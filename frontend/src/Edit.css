@@ -1,0 +1,9 @@
+#edit { margin-left: 0px; margin-right: 0px; width: 100%; }
+.container { max-width: none; }
+.card-header { padding: 5px; }
+.card-body { padding: 5px; }
+.row { margin: 1px; }
+.row * { padding-left: 1px; padding-right: 1px; }
+.button_group button { margin-right: 5px; width: auto; }
+input.form-control { padding-left: 1px; padding-right: 1px; border-width: thin; border-color: #ddd; border-style: solid; border-collapse: collapse; }
+button { padding-left: 5px !important; padding-right: 5px !important; }
