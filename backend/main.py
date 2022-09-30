@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any, Optional
 import logging
 from text_manager import TextManager
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 logging.config.fileConfig("logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -54,8 +55,14 @@ async def delete_file(dir_name: str, file_name: str) -> Dict[str, Any]:
     return response_object
 
 
+@app.get("/download/dirs/{dir_name}/files/{file_name}")
+async def get_file_content(dir_name: str, file_name: str) -> Dict[str, Any]:
+    LOGGER.debug(f"# get_file(dir_name={dir_name}, file_name={file_name})")
+    return text_manager.get_file_content(dir_name, file_name)
+
+
 @app.get("/dirs/{dir_name}/files/{file_name}")
-async def get_file(dir_name: str, file_name: str) -> Dict[str, Any]:
+async def get_file_info(dir_name: str, file_name: str) -> Dict[str, Any]:
     LOGGER.debug(f"# get_file(dir_name={dir_name}, file_name={file_name})")
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = text_manager.get_file_info(dir_name, file_name)
@@ -64,7 +71,7 @@ async def get_file(dir_name: str, file_name: str) -> Dict[str, Any]:
         response_object["result"] = result
     else:
         response_object["error"] = error
-    LOGGER.debug(response_object)
+    # LOGGER.debug(response_object)
     return response_object
 
 
@@ -86,3 +93,8 @@ async def get_dir(dir_name: Optional[str] = "") -> Dict[str, Any]:
 async def search(query: str) -> Dict[str, Any]:
     response_object: Dict[str, Any] = {"status": "failure"}
     return response_object
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

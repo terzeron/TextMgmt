@@ -1,29 +1,38 @@
-import {Provider, teamsTheme, Tree} from '@fluentui/react-northstar'
-import {faFolderOpen, faFolderClosed} from '@fortawesome/free-solid-svg-icons';
-import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import './DirList.css';
 
+import {useEffect, useState} from 'react';
 
-export default function DirList(props) {
-    const titleRenderer = (Component, {content, expanded, open, hasSubtree, ...restProps}) => (
-        <Component expanded={expanded} hasSubtree={hasSubtree} {...restProps}>
-            {hasSubtree ? (expanded ? <FontAwesomeIcon icon={faFolderOpen}/> : <FontAwesomeIcon icon={faFolderClosed}/>) : ""}
-            {content}
-        </Component>
-    );
+import TreeMenu from 'react-simple-tree-menu';
+import 'react-simple-tree-menu/dist/main.css';
+import {getUrlPrefix, handleFetchErrors} from './Common';
 
-    return (
-        <Provider theme={teamsTheme} id="dir_list">
-            <Tree
-                items={props.data}
-                renderItemTitle={titleRenderer}
-                aria-label="Initially open"
-                defaultActiveItemIds={[
-                    'root',
-                ]}
-                className="ps-0 pe-0"
-            />
-        </Provider>
-    );
+export default function DirList({onClickHandler}) {
+  const [treeData, setTreeData] = useState([]);
+
+  useEffect(() => {
+    fetch(`${getUrlPrefix()}/dirs`)
+      .then(handleFetchErrors)
+      .then((response) => {
+        response.json()
+          .then((result) => {
+            if (result['status'] === 'success') {
+              setTreeData(result['result']);
+            } else {
+              console.error(`dir list load failed, ${result['error']}`);
+            }
+          })
+          .catch((error) => {
+            console.error(`dir list load failed, ${error}`);
+          });
+      });
+
+    return () => {
+      // console.log('컴퍼넌트가 사라질 때 cleanup할 일을 여기서 처리해야 함');
+    };
+  }, [] /* rendered once */);
+
+  return (
+    <TreeMenu data={treeData} debounceTime={125} onClickItem={({key, label, ...props}) => { onClickHandler(key, label, props); } }>
+    </TreeMenu>
+  );
 }
-
