@@ -56,6 +56,8 @@ class TextManager:
                 content = FileResponse(path=path, media_type="application/pdf")
             elif path.suffix == ".epub":
                 content = FileResponse(path=path, media_type="application/epub+zip")
+            elif path.suffix == ".html":
+                content = FileResponse(path=path, media_type="text/html")
 
             return content
         return None

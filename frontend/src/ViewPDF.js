@@ -1,7 +1,6 @@
 import {useEffect, useRef, useState} from "react";
 import {getUrlPrefix} from "./Common";
 import {Document, Page, pdfjs} from "react-pdf";
-import {useParams} from "react-router-dom";
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.js`;
 
@@ -33,7 +32,6 @@ export default function ViewPDF(props) {
       //console.log("cleanup");
     };
   }, [props]);
-
 
   function onDocumentLoadSuccess({numPages}) {
     setNumPages(numPages);

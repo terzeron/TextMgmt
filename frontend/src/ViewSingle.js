@@ -7,7 +7,7 @@ import {useParams} from "react-router-dom";
 import ViewPDF from "./ViewPDF";
 import ViewEPUB from "./ViewEPUB";
 import ViewTXT from "./ViewTXT";
-
+import ViewHTML from './ViewHTML';
 
 export default function ViewSingle(props) {
   const { dirName, fileName } = useParams();
@@ -15,8 +15,8 @@ export default function ViewSingle(props) {
   const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
-    console.log(`ViewSingle(${props})`, props);
-    console.log(`ViewSingle(${dirName})`, dirName);
+    console.log(`ViewSingle() props=`, props);
+    console.log(`ViewSingle(dirName=${dirName}, fileName=${fileName})`);
 
     if (props.fileId) {
       setFileId(props.fileId);
@@ -40,6 +40,9 @@ export default function ViewSingle(props) {
       }
       {
         fileId && fileId.endsWith(".txt") && <ViewTXT fileId={fileId}/>
+      }
+      {
+        fileId && fileId.endsWith(".html") && <ViewHTML fileId={fileId}/>
       }
     </div>
   );

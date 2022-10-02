@@ -1,5 +1,4 @@
 import {useEffect, useRef, useState} from "react";
-import {useParams} from "react-router-dom";
 import {getUrlPrefix, handleFetchErrors} from "./Common";
 
 export default function ViewTXT(props) {

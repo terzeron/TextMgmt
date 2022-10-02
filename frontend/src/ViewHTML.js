@@ -1,9 +1,9 @@
 import {useEffect, useRef, useState} from "react";
-import {getUrlPrefix} from "./Common";
-import {ReactReader} from "react-reader"
+import {getUrlPrefix, handleFetchErrors} from "./Common";
 
-export default function ViewEPUB(props) {
+export default function ViewTXT(props) {
   const parentRef = useRef(null);
+  const ref = useRef(null);
   const [height, setHeight] = useState(0);
   const [width, setWidth] = useState(0);
 
@@ -11,14 +11,9 @@ export default function ViewEPUB(props) {
   const [fileContent, setFileContent] = useState("");
 
   const [url, setUrl] = useState("");
-  const [location, setLocation] = useState(null)
-
-  const locationChanged = (epubcifi) => {
-    // epubcifi is a internal string used by epubjs to point to a location in an epub. It looks like this: epubcfi(/6/6[titlepage]!/4/2/12[pgepubid00003]/3:0)
-    setLocation(epubcifi)
-  }
 
   useEffect(() => {
+    console.log(`ViewHTML: useEffect(${props})`, props);
     setHeight(parentRef.current.offsetHeight);
     setWidth(parentRef.current.offsetWidth);
 
@@ -26,7 +21,9 @@ export default function ViewEPUB(props) {
       const dirName = props.fileId.split('/')[0];
       const fileName = props.fileId.split('/')[1];
       const url = getUrlPrefix() + "/download/dirs/" + dirName + "/files/" + encodeURIComponent(fileName);
+      console.log(url);
       setUrl(url);
+      console.log(ref.current);
     }
 
     return () => {
@@ -35,11 +32,10 @@ export default function ViewEPUB(props) {
   }, [props]);
 
   return (
-    <div style={{height: "100vh"}} ref={parentRef}>
-      <ReactReader
-        location={location}
-        locationChanged={locationChanged}
-        url={url}/>
+    <div ref={parentRef}>
+      <iframe src={url} ref={ref}/>
     </div>
   );
 };
+
+
