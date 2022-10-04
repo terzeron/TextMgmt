@@ -42,13 +42,13 @@ export default function Edit() {
   const [selectedDirectory, setSelectedDirectory] = useState(null);
 
   useEffect(() => {
-    fetch(`${getUrlPrefix()}/dirs`)
+    fetch(`${getUrlPrefix()}/topdirs`)
       .then(handleFetchErrors)
       .then((response) => {
         response.json()
           .then((result) => {
             if (result.status === 'success') {
-              const dirListData = result['result'].filter((entry) => 'nodes' in entry);
+              const dirListData = result['result'];
               setDirList(dirListData);
               setFileContent(result['result']);
               setErrorMessage(null);

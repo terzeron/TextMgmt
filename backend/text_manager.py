@@ -82,8 +82,8 @@ class TextManager:
             return result, None
         return None, "File not found"
 
-    def get_file_list_from_dir(self, dir_name: str) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        LOGGER.debug(f"# get_file_list_from_dir(dir_name={dir_name})")
+    def get_full_dir_file_list(self, dir_name: str) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
+        LOGGER.debug(f"# get_full_dir_file_list(dir_name={dir_name})")
         path = self.path_prefix / dir_name
         result = []
         for entry in path.iterdir():
@@ -95,6 +95,16 @@ class TextManager:
                 nodes.sort(key=lambda x: x["key"])
                 result.append({"key": entry.name, "label": entry.name, "nodes": nodes})
             elif entry.is_file():
+                result.append({"key": entry.name, "label": entry.name})
+        result.sort(key=lambda x: x["key"])
+        return result, None
+
+    def get_top_dir_list(self, dir_name: str) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
+        LOGGER.debug(f"# get_top_dir_list(dir_name={dir_name})")
+        path = self.path_prefix / dir_name
+        result = []
+        for entry in path.iterdir():
+            if entry.is_dir():
                 result.append({"key": entry.name, "label": entry.name})
         result.sort(key=lambda x: x["key"])
         return result, None

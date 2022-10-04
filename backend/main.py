@@ -80,7 +80,21 @@ async def get_file_info(dir_name: str, file_name: str) -> Dict[str, Any]:
 async def get_dir(dir_name: Optional[str] = "") -> Dict[str, Any]:
     LOGGER.debug(f"# get_dir(dir_name={dir_name})")
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = text_manager.get_file_list_from_dir(dir_name)
+    result, error = text_manager.get_full_dir_file_list(dir_name)
+    if error is None:
+        response_object["status"] = "success"
+        response_object["result"] = result
+    else:
+        response_object["error"] = error
+    LOGGER.debug(response_object)
+    return response_object
+
+
+@app.get("/topdirs")
+async def get_top_dir(dir_name: Optional[str] = "") -> Dict[str, Any]:
+    LOGGER.debug(f"# get_top_dir(dir_name={dir_name})")
+    response_object: Dict[str, Any] = {"status": "failure"}
+    result, error = text_manager.get_top_dir_list(dir_name)
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
@@ -98,4 +112,5 @@ async def search(query: str) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
