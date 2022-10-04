@@ -14,7 +14,7 @@ LOGGER = logging.getLogger(__name__)
 
 class TextManager:
     def __init__(self):
-        self.path_prefix = Path(os.environ["HOME"]) / "workspace" / "TextMgmt"
+        self.path_prefix = Path(os.environ["TM_WORK_DIR"])
 
     def change_encoding(self, dir_name: str, file_name: str, encoding: str) -> Tuple[Dict[str, Any], Optional[Any]]:
         LOGGER.debug(f"# change_encoding(dir_name={dir_name}, file_name={file_name}, encoding={encoding})")
