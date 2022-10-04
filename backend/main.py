@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import os
 from typing import Dict, Any, Optional
 import logging
 from text_manager import TextManager
@@ -12,6 +13,7 @@ LOGGER = logging.getLogger(__name__)
 
 app = FastAPI()
 origins = [
+    os.environ["TM_DOMAIN"],
     "http://localhost:3000",
 ]
 app.add_middleware(
