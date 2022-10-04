@@ -13,8 +13,7 @@ LOGGER = logging.getLogger(__name__)
 
 app = FastAPI()
 origins = [
-    os.environ["TM_DOMAIN"],
-    "http://localhost:3000",
+    os.environ["TM_DOMAIN"] if "TM_DOMAIN" in os.environ else "http://localhost:3000"
 ]
 app.add_middleware(
     CORSMiddleware,

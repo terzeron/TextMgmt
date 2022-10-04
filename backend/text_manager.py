@@ -14,7 +14,8 @@ LOGGER = logging.getLogger(__name__)
 
 class TextManager:
     def __init__(self):
-        self.path_prefix = Path(os.environ["TM_WORK_DIR"])
+        work_dir = os.environ["TM_WORK_DIR"] if "TM_WORK_DIR" in os.environ else os.getcwd() + "/.."
+        self.path_prefix = Path(work_dir)
 
     def change_encoding(self, dir_name: str, file_name: str, encoding: str) -> Tuple[Dict[str, Any], Optional[Any]]:
         LOGGER.debug(f"# change_encoding(dir_name={dir_name}, file_name={file_name}, encoding={encoding})")
