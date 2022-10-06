@@ -21,7 +21,6 @@ export default function DirList({onClickHandler}) {
         response.json()
           .then((result) => {
             if (result['status'] === 'success') {
-              console.log("result", result['result']);
               setTreeData(result['result']);
 
               console.log("call /dirs for treeData");
@@ -31,7 +30,6 @@ export default function DirList({onClickHandler}) {
                   response.json()
                     .then((result) => {
                       if (result['status'] === 'success') {
-                        console.log("result", result['result']);
                         setTreeData(result['result']);
                       } else {
                         setErrorMessage(`directory list load failed, ${result['error']}`);

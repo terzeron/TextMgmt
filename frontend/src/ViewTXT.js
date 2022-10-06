@@ -7,7 +7,6 @@ export default function ViewTXT(props) {
   const [fileContent, setFileContent] = useState('');
 
   useEffect(() => {
-    console.log("222");
     if (props && props.entryId) {
       setLoading(true);
       const dirName = props.entryId.split('/')[0];
@@ -20,7 +19,7 @@ export default function ViewTXT(props) {
       fetch(url)
         .then(handleFetchErrors)
         .then((response) => {
-          response.json()
+          response.text()
             .then((result) => {
               setFileContent(result);
               setErrorMessage(null);
