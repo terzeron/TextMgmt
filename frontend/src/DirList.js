@@ -1,6 +1,6 @@
 import './DirList.css';
 
-import {useEffect, useState} from 'react';
+import {useCallback, useEffect, useState} from 'react';
 
 import TreeMenu from 'react-simple-tree-menu';
 import 'react-simple-tree-menu/dist/main.css';
@@ -8,21 +8,42 @@ import {getUrlPrefix, handleFetchErrors} from './Common';
 
 export default function DirList({onClickHandler}) {
   const [treeData, setTreeData] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
-    fetch(`${getUrlPrefix()}/dirs`)
+    console.log("call /dirs for treeData")
+
+    setLoading(true);
+    fetch(`${getUrlPrefix()}/somedirs`)
       .then(handleFetchErrors)
       .then((response) => {
         response.json()
           .then((result) => {
             if (result['status'] === 'success') {
               setTreeData(result['result']);
+
+              fetch(`${getUrlPrefix()}/dirs`)
+                .then(handleFetchErrors)
+                .then((response) => {
+                  if (result['status'] === 'success') {
+                    setTreeData(result['result']);
+                  } else {
+                    setErrorMessage(`directory list load failed, ${result['error']}`);
+                  }
+                })
+                .catch((error) => {
+                  setErrorMessage(`dir list load failed, ${error}`);
+                });
             } else {
-              console.error(`dir list load failed, ${result['error']}`);
+              setErrorMessage(`directory list load failed, ${result['error']}`);
             }
           })
           .catch((error) => {
-            console.error(`dir list load failed, ${error}`);
+            setErrorMessage(`dir list load failed, ${error}`);
+          })
+          .finally(() => {
+            setLoading(false);
           });
       });
 
@@ -31,8 +52,23 @@ export default function DirList({onClickHandler}) {
     };
   }, [] /* rendered once */);
 
+  if (loading) return <div>로딩 중...</div>;
+  if (errorMessage) return <div>{errorMessage}</div>;
   return (
-    <TreeMenu data={treeData} debounceTime={125} onClickItem={({key, label, ...props}) => { onClickHandler(key, label, props); } }>
+    <TreeMenu data={treeData} debounceTime={125} onClickItem={({key, label, ...props}) => {
+      if (props['level'] > 0) {
+        const next = treeData[props['level']][props['index'] + 1];
+        const subTreeData = treeData[props['index']].nodes;
+        let nextIndex = 0;
+        for (let i = 0; i < subTreeData.length; i++) {
+          if (subTreeData[i]['key'] === label) {
+            nextIndex = i + 1;
+            break;
+          }
+        }
+        onClickHandler(key, label, props, subTreeData, nextIndex);
+      }
+    }}>
     </TreeMenu>
   );
 }

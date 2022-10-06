@@ -1,7 +1,7 @@
 import './View.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
-import { useState } from 'react';
+import {useEffect, useState} from 'react';
 import {
   Button, Card, Col, Container, Form, InputGroup, Row,
 } from 'react-bootstrap';
@@ -11,22 +11,29 @@ import DirList from './DirList';
 export default function View() {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
-
-  const [fileMetadata, setFileMetadata] = useState({
+  const [viewUrl, setViewUrl] = useState(null);
+  const [downloadUrl, setDownloadUrl] = useState('');
+  const [entryInfo, setEntryInfo] = useState({
     id: '',
     name: '',
   });
   const [fileContent, setFileContent] = useState({
     size: '',
     encoding: '',
-    content: '',
   });
 
-  function fileClicked(key, label, props) {
-    const fileId = key;
-    const dirName = fileId.split('/')[0];
-    const fileName = fileId.split('/')[1];
-    setFileMetadata({ id: fileId, name: fileName });
+  function fileClicked(key, label, props, subTreeData, nextIndex) {
+    console.log(`fileClicked: key=${key}, label=${label}, props=${props}, nextIndex=${nextIndex}`);
+
+    const entryId = key;
+    const dirName = entryId.split('/')[0];
+    const fileName = entryId.split('/')[1];
+
+    setEntryInfo({ id: entryId, name: fileName });
+    console.log('viewUrl=/view/' + encodeURIComponent(dirName) + '/' + encodeURIComponent(fileName));
+    console.log('downloadUrl=' + getUrlPrefix() + '/download/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName));
+    setViewUrl('/view/' + encodeURIComponent(dirName) + '/' + encodeURIComponent(fileName));
+    setDownloadUrl(getUrlPrefix() + '/download/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName));
 
     fetch(`${getUrlPrefix()}/dirs/${dirName}/files/${fileName}`)
       .then(handleFetchErrors)
@@ -41,7 +48,6 @@ export default function View() {
               setFileContent({
                 size: '',
                 encoding: '',
-                content: '',
               });
             }
           })
@@ -50,7 +56,6 @@ export default function View() {
             setFileContent({
               size: '',
               encoding: '',
-              content: '',
             });
           });
       })
@@ -59,12 +64,12 @@ export default function View() {
         setFileContent({
           size: '',
           encoding: '',
-          content: '',
         });
       });
   }
 
   if (loading) return <div>로딩 중..</div>;
+  if (errorMessage) return <div>{errorMessage}</div>;
   return (
     <Container id="view">
       <Row fluid="true">
@@ -84,7 +89,7 @@ export default function View() {
                     <Col xs="6">
                       <InputGroup>
                         <InputGroup.Text>파일명</InputGroup.Text>
-                        <Form.Control defaultValue={fileMetadata.name} readOnly />
+                        <Form.Control defaultValue={entryInfo.name} readOnly />
                       </InputGroup>
                     </Col>
                     <Col xs="3">
@@ -102,11 +107,11 @@ export default function View() {
                   </Row>
                   <Row className="mt-1">
                     <span>
-                      <a href={`/view_single/${fileMetadata.id}`} target="_blank" rel="noreferrer">
-                        <Button variant="outline-secondary" size="sm" disabled={!fileMetadata.id}>보기</Button>
+                      <a href={viewUrl} target="_blank" rel="noreferrer">
+                        <Button variant="outline-secondary" size="sm" disabled={!entryInfo.id}>새 창에서 전체 보기</Button>
                       </a>
-                      <a href={`/view/download/${fileMetadata.id}`} target="_blank" rel="noreferrer">
-                        <Button variant="outline-secondary" size="sm" disabled={!fileMetadata.id}>다운로드</Button>
+                      <a href={downloadUrl} target="_blank" rel="noreferrer">
+                        <Button variant="outline-secondary" size="sm" disabled={!entryInfo.id}>다운로드</Button>
                       </a>
                     </span>
                   </Row>

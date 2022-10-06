@@ -17,9 +17,9 @@ export default function ViewTXT(props) {
     setHeight(parentRef.current.offsetHeight);
     setWidth(parentRef.current.offsetWidth);
 
-    if (props && props.fileId) {
-      const dirName = props.fileId.split('/')[0];
-      const fileName = props.fileId.split('/')[1];
+    if (props && props.entryId) {
+      const dirName = props.entryId.split('/')[0];
+      const fileName = props.entryId.split('/')[1];
       const url = getUrlPrefix() + "/download/dirs/" + dirName + "/files/" + encodeURIComponent(fileName);
       console.log(url);
       setUrl(url);

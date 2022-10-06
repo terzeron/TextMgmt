@@ -10,39 +10,45 @@ import ViewTXT from "./ViewTXT";
 import ViewHTML from './ViewHTML';
 
 export default function ViewSingle(props) {
-  const { dirName, fileName } = useParams();
-  const [fileId, setFileId] = useState("");
+  const {dirName, fileName} = useParams();
+  const [entryId, setEntryId] = useState("");
+  const [size, setSize] = useState(0);
   const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
-    console.log(`ViewSingle() props=`, props);
-    console.log(`ViewSingle(dirName=${dirName}, fileName=${fileName})`);
+    if (props) {
+      console.log(`ViewSingle: useEffect() props=`, props);
+    } else {
+      console.log(`ViewSingle: useEffect() dirName=${dirName}, fileName=${fileName})`);
+    }
 
-    if (props.fileId) {
-      setFileId(props.fileId);
+    if (props.entryId) {
+      setEntryId(props.entryId);
+      setSize(10 * 1024);
     }
     if (dirName && fileName) {
-      setFileId(dirName + "/" + fileName);
+      setEntryId(dirName + "/" + fileName);
     }
 
     return () => {
-      //console.log("cleanup");
+      console.log("cleanup ViewSingle");
+      setEntryId("");
     }
-  }, [props, dirName, fileName]);
+  }, [props]);
 
   return (
     <div>
       {
-        fileId && fileId.endsWith(".pdf") && <ViewPDF fileId={fileId}/>
+        entryId && entryId.endsWith(".pdf") && <ViewPDF entryId={entryId}/>
       }
       {
-        fileId && fileId.endsWith(".epub") && <ViewEPUB fileId={fileId}/>
+        entryId && entryId.endsWith(".epub") && <ViewEPUB entryId={entryId}/>
       }
       {
-        fileId && fileId.endsWith(".txt") && <ViewTXT fileId={fileId}/>
+        entryId && entryId.endsWith(".txt") && <ViewTXT entryId={entryId} size={size}/>
       }
       {
-        fileId && fileId.endsWith(".html") && <ViewHTML fileId={fileId}/>
+        entryId && entryId.endsWith(".html") && <ViewHTML entryId={entryId}/>
       }
     </div>
   );

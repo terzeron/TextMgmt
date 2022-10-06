@@ -9,6 +9,7 @@ import View from "./View";
 import Navigation from "./Navigation";
 import ViewSingle from "./ViewSingle";
 import ErrorPage from "./ErrorPage";
+import {getUrlPrefix} from "./Common";
 
 function App() {
   return (
@@ -19,7 +20,7 @@ function App() {
           <Route path="edit" element={<Edit/>} errorElement={<ErrorPage />}/>
           <Route path="view" element={<View/>} errorElement={<ErrorPage />}/>
         </Route>
-        <Route path="/view_single/:dirName/:fileName" element={<ViewSingle/>} errorElement={<ErrorPage />}/>
+        <Route path="/view/:dirName/:fileName" element={<ViewSingle/>} errorElement={<ErrorPage />}/>
       </Routes>
     </div>
   );

@@ -62,6 +62,12 @@ async def get_file_content(dir_name: str, file_name: str) -> Dict[str, Any]:
     return text_manager.get_file_content(dir_name, file_name)
 
 
+@app.get("/download/dirs/{dir_name}/files/{file_name}/size/{size}")
+async def get_file_content(dir_name: str, file_name: str, size: int) -> Dict[str, Any]:
+    LOGGER.debug(f"# get_file(dir_name={dir_name}, file_name={file_name}, size={size})")
+    return text_manager.get_file_content(dir_name, file_name, size)
+
+
 @app.get("/dirs/{dir_name}/files/{file_name}")
 async def get_file_info(dir_name: str, file_name: str) -> Dict[str, Any]:
     LOGGER.debug(f"# get_file(dir_name={dir_name}, file_name={file_name})")
@@ -77,10 +83,24 @@ async def get_file_info(dir_name: str, file_name: str) -> Dict[str, Any]:
 
 
 @app.get("/dirs")
-async def get_dir(dir_name: Optional[str] = "") -> Dict[str, Any]:
-    LOGGER.debug(f"# get_dir(dir_name={dir_name})")
+async def get_full_dirs() -> Dict[str, Any]:
+    LOGGER.debug(f"# get_full_dirs()")
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = text_manager.get_full_dir_file_list(dir_name)
+    result, error = text_manager.get_full_dirs()
+    if error is None:
+        response_object["status"] = "success"
+        response_object["result"] = result
+    else:
+        response_object["error"] = error
+    LOGGER.debug(response_object)
+    return response_object
+
+
+@app.get("/somedirs")
+async def get_some_dirs() -> Dict[str, Any]:
+    LOGGER.debug(f"# get_some_dirs()")
+    response_object: Dict[str, Any] = {"status": "failure"}
+    result, error = text_manager.get_full_dirs()
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
@@ -91,10 +111,10 @@ async def get_dir(dir_name: Optional[str] = "") -> Dict[str, Any]:
 
 
 @app.get("/topdirs")
-async def get_top_dir(dir_name: Optional[str] = "") -> Dict[str, Any]:
-    LOGGER.debug(f"# get_top_dir(dir_name={dir_name})")
+async def get_top_dirs() -> Dict[str, Any]:
+    LOGGER.debug(f"# get_top_dir()")
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = text_manager.get_top_dir_list(dir_name)
+    result, error = text_manager.get_top_dirs()
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result

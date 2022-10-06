@@ -1,45 +1,56 @@
 import {useEffect, useRef, useState} from "react";
 import {getUrlPrefix} from "./Common";
-import {ReactReader} from "react-reader"
+import {ReactReader} from "react-reader";
+import Section, {SpineItem} from "../node_modules/epubjs/lib/section.js";
 
 export default function ViewEPUB(props) {
-  const parentRef = useRef(null);
-  const [height, setHeight] = useState(0);
-  const [width, setWidth] = useState(0);
+  const [loading, setLoading] = useState(true);
 
-  const [errorMessage, setErrorMessage] = useState("");
-  const [fileContent, setFileContent] = useState("");
-
+  const renditionRef = useRef(null)
   const [url, setUrl] = useState("");
-  const [location, setLocation] = useState(null)
-
-  const locationChanged = (epubcifi) => {
-    // epubcifi is a internal string used by epubjs to point to a location in an epub. It looks like this: epubcfi(/6/6[titlepage]!/4/2/12[pgepubid00003]/3:0)
-    setLocation(epubcifi)
-  }
+  const [location] = useState(null)
+  const [locationChanged] = useState(null)
 
   useEffect(() => {
-    setHeight(parentRef.current.offsetHeight);
-    setWidth(parentRef.current.offsetWidth);
+    if (renditionRef.current) {
+      console.log(renditionRef.current);
+    }
 
-    if (props && props.fileId) {
-      const dirName = props.fileId.split('/')[0];
-      const fileName = props.fileId.split('/')[1];
+    console.log(`ViewEPUB: useEffect(${props})`, props);
+    if (props && props.entryId) {
+      const dirName = props.entryId.split('/')[0];
+      const fileName = props.entryId.split('/')[1];
       const url = getUrlPrefix() + "/download/dirs/" + dirName + "/files/" + encodeURIComponent(fileName);
       setUrl(url);
+      console.log(url);
+      setLoading(false);
     }
 
     return () => {
       //console.log("cleanup");
+      setUrl("");
     };
-  }, [props]);
+  }, []);
 
+  if (loading) return <div>로딩 중...</div>;
   return (
-    <div style={{height: "100vh"}} ref={parentRef}>
+    <div style={{height: "100vh"}}>
       <ReactReader
         location={location}
         locationChanged={locationChanged}
-        url={url}/>
+        url={url}
+        key={url}
+        getRendition={(rendition) => {
+          const spine_get = rendition.book.spine.get.bind(rendition.book.spine);
+          rendition.book.spine.get = function (target) {
+            var t = spine_get(target);
+            if (!t) {
+              t = spine_get(undefined);
+            }
+            return t;
+          }
+        }}
+      />
     </div>
   );
 };

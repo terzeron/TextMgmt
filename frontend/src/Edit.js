@@ -1,7 +1,7 @@
 import './Edit.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
-import {useEffect, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 
 import {
   Container, Row, Col, Card, Form, Button, InputGroup, Alert,
@@ -16,32 +16,37 @@ import ViewSingle from "./ViewSingle";
 
 export default function Edit() {
   const [loading, setLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState('');
 
   const [dirList, setDirList] = useState([]);
-  const [fileMetadata, setFileMetadata] = useState({
+  const [entryInfo, setEntryInfo] = useState({
     id: '',
     name: '',
   });
-  const [fileInfo, setFileInfo] = useState({
+  const [bookInfo, setBookInfo] = useState({
     author: '',
     title: '',
     extension: '',
   });
   const [newFileName, setNewFileName] = useState(null);
-  const [fileContent, setFileContent] = useState({
+  const [fileMetadata, setFileMetadata] = useState({
     size: '',
     encoding: '',
-    content: '',
   });
-  const [fileContentLoading, setFileContentLoading] = useState(false);
+  const [fileMetadataLoading, setFileMetadataLoading] = useState(false);
   const [similarFileList, setSimilarFileList] = useState([]);
   const [similarFileListLoading, setSimilarFileListLoading] = useState(false);
   const [searchResult, setSearchResult] = useState(null);
   const [searchResultLoading, setSearchResultLoading] = useState(false);
   const [selectedDirectory, setSelectedDirectory] = useState(null);
+  const [subTreeData, setSubTreeData] = useState([]);
+  const [nextEntryIndex, setNextEntryIndex] = useState(null);
+  const [propsData, setPropsData] = useState({});
 
   useEffect(() => {
+    console.log(`Edit: useEffect() `);
+
+    console.log("call /topdirs for other dir list")
     fetch(`${getUrlPrefix()}/topdirs`)
       .then(handleFetchErrors)
       .then((response) => {
@@ -50,32 +55,29 @@ export default function Edit() {
             if (result.status === 'success') {
               const dirListData = result['result'];
               setDirList(dirListData);
-              setFileContent(result['result']);
+              setFileMetadata(result['result']);
               setErrorMessage(null);
             } else {
               setErrorMessage(result['error']);
-              setFileContent({
+              setFileMetadata({
                 size: '',
                 encoding: '',
-                content: '',
               });
             }
           })
           .catch((error) => {
             setErrorMessage(error.message);
-            setFileContent({
+            setFileMetadata({
               size: '',
               encoding: '',
-              content: '',
             });
           });
       })
       .catch((error) => {
         setErrorMessage(error.message);
-        setFileContent({
+        setFileMetadata({
           size: '',
           encoding: '',
-          content: '',
         });
       });
 
@@ -85,10 +87,10 @@ export default function Edit() {
   }, [] /* rendered once */);
 
   useEffect(() => {
-    if (fileInfo && (fileInfo.author || fileInfo.title)) {
-      setNewFileName(`[${fileInfo.author}] ${fileInfo.title}.${fileInfo.extension}`);
+    if (bookInfo && (bookInfo.author || bookInfo.title)) {
+      setNewFileName(`[${bookInfo.author}] ${bookInfo.title}.${bookInfo.extension}`);
     }
-  }, [fileInfo]);
+  }, [bookInfo]);
 
   const decomposeFileName = (fileName) => {
     // console.log(`decomposeFileName(${fileName})`);
@@ -112,7 +114,7 @@ export default function Edit() {
         author = match.groups.author || '';
         title = match.groups.title || '';
         extension = match.groups.extension || '';
-        setFileInfo({
+        setBookInfo({
           author,
           title,
           extension,
@@ -122,9 +124,9 @@ export default function Edit() {
     }
   };
 
-  const showFileContent = () => {
-    if (fileContentLoading) return <div>로딩 중...</div>;
-    return <div>{fileContent.content}</div>;
+  const showfileMetadata = () => {
+    if (fileMetadataLoading) return <div>로딩 중...</div>;
+    return <div>{fileMetadata.content}</div>;
   };
 
   const showSimilarFileList = () => {
@@ -137,21 +139,28 @@ export default function Edit() {
     return <div>{searchResult}</div>;
   };
 
-  function fileClicked(key, label, props) {
-    const fileId = key;
-    const dirName = fileId.split('/')[0];
-    const fileName = fileId.split('/')[1];
-    setFileMetadata({id: fileId, name: fileName});
+  const fileClicked = useCallback((key, label, props, subTreeData, nextIndex) => {
+    console.log(`fileClicked: key=${key}, label=${label}, props=${JSON.stringify(props)}, nextIndex=${nextIndex}`);
+    const entryId = key;
+    const dirName = entryId.split('/')[0];
+    const fileName = entryId.split('/')[1];
+    setEntryInfo({id: entryId, name: fileName});
+    setNextEntryIndex(nextIndex);
+    setSubTreeData(subTreeData);
+    setPropsData(props);
     setNewFileName(fileName);
     decomposeFileName(fileName);
 
-    fetch(`${getUrlPrefix()}/dirs/${dirName}/files/${fileName}`)
+    window.scrollTo(0, 0);
+
+    const fileMetadataUrl = getUrlPrefix() + '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName);
+    fetch(fileMetadataUrl)
       .then(handleFetchErrors)
       .then((response) => {
         response.json()
           .then((result) => {
             if (result.status === 'success') {
-              setFileContent(result.result);
+              setFileMetadata(result.result);
               setErrorMessage(null);
             } else {
               setErrorMessage(result.error);
@@ -163,71 +172,80 @@ export default function Edit() {
       })
       .catch((error) => {
         setErrorMessage(error.message);
-        setFileContent({
+        setFileMetadata({
           size: '',
           encoding: '',
-          content: '',
         });
       });
-  };
+  }, []);
 
-  const cutAuthorClicked = (e, props) => {
+  const cutAuthorClicked = useCallback((e, props) => {
     e.preventDefault();
-    const tokens = fileInfo.author.split(' ');
-    setFileInfo({
+    const tokens = bookInfo.author.split(' ');
+    setBookInfo({
       author: tokens[0],
       title: tokens[1],
-      extension: fileInfo.extension,
+      extension: bookInfo.extension,
     });
-  };
+  }, [bookInfo]);
 
-  const cutTitleClicked = (e, props) => {
+  const cutTitleClicked = useCallback((e, props) => {
     e.preventDefault();
-    const tokens = fileInfo.title.split(' ');
-    setFileInfo({
+    const tokens = bookInfo.title.split(' ');
+    setBookInfo({
       author: tokens[0],
       title: tokens[1],
-      extension: fileInfo.extension,
+      extension: bookInfo.extension,
     });
-  };
+  }, [bookInfo]);
 
-  const exchangeAuthorAndTitleClicked = (e, props) => {
+  const exchangeAuthorAndTitleClicked = useCallback((e, props) => {
     e.preventDefault();
-    const tokens = [fileInfo.author, fileInfo.title];
-    setFileInfo({
+    const tokens = [bookInfo.author, bookInfo.title];
+    setBookInfo({
       author: tokens[1],
       title: tokens[0],
-      extension: fileInfo.extension,
+      extension: bookInfo.extension,
     });
-  };
+  }, [bookInfo]);
 
-  const resetAuthorAndTitleClicked = (e, props) => {
+  const resetAuthorAndTitleClicked = useCallback((e, props) => {
     e.preventDefault();
-    decomposeFileName(fileMetadata.name);
-  };
+    decomposeFileName(entryInfo.name);
+  }, [entryInfo]);
 
-  const changeClicked = () => {
+  const changeClicked = useCallback(() => {
     alert('변경 버튼 클릭됨');
-  };
+  }, []);
 
-  const moveToUpperDirectoryClicked = () => {
+  const moveToUpperDirectoryClicked = useCallback(() => {
     console.log(`move to upper directory as '${newFileName}'`);
-  };
+  }, [newFileName]);
 
-  const selectDirectoryClicked = (e, props) => {
+  const selectDirectoryClicked = useCallback((e, props) => {
     e.preventDefault();
     setSelectedDirectory(props);
-  };
+  }, []);
 
-  const moveToDirectoryClicked = () => {
+  const moveToDirectoryClicked = useCallback(() => {
     console.log(`move to '${selectedDirectory}' as '${newFileName}'`);
-  };
+  }, [newFileName]);
 
-  const removeClicked = () => {
+  const removeClicked = useCallback(() => {
     alert('삭제 버튼 클릭됨');
-  };
+  }, []);
+
+  const toNextBookClicked = useCallback(() => {
+    console.log('toNextBookClicked');
+    if (subTreeData[nextEntryIndex]) {
+      fileClicked(propsData['parent'] + '/' + subTreeData[nextEntryIndex].key, subTreeData[nextEntryIndex].label, propsData, subTreeData, nextEntryIndex + 1);
+    } else {
+      alert('마지막 파일입니다.');
+    }
+  }, [entryInfo]);
 
   if (loading) return <div>로딩 중..</div>;
+  if (errorMessage) return <div>{errorMessage}</div>;
   return (
     <Container id="edit">
       <Row fluid="true">
@@ -247,26 +265,26 @@ export default function Edit() {
                     <Col xs="6">
                       <InputGroup>
                         <InputGroup.Text>파일명</InputGroup.Text>
-                        <Form.Control defaultValue={fileMetadata.name} readOnly/>
+                        <Form.Control defaultValue={entryInfo.name} readOnly/>
                       </InputGroup>
                     </Col>
                     <Col xs="3">
                       <InputGroup>
                         <InputGroup.Text>인코딩</InputGroup.Text>
-                        <Form.Control defaultValue={fileContent.encoding} readOnly/>
+                        <Form.Control defaultValue={fileMetadata.encoding} readOnly/>
                       </InputGroup>
                     </Col>
                     <Col xs="3">
                       <InputGroup>
                         <InputGroup.Text>크기</InputGroup.Text>
-                        <Form.Control defaultValue={fileContent.size} readOnly/>
+                        <Form.Control defaultValue={fileMetadata.size} readOnly/>
                       </InputGroup>
                     </Col>
                   </Row>
                   <Row>
                     <InputGroup>
                       <InputGroup.Text>저자</InputGroup.Text>
-                      <Form.Control defaultValue={fileInfo.author}/>
+                      <Form.Control defaultValue={bookInfo.author}/>
                       <Button variant="outline-secondary" size="sm" onClick={cutAuthorClicked}>
                         자르기
                         <FontAwesomeIcon icon={faCut}/>
@@ -280,7 +298,7 @@ export default function Edit() {
                   <Row>
                     <InputGroup>
                       <InputGroup.Text>제목</InputGroup.Text>
-                      <Form.Control defaultValue={fileInfo.title}/>
+                      <Form.Control defaultValue={bookInfo.title}/>
                       <Button variant="outline-secondary" size="sm" onClick={cutTitleClicked}>
                         자르기
                         <FontAwesomeIcon icon={faCut}/>
@@ -295,7 +313,7 @@ export default function Edit() {
                     <Col xs="3">
                       <InputGroup>
                         <InputGroup.Text>확장자</InputGroup.Text>
-                        <Form.Control defaultValue={fileInfo.extension}/>
+                        <Form.Control defaultValue={bookInfo.extension}/>
                       </InputGroup>
                     </Col>
                     <Col xs="9">
@@ -315,10 +333,11 @@ export default function Edit() {
                   </Row>
                   <Row className="mt-2 button_group">
                     <Col>
-                      <a href={`https://search.shopping.naver.com/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&sort=REL&query=${fileInfo.author}+${fileInfo.title}`} target="_blank" rel="noreferrer">
+                      <Button variant="outline-success" size="sm" onClick={toNextBookClicked}>다음 책으로</Button>
+                      <a href={`https://search.shopping.naver.com/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&sort=REL&query=${bookInfo.author}+${bookInfo.title}`} target="_blank" rel="noreferrer">
                         <Button variant="outline-primary" size="sm">네이버 검색</Button>
                       </a>
-                      <a href={`https://www.google.com/search?sourceid=chrome&ie=UTF-8&oq=${fileInfo.author}+${fileInfo.title}&q=${fileInfo.author}+${fileInfo.title}`} target="_blank" rel="noreferrer">
+                      <a href={`https://www.google.com/search?sourceid=chrome&ie=UTF-8&oq=${bookInfo.author}+${bookInfo.title}&q=${bookInfo.author}+${bookInfo.title}`} target="_blank" rel="noreferrer">
                         <Button variant="outline-primary" size="sm">구글 검색</Button>
                       </a>
                     </Col>
@@ -330,7 +349,7 @@ export default function Edit() {
                     </Button>
 
                     {
-                      dirList.filter(dir => dir.key !== fileMetadata['id'].split('/')[0])
+                      dirList.filter(dir => dir.key !== entryInfo['id'].split('/')[0])
                         .map(dir =>
                           <Button
                             variant="outline-secondary"
@@ -393,14 +412,12 @@ export default function Edit() {
               <Card>
                 <Card.Header>
                   파일 보기
-                  <a href={`/view_single/${fileMetadata['id']}`} target="_blank" rel="noreferrer">
+                  <a href={`/view/${entryInfo['id']}`} target="_blank" rel="noreferrer">
                     <Button variant="outline-primary" size="sm" className="float-end">새 창에서 전체보기</Button>
                   </a>
                 </Card.Header>
                 <Card.Body>
-                  {
-                    fileMetadata['id'] && <ViewSingle fileId={fileMetadata['id']}/>
-                  }
+                  <ViewSingle key={entryInfo['id']} entryId={entryInfo['id']}/>
                 </Card.Body>
               </Card>
             </Col>
