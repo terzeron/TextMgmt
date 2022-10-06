@@ -92,7 +92,6 @@ async def get_full_dirs() -> Dict[str, Any]:
         response_object["result"] = result
     else:
         response_object["error"] = error
-    LOGGER.debug(response_object)
     return response_object
 
 
@@ -100,7 +99,7 @@ async def get_full_dirs() -> Dict[str, Any]:
 async def get_some_dirs() -> Dict[str, Any]:
     LOGGER.debug(f"# get_some_dirs()")
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = text_manager.get_full_dirs()
+    result, error = text_manager.get_some_dirs()
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result

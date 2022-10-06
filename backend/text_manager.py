@@ -104,16 +104,13 @@ class TextManager:
         result = []
         for entry in path.iterdir():
             if entry.is_dir():
-                result.append({"key": entry.name, "label": entry.name})
-        for entry in path.iterdir():
-            if entry.is_dir():
                 nodes = []
                 count = 0
                 for e in entry.iterdir():
                     if e.is_file():
                         nodes.append({"key": e.name, "label": e.name})
                         count = count + 1
-                        if count >= 100:
+                        if count >= 10:
                             break
                 result.append({"key": entry.name, "label": entry.name, "nodes": nodes})
             elif entry.is_file():

@@ -21,16 +21,24 @@ export default function DirList({onClickHandler}) {
         response.json()
           .then((result) => {
             if (result['status'] === 'success') {
+              console.log(result['result']);
               setTreeData(result['result']);
 
               fetch(`${getUrlPrefix()}/dirs`)
                 .then(handleFetchErrors)
                 .then((response) => {
-                  if (result['status'] === 'success') {
-                    setTreeData(result['result']);
-                  } else {
-                    setErrorMessage(`directory list load failed, ${result['error']}`);
-                  }
+                  response.json()
+                    .then((result) => {
+                      if (result['status'] === 'success') {
+                        console.log(result['result']);
+                        setTreeData(result['result']);
+                      } else {
+                        setErrorMessage(`directory list load failed, ${result['error']}`);
+                      }
+                    })
+                    .catch((error) => {
+                      setErrorMessage(`dir list load failed, ${error}`);
+                    });
                 })
                 .catch((error) => {
                   setErrorMessage(`dir list load failed, ${error}`);
