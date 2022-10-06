@@ -110,7 +110,7 @@ class TextManager:
                     if e.is_file():
                         nodes.append({"key": e.name, "label": e.name})
                         count = count + 1
-                        if count >= 10:
+                        if count >= 100:
                             break
                 result.append({"key": entry.name, "label": entry.name, "nodes": nodes})
             elif entry.is_file():

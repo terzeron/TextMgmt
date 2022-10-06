@@ -21,7 +21,6 @@ export default function DirList({onClickHandler}) {
         response.json()
           .then((result) => {
             if (result['status'] === 'success') {
-              console.log(result['result']);
               setTreeData(result['result']);
 
               fetch(`${getUrlPrefix()}/dirs`)
@@ -30,7 +29,6 @@ export default function DirList({onClickHandler}) {
                   response.json()
                     .then((result) => {
                       if (result['status'] === 'success') {
-                        console.log(result['result']);
                         setTreeData(result['result']);
                       } else {
                         setErrorMessage(`directory list load failed, ${result['error']}`);
