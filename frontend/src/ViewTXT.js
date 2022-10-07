@@ -7,14 +7,12 @@ export default function ViewTXT(props) {
   const [fileContent, setFileContent] = useState('');
 
   useEffect(() => {
+    console.log(`ViewTXT: useEffect(), props=${JSON.stringify(props)}`);
     if (props && props.entryId) {
       setLoading(true);
       const dirName = props.entryId.split('/')[0];
       const fileName = props.entryId.split('/')[1];
       let url = getUrlPrefix() + "/download/dirs/" + dirName + "/files/" + encodeURIComponent(fileName);
-      if (props.size > 0) {
-        url += "/size/" + props.size;
-      }
 
       fetch(url)
         .then(handleFetchErrors)
@@ -40,15 +38,21 @@ export default function ViewTXT(props) {
 
     return () => {
       //console.log("cleanup");
+      setFileContent('');
     };
-  }, [props]);
+  }, []);
 
   if (loading) return <div>로딩 중...</div>;
   if (errorMessage) return <div>{errorMessage}</div>;
   return (
     <div className="text-left">
       {
-        fileContent && fileContent.split('\n').map((line, index) => {
+        fileContent && (
+          props && props.lineCount > 0 ?
+            fileContent.split('\n').slice(0, props.lineCount)
+            :
+            fileContent.split('\n')
+        ).map((line, index) => {
           return <div key={index}>{line}</div>
         })
       }

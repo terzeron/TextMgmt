@@ -12,29 +12,28 @@ import ViewHTML from './ViewHTML';
 export default function ViewSingle(props) {
   const {dirName, fileName} = useParams();
   const [entryId, setEntryId] = useState("");
-  const [size, setSize] = useState(0);
+  const [lineCount, setLineCount] = useState(0);
   const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
     if (props) {
-      console.log(`ViewSingle: useEffect() props=`, props);
+      console.log(`ViewSingle: useEffect() props=${JSON.stringify(props)}`);
     } else {
       console.log(`ViewSingle: useEffect() dirName=${dirName}, fileName=${fileName})`);
     }
 
     if (props.entryId) {
       setEntryId(props.entryId);
-      setSize(10 * 1024);
+      setLineCount(props.lineCount);
     }
     if (dirName && fileName) {
       setEntryId(dirName + "/" + fileName);
     }
 
     return () => {
-      console.log("cleanup ViewSingle");
       setEntryId("");
     }
-  }, [props]);
+  }, []);
 
   return (
     <div>
@@ -45,7 +44,7 @@ export default function ViewSingle(props) {
         entryId && entryId.endsWith(".epub") && <ViewEPUB entryId={entryId}/>
       }
       {
-        entryId && entryId.endsWith(".txt") && <ViewTXT entryId={entryId} size={size}/>
+        entryId && entryId.endsWith(".txt") && <ViewTXT entryId={entryId} lineCount={lineCount}/>
       }
       {
         entryId && entryId.endsWith(".html") && <ViewHTML entryId={entryId}/>

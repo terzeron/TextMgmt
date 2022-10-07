@@ -18,29 +18,26 @@ export default function Edit() {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  const [dirList, setDirList] = useState([]);
-  const [entryInfo, setEntryInfo] = useState({
-    id: '',
-    name: '',
-  });
-  const [bookInfo, setBookInfo] = useState({
-    author: '',
-    title: '',
-    extension: '',
-  });
-  const [newFileName, setNewFileName] = useState(null);
-  const [fileMetadata, setFileMetadata] = useState({
-    size: '',
-    encoding: '',
-  });
+  const [topDirList, setToptopDirList] = useState('');
+  const [entryId, setEntryId] = useState('');
+  const [entryName, setEntryName] = useState('');
+
+  const [author, setAuthor] = useState('');
+  const [title, setTitle] = useState('');
+  const [extension, setExtension] = useState('');
+  const [size, setSize] = useState(0);
+  const [encoding, setEncoding] = useState('');
+  const [newFileName, setNewFileName] = useState('');
+
   const [fileMetadataLoading, setFileMetadataLoading] = useState(false);
   const [similarFileList, setSimilarFileList] = useState([]);
   const [similarFileListLoading, setSimilarFileListLoading] = useState(false);
-  const [searchResult, setSearchResult] = useState(null);
+  const [searchResult, setSearchResult] = useState('');
   const [searchResultLoading, setSearchResultLoading] = useState(false);
-  const [selectedDirectory, setSelectedDirectory] = useState(null);
+  const [selectedDirectory, setSelectedDirectory] = useState('');
+
   const [subTreeData, setSubTreeData] = useState([]);
-  const [nextEntryIndex, setNextEntryIndex] = useState(null);
+  const [nextEntryIndex, setNextEntryIndex] = useState(0);
   const [propsData, setPropsData] = useState({});
 
   useEffect(() => {
@@ -53,47 +50,46 @@ export default function Edit() {
         response.json()
           .then((result) => {
             if (result.status === 'success') {
-              const dirListData = result['result'];
-              setDirList(dirListData);
-              setFileMetadata(result['result']);
+              setToptopDirList(result['result']);
               setErrorMessage(null);
             } else {
               setErrorMessage(result['error']);
-              setFileMetadata({
-                size: '',
-                encoding: '',
-              });
             }
           })
           .catch((error) => {
             setErrorMessage(error.message);
-            setFileMetadata({
-              size: '',
-              encoding: '',
-            });
           });
       })
       .catch((error) => {
         setErrorMessage(error.message);
-        setFileMetadata({
-          size: '',
-          encoding: '',
-        });
       });
 
     return () => {
       // console.log('컴퍼넌트가 사라질 때 cleanup할 일을 여기서 처리해야 함');
+      setToptopDirList(null);
+      setEntryId('');
+      setEntryName('');
+
+      setSubTreeData(null);
+      setNextEntryIndex(0);
+
+      setAuthor('');
+      setTitle('');
+      setExtension('');
+      setNewFileName('');
+      setSize(0);
+      setEncoding('');
     };
   }, [] /* rendered once */);
 
   useEffect(() => {
-    if (bookInfo && (bookInfo.author || bookInfo.title)) {
-      setNewFileName(`[${bookInfo.author}] ${bookInfo.title}.${bookInfo.extension}`);
+    if (author || title) {
+      setNewFileName(`[${author}] ${title}.${extension}`);
     }
-  }, [bookInfo]);
+  }, [author, title]);
 
   const decomposeFileName = (fileName) => {
-    // console.log(`decomposeFileName(${fileName})`);
+    console.log(`decomposeFileName(${fileName})`);
     // [ 저자 ] 제목 . 확장자
     const pattern1 = /^\s*\[(?<author>.*?)]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
     // 제목 [ 저자 ] . 확장자
@@ -114,19 +110,13 @@ export default function Edit() {
         author = match.groups.author || '';
         title = match.groups.title || '';
         extension = match.groups.extension || '';
-        setBookInfo({
-          author,
-          title,
-          extension,
-        });
+        //console.log(`pattern=${pattern}, match.groups=${JSON.stringify(match.groups)}`);
+        setAuthor(author);
+        setTitle(title);
+        setExtension(extension);
         break;
       }
     }
-  };
-
-  const showfileMetadata = () => {
-    if (fileMetadataLoading) return <div>로딩 중...</div>;
-    return <div>{fileMetadata.content}</div>;
   };
 
   const showSimilarFileList = () => {
@@ -141,18 +131,24 @@ export default function Edit() {
 
   const fileClicked = useCallback((key, label, props, subTreeData, nextIndex) => {
     console.log(`fileClicked: key=${key}, label=${label}, props=${JSON.stringify(props)}, nextIndex=${nextIndex}`);
+
+    window.scrollTo(0, 0);
+
+    // handling next file entry
     const entryId = key;
     const dirName = entryId.split('/')[0];
     const fileName = entryId.split('/')[1];
-    setEntryInfo({id: entryId, name: fileName});
+    setEntryId(entryId);
+    setEntryName(fileName);
     setNextEntryIndex(nextIndex);
     setSubTreeData(subTreeData);
     setPropsData(props);
     setNewFileName(fileName);
+
+    // decompose file name to (author, title, extension)
     decomposeFileName(fileName);
 
-    window.scrollTo(0, 0);
-
+    // fetch file metadata (size, encoding)
     const fileMetadataUrl = getUrlPrefix() + '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName);
     fetch(fileMetadataUrl)
       .then(handleFetchErrors)
@@ -160,7 +156,8 @@ export default function Edit() {
         response.json()
           .then((result) => {
             if (result.status === 'success') {
-              setFileMetadata(result.result);
+              setSize(result['result']['size']);
+              setEncoding(result['result']['encoding']);
               setErrorMessage(null);
             } else {
               setErrorMessage(result.error);
@@ -172,58 +169,58 @@ export default function Edit() {
       })
       .catch((error) => {
         setErrorMessage(error.message);
-        setFileMetadata({
-          size: '',
-          encoding: '',
-        });
       });
   }, []);
 
-  const cutAuthorClicked = useCallback((e, props) => {
-    e.preventDefault();
-    const tokens = bookInfo.author.split(' ');
-    setBookInfo({
-      author: tokens[0],
-      title: tokens[1],
-      extension: bookInfo.extension,
-    });
-  }, [bookInfo]);
+  const authorChanged = useCallback((e, props) => {
+    setAuthor(e.target.value);
+  });
 
-  const cutTitleClicked = useCallback((e, props) => {
-    e.preventDefault();
-    const tokens = bookInfo.title.split(' ');
-    setBookInfo({
-      author: tokens[0],
-      title: tokens[1],
-      extension: bookInfo.extension,
-    });
-  }, [bookInfo]);
+  const titleChanged = useCallback((e, props) => {
+    setTitle(e.target.value);
+  });
 
-  const exchangeAuthorAndTitleClicked = useCallback((e, props) => {
-    e.preventDefault();
-    const tokens = [bookInfo.author, bookInfo.title];
-    setBookInfo({
-      author: tokens[1],
-      title: tokens[0],
-      extension: bookInfo.extension,
-    });
-  }, [bookInfo]);
+  const extensionChanged = useCallback((e, props) => {
+    setExtension(e.target.value);
+  });
 
-  const resetAuthorAndTitleClicked = useCallback((e, props) => {
-    e.preventDefault();
-    decomposeFileName(entryInfo.name);
-  }, [entryInfo]);
+  const newFileNameChanged = useCallback((e, props) => {
+    setNewFileName(e.target.value);
+  });
+
+  const cutAuthorButtonClicked = useCallback((e, props) => {
+    const tokens = author.split(' ');
+    setAuthor(tokens[0]);
+    setTitle(tokens[1]);
+  }, [author]);
+
+  const cutTitleButtonClicked = useCallback((e, props) => {
+    const tokens = title.split(' ');
+    setAuthor(tokens[0]);
+    setTitle(tokens[1]);
+  }, [title]);
+
+  const exchangeButtonClicked = useCallback((e, props) => {
+    console.log(`exchangeButtonClicked: author=${author}, title=${title}`);
+    const newAuthor = title;
+    const newTitle = author;
+    setAuthor(newAuthor);
+    setTitle(newTitle);
+  }, [author, title]);
+
+  const resetButtonClicked = useCallback((e, props) => {
+    decomposeFileName(entryName);
+  }, [entryName]);
 
   const changeClicked = useCallback(() => {
     alert('변경 버튼 클릭됨');
   }, []);
 
-  const moveToUpperDirectoryClicked = useCallback(() => {
+  const moveToUpperButtonClicked = useCallback(() => {
     console.log(`move to upper directory as '${newFileName}'`);
   }, [newFileName]);
 
   const selectDirectoryClicked = useCallback((e, props) => {
-    e.preventDefault();
     setSelectedDirectory(props);
   }, []);
 
@@ -242,7 +239,7 @@ export default function Edit() {
     } else {
       alert('마지막 파일입니다.');
     }
-  }, [entryInfo]);
+  }, [entryId]);
 
   if (loading) return <div>로딩 중..</div>;
   if (errorMessage) return <div>{errorMessage}</div>;
@@ -265,31 +262,31 @@ export default function Edit() {
                     <Col xs="6">
                       <InputGroup>
                         <InputGroup.Text>파일명</InputGroup.Text>
-                        <Form.Control defaultValue={entryInfo.name} readOnly/>
+                        <Form.Control value={entryName} readOnly/>
                       </InputGroup>
                     </Col>
                     <Col xs="3">
                       <InputGroup>
                         <InputGroup.Text>인코딩</InputGroup.Text>
-                        <Form.Control defaultValue={fileMetadata.encoding} readOnly/>
+                        <Form.Control value={encoding} readOnly/>
                       </InputGroup>
                     </Col>
                     <Col xs="3">
                       <InputGroup>
                         <InputGroup.Text>크기</InputGroup.Text>
-                        <Form.Control defaultValue={fileMetadata.size} readOnly/>
+                        <Form.Control value={size} readOnly/>
                       </InputGroup>
                     </Col>
                   </Row>
                   <Row>
                     <InputGroup>
                       <InputGroup.Text>저자</InputGroup.Text>
-                      <Form.Control defaultValue={bookInfo.author}/>
-                      <Button variant="outline-secondary" size="sm" onClick={cutAuthorClicked}>
+                      <Form.Control value={author} onChange={authorChanged}/>
+                      <Button variant="outline-secondary" size="sm" onClick={cutAuthorButtonClicked}>
                         자르기
                         <FontAwesomeIcon icon={faCut}/>
                       </Button>
-                      <Button variant="outline-secondary" size="sm" onClick={exchangeAuthorAndTitleClicked}>
+                      <Button variant="outline-secondary" size="sm" onClick={exchangeButtonClicked}>
                         교환
                         <FontAwesomeIcon icon={faRotate}/>
                       </Button>
@@ -298,12 +295,12 @@ export default function Edit() {
                   <Row>
                     <InputGroup>
                       <InputGroup.Text>제목</InputGroup.Text>
-                      <Form.Control defaultValue={bookInfo.title}/>
-                      <Button variant="outline-secondary" size="sm" onClick={cutTitleClicked}>
+                      <Form.Control value={title} onChange={titleChanged}/>
+                      <Button variant="outline-secondary" size="sm" onClick={cutTitleButtonClicked}>
                         자르기
                         <FontAwesomeIcon icon={faCut}/>
                       </Button>
-                      <Button variant="outline-secondary" size="sm" onClick={resetAuthorAndTitleClicked}>
+                      <Button variant="outline-secondary" size="sm" onClick={resetButtonClicked}>
                         초기화
                         <FontAwesomeIcon icon={faClockRotateLeft}/>
                       </Button>
@@ -313,13 +310,13 @@ export default function Edit() {
                     <Col xs="3">
                       <InputGroup>
                         <InputGroup.Text>확장자</InputGroup.Text>
-                        <Form.Control defaultValue={bookInfo.extension}/>
+                        <Form.Control value={extension} onChange={extensionChanged}/>
                       </InputGroup>
                     </Col>
                     <Col xs="9">
                       <InputGroup>
                         <InputGroup.Text>파일명</InputGroup.Text>
-                        <Form.Control defaultValue={newFileName}/>
+                        <Form.Control value={newFileName} onChange={newFileNameChanged}/>
                         <Button variant="outline-success" size="sm" onClick={changeClicked}>
                           변경
                           <FontAwesomeIcon icon={faCheck}/>
@@ -334,22 +331,22 @@ export default function Edit() {
                   <Row className="mt-2 button_group">
                     <Col>
                       <Button variant="outline-success" size="sm" onClick={toNextBookClicked}>다음 책으로</Button>
-                      <a href={`https://search.shopping.naver.com/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&sort=REL&query=${bookInfo.author}+${bookInfo.title}`} target="_blank" rel="noreferrer">
+                      <a href={`https://search.shopping.naver.com/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&sort=REL&query=${author}+${title}`} target="_blank" rel="noreferrer">
                         <Button variant="outline-primary" size="sm">네이버 검색</Button>
                       </a>
-                      <a href={`https://www.google.com/search?sourceid=chrome&ie=UTF-8&oq=${bookInfo.author}+${bookInfo.title}&q=${bookInfo.author}+${bookInfo.title}`} target="_blank" rel="noreferrer">
+                      <a href={`https://www.google.com/search?sourceid=chrome&ie=UTF-8&oq=${author}+${title}&q=${author}+${title}`} target="_blank" rel="noreferrer">
                         <Button variant="outline-primary" size="sm">구글 검색</Button>
                       </a>
                     </Col>
                   </Row>
                   <Row className="mt-2 button_group">
-                    <Button variant="outline-warning" size="sm" onClick={moveToUpperDirectoryClicked} disabled={!newFileName}>
+                    <Button variant="outline-warning" size="sm" onClick={moveToUpperButtonClicked} disabled={!newFileName}>
                       상위로
                       <FontAwesomeIcon icon={faUpload}/>
                     </Button>
 
                     {
-                      dirList.filter(dir => dir.key !== entryInfo['id'].split('/')[0])
+                      topDirList && topDirList.filter(dir => dir.key !== entryId.split('/')[0])
                         .map(dir =>
                           <Button
                             variant="outline-secondary"
@@ -366,7 +363,7 @@ export default function Edit() {
 
                   <Row className="mt-2">
                     <InputGroup className="ms-0 me-0">
-                      <Form.Control defaultValue={selectedDirectory} readOnly/>
+                      <Form.Control value={selectedDirectory} readOnly/>
                       <Button variant="outline-warning" size="sm" onClick={moveToDirectoryClicked} disabled={!newFileName || !selectedDirectory}>
                         로 옮기기
                         <FontAwesomeIcon icon={faTruckMoving}/>
@@ -412,12 +409,12 @@ export default function Edit() {
               <Card>
                 <Card.Header>
                   파일 보기
-                  <a href={`/view/${entryInfo['id']}`} target="_blank" rel="noreferrer">
+                  <a href={`/view/${entryId}`} target="_blank" rel="noreferrer">
                     <Button variant="outline-primary" size="sm" className="float-end">새 창에서 전체보기</Button>
                   </a>
                 </Card.Header>
                 <Card.Body>
-                  <ViewSingle key={entryInfo['id']} entryId={entryInfo['id']}/>
+                  <ViewSingle key={entryId} entryId={entryId} lineCount={100}/>
                 </Card.Body>
               </Card>
             </Col>
