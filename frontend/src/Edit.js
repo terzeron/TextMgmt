@@ -11,12 +11,13 @@ import {
   faCheck, faClockRotateLeft, faCut, faRotate, faTrash, faTruckMoving, faUpload,
 } from '@fortawesome/free-solid-svg-icons';
 import DirList from './DirList';
-import {getUrlPrefix, handleFetchErrors} from './Common';
+import {getUrlPrefix, handleFetchErrors, getRandomDarkColor} from './Common';
 import ViewSingle from "./ViewSingle";
 
 export default function Edit() {
-  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
 
   const [topDirList, setToptopDirList] = useState('');
   const [entryId, setEntryId] = useState('');
@@ -92,14 +93,16 @@ export default function Edit() {
     console.log(`decomposeFileName(${fileName})`);
     // [ 저자 ] 제목 . 확장자
     const pattern1 = /^\s*\[(?<author>.*?)]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
+    // ( 저자 ) 제목 . 확장자
+    const pattern2 = /^\s*\((?<author>.*?)\)\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
     // 제목 [ 저자 ] . 확장자
-    const pattern2 = /^\s*(?<title>.*?)\s*\[\s*(?<author>.*?)\s*]\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
+    const pattern3 = /^\s*(?<title>.*?)\s*\[\s*(?<author>.*?)\s*]\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
     // 제목 @ 저자 . 확장자
-    const pattern3 = /^\s*(?<title>.*?)\s*@\s*(?<author>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
+    const pattern4 = /^\s*(?<title>.*?)\s*@\s*(?<author>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
     // 저자 - 제목 . 확장자 or 저자 _ 제목 . 확장자
-    const pattern4 = /^\s*(?<author>.*?)\s*[_-]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
+    const pattern5 = /^\s*(?<author>.*?)\s*[_-]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
     // 제목
-    const pattern5 = /^\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
+    const pattern6 = /^\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
     let author = '';
     let title = '';
     let extension = '';
@@ -116,6 +119,14 @@ export default function Edit() {
         setExtension(extension);
         break;
       }
+    }
+    if (author === '' && title === '' && extension === '') {
+      const finalPattern = /^(?<title>.+)\.(?<extension>txt|epub|zip|pdf)\s*$/;
+      const match = finalPattern.exec(fileName)
+      title = match.groups.title || '';
+      extension = match.groups.extension || '';
+      setTitle(title);
+      setExtension(extension);
     }
   };
 
@@ -145,6 +156,9 @@ export default function Edit() {
     setPropsData(props);
     setNewFileName(fileName);
 
+    // reset
+    setSuccessMessage(null);
+
     // decompose file name to (author, title, extension)
     decomposeFileName(fileName);
 
@@ -164,11 +178,11 @@ export default function Edit() {
             }
           })
           .catch((error) => {
-            setErrorMessage(error.message);
+            setError(error.message);
           });
       })
       .catch((error) => {
-        setErrorMessage(error.message);
+        setError(error.message);
       });
   }, []);
 
@@ -212,9 +226,33 @@ export default function Edit() {
     decomposeFileName(entryName);
   }, [entryName]);
 
-  const changeClicked = useCallback(() => {
-    alert('변경 버튼 클릭됨');
-  }, []);
+  const changeButtonClicked = useCallback(() => {
+    console.log(`changeButtonClicked: entryId=${entryId}, newFileName=${newFileName}`);
+    const dirName = entryId.split('/')[0];
+    const fileName = entryId.split('/')[1];
+    const renameUrl = getUrlPrefix() + '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName) + '/new/' + encodeURIComponent(newFileName);
+    console.log(renameUrl);
+    fetch(renameUrl, {method: 'PUT'})
+      .then(handleFetchErrors)
+      .then((response) => {
+        response.json()
+          .then((result) => {
+            if (result.status === 'success') {
+              setErrorMessage(null);
+              setSuccessMessage("파일 이름이 변경되었습니다.");
+            } else {
+              setErrorMessage(result['error']);
+              setSuccessMessage(null);
+            }
+          })
+          .catch((error) => {
+            setErrorMessage(error.message);
+          });
+      })
+      .catch((error) => {
+        setErrorMessage(error.message);
+      });
+  }, [entryId, newFileName]);
 
   const moveToUpperButtonClicked = useCallback(() => {
     console.log(`move to upper directory as '${newFileName}'`);
@@ -226,11 +264,36 @@ export default function Edit() {
 
   const moveToDirectoryClicked = useCallback(() => {
     console.log(`move to '${selectedDirectory}' as '${newFileName}'`);
-  }, [newFileName]);
+  }, [newFileName, selectedDirectory]);
 
-  const removeClicked = useCallback(() => {
-    alert('삭제 버튼 클릭됨');
-  }, []);
+  const deleteButtonClicked = useCallback(() => {
+    console.log(`deleteButtonClicked: entryId=${entryId}`);
+    const dirName = entryId.split('/')[0];
+    const fileName = entryId.split('/')[1];
+    const deleteUrl = getUrlPrefix() + '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName);
+    console.log(deleteUrl);
+    fetch(deleteUrl, {method: 'DELETE'})
+      .then(handleFetchErrors)
+      .then((response) => {
+        response.json()
+          .then((result) => {
+            if (result.status === 'success') {
+              setErrorMessage(null);
+              setSuccessMessage("파일이 삭제되었습니다.");
+            } else {
+              setErrorMessage(result['error']);
+              setSuccessMessage(null);
+            }
+          })
+          .catch((error) => {
+            setErrorMessage(error.message);
+          });
+      })
+      .catch((error) => {
+        setErrorMessage(error.message);
+      });
+
+  }, [entryId]);
 
   const toNextBookClicked = useCallback(() => {
     console.log('toNextBookClicked');
@@ -241,8 +304,6 @@ export default function Edit() {
     }
   }, [entryId]);
 
-  if (loading) return <div>로딩 중..</div>;
-  if (errorMessage) return <div>{errorMessage}</div>;
   return (
     <Container id="edit">
       <Row fluid="true">
@@ -251,6 +312,9 @@ export default function Edit() {
         </Col>
 
         <Col md="9" lg="10">
+          {
+            error && <div>{error}</div>
+          }
           <Row id="top_panel">
             <Col id="left_panel" lg="5" className="ps-0 pe-0">
               <Card>
@@ -317,11 +381,11 @@ export default function Edit() {
                       <InputGroup>
                         <InputGroup.Text>파일명</InputGroup.Text>
                         <Form.Control value={newFileName} onChange={newFileNameChanged}/>
-                        <Button variant="outline-success" size="sm" onClick={changeClicked}>
+                        <Button variant="outline-success" size="sm" onClick={changeButtonClicked}>
                           변경
                           <FontAwesomeIcon icon={faCheck}/>
                         </Button>
-                        <Button variant="outline-danger" size="sm" onClick={removeClicked}>
+                        <Button variant="outline-danger" size="sm" onClick={deleteButtonClicked}>
                           삭제
                           <FontAwesomeIcon icon={faTrash}/>
                         </Button>
@@ -331,11 +395,23 @@ export default function Edit() {
                   <Row className="mt-2 button_group">
                     <Col>
                       <Button variant="outline-success" size="sm" onClick={toNextBookClicked}>다음 책으로</Button>
-                      <a href={`https://search.shopping.naver.com/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&sort=REL&query=${author}+${title}`} target="_blank" rel="noreferrer">
-                        <Button variant="outline-primary" size="sm">네이버 검색</Button>
+                      <a href={`http://www.yes24.com/Product/Search?domain=ALL&query=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
+                        <Button variant="outline-primary" size="sm">Yes24</Button>
                       </a>
-                      <a href={`https://www.google.com/search?sourceid=chrome&ie=UTF-8&oq=${author}+${title}&q=${author}+${title}`} target="_blank" rel="noreferrer">
-                        <Button variant="outline-primary" size="sm">구글 검색</Button>
+                      <a href={`https://www.google.com/search?sourceid=chrome&ie=UTF-8&oq=${encodeURIComponent(author)}+${encodeURIComponent(title)}&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
+                        <Button variant="outline-primary" size="sm">구글</Button>
+                      </a>
+                      <a href={`https://search.shopping.naver.com/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&sort=REL&query=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
+                        <Button variant="outline-primary" size="sm">네이버쇼핑</Button>
+                      </a>
+                      <a href={`https://series.naver.com/search/search.series?t=all&fs=novel&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
+                        <Button variant="outline-primary" size="sm">네이버시리즈</Button>
+                      </a>
+                      <a href={`https://novel.munpia.com/page/hd.platinum/view/search/keyword/${encodeURIComponent(author)}+${encodeURIComponent(title)}/order/search_result`} target="_blank" rel="noreferrer">
+                        <Button variant="outline-primary" size="sm">문피아</Button>
+                      </a>
+                      <a href={`https://ridibooks.com/search?adult_exclude=n&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
+                        <Button variant="outline-primary" size="sm">RIDI</Button>
                       </a>
                     </Col>
                   </Row>
@@ -344,19 +420,43 @@ export default function Edit() {
                       상위로
                       <FontAwesomeIcon icon={faUpload}/>
                     </Button>
-
                     {
-                      topDirList && topDirList.filter(dir => dir.key !== entryId.split('/')[0])
-                        .map(dir =>
-                          <Button
-                            variant="outline-secondary"
-                            size="sm"
-                            key={dir.key}
-                            onClick={(e) => {
-                              selectDirectoryClicked(e, dir.key);
-                            }}>
-                            {`${dir.key}`}
-                          </Button>
+                      topDirList && topDirList
+                        .filter(dir => dir.key !== entryId.split('/')[0])
+                        .map((dir) => {
+                            const category = dir.key.split('_')[0];
+                            const subCategory = dir.key.split('_')[1];
+                            const hasSubCategory = dir.key.includes('_');
+                            if (hasSubCategory)
+                              return (
+                                <Button
+                                  variant="outline-secondary"
+                                  size="sm"
+                                  key={dir.key}
+                                  style={{
+                                    backgroundColor: getRandomDarkColor(category),
+                                    color: 'white'
+                                  }}
+                                  onClick={(e) => {
+                                    selectDirectoryClicked(e, dir.key);
+                                  }}>
+                                  {subCategory}
+                                </Button>
+                              )
+                          else
+                            return (
+                              <Button
+                                variant="outline-secondary"
+                                size="sm"
+                                key={dir.key}
+                                className="btn-light"
+                                onClick={(e) => {
+                                  selectDirectoryClicked(e, dir.key);
+                                }}>
+                                {dir.key}
+                              </Button>
+                            )
+                          }
                         )
                     }
                   </Row>
@@ -379,6 +479,9 @@ export default function Edit() {
                 <Card.Body>
                   {
                     errorMessage && <Alert variant="danger" className="mb-0">{errorMessage}</Alert>
+                  }
+                  {
+                    successMessage && <Alert variant="success" className="mb-0">{successMessage}</Alert>
                   }
                 </Card.Body>
               </Card>

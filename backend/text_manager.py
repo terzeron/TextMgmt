@@ -23,14 +23,27 @@ class TextManager:
     def move_file(self, dir_name: str, file_name: str, new_dir_name: str) -> Tuple[Dict[str, Any], Optional[Any]]:
         LOGGER.debug(f"# move_file(dir_name={dir_name}, file_name={file_name}, new_dir_name={new_dir_name})")
 
-    def get_similar_file_list(self, dir_name: str, file_name: str) -> Tuple[Dict[str, Any], Optional[Any]]:
+    def get_similar_file_list(self, dir_name: str, file_name: str) -> Tuple[str, Optional[Any]]:
         LOGGER.debug(f"# get_similar_file_list(dir_name={dir_name}, file_name={file_name})")
 
     def rename_file(self, dir_name: str, file_name: str, new_file_name: str) -> Tuple[Dict[str, Any], Optional[Any]]:
         LOGGER.debug(f"# rename_file(dir_name={dir_name}, file_name={file_name}, new_file_name={new_file_name})")
+        path = self.path_prefix / dir_name / file_name
+        new_path = self.path_prefix / dir_name / new_file_name
+        try:
+            path.rename(new_path);
+        except IOError as e:
+            return "Error", f"can't rename '{dir_name}/{file_name}' to '{dir_name}/{new_file_name}', {e}"
+        return "Ok", None
 
-    def delete_file(self, dir_name: str, file_name: str) -> Tuple[Dict[str, Any], Optional[Any]]:
+    def delete_file(self, dir_name: str, file_name: str) -> Tuple[str, Optional[Any]]:
         LOGGER.debug(f"# delete_file(dir_name={dir_name}, file_name={file_name})")
+        path = self.path_prefix / dir_name / file_name
+        try:
+            path.unlink();
+        except IOError as e:
+            return "Error", f"can't delete '{dir_name}/{file_name}', {e}"
+        return "Ok", None
 
     def read_binary_file(self, path: Path) -> bytes:
         LOGGER.debug(f"# read_binary_file(path={path})")
@@ -50,6 +63,7 @@ class TextManager:
 
     def get_file_content(self, dir_name: str, file_name: str, size: int = 0) -> Union[str, bytes]:
         LOGGER.debug(f"# get_file_content(dir_name={dir_name}, file_name={file_name}, size={size})")
+        content = ""
         path = self.path_prefix / dir_name / file_name
         if path.is_file():
             if path.suffix == ".txt":
@@ -60,12 +74,15 @@ class TextManager:
                 content = FileResponse(path=path, media_type="application/epub+zip")
             elif path.suffix == ".html":
                 content = FileResponse(path=path, media_type="text/html")
+            else:
+                content = FileResponse(path=path, media_type="application/octet-stream")
 
             return content
-        return None
+        return content
 
     def get_file_info(self, dir_name: str, file_name: str) -> Tuple[Union[Dict[str, Any], bytes], Optional[Any]]:
         LOGGER.debug(f"# get_file_info(dir_name={dir_name}, file_name={file_name})")
+        result = {}
         path = self.path_prefix / dir_name / file_name
         if path.is_file():
             st = path.stat()
@@ -79,7 +96,7 @@ class TextManager:
                 "encoding": encoding,
             }
             return result, None
-        return None, "File not found"
+        return result, "File not found"
 
     def get_full_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
         LOGGER.debug(f"# get_full_dirs()")
@@ -98,10 +115,24 @@ class TextManager:
         result.sort(key=lambda x: x["key"])
         return result, None
 
-    def get_some_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        LOGGER.debug(f"# get_some_dirs()")
-        path = self.path_prefix
+    def get_full_entries_from_dir(self, dir_name: str = "") -> Tuple[List[Dict[str, Any]], Optional[Any]]:
+        LOGGER.debug(f"# get_full_entries_from_dir(dir_name={dir_name})")
         result = []
+        # 특정 디렉토리 하위만 조회
+        path = self.path_prefix / dir_name
+        if path.is_dir():
+            nodes = []
+            for entry in path.iterdir():
+                if entry.is_file():
+                    nodes.append({"key": entry.name, "label": entry.name})
+            result.append({"key": entry.name, "label": entry.name, "nodes": nodes})
+        result.sort(key=lambda x: x["key"])
+        return result, None
+
+    def get_some_entries_from_all_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
+        LOGGER.debug(f"# get_some_entries_from_all_dirs()")
+        # 전체 디렉토리의 일부 몇 개만 조회
+        path = self.path_prefix
         for entry in path.iterdir():
             if entry.is_dir():
                 nodes = []

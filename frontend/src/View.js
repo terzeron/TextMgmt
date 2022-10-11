@@ -9,8 +9,9 @@ import { getUrlPrefix, handleFetchErrors } from './Common';
 import DirList from './DirList';
 
 export default function View() {
-  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [errorMessage, setErrorMessage] = useState(null);
+  const [successMessage, setSuccessMessage] = useState('');
   const [viewUrl, setViewUrl] = useState(null);
   const [downloadUrl, setDownloadUrl] = useState('');
   const [entryInfo, setEntryInfo] = useState({
@@ -45,31 +46,17 @@ export default function View() {
               setErrorMessage(null);
             } else {
               setErrorMessage(result.error);
-              setFileContent({
-                size: '',
-                encoding: '',
-              });
             }
           })
           .catch((err) => {
-            setErrorMessage(err.message);
-            setFileContent({
-              size: '',
-              encoding: '',
-            });
+            setError(err.message);
           });
       })
       .catch((error) => {
-        setErrorMessage(error.message);
-        setFileContent({
-          size: '',
-          encoding: '',
-        });
+        setError(error.message);
       });
   }
 
-  if (loading) return <div>로딩 중..</div>;
-  if (errorMessage) return <div>{errorMessage}</div>;
   return (
     <Container id="view">
       <Row fluid="true">
@@ -78,6 +65,9 @@ export default function View() {
         </Col>
 
         <Col md="9" lg="10">
+          {
+            error && <div>{error}</div>
+          }
           <Row id="top_panel">
             <Col lg="12" className="ps-0 pe-0 me-0">
               <Card>
