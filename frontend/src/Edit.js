@@ -1,17 +1,13 @@
 import './Edit.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {useCallback, useEffect, useState} from 'react';
 
-import {
-  Container, Row, Col, Card, Form, Button, InputGroup, Alert,
-} from 'react-bootstrap';
+import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
-import {
-  faCheck, faClockRotateLeft, faCut, faRotate, faTrash, faTruckMoving, faUpload,
-} from '@fortawesome/free-solid-svg-icons';
+import {faCheck, faClockRotateLeft, faCut, faRotate, faTrash, faTruckMoving, faUpload} from '@fortawesome/free-solid-svg-icons';
 import DirList from './DirList';
-import {getUrlPrefix, handleFetchErrors, getRandomDarkColor} from './Common';
+import {getRandomDarkColor, getUrlPrefix, handleFetchErrors} from './Common';
 import ViewSingle from "./ViewSingle";
 
 export default function Edit() {
@@ -19,6 +15,7 @@ export default function Edit() {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
+  const [treeData, setTreeData] = useState([]);
   const [topDirList, setToptopDirList] = useState('');
   const [entryId, setEntryId] = useState('');
   const [entryName, setEntryName] = useState('');
@@ -30,6 +27,7 @@ export default function Edit() {
   const [encoding, setEncoding] = useState('');
   const [newFileName, setNewFileName] = useState('');
 
+  const [dirListLoading, setDirListLoading] = useState(false);
   const [fileMetadataLoading, setFileMetadataLoading] = useState(false);
   const [similarFileList, setSimilarFileList] = useState([]);
   const [similarFileListLoading, setSimilarFileListLoading] = useState(false);
@@ -37,15 +35,59 @@ export default function Edit() {
   const [searchResultLoading, setSearchResultLoading] = useState(false);
   const [selectedDirectory, setSelectedDirectory] = useState('');
 
-  const [subTreeData, setSubTreeData] = useState([]);
-  const [nextEntryIndex, setNextEntryIndex] = useState(0);
-  const [propsData, setPropsData] = useState({});
+  const [nextEntryId, setNextEntryId] = useState('');
 
   useEffect(() => {
     console.log(`Edit: useEffect() `);
 
+    setDirListLoading(true);
+    const someDirListUrl = getUrlPrefix() + "/somedirs";
+    fetch(someDirListUrl)
+      .then(handleFetchErrors)
+      .then((response) => {
+        response.json()
+          .then((result) => {
+            if (result['status'] === 'success') {
+              setTreeData(result['result']);
+
+              console.log("call /dirs for treeData");
+              const fullDirListUrl = getUrlPrefix() + "/dirs";
+              fetch(fullDirListUrl)
+                .then(handleFetchErrors)
+                .then((response) => {
+                  response.json()
+                    .then((result) => {
+                      if (result['status'] === 'success') {
+                        setTreeData(result['result']);
+                      } else {
+                        setErrorMessage(`directory list load failed, ${result['error']}`);
+                      }
+                    })
+                    .catch((error) => {
+                      setErrorMessage(`dir list load failed, ${error}`);
+                    });
+                })
+                .catch((error) => {
+                  setErrorMessage(`dir list load failed, ${error}`);
+                });
+            } else {
+              setErrorMessage(`directory list load failed, ${result['error']}`);
+            }
+          })
+          .catch((error) => {
+            setErrorMessage(`dir list load failed, ${error}`);
+          })
+      })
+      .catch((error) => {
+        setErrorMessage(`dir list load failed, ${error}`);
+      })
+      .finally(() => {
+        setDirListLoading(false);
+      });
+
     console.log("call /topdirs for other dir list")
-    fetch(`${getUrlPrefix()}/topdirs`)
+    const topDirListUrl = getUrlPrefix() + '/topdirs';
+    fetch(topDirListUrl)
       .then(handleFetchErrors)
       .then((response) => {
         response.json()
@@ -66,13 +108,11 @@ export default function Edit() {
       });
 
     return () => {
-      // console.log('컴퍼넌트가 사라질 때 cleanup할 일을 여기서 처리해야 함');
+      setTreeData(null);
+
       setToptopDirList(null);
       setEntryId('');
       setEntryName('');
-
-      setSubTreeData(null);
-      setNextEntryIndex(0);
 
       setAuthor('');
       setTitle('');
@@ -91,6 +131,10 @@ export default function Edit() {
 
   const decomposeFileName = (fileName) => {
     console.log(`decomposeFileName(${fileName})`);
+    setAuthor('');
+    setTitle('');
+    setExtension('');
+
     // [ 저자 ] 제목 . 확장자
     const pattern1 = /^\s*\[(?<author>.*?)]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
     // ( 저자 ) 제목 . 확장자
@@ -102,67 +146,70 @@ export default function Edit() {
     // 저자 - 제목 . 확장자 or 저자 _ 제목 . 확장자
     const pattern5 = /^\s*(?<author>.*?)\s*[_-]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
     // 제목
-    const pattern6 = /^\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
     let author = '';
     let title = '';
     let extension = '';
 
+    let isChanged = false;
     for (const pattern of [pattern1, pattern2, pattern3, pattern4, pattern5]) {
       const match = pattern.exec(fileName);
       if (match) {
         author = match.groups.author || '';
         title = match.groups.title || '';
         extension = match.groups.extension || '';
-        //console.log(`pattern=${pattern}, match.groups=${JSON.stringify(match.groups)}`);
         setAuthor(author);
         setTitle(title);
         setExtension(extension);
+        isChanged = true;
         break;
       }
     }
-    if (author === '' && title === '' && extension === '') {
+    if (isChanged === false) {
       const finalPattern = /^(?<title>.+)\.(?<extension>txt|epub|zip|pdf)\s*$/;
-      const match = finalPattern.exec(fileName)
-      title = match.groups.title || '';
-      extension = match.groups.extension || '';
-      setTitle(title);
-      setExtension(extension);
+      const match = finalPattern.exec(fileName);
+      if (match) {
+        title = match.groups.title || '';
+        extension = match.groups.extension || '';
+        setTitle(title);
+        setExtension(extension);
+      }
     }
   };
 
-  const showSimilarFileList = () => {
-    if (similarFileListLoading) return <div>로딩 중...</div>;
-    return <div>{similarFileList}</div>;
-  };
-
-  const showSearchResult = () => {
-    if (searchResultLoading) return <div>로딩 중...</div>;
-    return <div>{searchResult}</div>;
-  };
-
-  const fileClicked = useCallback((key, label, props, subTreeData, nextIndex) => {
-    console.log(`fileClicked: key=${key}, label=${label}, props=${JSON.stringify(props)}, nextIndex=${nextIndex}`);
+  const fileClicked = useCallback((key) => {
+    console.log(`fileClicked: key=${key}`);
 
     window.scrollTo(0, 0);
 
-    // handling next file entry
-    const entryId = key;
-    const dirName = entryId.split('/')[0];
-    const fileName = entryId.split('/')[1];
-    setEntryId(entryId);
+    const dirName = key.split('/')[0];
+    const fileName = key.split('/')[1];
+    setEntryId(key);
     setEntryName(fileName);
-    setNextEntryIndex(nextIndex);
-    setSubTreeData(subTreeData);
-    setPropsData(props);
     setNewFileName(fileName);
 
     // reset
     setSuccessMessage(null);
 
+    // determine nextEntryId
+    //for (let i = 0; i < treeData.length; i++) {
+    for (let treeDataItem of treeData) {
+      if (treeDataItem.key === dirName) {
+        const indexClicked = treeDataItem.nodes.findIndex((item) => item.key === fileName);
+        if (indexClicked < treeDataItem.nodes.length - 1) {
+          const nextEntryId = treeDataItem.nodes[indexClicked + 1].key;
+          setNextEntryId(dirName + '/' + nextEntryId);
+        } else {
+          setNextEntryId(null);
+        }
+        break;
+      }
+    }
+
     // decompose file name to (author, title, extension)
     decomposeFileName(fileName);
 
     // fetch file metadata (size, encoding)
+    setFileMetadataLoading(true);
     const fileMetadataUrl = getUrlPrefix() + '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName);
     fetch(fileMetadataUrl)
       .then(handleFetchErrors)
@@ -183,38 +230,41 @@ export default function Edit() {
       })
       .catch((error) => {
         setError(error.message);
+      })
+      .finally(() => {
+        setFileMetadataLoading(false);
       });
+  }, [treeData]);
+
+  const authorChanged = useCallback((e) => {
+    setAuthor(e.target.value);
   }, []);
 
-  const authorChanged = useCallback((e, props) => {
-    setAuthor(e.target.value);
-  });
-
-  const titleChanged = useCallback((e, props) => {
+  const titleChanged = useCallback((e) => {
     setTitle(e.target.value);
-  });
+  }, []);
 
-  const extensionChanged = useCallback((e, props) => {
+  const extensionChanged = useCallback((e) => {
     setExtension(e.target.value);
-  });
+  }, []);
 
-  const newFileNameChanged = useCallback((e, props) => {
+  const newFileNameChanged = useCallback((e) => {
     setNewFileName(e.target.value);
-  });
+  }, []);
 
-  const cutAuthorButtonClicked = useCallback((e, props) => {
+  const cutAuthorButtonClicked = useCallback(() => {
     const tokens = author.split(' ');
     setAuthor(tokens[0]);
     setTitle(tokens[1]);
   }, [author]);
 
-  const cutTitleButtonClicked = useCallback((e, props) => {
+  const cutTitleButtonClicked = useCallback(() => {
     const tokens = title.split(' ');
     setAuthor(tokens[0]);
     setTitle(tokens[1]);
   }, [title]);
 
-  const exchangeButtonClicked = useCallback((e, props) => {
+  const exchangeButtonClicked = useCallback(() => {
     console.log(`exchangeButtonClicked: author=${author}, title=${title}`);
     const newAuthor = title;
     const newTitle = author;
@@ -222,7 +272,7 @@ export default function Edit() {
     setTitle(newTitle);
   }, [author, title]);
 
-  const resetButtonClicked = useCallback((e, props) => {
+  const resetButtonClicked = useCallback(() => {
     decomposeFileName(entryName);
   }, [entryName]);
 
@@ -240,6 +290,26 @@ export default function Edit() {
             if (result.status === 'success') {
               setErrorMessage(null);
               setSuccessMessage("파일 이름이 변경되었습니다.");
+
+              const newTreeData = [...treeData];
+              let isChanged = false;
+
+              for (let treeDataItem of newTreeData) {
+                if (treeDataItem.key === dirName) {
+                  for (let treeDataItemNode of treeDataItem.nodes) {
+                    if (treeDataItemNode.key === fileName) {
+                      treeDataItemNode.key = newFileName;
+                      treeDataItemNode.title = newFileName;
+                      isChanged = true;
+                      break;
+                    }
+                  }
+                }
+                if (isChanged) {
+                  break;
+                }
+              }
+              setTreeData(newTreeData);
             } else {
               setErrorMessage(result['error']);
               setSuccessMessage(null);
@@ -280,6 +350,18 @@ export default function Edit() {
             if (result.status === 'success') {
               setErrorMessage(null);
               setSuccessMessage("파일이 삭제되었습니다.");
+
+              const newTreeData = [...treeData];
+              for (let treeDataItem of newTreeData) {
+                if (treeDataItem.key === dirName) {
+                  const indexToDelete = treeDataItem.nodes.findIndex((item) => item.key === fileName);
+                  if (indexToDelete > -1) {
+                    treeDataItem.nodes.splice(indexToDelete, 1);
+                    break;
+                  }
+                }
+              }
+              setTreeData(newTreeData);
             } else {
               setErrorMessage(result['error']);
               setSuccessMessage(null);
@@ -296,19 +378,22 @@ export default function Edit() {
   }, [entryId]);
 
   const toNextBookClicked = useCallback(() => {
-    console.log('toNextBookClicked');
-    if (subTreeData[nextEntryIndex]) {
-      fileClicked(propsData['parent'] + '/' + subTreeData[nextEntryIndex].key, subTreeData[nextEntryIndex].label, propsData, subTreeData, nextEntryIndex + 1);
+    console.log(`toNextBookClicked: nextEntryId=${nextEntryId}`);
+    if (nextEntryId) {
+      fileClicked(nextEntryId);
     } else {
       alert('마지막 파일입니다.');
     }
-  }, [entryId]);
+  }, [nextEntryId]);
 
   return (
     <Container id="edit">
       <Row fluid="true">
         <Col md="3" lg="2" className="ps-0 pe-0">
-          <DirList onClickHandler={fileClicked}/>
+          {
+            dirListLoading && <div className="loading">로딩 중...</div>
+          }
+          <DirList treeData={treeData} onClickHandler={fileClicked}/>
         </Col>
 
         <Col md="9" lg="10">
@@ -323,6 +408,9 @@ export default function Edit() {
                 </Card.Header>
                 <Card.Body>
                   <Row>
+                    {
+                      fileMetadataLoading && <div className="loading">로딩 중...</div>
+                    }
                     <Col xs="6">
                       <InputGroup>
                         <InputGroup.Text>파일명</InputGroup.Text>
@@ -395,7 +483,7 @@ export default function Edit() {
                   <Row className="mt-2 button_group">
                     <Col>
                       <Button variant="outline-success" size="sm" onClick={toNextBookClicked}>다음 책으로</Button>
-                      <a href={`http://www.yes24.com/Product/Search?domain=ALL&query=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
+                      <a href={`https://www.yes24.com/Product/Search?domain=ALL&query=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
                         <Button variant="outline-primary" size="sm">Yes24</Button>
                       </a>
                       <a href={`https://www.google.com/search?sourceid=chrome&ie=UTF-8&oq=${encodeURIComponent(author)}+${encodeURIComponent(title)}&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
@@ -443,19 +531,19 @@ export default function Edit() {
                                   {subCategory}
                                 </Button>
                               )
-                          else
-                            return (
-                              <Button
-                                variant="outline-secondary"
-                                size="sm"
-                                key={dir.key}
-                                className="btn-light"
-                                onClick={(e) => {
-                                  selectDirectoryClicked(e, dir.key);
-                                }}>
-                                {dir.key}
-                              </Button>
-                            )
+                            else
+                              return (
+                                <Button
+                                  variant="outline-secondary"
+                                  size="sm"
+                                  key={dir.key}
+                                  className="btn-light"
+                                  onClick={(e) => {
+                                    selectDirectoryClicked(e, dir.key);
+                                  }}>
+                                  {dir.key}
+                                </Button>
+                              )
                           }
                         )
                     }
@@ -489,19 +577,38 @@ export default function Edit() {
 
             <Col id="right_panel" lg="7" className="ps-0 pe-0">
               <Card>
+                {
+                  similarFileListLoading && <div className="loading">로딩 중...</div>
+                }
                 <Card.Header>
                   유사한 파일 목록
                 </Card.Header>
                 <Card.Body>
-                  {showSimilarFileList()}
+                  {
+                    similarFileList && similarFileList.map((item, index) => {
+                      return (
+                        {item}, {index}
+                      )
+                    })
+                  }
                 </Card.Body>
               </Card>
+
               <Card>
+                {
+                  searchResultLoading && <div className="loading">로딩 중...</div>
+                }
                 <Card.Header>
                   검색 결과
                 </Card.Header>
                 <Card.Body>
-                  {showSearchResult()}
+                  {
+                    searchResult && searchResult.map((item, index) => {
+                      return (
+                        {item}, {index}
+                      )
+                    })
+                  }
                 </Card.Body>
               </Card>
             </Col>

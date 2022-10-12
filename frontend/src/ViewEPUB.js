@@ -1,15 +1,14 @@
 import {useEffect, useRef, useState} from "react";
 import {getUrlPrefix} from "./Common";
 import {ReactReader} from "react-reader";
-import Section, {SpineItem} from "../node_modules/epubjs/lib/section.js";
 
 export default function ViewEPUB(props) {
   const [loading, setLoading] = useState(true);
 
   const renditionRef = useRef(null)
   const [url, setUrl] = useState("");
-  const [location] = useState(null)
-  const [locationChanged] = useState(null)
+  const [location] = useState('')
+  const [locationChanged] = useState(null);
 
   useEffect(() => {
     if (renditionRef.current) {
@@ -27,7 +26,6 @@ export default function ViewEPUB(props) {
     }
 
     return () => {
-      //console.log("cleanup");
       setUrl("");
     };
   }, []);
@@ -43,7 +41,7 @@ export default function ViewEPUB(props) {
         getRendition={(rendition) => {
           const spine_get = rendition.book.spine.get.bind(rendition.book.spine);
           rendition.book.spine.get = function (target) {
-            var t = spine_get(target);
+            let t = spine_get(target);
             if (!t) {
               t = spine_get(undefined);
             }
@@ -53,4 +51,4 @@ export default function ViewEPUB(props) {
       />
     </div>
   );
-};
+}

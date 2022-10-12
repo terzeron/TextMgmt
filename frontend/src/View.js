@@ -2,47 +2,102 @@ import './View.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
 import {useEffect, useState} from 'react';
-import {
-  Button, Card, Col, Container, Form, InputGroup, Row,
-} from 'react-bootstrap';
-import { getUrlPrefix, handleFetchErrors } from './Common';
+import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-bootstrap';
+import {getUrlPrefix, handleFetchErrors} from './Common';
 import DirList from './DirList';
 
 export default function View() {
   const [error, setError] = useState('');
-  const [errorMessage, setErrorMessage] = useState(null);
-  const [successMessage, setSuccessMessage] = useState('');
-  const [viewUrl, setViewUrl] = useState(null);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const [treeData, setTreeData] = useState([]);
+  const [entryId, setEntryId] = useState('');
+  const [entryName, setEntryName] = useState('');
+  const [size, setSize] = useState(0);
+  const [encoding, setEncoding] = useState('');
+  const [viewUrl, setViewUrl] = useState('');
   const [downloadUrl, setDownloadUrl] = useState('');
-  const [entryInfo, setEntryInfo] = useState({
-    id: '',
-    name: '',
-  });
-  const [fileContent, setFileContent] = useState({
-    size: '',
-    encoding: '',
-  });
 
-  function fileClicked(key, label, props, subTreeData, nextIndex) {
-    console.log(`fileClicked: key=${key}, label=${label}, props=${props}, nextIndex=${nextIndex}`);
+  const [dirListLoading, setDirListLoading] = useState(false);
 
-    const entryId = key;
-    const dirName = entryId.split('/')[0];
-    const fileName = entryId.split('/')[1];
+  useEffect(() => {
+    setDirListLoading(true);
+    const someDirListUrl = getUrlPrefix() + "/somedirs";
+    fetch(someDirListUrl)
+      .then(handleFetchErrors)
+      .then((response) => {
+        response.json()
+          .then((result) => {
+            if (result['status'] === 'success') {
+              setTreeData(result['result']);
 
-    setEntryInfo({ id: entryId, name: fileName });
-    console.log('viewUrl=/view/' + encodeURIComponent(dirName) + '/' + encodeURIComponent(fileName));
-    console.log('downloadUrl=' + getUrlPrefix() + '/download/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName));
+              console.log("call /dirs for treeData");
+              const fullDirListUrl = getUrlPrefix() + "/dirs";
+              fetch(fullDirListUrl)
+                .then(handleFetchErrors)
+                .then((response) => {
+                  response.json()
+                    .then((result) => {
+                      if (result['status'] === 'success') {
+                        setTreeData(result['result']);
+                      } else {
+                        setErrorMessage(`directory list load failed, ${result['error']}`);
+                      }
+                    })
+                    .catch((error) => {
+                      setErrorMessage(`dir list load failed, ${error}`);
+                    });
+                })
+                .catch((error) => {
+                  setErrorMessage(`dir list load failed, ${error}`);
+                });
+            } else {
+              setErrorMessage(`directory list load failed, ${result['error']}`);
+            }
+          })
+          .catch((error) => {
+            setErrorMessage(`dir list load failed, ${error}`);
+          });
+      })
+      .catch((error) => {
+        setErrorMessage(`dir list load failed, ${error}`);
+      })
+      .finally(() => {
+        setDirListLoading(false);
+      });
+
+    return () => {
+      setTreeData([]);
+      setEntryId('');
+      setEntryName('');
+      setSize(0);
+      setEncoding('');
+      setViewUrl('');
+      setDownloadUrl('');
+    }
+  }, []);
+
+  function fileClicked(key) {
+    console.log(`fileClicked: key=${key}`);
+
+    const dirName = key.split('/')[0];
+    const fileName = key.split('/')[1];
+    setEntryId(key);
+    setEntryName(fileName);
+
     setViewUrl('/view/' + encodeURIComponent(dirName) + '/' + encodeURIComponent(fileName));
     setDownloadUrl(getUrlPrefix() + '/download/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName));
 
-    fetch(`${getUrlPrefix()}/dirs/${dirName}/files/${fileName}`)
+    setDirListLoading(true);
+    const fileContentUrl = getUrlPrefix() + '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName);
+    fetch(fileContentUrl)
       .then(handleFetchErrors)
       .then((response) => {
         response.json()
           .then((result) => {
             if (result.status === 'success') {
-              setFileContent(result.result);
+              setSize(result.result.size);
+              setEncoding(result.result.encoding);
               setErrorMessage(null);
             } else {
               setErrorMessage(result.error);
@@ -54,6 +109,9 @@ export default function View() {
       })
       .catch((error) => {
         setError(error.message);
+      })
+      .finally(() => {
+        setDirListLoading(false);
       });
   }
 
@@ -61,7 +119,12 @@ export default function View() {
     <Container id="view">
       <Row fluid="true">
         <Col md="3" lg="2" className="ps-0 pe-0">
-          <DirList onClickHandler={fileClicked} />
+          {
+            dirListLoading && <div className="loading">로딩 중...</div>
+          }
+          {
+            !dirListLoading && <DirList treeData={treeData} onClickHandler={fileClicked}/>
+          }
         </Col>
 
         <Col md="9" lg="10">
@@ -71,6 +134,9 @@ export default function View() {
           <Row id="top_panel">
             <Col lg="12" className="ps-0 pe-0 me-0">
               <Card>
+                {
+                  errorMessage && <Alert variant="danger" className="mb-0">{errorMessage}</Alert>
+                }
                 <Card.Header>
                   파일 정보
                 </Card.Header>
@@ -79,29 +145,29 @@ export default function View() {
                     <Col xs="6">
                       <InputGroup>
                         <InputGroup.Text>파일명</InputGroup.Text>
-                        <Form.Control defaultValue={entryInfo.name} readOnly />
+                        <Form.Control defaultValue={entryName} readOnly/>
                       </InputGroup>
                     </Col>
                     <Col xs="3">
                       <InputGroup>
                         <InputGroup.Text>인코딩</InputGroup.Text>
-                        <Form.Control defaultValue={fileContent.encoding} readOnly />
+                        <Form.Control defaultValue={encoding} readOnly/>
                       </InputGroup>
                     </Col>
                     <Col xs="3">
                       <InputGroup>
                         <InputGroup.Text>크기</InputGroup.Text>
-                        <Form.Control defaultValue={fileContent.size} readOnly />
+                        <Form.Control defaultValue={size} readOnly/>
                       </InputGroup>
                     </Col>
                   </Row>
                   <Row className="mt-1">
                     <span>
                       <a href={viewUrl} target="_blank" rel="noreferrer">
-                        <Button variant="outline-secondary" size="sm" disabled={!entryInfo.id}>새 창에서 전체 보기</Button>
+                        <Button variant="outline-secondary" size="sm" disabled={!entryId}>새 창에서 전체 보기</Button>
                       </a>
                       <a href={downloadUrl} target="_blank" rel="noreferrer">
-                        <Button variant="outline-secondary" size="sm" disabled={!entryInfo.id}>다운로드</Button>
+                        <Button variant="outline-secondary" size="sm" disabled={!entryId}>다운로드</Button>
                       </a>
                     </span>
                   </Row>
