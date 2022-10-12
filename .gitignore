@@ -1,0 +1,14 @@
+text/_epub
+text/_pdf
+text/_txt
+text/_sub5
+text/_sub6
+text/cat1_sub1
+text/cat1_sub2
+text/cat2_sub3
+text/cat2_sub4
+text/testdata
+text/testdata2
+text/testdata3
+backend/.env
+frontend/.env
