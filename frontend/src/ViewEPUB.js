@@ -1,10 +1,8 @@
-import {useEffect, useRef, useState} from "react";
+import {useEffect, useRef, useState, Suspense} from "react";
 import {getUrlPrefix} from "./Common";
 import {ReactReader} from "react-reader";
 
 export default function ViewEPUB(props) {
-  const [loading, setLoading] = useState(true);
-
   const renditionRef = useRef(null)
   const [url, setUrl] = useState("");
   const [location] = useState('')
@@ -22,7 +20,6 @@ export default function ViewEPUB(props) {
       const url = getUrlPrefix() + "/download/dirs/" + dirName + "/files/" + encodeURIComponent(fileName);
       setUrl(url);
       console.log(url);
-      setLoading(false);
     }
 
     return () => {
@@ -30,25 +27,26 @@ export default function ViewEPUB(props) {
     };
   }, []);
 
-  if (loading) return <div>로딩 중...</div>;
   return (
     <div style={{height: "100vh"}}>
-      <ReactReader
-        location={location}
-        locationChanged={locationChanged}
-        url={url}
-        key={url}
-        getRendition={(rendition) => {
-          const spine_get = rendition.book.spine.get.bind(rendition.book.spine);
-          rendition.book.spine.get = function (target) {
-            let t = spine_get(target);
-            if (!t) {
-              t = spine_get(undefined);
+      <Suspense fallback={<div className="loading">로딩 중...</div>}>
+        <ReactReader
+          location={location}
+          locationChanged={locationChanged}
+          url={url}
+          key={url}
+          getRendition={(rendition) => {
+            const spine_get = rendition.book.spine.get.bind(rendition.book.spine);
+            rendition.book.spine.get = function (target) {
+              let t = spine_get(target);
+              if (!t) {
+                t = spine_get(undefined);
+              }
+              return t;
             }
-            return t;
-          }
-        }}
-      />
+          }}
+        />
+      </Suspense>
     </div>
   );
 }

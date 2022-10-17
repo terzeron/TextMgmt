@@ -40,3 +40,49 @@ const getRandomLightestColor = (str) => {
   return getRandomColorWithRange(str, 12, 4);
 };
 
+const apiReq = (url, method, type, resolve, reject, final) => {
+  try {
+    fetch(getUrlPrefix() + url, {method: method})
+      .then(handleFetchErrors)
+      .then((response) => {
+        let promise;
+        if (type === 'JSON') {
+          promise = response.json();
+        } else if (type === 'TEXT') {
+          promise = response.text();
+        } else {
+          promise = response.blob();
+        }
+        return promise;
+      })
+      .then((data) => {
+        if (type === 'JSON') {
+          if (data['status'] === 'success') {
+            resolve(data['result']);
+          } else {
+            reject(data['error']);
+          }
+        } else {
+          resolve(data);
+        }
+      })
+      .catch((error) => {
+        if (reject) {
+          reject(error);
+        }
+      })
+      .finally(() => {
+        if (final) {
+          final();
+        }
+      });
+  } catch (error) {
+    if (reject) {
+      reject(error);
+    }
+  }
+};
+
+export const jsonGetReq = (url, resolve, reject, final) => apiReq(url, 'GET', 'JSON', resolve, reject, final);
+export const textGetReq = (url, resolve, reject, final) => apiReq(url, 'GET', 'TEXT', resolve, reject, final);
+export const blobGetReq = (url, resolve, reject, final) => apiReq(url, 'GET', 'BLOB', resolve, reject, final);

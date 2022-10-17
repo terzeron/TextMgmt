@@ -1,21 +1,14 @@
 import {useEffect, useRef, useState} from "react";
-import {getUrlPrefix, handleFetchErrors} from "./Common";
+import {getUrlPrefix} from "./Common";
 
 export default function ViewTXT(props) {
-  const parentRef = useRef(null);
   const ref = useRef(null);
-  const [height, setHeight] = useState(0);
-  const [width, setWidth] = useState(0);
-
-  const [errorMessage, setErrorMessage] = useState("");
-  const [fileContent, setFileContent] = useState("");
-
+  const [iframeHeight, setIframeHeight] = useState(0);
   const [url, setUrl] = useState("");
 
   useEffect(() => {
     console.log(`ViewHTML: useEffect(${props})`, props);
-    setHeight(parentRef.current.offsetHeight);
-    setWidth(parentRef.current.offsetWidth);
+    setIframeHeight(document.body.scrollHeight);
 
     if (props && props.entryId) {
       const dirName = props.entryId.split('/')[0];
@@ -27,15 +20,14 @@ export default function ViewTXT(props) {
     }
 
     return () => {
-      //console.log("cleanup");
+      setUrl('')
+      setIframeHeight(0)
     };
   }, [props]);
 
   return (
-    <div ref={parentRef}>
-      <iframe src={url} ref={ref}/>
-    </div>
+    <iframe src={url} ref={ref} style={{display: 'block', width: '100%', height: iframeHeight, overflow: 'visible'}}/>
   );
-};
+}
 
 
