@@ -18,7 +18,6 @@ function App() {
           <Route index element={<Home/>} errorElement={<ErrorPage />}/>
           <Route path="edit" element={<Edit/>} errorElement={<ErrorPage />}/>
           <Route path="view" element={<View/>} errorElement={<ErrorPage />}/>
-
         </Route>
         <Route path="/view/:dirName/:fileName" element={<ViewSingle/>} errorElement={<ErrorPage />}/>
       </Routes>
