@@ -88,17 +88,17 @@ export default function Edit() {
     setExtension('');
 
     // [ 저자 ] 제목 . 확장자
-    const pattern1 = /^\s*\[(?<author>.*?)]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
+    const pattern1 = /^\s*\[(?<author>.*?)]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf|html|hwp|dvju)\s*$/;
     // ( 저자 ) 제목 . 확장자
-    const pattern2 = /^\s*\((?<author>.*?)\)\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
+    const pattern2 = /^\s*\((?<author>.*?)\)\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf|html|hwp|dvju)\s*$/;
     // 제목 [ 저자 ] . 확장자
-    const pattern3 = /^\s*(?<title>.*?)\s*\[\s*(?<author>.*?)\s*]\s*\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
+    const pattern3 = /^\s*(?<title>.*?)\s*\[\s*(?<author>.*?)\s*]\s*\.(?<extension>txt|epub|zip|pdf|html|hwp|dvju)\s*$/;
     // 제목 @ 저자 . 확장자
-    const pattern4 = /^\s*(?<title>.*?)\s*@\s*(?<author>.*?)\s*\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
+    const pattern4 = /^\s*(?<title>.*?)\s*@\s*(?<author>.*?)\s*\.(?<extension>txt|epub|zip|pdf|html|hwp|dvju)\s*$/;
     // 저자 - 제목 . 확장자 or 저자 _ 제목 . 확장자
-    const pattern5 = /^\s*(?<author>.*?)\s*[_-]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
+    const pattern5 = /^\s*(?<author>.*?)\s*[_-]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf|html|hwp|dvju)\s*$/;
     // 제목 ( 저자 )
-    const pattern6 = /^\s*(?<title>.*?)\s*\(\s*(?<author>.*?)\s*\)\s*\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
+    const pattern6 = /^\s*(?<title>.*?)\s*\(\s*(?<author>.*?)\s*\)\s*\.(?<extension>txt|epub|zip|pdf|html|hwp|dvju)\s*$/;
     // 모두 제목으로 간주
     const finalPattern = /^(?<title>.+)\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
 
