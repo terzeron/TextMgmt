@@ -88,22 +88,26 @@ export default function Edit() {
     setExtension('');
 
     // [ 저자 ] 제목 . 확장자
-    const pattern1 = /^\s*\[(?<author>.*?)]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
+    const pattern1 = /^\s*\[(?<author>.*?)]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
     // ( 저자 ) 제목 . 확장자
-    const pattern2 = /^\s*\((?<author>.*?)\)\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
+    const pattern2 = /^\s*\((?<author>.*?)\)\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
     // 제목 [ 저자 ] . 확장자
-    const pattern3 = /^\s*(?<title>.*?)\s*\[\s*(?<author>.*?)\s*]\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
+    const pattern3 = /^\s*(?<title>.*?)\s*\[\s*(?<author>.*?)\s*]\s*\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
     // 제목 @ 저자 . 확장자
-    const pattern4 = /^\s*(?<title>.*?)\s*@\s*(?<author>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
+    const pattern4 = /^\s*(?<title>.*?)\s*@\s*(?<author>.*?)\s*\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
     // 저자 - 제목 . 확장자 or 저자 _ 제목 . 확장자
-    const pattern5 = /^\s*(?<author>.*?)\s*[_-]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf)\s*$/;
-    // 제목
+    const pattern5 = /^\s*(?<author>.*?)\s*[_-]\s*(?<title>.*?)\s*\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
+    // 제목 ( 저자 )
+    const pattern6 = /^\s*(?<title>.*?)\s*\(\s*(?<author>.*?)\s*\)\s*\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
+    // 모두 제목으로 간주
+    const finalPattern = /^(?<title>.+)\.(?<extension>txt|epub|zip|pdf|html)\s*$/;
+
     let author = '';
     let title = '';
     let extension = '';
 
     let isChanged = false;
-    for (const pattern of [pattern1, pattern2, pattern3, pattern4, pattern5]) {
+    for (const pattern of [pattern1, pattern2, pattern3, pattern4, pattern5, pattern6]) {
       const match = pattern.exec(fileName);
       if (match) {
         author = match.groups.author || '';
@@ -117,7 +121,6 @@ export default function Edit() {
       }
     }
     if (isChanged === false) {
-      const finalPattern = /^(?<title>.+)\.(?<extension>txt|epub|zip|pdf)\s*$/;
       const match = finalPattern.exec(fileName);
       if (match) {
         title = match.groups.title || '';
