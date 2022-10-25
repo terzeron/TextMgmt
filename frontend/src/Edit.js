@@ -7,7 +7,7 @@ import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import {faCheck, faClockRotateLeft, faCut, faRotate, faTrash, faTruckMoving, faUpload} from '@fortawesome/free-solid-svg-icons';
 import DirList from './DirList';
-import {getRandomDarkColor, jsonGetReq} from './Common';
+import {getRandomDarkColor, jsonGetReq, jsonPutReq} from './Common';
 import ViewSingle from "./ViewSingle";
 
 export default function Edit() {
@@ -219,7 +219,7 @@ export default function Edit() {
     const fileName = entryId.split('/')[1];
     const renameUrl = '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName) + '/new/' + encodeURIComponent(newFileName);
     console.log(renameUrl);
-    jsonGetReq(renameUrl, (result) => {
+    jsonPutReq(renameUrl, (result) => {
       setSuccessMessage("파일 이름이 변경되었습니다.");
       const newTreeData = [...treeData];
       let isChanged = false;

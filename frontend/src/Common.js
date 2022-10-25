@@ -84,5 +84,6 @@ const apiReq = (url, method, type, resolve, reject, final) => {
 };
 
 export const jsonGetReq = (url, resolve, reject, final) => apiReq(url, 'GET', 'JSON', resolve, reject, final);
+export const jsonPutReq = (url, resolve, reject, final) => apiReq(url, 'PUT', 'JSON', resolve, reject, final);
 export const textGetReq = (url, resolve, reject, final) => apiReq(url, 'GET', 'TEXT', resolve, reject, final);
 export const blobGetReq = (url, resolve, reject, final) => apiReq(url, 'GET', 'BLOB', resolve, reject, final);
