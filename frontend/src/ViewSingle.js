@@ -8,6 +8,7 @@ import ViewPDF from "./ViewPDF";
 import ViewEPUB from "./ViewEPUB";
 import ViewTXT from "./ViewTXT";
 import ViewHTML from './ViewHTML';
+import ViewImage from "./ViewImage";
 
 export default function ViewSingle(props) {
   const {dirName, fileName} = useParams();
@@ -48,6 +49,9 @@ export default function ViewSingle(props) {
       }
       {
         entryId && entryId.endsWith(".html") && <ViewHTML entryId={entryId}/>
+      }
+      {
+        entryId && (entryId.endsWith(".jpg") || entryId.endsWith(".gif") || entryId.endsWith(".png")) && <ViewImage entryId={entryId}/>
       }
     </div>
   );
