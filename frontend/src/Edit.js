@@ -7,7 +7,7 @@ import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import {faCheck, faClockRotateLeft, faCut, faRotate, faTrash, faTruckMoving, faUpload} from '@fortawesome/free-solid-svg-icons';
 import DirList from './DirList';
-import {getRandomDarkColor, jsonGetReq, jsonPutReq} from './Common';
+import {getRandomDarkColor, jsonDeleteReq, jsonGetReq, jsonPutReq} from './Common';
 import ViewSingle from "./ViewSingle";
 
 export default function Edit() {
