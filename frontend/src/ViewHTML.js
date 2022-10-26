@@ -1,7 +1,7 @@
 import {useEffect, useRef, useState} from "react";
 import {getUrlPrefix} from "./Common";
 
-export default function ViewTXT(props) {
+export default function ViewHTML(props) {
   const ref = useRef(null);
   const [iframeHeight, setIframeHeight] = useState(0);
   const [url, setUrl] = useState("");
