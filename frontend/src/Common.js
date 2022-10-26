@@ -20,24 +20,8 @@ const getRandomColorWithRange = (key, base, range) => {
   return sprintf("#%01x%01x%01x", i1, i2, i3);
 }
 
-const getRandomDarkestColor = (str) => {
-  return getRandomColorWithRange(str, 4, 4);
-};
-
 export const getRandomDarkColor = (str) => {
   return getRandomColorWithRange(str, 6, 4);
-};
-
-const getRandomMediumColor = (str) => {
-  return getRandomColorWithRange(str, 8, 4);
-};
-
-const getRandomLightColor = (str) => {
-  return getRandomColorWithRange(str, 10, 4);
-};
-
-const getRandomLightestColor = (str) => {
-  return getRandomColorWithRange(str, 12, 4);
 };
 
 const apiReq = (url, method, type, resolve, reject, final) => {
