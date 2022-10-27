@@ -14,13 +14,21 @@ LOGGER = logging.getLogger(__name__)
 
 
 class TextManager:
+    ROOT_DIRECTORY = "$$rootdir$$"
     def __init__(self):
         work_dir = os.environ["TM_WORK_DIR"] if "TM_WORK_DIR" in os.environ else os.getcwd() + "/../text"
         self.path_prefix = Path(work_dir)
 
+    def determine_file_path(self, dir_name: str, file_name: str) -> Path:
+        if dir_name == TextManager.ROOT_DIRECTORY:
+            path = self.path_prefix / file_name
+        else:
+            path = self.path_prefix / dir_name / file_name
+        return path
+
     def change_encoding(self, dir_name: str, file_name: str) -> Tuple[Optional[str], Optional[Any]]:
         LOGGER.debug(f"# change_encoding(dir_name={dir_name}, file_name={file_name})")
-        path = self.path_prefix / dir_name / file_name
+        path = self.determine_file_path(dir_name, file_name)
         common_expression = r"(있었다|것이다|말했다|없었다|않았다|물었다|열었다|같았다|보였다|그러나|그리고|하지만|그렇게|그런데|때문에|갑자기|어떻게|앞으로|천천히|동시에|아니라|아닌가|있다는|말인가|못하고|그녀는|그녀의|자신의|그것은|사람은|그들은|사람이|그들의|자신이|사람의|이렇게|소리가|그래서|소리를|생각이|하였다|우리는|되었다)"
         with open(path, "rb") as infile:
             text = infile.read()
@@ -36,23 +44,29 @@ class TextManager:
 
     def get_similar_file_list(self, dir_name: str, file_name: str) -> Tuple[List[str], Optional[Any]]:
         LOGGER.debug(f"# get_similar_file_list(dir_name={dir_name}, file_name={file_name})")
-        path = self.path_prefix / dir_name / file_name
+        path = self.determine_file_path(dir_name, file_name)
         result = [str(path)]
         return result, None
 
-    def rename_file(self, dir_name: str, file_name: str, new_file_name: str) -> Tuple[str, Optional[Any]]:
-        LOGGER.debug(f"# rename_file(dir_name={dir_name}, file_name={file_name}, new_file_name={new_file_name})")
-        path = self.path_prefix / dir_name / file_name
-        new_path = self.path_prefix / dir_name / new_file_name
+    def move_file(self, dir_name: str, file_name: str, new_dir_name: str, new_file_name: str) -> Tuple[str, Optional[Any]]:
+        LOGGER.debug(f"# move_file(dir_name={dir_name}, file_name={file_name}, new_dir_name={new_dir_name}, new_file_name={new_file_name})")
+        path = self.determine_file_path(dir_name, file_name)
+        if new_dir_name == TextManager.ROOT_DIRECTORY or new_dir_name.startswith("..") or new_dir_name.startswith("/"):
+            new_dir_name = "."
+        if not (self.path_prefix / new_dir_name).exists():
+            return "Error", f"directory '{new_dir_name}' doesn't exist"
+        if new_file_name == "":
+            new_file_name = file_name
+        new_path = self.path_prefix / new_dir_name / new_file_name
         try:
             path.rename(new_path)
         except IOError as e:
-            return "Error", f"can't rename '{dir_name}/{file_name}' to '{dir_name}/{new_file_name}', {e}"
+            return "Error", f"can't rename '{dir_name}/{file_name}' to '{new_dir_name}/{new_file_name}', {e}"
         return "Ok", None
 
     def delete_file(self, dir_name: str, file_name: str) -> Tuple[str, Optional[Any]]:
         LOGGER.debug(f"# delete_file(dir_name={dir_name}, file_name={file_name})")
-        path = self.path_prefix / dir_name / file_name
+        path = self.determine_file_path(dir_name, file_name)
         try:
             path.unlink()
         except IOError as e:
@@ -80,7 +94,7 @@ class TextManager:
     def get_file_content(self, dir_name: str, file_name: str, size: int = 0) -> Union[str, FileResponse]:
         LOGGER.debug(f"# get_file_content(dir_name={dir_name}, file_name={file_name}, size={size})")
         content = ""
-        path = self.path_prefix / dir_name / file_name
+        path = self.determine_file_path(dir_name, file_name)
         if path.is_file():
             if path.suffix == ".txt":
                 content = FileResponse(path=path, media_type="text/plain")
@@ -99,7 +113,7 @@ class TextManager:
     def get_file_info(self, dir_name: str, file_name: str) -> Tuple[Union[Dict[str, Any], bytes], Optional[Any]]:
         LOGGER.debug(f"# get_file_info(dir_name={dir_name}, file_name={file_name})")
         result = {}
-        path = self.path_prefix / dir_name / file_name
+        path = self.determine_file_path(dir_name, file_name)
         if path.is_file():
             st = path.stat()
             if path.suffix == ".txt":

@@ -26,10 +26,8 @@ export default function Edit() {
   const [encoding, setEncoding] = useState('');
   const [newFileName, setNewFileName] = useState('');
 
-  const [similarFileList, setSimilarFileList] = useState([]);
-  const [searchResult, setSearchResult] = useState('');
   const [selectedDirectory, setSelectedDirectory] = useState('');
-
+  const ROOT_DIRECTORY = '$$rootdir$$';
   const [nextEntryId, setNextEntryId] = useState('');
 
   useEffect(() => {
@@ -131,34 +129,62 @@ export default function Edit() {
     }
   };
 
-  const fileClicked = useCallback((key) => {
-    console.log(`fileClicked: key=${key}`);
+  const determineNextEntryId = (treeData, dirName, fileName) => {
+    let indexClicked = null;
+    if (dirName === ROOT_DIRECTORY) {
+      indexClicked = treeData.findIndex((item) => item.key === fileName);
+      console.log(`determineNextEntryId(): indexClicked=${indexClicked}`);
+
+      if (indexClicked < treeData.length - 1) {
+        // no last entry
+        const nextEntryId = treeData[indexClicked + 1].key;
+        console.log(`fileEntryClicked(): nextEntryId=${nextEntryId}`);
+        return dirName + '/' + nextEntryId;
+      }
+    } else {
+      for (let entry of treeData) {
+        if (entry.key === dirName && entry.nodes && entry.nodes.length > 0) {
+          console.log(`determineNextEntryId(): entry=`, entry);
+          indexClicked = entry.nodes.findIndex((item) => item.key === fileName);
+          console.log(`determineNextEntryId(): indexClicked=${indexClicked}`);
+
+          if (indexClicked < entry.nodes.length - 1) {
+            // no last entry
+            const nextEntryId = entry.nodes[indexClicked + 1].key;
+            console.log(`fileEntryClicked(): nextEntryId=${nextEntryId}`);
+            return dirName + '/' + nextEntryId;
+          }
+          break;
+        }
+      }
+    }
+
+    return null;
+  };
+
+  const fileEntryClicked = useCallback((key) => {
+    console.log(`fileEntryClicked(): key=${key}`);
 
     window.scrollTo(0, 0);
 
+    if (key.indexOf("/") <= 0) {
+      key = ROOT_DIRECTORY + "/" + key;
+      console.log(`fileEntryClicked(): key=${key}`);
+    }
+    setEntryId(key);
     const dirName = key.split('/')[0];
     const fileName = key.split('/')[1];
-    setEntryId(key);
     setEntryName(fileName);
     setNewFileName(fileName);
+    console.log(`fileEntryClicked(): dirName=${dirName}, fileName=${fileName}`);
 
     // reset
-    setSuccessMessage(null);
+    setSuccessMessage('');
+    setErrorMessage('');
 
     // determine nextEntryId
-    //for (let i = 0; i < treeData.length; i++) {
-    for (let treeDataItem of treeData) {
-      if (treeDataItem.key === dirName) {
-        const indexClicked = treeDataItem.nodes.findIndex((item) => item.key === fileName);
-        if (indexClicked < treeDataItem.nodes.length - 1) {
-          const nextEntryId = treeDataItem.nodes[indexClicked + 1].key;
-          setNextEntryId(dirName + '/' + nextEntryId);
-        } else {
-          setNextEntryId(null);
-        }
-        break;
-      }
-    }
+    const nextEntryId = determineNextEntryId(treeData, dirName, fileName);
+    setNextEntryId(nextEntryId);
 
     // decompose file name to (author, title, extension)
     decomposeFileName(fileName);
@@ -170,7 +196,7 @@ export default function Edit() {
       setEncoding(result['encoding']);
     }, (error) => {
       setErrorMessage(`file metadata load failed, ${error}`);
-    })
+    });
   }, [treeData]);
 
   const authorChanged = useCallback((e) => {
@@ -213,48 +239,126 @@ export default function Edit() {
     decomposeFileName(entryName);
   }, [entryName]);
 
-  const changeButtonClicked = useCallback(() => {
-    console.log(`changeButtonClicked: entryId=${entryId}, newFileName=${newFileName}`);
-    const dirName = entryId.split('/')[0];
-    const fileName = entryId.split('/')[1];
-    const renameUrl = '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName) + '/new/' + encodeURIComponent(newFileName);
-    console.log(renameUrl);
-    jsonPutReq(renameUrl, (result) => {
-      setSuccessMessage("파일 이름이 변경되었습니다.");
-      const newTreeData = [...treeData];
-      let isChanged = false;
+  const checkEntryExistence = (treeData, newDirName, newFileName) => {
+    console.log('checkEntryExistence()');
+    for (let entry of treeData) {
+      // remove previous entry
+      if (newDirName === ROOT_DIRECTORY) {
+        if (entry.key === newFileName) {
+          return true;
+        }
+      } else {
+        if (entry.key === newDirName) {
+          for (let node of entry.nodes) {
+            if (node.key === newFileName) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
+  };
 
-      for (let treeDataItem of newTreeData) {
-        if (treeDataItem.key === dirName) {
-          for (let treeDataItemNode of treeDataItem.nodes) {
-            if (treeDataItemNode.key === fileName) {
-              treeDataItemNode.key = newFileName;
-              treeDataItemNode.title = newFileName;
-              isChanged = true;
+  const removeEntryFromTreeData = (treeData, dirName, fileName) => {
+    let newTreeData = [...treeData];
+    let isRemoved = false;
+    // remove previous entry
+    for (let entry of newTreeData) {
+      if (dirName === ROOT_DIRECTORY) {
+        if (entry.key === fileName) {
+          newTreeData = newTreeData.filter(item => item !== entry);
+          console.log(`removeEntryFromTreeData(): removed ${fileName}`);
+          isRemoved = true;
+        }
+      } else {
+        if (entry.key === dirName) {
+          for (let node of entry.nodes) {
+            if (node.key === fileName) {
+              entry.nodes = entry.nodes.filter(item => item !== node);
+              console.log(`removeEntryFromTreeData(): removed ${fileName}`);
+              isRemoved = true;
+            }
+
+            if (isRemoved) {
               break;
             }
           }
         }
-        if (isChanged) {
-          break;
+      }
+    }
+    return newTreeData;
+  };
+
+  const appendEntryToTreeData = (treeData, newDirName, newFileName) => {
+    let newTreeData = [...treeData];
+    let isAppended = false;
+    // add new entry
+    for (let entry of newTreeData) {
+      if (newDirName === ROOT_DIRECTORY) {
+        newTreeData.push({'key': newFileName, 'label': newFileName});
+        console.log(`appendEntryToTreeData(): pushed ${newFileName} to root directory`);
+        isAppended = true;
+      } else {
+        if (entry.key === newDirName) {
+          entry.nodes.push({'key': newFileName, 'label': newFileName});
+          console.log(`appendEntryToTreeData(): pushed ${newFileName} to ${newDirName}`);
+          isAppended = true;
         }
       }
-      setTreeData(newTreeData);
-    }, (error) => {
-      setErrorMessage(`파일 이름 변경에 실패했습니다. ${error}`);
-    });
+
+      if (isAppended) {
+        break;
+      }
+    }
+    return newTreeData;
+  };
+
+  const moveOrRenameFile = (dirName, fileName, newDirName, newFileName) => {
+    console.log(`moveOrRenameFile: dirName=${dirName}, fileName=${fileName}, newDirName=${newDirName}, newFileName=${newFileName}`);
+    if (checkEntryExistence(treeData, newDirName, newFileName) === false) {
+      const moveOrRenameUrl = '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName) + '/newdir/' + encodeURIComponent(newDirName) + '/newfile/' + encodeURIComponent(newFileName);
+      console.log(moveOrRenameUrl);
+      jsonPutReq(moveOrRenameUrl, () => {
+        setSuccessMessage("파일 이름이나 위치가 변경되었습니다.");
+        setErrorMessage('');
+
+        let newTreeData = removeEntryFromTreeData(treeData, dirName, fileName);
+        newTreeData = appendEntryToTreeData(newTreeData, newDirName, newFileName);
+        setTreeData(newTreeData);
+      }, (error) => {
+        setErrorMessage(`파일 이름 변경에 실패했습니다. ${error}`);
+      });
+    } else {
+      setErrorMessage("대상 디렉토리에 파일이 이미 존재합니다.");
+    }
+  };
+
+  const changeButtonClicked = useCallback(() => {
+    console.log(`changeButtonClicked: entryId=${entryId}, newFileName=${newFileName}`);
+    const dirName = entryId.split('/')[0];
+    const fileName = entryId.split('/')[1];
+    moveOrRenameFile(dirName, fileName, dirName, newFileName);
   }, [entryId, newFileName]);
 
   const moveToUpperButtonClicked = useCallback(() => {
     console.log(`move to upper directory as '${newFileName}'`);
+    const dirName = entryId.split('/')[0];
+    const fileName = entryId.split('/')[1];
+    moveOrRenameFile(dirName, fileName, ROOT_DIRECTORY, newFileName);
   }, [newFileName]);
 
-  const selectDirectoryClicked = useCallback((e, props) => {
+  const selectDirectoryButtonClicked
+    = useCallback((e, props) => {
     setSelectedDirectory(props);
   }, []);
 
-  const moveToDirectoryClicked = useCallback(() => {
+  const moveToDirectoryButtonClicked
+    = useCallback(() => {
     console.log(`move to '${selectedDirectory}' as '${newFileName}'`);
+    const dirName = entryId.split('/')[0];
+    const fileName = entryId.split('/')[1];
+    moveOrRenameFile(dirName, fileName, selectedDirectory, newFileName);
   }, [newFileName, selectedDirectory]);
 
   const deleteButtonClicked = useCallback(() => {
@@ -263,31 +367,31 @@ export default function Edit() {
     const fileName = entryId.split('/')[1];
     const deleteUrl = '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName);
     console.log(deleteUrl);
-    jsonDeleteReq(deleteUrl, (result) => {
+    jsonDeleteReq(deleteUrl, () => {
       setSuccessMessage("파일이 삭제되었습니다.");
+      setErrorMessage('');
 
-      const newTreeData = [...treeData];
-      for (let treeDataItem of newTreeData) {
-        if (treeDataItem.key === dirName) {
-          const indexToDelete = treeDataItem.nodes.findIndex((item) => item.key === fileName);
-          if (indexToDelete > -1) {
-            treeDataItem.nodes.splice(indexToDelete, 1);
-            break;
-          }
-        }
-      }
+      const newTreeData = removeEntryFromTreeData(treeData, dirName, fileName);
       setTreeData(newTreeData);
+
+      if (nextEntryId) {
+        console.log(`deleteButtonClicked(): nextEntryId=${nextEntryId}`);
+        fileEntryClicked(nextEntryId);
+      } else {
+        setErrorMessage('마지막 파일입니다.');
+      }
     }, (error) => {
       setErrorMessage(`파일 삭제에 실패했습니다. ${error}`);
     });
-  }, [entryId]);
+  }, [entryId, nextEntryId]);
 
   const toNextBookClicked = useCallback(() => {
     console.log(`toNextBookClicked: nextEntryId=${nextEntryId}`);
     if (nextEntryId) {
-      fileClicked(nextEntryId);
+      console.log(`toNextBookClicked(): nextEntryId=${nextEntryId}`);
+      fileEntryClicked(nextEntryId);
     } else {
-      alert('마지막 파일입니다.');
+      setErrorMessage('마지막 파일입니다.');
     }
   }, [nextEntryId]);
 
@@ -296,7 +400,7 @@ export default function Edit() {
       <Row fluid="true">
         <Col md="3" lg="2" className="ps-0 pe-0">
           <Suspense fallback={<div className="loading">로딩 중...</div>}>
-            <DirList treeData={treeData} onClickHandler={fileClicked}/>
+            <DirList treeData={treeData} onClickHandler={fileEntryClicked}/>
           </Suspense>
         </Col>
 
@@ -307,164 +411,164 @@ export default function Edit() {
                 <Card.Header>
                   파일 정보
                 </Card.Header>
-                {
-                  errorMessage && <div>{errorMessage}</div>
-                }
-                {
-                  !errorMessage &&
-                  <Suspense fallback={<div className="loading">로딩 중...</div>}>
-                    <Card.Body>
-                      <Row>
-                        <Col xs="6">
-                          <InputGroup>
-                            <InputGroup.Text>파일명</InputGroup.Text>
-                            <Form.Control value={entryName} readOnly/>
-                          </InputGroup>
-                        </Col>
-                        <Col xs="3">
-                          <InputGroup>
-                            <InputGroup.Text>인코딩</InputGroup.Text>
-                            <Form.Control value={encoding} readOnly/>
-                          </InputGroup>
-                        </Col>
-                        <Col xs="3">
-                          <InputGroup>
-                            <InputGroup.Text>크기</InputGroup.Text>
-                            <Form.Control value={size} readOnly/>
-                          </InputGroup>
-                        </Col>
-                      </Row>
-                      <Row>
+                <Suspense fallback={<div className="loading">로딩 중...</div>}>
+                  <Card.Body>
+                    <Row>
+                      <Col xs="8">
                         <InputGroup>
-                          <InputGroup.Text>저자</InputGroup.Text>
-                          <Form.Control value={author} onChange={authorChanged}/>
-                          <Button variant="outline-secondary" size="sm" onClick={cutAuthorButtonClicked} disabled={!entryId}>
-                            자르기
-                            <FontAwesomeIcon icon={faCut}/>
+                          <InputGroup.Text>파일명</InputGroup.Text>
+                          <Form.Control value={entryName} readOnly disabled/>
+                        </InputGroup>
+                      </Col>
+                      <Col xs="2">
+                        <InputGroup>
+                          <InputGroup.Text>인코딩</InputGroup.Text>
+                          <Form.Control value={encoding} readOnly disabled/>
+                        </InputGroup>
+                      </Col>
+                      <Col xs="2">
+                        <InputGroup>
+                          <InputGroup.Text>크기</InputGroup.Text>
+                          <Form.Control value={size} readOnly disabled/>
+                        </InputGroup>
+                      </Col>
+                    </Row>
+                    <Row>
+                      <InputGroup>
+                        <InputGroup.Text>저자</InputGroup.Text>
+                        <Form.Control value={author} onChange={authorChanged}/>
+                        <Button variant="outline-secondary" size="sm" onClick={cutAuthorButtonClicked} disabled={!entryId}>
+                          자르기
+                          <FontAwesomeIcon icon={faCut}/>
+                        </Button>
+                        <Button variant="outline-secondary" size="sm" onClick={exchangeButtonClicked} disabled={!entryId}>
+                          교환
+                          <FontAwesomeIcon icon={faRotate}/>
+                        </Button>
+                      </InputGroup>
+                    </Row>
+                    <Row>
+                      <InputGroup>
+                        <InputGroup.Text>제목</InputGroup.Text>
+                        <Form.Control value={title} onChange={titleChanged}/>
+                        <Button variant="outline-secondary" size="sm" onClick={cutTitleButtonClicked} disabled={!entryId}>
+                          자르기
+                          <FontAwesomeIcon icon={faCut}/>
+                        </Button>
+                        <Button variant="outline-secondary" size="sm" onClick={resetButtonClicked} disabled={!entryId}>
+                          초기화
+                          <FontAwesomeIcon icon={faClockRotateLeft}/>
+                        </Button>
+                      </InputGroup>
+                    </Row>
+                    <Row>
+                      <Col xs="3">
+                        <InputGroup>
+                          <InputGroup.Text>확장자</InputGroup.Text>
+                          <Form.Control value={extension} onChange={extensionChanged}/>
+                        </InputGroup>
+                      </Col>
+                      <Col xs="9">
+                        <InputGroup>
+                          <InputGroup.Text>파일명</InputGroup.Text>
+                          <Form.Control value={newFileName} onChange={newFileNameChanged}/>
+                          <Button variant="outline-success" size="sm" onClick={changeButtonClicked} disabled={!entryId}>
+                            변경
+                            <FontAwesomeIcon icon={faCheck}/>
                           </Button>
-                          <Button variant="outline-secondary" size="sm" onClick={exchangeButtonClicked} disabled={!entryId}>
-                            교환
-                            <FontAwesomeIcon icon={faRotate}/>
+                          <Button variant="outline-danger" size="sm" onClick={deleteButtonClicked} disabled={!entryId}>
+                            삭제
+                            <FontAwesomeIcon icon={faTrash}/>
                           </Button>
                         </InputGroup>
-                      </Row>
-                      <Row>
-                        <InputGroup>
-                          <InputGroup.Text>제목</InputGroup.Text>
-                          <Form.Control value={title} onChange={titleChanged}/>
-                          <Button variant="outline-secondary" size="sm" onClick={cutTitleButtonClicked} disabled={!entryId}>
-                            자르기
-                            <FontAwesomeIcon icon={faCut}/>
-                          </Button>
-                          <Button variant="outline-secondary" size="sm" onClick={resetButtonClicked} disabled={!entryId}>
-                            초기화
-                            <FontAwesomeIcon icon={faClockRotateLeft}/>
-                          </Button>
-                        </InputGroup>
-                      </Row>
-                      <Row>
-                        <Col xs="3">
-                          <InputGroup>
-                            <InputGroup.Text>확장자</InputGroup.Text>
-                            <Form.Control value={extension} onChange={extensionChanged}/>
-                          </InputGroup>
-                        </Col>
-                        <Col xs="9">
-                          <InputGroup>
-                            <InputGroup.Text>파일명</InputGroup.Text>
-                            <Form.Control value={newFileName} onChange={newFileNameChanged}/>
-                            <Button variant="outline-success" size="sm" onClick={changeButtonClicked} disabled={!entryId}>
-                              변경
-                              <FontAwesomeIcon icon={faCheck}/>
-                            </Button>
-                            <Button variant="outline-danger" size="sm" onClick={deleteButtonClicked} disabled={!entryId}>
-                              삭제
-                              <FontAwesomeIcon icon={faTrash}/>
-                            </Button>
-                          </InputGroup>
-                        </Col>
-                      </Row>
-                      <Row className="mt-2 button_group">
-                        <Col>
-                          <Button variant="outline-success" size="sm" onClick={toNextBookClicked}>다음 책으로</Button>
-                          <a href={`https://www.yes24.com/Product/Search?domain=ALL&query=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
-                            <Button variant="outline-primary" size="sm">Yes24</Button>
-                          </a>
-                          <a href={`https://www.google.com/search?sourceid=chrome&ie=UTF-8&oq=${encodeURIComponent(author)}+${encodeURIComponent(title)}&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
-                            <Button variant="outline-primary" size="sm">구글</Button>
-                          </a>
-                          <a href={`https://search.shopping.naver.com/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&sort=REL&query=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
-                            <Button variant="outline-primary" size="sm">네이버쇼핑</Button>
-                          </a>
-                          <a href={`https://series.naver.com/search/search.series?t=all&fs=novel&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
-                            <Button variant="outline-primary" size="sm">네이버시리즈</Button>
-                          </a>
-                          <a href={`https://novel.munpia.com/page/hd.platinum/view/search/keyword/${encodeURIComponent(author)}+${encodeURIComponent(title)}/order/search_result`} target="_blank" rel="noreferrer">
-                            <Button variant="outline-primary" size="sm">문피아</Button>
-                          </a>
-                          <a href={`https://ridibooks.com/search?adult_exclude=n&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
-                            <Button variant="outline-primary" size="sm">RIDI</Button>
-                          </a>
-                        </Col>
-                      </Row>
-                      <Row className="mt-2 button_group">
+                      </Col>
+                    </Row>
+                    <Row className="mt-2 button_group">
+                      <Col>
+                        <Button variant="outline-success" size="sm" onClick={toNextBookClicked}>다음 책으로</Button>
+                        <a href={`https://www.yes24.com/Product/Search?domain=ALL&query=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
+                          <Button variant="outline-primary" size="sm">Yes24</Button>
+                        </a>
+                        <a href={`https://www.google.com/search?sourceid=chrome&ie=UTF-8&oq=${encodeURIComponent(author)}+${encodeURIComponent(title)}&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
+                          <Button variant="outline-primary" size="sm">구글</Button>
+                        </a>
+                        <a href={`https://search.shopping.naver.com/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&sort=REL&query=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
+                          <Button variant="outline-primary" size="sm">네이버쇼핑</Button>
+                        </a>
+                        <a href={`https://series.naver.com/search/search.series?t=all&fs=novel&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
+                          <Button variant="outline-primary" size="sm">네이버시리즈</Button>
+                        </a>
+                        <a href={`https://novel.munpia.com/page/hd.platinum/view/search/keyword/${encodeURIComponent(author)}+${encodeURIComponent(title)}/order/search_result`} target="_blank" rel="noreferrer">
+                          <Button variant="outline-primary" size="sm">문피아</Button>
+                        </a>
+                        <a href={`https://ridibooks.com/search?adult_exclude=n&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
+                          <Button variant="outline-primary" size="sm">RIDI</Button>
+                        </a>
+                      </Col>
+                    </Row>
+                    <Row className="mt-2 button_group">
+                      {
+                        !entryId.startsWith(ROOT_DIRECTORY) > 0 &&
                         <Button variant="outline-warning" size="sm" onClick={moveToUpperButtonClicked} disabled={!newFileName}>
                           상위로
                           <FontAwesomeIcon icon={faUpload}/>
                         </Button>
-                        {
-                          topDirList && topDirList
-                            .filter(dir => dir.key !== entryId.split('/')[0])
-                            .map((dir) => {
-                                const category = dir.key.split('_')[0];
-                                const subCategory = dir.key.split('_')[1];
-                                const hasSubCategory = dir.key.includes('_');
-                                if (hasSubCategory)
-                                  return (
-                                    <Button
-                                      variant="outline-secondary"
-                                      size="sm"
-                                      key={dir.key}
-                                      style={{
-                                        backgroundColor: getRandomDarkColor(category),
-                                        color: 'white'
-                                      }}
-                                      onClick={(e) => {
-                                        selectDirectoryClicked(e, dir.key);
-                                      }}>
-                                      {subCategory}
-                                    </Button>
-                                  )
-                                else
-                                  return (
-                                    <Button
-                                      variant="outline-secondary"
-                                      size="sm"
-                                      key={dir.key}
-                                      className="btn-light"
-                                      onClick={(e) => {
-                                        selectDirectoryClicked(e, dir.key);
-                                      }}>
-                                      {dir.key}
-                                    </Button>
-                                  )
-                              }
-                            )
-                        }
-                      </Row>
+                      }
+                      {
+                        topDirList && topDirList
+                          .filter(dir => dir.key !== entryId.split('/')[0])
+                          .map((dir) => {
+                              const category = dir.key.split('_')[0];
+                              const subCategory = dir.key.split('_')[1];
+                              const hasSubCategory = dir.key.includes('_');
+                              if (hasSubCategory)
+                                return (
+                                  <Button
+                                    variant="outline-secondary"
+                                    size="sm"
+                                    key={dir.key}
+                                    style={{
+                                      backgroundColor: getRandomDarkColor(category),
+                                      color: 'white'
+                                    }}
+                                    onClick={(e) => {
+                                      selectDirectoryButtonClicked
+                                      (e, dir.key);
+                                    }}>
+                                    {subCategory}
+                                  </Button>
+                                )
+                              else
+                                return (
+                                  <Button
+                                    variant="outline-secondary"
+                                    size="sm"
+                                    key={dir.key}
+                                    className="btn-light"
+                                    onClick={(e) => {
+                                      selectDirectoryButtonClicked
+                                      (e, dir.key);
+                                    }}>
+                                    {dir.key}
+                                  </Button>
+                                )
+                            }
+                          )
+                      }
+                    </Row>
 
-                      <Row className="mt-2">
-                        <InputGroup className="ms-0 me-0">
-                          <Form.Control value={selectedDirectory} readOnly/>
-                          <Button variant="outline-warning" size="sm" onClick={moveToDirectoryClicked} disabled={!entryId && !selectedDirectory}>
-                            로 옮기기
-                            <FontAwesomeIcon icon={faTruckMoving}/>
-                          </Button>
-                        </InputGroup>
-                      </Row>
-                    </Card.Body>
-                  </Suspense>
-                }
+                    <Row className="mt-2">
+                      <InputGroup className="ms-0 me-0">
+                        <Form.Control value={selectedDirectory} readOnly/>
+                        <Button variant="outline-warning" size="sm" onClick={moveToDirectoryButtonClicked
+                        } disabled={!entryId && !selectedDirectory}>
+                          로 옮기기
+                          <FontAwesomeIcon icon={faTruckMoving}/>
+                        </Button>
+                      </InputGroup>
+                    </Row>
+                  </Card.Body>
+                </Suspense>
               </Card>
               <Card>
                 <Card.Header>
@@ -488,13 +592,6 @@ export default function Edit() {
                 </Card.Header>
                 <Suspense fallback={<div className="loading">로딩 중...</div>}>
                   <Card.Body>
-                    {
-                      similarFileList && similarFileList.map((item, index) => {
-                        return (
-                          {item}, {index}
-                        )
-                      })
-                    }
                   </Card.Body>
                 </Suspense>
               </Card>
@@ -505,13 +602,6 @@ export default function Edit() {
                 </Card.Header>
                 <Suspense fallback={<div className="loading">로딩 중...</div>}>
                   <Card.Body>
-                    {
-                      searchResult && searchResult.map((item, index) => {
-                        return (
-                          {item}, {index}
-                        )
-                      })
-                    }
                   </Card.Body>
                 </Suspense>
               </Card>

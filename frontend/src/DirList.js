@@ -6,7 +6,7 @@ import 'react-simple-tree-menu/dist/main.css';
 export default function DirList({treeData, onClickHandler}) {
   return (
     <TreeMenu data={treeData} debounceTime={125} onClickItem={({key, ...props}) => {
-      if (props['level'] > 0) {
+      if (props["hasNodes"] === false) {
         onClickHandler(key);
       }
     }}>

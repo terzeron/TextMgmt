@@ -27,11 +27,11 @@ app.add_middleware(
 text_manager = TextManager()
 
 
-@app.put("/dirs/{dir_name}/files/{file_name}/new/{new_file_name}")
-async def rename_file(dir_name: str, file_name: str, new_file_name: str) -> Dict[str, Any]:
-    LOGGER.debug(f"# rename_file(dir_name={dir_name}, file_name={file_name}, new_file_name={new_file_name})")
+@app.put("/dirs/{dir_name}/files/{file_name}/newdir/{new_dir_name}/newfile/{new_file_name}")
+async def move_file(dir_name: str, file_name: str, new_dir_name: str, new_file_name: str) -> Dict[str, Any]:
+    LOGGER.debug(f"# move_file(dir_name={dir_name}, file_name={file_name}, new_dir_name={new_dir_name}, new_file_name={new_file_name})")
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = text_manager.rename_file(dir_name, file_name, new_file_name)
+    result, error = text_manager.move_file(dir_name, file_name, new_dir_name, new_file_name)
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
