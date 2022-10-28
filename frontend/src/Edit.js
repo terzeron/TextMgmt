@@ -138,7 +138,7 @@ export default function Edit() {
       if (indexClicked < treeData.length - 1) {
         // no last entry
         const nextEntryId = treeData[indexClicked + 1].key;
-        console.log(`fileEntryClicked(): nextEntryId=${nextEntryId}`);
+        console.log(`determineNextEntryId(): nextEntryId=${nextEntryId}`);
         return dirName + '/' + nextEntryId;
       }
     } else {
@@ -151,7 +151,7 @@ export default function Edit() {
           if (indexClicked < entry.nodes.length - 1) {
             // no last entry
             const nextEntryId = entry.nodes[indexClicked + 1].key;
-            console.log(`fileEntryClicked(): nextEntryId=${nextEntryId}`);
+            console.log(`determineNextEntryId(): nextEntryId=${nextEntryId}`);
             return dirName + '/' + nextEntryId;
           }
           break;
@@ -164,8 +164,6 @@ export default function Edit() {
 
   const fileEntryClicked = useCallback((key) => {
     console.log(`fileEntryClicked(): key=${key}`);
-
-    window.scrollTo(0, 0);
 
     if (key.indexOf("/") <= 0) {
       key = ROOT_DIRECTORY + "/" + key;
@@ -398,15 +396,15 @@ export default function Edit() {
   return (
     <Container id="edit">
       <Row fluid="true">
-        <Col md="3" lg="2" className="ps-0 pe-0">
+        <Col md="3" lg="2" className="ps-0 pe-0 section">
           <Suspense fallback={<div className="loading">로딩 중...</div>}>
             <DirList treeData={treeData} onClickHandler={fileEntryClicked}/>
           </Suspense>
         </Col>
 
-        <Col md="9" lg="10">
+        <Col md="9" lg="10" className="section">
           <Row id="top_panel">
-            <Col id="left_panel" lg="5" className="ps-0 pe-0">
+            <Col id="left_panel" lg="7" className="ps-0 pe-0">
               <Card>
                 <Card.Header>
                   파일 정보
@@ -415,10 +413,7 @@ export default function Edit() {
                   <Card.Body>
                     <Row>
                       <Col xs="8">
-                        <InputGroup>
-                          <InputGroup.Text>파일명</InputGroup.Text>
                           <Form.Control value={entryName} readOnly disabled/>
-                        </InputGroup>
                       </Col>
                       <Col xs="2">
                         <InputGroup>
@@ -438,7 +433,7 @@ export default function Edit() {
                         <InputGroup.Text>저자</InputGroup.Text>
                         <Form.Control value={author} onChange={authorChanged}/>
                         <Button variant="outline-secondary" size="sm" onClick={cutAuthorButtonClicked} disabled={!entryId}>
-                          자르기
+                          분할
                           <FontAwesomeIcon icon={faCut}/>
                         </Button>
                         <Button variant="outline-secondary" size="sm" onClick={exchangeButtonClicked} disabled={!entryId}>
@@ -452,11 +447,11 @@ export default function Edit() {
                         <InputGroup.Text>제목</InputGroup.Text>
                         <Form.Control value={title} onChange={titleChanged}/>
                         <Button variant="outline-secondary" size="sm" onClick={cutTitleButtonClicked} disabled={!entryId}>
-                          자르기
+                          분할
                           <FontAwesomeIcon icon={faCut}/>
                         </Button>
                         <Button variant="outline-secondary" size="sm" onClick={resetButtonClicked} disabled={!entryId}>
-                          초기화
+                          복원
                           <FontAwesomeIcon icon={faClockRotateLeft}/>
                         </Button>
                       </InputGroup>
@@ -585,7 +580,7 @@ export default function Edit() {
               </Card>
             </Col>
 
-            <Col id="right_panel" lg="7" className="ps-0 pe-0">
+            <Col id="right_panel" lg="5" className="ps-0 pe-0">
               <Card>
                 <Card.Header>
                   유사한 파일 목록

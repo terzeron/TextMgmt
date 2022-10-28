@@ -69,15 +69,15 @@ export default function View() {
   return (
     <Container id="view">
       <Row fluid="true">
-        <Col md="3" lg="2" className="ps-0 pe-0">
+        <Col md="3" lg="2" className="ps-0 pe-0 section">
           <Suspense fallback={<div className="loading">로딩 중...</div>}>
             <DirList treeData={treeData} onClickHandler={fileClicked}/>
           </Suspense>
         </Col>
 
-        <Col md="9" lg="10">
+        <Col md="9" lg="10" className="section">
           <Row id="top_panel">
-            <Col lg="12" className="ps-0 pe-0 me-0">
+            <Col lg="12" className="ps-0 pe-0 me-0 ">
               <Card>
                 {
                   errorMessage && <Alert variant="danger" className="mb-0">{errorMessage}</Alert>
