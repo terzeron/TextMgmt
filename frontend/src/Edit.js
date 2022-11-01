@@ -162,7 +162,7 @@ export default function Edit() {
     return null;
   };
 
-  const fileEntryClicked = useCallback((key) => {
+  const fileEntryClicked = (key) => {
     console.log(`fileEntryClicked(): key=${key}`);
 
     if (key.indexOf("/") <= 0) {
@@ -195,7 +195,7 @@ export default function Edit() {
     }, (error) => {
       setErrorMessage(`file metadata load failed, ${error}`);
     });
-  }, [treeData]);
+  };
 
   const authorChanged = useCallback((e) => {
     setAuthor(e.target.value);
@@ -413,7 +413,7 @@ export default function Edit() {
                   <Card.Body>
                     <Row>
                       <Col xs="8">
-                          <Form.Control value={entryName} readOnly disabled/>
+                        <Form.Control value={entryName} readOnly disabled/>
                       </Col>
                       <Col xs="2">
                         <InputGroup>

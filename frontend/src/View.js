@@ -45,8 +45,8 @@ export default function View() {
     }
   }, []);
 
-  function fileClicked(key) {
-    console.log(`fileClicked: key=${key}`);
+  function fileEntryClicked(key) {
+    console.log(`fileEntryClicked: key=${key}`);
 
     const dirName = key.split('/')[0];
     const fileName = key.split('/')[1];
@@ -63,7 +63,7 @@ export default function View() {
       setEncoding(result['encoding']);
     }, (error) => {
       setErrorMessage(`file metadata load failed, ${error}`);
-    })
+    });
   }
 
   return (
@@ -71,7 +71,7 @@ export default function View() {
       <Row fluid="true">
         <Col md="3" lg="2" className="ps-0 pe-0 section">
           <Suspense fallback={<div className="loading">로딩 중...</div>}>
-            <DirList treeData={treeData} onClickHandler={fileClicked}/>
+            <DirList treeData={treeData} onClickHandler={fileEntryClicked}/>
           </Suspense>
         </Col>
 

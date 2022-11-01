@@ -2,9 +2,9 @@
 
 import os
 import re
+import chardet
 import logging
 from logging import config
-import chardet
 from pathlib import Path
 from typing import Any, Optional, Dict, Tuple, List, Union
 from fastapi.responses import FileResponse
@@ -15,9 +15,12 @@ LOGGER = logging.getLogger(__name__)
 
 class TextManager:
     ROOT_DIRECTORY = "$$rootdir$$"
+
     def __init__(self):
+        LOGGER.debug("# TextManager()")
         work_dir = os.environ["TM_WORK_DIR"] if "TM_WORK_DIR" in os.environ else os.getcwd() + "/../text"
-        self.path_prefix = Path(work_dir)
+        LOGGER.debug(f"work_dir={work_dir}")
+        self.path_prefix = Path(work_dir).resolve()
 
     def determine_file_path(self, dir_name: str, file_name: str) -> Path:
         if dir_name == TextManager.ROOT_DIRECTORY:
@@ -42,13 +45,13 @@ class TextManager:
                     continue
         return None, f"can't find appropriate encoding for file '{dir_name}/{file_name}'"
 
-    def get_similar_file_list(self, dir_name: str, file_name: str) -> Tuple[List[str], Optional[Any]]:
+    async def get_similar_file_list(self, dir_name: str, file_name: str) -> Tuple[List[str], Optional[Any]]:
         LOGGER.debug(f"# get_similar_file_list(dir_name={dir_name}, file_name={file_name})")
         path = self.determine_file_path(dir_name, file_name)
         result = [str(path)]
         return result, None
 
-    def move_file(self, dir_name: str, file_name: str, new_dir_name: str, new_file_name: str) -> Tuple[str, Optional[Any]]:
+    async def move_file(self, dir_name: str, file_name: str, new_dir_name: str, new_file_name: str) -> Tuple[str, Optional[Any]]:
         LOGGER.debug(f"# move_file(dir_name={dir_name}, file_name={file_name}, new_dir_name={new_dir_name}, new_file_name={new_file_name})")
         path = self.determine_file_path(dir_name, file_name)
         if new_dir_name == TextManager.ROOT_DIRECTORY or new_dir_name.startswith("..") or new_dir_name.startswith("/"):
@@ -64,7 +67,7 @@ class TextManager:
             return "Error", f"can't rename '{dir_name}/{file_name}' to '{new_dir_name}/{new_file_name}', {e}"
         return "Ok", None
 
-    def delete_file(self, dir_name: str, file_name: str) -> Tuple[str, Optional[Any]]:
+    async def delete_file(self, dir_name: str, file_name: str) -> Tuple[str, Optional[Any]]:
         LOGGER.debug(f"# delete_file(dir_name={dir_name}, file_name={file_name})")
         path = self.determine_file_path(dir_name, file_name)
         try:
@@ -72,12 +75,6 @@ class TextManager:
         except IOError as e:
             return "Error", f"can't delete '{dir_name}/{file_name}', {e}"
         return "Ok", None
-
-    @staticmethod
-    def read_binary_file(path: Path) -> bytes:
-        LOGGER.debug(f"# read_binary_file(path={path})")
-        with open(path, "rb") as f:
-            return f.read()
 
     @staticmethod
     def determine_file_content_and_encoding(path: Path) -> Tuple[str]:
@@ -91,7 +88,7 @@ class TextManager:
                     encoding = encoding_metadata["encoding"]
         return encoding
 
-    def get_file_content(self, dir_name: str, file_name: str, size: int = 0) -> Union[str, FileResponse]:
+    async def get_file_content(self, dir_name: str, file_name: str, size: int = 0) -> Union[str, FileResponse]:
         LOGGER.debug(f"# get_file_content(dir_name={dir_name}, file_name={file_name}, size={size})")
         content = ""
         path = self.determine_file_path(dir_name, file_name)
@@ -110,7 +107,7 @@ class TextManager:
             return content
         return content
 
-    def get_file_info(self, dir_name: str, file_name: str) -> Tuple[Union[Dict[str, Any], bytes], Optional[Any]]:
+    async def get_file_info(self, dir_name: str, file_name: str) -> Tuple[Union[Dict[str, Any], bytes], Optional[Any]]:
         LOGGER.debug(f"# get_file_info(dir_name={dir_name}, file_name={file_name})")
         result = {}
         path = self.determine_file_path(dir_name, file_name)
@@ -128,21 +125,21 @@ class TextManager:
             return result, None
         return result, "File not found"
 
-    def get_full_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        LOGGER.debug(f"# get_full_dirs()")
+    async def get_full_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
+        #LOGGER.debug(f"# get_full_dirs()")
         path = self.path_prefix
         result = []
         for entry in path.iterdir():
             if entry.is_dir():
-                nodes, error = self.get_entries_from_dir(entry.name)
+                nodes, error = await self.get_entries_from_dir(entry.name)
                 result.append({"key": entry.name, "label": entry.name, "nodes": nodes})
             elif entry.is_file():
                 result.append({"key": entry.name, "label": entry.name})
         result.sort(key=lambda x: x["key"])
         return result, None
 
-    def get_entries_from_dir(self, dir_name: str = "", size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        LOGGER.debug(f"# get_full_entries_from_dir(dir_name={dir_name}, size={size})")
+    async def get_entries_from_dir(self, dir_name: str = "", size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
+        #LOGGER.debug(f"# get_full_entries_from_dir(dir_name={dir_name}, size={size})")
         # 특정 디렉토리 하위만 조회
         result = []
         path = self.path_prefix / dir_name
@@ -159,22 +156,22 @@ class TextManager:
             return result, f"can't find '{dir_name}'"
         return result, None
 
-    def get_some_entries_from_all_dirs(self, size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        LOGGER.debug(f"# get_some_entries_from_all_dirs(size={size})")
+    async def get_some_entries_from_all_dirs(self, size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
+        #LOGGER.debug(f"# get_some_entries_from_all_dirs(size={size})")
         # 전체 디렉토리의 일부 몇 개만 조회
         result = []
         path = self.path_prefix
         for entry in path.iterdir():
             if entry.is_dir():
-                nodes, error = self.get_entries_from_dir(entry.name, size)
+                nodes, error = await self.get_entries_from_dir(entry.name, size)
                 result.append({"key": entry.name, "label": entry.name, "nodes": nodes})
             elif entry.is_file():
                 result.append({"key": entry.name, "label": entry.name})
         result.sort(key=lambda x: x["key"])
         return result, None
 
-    def get_top_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        LOGGER.debug(f"# get_top_dirs()")
+    async def get_top_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
+        #LOGGER.debug(f"# get_top_dirs()")
         path = self.path_prefix
         result = []
         for entry in path.iterdir():
@@ -183,7 +180,7 @@ class TextManager:
         result.sort(key=lambda x: x["key"])
         return result, None
 
-    def search(self, query: str) -> Tuple[List[str], Optional[Any]]:
+    async def search(self, query: str) -> Tuple[List[str], Optional[Any]]:
         LOGGER.debug(f"# search(query={query})")
         path = self.path_prefix
         result = [str(path)]
