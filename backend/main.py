@@ -29,6 +29,10 @@ app.add_middleware(
 
 text_manager = TextManager()
 HEADER_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
+RENAMED_MASK = 0b0000000000010000
+REMOVED_MASK = 0b0000000000001000
+UPDATED_MASK = 0b0000000000000100
+CREATED_MASK = 0b0000000000000010
 last_modified_time = datetime.utcnow().strftime(HEADER_DATE_FORMAT)
 
 
@@ -40,14 +44,8 @@ def _handle_signal(signum, frame):
     exit(0)
 
 
-RENAMED_MASK =      0b0000000000010000
-REMOVED_MASK =      0b0000000000001000
-UPDATED_MASK =      0b0000000000000100
-CREATED_MASK =      0b0000000000000010
-
-
 def callback(path, evt_time, flags_list):
-    #LOGGER.debug(f"# callback(path={path})")
+    # LOGGER.debug(f"# callback(path={path})")
     global last_modified_time
     for flag in flags_list:
         if bool(flag & RENAMED_MASK) or bool(flag & REMOVED_MASK) or bool(flag & UPDATED_MASK) or bool(flag & CREATED_MASK):
@@ -72,6 +70,8 @@ thread = Thread(
     daemon=True,
 )
 thread.start()
+
+text_manager.load_initial_dir_entries()
 
 
 @app.put("/dirs/{dir_name}/files/{file_name}/newdir/{new_dir_name}/newfile/{new_file_name}")
@@ -231,4 +231,3 @@ async def search(query: str) -> Dict[str, Any]:
     else:
         response_object["error"] = error
     return response_object
-

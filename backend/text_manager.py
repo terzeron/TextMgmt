@@ -21,6 +21,7 @@ class TextManager:
         work_dir = os.environ["TM_WORK_DIR"] if "TM_WORK_DIR" in os.environ else os.getcwd() + "/../text"
         LOGGER.debug(f"work_dir={work_dir}")
         self.path_prefix = Path(work_dir).resolve()
+        self.initial_full_dirs = []
 
     def determine_file_path(self, dir_name: str, file_name: str) -> Path:
         if dir_name == TextManager.ROOT_DIRECTORY:
@@ -77,7 +78,7 @@ class TextManager:
         return "Ok", None
 
     @staticmethod
-    def determine_file_content_and_encoding(path: Path) -> Tuple[str]:
+    def determine_file_content_and_encoding(path: Path) -> str:
         LOGGER.debug(f"# determine_file_content_and_encoding(path={path})")
         encoding = "utf-8"
         with open(path, "r") as infile:
@@ -90,7 +91,7 @@ class TextManager:
 
     async def get_file_content(self, dir_name: str, file_name: str, size: int = 0) -> Union[str, FileResponse]:
         LOGGER.debug(f"# get_file_content(dir_name={dir_name}, file_name={file_name}, size={size})")
-        content = ""
+        content: Union[str, FileResponse] = ""
         path = self.determine_file_path(dir_name, file_name)
         if path.is_file():
             if path.suffix == ".txt":
@@ -127,6 +128,12 @@ class TextManager:
 
     async def get_full_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
         #LOGGER.debug(f"# get_full_dirs()")
+        if self.initial_full_dirs and self.initial_full_dirs != []:
+            result = self.initial_full_dirs
+            self.initial_full_dirs = []
+            LOGGER.debug("use initial_full_dirs")
+            return result, None
+
         path = self.path_prefix
         result = []
         for entry in path.iterdir():
@@ -137,6 +144,10 @@ class TextManager:
                 result.append({"key": entry.name, "label": entry.name})
         result.sort(key=lambda x: x["key"])
         return result, None
+
+    def load_initial_dir_entries(self) -> None:
+        LOGGER.debug(f"# load_initial_dir_entries()")
+        self.initial_full_dirs = self.get_full_dirs()
 
     async def get_entries_from_dir(self, dir_name: str = "", size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
         #LOGGER.debug(f"# get_full_entries_from_dir(dir_name={dir_name}, size={size})")
