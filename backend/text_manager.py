@@ -19,8 +19,8 @@ class TextManager:
     def __init__(self):
         LOGGER.debug("# TextManager()")
         work_dir = os.environ["TM_WORK_DIR"] if "TM_WORK_DIR" in os.environ else os.getcwd() + "/../text"
-        LOGGER.debug(f"work_dir={work_dir}")
         self.path_prefix = Path(work_dir).resolve()
+        LOGGER.debug(self.path_prefix)
         self.initial_full_dirs = []
 
     def determine_file_path(self, dir_name: str, file_name: str) -> Path:
@@ -129,9 +129,9 @@ class TextManager:
     async def get_full_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
         #LOGGER.debug(f"# get_full_dirs()")
         if self.initial_full_dirs and self.initial_full_dirs != []:
+            LOGGER.debug("use initial_full_dirs")
             result = self.initial_full_dirs
             self.initial_full_dirs = []
-            LOGGER.debug("use initial_full_dirs")
             return result, None
 
         path = self.path_prefix
@@ -145,9 +145,11 @@ class TextManager:
         result.sort(key=lambda x: x["key"])
         return result, None
 
-    def load_initial_dir_entries(self) -> None:
+    async def load_initial_dir_entries(self) -> None:
         LOGGER.debug(f"# load_initial_dir_entries()")
-        self.initial_full_dirs = self.get_full_dirs()
+        result, _ = await self.get_full_dirs()
+        self.initial_full_dirs = result
+        LOGGER.debug("initial_dir_entries is ready")
 
     async def get_entries_from_dir(self, dir_name: str = "", size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
         #LOGGER.debug(f"# get_full_entries_from_dir(dir_name={dir_name}, size={size})")

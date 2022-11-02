@@ -29,7 +29,7 @@ function App() {
     jsonGetReq(topDirListUrl, (result) => {
     }, (error) => {
     });
-  });
+  }, []);
 
   return (
     <div className="App">

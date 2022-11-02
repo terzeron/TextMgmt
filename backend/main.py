@@ -1,9 +1,9 @@
 #!/usr/bin/env python
-
 import os
-from typing import Dict, Any, Union, Optional
+import asyncio
 import logging
 from logging import config
+from typing import Dict, Any, Union, Optional
 from datetime import datetime
 from threading import Thread
 from text_manager import TextManager
@@ -71,7 +71,7 @@ thread = Thread(
 )
 thread.start()
 
-text_manager.load_initial_dir_entries()
+asyncio.create_task(text_manager.load_initial_dir_entries())
 
 
 @app.put("/dirs/{dir_name}/files/{file_name}/newdir/{new_dir_name}/newfile/{new_file_name}")
