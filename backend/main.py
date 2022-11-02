@@ -40,16 +40,25 @@ def _handle_signal(signum, frame):
     exit(0)
 
 
-def callback(path, _):
-    LOGGER.debug(f"# callback(path={path})")
+RENAMED_MASK =      0b0000000000010000
+REMOVED_MASK =      0b0000000000001000
+UPDATED_MASK =      0b0000000000000100
+CREATED_MASK =      0b0000000000000010
+
+
+def callback(path, evt_time, flags_list):
+    #LOGGER.debug(f"# callback(path={path})")
     global last_modified_time
-    last_modified_time = datetime.utcnow().strftime(HEADER_DATE_FORMAT)
-    LOGGER.debug(f"last_modified_time={last_modified_time}")
+    for flag in flags_list:
+        if bool(flag & RENAMED_MASK) or bool(flag & REMOVED_MASK) or bool(flag & UPDATED_MASK) or bool(flag & CREATED_MASK):
+            last_modified_time = datetime.utcnow().strftime(HEADER_DATE_FORMAT)
+            LOGGER.debug(f"last_modified_time={last_modified_time}")
 
 
-def _callback_wrapper(events, _):
-    event = events[0]
-    callback(event.path, event.evt_time)
+def _callback_wrapper(events, event_num):
+    for i in range(event_num):
+        flags_list = [events[i].flags[f_idx] for f_idx in range(events[i].flags_num)]
+        callback(events[i].path, events[i].evt_time, flags_list)
 
 
 fsw_session = libfswatch.fsw_init_session(0)
