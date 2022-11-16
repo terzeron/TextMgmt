@@ -22,6 +22,7 @@
     "react-router-dom": "^6.4.1",
     "react-scripts": "5.0.1",
     "react-simple-tree-menu": "^1.1.18",
+    "rtf.js": "^3.0.9",
     "sprintf-js": "^1.1.2",
     "web-vitals": "^2.1.4"
   },

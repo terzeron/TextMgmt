@@ -8,6 +8,7 @@ import ViewPDF from "./ViewPDF";
 import ViewEPUB from "./ViewEPUB";
 import ViewTXT from "./ViewTXT";
 import ViewHTML from './ViewHTML';
+import ViewRTF from './ViewRTF';
 import ViewImage from "./ViewImage";
 
 export default function ViewSingle(props) {
@@ -51,6 +52,8 @@ export default function ViewSingle(props) {
         entryId && entryId.endsWith(".html") && <ViewHTML entryId={entryId}/>
       }
       {
+        entryId && entryId.endsWith(".rtf") && <ViewRTF entryId={entryId}/>
+      }      {
         entryId && (entryId.endsWith(".jpg") || entryId.endsWith(".gif") || entryId.endsWith(".png")) && <ViewImage entryId={entryId}/>
       }
     </div>
