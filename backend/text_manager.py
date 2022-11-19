@@ -7,6 +7,7 @@ import logging
 from logging import config
 from pathlib import Path
 from typing import Any, Optional, Dict, Tuple, List, Union
+from datetime import datetime
 from fastapi.responses import FileResponse
 
 logging.config.fileConfig("logging.conf", disable_existing_loggers=False)
@@ -18,10 +19,18 @@ class TextManager:
 
     def __init__(self):
         LOGGER.debug("# TextManager()")
-        work_dir = os.environ["TM_WORK_DIR"] if "TM_WORK_DIR" in os.environ else os.getcwd() + "/../text"
-        self.path_prefix = Path(work_dir).resolve()
+        work_dir = os.environ["TM_WORK_DIR"] if "TM_WORK_DIR" in os.environ else Path.cwd().parent / "text"
+        self.path_prefix = Path(work_dir)
         LOGGER.debug(self.path_prefix)
-        self.initial_full_dirs = []
+        self.last_modified_time = datetime.utcnow()
+        self.cached_full_dirs = []
+        self.cached_some_dirs = []
+
+    def reset_cache(self):
+        LOGGER.debug("# reset_cache()")
+        self.last_modified_time = datetime.utcnow()
+        self.cached_full_dirs = []
+        self.cached_some_dirs = []
 
     def determine_file_path(self, dir_name: str, file_name: str) -> Path:
         if dir_name == TextManager.ROOT_DIRECTORY:
@@ -34,9 +43,9 @@ class TextManager:
         LOGGER.debug(f"# change_encoding(dir_name={dir_name}, file_name={file_name})")
         path = self.determine_file_path(dir_name, file_name)
         common_expression = r"(있었다|것이다|말했다|없었다|않았다|물었다|열었다|같았다|보였다|그러나|그리고|하지만|그렇게|그런데|때문에|갑자기|어떻게|앞으로|천천히|동시에|아니라|아닌가|있다는|말인가|못하고|그녀는|그녀의|자신의|그것은|사람은|그들은|사람이|그들의|자신이|사람의|이렇게|소리가|그래서|소리를|생각이|하였다|우리는|되었다)"
-        with open(path, "rb") as infile:
+        with path.open("rb") as infile:
             text = infile.read()
-            for encoding in ["cp949", "johab", "utf-16"]:
+            for encoding in ("cp949", "johab", "utf-16"):
                 try:
                     new_text = text.decode(encoding)
                     m = re.search(common_expression, new_text)
@@ -55,7 +64,7 @@ class TextManager:
     async def move_file(self, dir_name: str, file_name: str, new_dir_name: str, new_file_name: str) -> Tuple[str, Optional[Any]]:
         LOGGER.debug(f"# move_file(dir_name={dir_name}, file_name={file_name}, new_dir_name={new_dir_name}, new_file_name={new_file_name})")
         path = self.determine_file_path(dir_name, file_name)
-        if new_dir_name == TextManager.ROOT_DIRECTORY or new_dir_name.startswith("..") or new_dir_name.startswith("/"):
+        if new_dir_name == TextManager.ROOT_DIRECTORY or new_dir_name.startswith(("..", "/")):
             new_dir_name = "."
         if not (self.path_prefix / new_dir_name).exists():
             return "Error", f"directory '{new_dir_name}' doesn't exist"
@@ -81,7 +90,7 @@ class TextManager:
     def determine_file_content_and_encoding(path: Path) -> str:
         LOGGER.debug(f"# determine_file_content_and_encoding(path={path})")
         encoding = "utf-8"
-        with open(path, "r") as infile:
+        with path.open("r") as infile:
             content = infile.read(1024 * 100)
             if content:
                 encoding_metadata = chardet.detect(content.encode())
@@ -128,14 +137,12 @@ class TextManager:
 
     async def get_full_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
         #LOGGER.debug(f"# get_full_dirs()")
-        if self.initial_full_dirs and self.initial_full_dirs != []:
-            LOGGER.debug("use initial_full_dirs")
-            result = self.initial_full_dirs
-            self.initial_full_dirs = []
-            return result, None
+        if self.cached_full_dirs:
+            LOGGER.debug("use cached_full_dirs")
+            return self.cached_full_dirs, None
 
-        path = self.path_prefix
         result = []
+        path = self.path_prefix
         for entry in path.iterdir():
             if entry.is_dir():
                 nodes, error = await self.get_entries_from_dir(entry.name)
@@ -143,13 +150,8 @@ class TextManager:
             elif entry.is_file():
                 result.append({"key": entry.name, "label": entry.name})
         result.sort(key=lambda x: x["key"])
+        self.cached_full_dirs = result
         return result, None
-
-    async def load_initial_dir_entries(self) -> None:
-        LOGGER.debug(f"# load_initial_dir_entries()")
-        result, _ = await self.get_full_dirs()
-        self.initial_full_dirs = result
-        LOGGER.debug("initial_dir_entries is ready")
 
     async def get_entries_from_dir(self, dir_name: str = "", size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
         #LOGGER.debug(f"# get_full_entries_from_dir(dir_name={dir_name}, size={size})")
@@ -172,6 +174,10 @@ class TextManager:
     async def get_some_entries_from_all_dirs(self, size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
         #LOGGER.debug(f"# get_some_entries_from_all_dirs(size={size})")
         # 전체 디렉토리의 일부 몇 개만 조회
+        if self.cached_some_dirs:
+            LOGGER.debug("use cached_some_dirs")
+            return self.cached_some_dirs, None
+
         result = []
         path = self.path_prefix
         for entry in path.iterdir():
@@ -181,6 +187,7 @@ class TextManager:
             elif entry.is_file():
                 result.append({"key": entry.name, "label": entry.name})
         result.sort(key=lambda x: x["key"])
+        self.cached_some_dirs = result
         return result, None
 
     async def get_top_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:

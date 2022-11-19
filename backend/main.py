@@ -33,7 +33,6 @@ RENAMED_MASK = 0b0000000000010000
 REMOVED_MASK = 0b0000000000001000
 UPDATED_MASK = 0b0000000000000100
 CREATED_MASK = 0b0000000000000010
-last_modified_time = datetime.utcnow().strftime(HEADER_DATE_FORMAT)
 
 
 def _handle_signal(signum, frame):
@@ -46,11 +45,10 @@ def _handle_signal(signum, frame):
 
 def callback(path, evt_time, flags_list):
     # LOGGER.debug(f"# callback(path={path})")
-    global last_modified_time
     for flag in flags_list:
         if bool(flag & RENAMED_MASK) or bool(flag & REMOVED_MASK) or bool(flag & UPDATED_MASK) or bool(flag & CREATED_MASK):
-            last_modified_time = datetime.utcnow().strftime(HEADER_DATE_FORMAT)
-            LOGGER.debug(f"last_modified_time={last_modified_time}")
+            text_manager.reset_cache()
+            LOGGER.debug(f"text_manager.last_modified_time={text_manager.last_modified_time}")
 
 
 def _callback_wrapper(events, event_num):
@@ -71,7 +69,7 @@ thread = Thread(
 )
 thread.start()
 
-asyncio.create_task(text_manager.load_initial_dir_entries())
+asyncio.create_task(text_manager.get_full_dirs())
 
 
 @app.put("/dirs/{dir_name}/files/{file_name}/newdir/{new_dir_name}/newfile/{new_file_name}")
@@ -106,14 +104,19 @@ async def get_file_content(dir_name: str, file_name: str) -> Union[str, FileResp
     return await text_manager.get_file_content(dir_name, file_name)
 
 
+def respond_with_304_not_modified(if_modified_since: Optional[str]) -> bool:
+    if text_manager.last_modified_time and if_modified_since:
+        if text_manager.last_modified_time <= datetime.strptime(if_modified_since, HEADER_DATE_FORMAT):
+            return True
+    return False
+
 @app.get("/dirs/{dir_name}/files/{file_name}")
-async def get_file_info(response: Response, dir_name: str, file_name: str, if_modified_since: Optional[str] = Header(None), ) -> Dict[str, Any]:
+async def get_file_info(response: Response, dir_name: str, file_name: str, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
     LOGGER.debug(f"# get_file(dir_name={dir_name}, file_name={file_name})")
-    if last_modified_time and if_modified_since:
-        if datetime.strptime(last_modified_time, HEADER_DATE_FORMAT) <= datetime.strptime(if_modified_since, HEADER_DATE_FORMAT):
-            response.status_code = status.HTTP_304_NOT_MODIFIED
-            return {}
-    response.headers["Last-Modified"] = last_modified_time
+    if respond_with_304_not_modified(if_modified_since):
+        response.status_code = status.HTTP_304_NOT_MODIFIED
+        return {}
+    response.headers["Last-Modified"] = text_manager.last_modified_time.strftime(HEADER_DATE_FORMAT)
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_file_info(dir_name, file_name)
     if error is None:
@@ -128,11 +131,10 @@ async def get_file_info(response: Response, dir_name: str, file_name: str, if_mo
 @app.get("/dirs/{dir_name}")
 async def get_a_dir(response: Response, dir_name: str, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
     LOGGER.debug(f"# get_a_dir(dir_name={dir_name})")
-    if last_modified_time and if_modified_since:
-        if datetime.strptime(last_modified_time, HEADER_DATE_FORMAT) <= datetime.strptime(if_modified_since, HEADER_DATE_FORMAT):
-            response.status_code = status.HTTP_304_NOT_MODIFIED
-            return {}
-    response.headers["Last-Modified"] = last_modified_time
+    if respond_with_304_not_modified(if_modified_since):
+        response.status_code = status.HTTP_304_NOT_MODIFIED
+        return {}
+    response.headers["Last-Modified"] = text_manager.last_modified_time.strftime(HEADER_DATE_FORMAT)
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_entries_from_dir(dir_name)
     if error is None:
@@ -146,12 +148,11 @@ async def get_a_dir(response: Response, dir_name: str, if_modified_since: Option
 
 @app.get("/dirs")
 async def get_full_dirs(response: Response, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
-    LOGGER.debug(f"# get_full_dirs(if_modified_since={str(if_modified_since)})")
-    if last_modified_time and if_modified_since:
-        if datetime.strptime(last_modified_time, HEADER_DATE_FORMAT) <= datetime.strptime(if_modified_since, HEADER_DATE_FORMAT):
-            response.status_code = status.HTTP_304_NOT_MODIFIED
-            return {}
-    response.headers["Last-Modified"] = last_modified_time
+    LOGGER.debug(f"# get_full_dirs(if_modified_since={if_modified_since})")
+    if respond_with_304_not_modified(if_modified_since):
+        response.status_code = status.HTTP_304_NOT_MODIFIED
+        return {}
+    response.headers["Last-Modified"] = text_manager.last_modified_time.strftime(HEADER_DATE_FORMAT)
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_full_dirs()
     if error is None:
@@ -164,12 +165,11 @@ async def get_full_dirs(response: Response, if_modified_since: Optional[str] = H
 
 @app.get("/somedirs")
 async def get_some_dirs(response: Response, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
-    LOGGER.debug(f"# get_some_dirs(if_modified_since={str(if_modified_since)})")
-    if last_modified_time and if_modified_since:
-        if datetime.strptime(last_modified_time, HEADER_DATE_FORMAT) <= datetime.strptime(if_modified_since, HEADER_DATE_FORMAT):
-            response.status_code = status.HTTP_304_NOT_MODIFIED
-            return {}
-    response.headers["Last-Modified"] = last_modified_time
+    LOGGER.debug(f"# get_some_dirs(if_modified_since={if_modified_since})")
+    if respond_with_304_not_modified(if_modified_since):
+        response.status_code = status.HTTP_304_NOT_MODIFIED
+        return {}
+    response.headers["Last-Modified"] = text_manager.last_modified_time.strftime(HEADER_DATE_FORMAT)
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_some_entries_from_all_dirs(10)
     if error is None:
@@ -183,12 +183,11 @@ async def get_some_dirs(response: Response, if_modified_since: Optional[str] = H
 
 @app.get("/topdirs")
 async def get_top_dirs(response: Response, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
-    LOGGER.debug(f"# get_top_dir(if_modified_since={str(if_modified_since)})")
-    if last_modified_time and if_modified_since:
-        if datetime.strptime(last_modified_time, HEADER_DATE_FORMAT) <= datetime.strptime(if_modified_since, HEADER_DATE_FORMAT):
-            response.status_code = status.HTTP_304_NOT_MODIFIED
-            return {}
-    response.headers["Last-Modified"] = last_modified_time
+    LOGGER.debug(f"# get_top_dir(if_modified_since={if_modified_since})")
+    if respond_with_304_not_modified(if_modified_since):
+        response.status_code = status.HTTP_304_NOT_MODIFIED
+        return {}
+    response.headers["Last-Modified"] = text_manager.last_modified_time.strftime(HEADER_DATE_FORMAT)
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_top_dirs()
     if error is None:
