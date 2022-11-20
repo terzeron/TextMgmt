@@ -18,10 +18,10 @@ This software is for management of text files. It is optimized and tested for te
 * My unofficial patch for this bug is the following.
 * check your python site-packages path by 
   * `python -c "import site; print(site.getsitepackages()[0])"`
-* copy backend/fswatch.patched.py to <python site-packages path>/fswatch.py
-  * ex) `cp backend/fswatch.patched.py ~/.pyenv/versions/tm/lib/python3.10/site-packages/fswatch.py`
-* copy backend/libfswatch.patched.py to <python site-packages path>/libfswatch.py
-  * ex) `cp backend/libfswatch.patched.py ~/.pyenv/versions/tm/lib/python3.10/site-packages/libfswatch.py`
+* copy backend/fswatch.patched.py to <python site-packages path>/fswatch/fswatch.py
+  * ex) `cp backend/fswatch.patched.py ~/.pyenv/versions/tm/lib/python3.10/site-packages/fswatch/fswatch.py`
+* copy backend/libfswatch.patched.py to <python site-packages path>/fswatch/libfswatch.py
+  * ex) `cp backend/libfswatch.patched.py ~/.pyenv/versions/tm/lib/python3.10/site-packages/fswatch/libfswatch.py`
 
 ### common
 * `cd backend`
