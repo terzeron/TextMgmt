@@ -4,16 +4,13 @@
 import os
 import logging
 import asyncio
+import platform
 from typing import Dict, Any, Union, Optional
-from pathlib import Path
 from datetime import datetime
-from threading import Thread
 from fastapi import FastAPI, Response, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-import inotify.adapters
 from text_manager import TextManager
-
 
 logging.config.fileConfig("logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -33,19 +30,10 @@ app.add_middleware(
 )
 
 text_manager = TextManager()
-HEADER_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
 
-def inotify_worker(path: Path):
-    LOGGER.debug(f"# inotify_worker(path={path})")
-    inotify_client = inotify.adapters.InotifyTree(str(path))
-    for event in inotify_client.event_gen(yield_nones=False):
-        _, type_names, path, filename = event
-        for type_name in type_names:
-            if type_name in ("IN_CREATE", "IN_DELETE", "IN_MOVED_FROM", "IN_MOVED_TO", "IN_CLOSE_WRITE", "IN_MODIFY", "IN_DELETE_SELF", "IN_MOVE_SELF"):
-                LOGGER.debug(f"PATH=[{path}] FILENAME=[{filename}] EVENT_TYPE={type_name}")
-                text_manager.reset_cache()
-
-Thread(target=inotify_worker, args=(text_manager.path_prefix, ), daemon=True).start()
+if platform.system() == "Linux":
+    import fs_monitor_in_linux
+    fs_monitor_in_linux.start(text_manager)
 
 asyncio.create_task(text_manager.get_full_dirs())
 
@@ -87,6 +75,7 @@ def respond_with_304_not_modified(if_modified_since: Optional[str]) -> bool:
         if text_manager.last_modified_time <= datetime.strptime(if_modified_since, HEADER_DATE_FORMAT):
             return True
     return False
+
 
 @app.get("/dirs/{dir_name}/files/{file_name}")
 async def get_file_info(response: Response, dir_name: str, file_name: str, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
