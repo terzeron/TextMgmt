@@ -29,6 +29,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+HEADER_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
 text_manager = TextManager()
 
 if platform.system() == "Linux":
