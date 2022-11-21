@@ -136,7 +136,7 @@ class TextManager:
         return result, "File not found"
 
     async def get_full_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        #LOGGER.debug(f"# get_full_dirs()")
+        LOGGER.debug(f"# get_full_dirs()")
         if self.cached_full_dirs:
             LOGGER.debug("use cached_full_dirs")
             return self.cached_full_dirs, None
@@ -151,6 +151,7 @@ class TextManager:
                 result.append({"key": entry.name, "label": entry.name})
         result.sort(key=lambda x: x["key"])
         self.cached_full_dirs = result
+        LOGGER.debug("loaded full dirs")
         return result, None
 
     async def get_entries_from_dir(self, dir_name: str = "", size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:

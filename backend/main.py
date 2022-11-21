@@ -1,19 +1,24 @@
 #!/usr/bin/env python
+
+
 import os
-import asyncio
 import logging
-from logging import config
+import asyncio
 from typing import Dict, Any, Union, Optional
+from pathlib import Path
 from datetime import datetime
 from threading import Thread
-from text_manager import TextManager
 from fastapi import FastAPI, Response, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fswatch import libfswatch
+import inotify.adapters
+from text_manager import TextManager
+
 
 logging.config.fileConfig("logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
+# ignore debug logs from inotify.adapters
+logging.getLogger("inotify.adapters").setLevel(logging.WARNING)
 
 app = FastAPI()
 origins = [
@@ -29,45 +34,18 @@ app.add_middleware(
 
 text_manager = TextManager()
 HEADER_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
-RENAMED_MASK = 0b0000000000010000
-REMOVED_MASK = 0b0000000000001000
-UPDATED_MASK = 0b0000000000000100
-CREATED_MASK = 0b0000000000000010
 
+def inotify_worker(path: Path):
+    LOGGER.debug(f"# inotify_worker(path={path})")
+    inotify_client = inotify.adapters.InotifyTree(str(path))
+    for event in inotify_client.event_gen(yield_nones=False):
+        _, type_names, path, filename = event
+        for type_name in type_names:
+            if type_name in ("IN_CREATE", "IN_DELETE", "IN_MOVED_FROM", "IN_MOVED_TO", "IN_CLOSE_WRITE", "IN_MODIFY", "IN_DELETE_SELF", "IN_MOVE_SELF"):
+                LOGGER.debug(f"PATH=[{path}] FILENAME=[{filename}] EVENT_TYPE={type_name}")
+                text_manager.reset_cache()
 
-def _handle_signal(signum, frame):
-    LOGGER.debug(f"# _handle_signal(signum={signum}, frame={frame})")
-    global fsw_session
-    if libfswatch.fsw_is_running(fsw_session):
-        libfswatch.fsw_stop_monitor(fsw_session)
-    exit(0)
-
-
-def callback(path, evt_time, flags_list):
-    # LOGGER.debug(f"# callback(path={path})")
-    for flag in flags_list:
-        if bool(flag & RENAMED_MASK) or bool(flag & REMOVED_MASK) or bool(flag & UPDATED_MASK) or bool(flag & CREATED_MASK):
-            text_manager.reset_cache()
-            LOGGER.debug(f"text_manager.last_modified_time={text_manager.last_modified_time}")
-
-
-def _callback_wrapper(events, event_num):
-    for i in range(event_num):
-        flags_list = [events[i].flags[f_idx] for f_idx in range(events[i].flags_num)]
-        callback(events[i].path, events[i].evt_time, flags_list)
-
-
-fsw_session = libfswatch.fsw_init_session(0)
-libfswatch.fsw_init_library()
-libfswatch.fsw_add_path(fsw_session, str(text_manager.path_prefix).encode())
-cevent_callback = libfswatch.cevent_callback(_callback_wrapper)
-libfswatch.fsw_set_callback(fsw_session, cevent_callback)
-thread = Thread(
-    target=libfswatch.fsw_start_monitor,
-    args=(fsw_session,),
-    daemon=True,
-)
-thread.start()
+Thread(target=inotify_worker, args=(text_manager.path_prefix, ), daemon=True).start()
 
 asyncio.create_task(text_manager.get_full_dirs())
 
