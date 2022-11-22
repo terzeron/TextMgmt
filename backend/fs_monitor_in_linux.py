@@ -11,7 +11,7 @@ LOGGER = logging.getLogger(__name__)
 logging.getLogger("inotify.adapters").setLevel(logging.WARNING)
 
 
-async def inotify_worker(text_manager: TextManager):
+def inotify_worker(text_manager: TextManager):
     LOGGER.debug(f"# inotify_worker(path={text_manager.path_prefix})")
     inotify_client = inotify.adapters.InotifyTree(str(text_manager.path_prefix))
     for event in inotify_client.event_gen(yield_nones=False):
