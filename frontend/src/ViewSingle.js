@@ -16,6 +16,7 @@ export default function ViewSingle(props) {
   const {dirName, fileName} = useParams();
   const [entryId, setEntryId] = useState("");
   const [lineCount, setLineCount] = useState(0);
+  const [pageCount, setPageCount] = useState(0);
 
   useEffect(() => {
     if (props) {
@@ -27,6 +28,7 @@ export default function ViewSingle(props) {
     if (props.entryId) {
       setEntryId(props.entryId);
       setLineCount(props.lineCount);
+      setPageCount(props.pageCount);
     }
     if (dirName && fileName) {
       setEntryId(dirName + "/" + fileName);
@@ -40,7 +42,7 @@ export default function ViewSingle(props) {
   return (
     <div>
       {
-        entryId && entryId.endsWith(".pdf") && <ViewPDF entryId={entryId}/>
+        entryId && entryId.endsWith(".pdf") && <ViewPDF entryId={entryId} pageCount={pageCount}/>
       }
       {
         entryId && entryId.endsWith(".epub") && <ViewEPUB entryId={entryId}/>

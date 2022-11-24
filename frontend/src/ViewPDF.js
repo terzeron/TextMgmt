@@ -11,6 +11,7 @@ export default function ViewPDF(props) {
   const [url, setUrl] = useState("");
   const [numPages, setNumPages] = useState(null);
   const [pageNumber, setPageNumber] = useState(1);
+  const [pageCount, setPageCount] = useState(0);
 
   useEffect(() => {
     console.log(`ViewPDF: useEffect(${props})`, props);
@@ -21,6 +22,7 @@ export default function ViewPDF(props) {
       const fileName = props.entryId.split('/')[1];
       const url = getUrlPrefix() + "/download/dirs/" + dirName + "/files/" + encodeURIComponent(fileName);
       setUrl(url);
+      setPageCount(props.pageCount);
     }
 
     return () => {
@@ -45,7 +47,7 @@ export default function ViewPDF(props) {
           file={url}
           onLoadSuccess={onDocumentLoadSuccess}>
           {Array.from(new Array(numPages), (el, index) => {
-              if (index > 5) {
+              if (pageCount && index + 1 > pageCount) {
                 return;
               }
               return (

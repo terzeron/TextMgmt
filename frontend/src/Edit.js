@@ -613,7 +613,7 @@ export default function Edit() {
                   </a>
                 </Card.Header>
                 <Card.Body>
-                  <ViewSingle key={entryId} entryId={entryId} lineCount={100}/>
+                  <ViewSingle key={entryId} entryId={entryId} lineCount={100} pageCount={10}/>
                 </Card.Body>
               </Card>
             </Col>
