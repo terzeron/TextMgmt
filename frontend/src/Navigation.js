@@ -20,6 +20,15 @@ export default function Navigation() {
 
   useEffect(() => {
     console.log('Navigation useEffect');
+    if (!appId) {
+      console.error("REACT_APP_FACEBOOK_APP_ID is not set");
+      return;
+    }
+    if (!adminEmail) {
+      console.log("REACT_APP_ADMIN_EMAIL is not set");
+      return;
+    }
+
     if (sessionStorage.getItem('accessToken') && sessionStorage.getItem('email') === adminEmail) {
       setLogin(true);
       setAuthorized(true);
