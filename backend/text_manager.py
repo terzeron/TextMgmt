@@ -109,6 +109,10 @@ class TextManager:
                 content = FileResponse(path=path, media_type="application/pdf")
             elif path.suffix == ".epub":
                 content = FileResponse(path=path, media_type="application/epub+zip")
+            elif path.suffix == ".doc":
+                content = FileResponse(path=path, media_type="application/msword")
+            elif path.suffix == ".docx":
+                content = FileResponse(path=path, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
             elif path.suffix == ".html":
                 content = FileResponse(path=path, media_type="text/html")
             else:
