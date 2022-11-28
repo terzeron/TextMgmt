@@ -1,6 +1,7 @@
 import {Button, Card, Form, FormControl, Image, InputGroup, Nav, Navbar} from "react-bootstrap";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {faSearch, faUser} from "@fortawesome/free-solid-svg-icons";
+import {faFacebook} from "@fortawesome/free-brands-svg-icons";
 import React, {useEffect, useState} from "react";
 import {Outlet} from "react-router-dom";
 import FacebookLogin, {FacebookLoginClient} from "@greatsumini/react-facebook-login";
@@ -117,7 +118,7 @@ export default function Navigation() {
         </Navbar.Collapse>
       </Navbar>
 
-      <div className="container">
+      <div className="container ps-3 pt-3">
         {
           !login &&
           <FacebookLogin
@@ -125,7 +126,17 @@ export default function Navigation() {
             onSuccess={onLoginSuccess}
             onFail={onLoginFailure}
             onProfileSuccess={onProfileSuccess}
-          />
+            style={{
+              backgroundColor: '#4267b2',
+              color: '#fff',
+              fontSize: '16px',
+              padding: '10px',
+              border: 'none',
+              borderRadius: '4px',
+            }}
+          >
+            Login with Facebook <FontAwesomeIcon icon={faFacebook}/>
+          </FacebookLogin>
         }
         {
           authorized &&
