@@ -41,11 +41,12 @@ asyncio.create_task(text_manager.get_full_dirs())
 
 
 @app.on_event("startup")
-@repeat_every(seconds=10)
+@repeat_every(seconds=60)
 def check_recent_changes_in_fs() -> None:
     if text_manager.last_modified_time < datetime.utcnow() - timedelta(seconds=60*5):
         # older than 5 minutes
         LOGGER.debug("call get_full_dirs() for caching because there is no changes during recent 5 minutes in file system")
+        text_manager.last_modified_time = datetime.utcnow()
         asyncio.create_task(text_manager.get_some_dirs())
         asyncio.create_task(text_manager.get_full_dirs())
 
