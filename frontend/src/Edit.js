@@ -7,7 +7,7 @@ import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import {faCheck, faClockRotateLeft, faCut, faRotate, faTrash, faTruckMoving, faUpload} from '@fortawesome/free-solid-svg-icons';
 import DirList from './DirList';
-import {getRandomDarkColor, jsonDeleteReq, jsonGetReq, jsonPutReq} from './Common';
+import {getRandomDarkColor, getUrlPrefix, jsonDeleteReq, jsonGetReq, jsonPutReq} from './Common';
 import ViewSingle from "./ViewSingle";
 
 export default function Edit() {
@@ -25,6 +25,8 @@ export default function Edit() {
   const [size, setSize] = useState(0);
   const [encoding, setEncoding] = useState('');
   const [newFileName, setNewFileName] = useState('');
+  const [viewUrl, setViewUrl] = useState('');
+  const [downloadUrl, setDownloadUrl] = useState('');
 
   const [selectedDirectory, setSelectedDirectory] = useState('');
   const ROOT_DIRECTORY = '$$rootdir$$';
@@ -70,6 +72,8 @@ export default function Edit() {
       setNewFileName('');
       setSize(0);
       setEncoding('');
+      setViewUrl('');
+      setDownloadUrl('');
     };
   }, [] /* rendered once */);
 
@@ -186,6 +190,9 @@ export default function Edit() {
 
     // decompose file name to (author, title, extension)
     decomposeFileName(fileName);
+
+    setViewUrl('/view/' + encodeURIComponent(dirName) + '/' + encodeURIComponent(fileName));
+    setDownloadUrl(getUrlPrefix() + '/download/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName));
 
     // get file metadata (size, encoding)
     const fileMetadataUrl = '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName);
@@ -608,9 +615,14 @@ export default function Edit() {
               <Card>
                 <Card.Header>
                   파일 보기
-                  <a href={`/view/${entryId}`} target="_blank" rel="noreferrer">
-                    <Button variant="outline-primary" size="sm" className="float-end">새 창에서 전체보기</Button>
-                  </a>
+                  <span>
+                    <a href={viewUrl} target="_blank" rel="noreferrer">
+                      <Button variant="outline-primary" size="sm" disabled={!entryId} className="float-end">새 창에서 전체 보기</Button>
+                    </a>
+                    <a href={downloadUrl} target="_blank" rel="noreferrer">
+                      <Button variant="outline-primary" size="sm" disabled={!entryId} className="float-end">다운로드</Button>
+                    </a>
+                  </span>
                 </Card.Header>
                 <Card.Body>
                   <ViewSingle key={entryId} entryId={entryId} lineCount={100} pageCount={10}/>

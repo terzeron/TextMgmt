@@ -112,10 +112,10 @@ export default function View() {
                     <Row className="mt-1">
                       <span>
                         <a href={viewUrl} target="_blank" rel="noreferrer">
-                          <Button variant="outline-secondary" size="sm" disabled={!entryId}>새 창에서 전체 보기</Button>
+                          <Button variant="outline-primary" size="sm" disabled={!entryId}>새 창에서 전체 보기</Button>
                         </a>
                         <a href={downloadUrl} target="_blank" rel="noreferrer">
-                          <Button variant="outline-secondary" size="sm" disabled={!entryId}>다운로드</Button>
+                          <Button variant="outline-primary" size="sm" disabled={!entryId}>다운로드</Button>
                         </a>
                       </span>
                     </Row>
