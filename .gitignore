@@ -1,8 +1,12 @@
-text/_epub
-text/_pdf
-text/_txt
-text/_hwp
 text/_djvu
+text/_doc
+text/_epub
+text/_html
+text/_hwp
+text/_image
+text/_pdf
+text/_rtf
+text/_txt
 text/_sub5
 text/_sub6
 text/cat1_sub1
