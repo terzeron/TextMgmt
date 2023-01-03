@@ -17,6 +17,7 @@ export default function Edit() {
   const [treeData, setTreeData] = useState([]);
   const [topDirList, setToptopDirList] = useState('');
   const [entryId, setEntryId] = useState('');
+  const [dirName, setDirName] = useState('');
   const [entryName, setEntryName] = useState('');
 
   const [author, setAuthor] = useState('');
@@ -64,6 +65,7 @@ export default function Edit() {
 
       setToptopDirList(null);
       setEntryId('');
+      setDirName('');
       setEntryName('');
 
       setAuthor('');
@@ -176,6 +178,7 @@ export default function Edit() {
     setEntryId(key);
     const dirName = key.split('/')[0];
     const fileName = key.split('/')[1];
+    setDirName(dirName);
     setEntryName(fileName);
     setNewFileName(fileName);
     console.log(`fileEntryClicked(): dirName=${dirName}, fileName=${fileName}`);
@@ -419,16 +422,27 @@ export default function Edit() {
                 <Suspense fallback={<div className="loading">로딩 중...</div>}>
                   <Card.Body>
                     <Row>
-                      <Col xs="8">
+                      <Col xs="3">
+                        <Form.Control value={dirName} readOnly disabled/>
+                      </Col>
+                      <Col xs="9">
                         <Form.Control value={entryName} readOnly disabled/>
                       </Col>
-                      <Col xs="2">
+                    </Row>
+                    <Row>
+                      <Col xs="3">
+                        <InputGroup>
+                          <InputGroup.Text>확장자</InputGroup.Text>
+                          <Form.Control value={extension} onChange={extensionChanged}/>
+                        </InputGroup>
+                      </Col>
+                      <Col xs="4">
                         <InputGroup>
                           <InputGroup.Text>인코딩</InputGroup.Text>
                           <Form.Control value={encoding} readOnly disabled/>
                         </InputGroup>
                       </Col>
-                      <Col xs="2">
+                      <Col xs="5">
                         <InputGroup>
                           <InputGroup.Text>크기</InputGroup.Text>
                           <Form.Control value={size} readOnly disabled/>
@@ -464,15 +478,9 @@ export default function Edit() {
                       </InputGroup>
                     </Row>
                     <Row>
-                      <Col xs="3">
+                      <Col>
                         <InputGroup>
-                          <InputGroup.Text>확장자</InputGroup.Text>
-                          <Form.Control value={extension} onChange={extensionChanged}/>
-                        </InputGroup>
-                      </Col>
-                      <Col xs="9">
-                        <InputGroup>
-                          <InputGroup.Text>파일명</InputGroup.Text>
+                          <InputGroup.Text>신규 파일명</InputGroup.Text>
                           <Form.Control value={newFileName} onChange={newFileNameChanged}/>
                           <Button variant="outline-success" size="sm" onClick={changeButtonClicked} disabled={!entryId}>
                             변경
@@ -491,7 +499,7 @@ export default function Edit() {
                         <a href={`https://www.yes24.com/Product/Search?domain=ALL&query=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
                           <Button variant="outline-primary" size="sm">Yes24</Button>
                         </a>
-                        <a href={`https://www.google.com/search?sourceid=chrome&ie=UTF-8&oq=${encodeURIComponent(author)}+${encodeURIComponent(title)}&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
+                        <a href={`https://www.google.com/search?sourceid=chrome&ie=UTF-8&oq=${encodeURIComponent(author)}+${encodeURIComponent(title)}&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}&sourceid=chrome&ie=UTF-8`} target="_blank" rel="noreferrer">
                           <Button variant="outline-primary" size="sm">구글</Button>
                         </a>
                         <a href={`https://search.shopping.naver.com/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&sort=REL&query=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
