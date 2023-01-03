@@ -14,3 +14,5 @@ text/testdata2
 text/testdata3
 backend/.env
 frontend/.env
+frontend/.env.development
+frontend/.env.production
