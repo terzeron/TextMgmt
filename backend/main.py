@@ -6,7 +6,7 @@ import logging.config
 import asyncio
 import platform
 from typing import Dict, Any, Union, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 from fastapi import FastAPI, Response, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -37,18 +37,18 @@ if platform.system() == "Linux":
     import fs_monitor_in_linux
     fs_monitor_in_linux.start(text_manager)
 
+asyncio.create_task(text_manager.get_some_entries_from_all_dirs(10))
 asyncio.create_task(text_manager.get_full_dirs())
 
 
 @app.on_event("startup")
-@repeat_every(seconds=60)
+@repeat_every(seconds=50)
 def check_recent_changes_in_fs() -> None:
-    if text_manager.last_modified_time < datetime.utcnow() - timedelta(seconds=60*5):
-        # older than 5 minutes
-        LOGGER.debug("call get_full_dirs() for caching because there is no changes during recent 5 minutes in file system")
-        text_manager.last_modified_time = datetime.utcnow()
-        asyncio.create_task(text_manager.get_some_dirs())
+    if text_manager.do_trigger_caching:
+        LOGGER.debug("trigger re-caching")
+        asyncio.create_task(text_manager.get_some_entries_from_all_dirs(10))
         asyncio.create_task(text_manager.get_full_dirs())
+        text_manager.do_trigger_caching = False
 
 
 @app.put("/dirs/{dir_name}/files/{file_name}/newdir/{new_dir_name}/newfile/{new_file_name}")

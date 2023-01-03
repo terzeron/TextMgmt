@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional, Dict, Tuple, List, Union
 from datetime import datetime
 from fastapi.responses import FileResponse
+from debounce import debounce
 
 logging.config.fileConfig("logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -25,12 +26,11 @@ class TextManager:
         self.last_modified_time = datetime.utcnow()
         self.cached_full_dirs = []
         self.cached_some_dirs = []
+        self.do_trigger_caching = False
 
-    def reset_cache(self):
-        LOGGER.debug("# reset_cache()")
-        self.last_modified_time = datetime.utcnow()
-        self.cached_full_dirs = []
-        self.cached_some_dirs = []
+    @debounce(60)
+    def trigger_caching(self):
+        self.do_trigger_caching = True
 
     def determine_file_path(self, dir_name: str, file_name: str) -> Path:
         if dir_name == TextManager.ROOT_DIRECTORY:
@@ -159,7 +159,7 @@ class TextManager:
         return result, None
 
     async def get_entries_from_dir(self, dir_name: str = "", size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        #LOGGER.debug(f"# get_full_entries_from_dir(dir_name={dir_name}, size={size})")
+        # LOGGER.debug(f"# get_full_entries_from_dir(dir_name={dir_name}, size={size})")
         # 특정 디렉토리 하위만 조회
         result = []
         path = self.path_prefix / dir_name
@@ -177,7 +177,7 @@ class TextManager:
         return result, None
 
     async def get_some_entries_from_all_dirs(self, size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        #LOGGER.debug(f"# get_some_entries_from_all_dirs(size={size})")
+        # LOGGER.debug(f"# get_some_entries_from_all_dirs(size={size})")
         # 전체 디렉토리의 일부 몇 개만 조회
         if self.cached_some_dirs:
             LOGGER.debug("use cached_some_dirs")
@@ -196,7 +196,7 @@ class TextManager:
         return result, None
 
     async def get_top_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        #LOGGER.debug(f"# get_top_dirs()")
+        # LOGGER.debug(f"# get_top_dirs()")
         path = self.path_prefix
         result = []
         for entry in path.iterdir():
