@@ -13,16 +13,52 @@ export function handleFetchErrors(response) {
 }
 
 const getRandomColorWithRange = (key, base, range) => {
-  const i = str(key) % (16 * 16 * 16);
-  const i1 = ((i >> 0) % range) + base;
-  const i2 = ((i >> 4) % range) + base;
-  const i3 = ((i >> 8) % range) + base;
-  return sprintf("#%01x%01x%01x", i1, i2, i3);
+  let i = str(key + "_saltstring") % (256 * 256 * 256);
+  if (i < 0) {
+    i = i * -1;
+  }
+  let i1 = ((i >> 0) % range) + base;
+  let i2 = ((i >> 8) % range) + base;
+  let i3 = ((i >> 16) % range) + base;
+
+  if (i1 > i2 && i1 > i3) {
+    if (i2 > i3) {
+      i2 = i2 * 0.6;
+      i3 = i3 * 0.3;
+    } else {
+      i2 = i2 * 0.3;
+      i3 = i3 * 0.6;
+    }
+  }
+  if (i2 > i1 && i2 > i3) {
+    if (i1 > i3) {
+      i3 = i3 * 0.1;
+      i1 = i1 * 0.7;
+    } else {
+      i3 = i3 * 0.7;
+      i1 = i1 * 0.1;
+    }
+  }
+  if (i3 > i1 && i3 > i2) {
+    i3 = i3 * 0.8;
+    if (i1 > i2) {
+      i1 = i1 * 0.6;
+      i2 = i2 * 0.3;
+    } else {
+      i1 = i1 * 0.3;
+      i2 = i2 * 0.6;
+    }
+  }
+
+  console.log(String(i), i1, i2, i3);
+
+  return sprintf("#%02x%02x%02x", i1, i2, i3);
 }
 
-export const getRandomDarkColor = (str) => {
-  return getRandomColorWithRange(str, 6, 4);
-};
+
+export const getRandomMediumColor = (str) => {
+  return getRandomColorWithRange(str, 96, 96);
+}
 
 const apiReq = (url, method, type, resolve, reject, final) => {
   try {

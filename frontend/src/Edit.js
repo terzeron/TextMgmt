@@ -7,7 +7,7 @@ import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import {faCheck, faClockRotateLeft, faCut, faRotate, faTrash, faTruckMoving, faUpload} from '@fortawesome/free-solid-svg-icons';
 import DirList from './DirList';
-import {getRandomDarkColor, getUrlPrefix, jsonDeleteReq, jsonGetReq, jsonPutReq} from './Common';
+import {getRandomMediumColor, getUrlPrefix, jsonDeleteReq, jsonGetReq, jsonPutReq} from './Common';
 import ViewSingle from "./ViewSingle";
 
 export default function Edit() {
@@ -538,7 +538,7 @@ export default function Edit() {
                                     size="sm"
                                     key={dir.key}
                                     style={{
-                                      backgroundColor: getRandomDarkColor(category),
+                                      backgroundColor: getRandomMediumColor(category),
                                       color: 'white'
                                     }}
                                     onClick={(e) => {
