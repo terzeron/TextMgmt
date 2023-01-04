@@ -36,18 +36,10 @@ export default function Edit() {
   useEffect(() => {
     console.log(`Edit: useEffect() `);
 
-    console.log(`call /somedir for partial tree data`)
-    const someDirListUrl = '/somedirs';
-    jsonGetReq(someDirListUrl, (result) => {
+    console.log("call /dirs for treeData");
+    const fullDirListUrl = '/dirs';
+    jsonGetReq(fullDirListUrl, (result) => {
       setTreeData(result);
-
-      console.log("call /dirs for treeData");
-      const fullDirListUrl = '/dirs';
-      jsonGetReq(fullDirListUrl, (result) => {
-        setTreeData(result);
-      }, (error) => {
-        setErrorMessage(`directory list load failed, ${error}`);
-      });
     }, (error) => {
       setErrorMessage(`directory list load failed, ${error}`);
     });
