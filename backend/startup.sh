@@ -3,8 +3,8 @@
 pidfile="uvicorn.pid"
 if [ -f "$pidfile" ]; then
     echo "Killing old process"
-    kill -9 $(cat $pidfile)
-    sleep 5
+    kill $(cat $pidfile)
+    sleep 3
 fi
 
 nohup uvicorn main:app --workers=2 &
