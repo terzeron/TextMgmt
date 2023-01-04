@@ -147,12 +147,16 @@ class TextManager:
 
         result = []
         path = self.path_prefix
-        for entry in path.iterdir():
-            if entry.is_dir():
-                nodes, error = await self.get_entries_from_dir(entry.name)
-                result.append({"key": entry.name, "label": entry.name, "nodes": nodes})
-            elif entry.is_file():
-                result.append({"key": entry.name, "label": entry.name})
+        for entry1 in os.scandir(path):
+            if entry1.is_dir():
+                sub_result = []
+                for entry2 in os.scandir(entry1):
+                    if entry2.is_file():
+                        sub_result.append({"key": entry2.name, "label": entry2.name})
+                sub_result.sort(key=lambda x: x["key"])
+                result.append({"key": entry1.name, "label": entry1.name, "nodes": sub_result})
+            elif entry1.is_file():
+                result.append({"key": entry1.name, "label": entry1.name})
         result.sort(key=lambda x: x["key"])
         self.cached_full_dirs = result
         LOGGER.debug("loaded full dirs")
