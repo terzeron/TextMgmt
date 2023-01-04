@@ -18,18 +18,10 @@ export default function View() {
   const [downloadUrl, setDownloadUrl] = useState('');
 
   useEffect(() => {
-    console.log(`call /somedir for partial tree data`)
-    const someDirListUrl = '/somedirs';
-    jsonGetReq(someDirListUrl, (result) => {
-      setTreeData(result['result']);
-
-      console.log("call /dirs for full tree data");
-      const fullDirListUrl = '/dirs';
-      jsonGetReq(fullDirListUrl, (result) => {
-        setTreeData(result);
-      }, (error) => {
-        setErrorMessage(`dir list load failed, ${error}`);
-      })
+    console.log("call /dirs for full tree data");
+    const fullDirListUrl = '/dirs';
+    jsonGetReq(fullDirListUrl, (result) => {
+      setTreeData(result);
     }, (error) => {
       setErrorMessage(`dir list load failed, ${error}`);
     });

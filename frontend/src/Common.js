@@ -50,8 +50,6 @@ const getRandomColorWithRange = (key, base, range) => {
     }
   }
 
-  console.log(String(i), i1, i2, i3);
-
   return sprintf("#%02x%02x%02x", i1, i2, i3);
 }
 
