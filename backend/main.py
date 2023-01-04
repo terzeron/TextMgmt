@@ -131,6 +131,7 @@ async def get_a_dir(response: Response, dir_name: str, if_modified_since: Option
 async def get_full_dirs(response: Response, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
     LOGGER.debug(f"# get_full_dirs(if_modified_since={if_modified_since})")
     if respond_with_304_not_modified(if_modified_since):
+        LOGGER.debug(f"respond empty reponse body with 304 status code")
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return {}
     response.headers["Last-Modified"] = text_manager.last_modified_time.strftime(HEADER_DATE_FORMAT)

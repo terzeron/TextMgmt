@@ -20,3 +20,4 @@ backend/.env
 frontend/.env
 frontend/.env.development
 frontend/.env.production
+backend/*.pid
