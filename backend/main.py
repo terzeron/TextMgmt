@@ -9,6 +9,7 @@ from typing import Dict, Any, Union, Optional
 from datetime import datetime
 from fastapi import FastAPI, Response, Header, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi_utils.tasks import repeat_every
 from text_manager import TextManager
@@ -22,19 +23,16 @@ app = FastAPI()
 origins = [
     os.environ["TM_DOMAIN"] if "TM_DOMAIN" in os.environ else "https://localhost:3000"
 ]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"],
+                   allow_headers=["*"])
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 HEADER_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
 text_manager = TextManager()
 
 if platform.system() == "Linux":
     import fs_monitor_in_linux
+
     fs_monitor_in_linux.start(text_manager)
 
 asyncio.create_task(text_manager.get_some_entries_from_all_dirs(10))
@@ -53,7 +51,8 @@ def check_recent_changes_in_fs() -> None:
 
 @app.put("/dirs/{dir_name}/files/{file_name}/newdir/{new_dir_name}/newfile/{new_file_name}")
 async def move_file(dir_name: str, file_name: str, new_dir_name: str, new_file_name: str) -> Dict[str, Any]:
-    LOGGER.debug(f"# move_file(dir_name={dir_name}, file_name={file_name}, new_dir_name={new_dir_name}, new_file_name={new_file_name})")
+    LOGGER.debug(
+        f"# move_file(dir_name={dir_name}, file_name={file_name}, new_dir_name={new_dir_name}, new_file_name={new_file_name})")
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.move_file(dir_name, file_name, new_dir_name, new_file_name)
     if error is None:
@@ -91,7 +90,8 @@ def respond_with_304_not_modified(if_modified_since: Optional[str]) -> bool:
 
 
 @app.get("/dirs/{dir_name}/files/{file_name}")
-async def get_file_info(response: Response, dir_name: str, file_name: str, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
+async def get_file_info(response: Response, dir_name: str, file_name: str,
+                        if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
     LOGGER.debug(f"# get_file(dir_name={dir_name}, file_name={file_name})")
     if respond_with_304_not_modified(if_modified_since):
         response.status_code = status.HTTP_304_NOT_MODIFIED
@@ -109,7 +109,8 @@ async def get_file_info(response: Response, dir_name: str, file_name: str, if_mo
 
 
 @app.get("/dirs/{dir_name}")
-async def get_a_dir(response: Response, dir_name: str, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
+async def get_a_dir(response: Response, dir_name: str, if_modified_since: Optional[str] = Header(None)) -> Dict[
+    str, Any]:
     LOGGER.debug(f"# get_a_dir(dir_name={dir_name})")
     if respond_with_304_not_modified(if_modified_since):
         response.status_code = status.HTTP_304_NOT_MODIFIED
