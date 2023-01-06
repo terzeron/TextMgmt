@@ -8,6 +8,6 @@ if [ -f "$pidfile" ]; then
 fi
 
 echo "Starting service..."
-nohup uvicorn main:app --workers=2 &
+daemon --pidfile=$(pwd)/uvicorn.pid -- uvicorn main:app --workers=2
 echo $! > uvicorn.pid
 sleep 2
