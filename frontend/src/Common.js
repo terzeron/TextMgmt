@@ -77,8 +77,12 @@ const apiReq = (url, method, type, resolve, reject, final) => {
       .then((data) => {
         if (type === 'JSON') {
           if (data['status'] === 'success') {
-            data['result']['last_modified_time'] = new DateTime(data['last_modified_time']).toFormat('HH:mm:ssZZ');
-            data['result']['last_responded_time'] = new DateTime(data['last_responded_time']).toFormat('HH:mm:ssZZ');
+            if (data['result']['last_modified_time']) {
+              data['result']['last_modified_time'] = new DateTime(data['result']['last_modified_time']).toFormat('HH:mm:ssZZ');
+            }
+            if (data['result']['last_responded_time']) {
+                data['result']['last_responded_time'] = new DateTime(data['result']['last_responded_time']).toFormat('HH:mm:ssZZ');
+            }
             resolve(data['result']);
           } else {
             reject(data['error']);
