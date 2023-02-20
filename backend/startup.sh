@@ -7,7 +7,9 @@ if [ -f "$pidfile" ]; then
     sleep 3
 fi
 
+rm -f nohup.out
 echo "Starting service..."
 nohup uvicorn main:app --workers=2 &
-echo $! > uvicorn.pid
+echo "$!" > "$pidfile"
 sleep 2
+tail nohup.out
