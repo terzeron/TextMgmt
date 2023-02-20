@@ -400,6 +400,8 @@ export default function Edit() {
       <Row fluid="true">
         <Col md="3" lg="2" className="ps-0 pe-0 section">
           <Suspense fallback={<div className="loading">로딩 중...</div>}>
+            <div style={{fontSize: '6pt'}}>Respond: {treeData && treeData['last_responded_time']}</div>
+            <div style={{fontSize: '6pt'}}>Modify: {treeData && treeData['last_modified_time']}</div>
             <DirList treeData={treeData} onClickHandler={fileEntryClicked}/>
           </Suspense>
         </Col>

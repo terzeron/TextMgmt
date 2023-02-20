@@ -140,6 +140,8 @@ async def get_full_dirs(response: Response, if_modified_since: Optional[str] = H
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
+        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
+        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
     else:
         response_object["error"] = error
     return response_object
@@ -157,6 +159,8 @@ async def get_some_dirs(response: Response, if_modified_since: Optional[str] = H
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
+        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
+        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
     else:
         response_object["error"] = error
     # LOGGER.debug(response_object)
@@ -175,6 +179,8 @@ async def get_top_dirs(response: Response, if_modified_since: Optional[str] = He
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
+        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
+        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
     else:
         response_object["error"] = error
     # LOGGER.debug(response_object)

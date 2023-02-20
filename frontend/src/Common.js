@@ -1,5 +1,6 @@
 import {sprintf} from 'sprintf-js';
 import {str} from 'crc-32';
+import {DateTime} from 'luxon';
 
 export function getUrlPrefix() {
   return process.env.REACT_APP_API_URL_PREFIX;
@@ -76,6 +77,8 @@ const apiReq = (url, method, type, resolve, reject, final) => {
       .then((data) => {
         if (type === 'JSON') {
           if (data['status'] === 'success') {
+            data['result']['last_modified_time'] = new DateTime(data['last_modified_time']).toFormat('HH:mm:ssZZ');
+            data['result']['last_responded_time'] = new DateTime(data['last_responded_time']).toFormat('HH:mm:ssZZ');
             resolve(data['result']);
           } else {
             reject(data['error']);
