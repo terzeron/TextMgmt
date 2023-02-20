@@ -58,6 +58,8 @@ async def move_file(dir_name: str, file_name: str, new_dir_name: str, new_file_n
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
+        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
+        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
     else:
         response_object["error"] = error
     return response_object
@@ -71,6 +73,8 @@ async def delete_file(dir_name: str, file_name: str) -> Dict[str, Any]:
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
+        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
+        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
     else:
         response_object["error"] = error
     return response_object
@@ -102,6 +106,8 @@ async def get_file_info(response: Response, dir_name: str, file_name: str,
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
+        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
+        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
     else:
         response_object["error"] = error
     # LOGGER.debug(response_object)
@@ -121,6 +127,8 @@ async def get_a_dir(response: Response, dir_name: str, if_modified_since: Option
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
+        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
+        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
     else:
         response_object["error"] = error
     LOGGER.debug(response_object)
@@ -195,6 +203,8 @@ async def change_encoding(dir_name: str, file_name: str) -> Dict[str, Any]:
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
+        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
+        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
     else:
         response_object["error"] = error
     LOGGER.debug(response_object)
@@ -215,6 +225,8 @@ async def search(query: str) -> Dict[str, Any]:
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
+        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
+        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
     else:
         response_object["error"] = error
     return response_object
