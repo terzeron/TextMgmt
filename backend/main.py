@@ -99,7 +99,7 @@ async def delete_file(dir_name: str, file_name: str) -> Dict[str, Any]:
     return response_object
 
 
-@app.get("/download/dirs/{dir_name}/files/{file_name}")
+@app.get("/download/dirs/{dir_name}/files/{file_name}", response_model=None)
 async def get_file_content(dir_name: str, file_name: str) -> Union[str, FileResponse]:
     LOGGER.debug(f"# get_file(dir_name={dir_name}, file_name={file_name})")
     return await text_manager.get_file_content(dir_name, file_name)
