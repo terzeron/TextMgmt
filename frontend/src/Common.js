@@ -79,10 +79,10 @@ const apiReq = (url, method, type, resolve, reject, final) => {
                     if (data['status'] === 'success') {
                         if (typeof data['result'] === 'object') {
                             if (data['last_modified_time']) {
-                                data['result']['last_modified_time'] = new DateTime(data['last_modified_time']).toFormat('HH:mm:ssZZ');
+                                data['result']['last_modified_time'] = DateTime.fromISO(data['last_modified_time']).setZone('local').toFormat('MM-dd HH:mm');
                             }
                             if (data['last_responded_time']) {
-                                data['result']['last_responded_time'] = new DateTime(data['last_responded_time']).toFormat('HH:mm:ssZZ');
+                                data['result']['last_responded_time'] = DateTime.fromISO(data['last_responded_time']).setZone('local').toFormat('MM-dd HH:mm');
                             }
                         }
                         resolve(data['result']);

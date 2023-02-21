@@ -5,6 +5,7 @@ import {useCallback, useEffect, useState, Suspense} from 'react';
 
 import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
+import {faEdit, faShareFromSquare} from '@fortawesome/free-regular-svg-icons';
 import {faCheck, faClockRotateLeft, faCut, faRotate, faTrash, faTruckMoving, faUpload} from '@fortawesome/free-solid-svg-icons';
 import DirList from './DirList';
 import {getRandomMediumColor, getUrlPrefix, jsonDeleteReq, jsonGetReq, jsonPutReq} from './Common';
@@ -399,9 +400,12 @@ export default function Edit() {
     <Container id="edit">
       <Row fluid="true">
         <Col md="3" lg="2" className="ps-0 pe-0 section">
+          <div>
+            <span style={{fontSize: '5pt'}}><FontAwesomeIcon icon={faEdit}/> {treeData && treeData['last_modified_time']}</span>
+            <span style={{fontSize: '5pt'}}> | </span>
+            <span style={{fontSize: '5pt'}}><FontAwesomeIcon icon={faShareFromSquare}/> {treeData && treeData['last_responded_time']}</span>
+          </div>
           <Suspense fallback={<div className="loading">로딩 중...</div>}>
-            <div style={{fontSize: '6pt'}}>Respond: {treeData && treeData['last_responded_time']}</div>
-            <div style={{fontSize: '6pt'}}>Modify: {treeData && treeData['last_modified_time']}</div>
             <DirList treeData={treeData} onClickHandler={fileEntryClicked}/>
           </Suspense>
         </Col>

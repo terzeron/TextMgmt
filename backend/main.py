@@ -5,6 +5,7 @@ import os
 import logging.config
 import asyncio
 import platform
+import tzlocal
 from typing import Dict, Any, Union, Optional
 from datetime import datetime
 from fastapi import FastAPI, Response, Header, status
@@ -23,20 +24,38 @@ app = FastAPI()
 origins = [
     os.environ["TM_DOMAIN"] if "TM_DOMAIN" in os.environ else "https://localhost:3000"
 ]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"],
-                   allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 HEADER_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
 text_manager = TextManager()
+local_tz = tzlocal.get_localzone()
 
 if platform.system() == "Linux":
     import fs_monitor_in_linux
-
     fs_monitor_in_linux.start(text_manager)
 
 asyncio.create_task(text_manager.get_some_entries_from_all_dirs(10))
 asyncio.create_task(text_manager.get_full_dirs())
+
+
+def get_last_modified_time() -> str:
+    return text_manager.last_modified_time.astimezone().isoformat(timespec="seconds")
+
+
+def get_last_responded_time() -> str:
+    return datetime.now().astimezone(local_tz).isoformat(timespec="seconds")
+
+
+def get_last_modified_header_str() -> str:
+    return text_manager.last_modified_time.strftime(HEADER_DATE_FORMAT)
+
+
+def respond_with_304_not_modified(if_modified_since: Optional[str]) -> bool:
+    if text_manager.last_modified_time and if_modified_since:
+        if text_manager.last_modified_time < datetime.strptime(if_modified_since, HEADER_DATE_FORMAT):
+            return True
+    return False
 
 
 @app.on_event("startup")
@@ -58,8 +77,8 @@ async def move_file(dir_name: str, file_name: str, new_dir_name: str, new_file_n
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
-        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
+        response_object["last_modified_time"] = get_last_modified_time()
+        response_object["last_responded_time"] = get_last_responded_time()
     else:
         response_object["error"] = error
     return response_object
@@ -73,8 +92,8 @@ async def delete_file(dir_name: str, file_name: str) -> Dict[str, Any]:
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
-        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
+        response_object["last_modified_time"] = get_last_modified_time()
+        response_object["last_responded_time"] = get_last_responded_time()
     else:
         response_object["error"] = error
     return response_object
@@ -86,13 +105,6 @@ async def get_file_content(dir_name: str, file_name: str) -> Union[str, FileResp
     return await text_manager.get_file_content(dir_name, file_name)
 
 
-def respond_with_304_not_modified(if_modified_since: Optional[str]) -> bool:
-    if text_manager.last_modified_time and if_modified_since:
-        if text_manager.last_modified_time <= datetime.strptime(if_modified_since, HEADER_DATE_FORMAT):
-            return True
-    return False
-
-
 @app.get("/dirs/{dir_name}/files/{file_name}")
 async def get_file_info(response: Response, dir_name: str, file_name: str,
                         if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
@@ -100,14 +112,14 @@ async def get_file_info(response: Response, dir_name: str, file_name: str,
     if respond_with_304_not_modified(if_modified_since):
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return {}
-    response.headers["Last-Modified"] = text_manager.last_modified_time.strftime(HEADER_DATE_FORMAT)
+    response.headers["Last-Modified"] = get_last_modified_header_str()
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_file_info(dir_name, file_name)
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
-        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
+        response_object["last_modified_time"] = get_last_modified_time()
+        response_object["last_responded_time"] = get_last_responded_time()
     else:
         response_object["error"] = error
     # LOGGER.debug(response_object)
@@ -121,14 +133,14 @@ async def get_a_dir(response: Response, dir_name: str, if_modified_since: Option
     if respond_with_304_not_modified(if_modified_since):
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return {}
-    response.headers["Last-Modified"] = text_manager.last_modified_time.strftime(HEADER_DATE_FORMAT)
+    response.headers["Last-Modified"] = get_last_modified_header_str()
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_entries_from_dir(dir_name)
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
-        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
+        response_object["last_modified_time"] = get_last_modified_time()
+        response_object["last_responded_time"] = get_last_responded_time()
     else:
         response_object["error"] = error
     LOGGER.debug(response_object)
@@ -142,14 +154,14 @@ async def get_full_dirs(response: Response, if_modified_since: Optional[str] = H
         LOGGER.debug(f"respond empty reponse body with 304 status code")
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return {}
-    response.headers["Last-Modified"] = text_manager.last_modified_time.strftime(HEADER_DATE_FORMAT)
+    response.headers["Last-Modified"] = get_last_modified_header_str()
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_full_dirs()
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
-        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
+        response_object["last_modified_time"] = get_last_modified_time()
+        response_object["last_responded_time"] = get_last_responded_time()
     else:
         response_object["error"] = error
     return response_object
@@ -161,14 +173,14 @@ async def get_some_dirs(response: Response, if_modified_since: Optional[str] = H
     if respond_with_304_not_modified(if_modified_since):
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return {}
-    response.headers["Last-Modified"] = text_manager.last_modified_time.strftime(HEADER_DATE_FORMAT)
+    response.headers["Last-Modified"] = get_last_modified_header_str()
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_some_entries_from_all_dirs(10)
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
-        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
+        response_object["last_modified_time"] = get_last_modified_time()
+        response_object["last_responded_time"] = get_last_responded_time()
     else:
         response_object["error"] = error
     # LOGGER.debug(response_object)
@@ -181,14 +193,14 @@ async def get_top_dirs(response: Response, if_modified_since: Optional[str] = He
     if respond_with_304_not_modified(if_modified_since):
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return {}
-    response.headers["Last-Modified"] = text_manager.last_modified_time.strftime(HEADER_DATE_FORMAT)
+    response.headers["Last-Modified"] = get_last_modified_header_str()
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_top_dirs()
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
-        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
+        response_object["last_modified_time"] = get_last_modified_time()
+        response_object["last_responded_time"] = get_last_responded_time()
     else:
         response_object["error"] = error
     # LOGGER.debug(response_object)
@@ -203,8 +215,8 @@ async def change_encoding(dir_name: str, file_name: str) -> Dict[str, Any]:
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
-        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
+        response_object["last_modified_time"] = get_last_modified_time()
+        response_object["last_responded_time"] = get_last_responded_time()
     else:
         response_object["error"] = error
     LOGGER.debug(response_object)
@@ -225,8 +237,8 @@ async def search(query: str) -> Dict[str, Any]:
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.last_modified_time.astimezone().isoformat()
-        response_object["last_responded_time"] = datetime.now().astimezone().isoformat()
+        response_object["last_modified_time"] = get_last_modified_time()
+        response_object["last_responded_time"] = get_last_responded_time()
     else:
         response_object["error"] = error
     return response_object

@@ -5,6 +5,8 @@ import {Suspense, useEffect, useState} from 'react';
 import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-bootstrap';
 import {jsonGetReq, getUrlPrefix} from './Common';
 import DirList from './DirList';
+import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
+import {faEdit, faShareFromSquare} from "@fortawesome/free-regular-svg-icons";
 
 export default function View() {
   const [errorMessage, setErrorMessage] = useState('');
@@ -61,6 +63,11 @@ export default function View() {
   return (
     <Container id="view">
       <Row fluid="true">
+        <div>
+          <span style={{fontSize: '5pt'}}><FontAwesomeIcon icon={faEdit}/> {treeData && treeData['last_modified_time']}</span>
+          <span style={{fontSize: '5pt'}}> | </span>
+          <span style={{fontSize: '5pt'}}><FontAwesomeIcon icon={faShareFromSquare}/> {treeData && treeData['last_responded_time']}</span>
+        </div>
         <Col md="3" lg="2" className="ps-0 pe-0 section">
           <Suspense fallback={<div className="loading">로딩 중...</div>}>
             <DirList treeData={treeData} onClickHandler={fileEntryClicked}/>

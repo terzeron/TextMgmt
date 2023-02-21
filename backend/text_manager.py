@@ -23,7 +23,7 @@ class TextManager:
         work_dir = os.environ["TM_WORK_DIR"] if "TM_WORK_DIR" in os.environ else Path.cwd().parent / "text"
         self.path_prefix = Path(work_dir)
         LOGGER.debug(self.path_prefix)
-        self.last_modified_time = datetime.utcnow()
+        self.last_modified_time = datetime.now()
         self.cached_full_dirs = []
         self.cached_some_dirs = []
         self.do_trigger_caching = False
