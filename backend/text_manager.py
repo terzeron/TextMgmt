@@ -4,6 +4,9 @@ import os
 import re
 import chardet
 import logging
+import tzlocal
+import pytz
+import dateutil.parser
 from logging import config
 from pathlib import Path
 from typing import Any, Optional, Dict, Tuple, List, Union
@@ -17,13 +20,15 @@ LOGGER = logging.getLogger(__name__)
 
 class TextManager:
     ROOT_DIRECTORY = "$$rootdir$$"
+    HEADER_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
 
     def __init__(self):
         LOGGER.debug("# TextManager()")
         work_dir = os.environ["TM_WORK_DIR"] if "TM_WORK_DIR" in os.environ else Path.cwd().parent / "text"
         self.path_prefix = Path(work_dir)
         LOGGER.debug(self.path_prefix)
-        self.last_modified_time = datetime.now()
+        self.local_tz = tzlocal.get_localzone()
+        self.last_modified_time = datetime.now(self.local_tz)
         self.cached_full_dirs = []
         self.cached_some_dirs = []
         self.do_trigger_caching = False
@@ -31,6 +36,22 @@ class TextManager:
     @debounce(60)
     def trigger_caching(self):
         self.do_trigger_caching = True
+
+    def get_last_modified_time_str(self) -> str:
+        LOGGER.debug("last_modified_time=%s", self.last_modified_time.isoformat(timespec="seconds"))
+        return self.last_modified_time.isoformat(timespec="seconds")
+
+    def get_last_responded_time_str(self) -> str:
+        LOGGER.debug("last_responded_time=%s", datetime.now(self.local_tz).isoformat(timespec="seconds"))
+        return datetime.now(self.local_tz).isoformat(timespec="seconds")
+
+    def get_last_modified_header_str(self) -> str:
+        LOGGER.debug("last_modified_header_str=%r", self.last_modified_time.astimezone(pytz.UTC).strftime(TextManager.HEADER_DATE_FORMAT))
+        return self.last_modified_time.astimezone(pytz.UTC).strftime(TextManager.HEADER_DATE_FORMAT)
+
+    def get_if_modified_since_time_str(self, if_modified_since: str) -> str:
+        LOGGER.debug("if_modified_since_str=%s", dateutil.parser.parse(if_modified_since).astimezone(self.local_tz).isoformat(timespec="seconds"))
+        return dateutil.parser.parse(if_modified_since).astimezone(self.local_tz).isoformat(timespec="seconds")
 
     def determine_file_path(self, dir_name: str, file_name: str) -> Path:
         if dir_name == TextManager.ROOT_DIRECTORY:
