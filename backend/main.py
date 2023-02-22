@@ -101,7 +101,7 @@ async def get_file_info(response: Response, dir_name: str, file_name: str,
     if respond_with_304_not_modified(if_modified_since):
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return {}
-    response.headers["Last-Modified"] = text_manager.get_last_modified_header_str()
+    #response.headers["Last-Modified"] = text_manager.get_last_modified_header_str()
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_file_info(dir_name, file_name)
     if error is None:
@@ -122,7 +122,7 @@ async def get_a_dir(response: Response, dir_name: str, if_modified_since: Option
     if respond_with_304_not_modified(if_modified_since):
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return {}
-    response.headers["Last-Modified"] = text_manager.get_last_modified_header_str()
+    #response.headers["Last-Modified"] = text_manager.get_last_modified_header_str()
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_entries_from_dir(dir_name)
     if error is None:
@@ -162,7 +162,7 @@ async def get_some_dirs(response: Response, if_modified_since: Optional[str] = H
     if respond_with_304_not_modified(if_modified_since):
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return {}
-    response.headers["Last-Modified"] = text_manager.get_last_modified_header_str()
+    #response.headers["Last-Modified"] = text_manager.get_last_modified_header_str()
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_some_entries_from_all_dirs(10)
     if error is None:
@@ -182,7 +182,7 @@ async def get_top_dirs(response: Response, if_modified_since: Optional[str] = He
     if respond_with_304_not_modified(if_modified_since):
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return {}
-    response.headers["Last-Modified"] = text_manager.get_last_modified_header_str()
+    #response.headers["Last-Modified"] = text_manager.get_last_modified_header_str()
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_top_dirs()
     if error is None:
