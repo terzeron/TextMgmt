@@ -21,7 +21,9 @@ platformdirs==3.0.0
 pydantic==1.10.5
 pyflakes==2.5.0
 pylint==2.15.6
+python-dateutil==2.8.2
 python-multipart==0.0.5
+pytz==2022.7.1
 pytz-deprecation-shim==0.1.0.post0
 rfc3986==1.5.0
 six==1.16.0
