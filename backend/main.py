@@ -52,9 +52,9 @@ def get_last_modified_header_str() -> str:
 
 
 def respond_with_304_not_modified(if_modified_since: Optional[str]) -> bool:
-    LOGGER.debug("# respond_with_304_not_modified(%r)", if_modified_since if if_modified_since else "")
+    LOGGER.debug("# respond_with_304_not_modified(%r, %r)", if_modified_since, text_manager.last_modified_time)
     if text_manager.last_modified_time and if_modified_since:
-        if text_manager.last_modified_time < datetime.strptime(if_modified_since, HEADER_DATE_FORMAT):
+        if text_manager.last_modified_time < local_tz.localize(datetime.strptime(if_modified_since, HEADER_DATE_FORMAT)):
             return True
     return False
 
