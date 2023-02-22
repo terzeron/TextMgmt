@@ -41,7 +41,7 @@ def respond_with_304_not_modified(if_modified_since: Optional[str]) -> bool:
     if if_modified_since:
         LOGGER.debug("if_modified_since=%r", text_manager.get_if_modified_since_time_str(if_modified_since))
     if text_manager.get_last_modified_time_str() and if_modified_since:
-        if text_manager.get_last_modified_time_str() < text_manager.get_if_modified_since_time_str(if_modified_since):
+        if text_manager.get_last_modified_time_str() <= text_manager.get_if_modified_since_time_str(if_modified_since):
             return True
     return False
 
