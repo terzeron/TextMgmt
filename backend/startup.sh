@@ -9,7 +9,7 @@ fi
 
 rm -f nohup.out
 echo "Starting service..."
-nohup uvicorn main:app --workers=2 &
+nohup uvicorn main:app --workers=1 &
 echo "$!" > "$pidfile"
 sleep 2
 tail nohup.out
