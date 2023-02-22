@@ -66,6 +66,7 @@ def check_recent_changes_in_fs() -> None:
         text_manager.do_trigger_caching = False
         asyncio.create_task(text_manager.get_some_entries_from_all_dirs(10))
         asyncio.create_task(text_manager.get_full_dirs())
+        text_manager.last_modified_time = datetime.now()
 
 
 @app.put("/dirs/{dir_name}/files/{file_name}/newdir/{new_dir_name}/newfile/{new_file_name}")

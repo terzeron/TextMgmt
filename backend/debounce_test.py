@@ -6,14 +6,14 @@ from datetime import datetime
 import time
 from debounce import debounce
 
-last_modified_time = datetime.utcnow()
+last_modified_time = datetime.now()
 do_trigger_caching = False
 
 @debounce(600)
 def modify():
     global last_modified_time, do_trigger_caching
     do_trigger_caching = True
-    last_modified_time = datetime.utcnow()
+    last_modified_time = datetime.now()
     print("*", last_modified_time.strftime("%M:%S"))
 
 
@@ -21,8 +21,8 @@ def emitter():
     print("# emitter()")
     while True:
         time.sleep(random.randint(1, 1800))
-        for i in range(random.randint(1, 10)):
-            dt = datetime.utcnow()
+        for _ in range(random.randint(1, 10)):
+            dt = datetime.now()
             print("!", dt.strftime("%M:%S"))
             modify()
             time.sleep(random.randint(1, 3))
