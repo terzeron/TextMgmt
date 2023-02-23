@@ -52,9 +52,9 @@ def check_recent_changes_in_fs() -> None:
     if text_manager.do_trigger_caching:
         LOGGER.debug("trigger re-caching")
         text_manager.do_trigger_caching = False
+        text_manager.last_modified_time = datetime.now(text_manager.local_tz)
         asyncio.create_task(text_manager.get_some_entries_from_all_dirs(10))
         asyncio.create_task(text_manager.get_full_dirs())
-        text_manager.last_modified_time = datetime.now(text_manager.local_tz)
 
 
 @app.put("/dirs/{dir_name}/files/{file_name}/newdir/{new_dir_name}/newfile/{new_file_name}")
