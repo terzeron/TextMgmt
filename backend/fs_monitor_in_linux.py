@@ -3,6 +3,7 @@
 import os
 import sys
 import platform
+import pymysql
 import logging.config
 from threading import Thread
 from pathlib import Path
@@ -18,8 +19,19 @@ if platform.system() == "Linux":
 
 
 @debounce(60)
-def trigger_caching(self):
-    self.do_trigger_caching = True
+def trigger_update(self):
+    LOGGER.debug("# trigger_update()")
+    host = os.environ["TM_DB_HOST"] if "TM_DB_HOST" in os.environ else ""
+    port = os.environ["TM_DB_PORT"] if "TM_DB_PORT" in os.environ else ""
+    db = os.environ["TM_DB_NAME"] if "TM_DB_NAME" in os.environ else ""
+    user = os.environ["TM_DB_USER"] if "TM_DB_USER" in os.environ else ""
+    passwd = os.environ["TM_DB_PASSWD"] if "TM_DB_PASSWD" in os.environ else ""
+    conn = pymysql.connect(host=host, user=user, password=passwd, database=db, port=int(port), charset="utf8", cursorclass=pymysql.cursors.DictCursor)
+    conn.cursor().execute("UPDATE fs_modification SET last_modified_time = NOW()")
+    conn.commit()
+    LOGGER.debug("updated last modified time of file system")
+    conn.cursor().close()
+    conn.close()
 
 
 def inotify_worker(path_prefix: Path):
@@ -30,7 +42,7 @@ def inotify_worker(path_prefix: Path):
         for type_name in type_names:
             if type_name in ("IN_CREATE", "IN_DELETE", "IN_MOVED_FROM", "IN_MOVED_TO", "IN_CLOSE_WRITE", "IN_MODIFY", "IN_DELETE_SELF", "IN_MOVE_SELF"):
                 LOGGER.debug(f"PATH=[{path}] FILENAME=[{filename}] EVENT_TYPE={type_name}")
-                trigger_caching()
+                trigger_update()
 
 
 def main() -> int:

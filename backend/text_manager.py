@@ -4,6 +4,7 @@ import os
 import re
 import chardet
 import logging
+import pymysql
 import tzlocal
 import pytz
 import dateutil.parser
@@ -12,7 +13,6 @@ from pathlib import Path
 from typing import Any, Optional, Dict, Tuple, List, Union
 from datetime import datetime
 from fastapi.responses import FileResponse
-from debounce import debounce
 
 logging.config.fileConfig("logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -30,12 +30,18 @@ class TextManager:
         self.local_tz = tzlocal.get_localzone()
         self.last_modified_time = datetime.now(self.local_tz)
         self.cached_full_dirs = []
-        self.cached_some_dirs = []
         self.do_trigger_caching = False
 
-    @debounce(60)
-    def trigger_caching(self):
-        self.do_trigger_caching = True
+        host = os.environ["TM_DB_HOST"]
+        port = os.environ["TM_DB_PORT"]
+        db = os.environ["TM_DB_NAME"]
+        user = os.environ["TM_DB_USER"]
+        passwd = os.environ["TM_DB_PASSWD"]
+        self.conn = pymysql.connect(host=host, user=user, password=passwd, database=db, port=int(port), charset="utf8", cursorclass=pymysql.cursors.DictCursor)
+
+    def __del__(self):
+        del self.cached_full_dirs
+        del self.conn
 
     def get_last_modified_time_str(self) -> str:
         LOGGER.debug("last_modified_time=%s", self.last_modified_time.isoformat(timespec="seconds"))
@@ -199,25 +205,6 @@ class TextManager:
             result.sort(key=lambda x: x["key"])
         else:
             return result, f"can't find '{dir_name}'"
-        return result, None
-
-    async def get_some_entries_from_all_dirs(self, size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        # LOGGER.debug(f"# get_some_entries_from_all_dirs(size={size})")
-        # 전체 디렉토리의 일부 몇 개만 조회
-        if self.cached_some_dirs:
-            LOGGER.debug("use cached_some_dirs")
-            return self.cached_some_dirs, None
-
-        result = []
-        path = self.path_prefix
-        for entry in path.iterdir():
-            if entry.is_dir():
-                nodes, error = await self.get_entries_from_dir(entry.name, size)
-                result.append({"key": entry.name, "label": entry.name, "nodes": nodes})
-            elif entry.is_file():
-                result.append({"key": entry.name, "label": entry.name})
-        result.sort(key=lambda x: x["key"])
-        self.cached_some_dirs = result
         return result, None
 
     async def get_top_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:

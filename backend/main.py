@@ -27,12 +27,6 @@ app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 text_manager = TextManager()
-
-if platform.system() == "Linux":
-    import fs_monitor_in_linux
-    fs_monitor_in_linux.start(text_manager)
-
-asyncio.create_task(text_manager.get_some_entries_from_all_dirs(10))
 asyncio.create_task(text_manager.get_full_dirs())
 
 
@@ -40,7 +34,7 @@ def respond_with_304_not_modified(if_modified_since: Optional[str]) -> bool:
     LOGGER.debug("# respond_with_304_not_modified(%r, %r)", if_modified_since, text_manager.get_last_modified_time_str())
     if if_modified_since:
         LOGGER.debug("if_modified_since=%r", text_manager.get_if_modified_since_time_str(if_modified_since))
-    if text_manager.get_last_modified_time_str() and if_modified_since:
+    if if_modified_since and text_manager.get_last_modified_time_str():
         if text_manager.get_last_modified_time_str() <= text_manager.get_if_modified_since_time_str(if_modified_since):
             return True
     return False
@@ -48,13 +42,21 @@ def respond_with_304_not_modified(if_modified_since: Optional[str]) -> bool:
 
 @app.on_event("startup")
 @repeat_every(seconds=50)
-def check_recent_changes_in_fs() -> None:
-    if text_manager.do_trigger_caching:
-        LOGGER.debug("trigger re-caching")
-        text_manager.do_trigger_caching = False
-        text_manager.last_modified_time = datetime.now(text_manager.local_tz)
-        asyncio.create_task(text_manager.get_some_entries_from_all_dirs(10))
-        asyncio.create_task(text_manager.get_full_dirs())
+async def check_recent_changes_in_fs() -> None:
+    LOGGER.debug("# check_recent_changes_in_fs()")
+    if platform.system() == "Linux":
+        rs = text_manager.conn.cursor().execute("SELECT last_modified_time FROM fs_modification")
+        last_modified_time = rs.fetchone()["last_modified_time"]
+        if datetime.now() - datetime.timedelta(minutes=2) < last_modified_time < datetime.now() - datetime.timedelta(minutes=1):
+            text_manager.conn.cursor().execute("UPDATE cache_modification SET last_modified_time = NOW()")
+            text_manager.conn.commit()
+            LOGGER.debug("updated last modified time of cache")
+            await asyncio.create_task(text_manager.get_full_dirs())
+    else:
+        text_manager.conn.cursor().execute("UPDATE cache_modification SET last_modified_time = NOW()")
+        text_manager.conn.commit()
+        LOGGER.debug("updated last modified time of cache")
+        await asyncio.create_task(text_manager.get_full_dirs())
 
 
 @app.put("/dirs/{dir_name}/files/{file_name}/newdir/{new_dir_name}/newfile/{new_file_name}")
@@ -95,13 +97,8 @@ async def get_file_content(dir_name: str, file_name: str) -> Union[str, FileResp
 
 
 @app.get("/dirs/{dir_name}/files/{file_name}")
-async def get_file_info(response: Response, dir_name: str, file_name: str,
-                        if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
+async def get_file_info(response: Response, dir_name: str, file_name: str, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
     LOGGER.debug(f"# get_file(dir_name={dir_name}, file_name={file_name})")
-    if respond_with_304_not_modified(if_modified_since):
-        response.status_code = status.HTTP_304_NOT_MODIFIED
-        return {}
-    #response.headers["Last-Modified"] = text_manager.get_last_modified_header_str()
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_file_info(dir_name, file_name)
     if error is None:
@@ -119,10 +116,6 @@ async def get_file_info(response: Response, dir_name: str, file_name: str,
 async def get_a_dir(response: Response, dir_name: str, if_modified_since: Optional[str] = Header(None)) -> Dict[
     str, Any]:
     LOGGER.debug(f"# get_a_dir(dir_name={dir_name})")
-    if respond_with_304_not_modified(if_modified_since):
-        response.status_code = status.HTTP_304_NOT_MODIFIED
-        return {}
-    #response.headers["Last-Modified"] = text_manager.get_last_modified_header_str()
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_entries_from_dir(dir_name)
     if error is None:
@@ -156,33 +149,9 @@ async def get_full_dirs(response: Response, if_modified_since: Optional[str] = H
     return response_object
 
 
-@app.get("/somedirs")
-async def get_some_dirs(response: Response, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
-    LOGGER.debug(f"# get_some_dirs(if_modified_since={if_modified_since})")
-    if respond_with_304_not_modified(if_modified_since):
-        response.status_code = status.HTTP_304_NOT_MODIFIED
-        return {}
-    #response.headers["Last-Modified"] = text_manager.get_last_modified_header_str()
-    response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await text_manager.get_some_entries_from_all_dirs(10)
-    if error is None:
-        response_object["status"] = "success"
-        response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.get_last_modified_time_str()
-        response_object["last_responded_time"] = text_manager.get_last_responded_time_str()
-    else:
-        response_object["error"] = error
-    # LOGGER.debug(response_object)
-    return response_object
-
-
 @app.get("/topdirs")
 async def get_top_dirs(response: Response, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
     LOGGER.debug(f"# get_top_dir(if_modified_since={if_modified_since})")
-    if respond_with_304_not_modified(if_modified_since):
-        response.status_code = status.HTTP_304_NOT_MODIFIED
-        return {}
-    #response.headers["Last-Modified"] = text_manager.get_last_modified_header_str()
     response_object: Dict[str, Any] = {"status": "failure"}
     result, error = await text_manager.get_top_dirs()
     if error is None:
