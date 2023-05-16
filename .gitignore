@@ -23,4 +23,4 @@ frontend/.env.production
 backend/*.pid
 backend/nohup.out
 backend/run.log*
-backend/.python-version
+.python-version
