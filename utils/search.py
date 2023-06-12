@@ -3,14 +3,11 @@
 
 import sys
 import logging.config
-from pathlib import Path
-from esclient import ESClient
+from backend.es_manager import ESManager
 
 
 logging.config.fileConfig("../logging.conf")
 LOGGER = logging.getLogger()
-TEXT_SIZE = 4096
-TEMP_DIR_PREFIX_PATH = Path("/mnt/ramdisk")
 
 
 def print_usage(program_name: str):
@@ -38,7 +35,7 @@ def main() -> int:
     if len(sys.argv) > 4:
         size = int(sys.argv[4])
 
-    es = ESClient("tm")
+    es = ESManager("tm")
     if title:
         result = es.search_by_title(max_result_count, title, ext, size)
         for item, score in result:

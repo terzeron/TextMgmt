@@ -3,7 +3,6 @@
 
 import sys
 import re
-import getopt
 import shutil
 import logging.config
 from datetime import datetime
@@ -17,7 +16,7 @@ import PyPDF2
 from docx import Document
 from pyth.plugins.rtf15.reader import Rtf15Reader
 from bs4 import BeautifulSoup
-from esclient import ESClient
+from backend.es_manager import ESManager
 
 
 logging.config.fileConfig("../logging.conf")
@@ -53,7 +52,7 @@ def read_from_epub_with_extracting_zip(file_path: Path) -> str:
                         if not root_file_path.is_file():
                             LOGGER.error(f"can't file '{root_file_path}' in epub file '{file_path}'")
                             return ""
-             #print(root_file_path)
+            #print(root_file_path)
             with root_file_path.open("r", encoding="utf-8") as infile:
                 for line in infile:
                     matches = re.findall(r'<(?:opf:)?item\s[^>]*href="(?P<chapter_file>[^"]*\.x?html)"[^>]*media-type="application/xhtml\+xml"', line)
@@ -223,7 +222,7 @@ def main() -> int:
         return 0
 
     data = read_data(path)
-    es = ESClient("tm")
+    es = ESManager("tm")
     try:
         es.create_index()
     except Exception as e:

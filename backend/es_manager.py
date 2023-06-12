@@ -14,7 +14,7 @@ TEXT_SIZE = 4096
 TEMP_DIR_PREFIX_PATH = Path("/mnt/ramdisk")
 
 
-class ESClient:
+class ESManager:
     def __init__(self, index_name) -> None:
         self.es = Elasticsearch()
         self.index_name = index_name
@@ -23,7 +23,7 @@ class ESClient:
         del self.es
 
     def create_index(self) -> None:
-        print("Creating index ...")
+        LOGGER.debug("create_index()")
         self.es = Elasticsearch()
         settings = {
             "index": {
@@ -68,7 +68,7 @@ class ESClient:
         self.es.indices.create(index=self.index_name, settings=settings, mappings=mappings)
 
     def load(self, data: Dict[int, Dict[str, Any]]) -> None:
-        print("Loading data ...")
+        LOGGER.debug(f"load({len(data)} items)")
         es_data: List[Dict[str, Any]] = []
         data_count = 0
         from itertools import islice
@@ -86,6 +86,7 @@ class ESClient:
             es_data = []
 
     def _search(self, max_result_count: int, query: Dict[str, Any]) -> List[Tuple[Dict[str, Any], float]]:
+        LOGGER.debug(f"_search(max_result_count={max_result_count}, query='{query}')")
         result_count = 0
         result = []
         response = self.es.search(index=self.index_name, query=query, scroll='10m')
@@ -120,7 +121,7 @@ class ESClient:
         return result[:max_result_count]
 
     def search_by_title(self, max_result_count: int, title: str, ext: str = "", size: int = 0) -> List[Tuple[Dict[str, Any]]]:  
-        print(f"Searching by title and metata with '{title}', '{ext}', '{size}' ...")
+        LOGGER.debug(f"search_by_title(max_result_count={max_result_count}, title='{title}', ext='{ext}', size={size})")
         query = {
             "bool": {
                 "should": [
@@ -133,10 +134,46 @@ class ESClient:
         return self._search(max_result_count, query)
 
     def search_by_content(self, max_result_count: int, content: str) -> List[Tuple[Dict[str, Any]]]:
-        print(f"Searching by content with '{content}' ...")
+        LOGGER.debug(f"search_by_content(max_result_count={max_result_count}, content='{content}')")
         query = {
             "match": {
                 "content": content
             }
         }
         return self._search(max_result_count, query)
+
+    def search_by_id(self, id: int) -> List[Tuple[Dict[str, Any]]]:
+        LOGGER.debug(f"search_by_id(id={id})")
+        query = {
+            "match": {
+                "_id": id
+            }
+        }
+        return self._search(1, query)
+
+    def update(self, id: int, title: str, ext: str, size: int, content: str, dir: str) -> bool:
+        LOGGER.debug(f"update(id={id}, title='{title}', ext='{ext}', size={size}, content='{content}', dir='{dir}')")
+        body = {
+            "doc": {
+                "name": title,
+                "ext": ext,
+                "size": size,
+                "content": content,
+                "dir": dir
+            }
+        }
+        result = self.es.update(index=self.index_name, id=id, body=body, refresh=True)
+        if "_shards" in result:
+            if "failed" in result["_shards"]:
+                if result["_shards"]["failed"] > 0:
+                    return False
+        return True
+
+    def delete(self, id: int) -> bool:
+        LOGGER.debug(f"delete(id={id})")
+        result = self.es.delete(index=self.index_name, id=id, refresh=True)
+        if "result" in result:
+            if result["result"] == "deleted":
+                return True
+        return False
+
