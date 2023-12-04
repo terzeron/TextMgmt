@@ -8,7 +8,7 @@ import FacebookLogin, {FacebookLoginClient} from "@greatsumini/react-facebook-lo
 
 export default function Navigation() {
   const appId = process.env.REACT_APP_FACEBOOK_APP_ID;
-  const adminEmail = process.env.REACT_APP_ADMIN_EMAIL;
+  const adminEmailList = process.env.REACT_APP_ADMIN_EMAIL_LIST;
   const [login, setLogin] = useState(false);
   const [authorized, setAuthorized] = useState(false);
   const [name, setName] = useState('');
@@ -25,12 +25,12 @@ export default function Navigation() {
       console.error("REACT_APP_FACEBOOK_APP_ID is not set");
       return;
     }
-    if (!adminEmail) {
+    if (!adminEmailList) {
       console.log("REACT_APP_ADMIN_EMAIL is not set");
       return;
     }
 
-    if (sessionStorage.getItem('accessToken') && sessionStorage.getItem('email') === adminEmail) {
+    if (sessionStorage.getItem('accessToken') && adminEmailList.includes(sessionStorage.getItem('email'))) {
       setLogin(true);
       setAuthorized(true);
       setName(sessionStorage.getItem('name'));
@@ -57,7 +57,7 @@ export default function Navigation() {
     setName(response.name);
     setEmail(response.email);
     setPicture(response.picture.data.url);
-    if (response.email === adminEmail) {
+    if (adminEmailList.includes(response.email)) {
       setAuthorized(true);
       sessionStorage.setItem('name', response.name);
       sessionStorage.setItem('email', response.email);
