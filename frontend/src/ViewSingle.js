@@ -1,11 +1,12 @@
 import './ViewSingle.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
-import {useEffect, useRef, useState} from "react";
+import {useEffect, useState} from "react";
 import {useParams} from "react-router-dom";
 
 import ViewPDF from "./ViewPDF";
 import ViewEPUB from "./ViewEPUB";
+import ViewDOC from "./ViewDOC";
 import ViewTXT from "./ViewTXT";
 import ViewHTML from './ViewHTML';
 import ViewRTF from './ViewRTF';
@@ -15,7 +16,7 @@ export default function ViewSingle(props) {
   const {dirName, fileName} = useParams();
   const [entryId, setEntryId] = useState("");
   const [lineCount, setLineCount] = useState(0);
-  const [errorMessage, setErrorMessage] = useState("");
+  const [pageCount, setPageCount] = useState(0);
 
   useEffect(() => {
     if (props) {
@@ -27,6 +28,7 @@ export default function ViewSingle(props) {
     if (props.entryId) {
       setEntryId(props.entryId);
       setLineCount(props.lineCount);
+      setPageCount(props.pageCount);
     }
     if (dirName && fileName) {
       setEntryId(dirName + "/" + fileName);
@@ -40,10 +42,13 @@ export default function ViewSingle(props) {
   return (
     <div>
       {
-        entryId && entryId.endsWith(".pdf") && <ViewPDF entryId={entryId}/>
+        entryId && entryId.endsWith(".pdf") && <ViewPDF entryId={entryId} pageCount={pageCount}/>
       }
       {
         entryId && entryId.endsWith(".epub") && <ViewEPUB entryId={entryId}/>
+      }
+      {
+        entryId && (entryId.endsWith(".doc") || entryId.endsWith(".docx")) && <ViewDOC entryId={entryId}/>
       }
       {
         entryId && entryId.endsWith(".txt") && <ViewTXT entryId={entryId} lineCount={lineCount}/>
@@ -53,7 +58,8 @@ export default function ViewSingle(props) {
       }
       {
         entryId && entryId.endsWith(".rtf") && <ViewRTF entryId={entryId}/>
-      }      {
+      }
+      {
         entryId && (entryId.endsWith(".jpg") || entryId.endsWith(".gif") || entryId.endsWith(".png")) && <ViewImage entryId={entryId}/>
       }
     </div>

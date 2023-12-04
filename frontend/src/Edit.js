@@ -5,9 +5,10 @@ import {useCallback, useEffect, useState, Suspense} from 'react';
 
 import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
+import {faEdit, faShareFromSquare} from '@fortawesome/free-regular-svg-icons';
 import {faCheck, faClockRotateLeft, faCut, faRotate, faTrash, faTruckMoving, faUpload} from '@fortawesome/free-solid-svg-icons';
 import DirList from './DirList';
-import {getRandomDarkColor, jsonDeleteReq, jsonGetReq, jsonPutReq} from './Common';
+import {getRandomMediumColor, getUrlPrefix, jsonDeleteReq, jsonGetReq, jsonPutReq} from './Common';
 import ViewSingle from "./ViewSingle";
 
 export default function Edit() {
@@ -17,6 +18,7 @@ export default function Edit() {
   const [treeData, setTreeData] = useState([]);
   const [topDirList, setToptopDirList] = useState('');
   const [entryId, setEntryId] = useState('');
+  const [dirName, setDirName] = useState('');
   const [entryName, setEntryName] = useState('');
 
   const [author, setAuthor] = useState('');
@@ -25,6 +27,8 @@ export default function Edit() {
   const [size, setSize] = useState(0);
   const [encoding, setEncoding] = useState('');
   const [newFileName, setNewFileName] = useState('');
+  const [viewUrl, setViewUrl] = useState('');
+  const [downloadUrl, setDownloadUrl] = useState('');
 
   const [selectedDirectory, setSelectedDirectory] = useState('');
   const ROOT_DIRECTORY = '$$rootdir$$';
@@ -33,18 +37,10 @@ export default function Edit() {
   useEffect(() => {
     console.log(`Edit: useEffect() `);
 
-    console.log(`call /somedir for partial tree data`)
-    const someDirListUrl = '/somedirs';
-    jsonGetReq(someDirListUrl, (result) => {
+    console.log("call /dirs for treeData");
+    const fullDirListUrl = '/dirs';
+    jsonGetReq(fullDirListUrl, (result) => {
       setTreeData(result);
-
-      console.log("call /dirs for treeData");
-      const fullDirListUrl = '/dirs';
-      jsonGetReq(fullDirListUrl, (result) => {
-        setTreeData(result);
-      }, (error) => {
-        setErrorMessage(`directory list load failed, ${error}`);
-      });
     }, (error) => {
       setErrorMessage(`directory list load failed, ${error}`);
     });
@@ -62,6 +58,7 @@ export default function Edit() {
 
       setToptopDirList(null);
       setEntryId('');
+      setDirName('');
       setEntryName('');
 
       setAuthor('');
@@ -70,6 +67,8 @@ export default function Edit() {
       setNewFileName('');
       setSize(0);
       setEncoding('');
+      setViewUrl('');
+      setDownloadUrl('');
     };
   }, [] /* rendered once */);
 
@@ -172,6 +171,7 @@ export default function Edit() {
     setEntryId(key);
     const dirName = key.split('/')[0];
     const fileName = key.split('/')[1];
+    setDirName(dirName);
     setEntryName(fileName);
     setNewFileName(fileName);
     console.log(`fileEntryClicked(): dirName=${dirName}, fileName=${fileName}`);
@@ -186,6 +186,9 @@ export default function Edit() {
 
     // decompose file name to (author, title, extension)
     decomposeFileName(fileName);
+
+    setViewUrl('/view/' + encodeURIComponent(dirName) + '/' + encodeURIComponent(fileName));
+    setDownloadUrl(getUrlPrefix() + '/download/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName));
 
     // get file metadata (size, encoding)
     const fileMetadataUrl = '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName);
@@ -397,6 +400,11 @@ export default function Edit() {
     <Container id="edit">
       <Row fluid="true">
         <Col md="3" lg="2" className="ps-0 pe-0 section">
+          <div>
+            <span style={{fontSize: '5pt'}}><FontAwesomeIcon icon={faEdit}/> {treeData && treeData['last_modified_time']}</span>
+            <span style={{fontSize: '5pt'}}> | </span>
+            <span style={{fontSize: '5pt'}}><FontAwesomeIcon icon={faShareFromSquare}/> {treeData && treeData['last_responded_time']}</span>
+          </div>
           <Suspense fallback={<div className="loading">로딩 중...</div>}>
             <DirList treeData={treeData} onClickHandler={fileEntryClicked}/>
           </Suspense>
@@ -412,16 +420,27 @@ export default function Edit() {
                 <Suspense fallback={<div className="loading">로딩 중...</div>}>
                   <Card.Body>
                     <Row>
-                      <Col xs="8">
+                      <Col xs="3">
+                        <Form.Control value={dirName} readOnly disabled/>
+                      </Col>
+                      <Col xs="9">
                         <Form.Control value={entryName} readOnly disabled/>
                       </Col>
-                      <Col xs="2">
+                    </Row>
+                    <Row>
+                      <Col xs="3">
+                        <InputGroup>
+                          <InputGroup.Text>확장자</InputGroup.Text>
+                          <Form.Control value={extension} onChange={extensionChanged}/>
+                        </InputGroup>
+                      </Col>
+                      <Col xs="4">
                         <InputGroup>
                           <InputGroup.Text>인코딩</InputGroup.Text>
                           <Form.Control value={encoding} readOnly disabled/>
                         </InputGroup>
                       </Col>
-                      <Col xs="2">
+                      <Col xs="5">
                         <InputGroup>
                           <InputGroup.Text>크기</InputGroup.Text>
                           <Form.Control value={size} readOnly disabled/>
@@ -457,15 +476,9 @@ export default function Edit() {
                       </InputGroup>
                     </Row>
                     <Row>
-                      <Col xs="3">
+                      <Col>
                         <InputGroup>
-                          <InputGroup.Text>확장자</InputGroup.Text>
-                          <Form.Control value={extension} onChange={extensionChanged}/>
-                        </InputGroup>
-                      </Col>
-                      <Col xs="9">
-                        <InputGroup>
-                          <InputGroup.Text>파일명</InputGroup.Text>
+                          <InputGroup.Text>신규 파일명</InputGroup.Text>
                           <Form.Control value={newFileName} onChange={newFileNameChanged}/>
                           <Button variant="outline-success" size="sm" onClick={changeButtonClicked} disabled={!entryId}>
                             변경
@@ -484,7 +497,7 @@ export default function Edit() {
                         <a href={`https://www.yes24.com/Product/Search?domain=ALL&query=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
                           <Button variant="outline-primary" size="sm">Yes24</Button>
                         </a>
-                        <a href={`https://www.google.com/search?sourceid=chrome&ie=UTF-8&oq=${encodeURIComponent(author)}+${encodeURIComponent(title)}&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
+                        <a href={`https://www.google.com/search?sourceid=chrome&ie=UTF-8&oq=${encodeURIComponent(author)}+${encodeURIComponent(title)}&q=${encodeURIComponent(author)}+${encodeURIComponent(title)}&sourceid=chrome&ie=UTF-8`} target="_blank" rel="noreferrer">
                           <Button variant="outline-primary" size="sm">구글</Button>
                         </a>
                         <a href={`https://search.shopping.naver.com/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&sort=REL&query=${encodeURIComponent(author)}+${encodeURIComponent(title)}`} target="_blank" rel="noreferrer">
@@ -523,7 +536,7 @@ export default function Edit() {
                                     size="sm"
                                     key={dir.key}
                                     style={{
-                                      backgroundColor: getRandomDarkColor(category),
+                                      backgroundColor: getRandomMediumColor(category),
                                       color: 'white'
                                     }}
                                     onClick={(e) => {
@@ -608,12 +621,17 @@ export default function Edit() {
               <Card>
                 <Card.Header>
                   파일 보기
-                  <a href={`/view/${entryId}`} target="_blank" rel="noreferrer">
-                    <Button variant="outline-primary" size="sm" className="float-end">새 창에서 전체보기</Button>
-                  </a>
+                  <span>
+                    <a href={viewUrl} target="_blank" rel="noreferrer">
+                      <Button variant="outline-primary" size="sm" disabled={!entryId} className="float-end">새 창에서 전체 보기</Button>
+                    </a>
+                    <a href={downloadUrl} target="_blank" rel="noreferrer">
+                      <Button variant="outline-primary" size="sm" disabled={!entryId} className="float-end">다운로드</Button>
+                    </a>
+                  </span>
                 </Card.Header>
                 <Card.Body>
-                  <ViewSingle key={entryId} entryId={entryId} lineCount={100}/>
+                  <ViewSingle key={entryId} entryId={entryId} lineCount={100} pageCount={10}/>
                 </Card.Body>
               </Card>
             </Col>

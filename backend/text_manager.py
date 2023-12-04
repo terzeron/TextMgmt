@@ -4,11 +4,15 @@ import os
 import re
 import chardet
 import logging
+import tzlocal
+import pytz
+import dateutil.parser
 from logging import config
 from pathlib import Path
 from typing import Any, Optional, Dict, Tuple, List, Union
 from datetime import datetime
 from fastapi.responses import FileResponse
+from debounce import debounce
 
 logging.config.fileConfig("logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -16,21 +20,38 @@ LOGGER = logging.getLogger(__name__)
 
 class TextManager:
     ROOT_DIRECTORY = "$$rootdir$$"
+    HEADER_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
 
     def __init__(self):
         LOGGER.debug("# TextManager()")
         work_dir = os.environ["TM_WORK_DIR"] if "TM_WORK_DIR" in os.environ else Path.cwd().parent / "text"
         self.path_prefix = Path(work_dir)
         LOGGER.debug(self.path_prefix)
-        self.last_modified_time = datetime.utcnow()
+        self.local_tz = tzlocal.get_localzone()
+        self.last_modified_time = datetime.now(self.local_tz)
         self.cached_full_dirs = []
         self.cached_some_dirs = []
+        self.do_trigger_caching = False
 
-    def reset_cache(self):
-        LOGGER.debug("# reset_cache()")
-        self.last_modified_time = datetime.utcnow()
-        self.cached_full_dirs = []
-        self.cached_some_dirs = []
+    @debounce(60)
+    def trigger_caching(self):
+        self.do_trigger_caching = True
+
+    def get_last_modified_time_str(self) -> str:
+        LOGGER.debug("last_modified_time=%s", self.last_modified_time.isoformat(timespec="seconds"))
+        return self.last_modified_time.isoformat(timespec="seconds")
+
+    def get_last_responded_time_str(self) -> str:
+        LOGGER.debug("last_responded_time=%s", datetime.now(self.local_tz).isoformat(timespec="seconds"))
+        return datetime.now(self.local_tz).isoformat(timespec="seconds")
+
+    def get_last_modified_header_str(self) -> str:
+        LOGGER.debug("last_modified_header_str=%r", self.last_modified_time.astimezone(pytz.UTC).strftime(TextManager.HEADER_DATE_FORMAT))
+        return self.last_modified_time.astimezone(pytz.UTC).strftime(TextManager.HEADER_DATE_FORMAT)
+
+    def get_if_modified_since_time_str(self, if_modified_since: str) -> str:
+        LOGGER.debug("if_modified_since_str=%s", dateutil.parser.parse(if_modified_since).astimezone(self.local_tz).isoformat(timespec="seconds"))
+        return dateutil.parser.parse(if_modified_since).astimezone(self.local_tz).isoformat(timespec="seconds")
 
     def determine_file_path(self, dir_name: str, file_name: str) -> Path:
         if dir_name == TextManager.ROOT_DIRECTORY:
@@ -109,6 +130,10 @@ class TextManager:
                 content = FileResponse(path=path, media_type="application/pdf")
             elif path.suffix == ".epub":
                 content = FileResponse(path=path, media_type="application/epub+zip")
+            elif path.suffix == ".doc":
+                content = FileResponse(path=path, media_type="application/msword")
+            elif path.suffix == ".docx":
+                content = FileResponse(path=path, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
             elif path.suffix == ".html":
                 content = FileResponse(path=path, media_type="text/html")
             else:
@@ -143,19 +168,23 @@ class TextManager:
 
         result = []
         path = self.path_prefix
-        for entry in path.iterdir():
-            if entry.is_dir():
-                nodes, error = await self.get_entries_from_dir(entry.name)
-                result.append({"key": entry.name, "label": entry.name, "nodes": nodes})
-            elif entry.is_file():
-                result.append({"key": entry.name, "label": entry.name})
+        for entry1 in os.scandir(path):
+            if entry1.is_dir():
+                sub_result = []
+                for entry2 in os.scandir(entry1):
+                    if entry2.is_file():
+                        sub_result.append({"key": entry2.name, "label": entry2.name})
+                sub_result.sort(key=lambda x: x["key"])
+                result.append({"key": entry1.name, "label": entry1.name, "nodes": sub_result})
+            elif entry1.is_file():
+                result.append({"key": entry1.name, "label": entry1.name})
         result.sort(key=lambda x: x["key"])
         self.cached_full_dirs = result
         LOGGER.debug("loaded full dirs")
         return result, None
 
     async def get_entries_from_dir(self, dir_name: str = "", size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        #LOGGER.debug(f"# get_full_entries_from_dir(dir_name={dir_name}, size={size})")
+        # LOGGER.debug(f"# get_full_entries_from_dir(dir_name={dir_name}, size={size})")
         # 특정 디렉토리 하위만 조회
         result = []
         path = self.path_prefix / dir_name
@@ -173,7 +202,7 @@ class TextManager:
         return result, None
 
     async def get_some_entries_from_all_dirs(self, size: int = 0) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        #LOGGER.debug(f"# get_some_entries_from_all_dirs(size={size})")
+        # LOGGER.debug(f"# get_some_entries_from_all_dirs(size={size})")
         # 전체 디렉토리의 일부 몇 개만 조회
         if self.cached_some_dirs:
             LOGGER.debug("use cached_some_dirs")
@@ -192,7 +221,7 @@ class TextManager:
         return result, None
 
     async def get_top_dirs(self) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
-        #LOGGER.debug(f"# get_top_dirs()")
+        # LOGGER.debug(f"# get_top_dirs()")
         path = self.path_prefix
         result = []
         for entry in path.iterdir():

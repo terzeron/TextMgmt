@@ -5,6 +5,8 @@ import {Suspense, useEffect, useState} from 'react';
 import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-bootstrap';
 import {jsonGetReq, getUrlPrefix} from './Common';
 import DirList from './DirList';
+import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
+import {faEdit, faShareFromSquare} from "@fortawesome/free-regular-svg-icons";
 
 export default function View() {
   const [errorMessage, setErrorMessage] = useState('');
@@ -18,18 +20,10 @@ export default function View() {
   const [downloadUrl, setDownloadUrl] = useState('');
 
   useEffect(() => {
-    console.log(`call /somedir for partial tree data`)
-    const someDirListUrl = '/somedirs';
-    jsonGetReq(someDirListUrl, (result) => {
-      setTreeData(result['result']);
-
-      console.log("call /dirs for full tree data");
-      const fullDirListUrl = '/dirs';
-      jsonGetReq(fullDirListUrl, (result) => {
-        setTreeData(result);
-      }, (error) => {
-        setErrorMessage(`dir list load failed, ${error}`);
-      })
+    console.log("call /dirs for full tree data");
+    const fullDirListUrl = '/dirs';
+    jsonGetReq(fullDirListUrl, (result) => {
+      setTreeData(result);
     }, (error) => {
       setErrorMessage(`dir list load failed, ${error}`);
     });
@@ -69,6 +63,11 @@ export default function View() {
   return (
     <Container id="view">
       <Row fluid="true">
+        <div>
+          <span style={{fontSize: '5pt'}}><FontAwesomeIcon icon={faEdit}/> {treeData && treeData['last_modified_time']}</span>
+          <span style={{fontSize: '5pt'}}> | </span>
+          <span style={{fontSize: '5pt'}}><FontAwesomeIcon icon={faShareFromSquare}/> {treeData && treeData['last_responded_time']}</span>
+        </div>
         <Col md="3" lg="2" className="ps-0 pe-0 section">
           <Suspense fallback={<div className="loading">로딩 중...</div>}>
             <DirList treeData={treeData} onClickHandler={fileEntryClicked}/>
@@ -112,10 +111,10 @@ export default function View() {
                     <Row className="mt-1">
                       <span>
                         <a href={viewUrl} target="_blank" rel="noreferrer">
-                          <Button variant="outline-secondary" size="sm" disabled={!entryId}>새 창에서 전체 보기</Button>
+                          <Button variant="outline-primary" size="sm" disabled={!entryId}>새 창에서 전체 보기</Button>
                         </a>
                         <a href={downloadUrl} target="_blank" rel="noreferrer">
-                          <Button variant="outline-secondary" size="sm" disabled={!entryId}>다운로드</Button>
+                          <Button variant="outline-primary" size="sm" disabled={!entryId}>다운로드</Button>
                         </a>
                       </span>
                     </Row>

@@ -13,7 +13,7 @@ export default function ViewEPUB(props) {
       console.log(renditionRef.current);
     }
 
-    console.log(`ViewEPUB: useEffect(${props})`, props);
+    console.log(`ViewEPUB: useEffect()`, props);
     if (props && props.entryId) {
       const dirName = props.entryId.split('/')[0];
       const fileName = props.entryId.split('/')[1];

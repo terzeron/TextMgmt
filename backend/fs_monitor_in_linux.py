@@ -19,8 +19,8 @@ def inotify_worker(text_manager: TextManager):
         for type_name in type_names:
             if type_name in ("IN_CREATE", "IN_DELETE", "IN_MOVED_FROM", "IN_MOVED_TO", "IN_CLOSE_WRITE", "IN_MODIFY", "IN_DELETE_SELF", "IN_MOVE_SELF"):
                 LOGGER.debug(f"PATH=[{path}] FILENAME=[{filename}] EVENT_TYPE={type_name}")
-                text_manager.reset_cache()
+                text_manager.trigger_caching()
 
 
-def start(text_manager: TextManager):
+def start(text_manager: TextManager) -> None:
     Thread(target=inotify_worker, args=(text_manager, ), daemon=True).start()
