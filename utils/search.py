@@ -4,13 +4,10 @@
 import sys
 import logging.config
 from pathlib import Path
-from esclient import ESClient
+from backend.es_manager import ESManager
 
-
-logging.config.fileConfig("../logging.conf")
+logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger()
-TEXT_SIZE = 4096
-TEMP_DIR_PREFIX_PATH = Path("/mnt/ramdisk")
 
 
 def print_usage(program_name: str):
@@ -38,17 +35,17 @@ def main() -> int:
     if len(sys.argv) > 4:
         size = int(sys.argv[4])
 
-    es = ESClient("tm")
+    es = ESManager()
     if title:
-        result = es.search_by_title(max_result_count, title, ext, size)
-        for item, score in result:
+        result = es.search_by_title(title, ext, size, max_result_count=10)
+        for _, item, score in result:
             print("----------------------------------------")
-            print("item:", item["name"], "ext:", item["ext"], "size:", item["size"], "score:", score)
+            print("item:", item["name"], "file_type:", item["file_type"], "file_size:", item["file_size"], "score:", score)
             print(item["content"][:200].replace("\n", " "))
     if content:
-        result = es.search_by_content(max_result_count, content)
-        for item, score in result:
-            print("item:", item["name"], "ext:", item["ext"], "size:", item["size"], "score:", score)
+        result = es.search_similar_docs(summary=content, max_result_count=max_result_count)
+        for _, item, score in result:
+            print("item:", item["name"], "file_type:", item["file_type"], "file_size:", item["file_size"], "score:", score)
             print(item["content"][:200].replace("\n", " "))
 
     return 0

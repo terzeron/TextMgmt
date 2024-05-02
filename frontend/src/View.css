@@ -1,3 +1,8 @@
-#view { margin-left: 0px; margin-right: 0px; }
-#view * { font-size: small; }
-.section { display: inline-block; height: 100vh; overflow-y: auto; }
+#view {
+    margin-left: 0;
+    margin-right: 0;
+}
+
+#view * {
+    font-size: small;
+}

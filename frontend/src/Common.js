@@ -2,8 +2,11 @@ import {sprintf} from 'sprintf-js';
 import {str} from 'crc-32';
 import {DateTime} from 'luxon';
 
-export function getUrlPrefix() {
-    return process.env.REACT_APP_API_URL_PREFIX;
+export function getApiUrlPrefix() {
+    if (!import.meta.env.VITE_API_URL_PREFIX) {
+        console.log("The environment variable VITE_API_URL_PREFIX is not set.");
+    }
+    return import.meta.env.VITE_API_URL_PREFIX;
 }
 
 export function handleFetchErrors(response) {
@@ -59,9 +62,10 @@ export const getRandomMediumColor = (str) => {
     return getRandomColorWithRange(str, 96, 96);
 }
 
-const apiReq = (url, method, type, resolve, reject, final) => {
+const apiReq = (url, method, payload, type, resolve, reject, final) => {
     try {
-        fetch(getUrlPrefix() + url, {method: method})
+        console.log(`payload=${JSON.stringify(payload)}`);
+        fetch(getApiUrlPrefix() + url, payload ? {method: method, body: JSON.stringify(payload)} : {method: method})
             .then(handleFetchErrors)
             .then((response) => {
                 let promise;
@@ -110,8 +114,10 @@ const apiReq = (url, method, type, resolve, reject, final) => {
     }
 };
 
-export const jsonGetReq = (url, resolve, reject, final) => apiReq(url, 'GET', 'JSON', resolve, reject, final);
-export const jsonPutReq = (url, resolve, reject, final) => apiReq(url, 'PUT', 'JSON', resolve, reject, final);
-export const jsonDeleteReq = (url, resolve, reject, final) => apiReq(url, 'DELETE', 'JSON', resolve, reject, final);
-export const textGetReq = (url, resolve, reject, final) => apiReq(url, 'GET', 'TEXT', resolve, reject, final);
-export const blobGetReq = (url, resolve, reject, final) => apiReq(url, 'GET', 'BLOB', resolve, reject, final);
+export const jsonGetReq = (url, payload, resolve, reject, final) => apiReq(url, 'GET', payload, 'JSON', resolve, reject, final);
+export const jsonPutReq = (url, payload, resolve, reject, final) => apiReq(url, 'PUT', payload, 'JSON', resolve, reject, final);
+export const jsonDeleteReq = (url, payload, resolve, reject, final) => apiReq(url, 'DELETE', payload, 'JSON', resolve, reject, final);
+export const textGetReq = (url, payload, resolve, reject, final) => apiReq(url, 'GET', payload, 'TEXT', resolve, reject, payload, final);
+export const blobGetReq = (url, payload, resolve, reject, final) => apiReq(url, 'GET', payload, 'BLOB', resolve, reject, payload, final);
+
+export const ROOT_DIRECTORY = '$$rootdir$$';

@@ -1,12 +1,8 @@
-#edit { margin-left: 0; margin-right: 0; }
-#edit * { font-size: small; }
-.container { max-width: none; }
-.section { display: inline-block; height: 100vh; overflow-y: auto; }
+#edit {
+    margin-left: 0;
+    margin-right: 0;
+}
 
-.card-header { padding: 5px; }
-.card-body { padding: 5px; }
-.row { margin: 1px; }
-.row * { padding-left: 1px; padding-right: 1px; }
-.button_group button { margin-right: 5px; width: auto; }
-input.form-control { padding-left: 1px; padding-right: 1px; border-width: thin; border-color: #ddd; border-style: solid; border-collapse: collapse; }
-button { padding-left: 5px !important; padding-right: 5px !important; }
+#edit * {
+    font-size: small;
+}
