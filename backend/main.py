@@ -16,12 +16,12 @@ from utils.loader import Loader
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
 
-if "TM_DOMAIN" not in os.environ:
-    LOGGER.error("The environment variable TM_DOMAIN is not set.")
+if "TM_FRONTEND_URL" not in os.environ:
+    LOGGER.error("The environment variable TM_FRONTEND_URL is not set.")
     sys.exit(-1)
 
 app = FastAPI()
-origins = [os.environ["TM_DOMAIN"]]
+origins = [os.environ["TM_FRONTEND_URL"]]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
