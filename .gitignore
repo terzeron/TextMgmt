@@ -18,8 +18,8 @@ text/testdata2
 text/testdata3
 backend/.env
 frontend/.env
-frontend/.env.development
-frontend/.env.production
+frontend/.env.local
+frontend.original/.env.production
 backend/*.pid
 backend/nohup.out
 backend/run.log*

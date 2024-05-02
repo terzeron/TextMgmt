@@ -1,0 +1,15 @@
+.MuiTreeItem-content {
+    padding: 0 0 0 0 !important;
+}
+
+.MuiTreeItem-label {
+    font-size: small !important;
+    line-height: 0.9;
+}
+
+div#dir_list {
+    border-width: thin;
+    border-color: #ddd;
+    border-style: solid;
+    border-collapse: collapse;
+}

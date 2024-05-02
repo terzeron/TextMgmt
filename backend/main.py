@@ -1,202 +1,146 @@
 #!/usr/bin/env python
 
-
+import sys
 import os
 import logging.config
-import asyncio
-import platform
-from typing import Dict, Any, Union, Optional
-from datetime import datetime
-from fastapi import FastAPI, Response, Header, status
+from pathlib import Path
+from typing import Dict, Any, Union
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
-from fastapi_utils.tasks import repeat_every
-from text_manager import TextManager
+from pydantic import BaseModel
+from backend.book_manager import BookManager
+from utils.loader import Loader
 
-logging.config.fileConfig("logging.conf", disable_existing_loggers=False)
+logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
-# ignore debug logs from inotify.adapters
-logging.getLogger("inotify.adapters").setLevel(logging.WARNING)
+
+if "TM_DOMAIN" not in os.environ:
+    LOGGER.error("The environment variable TM_DOMAIN is not set.")
+    sys.exit(-1)
 
 app = FastAPI()
-origins = [
-    os.environ["TM_DOMAIN"] if "TM_DOMAIN" in os.environ else "https://localhost:3000"
-]
+origins = [os.environ["TM_DOMAIN"]]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-text_manager = TextManager()
-asyncio.create_task(text_manager.get_full_dirs())
+book_manager = BookManager()
+if book_manager.es_manager.es.count(index=book_manager.es_manager.index_name)["count"] == 0:
+    print("loading data...")
+    data = Loader.read_files(book_manager.path_prefix)
+    book_manager.es_manager.insert(data)
+print("ready!")
 
 
-def respond_with_304_not_modified(if_modified_since: Optional[str]) -> bool:
-    LOGGER.debug("# respond_with_304_not_modified(%r, %r)", if_modified_since, text_manager.get_last_modified_time_str())
-    if if_modified_since:
-        LOGGER.debug("if_modified_since=%r", text_manager.get_if_modified_since_time_str(if_modified_since))
-    if if_modified_since and text_manager.get_last_modified_time_str():
-        if text_manager.get_last_modified_time_str() <= text_manager.get_if_modified_since_time_str(if_modified_since):
-            return True
-    return False
+class BookModel(BaseModel):
+    book_id: int
+    category: str
+    title: str
+    author: str
+    file_path: str
+    file_type: str
+    file_size: int
+    updated_time: str
 
 
-@app.on_event("startup")
-@repeat_every(seconds=50)
-async def check_recent_changes_in_fs() -> None:
-    LOGGER.debug("# check_recent_changes_in_fs()")
-    if platform.system() == "Linux":
-        rs = text_manager.conn.cursor().execute("SELECT last_modified_time FROM fs_modification")
-        last_modified_time = rs.fetchone()["last_modified_time"]
-        if datetime.now() - datetime.timedelta(minutes=2) < last_modified_time < datetime.now() - datetime.timedelta(minutes=1):
-            text_manager.conn.cursor().execute("UPDATE cache_modification SET last_modified_time = NOW()")
-            text_manager.conn.commit()
-            LOGGER.debug("updated last modified time of cache")
-            await asyncio.create_task(text_manager.get_full_dirs())
-    else:
-        text_manager.conn.cursor().execute("UPDATE cache_modification SET last_modified_time = NOW()")
-        text_manager.conn.commit()
-        LOGGER.debug("updated last modified time of cache")
-        await asyncio.create_task(text_manager.get_full_dirs())
-
-
-@app.put("/dirs/{dir_name}/files/{file_name}/newdir/{new_dir_name}/newfile/{new_file_name}")
-async def move_file(dir_name: str, file_name: str, new_dir_name: str, new_file_name: str) -> Dict[str, Any]:
-    LOGGER.debug(
-        f"# move_file(dir_name={dir_name}, file_name={file_name}, new_dir_name={new_dir_name}, new_file_name={new_file_name})")
+@app.put("/books/{book_id}")
+async def update_book(book_id: int, book_item: BookModel) -> Dict[str, Any]:
+    LOGGER.debug("# update_book(book_id=%d, book=%r)", book_id, book_item)
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await text_manager.move_file(dir_name, file_name, new_dir_name, new_file_name)
+    result, error = await book_manager.update_book(book_id, new_category=book_item.category, new_title=book_item.title, new_author=book_item.author, new_path=book_manager.path_prefix / book_item.file_path, new_type=book_item.file_type)
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.get_last_modified_time_str()
-        response_object["last_responded_time"] = text_manager.get_last_responded_time_str()
     else:
         response_object["error"] = error
     return response_object
 
 
-@app.delete("/dirs/{dir_name}/files/{file_name}")
-async def delete_file(dir_name: str, file_name: str) -> Dict[str, Any]:
-    LOGGER.debug(f"# delete_file(dir_name={dir_name}, file_name={file_name})")
+@app.delete("/books/{book_id}")
+async def delete_book(book_id: int) -> Dict[str, Any]:
+    LOGGER.debug("# delete_book(book_id=%d)", book_id)
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await text_manager.delete_file(dir_name, file_name)
+    result, error = await book_manager.delete_book(book_id)
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.get_last_modified_time_str()
-        response_object["last_responded_time"] = text_manager.get_last_responded_time_str()
     else:
         response_object["error"] = error
     return response_object
 
 
-@app.get("/download/dirs/{dir_name}/files/{file_name}", response_model=None)
-async def get_file_content(dir_name: str, file_name: str) -> Union[str, FileResponse]:
-    LOGGER.debug(f"# get_file(dir_name={dir_name}, file_name={file_name})")
-    return await text_manager.get_file_content(dir_name, file_name)
+# JSON 대신 파일 바이너리 다운로드를 위해 response_model를 None으로 지정
+@app.get("/download/{book_id}/{dir_name}/{file_name}", response_model=None)
+@app.get("/download/{book_id}", response_model=None)
+async def get_book_content(book_id: int, dir_name: str = "", file_name: str = "") -> Union[str, FileResponse]:
+    LOGGER.debug("# get_book(book_id=%d)", book_id)
+    return await book_manager.get_book_content(book_id=book_id)
 
 
-@app.get("/dirs/{dir_name}/files/{file_name}")
-async def get_file_info(response: Response, dir_name: str, file_name: str, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
-    LOGGER.debug(f"# get_file(dir_name={dir_name}, file_name={file_name})")
+@app.get("/books/{book_id}")
+async def get_book(book_id: int) -> Dict[str, Any]:
+    LOGGER.debug("# get_book(book_id=%d)", book_id)
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await text_manager.get_file_info(dir_name, file_name)
-    if error is None:
+    book, error = await book_manager.get_book(book_id)
+    if book and error is None:
         response_object["status"] = "success"
-        response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.get_last_modified_time_str()
-        response_object["last_responded_time"] = text_manager.get_last_responded_time_str()
+        response_object["result"] = BookModel(**book.dict())
     else:
         response_object["error"] = error
     # LOGGER.debug(response_object)
     return response_object
 
 
-@app.get("/dirs/{dir_name}")
-async def get_a_dir(response: Response, dir_name: str, if_modified_since: Optional[str] = Header(None)) -> Dict[
-    str, Any]:
-    LOGGER.debug(f"# get_a_dir(dir_name={dir_name})")
+@app.get("/categories/{category}")
+async def get_books_in_category(category: str) -> Dict[str, Any]:
+    LOGGER.debug("# get_books_in_category(category='%s')", category)
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await text_manager.get_entries_from_dir(dir_name)
+    result, error = await book_manager.get_books_in_category(category)
     if error is None:
         response_object["status"] = "success"
-        response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.get_last_modified_time_str()
-        response_object["last_responded_time"] = text_manager.get_last_responded_time_str()
+        response_object["result"] = [BookModel(**book.dict()) for book in result]
     else:
         response_object["error"] = error
-    LOGGER.debug(response_object)
+    #LOGGER.debug(response_object)
     return response_object
 
 
-@app.get("/dirs")
-async def get_full_dirs(response: Response, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
-    LOGGER.debug(f"# get_full_dirs(if_modified_since={if_modified_since})")
-    if respond_with_304_not_modified(if_modified_since):
-        LOGGER.debug(f"respond empty reponse body with 304 status code")
-        response.status_code = status.HTTP_304_NOT_MODIFIED
-        return {}
-    response.headers["Last-Modified"] = text_manager.get_last_modified_header_str()
+@app.get("/categories")
+async def get_categories() -> Dict[str, Any]:
+    LOGGER.debug("# get_categories()")
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await text_manager.get_full_dirs()
+    result, error = await book_manager.get_categories()
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.get_last_modified_time_str()
-        response_object["last_responded_time"] = text_manager.get_last_responded_time_str()
-    else:
-        response_object["error"] = error
-    return response_object
-
-
-@app.get("/topdirs")
-async def get_top_dirs(response: Response, if_modified_since: Optional[str] = Header(None)) -> Dict[str, Any]:
-    LOGGER.debug(f"# get_top_dir(if_modified_since={if_modified_since})")
-    response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await text_manager.get_top_dirs()
-    if error is None:
-        response_object["status"] = "success"
-        response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.get_last_modified_time_str()
-        response_object["last_responded_time"] = text_manager.get_last_responded_time_str()
     else:
         response_object["error"] = error
     # LOGGER.debug(response_object)
     return response_object
 
 
-@app.put("/encoding/dirs/{dir_name}/files/{file_name}}")
-async def change_encoding(dir_name: str, file_name: str) -> Dict[str, Any]:
-    LOGGER.debug(f"# change_encoding(dir_name={dir_name}, file_name={file_name})")
+@app.get("/similar/{book_id}")
+async def search_similar_books(book_id: int) -> Dict[str, Any]:
+    LOGGER.debug("# search_similar_books(book_id=%d)", book_id)
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = text_manager.change_encoding(dir_name, file_name)
+    result, error = await book_manager.search_similar_books(book_id)
     if error is None:
         response_object["status"] = "success"
-        response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.get_last_modified_time_str()
-        response_object["last_responded_time"] = text_manager.get_last_responded_time_str()
+        response_object["result"] = [BookModel(**book.dict()) for book in result]
     else:
         response_object["error"] = error
-    LOGGER.debug(response_object)
     return response_object
 
 
-@app.get("/dirs/{dir_name}/files/{file_name}/similar")
-async def get_similar_file_list(dir_name: str, file_name: str) -> Dict[str, Any]:
-    LOGGER.debug(f"# get_similar_file_list(dir_name={dir_name}, file_name={file_name})")
+@app.get("/search/{keyword}")
+async def search_by_keyword(keyword: str) -> Dict[str, Any]:
+    LOGGER.debug("# search(keyword=%s)", keyword)
     response_object: Dict[str, Any] = {"status": "failure"}
-    return response_object
-
-
-@app.post("/search/{query}")
-async def search(query: str) -> Dict[str, Any]:
-    response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await text_manager.search(query)
+    result, error = await book_manager.search_by_keyword(keyword)
     if error is None:
         response_object["status"] = "success"
-        response_object["result"] = result
-        response_object["last_modified_time"] = text_manager.get_last_modified_time_str()
-        response_object["last_responded_time"] = text_manager.get_last_responded_time_str()
+        response_object["result"] = [BookModel(**book.dict()) for book in result]
     else:
         response_object["error"] = error
     return response_object
