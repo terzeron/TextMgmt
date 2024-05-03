@@ -21,13 +21,16 @@ logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
 class ESManager:
     def __init__(self) -> None:
-        if "TM_ES_INDEX" not in os.environ or "TM_ES_URL" not in os.environ:
-            LOGGER.error("The environment variable TM_ES_INDEX/TM_ES_URL is not set.")
-            sys.exit(-1)
+        for env in ["TM_ES_INDEX", "TM_ES_URL", "TM_ES_ID", "TM_ES_PASSWORD"]:
+            if env not in os.environ:
+                LOGGER.error(f"The environment variable {env} is not set.")
+                sys.exit(-1)
 
         self.index_name = os.environ["TM_ES_INDEX"]
         url = os.environ["TM_ES_URL"]
-        self.es = Elasticsearch(hosts=[url])
+        id = os.environ["TM_ES_ID"]
+        password = os.environ["TM_ES_PASSWORD"]
+        self.es = Elasticsearch(hosts=[url], http_auth=(id, password))
 
     def __del__(self) -> None:
         del self.es
