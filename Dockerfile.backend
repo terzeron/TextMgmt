@@ -21,8 +21,6 @@ COPY utils /app/utils
 RUN pip install -r requirements.txt > /dev/null
 
 VOLUME /books
-VOLUME /xml
-VOLUME /logs
 
 ENV PATH="$PATH:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:/home/terzeron/.local/bin:/app/bin:/app/utils"
 ENV PYTHONPATH="/app"
