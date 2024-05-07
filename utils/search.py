@@ -40,13 +40,13 @@ def main() -> int:
         result = es.search_by_title(title, ext, size, max_result_count=10)
         for _, item, score in result:
             print("----------------------------------------")
-            print("item:", item["name"], "file_type:", item["file_type"], "file_size:", item["file_size"], "score:", score)
-            print(item["content"][:200].replace("\n", " "))
+            print("item:", item)
+            print(item["summary"][:200].replace("\n", " "))
     if content:
         result = es.search_similar_docs(summary=content, max_result_count=max_result_count)
         for _, item, score in result:
-            print("item:", item["name"], "file_type:", item["file_type"], "file_size:", item["file_size"], "score:", score)
-            print(item["content"][:200].replace("\n", " "))
+            print("item:", item)
+            print(item["summary"][:200].replace("\n", " "))
 
     return 0
 

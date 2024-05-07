@@ -21,6 +21,7 @@ if "TM_FRONTEND_URL" not in os.environ:
     sys.exit(-1)
 
 app = FastAPI()
+LOGGER.info("app ready")
 origins = [os.environ["TM_FRONTEND_URL"]]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -30,7 +31,7 @@ if book_manager.es_manager.es.count(index=book_manager.es_manager.index_name)["c
     print("loading data...")
     data = Loader.read_files(book_manager.path_prefix)
     book_manager.es_manager.insert(data)
-print("ready!")
+print("book manager ready")
 
 
 class BookModel(BaseModel):
