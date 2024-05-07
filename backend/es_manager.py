@@ -4,11 +4,12 @@ import sys
 import os
 import math
 import warnings
+import time
 import logging.config
 from pathlib import Path
 from typing import Dict, List, Any, Tuple, Union
 from itertools import islice
-from elasticsearch7 import Elasticsearch, RequestError
+from elasticsearch7 import Elasticsearch, NotFoundError
 from elasticsearch7.exceptions import ElasticsearchWarning
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -21,16 +22,15 @@ logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
 class ESManager:
     def __init__(self) -> None:
-        for env in ["TM_ES_INDEX", "TM_ES_URL", "TM_ES_ID", "TM_ES_PASSWORD"]:
+        for env in ["TM_ES_INDEX", "TM_ES_URL"]:
+            print(f"{env}={os.environ[env]}")
             if env not in os.environ:
                 LOGGER.error(f"The environment variable {env} is not set.")
                 sys.exit(-1)
 
         self.index_name = os.environ["TM_ES_INDEX"]
         url = os.environ["TM_ES_URL"]
-        id = os.environ["TM_ES_ID"]
-        password = os.environ["TM_ES_PASSWORD"]
-        self.es = Elasticsearch(hosts=[url], http_auth=(id, password))
+        self.es = Elasticsearch(hosts=[url])
 
     def __del__(self) -> None:
         del self.es
@@ -38,7 +38,6 @@ class ESManager:
     def create_index(self) -> dict[str, Any]:
         LOGGER.debug("create_index()", )
 
-        self.es = Elasticsearch()
         settings = {
             "index": {
                 "analysis": {
@@ -97,16 +96,22 @@ class ESManager:
             }
         }
 
-        try:
-            return self.es.indices.create(index=self.index_name, body={"settings": settings, "mappings": mappings})
-        except RequestError as e:
-            if e.status_code != 400:
-                raise e
-        return {}
+        return self.es.indices.create(index=self.index_name, body={"settings": settings, "mappings": mappings})
 
-    def delete_index(self) -> dict[str, Any]:
+    def delete_index(self) -> None:
         LOGGER.debug("delete_index()")
-        return self.es.indices.delete(index=self.index_name)
+        try:
+            self.es.indices.delete(index=self.index_name)
+        except NotFoundError:
+            pass
+
+    def get_mapping(self) -> dict[str, Any]:
+        LOGGER.debug("get_mapping()")
+        while True:
+            if self.es.indices.exists(index=self.index_name):
+                break
+            time.sleep(1)
+        return self.es.indices.get_mapping(index=self.index_name)
 
     def _search(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
         LOGGER.debug("_search(max_result_count=%d, query='%s')", max_result_count, query)
