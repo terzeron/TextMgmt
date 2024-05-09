@@ -2,7 +2,6 @@
 
 
 import unittest
-import os
 import logging.config
 from pathlib import Path
 from typing import Dict, Any
@@ -23,7 +22,6 @@ class TestBook(unittest.TestCase):
             "file_path": Book.path_prefix / "category1" / "[anonymous] any book.epub",
             "file_type": "file_type1",
             "file_size": 100,
-            "summary": "summary1",
             "updated_time": "2021-01-01T00:00:00.000000",
         }
 
@@ -35,7 +33,6 @@ class TestBook(unittest.TestCase):
         assert book.file_path == Book.path_prefix / "category1" / "[anonymous] any book.epub"
         assert book.file_type == "file_type1"
         assert book.file_size == 100
-        assert book.summary == "summary1"
 
     def test_dict(self):
         book_id = 3
@@ -46,7 +43,6 @@ class TestBook(unittest.TestCase):
             "file_path": Book.path_prefix / "category1" / "[anonymous] any book.epub",
             "file_type": "file_type1",
             "file_size": 100,
-            "summary": "summary1",
             "updated_time": "2021-01-01T00:00:00.000000",
         }
 
@@ -59,8 +55,5 @@ class TestBook(unittest.TestCase):
             "file_path": "category1/[anonymous] any book.epub",
             "file_type": "file_type1",
             "file_size": 100,
-            "summary": "summary1",
             "updated_time": "2021-01-01T00:00:00.000000",
         }
-
-

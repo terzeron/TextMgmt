@@ -69,7 +69,6 @@ class TestBookManager(unittest.IsolatedAsyncioTestCase):
         assert isinstance(book.file_type, str)
         assert isinstance(book.file_path, Path)
         assert isinstance(book.file_size, int)
-        assert isinstance(book.summary, str)
         assert isinstance(book.updated_time, datetime)
 
     async def test_get_categories(self):
@@ -99,7 +98,6 @@ class TestBookManager(unittest.IsolatedAsyncioTestCase):
         assert book.file_type == randomly_chosen_book.file_type
         assert book.file_path == randomly_chosen_book.file_path
         assert book.file_size == randomly_chosen_book.file_size
-        assert book.summary == randomly_chosen_book.summary
         assert book.updated_time == randomly_chosen_book.updated_time
 
     async def test_determine_file_content_and_encoding(self):

@@ -27,7 +27,6 @@ class Book:
         self.file_path: Path = self.path_prefix / info["file_path"]
         self.file_type: str = info["file_type"]
         self.file_size: int = info["file_size"]
-        self.summary: str = info["summary"]
         self.updated_time: datetime = datetime.strptime(info["updated_time"], "%Y-%m-%dT%H:%M:%S.%f")
 
     def dict(self) -> Dict[str, Any]:
