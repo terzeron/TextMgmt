@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 
+import os
 import unittest
 import logging.config
 import math
@@ -230,30 +231,18 @@ class ESManagerTest(unittest.TestCase):
         result = self.esm.search_by_id(doc_id)
         assert result == {}
 
-    @patch("backend.es_manager.Elasticsearch")
-    def test_91_create_index(self, mock_es):
-        mock_response = {"acknowledged": True}
-        mock_es_instance = mock_es.return_value
-        mock_es_instance.indices.create.return_value = mock_response
+    def test_91_create_delete_do_exists_index(self):
+        self.esm.delete_index()
+        actual = self.esm.create_index()
+        assert actual == {"acknowledged": True, "index": self.esm.index_name, "shards_acknowledged": True}
+        assert self.esm.do_exist_index()
 
         actual = self.esm.create_index()
-        assert actual == mock_response
-        expected_settings = {"index": {"analysis": {"analyzer": {"nori_analyzer": {"tokenizer": "nori_tokenizer"}}}, "similarity": {"default": {"type": "BM25"}}}}
-        expected_mappings = {"properties": {"category": {"type": "keyword"}, "title": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}}, "author": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}}, "file_path": {"type": "keyword"}, "file_type": {"type": "keyword"}, "file_size": {"type": "unsigned_long"}, "summary": {"type": "text", "analyzer": "nori_analyzer"}, "updated_time": {"type": "date"}}}
-        mock_es_instance.indices.create.assert_called_once_with(index=self.esm.index_name, body={"settings": expected_settings, "mappings": expected_mappings})
+        assert actual == {"acknowledged": True}
+        assert self.esm.do_exist_index()
 
-    @patch("backend.es_manager.Elasticsearch")
-    def test_92_delete_index(self, mock_es):
-        mock_response = {"acknowledged": True}
-        mock_es_instance = mock_es.return_value
-        mock_es_instance.indices.delete.return_value = mock_response
-
-        es_manager = ESManager()
-        es_manager.create_index()
-        actual = es_manager.delete_index()
-        assert actual == mock_response
-        mock_es_instance.indices.delete.assert_called_once_with(index=self.esm.index_name)
-
+        self.esm.delete_index()
+        assert not self.esm.do_exist_index()
 
 if __name__ == "__main__":
     unittest.main()
