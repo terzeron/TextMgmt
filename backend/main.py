@@ -72,7 +72,7 @@ async def delete_book(book_id: int) -> Dict[str, Any]:
 
 
 # JSON 대신 파일 바이너리 다운로드를 위해 response_model를 None으로 지정
-@app.get("/download/{book_id}/{file_path}", response_model=None)
+@app.get("/download/{book_id}/{path:path}", response_model=None)
 @app.get("/download/{book_id}", response_model=None)
 async def get_book_content(book_id: int) -> Union[str, FileResponse]:
     LOGGER.debug("# get_book(book_id=%d)", book_id)

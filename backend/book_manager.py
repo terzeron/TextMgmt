@@ -17,6 +17,22 @@ logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
 class BookManager:
     ROOT_DIRECTORY = "$$rootdir$$"
+    MEDIA_TYPES = {
+        ".txt": "text/plain",
+        ".pdf": "application/pdf",
+        ".epub": "application/epub+zip",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".html": "text/html",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".bmp": "image/bmp",
+        ".tiff": "image/tiff",
+        ".svg": "image/svg+xml",
+    }
 
     def __init__(self) -> None:
         if "TM_WORK_DIR" not in os.environ:
@@ -66,27 +82,11 @@ class BookManager:
 
     async def get_book_content(self, book_id: int) -> Union[str, FileResponse]:
         LOGGER.debug("# get_book_content(book_id=%d)", book_id)
-        media_types = {
-            ".txt": "text/plain",
-            ".pdf": "application/pdf",
-            ".epub": "application/epub+zip",
-            ".doc": "application/msword",
-            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ".html": "text/html",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".gif": "image/gif",
-            ".webp": "image/webp",
-            ".bmp": "image/bmp",
-            ".tiff": "image/tiff",
-            ".svg": "image/svg+xml",
-        }
         doc = self.es_manager.search_by_id(book_id)
         book = Book(book_id, doc)
         file_path = book.file_path
         if file_path.is_file():
-            media_type = media_types.get(file_path.suffix, "application/octet-stream")
+            media_type = BookManager.MEDIA_TYPES.get(file_path.suffix, "application/octet-stream")
             return FileResponse(path=file_path, media_type=media_type)
         return ""
 
@@ -140,10 +140,9 @@ class BookManager:
             file_path = book.file_path
             file_path.unlink()
         except IOError as e:
-            return "Error", f"can't delete '{file_path}', {e}"
+            return "Error", f"can't delete a book with '{book_id}', {e}"
 
         # delete book info from ElasticSearch
         if self.es_manager.delete(book_id):
             return "Ok", None
         return "Error", f"can't delete book information of '{book_id}' from ElasticSearch"
-

@@ -19,6 +19,7 @@ bm = BookManager()
 
 
 class TestBackend(unittest.IsolatedAsyncioTestCase):
+    @classmethod
     async def asyncSetUpClass(cls) -> None:
         data = Loader.read_files(Book.path_prefix / "_epub", 1000)
         bm.es_manager.insert(data)
@@ -65,21 +66,12 @@ class TestBackend(unittest.IsolatedAsyncioTestCase):
         None
 
     def test_get_file_content(self):
-        media_types = {
-            ".txt": "text/plain",
-            ".pdf": "application/pdf",
-            ".epub": "application/epub+zip",
-            ".doc": "application/msword",
-            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ".html": "text/html",
-        }
-
         response = client.get(f"/download/{self.book.book_id}")
         assert response
         assert response.status_code == 200
         assert response.content
         assert len(response.content) > 1024
-        media_type = media_types.get(self.book.file_path.suffix, "application/octet-stream")
+        media_type = BookManager.MEDIA_TYPES.get(self.book.file_path.suffix, "application/octet-stream")
         assert response.headers["Content-Type"].split(";")[0] == media_type
 
     def test_get_book(self):
