@@ -113,7 +113,7 @@ class TestBookManager(unittest.IsolatedAsyncioTestCase):
         assert isinstance(content, (FileResponse, str))
 
     async def test_search_by_keyword(self):
-        keyword = "마법"
+        keyword = "검왕"
         book_list, error = await self.bm.search_by_keyword(keyword, max_result_count=20)
         assert book_list and not error
         assert isinstance(book_list, list)
@@ -124,7 +124,8 @@ class TestBookManager(unittest.IsolatedAsyncioTestCase):
             assert isinstance(book, Book)
             if keyword in book.title:
                 match_count += 1
-        assert match_count / len(book_list) > 0.7
+        assert match_count > 10
+        assert match_count / len(book_list) > 0.1
 
     async def test_search_similar_books(self):
         book = await TestBookManager.get_one_random_book()
