@@ -1,0 +1,1160 @@
+﻿                    Escaflowne of the Heavens#                     Escaflowne of the Heavens
+#                     LD version Episodes 9-10
+#                     `` Memory of the Wings  ''
+#                   `` The Prince with Blue Eyes ''
+#                            Version 1.2
+#                         Translation: Hiroaki Fukuda
+#                             Editing: Todd Perkins, Hiroaki Fukuda, Dave
+#                                      Barbara
+#                              Timing: Todd Perkins
+#
+
+{title:} \C5ESCAFLOWNE
+{title:} of the Heavens
+# Opening English
+{OPSONG(EN)} Does everyone feel lonely like I do, when they love someone ?
+{OPSONG(EN)} I'm suffering from a pain, which is deeper than the dark.
+{OPSONG(EN)} Everything exists to brighten the two of us.
+{OPSONG(EN)} I love...I love you.
+{OPSONG(EN)} My heart is looking at you.
+{OPSONG(EN)} I believe...\nI believe in you in the cold night.
+{OPSONG(EN)} I'll call to you with tears.
+{OPSONG(EN)} I don't need any promises...
+{OPSONG(EN)} ...because I have a precious strength that you gave me.
+
+{HITOMI} Senpai...Amano...
+ 히토미    아마노... 선배...
+{HITOMI} Van...
+           반...
+
+{TITLE::::.} Memory of the Wings
+           깃털의 기억
+
+{HITOMI} Angel wings...?
+ 히토미    천사의 날개...?
+{MERLE} No, don't look !\nDon't look at Master Van !
+ 메르르    안돼, 보지마! 반 님을 보지 말라구!
+{HITOMI} Merle...
+ 히토미    메르르...
+{HITOMI} This feather...
+ 히토미    이 깃털...
+
+{VAN} Mother, please don't cry.
+ 반        어머님, 울지 마세요.
+
+{HITOMI} This feather makes me\nfeel sad for some reason.
+ 히토미    왠지 슬퍼져, 이 깃털을 보면.
+
+{TEO} Watch out !~~We might\ncrash into the ground !
+ 테오      조심해! 추락할 것 같아!
+{KIO} I know.
+ 키오      알아.
+{GADETH} Boss, this route is very difficult. Shouldn't we gain altitude and change course ?
+ 가데스    대장, 이 상태론 위험합니다. 고도를 높여서 코스를 바꾸는 게 어떨지.?
+{ALLEN} No.\nKeep going.
+ 알렌      아니. 그대로 간다.
+{GADETH} But...
+ 가데스    하지만...
+{ALLEN} I know it's dangerous...
+ 알렌      위험한 건 알고 있어...
+{ALLEN} ...but it's the only route to the Duchy of Freid that prevents Zaibach from noticing us.
+           하지만 자이바하를 앞질러서 프레이드공국으로 가는 유일한 길이야.
+{ALLEN:::.???} It's a sideshow which only you guys can perform, isn't it ?
+           너희들에겐 이런 일은 간단한 쇼에 불과하잖아.
+{GADETH} You're...
+ 가데스   정말...
+{GADETH} Guys, don't let up !~~Let's get through this route and surprise Zaibach !
+           자식들아, 포기하지 마라! 이 숲을 가로질러서 자이바하 녀석들을 놀라게 해 주자!
+{ALLEN} Van, you're coming, aren't you ?\nSee you in Freid.
+ 알렌      (생각) 반, 너도 올 거지? 프레이드에서 보자.
+
+{MILLERNA} Sister...
+ 밀레나    언니...
+{Eries} Millerna !
+ 엘리스    밀레나!
+{MILLERNA} You can't stop me.\nI've made up my mind.
+ 밀레나    날  막을 순 없어요. 내 마음은 정해졌어요.
+{Eries} Ignoring your country...?~~Someone like you, who can't do anything, won't...
+ 에리스    나라를 배반하겠다는 거니? 너 같이 아무것도 할 수 없는 애가?
+{MILLERNA} Don't treat me like a child !\nI'm an adult !
+ 밀레나    날 어린애처럼 다루지 마세요! 난 성인이야!
+{MILLERNA} Both you and Father always proceed with things without thinking of my feelings.
+           언니나 아버진 내가 어떻게 생각하는 진 고려하지도 않고 일을 처리했잖아요.
+{Eries} It's for\nyour own good.
+ 에리스    그건 널 위해서야.
+{MILLERNA} And forcing me to stop\nstudying the medical arts, also ?
+ 밀레나    그래서 내가 의술을 배우는 걸 그만두게 했어요?
+{Eries} What's so beneficial about the medical arts to a member of the royal family ?
+ 에리스    왕족이 의술을 배워서 뭘하겠니?
+{MILLERNA} I want to help people.
+ 밀레나    난 사람들을 돕고 싶었어요.
+{Eries:::..} As a member of the royal family you should do all you can for the people with your status.
+ 에리스    왕족인 네 지위로 사람들을 위해 네가 하고 싶은 뭐든 지 할 수 있어.
+{Eries} Your selfishness is a\nblasphemy against the people.
+           네 이기심이 오히려 사람들에 대한 모독이야.
+{MILLERNA} I love Allen !
+ 밀레나    난 알렌씨를 사랑해요!
+{MILLERNA} I'm going.\nGoodbye, Sister.
+           난 갈 꺼예요. 잘 있어요, 언니.
+{MILLERNA} Goodbye, Sister.
+           안녕히, 언니.
+
+{LEft} Dragon gods possess wings on their backs.\n{Literally Dragon God Human}
+ 왼쪽      용신인들이 날개를 펼치고 있다. 
+{RIGHT} Dragon gods are the descendants of Atlantis.
+ 오른쪽    용신족들은 아틀란티스의 후예들이다.
+{LEFT} The cursed people...
+ 왼쪽      그 저주받은 종족...
+{RIGHT} Evil people...
+ 오른쪽    악마의 종족....
+{HITOMI} What...? Dragon god...?
+ 히토미    뭐...? 용신인...?
+{voice} You shouldn't get close to the dragon gods.
+ 소리      용신인에 가까이 가선 안된다. 
+{LEFT} Death is the result for people who get involved with dragon gods.
+ 왼쪽      (소리) 용신인에 연관된 사람에겐 죽음이 있을 뿐이다.
+{RIGHT} The end of the world...They were the ones who had doomed Atlantis.
+ 오른쪽    (소리)세계의 종말은.. 그들이 아틀란티스를 멸망시켰다.
+               
+
+{HITOMI} Van...
+ 히토미    (생각) 반...
+{HITOMI} Fanelia...?
+           (생각) 파넬리아...?
+{MERLE} Master Van...
+ 메르르    반 님...
+{MERLE} Please don't,\nMaster Van !
+           그만 해요, 반 님!
+{VAN} What're you saying ?~~You told me you wanted to see, Merle.
+ 반        무슨 소릴 하는 거야?~~ 보고 싶어했잖아, 메르르.
+{MERLE} But, it's dangerous !
+ 메르르    하지만, 이건 위험해요!
+{VAN} It's alright.\nJust watch.
+ 반        괜찮아. 보고 있어.
+{MERLE} Master Van !
+ 메르르    반 님!
+
+{MAN} Liquor tastes best\nafter a victory !
+ 남자      승리 후에 마시는 술은 정말 최고야!
+{MAN} It'll be a decisive battle tomorrow !\nWe'll be the first to attack their fort !
+ 남자      내일은 중대한 결전이다! 그들의 성채를 처음으로 공격하는 거야!
+{HITOMI} People of Fanelia...
+히토미     (생각) 파넬리아의 모두가...
+{HITOMI} Escaflowne...?
+           (생각) 에스카플로네...?
+{GOOU} Vargas...
+ 고오우    바르가스...
+{GOOU} Are you going to\nleave after this war ?
+           이 전쟁 후에 떠날 건가?
+{Vargas} Yes. I want to improve\nmyself once more.
+ 바르가스  예. 한 번 더 저 자신을 단련시키고 싶습니다.
+{GOOU} I see.\nWe'll miss you.
+ 고오우    알겠다. 네가 그리울 거야. 
+{Vargas} My Lord, the favor\nyou provided...
+ 바르가스  폐하, 당신께서 베풀어주신 호의에...
+{GOOU} It's alright, Vargas. I want you to perfect your swordsmanship.
+ 고오우    됐다, 바르가스. 네가 완벽한 검사가 되길 바란다.
+{GOOU} And someday...return\nto me and to Fanelia.
+           그리고 언젠가... 파넬리아로, 내게로 돌아오기를.
+{Vargas} My Lord...
+ 바르가스  폐하....
+{GOOU} Who's that...?
+ 고오우    누구지..?
+{Vargas} Dragon god...!~~A descendant of Atlantis, a notorious demon...
+ 바르가스  용신인...!~~ 아틀란티스의 후예, 그 악명높은 악마가...
+{Vargas} My Lord, it's dangerous.\nPlease, stay back.
+           폐하, 위험합니다. 물러서십시오.
+{GOOU} Hold, Vargas.
+ 고오우    그만, 바르가스.
+{GOOU} She's a demon ?\nShe's so beautiful.
+           그녀가 악마라고? 너무 아름답군.
+{GOOU} I don't care if my life is\ntaken by a demon like that.
+           저런 악마라면 목숨을 잃어도 상관없다.
+{Vargas} My Lord...
+ 바르가스  폐하...
+{VARIE} You're Goou of Fanelia,\naren't you ?{Goou: Romaji spelling}
+ 바리에    당신은 파넬리아의 고오우죠?
+{GOOU} How did you\nknow my name ?
+ 고오우    어떻게 내 이름을?
+{VARIE} Tonight, when the Phantom Moon shines over the mountains of the west...
+ 바리에    오늘 밤, 환상의 달이 서쪽 산 위에서 빛날 때...
+{VARIE} ...the destined man will arrive.
+           ... 운명의 남자가 도착할 것이다.
+{VARIE:::..???} It's a phrase from the\nforetelling at my birth.
+           이것은 제가 태어날 때 예언된 구절입니다.
+{GOOU} Destiny...
+ 고오우    운명...
+{VARIE} Yes, this is a\ndestined meeting.
+ 바리에    예, 이것은 운명적인 만남.
+{GOOU} Destiny...?\nWhat is your name ?
+ 고오우    운명...? 당신의 이름은?
+{VARIE} Varie.
+ 바리에    바리에.
+{GOOU} Varie, will you\ncome with me ?
+ 고오우    바리에, 나와 함께 가겠소?
+{VARIE} Yes, Lord Goou.
+ 바리에    예, 고오우님.
+{HITOMI} Van's father and mother...
+ 히토미    반의 아버지와 어머니...
+
+{MAN} No, you shouldn't take a\ndragon god for your wife.
+ 남자      안됩니다. 용신인을 부인으로 삼으셔 선 안됩니다.
+{MAN} Dragon gods are the cursed\npeople who doomed Atlantis.
+ 남자      용신인은 멸망한 아틀란티스의 저주받은 종족입니다.
+{MAN} Disaster will\ncome to Fanelia.
+ 남자      파넬리아에 재앙이 올 겁니다.
+{MAN} We cannot support\nyour marriage, My Lord.
+ 남자      우린 당신의 결혼을 지지할 수 없습니다. 폐하.
+{GOOU} Whatever legend says, it has nothing to do with Varie. I love Varie.
+ 고오우    전설이 어떻든, 바리에완 아무 상관없소. 난 바리에를 사랑하오.
+{GOOU} No one can\nseparate Varie and I~~!
+           어느 누구도 나와 바리에를 갈라놓을 수 없소!
+
+{GOOU} Oh, it's a boy.
+ 고오우    아, 사내로구나.
+{GOOU} He's a cheerful boy.
+           참으로 건강한 아이로구나.
+{GOOU} Look at him, Folken.\nHe's your brother.
+           봐라, 폴켄. 네 동생이다.
+{FOLKEN} Father, what's his name ?
+ 폴켄      아버지, 이름을 뭐라 하죠?
+{GOOU} Van.\nVan Fanel.
+ 고오우    반. 반 파넬이다.
+
+{VAN} M...Mother...
+ 반        어..어머니..
+{VARIE} Van, you shouldn't\nshow your wings, alright ?
+ 바리에    반, 네 날개를 아무에게도 보여주어선 안된다. 알겠니?
+{VARIE} Until the time comes, you can't.\nPromise me.
+           때가 될 때까지, 그러지 말아다오. 약속해 주렴.
+{VARIE} Don't make me feel sad.
+           날 슬프게 하지 마렴.
+{VAN} Mother...\nI'm sorry, Mother.
+ 반        어머니... 죄송해요, 어머니.
+
+{MAN} Vargas, you've returned.
+ 남자      바르가스, 돌아왔구나.
+{Vargas} Lord Goou...
+ 바르가스  고오우 폐하...
+{Vargas} I didn't make it...\nLord Goou...
+           실패했습니다... 고오우 폐하...
+
+{VAN} Don't cry. I'll be the king\nin place of my brother.
+ 반        울지마세요. 형을 대신해 제가 왕이 될 테니.
+{VAN} I'll be a strong\nman like Father.
+           제가 아버지처럼 강한 남자가 될 테니.
+{VAN} So, don't cry, Mother.
+           그러니, 울지 마세요, 어머니.
+{VAN} Mother...
+           어머니....
+
+{VAN} After a while, she followed my brother, Folken,\nand entered the Dragon's Forest.
+ 반        얼마후, 어머니는 나의 형, 폴켄을 따라 용의 숲에 들어가셨지.
+{VAN} Vargas went to the forest to look for Mother, but he couldn't find her.
+           바르가스가 어머니를 찾아 숲에 갔었지만, 찾지 못했어.
+{VAN} She never returned\nto the castle.
+           그분은 다시 성으로 돌아오지 않으셨어.
+{HITOMI} Thank you...
+ 히토미    고마워...
+{HITOMI} ...for telling me that.
+           .. 얘기해 줘서.
+{HITOMI} Your wings...
+           네 날개...
+{HITOMI} I like your wings very much.\nThey're beautiful.
+           나 아주 좋아해. 아름다워.
+{VAN} You and Merle are the only ones who've said that.
+ 반        그런 말하는 건 너와 메르르 뿐 이야.
+{HITOMI} Then, I'm the\nsame as Merle ?
+히토미     그럼, 난 메르르와 같다는 거야?
+{HITOMI} Geez.
+           칫
+
+#  EYECATCH
+
+{DORNKIRK} I can't see it.\nI can't see the future.
+ 도른킬크  보이지가 않는다. 미래를 볼 수 없어.
+{DORNKIRK} My vision is obstructed and\nremains deep-seated in chaos.
+           내 비젼은 가로막힌 채 지독한 혼란에 묻혀있어.
+{DORNKIRK} Why doesn't it\nappear to me ?
+           왜 내게 보이지 않는 거지?
+{DORNKIRK} The Dragon's shadow covers\nthe vision of the future.
+           내 미래가 그 용의 그림자에 덮여 있다.
+
+{HITOMI} Van, where are you going ?
+ 히토미    반, 어디로 가는 거지?
+{VAN} The Duchy of Freid\nis nearby.
+ 반        근처의 프레이드공국에.
+{HITOMI} Van...
+ 히토미    반...
+{HITOMI} Wait, Van.
+           기다려, 반.
+{VAN} What's wrong ?
+ 반        왜 그래?
+{HITOMI} I feel uneasy.
+ 히토미    불안한 느낌이야.
+{HITOMI} I'm not sure, but...
+           확실친 않지만..
+{MERLE} What is it ?\nIs there something around here ?
+ 메르르    뭐야? 뭔가 이 근처에 있다는 거야?
+
+{DILANDAU} That's it.
+ 딜란두    저거다.
+
+{MERLE} What is it ?!
+ 메르르    뭐야?!
+{HITOMI} Van, be careful.
+ 히토미    반, 조심해.
+{VAN} The invisible ones\nfrom Zaibach, huh ?
+ 반        자이바하의 안 보이는 녀석들인가? 후!
+{HITOMI} They're here.\nI'm sure they are.
+ 히토미    그들이 여기 있어. 확실해.
+{HITOMI} Where...?\nWhere are they ?
+           (생각) 어디... 어디 있지?
+{HITOMI} Van, to the front !
+           반, 정면이야!
+{VAN} Here they come.
+ 반        왔구나.
+{VAN} Hitomi, Merle,\nhang on tight !
+           히토미, 메르르, 꽉 잡아!
+{HITOMI} Van, to the right !
+ 히토미    반, 오른쪽에!
+{HITOMI} Behind us !
+           우리 뒤야!
+{DILANDAU} What're you doing ?\nYou keep missing.
+ 딜란두    뭐 하는 거야? 계속 놓치고 있잖아.
+{SHESTA} I aimed at it, but...
+ 세스타    겨냥을 했었습니다만...
+{MIGEL} It seems that\nit can see us.
+ 미겔      우리를 볼 수 있는 것 같습니다.
+{DILANDAU} Stop talking nonsense !~~Just hit it as much you need to, but leave him alive.
+ 딜란두    헛소리 하지마!~~ 녀석을 제대로만 맞춰, 죽이지는 말고 .
+{VAN} Where are they\nattacking from ?
+ 반        어디서 공격할 거지?
+{HITOMI} What the...?
+ 히토미    어디..?
+{HITOMI} Van, to the front !
+           반, 정면이야!
+{DILANDAU} What the...?
+ 딜란두    이런...?
+{VAN} I'm gonna run for it !
+ 반        달린다!
+{DILANDAU} Don't let it escape !
+ 딜란두    놓치지 마라!
+{VAN} A river... 
+ 반        강...
+{VAN} Alright.
+           좋았어.
+{VAN} Hitomi, Merle, get off !
+           히토미, 메르르, 내려!
+{HITOMI} What're you going to do ?
+ 히토미    뭘 하려는 거야.
+{VAN} Just get off, quickly !
+ 반        빨리 내려, 어서!
+{MERLE} O...okay.
+ 메르르    아..알겠어요.
+{HITOMI} Van !
+ 히토미    반!
+{MERLE} Master Van !
+ 메르르    반 님!
+{HITOMI} I wonder what\nhe's gonna do.
+ 히토미    뭘 하려는 거지?
+{HITOMI} Merle, this way !
+           메르르, 이쪽으로!
+{VAN} You fell for my plan.\nYou can't hide yourself in water.
+ 반        내 함정에 걸렸어. 물에선 모습을 감출 수 없어.
+{VAN} If I can see you...
+           네녀석들을 볼 수 있다면...
+
+{DILANDAU} How clever of you...
+ 딜란두    영리하군...
+{DILANDAU} Do it, now !
+           즉시, 공격해라, 
+{DILANDAU} Got it.
+           잡아라.
+{DILANDAU} It doesn't matter if\nwe're visible or not.
+           보이든 안보이든 그건 상관없는 거야.
+{MERLE} Master Van...
+           반 님...
+{DILANDAU} Should I crush you now ?
+ 딜란두    지금 당장 부셔줄까?
+
+{MAN} The Dragon Slayers have\ncaptured the target.
+ 남자      용격대가 사냥감을 잡았습니다.
+{FOLKEN} Good. Descend and\nbring the Dragon in.
+ 폴켄      좋다. 내려가서 용을 데려 오도록.
+
+{MERLE} What should we do ?\nMaster Van'll be captured.
+ 메르르    어떡해? 반 님이 잡혔어.
+{HITOMI} Someone...\nSomeone, please help Van.
+ 히토미    (생각) 누가... 누가 반을 도와줘요.
+{HITOMI} Help him.
+           (생각) 그를 도와줘요.
+{FOLKEN} Van, this is your destiny.
+ 폴켄      (생각) 반, 이것이 네 운명이다.
+{MAN} A floating ship is\napproaching from Norte.
+ 남자      (소리) 비행선이 북쪽에서 다가오고 있습니다. /(아니 왠 norte. 이건 영어버전인데....-_-)/
+{FOLKEN} What ?
+ 폴켄      뭐라고?
+
+{HITOMI} Allen !
+ 히토미    알렌씨!
+{DILANDAU} Allen ?!
+ 딜란두    알렌?!
+{VAN} Allen !
+ 반        알렌!
+{ALLEN} I'm glad to\nsee you again, Van.
+ 알렌      다시 보게 되서 반갑다, 반.
+{DILANDAU} Not you again, Allen !
+ 딜란두    또 너로구나, 알렌! 
+{ALLEN} Hitomi.
+ 알렌      히토미.
+{DARRET} Damn...
+ 다렛      제길....
+{DILANDAU} Migel !
+ 딜란두    미겔!
+{VAN} Hitomi !
+ 반        히토미!
+{ALLEN} No !
+ 알렌      안돼!
+{HITOMI} Allen...!
+ 히토미    알렌씨..!
+{ALLEN} How careless of me...
+ 알렌      이런, 실수...
+{HITOMI} Allen.\nAnswer me, Allen !
+ 히토미    알렌씨. 대답해요, 알렌씨!
+{HITOMI} Allen !
+           알렌씨!
+{GADETH} That looks bad !\nHe took a direct hit !
+ 가데스    안 좋은데! 직격탄이야!
+{KIO} Ships !
+ 키오      배다!
+
+{MAN} Trading ships from the\nDuchy of Freid are approaching.
+ 남자      프레이드 공국쪽에서 무역선이 다가오고 있습니다.
+{FOLKEN} That's unwelcome news.
+ 폴켄      안 좋은 뉴스로군.
+{FOLKEN} That's enough.\nWithdraw, Dilandau.
+           됐다. 철수해라, 딜란두
+{FOLKEN} Freid ships are approaching. They might figure out our plan if we're seen now.
+           (소리) 프레이드의 배가 다가온다. 우리가 발각되면 계획이 들통난다.
+{DILANDAU} Damn, I had a\ngood opportunity...
+ 딜란두    제길, 좋은 기회였는데..
+{VAN} Brother...
+ 반        형...
+
+{HITOMI} Allen !\nAnswer me, Allen !
+ 히토미    알렌씨! 대답해요, 알렌씨!
+{GADETH} It's no good,\nthe bleeding won't stop !
+ 가데스    좋지 않아, 출혈이 멈추지 않아!
+{CAPTAIN} What happened ?
+ 선장      무슨 일이죠?
+{GADETH} We'll discuss\nthe details later !
+ 가데스    얘기는 나중에!
+{GADETH} A doctor ! Is there\na doctor aboard ?!
+           의사를! 여기에 의사가 없소?!
+{CAPTAIN} Unfortunately, this is a fleet that goes between Ranpant of Asturia and Godasim of Freid.
+ 선장      안타깝게도, 이 배는 아스토리아의 랜팬트와 프레이드의 고다심을 오가는 선단이오.
+{CAPTAIN} A doctor who can treat\nsuch serious injuries isn't...
+           의사가 필요할 정도로 심각한 사태는...
+{HITOMI} It was my fault. Because he tried to save me, Allen...
+ 히토미    내 책임이야. 날 구하려다가, 알렌씨가...
+{MILLERNA} Gadeth...?\nThat's Gadeth's voice, isn't it ?
+ 밀레나    가데스...? 가데스의 목소리죠?
+{GADETH} Princess Millerna...
+ 가데스    밀레나 공주님.
+{MILLERNA} Everyone else\nis here, too.
+ 밀레나    모두 여기 있었군요.
+{MILLERNA} Did someone get hurt ?
+           누가 다쳤나요?
+{MILLERNA} Allen, what happened ?\nAllen !
+           알렌, 무슨 일이예요? 알렌!
+{MILLERNA} Allen...
+           알렌....
+{MILLERNA} This...this bleeding...
+           이건.. 이 출혈은...
+{MILLERNA} Gadeth, what're you doing ?~~Treat him immediately !~~He won't make it at this rate !
+           가데스, 뭐하고 있어요? 즉시 치료해요! 이 상태론 무사하지 못해요!
+{GADETH} But we need a doctor...
+ 가데스    하지만 의사가...
+{MILLERNA} Captain...
+ 밀레나    선장님..
+{MILLERNA} Oh, no...
+           아, 안돼...
+{MOLEMAN} Princess, you know\nhow, don't you ?
+ 두더지    공주님, 어떻게 해야 하는 지 아시죠?
+{MOLEMAN} You studied\nthe medical arts.
+           당신은 의술을 배우셨잖아요.
+{MILLERNA} But, I've only read\nthe books, so...
+ 밀레나    하지만, 난 단지 책을 읽었을 뿐...
+{MOLEMAN} It'll be alright. You want Allen to live, don't you ?
+ 두더지    충분해요. 당신은 알렌씨를 살리고 싶으시죠?
+{MOLEMAN} Only you can do it.
+           당신만이 할 수 있어요.
+{MILLERNA} I'll do it.
+ 밀레나    해 보겠어요.
+{MILLERNA} Mr. Mole, please\nbring me my blue bag.
+           두더지씨. 제 파란 가방을 갖다줘요.
+{MOLEMAN} This one, right ?
+ 두더지    이거죠?
+
+{OLT} Come out, slowly !
+ 올트      천천히 나와!
+{RIDEN} If the Boss dies,\nI'll kill you immediately.
+ 라이덴    대장이 죽으면, 즉시 네녀석도 죽여버릴테다.
+{MILLERNA} I believe that the anesthesia's working,\nbut hold him so that he won't struggle.
+ 밀레나    마취약이 작용하리라 생각해요, 하지만 그가 몸부림치지 않도록 그를 꽉 잡아 주세요.
+{GADETH} Boss...
+ 가데스    대장...
+{HITOMI} God, please...\nPlease, please...Allen...
+ 히토미    (생각) 신이시여, 제발... 제발, 제발...알렌씨를...
+{HITOMI} Please, save Allen.\nI beg you.
+           제발, 알렌씨를 구해주세요. 
+{HITOMI} Van...
+           반...
+
+#  Ending English
+{ENDSNG(EN)} The blue searchlights overlap behind the moon.
+{ENDSNG(EN)} An angel came down suddenly.  I wonder who you are.
+{ENDSNG(EN)} The gate of destiny's about to open.\n(So just fall in love.)
+{ENDSNG(EN)} I won't let this exciting moment go by.\n(Don't stop baby.)
+{ENDSNG(EN)} Your innocent smile will break down your burning mystic eyes.
+{ENDSNG(EN)} I'll give my love, which is kept in my eyes, to you.
+{ENDSNG(EN)} A never-ending journey will begin.
+{ENDSNG(EN)} Nothing can stop my heartbeat.
+{ENDSNG(EN)} I want to take you away with me.
+
+{TEXT} Preview
+           예고
+{ALLEN} Have you ever trusted someone from the bottom of your heart ?
+ 알렌      마음 속 깊이 누군가를 믿어 본 적이 있습니까?
+{DILANDAU} A Deceptant ...?
+ 딜란두    스파이...?
+{Boris} Traitor...?\nWho is it ?
+ 보리스    반역자...? 누가?
+               
+{TITLE} The Prince with Blue Eyes
+           푸른 눈동자의 왕자
+
+# Episode 10
+
+{title} \C5ESCAFLOWNE
+{title} Tenkuu no
+# Opening Japanese
+{OPSONG(JP)} Nee, ai shitara daremo ga konna kodoku ni naruno
+{OPSONG(JP)} Nee, kurayami yorimo fukai kurushimi dakishimeteruno
+{OPSONG(JP)} Nanimo kamo ga futari kagayaku tame kitto...
+{OPSONG(JP)} Kimi wo kimi wo ai shiteru
+{OPSONG(JP)} Kokoro de mitsumete iru
+{OPSONG(JP)} Kimi wo kimi wo shinjiteru samui yoru mo
+{OPSONG(JP)} Namida de ima yobikakeru
+{OPSONG(JP)} Yakusoku nado iranai
+{OPSONG(JP)} Kimi ga kureta taisetsu na tsuyosa dakara
+ 
+{RIDEN} She's taking so long.
+ 라이덴    오래 걸리는 데.
+{TEO} Yeah.
+ 테오      응.
+{KATTZ} Don't worry. The Boss\nis tough. He won't die.
+ 카즈      걱정마. 대장은 강해. 죽지 않아.
+{PAILE} You're right.
+ 파이레    맞아.
+{HITOMI} Allen.
+ 히토미    알렌 씨.
+{MILLERNA} The operation was\ncompleted safely.
+ 밀레나    수술은 성공적이었어요.
+{VAN} Will Allen be alright ?
+ 반        알렌은 괜찮을까?
+{MILLERNA} Yes. He's still sleeping\nbecause of the anesthesia.
+ 밀레나    예. 마취 때문에 아직 자고 있는 것뿐이에요.
+{HITOMI} Millerna !
+ 히토미    밀레나!
+
+{TITLE} The Prince with Blue Eyes 
+           푸른 눈동자의 왕자
+
+{VAN} It was fortunate that\nPrincess Millerna was aboard.
+ 반        배에 밀레나 공주님이 있었던 게 다행이야.
+{GADETH} We'll be able to enter\nFreid easily with her aboard.
+ 가데스    그녀의 배로 프레이드로 쉽게 들어 갈 수 있겠어.
+{VAN} Why ?
+ 반        왜?
+{GADETH} Freid is the country Millerna's\nsister, Marlene, married into.
+ 가데스    프레이드는 밀레나 공주의 언니 말레네공주가 시집간 나라거든.
+{VAN} Princess Marlene...?
+ 반        말레네 공주..?
+{GADETH} Yes. She's the eldest princess of Asturia.\nShe died of an illness three years ago...
+ 가데스    응. 오스트리아의 첫 째 공주님이시지. 삼년 전에 병으로....
+{GADETH} ...leaving the prince alone.
+           ... 왕자만 남겨둔채 돌아가셨지만.
+{VAN} The Prince of the\nDuchy of Freid...?
+ 반        프레이드공국의 왕자...?
+
+{Boris} The third Princess of Asturia,\nAston Sarah Millerna, has arrived.
+ 보리스    아스토리아 삼공주 아스톤 사라 밀레나 공주께서 도착하셨습니다.
+{SID} Thank you for coming\nsuch a long way.
+ 시드      먼길을 오시느라 수고하셨습니다.
+{SID} Duke Freid is in another part of the country, so I welcome you instead.
+            프레이드 공왕께선 다른 지역을 순시 중이셔서, 제가 대신 맞이하게 됐습니다.
+               
+{MILLERNA} Sid...you're Prince Sid,\naren't you ?
+ 밀레나    시드... 시드 왕자죠?
+{SID} Yes. It's been a while,\nAunt Millerna.
+ 시드      예. 오랜만이에요, 밀레나 이모님.
+{MILLERNA} You look so distinguished.\nI'm surprised.
+ 밀레나    꽤 품위 있어 졌군요. 놀랬습니다.
+{MILLERNA} We last met each other\nwhen you were very little.
+           꽤 어렸을 때 보곤 못 봤었는데.
+{SID} Auntie...
+ 시드      이모님... 
+{SID} ...I heard that Allen Schezar has come also.\nIs that person over there him ?
+           알렌 세자르경도 같이 왔다고 들었는데... 저분이십니까?
+{SID} I heard about him\nwhen Mother was alive.
+           어머니께서 생전에 말씀 많이 해 주셨어요.
+{SID} The strongest swordsman in Gaea,\nAllen Schezar, lives in Asturia.
+           가이아에서 가장 강한 검사, 알렌 세자르가 아스토리아에 살고있다고.
+{SID} Invincible knight, excellent Guymelef pilot... I hoped that I could see him someday.
+           무적의 기사이고, 우수한 가이메르프 파일럿이라고... 언젠가 그를 보고 싶었어요.
+{Boris} Your Highness...
+ 보리스    폐하...
+{Boris} ...he is the King of Fanelia,\nLord Van Fanel.
+           ... 이분은 파넬리아의 왕, 반 파넬 님이십니다.
+{SID} Is that so ?  King of Fanelia,\nI apologize for my discourtesy.
+ 시드      그래요? 파넬리아의 왕, 제 무례를 용서해 주십시오.
+{SID} Freid welcomes you.  Feel as at home as if you're staying in your own country.
+           프레이드에 오신 걸 환영합니다. 고국에 오신 것처럼 여겨 주십시오.
+{VAN} I appreciate your hospitality.
+ 반        환대에 감사드리오.
+{SID} Auntie, where is Allen ?
+ 시드      이모 님, 알렌 경은?
+
+{DOCTOR} He'll be alright. His pulse is stable.\nIt's about time for him to regain consciousness.
+ 의사      그는 괜찮습니다. 맥박도 안정됐고. 이제 곧 의식이 돌아 올 시간입니다.
+{Millerna} Yes, Doctor.
+ 밀레나    예, 의사 선생님.
+{SID} Allen Schezar was\n injured in a fight...
+ 시드      알렌 세자르 경이 싸움에서 부상을...
+{SID} That's right. There's no such\nthing as an invincible knight.
+           그래. 무적의 기사 따윈 존재할 리 없는 거야.
+{SID} The story my mother told me was only a fantasy for a child.
+           그 이야긴 어머니가 아이에게 하는 판타지에 불과한 거야.
+
+{HITOMI} Allen !
+ 히토미    알렌 씨!
+{EVERYONE} B...Boss...!
+ 모두      대..대장..!
+{ALLEN} Hitomi...
+ 알렌      히토미...
+{ALLEN} Princess Millerna...
+           밀레나 공주님...
+{MILLERNA} Allen, this is Prince Sid\nof the Duchy of Freid...
+ 밀레나    알렌, 이쪽은 프레이드공국의 시드 왕자예요.
+{sid} Allen.
+ 시드      알렌.
+{ALLEN} That ring...\nPrince Sid...
+ 알렌      (생각) 저 반지는.... 시드 왕자...
+{SID} How do you feel, Sir Allen ?
+ 시드      어떤가요, 알렌경?
+{ALLEN} Prince, your country is the target of Zaibach's invasion.
+ 알렌      왕자님, 귀국의 나라는 지금 자이바하의 공격 목표가 되어 있습니다.
+{ALLEN} Your father...ask the King\nto call a council meeting.
+           아버지께.... 폐하께 청하셔서 평의회를 소집해야 합니다.
+{ALLEN} Zaibach's planning\nan invasion.
+           자이바하가 침략하려 합니다.
+{MILLERNA} Allen !\n
+ 밀레나    알렌!
+{HITOMI} Allen.
+ 히토미    알렌씨.
+{VAN} Prince Sid...
+ 반        시드 왕자...
+{VAN} .Allen left his home country, and was branded a disgraceful man, to tell you what's happening.
+           ..알렌은 고국을 제치고, 불명예스런 소리를 들으면서까지 당신에게 얘기하는 것입니다.
+{VAN} Your mother's story was true.\nHe is a true knight.
+           당신의 어머님 말씀은 사실이었습니다. 그는 진정한 기사인 것입니다.
+{SID} Allen...
+ 시드      알렌 경...
+
+{Boris} I still can't believe it.\nWhy would Zaibach...?
+ 보리스    전 아직도 믿을 수 없습니다.. 왜 자이바하가...?
+{Van} If you interrogate the captured Zaibach soldier, it will all be made clear.
+ 반        사로잡은 자이바하의 병사를 심문해 보면, 확실해 질 것입니다.
+{Boris} I've already\n arranged for that.
+ 보리스    이미 준비를 하고 있습니다.
+{VAN} Arrange...?
+ 반        준비..?
+{Boris} Since the King is absent, we should be careful about the prisoner's interrogation.
+ 보리스    폐하께서 출타 중 이실 땐, 우리로선 포로의 신문은 신중히 해야 합니다.
+
+{FOLKEN} The Dragon's\nrun to Freid.
+ 폴켄      용이 프레이드로 달아났다.
+{DILANDAU} Is that so ?
+ 딜란두    그래?
+{FOLKEN} Along with a prisoner...?
+ 폴켄      포로를 데리고...
+{DILANDAU} Don't worry.
+ 딜란두    걱정하지 마.
+{DILANDAU} Migel's one of my men.\nHe won't talk, even if he has to die.
+           미겔은 내 부하이다. 그는 죽어도 말하지 않을 테니.
+{FOLKEN} I believe you.\nHowever, Freid has Plactu.
+ 폴켄      알고 있다. 하지만, 프레이드엔 플락츄가 있다.
+{DILANDAU} Who's that ?
+ 딜란두    그가 누구지?
+{FOLKEN} Plactu...He's a monk who specializes in hypnotic suggestion.
+ 폴켄      플락츄... 심층최면전문의 수도사다.
+{FOLKEN} He will be able to pull the information from deep within his psyche.
+           그는 상대의 정신 깊은 곳에서 정보를 빼 낼 수 있지.
+{FOLKEN} I've confirmed that he's already headed for Godasim.
+           내가 확인 한 바론 그가 벌서 고다심으로 향했다는 군.
+{DILANDAU}That's bad. We have to kill him before he gets to the castle,or our plan will be revealed.
+ 딜란두    나쁜 소식이로군. 그가 도착하기 전에 죽이지 않으면, 우리 계획이 탄로 나겠어.
+{FOLKEN} Zongi.
+ 폴켄      존기.
+{ZONGI} Sir.
+ 존기      예.
+{DILANDAU} W...who was that ?
+ 딜란두    누...누구지?
+{DILANDAU} What's this smell ?
+           무슨 냄새..?
+{DILANDAU} A Deceptant ...?
+           위인...?  /(주현: 직역하면 '가짜 인간'이 됩니다. 나중에 히토미가 설명을 하니 그 때 자세히..)/
+{FOLKEN} I have an assignment\nfor you, Zongi.
+ 폴켄      너에게 맡기겠다, 존기.
+{ZONGI} My life is yours,\nMaster Folken.
+ 존기      제 삶은 당신 것입니다. 폴켄님.
+
+{MILLERNA} Hitomi.
+ 밀레나    히토미.
+{HITOMI} Millerna.
+ 히토미    밀레나씨.
+{MILLERNA} Here, you forgot this.
+ 밀레나    여기, 당신이 잃어 버린 거요.
+{HITOMI} My bag.
+ 히토미    내 가방.
+{HITOMI} Thank you, Millerna.
+           고마워요, 밀레나.
+{HITOMI} How did you\nknow I'd be here ?
+           어떻게 제가 여기 있는 걸 알았어요?
+{MILLERNA} Well, I felt like\nI'd see you again.
+ 밀레나    그저, 당신을 다시 볼 거란 느낌이 들었어요.
+{MILLERNA} We'll be together for a while.\nLet's be on good terms, Hitomi.
+           우리 얼마간 같이 있겠군요. 좋은 관계로 있자구요, 히토미.
+{HITOMI} Woman's intuition, huh ?
+ 히토미    여자의 직감인가? 후.
+
+{DILANDAU} That ship...?
+ 딜란두    저 배..?
+{DILANDAU} I could destroy\nit with one blow.
+           나라면 한 방에 날려 버리겠어.
+{ZONGI} Master Dilandau,\nplease proceed towards it.
+ 존기      딜란두님, 접근 부탁 드립니다.
+{DILANDAU} I know.
+ 딜란두    알아.
+{DILANDAU} Using a Deceptant ...?
+ 딜란두    위인 따위를 쓰다니..
+{DILANDAU} You have bad taste, Folken.
+           나쁜 취미를 가졌군, 폴켄.
+
+{ALLEN} You're unreasonable,\nfollowing me...
+ 알렌      절 따라 오실 필요는 없었습니다...
+{MILLERNA} I know what you're\nreally thinking.
+ 밀레나    저도 당신이 무얼 생각하시는 진 알아요.
+{MILLERNA} You didn't leave\njust for Freid, right ?
+           단지 프레이드만을 위해서 떠난 것은 아니죠?
+{MILLERNA} You're worried that Zaibach\nwill attack Asturia someday.
+           자이바하가 언젠간 아스토리아를 공격할 거라 생각하시고 계시죠.
+{MILLERNA} Someday, Father will understand...\n
+           언젠가, 아버지도 이해하실 거예요.
+{MILLERNA} ...how much you\ncare about Asturia.
+           ... 얼마나 당신이 아스토리아를 걱정하는 지.
+
+{HITOMI} What could be the matter\nthis early in the morning, Van ?
+ 히토미    무슨 일이야, 이렇게 아침 일찍. 반?
+{HITOMI} Merle, why did you come ?
+           메르르, 넌 또 왜 왔니?
+{MERLE} I'm worried about\nleaving you two alone.
+ 메르르    난 둘이서랑 있는 것이 걱정 된 것뿐이라구.
+{HITOMI} Why ?
+ 히토미    뭐?
+{VAN} You've pointed out the invisible Guymelefs many times.
+ 반        넌 안 보이는 가이메르프의 위치를 여러번 맞췄어.
+{VAN} In order to fight them on equal footing, your ability...
+           네 능력이라면, 그들과 맞설 수 있어.
+{VAN} ...your ability is necessary.
+           네 능력이 필요해.
+{VAN} Tell me how to find\nthe invisible enemy.
+           가르쳐 줘, 어떻게 안 보이는 적을 볼 수 있지?
+{HITOMI} Van.
+ 히토미    반.
+
+{PLACTU} A spy...?
+ 플락츄    스파이..?
+{PLACTU} You entered\nwithout any sign...
+           아무 흔적도 없이 들어오다니...
+{PLACTU} However...
+           하지만...
+{ZONGI} Good.\nGood body.
+ 존기      좋아. 좋은 몸이로군.
+
+{HITOMI} Strongly imagine what you want to find in your mind. That's all.
+ 히토미    네 마음속으로 찾고 싶은 것을 강하게 그려봐. 그게 다야.
+{HITOMI} When you feel the object, the pendant starts to swing in that direction.
+           목표를 느끼면, 펜던트가 그 방향으로 움직이는 거야.
+{HITOMI} When you get used to it, you'll only need to imagine the pendant in your mind.
+           이게 가능하면, 그냥 마음속에 그 펜던트를 그리면 되는 거야.
+{VAN} What should I find ?
+ 반        뭘 찾아보지?
+{HITOMI} Let's see...
+ 히토미    보자...
+{MERLE} Master Van, me...\nPlease find me !
+ 메르르    반 님. 저요... 절 찾아보세요!
+{VAN} Well, alright.
+ 반        그래, 알았어.
+
+{SID} What are they doing ?
+ 시드      저들이 뭘 하고 있는 거지?
+{Boris} I don't know.
+ 보리스    저도 모르겠습니다.
+
+{MERLE} Master Van will\nsurely find me.
+ 메르르    반 님은 쉽게 찾을 수 있을 거야.
+
+{HITOMI} Imagine her in your mind.
+ 히토미    그녀를 마음속으로 상상해.
+{HITOMI} Calm your heart,\nand concentrate.
+           마음을 가라앉히고, 그리곤 집중하는 거야.
+{HITOMI} As clearly as possible.
+           선명하게, 확실하게.
+{HITOMI} You can do it slowly\nuntil her figure appears.
+           천천히, 그녀의 모습이 나타날 때 까지.
+{HITOMI} Yes, she has a tail,\npointy ears, curly hair...
+           그래, 그녀의 꼬리, 쫑긋한 귀, 머리는 뱅글뱅글 말리고 ...
+{HITOMI} ...she's bug-eyed, annoying ,\nand she has a sharp tongue...
+           ....그녀의 둥그런 눈, 성가시고 날카로운 혀....
+{MERLE} I'll ``sharpen'' my\n claws on her legs.
+ 메르르    그녀의 다리에 내 발톱의 날카로움을 보여 주겠어.
+{VAN} No, I can't.
+ 반        안돼, 안되겠어.
+{HITOMI} Don't give up.
+ 히토미    포기하지 마.
+{HITOMI} You won't be able to do it easily at first,\nbut anyone can, once they get used to it.
+           처음엔 쉽게 되진 안아. 하지만 하다보면 언젠간 요령을 알게 되.
+{HITOMI} Watch.
+           봐.
+{HITOMI} There.
+           저기.
+{MERLE} How could she see me ?
+ 메르르    어떻게 찾았지?
+{VAN} Merle ?!
+ 반        메르르?!
+{MERLE} Here, Master Van !
+ 메르르    여기예요, 반 님!
+{HITOMI} Prince Sid ?
+ 히토미    시드 왕자?
+{SID} Wonderful. That was wonderful !\nHow did you do that, Hitomi ?
+ 시드      놀랍군요. 굉장해요! 어떻게 하신 거죠, 히토미양?
+{SID} How did you know ?
+           어떻게 알 수 있는 거죠?
+{HITOMI} Well, I...
+ 히토미    그게, 저...
+{MERLE} Prince Sid,\ndon't fuss over her.
+ 메르르    시드 왕자님, 그녀를 치켜세우지 마세요.
+{MERLE} She's only a fortuneteller.
+           그녀는 단순한 점쟁이일 뿐이라구요.
+{MERLE} She reads people's pasts and futures,\nand she's so sinister.
+           사람들의 과거와 미래를 읽죠, 기분 나쁜 녀석이라구요.
+{HITOMI} Sorry about that.
+ 히토미    그래서 미안하군.
+{SID} Is that true ?
+ 시드      사실인가요?
+{SID} Can you really\nread the future ?
+           정말 미래를 볼 수 있나요?
+{HITOMI} Well, how can I say it...
+ 히토미    그게, 어떻게 말해야 할 지...
+{HITOMI} I can read it when I do\nfortunetelling for some reason.
+           어떤 이유론지 점칠 때 미래를 보게 됐어요.
+{SID} Incredible. Even Plactu\ncan't read the future.
+ 시드      놀랍군요. 플락츄도 미래는 볼 수 없는데.
+{SID} Hitomi, can you read my future ?
+           히토미양, 내 미래를 봐 주겠어요?
+{HITOMI} But...
+ 히토미    하지만...
+{SID} Please, Hitomi.
+ 시드      제발요, 히토미양.
+{HITOMI} Sure, Prince.
+ 히토미    알겠습니다. 왕자님.
+{MAN} Sir Boris.~~I was informed that Plactu has just arrived at the port.
+ 남자      보리스님. 플락츄께서 항구에 도착하셨다는 전갈입니다.
+{Boris} Oh, is that so ?\nYour Highness, shall we go ?
+ 보리스    아, 그래? 폐하, 가실까요?
+
+{SID} I appreciate your help.\nI'm counting on you.
+ 시드      부탁하오. 당신에게 맡기겠소.
+{PLACTU} Leave the matter to me.
+ 플락츄    맡겨 주십시오.
+
+{PLACTU} Sir Boris, I want you\nto leave us alone.
+           보리스경, 우리끼리만 있게 해 주시면 고맙겠습니다.
+{Boris} Well, but...
+ 보리스    하지만, 그건...
+
+{PLACTU} You're Migel, aren't you ?
+ 플락츄    네가 미겔이지?
+{MIGEL} How did you\nknow my name ?
+ 미겔      어떻게 내 이름을?
+{MIGEL} You're on an errand\nfor Folken, aren't you ?
+ 미겔      당신은 폴켄님의 사자군, 그렇지?
+
+{MILLERNA} Allen, here's your meal.\nEat a lot so you recover soon.
+ 밀레나    알렌, 여기 당신 식사예요. 빨리 낫고 싶으시면 많이 드셔야 해요.
+{ALLEN} Prince Millerna...
+ 알렌      밀레나 공주님...
+{MILLERNA} Yes ?
+ 밀레나    예?
+{ALLEN} Would you call Hitomi ?
+ 알렌      히토미를 불러 주시겠어요?
+
+{PLACTU} Mysterious girl ?
+ 플락츄    이상한 소녀?
+{MIGEL} Yes. She clearly pointed at my Guymelef which was supposedly invisible.
+ 미겔      그래. 그녀가 내 가이메르프의 위치를 마치 보이는 것처럼 알아 맞췄어.
+{PLACTU} I see. I'll deal\nwith that matter.
+ 플락츄    알겠다. 내가 처리하지.
+{MIGEL} Free me first !
+ 미겔      먼저 날 풀어줘!
+{PLACTU} No. You have\nanother job to do.
+플락츄     안돼. 너에겐 다른 할 일이 있다.
+
+{PLACTU} Sir Boris.
+           보리스님.
+{Boris} D...did I...
+ 보리스    내...내가..
+{PLACTU} He's ready.
+ 플락츄    준비 됐습니다.
+{SID} Sir Plactu...
+ 시드      플락츄님...
+{Boris} Prince Sid !
+ 보리스    시드 왕자님!
+{SID} Let me observe.
+ 시드      내가 참관하게 해 주시오.
+{PLACTU} He's already under my hypnosis.\nPlease, ask your questions.
+ 플라츄    그는 벌써 제 최면 아래 있습니다. 뭐든지 물어 보십시오.
+{Boris} Then, soldier of Zaibach,\nwhat is your name ?
+ 보리스    그럼, 자이바하의 병사, 네 이름이 뭐냐.
+{MIGEL} Migel...
+ 미겔      미겔...
+{MIGEL} Migel Labariel.
+           미겔 라바리엘.
+{Boris} What were you doing\non the border ?
+ 보리스    선상에서 뭘하고 있었느냐.
+{MIGEL} I was hunting a traitor,\nat Asturia's request.
+ 미겔      아스토리아의 요구로 반역자를 쫓고 있었습니다.
+{Boris} Traitor...who is it ?
+ 보리스    반역자... 그가 누군가.
+{MIGEL} He conspired with the King of Fanelia to betray the country...
+ 미겔      그는 파넬리아의 왕과 공모하여 나라를 팔려고 한...
+{MIGEL} ...Allen Schezar.
+           ... 알렌 세자르.
+{SID} A...Allen did...?
+ 시드      아..알렌이라고?
+{Boris} It...it can't be...\nDon't lie to us !
+ 보리스    그...그럴 리가... 거짓말하지 마라!
+{MIGEL} I'm not lying.
+ 미겔      거짓말이 아닙니다.
+{Boris} Then, why did Allen\nhand you over to us ?
+ 보리스    그럼, 왜 알렌이 널 우리에게 넘겼지?
+{MIGEL} I was told to lie,\nand then he'd rescue me.
+ 미겔      전 거짓말을 하려고, 그러면 그가 날 풀어준다고.
+{Boris} Lie...?
+ 보리스    거짓말...?
+{MIGEL} To deceive Freid into engaging in a war against Asturia.
+ 미겔      프레이드를 속여서 아스토리아와 전쟁을 하게 하려고.
+{MIGEL} And taking advantage of the disorder, he'd take over Asturia.
+           그리고 그 혼란을 틈타 그가 아스토리아의 왕으로 서기 위해서.
+{Boris} M...My lord...
+ 보리스    이...이런...
+{SID} He's lying.
+ 시드      거짓말이야.
+{SID} That's a lie.
+           그건 거짓말이야.
+{SID} A lie...
+           거짓말...
+{SID} It's a lie !
+           거짓말이야!
+
+{HITOMI} Read the cards...?
+ 히토미    카드를 봐 달라구요?
+{ALLEN} I want you to read about\nthe captured Zaibach soldier.
+ 알렌      사로잡힌 자이바하의 병사에 대해 봐줘.
+{MILLERNA} Allen, such superstition...
+ 밀레나    알렌, 그런 미신은....
+{ALLEN} Please.
+ 알렌      제발.
+{HITOMI} Allen...
+ 히토미    알렌 씨...
+
+{Boris} Make emergency arrangements !\nDispatch the privy guard !
+ 보리스    긴급 수배령을! 호위병을 배치 시켜라!
+{Boris} I'll leave him\nto you, okay ?
+           너희들에게 맡기겠다. 알겠나?
+
+{HITOMI} Danger...confrontation...
+ 히토미    위험...대립....
+{HITOMI} It's showing a\nrise of tension.
+           이건 긴박한 사태가 벌어진다는 의미예요.
+{HITOMI} And a dragon fighter...\nit must be Van.
+           그리고 용의 전사는... 이건 반이예요.
+{MILLERNA} You can't be...
+ 밀레나     그런...
+{ALLEN} Continue.
+ 알렌      계속 해.
+{HITOMI} The universe...and death...
+ 히토미    우주..그리고 죽음...
+{HITOMI} Something powerful will bring\neverything to an end for rebirth.
+           뭔가 강한 것이 부활을 위해 모든 것을 멸망시킨다..
+{ALLEN} Everything to an end...\nis that Zaibach's purpose ?
+ 알렌      모든 것을 멸망시킨다.... 그것이 자이바하의 목적?
+{HITOMI} And the prisoner...
+ 히토미    그리고 그 포로는...
+{HITOMI} The spare card...?\nI usually keep this separate.
+           스페어 카드..? 난 늘 이걸 떼어놓는데.
+{ALLEN} A blank card...
+ 알렌      공백의 카드라...
+{ALLEN} Could it be...
+           설마 그건...
+
+{MIGEL} It's still functional.
+ 미겔      아직 움직일 수 있겠어.
+
+{Boris} Where are you going ?
+ 보리스    어딜 가는 건가?
+{ALLEN} Sir Boris...
+ 알렌      보리스경...
+{ALLEN} W...what's this all...?
+           이.. 이건...?
+{ALLEN} Prince Sid !
+           시드 왕자님!
+{SID} Allen, I never thought that\nyou'd be a traitor.
+ 시드      알렌 경. 당신이 반역자이리라곤 생각 못 했어요.
+{MILLERNA} What nonsense.
+ 밀레나    무슨 헛소리를.
+{HITOMI} Prince Sid.
+ 히토미    시드 왕자님.
+{ALLEN} Sid...
+ 알렌      시드...
+{MAN} Sir Boris,\nthe prisoner has escaped !
+ 남자      보리스님. 죄수가 도망쳤습니다!
+{Boris} What ?!
+ 보리스    뭐?!
+{HITOMI} No. It's just\nlike her prophecy...
+ 밀레나    이럴 수가. 정말 그녀의 예언대로....
+
+{MAN} That Guymelef...
+ 남자      저 가이메르프는...
+{MIGEL} Alright. I can go.\nThe manteau still works as well.
+ 미겔      좋았어. 갈 수 있겠어. 망토도 여전히 쓸 수 있겠어.
+{PLACTU} How pointless...\nHe should just escape.
+ 플락츄    멍청한.... 그냥 탈출 할 것이지.
+
+{MIGEL} What the...?!
+ 미겔      뭐지...?!
+{VAN} The Zaibach Guymelef...!
+ 반        자이바하의 가이메르프...!
+{MIGEL} The pressure's too low !
+ 미겔      압력이 너무 낮아!
+{MIGEL} Damn...
+           제길...
+{VAN} It's disappearing...
+ 반        사라진다....
+{VAN} No you don't !
+           안돼, 그럴 수 없다!
+{MAN} That Guymelef's disappeared.
+ 남자      가이메르프가 사라졌다.
+{MAN} Dispatch the Melef squad.
+ 남자      메르프 부대는 긴급 출동하라.
+{VAN} Where...?\nWhere are you ?
+ 반        어디...? 어디지?
+{MIGEL} As I thought. You can't see through the Stealth Manteau without that girl, can you ?
+ 미겔      생각 대로군. 그 소녀 없이는 스탤스 망토를 보지 못하는 군.
+{VAN} Where...where will\nhe attack from ?
+ 반        (생각) 어디냐... 어디서 공격하는 거냐...
+{VAN} I'll try.
+           해 보자.
+{MIGEL} What's he doing ?
+ 미겔      뭐 하는 거지?
+{MIGEL} I don't care. If I destroy it, Master Dilandau will forgive me for being captured.
+           상관없지. 저 녀석을 파괴하면 딜란두 님도 내가 사로잡힌걸 용서해 주실 테니.
+{VAN} Strongly imagine what\nI want to find...
+ 반        (생각) 찾으려는 것을 강하게 생각하라......
+{HITOMI} If you strongly imagine,\nyou'll be able to see it.
+ 히토미    (반의 생각) 강하게 생각하면, 볼 수 있을 거야. 
+{MIGEL} If I concentrate the liquid metal in one launcher, I can hit it.
+ 미겔      렌처의 액체 금속(/발톱/)에 집중시키면, 그 녀석을 맞출 수 있을 거야.
+{VAN} Where...where is\nthe Zaibach Guymelef...?
+ 반        어디냐... 자이바하의 가이메르프는 어디...?
+{VAN} Behind me !
+           뒷 쪽이다!
+{MIGEL} Die !
+ 미겔      죽어라!
+{MIGEL} H...how...?!
+           어.. 어떻게...?!
+{VAN} I won't let you escape.
+ 반        도망치게 두진 않는다.
+{VAN} Why are you doing this ?
+           무슨 짓을 하고 있는 거야?
+{VAN} W...what's this about ?
+           이.... 이것은.. 무슨 일이지?
+
+{MIGEL} I can't escape with this injury.\nWhat should I do ?
+ 미겔      이 상태론 도망 칠 수 없다. 어떻게 해야 하지?
+{ZONGI} Sorry, but my presence\nshould not be disclosed.
+ 존기      미안하군, 하지만 내 정체를 들켜선 안 되니까.
+{ZONGI} The ability to see\nan invisible object...
+           보이지 않는 물체를 보는 능력이라...
+
+{MILLERNA} Prince, this must be a mistake.\nIf you investigate, you'll see.
+ 밀레나    왕자, 이것은 분명 오해예요. 조사해 보면, 알 수 있을 거예요.
+{HITOMI} Prince Sid...
+ 히토미    시드 왕자님....
+{SID} I heard about you from Mother,\nand I admired you.
+ 시드      난 어머님께 당신에 대해 들었어, 그리고 당신을 존경했어요.
+{SID} I'm disappointed.
+           실망했습니다.
+{SID} Did Mother lie to me ?
+           어머니가 내게 거짓말을 하신 걸까요?
+{ALLEN} Prince Sid...
+ 알렌      시드 왕자님...
+{ALLEN} Have you ever trusted someone from the bottom of your heart ?
+           마음속 깊이 누군가를 믿어 본 적이 있습니까?
+{ALLEN} Trusting someone takes more\ncourage than going to war.
+           누군가를 믿는 것은 전쟁에 나가는 것 보다 더 큰 용기가 필요한 것입니다.
+{ALLEN} Prince Sid, do you understand\nthe meaning of courage ?
+           시드 왕자님, 진정한 용기의 뜻을 아시겠습니까?
+{HITOMI} I felt something at that time.
+ 히토미    난 그 때 뭔가를 느꼈다.
+{HITOMI} There must be a strong tie between Allen and Prince Sid.
+           알렌씨와 시드 왕자간에 강한 그 무엇이 있는 것을.
+
+CF1 {ENDSNG(JP)} Tsuki no mukou aoi SEARCHLIGHT kasanaru
+CF1 {ENDSNG(JP)} Totsuzen maiorita ANGEL soo, kimi wa dare
+CF1 {ENDSNG(JP)} Ima unmei no tobira ga hiraku\n(So just fall in love)
+CF1 {ENDSNG(JP)} Munasawagi suru kono shunkan wo nogasenai\n(Don't stop baby)
+CF1 {ENDSNG(JP)} Yakesou na kimi no MYSTIC EYES mujaki na egao de BREAKING DOWN
+CF1 {ENDSNG(JP)} Kidake ni hitomi no boku no ai
+CF1 {ENDSNG(JP)} Hatenai tabi wa hajimaru
+CF1 {ENDSNG(JP)} Mou tomaranai mune no kodou
+CF1 {ENDSNG(JP)} Kimi wo saratte yukitai
+
+
+{TEXT} Preview
+           예고
+{DILANDAU} It's you.
+ 딜란두    바로 너야.
+{DILANDAU} You're in my way.
+ 딜란두    네 녀석이(/년이?/) 방해인 거야!/( 다음편의 해석을 갖다 붙였습니다. )/
+{MAN} Your friend died.
+ 남자      네 친구는 죽었다.
+
+{TITLE} Prophecy of Death
+           죽음의 예언
+#
+#
+

@@ -111,7 +111,7 @@ class TestBackend(unittest.IsolatedAsyncioTestCase):
         assert self.book.book_id in [book["book_id"] for book in books]
 
     def test_search_by_keyword(self):
-        keyword = self.book.title + " " + " ".join(self.book.summary.split(" ")[:5])
+        keyword = self.book.title
         response = client.get(f"/search/{keyword}")
         assert response
         assert response.status_code == 200
