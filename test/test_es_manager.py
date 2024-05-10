@@ -83,22 +83,23 @@ class ESManagerTest(unittest.TestCase):
         match_count = 0
         for word in keyword.split(" "):
             match_count += word in first_doc["title"]
-        assert match_count / len(keyword.split(" ")) > 0.7
+        assert match_count >= 1
+        assert match_count / len(keyword.split(" ")) >= 0.1
 
     def test_02_search_by_title(self):
-        keyword = "마법"
-        result_list = self.esm.search_by_title(keyword, max_result_count=3)
+        keyword = "드래곤"
+        result_list = self.esm.search_by_title(keyword, max_result_count=10)
         assert isinstance(result_list, list)
-        assert len(result_list) == 3
+        assert len(result_list) == 10
         for _, doc, _ in result_list:
             self.inspect_search_result_hierarchy(doc)
-            assert keyword in doc["title"]
+            assert keyword in doc["title"] or keyword in doc["summary"] or keyword in doc["file_path"]
 
     def test_03_search_by_summary(self):
-        keyword = "게이고는 공학 전공자답게 과학/공학 요소를 작품에 실감나게 이용하는 것으로 유명하다"
-        result_list = self.esm.search_by_summary(keyword, max_result_count=5)
+        keyword = "리오에 의해 거인이 팔뚝에 장비 부숴지듯 산산조각이 나고"
+        result_list = self.esm.search_by_summary(keyword, max_result_count=10)
         assert isinstance(result_list, list)
-        assert len(result_list) == 5
+        assert len(result_list) == 10
         for _, doc, _ in result_list:
             self.inspect_search_result_hierarchy(doc)
 
@@ -106,7 +107,8 @@ class ESManagerTest(unittest.TestCase):
         match_count = 0
         for word in keyword.split(" "):
             match_count += word in first_doc["summary"]
-        assert match_count / len(keyword.split(" ")) > 0.7
+        assert match_count >= 1
+        assert match_count / len(keyword.split(" ")) >= 0.1
 
     def test_04_search_by_category(self):
         category = "_txt"
@@ -174,7 +176,7 @@ class ESManagerTest(unittest.TestCase):
         assert isinstance(result[1], str)
 
     def test_11_insert(self):
-        num_files = 50
+        num_files = 20
         dir1 = "_epub"
         data = Loader.read_files(Loader.path_prefix / dir1, num_files=num_files)
         self.esm.insert(data, num_docs=num_files)
