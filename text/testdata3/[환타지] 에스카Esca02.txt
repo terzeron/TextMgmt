@@ -1,0 +1,447 @@
+﻿#                      Escaflowne of the Heavens
+#                       EPISODE 02 Long Version:
+#                 `` Girl from the Phantom Moon ''
+#                          Version 1.1
+#                         Translation: Hiroaki Fukuda
+#                             Editing: Todd Perkins, Hiroaki Fukuda, Dave
+#                                      Barbara
+#                              Timing: Todd Perkins
+#  
+
+{title:} \C5ESCAFLOWNE
+{title:} of the Heavens
+
+{OPSONG(EN)} Does everyone feel lonely like I do, when they love someone ?
+{OPSONG(EN)} I'm suffering from a pain which is deeper than the dark.
+{OPSONG(EN)} Everything exists to brighten the two of us.
+{OPSONG(EN)} I love...I love you.
+{OPSONG(EN)} My heart is looking at you.
+{OPSONG(EN)} I believe...\nI believe in you in the cold night.
+{OPSONG(EN)} I'll call to you with tears.
+{OPSONG(EN)} I don't need any promises...
+{OPSONG(EN)} ...because I have a precious strength that you gave me.
+
+{HITOMI:} Was it a dream...\nor an illusion ?
+ 히토미 그것은 꿈... 아니면 환상?
+{HITOMI:} It's about the sudden transfer of my admirable senpai abroad...
+ 동경하던 선배가 갑자기 전학하게 되고...
+{HITOMI:} ...about him and a giant dragon that appeared in front of me...
+ ...내 앞에 그 녀석과 용이 나타나게 된다.
+{HITOMI:} ...and this mysterious world where both Moon and Earth appear in the sky.
+ ...그리고 여기는 달과 지구가 하늘에 떠 있는 이상한 세계....
+
+{Van:} We're surrounded.
+ 반   포위됐어.
+
+{TITLE:} Girl from the Phantom Moon
+ 환상의 달의 소녀
+
+{AMANO:} It'll be okay, Uchida.
+ 아마노 괜찮을 거야, 우치다.
+{AMANO:} Kanzaki's mom believed\nwhat we said.
+ 칸자키의 어머니도 우릴 믿어 줬어.
+{AMANO:} She said that Kanzaki'll return.\nI'll stay in Japan until then.
+ 그리고 돌아 올 거라고 말씀하셨어. 난 그때까지 일본에 남겠어.
+{YUKARI:} Senpai...
+ 유카리 선배...
+{MOM:} Hitomi...
+ 어머니 히토미...
+
+{RUMU:} Y...you went to\nthe Phantom Moon ?
+ 루무 너...환상의 달에 갔었다고?
+{RUMU:} So, that girl is...
+ 그래, 저 소녀가...
+{Van:} Yeah, she's a resident \nof the Phantom Moon.
+ 반 응, 그녀가 환상의 달의 주민이야.
+{RUMU:} Whadda ya know...
+ 루무 야~ !.. 그래...
+{RUMU:} You passed through our\nvillage some time ago.
+ 넌 한동안 우리 마을에선 보이질 않더니...
+{RUMU:} Now, you say you're on your way back from the Phantom Moon ?
+ 지금은, 환상의 달에서 돌아오는 길이라고?
+{RUMU:} Come to think of it,\nour myth says...
+ 생각 좀 해보자구, 우리 전설에 의하면...
+{RUMU:} ...that we travelled to and from the moon a long time ago, but, well...
+ ...오래 전에 달에 오가곤 했다고 하지만, 글쎄...
+{HITOMI:} Umm, what is the\nPhantom Moon ?
+ 히토미 저, 환상의 달이란 게 뭐죠?
+{RUMU:} Look. It's that blue moon\nwhere you came from.
+ 루무 봐요. 저기 푸른 달, 바로 당신이 온 곳.
+{HITOMI:} Phantom Moon...
+ 히토미 환상의 달....
+{Van:} What's wrong ?
+ 반 왜 그래?
+{HITOMI:} N...nothing.
+ 히토미 아.. 아냐.
+{RUMU:} The Phantom Moon shines brighter\nthan usual these days.
+ 루무 요즘은 환상의 달이 보통 때보다 더 밝게 빛나고 있는데...
+{RUMU:} That might have caused\nthose mysterious incidents.
+ 어쩌면 그게 이번 이상한 사건의 원인일지도...
+
+{MAN:} It's been three days.
+ 남자 벌써 사흘째야.
+{MAN:} What's going to happen to Fanelia if he doesn't return ?
+ 그분이 돌아오시지 않는다면, 파넬리아는 어떻게 될지...
+{MAN:} I wonder if he gave up on his right to succeed, like his brother Folken did.
+ 남자 그의 형 폴켄처럼 자신의 의무를 포기한 건지도 모르겠네.
+{MAN:} Vargas, what do you think ?
+ 바르가스, 자네의 생각은 어떤가?
+{Vargas:} I've been teaching\nhim for ten years.
+ 바르가스 난 그분을 10년동안 가르쳐 왔네.
+{Vargas:} He's lived his life\nonly for this day...
+ 그분은 이 날을 위해 사신 거나 다름없어...
+{Vargas:} ...in order to erase the disgrace that Folken left the family of Fanel.
+ 폴켄이 파넬의 가족들에게 남긴 불명예를 씻을 수 있는 날을...
+{Vargas:} Even if he loses an arm or leg to the dragon, he won't run away.
+ 설사 용에게 팔, 다리를 뜯기게 된다고 해도, 그분은 도망치지 않을 걸세.
+
+{RUMU:} See ?\nThat's Fanelia.
+ 루무 보여? 저기, 파넬리아야.
+{MAN:} Hey, hurry up, hurry up !\nVan's almost here !
+ 남자 어이, 서둘러라, 서둘러! 반님께서 오신다!
+{WOMAN:} Eh...?\nVan's returned ?!
+ 여자 예..? 반님께서 돌아 오신다구요?!
+{MAN:} Open the gate !
+ 남자 성문을 열어라!
+{Merle:} Master Van !
+ 메르르 반 님!
+{Merle:} Master Van !
+  반 님!
+{Van:} Merle !
+ 반 메르르!
+{Merle:} Master Van,\nyou came back safely.
+ 메르르 반 님, 무사히 다녀오셨군요.
+{Merle:} I was worried to death.
+ 죽을 정도로 걱정했어요.
+       /( 메르르는 약간 치기 어린(?) 분위기라 일부러 이런 표현을 썼습니다.
+      원작관 좀 다릅니다. )/
+{Van:} S...stop it, Merle.\nEveryone's watching.
+ 반 그.. 그만, 메르르. 사람들이 보고 있어.
+{Merle:} But I'm so glad.
+ 메르르 하지만 전 무척 기쁜 걸요.
+{Van:} Stop it, Merle.
+ 반 그만 해, 메르르.
+{HITOMI:} First wolfmen,\nnow a catgirl.
+ 히토미 처음엔 늑대인간, 이번엔 고양이소녀인가.
+
+{Vargas:} Master Van.
+ 바르가스 반 님.
+{Vargas:} Master Van.
+ 반 님.
+{Vargas:} Master Van...
+ 반 님...
+{Van:} Van Fanel has finished hunting the dragon, and returned with a Dragu-Energist.
+ 반 반 파넬은 용 퇴치의 의식을 마치고, 드래그-에너지스트를 가지고 돌아왔소.
+{MAN:} That stone is undoubtedly...
+ 남자 이 돌은 틀림없는...
+{MAN:} ...a Dragu-Energist.
+ ... 드래그-에너지스트.
+{Vargas:} The four leaders of the\nFanelia Samurai confirm it.
+ 바르가스 파넬리아 기사(사무라이)의 사대장이 인증합니다.
+{Van:} Thank you, everyone.
+ 반 고맙소, 여러분.
+{HITOMI:} A prince...?
+히토미 (생각) 왕자님...?
+
+{MAN:} This smell...
+ 남자 이 냄새...
+{MAN:} I like the Melef.
+  난 메레프가 좋아.
+{MAN:} There's been no war lately, so it's been a while since we were equipped like this.
+ 최근엔 전쟁도 없어서 한동안 지금처럼 장비를 착용하지 않았었지.
+{MAN:} I can't wait for the match before the coronation.
+ 도저히 대관식 때까지 참지 못하겠는 걸.
+{MAN:} Boss, an old man like you\nshouldn't push yourself too hard.
+ 남자 대장님, 그 나이에 무리하시면 안됩니다.
+
+{HITOMI:} What am I doing ?
+ 히토미 난 뭘 하고 있는 걸까?
+
+{YUKARI:} Hitomi !
+ 여자 히토미!
+{YUKARI:} Hitomi, Keiko wants you to read the tarot, and is looking for you.
+ 히토미, 케이코가 찾고 있어, 타롯트 점을 봐 달라고.
+{TUKARI:} Hitomi.
+ 히토미.
+{HITOMI:} Amano...
+ 히토미 아마노 선배...
+{HITOMI:} Hey, watch where\nyou come in !
+ 잠깐, 어디로 들어오는 거야!
+{HITOMI:} W...what ?
+ 뭐..?
+
+{Merle:} Don't be too familiar.
+ 메르르 너무 친한 척 하지마.
+{Merle:} Don't get too\nclose to Master Van.
+ 반 님께 가까이 붙지 말라구.
+{Merle:} I don't want a foreigner like you taking liberties with him.
+ 너같은 외지인이 그 분과 자유롭게 얘기하는 건 싫으니까.
+{HITOMI:} No, of course I won't.
+ 히토미 무슨, 나도 원치 않아.
+{HITOMI:} Hey !
+ 야!
+{HITOMI:} Hey, stop that !
+ 야, 그만 해!
+{Merle:} Beautiful stone.
+ 메르르 아름다운 돌이네.
+{Merle:} I'll keep this.
+ 내가 같겠어.
+{HITOMI:} Hey !
+ 히토미 야!
+{HITOMI:} Geez !
+ 칫!
+{HITOMI:} Wait !
+ 기다려!
+{HITOMI:} Damn cat burglar !
+ 망할 도둑고양이!
+{HITOMI:} Don't underestimate an athlete !
+ 운동선수(스프린터)를 얕보지 말라구!
+{HITOMI:} Wait !
+ 기다려!
+
+{Vargas:} You didn't step\nforward enough, Master Van.
+ 바르가스 파고 들어오는 힘이 부족합니다, 반 님.
+{Vargas:} Attack me as if\nyou're trying to kill me.
+ 저를 죽일 각오로 공격하십시오.
+{Van:} I don't like using\na sword to kill someone.
+ 반 난 생명을 주고 받는 검은 좋아하지 않아.
+{Vargas:} Master Van, you're going to be the King of Fanelia...
+ 바르가스 반 님, 당신은 곧 파넬리아의 왕이 되십니다....
+{Vargas:} ...I want you to get\nrid of your timidness.
+ 저는 반 님이 소심해 지는 것을 바라지 않습니다...
+{Van:} I'm not going to be the\nKing because I want to.
+ 반     왕이 되고 싶어서 되는 게 아냐.
+     
+{Vargas:} Master Van.
+ 바르가스 반 님.
+{Vargas:} You have a guest.
+ 손님이 오셨군요.
+{HITOMI:} Sorry, I didn't\nmean to peep.
+ 히토미 미안해요, 엿들을 생각은 없었어요.
+{Van:} Oh, it's you.
+ 반 아, 너로군.
+{Merle:} That's why I don't like strangers,\nbecause they don't know etiquette.
+ 메르르 그래서 외지인은 싫은 거야, 예절을 모르니까.
+{HITOMI:} Hey, you !\nWhere's my pendant ?
+ 히토미 어이, 너! 내 펜던트는 어쨌지?
+{HITOMI:} That brat...
+ 그 팬던...
+{Merle:} Master Van !
+ 메르르 반 님!
+{Vargas:} I heard the story.\nYou saved Master Van.
+ 바르가스 얘기는 들었습니다. 당신께서 반 님을 구해 주셨다구요.
+{Vargas:}As soon as the coronation's over,we'll do our best to find a way back to the Phantom Moon.
+ 즉위식이 끝나는 대로, 당신이 환상의 달로 돌아갈 수 있는 방법을 최선을 다해 찾아보겠습니다.
+{HITOMI:} Really {Are you sure} ?
+ 히토미 정말요?
+{Vargas:} The samurai of\nFanelia don't lie.
+ 바르가스 파넬리아의 기사(사무라이)는 거짓말을 않습니다.
+
+{RUMU:} Stop, stop.
+ 루무 정지, 정지.
+{RUMU:} It's strange. I sensed a bad smell...but I might be mistaken.
+ 이상해, 이상한 냄새를 맡았었는데... 착각인가.
+
+#  Eyecatch
+
+{Merle:} I wanted to see how\ngreat Master Van looks.
+ 메르르 반 님이 멋진 모습, 보고 싶었어요.
+{HITOMI:} Geez, Vargas, you\ndidn't have to put me here.
+ 히토미 (생각)쳇, 바르가스씨, 신경써주시지 않아도 되는데...
+{MAN:} King of Fanelia, Van Fanel. I present this to you as a symbol of kingship.
+ 남자 파넬리아의 왕, 반 파넬이시여. 왕위의 상징으로 이것을 바칩니다.
+
+{MAN:} I'm looking forward\nto the festival tonight.
+ 병사1 오늘 밤 페스티발이 기대되는 데.
+{MAN:} Are you going to\nask her to go out ?
+ 병사2 그녀에게 같이 가자고 청할꺼야?
+{MAN:} Of course.
+ 병사1 물론이지.
+{MAN:} A shimmer...?
+ 병사2 아지랭이..?
+{MAN:} What ?\n
+ 병사2 뭐지..?
+{MAN:} Noth...
+  (생각)착각...
+{MAN:} What's happening ?!
+ 남자1 뭐지?!
+{MAN:} What...?!\nWhat's coming ?!
+ 남자2 뭔가...?! 뭔가 오고있다?!
+{MAN:} A...demon...?!
+ 아..악마...?!
+
+{MAN:} Hey, what's that ?
+ 남자 어이, 저게 뭐지?
+{MAN:} It's smoking over there.
+ 저기서 연기가 나고 있어.
+{MAN:} A fire...?
+ 남자 불났나..?
+{MAN:} Enemy attack !
+ 적습이다!
+{MAN:} Enemy attack ! Women and children,\nescape to the mountains in the back !
+ 습격이다! 여자와 어린이는 뒷산으로 피하라!
+{MAN:} All men, prepare for battle !\nLet me through !
+ 모든 남자는 무장을! 나를 따르라!
+
+{Vargas:} Invisible enemy...?!
+ 바르가스 보이지 않는 적...?!
+{MAN:} Vargas...
+ 남자 바르가스...
+{Vargas:} Stop the enemy with your Melefs.\nLuva, Asona, Yurizen...I'm counting on you.
+ 바르가스 자네들의 메레프로 적을 막아주게. 루바, 아소나, 유리젠... 자네들만 믿겠네.
+{MEN:} Sir.
+ 남자 예.
+{Van:} What should I do ?
+ 반 난 뭘하지?
+{Vargas:} You'd better go to the shrine with our guest, Hitomi.
+ 바르가스 폐하께선 손님이신 히토미와 같이 성지로 가십시오.
+{Van:} Shrine...?
+ 반 성지에..?
+{Vargas:} Yes. If the worst happens,\nplease escape with Escaflowne.
+ 바르가스 예. 최악의 경우엔, 부디 에스카플로네로 탈출해 주십시오.
+{Van:} Escaflowne...
+ 반 에스카플로네...
+{Merle:} Master Van...
+ 메르르 반 님...
+{Merle:} Master Van,\nI'll fight beside you !
+ 반 님, 저도 옆에서 돕겠어요!
+{WOMAN:} What're you doing, Merle ?!\nCome with us !
+ 여자 뭘 하는 거야, 메르르?! 따라와!
+{Merle:} Master Van !
+ 메르르 반 님!
+
+{MAN:} You coward !\nShow yourself !
+ 남자 이 겁장이녀석! 모습을 보여라!
+{MAN:} Where...where are you ?!
+ 어디.. 어디에 있는 거냐?!
+{MAN:} How dare you...?!
+ 어디 있느냐?!
+{MAN:} From behind...\nhow cowardly...
+ 뒤에서... 비겁자....
+{MAN:} Boss !
+ 남자 대장님!
+{MAN:} Vargas...sorry...
+ 바르가스... 미안하네...
+{MAN:} I won't let you\ngo any farther !
+ 남자 이 이상 보낼 수 없다!
+{MAN:} How could I....
+ 어떻게....
+
+{Van:} I am the new\nKing of Fanelia, Van Fanel !
+ 반 난 파넬리아의 새로운 왕, 반 파넬!
+{Van:} With my blood, I'm willing to make a contract with you, Escaflowne.
+ 나의 이 피로, 너와 맹약을 맺는다, 에스카플로네.
+{Van:} Sleeping dragon, awaken now.
+ 잠들어 있는 용이여, 이제 깨어나라.
+{HITOMI:} That's the one\nfrom my dream...
+ 히토미 꿈에서 본 거야...
+{Van:} Good.
+ 반 좋았어.
+{HITOMI:} Hey !
+ 히토미 이봐!
+{HITOMI:} What're you going to do ?!
+ 뭘 하려는 거야?!
+{Van:} I'm gonna fight\nin Escaflowne.
+ 반 에스카플로네로 싸우려는 거야.
+{Van:} Alright. It's the same as\nthat ancient book described it.
+ 좋았어. 고문서에 기술된 대로야.
+{Van:} I can pilot it.
+ 조종할 수 있겠어.
+{HITOMI:} That's Escaflowne...
+ 히토미 저것이 에스카플로네...
+{Van:} What're you doing ?!\nHide yourself now !
+ 반 뭐 하는 거야?! 냉큼 숨어!
+{Van:} There you are.
+ 거기 있어.
+{HITOMI:} Where...?\nWhere is it ?
+ 히토미 어디..? 어디지?
+{HITOMI:} Van, to your left !
+  반, 왼쪽이야!
+{Van:} What ?!
+ 반  뭐?!
+{HITOMI:} Look out !
+ 히토미 조심해!
+{Van:} You can't escape !
+ 반 도망 갈 수 없다!
+{Van:} Guymelef...!
+ 가이메르프...!
+{HITOMI:} That's the giant\nfrom my dream.
+ 히토미 저건 꿈에서 본 거인이야.
+{HITOMI:} Van, behind you !
+ 반, 뒤에!
+{HITOMI:} Vargas !
+ 바르가스!
+{Van:} Vargas...?!
+ 반 바르가스...?!
+{Vargas:} Master Van, escape\nwith Hitomi now !
+ 바르가스 반 폐하, 히토미 님과 탈출하십시오, 즉시!
+{Van:} I won't show my back\nto the enemy and escape !
+ 반 적에게 등을 보이며 도망칠 순 없다!
+{Vargas:} Master Van !
+ 바르가스 폐하!
+{Van:} Vargas !
+ 반 바르가스!
+{Vargas:} Master Van !
+ 바르가스 폐하!
+{Van:} Damn it !
+ 반 제길!
+{Van:} Let's go !\nHang on !
+  가자! 꼭 잡아!
+{Van:} It's over, Vargas.\nWithdraw.
+ 끝났어, 바르가스. 퇴각이다.
+{HITOMI:} Watch out, Vargas !
+ 히토미 조심해요, 바르가스씨!
+{Van:} Vargas !
+ 반 바르가스!
+{HITOMI:} Vargas !
+ 히토미 바르가스씨!
+{Vargas:} Master Van, get out\nof here with Escaflowne.
+ 바르가스 반 폐하, 에스카플로네로 여기서 탈출하십시오.
+{Vargas:} And someday, revive Fanelia...
+ 그리고 언젠가, 파넬리아의 재건을...
+{Vargas:} ...the people of Fanelia...
+ ...파넬리아의 국민들을...
+{Van:} Vargas !
+ 반 바르가스!
+{HITOMI:} No...
+ 히토미 안돼...
+{HITOMI:} No...
+ 안돼...
+{HITOMI:} No !
+ 안 돼!
+
+{Merle:} Master Van...
+ 메르르 반 님...
+{Merle:} Master Van !
+ 반 님!
+
+#
+{ENDSNG(EN)} The blue searchlights overlap behind the moon.
+{ENDSNG(EN)} An angel came down suddenly.\nI wonder who you are.
+{ENDSNG(EN)} The gate of destiny's about to open.\n(So just fall in love.)
+{ENDSNG(EN)} I won't let this exciting moment go by.\n(Don't stop baby.)
+{ENDSNG(EN)} Your innocent smile will break down your burning mystic eyes.
+{ENDSNG(EN)} I'll give my love, which is kept in my eyes, to you.
+{ENDSNG(EN)} A never-ending journey will begin.
+{ENDSNG(EN)} Nothing can stop my heartbeat.
+{ENDSNG(EN)} I want to take you away with me.
+#
+#
+{TEXT:} Preview
+ 예고
+{ALLEN:} How foolish.
+알렌 어리석은.
+{HITOMI:} Is he...
+히토미 이 사람...
+{HITOMI:} Is he the one ?
+ 이 사람인 거야?
+
+{TEXT:} A Splendid Swordsman
+ 화려한 검사
+#
+
+/( 정말 의역이 난무한 번역이었습니다. 특히 men의 처리가 문제였습니다.
+   루바, 아소나, 유리젠, 바르가스는 친구이면서 계급적으로 바르가스가 제일 위로 알고 있습니다.
+   하지만 이 대본엔 바르가스 이외엔 전부 men으로 되어 있고, 병사들이나 마을 남자도 전부
+   men..... 기억을 되살려 가며 되도록 원작에 가깝게 쓰긴 했습니다만 본지 오래돼서 확실치 않아
+   이상한 부분들도 있습니다. 양해 바랍니다. )/
