@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 
-import sys
-import os
 import unittest
 import logging.config
 from pathlib import Path
