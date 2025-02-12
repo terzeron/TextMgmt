@@ -8,4 +8,7 @@ export default defineConfig({
         https: true
     },
     plugins: [basicSsl(), react()],
+    optimizeDeps: {
+        exclude: ["pdfjs-dist"]
+    },
 })
