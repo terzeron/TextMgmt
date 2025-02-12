@@ -324,19 +324,19 @@ def print_usage(program_name: str):
 
 def main() -> int:
     do_reload = False
+    path = Path()
     try:
         opts, args = getopt.getopt(sys.argv[1:], "r")
         for opt, _ in opts:
             if opt == "-r":
                 do_reload = True
+        if len(args) != 1:
+            print_usage(sys.argv[0])
+        path = Path(args[0])
     except getopt.GetoptError as e:
         LOGGER.error(e)
         print_usage(sys.argv[0])
 
-    if len(args) != 1:
-        print_usage(sys.argv[0])
-
-    path = Path(args[0])
     if not path.exists():
         LOGGER.error("can't find such a file or directory '%s'", path)
         return 0
