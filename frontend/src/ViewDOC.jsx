@@ -1,13 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import PropTypes from "prop-types";
 import { getApiUrlPrefix } from "./Common";
+import mammoth from "mammoth";
 
-export default function ViewDOC({ bookId }) {
-    const [url, setUrl] = useState("");
+export default function ViewDOC({ bookId, lineCount }) {
+    const [content, setContent] = useState("");
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState(null);
-    const [iframeHeight, setIframeHeight] = useState(0);
-    const ref = useRef(null);
 
     useEffect(() => {
         console.log(`ViewDOC: useEffect()`, bookId);
@@ -18,17 +17,22 @@ export default function ViewDOC({ bookId }) {
             return;
         }
 
-        setIframeHeight(document.body.scrollHeight);
-
         const uri = getApiUrlPrefix() + "/download/" + bookId;
-        const wordViewerUrlPrefix = "https://view.officeapps.live.com/op/embed.aspx?src=";
-        const fullUrl = wordViewerUrlPrefix + encodeURIComponent(uri);
-
-        setUrl(fullUrl);
-        setIsLoading(true);
-        setErrorMessage(null);
-        console.log(fullUrl);
-    }, [bookId]);
+        fetch(uri)
+            .then(response => response.arrayBuffer())
+            .then(buffer => mammoth.convertToHtml({ arrayBuffer: buffer }))
+            .then(result => {
+                // 변환된 HTML을 특정 단락 수로 제한
+                const paragraphs = result.value.split("</p>").slice(0, lineCount).join("</p>") + "</p>";
+                setContent(paragraphs);
+                setIsLoading(false);
+            })
+            .catch(error => {
+                console.error("Error loading DOCX file:", error);
+                setErrorMessage("❌ 문서를 불러오는 중 오류가 발생했습니다.");
+                setIsLoading(false);
+            });
+    }, [bookId, lineCount]);
 
     return (
         <div className="doc-container">
@@ -43,23 +47,16 @@ export default function ViewDOC({ bookId }) {
                     {errorMessage}
                 </div>
             )}
-            <iframe
-                title="doc viewer"
-                src={url}
-                ref={ref}
-                onLoad={() => setIsLoading(false)} // ✅ iframe 로드 완료 시 로딩 숨김
-                style={{
-                    display: isLoading || errorMessage ? "none" : "block",
-                    width: "100%",
-                    height: iframeHeight,
-                    overflow: "visible",
-                    border: "none"
-                }}
+            <div
+                className="doc-content"
+                dangerouslySetInnerHTML={{ __html: content }}
+                style={{ display: isLoading || errorMessage ? "none" : "block" }}
             />
         </div>
     );
 }
 
 ViewDOC.propTypes = {
-    bookId: PropTypes.number.isRequired
+    bookId: PropTypes.number.isRequired,
+    lineCount: PropTypes.number,
 };
