@@ -122,7 +122,7 @@ const StyledTreeItemLabelText = styled(Typography)({
 const MemoizedIcon = React.memo(({ Icon }) => (
     <Box component={Icon} className="labelIcon" color="inherit" sx={{ mr: 1, fontSize: '1.2rem' }} />
 ));
-
+MemoizedIcon.displayName = "MemoizedIcon";
 MemoizedIcon.propTypes = {
     Icon: PropTypes.elementType.isRequired, // Icon의 타입을 정의하여 ESLint 오류 해결
 };
