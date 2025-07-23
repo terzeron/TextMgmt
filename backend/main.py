@@ -39,6 +39,15 @@ app = FastAPI(lifespan=lifespan)
 # For test purpose
 # book_manager: BookManager = BookManager()
 
+# CORS 미들웨어 추가
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[os.environ["TM_FRONTEND_URL"]],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 class BookModel(BaseModel):
     book_id: int
     category: str
@@ -84,7 +93,7 @@ async def get_categories(book_manager: BookManager = Depends(get_book_manager)):
         return {"status": "fail", "result": error}
     return {"status": "success", "result": categories}
 
-@app.get("/categories/{category_name:path}")
+@app.get("/categories/{category_name}")
 async def get_books_in_category(category_name: str, page: int = 1, page_size: int = 10, book_manager: BookManager = Depends(get_book_manager)):
     books, error = await book_manager.get_books_in_category(category_name, page, page_size)
     if error:

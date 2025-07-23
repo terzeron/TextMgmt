@@ -7,6 +7,7 @@ import logging.config
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any
+from dateutil.parser import parse
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -28,7 +29,10 @@ class Book:
         self.file_path: Path = self.path_prefix / info["file_path"]
         self.file_type: str = info["file_type"]
         self.file_size: int = info["file_size"]
-        self.updated_time: datetime = datetime.strptime(info["updated_time"], "%Y-%m-%dT%H:%M:%S.%f")
+        try:
+            self.updated_time: datetime = parse(info["updated_time"])
+        except (ValueError, TypeError):
+            self.updated_time: datetime = datetime.now()
 
     def dict(self) -> Dict[str, Any]:
         return {

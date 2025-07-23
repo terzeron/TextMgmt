@@ -22,7 +22,10 @@ logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
 
 class ESManager:
-    def __init__(self, es_url: str = "https://localhost:9200", index_name: str = "tm") -> None:
+    def __init__(self, es_url: str = "", index_name: str = "") -> None:
+        if not es_url:
+            es_url = os.environ.get("TM_ES_URL", "https://localhost:9200")
+
         if es_url:
             parsed_url = urlparse(es_url)
             if not parsed_url.port:
@@ -32,7 +35,11 @@ class ESManager:
             self.es_url = urlunparse(parsed_url)
         else:
             self.es_url = "https://localhost:9200"
-        self.index_name = index_name
+
+        if not index_name:
+            self.index_name = os.environ.get("TM_ES_INDEX", "tm")
+        else:
+            self.index_name = index_name
         self.es = None
 
     def connect(self) -> None:
@@ -141,10 +148,14 @@ class ESManager:
         LOGGER.debug("_search(max_result_count=%d, query='%s')", max_result_count, query)
         result = []
         try:
-            response = self.es.search(index=self.index_name, query=query, sort=sort, size=max_result_count)
+            body = {"query": query}
+            if sort:
+                body["sort"] = sort
+            response = self.es.search(index=self.index_name, body=body, size=max_result_count)
             if not response or "hits" not in response:
                 return []
-        except Exception:
+        except Exception as e:
+            LOGGER.error("Error during ES search: %s", e)
             return []
 
         max_score = response["hits"].get("max_score", 1.0)
@@ -193,8 +204,10 @@ class ESManager:
                 "category": category
             }
         }
-        sort = ["author.keyword", "title.keyword"]
-
+        sort = [
+            {"author.keyword": "asc"},
+            {"title.keyword": "asc"}
+        ]
         return self._search(query, sort=sort, max_result_count=max_result_count)
 
     def search_by_keyword(self, keyword: str, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:

@@ -50,10 +50,14 @@ class BookManager:
     async def get_categories(self) -> Tuple[List[str], Optional[str]]:
         LOGGER.debug("# get_categories()")
         categories = self.es_manager.search_and_aggregate_by_category()
-        return categories, None
+        # '$$rootdir$$/' 접두사 제거
+        prefix = f"{self.ROOT_DIRECTORY}/"
+        cleaned_categories = [cat.replace(prefix, "") for cat in categories]
+        return cleaned_categories, None
 
     async def get_books_in_category(self, category: str, page: int = 1, page_size: int = 10) -> Tuple[List[Book], Optional[str]]:
-        doc_list = self.es_manager.search_by_category(category, max_result_count=50000)
+        doc_list = self.es_manager.search_by_category(category, max_result_count=10000)
+        LOGGER.info(f"doc_list from ES for category '{category}': {doc_list}")
         if doc_list and len(doc_list) > 0:
             return [Book(book_id, doc) for book_id, doc, _score in doc_list], None
         return [], f"No books found in '{category}'"

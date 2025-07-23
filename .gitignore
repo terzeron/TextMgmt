@@ -40,4 +40,6 @@ run.log*
 .dependency_cache
 .last_test_success
 .test_performance_cache
-unicorn.pid
+uvicorn.pid
+
+backend/uvicorn.pid

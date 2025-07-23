@@ -55,6 +55,7 @@ urllib3==1.26.18
 uvicorn==0.27.1
 fastapi
 python-multipart
+python-dotenv
 Jinja2
 pillow
 python-magic
