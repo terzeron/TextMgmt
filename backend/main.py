@@ -4,14 +4,16 @@ import sys
 import os
 import logging.config
 from pathlib import Path
-from typing import Dict, Any, Union
-from fastapi import FastAPI
+from typing import Dict, Any, Union, List
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from backend.book_manager import BookManager
+from backend.book import Book
 from utils.loader import Loader
+from contextlib import asynccontextmanager
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -20,19 +22,22 @@ if "TM_FRONTEND_URL" not in os.environ:
     LOGGER.error("The environment variable TM_FRONTEND_URL is not set.")
     sys.exit(-1)
 
-app = FastAPI()
-LOGGER.info("app ready")
-origins = [os.environ["TM_FRONTEND_URL"]]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-book_manager = BookManager()
-if book_manager.es_manager.es.count(index=book_manager.es_manager.index_name)["count"] == 0:
-    print("loading data...")
-    data = Loader.read_files(book_manager.path_prefix)
-    book_manager.es_manager.insert(data)
-print("book manager ready")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    book_manager = BookManager()
+    try:
+        book_manager.is_healthy()
+    except Exception as e:
+        LOGGER.error(f"can't connect to es server")
+        LOGGER.exception(e)
+    yield
 
+
+app = FastAPI(lifespan=lifespan)
+
+# For test purpose
+# book_manager: BookManager = BookManager()
 
 class BookModel(BaseModel):
     book_id: int
@@ -42,106 +47,64 @@ class BookModel(BaseModel):
     file_path: str
     file_type: str
     file_size: int
+    summary: str
     updated_time: str
 
 
+def get_book_manager():
+    return BookManager()
+
+
 @app.put("/books/{book_id}")
-async def update_book(book_id: int, book_item: BookModel) -> Dict[str, Any]:
-    LOGGER.debug("# update_book(book_id=%d, book=%r)", book_id, book_item)
-    response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await book_manager.update_book(book_id, new_category=book_item.category, new_title=book_item.title, new_author=book_item.author, new_path=book_manager.path_prefix / book_item.file_path, new_type=book_item.file_type)
-    if error is None:
-        response_object["status"] = "success"
-        response_object["result"] = result
-    else:
-        response_object["error"] = error
-    return response_object
+async def update_book(book_id: int, book: BookModel, book_manager: BookManager = Depends(get_book_manager)):
+    result, error = await book_manager.update_book(book_id, book.model_dump())
+    if error:
+        return {"status": "fail", "result": error}
+    return {"status": "success", "result": result}
 
 
 @app.delete("/books/{book_id}")
-async def delete_book(book_id: int) -> Dict[str, Any]:
-    LOGGER.debug("# delete_book(book_id=%d)", book_id)
-    response_object: Dict[str, Any] = {"status": "failure"}
+async def delete_book(book_id: int, book_manager: BookManager = Depends(get_book_manager)):
     result, error = await book_manager.delete_book(book_id)
-    if error is None:
-        response_object["status"] = "success"
-        response_object["result"] = result
-    else:
-        response_object["error"] = error
-    return response_object
-
-
-# JSON 대신 파일 바이너리 다운로드를 위해 response_model를 None으로 지정
-@app.get("/download/{book_id}/{path:path}", response_model=None)
-@app.get("/download/{book_id}", response_model=None)
-async def get_book_content(book_id: int) -> Union[str, FileResponse]:
-    LOGGER.debug("# get_book(book_id=%d)", book_id)
-    return await book_manager.get_book_content(book_id=book_id)
-
+    if error:
+        return {"status": "fail", "result": error}
+    return {"status": "success", "result": result}
 
 @app.get("/books/{book_id}")
-async def get_book(book_id: int) -> Dict[str, Any]:
-    LOGGER.debug("# get_book(book_id=%d)", book_id)
-    response_object: Dict[str, Any] = {"status": "failure"}
+async def get_book(book_id: int, book_manager: BookManager = Depends(get_book_manager)):
     book, error = await book_manager.get_book(book_id)
-    if book and error is None:
-        response_object["status"] = "success"
-        response_object["result"] = BookModel(**book.dict())
-    else:
-        response_object["error"] = error
-    # LOGGER.debug(response_object)
-    return response_object
-
-
-@app.get("/categories/{category}")
-async def get_books_in_category(category: str) -> Dict[str, Any]:
-    LOGGER.debug("# get_books_in_category(category='%s')", category)
-    response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await book_manager.get_books_in_category(category)
-    if error is None:
-        response_object["status"] = "success"
-        response_object["result"] = [BookModel(**book.dict()) for book in result]
-    else:
-        response_object["error"] = error
-    #LOGGER.debug(response_object)
-    return response_object
-
+    if error:
+        return {"status": "fail", "result": error}
+    return {"status": "success", "result": book.dict() if book else None}
 
 @app.get("/categories")
-async def get_categories() -> Dict[str, Any]:
-    LOGGER.debug("# get_categories()")
-    response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await book_manager.get_categories()
-    if error is None:
-        response_object["status"] = "success"
-        response_object["result"] = result
-    else:
-        response_object["error"] = error
-    # LOGGER.debug(response_object)
-    return response_object
+async def get_categories(book_manager: BookManager = Depends(get_book_manager)):
+    categories, error = await book_manager.get_categories()
+    if error:
+        return {"status": "fail", "result": error}
+    return {"status": "success", "result": categories}
 
-
-@app.get("/similar/{book_id}")
-async def search_similar_books(book_id: int) -> Dict[str, Any]:
-    LOGGER.debug("# search_similar_books(book_id=%d)", book_id)
-    response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await book_manager.search_similar_books(book_id)
-    if error is None:
-        response_object["status"] = "success"
-        response_object["result"] = [BookModel(**book.dict()) for book in result]
-    else:
-        response_object["error"] = error
-    return response_object
-
+@app.get("/categories/{category_name:path}")
+async def get_books_in_category(category_name: str, page: int = 1, page_size: int = 10, book_manager: BookManager = Depends(get_book_manager)):
+    books, error = await book_manager.get_books_in_category(category_name, page, page_size)
+    if error:
+        return {"status": "fail", "result": error}
+    return {"status": "success", "result": [book.dict() for book in books]}
 
 @app.get("/search/{keyword}")
-async def search_by_keyword(keyword: str) -> Dict[str, Any]:
-    LOGGER.debug("# search(keyword=%s)", keyword)
-    response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await book_manager.search_by_keyword(keyword)
-    if error is None:
-        response_object["status"] = "success"
-        response_object["result"] = [BookModel(**book.dict()) for book in result]
-    else:
-        response_object["error"] = error
-    return response_object
+async def search_by_keyword(keyword: str, page: int = 1, page_size: int = 10, book_manager: BookManager = Depends(get_book_manager)):
+    books, error = await book_manager.search_by_keyword(keyword, max_result_count=page * page_size)
+    if error:
+        return {"status": "fail", "result": error}
+    return {"status": "success", "result": [book.dict() for book in books]}
+
+@app.get("/similar/{book_id}")
+async def search_similar_books(book_id: int, page: int = 1, page_size: int = 10, book_manager: BookManager = Depends(get_book_manager)):
+    books, error = await book_manager.search_similar_books(str(book_id), max_result_count=page * page_size)
+    if error:
+        return {"status": "fail", "result": error}
+    return {"status": "success", "result": [book.dict() for book in books]}
+
+@app.get("/download/{book_id}")
+async def download_book(book_id: int, book_manager: BookManager = Depends(get_book_manager)):
+    return await book_manager.get_book_content(book_id)

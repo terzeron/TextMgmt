@@ -9,8 +9,9 @@ import logging.config
 from pathlib import Path
 from typing import Dict, List, Any, Tuple, Union
 from itertools import islice
-from elasticsearch7 import Elasticsearch, RequestError, NotFoundError
-from elasticsearch7.exceptions import ElasticsearchWarning
+from urllib.parse import urlparse, urlunparse
+from elasticsearch import Elasticsearch, RequestError, NotFoundError
+from elasticsearch.exceptions import ElasticsearchWarning
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=ElasticsearchWarning)
@@ -21,25 +22,39 @@ logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
 
 class ESManager:
-    def __init__(self) -> None:
-        for env in ["TM_ES_INDEX", "TM_ES_URL"]:
-            print(f"{env}={os.environ[env]}")
-            if env not in os.environ:
-                LOGGER.error(f"The environment variable {env} is not set.")
-                sys.exit(-1)
+    def __init__(self, es_url: str = "https://localhost:9200", index_name: str = "tm") -> None:
+        if es_url:
+            parsed_url = urlparse(es_url)
+            if not parsed_url.port:
+                # If port is not specified, add the default port for the scheme
+                port = 80 if parsed_url.scheme == "http" else 443
+                parsed_url = parsed_url._replace(netloc=f"{parsed_url.hostname}:{port}")
+            self.es_url = urlunparse(parsed_url)
+        else:
+            self.es_url = "https://localhost:9200"
+        self.index_name = index_name
+        self.es = None
 
-        self.index_name = os.environ["TM_ES_INDEX"]
-        url = os.environ["TM_ES_URL"]
-        self.es = Elasticsearch(hosts=[url], verify_certs=False)
+    def connect(self) -> None:
+        if self.es is None:
+            self.es = Elasticsearch([self.es_url], verify_certs=False, ssl_show_warn=False)
 
-    def __del__(self) -> None:
-        del self.es
+    def _ensure_index_exists(self) -> None:
+        if not self.do_exist_index():
+            self.create_index()
+
+    def is_healthy(self) -> bool:
+        self.connect()
+        self.es.info()
+        return True
 
     def do_exist_index(self) -> bool:
+        self.connect()
         LOGGER.debug("do_exist_index()")
         return self.es.indices.exists(index=self.index_name)
 
     def create_index(self) -> dict[str, Any]:
+        self.connect()
         LOGGER.debug("create_index()")
 
         settings = {
@@ -102,14 +117,17 @@ class ESManager:
 
         if self.do_exist_index():
             return {"acknowledged": True}
-        return self.es.indices.create(index=self.index_name, body={"settings": settings, "mappings": mappings})
+        return self.es.indices.create(index=self.index_name, settings=settings, mappings=mappings)
 
     def delete_index(self) -> None:
+        self.connect()
         LOGGER.debug("delete_index()")
         if self.do_exist_index():
             self.es.indices.delete(index=self.index_name)
 
     def get_mapping(self) -> dict[str, Any]:
+        self.connect()
+        self._ensure_index_exists()
         LOGGER.debug("get_mapping()")
         while True:
             if self.es.indices.exists(index=self.index_name):
@@ -118,43 +136,31 @@ class ESManager:
         return self.es.indices.get_mapping(index=self.index_name)
 
     def _search(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+        self.connect()
+        self._ensure_index_exists()
         LOGGER.debug("_search(max_result_count=%d, query='%s')", max_result_count, query)
-        result_count = 0
         result = []
-        response = self.es.search(index=self.index_name, query=query, sort=sort, scroll='10m', track_scores=True)
-        # total_hits = response['hits']['total']['value']
-        max_score = response['hits']['max_score']
+        try:
+            response = self.es.search(index=self.index_name, query=query, sort=sort, size=max_result_count)
+            if not response or "hits" not in response:
+                return []
+        except Exception:
+            return []
+
+        max_score = response["hits"].get("max_score", 1.0)
+        if not max_score:
+            max_score = 1.0
+
         for hit in response['hits']['hits']:
-            normalized_score = hit['_score'] * 100 / max_score
+            normalized_score = hit['_score'] * 100 / max_score if hit['_score'] else 0.0
             # print(hit['_source'], normalized_score)
             result_item = (int(hit['_id']), hit['_source'], normalized_score)
             result.append(result_item)
-            result_count += 1
-            if result_count >= max_result_count:
-                return result[:max_result_count]
-        scroll_id = response['_scroll_id']
-        scroll_size = response['hits']['total']['value']
-
-        while scroll_size > 0:
-            response = self.es.scroll(scroll_id=scroll_id, scroll='10m')
-            # total_hits = response['hits']['total']['value']
-            max_score = response['hits']['max_score']
-            for hit in response['hits']['hits']:
-                normalized_score = hit['_score'] * 100 / max_score
-                # print(hit['_source'], normalized_score)
-                result_item = (int(hit['_id']), hit['_source'], normalized_score)
-                result.append(result_item)
-                result_count += 1
-                if result_count >= max_result_count:
-                    return result[:max_result_count]
-            scroll_id = response['_scroll_id']
-            scroll_size = len(response['hits']['hits'])
-            # print(result_count)
-            # print(len(result))
-
-        return result[:max_result_count]
+        return result
 
     def search_by_title(self, title: str, file_type: str = "", file_size: int = 0, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+        self.connect()
+        self._ensure_index_exists()
         LOGGER.debug("search_by_title(max_result_count=%d, title='%s', file_type='%s', file_size=%d)", max_result_count, title, file_type, file_size)
         query = {
             "bool": {
@@ -168,6 +174,8 @@ class ESManager:
         return self._search(query, max_result_count=max_result_count)
 
     def search_by_summary(self, summary: str, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+        self.connect()
+        self._ensure_index_exists()
         LOGGER.debug("search_by_summary(max_result_count=%d, summary='%s')", max_result_count, summary)
         query = {
             "match": {
@@ -177,6 +185,8 @@ class ESManager:
         return self._search(query, max_result_count=max_result_count)
 
     def search_by_category(self, category: str, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+        self.connect()
+        self._ensure_index_exists()
         LOGGER.debug("search_by_category(category='%s')", category)
         query = {
             "match": {
@@ -188,6 +198,8 @@ class ESManager:
         return self._search(query, sort=sort, max_result_count=max_result_count)
 
     def search_by_keyword(self, keyword: str, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+        self.connect()
+        self._ensure_index_exists()
         LOGGER.debug("search_by_keyword(keyword='%s', max_result_count=%d)", keyword, max_result_count)
         query = {
             "bool": {
@@ -202,6 +214,8 @@ class ESManager:
         return self._search(query, max_result_count=max_result_count)
 
     def search_similar_docs(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+        self.connect()
+        self._ensure_index_exists()
         LOGGER.debug("search_similar_docs(category='%s', title='%s', author='%s', type='%s', size=%d, summary='%s', max_result_count=%d)", category, title, author, file_type, file_size, summary, max_result_count)
         query = {
             "bool": {
@@ -220,6 +234,8 @@ class ESManager:
         return self._search(query, max_result_count=max_result_count)
 
     def search_by_id(self, doc_id: int) -> Dict[str, Any]:
+        self.connect()
+        self._ensure_index_exists()
         LOGGER.debug("search_by_id(doc_id=%d)", doc_id)
         query = {
             "match": {
@@ -232,6 +248,8 @@ class ESManager:
         return {}
 
     def search_and_aggregate_by_category(self) -> List[str]:
+        self.connect()
+        self._ensure_index_exists()
         LOGGER.debug("search_and_aggregate_by_category()")
         field_name = "category"
         size = 100
@@ -251,8 +269,10 @@ class ESManager:
         return unique_values
 
     def insert(self, data: Dict[int, Dict[str, Any]], num_docs: int = sys.maxsize) -> List[int]:
+        self.connect()
+        self._ensure_index_exists()
         LOGGER.debug("insert() %d items", len(data))
-        es_data: List[Dict[str, Any]] = []
+        operations: List[Dict[str, Any]] = []
         data_count = 0
         iter_items = iter(data.items())
         doc_id_list: List[int] = []
@@ -261,18 +281,20 @@ class ESManager:
             if not chunk:
                 break
             for inode_num, path_and_size in chunk:
-                es_data.append({"index": {"_index": self.index_name, "_id": str(inode_num)}})
-                es_data.append(path_and_size)
+                operations.append({"index": {"_index": self.index_name, "_id": str(inode_num)}})
+                operations.append(path_and_size)
                 doc_id_list.append(inode_num)
                 data_count += 1
-            LOGGER.info("%d items inserted", int(len(es_data) / 2))
-            self.es.bulk(body=es_data, timeout="60s", refresh=True)
-            es_data = []
+            LOGGER.info("%d items inserted", int(len(operations) / 2))
+            self.es.bulk(operations=operations, timeout="60s", refresh=True)
+            operations = []
             if data_count >= num_docs:
                 break
         return doc_id_list
 
     def update(self, doc_id: int, category: str = "", title: str = "", author: str = "", file_path: str = "", file_type: str = "", file_size: int = 0, summary: str = "") -> bool:
+        self.connect()
+        self._ensure_index_exists()
         LOGGER.debug("update(doc_id=%d, title='%s', author='%s', file_path='%r', file_type='%s', file_size=%d, summary='%s', category='%s')", doc_id, title, author, file_path, file_type, file_size, summary, category)
         doc: Dict[str, Any] = {}
         if category:
@@ -298,6 +320,8 @@ class ESManager:
         return True
 
     def delete(self, doc_id: int) -> bool:
+        self.connect()
+        self._ensure_index_exists()
         LOGGER.debug("delete(doc_id=%d)", doc_id)
         result = self.es.delete(index=self.index_name, id=str(doc_id), refresh=True)
         if "result" in result:

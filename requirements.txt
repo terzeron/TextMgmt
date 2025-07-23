@@ -10,8 +10,7 @@ click==8.1.7
 cryptography==42.0.7
 dill==0.3.8
 EbookLib==0.18
-elastic-transport==7.16.0
-elasticsearch7==7.17.9
+elasticsearch==8.14.0
 fastapi==0.110.0
 h11==0.14.0
 httpcore==1.0.5
@@ -54,3 +53,11 @@ typing_extensions==4.10.0
 tzlocal==5.2
 urllib3==1.26.18
 uvicorn==0.27.1
+fastapi
+python-multipart
+Jinja2
+pillow
+python-magic
+PyPDF2
+mammoth
+beautifulsoup4

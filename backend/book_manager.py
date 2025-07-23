@@ -38,21 +38,21 @@ class BookManager:
         if "TM_WORK_DIR" not in os.environ:
             LOGGER.error("The environment variable TM_WORK_DIR is not set.")
             sys.exit(-1)
-
         self.path_prefix = Path(os.environ["TM_WORK_DIR"])
-        LOGGER.debug(self.path_prefix)
         self.es_manager = ESManager()
-        self.es_manager.create_index()
 
     def __del__(self) -> None:
         del self.es_manager
+
+    def is_healthy(self) -> bool:
+        return self.es_manager.is_healthy()
 
     async def get_categories(self) -> Tuple[List[str], Optional[str]]:
         LOGGER.debug("# get_categories()")
         categories = self.es_manager.search_and_aggregate_by_category()
         return categories, None
 
-    async def get_books_in_category(self, category: str) -> Tuple[List[Book], Optional[str]]:
+    async def get_books_in_category(self, category: str, page: int = 1, page_size: int = 10) -> Tuple[List[Book], Optional[str]]:
         doc_list = self.es_manager.search_by_category(category, max_result_count=50000)
         if doc_list and len(doc_list) > 0:
             return [Book(book_id, doc) for book_id, doc, _score in doc_list], None
@@ -97,9 +97,9 @@ class BookManager:
             return [Book(book_id, doc) for book_id, doc, _score in result_list], None
         return [], "No books found"
 
-    async def search_similar_books(self, book_id: int, max_result_count: int = sys.maxsize) -> Tuple[List[Book], Optional[str]]:
-        LOGGER.debug("# search_similar_books(book_id=%d)", book_id)
-        doc = self.es_manager.search_by_id(book_id)
+    async def search_similar_books(self, book_id: str, max_result_count: int = sys.maxsize) -> Tuple[List[Book], Optional[str]]:
+        LOGGER.debug("# search_similar_books(book_id=%s)", book_id)
+        doc = self.es_manager.search_by_id(int(book_id))
         result_list = self.es_manager.search_similar_docs(doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], max_result_count=max_result_count)
         if result_list and len(result_list) > 0:
             return [Book(doc_id, doc) for doc_id, doc, _score in result_list], None
@@ -112,26 +112,27 @@ class BookManager:
             return doc_id_list[0], None
         return None, f"can't add book '{data}' to ElasticSearch"
 
-    async def update_book(self, book_id: int, new_category: str, new_title: str, new_author: str, new_path: Path, new_type: str) -> Tuple[str, Optional[str]]:
-        LOGGER.debug("# update_book(book_id=%d, new_category='%s', new_title='%s', new_author='%s', new_path='%r', new_file_type='%s')", book_id, new_category, new_title, new_author, new_path, new_type)
+    async def update_book(self, book_id: int, book_data: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+        LOGGER.debug("# update_book(book_id=%d, book_data=%r)", int(book_id), book_data)
         # rename file
         doc = self.es_manager.search_by_id(book_id)
         if doc:
             book = Book(book_id, doc)
             file_path = book.file_path
-            new_path = file_path.parent.parent / new_category / (new_title + "." + new_type)
+            new_path = file_path.parent.parent / book_data["category"] / (book_data["title"] + "." + book_data["file_type"])
             try:
                 file_path.rename(new_path)
             except IOError as e:
                 return "Error", f"can't move '{file_path}' to '{new_path}', {e}"
 
+            book_data["file_path"] = str(new_path)
             # update book info in ElasticSearch
-            if self.es_manager.update(book_id, category=new_category, title=new_title, author=new_author, file_path=str(new_path), file_type=new_type):
+            if self.es_manager.update(book_id, **book_data):
                 return "Ok", None
         return "Error", f"can't update book information of '{book_id}' in ElasticSearch, no such a book"
 
     async def delete_book(self, book_id: int) -> Tuple[str, Optional[str]]:
-        LOGGER.debug("# delete_book(book_id=%d)", book_id)
+        LOGGER.debug("# delete_book(book_id=%d)", int(book_id))
         doc = self.es_manager.search_by_id(book_id)
 
         # delete file

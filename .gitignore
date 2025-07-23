@@ -31,7 +31,13 @@ frontend/.env.local
 frontend/.env.development
 frontend/.env.production
 
+.mypy_cache/
+.pytest_cache/
+
 .python-version
 .env
 run.log*
-__pycache__
+.dependency_cache
+.last_test_success
+.test_performance_cache
+unicorn.pid

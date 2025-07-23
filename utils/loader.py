@@ -330,10 +330,17 @@ def main() -> int:
         LOGGER.error("can't find such a file or directory '%s'", path)
         return 0
 
+    es_manager = ESManager(es_url=os.environ.get("TM_ES_URL"), index_name=os.environ.get("TM_ES_INDEX"))
+    try:
+        es_manager.is_healthy()
+    except Exception as e:
+        LOGGER.error(f"can't connect to es server: {es_manager.es_url}")
+        LOGGER.exception(e)
+        return -1
+
     data = Loader.read_files(path)
 
     start_time = datetime.now()
-    es_manager = ESManager()
     try:
         es_manager.create_index()
     except Exception as e:

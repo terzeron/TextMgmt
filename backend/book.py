@@ -24,6 +24,7 @@ class Book:
         self.category: str = info["category"]
         self.title: str = info["title"]
         self.author: str = info["author"]
+        self.summary: str = info.get("summary", "")
         self.file_path: Path = self.path_prefix / info["file_path"]
         self.file_type: str = info["file_type"]
         self.file_size: int = info["file_size"]
@@ -35,6 +36,7 @@ class Book:
             "category": self.category,
             "title": self.title,
             "author": self.author,
+            "summary": self.summary,
             "file_path": str(self.file_path.relative_to(self.path_prefix)),
             "file_type": self.file_type,
             "file_size": self.file_size,

@@ -103,3 +103,7 @@ class TestLoader(unittest.TestCase):
         assert data
         assert 0 < len(data) <= 1000
         self.inspect_data(data)
+
+
+if __name__ == "__main__":
+    unittest.main()
