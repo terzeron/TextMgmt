@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import FacebookLogin, { FacebookLoginClient } from "@greatsumini/react-facebook-login";
-import { Button, Form, FormControl, InputGroup, Nav, Navbar } from "react-bootstrap";
+import { Button, Form, FormControl, InputGroup, Nav, Navbar, Dropdown } from "react-bootstrap";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSearch, faUser } from "@fortawesome/free-solid-svg-icons";
 import { faFacebook } from "@fortawesome/free-brands-svg-icons";
-import { getApiUrlPrefix } from "./Common.js";
+import { getApiUrlPrefix, jsonGetReq } from "./Common.js";
 
 export default function Navigation() {
     const appId = import.meta.env.VITE_FACEBOOK_APP_ID;
@@ -15,6 +15,21 @@ export default function Navigation() {
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [picture, setPicture] = useState('');
+    const [searchKeyword, setSearchKeyword] = useState('');
+    const [searchResults, setSearchResults] = useState([]);
+    const [hasSearched, setHasSearched] = useState(false);
+    // 검색 실행 로직을 함수로 추출
+    const handleSearch = () => {
+        if (searchKeyword) {
+            setHasSearched(true);
+            jsonGetReq(
+                `/search/${encodeURIComponent(searchKeyword)}`,
+                null,
+                (data) => { setSearchResults(data); },
+                (error) => { console.error(error); }
+            );
+        }
+    };
 
     useEffect(() => {
         if (!appId) {
@@ -117,22 +132,29 @@ export default function Navigation() {
                     <Nav className="me-auto my-2 my-lg-0" style={{maxHeight: '100px'}} navbarScroll>
                         <Nav.Link href="/edit">편집</Nav.Link>
                         <Nav.Link href="/view">조회</Nav.Link>
-                        {login && <Nav.Link onClick={logout}>로그아웃</Nav.Link>}
                     </Nav>
-                    <Form>
-                        <InputGroup>
-                            <FormControl type="text" placeholder="키워드" className="mr-sm-2"/>
-                            <Button variant="outline-success" size="sm" onClick={() => alert('검색 버튼 클릭됨')}>
-                                검색
-                                <FontAwesomeIcon icon={faSearch}/>
-                            </Button>
-                        </InputGroup>
-                    </Form>
-                    <div className="ms-2">
-                        {login && picture ? (
-                            <img src={picture} alt={"profile image of " + email} title={email} width="38" height="38" className="rounded-circle" style={{ 'border': '1px solid #cccccc' }} />
-                        ) : (
-                            <FontAwesomeIcon icon={faUser} />
+                    <div className="d-flex align-items-center ms-auto">
+                        <Form onSubmit={e => { e.preventDefault(); handleSearch(); }} className="me-2">
+                            <InputGroup>
+                                <FormControl type="text" placeholder="키워드" className="mr-sm-2" value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)}/>
+                                <Button type="button" variant="outline-success" size="sm" onClick={handleSearch}>
+                                    검색<FontAwesomeIcon icon={faSearch}/>
+                                </Button>
+                            </InputGroup>
+                        </Form>
+                        {login && (
+                            <Dropdown align="end">
+                                <Dropdown.Toggle as="div" style={{ cursor: 'pointer', display: 'inline-block' }}>
+                                    {picture ? (
+                                        <img src={picture} alt={email} title={email} width="38" height="38" className="rounded-circle" style={{ border: '1px solid #cccccc' }} />
+                                    ) : (
+                                        <FontAwesomeIcon icon={faUser} size="lg" />
+                                    )}
+                                </Dropdown.Toggle>
+                                <Dropdown.Menu>
+                                    <Dropdown.Item onClick={logout}>로그아웃</Dropdown.Item>
+                                </Dropdown.Menu>
+                            </Dropdown>
                         )}
                     </div>
                 </Navbar.Collapse>
@@ -157,7 +179,7 @@ export default function Navigation() {
                         Login with Facebook <FontAwesomeIcon icon={faFacebook}/>
                     </FacebookLogin>
                 )}
-                {authorized && <Outlet />}
+                {authorized && <Outlet context={{searchResults, hasSearched}} />}
                 {login && !authorized && <div>{name}님으로 로그인하셨습니다. 권한 부족</div>}
             </div>
         </div>

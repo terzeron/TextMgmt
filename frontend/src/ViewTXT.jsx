@@ -22,7 +22,8 @@ export default function ViewTXT({bookId, lineCount}) {
             downloadUrl,
             null,
             (result) => {
-                const lineList = result.split("\n").slice(0, lineCount).map((line) => line);
+                const lines = result.split("\n");
+                const lineList = lineCount > 0 ? lines.slice(0, lineCount) : lines;
                 setFileContent(lineList);
                 setIsLoading(false);
             },

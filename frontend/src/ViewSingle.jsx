@@ -15,7 +15,8 @@ import ViewImage from "./ViewImage";
 import {Button, Card} from "react-bootstrap";
 
 export default function ViewSingle(props) {
-    const {entryId, type, path} = useParams();
+    const { entryId, fileType: paramFileType, filePath: paramFilePath } = useParams();
+    const standalone = Boolean(entryId && paramFileType && paramFilePath);
     const [bookId, setBookId] = useState(0);
     const [filePath, setFilePath] = useState('');
     const [fileType, setFileType] = useState('');
@@ -23,23 +24,23 @@ export default function ViewSingle(props) {
     const [pageCount, setPageCount] = useState(0);
 
     useEffect(() => {
-        if (entryId && type && path) {
-            // as single page
-            //console.log(`ViewSingle: useEffect() entryId=${entryId}, fileType=${fileType}, filePath=${path}`);
-            setBookId(entryId);
-        } else if (props) {
-            // as sub-component
-            //console.log(`ViewSingle: useEffect() props=${JSON.stringify(props)}`);
+        if (entryId && paramFileType && paramFilePath) {
+            // standalone page via route
+            setBookId(Number(entryId));
+            setFileType(paramFileType);
+            setFilePath(paramFilePath);
+        } else if (props.bookId) {
+            // nested component
             setBookId(props.bookId);
-            setFilePath(props.filePath);
             setFileType(props.fileType);
+            setFilePath(props.filePath);
             setLineCount(props.lineCount);
             setPageCount(props.pageCount);
         }
         return () => {
-            setBookId("");
+            setBookId(0);
         };
-    }, [props, entryId, type, path]);
+    }, [props, entryId, paramFileType, paramFilePath]);
 
     const componentMap = {
         'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} />,
@@ -57,34 +58,33 @@ export default function ViewSingle(props) {
 
     return (
         <Card>
-            <Card.Header>
-                책 보기
-                <span>
-                    {
-                        props.viewUrl &&
-                        <a href={props.viewUrl} target="_blank" rel="noreferrer">
-                            <Button variant="outline-primary" size="sm" disabled={!props.viewUrl} className="float-end">새 창에서 전체 보기</Button>
-                        </a>
-                    }
-                    {
-                        props.downloadUrl &&
-                        <a href={props.downloadUrl} target="_blank" rel="noreferrer">
-                            <Button variant="outline-primary" size="sm" disabled={!props.downloadUrl} className="float-end">다운로드</Button>
-                        </a>
-                    }
-                </span>
-            </Card.Header>
+            {!standalone && (
+                <Card.Header>
+                    책 보기
+                    <span>
+                        {props.viewUrl && (
+                            <a href={props.viewUrl} target="_blank" rel="noreferrer">
+                                <Button variant="outline-primary" size="sm" disabled={!props.viewUrl} className="float-end">
+                                    새 창에서 전체 보기
+                                </Button>
+                            </a>
+                        )}
+                        {props.downloadUrl && (
+                            <a href={props.downloadUrl} target="_blank" rel="noreferrer">
+                                <Button variant="outline-primary" size="sm" disabled={!props.downloadUrl} className="float-end">
+                                    다운로드
+                                </Button>
+                            </a>
+                        )}
+                    </span>
+                </Card.Header>
+            )}
             <Card.Body>
-                {
-                    bookId && (
-                        <>
-                            { bookId && renderComponent }
-                        </>
-                    )
-                }
-                {
-                    !bookId && <div>책이 선택되지 않았습니다.</div>
-                }
+                {bookId ? (
+                    renderComponent
+                ) : (
+                    <div>책이 선택되지 않았습니다.</div>
+                )}
             </Card.Body>
         </Card>
     )

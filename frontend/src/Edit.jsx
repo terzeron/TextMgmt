@@ -2,6 +2,7 @@ import './Edit.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
 import {useCallback, useEffect, useState, Suspense} from 'react';
+import {useParams, useOutletContext} from 'react-router-dom';
 
 import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
@@ -19,6 +20,8 @@ import {DateTime} from "luxon";
 
 
 export default function Edit() {
+    const { category: routeCategory, bookId: routeBookId } = useParams();
+    const {searchResults, hasSearched} = useOutletContext();
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
 
@@ -64,19 +67,6 @@ export default function Edit() {
             setDownloadUrl('');
         };
     }, [] /* rendered once */);
-
-    useEffect(() => {
-        console.log(`bookInfo=${JSON.stringify(bookInfo)}`);
-        // determine new file name from author and title
-        let newName = '';
-        if (bookInfo['author']) {
-            newName = '[' + bookInfo['author'] + '] ';
-        }
-        if (bookInfo['title']) {
-            newName += bookInfo['title'] + '.' + bookInfo['file_type'];
-        }
-        setNewFileName(newName);
-    }, [bookInfo, setNewFileName]);
 
     const decomposeTitle = useCallback((book) => {
         let title = '';
@@ -236,6 +226,32 @@ export default function Edit() {
         const nextEntryId = determineNextEntryId(folderData, selectedEntryId);
         setNextEntryId(nextEntryId);
     }, [folderData, categoryList, decomposeTitle]);
+
+    useEffect(() => {
+        if (routeCategory && routeBookId && folderData.length > 0) {
+            const categoryItem = folderData.find(item => item.id === routeCategory);
+            if (!categoryItem) return;
+            // load children if not yet
+            if (!categoryItem.children || categoryItem.children.length === 0) {
+                entryClicked(routeCategory);
+            } else {
+                entryClicked(`${routeCategory}/${routeBookId}`);
+            }
+        }
+    }, [routeCategory, routeBookId, folderData, entryClicked]);
+
+    useEffect(() => {
+        console.log(`bookInfo=${JSON.stringify(bookInfo)}`);
+        // determine new file name from author and title
+        let newName = '';
+        if (bookInfo['author']) {
+            newName = '[' + bookInfo['author'] + '] ';
+        }
+        if (bookInfo['title']) {
+            newName += bookInfo['title'] + '.' + bookInfo['file_type'];
+        }
+        setNewFileName(newName);
+    }, [bookInfo, setNewFileName]);
 
     const newFileNameChanged = useCallback((e) => {
         setNewFileName(e.target.value);
@@ -451,13 +467,10 @@ export default function Edit() {
                 </Col>
 
                 <Col md="9" lg="10" className="section">
-                    {
-                        !bookInfo['book_id'] &&
-                        <Card.Body>책이 선택되지 않았습니다.</Card.Body>
-                    }
+                    {hasSearched && <SearchResult results={searchResults}/>}
                     {
                         bookInfo['book_id'] &&
-                        <>
+                            <>
                             <Row id="top_panel">
                                 <Col id="left_panel" md="6" lg="5" className="ps-0 pe-0">
                                     <BookInfoView bookInfo={bookInfo} isEditEnabled={true} onTitleChange={titleChanged} onAuthorChange={authorChanged} onCutTitleButtonClick={cutTitleButtonClicked} onCutAuthorButtonClick={cutAuthorButtonClicked} onExchangeButtonClick={exchangeButtonClicked} onResetButtonClick={resetButtonClicked}/>
@@ -518,16 +531,24 @@ export default function Edit() {
 
                                 <Col id="right_panel" md="6" lg="7" className="ps-0 pe-0">
                                     <SimilarBooks bookId={bookInfo['book_id']} onSelect={entryClicked}/>
-                                    <SearchResult/>
                                 </Col>
                             </Row>
 
                             <Row id="bottom_panel">
                                 <Col id="right_panel" className="ps-0 pe-0">
-                                    <ViewSingle key={bookInfo['book_id']} bookId={bookInfo['book_id']} filePath={bookInfo['file_path']} fileType={bookInfo['file_type']} viewUrl={viewUrl} downloadUrl={downloadUrl} lineCount={100} pageCount={10}/>
+                                    <ViewSingle
+                                        key={bookInfo['book_id']}
+                                        bookId={bookInfo['book_id']}
+                                        filePath={bookInfo['file_path']}
+                                        fileType={bookInfo['file_type']}
+                                        viewUrl={viewUrl}
+                                        downloadUrl={downloadUrl}
+                                        lineCount={100}
+                                        pageCount={10}
+                                    />
                                 </Col>
                             </Row>
-                        </>
+                            </>
                     }
                 </Col>
             </Row>
