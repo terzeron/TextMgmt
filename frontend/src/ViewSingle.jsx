@@ -15,31 +15,31 @@ import ViewImage from "./ViewImage";
 import {Button, Card} from "react-bootstrap";
 
 export default function ViewSingle(props) {
-    const {entryId, type, path} = useParams();
+    const {entryId, fileType, filePath: path} = useParams();
     const [bookId, setBookId] = useState(0);
     const [filePath, setFilePath] = useState('');
-    const [fileType, setFileType] = useState('');
+    const [currentFileType, setCurrentFileType] = useState('');
     const [lineCount, setLineCount] = useState(0);
     const [pageCount, setPageCount] = useState(0);
 
     useEffect(() => {
-        if (entryId && type && path) {
+        if (entryId && fileType && path) {
             // as single page
-            //console.log(`ViewSingle: useEffect() entryId=${entryId}, fileType=${fileType}, filePath=${path}`);
             setBookId(entryId);
-        } else if (props) {
+            setCurrentFileType(fileType);
+            setFilePath(decodeURIComponent(path));
+        } else if (props.bookId) {
             // as sub-component
-            //console.log(`ViewSingle: useEffect() props=${JSON.stringify(props)}`);
             setBookId(props.bookId);
             setFilePath(props.filePath);
-            setFileType(props.fileType);
+            setCurrentFileType(props.fileType);
             setLineCount(props.lineCount);
             setPageCount(props.pageCount);
         }
         return () => {
-            setBookId("");
+            setBookId(0);
         };
-    }, [props, entryId, type, path]);
+    }, [props, entryId, fileType, path]);
 
     const componentMap = {
         'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} />,
@@ -53,7 +53,7 @@ export default function ViewSingle(props) {
         'gif': <ViewImage bookId={bookId} />,
         'png': <ViewImage bookId={bookId} />
     };
-    const renderComponent = componentMap[fileType];
+    const renderComponent = componentMap[currentFileType];
 
     return (
         <Card>
