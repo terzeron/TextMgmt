@@ -226,12 +226,19 @@ class ESManager:
         }
         return self._search(query, max_result_count=max_result_count)
 
-    def search_similar_docs(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_similar_docs(self, doc_id: str, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
         self.connect()
         self._ensure_index_exists()
-        LOGGER.debug("search_similar_docs(category='%s', title='%s', author='%s', type='%s', size=%d, summary='%s', max_result_count=%d)", category, title, author, file_type, file_size, summary, max_result_count)
+        LOGGER.debug("search_similar_docs(id=%s, category='%s', title='%s', author='%s', type='%s', size=%d, summary='%s', max_result_count=%d)", doc_id, category, title, author, file_type, file_size, summary, max_result_count)
         query = {
             "bool": {
+                "must_not": [
+                    {
+                        "term": {
+                            "_id": doc_id
+                        }
+                    }
+                ],
                 "should": [
                     {"match": {"summary": {"query": summary, "boost": 10}}},
                     {"match": {"title": {"query": title, "boost": 5}}},
