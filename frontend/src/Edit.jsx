@@ -210,7 +210,7 @@ export default function Edit() {
                     const newBook = decomposeTitle(book);
                     setBookInfo(newBook);
                     setViewUrl('/view/' + book['file_type'] + '/' + bookId + '/' + encodeURIComponent(book['file_path']));
-                    setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
+                    setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId + '/' + encodeURIComponent(book['file_path']));
 
                     // determine other category list
                     const otherCategoryList = categoryList
