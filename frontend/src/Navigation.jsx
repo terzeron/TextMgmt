@@ -6,6 +6,7 @@ import {Button, Form, FormControl, InputGroup, Nav, Navbar} from "react-bootstra
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {faSearch, faUser} from "@fortawesome/free-solid-svg-icons";
 import {faFacebook} from "@fortawesome/free-brands-svg-icons";
+import useSearchStore from "./stores/searchStore";
 
 export default function Navigation() {
     const appId = import.meta.env.VITE_FACEBOOK_APP_ID;
@@ -16,8 +17,11 @@ export default function Navigation() {
     const [, setEmail] = useState('');
     const [picture, setPicture] = useState('');
 
-    const searchClicked = () => {
-        alert('검색 버튼 클릭됨');
+    const {query, setQuery, search} = useSearchStore();
+
+    const handleSearch = (e) => {
+        e.preventDefault();
+        search(query);
     };
 
     useEffect(() => {
@@ -97,10 +101,10 @@ export default function Navigation() {
                             !login && <Nav.Link href="/">로그인</Nav.Link>
                         }
                     </Nav>
-                    <Form>
+                    <Form onSubmit={handleSearch}>
                         <InputGroup>
-                            <FormControl type="text" placeholder="키워드" className="mr-sm-2"/>
-                            <Button variant="outline-success" size="sm" onClick={searchClicked}>
+                            <FormControl type="text" placeholder="키워드" className="mr-sm-2" value={query} onChange={(e) => setQuery(e.target.value)}/>
+                            <Button variant="outline-success" size="sm" type="submit">
                                 검색
                                 <FontAwesomeIcon icon={faSearch}/>
                             </Button>

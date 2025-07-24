@@ -7,14 +7,18 @@ export default function ViewTXT(props) {
     const [fileContent, setFileContent] = useState([]);
 
     useEffect(() => {
-        if (props && props.bookId) {
-            const downloadUrl = '/download/' + props.bookId;
+        if (props && props.bookId && props.filePath) {
+            const downloadUrl = '/download/' + props.bookId + "/" + props.filePath;
             textGetReq(downloadUrl, null, (result) => {
                 const lineList = result.split('\n').map(line => {
                         return line;
                     }
                 );
-                setFileContent(lineList);
+                if (props.lineCount > 0) {
+                    setFileContent(lineList.slice(0, props.lineCount));
+                } else {
+                    setFileContent(lineList);
+                }
             }, (error) => {
                 setErrorMessage(`file content load failed, ${error}`);
             });
@@ -23,7 +27,7 @@ export default function ViewTXT(props) {
         return () => {
             setFileContent('');
         };
-    }, [props]);
+    }, [props.bookId, props.filePath, props.lineCount]);
 
     return (
         <div className="text-left">
@@ -44,5 +48,6 @@ export default function ViewTXT(props) {
 
 ViewTXT.propTypes = {
     bookId: PropTypes.number.isRequired,
-    lineCount: PropTypes.number
+    lineCount: PropTypes.number,
+    filePath: PropTypes.string.isRequired,
 }

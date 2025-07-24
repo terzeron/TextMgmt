@@ -42,16 +42,16 @@ export default function ViewSingle(props) {
     }, [props, entryId, fileType, path]);
 
     const componentMap = {
-        'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} />,
+        'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} filePath={filePath}/>,
         'epub': <ViewEPUB bookId={bookId} filePath={filePath} />,
-        'doc': <ViewDOC bookId={bookId} />,
-        'docx': <ViewDOC bookId={bookId} />,
-        'txt': <ViewTXT bookId={bookId} lineCount={lineCount} />,
-        'html': <ViewHTML bookId={bookId} />,
-        'rtf': <ViewRTF bookId={bookId} />,
-        'jpg': <ViewImage bookId={bookId} />,
-        'gif': <ViewImage bookId={bookId} />,
-        'png': <ViewImage bookId={bookId} />
+        'doc': <ViewDOC bookId={bookId} filePath={filePath} />,
+        'docx': <ViewDOC bookId={bookId} filePath={filePath} />,
+        'txt': <ViewTXT bookId={bookId} lineCount={lineCount} filePath={filePath} />,
+        'html': <ViewHTML bookId={bookId} filePath={filePath} />,
+        'rtf': <ViewRTF bookId={bookId} filePath={filePath} />,
+        'jpg': <ViewImage bookId={bookId} filePath={filePath} />,
+        'gif': <ViewImage bookId={bookId} filePath={filePath} />,
+        'png': <ViewImage bookId={bookId} filePath={filePath} />
     };
     const renderComponent = componentMap[currentFileType];
 

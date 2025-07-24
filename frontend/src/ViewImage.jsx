@@ -6,18 +6,15 @@ export default function ViewImage(props) {
   const [url, setUrl] = useState("");
 
   useEffect(() => {
-    console.log(`ViewImage: useEffect(${props})`, props);
-
-    if (props && props.bookId) {
-      const url = getApiUrlPrefix() + '/download/' + props.bookId;
-      console.log(url);
+    if (props && props.bookId && props.filePath) {
+      const url = getApiUrlPrefix() + '/download/' + props.bookId + '/' + props.filePath;
       setUrl(url);
     }
 
     return () => {
       setUrl('')
     };
-  }, [props]);
+  }, [props.bookId, props.filePath]);
 
   return (
     <img src={url} alt='book image'/>
@@ -26,6 +23,7 @@ export default function ViewImage(props) {
 
 ViewImage.propTypes = {
     bookId: PropTypes.number.isRequired,
+    filePath: PropTypes.string.isRequired
 }
 
 

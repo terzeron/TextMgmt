@@ -16,9 +16,11 @@ import SimilarBooks from './SimilarBooks';
 import SearchResult from './SearchResult';
 import ViewSingle from "./ViewSingle";
 import {DateTime} from "luxon";
+import useSearchStore from "./stores/searchStore";
 
 
 export default function Edit() {
+    const {searchResult, isLoading, error} = useSearchStore();
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
 
@@ -117,45 +119,14 @@ export default function Edit() {
         return {...book, title: title, author: author, file_type: extension};
     }, []);
 
-    const entryClicked = useCallback((selectedEntryId) => {
-        const determineNextEntryId = (folderData, selectedEntryId) => {
-            /*
-            let indexClicked = null;
-            if (dirName === ROOT_DIRECTORY) {
-                indexClicked = folderData.findIndex((item) => item.key === fileName);
-                console.log(`determineNextEntryId(): indexClicked=${indexClicked}`);
-
-                if (indexClicked < folderData.length - 1) {
-                    // no last entry
-                    const nextEntryId = folderData[indexClicked + 1].key;
-                    console.log(`determineNextEntryId(): nextEntryId=${nextEntryId}`);
-                    return dirName + '/' + nextEntryId;
-                }
-            } else {
-                for (let entry of folderData) {
-                    if (entry.key === dirName && entry.nodes && entry.nodes.length > 0) {
-                        console.log(`determineNextEntryId(): entry=`, entry);
-                        indexClicked = entry.nodes.findIndex((item) => item.key === fileName);
-                        console.log(`determineNextEntryId(): indexClicked=${indexClicked}`);
-
-                        if (indexClicked < entry.nodes.length - 1) {
-                            // no last entry
-                            const nextEntryId = entry.nodes[indexClicked + 1].key;
-                            console.log(`determineNextEntryId(): nextEntryId=${nextEntryId}`);
-                            return dirName + '/' + nextEntryId;
-                        }
-                        break;
-                    }
-                }
-            }
-            */
-            const category = selectedEntryId.split('/')[0];
-            const bookId = selectedEntryId.split('/')[1];
-            if (bookId) {
+    const selectBook = useCallback((book) => {
+        const determineNextEntryId = (folderData, selectedBook) => {
+            const category = selectedBook.category;
+            if (category) {
                 const children = folderData.find(obj => obj.id === category)?.children;
                 if (children) {
-                    const index = children.findIndex(item => item.id === selectedEntryId);
-                    if (0 <= index && index < (children.length - 2)) {
+                    const index = children.findIndex(item => item.id === `${category}/${selectedBook.book_id}`);
+                    if (0 <= index && index < (children.length - 1)) {
                         return children[index + 1].id;
                     }
                 }
@@ -163,79 +134,88 @@ export default function Edit() {
             return null;
         };
 
-        const selectedFolderData = folderData.find(o => o.id === selectedEntryId);
-        if (selectedFolderData) {
-            // category entry
-            const booksInCategoryUrl = '/categories/' + selectedEntryId;
-            const isChildrenLoaded = folderData.find(item => item.id === selectedEntryId && item.children && item.children.length > 0)
-            if (!isChildrenLoaded) {
-                jsonGetReq(booksInCategoryUrl, null, (bookList) => {
-                    const data = folderData.map(item => {
-                        if (item.id === selectedEntryId) {
-                            // add book list to the selected category
-                            return {
-                                ...item,
-                                children: bookList
-                                    .sort((a, b) => a['title'].localeCompare(b['title']))
-                                    .map(book => {
-                                        return {
-                                            id: item.id + '/' + book['book_id'].toString(),
-                                            label: book['title'] + '.' + book['file_type'],
-                                            fileType: book['file_type'],
-                                            children: [],
-                                            book: book,
-                                        }
-                                    })
-                            }
-                        } else {
-                            return item;
-                        }
+        if (!book || !book.book_id) {
+            setErrorMessage('Invalid book selected');
+            return;
+        }
+
+        const { book_id, category, file_path, file_type } = book;
+
+        // Immediately update the view with the book from search result
+        setOriginalBookInfo(book);
+        const newBook = decomposeTitle(book);
+        setBookInfo(newBook);
+        setViewUrl('/view/' + file_type + '/' + book_id + '/' + encodeURIComponent(file_path));
+        setDownloadUrl(getApiUrlPrefix() + '/download/' + book_id + '/' + encodeURIComponent(file_path));
+        setSelectedEntryId(`${category}/${book_id}`);
+
+        const otherCategoryList = categoryList
+            .sort((a, b) => a.localeCompare(b))
+            .filter(cat => cat !== category)
+        setOtherCategoryList(otherCategoryList);
+
+        // Determine next entry in the background if category is loaded
+        const nextEntryId = determineNextEntryId(folderData, book);
+        setNextEntryId(nextEntryId);
+
+    }, [categoryList, decomposeTitle, folderData]);
+
+    const entryClicked = useCallback((entry) => {
+        // If entry is a string, it's from the folder tree
+        if (typeof entry === 'string') {
+            const selectedEntryId = entry;
+            const isCategoryClick = !selectedEntryId.includes('/');
+            if (isCategoryClick) {
+                const categoryId = selectedEntryId;
+                const isChildrenLoaded = folderData.find(item => item.id === categoryId)?.children;
+                if (!isChildrenLoaded) {
+                    const booksInCategoryUrl = '/categories/' + categoryId;
+                    jsonGetReq(booksInCategoryUrl, null, (bookList) => {
+                        setFolderData(currentFolderData => currentFolderData.map(item =>
+                            item.id === categoryId
+                                ? { ...item, children: bookList.sort((a, b) => a['title'].localeCompare(b['title'])).map(b => ({
+                                        id: `${item.id}/${b.book_id}`,
+                                        label: `${b.title}.${b.file_type}`,
+                                        fileType: b.file_type,
+                                        children: [],
+                                        book: b,
+                                    }))}
+                                : item
+                        ));
                     });
-                    setFolderData(data);
+                }
+            } else { // This is a book click from folder tree
+                const category = selectedEntryId.split('/')[0];
+                const book = folderData.find(c => c.id === category)?.children?.find(b => b.id === selectedEntryId)?.book;
+                if (book) {
+                    selectBook(book);
+                }
+            }
+        } else { // If entry is an object, it's from the search result
+            const book = entry;
+            selectBook(book);
+
+            // Silently load category data in the background if not already loaded
+            const categoryId = book.category;
+            const isCategoryLoaded = folderData.find(item => item.id === categoryId)?.children;
+            if (!isCategoryLoaded) {
+                const booksInCategoryUrl = '/categories/' + categoryId;
+                jsonGetReq(booksInCategoryUrl, null, (bookList) => {
+                    setFolderData(currentFolderData => currentFolderData.map(item =>
+                        item.id === categoryId
+                            ? { ...item, children: bookList.sort((a, b) => a['title'].localeCompare(b['title'])).map(b => ({
+                                    id: `${item.id}/${b.book_id}`,
+                                    label: `${b.title}.${b.file_type}`,
+                                    fileType: b.file_type,
+                                    children: [],
+                                    book: b,
+                                }))}
+                            : item
+                    ));
                 });
             }
-        } else {
-            // book entry
-            const category = selectedEntryId.split('/')[0];
-            const bookId = selectedEntryId.split('/')[1];
-            const booksInCategory = folderData.find(categoryItem => categoryItem.id === category)?.children;
-            setSelectedEntryId(selectedEntryId);
-            if (booksInCategory) {
-                const book = booksInCategory.find(bookItem => bookItem.id === selectedEntryId)?.book;
-                if (book) {
-                    // save as original
-                    setOriginalBookInfo(book);
-
-                    // decompose file name to (author, title, extension)
-                    const newBook = decomposeTitle(book);
-                    setBookInfo(newBook);
-                    setViewUrl('/view/' + book['file_type'] + '/' + bookId + '/' + encodeURIComponent(book['file_path']));
-                    setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId + '/' + encodeURIComponent(book['file_path']));
-
-                    // determine other category list
-                    const otherCategoryList = categoryList
-                        .sort((a, b) => a.localeCompare(b))
-                        .filter(cat => cat !== category)
-                    setOtherCategoryList(otherCategoryList);
-                } else {
-                    setErrorMessage(`can't find the selected book`);
-                }
-            } else {
-                setErrorMessage(`can't find the selected category`);
-            }
         }
-
-        /*
-        if (selectedEntryId.indexOf('/') <= 0) {
-            selectedEntryId = ROOT_DIRECTORY + '/' + selectedEntryId;
-            console.log(`entryClicked(): key=${selectedEntryId}`);
-        }
-        */
-
-        // determine nextEntryId
-        const nextEntryId = determineNextEntryId(folderData, selectedEntryId);
-        setNextEntryId(nextEntryId);
-    }, [folderData, categoryList, decomposeTitle]);
+    }, [folderData, selectBook]);
 
     const newFileNameChanged = useCallback((e) => {
         setNewFileName(e.target.value);
@@ -451,15 +431,11 @@ export default function Edit() {
                 </Col>
 
                 <Col md="9" lg="10" className="section">
-                    {
-                        !bookInfo['book_id'] &&
-                        <Card.Body>책이 선택되지 않았습니다.</Card.Body>
-                    }
-                    {
-                        bookInfo['book_id'] &&
-                        <>
-                            <Row id="top_panel">
-                                <Col id="left_panel" md="6" lg="5" className="ps-0 pe-0">
+                    <Row id="top_panel">
+                        <Col id="left_panel" md="6" lg="5" className="ps-0 pe-0">
+                            {
+                                bookInfo['book_id'] ?
+                                <>
                                     <BookInfoView bookInfo={bookInfo} isEditEnabled={true} onTitleChange={titleChanged} onAuthorChange={authorChanged} onCutTitleButtonClick={cutTitleButtonClicked} onCutAuthorButtonClick={cutAuthorButtonClicked} onExchangeButtonClick={exchangeButtonClicked} onResetButtonClick={resetButtonClicked}/>
 
                                     <Card>
@@ -514,20 +490,23 @@ export default function Edit() {
                                             }
                                         </Card.Body>
                                     </Card>
-                                </Col>
+                                </>
+                                : <Card.Body>책이 선택되지 않았습니다.</Card.Body>
+                            }
+                        </Col>
 
-                                <Col id="right_panel" md="6" lg="7" className="ps-0 pe-0">
-                                    <SimilarBooks/>
-                                    <SearchResult/>
-                                </Col>
-                            </Row>
-
-                            <Row id="bottom_panel">
-                                <Col id="right_panel" className="ps-0 pe-0">
-                                    <ViewSingle key={bookInfo['book_id']} bookId={bookInfo['book_id']} filePath={bookInfo['file_path']} fileType={bookInfo['file_type']} viewUrl={viewUrl} downloadUrl={downloadUrl} lineCount={100} pageCount={10}/>
-                                </Col>
-                            </Row>
-                        </>
+                        <Col id="right_panel" md="6" lg="7" className="ps-0 pe-0">
+                            { bookInfo['book_id'] && <SimilarBooks/> }
+                            <SearchResult results={searchResult} isLoading={isLoading} error={error} entryClicked={entryClicked}/>
+                        </Col>
+                    </Row>
+                    {
+                        bookInfo['book_id'] &&
+                        <Row id="bottom_panel">
+                            <Col id="right_panel" className="ps-0 pe-0">
+                                <ViewSingle key={bookInfo['book_id']} bookId={bookInfo['book_id']} filePath={bookInfo['file_path']} fileType={bookInfo['file_type']} viewUrl={viewUrl} downloadUrl={downloadUrl} lineCount={100} pageCount={10}/>
+                            </Col>
+                        </Row>
                     }
                 </Col>
             </Row>

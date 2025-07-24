@@ -8,13 +8,13 @@ export default function ViewDOC(props) {
     const ref = useRef(null);
 
     useEffect(() => {
-        console.log(`ViewDOC: useEffect()`, props);
-        setIframeHeight(document.body.scrollHeight);
-        const uri = getApiUrlPrefix() + '/download/' + props.bookId;
-        const wordViewerUrlPrefix = 'https://view.officeapps.live.com/op/embed.aspx?src=';
-        setUrl(wordViewerUrlPrefix + encodeURIComponent(uri));
-        console.log(wordViewerUrlPrefix + encodeURIComponent(uri));
-    }, [props]);
+        if (props.bookId && props.filePath) {
+            setIframeHeight(document.body.scrollHeight);
+            const uri = getApiUrlPrefix() + '/download/' + props.bookId + '/' + props.filePath;
+            const wordViewerUrlPrefix = 'https://view.officeapps.live.com/op/embed.aspx?src=';
+            setUrl(wordViewerUrlPrefix + encodeURIComponent(uri));
+        }
+    }, [props.bookId, props.filePath]);
 
     return (
         url && <iframe src={url} ref={ref} style={{display: 'block', width: '100%', height: iframeHeight, overflow: 'visible'}}/>
@@ -22,5 +22,6 @@ export default function ViewDOC(props) {
 }
 
 ViewDOC.propTypes = {
-    bookId: PropTypes.number.isRequired
+    bookId: PropTypes.number.isRequired,
+    filePath: PropTypes.string.isRequired
 };

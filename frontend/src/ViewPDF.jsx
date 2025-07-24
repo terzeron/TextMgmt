@@ -15,20 +15,18 @@ export default function ViewPDF(props) {
     const [pageCount, setPageCount] = useState(0);
 
     useEffect(() => {
-        console.log(`ViewPDF: useEffect(${props})`, props);
-        setWidth(parentRef.current.offsetWidth);
-
-        const url = getApiUrlPrefix() + '/download/' + props.bookId;
-        console.log(url);
-        setUrl(url);
-        setPageCount(props.pageCount);
-
+        if (props.bookId && props.filePath) {
+            setWidth(parentRef.current.offsetWidth);
+            const url = getApiUrlPrefix() + '/download/' + props.bookId + '/' + props.filePath;
+            setUrl(url);
+            setPageCount(props.pageCount);
+        }
         return () => {
             setUrl('');
             setNumPages(0);
             setPageNumber(1);
         };
-    }, [props]);
+    }, [props.bookId, props.filePath, props.pageCount]);
 
     function onDocumentLoadSuccess({numPages}) {
         setNumPages(numPages);
@@ -66,5 +64,6 @@ export default function ViewPDF(props) {
 
 ViewPDF.propTypes = {
     bookId: PropTypes.number.isRequired,
-    pageCount: PropTypes.number.isRequired
+    pageCount: PropTypes.number.isRequired,
+    filePath: PropTypes.string.isRequired
 };

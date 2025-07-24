@@ -8,19 +8,16 @@ export default function ViewHTML(props) {
     const [url, setUrl] = useState("");
 
     useEffect(() => {
-        console.log(`ViewHTML: useEffect(${props})`, props);
-        setIframeHeight(document.body.scrollHeight);
-
-        const url = getApiUrlPrefix() + '/download/' + props.bookId;
-        console.log(url);
-        setUrl(url);
-        console.log(ref.current);
-
+        if (props.bookId && props.filePath) {
+            setIframeHeight(document.body.scrollHeight);
+            const url = getApiUrlPrefix() + '/download/' + props.bookId + "/" + props.filePath;
+            setUrl(url);
+        }
         return () => {
             setUrl('')
             setIframeHeight(0)
         };
-    }, [props]);
+    }, [props.bookId, props.filePath]);
 
     return (
         <iframe src={url} ref={ref} style={{display: 'block', width: '100%', height: iframeHeight, overflow: 'visible'}}/>
@@ -29,6 +26,7 @@ export default function ViewHTML(props) {
 
 ViewHTML.propTypes = {
     bookId: PropTypes.number.isRequired,
+    filePath: PropTypes.string.isRequired,
 };
 
 

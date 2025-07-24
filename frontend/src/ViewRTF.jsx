@@ -17,28 +17,27 @@ export default function ViewRTF(props) {
     };
 
     useEffect(() => {
-        console.log(`ViewRTF: useEffect()`, props);
-        RTFJS.loggingEnabled(false);
-        const downloadUrl = '/download/' + props.bookId;
-        console.log(downloadUrl);
-        textGetReq(downloadUrl, null, (result) => {
-            const doc = new RTFJS.Document(stringToArrayBuffer(result), null);
-            doc.render().then((htmlElements) => {
-                const node = document.createElement("div");
-                htmlElements.map((element) => {
-                    node.appendChild(element);
+        if (props.bookId && props.filePath) {
+            RTFJS.loggingEnabled(false);
+            const downloadUrl = '/download/' + props.bookId + '/' + props.filePath;
+            textGetReq(downloadUrl, null, (result) => {
+                const doc = new RTFJS.Document(stringToArrayBuffer(result), null);
+                doc.render().then((htmlElements) => {
+                    const node = document.createElement("div");
+                    htmlElements.map((element) => {
+                        node.appendChild(element);
+                    });
+                    parentRef.current.appendChild(node);
+                }).catch((error) => {
+                    console.error(error)
                 });
-                parentRef.current.appendChild(node);
-            }).catch((error) => {
-                console.error(error)
+            }, (error) => {
+                setErrorMessage(`file content load failed, ${error}`);
             });
-        }, (error) => {
-            setErrorMessage(`file content load failed, ${error}`);
-        });
-
+        }
         return () => {
         };
-    }, [props]);
+    }, [props.bookId, props.filePath]);
 
     return (
         <div>
@@ -54,4 +53,5 @@ export default function ViewRTF(props) {
 
 ViewRTF.propTypes = {
     bookId: PropTypes.number.isRequired,
+    filePath: PropTypes.string.isRequired
 };

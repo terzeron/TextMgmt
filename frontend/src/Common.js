@@ -117,7 +117,7 @@ const apiReq = (url, method, payload, type, resolve, reject, final) => {
 export const jsonGetReq = (url, payload, resolve, reject, final) => apiReq(url, 'GET', payload, 'JSON', resolve, reject, final);
 export const jsonPutReq = (url, payload, resolve, reject, final) => apiReq(url, 'PUT', payload, 'JSON', resolve, reject, final);
 export const jsonDeleteReq = (url, payload, resolve, reject, final) => apiReq(url, 'DELETE', payload, 'JSON', resolve, reject, final);
-export const textGetReq = (url, payload, resolve, reject, final) => apiReq(url, 'GET', payload, 'TEXT', resolve, reject, payload, final);
-export const blobGetReq = (url, payload, resolve, reject, final) => apiReq(url, 'GET', payload, 'BLOB', resolve, reject, payload, final);
+export const textGetReq = (url, payload, resolve, reject, final) => apiReq(url, 'GET', payload, 'TEXT', resolve, reject, final);
+export const blobGetReq = (url, payload, resolve, reject, final) => apiReq(url, 'GET', payload, 'BLOB', resolve, reject, final);
 
 export const ROOT_DIRECTORY = '$$rootdir$$';
