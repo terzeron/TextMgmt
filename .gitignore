@@ -35,3 +35,6 @@ frontend/.env.production
 .env
 run.log*
 __pycache__
+.dependency_cache
+.last_test_success
+.test_performance_cache
