@@ -1,4 +1,5 @@
 import {useEffect, useState, useCallback, Suspense} from 'react';
+import {useParams, useOutletContext} from 'react-router-dom';
 
 import {getApiUrlPrefix} from './Common';
 
@@ -10,11 +11,16 @@ import {jsonGetReq} from './Common';
 import Folder from './Folder.jsx';
 import ViewSingle from "./ViewSingle.jsx";
 import BookInfoView from "./BookInfoView.jsx";
+import SearchResult from './SearchResult';
+
 
 export default function View() {
+    // get optional route params for deep link
+    const { category: routeCategory, bookId: routeBookId } = useParams();
+    const {searchResults, hasSearched} = useOutletContext();
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
-    const [selectedEntryId, setSelectedEntryId] = useState('');
+    // removed selectedEntryId state as it's not needed
     const [folderData, setFolderData] = useState([]);
     const [bookInfo, setBookInfo] = useState({});
     const [viewUrl, setViewUrl] = useState('');
@@ -39,7 +45,7 @@ export default function View() {
         return () => {
             setErrorMessage('');
             setSuccessMessage('');
-            setSelectedEntryId('');
+            // selectedEntryId state removed
             setFolderData([]);
             setBookInfo({});
             setViewUrl('');
@@ -84,7 +90,6 @@ export default function View() {
             const category = selectedEntryId.split('/')[0];
             const bookId = selectedEntryId.split('/')[1];
             const booksInCategory = folderData.find(categoryItem => categoryItem.id === category)?.children;
-            setSelectedEntryId(selectedEntryId);
             if (booksInCategory) {
                 const book = booksInCategory.find(bookItem => bookItem.id === selectedEntryId)?.book;
                 if (book) {
@@ -100,6 +105,21 @@ export default function View() {
         }
     }, [folderData]);
 
+    // if route specifies a category/bookId, auto-select after folderData loads
+    useEffect(() => {
+        if (routeCategory && routeBookId && folderData.length > 0) {
+            const categoryItem = folderData.find(item => item.id === routeCategory);
+            if (!categoryItem) return;
+            // If category children not loaded, load them first
+            if (!categoryItem.children || categoryItem.children.length === 0) {
+                entryClicked(routeCategory);
+            } else {
+                // Children already loaded, select specific book
+                entryClicked(`${routeCategory}/${routeBookId}`);
+            }
+        }
+    }, [routeCategory, routeBookId, folderData, entryClicked]);
+
     return (
         <Container id="view">
             <Row fluid="true">
@@ -110,11 +130,8 @@ export default function View() {
                 </Col>
 
                 <Col md="9" lg="10" className="section">
-                    {
-                        !bookInfo['book_id'] &&
-                        <Card.Body>책이 선택되지 않았습니다.</Card.Body>
-                    }
-                    {
+                {hasSearched && <SearchResult results={searchResults}/>}
+                {
                         bookInfo['book_id'] &&
                         <>
                             <Row id="top_panel">
