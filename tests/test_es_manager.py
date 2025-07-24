@@ -91,17 +91,18 @@ class ESManagerTest(unittest.TestCase):
         self.esm.search_by_keyword(keyword)
         self.esm.es.search.assert_called_with(
             index=self.esm.index_name,
-            query={
-                "bool": {
-                    "should": [
-                        {"match": {"title": {"query": keyword, "boost": 10}}},
-                        {"match": {"author": {"query": keyword, "boost": 5}}},
-                        {"match": {"summary": {"query": keyword, "boost": 1}}},
-                    ],
-                    "minimum_should_match": 1,
+            body={
+                "query": {
+                    "bool": {
+                        "should": [
+                            {"match": {"title": {"query": keyword, "boost": 10}}},
+                            {"match": {"author": {"query": keyword, "boost": 5}}},
+                            {"match": {"summary": {"query": keyword, "boost": 1}}},
+                        ],
+                        "minimum_should_match": 1,
+                    }
                 }
             },
-            sort=None,
             size=unittest.mock.ANY
         )
 

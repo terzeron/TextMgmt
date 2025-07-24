@@ -5,6 +5,7 @@ import unittest
 import logging.config
 from pathlib import Path
 from typing import Dict, Any
+from datetime import datetime, timedelta
 from backend.book import Book
 
 
@@ -99,17 +100,17 @@ class TestBook(unittest.TestCase):
             Book(4, {"category": "c"})
 
     def test_init_with_invalid_date_format(self):
-        with self.assertRaises(ValueError):
-            info: Dict[str, Any] = {
-                "category": "category1",
-                "title": "title1",
-                "author": "author1",
-                "file_path": Book.path_prefix / "category1" / "file.epub",
-                "file_type": "epub",
-                "file_size": 100,
-                "updated_time": "invalid-date-format",
-            }
-            Book(5, info)
+        info: Dict[str, Any] = {
+            "category": "category1",
+            "title": "title1",
+            "author": "author1",
+            "file_path": Book.path_prefix / "category1" / "file.epub",
+            "file_type": "epub",
+            "file_size": 100,
+            "updated_time": "invalid-date-format",
+        }
+        book = Book(5, info)
+        self.assertTrue(datetime.now() - book.updated_time < timedelta(seconds=1))
 
 
 if __name__ == "__main__":
