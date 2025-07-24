@@ -120,7 +120,8 @@ class BookManager:
         doc = self.es_manager.search_by_id(int(book_id))
         result_list = self.es_manager.search_similar_docs(doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], max_result_count=max_result_count)
         if result_list and len(result_list) > 0:
-            return [Book(doc_id, doc) for doc_id, doc, _score in result_list], None
+            filtered_list = [item for item in result_list if str(item[0]) != book_id]
+            return [Book(doc_id, doc) for doc_id, doc, _score in filtered_list], None
         return [], "No similar books found"
 
     def add_book(self, data: Dict[int, Dict[str, Any]]) -> Tuple[Optional[int], Optional[str]]:

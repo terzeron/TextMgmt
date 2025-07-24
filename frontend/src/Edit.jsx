@@ -496,7 +496,7 @@ export default function Edit() {
                         </Col>
 
                         <Col id="right_panel" md="6" lg="7" className="ps-0 pe-0">
-                            { bookInfo['book_id'] && <SimilarBooks/> }
+                            { bookInfo['book_id'] && <SimilarBooks bookId={bookInfo['book_id']} entryClicked={entryClicked}/> }
                             <SearchResult results={searchResult} isLoading={isLoading} error={error} entryClicked={entryClicked}/>
                         </Col>
                     </Row>

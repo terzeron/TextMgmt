@@ -114,6 +114,18 @@ def search_similar_books(book_id: int, page: int = 1, page_size: int = 10, book_
         return {"status": "fail", "result": error}
     return {"status": "success", "result": [book.dict() for book in books]}
 
+# 단순 파일 다운로드용 엔드포인트: 파일 경로를 명시하지 않아도 동작하도록 합니다.
+@app.get("/download/{book_id}")
+def download_book_by_id(book_id: int, book_manager: BookManager = Depends(get_book_manager)):
+    """`/download/{book_id}` 형태의 요청을 처리합니다. 시험 코드 호환을 위해 추가되었습니다."""
+    book, error = book_manager.get_book(book_id)
+    if error:
+        raise HTTPException(status_code=404, detail=error)
+
+    # 실제 파일 시스템상의 경로는 TM_WORK_DIR 하위에 위치하므로, 상대 경로만 전달합니다.
+    from fastapi.responses import FileResponse
+    return FileResponse(path=book.file_path, media_type=BookManager.MEDIA_TYPES.get(book.file_path.suffix, "application/octet-stream"))
+
 @app.get("/download/{book_id}/{file_path:path}")
 def download_book(book_id: int, file_path: str, book_manager: BookManager = Depends(get_book_manager)):
     return book_manager.get_book_content(book_id, file_path)
