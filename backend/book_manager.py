@@ -97,10 +97,10 @@ class BookManager:
             return [Book(book_id, doc) for book_id, doc, _score in result_list], None
         return [], "No books found"
 
-    async def search_similar_books(self, book_id: int, max_result_count: int = sys.maxsize) -> Tuple[List[Book], Optional[str]]:
+    async def search_similar_books(self, book_id: int, max_result_count: int = 10) -> Tuple[List[Book], Optional[str]]:
         LOGGER.debug("# search_similar_books(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
-        result_list = self.es_manager.search_similar_docs(doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], max_result_count=max_result_count)
+        result_list = self.es_manager.search_similar_docs(doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], max_result_count=max_result_count, exclude_id=book_id)
         if result_list and len(result_list) > 0:
             return [Book(doc_id, doc) for doc_id, doc, _score in result_list], None
         return [], "No similar books found"
