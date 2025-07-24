@@ -1,6 +1,6 @@
 import './Folder.css';
 
-import React, {useState} from "react";
+import React, {useState, useMemo} from "react";
 import PropTypes from 'prop-types';
 
 import clsx from 'clsx';
@@ -119,6 +119,14 @@ const StyledTreeItemLabelText = styled(Typography)({
 });
 
 
+const MemoizedIcon = React.memo(({ Icon }) => (
+    <Box component={Icon} className="labelIcon" color="inherit" sx={{ mr: 1, fontSize: '1.2rem' }} />
+));
+MemoizedIcon.displayName = "MemoizedIcon";
+MemoizedIcon.propTypes = {
+    Icon: PropTypes.elementType.isRequired, // Icon의 타입을 정의하여 ESLint 오류 해결
+};
+
 // eslint-disable-next-line react/prop-types
 function CustomLabel({icon: Icon, expandable, children, ...other}) {
     return (
@@ -129,20 +137,18 @@ function CustomLabel({icon: Icon, expandable, children, ...other}) {
                 alignItems: 'center',
             }}
         >
-            {Icon && (
-                <Box
-                    component={Icon}
-                    className="labelIcon"
-                    color="inherit"
-                    sx={{mr: 1, fontSize: '1.2rem'}}
-                />
-            )}
-
+            {Icon && <MemoizedIcon Icon={Icon} />}
             <StyledTreeItemLabelText variant="body2">{children}</StyledTreeItemLabelText>
             {expandable && <DotIcon/>}
         </TreeItem2Label>
     );
 }
+
+CustomLabel.propTypes = {
+    icon: PropTypes.elementType, // React 컴포넌트 또는 아이콘을 받을 수 있도록 설정
+    expandable: PropTypes.bool,
+    children: PropTypes.node,
+};
 
 const isExpandable = (reactChildren) => {
     if (Array.isArray(reactChildren)) {
@@ -198,14 +204,12 @@ const CustomTreeItem = React.forwardRef(function CustomTreeItem(props, ref) {
         publicAPI,
     } = useTreeItem2({id, itemId, children, label, disabled, rootRef: ref});
 
-    const item = publicAPI.getItem(itemId);
+    const item = useMemo(() => publicAPI.getItem(itemId), [publicAPI, itemId]);
     const expandable = isExpandable(children);
-    let icon;
-    if (expandable) {
-        icon = FolderRounded;
-    } else if (item.fileType) {
-        icon = getIconFromFileType(item.fileType);
-    }
+    const icon = useMemo(() => {
+        if (expandable) return FolderRounded;
+        return getIconFromFileType(item?.fileType);
+    }, [expandable, item?.fileType]);
 
     return (
         <TreeItem2Provider itemId={itemId}>
@@ -236,6 +240,13 @@ const CustomTreeItem = React.forwardRef(function CustomTreeItem(props, ref) {
 
 export default function Folder(props) {
     const [expandedItems, setExpandedItems] = useState([]);
+    const defaultExpandedItems = useMemo(() => props.folderData.map(o => o.id), [props.folderData]);
+    const treeViewStyles = useMemo(() => ({
+        height: 'fit-content',
+        flexGrow: 1,
+        maxWidth: 400,
+        overflowY: 'auto',
+    }), []);
 
     return (
         <div id="dir_list">
@@ -243,19 +254,20 @@ export default function Folder(props) {
                 <RichTreeView
                     items={props.folderData}
                     aria-label="file explorer"
-                    sx={{height: 'fit-content', flexGrow: 1, maxWidth: 400, overflowY: 'auto'}}
+                    sx={treeViewStyles}
                     slots={{item: CustomTreeItem}}
-                    defaultExpandedItems={props.folderData.map(o => o.id)}
+                    defaultExpandedItems={defaultExpandedItems}
                     expandedItems={expandedItems}
                     selectedItems={props.selectedItems}
                     onSelectedItemsChange={(event, selectedId) => {
-                        // in case of category entry, expand the selected category
-                        if (props.folderData.find(o => o.id === selectedId)) {
-                            const expanded = expandedItems.includes(selectedId)
-                                ? expandedItems.filter(x => x !== selectedId)
-                                : [...expandedItems, selectedId];
-                            setExpandedItems(expanded);
-                        }
+                        setExpandedItems((prevExpandedItems) => {
+                            if (prevExpandedItems.includes(selectedId)) {
+                                return prevExpandedItems.filter(x => x !== selectedId);
+                            } else {
+                                return [...prevExpandedItems, selectedId];
+                            }
+                        });
+
                         props.onClickHandler(selectedId);
                     }}
                 />

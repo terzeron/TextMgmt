@@ -5,6 +5,7 @@ import sys
 import os
 import re
 import shutil
+import getopt
 import logging.config
 from datetime import datetime
 from pathlib import Path
@@ -131,7 +132,6 @@ class Loader:
 
             end_time = datetime.now()
             Stat.normal_epub_total_time += (end_time - start_time).total_seconds()
-
         except Exception as e:
             LOGGER.error(file_path)
             LOGGER.error(e)
@@ -240,7 +240,7 @@ class Loader:
         return result[:Loader.TEXT_SIZE]
 
     @staticmethod
-    def read_from_image(file_path: Path) -> str:
+    def read_from_image() -> str:
         Stat.image_count += 1
 
         return ""
@@ -278,7 +278,7 @@ class Loader:
             elif file_type == "html":
                 summary = Loader.read_from_html(file_path)
             elif file_type in ("jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg"):
-                summary = Loader.read_from_image(file_path)
+                summary = Loader.read_from_image()
             else:
                 return {}
 
@@ -317,15 +317,26 @@ class Loader:
 
 
 def print_usage(program_name: str):
-    print(f"Usage:\t{program_name}\t<index name>\t<file or directory path>\n")
+    print(f"Usage:\t{program_name}\t[ -r ] <file or directory path>")
+    print("\t\t-r: reload text files")
     sys.exit(0)
 
 
 def main() -> int:
-    if len(sys.argv) < 3:
+    do_reload = False
+    path = Path()
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], "r")
+        for opt, _ in opts:
+            if opt == "-r":
+                do_reload = True
+        if len(args) != 1:
+            print_usage(sys.argv[0])
+        path = Path(args[0])
+    except getopt.GetoptError as e:
+        LOGGER.error(e)
         print_usage(sys.argv[0])
 
-    path = Path(sys.argv[2])
     if not path.exists():
         LOGGER.error("can't find such a file or directory '%s'", path)
         return 0
@@ -335,6 +346,8 @@ def main() -> int:
     start_time = datetime.now()
     es_manager = ESManager()
     try:
+        if do_reload:
+            es_manager.delete_index()
         es_manager.create_index()
     except Exception as e:
         LOGGER.error(e)

@@ -1,41 +1,60 @@
 import {useEffect, useState, Suspense} from "react";
-import PropTypes from 'prop-types';
+import PropTypes from "prop-types";
 import {textGetReq} from "./Common";
 
-export default function ViewTXT(props) {
-    const [errorMessage, setErrorMessage] = useState('');
+export default function ViewTXT({bookId, lineCount}) {
+    const [isLoading, setIsLoading] = useState(true);
+    const [errorMessage, setErrorMessage] = useState(null);
     const [fileContent, setFileContent] = useState([]);
 
     useEffect(() => {
-        if (props && props.bookId) {
-            const downloadUrl = '/download/' + props.bookId;
-            textGetReq(downloadUrl, null, (result) => {
-                const lineList = result.split('\n').map(line => {
-                        return line;
-                    }
-                );
-                setFileContent(lineList);
-            }, (error) => {
-                setErrorMessage(`file content load failed, ${error}`);
-            });
+        if (!bookId) {
+            setErrorMessage("❌ 유효한 bookId가 제공되지 않았습니다.");
+            setIsLoading(false);
+            return;
         }
 
+        const downloadUrl = "/download/" + bookId;
+        setIsLoading(true);
+        setErrorMessage(null);
+
+        textGetReq(
+            downloadUrl,
+            null,
+            (result) => {
+                const lineList = result.split("\n").slice(0, lineCount).map((line) => line);
+                setFileContent(lineList);
+                setIsLoading(false);
+            },
+            (error) => {
+                setErrorMessage(`❌ 파일을 불러올 수 없습니다: ${error}`);
+                setIsLoading(false);
+            }
+        );
+
         return () => {
-            setFileContent('');
+            setFileContent([]);
         };
-    }, [props]);
+    }, [bookId, lineCount]);
 
     return (
-        <div className="text-left">
+        <div className="txt-container">
+            {isLoading && (
+                <div className="loading-container">
+                    <div className="spinner"></div>
+                    <span className="blinking">로딩 중...</span>
+                </div>
+            )}
+            {errorMessage && (
+                <div className="error-message">
+                    {errorMessage}
+                </div>
+            )}
             <Suspense fallback={<div className="loading">로딩 중...</div>}>
-                {
-                    errorMessage && <div>{errorMessage}</div>
-                }
-                {
-                    fileContent &&
-                    fileContent.map((line, index) => {
-                        return <div key={index}>{line}</div>
-                    })
+                {!isLoading &&
+                    fileContent.map((line, index) => (
+                        <div key={index}>{line}</div>
+                    ))
                 }
             </Suspense>
         </div>
@@ -44,5 +63,5 @@ export default function ViewTXT(props) {
 
 ViewTXT.propTypes = {
     bookId: PropTypes.number.isRequired,
-    lineCount: PropTypes.number
-}
+    lineCount: PropTypes.number,
+};

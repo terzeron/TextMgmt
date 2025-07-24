@@ -4,12 +4,11 @@ import sys
 import os
 import math
 import warnings
-import time
 import logging.config
 from pathlib import Path
 from typing import Dict, List, Any, Tuple, Union
 from itertools import islice
-from elasticsearch7 import Elasticsearch, RequestError, NotFoundError
+from elasticsearch7 import Elasticsearch
 from elasticsearch7.exceptions import ElasticsearchWarning
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -109,13 +108,12 @@ class ESManager:
         if self.do_exist_index():
             self.es.indices.delete(index=self.index_name)
 
-    def get_mapping(self) -> dict[str, Any]:
-        LOGGER.debug("get_mapping()")
-        while True:
-            if self.es.indices.exists(index=self.index_name):
-                break
-            time.sleep(1)
-        return self.es.indices.get_mapping(index=self.index_name)
+    def get_mappings(self) -> dict[str, Any]:
+        LOGGER.debug("get_mappings()")
+        if self.do_exist_index():
+            return self.es.indices.get_mapping(index=self.index_name)[self.index_name]["mappings"]
+        else:
+            return {}
 
     def _search(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
         LOGGER.debug("_search(max_result_count=%d, query='%s')", max_result_count, query)

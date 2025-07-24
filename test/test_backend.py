@@ -44,7 +44,7 @@ class TestBackend(unittest.IsolatedAsyncioTestCase):
         assert response.json() == {"status": "success", "result": "Ok"}
         del self.book
 
-    def test_move_file(self) -> None:
+    def test_update_book(self) -> None:
         doc = {
             "book_id": self.book.book_id,
             "category": self.book.category,
@@ -62,8 +62,23 @@ class TestBackend(unittest.IsolatedAsyncioTestCase):
         assert response.status_code == 200
         assert response.json() == {"status": "success", "result": "Ok"}
 
-    def test_delete_file(self):
-        None
+    def test_delete_book(self):
+        epub_file_path = list(Book.path_prefix.glob("*/*.epub"))[0]
+        temp_file_path = Book.path_prefix / epub_file_path.parent / ("to_be_deleted_" + epub_file_path.name)
+        shutil.copy(epub_file_path, temp_file_path)
+        data = Loader.read_file(temp_file_path)
+
+        book_id, error = bm.add_book(data)
+        assert book_id and not error
+
+        book, error = bm.get_book(book_id)
+        assert book and not error
+        self.book = book
+
+        response = client.delete(f"/books/{self.book.book_id}")
+        assert response
+        assert response.status_code == 200
+        assert response.json() == {"status": "success", "result": "Ok"}
 
     def test_get_file_content(self):
         response = client.get(f"/download/{self.book.book_id}")

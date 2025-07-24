@@ -1,12 +1,10 @@
 #!/usr/bin/env python
 
 
-import os
 import unittest
 import logging.config
 import math
 from pathlib import Path
-from unittest.mock import patch
 from typing import Dict, Any
 from backend.es_manager import ESManager
 from utils.loader import Loader
@@ -41,7 +39,7 @@ class ESManagerTest(unittest.TestCase):
         cls.esm.delete_index()
         del cls.esm
 
-    def inspect_search_result_hierarchy(self, data: Dict[str, Any]):
+    def inspect_search_result_hierarchy(self, data: Dict[str, Any]) -> None:
         assert isinstance(data, dict)
         assert "category" in data
         assert isinstance(data["category"], str)
@@ -59,7 +57,34 @@ class ESManagerTest(unittest.TestCase):
         assert isinstance(data["summary"], str)
         assert "updated_time" in data
 
-    def test_01_search(self):
+    def test_99_create_delete_do_exists_index(self) -> None:
+        self.esm.delete_index()
+        actual = self.esm.create_index()
+        assert actual == {"acknowledged": True, "index": self.esm.index_name, "shards_acknowledged": True}
+        assert self.esm.do_exist_index()
+
+        actual = self.esm.create_index()
+        assert actual == {"acknowledged": True}
+        assert self.esm.do_exist_index()
+
+        self.esm.delete_index()
+        assert not self.esm.do_exist_index()
+
+    def test_00_get_mappings(self) -> None:
+        mappings = self.esm.get_mappings()
+        assert isinstance(mappings, dict)
+        assert "properties" in mappings
+        assert isinstance(mappings["properties"], dict)
+        assert "category" in mappings["properties"]
+        assert "title" in mappings["properties"]
+        assert "author" in mappings["properties"]
+        assert "file_path" in mappings["properties"]
+        assert "file_type" in mappings["properties"]
+        assert "file_size" in mappings["properties"]
+        assert "summary" in mappings["properties"]
+        assert "updated_time" in mappings["properties"]
+
+    def test_01_search(self) -> None:
         keyword = "마법사 드래곤"
         file_type = "txt"
         query = {
@@ -86,7 +111,7 @@ class ESManagerTest(unittest.TestCase):
         assert match_count >= 1
         assert match_count / len(keyword.split(" ")) >= 0.1
 
-    def test_02_search_by_title(self):
+    def test_02_search_by_title(self) -> None:
         keyword = "드래곤"
         result_list = self.esm.search_by_title(keyword, max_result_count=10)
         assert isinstance(result_list, list)
@@ -95,7 +120,7 @@ class ESManagerTest(unittest.TestCase):
             self.inspect_search_result_hierarchy(doc)
             assert keyword in doc["title"] or keyword in doc["summary"] or keyword in doc["file_path"]
 
-    def test_03_search_by_summary(self):
+    def test_03_search_by_summary(self) -> None:
         keyword = "리오에 의해 거인이 팔뚝에 장비 부숴지듯 산산조각이 나고"
         result_list = self.esm.search_by_summary(keyword, max_result_count=10)
         assert isinstance(result_list, list)
@@ -110,7 +135,7 @@ class ESManagerTest(unittest.TestCase):
         assert match_count >= 1
         assert match_count / len(keyword.split(" ")) >= 0.1
 
-    def test_04_search_by_category(self):
+    def test_04_search_by_category(self) -> None:
         category = "_txt"
         result_list = self.esm.search_by_category(category, max_result_count =10)
         assert isinstance(result_list, list)
@@ -119,7 +144,7 @@ class ESManagerTest(unittest.TestCase):
             self.inspect_search_result_hierarchy(doc)
             assert doc["category"] == category
 
-    def test_05_search_by_keyword(self):
+    def test_05_search_by_keyword(self) -> None:
         keyword = "마법"
         result_list = self.esm.search_by_keyword(keyword, max_result_count=5)
         assert isinstance(result_list, list)
@@ -128,7 +153,7 @@ class ESManagerTest(unittest.TestCase):
             self.inspect_search_result_hierarchy(doc)
             assert keyword in doc["title"] or keyword in doc["author"] or keyword in doc["summary"]
 
-    def test_06_search_similar_docs(self):
+    def test_06_search_similar_docs(self) -> None:
         doc: Dict[str, Any] = {
             "category": "_txt",
             "title": "마법사와 드래곤",
@@ -149,7 +174,7 @@ class ESManagerTest(unittest.TestCase):
             assert doc["file_size"] == doc["file_size"]
             assert doc["summary"] == doc["summary"]
 
-    def test_07_search_by_id(self):
+    def test_07_search_by_id(self) -> None:
         result_list = self.esm.search_by_category("testdata2", max_result_count=5)
         assert result_list
         assert isinstance(result_list, list)
@@ -167,7 +192,7 @@ class ESManagerTest(unittest.TestCase):
         assert len(doc) >= 1
         self.inspect_search_result_hierarchy(doc)
 
-    def test_06_search_and_aggregate_by_category(self):
+    def test_06_search_and_aggregate_by_category(self) -> None:
         result = self.esm.search_and_aggregate_by_category()
         assert isinstance(result, list)
         print(result)
@@ -175,7 +200,7 @@ class ESManagerTest(unittest.TestCase):
         assert isinstance(result[0], str)
         assert isinstance(result[1], str)
 
-    def test_11_insert(self):
+    def test_11_insert(self) -> None:
         num_files = 20
         dir1 = "_epub"
         data = Loader.read_files(Loader.path_prefix / dir1, num_files=num_files)
@@ -189,7 +214,7 @@ class ESManagerTest(unittest.TestCase):
         result = self.esm.search_by_category(dir2)
         assert len(result) >= num_files * 0.9
 
-    def test_12_update(self):
+    def test_12_update(self) -> None:
         previous_result = self.esm.search_by_category("_txt", 1)
         assert isinstance(previous_result, list)
         assert len(previous_result) > 0
@@ -222,7 +247,7 @@ class ESManagerTest(unittest.TestCase):
         assert summary == "modified_" + previous_doc["summary"]
         assert file_size == previous_doc["file_size"]
 
-    def test_13_delete(self):
+    def test_13_delete(self) -> None:
         previous_result = self.esm.search_by_category("_txt", 1)
         assert isinstance(previous_result, list)
         assert len(previous_result) == 1
@@ -232,19 +257,6 @@ class ESManagerTest(unittest.TestCase):
 
         result = self.esm.search_by_id(doc_id)
         assert result == {}
-
-    def test_91_create_delete_do_exists_index(self):
-        self.esm.delete_index()
-        actual = self.esm.create_index()
-        assert actual == {"acknowledged": True, "index": self.esm.index_name, "shards_acknowledged": True}
-        assert self.esm.do_exist_index()
-
-        actual = self.esm.create_index()
-        assert actual == {"acknowledged": True}
-        assert self.esm.do_exist_index()
-
-        self.esm.delete_index()
-        assert not self.esm.do_exist_index()
 
 if __name__ == "__main__":
     unittest.main()

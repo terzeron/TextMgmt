@@ -5,7 +5,8 @@ import os
 import logging.config
 from pathlib import Path
 from typing import Dict, Any, Union
-from fastapi import FastAPI
+import httpx
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
@@ -19,12 +20,21 @@ LOGGER = logging.getLogger(__name__)
 if "TM_FRONTEND_URL" not in os.environ:
     LOGGER.error("The environment variable TM_FRONTEND_URL is not set.")
     sys.exit(-1)
+if "TM_FACEBOOK_APP_ID" not in os.environ:
+    LOGGER.error("The environment variable TM_FACEBOOK_APP_ID is not set.")
+    sys.exit(-1)
+if "TM_FACEBOOK_APP_SECRET" not in os.environ:
+    LOGGER.error("The environment variable TM_FACEBOOK_APP_SECRET is not set.")
+    sys.exit(-1)
 
 app = FastAPI()
 LOGGER.info("app ready")
-origins = [os.environ["TM_FRONTEND_URL"]]
+origins = [os.getenv("TM_FRONTEND_URL")]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+TM_FACEBOOK_APP_ID = os.getenv("TM_FACEBOOK_APP_ID")
+TM_FACEBOOK_APP_SECRET = os.getenv("TM_FACEBOOK_APP_SECRET")
 
 book_manager = BookManager()
 if book_manager.es_manager.es.count(index=book_manager.es_manager.index_name)["count"] == 0:
@@ -145,3 +155,25 @@ async def search_by_keyword(keyword: str) -> Dict[str, Any]:
     else:
         response_object["error"] = error
     return response_object
+
+
+@app.post("/auth/facebook")
+async def exchange_facebook_token(exchange_request_body: dict):
+    access_token = exchange_request_body.get("accessToken")
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Access token is required")
+
+    async with httpx.AsyncClient() as client:
+        url = "https://graph.facebook.com/v12.0/oauth/access_token"
+        params = {
+            "grant_type": "fb_exchange_token",
+            "client_id": TM_FACEBOOK_APP_ID,
+            "client_secret": TM_FACEBOOK_APP_SECRET,
+            "fb_exchange_token": access_token
+        }
+        response = await client.get(url, params=params)
+        result = response.json()
+
+    if "access_token" in result:
+        return {"longLivedToken": result["access_token"]}
+    raise HTTPException(status_code=500, detail="Failed to get long-lived token")

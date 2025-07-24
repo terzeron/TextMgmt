@@ -45,7 +45,7 @@ export default function ViewSingle(props) {
         'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} />,
         'epub': <ViewEPUB bookId={bookId} filePath={filePath} />,
         'doc': <ViewDOC bookId={bookId} />,
-        'docx': <ViewDOC bookId={bookId} />,
+        'docx': <ViewDOC bookId={bookId} lineCount={lineCount} />,
         'txt': <ViewTXT bookId={bookId} lineCount={lineCount} />,
         'html': <ViewHTML bookId={bookId} />,
         'rtf': <ViewRTF bookId={bookId} />,

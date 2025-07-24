@@ -38,13 +38,13 @@ def main() -> int:
     es = ESManager()
     if title:
         result = es.search_by_title(title, ext, size, max_result_count=10)
-        for _, item, score in result:
+        for _, item, _ in result:
             print("----------------------------------------")
             print("item:", item)
             print(item["summary"][:200].replace("\n", " "))
     if content:
         result = es.search_similar_docs(summary=content, max_result_count=max_result_count)
-        for _, item, score in result:
+        for _, item, _ in result:
             print("item:", item)
             print(item["summary"][:200].replace("\n", " "))
 
