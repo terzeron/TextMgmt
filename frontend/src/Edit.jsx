@@ -517,7 +517,7 @@ export default function Edit() {
                                 </Col>
 
                                 <Col id="right_panel" md="6" lg="7" className="ps-0 pe-0">
-                                    <SimilarBooks/>
+                                    <SimilarBooks bookId={bookInfo['book_id']} onSelect={entryClicked}/>
                                     <SearchResult/>
                                 </Col>
                             </Row>

@@ -199,7 +199,7 @@ class ESManager:
         }
         return self._search(query, max_result_count=max_result_count)
 
-    def search_similar_docs(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_similar_docs(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = sys.maxsize, exclude_id: int = None) -> List[Tuple[int, Dict[str, Any], float]]:
         LOGGER.debug("search_similar_docs(category='%s', title='%s', author='%s', type='%s', size=%d, summary='%s', max_result_count=%d)", category, title, author, file_type, file_size, summary, max_result_count)
         query = {
             "bool": {
@@ -215,6 +215,8 @@ class ESManager:
                 "minimum_should_match": 1
             }
         }
+        if exclude_id is not None:
+            query["bool"]["must_not"] = [{"term": {"_id": str(exclude_id)}}]
         return self._search(query, max_result_count=max_result_count)
 
     def search_by_id(self, doc_id: int) -> Dict[str, Any]:
