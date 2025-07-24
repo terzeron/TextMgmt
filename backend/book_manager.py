@@ -6,6 +6,7 @@ import logging.config
 from pathlib import Path
 from typing import Tuple, Dict, List, Union, Optional, Any
 import chardet
+from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from backend.es_manager import ESManager
 from backend.book import Book
@@ -87,15 +88,25 @@ class BookManager:
                     encoding = encoding_metadata["encoding"] if encoding_metadata["encoding"] else "utf-8"
         return encoding
 
-    def get_book_content(self, book_id: int) -> Union[str, FileResponse]:
-        LOGGER.debug("# get_book_content(book_id=%d)", book_id)
+    def get_book_content(self, book_id: int, file_path: str) -> Union[str, FileResponse]:
+        LOGGER.debug("# get_book_content(book_id=%d, file_path=%s)", book_id, file_path)
         doc = self.es_manager.search_by_id(book_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Book not found")
+
         book = Book(book_id, doc)
-        file_path = book.file_path
-        if file_path.is_file():
-            media_type = BookManager.MEDIA_TYPES.get(file_path.suffix, "application/octet-stream")
-            return FileResponse(path=file_path, media_type=media_type)
-        return ""
+        
+        # URL에서 받은 file_path는 디코딩되었을 수 있으므로, book.file_path와 비교하기 전에 정규화가 필요할 수 있습니다.
+        # 여기서는 단순 문자열 비교를 가정합니다.
+        # Path(file_path)와 book.file_path.relative_to(self.path_prefix)를 비교해야 할 수도 있습니다.
+        if str(book.file_path.relative_to(self.path_prefix)) != file_path:
+            raise HTTPException(status_code=403, detail="File path does not match")
+            
+        if book.file_path.is_file():
+            media_type = BookManager.MEDIA_TYPES.get(book.file_path.suffix, "application/octet-stream")
+            return FileResponse(path=book.file_path, media_type=media_type)
+        
+        raise HTTPException(status_code=404, detail="File not found")
 
     def search_by_keyword(self, keyword: str, max_result_count: int = sys.maxsize) -> Tuple[List[Book], Optional[str]]:
         LOGGER.debug("# search_by_keyword(keyword='%s', max_result_count=%d)", keyword, max_result_count)

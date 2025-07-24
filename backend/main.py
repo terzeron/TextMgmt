@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from backend.book_manager import BookManager
 from backend.book import Book
 from utils.loader import Loader
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -23,8 +23,8 @@ if "TM_FRONTEND_URL" not in os.environ:
     sys.exit(-1)
 
 
-@contextmanager
-def lifespan(app: FastAPI):
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     book_manager = BookManager()
     try:
         book_manager.is_healthy()
@@ -114,6 +114,6 @@ def search_similar_books(book_id: int, page: int = 1, page_size: int = 10, book_
         return {"status": "fail", "result": error}
     return {"status": "success", "result": [book.dict() for book in books]}
 
-@app.get("/download/{book_id}")
-def download_book(book_id: int, book_manager: BookManager = Depends(get_book_manager)):
-    return book_manager.get_book_content(book_id)
+@app.get("/download/{book_id}/{file_path:path}")
+def download_book(book_id: int, file_path: str, book_manager: BookManager = Depends(get_book_manager)):
+    return book_manager.get_book_content(book_id, file_path)

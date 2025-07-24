@@ -44,7 +44,7 @@ class ESManager:
 
     def connect(self) -> None:
         if self.es is None:
-            self.es = Elasticsearch([self.es_url], verify_certs=False, ssl_show_warn=False)
+            self.es = Elasticsearch([self.es_url], verify_certs=False, ssl_show_warn=False, request_timeout=30)
 
     def _ensure_index_exists(self) -> None:
         if not self.do_exist_index():

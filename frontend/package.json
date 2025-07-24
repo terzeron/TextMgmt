@@ -31,7 +31,7 @@
     "react-bootstrap": "^2.10.2",
     "react-dom": "^18.2.0",
     "react-pdf": "^7.7.1",
-    "react-reader": "^2.0.9",
+    "react-reader": "^2.0.13",
     "react-router-dom": "^6.23.0",
     "rtf.js": "^3.0.9",
     "sprintf-js": "^1.1.3"

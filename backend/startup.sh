@@ -1,5 +1,8 @@
 #!/bin/bash
 
+cd "$(dirname "$0")/"
+pwd
+
 pidfile="uvicorn.pid"
 if [ -f "$pidfile" ]; then
     echo "Killing old process..."
@@ -9,7 +12,7 @@ fi
 
 rm -f nohup.out
 echo "Starting service..."
-nohup uvicorn backend.main:app --workers=4 --env-file .env &
+nohup uvicorn backend.main:app --workers=4 &
 echo "$!" > "$pidfile"
-sleep 2
-tail nohup.out
+sleep 1
+tail -f nohup.out
