@@ -9,7 +9,7 @@ from backend.book import Book
 from backend.book_manager import BookManager
 
 
-class TestBackend(unittest.IsolatedAsyncioTestCase):
+class TestBackend(unittest.TestCase):
     def setUp(self):
         self.bm = BookManager()
         self.bm.es_manager = MagicMock()
@@ -35,20 +35,20 @@ class TestBackend(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         app.dependency_overrides = {}
 
-    async def test_get_book(self):
+    def test_get_book(self):
         self.bm.es_manager.search_by_id.return_value = self.book_dict
         response = self.client.get("/books/1")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "success")
         self.bm.es_manager.search_by_id.assert_called_with(1)
 
-    async def test_search_by_keyword(self):
+    def test_search_by_keyword(self):
         self.bm.es_manager.search_by_keyword.return_value = [(1, self.book_dict, 1.0)]
         response = self.client.get("/search/test_title")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "success")
 
-    async def test_update_book(self):
+    def test_update_book(self):
         self.bm.es_manager.search_by_id.return_value = self.book_dict
         self.bm.es_manager.update.return_value = True
         with patch('pathlib.Path.rename'):
@@ -56,7 +56,7 @@ class TestBackend(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["status"], "success")
 
-    async def test_delete_book(self):
+    def test_delete_book(self):
         self.bm.es_manager.search_by_id.return_value = self.book_dict
         self.bm.es_manager.delete.return_value = True
         with patch('pathlib.Path.unlink'):
@@ -64,25 +64,48 @@ class TestBackend(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["status"], "success")
             
-    async def test_get_categories(self):
+    def test_get_categories(self):
         self.bm.es_manager.search_and_aggregate_by_category.return_value = ["cat1", "cat2"]
         response = self.client.get("/categories")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["result"], ["cat1", "cat2"])
 
-    async def test_get_books_in_category(self):
+    def test_get_books_in_category(self):
         self.bm.es_manager.search_by_category.return_value = [(1, self.book_dict, 1.0)]
         response = self.client.get("/categories/test_category")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "success")
 
-    async def test_download_book(self):
+    def test_get_books_in_category_with_pagination(self):
+        books_data = []
+        for i in range(1, 21):
+            book = self.book_dict.copy()
+            book["book_id"] = i
+            book["title"] = f"test_title_{i}"
+            books_data.append((i, book, 1.0))
+        self.bm.es_manager.search_by_category.return_value = books_data
+        
+        page = 2
+        page_size = 5
+        response = self.client.get(f"/categories/test_category?page={page}&page_size={page_size}")
+
+        self.assertEqual(response.status_code, 200)
+        json_response = response.json()
+        self.assertEqual(json_response["status"], "success")
+        
+        self.assertEqual(len(json_response["result"]), page_size)
+
+        expected_ids = list(range(6, 11))
+        returned_ids = [item['book_id'] for item in json_response['result']]
+        self.assertEqual(returned_ids, expected_ids)
+
+    def test_download_book(self):
         self.bm.es_manager.search_by_id.return_value = self.book_dict
         with patch('fastapi.responses.FileResponse'):
             response = self.client.get("/download/1")
             self.assertEqual(response.status_code, 200)
 
-    async def test_get_similar_books(self):
+    def test_get_similar_books(self):
         self.bm.es_manager.search_by_id.return_value = self.book_dict
         self.bm.es_manager.search_similar_docs.return_value = [(1, self.book_dict, 1.0)]
         response = self.client.get("/similar/1")

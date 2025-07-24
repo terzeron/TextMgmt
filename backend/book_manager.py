@@ -47,7 +47,7 @@ class BookManager:
     def is_healthy(self) -> bool:
         return self.es_manager.is_healthy()
 
-    async def get_categories(self) -> Tuple[List[str], Optional[str]]:
+    def get_categories(self) -> Tuple[List[str], Optional[str]]:
         LOGGER.debug("# get_categories()")
         categories = self.es_manager.search_and_aggregate_by_category()
         # '$$rootdir$$/' 접두사 제거
@@ -55,14 +55,17 @@ class BookManager:
         cleaned_categories = [cat.replace(prefix, "") for cat in categories]
         return cleaned_categories, None
 
-    async def get_books_in_category(self, category: str, page: int = 1, page_size: int = 10) -> Tuple[List[Book], Optional[str]]:
+    def get_books_in_category(self, category: str, page: int = 1, page_size: int = 10) -> Tuple[List[Book], Optional[str]]:
         doc_list = self.es_manager.search_by_category(category, max_result_count=10000)
         LOGGER.info(f"doc_list from ES for category '{category}': {doc_list}")
         if doc_list and len(doc_list) > 0:
-            return [Book(book_id, doc) for book_id, doc, _score in doc_list], None
+            start = (page - 1) * page_size
+            end = start + page_size
+            paginated_list = doc_list[start:end]
+            return [Book(book_id, doc) for book_id, doc, _score in paginated_list], None
         return [], f"No books found in '{category}'"
 
-    async def get_book(self, book_id: int) -> Tuple[Optional[Book], Optional[str]]:
+    def get_book(self, book_id: int) -> Tuple[Optional[Book], Optional[str]]:
         LOGGER.debug("# get_book(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
         if doc:
@@ -84,7 +87,7 @@ class BookManager:
                     encoding = encoding_metadata["encoding"] if encoding_metadata["encoding"] else "utf-8"
         return encoding
 
-    async def get_book_content(self, book_id: int) -> Union[str, FileResponse]:
+    def get_book_content(self, book_id: int) -> Union[str, FileResponse]:
         LOGGER.debug("# get_book_content(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
         book = Book(book_id, doc)
@@ -94,14 +97,14 @@ class BookManager:
             return FileResponse(path=file_path, media_type=media_type)
         return ""
 
-    async def search_by_keyword(self, keyword: str, max_result_count: int = sys.maxsize) -> Tuple[List[Book], Optional[str]]:
+    def search_by_keyword(self, keyword: str, max_result_count: int = sys.maxsize) -> Tuple[List[Book], Optional[str]]:
         LOGGER.debug("# search_by_keyword(keyword='%s', max_result_count=%d)", keyword, max_result_count)
         result_list = self.es_manager.search_by_keyword(keyword, max_result_count)
         if result_list and len(result_list) > 0:
             return [Book(book_id, doc) for book_id, doc, _score in result_list], None
         return [], "No books found"
 
-    async def search_similar_books(self, book_id: str, max_result_count: int = sys.maxsize) -> Tuple[List[Book], Optional[str]]:
+    def search_similar_books(self, book_id: str, max_result_count: int = sys.maxsize) -> Tuple[List[Book], Optional[str]]:
         LOGGER.debug("# search_similar_books(book_id=%s)", book_id)
         doc = self.es_manager.search_by_id(int(book_id))
         result_list = self.es_manager.search_similar_docs(doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], max_result_count=max_result_count)
@@ -109,14 +112,14 @@ class BookManager:
             return [Book(doc_id, doc) for doc_id, doc, _score in result_list], None
         return [], "No similar books found"
 
-    async def add_book(self, data: Dict[int, Dict[str, Any]]) -> Tuple[Optional[int], Optional[str]]:
+    def add_book(self, data: Dict[int, Dict[str, Any]]) -> Tuple[Optional[int], Optional[str]]:
         LOGGER.debug("# add_book(data='%r')", data)
         doc_id_list = self.es_manager.insert(data)
         if doc_id_list and len(doc_id_list) == 1:
             return doc_id_list[0], None
         return None, f"can't add book '{data}' to ElasticSearch"
 
-    async def update_book(self, book_id: int, book_data: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+    def update_book(self, book_id: int, book_data: Dict[str, Any]) -> Tuple[str, Optional[str]]:
         LOGGER.debug("# update_book(book_id=%d, book_data=%r)", int(book_id), book_data)
         # rename file
         doc = self.es_manager.search_by_id(book_id)
@@ -135,7 +138,7 @@ class BookManager:
                 return "Ok", None
         return "Error", f"can't update book information of '{book_id}' in ElasticSearch, no such a book"
 
-    async def delete_book(self, book_id: int) -> Tuple[str, Optional[str]]:
+    def delete_book(self, book_id: int) -> Tuple[str, Optional[str]]:
         LOGGER.debug("# delete_book(book_id=%d)", int(book_id))
         doc = self.es_manager.search_by_id(book_id)
 
