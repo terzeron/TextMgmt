@@ -20,6 +20,8 @@ logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
 
 class ESManager:
+    DEFAULT_MAX_RESULT_COUNT = 10
+
     def __init__(self) -> None:
         for env in ["TM_ES_INDEX", "TM_ES_URL"]:
             print(f"{env}={os.environ[env]}")
@@ -115,11 +117,13 @@ class ESManager:
         else:
             return {}
 
-    def _search(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+    def _search(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+        if max_result_count < 0:
+            max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("_search(max_result_count=%d, query='%s')", max_result_count, query)
         result_count = 0
         result = []
-        response = self.es.search(index=self.index_name, query=query, sort=sort, scroll='10m', track_scores=True)
+        response = self.es.search(index=self.index_name, query=query, sort=sort, scroll='10m', track_scores=True, size=max_result_count)
         # total_hits = response['hits']['total']['value']
         max_score = response['hits']['max_score']
         for hit in response['hits']['hits']:
@@ -152,7 +156,9 @@ class ESManager:
 
         return result[:max_result_count]
 
-    def search_by_title(self, title: str, file_type: str = "", file_size: int = 0, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_title(self, title: str, file_type: str = "", file_size: int = 0, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+        if max_result_count < 0:
+            max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_title(max_result_count=%d, title='%s', file_type='%s', file_size=%d)", max_result_count, title, file_type, file_size)
         query = {
             "bool": {
@@ -165,7 +171,9 @@ class ESManager:
         }
         return self._search(query, max_result_count=max_result_count)
 
-    def search_by_summary(self, summary: str, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_summary(self, summary: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+        if max_result_count < 0:
+            max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_summary(max_result_count=%d, summary='%s')", max_result_count, summary)
         query = {
             "match": {
@@ -174,7 +182,9 @@ class ESManager:
         }
         return self._search(query, max_result_count=max_result_count)
 
-    def search_by_category(self, category: str, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_category(self, category: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+        if max_result_count < 0:
+            max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_category(category='%s')", category)
         query = {
             "match": {
@@ -185,7 +195,9 @@ class ESManager:
 
         return self._search(query, sort=sort, max_result_count=max_result_count)
 
-    def search_by_keyword(self, keyword: str, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+        if max_result_count < 0:
+            max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_keyword(keyword='%s', max_result_count=%d)", keyword, max_result_count)
         query = {
             "bool": {
@@ -199,7 +211,9 @@ class ESManager:
         }
         return self._search(query, max_result_count=max_result_count)
 
-    def search_similar_docs(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = sys.maxsize, exclude_id: int = None) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_similar_docs(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = -1, exclude_id: int = None) -> List[Tuple[int, Dict[str, Any], float]]:
+        if max_result_count < 0:
+            max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_similar_docs(category='%s', title='%s', author='%s', type='%s', size=%d, summary='%s', max_result_count=%d)", category, title, author, file_type, file_size, summary, max_result_count)
         query = {
             "bool": {
