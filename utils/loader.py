@@ -44,7 +44,8 @@ class Loader:
             with file_path.open("r", encoding="utf-8") as infile:
                 data = infile.read(Loader.TEXT_SIZE)
                 data = data.replace("\ufeff", "")
-                data = re.sub(r"\W+", " ", data)
+                # Preserve Korean characters by replacing only non-word, non-space, non-Korean characters.
+                data = re.sub(r'[^\w\sㄱ-힣]', ' ', data)
         except UnicodeDecodeError as e:
             LOGGER.error(f"can't read unicode text from file '{file_path}', {e}")
             data = ""
@@ -149,7 +150,7 @@ class Loader:
             end_time = datetime.now()
             Stat.zipped_epub_total_time += (end_time - start_time).total_seconds()
 
-        result = re.sub(r"\W+", " ", result)
+        result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
 
         return result[:Loader.TEXT_SIZE]
 
@@ -171,7 +172,7 @@ class Loader:
             except Exception as e:
                 LOGGER.error(file_path)
                 LOGGER.error(e)
-        result = re.sub(r"\W+", " ", result)
+        result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
 
         end_time = datetime.now()
         Stat.pdf_total_time += (end_time - start_time).total_seconds()
@@ -189,7 +190,7 @@ class Loader:
 
         soup = BeautifulSoup(content, "html.parser")
         result = soup.get_text()
-        result = re.sub(r"\W+", " ", result)
+        result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
 
         end_time = datetime.now()
         Stat.html_total_time += (end_time - start_time).total_seconds()
@@ -210,7 +211,7 @@ class Loader:
                 result += text
             else:
                 break
-        result = re.sub(r"\W+", " ", result)
+        result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
 
         end_time = datetime.now()
         Stat.docx_total_time += (end_time - start_time).total_seconds()
@@ -231,7 +232,7 @@ class Loader:
         except UnicodeDecodeError as e:
             LOGGER.error(file_path)
             LOGGER.error(e)
-        result = re.sub(r"\W+", " ", result)
+        result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
         # print(result[:TEXT_SIZE])
 
         end_time = datetime.now()

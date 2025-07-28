@@ -120,17 +120,23 @@ class ESManager:
     def _search(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
-        LOGGER.debug("_search(max_result_count=%d, query='%s')", max_result_count, query)
+
+        # Clamp the size to prevent ES 'max_result_window' error (default 10000)
+        size = min(max_result_count, 10000)
+
+        LOGGER.debug("_search(max_result_count=%d, size=%d, query='%s')", max_result_count, size, query)
         result_count = 0
         result = []
-        response = self.es.search(index=self.index_name, query=query, sort=sort, scroll='10m', track_scores=True, size=max_result_count)
+        response = self.es.search(index=self.index_name, query=query, sort=sort, scroll='10m', track_scores=True, size=size)
         # total_hits = response['hits']['total']['value']
         max_score = response['hits']['max_score']
+        if max_score is None:
+            return []
+
         for hit in response['hits']['hits']:
-            normalized_score = hit['_score'] * 100 / max_score
+            normalized_score = hit['_score'] * 100 / max_score if max_score > 0 else 0
             # print(hit['_source'], normalized_score)
-            result_item = (int(hit['_id']), hit['_source'], normalized_score)
-            result.append(result_item)
+            result.append((hit['_id'], hit['_source'], normalized_score))
             result_count += 1
             if result_count >= max_result_count:
                 return result[:max_result_count]
@@ -141,8 +147,10 @@ class ESManager:
             response = self.es.scroll(scroll_id=scroll_id, scroll='10m')
             # total_hits = response['hits']['total']['value']
             max_score = response['hits']['max_score']
+            if max_score is None:
+                return []
             for hit in response['hits']['hits']:
-                normalized_score = hit['_score'] * 100 / max_score
+                normalized_score = hit['_score'] * 100 / max_score if max_score > 0 else 0
                 # print(hit['_source'], normalized_score)
                 result_item = (int(hit['_id']), hit['_source'], normalized_score)
                 result.append(result_item)
