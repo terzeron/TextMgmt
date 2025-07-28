@@ -22,7 +22,6 @@ def main() -> int:
     content = ""
     ext = ""
     size = 0
-    max_result_count = 10
 
     if len(sys.argv) > 1:
         title = sys.argv[1]
@@ -37,13 +36,13 @@ def main() -> int:
 
     es = ESManager()
     if title:
-        result = es.search_by_title(title, ext, size, max_result_count=10)
+        result = es.search_by_title(title, ext, size)
         for _, item, _ in result:
             print("----------------------------------------")
             print("item:", item)
             print(item["summary"][:200].replace("\n", " "))
     if content:
-        result = es.search_similar_docs(summary=content, max_result_count=max_result_count)
+        result = es.search_similar_docs(summary=content)
         for _, item, _ in result:
             print("item:", item)
             print(item["summary"][:200].replace("\n", " "))

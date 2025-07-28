@@ -20,6 +20,8 @@ logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
 
 class ESManager:
+    DEFAULT_MAX_RESULT_COUNT = 10
+
     def __init__(self) -> None:
         for env in ["TM_ES_INDEX", "TM_ES_URL"]:
             print(f"{env}={os.environ[env]}")
@@ -115,18 +117,26 @@ class ESManager:
         else:
             return {}
 
-    def _search(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
-        LOGGER.debug("_search(max_result_count=%d, query='%s')", max_result_count, query)
+    def _search(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+        if max_result_count < 0:
+            max_result_count = self.DEFAULT_MAX_RESULT_COUNT
+
+        # Clamp the size to prevent ES 'max_result_window' error (default 10000)
+        size = min(max_result_count, 10000)
+
+        LOGGER.debug("_search(max_result_count=%d, size=%d, query='%s')", max_result_count, size, query)
         result_count = 0
         result = []
-        response = self.es.search(index=self.index_name, query=query, sort=sort, scroll='10m', track_scores=True)
+        response = self.es.search(index=self.index_name, query=query, sort=sort, scroll='10m', track_scores=True, size=size)
         # total_hits = response['hits']['total']['value']
         max_score = response['hits']['max_score']
+        if max_score is None:
+            return []
+
         for hit in response['hits']['hits']:
-            normalized_score = hit['_score'] * 100 / max_score
+            normalized_score = hit['_score'] * 100 / max_score if max_score > 0 else 0
             # print(hit['_source'], normalized_score)
-            result_item = (int(hit['_id']), hit['_source'], normalized_score)
-            result.append(result_item)
+            result.append((hit['_id'], hit['_source'], normalized_score))
             result_count += 1
             if result_count >= max_result_count:
                 return result[:max_result_count]
@@ -137,8 +147,10 @@ class ESManager:
             response = self.es.scroll(scroll_id=scroll_id, scroll='10m')
             # total_hits = response['hits']['total']['value']
             max_score = response['hits']['max_score']
+            if max_score is None:
+                return []
             for hit in response['hits']['hits']:
-                normalized_score = hit['_score'] * 100 / max_score
+                normalized_score = hit['_score'] * 100 / max_score if max_score > 0 else 0
                 # print(hit['_source'], normalized_score)
                 result_item = (int(hit['_id']), hit['_source'], normalized_score)
                 result.append(result_item)
@@ -152,7 +164,9 @@ class ESManager:
 
         return result[:max_result_count]
 
-    def search_by_title(self, title: str, file_type: str = "", file_size: int = 0, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_title(self, title: str, file_type: str = "", file_size: int = 0, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+        if max_result_count < 0:
+            max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_title(max_result_count=%d, title='%s', file_type='%s', file_size=%d)", max_result_count, title, file_type, file_size)
         query = {
             "bool": {
@@ -165,7 +179,9 @@ class ESManager:
         }
         return self._search(query, max_result_count=max_result_count)
 
-    def search_by_summary(self, summary: str, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_summary(self, summary: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+        if max_result_count < 0:
+            max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_summary(max_result_count=%d, summary='%s')", max_result_count, summary)
         query = {
             "match": {
@@ -174,7 +190,9 @@ class ESManager:
         }
         return self._search(query, max_result_count=max_result_count)
 
-    def search_by_category(self, category: str, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_category(self, category: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+        if max_result_count < 0:
+            max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_category(category='%s')", category)
         query = {
             "match": {
@@ -185,7 +203,9 @@ class ESManager:
 
         return self._search(query, sort=sort, max_result_count=max_result_count)
 
-    def search_by_keyword(self, keyword: str, max_result_count: int = sys.maxsize) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+        if max_result_count < 0:
+            max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_keyword(keyword='%s', max_result_count=%d)", keyword, max_result_count)
         query = {
             "bool": {
@@ -199,7 +219,9 @@ class ESManager:
         }
         return self._search(query, max_result_count=max_result_count)
 
-    def search_similar_docs(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = sys.maxsize, exclude_id: int = None) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_similar_docs(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = -1, exclude_id: int = None) -> List[Tuple[int, Dict[str, Any], float]]:
+        if max_result_count < 0:
+            max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_similar_docs(category='%s', title='%s', author='%s', type='%s', size=%d, summary='%s', max_result_count=%d)", category, title, author, file_type, file_size, summary, max_result_count)
         query = {
             "bool": {
