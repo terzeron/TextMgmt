@@ -276,10 +276,11 @@ class ESManager:
         LOGGER.debug("insert() %d items", len(data))
         es_data: List[Dict[str, Any]] = []
         data_count = 0
+        chunk_size = 100
         iter_items = iter(data.items())
         doc_id_list: List[int] = []
         while True:
-            chunk = list(islice(iter_items, 1000))
+            chunk = list(islice(iter_items, chunk_size))
             if not chunk:
                 break
             for inode_num, path_and_size in chunk:
