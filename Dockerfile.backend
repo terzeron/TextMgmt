@@ -1,15 +1,17 @@
 FROM python:3.11
 
 # root
-#RUN apt-get update > /dev/null && \
-#    apt-get install -y apt-utils libpoppler-dev libpoppler-cpp-dev libheif-dev > /dev/null && \
-#    apt-get clean autoclean && apt-get autoremove -y && \
-RUN    useradd -u 1000 terzeron && \
-    mkdir -p /app /books /home/terzeron/.cache/pip /home/terzeron/.local && \
-    chown -R terzeron /app /books /home/terzeron/.cache/pip /home/terzeron/.local
+RUN apt-get update > /dev/null && \
+    apt-get install -y --no-install-recommends apt-utils libpoppler-dev libpoppler-cpp-dev libheif-dev libcairo2-dev > /dev/null && \
+    apt-get clean autoclean && apt-get autoremove -y &&
+
+ARG USER=terzeron
+RUN useradd -u 1000 $USER && \
+    mkdir -p /app /books /home/$USER/.cache/pip /home/$USER/.local && \
+    chown -R $USER /app /books /home/$USER/.cache/pip /home/$USER/.local
 
 # user(1000)
-USER terzeron
+USER $USER
 
 WORKDIR /app
 
@@ -22,9 +24,11 @@ RUN pip install -r requirements.txt > /dev/null
 
 VOLUME /books
 
-ENV PATH="$PATH:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:/home/terzeron/.local/bin:/app/bin:/app/utils"
+ENV PATH="$PATH:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:/home/$USER/.local/bin:/app/bin:/app/utils"
 ENV PYTHONPATH="/app"
 ARG TM_BACKEND_DEFAULT_PORT=8010
 ENV TM_BACKEND_PORT=$TM_BACKEND_DEFAULT_PORT
 
-CMD uvicorn backend.main:app --workers 1 --host 0.0.0.0 --reload --port $TM_BACKEND_PORT
+EXPOSE $TM_BACKEND_PORT
+
+CMD ["uvicorn", "backend.main:app", "--workers", "1", "--host", "0.0.0.0", "--reload", "--port", "$TM_BACKEND_PORT"]
