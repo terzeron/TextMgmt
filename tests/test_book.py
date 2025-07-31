@@ -57,3 +57,7 @@ class TestBook(unittest.TestCase):
             "file_size": 100,
             "updated_time": "2021-01-01T00:00:00.000000",
         }
+
+
+if __name__ == "__main__":
+    unittest.main()

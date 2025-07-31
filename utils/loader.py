@@ -10,6 +10,7 @@ import logging.config
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
+
 import zipfile
 import hashlib
 import ebooklib
@@ -18,6 +19,7 @@ import pypdf
 from docx import Document
 from striprtf.striprtf import rtf_to_text
 from bs4 import BeautifulSoup
+
 from backend.es_manager import ESManager
 from utils.stat import Stat
 
@@ -58,7 +60,6 @@ class Loader:
     @staticmethod
     def read_from_epub_with_extracting_zip(file_path: Path) -> str:
         result = ""
-        print("extracting epub file as zip file")
         try:
             with zipfile.ZipFile(file_path, "r") as zip_ref:
                 temp_dir_name = hashlib.md5(str(file_path).encode("utf-8")).hexdigest()[:7]
@@ -226,10 +227,11 @@ class Loader:
         result = ""
         # print(file_path)
         try:
-            with file_path.open("r", encoding="utf-8") as infile:
-                doc = infile.read()
-                result = rtf_to_text(doc)
-        except UnicodeDecodeError as e:
+            with file_path.open("rb") as infile:
+                raw_data = infile.read()
+                doc = raw_data.decode('utf-8')
+                result = rtf_to_text(doc, errors="ignore")
+        except Exception as e:
             LOGGER.error(file_path)
             LOGGER.error(e)
         result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)

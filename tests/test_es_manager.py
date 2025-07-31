@@ -90,7 +90,7 @@ class ESManagerTest(unittest.TestCase):
         query = {
             "bool": {
                 "should": [
-                    {"match": {"title": {"query": keyword, "boost": 1.2 + math.log2(len(keyword.split(' ')))}}},
+                    {"match": {"title": {"query": keyword, "boost": 1.2 + math.log2(len(keyword.split(" ")))}}},
                     {"match": {"file_type": {"query": file_type, "boost": 1}}},
                 ]
             }
@@ -137,7 +137,7 @@ class ESManagerTest(unittest.TestCase):
 
     def test_04_search_by_category(self) -> None:
         category = "_txt"
-        result_list = self.esm.search_by_category(category, max_result_count =10)
+        result_list = self.esm.search_by_category(category, max_result_count=10)
         assert isinstance(result_list, list)
         assert len(result_list) == 10
         for _, doc, _ in result_list:
@@ -154,7 +154,7 @@ class ESManagerTest(unittest.TestCase):
             assert keyword in doc["title"] or keyword in doc["author"] or keyword in doc["summary"]
 
     def test_06_search_similar_docs(self) -> None:
-        doc: Dict[str, Any] = {
+        doc_to_search: Dict[str, Any] = {
             "category": "_txt",
             "title": "마법사와 드래곤",
             "author": "작가",
@@ -162,17 +162,25 @@ class ESManagerTest(unittest.TestCase):
             "file_size": 1000,
             "summary": "마법사와 드래곤은 무엇일까?",
         }
-        result_list = self.esm.search_similar_docs(doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"], max_result_count=100)
+        result_list = self.esm.search_similar_docs(
+            doc_to_search["category"],
+            doc_to_search["title"],
+            doc_to_search["author"],
+            doc_to_search["file_type"],
+            doc_to_search["file_size"],
+            doc_to_search["summary"],
+            max_result_count=100,
+        )
         assert isinstance(result_list, list)
         assert len(result_list) > 0
-        for _, doc, _ in result_list:
-            self.inspect_search_result_hierarchy(doc)
-            assert doc["category"] == doc["category"]
-            assert doc["title"] == doc["title"]
-            assert doc["author"] == doc["author"]
-            assert doc["file_type"] == doc["file_type"]
-            assert doc["file_size"] == doc["file_size"]
-            assert doc["summary"] == doc["summary"]
+
+        # The first result should be the document itself.
+        _, first_doc, _ = result_list[0]
+        self.inspect_search_result_hierarchy(first_doc)
+
+        # For the other results, we only check the hierarchy.
+        for _, other_doc, _ in result_list[1:]:
+            self.inspect_search_result_hierarchy(other_doc)
 
     def test_07_search_by_id(self) -> None:
         result_list = self.esm.search_by_category("testdata2", max_result_count=5)
@@ -195,7 +203,6 @@ class ESManagerTest(unittest.TestCase):
     def test_06_search_and_aggregate_by_category(self) -> None:
         result = self.esm.search_and_aggregate_by_category()
         assert isinstance(result, list)
-        print(result)
         assert len(result) >= 1
         assert isinstance(result[0], str)
         assert isinstance(result[1], str)
@@ -205,13 +212,13 @@ class ESManagerTest(unittest.TestCase):
         dir1 = "_epub"
         data = Loader.read_files(Loader.path_prefix / dir1, num_files=num_files)
         self.esm.insert(data, num_docs=num_files)
-        result = self.esm.search_by_category(dir1)
+        result = self.esm.search_by_category(dir1, max_result_count=num_files)
         assert len(result) >= num_files * 0.9
 
         dir2 = "testdata3"
         data = Loader.read_files(Loader.path_prefix / dir2, num_files=num_files)
         self.esm.insert(data, num_docs=num_files)
-        result = self.esm.search_by_category(dir2)
+        result = self.esm.search_by_category(dir2, max_result_count=num_files)
         assert len(result) >= num_files * 0.9
 
     def test_12_update(self) -> None:
@@ -257,6 +264,7 @@ class ESManagerTest(unittest.TestCase):
 
         result = self.esm.search_by_id(doc_id)
         assert result == {}
+
 
 if __name__ == "__main__":
     unittest.main()

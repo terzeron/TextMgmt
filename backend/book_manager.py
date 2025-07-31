@@ -53,16 +53,16 @@ class BookManager:
         return categories, None
 
     async def get_books_in_category(self, category: str) -> Tuple[List[Book], Optional[str]]:
-        doc_list = self.es_manager.search_by_category(category, max_result_count=50000)
+        doc_list = self.es_manager.search_by_category(category, max_result_count=10000)
         if doc_list and len(doc_list) > 0:
-            return [Book(book_id=book_id, **doc) for book_id, doc, _score in doc_list], None
+            return [Book(book_id=book_id, info=doc) for book_id, doc, _score in doc_list], None
         return [], f"No books found in '{category}'"
 
     async def get_book(self, book_id: int) -> Tuple[Optional[Book], Optional[str]]:
         LOGGER.debug("# get_book(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
         if doc:
-            return Book(book_id=book_id, **doc), None
+            return Book(book_id=book_id, info=doc), None
         return None, f"No book found by '{book_id}'"
 
     @staticmethod
@@ -83,28 +83,28 @@ class BookManager:
     async def get_book_content(self, book_id: int) -> Union[str, FileResponse]:
         LOGGER.debug("# get_book_content(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
-        book = Book(book_id=book_id, **doc)
+        book = Book(book_id=book_id, info=doc)
         file_path = self.path_prefix / book.file_path
         if file_path.is_file():
             media_type = BookManager.MEDIA_TYPES.get(file_path.suffix, "application/octet-stream")
             return FileResponse(path=file_path, media_type=media_type)
         return ""
 
-    async def search_by_keyword(self, keyword: str) -> Tuple[List[Book], Optional[str]]:
+    async def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> Tuple[List[Book], Optional[str]]:
         LOGGER.debug("# search_by_keyword(keyword='%s')", keyword)
-        result_list = self.es_manager.search_by_keyword(keyword)
+        result_list = self.es_manager.search_by_keyword(keyword, max_result_count=max_result_count)
         if result_list and len(result_list) > 0:
-            return [Book(book_id=book_id, **doc) for book_id, doc, _score in result_list], None
+            return [Book(book_id=book_id, info=doc) for book_id, doc, _score in result_list], None
         return [], "No books found"
 
-    async def search_similar_books(self, book_id: int) -> Tuple[List[Book], Optional[str]]:
+    async def search_similar_books(self, book_id: int, max_result_count: int = -1) -> Tuple[List[Book], Optional[str]]:
         LOGGER.debug("# search_similar_books(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
             return [], f"No book found with id '{book_id}'"
-        result_list = self.es_manager.search_similar_docs(doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], exclude_id=book_id)
+        result_list = self.es_manager.search_similar_docs(doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], exclude_id=book_id, max_result_count=max_result_count)
         if result_list and len(result_list) > 0:
-            return [Book(book_id=doc_id, **similar_doc) for doc_id, similar_doc, _score in result_list], None
+            return [Book(book_id=doc_id, info=similar_doc) for doc_id, similar_doc, _score in result_list], None
         return [], "No similar books found"
 
     async def add_book(self, data: Dict[int, Dict[str, Any]]) -> Tuple[Optional[int], Optional[str]]:
@@ -119,7 +119,7 @@ class BookManager:
         # rename file
         doc = self.es_manager.search_by_id(book_id)
         if doc:
-            book = Book(book_id=book_id, **doc)
+            book = Book(book_id=book_id, info=doc)
             file_path = self.path_prefix / book.file_path
             new_full_path = file_path.parent.parent / new_category / (new_title + "." + new_type)
             try:
@@ -137,10 +137,12 @@ class BookManager:
     async def delete_book(self, book_id: int) -> Tuple[str, Optional[str]]:
         LOGGER.debug("# delete_book(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
+        if not doc:
+            return "Ok", None
 
         # delete file
         try:
-            book = Book(book_id=book_id, **doc)
+            book = Book(book_id=book_id, info=doc)
             file_path = self.path_prefix / book.file_path
             file_path.unlink()
         except IOError as e:

@@ -127,15 +127,7 @@ def get_failed_or_skipped_tests() -> list[str]:
         # If there's any issue reading the cache, assume no failed tests
         return []
 
-def is_test_actually_failed(test_path: Path) -> bool:
-    """Check if a test file actually failed based on pytest cache"""
-    failed_tests = get_failed_or_skipped_tests()
-    test_file_str = str(test_path.relative_to(PROJECT_ROOT))
-    
-    for failed_test in failed_tests:
-        if failed_test.startswith(test_file_str):
-            return True
-    return False
+
 
 def clean_test_data() -> None:
     """Clean up existing test data completely"""
@@ -281,10 +273,11 @@ def get_test_methods(test_file: Path) -> list[str]:
     return test_methods
 
 
-def run_test_modules_sequentially(test_targets: list[Path]) -> tuple[bool, int, int]:
-    """Run test modules sequentially and return (success, passed_count, failed_count)"""
+def run_test_modules_sequentially(test_targets: list[Path]) -> tuple[bool, int, int, list[Path]]:
+    """Run test modules sequentially and return (success, passed_count, failed_count, failed_files)"""
     passed_count = 0
     failed_count = 0
+    failed_files = []
     
     for idx, t in enumerate(test_targets, 1):
         print(f"--- [{idx}/{len(test_targets)}] Running: {t} ---")
@@ -326,6 +319,7 @@ def run_test_modules_sequentially(test_targets: list[Path]) -> tuple[bool, int, 
         if result.returncode != 0:
             print(f"❌ {t.name} FAILED.")
             failed_count += 1
+            failed_files.append(t)
         else:
             print(f"✅ {t.name} PASSED.")
             passed_count += 1
@@ -337,7 +331,7 @@ def run_test_modules_sequentially(test_targets: list[Path]) -> tuple[bool, int, 
     else:
         print(f"❌ {failed_count} out of {len(test_targets)} tests failed.")
     
-    return overall_success, passed_count, failed_count
+    return overall_success, passed_count, failed_count, failed_files
 
 def run_specific_test_file(test_file: str) -> bool:
     """Run a specific test file"""
@@ -404,17 +398,18 @@ def update_actual_execution_duration(duration: float) -> None:
     except (OSError, PermissionError, TypeError) as e:
         print(f"⚠️  Failed to save actual execution duration: {e}")
 
-def run_all_tests() -> bool:
-    """Run all tests in dependency order (개별 파일별로 실행 및 시간 측정)"""
+def run_all_tests() -> tuple[bool, list[Path]]:
+    """Run all tests in dependency order and return success and failed files"""
     print("=== Test Dependency Analysis and Execution (All Tests) ===")
     test_files = [f for f in TEST_DIR.glob("test_*.py") if f.name != "test_runner.py"]
     ordered_tests = sorted(test_files, key=lambda x: x.name)
     if not ordered_tests:
         print("No tests to run")
-        return False
+        return True, []
 
     total_start = time.time()
-    all_passed = True
+    failed_files = []
+    
     for idx, t in enumerate(ordered_tests, 1):
         print(f"--- [{idx}/{len(ordered_tests)}] Running: {t.name} ---")
         start = time.time()
@@ -445,11 +440,13 @@ def run_all_tests() -> bool:
 
         update_test_performance_cache(t.name, end - start)
         if result.returncode != 0:
-            all_passed = False
+            failed_files.append(t)
+            
     total_end = time.time()
     update_actual_execution_duration(total_end - total_start)
     print(f"⏱️  실제 총 수행 시간: {total_end - total_start:.1f}초")
-    return all_passed
+    
+    return not failed_files, failed_files
 
 def run_failed_tests() -> bool:
     """Run only failed tests"""
@@ -479,7 +476,9 @@ def run_failed_tests() -> bool:
     for t in unique_test_files:
         print(f"  - {t}")
 
-    if not run_test_modules_sequentially(unique_test_files):
+    # 실패한 파일 목록을 받아오지만, 여기서는 성공 여부만 중요
+    success, _, _, _ = run_test_modules_sequentially(unique_test_files)
+    if not success:
         return False
 
     print("All failed tests passed. Now running changed test modules (if any)...")
@@ -487,10 +486,10 @@ def run_failed_tests() -> bool:
 
 def run_changed_tests() -> bool:
     """Run tests for changed files with dependency consideration"""
-    success, _, _ = run_changed_tests_with_results()
+    success, _, _, _ = run_changed_tests_with_results()
     return success
 
-def run_changed_tests_with_results() -> tuple[bool, int, int]:
+def run_changed_tests_with_results() -> tuple[bool, int, int, list[Path]]:
     """Run tests for changed files and return detailed results"""
     last_success = get_last_success_time()
     modified_files = get_modified_files(last_success)
@@ -500,14 +499,14 @@ def run_changed_tests_with_results() -> tuple[bool, int, int]:
 
     if not modified_files:
         print("✅ 변경된 테스트가 없습니다. 아무 테스트도 실행하지 않습니다.")
-        return True, 0, 0
+        return True, 0, 0, []
 
     # Get test targets considering import dependencies
     test_targets = get_test_targets_with_dependencies(modified_files)
 
     if not test_targets:
         print("No test targets found for changed files.")
-        return True, 0, 0
+        return True, 0, 0, []
 
     print("\n🎯 Running tests for changed files (with dependency analysis)...")
     print(f"📋 Found {len(test_targets)} test targets for {len(modified_files)} modified files")
@@ -1602,21 +1601,16 @@ def main() -> bool:
             actual_passed_count = 0
             actual_failed_count = 1
     elif args.all:
-        success = run_all_tests()
-        # Update test status after execution based on actual pytest cache results
-        test_files = [f for f in TEST_DIR.glob("test_*.py") if f.name != "test_runner.py"]
-        for test_file in test_files:
-            executed_tests.add(test_file)
-            # Check actual test result from pytest cache
-            if is_test_actually_failed(test_file):
-                failed_tests.add(test_file)
-                actual_failed_count += 1
-            else:
-                passed_tests.add(test_file)
-                actual_passed_count += 1
+        success, all_failed_files = run_all_tests()
+        failed_tests.update(all_failed_files)
         
-        # Override success based on actual results
-        success = actual_failed_count == 0
+        test_files = [f for f in TEST_DIR.glob("test_*.py") if f.name != "test_runner.py"]
+        executed_tests.update(test_files)
+        passed_tests.update(set(test_files) - failed_tests)
+        
+        actual_passed_count = len(passed_tests)
+        actual_failed_count = len(failed_tests)
+        
     else:
         # Default behavior: run failed tests first, then changed tests
         failed_tests_success = run_failed_tests()
@@ -1624,7 +1618,8 @@ def main() -> bool:
             return False
         
         # Run changed tests and get detailed results
-        success, actual_passed_count, actual_failed_count = run_changed_tests_with_results()
+        success, actual_passed_count, actual_failed_count, changed_failed_files = run_changed_tests_with_results()
+        failed_tests.update(changed_failed_files)
         
         print(f"\n📋 Test execution completed: {actual_passed_count} passed, {actual_failed_count} failed")
         
@@ -1633,16 +1628,10 @@ def main() -> bool:
         modified_files = set(get_modified_files(last_success))
         if modified_files:
             test_targets = get_test_targets_with_dependencies(list(modified_files))
-            for test_target in test_targets:
-                executed_tests.add(test_target)
-                # Check actual test result from pytest cache
-                if is_test_actually_failed(test_target):
-                    failed_tests.add(test_target)
-                else:
-                    passed_tests.add(test_target)
-        
-        # Override success based on actual results
-        success = actual_failed_count == 0
+            executed_tests.update(test_targets)
+            passed_tests.update(set(test_targets) - failed_tests)
+            
+        success = not failed_tests
     
     # Update last success time if tests passed
     if success:
