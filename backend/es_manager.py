@@ -8,13 +8,11 @@ import logging.config
 from pathlib import Path
 from typing import Dict, List, Any, Tuple, Union
 from itertools import islice
-from elasticsearch7 import Elasticsearch
-from elasticsearch7.exceptions import ElasticsearchWarning
+from elasticsearch import Elasticsearch
 
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-warnings.filterwarnings("ignore", category=ElasticsearchWarning)
-warnings.filterwarnings("ignore", category=UserWarning)
-logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
+
+logging.config.fileConfig(
+    Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
@@ -45,18 +43,8 @@ class ESManager:
 
         settings = {
             "index": {
-                "analysis": {
-                    "analyzer": {
-                        "nori_analyzer": {
-                            "tokenizer": "nori_tokenizer"
-                        }
-                    }
-                },
-                "similarity": {
-                    "default": {
-                        "type": "BM25"
-                    }
-                }
+                "analysis": {"analyzer": {"nori_analyzer": {"tokenizer": "nori_tokenizer"}}},
+                "similarity": {"default": {"type": "BM25"}},
             }
         }
         mappings = {
@@ -64,40 +52,15 @@ class ESManager:
                 "category": {
                     "type": "keyword",
                 },
-                "title": {
-                    "type": "text",
-                    "analyzer": "nori_analyzer",
-                    "fields": {
-                        "keyword": {
-                            "type": "keyword"
-                        }
-                    }
-                },
-                "author": {
-                    "type": "text",
-                    "analyzer": "nori_analyzer",
-                    "fields": {
-                        "keyword": {
-                            "type": "keyword"
-                        }
-                    }
-                },
-                "file_path": {
-                    "type": "keyword"
-                },
-                "file_type": {
-                    "type": "keyword"
-                },
-                "file_size": {
-                    "type": "unsigned_long"
-                },
-                "summary": {
-                    "type": "text",
-                    "analyzer": "nori_analyzer"
-                },
+                "title": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
+                "author": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
+                "file_path": {"type": "keyword"},
+                "file_type": {"type": "keyword"},
+                "file_size": {"type": "unsigned_long"},
+                "summary": {"type": "text", "analyzer": "nori_analyzer"},
                 "updated_time": {
                     "type": "date",
-                }
+                },
             }
         }
 
@@ -124,56 +87,68 @@ class ESManager:
         # Clamp the size to prevent ES 'max_result_window' error (default 10000)
         size = min(max_result_count, 10000)
 
-        LOGGER.debug("_search(max_result_count=%d, size=%d, query='%s')", max_result_count, size, query)
+        LOGGER.debug("_search(max_result_count=%d, size=%d, query='%s')",
+                     max_result_count, size, query)
         result_count = 0
         result = []
-        response = self.es.search(index=self.index_name, query=query, sort=sort, scroll='10m', track_scores=True, size=size)
+        response = self.es.search(index=self.index_name, query=query,
+                                  sort=sort, scroll="10m", track_scores=True, size=size)
         # total_hits = response['hits']['total']['value']
-        max_score = response['hits']['max_score']
+        max_score = response["hits"]["max_score"]
         if max_score is None:
             return []
 
-        for hit in response['hits']['hits']:
-            normalized_score = hit['_score'] * 100 / max_score if max_score > 0 else 0
+        for hit in response["hits"]["hits"]:
+            normalized_score = hit["_score"] * 100 / \
+                max_score if max_score > 0 else 0
             # print(hit['_source'], normalized_score)
-            result.append((hit['_id'], hit['_source'], normalized_score))
+            result.append((int(hit["_id"]), hit["_source"], normalized_score))
             result_count += 1
             if result_count >= max_result_count:
                 return result[:max_result_count]
-        scroll_id = response['_scroll_id']
-        scroll_size = response['hits']['total']['value']
+        scroll_id = response["_scroll_id"]
+        scroll_size = response["hits"]["total"]["value"]
 
         while scroll_size > 0:
-            response = self.es.scroll(scroll_id=scroll_id, scroll='10m')
+            response = self.es.scroll(scroll_id=scroll_id, scroll="10m")
             # total_hits = response['hits']['total']['value']
-            max_score = response['hits']['max_score']
+            max_score = response["hits"]["max_score"]
             if max_score is None:
                 return []
-            for hit in response['hits']['hits']:
-                normalized_score = hit['_score'] * 100 / max_score if max_score > 0 else 0
+            for hit in response["hits"]["hits"]:
+                normalized_score = hit["_score"] * 100 / max_score if max_score > 0 else 0
                 # print(hit['_source'], normalized_score)
-                result_item = (int(hit['_id']), hit['_source'], normalized_score)
+                result_item = (int(hit["_id"]), hit["_source"], normalized_score)
                 result.append(result_item)
                 result_count += 1
                 if result_count >= max_result_count:
                     return result[:max_result_count]
-            scroll_id = response['_scroll_id']
-            scroll_size = len(response['hits']['hits'])
+            scroll_id = response["_scroll_id"]
+            scroll_size = len(response["hits"]["hits"])
             # print(result_count)
             # print(len(result))
 
         return result[:max_result_count]
 
-    def search_by_title(self, title: str, file_type: str = "", file_size: int = 0, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_title(
+        self, title: str, file_type: str = "", file_size: int = 0, max_result_count: int = -1
+    ) -> List[Tuple[int, Dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
-        LOGGER.debug("search_by_title(max_result_count=%d, title='%s', file_type='%s', file_size=%d)", max_result_count, title, file_type, file_size)
+        LOGGER.debug(
+            "search_by_title(max_result_count=%d, title='%s', file_type='%s', file_size=%d)",
+            max_result_count,
+            title,
+            file_type,
+            file_size,
+        )
         query = {
             "bool": {
                 "should": [
-                    {"match": {"title": {"query": title, "boost": 1.2 + math.log2(len(title.split(' ')))}}},
+                    {"match": {"title": {"query": title, "boost": 1.2 +
+                                         math.log2(len(title.split(" ")))}}},
                     {"match": {"file_type": {"query": file_type, "boost": 1}}},
-                    {"match": {"file_size": {"query": file_size, "boost": 1}}}
+                    {"match": {"file_size": {"query": file_size, "boost": 1}}},
                 ]
             }
         }
@@ -182,23 +157,16 @@ class ESManager:
     def search_by_summary(self, summary: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
-        LOGGER.debug("search_by_summary(max_result_count=%d, summary='%s')", max_result_count, summary)
-        query = {
-            "match": {
-                "summary": summary
-            }
-        }
+        LOGGER.debug(
+            "search_by_summary(max_result_count=%d, summary='%s')", max_result_count, summary)
+        query = {"match": {"summary": summary}}
         return self._search(query, max_result_count=max_result_count)
 
     def search_by_category(self, category: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_category(category='%s')", category)
-        query = {
-            "match": {
-                "category": category
-            }
-        }
+        query = {"match": {"category": category}}
         sort = ["author.keyword", "title.keyword"]
 
         return self._search(query, sort=sort, max_result_count=max_result_count)
@@ -206,35 +174,54 @@ class ESManager:
     def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
-        LOGGER.debug("search_by_keyword(keyword='%s', max_result_count=%d)", keyword, max_result_count)
+        LOGGER.debug(
+            "search_by_keyword(keyword='%s', max_result_count=%d)", keyword, max_result_count)
         query = {
             "bool": {
                 "should": [
                     {"match": {"title": {"query": keyword, "boost": 10}}},
                     {"match": {"author": {"query": keyword, "boost": 5}}},
-                    {"match": {"summary": {"query": keyword, "boost": 1}}}
+                    {"match": {"summary": {"query": keyword, "boost": 1}}},
                 ],
-                "minimum_should_match": 1
+                "minimum_should_match": 1,
             }
         }
         return self._search(query, max_result_count=max_result_count)
 
-    def search_similar_docs(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = -1, exclude_id: int = None) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_similar_docs(
+        self,
+        category: str = "",
+        title: str = "",
+        author: str = "",
+        file_type: str = "",
+        file_size: int = 0,
+        summary: str = "",
+        max_result_count: int = -1,
+        exclude_id: int = None,
+    ) -> List[Tuple[int, Dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
-        LOGGER.debug("search_similar_docs(category='%s', title='%s', author='%s', type='%s', size=%d, summary='%s', max_result_count=%d)", category, title, author, file_type, file_size, summary, max_result_count)
+        LOGGER.debug(
+            "search_similar_docs(category='%s', title='%s', author='%s', type='%s', size=%d, summary='%s', max_result_count=%d)",
+            category,
+            title,
+            author,
+            file_type,
+            file_size,
+            summary,
+            max_result_count,
+        )
         query = {
             "bool": {
                 "should": [
                     {"match": {"summary": {"query": summary, "boost": 10}}},
                     {"match": {"title": {"query": title, "boost": 5}}},
                     {"match": {"author": {"query": author, "boost": 3}}},
-                    {"range": {"file_size": {"gte": file_size * 0.9, "lte": file_size * 1.1, "boost": 2}}},
+                    {"range": {"file_size": {"gte": file_size *
+                                             0.9, "lte": file_size * 1.1, "boost": 2}}},
                 ],
-                "filter": [
-                    {"match": {"file_type": {"query": file_type}}}
-                ],
-                "minimum_should_match": 1
+                "filter": [{"match": {"file_type": {"query": file_type}}}],
+                "minimum_should_match": 1,
             }
         }
         if exclude_id is not None:
@@ -243,11 +230,7 @@ class ESManager:
 
     def search_by_id(self, doc_id: int) -> Dict[str, Any]:
         LOGGER.debug("search_by_id(doc_id=%d)", doc_id)
-        query = {
-            "match": {
-                "_id": str(doc_id)
-            }
-        }
+        query = {"match": {"_id": str(doc_id)}}
         result_list = self._search(query, max_result_count=1)
         if result_list and len(result_list) > 0:
             return result_list[0][1]
@@ -257,19 +240,11 @@ class ESManager:
         LOGGER.debug("search_and_aggregate_by_category()")
         field_name = "category"
         size = 100
-        body = {
-            "size": 1,
-            "aggs": {
-                "unique_values": {
-                    "terms": {
-                        "field": field_name,
-                        "size": size
-                    }
-                }
-            }
-        }
+        body = {"size": 1, "aggs": {"unique_values": {
+            "terms": {"field": field_name, "size": size}}}}
         result = self.es.search(index=self.index_name, body=body)
-        unique_values = [bucket['key'] for bucket in result['aggregations']['unique_values']['buckets']]
+        unique_values = [bucket["key"]
+                         for bucket in result["aggregations"]["unique_values"]["buckets"]]
         return unique_values
 
     def insert(self, data: Dict[int, Dict[str, Any]], num_docs: int = sys.maxsize) -> List[int]:
@@ -284,7 +259,8 @@ class ESManager:
             if not chunk:
                 break
             for inode_num, path_and_size in chunk:
-                es_data.append({"index": {"_index": self.index_name, "_id": str(inode_num)}})
+                es_data.append(
+                    {"index": {"_index": self.index_name, "_id": str(inode_num)}})
                 es_data.append(path_and_size)
                 doc_id_list.append(inode_num)
                 data_count += 1

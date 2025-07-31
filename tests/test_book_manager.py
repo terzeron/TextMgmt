@@ -100,7 +100,7 @@ class TestBookManager(unittest.IsolatedAsyncioTestCase):
         assert book.file_size == randomly_chosen_book.file_size
         assert book.updated_time == randomly_chosen_book.updated_time
 
-    async def test_determine_file_content_and_encoding(self):
+    def test_determine_file_content_and_encoding(self):
         file_path = self.bm.path_prefix / "epub" / "[J. R. R. 톨킨] 실마릴리온 1.epub"
         content = self.bm.determine_file_content_and_encoding(file_path)
         assert isinstance(content, str)
