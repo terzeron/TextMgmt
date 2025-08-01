@@ -7,7 +7,7 @@ import PropTypes from 'prop-types';
 
 import {Card, Button} from 'react-bootstrap';
 
-export default function SearchResult({results}) {
+export default function SearchResult({results, showEditButton = true}) {
     const navigate = useNavigate();
     return (
         <Card>
@@ -21,13 +21,15 @@ export default function SearchResult({results}) {
                             <div key={book.book_id} style={{padding: '4px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
                                 <span>{book.title} - {book.author}</span>
                                 <div>
-                                    <Button
-                                        variant="outline-warning" size="sm"
-                                        onClick={() => window.open(`/edit/${book.category}/${book.book_id}`, '_blank', 'noopener')}
-                                        style={{marginRight: '4px'}}
-                                    >
-                                        편집
-                                    </Button>
+                                    {showEditButton && (
+                                        <Button
+                                            variant="outline-warning" size="sm"
+                                            onClick={() => window.open(`/edit/${book.category}/${book.book_id}`, '_blank', 'noopener')}
+                                            style={{marginRight: '4px'}}
+                                        >
+                                            편집
+                                        </Button>
+                                    )}
                                     <Button
                                         variant="outline-primary" size="sm"
                                         onClick={() => window.open(`/view/${book.category}/${book.book_id}`, '_blank', 'noopener')}
@@ -35,12 +37,14 @@ export default function SearchResult({results}) {
                                     >
                                         조회
                                     </Button>
-                                    <Button
-                                        variant="outline-secondary" size="sm"
-                                        onClick={() => window.open(`/view/${book.file_type}/${book.book_id}/${encodeURIComponent(book.file_path)}`, '_blank', 'noopener')}
-                                    >
-                                        새 창에서 전체 보기
-                                    </Button>
+                                    {showEditButton || (
+                                        <Button
+                                                variant="outline-secondary" size="sm"
+                                                onClick={() => window.open(`/view/${book.file_type}/${book.book_id}/${encodeURIComponent(book.file_path)}`, '_blank', 'noopener')}
+                                            >
+                                            새 창에서 전체 보기
+                                        </Button>
+                                    )}
                                 </div>
                             </div>
                         ))
@@ -54,9 +58,11 @@ export default function SearchResult({results}) {
 }
 
 SearchResult.propTypes = {
-    results: PropTypes.array
+    results: PropTypes.array,
+    showEditButton: PropTypes.bool
 };
 
 SearchResult.defaultProps = {
-    results: []
+    results: [],
+    showEditButton: true
 };
