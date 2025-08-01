@@ -5,7 +5,7 @@ import {useEffect, useState, Suspense} from 'react';
 import PropTypes from 'prop-types';
 import {jsonGetReq} from './Common';
 
-import {Card} from 'react-bootstrap';
+import {Card, Button} from 'react-bootstrap';
 
 export default function SimilarBooks({bookId, onSelect}) {
     const [similarBooks, setSimilarBooks] = useState([]);
@@ -29,8 +29,26 @@ export default function SimilarBooks({bookId, onSelect}) {
                 <Card.Body>
                     {similarBooks && similarBooks.length > 0 ? (
                         similarBooks.map((book) => (
-                            <div key={book.book_id} style={{cursor: 'pointer', padding: '4px', borderBottom: '1px solid #eee'}} onClick={() => onSelect && onSelect(`${book.category}/${book.book_id}`)}>
-                                {book.title} - {book.author}
+                            <div key={book.book_id} style={{padding: '4px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
+                                <span style={{cursor: 'pointer'}} onClick={() => onSelect && onSelect(`${book.category}/${book.book_id}`)}>
+                                    {book.title} - {book.author}
+                                </span>
+                                <div>
+                                    <Button
+                                        variant="outline-warning" size="sm"
+                                        onClick={() => window.open(`/edit/${book.category}/${book.book_id}`, '_blank', 'noopener')}
+                                        style={{marginRight: '4px'}}
+                                    >
+                                        편집
+                                    </Button>
+                                    <Button
+                                        variant="outline-primary" size="sm"
+                                        onClick={() => window.open(`/view/${book.category}/${book.book_id}`, '_blank', 'noopener')}
+                                        style={{marginRight: '4px'}}
+                                    >
+                                        조회
+                                    </Button>
+                                </div>
                             </div>
                         ))
                     ) : (

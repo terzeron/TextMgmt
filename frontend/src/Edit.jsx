@@ -467,10 +467,11 @@ export default function Edit() {
                 </Col>
 
                 <Col md="9" lg="10" className="section">
-                    {hasSearched && <SearchResult results={searchResults}/>}
-                    {
-                        bookInfo['book_id'] &&
-                            <>
+                    {hasSearched &&
+                        <SearchResult results={searchResults} showEditButton={true}/>
+                    }
+                    {bookInfo['book_id'] &&
+                        <>
                             <Row id="top_panel">
                                 <Col id="left_panel" md="6" lg="5" className="ps-0 pe-0">
                                     <BookInfoView bookInfo={bookInfo} isEditEnabled={true} onTitleChange={titleChanged} onAuthorChange={authorChanged} onCutTitleButtonClick={cutTitleButtonClicked} onCutAuthorButtonClick={cutAuthorButtonClicked} onExchangeButtonClick={exchangeButtonClicked} onResetButtonClick={resetButtonClicked}/>
@@ -548,7 +549,7 @@ export default function Edit() {
                                     />
                                 </Col>
                             </Row>
-                            </>
+                        </>
                     }
                 </Col>
             </Row>

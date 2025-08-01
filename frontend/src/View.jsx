@@ -130,9 +130,10 @@ export default function View() {
                 </Col>
 
                 <Col md="9" lg="10" className="section">
-                {hasSearched && <SearchResult results={searchResults}/>}
-                {
-                        bookInfo['book_id'] &&
+                    {hasSearched &&
+                        <SearchResult results={searchResults} showEditButton={false}/>
+                    }
+                    {bookInfo['book_id'] &&
                         <>
                             <Row id="top_panel">
                                 <Col lg="12" className="ps-0 pe-0 me-0 ">
