@@ -13,7 +13,7 @@ fi
 
 rm -f nohup.out
 echo "Starting service..."
-nohup uvicorn main:app --workers=1 &
+nohup uvicorn main:app --workers=1 --reload &
 echo "$!" > "$pidfile"
 sleep 2
 cat "$pidfile"
