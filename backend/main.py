@@ -9,9 +9,14 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+# 에러 및 미디어 타입 상수 정의
+ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
+JSON_MEDIA_TYPE = "application/json"
 from pydantic import BaseModel
 from backend.book_manager import BookManager
+from backend.bookstore import Bookstore, Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, MunpiaBookstore
+from urllib.parse import quote_plus
 from utils.loader import Loader
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
@@ -33,6 +38,35 @@ origins = [os.getenv("TM_FRONTEND_URL")]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+# JSON 응답에서 한글이 유니코드 이스케이프로 인코딩되지 않도록 설정
+import json
+from fastapi.responses import JSONResponse
+
+class CustomJSONResponse(JSONResponse):
+    def render(self, content) -> bytes:
+        return json.dumps(content, ensure_ascii=False, separators=(',', ':'), indent=2).encode('utf-8')
+
+# FastAPI의 기본 JSON 인코더 설정
+import json
+from fastapi.encoders import jsonable_encoder
+
+# 원본 jsonable_encoder를 백업
+_original_jsonable_encoder = jsonable_encoder
+
+def custom_jsonable_encoder(obj, **kwargs):
+    """한글이 유니코드 이스케이프로 인코딩되지 않도록 하는 커스텀 인코더"""
+    if isinstance(obj, dict):
+        return {k: custom_jsonable_encoder(v, **kwargs) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [custom_jsonable_encoder(item, **kwargs) for item in obj]
+    elif isinstance(obj, str):
+        return obj
+    else:
+        return _original_jsonable_encoder(obj, **kwargs)
+
+# FastAPI 앱에 커스텀 JSON 인코더 설정
+app.json_encoder = custom_jsonable_encoder
+
 TM_FACEBOOK_APP_ID = os.getenv("TM_FACEBOOK_APP_ID")
 TM_FACEBOOK_APP_SECRET = os.getenv("TM_FACEBOOK_APP_SECRET")
 
@@ -42,6 +76,9 @@ if book_manager.es_manager.es.count(index=book_manager.es_manager.index_name)["c
     data = Loader.read_files(book_manager.path_prefix)
     book_manager.es_manager.insert(data)
 print("book manager ready")
+
+bookstore = Bookstore(base_dir=".", verbose=True)
+print("bookstore ready")
 
 
 class BookModel(BaseModel):
@@ -155,6 +192,55 @@ async def search_by_keyword(keyword: str) -> Dict[str, Any]:
     else:
         response_object["error"] = error
     return response_object
+
+
+@app.get("/search/bookstore/{store_name}")
+async def search_bookstore_api(store_name: str, title: str):
+    """지정된 온라인 서점에서 책을 검색하여 상위 2개의 메타데이터를 반환합니다."""
+    store_class = None
+    if store_name.lower() == 'yes24':
+        store_class = Yes24Bookstore
+    elif store_name.lower() == 'aladin':
+        store_class = AladinBookstore
+    elif store_name.lower() == 'ridi':
+        store_class = RidibooksBookstore
+    elif store_name.lower() == 'naver':
+        store_class = NaverShoppingBookstore
+    elif store_name.lower() == 'munpia':
+        store_class = MunpiaBookstore
+    else:
+        raise HTTPException(status_code=404, detail="Bookstore not found")
+
+    bookstore = store_class()
+    results = bookstore.search_by_keyword(title)
+
+    # 결과가 튜플 리스트이므로 딕셔너리로 변환
+    books_data = [
+        {
+            "title": r[0],
+            "author": r[1],
+            "category": r[2],
+            "book_url": r[3]
+        } for r in results[:5] # 상위 5개만 선택
+    ]
+
+    if not books_data:
+        return {
+            "status": "not_found",
+            "store": store_name,
+            "search_keyword": title,
+            "search_url": bookstore.build_search_url(title),
+            "result": []
+        }
+
+    return {
+        "status": "success",
+        "store": store_name,
+        "search_keyword": title,
+        "search_url": bookstore.build_search_url(title),
+        "search_method": f"{store_name.lower()}_keyword",
+        "result": books_data
+    }
 
 
 @app.post("/auth/facebook")
