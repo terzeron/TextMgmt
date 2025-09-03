@@ -474,7 +474,16 @@ export default function Edit() {
                         <>
                             <Row id="top_panel">
                                 <Col id="left_panel" md="6" lg="5" className="ps-0 pe-0">
-                                    <BookInfoView bookInfo={bookInfo} isEditEnabled={true} onTitleChange={titleChanged} onAuthorChange={authorChanged} onCutTitleButtonClick={cutTitleButtonClicked} onCutAuthorButtonClick={cutAuthorButtonClicked} onExchangeButtonClick={exchangeButtonClicked} onResetButtonClick={resetButtonClicked}/>
+                                    <Card>
+                                        <Card.Header>
+                                            책 정보
+                                        </Card.Header>
+                                        <Suspense fallback={<div className="loading">로딩 중...</div>}>
+                                            <Card.Body>
+                                                <BookInfoView bookInfo={bookInfo} isEditEnabled={true} onTitleChange={titleChanged} onAuthorChange={authorChanged} onCutTitleButtonClick={cutTitleButtonClicked} onCutAuthorButtonClick={cutAuthorButtonClicked} onExchangeButtonClick={exchangeButtonClicked} onResetButtonClick={resetButtonClicked} newFileName={newFileName} newFileNameChanged={newFileNameChanged} changeButtonClicked={changeButtonClicked} deleteButtonClicked={deleteButtonClicked}/>
+                                            </Card.Body>
+                                        </Suspense>
+                                    </Card>
 
                                     <Card>
                                         <Suspense fallback={<div className="loading">로딩 중...</div>}>
@@ -499,13 +508,13 @@ export default function Edit() {
 
                                                     <Row className="button_group">
                                                         <Col>
-                                                            <Bookstore bookInfo={bookInfo}/>
+                                                            <Actions selectedEntryId={selectedEntryId} selectedCategory={selectedCategory} otherCategoryList={otherCategoryList} newFileName={newFileName} moveToUpperButtonClicked={moveToUpperButtonClicked} moveToDirectoryButtonClicked={moveToDirectoryButtonClicked} selectDirectoryButtonClicked={selectDirectoryButtonClicked} toNextEntryClicked={toNextEntryButtonClicked}/>
                                                         </Col>
                                                     </Row>
 
                                                     <Row className="button_group">
                                                         <Col>
-                                                            <Actions selectedEntryId={selectedEntryId} selectedCategory={selectedCategory} otherCategoryList={otherCategoryList} newFileName={newFileName} moveToUpperButtonClicked={moveToUpperButtonClicked} moveToDirectoryButtonClicked={moveToDirectoryButtonClicked} selectDirectoryButtonClicked={selectDirectoryButtonClicked} toNextEntryClicked={toNextEntryButtonClicked}/>
+                                                            <Bookstore bookInfo={bookInfo}/>
                                                         </Col>
                                                     </Row>
                                                 </Card.Body>

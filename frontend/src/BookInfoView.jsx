@@ -32,79 +32,72 @@ export default function BookInfoView(props) {
     }, [props]);
 
     return (
-        <Card>
-            <Card.Header>
-                책 정보
-            </Card.Header>
-            <Suspense fallback={<div className="loading">로딩 중...</div>}>
-                <Card.Body>
-                    <Row>
-                        <Col>
-                            <Form.Control value={filePath} readOnly disabled/>
-                        </Col>
-                    </Row>
+        <>
+            <Row>
+                <Col>
+                    <Form.Control value={filePath} readOnly disabled/>
+                </Col>
+            </Row>
 
-                    <Row>
-                        <Col xs="6">
-                            <InputGroup>
-                                <InputGroup.Text>파일 종류</InputGroup.Text>
-                                <Form.Control value={fileType} readOnly disabled/>
-                            </InputGroup>
-                        </Col>
-                        <Col xs="6">
-                            <InputGroup>
-                                <InputGroup.Text>파일 크기</InputGroup.Text>
-                                <Form.Control value={fileSize.toLocaleString()} readOnly disabled/>
-                            </InputGroup>
-                        </Col>
-                    </Row>
+            <Row>
+                <Col xs="6">
+                    <InputGroup>
+                        <InputGroup.Text>파일 종류</InputGroup.Text>
+                        <Form.Control value={fileType} readOnly disabled/>
+                    </InputGroup>
+                </Col>
+                <Col xs="6">
+                    <InputGroup>
+                        <InputGroup.Text>파일 크기</InputGroup.Text>
+                        <Form.Control value={fileSize.toLocaleString()} readOnly disabled/>
+                    </InputGroup>
+                </Col>
+            </Row>
 
-                    {
-                        isEditEnabled &&
-                        <Row>
-                            <InputGroup>
-                                <InputGroup.Text>저자</InputGroup.Text>
-                                <Form.Control value={author} onChange={(e) => {
-                                    props.onAuthorChange(e)
-                                }}/>
-                                <Button variant="outline-secondary" size="sm" onClick={(e) => {
-                                    props.onCutAuthorButtonClick(e)
-                                }}>
-                                    분할
-                                    <FontAwesomeIcon icon={faCut}/>
-                                </Button>
-                                <Button variant="outline-secondary" size="sm" onClick={props.onExchangeButtonClick}>
-                                    교환
-                                    <FontAwesomeIcon icon={faRotate}/>
-                                </Button>
-                            </InputGroup>
-                        </Row>
-                    }
+            {
+                isEditEnabled &&
+                <Row>
+                    <InputGroup>
+                        <InputGroup.Text>저자</InputGroup.Text>
+                        <Form.Control value={author} onChange={(e) => {
+                            props.onAuthorChange(e)
+                        }}/>
+                        <Button variant="outline-secondary" size="sm" onClick={(e) => {
+                            props.onCutAuthorButtonClick(e)
+                        }}>
+                            분할
+                            <FontAwesomeIcon icon={faCut}/>
+                        </Button>
+                        <Button variant="outline-secondary" size="sm" onClick={props.onExchangeButtonClick}>
+                            교환
+                            <FontAwesomeIcon icon={faRotate}/>
+                        </Button>
+                    </InputGroup>
+                </Row>
+            }
 
-                    {
-                        isEditEnabled &&
-                        <Row>
-                            <InputGroup>
-                                <InputGroup.Text>제목</InputGroup.Text>
-                                <Form.Control value={title} onChange={(e) => props.onTitleChange(e)}/>
-                                <Button variant="outline-secondary" size="sm" onClick={(e) => {
-                                    props.onCutTitleButtonClick(e)
-                                }}>
-                                    분할
-                                    <FontAwesomeIcon icon={faCut}/>
-                                </Button>
-                                <Button variant="outline-secondary" size="sm" onClick={(e) => {
-                                    props.onResetButtonClick(e)
-                                }}>
-                                    복원
-                                    <FontAwesomeIcon icon={faClockRotateLeft}/>
-                                </Button>
-                            </InputGroup>
-                        </Row>
-                    }
-                </Card.Body>
-            </Suspense>
-        </Card>
+            {
+                isEditEnabled &&
+                <Row>
+                    <InputGroup>
+                        <InputGroup.Text>제목</InputGroup.Text>
+                        <Form.Control value={title} onChange={(e) => props.onTitleChange(e)}/>
+                        <Button variant="outline-secondary" size="sm" onClick={(e) => {
+                            props.onCutTitleButtonClick(e)
+                        }}>
+                            분할
+                            <FontAwesomeIcon icon={faCut}/>
+                        </Button>
+                        <Button variant="outline-secondary" size="sm" onClick={(e) => {
+                            props.onResetButtonClick(e)
+                        }}>
+                            복원
+                            <FontAwesomeIcon icon={faClockRotateLeft}/>
+                        </Button>
+                    </InputGroup>
+                </Row>
+            }
+        </>
     );
 }
 
@@ -116,5 +109,5 @@ BookInfoView.propTypes = {
     onCutTitleButtonClick: PropTypes.func,
     onCutAuthorButtonClick: PropTypes.func,
     onExchangeButtonClick: PropTypes.func,
-    onResetButtonClick: PropTypes.func
+    onResetButtonClick: PropTypes.func,
 };
