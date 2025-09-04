@@ -125,7 +125,7 @@ class AbstractBookstore(ABC):
         return None
 
 # Yes24 구현
-class Bookstore(AbstractBookstore):
+class Yes24Bookstore(AbstractBookstore):
     BASE_URL = 'https://www.yes24.com'
 
     def build_search_url(self, keyword: str) -> str:
@@ -186,15 +186,14 @@ class Bookstore(AbstractBookstore):
             if title_elem:
                 book_info['title'] = title_elem.get_text(strip=True)
 
-            # 저자 정보 추출
+            # 저자 정보 추출: span.gd_auth의 하위 <a> 텍스트 사용
             author_elem = soup.find('span', class_='gd_auth')
             if author_elem:
-                book_info['author'] = author_elem.get_text(strip=True)
-
-            # 출판사 정보 추출
-            publisher_elem = soup.find('span', class_='gd_pub')
-            if publisher_elem:
-                book_info['publisher'] = publisher_elem.get_text(strip=True)
+                a_tag = author_elem.find('a')
+                if a_tag:
+                    book_info['author'] = a_tag.get_text(strip=True)
+                else:
+                    book_info['author'] = author_elem.get_text(strip=True)
 
             # 카테고리 정보 추출 (실제 구조에 맞게 수정)
             category_text = self._extract_yes24_category(soup)
@@ -631,17 +630,19 @@ class NaverSeriesBookstore(AbstractBookstore):
             info['category'] = category_elem.get_text(strip=True)
         return info
 
-# 기본 Bookstore alias
-DefaultBookstore = Bookstore
+# 기본 예스24 Bookstore alias (기존 Bookstore 참조 호환성)
+Bookstore = Yes24Bookstore
 # 예스24 구현 클래스 alias
-Yes24Bookstore = Bookstore
+Yes24Bookstore = Yes24Bookstore
+
+# Alias search method for backward compatibility with tests
+Yes24Bookstore.search_yes24_by_keyword = Yes24Bookstore.search_by_keyword
 
 # 공개 API
 __all__ = [
     'AbstractBookstore',
     'Bookstore',
     'Yes24Bookstore',
-    'DefaultBookstore',
     'AladinBookstore',
     'RidibooksBookstore',
     'NaverShoppingBookstore',
