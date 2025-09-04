@@ -1,28 +1,28 @@
-import {useEffect, useState, Suspense} from 'react';
+import {useEffect, useState} from 'react';
 import PropTypes from 'prop-types';
 
 import './Edit.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
-import {Button, Card, Col, Form, InputGroup, Row} from 'react-bootstrap';
+import {Button, Col, Form, InputGroup, Row} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import {faClockRotateLeft, faCut, faRotate} from '@fortawesome/free-solid-svg-icons';
 
 
 export default function BookInfoView(props) {
-    const [, setBookId] = useState('');
-    const [, setCategory] = useState('');
+    // bookId, category state는 현재 UI에 사용되지 않으므로 제거
     const [title, setTitle] = useState('');
     const [author, setAuthor] = useState('');
     const [fileType, setFileType] = useState('');
     const [filePath, setFilePath] = useState('');
     const [fileSize, setFileSize] = useState(0);
     const [isEditEnabled, setIsEditEnabled] = useState(false);
+    const [isComposingAuthor, setIsComposingAuthor] = useState(false);
+    const [isComposingTitle, setIsComposingTitle] = useState(false);
 
     useEffect(() => {
         const bookInfo = props.bookInfo
-        setBookId(bookInfo['book_id']);
-        setCategory(bookInfo['category']);
+        // book_id와 category는 UI에 표시하지 않아 상태 업데이트 생략
         setTitle(bookInfo['title']);
         setAuthor(bookInfo['author']);
         setFileType(bookInfo['file_type']);
@@ -59,9 +59,23 @@ export default function BookInfoView(props) {
                 <Row>
                     <InputGroup>
                         <InputGroup.Text>저자</InputGroup.Text>
-                        <Form.Control value={author} onChange={(e) => {
-                            props.onAuthorChange(e)
-                        }}/>
+                        <Form.Control
+                            value={author}
+                            onCompositionStart={() => setIsComposingAuthor(true)}
+                            onCompositionEnd={(e) => {
+                                setIsComposingAuthor(false)
+                                const val = e.target.value
+                                setAuthor(val)
+                                props.onAuthorChange(e)
+                            }}
+                            onChange={(e) => {
+                                const val = e.target.value
+                                setAuthor(val)
+                                if (!isComposingAuthor) {
+                                    props.onAuthorChange(e)
+                                }
+                            }}
+                        />
                         <Button variant="outline-secondary" size="sm" onClick={(e) => {
                             props.onCutAuthorButtonClick(e)
                         }}>
@@ -81,7 +95,23 @@ export default function BookInfoView(props) {
                 <Row>
                     <InputGroup>
                         <InputGroup.Text>제목</InputGroup.Text>
-                        <Form.Control value={title} onChange={(e) => props.onTitleChange(e)}/>
+                        <Form.Control
+                            value={title}
+                            onCompositionStart={() => setIsComposingTitle(true)}
+                            onCompositionEnd={(e) => {
+                                setIsComposingTitle(false)
+                                const val = e.target.value
+                                setTitle(val)
+                                props.onTitleChange(e)
+                            }}
+                            onChange={(e) => {
+                                const val = e.target.value
+                                setTitle(val)
+                                if (!isComposingTitle) {
+                                    props.onTitleChange(e)
+                                }
+                            }}
+                        />
                         <Button variant="outline-secondary" size="sm" onClick={(e) => {
                             props.onCutTitleButtonClick(e)
                         }}>

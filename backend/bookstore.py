@@ -16,6 +16,7 @@ import json
 import http.client
 http.client._MAXHEADERS = 1000  # allow more response headers
 from abc import ABC, abstractmethod
+import uuid
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -67,18 +68,23 @@ class AbstractBookstore(ABC):
         links = self.extract_search_links(soup)
         results: List[Tuple[str, str, str, str, str]] = []
         for detail_url in links[:self.MAX_RESULTS]:
-            # 상세 페이지 요청 예외 처리
-            try:
-                resp2 = self.session.get(detail_url, timeout=10, verify=False)
-            except Exception as e:
-                logger.error(f"상세 페이지 요청 실패: {detail_url} - {e}")
-                continue
-            resp2.encoding = 'utf-8'
-            if not resp2.text or not resp2.text.strip():
+            # 캐시된 HTML 로드 시도
+            html = self._load_html_from_tmp(detail_url)
+            if html is None:
+                # 캐시가 없으면 HTTP 요청 후 저장
+                try:
+                    resp2 = self.session.get(detail_url, timeout=10, verify=False)
+                except Exception as e:
+                    logger.error(f"상세 페이지 요청 실패: {detail_url} - {e}")
+                    continue
+                resp2.encoding = 'utf-8'
+                html = resp2.text
+                self._save_html_to_tmp(html, detail_url)
+            if not html or not html.strip():
                 if self.verbose:
                     logger.warning(f"상세 페이지가 비어있습니다: {detail_url}")
                 continue
-            detail_soup = BeautifulSoup(resp2.text, 'html.parser')
+            detail_soup = BeautifulSoup(html, 'html.parser')
             info = self.extract_book_info(detail_soup)
             title = info.get('title', '')
             author = info.get('author', '')
@@ -89,6 +95,34 @@ class AbstractBookstore(ABC):
                 category = ' > '.join(parts[:3])
             results.append((title, author, category, detail_url, url))
         return results
+
+    def _save_html_to_tmp(self, html: str, url: str):
+        try:
+            # URL 기반 deterministic UUID 생성
+            filename = f"{uuid.uuid5(uuid.NAMESPACE_URL, url)}.html"
+            path = os.path.join('/tmp', filename)
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(html)
+            if self.verbose:
+                logger.info(f"Saved HTML to {path}")
+        except Exception as e:
+            logger.error(f"Failed to save HTML to tmp: {e}")
+
+    def _load_html_from_tmp(self, url: str) -> Optional[str]:
+        """
+        주어진 URL에 해당하는 임시 저장된 HTML을 로드합니다. 존재하지 않으면 None을 반환합니다.
+        """
+        try:
+            filename = f"{uuid.uuid5(uuid.NAMESPACE_URL, url)}.html"
+            path = os.path.join('/tmp', filename)
+            if os.path.exists(path):
+                if self.verbose:
+                    logger.info(f"Loading cached HTML from {path}")
+                with open(path, 'r', encoding='utf-8') as f:
+                    return f.read()
+        except Exception as e:
+            logger.error(f"Failed to load HTML from tmp: {e}")
+        return None
 
 # Yes24 구현
 class Bookstore(AbstractBookstore):
@@ -540,6 +574,63 @@ class MunpiaBookstore(AbstractBookstore):
             book_info['category'] = ' > '.join([p.strip() for p in path_text.split('>')])
         return book_info
 
+# NaverSeriesBookstore 구현
+class NaverSeriesBookstore(AbstractBookstore):
+    BASE_URL = 'https://series.naver.com'
+
+    def build_search_url(self, keyword: str) -> str:
+        encoded = quote(keyword)
+        return f"{self.BASE_URL}/search/search.series?t=all&fs=novel&q={encoded}"
+
+    def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
+        links: List[str] = []
+        seen = set()
+        # 검색 결과 리스트에서 링크 추출
+        for a_tag in soup.select('ul.lst_list li a[class="N=a:nov.title"]'):
+            href = a_tag.get('href')
+            if href:
+                full = urljoin(self.BASE_URL, href)
+                if full not in seen:
+                    seen.add(full)
+                    links.append(full)
+        if self.verbose:
+            logger.info(f"NaverSeries에서 {len(links)}개의 상세 페이지 링크를 찾았습니다")
+        return links
+
+    def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
+        info: Dict[str, str] = {'title': '', 'author': '', 'category': ''}
+        # 제목 추출
+        if soup.title and soup.title.string:
+            info['title'] = soup.title.string.strip()
+        # 저자 추출: 작가 정보 컨테이너 내 <strong> 태그 활용
+        author_container = soup.find('div', id='_otherProductByPerson')
+        if author_container:
+            strongs = author_container.find_all('strong')
+            if len(strongs) >= 2:
+                info['author'] = strongs[1].get_text(strip=True)
+        # author가 비어있을 경우 meta name='description' 우선 Fallback, og:description 다음 사용
+        if not info['author']:
+            # 1) meta name='description'
+            meta_name_desc = soup.find('meta', attrs={'name': 'description'})
+            if meta_name_desc and meta_name_desc.get('content'):
+                desc = meta_name_desc['content']
+                m = re.search(r'작가[:：]\s*([^,]+)', desc)
+                if m:
+                    info['author'] = m.group(1).strip()
+            # 2) meta property='og:description'
+        if not info['author']:
+            meta_og = soup.find('meta', attrs={'property': 'og:description'})
+            if meta_og and meta_og.get('content'):
+                desc = meta_og['content']
+                m = re.search(r'작가[:：]\s*([^,」]+)', desc)
+                if m:
+                    info['author'] = m.group(1).strip()
+        # 카테고리 추출
+        category_elem = soup.select_one('div#content > ul.end_info > li.info_lst > ul > li span a')
+        if category_elem:
+            info['category'] = category_elem.get_text(strip=True)
+        return info
+
 # 기본 Bookstore alias
 DefaultBookstore = Bookstore
 # 예스24 구현 클래스 alias
@@ -554,6 +645,7 @@ __all__ = [
     'AladinBookstore',
     'RidibooksBookstore',
     'NaverShoppingBookstore',
-    'MunpiaBookstore'
+    'MunpiaBookstore',
+    'NaverSeriesBookstore'
 ]
 

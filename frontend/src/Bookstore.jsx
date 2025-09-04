@@ -10,7 +10,8 @@ const STORES = [
   { key: 'yes24', label: 'Yes24' },
   { key: 'aladin', label: '알라딘' },
   { key: 'munpia', label: '문피아' },
-  { key: 'ridi', label: 'RIDI' }
+  { key: 'ridi', label: 'RIDI' },
+  { key: 'naverseries', label: '시리즈' }
 ];
 
 export default function Bookstore(props) {
