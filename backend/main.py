@@ -15,7 +15,7 @@ ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
 JSON_MEDIA_TYPE = "application/json"
 from pydantic import BaseModel
 from backend.book_manager import BookManager
-from backend.bookstore import Bookstore, Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, MunpiaBookstore
+from backend.bookstore import Bookstore, Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
 from urllib.parse import quote_plus
 from utils.loader import Loader
 
@@ -206,6 +206,8 @@ async def search_bookstore_api(store_name: str, title: str):
         store_class = RidibooksBookstore
     elif store_name.lower() == 'naver':
         store_class = NaverShoppingBookstore
+    elif store_name.lower() == 'naverseries':
+        store_class = NaverSeriesBookstore
     elif store_name.lower() == 'munpia':
         store_class = MunpiaBookstore
     else:

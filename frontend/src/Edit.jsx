@@ -11,8 +11,8 @@ import {faCheck, faTrash} from '@fortawesome/free-solid-svg-icons';
 import {getApiUrlPrefix, jsonDeleteReq, jsonGetReq, jsonPutReq, ROOT_DIRECTORY} from './Common';
 import Folder from './Folder';
 import BookInfoView from './BookInfoView';
+import Bookstore from './Bookstore';
 import Actions from './Actions';
-import Move from './Move';
 import SimilarBooks from './SimilarBooks';
 import SearchResult from './SearchResult';
 import ViewSingle from "./ViewSingle";
@@ -474,7 +474,16 @@ export default function Edit() {
                         <>
                             <Row id="top_panel">
                                 <Col id="left_panel" md="6" lg="5" className="ps-0 pe-0">
-                                    <BookInfoView bookInfo={bookInfo} isEditEnabled={true} onTitleChange={titleChanged} onAuthorChange={authorChanged} onCutTitleButtonClick={cutTitleButtonClicked} onCutAuthorButtonClick={cutAuthorButtonClicked} onExchangeButtonClick={exchangeButtonClicked} onResetButtonClick={resetButtonClicked}/>
+                                    <Card>
+                                        <Card.Header>
+                                            책 정보
+                                        </Card.Header>
+                                        <Suspense fallback={<div className="loading">로딩 중...</div>}>
+                                            <Card.Body>
+                                                <BookInfoView bookInfo={bookInfo} isEditEnabled={true} onTitleChange={titleChanged} onAuthorChange={authorChanged} onCutTitleButtonClick={cutTitleButtonClicked} onCutAuthorButtonClick={cutAuthorButtonClicked} onExchangeButtonClick={exchangeButtonClicked} onResetButtonClick={resetButtonClicked} newFileName={newFileName} newFileNameChanged={newFileNameChanged} changeButtonClicked={changeButtonClicked} deleteButtonClicked={deleteButtonClicked}/>
+                                            </Card.Body>
+                                        </Suspense>
+                                    </Card>
 
                                     <Card>
                                         <Suspense fallback={<div className="loading">로딩 중...</div>}>
@@ -499,13 +508,13 @@ export default function Edit() {
 
                                                     <Row className="button_group">
                                                         <Col>
-                                                            <Actions toNextEntryClicked={toNextEntryButtonClicked} bookInfo={bookInfo}/>
+                                                            <Actions selectedEntryId={selectedEntryId} selectedCategory={selectedCategory} otherCategoryList={otherCategoryList} newFileName={newFileName} moveToUpperButtonClicked={moveToUpperButtonClicked} moveToDirectoryButtonClicked={moveToDirectoryButtonClicked} selectDirectoryButtonClicked={selectDirectoryButtonClicked} toNextEntryClicked={toNextEntryButtonClicked}/>
                                                         </Col>
                                                     </Row>
 
                                                     <Row className="button_group">
                                                         <Col>
-                                                            <Move selectedEntryId={selectedEntryId} selectedCategory={selectedCategory} otherCategoryList={otherCategoryList} newFileName={newFileName} moveToUpperButtonClicked={moveToUpperButtonClicked} moveToDirectoryButtonClicked={moveToDirectoryButtonClicked} selectDirectoryButtonClicked={selectDirectoryButtonClicked}/>
+                                                            <Bookstore bookInfo={bookInfo}/>
                                                         </Col>
                                                     </Row>
                                                 </Card.Body>
