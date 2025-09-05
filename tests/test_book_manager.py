@@ -10,7 +10,6 @@ from typing import Tuple, Optional
 from fastapi.responses import FileResponse
 from backend.book import Book
 from backend.book_manager import BookManager
-from backend.bookstore import Bookstore
 from utils.loader import Loader
 from unittest import skip
 
@@ -221,110 +220,5 @@ class TestBookManager(unittest.IsolatedAsyncioTestCase):
         book_id3, error = await self.bm.add_book(Loader.read_file(file_path))
         assert book_id3 and not error
 
-    @skip("skip category extraction test due to external dependency instability")
-    async def test_bookstore_category_extraction(self):
-        """Bookstore 클래스의 카테고리 추출 기능 테스트"""
-        bookstore = Bookstore(base_dir=".", verbose=False)
-
-        # 테스트할 도서들
-        test_books = [
-            {"keyword": "해리포터", "expected": "국내도서 > 소설/시/희곡 > 장르소설 > 판타지"},
-            {"keyword": "어린 왕자", "expected": "국내도서 > 소설/시/희곡 > 프랑스소설"},
-            {"keyword": "드래곤라자", "expected": "국내도서 > 소설/시/희곡 > 장르소설 > 판타지"},
-            {"keyword": "마검크루세이더", "expected": "국내도서 > 소설/시/희곡 > 장르소설 > 판타지"},
-            {"keyword": "1984", "expected": "국내도서 > 소설/시/희곡 > 영미소설 > 영미 장편소설"}
-        ]
-
-        success_count = 0
-        total_count = len(test_books)
-
-        for i, book in enumerate(test_books, 1):
-            keyword = book["keyword"]
-            expected = book["expected"]
-
-            try:
-                books = bookstore.search_yes24_by_keyword(keyword)
-                assert isinstance(books, list) and books, f"검색 결과가 없습니다: {keyword}"
-                title, author, category, book_url, search_url = books[0]
-
-                # 기본 검증
-                assert title, f"제목이 비어있음: {keyword}"
-                assert book_url, f"URL이 비어있음: {keyword}"
-                assert search_url, f"검색 URL이 비어있음: {keyword}"
-
-                if category == expected:
-                    success_count += 1
-                else:
-                    print(f"❌ 카테고리 불일치 - 키워드: {keyword}")
-                    print(f"  기대값: {expected}")
-                    print(f"  실제값: {category}")
-
-            except Exception as e:
-                print(f"❌ 검색 중 오류 발생 - 키워드: {keyword}, 오류: {e}")
-
-        # 성공률 검증 (80% 이상 성공 시 통과)
-        success_rate = (success_count / total_count) * 100
-        assert success_rate >= 80.0, f"카테고리 추출 성공률이 80% 미만입니다: {success_rate:.1f}%"
-
-        print(f"✅ 카테고리 추출 테스트 완료: {success_count}/{total_count} 성공 ({success_rate:.1f}%)")
-
-    @skip("skip category extraction debug test due to external dependency instability")
-    async def test_category_extraction_debug(self):
-        """카테고리 추출 디버깅 테스트 (개선된 버전)"""
-        bookstore = Bookstore(base_dir=".", verbose=False)
-
-        # 테스트할 도서들 (더 다양한 케이스 포함)
-        test_books = [
-            {"keyword": "해리포터", "expected": "국내도서 > 소설/시/희곡 > 장르소설 > 판타지", "description": "해리포터 시리즈"},
-            {"keyword": "어린 왕자", "expected": "국내도서 > 소설/시/희곡 > 프랑스소설", "description": "프랑스 소설"},
-            {"keyword": "드래곤라자", "expected": "국내도서 > 소설/시/희곡 > 장르소설 > 판타지", "description": "국내 판타지"},
-            {"keyword": "1984", "expected": "국내도서 > 소설/시/희곡 > 영미소설 > 영미 장편소설", "description": "영미 소설"},
-            {"keyword": "마검크루세이더", "expected": "국내도서 > 소설/시/희곡 > 장르소설 > 판타지", "description": "국내 판타지"}
-        ]
-
-        print("=== 카테고리 추출 디버깅 테스트 (개선된 버전) ===")
-
-        success_count = 0
-        total_count = len(test_books)
-
-        for i, book in enumerate(test_books, 1):
-            keyword = book["keyword"]
-            expected = book["expected"]
-            description = book["description"]
-
-            print(f"\n--- {i}/{total_count}: {description} ('{keyword}') ---")
-
-            try:
-                books = bookstore.search_yes24_by_keyword(keyword)
-                assert isinstance(books, list) and books, f"검색 결과가 없습니다: {keyword}"
-                title, author, category, book_url, search_url = books[0]
-
-                print(f"제목: {title}")
-                print(f"저자: {author}")
-                print(f"카테고리: {category}")
-                print(f"URL: {book_url}")
-
-                if category == expected:
-                    print(f"✅ 카테고리 추출 성공: {category}")
-                    success_count += 1
-                else:
-                    print(f"❌ 카테고리 추출 실패")
-                    print(f"  기대값: {expected}")
-                    print(f"  실제값: {category}")
-
-            except Exception as e:
-                print(f"❌ 검색 중 오류 발생: {e}")
-
-        print(f"\n=== 디버깅 테스트 결과 요약 ===")
-        print(f"총 테스트: {total_count}개")
-        print(f"성공: {success_count}개")
-        print(f"실패: {total_count - success_count}개")
-        print(f"성공률: {(success_count/total_count)*100:.1f}%")
-
-        # 성공률이 80% 이상이면 통과
-        success_rate = (success_count / total_count) * 100
-        assert success_rate >= 80.0, f"카테고리 추출 성공률이 80% 미만입니다: {success_rate:.1f}%"
-
-
-if __name__ == "__main__":
-    unittest.main()
+    # Bookstore 관련 테스트는 분리된 test_bookstore.py에서 수행합니다
+    # __main__ 진입점는 불필요하여 제거되었습니다
