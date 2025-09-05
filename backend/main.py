@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
+from elasticsearch import NotFoundError
 # 에러 및 미디어 타입 상수 정의
 ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
 JSON_MEDIA_TYPE = "application/json"
@@ -71,7 +72,12 @@ TM_FACEBOOK_APP_ID = os.getenv("TM_FACEBOOK_APP_ID")
 TM_FACEBOOK_APP_SECRET = os.getenv("TM_FACEBOOK_APP_SECRET")
 
 book_manager = BookManager()
-if book_manager.es_manager.es.count(index=book_manager.es_manager.index_name)["count"] == 0:
+# Elasticsearch 인덱스가 없으면 count 에러를 무시하고 0으로 처리
+try:
+    count = book_manager.es_manager.es.count(index=book_manager.es_manager.index_name)["count"]
+except NotFoundError:
+    count = 0
+if count == 0:
     print("loading data...")
     data = Loader.read_files(book_manager.path_prefix)
     book_manager.es_manager.insert(data)
@@ -229,9 +235,9 @@ async def search_bookstore_api(store_name: str, title: str):
     from bs4 import BeautifulSoup
     # 상위 5개만 선택하여 isbn 필드도 포함
     for r in results[:5]:
-        title, author, category, book_url, search_url = r
+        book_title, author, category, book_url, _ = r
         item = {
-            "title": title,
+            "title": book_title,
             "author": author,
             "category": category,
             "book_url": book_url
