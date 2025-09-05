@@ -9,8 +9,8 @@ import { Button, Tabs, Tab, Spinner, Card } from 'react-bootstrap';
 const STORES = [
   { key: 'yes24', label: 'Yes24' },
   { key: 'aladin', label: '알라딘' },
-  { key: 'munpia', label: '문피아' },
   { key: 'ridi', label: 'RIDI' },
+  { key: 'munpia', label: '문피아' },
   { key: 'naverseries', label: '시리즈' }
 ];
 
@@ -71,6 +71,7 @@ export default function Bookstore(props) {
                 </a></div>
               <div><strong>저자명:</strong> {item.author}</div>
               <div><strong>카테고리:</strong> {item.category}</div>
+              <div><strong>ISBN:</strong> {item.isbn}</div>
             </div>
           ))
         ) : (

@@ -15,7 +15,7 @@ ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
 JSON_MEDIA_TYPE = "application/json"
 from pydantic import BaseModel
 from backend.book_manager import BookManager
-from backend.bookstore import Bookstore, Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
+from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
 from urllib.parse import quote_plus
 from utils.loader import Loader
 
@@ -77,7 +77,7 @@ if book_manager.es_manager.es.count(index=book_manager.es_manager.index_name)["c
     book_manager.es_manager.insert(data)
 print("book manager ready")
 
-bookstore = Bookstore(base_dir=".", verbose=True)
+bookstore = Yes24Bookstore(base_dir=".", verbose=True)
 print("bookstore ready")
 
 
@@ -172,12 +172,20 @@ async def get_categories() -> Dict[str, Any]:
 async def search_similar_books(book_id: int) -> Dict[str, Any]:
     LOGGER.debug("# search_similar_books(book_id=%d)", book_id)
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await book_manager.search_similar_books(book_id)
-    if error is None:
+    # 우선 유사 도서 검색
+    similar_list, error = await book_manager.search_similar_books(book_id)
+    if similar_list and error is None:
         response_object["status"] = "success"
-        response_object["result"] = [BookModel(**book.dict()) for book in result]
+        response_object["result"] = [BookModel(**book.dict()) for book in similar_list]
+        return response_object
+    # 유사 도서를 찾지 못한 경우 원본 도서 정보로 fallback
+    book, err2 = await book_manager.get_book(book_id)
+    if book and err2 is None:
+        response_object["status"] = "success"
+        response_object["result"] = [BookModel(**book.dict())]
     else:
-        response_object["error"] = error
+        # 원본 도서도 조회 실패 시 error 반환
+        response_object["error"] = error or err2
     return response_object
 
 
@@ -217,14 +225,42 @@ async def search_bookstore_api(store_name: str, title: str):
     results = bookstore.search_by_keyword(title)
 
     # 결과가 튜플 리스트이므로 딕셔너리로 변환
-    books_data = [
-        {
-            "title": r[0],
-            "author": r[1],
-            "category": r[2],
-            "book_url": r[3]
-        } for r in results[:5] # 상위 5개만 선택
-    ]
+    books_data = []
+    from bs4 import BeautifulSoup
+    # 상위 5개만 선택하여 isbn 필드도 포함
+    for r in results[:5]:
+        title, author, category, book_url, search_url = r
+        item = {
+            "title": title,
+            "author": author,
+            "category": category,
+            "book_url": book_url
+        }
+        # ISBN 추출: 각 서점별 구현체에 따라 메서드 호출
+        # 캐시된 HTML 로드 또는 신규 요청
+        html = bookstore._load_html_from_tmp(book_url)
+        if html is None:
+            resp = bookstore.session.get(book_url, timeout=10, verify=False)
+            resp.encoding = 'utf-8'
+            html = resp.text
+        soup = BeautifulSoup(html, 'html.parser')
+        isbn = ''
+        # 예스24
+        if hasattr(bookstore, '_extract_yes24_isbn'):
+            isbn = bookstore._extract_yes24_isbn(soup)
+        # 알라딘
+        elif hasattr(bookstore, '_extract_aladin_isbn'):
+            isbn = bookstore._extract_aladin_isbn(soup)
+        # 리디북스
+        elif hasattr(bookstore, '_extract_ridi_isbn'):
+            isbn = bookstore._extract_ridi_isbn(soup)
+            # 상세 페이지에서 author 정보 재추출
+            info = bookstore.extract_book_info(soup)
+            item['author'] = info.get('author', item.get('author', ''))
+        # 기타 서점: 필요 시 메서드 추가
+        if isbn:
+            item["isbn"] = isbn
+        books_data.append(item)
 
     if not books_data:
         return {

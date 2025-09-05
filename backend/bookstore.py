@@ -176,7 +176,6 @@ class Yes24Bookstore(AbstractBookstore):
             'title': '',
             'author': '',
             'category': '',
-            'publisher': '',
             'isbn': ''
         }
 
@@ -316,7 +315,7 @@ class AladinBookstore(AbstractBookstore):
 
     def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
         """알라딘 상세 페이지에서 책 정보를 추출합니다."""
-        info = {'title': '', 'author': '', 'category': ''}
+        info = {'title': '', 'author': '', 'category': '', 'isbn': ''}
 
         # 1. <title> 태그에서 제목, 저자 추출
         title_tag = soup.find('title')
@@ -345,11 +344,62 @@ class AladinBookstore(AbstractBookstore):
                 # 첫 번째 링크는 "국내도서" 같은 최상위 카테고리이므로 필요시 포함/제외
                 info['category'] = ' > '.join(category_parts)
 
+        # ISBN 추출
+        isbn_code = self._extract_aladin_isbn(soup)
+        if isbn_code:
+            info['isbn'] = isbn_code
+
         return info
+
+    def _extract_aladin_isbn(self, soup: BeautifulSoup) -> str:
+        """
+        알라딘 상세 페이지에서 ISBN13 코드 추출
+        """
+        try:
+            selector = '#Ere_prod_allwrap div.Ere_prod_mconts_R > div.conts_info_list1 > ul li'
+            for li in soup.select(selector):
+                text = li.get_text(strip=True)
+                if text.startswith('ISBN'):
+                    match = re.search(r'(\d{13})', text)
+                    if match:
+                        return match.group(1)
+            # fallback: middlewrap 영역 하위 ul li 중 ISBN 포함 항목 추출
+            # ISBN 위치가 다른 경우 fallback selector 사용
+            fallback_sel = '#Ere_prod_allwrap > div.Ere_prod_middlewrap div.Ere_prod_mconts_R ul > li'
+            for li in soup.select(fallback_sel):
+                text2 = li.get_text(strip=True)
+                if 'ISBN' in text2:
+                    m2 = re.search(r'(\d{10,13})', text2)
+                    if m2:
+                        return m2.group(1)
+            return ''
+        except Exception as e:
+            logger.error(f"ISBN 알라딘 추출 중 오류: {e}")
+            return ''
 
 # RidibooksBookstore implementation
 class RidibooksBookstore(AbstractBookstore):
     BASE_URL = 'https://ridibooks.com'
+
+    def _extract_ridi_isbn(self, soup: BeautifulSoup) -> str:
+        """
+        리디북스 상세 페이지에서 ISBN 코드 추출
+        첫 번째 'ISBN' 텍스트 요소의 다음 형제 div에서 13자리 코드 반환
+        """
+        try:
+            # 'ISBN' 텍스트를 가진 div 요소 찾기
+            labels = soup.find_all(lambda tag: tag.name == 'div' and tag.get_text(strip=True) == 'ISBN')
+            for label in labels:
+                # 다음 형제 div에서 코드 추출
+                sibling = label.find_next_sibling('div')
+                if sibling:
+                    code = sibling.get_text(strip=True)
+                    if re.match(r'^\d{13}$', code):
+                        return code
+            return ''
+        except Exception as e:
+            logger.error(f"ISBN 리디북스 추출 중 오류: {e}")
+            return ''
 
     def build_search_url(self, keyword: str) -> str:
         encoded = quote(keyword)
@@ -383,7 +433,7 @@ class RidibooksBookstore(AbstractBookstore):
         return links
 
     def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
-        info = {'title': '', 'author': '', 'category': ''}
+        info = {'title': '', 'author': '', 'category': '', 'isbn': ''}
         # 제목 추출: og:title 메타 태그 우선, 실패 시 <h1> 태그 사용
         meta = soup.find('meta', property='og:title') or soup.find('meta', attrs={'name': 'title'})
         if meta and meta.get('content'):
@@ -392,20 +442,41 @@ class RidibooksBookstore(AbstractBookstore):
             h1 = soup.select_one('h1')
             if h1 and h1.get_text(strip=True):
                 info['title'] = h1.get_text(strip=True)
-        # 저자 추출: 디테일 페이지 author 섹션의 링크
-        author_elem = soup.select_one("div.rigrid-bec17 a[href^='/author/']")
-        if author_elem:
-            info['author'] = author_elem.get_text(strip=True)
-        else:
-            # fallback1: any /author/<digits> 링크
-            elem = soup.find('a', href=re.compile(r'^/author/\d+'))
-            if elem:
-                info['author'] = elem.get_text(strip=True)
-        # fallback2: specific author list under header section
+        # RidiBooks 헤더 영역에서 author 정보 우선 추출 (ID 이름 오타 가능성 포함)
+        header_li = soup.select('div#ISLANDS__Header ul > li > li') or soup.select('div#iSLANDS__Header ul > li > li')
+        if header_li:
+            raw = header_li[0].get_text(strip=True)
+            author_text = raw.replace('저자', '').strip()
+            if author_text:
+                info['author'] = author_text
+        # li 태그 중 '저자' 포함 요소에서 prefix 텍스트 추출
         if not info['author']:
-            list_elem = soup.select_one("ul.rigrid-15fcnk6 a[href^='/author/']")
-            if list_elem:
-                info['author'] = list_elem.get_text(strip=True)
+            for li in soup.find_all('li'):
+                txt = li.get_text(separator=' ', strip=True)
+                if txt.endswith('저자') and len(txt) > len('저자'):
+                    raw = txt[:-2]  # '저자' 제거
+                    # '외13명' 형태에 스페이스 삽입
+                    raw = re.sub(r'외(\d+명)', r' 외 \1', raw)
+                    info['author'] = raw.strip()
+                    break
+        # author가 비어있으면 /author 링크 사용
+        if not info['author']:
+            author_elem = soup.find('a', href=re.compile(r'/author'))
+            if author_elem and author_elem.get_text(strip=True):
+                info['author'] = author_elem.get_text(strip=True)
+        # author가 비어있으면 메타 태그
+        if not info['author']:
+            meta_author = soup.find('meta', attrs={'name': 'author'}) or soup.find('meta', attrs={'property': 'og:author'})
+            if meta_author and meta_author.get('content'):
+                info['author'] = meta_author['content'].strip()
+        # author가 비어있으면 meta description에서 키워드 추출
+        if not info['author']:
+            meta_desc = soup.find('meta', attrs={'property': 'og:description'}) or soup.find('meta', attrs={'name': 'description'})
+            if meta_desc and meta_desc.get('content'):
+                desc = meta_desc['content']
+                m = re.search(r'저자[:：]\s*([^,]+)', desc)
+                if m:
+                    info['author'] = m.group(1).strip()
         # 카테고리 추출: /category/숫자열 링크 텍스트
         categories = []
         selector = "#books_contents section.detail_body ul li a[href^='/category/']"
@@ -415,6 +486,10 @@ class RidibooksBookstore(AbstractBookstore):
                 categories.append(text)
         if categories:
             info['category'] = ' > '.join(categories)
+        # ISBN 추출
+        isbn_code = self._extract_ridi_isbn(soup)
+        if isbn_code:
+            info['isbn'] = isbn_code
         return info
 
 class NaverShoppingBookstore(AbstractBookstore):
@@ -630,18 +705,9 @@ class NaverSeriesBookstore(AbstractBookstore):
             info['category'] = category_elem.get_text(strip=True)
         return info
 
-# 기본 예스24 Bookstore alias (기존 Bookstore 참조 호환성)
-Bookstore = Yes24Bookstore
-# 예스24 구현 클래스 alias
-Yes24Bookstore = Yes24Bookstore
-
-# Alias search method for backward compatibility with tests
-Yes24Bookstore.search_yes24_by_keyword = Yes24Bookstore.search_by_keyword
-
 # 공개 API
 __all__ = [
     'AbstractBookstore',
-    'Bookstore',
     'Yes24Bookstore',
     'AladinBookstore',
     'RidibooksBookstore',
