@@ -43,7 +43,6 @@ class ESManager:
 
         settings = {
             "index": {
-                "analysis": {"analyzer": {"nori_analyzer": {"tokenizer": "nori_tokenizer"}}},
                 "similarity": {"default": {"type": "BM25"}},
             }
         }
@@ -52,12 +51,12 @@ class ESManager:
                 "category": {
                     "type": "keyword",
                 },
-                "title": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
-                "author": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
+                "title": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
+                "author": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
                 "file_path": {"type": "keyword"},
                 "file_type": {"type": "keyword"},
                 "file_size": {"type": "unsigned_long"},
-                "summary": {"type": "text", "analyzer": "nori_analyzer"},
+                "summary": {"type": "text", "analyzer": "nori"},
                 "updated_time": {
                     "type": "date",
                 },
