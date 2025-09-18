@@ -258,7 +258,7 @@ class Loader:
             inode_num = st.st_ino
             file_size = st.st_size
             category = file_path.parent.name
-            m = re.search(r"^\[(?P<author>[\]]+)\]\s*(?P<title>.+)$", file_path.stem)
+            m = re.search(r"^\[(?P<author>[^\]]+)\]\s*(?P<title>.+)$", file_path.stem)
             if m:
                 author = m.group("author")
                 title = m.group("title")
@@ -310,6 +310,7 @@ class Loader:
 
         file_count = 0
         for child_path in file_path_list[:num_files]:
+            print(f"* {child_path}")
             data_item = Loader.read_file(child_path)
             data.update(data_item)
             file_count += 1
@@ -327,26 +328,20 @@ def print_usage(program_name: str):
 
 def main() -> int:
     do_reload = False
-    path = Path()
     try:
         opts, args = getopt.getopt(sys.argv[1:], "r")
         for opt, _ in opts:
             if opt == "-r":
                 do_reload = True
-        if len(args) != 1:
-            print_usage(sys.argv[0])
-        path = Path(args[0])
     except getopt.GetoptError as e:
         LOGGER.error(e)
         print_usage(sys.argv[0])
 
-    if not path.exists():
-        LOGGER.error("can't find such a file or directory '%s'", path)
-        return 0
+    if len(args) < 1:
+        print_usage(sys.argv[0])
 
-    data = Loader.read_files(path)
+    start_time: datetime = datetime.now()
 
-    start_time = datetime.now()
     es_manager = ESManager()
     try:
         if do_reload:
@@ -354,12 +349,21 @@ def main() -> int:
         es_manager.create_index()
     except Exception as e:
         LOGGER.error(e)
-    es_manager.insert(data)
+
+    for dir in args:
+        dir_path = Path(dir)
+        if not dir_path.exists():
+            LOGGER.error("can't find such a file or directory '%s'", dir_path)
+            return 0
+
+        print(f"====== {dir_path} ======")
+        data = Loader.read_files(dir_path)
+        Stat.index_count += len(data)
+        es_manager.insert(data)
+        print("================================")
 
     end_time = datetime.now()
-    Stat.index_count = len(data)
     Stat.index_total_time = (end_time - start_time).total_seconds()
-
     Stat.print()
 
     return 0

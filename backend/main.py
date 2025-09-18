@@ -26,11 +26,11 @@ LOGGER = logging.getLogger(__name__)
 if "TM_FRONTEND_URL" not in os.environ:
     LOGGER.error("The environment variable TM_FRONTEND_URL is not set.")
     sys.exit(-1)
-if "TM_FACEBOOK_APP_ID" not in os.environ:
-    LOGGER.error("The environment variable TM_FACEBOOK_APP_ID is not set.")
+if "VITE_FACEBOOK_APP_ID" not in os.environ:
+    LOGGER.error("The environment variable VITE_FACEBOOK_APP_ID is not set.")
     sys.exit(-1)
-if "TM_FACEBOOK_APP_SECRET" not in os.environ:
-    LOGGER.error("The environment variable TM_FACEBOOK_APP_SECRET is not set.")
+if "VITE_FACEBOOK_APP_SECRET" not in os.environ:
+    LOGGER.error("The environment variable VITE_FACEBOOK_APP_SECRET is not set.")
     sys.exit(-1)
 
 app = FastAPI()
@@ -68,8 +68,8 @@ def custom_jsonable_encoder(obj, **kwargs):
 # FastAPI 앱에 커스텀 JSON 인코더 설정
 app.json_encoder = custom_jsonable_encoder
 
-TM_FACEBOOK_APP_ID = os.getenv("TM_FACEBOOK_APP_ID")
-TM_FACEBOOK_APP_SECRET = os.getenv("TM_FACEBOOK_APP_SECRET")
+VITE_FACEBOOK_APP_ID = os.getenv("VITE_FACEBOOK_APP_ID")
+VITE_FACEBOOK_APP_SECRET = os.getenv("VITE_FACEBOOK_APP_SECRET")
 
 book_manager = BookManager()
 # Elasticsearch 인덱스가 없으면 count 에러를 무시하고 0으로 처리
@@ -297,8 +297,8 @@ async def exchange_facebook_token(exchange_request_body: dict):
         url = "https://graph.facebook.com/v12.0/oauth/access_token"
         params = {
             "grant_type": "fb_exchange_token",
-            "client_id": TM_FACEBOOK_APP_ID,
-            "client_secret": TM_FACEBOOK_APP_SECRET,
+            "client_id": VITE_FACEBOOK_APP_ID,
+            "client_secret": VITE_FACEBOOK_APP_SECRET,
             "fb_exchange_token": access_token
         }
         response = await client.get(url, params=params)
