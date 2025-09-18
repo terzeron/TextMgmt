@@ -1,12 +1,13 @@
-import {sprintf} from 'sprintf-js';
-import {str} from 'crc-32';
-import {DateTime} from 'luxon';
+import { sprintf } from 'sprintf-js';
+import { str } from 'crc-32';
+import { DateTime } from 'luxon';
 
 export function getApiUrlPrefix() {
-    if (!import.meta.env.VITE_API_URL_PREFIX) {
+    const api_url_prefix = window.__ENV__?.['VITE_API_URL_PREFIX'] || import.meta.env.VITE_API_URL_PREFIX;
+    if (!api_url_prefix) {
         console.log("The environment variable VITE_API_URL_PREFIX is not set.");
     }
-    return import.meta.env.VITE_API_URL_PREFIX;
+    return api_url_prefix;
 }
 
 export function handleFetchErrors(response) {
@@ -64,7 +65,7 @@ export const getRandomMediumColor = (str) => {
 
 const apiReq = (url, method, payload, type, resolve, reject, final) => {
     try {
-        fetch(getApiUrlPrefix() + url, payload ? {method: method, body: JSON.stringify(payload)} : {method: method})
+        fetch(getApiUrlPrefix() + url, payload ? { method: method, body: JSON.stringify(payload) } : { method: method })
             .then(handleFetchErrors)
             .then((response) => {
                 let promise;

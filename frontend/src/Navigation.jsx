@@ -8,8 +8,8 @@ import { faFacebook } from "@fortawesome/free-brands-svg-icons";
 import { getApiUrlPrefix, jsonGetReq } from "./Common.js";
 
 export default function Navigation() {
-    const appId = import.meta.env.VITE_FACEBOOK_APP_ID;
-    const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
+    const appId = window.__ENV__?.['VITE_FACEBOOK_APP_ID'] || import.meta.env.VITE_FACEBOOK_APP_ID;
+    const adminEmail = window.__ENV__?.['VITE_ADMIN_EMAIL'] || import.meta.env.VITE_ADMIN_EMAIL;
     const [login, setLogin] = useState(false);
     const [authorized, setAuthorized] = useState(false);
     const [name, setName] = useState('');
@@ -127,18 +127,18 @@ export default function Navigation() {
         <div>
             <Navbar bg="light" expand="sm">
                 <Navbar.Brand href="/">Text</Navbar.Brand>
-                <Navbar.Toggle aria-controls="basic-navbar-nav"/>
+                <Navbar.Toggle aria-controls="basic-navbar-nav" />
                 <Navbar.Collapse id="basic-navbar-nav">
-                    <Nav className="me-auto my-2 my-lg-0" style={{maxHeight: '100px'}} navbarScroll>
+                    <Nav className="me-auto my-2 my-lg-0" style={{ maxHeight: '100px' }} navbarScroll>
                         <Nav.Link href="/edit">편집</Nav.Link>
                         <Nav.Link href="/view">조회</Nav.Link>
                     </Nav>
                     <div className="d-flex align-items-center ms-auto">
                         <Form onSubmit={e => { e.preventDefault(); handleSearch(); }} className="me-2">
                             <InputGroup>
-                                <FormControl type="text" placeholder="키워드" className="mr-sm-2" value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)}/>
+                                <FormControl type="text" placeholder="키워드" className="mr-sm-2" value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)} />
                                 <Button type="button" variant="outline-success" size="sm" onClick={handleSearch}>
-                                    검색<FontAwesomeIcon icon={faSearch}/>
+                                    검색<FontAwesomeIcon icon={faSearch} />
                                 </Button>
                             </InputGroup>
                         </Form>
@@ -176,10 +176,10 @@ export default function Navigation() {
                             borderRadius: '4px',
                         }}
                     >
-                        Login with Facebook <FontAwesomeIcon icon={faFacebook}/>
+                        Login with Facebook <FontAwesomeIcon icon={faFacebook} />
                     </FacebookLogin>
                 )}
-                {authorized && <Outlet context={{searchResults, hasSearched}} />}
+                {authorized && <Outlet context={{ searchResults, hasSearched }} />}
                 {login && !authorized && <div>{name}님으로 로그인하셨습니다. 권한 부족</div>}
             </div>
         </div>
