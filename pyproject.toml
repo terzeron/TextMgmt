@@ -92,27 +92,29 @@ dependencies = [
     "wsproto==1.2.0",
 ]
 
-[tool.uv.dev-dependencies]
-astroid = "==3.1.0"           # pylint 관련
-isort = "==5.13.2"            # import 정렬
-mccabe = "==0.7.0"            # 코드 복잡도 검사
-mypy = "==1.10.0"             # 정적 타입체크
-mypy-extensions = "==1.0.0"
-py = "==1.11.0"               # pytest legacy dep
-pyflakes = "==3.2.0"          # lint
-pylint = "==3.1.0"            # lint
-pyre = "==1.12.4"             # type checker
-pyright = "==1.1.361"         # type checker
-pytest = "==7.0.1"
-pytest-asyncio = "==0.23.6"
-pytest-json-report = "==1.5.0"
-pytest-metadata = "==3.1.1"
-types-python-dateutil = "==2.9.0.20240316"
-types-pytz = "==2024.1.0.20240417"
-tomli = "==2.2.1"
-tomlkit = "==0.12.4"
-typing-extensions = "==4.14.1"
-typing-inspection = "==0.4.0"
+[dependency-groups]
+dev = [
+    "astroid==3.1.0",
+    "isort==5.13.2",
+    "mccabe==0.7.0",
+    "mypy==1.10.0",
+    "mypy-extensions==1.0.0",
+    "py==1.11.0",
+    "pyflakes==3.2.0",
+    "pylint==3.1.0",
+    "pyre==1.12.4",
+    "pyright==1.1.361",
+    "pytest==7.0.1",
+    "pytest-asyncio==0.23.6",
+    "pytest-json-report==1.5.0",
+    "pytest-metadata==3.1.1",
+    "types-python-dateutil==2.9.0.20240316",
+    "types-pytz==2024.1.0.20240417",
+    "tomli==2.2.1",
+    "tomlkit==0.12.4",
+    "typing-extensions==4.14.1",
+    "typing-inspection==0.4.0"
+]
 
 [tool.black]
 line-length = 120
@@ -139,7 +141,7 @@ disallow_any_generics = true
 
 [tool.poetry.dev-dependencies]
 pylint = "3.1.0"
-mypy = "1.9.0"
+mypy = "1.10.0"
 
 [tool.pylint."master"]
 ignore = [".github/*", "idea/*", ".mypy_cache/*", ".run/*", "frontend/*", "out/*"]
