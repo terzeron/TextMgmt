@@ -35,7 +35,6 @@ node_modules/
 
 .python-version
 .env
-.envrc
 run.log*
 __pycache__
 .dependency_cache
