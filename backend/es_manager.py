@@ -30,7 +30,7 @@ class ESManager:
         self.index_name = os.environ["TM_ES_INDEX"]
         url = os.environ["TM_ES_URL"]
         user = os.environ["TM_ES_USER"]
-        passsword = os.environ["TM_ES_PASSWORD"]
+        password = os.environ["TM_ES_PASSWORD"]
         self.es = Elasticsearch(hosts=[url], basic_auth=(user, password), request_timeout=10, retry_on_timeout=True, verify_certs=False)
 
     def __del__(self) -> None:
