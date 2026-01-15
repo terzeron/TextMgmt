@@ -21,7 +21,7 @@ class ESManager:
     DEFAULT_MAX_RESULT_COUNT = 10
 
     def __init__(self) -> None:
-        for env in ["TM_ES_INDEX", "TM_ES_URL"]:
+        for env in ["TM_ES_INDEX", "TM_ES_URL", "TM_ES_USER", "TM_ES_PASSWORD"]:
             print(f"{env}={os.environ[env]}")
             if env not in os.environ:
                 LOGGER.error(f"The environment variable {env} is not set.")
@@ -29,7 +29,9 @@ class ESManager:
 
         self.index_name = os.environ["TM_ES_INDEX"]
         url = os.environ["TM_ES_URL"]
-        self.es = Elasticsearch(hosts=[url], verify_certs=False)
+        user = os.environ["TM_ES_USER"]
+        password = os.environ["TM_ES_PASSWORD"]
+        self.es = Elasticsearch(hosts=[url], basic_auth=(user, password), request_timeout=10, retry_on_timeout=True, verify_certs=False)
 
     def __del__(self) -> None:
         del self.es
