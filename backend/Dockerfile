@@ -1,4 +1,4 @@
-FROM nexus.nhnent.com/python:3.11-slim
+FROM python:3.13-slim
 
 # root
 RUN apt-get update && \
@@ -20,7 +20,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
 USER $USER_NAME
 WORKDIR /app
 
-ENV UV_SYSTEM_PYTHON=1 UV_LINK_MODE=copy UV_PYTHON=python3.11
+ENV UV_SYSTEM_PYTHON=1 UV_LINK_MODE=copy UV_PYTHON=python3.13
 COPY pyproject.toml uv.lock /app/
 RUN HOME=/tmp XDG_CACHE_HOME=/tmp/.cache UV_CACHE_DIR=/tmp/uv-cache \
     uv sync --locked --no-editable
