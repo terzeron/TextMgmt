@@ -355,6 +355,9 @@ def main() -> int:
         if not dir_path.exists():
             LOGGER.error("can't find such a file or directory '%s'", dir_path)
             return 0
+        if not dir_path.is_relative_to(Loader.path_prefix):
+            LOGGER.error(f"{dir_path} is not in $TM_WORK_DIR({Loader.path_prefix}).")
+            continue
 
         print(f"====== {dir_path} ======")
         data = Loader.read_files(dir_path)

@@ -1,5 +1,7 @@
 #!/bin/bash
 
+eval "$(direnv export bash)"
+
 cd "$(dirname "$0")"
 pwd
 
@@ -13,7 +15,7 @@ fi
 
 rm -f nohup.out
 echo "Starting service..."
-nohup uvicorn main:app --workers=1 --reload &
+nohup uvicorn main:app --workers=1 --reload --port=$TM_BACKEND_PORT &
 echo "$!" > "$pidfile"
 sleep 2
 cat "$pidfile"
