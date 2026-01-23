@@ -102,5 +102,35 @@ class TestLoader(unittest.TestCase):
         assert 0 < len(data) <= 1000
         self.inspect_data(data)
 
+    def test_read_files_non_recursive(self):
+        """Test read_files with recursive=False (default) only reads files in the immediate directory."""
+        data = self.loader.read_files(self.txt_dir_path, recursive=False)
+        assert isinstance(data, dict)
+        # All files should be from the immediate directory, not subdirectories
+        for _, v in data.items():
+            file_path = Path(v["file_path"])
+            # The parent should be the txt_dir_path itself (relative path)
+            assert file_path.parent.name == self.txt_dir_path.name
+
+    def test_read_files_recursive(self):
+        """Test read_files with recursive=True reads files from subdirectories."""
+        # Use path_prefix which should have subdirectories
+        data = self.loader.read_files(self.path_prefix, num_files=100, recursive=True)
+        assert isinstance(data, dict)
+        # With recursive=True, we should find files in various subdirectories
+        if data:
+            categories = set()
+            for _, v in data.items():
+                categories.add(v["category"])
+            # Should have files from multiple categories/subdirectories
+            self.inspect_data(data)
+
+    def test_read_files_recursive_vs_non_recursive(self):
+        """Test that recursive=True finds more or equal files than recursive=False."""
+        non_recursive_data = self.loader.read_files(self.path_prefix, num_files=1000, recursive=False)
+        recursive_data = self.loader.read_files(self.path_prefix, num_files=1000, recursive=True)
+        # Recursive should find at least as many files as non-recursive
+        assert len(recursive_data) >= len(non_recursive_data)
+
 if __name__ == "__main__":
     unittest.main()

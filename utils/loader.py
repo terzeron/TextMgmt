@@ -301,10 +301,13 @@ class Loader:
         return {}
 
     @staticmethod
-    def read_files(path: Path, num_files: int = sys.maxsize) -> Dict[int, Dict[str, Any]]:
+    def read_files(path: Path, num_files: int = sys.maxsize, recursive: bool = False) -> Dict[int, Dict[str, Any]]:
         data: Dict[int, Dict[str, Any]] = {}
         if path.is_dir():
-            file_path_list = list(path.rglob("*"))
+            if recursive:
+                file_path_list = list(path.rglob("*"))
+            else:
+                file_path_list = [p for p in path.iterdir() if p.is_file()]
         else:
             file_path_list = [path]
 
@@ -321,18 +324,22 @@ class Loader:
 
 
 def print_usage(program_name: str):
-    print(f"Usage:\t{program_name}\t[ -r ] <file or directory path>")
-    print("\t\t-r: reload text files")
+    print(f"Usage:\t{program_name}\t[ --reload ] [ --recursive ] <file or directory path>")
+    print("\t\t--reload: delete and recreate index before loading")
+    print("\t\t--recursive: scan subdirectories recursively")
     sys.exit(0)
 
 
 def main() -> int:
     do_reload = False
+    do_recursive = False
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "r")
+        opts, args = getopt.getopt(sys.argv[1:], "", ["reload", "recursive"])
         for opt, _ in opts:
-            if opt == "-r":
+            if opt == "--reload":
                 do_reload = True
+            elif opt == "--recursive":
+                do_recursive = True
     except getopt.GetoptError as e:
         LOGGER.error(e)
         print_usage(sys.argv[0])
@@ -360,7 +367,7 @@ def main() -> int:
             continue
 
         print(f"====== {dir_path} ======")
-        data = Loader.read_files(dir_path)
+        data = Loader.read_files(dir_path, recursive=do_recursive)
         Stat.index_count += len(data)
         es_manager.insert(data)
         print("================================")
