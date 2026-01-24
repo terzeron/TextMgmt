@@ -4,6 +4,7 @@ FROM python:3.13-slim
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     libpoppler-dev libpoppler-cpp-dev libheif-dev libcairo2-dev \
+    libxml2-dev libxslt-dev \
     curl ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
