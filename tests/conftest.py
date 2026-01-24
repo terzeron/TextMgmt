@@ -4,7 +4,6 @@ import os
 import time
 import urllib.request
 import urllib.error
-import http.client
 import pytest
 
 # Disable Ryuk to avoid docker.sock mount issues with Colima
@@ -33,27 +32,24 @@ class ElasticsearchContainer(DockerContainer):
         port = self.get_exposed_port(9200)
         return f"http://{host}:{port}"
 
-    def _wait_for_http(self, timeout: int = 300) -> None:
-        """Wait until ES responds to HTTP requests."""
-        url = self.get_url()
-        start_time = time.time()
-        while time.time() - start_time < timeout:
+    def _wait_for_ready(self) -> None:
+        """Wait until ES cluster is ready (yellow or green status)."""
+        url = f"{self.get_url()}/_cluster/health?wait_for_status=yellow&timeout=120s"
+        while True:
             try:
-                with urllib.request.urlopen(url, timeout=10) as response:
+                with urllib.request.urlopen(url, timeout=130) as response:
                     if response.status == 200:
                         return
-            except (urllib.error.URLError, TimeoutError, ConnectionRefusedError,
-                    http.client.RemoteDisconnected, OSError):
+            except (urllib.error.URLError, TimeoutError, ConnectionRefusedError, OSError):
                 pass
-            time.sleep(3)
-        raise TimeoutError(f"Elasticsearch not ready after {timeout} seconds")
+            time.sleep(1)
 
     def start(self):
         super().start()
-        # Wait for ES to be ready (longer timeout for plugin installation)
-        wait_for_logs(self, "started", timeout=300)
-        # Wait for HTTP endpoint to be ready
-        self._wait_for_http(timeout=300)
+        # Wait for "started" log which indicates ES is ready
+        wait_for_logs(self, "started")
+        # Wait for cluster to be ready (yellow status)
+        self._wait_for_ready()
         return self
 
 

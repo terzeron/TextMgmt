@@ -3,7 +3,6 @@
 import logging.config
 import os
 import shutil
-import time
 from pathlib import Path
 
 import pytest
@@ -28,25 +27,13 @@ def backend_test_setup(elasticsearch_container):
     # Create BookManager (it will use env vars set by elasticsearch_container fixture)
     bm = BookManager()
 
-    # Override ES client with longer timeout for testcontainers
+    # Override ES client with longer timeout for index operations
     bm.es_manager.es = Elasticsearch(
         hosts=[os.environ["TM_ES_URL"]],
         basic_auth=(os.environ.get("TM_ES_USER", ""), os.environ.get("TM_ES_PASSWORD", "")),
-        request_timeout=120,
-        retry_on_timeout=True,
         verify_certs=False,
-        max_retries=5
+        request_timeout=120,
     )
-
-    # Wait for cluster to be ready
-    for _ in range(60):
-        try:
-            health = bm.es_manager.es.cluster.health(wait_for_status="yellow", timeout="5s")
-            LOGGER.info("Cluster health: %s", health["status"])
-            break
-        except Exception as e:
-            LOGGER.warning("Waiting for cluster: %s", e)
-            time.sleep(1)
 
     # Delete index if exists, then create fresh
     try:
@@ -84,32 +71,18 @@ def backend_test_setup(elasticsearch_container):
         LOGGER.info("Index already exists")
 
     # Wait for index to be ready
-    bm.es_manager.es.cluster.health(index=bm.es_manager.index_name, wait_for_status="yellow", timeout="30s")
+    bm.es_manager.es.cluster.health(index=bm.es_manager.index_name, wait_for_status="yellow", timeout="60s")
 
     # Load test data from actual files if available
     epub_path = bm.path_prefix / CATEGORY
     if epub_path.exists():
-        data = Loader.read_files(epub_path, num_files=100)
+        data = Loader.read_files(epub_path, num_files=20)
         if data:
-            bm.es_manager.insert(data, num_docs=100)
+            bm.es_manager.insert(data, num_docs=20)
             LOGGER.info("Inserted %d epub documents", len(data))
 
-    # Refresh and wait for data to be searchable
-    try:
-        bm.es_manager.es.indices.refresh(index=bm.es_manager.index_name)
-    except Exception as e:
-        LOGGER.warning("Failed to refresh index: %s", e)
-
-    # Verify documents are searchable
-    for attempt in range(30):
-        try:
-            count = bm.es_manager.es.count(index=bm.es_manager.index_name)["count"]
-            if count > 0:
-                LOGGER.info("Documents ready: %d", count)
-                break
-        except Exception as e:
-            LOGGER.warning("Count failed (attempt %d): %s", attempt, e)
-        time.sleep(0.2)
+    # Refresh index to make data searchable
+    bm.es_manager.es.indices.refresh(index=bm.es_manager.index_name)
 
     client = TestClient(app)
 

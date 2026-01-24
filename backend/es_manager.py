@@ -42,6 +42,7 @@ class ESManager:
 
     def create_index(self) -> dict[str, Any]:
         LOGGER.debug("create_index()")
+        from elasticsearch import BadRequestError
 
         settings = {
             "index": {
@@ -67,7 +68,13 @@ class ESManager:
 
         if self.do_exist_index():
             return {"acknowledged": True}
-        return self.es.indices.create(index=self.index_name, body={"settings": settings, "mappings": mappings})
+        try:
+            return self.es.indices.create(index=self.index_name, body={"settings": settings, "mappings": mappings})
+        except BadRequestError as e:
+            if "resource_already_exists_exception" in str(e):
+                LOGGER.info("Index %s already exists, skipping creation", self.index_name)
+                return {"acknowledged": True}
+            raise
 
     def delete_index(self) -> None:
         LOGGER.debug("delete_index()")
