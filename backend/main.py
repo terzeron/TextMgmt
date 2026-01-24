@@ -10,7 +10,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
-from elasticsearch import NotFoundError
 # 에러 및 미디어 타입 상수 정의
 ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
 JSON_MEDIA_TYPE = "application/json"
@@ -18,7 +17,6 @@ from pydantic import BaseModel
 from backend.book_manager import BookManager
 from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
 from urllib.parse import quote_plus
-from utils.loader import Loader
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -72,15 +70,6 @@ TM_FACEBOOK_APP_ID = os.getenv("TM_FACEBOOK_APP_ID")
 TM_FACEBOOK_APP_SECRET = os.getenv("TM_FACEBOOK_APP_SECRET")
 
 book_manager = BookManager()
-# Elasticsearch 인덱스가 없으면 count 에러를 무시하고 0으로 처리
-try:
-    count = book_manager.es_manager.es.count(index=book_manager.es_manager.index_name)["count"]
-except NotFoundError:
-    count = 0
-if count == 0:
-    print("loading data...")
-    data = Loader.read_files(book_manager.path_prefix)
-    book_manager.es_manager.insert(data)
 print("book manager ready")
 
 bookstore = Yes24Bookstore(base_dir=".", verbose=True)
