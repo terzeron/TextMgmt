@@ -66,5 +66,9 @@ def elasticsearch_container():
         os.environ["TM_ES_INDEX"] = "test_index"
         os.environ["TM_ES_USER"] = "elastic"
         os.environ["TM_ES_PASSWORD"] = ""
+        # Set environment variables for backend/main.py
+        os.environ.setdefault("TM_FRONTEND_URL", "http://localhost:3000")
+        os.environ.setdefault("VITE_FACEBOOK_APP_ID", "test_app_id")
+        os.environ.setdefault("VITE_FACEBOOK_APP_SECRET", "test_app_secret")
         yield es
     print(">>> Elasticsearch container stopped")

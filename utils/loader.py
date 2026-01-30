@@ -9,7 +9,7 @@ import getopt
 import logging.config
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 import zipfile
 import hashlib
@@ -301,24 +301,33 @@ class Loader:
         return {}
 
     @staticmethod
-    def read_files(path: Path, num_files: int = sys.maxsize, recursive: bool = False) -> Dict[int, Dict[str, Any]]:
-        data: Dict[int, Dict[str, Any]] = {}
+    def get_file_list(path: Path, num_files: int = sys.maxsize, recursive: bool = False) -> List[Path]:
+        """파일 목록을 반환 (파싱 없이)"""
         if path.is_dir():
             if recursive:
-                file_path_list = list(path.rglob("*"))
+                file_path_list = [p for p in path.rglob("*") if p.is_file()]
             else:
                 file_path_list = [p for p in path.iterdir() if p.is_file()]
         else:
             file_path_list = [path]
+        return file_path_list[:num_files]
 
-        file_count = 0
-        for child_path in file_path_list[:num_files]:
+    @staticmethod
+    def get_inode(file_path: Path) -> int:
+        """파일의 inode를 반환"""
+        return file_path.stat().st_ino
+
+    @staticmethod
+    def read_files(path: Path, num_files: int = sys.maxsize, recursive: bool = False) -> Dict[int, Dict[str, Any]]:
+        """파일들을 읽어서 데이터 딕셔너리로 반환 (테스트 및 하위 호환성용)"""
+        data: Dict[int, Dict[str, Any]] = {}
+        file_list = Loader.get_file_list(path, num_files, recursive)
+
+        for child_path in file_list:
             print(f"* {child_path}")
             data_item = Loader.read_file(child_path)
-            data.update(data_item)
-            file_count += 1
-            if file_count >= num_files:
-                break
+            if data_item:
+                data.update(data_item)
 
         return data
 
@@ -331,8 +340,11 @@ def print_usage(program_name: str):
 
 
 def main() -> int:
+    BATCH_SIZE = 100
+
     do_reload = False
     do_recursive = False
+    args: List[str] = []
     try:
         opts, args = getopt.getopt(sys.argv[1:], "", ["reload", "recursive"])
         for opt, _ in opts:
@@ -350,12 +362,23 @@ def main() -> int:
     start_time: datetime = datetime.now()
 
     es_manager = ESManager()
+
+    # ES 접속 테스트
+    try:
+        if not es_manager.es.ping():
+            LOGGER.error("Elasticsearch 서버에 연결할 수 없습니다.")
+            return -1
+    except Exception as e:
+        LOGGER.error(f"Elasticsearch 접속 실패: {e}")
+        return -1
+
     try:
         if do_reload:
             es_manager.delete_index()
         es_manager.create_index()
     except Exception as e:
         LOGGER.error(e)
+        return -1
 
     for dir in args:
         dir_path = Path(dir)
@@ -367,9 +390,47 @@ def main() -> int:
             continue
 
         print(f"====== {dir_path} ======")
-        data = Loader.read_files(dir_path, recursive=do_recursive)
-        Stat.index_count += len(data)
-        es_manager.insert(data)
+
+        # 파일 목록 수집
+        file_list = Loader.get_file_list(dir_path, recursive=do_recursive)
+        print(f"  총 {len(file_list)}개 파일 발견")
+
+        # 배치 처리: BATCH_SIZE개씩 존재 확인 후 없는 것만 파싱하여 저장
+        skipped_count = 0
+        for i in range(0, len(file_list), BATCH_SIZE):
+            batch_files = file_list[i:i + BATCH_SIZE]
+
+            # 1. inode 수집 (파싱 없이)
+            file_inode_map: Dict[int, Path] = {}
+            for file_path in batch_files:
+                try:
+                    inode = Loader.get_inode(file_path)
+                    file_inode_map[inode] = file_path
+                except OSError:
+                    continue
+
+            # 2. ES에서 존재하는 ID 확인
+            existing_ids = es_manager.get_existing_ids(list(file_inode_map.keys()))
+            skipped_count += len(existing_ids)
+
+            # 3. 존재하지 않는 파일만 파싱
+            batch_data: Dict[int, Dict[str, Any]] = {}
+            for inode, file_path in file_inode_map.items():
+                if inode in existing_ids:
+                    continue  # 이미 존재하면 건너뜀
+                print(f"* {file_path}")
+                data_item = Loader.read_file(file_path)
+                if data_item:
+                    batch_data.update(data_item)
+
+            # 4. 새 데이터 저장
+            if batch_data:
+                es_manager.insert(batch_data)
+                Stat.index_count += len(batch_data)
+                print(f"  [배치 저장: {len(batch_data)}개, 건너뜀: {len(existing_ids)}개]")
+
+        if skipped_count > 0:
+            print(f"  총 {skipped_count}개 중복 파일 건너뜀")
         print("================================")
 
     end_time = datetime.now()

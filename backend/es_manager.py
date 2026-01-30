@@ -6,7 +6,7 @@ import math
 import warnings
 import logging.config
 from pathlib import Path
-from typing import Dict, List, Any, Tuple, Union
+from typing import Dict, List, Any, Tuple, Union, Set
 from itertools import islice
 from elasticsearch import Elasticsearch
 
@@ -45,6 +45,15 @@ class ESManager:
     def do_exist_index(self) -> bool:
         LOGGER.debug("do_exist_index()")
         return self.es.indices.exists(index=self.index_name)
+
+    def get_existing_ids(self, doc_ids: List[int]) -> Set[int]:
+        """주어진 ID 목록 중 ES에 존재하는 ID들을 반환"""
+        if not doc_ids:
+            return set()
+        LOGGER.debug("get_existing_ids(%d ids)", len(doc_ids))
+        docs = [{"_index": self.index_name, "_id": str(doc_id)} for doc_id in doc_ids]
+        response = self.es.mget(docs=docs, source=False)
+        return {int(doc["_id"]) for doc in response["docs"] if doc.get("found", False)}
 
     def create_index(self) -> dict[str, Any]:
         LOGGER.debug("create_index()")
