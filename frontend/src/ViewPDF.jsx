@@ -1,10 +1,10 @@
 import {useEffect, useRef, useState, Suspense} from "react";
 import PropTypes from "prop-types";
 import {getApiUrlPrefix} from "./Common";
-import * as pdfjs from "pdfjs-dist/legacy/build/pdf";
-import workerSrc from "pdfjs-dist/build/pdf.worker?url";
+import * as pdfjs from "pdfjs-dist";
 
-pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
+// CDN에서 워커 로드 (pdfjs-dist 버전과 일치시켜야 함)
+pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
 
 export default function ViewPDF({bookId}) {
     const [url, setUrl] = useState("");
