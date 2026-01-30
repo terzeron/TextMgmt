@@ -16,6 +16,15 @@ export default defineConfig({
     },
     plugins: [basicSsl(), react()],
     optimizeDeps: {
-        exclude: ["pdfjs-dist"]
+        include: ["pdfjs-dist"]
+    },
+    build: {
+        rollupOptions: {
+            output: {
+                manualChunks: {
+                    pdfjs: ["pdfjs-dist"]
+                }
+            }
+        }
     },
 })

@@ -2,9 +2,9 @@ import {useEffect, useRef, useState, Suspense} from "react";
 import PropTypes from "prop-types";
 import {getApiUrlPrefix} from "./Common";
 import * as pdfjs from "pdfjs-dist";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
-// unpkg CDN에서 워커 로드 (package.json의 pdfjs-dist 버전과 일치)
-pdfjs.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
+pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 export default function ViewPDF({bookId}) {
     const [url, setUrl] = useState("");
