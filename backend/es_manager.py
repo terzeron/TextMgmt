@@ -3,6 +3,7 @@
 import sys
 import os
 import math
+import ssl
 import warnings
 import logging.config
 from pathlib import Path
@@ -31,7 +32,21 @@ class ESManager:
         url = os.environ["TM_ES_URL"]
         user = os.environ["TM_ES_USER"]
         password = os.environ["TM_ES_PASSWORD"]
-        self.es = Elasticsearch(hosts=[url], basic_auth=(user, password), request_timeout=10, retry_on_timeout=True, verify_certs=False)
+
+        # SSL 컨텍스트 생성 (자체 서명 인증서 허용)
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+
+        self.es = Elasticsearch(
+            hosts=[url],
+            basic_auth=(user, password),
+            request_timeout=10,
+            retry_on_timeout=True,
+            verify_certs=False,
+            ssl_show_warn=False,
+            ssl_context=ssl_context,
+        )
 
     def __del__(self) -> None:
         del self.es
