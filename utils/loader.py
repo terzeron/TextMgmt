@@ -9,7 +9,7 @@ import getopt
 import logging.config
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Set
 
 import zipfile
 import hashlib
@@ -406,7 +406,7 @@ def main() -> int:
         LOGGER.error(e)
         return -1
 
-    def process_file_list(file_list: List[Path], phase_name: str = "") -> int:
+    def process_file_list(file_list: List[Path], skip_check: bool = False) -> int:
         """파일 목록을 배치 처리하여 ES에 저장"""
         skipped_count = 0
         for i in range(0, len(file_list), BATCH_SIZE):
@@ -421,11 +421,13 @@ def main() -> int:
                 except OSError:
                     continue
 
-            # ES에서 존재하는 ID 확인
-            existing_ids = es_manager.get_existing_ids(list(file_inode_map.keys()))
-            skipped_count += len(existing_ids)
+            # 존재 여부 검사 (skip_check가 False일 때만)
+            existing_ids: Set[int] = set()
+            if not skip_check:
+                existing_ids = es_manager.get_existing_ids(list(file_inode_map.keys()))
+                skipped_count += len(existing_ids)
 
-            # 존재하지 않는 파일만 파싱
+            # 파일 파싱
             batch_data: Dict[int, Dict[str, Any]] = {}
             for inode, file_path in file_inode_map.items():
                 if inode in existing_ids:
@@ -435,11 +437,14 @@ def main() -> int:
                 if data_item:
                     batch_data.update(data_item)
 
-            # 새 데이터 저장
+            # 데이터 저장
             if batch_data:
                 es_manager.insert(batch_data)
                 Stat.index_count += len(batch_data)
-                print(f"  [배치 저장: {len(batch_data)}개, 건너뜀: {len(existing_ids)}개]")
+                if skip_check:
+                    print(f"  [배치 저장: {len(batch_data)}개]")
+                else:
+                    print(f"  [배치 저장: {len(batch_data)}개, 건너뜀: {len(existing_ids)}개]")
 
         return skipped_count
 
@@ -458,7 +463,7 @@ def main() -> int:
             # 전체 파일 등록
             file_list = [p for p in dir_path.rglob("*") if p.is_file()]
             print(f"  총 {len(file_list)}개 파일 발견")
-            skipped_count = process_file_list(file_list)
+            skipped_count = process_file_list(file_list, skip_check=do_reload)
             if skipped_count > 0:
                 print(f"  총 {skipped_count}개 중복 파일 건너뜀")
         else:
@@ -474,7 +479,7 @@ def main() -> int:
                         sample_file = subdir_files[0]
                         print(f" -> {sample_file.name}", end="", flush=True)
                         # 즉시 ES에 저장
-                        skipped = process_file_list([sample_file])
+                        skipped = process_file_list([sample_file], skip_check=do_reload)
                         if skipped > 0:
                             print(" (중복)")
                             skipped1 += skipped
@@ -489,7 +494,7 @@ def main() -> int:
             print("  [2단계] 현재 디렉토리 파일 등록")
             current_dir_files = sorted([p for p in dir_path.iterdir() if p.is_file()])
             print(f"    {len(current_dir_files)}개 파일 발견")
-            skipped2 = process_file_list(current_dir_files)
+            skipped2 = process_file_list(current_dir_files, skip_check=do_reload)
             if skipped2 > 0:
                 print(f"    {skipped2}개 중복 파일 건너뜀")
 
