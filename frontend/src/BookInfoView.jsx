@@ -16,6 +16,8 @@ export default function BookInfoView(props) {
     const [fileType, setFileType] = useState('');
     const [filePath, setFilePath] = useState('');
     const [fileSize, setFileSize] = useState(0);
+    const [lineCount, setLineCount] = useState(0);
+    const [pageCount, setPageCount] = useState(0);
     const [isEditEnabled, setIsEditEnabled] = useState(false);
     const [isComposingAuthor, setIsComposingAuthor] = useState(false);
     const [isComposingTitle, setIsComposingTitle] = useState(false);
@@ -28,6 +30,8 @@ export default function BookInfoView(props) {
         setFileType(bookInfo['file_type']);
         setFilePath(bookInfo['file_path']);
         setFileSize(bookInfo['file_size']);
+        setLineCount(bookInfo['line_count'] || 0);
+        setPageCount(bookInfo['page_count'] || 0);
         setIsEditEnabled(props.isEditEnabled);
     }, [props]);
 
@@ -40,16 +44,26 @@ export default function BookInfoView(props) {
             </Row>
 
             <Row>
-                <Col xs="6">
+                <Col xs="4">
                     <InputGroup>
-                        <InputGroup.Text>파일 종류</InputGroup.Text>
+                        <InputGroup.Text>종류</InputGroup.Text>
                         <Form.Control value={fileType} readOnly disabled/>
                     </InputGroup>
                 </Col>
-                <Col xs="6">
+                <Col xs="4">
                     <InputGroup>
-                        <InputGroup.Text>파일 크기</InputGroup.Text>
+                        <InputGroup.Text>크기</InputGroup.Text>
                         <Form.Control value={fileSize.toLocaleString()} readOnly disabled/>
+                    </InputGroup>
+                </Col>
+                <Col xs="4">
+                    <InputGroup>
+                        <InputGroup.Text>분량</InputGroup.Text>
+                        <Form.Control
+                            value={pageCount > 0 ? `${pageCount.toLocaleString()}페이지` : (lineCount > 0 ? `${lineCount.toLocaleString()}행` : '-')}
+                            readOnly
+                            disabled
+                        />
                     </InputGroup>
                 </Col>
             </Row>

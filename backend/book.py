@@ -27,6 +27,8 @@ class Book:
         self.file_path: Path = self.path_prefix / info["file_path"]
         self.file_type: str = info["file_type"]
         self.file_size: int = info["file_size"]
+        self.line_count: int = info.get("line_count", 0)
+        self.page_count: int = info.get("page_count", 0)
         self.summary: str = info.get("summary", "")
         self.updated_time: datetime = datetime.strptime(info["updated_time"], "%Y-%m-%dT%H:%M:%S.%f")
 
@@ -39,6 +41,8 @@ class Book:
             "file_path": str(self.file_path.relative_to(self.path_prefix)),
             "file_type": self.file_type,
             "file_size": self.file_size,
+            "line_count": self.line_count,
+            "page_count": self.page_count,
             "updated_time": self.updated_time.strftime("%Y-%m-%dT%H:%M:%S.%f"),
         }
 

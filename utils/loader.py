@@ -9,7 +9,7 @@ import getopt
 import logging.config
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Set
+from typing import Dict, Any, List, Set, Tuple
 
 import zipfile
 import hashlib
@@ -38,16 +38,20 @@ class Loader:
     path_prefix = Path(os.environ["TM_WORK_DIR"])
 
     @staticmethod
-    def read_from_text(file_path: Path) -> str:
+    def read_from_text(file_path: Path) -> Tuple[str, int, int]:
         Stat.text_count += 1
         start_time = datetime.now()
 
+        line_count = 0
         try:
             with file_path.open("r", encoding="utf-8") as infile:
                 data = infile.read(Loader.TEXT_SIZE)
                 data = data.replace("\ufeff", "")
                 # Preserve Korean characters by replacing only non-word, non-space, non-Korean characters.
                 data = re.sub(r'[^\w\sㄱ-힣]', ' ', data)
+            # 전체 행 수 계산
+            with file_path.open("r", encoding="utf-8") as infile:
+                line_count = sum(1 for _ in infile)
         except UnicodeDecodeError as e:
             LOGGER.error(f"can't read unicode text from file '{file_path}', {e}")
             data = ""
@@ -55,11 +59,12 @@ class Loader:
         end_time = datetime.now()
         Stat.text_total_time += (end_time - start_time).total_seconds()
 
-        return data
+        return data, line_count, 0
 
     @staticmethod
-    def read_from_epub_with_extracting_zip(file_path: Path) -> str:
+    def read_from_epub_with_extracting_zip(file_path: Path) -> Tuple[str, int]:
         result = ""
+        total_text = ""
         try:
             with zipfile.ZipFile(file_path, "r") as zip_ref:
                 temp_dir_name = hashlib.md5(str(file_path).encode("utf-8")).hexdigest()[:7]
@@ -78,38 +83,38 @@ class Loader:
                             root_file_path = temp_dir_path / Path(root_file)
                             if not root_file_path.is_file():
                                 LOGGER.error("can't file '%s' in epub file '%s'", root_file_path, file_path)
-                                return ""
-                #print(root_file_path)
+                                return "", 0
                 with root_file_path.open("r", encoding="utf-8") as infile:
                     for line in infile:
                         matches = re.findall(r'<(?:opf:)?item\s[^>]*href="(?P<chapter_file>[^"]*\.x?html)"[^>]*media-type="application/xhtml\+xml"', line)
                         for match in matches:
                             chapter_file = match
                             chapter_file_path = root_file_path.parent / chapter_file
-                            # print(chapter_file_path)
                             if not chapter_file_path.is_file():
                                 continue
                             with chapter_file_path.open("r", encoding="utf-8") as file:
                                 content = file.read()
                                 soup = BeautifulSoup(content, "html.parser")
                                 text = soup.get_text()
+                                total_text += text
                                 if len(result) < Loader.TEXT_SIZE:
                                     result += text
-                                else:
-                                    break
                 shutil.rmtree(temp_dir_path)
         except zipfile.BadZipFile as e:
             LOGGER.error(file_path)
             LOGGER.error(e)
 
-        return result[:Loader.TEXT_SIZE]
+        line_count = total_text.count('\n') + 1 if total_text else 0
+        return result[:Loader.TEXT_SIZE], line_count
 
     @staticmethod
-    def read_from_epub(file_path: Path) -> str:
+    def read_from_epub(file_path: Path) -> Tuple[str, int, int]:
         Stat.normal_epub_count += 1
         start_time = datetime.now()
 
         result = ""
+        total_text = ""
+        line_count = 0
         try:
             book = epub.read_epub(file_path)
             titles = book.get_metadata("DC", "title")
@@ -124,13 +129,13 @@ class Loader:
                         result += " " + creator[0]
 
             for doc in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-                # print(doc.get_body_content())
                 soup = BeautifulSoup(doc.get_body_content(), "html.parser")
                 text = soup.get_text()
+                total_text += text
                 if len(result) < Loader.TEXT_SIZE:
                     result += text
-                else:
-                    break
+
+            line_count = total_text.count('\n') + 1 if total_text else 0
 
             end_time = datetime.now()
             Stat.normal_epub_total_time += (end_time - start_time).total_seconds()
@@ -143,7 +148,7 @@ class Loader:
             start_time = datetime.now()
 
             try:
-                result = Loader.read_from_epub_with_extracting_zip(file_path)
+                result, line_count = Loader.read_from_epub_with_extracting_zip(file_path)
             except epub.EpubException as e2:
                 LOGGER.error(file_path)
                 LOGGER.error(e2)
@@ -153,17 +158,19 @@ class Loader:
 
         result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
 
-        return result[:Loader.TEXT_SIZE]
+        return result[:Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
-    def read_from_pdf(file_path: Path) -> str:
+    def read_from_pdf(file_path: Path) -> Tuple[str, int, int]:
         Stat.pdf_count += 1
         start_time = datetime.now()
 
         result = ""
+        page_count = 0
         with file_path.open("rb") as infile:
             try:
                 reader = pypdf.PdfReader(infile)
+                page_count = len(reader.pages)
                 for page in reader.pages:
                     text = page.extract_text()
                     if len(result) < Loader.TEXT_SIZE:
@@ -178,16 +185,18 @@ class Loader:
         end_time = datetime.now()
         Stat.pdf_total_time += (end_time - start_time).total_seconds()
 
-        return result[:Loader.TEXT_SIZE]
+        return result[:Loader.TEXT_SIZE], 0, page_count
 
     @staticmethod
-    def read_from_html(file_path: Path) -> str:
+    def read_from_html(file_path: Path) -> Tuple[str, int, int]:
         Stat.html_count += 1
         start_time = datetime.now()
 
         content = ""
+        line_count = 0
         with file_path.open("r") as infile:
             content = infile.read()
+            line_count = content.count('\n') + 1
 
         soup = BeautifulSoup(content, "html.parser")
         result = soup.get_text()
@@ -196,57 +205,57 @@ class Loader:
         end_time = datetime.now()
         Stat.html_total_time += (end_time - start_time).total_seconds()
 
-        return result[:Loader.TEXT_SIZE]
+        return result[:Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
-    def read_from_docx(file_path: Path) -> str:
+    def read_from_docx(file_path: Path) -> Tuple[str, int, int]:
         Stat.docx_count += 1
         start_time = datetime.now()
 
         result = ""
+        total_text = ""
         doc = Document(str(file_path))
-        # print(doc)
         for paragraph in doc.paragraphs:
             text = paragraph.text
+            total_text += text + "\n"
             if len(result) < Loader.TEXT_SIZE:
                 result += text
-            else:
-                break
         result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
+        line_count = total_text.count('\n') if total_text else 0
 
         end_time = datetime.now()
         Stat.docx_total_time += (end_time - start_time).total_seconds()
 
-        return result[:Loader.TEXT_SIZE]
+        return result[:Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
-    def read_from_rtf(file_path: Path) -> str:
+    def read_from_rtf(file_path: Path) -> Tuple[str, int, int]:
         Stat.rtf_count += 1
         start_time = datetime.now()
 
         result = ""
-        # print(file_path)
+        line_count = 0
         try:
             with file_path.open("rb") as infile:
                 raw_data = infile.read()
                 doc = raw_data.decode('utf-8')
                 result = rtf_to_text(doc, errors="ignore")
+                line_count = result.count('\n') + 1 if result else 0
         except Exception as e:
             LOGGER.error(file_path)
             LOGGER.error(e)
         result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
-        # print(result[:TEXT_SIZE])
 
         end_time = datetime.now()
         Stat.rtf_total_time += (end_time - start_time).total_seconds()
 
-        return result[:Loader.TEXT_SIZE]
+        return result[:Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
-    def read_from_image() -> str:
+    def read_from_image(_file_path: Path) -> Tuple[str, int, int]:
         Stat.image_count += 1
-
-        return ""
+        # 이미지는 line_count, page_count 해당 없음
+        return "", 0, 0
 
     @staticmethod
     def read_file(file_path: Path) -> Dict[int, Dict[str, Any]]:
@@ -270,20 +279,23 @@ class Loader:
 
             file_type = file_path.suffix[1:]
             # read content of each file
+            summary = ""
+            line_count = 0
+            page_count = 0
             if file_type == "txt":
-                summary = Loader.read_from_text(file_path)
+                summary, line_count, page_count = Loader.read_from_text(file_path)
             elif file_type == "epub":
-                summary = Loader.read_from_epub(file_path)
+                summary, line_count, page_count = Loader.read_from_epub(file_path)
             elif file_type == "pdf":
-                summary = Loader.read_from_pdf(file_path)
+                summary, line_count, page_count = Loader.read_from_pdf(file_path)
             elif file_type == "docx":
-                summary = Loader.read_from_docx(file_path)
+                summary, line_count, page_count = Loader.read_from_docx(file_path)
             elif file_type == "rtf":
-                summary = Loader.read_from_rtf(file_path)
+                summary, line_count, page_count = Loader.read_from_rtf(file_path)
             elif file_type == "html":
-                summary = Loader.read_from_html(file_path)
+                summary, line_count, page_count = Loader.read_from_html(file_path)
             elif file_type in ("jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg"):
-                summary = Loader.read_from_image()
+                summary, line_count, page_count = Loader.read_from_image(file_path)
             else:
                 return {}
 
@@ -295,6 +307,8 @@ class Loader:
                     "file_path": str(file_path.relative_to(Loader.path_prefix)),
                     "file_type": file_type,
                     "file_size": int(file_size),
+                    "line_count": line_count,
+                    "page_count": page_count,
                     "summary": summary,
                     "updated_time": datetime.now().isoformat()
                 }

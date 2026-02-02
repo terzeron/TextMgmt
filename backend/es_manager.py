@@ -127,6 +127,8 @@ class ESManager:
                 "file_path": {"type": "keyword"},
                 "file_type": {"type": "keyword"},
                 "file_size": {"type": "unsigned_long"},
+                "line_count": {"type": "integer"},
+                "page_count": {"type": "integer"},
                 "summary": {"type": "text", "analyzer": "nori_analyzer"},
                 "updated_time": {
                     "type": "date",

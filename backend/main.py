@@ -121,6 +121,8 @@ class BookModel(BaseModel):
     file_path: str
     file_type: str
     file_size: int
+    line_count: int = 0
+    page_count: int = 0
     updated_time: str
 
 
