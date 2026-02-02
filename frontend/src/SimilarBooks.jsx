@@ -31,7 +31,7 @@ export default function SimilarBooks({bookId, onSelect}) {
                         similarBooks.map((book) => (
                             <div key={book.book_id} style={{padding: '4px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
                                 <span style={{cursor: 'pointer'}} onClick={() => onSelect && onSelect(`${book.category}/${book.book_id}`)}>
-                                    {book.title} - {book.author}
+                                    {book.file_path.split('/').pop()}
                                 </span>
                                 <div>
                                     <Button
