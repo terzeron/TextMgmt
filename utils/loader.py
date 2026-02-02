@@ -449,22 +449,28 @@ def main() -> int:
             if skipped_count > 0:
                 print(f"  총 {skipped_count}개 중복 파일 건너뜀")
         else:
-            # 1단계: 하위 디렉토리 각각에서 첫 번째 파일 1개씩
+            # 1단계: 하위 디렉토리 각각에서 첫 번째 파일 1개씩 (즉시 저장)
             print("  [1단계] 하위 디렉토리별 샘플 파일 등록")
-            sample_files: List[Path] = []
+            sample_count = 0
+            skipped1 = 0
             for subdir in sorted(dir_path.iterdir()):
                 if subdir.is_dir():
                     print(f"    탐색 중: {subdir.name}/", end="", flush=True)
                     subdir_files = sorted([p for p in subdir.iterdir() if p.is_file()])
                     if subdir_files:
-                        sample_files.append(subdir_files[0])
-                        print(f" -> {subdir_files[0].name}")
+                        sample_file = subdir_files[0]
+                        print(f" -> {sample_file.name}", end="", flush=True)
+                        # 즉시 ES에 저장
+                        skipped = process_file_list([sample_file])
+                        if skipped > 0:
+                            print(" (중복)")
+                            skipped1 += skipped
+                        else:
+                            print(" (저장됨)")
+                            sample_count += 1
                     else:
                         print(" -> (파일 없음)")
-            print(f"    {len(sample_files)}개 카테고리 샘플 파일 발견")
-            skipped1 = process_file_list(sample_files)
-            if skipped1 > 0:
-                print(f"    {skipped1}개 중복 파일 건너뜀")
+            print(f"    {sample_count}개 카테고리 샘플 저장, {skipped1}개 중복 건너뜀")
 
             # 2단계: 지정된 디렉토리에 바로 속한 파일들
             print("  [2단계] 현재 디렉토리 파일 등록")
