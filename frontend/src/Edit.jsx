@@ -42,6 +42,10 @@ export default function Edit() {
     useEffect(() => {
         const categoryListUrl = '/categories';
         jsonGetReq(categoryListUrl, null, (categoryList) => {
+            // _root 카테고리(최상위 파일) 분리
+            const hasRootFiles = categoryList.includes('_root');
+            const nonEmptyCategories = categoryList.filter(c => c !== '_root');
+
             // 공통 prefix 찾기
             const findCommonPrefix = (strings) => {
                 if (!strings || strings.length === 0) return '';
@@ -62,9 +66,10 @@ export default function Edit() {
                 }
                 return commonParts.length > 0 ? commonParts.join('/') + '/' : '';
             };
-            const commonPrefix = findCommonPrefix(categoryList);
+            const commonPrefix = findCommonPrefix(nonEmptyCategories);
 
-            let data = categoryList.sort((a, b) => a.localeCompare(b))
+            // 폴더 목록 생성
+            let data = nonEmptyCategories.sort((a, b) => a.localeCompare(b))
                 .map(category => {
                     return {
                         id: category,
@@ -72,7 +77,26 @@ export default function Edit() {
                         fileType: 'folder'
                     };
                 });
-            setFolderData(data);
+
+            // 최상위 파일이 있으면 가져와서 추가
+            if (hasRootFiles) {
+                jsonGetReq('/categories/_root', null, (bookList) => {
+                    const rootFiles = bookList
+                        .sort((a, b) => a['title'].localeCompare(b['title']))
+                        .map(book => ({
+                            id: '/' + book['book_id'].toString(),
+                            label: book['title'] + '.' + book['file_type'],
+                            fileType: book['file_type'],
+                            children: [],
+                            book: book,
+                        }));
+                    setFolderData([...data, ...rootFiles]);
+                }, () => {
+                    setFolderData(data);
+                });
+            } else {
+                setFolderData(data);
+            }
             setCategoryList(categoryList);
         }, (error) => {
             setErrorMessage(`can't load directory data, ${error}`);
@@ -176,8 +200,8 @@ export default function Edit() {
         };
 
         const selectedFolderData = folderData.find(o => o.id === selectedEntryId);
-        if (selectedFolderData) {
-            // category entry
+        if (selectedFolderData && selectedFolderData.fileType === 'folder') {
+            // category entry (폴더)
             const booksInCategoryUrl = '/categories/' + selectedEntryId;
             const isChildrenLoaded = folderData.find(item => item.id === selectedEntryId && item.children && item.children.length > 0)
             if (!isChildrenLoaded) {
@@ -206,6 +230,20 @@ export default function Edit() {
                     setFolderData(data);
                 });
             }
+        } else if (selectedFolderData && selectedFolderData.book) {
+            // 최상위 파일 (folderData에 직접 포함된 파일)
+            const book = selectedFolderData.book;
+            const bookId = book['book_id'];
+            setSelectedEntryId(selectedEntryId);
+            setOriginalBookInfo(book);
+            const newBook = decomposeTitle(book);
+            setBookInfo(newBook);
+            setViewUrl('/view/' + book['file_type'] + '/' + bookId + '/' + encodeURIComponent(book['file_path']));
+            setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
+            const otherCategoryList = categoryList
+                .sort((a, b) => a.localeCompare(b))
+                .filter(cat => cat !== '_root');
+            setOtherCategoryList(otherCategoryList);
         } else {
             // book entry
             const category = selectedEntryId.split('/')[0];
