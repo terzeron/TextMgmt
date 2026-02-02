@@ -42,11 +42,33 @@ export default function Edit() {
     useEffect(() => {
         const categoryListUrl = '/categories';
         jsonGetReq(categoryListUrl, null, (categoryList) => {
+            // 공통 prefix 찾기
+            const findCommonPrefix = (strings) => {
+                if (!strings || strings.length === 0) return '';
+                if (strings.length === 1) {
+                    const parts = strings[0].split('/');
+                    return parts.length > 1 ? parts.slice(0, -1).join('/') + '/' : '';
+                }
+                const parts = strings.map(s => s.split('/'));
+                const minLen = Math.min(...parts.map(p => p.length));
+                let commonParts = [];
+                for (let i = 0; i < minLen - 1; i++) {
+                    const part = parts[0][i];
+                    if (parts.every(p => p[i] === part)) {
+                        commonParts.push(part);
+                    } else {
+                        break;
+                    }
+                }
+                return commonParts.length > 0 ? commonParts.join('/') + '/' : '';
+            };
+            const commonPrefix = findCommonPrefix(categoryList);
+
             let data = categoryList.sort((a, b) => a.localeCompare(b))
                 .map(category => {
                     return {
                         id: category,
-                        label: category,
+                        label: commonPrefix ? category.replace(commonPrefix, '') : category,
                         fileType: 'folder'
                     };
                 });

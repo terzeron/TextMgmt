@@ -257,7 +257,7 @@ class Loader:
             st = file_path.stat()
             inode_num = st.st_ino
             file_size = st.st_size
-            category = file_path.parent.name
+            category = str(file_path.parent.relative_to(Loader.path_prefix))
             m = re.search(r"^\[(?P<author>[^\]]+)\]\s*(?P<title>.+)$", file_path.stem)
             if m:
                 author = m.group("author")
