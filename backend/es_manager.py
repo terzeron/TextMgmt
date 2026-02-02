@@ -67,7 +67,7 @@ class ESManager:
                 "tokenizer": {
                     "nori_tokenizer": {
                         "type": "nori_tokenizer",
-                        "decompound_mode": "mixed",
+                        "decompound_mode": "discard",
                     }
                 },
                 "filter": {
