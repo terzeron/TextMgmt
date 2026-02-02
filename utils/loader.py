@@ -302,12 +302,25 @@ class Loader:
 
     @staticmethod
     def get_file_list(path: Path, num_files: int = sys.maxsize, recursive: bool = False) -> List[Path]:
-        """파일 목록을 반환 (파싱 없이)"""
+        """파일 목록을 반환 (파싱 없이)
+
+        recursive=False인 경우:
+        1. 하위 디렉토리 각각에서 첫 번째 파일 1개씩
+        2. 지정된 디렉토리에 바로 속한 파일들
+        """
         if path.is_dir():
             if recursive:
                 file_path_list = [p for p in path.rglob("*") if p.is_file()]
             else:
-                file_path_list = [p for p in path.iterdir() if p.is_file()]
+                file_path_list = []
+                # 1. 하위 디렉토리 각각에서 첫 번째 파일 1개씩
+                for subdir in sorted(path.iterdir()):
+                    if subdir.is_dir():
+                        subdir_files = sorted([p for p in subdir.iterdir() if p.is_file()])
+                        if subdir_files:
+                            file_path_list.append(subdir_files[0])
+                # 2. 지정된 디렉토리에 바로 속한 파일들
+                file_path_list.extend(sorted([p for p in path.iterdir() if p.is_file()]))
         else:
             file_path_list = [path]
         return file_path_list[:num_files]
@@ -380,6 +393,43 @@ def main() -> int:
         LOGGER.error(e)
         return -1
 
+    def process_file_list(file_list: List[Path], phase_name: str = "") -> int:
+        """파일 목록을 배치 처리하여 ES에 저장"""
+        skipped_count = 0
+        for i in range(0, len(file_list), BATCH_SIZE):
+            batch_files = file_list[i:i + BATCH_SIZE]
+
+            # inode 수집 (파싱 없이)
+            file_inode_map: Dict[int, Path] = {}
+            for file_path in batch_files:
+                try:
+                    inode = Loader.get_inode(file_path)
+                    file_inode_map[inode] = file_path
+                except OSError:
+                    continue
+
+            # ES에서 존재하는 ID 확인
+            existing_ids = es_manager.get_existing_ids(list(file_inode_map.keys()))
+            skipped_count += len(existing_ids)
+
+            # 존재하지 않는 파일만 파싱
+            batch_data: Dict[int, Dict[str, Any]] = {}
+            for inode, file_path in file_inode_map.items():
+                if inode in existing_ids:
+                    continue  # 이미 존재하면 건너뜀
+                print(f"* {file_path}")
+                data_item = Loader.read_file(file_path)
+                if data_item:
+                    batch_data.update(data_item)
+
+            # 새 데이터 저장
+            if batch_data:
+                es_manager.insert(batch_data)
+                Stat.index_count += len(batch_data)
+                print(f"  [배치 저장: {len(batch_data)}개, 건너뜀: {len(existing_ids)}개]")
+
+        return skipped_count
+
     for dir in args:
         dir_path = Path(dir)
         if not dir_path.exists():
@@ -391,46 +441,35 @@ def main() -> int:
 
         print(f"====== {dir_path} ======")
 
-        # 파일 목록 수집
-        file_list = Loader.get_file_list(dir_path, recursive=do_recursive)
-        print(f"  총 {len(file_list)}개 파일 발견")
+        if do_recursive:
+            # 전체 파일 등록
+            file_list = [p for p in dir_path.rglob("*") if p.is_file()]
+            print(f"  총 {len(file_list)}개 파일 발견")
+            skipped_count = process_file_list(file_list)
+            if skipped_count > 0:
+                print(f"  총 {skipped_count}개 중복 파일 건너뜀")
+        else:
+            # 1단계: 하위 디렉토리 각각에서 첫 번째 파일 1개씩
+            print("  [1단계] 하위 디렉토리별 샘플 파일 등록")
+            sample_files: List[Path] = []
+            for subdir in sorted(dir_path.iterdir()):
+                if subdir.is_dir():
+                    subdir_files = sorted([p for p in subdir.iterdir() if p.is_file()])
+                    if subdir_files:
+                        sample_files.append(subdir_files[0])
+            print(f"    {len(sample_files)}개 카테고리 샘플 파일 발견")
+            skipped1 = process_file_list(sample_files)
+            if skipped1 > 0:
+                print(f"    {skipped1}개 중복 파일 건너뜀")
 
-        # 배치 처리: BATCH_SIZE개씩 존재 확인 후 없는 것만 파싱하여 저장
-        skipped_count = 0
-        for i in range(0, len(file_list), BATCH_SIZE):
-            batch_files = file_list[i:i + BATCH_SIZE]
+            # 2단계: 지정된 디렉토리에 바로 속한 파일들
+            print("  [2단계] 현재 디렉토리 파일 등록")
+            current_dir_files = sorted([p for p in dir_path.iterdir() if p.is_file()])
+            print(f"    {len(current_dir_files)}개 파일 발견")
+            skipped2 = process_file_list(current_dir_files)
+            if skipped2 > 0:
+                print(f"    {skipped2}개 중복 파일 건너뜀")
 
-            # 1. inode 수집 (파싱 없이)
-            file_inode_map: Dict[int, Path] = {}
-            for file_path in batch_files:
-                try:
-                    inode = Loader.get_inode(file_path)
-                    file_inode_map[inode] = file_path
-                except OSError:
-                    continue
-
-            # 2. ES에서 존재하는 ID 확인
-            existing_ids = es_manager.get_existing_ids(list(file_inode_map.keys()))
-            skipped_count += len(existing_ids)
-
-            # 3. 존재하지 않는 파일만 파싱
-            batch_data: Dict[int, Dict[str, Any]] = {}
-            for inode, file_path in file_inode_map.items():
-                if inode in existing_ids:
-                    continue  # 이미 존재하면 건너뜀
-                print(f"* {file_path}")
-                data_item = Loader.read_file(file_path)
-                if data_item:
-                    batch_data.update(data_item)
-
-            # 4. 새 데이터 저장
-            if batch_data:
-                es_manager.insert(batch_data)
-                Stat.index_count += len(batch_data)
-                print(f"  [배치 저장: {len(batch_data)}개, 건너뜀: {len(existing_ids)}개]")
-
-        if skipped_count > 0:
-            print(f"  총 {skipped_count}개 중복 파일 건너뜀")
         print("================================")
 
     end_time = datetime.now()
