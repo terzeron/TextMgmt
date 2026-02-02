@@ -7,6 +7,13 @@
     font-size: small;
 }
 
+#view .directory-menu {
+    height: calc(100vh - 80px);
+    overflow-y: auto;
+    position: sticky;
+    top: 0;
+}
+
 .loading-container {
     display: flex;
     flex-direction: column;

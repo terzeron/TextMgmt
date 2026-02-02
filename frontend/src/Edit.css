@@ -6,3 +6,10 @@
 #edit * {
     font-size: small;
 }
+
+#edit .directory-menu {
+    height: calc(100vh - 80px);
+    overflow-y: auto;
+    position: sticky;
+    top: 0;
+}

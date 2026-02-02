@@ -460,7 +460,7 @@ export default function Edit() {
     return (
         <Container id="edit">
             <Row fluid="true">
-                <Col md="3" lg="2" className="ps-0 pe-0 section">
+                <Col md="3" lg="2" className="ps-0 pe-0 section directory-menu">
                     <Suspense fallback={<div className="loading">로딩 중...</div>}>
                         <Folder folderData={folderData} selectedItems={selectedItems} onClickHandler={entryClicked}/>
                     </Suspense>

@@ -123,7 +123,7 @@ export default function View() {
     return (
         <Container id="view">
             <Row fluid="true">
-                <Col md="3" lg="2" className="ps-0 pe-0 section">
+                <Col md="3" lg="2" className="ps-0 pe-0 section directory-menu">
                     <Suspense fallback={<div className="loading">로딩 중...</div>}>
                         <Folder folderData={folderData} onClickHandler={entryClicked}/>
                     </Suspense>
