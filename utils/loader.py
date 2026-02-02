@@ -346,7 +346,8 @@ class Loader:
 
 
 def print_usage(program_name: str):
-    print(f"Usage:\t{program_name}\t[ --reload ] [ --recursive ] <file or directory path>")
+    print(f"Usage:\t{program_name}\t[ --delete ] [ --reload ] [ --recursive ] <file or directory path>")
+    print("\t\t--delete: delete index and exit (no file path required)")
     print("\t\t--reload: delete and recreate index before loading")
     print("\t\t--recursive: scan subdirectories recursively")
     sys.exit(0)
@@ -355,13 +356,16 @@ def print_usage(program_name: str):
 def main() -> int:
     BATCH_SIZE = 100
 
+    do_delete = False
     do_reload = False
     do_recursive = False
     args: List[str] = []
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "", ["reload", "recursive"])
+        opts, args = getopt.getopt(sys.argv[1:], "", ["delete", "reload", "recursive"])
         for opt, _ in opts:
-            if opt == "--reload":
+            if opt == "--delete":
+                do_delete = True
+            elif opt == "--reload":
                 do_reload = True
             elif opt == "--recursive":
                 do_recursive = True
@@ -369,7 +373,7 @@ def main() -> int:
         LOGGER.error(e)
         print_usage(sys.argv[0])
 
-    if len(args) < 1:
+    if not do_delete and len(args) < 1:
         print_usage(sys.argv[0])
 
     start_time: datetime = datetime.now()
@@ -386,6 +390,13 @@ def main() -> int:
         return -1
 
     try:
+        if do_delete:
+            if es_manager.do_exist_index():
+                es_manager.delete_index()
+                print(f"인덱스 '{es_manager.index_name}' 삭제 완료")
+            else:
+                print(f"인덱스 '{es_manager.index_name}'가 존재하지 않습니다")
+            return 0
         if do_reload:
             es_manager.delete_index()
         es_manager.create_index()
