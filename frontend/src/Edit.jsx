@@ -39,6 +39,21 @@ export default function Edit() {
     const [viewUrl, setViewUrl] = useState('');
     const [downloadUrl, setDownloadUrl] = useState('');
 
+    // 메시지 자동 사라짐 (10초 후)
+    useEffect(() => {
+        if (successMessage) {
+            const timer = setTimeout(() => setSuccessMessage(''), 10000);
+            return () => clearTimeout(timer);
+        }
+    }, [successMessage]);
+
+    useEffect(() => {
+        if (errorMessage) {
+            const timer = setTimeout(() => setErrorMessage(''), 10000);
+            return () => clearTimeout(timer);
+        }
+    }, [errorMessage]);
+
     useEffect(() => {
         const categoryListUrl = '/categories';
         jsonGetReq(categoryListUrl, null, (categoryList) => {
@@ -99,7 +114,7 @@ export default function Edit() {
             }
             setCategoryList(categoryList);
         }, (error) => {
-            setErrorMessage(`can't load directory data, ${error}`);
+            setErrorMessage(`디렉토리 데이터를 불러올 수 없습니다. ${error}`);
         });
 
         return () => {
@@ -123,6 +138,11 @@ export default function Edit() {
             title = book['title'];
             author = book['author'];
             extension = book['file_type'];
+            // title에 이미 저자 prefix가 포함된 경우 제거 (ES 데이터 오염 대응)
+            const authorPrefix = '[' + author + '] ';
+            if (title.startsWith(authorPrefix)) {
+                title = title.substring(authorPrefix.length);
+            }
         } else {
             const name = book['title'] + '.' + book['file_type'];
             // [ 저자 ] 제목 . 확장자
@@ -268,10 +288,10 @@ export default function Edit() {
                         .filter(cat => cat !== category)
                     setOtherCategoryList(otherCategoryList);
                 } else {
-                    setErrorMessage(`can't find the selected book`);
+                    setErrorMessage(`선택한 책을 찾을 수 없습니다. (ID: ${bookId})`);
                 }
             } else {
-                setErrorMessage(`can't find the selected category`);
+                setErrorMessage(`선택한 카테고리를 찾을 수 없습니다. (${category})`);
             }
         }
 
@@ -362,81 +382,117 @@ export default function Edit() {
 
     const checkEntryExistence = useCallback((folderData, newDirName, newFileName) => {
         console.log(`checkEntryExistence(newDirName=${newDirName}, newFileName=${newFileName})`);
-        for (let entry of folderData) {
-            // remove previous entry
-            if (newDirName === ROOT_DIRECTORY) {
-                if (entry.key === newFileName) {
-                    return true;
-                }
-            } else if (entry.key === newDirName) {
-                for (let node of entry.nodes) {
-                    if (node.key === newFileName) {
-                        return true;
-                    }
-                }
+        // newFileName에서 확장자 제거 후 비교용 label 생성
+        const extensionSuffix = '.' + bookInfo['file_type'];
+        const titleOnly = newFileName.endsWith(extensionSuffix)
+            ? newFileName.slice(0, -extensionSuffix.length)
+            : newFileName;
+        const targetLabel = titleOnly + extensionSuffix;
+        if (newDirName === '_root' || newDirName === '') {
+            // 최상위 파일 확인
+            return folderData.some(entry => entry.label === targetLabel);
+        } else {
+            // 폴더 내 파일 확인
+            const folder = folderData.find(entry => entry.id === newDirName);
+            if (folder && folder.children) {
+                return folder.children.some(item => item.label === targetLabel);
             }
         }
         return false;
-    }, []);
+    }, [bookInfo]);
 
     const removeEntryFromFolderData = useCallback((folderData, dirName, fileName) => {
         let newFolderData = [...folderData];
-        let isRemoved = false;
-        // remove previous entry
-        for (let entry of newFolderData) {
-            if (dirName === ROOT_DIRECTORY) {
-                if (entry.key === fileName) {
-                    newFolderData = newFolderData.filter(item => item !== entry);
-                    console.log(`removeEntryFromFolderData(): removed ${fileName}`);
-                    isRemoved = true;
+        // 최상위 파일 제거 (_root 또는 /로 시작하는 id)
+        if (dirName === '_root' || dirName === '') {
+            const entryId = '/' + fileName;
+            newFolderData = newFolderData.filter(item => item.id !== entryId);
+            console.log(`removeEntryFromFolderData(): removed root file ${entryId}`);
+        } else {
+            // 폴더 내 파일 제거
+            const entryId = dirName + '/' + fileName;
+            newFolderData = newFolderData.map(entry => {
+                if (entry.id === dirName && entry.children) {
+                    return {
+                        ...entry,
+                        children: entry.children.filter(item => item.id !== entryId)
+                    };
                 }
-            } else if (entry.key === dirName) {
-                for (let node of entry.nodes) {
-                    if (node.key === fileName) {
-                        entry.nodes = entry.nodes.filter(item => item !== node);
-                        console.log(`removeEntryFromFolderData(): removed ${fileName}`);
-                        isRemoved = true;
-                    }
-
-                    if (isRemoved) {
-                        break;
-                    }
-                }
-            }
+                return entry;
+            });
+            console.log(`removeEntryFromFolderData(): removed ${entryId}`);
         }
         return newFolderData;
     }, []);
 
     const appendEntryToFolderData = useCallback((folderData, newDirName, newFileName) => {
         let newFolderData = [...folderData];
-        let isAppended = false;
-        // add new entry
-        for (let entry of newFolderData) {
-            if (newDirName === ROOT_DIRECTORY) {
-                newFolderData.push({key: newFileName, label: newFileName});
-                console.log(`appendEntryToFolderData(): pushed ${newFileName} to root directory`);
-                isAppended = true;
-            } else if (entry.key === newDirName) {
-                entry.nodes.push({key: newFileName, label: newFileName});
-                console.log(`appendEntryToFolderData(): pushed ${newFileName} to ${newDirName}`);
-                isAppended = true;
-            }
+        const isRootFile = newDirName === '_root' || newDirName === '';
+        // newFileName에서 확장자 제거 후 label 생성 (label은 파일명 전체)
+        const extensionSuffix = '.' + bookInfo['file_type'];
+        const labelWithoutExt = newFileName.endsWith(extensionSuffix)
+            ? newFileName.slice(0, -extensionSuffix.length)
+            : newFileName;
+        const newEntry = {
+            id: isRootFile ? '/' + bookInfo['book_id'] : newDirName + '/' + bookInfo['book_id'],
+            label: labelWithoutExt + extensionSuffix,
+            fileType: bookInfo['file_type'],
+            children: [],
+            // title과 author는 bookInfo 원본 유지 (titleOnly 사용 시 저자 중복 발생)
+            book: { ...bookInfo, category: isRootFile ? '_root' : newDirName },
+        };
 
-            if (isAppended) {
-                break;
+        if (isRootFile) {
+            // 최상위 파일 추가 (폴더들 뒤에 추가)
+            const folderEndIndex = newFolderData.findIndex(item => item.fileType !== 'folder');
+            if (folderEndIndex === -1) {
+                newFolderData.push(newEntry);
+            } else {
+                newFolderData.splice(folderEndIndex, 0, newEntry);
             }
+            console.log(`appendEntryToFolderData(): pushed ${newFileName} to root`);
+        } else {
+            // 폴더 내 파일 추가
+            newFolderData = newFolderData.map(entry => {
+                if (entry.id === newDirName && entry.children) {
+                    return {
+                        ...entry,
+                        children: [...entry.children, newEntry]
+                    };
+                }
+                return entry;
+            });
+            console.log(`appendEntryToFolderData(): pushed ${newFileName} to ${newDirName}`);
         }
         return newFolderData;
-    }, []);
+    }, [bookInfo]);
 
     const updateFile = useCallback((dirName, fileName, newDirName, newFileName) => {
         if (checkEntryExistence(folderData, newDirName, newFileName) === false) {
             const updateUrl = '/books/' + bookInfo['book_id'];
-            const newFilePath = newDirName + '/' + newFileName + '.' + bookInfo['file_type'];
+            // 백엔드는 '_root'를 기대하므로 빈 문자열을 '_root'로 변환
+            const categoryForBackend = (newDirName === '' || newDirName === '_root') ? '_root' : newDirName;
+            // newFileName에서 확장자 제거 (백엔드는 title에 확장자가 없어야 함)
+            const extensionSuffix = '.' + bookInfo['file_type'];
+            const titleOnly = newFileName.endsWith(extensionSuffix)
+                ? newFileName.slice(0, -extensionSuffix.length)
+                : newFileName;
+            const newFilePath = categoryForBackend === '_root'
+                ? titleOnly + extensionSuffix
+                : newDirName + '/' + titleOnly + extensionSuffix;
             const updatedTime = DateTime.now().toFormat('yyyy-MM-dd\'T\'HH:mm:ss.SSS');
-            const payload = { ...bookInfo, category: newDirName, title: newFileName, file_path: newFilePath, updated_time: updatedTime };
+            const payload = { ...bookInfo, category: categoryForBackend, title: titleOnly, file_path: newFilePath, updated_time: updatedTime };
             jsonPutReq(updateUrl, payload, () => {
-                setSuccessMessage("책 이름이나 위치가 변경되었습니다.");
+                // 구체적인 성공 메시지 생성
+                const displayDirName = (dirName === '' || dirName === '_root') ? '최상위' : dirName;
+                const displayNewDirName = (newDirName === '' || newDirName === '_root') ? '최상위' : newDirName;
+                let message;
+                if (dirName !== newDirName) {
+                    message = `"${newFileName}"을(를) "${displayNewDirName}" 디렉토리로 이동했습니다.`;
+                } else {
+                    message = `"${displayDirName}"의 파일 이름을 "${newFileName}"(으)로 변경했습니다.`;
+                }
+                setSuccessMessage(message);
                 setErrorMessage('');
 
                 let newFolderData = removeEntryFromFolderData(folderData, dirName, fileName);
@@ -446,7 +502,8 @@ export default function Edit() {
                 setErrorMessage(`책 이름 변경에 실패했습니다. ${error}`);
             });
         } else {
-            setErrorMessage("대상 디렉토리에 책이 이미 존재합니다.");
+            const displayNewDirName = (newDirName === '' || newDirName === '_root') ? '최상위' : newDirName;
+            setErrorMessage(`"${displayNewDirName}" 디렉토리에 "${newFileName}"이(가) 이미 존재합니다.`);
         }
     }, [bookInfo, folderData, checkEntryExistence, appendEntryToFolderData, removeEntryFromFolderData]);
 
@@ -464,7 +521,7 @@ export default function Edit() {
         if (selectedEntryId?.includes('/')) {
             const dirName = selectedEntryId.split('/')[0];
             const fileName = selectedEntryId.split('/')[1];
-            updateFile(dirName, fileName, ROOT_DIRECTORY, newFileName);
+            updateFile(dirName, fileName, '_root', newFileName);
         }
     }, [updateFile, selectedEntryId, newFileName]);
 
@@ -489,7 +546,8 @@ export default function Edit() {
             const deleteUrl = '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName);
             console.log(deleteUrl);
             jsonDeleteReq(deleteUrl, null, () => {
-                setSuccessMessage("책이 삭제되었습니다.");
+                const displayDirName = (dirName === '' || dirName === '_root') ? '최상위' : dirName;
+                setSuccessMessage(`"${displayDirName}/${newFileName}"이(가) 삭제되었습니다.`);
                 setErrorMessage('');
 
                 const newFolderData = removeEntryFromFolderData(folderData, dirName, fileName);
@@ -505,7 +563,7 @@ export default function Edit() {
                 setErrorMessage(`책 삭제에 실패했습니다. ${error}`);
             });
         }
-    }, [selectedEntryId, nextEntryId, folderData, entryClicked, removeEntryFromFolderData]);
+    }, [selectedEntryId, nextEntryId, folderData, entryClicked, removeEntryFromFolderData, newFileName]);
 
     const toNextEntryButtonClicked = useCallback(() => {
         console.log(`toNextEntryButtonClicked: nextEntryId=${nextEntryId}`);
