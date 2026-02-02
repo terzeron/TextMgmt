@@ -454,9 +454,13 @@ def main() -> int:
             sample_files: List[Path] = []
             for subdir in sorted(dir_path.iterdir()):
                 if subdir.is_dir():
+                    print(f"    탐색 중: {subdir.name}/", end="", flush=True)
                     subdir_files = sorted([p for p in subdir.iterdir() if p.is_file()])
                     if subdir_files:
                         sample_files.append(subdir_files[0])
+                        print(f" -> {subdir_files[0].name}")
+                    else:
+                        print(" -> (파일 없음)")
             print(f"    {len(sample_files)}개 카테고리 샘플 파일 발견")
             skipped1 = process_file_list(sample_files)
             if skipped1 > 0:
