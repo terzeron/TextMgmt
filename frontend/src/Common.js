@@ -65,7 +65,11 @@ export const getRandomMediumColor = (str) => {
 
 const apiReq = (url, method, payload, type, resolve, reject, final) => {
     try {
-        fetch(getApiUrlPrefix() + url, payload ? { method: method, body: JSON.stringify(payload) } : { method: method })
+        fetch(getApiUrlPrefix() + url, payload ? {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        } : { method: method })
             .then(handleFetchErrors)
             .then((response) => {
                 let promise;
