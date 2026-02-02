@@ -237,13 +237,12 @@ class ESManager:
         query = {
             "bool": {
                 "should": [
-                    {"match": {"summary": {"query": summary, "boost": 10}}},
-                    {"match": {"title": {"query": title, "boost": 5}}},
-                    {"match": {"author": {"query": author, "boost": 3}}},
+                    {"match": {"title": {"query": title, "boost": 20}}},
+                    {"match": {"author": {"query": author, "boost": 15}}},
+                    {"match": {"summary": {"query": summary, "boost": 3}}},
                     {"range": {"file_size": {"gte": file_size *
-                                             0.9, "lte": file_size * 1.1, "boost": 2}}},
+                                             0.9, "lte": file_size * 1.1, "boost": 1}}},
                 ],
-                "filter": [{"match": {"file_type": {"query": file_type}}}],
                 "minimum_should_match": 1,
             }
         }
