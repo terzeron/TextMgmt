@@ -62,6 +62,59 @@ class ESManager:
         settings = {
             "index": {
                 "similarity": {"default": {"type": "BM25"}},
+            },
+            "analysis": {
+                "tokenizer": {
+                    "nori_tokenizer": {
+                        "type": "nori_tokenizer",
+                        "decompound_mode": "mixed",
+                    }
+                },
+                "filter": {
+                    "nori_posfilter": {
+                        "type": "nori_part_of_speech",
+                        "stoptags": [
+                            # 어미 (Ending)
+                            "EC",    # 연결 어미
+                            "EF",    # 종결 어미
+                            "EP",    # 선어말 어미
+                            "ETM",   # 관형형 전성 어미
+                            "ETN",   # 명사형 전성 어미
+                            # 조사 (Josa)
+                            "JC",    # 접속 조사
+                            "JKB",   # 부사격 조사
+                            "JKC",   # 보격 조사
+                            "JKG",   # 관형격 조사
+                            "JKO",   # 목적격 조사
+                            "JKQ",   # 인용격 조사
+                            "JKS",   # 주격 조사
+                            "JKV",   # 호격 조사
+                            "JX",    # 보조사
+                            # 기호
+                            "SC",    # 구분자
+                            "SE",    # 줄임표
+                            "SF",    # 마침표, 물음표, 느낌표
+                            "SP",    # 공백
+                            "SSC",   # 닫는 괄호
+                            "SSO",   # 여는 괄호
+                            "SY",    # 기타 기호
+                            # 접미사
+                            "XSA",   # 형용사 파생 접미사
+                            "XSN",   # 명사 파생 접미사
+                            "XSV",   # 동사 파생 접미사
+                            # 기타
+                            "IC",    # 감탄사
+                            "MAJ",   # 접속부사
+                        ]
+                    }
+                },
+                "analyzer": {
+                    "nori_analyzer": {
+                        "type": "custom",
+                        "tokenizer": "nori_tokenizer",
+                        "filter": ["nori_posfilter", "lowercase"]
+                    }
+                }
             }
         }
         mappings = {
@@ -69,12 +122,12 @@ class ESManager:
                 "category": {
                     "type": "keyword",
                 },
-                "title": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
-                "author": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
+                "title": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
+                "author": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
                 "file_path": {"type": "keyword"},
                 "file_type": {"type": "keyword"},
                 "file_size": {"type": "unsigned_long"},
-                "summary": {"type": "text", "analyzer": "nori"},
+                "summary": {"type": "text", "analyzer": "nori_analyzer"},
                 "updated_time": {
                     "type": "date",
                 },
