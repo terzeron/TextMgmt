@@ -119,16 +119,17 @@ const StyledTreeItemLabelText = styled(Typography)({
 });
 
 
-const MemoizedIcon = React.memo(({ Icon }) => (
-    <Box component={Icon} className="labelIcon" color="inherit" sx={{ mr: 1, fontSize: '1.2rem' }} />
+const MemoizedIcon = React.memo(({ Icon, color }) => (
+    <Box component={Icon} className="labelIcon" sx={{ mr: 1, fontSize: '1.2rem', color: color || 'inherit' }} />
 ));
 MemoizedIcon.displayName = "MemoizedIcon";
 MemoizedIcon.propTypes = {
-    Icon: PropTypes.elementType.isRequired, // Icon의 타입을 정의하여 ESLint 오류 해결
+    Icon: PropTypes.elementType.isRequired,
+    color: PropTypes.string,
 };
 
 // eslint-disable-next-line react/prop-types
-function CustomLabel({icon: Icon, expandable, children, ...other}) {
+function CustomLabel({icon: Icon, iconColor, expandable, children, ...other}) {
     return (
         <TreeItem2Label
             {...other}
@@ -137,7 +138,7 @@ function CustomLabel({icon: Icon, expandable, children, ...other}) {
                 alignItems: 'center',
             }}
         >
-            {Icon && <MemoizedIcon Icon={Icon} />}
+            {Icon && <MemoizedIcon Icon={Icon} color={iconColor} />}
             <StyledTreeItemLabelText variant="body2">{children}</StyledTreeItemLabelText>
             {expandable && <DotIcon/>}
         </TreeItem2Label>
@@ -145,7 +146,8 @@ function CustomLabel({icon: Icon, expandable, children, ...other}) {
 }
 
 CustomLabel.propTypes = {
-    icon: PropTypes.elementType, // React 컴포넌트 또는 아이콘을 받을 수 있도록 설정
+    icon: PropTypes.elementType,
+    iconColor: PropTypes.string,
     expandable: PropTypes.bool,
     children: PropTypes.node,
 };
@@ -168,25 +170,28 @@ const getIconFromFileType = (fileType) => {
         case 'bmp':
         case 'tiff':
         case 'svg':
-            return ImageIcon;
+            return { icon: ImageIcon, color: '#4caf50' };  // 초록
         case 'pdf':
-            return PictureAsPdfIcon;
+            return { icon: PictureAsPdfIcon, color: '#f44336' };  // 빨강
         case 'doc':
+        case 'docx':
+            return { icon: ArticleIcon, color: '#2196f3' };  // 파랑
         case 'epub':
+            return { icon: ArticleIcon, color: '#9c27b0' };  // 보라
         case 'rtf':
         case 'html':
         case 'txt':
-            return ArticleIcon;
+            return { icon: ArticleIcon, color: '#607d8b' };  // 회색
         case 'video':
-            return VideoCameraBackIcon;
+            return { icon: VideoCameraBackIcon, color: '#ff9800' };  // 주황
         case 'folder':
-            return FolderRounded;
+            return { icon: FolderRounded, color: '#ffc107' };  // 노랑
         case 'pinned':
-            return FolderOpenIcon;
+            return { icon: FolderOpenIcon, color: '#ffc107' };
         case 'trash':
-            return DeleteIcon;
+            return { icon: DeleteIcon, color: '#9e9e9e' };
         default:
-            return ArticleIcon;
+            return { icon: ArticleIcon, color: '#607d8b' };
     }
 };
 
@@ -206,9 +211,10 @@ const CustomTreeItem = React.forwardRef(function CustomTreeItem(props, ref) {
 
     const item = useMemo(() => publicAPI.getItem(itemId), [publicAPI, itemId]);
     const expandable = isExpandable(children);
-    const icon = useMemo(() => {
-        if (expandable) return FolderRounded;
-        return getIconFromFileType(item?.fileType);
+    const { icon, iconColor } = useMemo(() => {
+        if (expandable) return { icon: FolderRounded, iconColor: '#ffc107' };
+        const result = getIconFromFileType(item?.fileType);
+        return { icon: result.icon, iconColor: result.color };
     }, [expandable, item?.fileType]);
 
     return (
@@ -229,7 +235,7 @@ const CustomTreeItem = React.forwardRef(function CustomTreeItem(props, ref) {
                     </TreeItem2IconContainer>
 
                     <CustomLabel
-                        {...getLabelProps({icon, expandable: expandable && status.expanded})}
+                        {...getLabelProps({icon, iconColor, expandable: expandable && status.expanded})}
                     />
                 </CustomTreeItemContent>
                 {children && <TransitionComponent {...getGroupTransitionProps()} />}
