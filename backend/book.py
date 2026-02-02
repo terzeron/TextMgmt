@@ -29,6 +29,7 @@ class Book:
         self.file_size: int = info["file_size"]
         self.line_count: int = info.get("line_count", 0)
         self.page_count: int = info.get("page_count", 0)
+        self.isbn: str = info.get("isbn", "")
         self.summary: str = info.get("summary", "")
         self.updated_time: datetime = datetime.strptime(info["updated_time"], "%Y-%m-%dT%H:%M:%S.%f")
 
@@ -43,6 +44,7 @@ class Book:
             "file_size": self.file_size,
             "line_count": self.line_count,
             "page_count": self.page_count,
+            "isbn": self.isbn,
             "updated_time": self.updated_time.strftime("%Y-%m-%dT%H:%M:%S.%f"),
         }
 

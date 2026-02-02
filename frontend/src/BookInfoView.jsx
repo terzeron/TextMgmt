@@ -18,6 +18,7 @@ export default function BookInfoView(props) {
     const [fileSize, setFileSize] = useState(0);
     const [lineCount, setLineCount] = useState(0);
     const [pageCount, setPageCount] = useState(0);
+    const [isbn, setIsbn] = useState('');
     const [isEditEnabled, setIsEditEnabled] = useState(false);
     const [isComposingAuthor, setIsComposingAuthor] = useState(false);
     const [isComposingTitle, setIsComposingTitle] = useState(false);
@@ -32,6 +33,7 @@ export default function BookInfoView(props) {
         setFileSize(bookInfo['file_size']);
         setLineCount(bookInfo['line_count'] || 0);
         setPageCount(bookInfo['page_count'] || 0);
+        setIsbn(bookInfo['isbn'] || '');
         setIsEditEnabled(props.isEditEnabled);
     }, [props]);
 
@@ -50,13 +52,22 @@ export default function BookInfoView(props) {
                         <Form.Control value={fileType} readOnly disabled/>
                     </InputGroup>
                 </Col>
-                <Col xs="4">
+                <Col xs="8">
+                    <InputGroup>
+                        <InputGroup.Text>ISBN</InputGroup.Text>
+                        <Form.Control value={isbn || '-'} readOnly disabled/>
+                    </InputGroup>
+                </Col>
+            </Row>
+
+            <Row>
+                <Col xs="6">
                     <InputGroup>
                         <InputGroup.Text>크기</InputGroup.Text>
                         <Form.Control value={fileSize.toLocaleString()} readOnly disabled/>
                     </InputGroup>
                 </Col>
-                <Col xs="4">
+                <Col xs="6">
                     <InputGroup>
                         <InputGroup.Text>분량</InputGroup.Text>
                         <Form.Control

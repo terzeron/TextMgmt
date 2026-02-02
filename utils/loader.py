@@ -22,6 +22,7 @@ from bs4 import BeautifulSoup
 
 from backend.es_manager import ESManager
 from utils.stat import Stat
+from utils.isbn import extract as extract_isbn
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger()
@@ -282,6 +283,7 @@ class Loader:
             summary = ""
             line_count = 0
             page_count = 0
+            isbn_list = []
             if file_type == "txt":
                 summary, line_count, page_count = Loader.read_from_text(file_path)
             elif file_type == "epub":
@@ -299,6 +301,10 @@ class Loader:
             else:
                 return {}
 
+            # ISBN 추출
+            if file_type in ("txt", "epub", "pdf", "djvu", "hwp"):
+                isbn_list = extract_isbn(file_path)
+
             return {
                 inode_num: {
                     "category": category,
@@ -309,6 +315,7 @@ class Loader:
                     "file_size": int(file_size),
                     "line_count": line_count,
                     "page_count": page_count,
+                    "isbn": isbn_list[0] if isbn_list else "",
                     "summary": summary,
                     "updated_time": datetime.now().isoformat()
                 }
