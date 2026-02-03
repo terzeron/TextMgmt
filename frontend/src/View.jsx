@@ -29,15 +29,61 @@ export default function View() {
     useEffect(() => {
         const categoryListUrl = '/categories';
         jsonGetReq(categoryListUrl, null, (categoryList) => {
-            let data = categoryList.sort((a, b) => a.localeCompare(b))
+            // _root 카테고리(최상위 파일) 분리
+            const hasRootFiles = categoryList.includes('_root');
+            const nonEmptyCategories = categoryList.filter(c => c !== '_root');
+
+            // 공통 prefix 찾기
+            const findCommonPrefix = (strings) => {
+                if (!strings || strings.length === 0) return '';
+                if (strings.length === 1) {
+                    const parts = strings[0].split('/');
+                    return parts.length > 1 ? parts.slice(0, -1).join('/') + '/' : '';
+                }
+                const parts = strings.map(s => s.split('/'));
+                const minLen = Math.min(...parts.map(p => p.length));
+                let commonParts = [];
+                for (let i = 0; i < minLen - 1; i++) {
+                    const part = parts[0][i];
+                    if (parts.every(p => p[i] === part)) {
+                        commonParts.push(part);
+                    } else {
+                        break;
+                    }
+                }
+                return commonParts.length > 0 ? commonParts.join('/') + '/' : '';
+            };
+            const commonPrefix = findCommonPrefix(nonEmptyCategories);
+
+            // 폴더 목록 생성
+            let data = nonEmptyCategories.sort((a, b) => a.localeCompare(b))
                 .map(category => {
                     return {
                         id: category,
-                        label: category,
+                        label: commonPrefix ? category.replace(commonPrefix, '') : category,
                         fileType: 'folder'
                     };
                 });
-            setFolderData(data);
+
+            // 최상위 파일이 있으면 가져와서 추가
+            if (hasRootFiles) {
+                jsonGetReq('/categories/_root', null, (bookList) => {
+                    const rootFiles = bookList
+                        .sort((a, b) => a['title'].localeCompare(b['title']))
+                        .map(book => ({
+                            id: '/' + book['book_id'].toString(),
+                            label: book['title'] + '.' + book['file_type'],
+                            fileType: book['file_type'],
+                            children: [],
+                            book: book,
+                        }));
+                    setFolderData([...data, ...rootFiles]);
+                }, () => {
+                    setFolderData(data);
+                });
+            } else {
+                setFolderData(data);
+            }
         }, (error) => {
             setErrorMessage(`can't load directory data, ${error}`);
         });
@@ -55,8 +101,8 @@ export default function View() {
 
     const entryClicked = useCallback((selectedEntryId) => {
         const selectedFolderData = folderData.find(o => o.id === selectedEntryId);
-        if (selectedFolderData) {
-            // category entry
+        if (selectedFolderData && selectedFolderData.fileType === 'folder') {
+            // category entry (폴더)
             const booksInCategoryUrl = '/categories/' + selectedEntryId;
             const isChildrenLoaded = folderData.find(item => item.id === selectedEntryId && item.children && item.children.length > 0)
             if (!isChildrenLoaded) {
@@ -85,8 +131,15 @@ export default function View() {
                     setFolderData(data);
                 });
             }
+        } else if (selectedFolderData && selectedFolderData.book) {
+            // 최상위 파일 (folderData에 직접 포함된 파일)
+            const book = selectedFolderData.book;
+            const bookId = book['book_id'];
+            setBookInfo(book);
+            setViewUrl('/view/' + book['file_type'] + '/' + bookId + '/' + encodeURIComponent(book['file_path']));
+            setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
         } else {
-            // book entry
+            // book entry (폴더 내 파일)
             const category = selectedEntryId.split('/')[0];
             const bookId = selectedEntryId.split('/')[1];
             const booksInCategory = folderData.find(categoryItem => categoryItem.id === category)?.children;
@@ -123,7 +176,7 @@ export default function View() {
     return (
         <Container id="view">
             <Row fluid="true">
-                <Col md="3" lg="2" className="ps-0 pe-0 section">
+                <Col md="3" lg="2" className="ps-0 pe-0 section directory-menu">
                     <Suspense fallback={<div className="loading">로딩 중...</div>}>
                         <Folder folderData={folderData} onClickHandler={entryClicked}/>
                     </Suspense>

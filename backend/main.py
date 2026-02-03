@@ -6,10 +6,11 @@ import logging.config
 from pathlib import Path
 from typing import Dict, Any, Union
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
+from fastapi.exceptions import RequestValidationError
 # 에러 및 미디어 타입 상수 정의
 ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
 JSON_MEDIA_TYPE = "application/json"
@@ -30,6 +31,42 @@ LOGGER.info("app ready")
 origins = [os.getenv("TM_FRONTEND_URL")]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    LOGGER.error("[422] %s %s", request.method, request.url.path)
+    LOGGER.error("Validation error: %s", exc.errors())
+    LOGGER.error("Request body: %s", exc.body)
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": str(exc.body)},
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    LOGGER.error("[%d] %s %s - %s", exc.status_code, request.method, request.url.path, exc.detail)
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    import traceback
+    LOGGER.error("[500] %s %s", request.method, request.url.path)
+    LOGGER.error("Exception: %s", str(exc))
+    LOGGER.error("Traceback:\n%s", traceback.format_exc())
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc)},
+    )
+
 
 # JSON 응답에서 한글이 유니코드 이스케이프로 인코딩되지 않도록 설정
 import json
@@ -78,6 +115,9 @@ class BookModel(BaseModel):
     file_path: str
     file_type: str
     file_size: int
+    line_count: int = 0
+    page_count: int = 0
+    isbn: str = ""
     updated_time: str
 
 
@@ -192,8 +232,11 @@ async def search_by_keyword(keyword: str) -> Dict[str, Any]:
 
 
 @app.get("/search/bookstore/{store_name}")
-async def search_bookstore_api(store_name: str, title: str):
-    """지정된 온라인 서점에서 책을 검색하여 상위 2개의 메타데이터를 반환합니다."""
+async def search_bookstore_api(store_name: str, title: str = "", author: str = "", isbn: str = ""):
+    """
+    지정된 온라인 서점에서 책을 검색하여 상위 결과의 메타데이터를 반환합니다.
+    검색 우선순위: ISBN > 제목+저자 > 제목 > 저자
+    """
     store_class = None
     if store_name.lower() == 'yes24':
         store_class = Yes24Bookstore
@@ -210,62 +253,59 @@ async def search_bookstore_api(store_name: str, title: str):
     else:
         raise HTTPException(status_code=404, detail="Bookstore not found")
 
+    if not title and not author and not isbn:
+        raise HTTPException(status_code=400, detail=ERR_MISSING_INPUT)
+
     bookstore = store_class()
-    results = bookstore.search_by_keyword(title)
+
+    # 입력값 정리
+    title = title.strip() if title else ""
+    author = author.strip() if author else ""
+    isbn = isbn.strip() if isbn else ""
+
+    # 통합 검색 메서드 사용 - 실제 사용된 키워드와 검색 방법도 반환
+    results, search_keyword, search_method = bookstore.search(isbn=isbn, title=title, author=author)
 
     # 결과가 튜플 리스트이므로 딕셔너리로 변환
     books_data = []
     from bs4 import BeautifulSoup
     # 상위 5개만 선택하여 isbn 필드도 포함
     for r in results[:5]:
-        book_title, author, category, book_url, _ = r
+        book_title, book_author, category, book_url, _ = r
         item = {
             "title": book_title,
-            "author": author,
+            "author": book_author,
             "category": category,
             "book_url": book_url
         }
-        # ISBN 추출: 각 서점별 구현체에 따라 메서드 호출
-        # 캐시된 HTML 로드 또는 신규 요청
+        # ISBN 추출: 캐시된 HTML에서 extract_book_info 사용
         html = bookstore._load_html_from_tmp(book_url)
-        if html is None:
-            resp = bookstore.session.get(book_url, timeout=10, verify=False)
-            resp.encoding = 'utf-8'
-            html = resp.text
-        soup = BeautifulSoup(html, 'html.parser')
-        isbn = ''
-        # 예스24
-        if hasattr(bookstore, '_extract_yes24_isbn'):
-            isbn = bookstore._extract_yes24_isbn(soup)
-        # 알라딘
-        elif hasattr(bookstore, '_extract_aladin_isbn'):
-            isbn = bookstore._extract_aladin_isbn(soup)
-        # 리디북스
-        elif hasattr(bookstore, '_extract_ridi_isbn'):
-            isbn = bookstore._extract_ridi_isbn(soup)
-            # 상세 페이지에서 author 정보 재추출
+        if html:
+            soup = BeautifulSoup(html, 'html.parser')
             info = bookstore.extract_book_info(soup)
-            item['author'] = info.get('author', item.get('author', ''))
-        # 기타 서점: 필요 시 메서드 추가
-        if isbn:
-            item["isbn"] = isbn
+            if info.get('isbn'):
+                item["isbn"] = info['isbn']
+            # author 정보가 비어있으면 상세 페이지에서 재추출
+            if not item['author'] and info.get('author'):
+                item['author'] = info['author']
         books_data.append(item)
 
     if not books_data:
         return {
             "status": "not_found",
             "store": store_name,
-            "search_keyword": title,
-            "search_url": bookstore.build_search_url(title),
+            "search_keyword": search_keyword,
+            "search_method": search_method,
+            "search_url": bookstore.build_search_url(search_keyword) if search_keyword else "",
             "result": []
         }
 
     return {
         "status": "success",
         "store": store_name,
-        "search_keyword": title,
-        "search_url": bookstore.build_search_url(title),
-        "search_method": f"{store_name.lower()}_keyword",
+        "search_keyword": search_keyword,
+        "search_method": search_method,
+        "search_url": bookstore.build_search_url(search_keyword) if search_keyword else "",
         "result": books_data
     }
 

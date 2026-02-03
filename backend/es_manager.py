@@ -62,6 +62,59 @@ class ESManager:
         settings = {
             "index": {
                 "similarity": {"default": {"type": "BM25"}},
+            },
+            "analysis": {
+                "tokenizer": {
+                    "nori_tokenizer": {
+                        "type": "nori_tokenizer",
+                        "decompound_mode": "discard",
+                    }
+                },
+                "filter": {
+                    "nori_posfilter": {
+                        "type": "nori_part_of_speech",
+                        "stoptags": [
+                            # 어미 (Ending)
+                            "EC",    # 연결 어미
+                            "EF",    # 종결 어미
+                            "EP",    # 선어말 어미
+                            "ETM",   # 관형형 전성 어미
+                            "ETN",   # 명사형 전성 어미
+                            # 조사 (Josa)
+                            "JC",    # 접속 조사
+                            "JKB",   # 부사격 조사
+                            "JKC",   # 보격 조사
+                            "JKG",   # 관형격 조사
+                            "JKO",   # 목적격 조사
+                            "JKQ",   # 인용격 조사
+                            "JKS",   # 주격 조사
+                            "JKV",   # 호격 조사
+                            "JX",    # 보조사
+                            # 기호
+                            "SC",    # 구분자
+                            "SE",    # 줄임표
+                            "SF",    # 마침표, 물음표, 느낌표
+                            "SP",    # 공백
+                            "SSC",   # 닫는 괄호
+                            "SSO",   # 여는 괄호
+                            "SY",    # 기타 기호
+                            # 접미사
+                            "XSA",   # 형용사 파생 접미사
+                            "XSN",   # 명사 파생 접미사
+                            "XSV",   # 동사 파생 접미사
+                            # 기타
+                            "IC",    # 감탄사
+                            "MAJ",   # 접속부사
+                        ]
+                    }
+                },
+                "analyzer": {
+                    "nori_analyzer": {
+                        "type": "custom",
+                        "tokenizer": "nori_tokenizer",
+                        "filter": ["nori_posfilter", "lowercase"]
+                    }
+                }
             }
         }
         mappings = {
@@ -69,12 +122,15 @@ class ESManager:
                 "category": {
                     "type": "keyword",
                 },
-                "title": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
-                "author": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
+                "title": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
+                "author": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
                 "file_path": {"type": "keyword"},
                 "file_type": {"type": "keyword"},
                 "file_size": {"type": "unsigned_long"},
-                "summary": {"type": "text", "analyzer": "nori"},
+                "line_count": {"type": "integer"},
+                "page_count": {"type": "integer"},
+                "isbn": {"type": "keyword"},
+                "summary": {"type": "text", "analyzer": "nori_analyzer"},
                 "updated_time": {
                     "type": "date",
                 },
@@ -237,13 +293,12 @@ class ESManager:
         query = {
             "bool": {
                 "should": [
-                    {"match": {"summary": {"query": summary, "boost": 10}}},
-                    {"match": {"title": {"query": title, "boost": 5}}},
-                    {"match": {"author": {"query": author, "boost": 3}}},
+                    {"match": {"title": {"query": title, "boost": 20}}},
+                    {"match": {"author": {"query": author, "boost": 15}}},
+                    {"match": {"summary": {"query": summary, "boost": 3}}},
                     {"range": {"file_size": {"gte": file_size *
-                                             0.9, "lte": file_size * 1.1, "boost": 2}}},
+                                             0.9, "lte": file_size * 1.1, "boost": 1}}},
                 ],
-                "filter": [{"match": {"file_type": {"query": file_type}}}],
                 "minimum_should_match": 1,
             }
         }
@@ -288,11 +343,16 @@ class ESManager:
                 doc_id_list.append(inode_num)
                 data_count += 1
             LOGGER.info("%d items inserted", int(len(es_data) / 2))
-            self.es.bulk(body=es_data, timeout="60s", refresh=True)
+            self.es.bulk(body=es_data, timeout="60s", refresh=False)
             es_data = []
             if data_count >= num_docs:
                 break
         return doc_id_list
+
+    def refresh(self) -> None:
+        """인덱스를 refresh하여 최근 변경사항을 검색 가능하게 함"""
+        LOGGER.debug("refresh()")
+        self.es.indices.refresh(index=self.index_name)
 
     def update(self, doc_id: int, category: str = "", title: str = "", author: str = "", file_path: str = "", file_type: str = "", file_size: int = 0, summary: str = "") -> bool:
         LOGGER.debug("update(doc_id=%d, title='%s', author='%s', file_path='%r', file_type='%s', file_size=%d, summary='%s', category='%s')", doc_id, title, author, file_path, file_type, file_size, summary, category)

@@ -111,6 +111,7 @@ class BookManager:
         LOGGER.debug("# add_book(data='%r')", data)
         doc_id_list = self.es_manager.insert(data)
         if doc_id_list and len(doc_id_list) == 1:
+            self.es_manager.refresh()  # 단일 문서 추가 후 즉시 검색 가능하도록
             return doc_id_list[0], None
         return None, f"can't add book '{data}' to ElasticSearch"
 
@@ -121,7 +122,11 @@ class BookManager:
         if doc:
             book = Book(book_id=book_id, info=doc)
             file_path = self.path_prefix / book.file_path
-            new_full_path = file_path.parent.parent / new_category / (new_title + "." + new_type)
+            # _root 카테고리는 path_prefix 바로 아래
+            if new_category == "_root":
+                new_full_path = self.path_prefix / (new_title + "." + new_type)
+            else:
+                new_full_path = self.path_prefix / new_category / (new_title + "." + new_type)
             try:
                 new_full_path.parent.mkdir(parents=True, exist_ok=True)
                 file_path.rename(new_full_path)

@@ -16,6 +16,9 @@ export default function BookInfoView(props) {
     const [fileType, setFileType] = useState('');
     const [filePath, setFilePath] = useState('');
     const [fileSize, setFileSize] = useState(0);
+    const [lineCount, setLineCount] = useState(0);
+    const [pageCount, setPageCount] = useState(0);
+    const [isbn, setIsbn] = useState('');
     const [isEditEnabled, setIsEditEnabled] = useState(false);
     const [isComposingAuthor, setIsComposingAuthor] = useState(false);
     const [isComposingTitle, setIsComposingTitle] = useState(false);
@@ -28,6 +31,9 @@ export default function BookInfoView(props) {
         setFileType(bookInfo['file_type']);
         setFilePath(bookInfo['file_path']);
         setFileSize(bookInfo['file_size']);
+        setLineCount(bookInfo['line_count'] || 0);
+        setPageCount(bookInfo['page_count'] || 0);
+        setIsbn(bookInfo['isbn'] || '');
         setIsEditEnabled(props.isEditEnabled);
     }, [props]);
 
@@ -40,16 +46,35 @@ export default function BookInfoView(props) {
             </Row>
 
             <Row>
+                <Col xs="4">
+                    <InputGroup>
+                        <InputGroup.Text>종류</InputGroup.Text>
+                        <Form.Control value={fileType} readOnly disabled/>
+                    </InputGroup>
+                </Col>
+                <Col xs="8">
+                    <InputGroup>
+                        <InputGroup.Text>ISBN</InputGroup.Text>
+                        <Form.Control value={isbn || '-'} readOnly disabled/>
+                    </InputGroup>
+                </Col>
+            </Row>
+
+            <Row>
                 <Col xs="6">
                     <InputGroup>
-                        <InputGroup.Text>파일 종류</InputGroup.Text>
-                        <Form.Control value={fileType} readOnly disabled/>
+                        <InputGroup.Text>크기</InputGroup.Text>
+                        <Form.Control value={fileSize.toLocaleString()} readOnly disabled/>
                     </InputGroup>
                 </Col>
                 <Col xs="6">
                     <InputGroup>
-                        <InputGroup.Text>파일 크기</InputGroup.Text>
-                        <Form.Control value={fileSize.toLocaleString()} readOnly disabled/>
+                        <InputGroup.Text>분량</InputGroup.Text>
+                        <Form.Control
+                            value={pageCount > 0 ? `${pageCount.toLocaleString()}페이지` : (lineCount > 0 ? `${lineCount.toLocaleString()}행` : '-')}
+                            readOnly
+                            disabled
+                        />
                     </InputGroup>
                 </Col>
             </Row>

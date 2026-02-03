@@ -326,6 +326,7 @@ class TestESManager:
             data = Loader.read_files(path, num_files=num_files)
             if data:
                 esm.insert(data, num_docs=num_files)
+                esm.refresh()  # refresh=False로 변경되어 명시적 refresh 필요
                 result = esm.search_by_category(dir1, max_result_count=num_files)
                 assert len(result) >= 1
 
