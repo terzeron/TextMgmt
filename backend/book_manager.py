@@ -111,6 +111,7 @@ class BookManager:
         LOGGER.debug("# add_book(data='%r')", data)
         doc_id_list = self.es_manager.insert(data)
         if doc_id_list and len(doc_id_list) == 1:
+            self.es_manager.refresh()  # 단일 문서 추가 후 즉시 검색 가능하도록
             return doc_id_list[0], None
         return None, f"can't add book '{data}' to ElasticSearch"
 

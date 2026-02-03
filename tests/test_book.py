@@ -55,6 +55,9 @@ class TestBook(unittest.TestCase):
             "file_path": "category1/[anonymous] any book.epub",
             "file_type": "file_type1",
             "file_size": 100,
+            "line_count": 0,
+            "page_count": 0,
+            "isbn": "",
             "updated_time": "2021-01-01T00:00:00.000000",
         }
 

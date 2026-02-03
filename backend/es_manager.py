@@ -343,11 +343,16 @@ class ESManager:
                 doc_id_list.append(inode_num)
                 data_count += 1
             LOGGER.info("%d items inserted", int(len(es_data) / 2))
-            self.es.bulk(body=es_data, timeout="60s", refresh=True)
+            self.es.bulk(body=es_data, timeout="60s", refresh=False)
             es_data = []
             if data_count >= num_docs:
                 break
         return doc_id_list
+
+    def refresh(self) -> None:
+        """인덱스를 refresh하여 최근 변경사항을 검색 가능하게 함"""
+        LOGGER.debug("refresh()")
+        self.es.indices.refresh(index=self.index_name)
 
     def update(self, doc_id: int, category: str = "", title: str = "", author: str = "", file_path: str = "", file_type: str = "", file_size: int = 0, summary: str = "") -> bool:
         LOGGER.debug("update(doc_id=%d, title='%s', author='%s', file_path='%r', file_type='%s', file_size=%d, summary='%s', category='%s')", doc_id, title, author, file_path, file_type, file_size, summary, category)

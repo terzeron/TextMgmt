@@ -4,15 +4,14 @@
 import sys
 import os
 import re
-import shutil
 import getopt
 import logging.config
+import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Set, Tuple
+from itertools import islice
+from typing import Dict, Any, List, Set, Tuple, Optional, Iterable, Iterator
 
-import zipfile
-import hashlib
 import ebooklib
 from ebooklib import epub
 import pypdf
@@ -26,7 +25,6 @@ from utils.isbn import extract as extract_isbn
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger()
-TEMP_DIR_PREFIX_PATH = Path("/mnt/ramdisk")
 
 
 if "TM_WORK_DIR" not in os.environ:
@@ -39,20 +37,22 @@ class Loader:
     path_prefix = Path(os.environ["TM_WORK_DIR"])
 
     @staticmethod
-    def read_from_text(file_path: Path) -> Tuple[str, int, int]:
+    def read_from_text(file_path: Path) -> Tuple[str, int, int, str]:
+        """TXT 파일 읽기. 반환: (summary, line_count, page_count, raw_content)"""
         Stat.text_count += 1
         start_time = datetime.now()
 
         line_count = 0
+        data = ""
+        raw_content = ""
         try:
             with file_path.open("r", encoding="utf-8") as infile:
-                data = infile.read(Loader.TEXT_SIZE)
+                # 한 번에 읽어서 처리
+                raw_content = infile.read()
+                line_count = raw_content.count('\n') + 1 if raw_content else 0
+                data = raw_content[:Loader.TEXT_SIZE]
                 data = data.replace("\ufeff", "")
-                # Preserve Korean characters by replacing only non-word, non-space, non-Korean characters.
                 data = re.sub(r'[^\w\sㄱ-힣]', ' ', data)
-            # 전체 행 수 계산
-            with file_path.open("r", encoding="utf-8") as infile:
-                line_count = sum(1 for _ in infile)
         except UnicodeDecodeError as e:
             LOGGER.error(f"can't read unicode text from file '{file_path}', {e}")
             data = ""
@@ -60,47 +60,42 @@ class Loader:
         end_time = datetime.now()
         Stat.text_total_time += (end_time - start_time).total_seconds()
 
-        return data, line_count, 0
+        return data, line_count, 0, raw_content
 
     @staticmethod
     def read_from_epub_with_extracting_zip(file_path: Path) -> Tuple[str, int]:
+        """메모리에서 직접 zip 내용을 읽어 처리 (임시 디렉토리 사용 안 함)"""
         result = ""
         total_text = ""
         try:
-            with zipfile.ZipFile(file_path, "r") as zip_ref:
-                temp_dir_name = hashlib.md5(str(file_path).encode("utf-8")).hexdigest()[:7]
-                if TEMP_DIR_PREFIX_PATH.is_dir():
-                    temp_dir_path = TEMP_DIR_PREFIX_PATH / temp_dir_name
-                else:
-                    temp_dir_path = Path(temp_dir_name)
-                zip_ref.extractall(temp_dir_path)
-                root_file_path = temp_dir_path / "OEBPS" / "content.opf"
-                metainf_file_path = temp_dir_path / "META-INF" / "container.xml"
-                with metainf_file_path.open("r", encoding="utf-8") as metainf_file:
-                    for line in metainf_file:
-                        m = re.search(r'<rootfile[^>]*full-path="(?P<root_file>[^"]+)"', line)
-                        if m:
-                            root_file = m.group("root_file")
-                            root_file_path = temp_dir_path / Path(root_file)
-                            if not root_file_path.is_file():
-                                LOGGER.error("can't file '%s' in epub file '%s'", root_file_path, file_path)
-                                return "", 0
-                with root_file_path.open("r", encoding="utf-8") as infile:
-                    for line in infile:
-                        matches = re.findall(r'<(?:opf:)?item\s[^>]*href="(?P<chapter_file>[^"]*\.x?html)"[^>]*media-type="application/xhtml\+xml"', line)
-                        for match in matches:
-                            chapter_file = match
-                            chapter_file_path = root_file_path.parent / chapter_file
-                            if not chapter_file_path.is_file():
-                                continue
-                            with chapter_file_path.open("r", encoding="utf-8") as file:
-                                content = file.read()
-                                soup = BeautifulSoup(content, "html.parser")
-                                text = soup.get_text()
-                                total_text += text
-                                if len(result) < Loader.TEXT_SIZE:
-                                    result += text
-                shutil.rmtree(temp_dir_path)
+            with zipfile.ZipFile(file_path, "r") as zf:
+                # 1. container.xml에서 rootfile 찾기
+                container_content = zf.read("META-INF/container.xml").decode("utf-8", errors="ignore")
+                m = re.search(r'<rootfile[^>]*full-path="(?P<root_file>[^"]+)"', container_content)
+                if not m:
+                    return "", 0
+                root_file = m.group("root_file")
+                root_dir = "/".join(root_file.split("/")[:-1])
+
+                # 2. OPF 파일에서 chapter 파일 목록 찾기
+                opf_content = zf.read(root_file).decode("utf-8", errors="ignore")
+                matches = re.findall(
+                    r'<(?:opf:)?item\s[^>]*href="(?P<chapter_file>[^"]*\.x?html)"[^>]*media-type="application/xhtml\+xml"',
+                    opf_content
+                )
+
+                # 3. 각 chapter 파일 읽기
+                for chapter_file in matches:
+                    chapter_path = f"{root_dir}/{chapter_file}" if root_dir else chapter_file
+                    try:
+                        content = zf.read(chapter_path).decode("utf-8", errors="ignore")
+                        soup = BeautifulSoup(content, "lxml")
+                        text = soup.get_text()
+                        total_text += text
+                        if len(result) < Loader.TEXT_SIZE:
+                            result += text
+                    except KeyError:
+                        continue
         except zipfile.BadZipFile as e:
             LOGGER.error(file_path)
             LOGGER.error(e)
@@ -130,7 +125,7 @@ class Loader:
                         result += " " + creator[0]
 
             for doc in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-                soup = BeautifulSoup(doc.get_body_content(), "html.parser")
+                soup = BeautifulSoup(doc.get_body_content(), "lxml")
                 text = soup.get_text()
                 total_text += text
                 if len(result) < Loader.TEXT_SIZE:
@@ -199,7 +194,7 @@ class Loader:
             content = infile.read()
             line_count = content.count('\n') + 1
 
-        soup = BeautifulSoup(content, "html.parser")
+        soup = BeautifulSoup(content, "lxml")
         result = soup.get_text()
         result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
 
@@ -259,12 +254,11 @@ class Loader:
         return "", 0, 0
 
     @staticmethod
-    def read_file(file_path: Path) -> Dict[int, Dict[str, Any]]:
+    def read_file(file_path: Path, stat_result: Optional[os.stat_result] = None) -> Dict[int, Dict[str, Any]]:
         if file_path.is_file():
-            # print(child_path)
             sys.stdout.flush()
-            # read metadata of each file
-            st = file_path.stat()
+            # read metadata of each file (stat 결과 재사용)
+            st = stat_result if stat_result else file_path.stat()
             inode_num = st.st_ino
             file_size = st.st_size
             category = str(file_path.parent.relative_to(Loader.path_prefix))
@@ -284,8 +278,9 @@ class Loader:
             line_count = 0
             page_count = 0
             isbn_list = []
+            raw_content = ""  # TXT 파일용 원본 content
             if file_type == "txt":
-                summary, line_count, page_count = Loader.read_from_text(file_path)
+                summary, line_count, page_count, raw_content = Loader.read_from_text(file_path)
             elif file_type == "epub":
                 summary, line_count, page_count = Loader.read_from_epub(file_path)
             elif file_type == "pdf":
@@ -301,9 +296,9 @@ class Loader:
             else:
                 return {}
 
-            # ISBN 추출
+            # ISBN 추출 (TXT는 이미 읽은 content 재사용)
             if file_type in ("txt", "epub", "pdf", "djvu", "hwp"):
-                isbn_list = extract_isbn(file_path)
+                isbn_list = extract_isbn(file_path, content=raw_content if file_type == "txt" else None)
 
             return {
                 inode_num: {
@@ -349,9 +344,9 @@ class Loader:
         return file_path_list[:num_files]
 
     @staticmethod
-    def get_inode(file_path: Path) -> int:
-        """파일의 inode를 반환"""
-        return file_path.stat().st_ino
+    def get_stat(file_path: Path) -> os.stat_result:
+        """파일의 stat 결과를 반환"""
+        return file_path.stat()
 
     @staticmethod
     def read_files(path: Path, num_files: int = sys.maxsize, recursive: bool = False) -> Dict[int, Dict[str, Any]]:
@@ -427,47 +422,54 @@ def main() -> int:
         LOGGER.error(e)
         return -1
 
-    def process_file_list(file_list: List[Path], skip_check: bool = False) -> int:
-        """파일 목록을 배치 처리하여 ES에 저장"""
+    def process_file_iter(file_iter: Iterable[Path], skip_check: bool = False) -> Tuple[int, int]:
+        """파일 iterator를 배치 처리하여 ES에 저장. 반환: (처리 수, 건너뜀 수)"""
         skipped_count = 0
-        for i in range(0, len(file_list), BATCH_SIZE):
-            batch_files = file_list[i:i + BATCH_SIZE]
+        processed_count = 0
+        file_iterator = iter(file_iter)
 
-            # inode 수집 (파싱 없이)
-            file_inode_map: Dict[int, Path] = {}
+        while True:
+            # generator에서 배치 단위로 가져오기
+            batch_files = list(islice(file_iterator, BATCH_SIZE))
+            if not batch_files:
+                break
+
+            # stat 수집 (한 번만 호출하여 inode와 함께 저장)
+            file_stat_map: Dict[int, Tuple[Path, os.stat_result]] = {}
             for file_path in batch_files:
                 try:
-                    inode = Loader.get_inode(file_path)
-                    file_inode_map[inode] = file_path
+                    st = Loader.get_stat(file_path)
+                    file_stat_map[st.st_ino] = (file_path, st)
                 except OSError:
                     continue
 
             # 존재 여부 검사 (skip_check가 False일 때만)
             existing_ids: Set[int] = set()
             if not skip_check:
-                existing_ids = es_manager.get_existing_ids(list(file_inode_map.keys()))
+                existing_ids = es_manager.get_existing_ids(list(file_stat_map.keys()))
                 skipped_count += len(existing_ids)
 
-            # 파일 파싱
+            # 파일 파싱 (stat 결과 재사용)
             batch_data: Dict[int, Dict[str, Any]] = {}
-            for inode, file_path in file_inode_map.items():
+            for inode, (file_path, st) in file_stat_map.items():
                 if inode in existing_ids:
                     continue  # 이미 존재하면 건너뜀
                 print(f"* {file_path}")
-                data_item = Loader.read_file(file_path)
+                data_item = Loader.read_file(file_path, stat_result=st)
                 if data_item:
                     batch_data.update(data_item)
 
             # 데이터 저장
             if batch_data:
                 es_manager.insert(batch_data)
+                processed_count += len(batch_data)
                 Stat.index_count += len(batch_data)
                 if skip_check:
                     print(f"  [배치 저장: {len(batch_data)}개]")
                 else:
                     print(f"  [배치 저장: {len(batch_data)}개, 건너뜀: {len(existing_ids)}개]")
 
-        return skipped_count
+        return processed_count, skipped_count
 
     for dir in args:
         dir_path = Path(dir)
@@ -481,10 +483,10 @@ def main() -> int:
         print(f"====== {dir_path} ======")
 
         if do_recursive:
-            # 전체 파일 등록
-            file_list = [p for p in dir_path.rglob("*") if p.is_file()]
-            print(f"  총 {len(file_list)}개 파일 발견")
-            skipped_count = process_file_list(file_list, skip_check=do_reload)
+            # 전체 파일 등록 (generator 사용으로 메모리 효율화)
+            file_iter = (p for p in dir_path.rglob("*") if p.is_file())
+            processed, skipped_count = process_file_iter(file_iter, skip_check=do_reload)
+            print(f"  총 {processed}개 파일 처리됨")
             if skipped_count > 0:
                 print(f"  총 {skipped_count}개 중복 파일 건너뜀")
         else:
@@ -500,7 +502,7 @@ def main() -> int:
                         sample_file = subdir_files[0]
                         print(f" -> {sample_file.name}", end="", flush=True)
                         # 즉시 ES에 저장
-                        skipped = process_file_list([sample_file], skip_check=do_reload)
+                        processed, skipped = process_file_iter([sample_file], skip_check=do_reload)
                         if skipped > 0:
                             print(" (중복)")
                             skipped1 += skipped
@@ -515,11 +517,14 @@ def main() -> int:
             print("  [2단계] 현재 디렉토리 파일 등록")
             current_dir_files = sorted([p for p in dir_path.iterdir() if p.is_file()])
             print(f"    {len(current_dir_files)}개 파일 발견")
-            skipped2 = process_file_list(current_dir_files, skip_check=do_reload)
+            _, skipped2 = process_file_iter(current_dir_files, skip_check=do_reload)
             if skipped2 > 0:
                 print(f"    {skipped2}개 중복 파일 건너뜀")
 
         print("================================")
+
+    # 모든 작업 완료 후 인덱스 refresh
+    es_manager.refresh()
 
     end_time = datetime.now()
     Stat.index_total_time = (end_time - start_time).total_seconds()
