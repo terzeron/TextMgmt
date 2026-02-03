@@ -542,15 +542,15 @@ export default function Edit() {
         console.log(`deleteButtonClicked: entryId=${selectedEntryId}`);
         if (selectedEntryId?.includes('/')) {
             const dirName = selectedEntryId.split('/')[0];
-            const fileName = selectedEntryId.split('/')[1];
-            const deleteUrl = '/dirs/' + encodeURIComponent(dirName) + '/files/' + encodeURIComponent(fileName);
+            const bookId = selectedEntryId.split('/')[1];
+            const deleteUrl = '/books/' + bookId;
             console.log(deleteUrl);
             jsonDeleteReq(deleteUrl, null, () => {
                 const displayDirName = (dirName === '' || dirName === '_root') ? '최상위' : dirName;
                 setSuccessMessage(`"${displayDirName}/${newFileName}"이(가) 삭제되었습니다.`);
                 setErrorMessage('');
 
-                const newFolderData = removeEntryFromFolderData(folderData, dirName, fileName);
+                const newFolderData = removeEntryFromFolderData(folderData, dirName, bookId);
                 setFolderData(newFolderData);
 
                 if (nextEntryId) {
