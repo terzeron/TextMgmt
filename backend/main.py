@@ -320,7 +320,7 @@ async def exchange_facebook_token(exchange_request_body: dict):
         url = "https://graph.facebook.com/v12.0/oauth/access_token"
         params = {
             "grant_type": "fb_exchange_token",
-            "client_id": VITE_FACEBOOK_APP_ID,
+            "client_id": TM_FACEBOOK_APP_ID,
             "client_secret": TM_FACEBOOK_APP_SECRET,
             "fb_exchange_token": access_token
         }

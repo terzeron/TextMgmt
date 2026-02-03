@@ -6,10 +6,6 @@ WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm install -g npm@10.9.2 && npm install && npx browserslist@latest --update-db
 
-ARG VITE_FACEBOOK_APP_ID
-ARG VITE_API_URL_PREFIX
-ARG VITE_ADMIN_EMAIL
-
 COPY frontend/ .
 RUN npm run build
 
