@@ -25,12 +25,6 @@ LOGGER = logging.getLogger(__name__)
 if "TM_FRONTEND_URL" not in os.environ:
     LOGGER.error("The environment variable TM_FRONTEND_URL is not set.")
     sys.exit(-1)
-if "VITE_FACEBOOK_APP_ID" not in os.environ:
-    LOGGER.error("The environment variable VITE_FACEBOOK_APP_ID is not set.")
-    sys.exit(-1)
-if "VITE_FACEBOOK_APP_SECRET" not in os.environ:
-    LOGGER.error("The environment variable VITE_FACEBOOK_APP_SECRET is not set.")
-    sys.exit(-1)
 
 app = FastAPI()
 LOGGER.info("app ready")
