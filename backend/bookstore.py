@@ -26,6 +26,7 @@ class AbstractBookstore(ABC):
     """서점 검색을 위한 베이스 인터페이스"""
     BASE_URL: str
     MAX_RESULTS: int = 2
+    SUPPORTS_ISBN_SEARCH: bool = False  # ISBN 검색 지원 여부
 
     def __init__(self, base_dir: str = '.', verbose: bool = True):
         self.base_dir = base_dir
@@ -45,6 +46,10 @@ class AbstractBookstore(ABC):
         """검색 URL 구성"""
         pass
 
+    def build_isbn_search_url(self, isbn: str) -> str:
+        """ISBN 검색 URL 구성 (기본: 일반 검색과 동일)"""
+        return self.build_search_url(isbn)
+
     @abstractmethod
     def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
         """검색 결과 링크 추출"""
@@ -57,6 +62,63 @@ class AbstractBookstore(ABC):
 
     def search_by_keyword(self, keyword: str) -> List[Tuple[str, str, str, str, str]]:
         url = self.build_search_url(keyword)
+        return self._fetch_search_results(url)
+
+    def search_by_isbn(self, isbn: str) -> List[Tuple[str, str, str, str, str]]:
+        """ISBN으로 검색"""
+        if not self.SUPPORTS_ISBN_SEARCH:
+            if self.verbose:
+                logger.info(f"{self.__class__.__name__}은 ISBN 검색을 지원하지 않습니다")
+            return []
+        url = self.build_isbn_search_url(isbn)
+        return self._fetch_search_results(url)
+
+    def search(self, isbn: str = '', title: str = '', author: str = '') -> Tuple[List[Tuple[str, str, str, str, str]], str, str]:
+        """
+        ISBN, 제목, 저자를 선택적으로 사용하여 검색
+        우선순위: ISBN > 제목+저자 > 제목 > 저자
+
+        Returns:
+            (results, actual_keyword, search_method) 튜플
+        """
+        # 1. ISBN이 있고 지원되면 ISBN 검색 시도
+        if isbn and self.SUPPORTS_ISBN_SEARCH:
+            results = self.search_by_isbn(isbn)
+            if results:
+                return results, isbn, "isbn"
+
+        # 2. 제목과 저자가 모두 있으면 조합 검색
+        if title and author:
+            keyword = f"{title} {author}"
+            results = self.search_by_keyword(keyword)
+            if results:
+                return results, keyword, "title_author"
+
+        # 3. 제목만으로 검색
+        if title:
+            results = self.search_by_keyword(title)
+            if results:
+                return results, title, "title"
+
+        # 4. 저자만으로 검색
+        if author:
+            results = self.search_by_keyword(author)
+            if results:
+                return results, author, "author"
+
+        # 검색 결과 없음 - 가장 구체적인 키워드 반환
+        if title and author:
+            return [], f"{title} {author}", "title_author"
+        elif title:
+            return [], title, "title"
+        elif author:
+            return [], author, "author"
+        elif isbn:
+            return [], isbn, "isbn"
+        return [], "", "unknown"
+
+    def _fetch_search_results(self, url: str) -> List[Tuple[str, str, str, str, str]]:
+        """검색 URL에서 결과를 가져오는 공통 로직"""
         # 검색 페이지 요청 예외 처리
         try:
             resp = self.session.get(url, timeout=10, verify=False)
@@ -86,14 +148,14 @@ class AbstractBookstore(ABC):
                 continue
             detail_soup = BeautifulSoup(html, 'html.parser')
             info = self.extract_book_info(detail_soup)
-            title = info.get('title', '')
-            author = info.get('author', '')
+            found_title = info.get('title', '')
+            found_author = info.get('author', '')
             category = info.get('category', '')
             # 카테고리 기본 처리 (비디오/판타지)
             if category:
                 parts = [p.strip() for p in category.split('>')]
                 category = ' > '.join(parts[:3])
-            results.append((title, author, category, detail_url, url))
+            results.append((found_title, found_author, category, detail_url, url))
         return results
 
     def _save_html_to_tmp(self, html: str, url: str):
@@ -127,10 +189,15 @@ class AbstractBookstore(ABC):
 # Yes24 구현
 class Yes24Bookstore(AbstractBookstore):
     BASE_URL = 'https://www.yes24.com'
+    SUPPORTS_ISBN_SEARCH = True
 
     def build_search_url(self, keyword: str) -> str:
         encoded = quote(keyword)
         return f"{self.BASE_URL}/Product/Search?domain=ALL&query={encoded}"
+
+    def build_isbn_search_url(self, isbn: str) -> str:
+        """Yes24 ISBN 검색 URL"""
+        return f"{self.BASE_URL}/Product/Search?domain=ALL&query={isbn}"
 
     def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
         """yes24 검색 결과 페이지에서 상세 페이지 링크를 CSS selector로 추출합니다."""
@@ -284,11 +351,16 @@ class Yes24Bookstore(AbstractBookstore):
 class AladinBookstore(AbstractBookstore):
     """알라딘 서점 검색 구현 스텁"""
     BASE_URL = 'https://www.aladin.co.kr'
+    SUPPORTS_ISBN_SEARCH = True
 
     def build_search_url(self, keyword: str) -> str:
         """알라딘 검색 URL을 생성합니다."""
         encoded_keyword = quote(keyword)
         return f"{self.BASE_URL}/search/wsearchresult.aspx?SearchTarget=All&SearchWord={encoded_keyword}"
+
+    def build_isbn_search_url(self, isbn: str) -> str:
+        """알라딘 ISBN 검색 URL"""
+        return f"{self.BASE_URL}/search/wsearchresult.aspx?SearchTarget=All&SearchWord={isbn}"
 
     def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
         """알라딘 검색 결과에서 상세 페이지 링크를 추출합니다."""
@@ -380,6 +452,7 @@ class AladinBookstore(AbstractBookstore):
 # RidibooksBookstore implementation
 class RidibooksBookstore(AbstractBookstore):
     BASE_URL = 'https://ridibooks.com'
+    SUPPORTS_ISBN_SEARCH = False  # RIDI는 ISBN 검색 미지원
 
     def _extract_ridi_isbn(self, soup: BeautifulSoup) -> str:
         """
@@ -405,32 +478,54 @@ class RidibooksBookstore(AbstractBookstore):
         encoded = quote(keyword)
         return f"{self.BASE_URL}/search?q={encoded}&adult_exclude=n"
 
+    def search_by_keyword(self, keyword: str) -> List[Tuple[str, str, str, str, str]]:
+        """RIDI 검색 API 직접 호출"""
+        search_url = self.build_search_url(keyword)
+
+        # RIDI 검색 API
+        api_url = "https://search-api.ridibooks.com/search"
+        params = {'keyword': keyword}
+
+        try:
+            resp = self.session.get(api_url, params=params, timeout=10, verify=False)
+
+            if resp.status_code != 200:
+                if self.verbose:
+                    logger.warning(f"RIDI API 응답 실패: {resp.status_code}")
+                return []
+
+            data = resp.json()
+            books = data.get('books', [])
+
+            if not books:
+                if self.verbose:
+                    logger.info("RIDI 검색 결과가 없습니다")
+                return []
+
+            results: List[Tuple[str, str, str, str, str]] = []
+            for book in books[:self.MAX_RESULTS]:
+                book_id = book.get('b_id', '')
+                title = book.get('title', '')
+                author = book.get('author', '')
+                category = book.get('category_name', '') or book.get('parent_category_name', '')
+
+                detail_url = f"{self.BASE_URL}/books/{book_id}" if book_id else ''
+
+                if title and detail_url:
+                    results.append((title, author, category, detail_url, search_url))
+
+            if self.verbose:
+                logger.info(f"RIDI에서 {len(results)}개의 검색 결과를 찾았습니다")
+            return results
+
+        except Exception as e:
+            if self.verbose:
+                logger.error(f"RIDI 검색 실패: {e}")
+            return []
+
     def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
-        links: List[str] = []
-        seen = set()
-        # ul > li > div > div > a
-        for a_tag in soup.select("ul > li > div > div > a"):
-            href = a_tag.get('href', '')
-            # strip query params to match pure book path
-            path = href.split('?', 1)[0]
-            if re.match(r'^/books/\d+$', path):
-                full = urljoin(self.BASE_URL, path)
-                if full not in seen:
-                    seen.add(full)
-                    links.append(full)
-        # fallback: find any book links if primary selector yields none
-        if not links:
-            for a_tag in soup.find_all('a', href=True):
-                href = a_tag['href']
-                path = href.split('?', 1)[0]
-                if re.match(r'^/books/\d+$', path):
-                    full = urljoin(self.BASE_URL, path)
-                    if full not in seen:
-                        seen.add(full)
-                        links.append(full)
-        if self.verbose:
-            logger.info(f"Ridibooks에서 {len(links)}개의 상세 페이지 링크를 찾았습니다")
-        return links
+        """RIDI는 search_by_keyword를 오버라이드하므로 이 메서드는 사용되지 않음"""
+        return []
 
     def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
         info = {'title': '', 'author': '', 'category': '', 'isbn': ''}
@@ -654,13 +749,14 @@ class NaverSeriesBookstore(AbstractBookstore):
 
     def build_search_url(self, keyword: str) -> str:
         encoded = quote(keyword)
-        return f"{self.BASE_URL}/search/search.series?t=all&fs=novel&q={encoded}"
+        # fs 파라미터 제거하여 웹소설+만화 모두 검색
+        return f"{self.BASE_URL}/search/search.series?t=all&q={encoded}"
 
     def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
         links: List[str] = []
         seen = set()
-        # 검색 결과 리스트에서 링크 추출
-        for a_tag in soup.select('ul.lst_list li a[class="N=a:nov.title"]'):
+        # 검색 결과 리스트에서 링크 추출 (웹소설: nov.title, 만화: com.title)
+        for a_tag in soup.select('ul.lst_list li a[class^="N=a:"]'):
             href = a_tag.get('href')
             if href:
                 full = urljoin(self.BASE_URL, href)
