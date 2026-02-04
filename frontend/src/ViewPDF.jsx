@@ -6,7 +6,7 @@ import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
-export default function ViewPDF({bookId, pageCount = 5}) {
+export default function ViewPDF({bookId, pageCount = 0}) {
     const [url, setUrl] = useState("");
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -37,7 +37,7 @@ export default function ViewPDF({bookId, pageCount = 5}) {
                 const pdf = await loadingTask.promise;
                 setTotalPages(pdf.numPages);
 
-                // 렌더링할 페이지 수 결정 (pageCount가 0이거나 없으면 전체, 아니면 제한)
+                // pageCount가 0이면 전체 페이지, 아니면 제한된 페이지
                 const pagesToRender = pageCount > 0 ? Math.min(pdf.numPages, pageCount) : pdf.numPages;
                 const pageDataArray = [];
 
@@ -45,7 +45,6 @@ export default function ViewPDF({bookId, pageCount = 5}) {
                     const page = await pdf.getPage(i);
                     const viewport = page.getViewport({scale: 1.5});
 
-                    // 오프스크린 캔버스 생성
                     const canvas = document.createElement("canvas");
                     const context = canvas.getContext("2d");
                     canvas.width = viewport.width;
@@ -57,7 +56,6 @@ export default function ViewPDF({bookId, pageCount = 5}) {
                     });
                     await renderTask.promise;
 
-                    // 캔버스를 이미지 데이터 URL로 변환
                     pageDataArray.push({
                         pageNum: i,
                         dataUrl: canvas.toDataURL(),
@@ -79,20 +77,30 @@ export default function ViewPDF({bookId, pageCount = 5}) {
         loadPdf();
     }, [url, pageCount]);
 
-    return (
-        <div className="pdf-container" ref={containerRef}>
-            {isLoading && (
+    if (error) {
+        return (
+            <div className="pdf-container">
+                <div className="error-message">{error}</div>
+                <style>{pdfStyles}</style>
+            </div>
+        );
+    }
+
+    if (isLoading) {
+        return (
+            <div className="pdf-container">
                 <div className="loading-container">
                     <div className="spinner"></div>
                     <span className="blinking">로딩 중...</span>
                 </div>
-            )}
-            {error && (
-                <div className="error-message">
-                    {error}
-                </div>
-            )}
-            {!isLoading && !error && totalPages > 0 && (
+                <style>{pdfStyles}</style>
+            </div>
+        );
+    }
+
+    return (
+        <div className="pdf-container" ref={containerRef}>
+            {totalPages > 0 && (
                 <div className="pdf-info">
                     총 {totalPages}페이지 중 {renderedPages.length}페이지 표시
                 </div>
@@ -111,45 +119,45 @@ export default function ViewPDF({bookId, pageCount = 5}) {
                     ))}
                 </div>
             </Suspense>
-
-            <style>
-                {`
-                    .pdf-container {
-                        display: flex;
-                        flex-direction: column;
-                        align-items: center;
-                        justify-content: center;
-                        padding: 20px;
-                        text-align: center;
-                    }
-                    .pdf-info {
-                        margin-bottom: 15px;
-                        color: #666;
-                        font-size: 14px;
-                    }
-                    .pdf-pages {
-                        display: flex;
-                        flex-direction: column;
-                        gap: 20px;
-                        align-items: center;
-                    }
-                    .pdf-page {
-                        border: 1px solid #ddd;
-                        border-radius: 4px;
-                        padding: 10px;
-                        background: #f9f9f9;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                    }
-                    .page-number {
-                        font-size: 12px;
-                        color: #888;
-                        margin-bottom: 8px;
-                    }
-                `}
-            </style>
+            <style>{pdfStyles}</style>
         </div>
     );
 }
+
+const pdfStyles = `
+    .pdf-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        text-align: center;
+        width: 100%;
+    }
+    .pdf-info {
+        margin-bottom: 15px;
+        color: #666;
+        font-size: 14px;
+    }
+    .pdf-pages {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        align-items: center;
+    }
+    .pdf-page {
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 10px;
+        background: #f9f9f9;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .page-number {
+        font-size: 12px;
+        color: #888;
+        margin-bottom: 8px;
+    }
+`;
 
 ViewPDF.propTypes = {
     bookId: PropTypes.number.isRequired,
