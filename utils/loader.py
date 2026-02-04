@@ -372,10 +372,13 @@ class Loader:
 
 
 def print_usage(program_name: str):
-    print(f"Usage:\t{program_name}\t[ --delete ] [ --reload ] [ --recursive ] <file or directory path>")
+    print(f"Usage:\t{program_name}\t[ --delete ] [ --reload ] [ --recursive ] [ --force ] <file or directory path>")
     print("\t\t--delete: delete index and exit (no file path required)")
     print("\t\t--reload: delete and recreate index before loading")
     print("\t\t--recursive: scan subdirectories recursively")
+    print("\t\t--force: force reload even if file already exists in ES")
+    print()
+    print("\t\tNote: When a file (not directory) is specified, it will be force-reloaded automatically.")
     sys.exit(0)
 
 
@@ -385,9 +388,10 @@ def main() -> int:
     do_delete = False
     do_reload = False
     do_recursive = False
+    do_force = False
     args: List[str] = []
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "", ["delete", "reload", "recursive"])
+        opts, args = getopt.getopt(sys.argv[1:], "", ["delete", "reload", "recursive", "force"])
         for opt, _ in opts:
             if opt == "--delete":
                 do_delete = True
@@ -395,6 +399,8 @@ def main() -> int:
                 do_reload = True
             elif opt == "--recursive":
                 do_recursive = True
+            elif opt == "--force":
+                do_force = True
     except getopt.GetoptError as e:
         LOGGER.error(e)
         print_usage(sys.argv[0])
@@ -479,29 +485,40 @@ def main() -> int:
 
         return processed_count, skipped_count
 
-    for dir in args:
-        dir_path = Path(dir)
-        if not dir_path.exists():
-            LOGGER.error("can't find such a file or directory '%s'", dir_path)
+    for arg in args:
+        target_path = Path(arg)
+        if not target_path.exists():
+            LOGGER.error("can't find such a file or directory '%s'", target_path)
             return 0
-        if not dir_path.is_relative_to(Loader.path_prefix):
-            LOGGER.error(f"{dir_path} is not in $TM_WORK_DIR({Loader.path_prefix}).")
+        if not target_path.is_relative_to(Loader.path_prefix):
+            LOGGER.error(f"{target_path} is not in $TM_WORK_DIR({Loader.path_prefix}).")
             continue
 
-        print(f"====== {dir_path} ======")
+        print(f"====== {target_path} ======")
 
-        if do_recursive:
+        # 파일이 지정된 경우: 강제 재적재 (skip_check=True)
+        if target_path.is_file():
+            print(f"  [파일 강제 재적재] {target_path.name}")
+            processed, _ = process_file_iter([target_path], skip_check=True)
+            if processed > 0:
+                print(f"  파일 재적재 완료")
+            else:
+                print(f"  파일 적재 실패 (지원하지 않는 형식일 수 있음)")
+        elif do_recursive:
             # 전체 파일 등록 (generator 사용으로 메모리 효율화)
-            file_iter = (p for p in dir_path.rglob("*") if p.is_file())
-            processed, skipped_count = process_file_iter(file_iter, skip_check=do_reload)
+            file_iter = (p for p in target_path.rglob("*") if p.is_file())
+            skip_check = do_reload or do_force
+            processed, skipped_count = process_file_iter(file_iter, skip_check=skip_check)
             print(f"  총 {processed}개 파일 처리됨")
             if skipped_count > 0:
                 print(f"  총 {skipped_count}개 중복 파일 건너뜀")
         else:
+            skip_check = do_reload or do_force
+
             # 1단계: 하위 디렉토리 각각에서 첫 번째 파일 1개씩 (모아서 한꺼번에 저장)
             print("  [1단계] 하위 디렉토리별 샘플 파일 등록")
             sample_files: List[Tuple[str, Path]] = []  # (subdir_name, file_path)
-            for subdir in sorted(dir_path.iterdir()):
+            for subdir in sorted(target_path.iterdir()):
                 if subdir.is_dir():
                     subdir_files = sorted([p for p in subdir.iterdir() if p.is_file()])
                     if subdir_files:
@@ -516,14 +533,14 @@ def main() -> int:
 
                 # 모아서 한꺼번에 ES에 저장
                 sample_file_paths = [f for _, f in sample_files]
-                processed, skipped1 = process_file_iter(sample_file_paths, skip_check=do_reload)
+                processed, skipped1 = process_file_iter(sample_file_paths, skip_check=skip_check)
                 print(f"    {processed}개 카테고리 샘플 저장, {skipped1}개 중복 건너뜀")
 
             # 2단계: 지정된 디렉토리에 바로 속한 파일들
             print("  [2단계] 현재 디렉토리 파일 등록")
-            current_dir_files = sorted([p for p in dir_path.iterdir() if p.is_file()])
+            current_dir_files = sorted([p for p in target_path.iterdir() if p.is_file()])
             print(f"    {len(current_dir_files)}개 파일 발견")
-            _, skipped2 = process_file_iter(current_dir_files, skip_check=do_reload)
+            _, skipped2 = process_file_iter(current_dir_files, skip_check=skip_check)
             if skipped2 > 0:
                 print(f"    {skipped2}개 중복 파일 건너뜀")
 
