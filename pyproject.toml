@@ -143,6 +143,15 @@ disallow_any_generics = true
 pylint = "3.1.0"
 mypy = "1.10.0"
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::pytest.PytestAssertRewriteWarning",
+    "ignore::DeprecationWarning:testcontainers.*",
+    "ignore::DeprecationWarning:_pytest.assertion.rewrite",
+    "ignore::bs4.XMLParsedAsHTMLWarning",
+]
+
 [tool.pylint."master"]
 ignore = [".github/*", "idea/*", ".mypy_cache/*", ".run/*", "frontend/*", "out/*"]
 disable = ["line-too-long", "missing-module-docstring", "missing-function-docstring", "missing-class-docstring", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-many-lines", "too-many-return-statements", "too-many-boolean-expressions", "too-many-nested-blocks", "too-many-ancestors", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-many-lines", "too-many-return-statements", "too-many-boolean-expressions", "too-many-nested-blocks", "too-many-ancestors", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-many-lines", "too-many-return-statements", "too-many-boolean-expressions", "too-many-nested-blocks", "too-many-ancestors", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-many-lines", "too-many-return-statements", "too-many-boolean-expressions", "too-many-nested-blocks", "too-many-ancestors", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-many-lines", "too-many-return-statements", "too-many-boolean-expressions", "too-many-nested-blocks", "too-many-ancestors", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-many-lines", "too-many-return-statements", "too-many-boolean-expressions", "too-many-nested-blocks", "too-many-ancestors", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-few-public-methods", "logging-fstring-interpolation", "invalid-name", "protected-access", "unexpected-keyword-arg"]
