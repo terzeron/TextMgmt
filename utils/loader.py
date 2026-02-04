@@ -91,7 +91,7 @@ class Loader:
                     try:
                         content = zf.read(chapter_path).decode("utf-8", errors="ignore")
                         with warnings.catch_warnings():
-                            warnings.filterwarnings("ignore", category=UserWarning, message=".*XML.*HTML.*")
+                            warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
                             soup = BeautifulSoup(content, "lxml")
                         text = soup.get_text()
                         total_text += text
@@ -129,7 +129,7 @@ class Loader:
 
             for doc in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
                 with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", category=UserWarning, message=".*XML.*HTML.*")
+                    warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
                     soup = BeautifulSoup(doc.get_body_content(), "lxml")
                 text = soup.get_text()
                 total_text += text
@@ -201,7 +201,7 @@ class Loader:
 
         # XMLParsedAsHTMLWarning 억제하고 lxml 파서 사용
         with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=UserWarning, message=".*XML.*HTML.*")
+            warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
             soup = BeautifulSoup(content, "lxml")
         result = soup.get_text()
         result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
@@ -498,28 +498,26 @@ def main() -> int:
             if skipped_count > 0:
                 print(f"  총 {skipped_count}개 중복 파일 건너뜀")
         else:
-            # 1단계: 하위 디렉토리 각각에서 첫 번째 파일 1개씩 (즉시 저장)
+            # 1단계: 하위 디렉토리 각각에서 첫 번째 파일 1개씩 (모아서 한꺼번에 저장)
             print("  [1단계] 하위 디렉토리별 샘플 파일 등록")
-            sample_count = 0
-            skipped1 = 0
+            sample_files: List[Tuple[str, Path]] = []  # (subdir_name, file_path)
             for subdir in sorted(dir_path.iterdir()):
                 if subdir.is_dir():
-                    print(f"    탐색 중: {subdir.name}/", end="", flush=True)
                     subdir_files = sorted([p for p in subdir.iterdir() if p.is_file()])
                     if subdir_files:
-                        sample_file = subdir_files[0]
-                        print(f" -> {sample_file.name}", end="", flush=True)
-                        # 즉시 ES에 저장
-                        processed, skipped = process_file_iter([sample_file], skip_check=do_reload)
-                        if skipped > 0:
-                            print(" (중복)")
-                            skipped1 += skipped
-                        else:
-                            print(" (저장됨)")
-                            sample_count += 1
+                        sample_files.append((subdir.name, subdir_files[0]))
                     else:
-                        print(" -> (파일 없음)")
-            print(f"    {sample_count}개 카테고리 샘플 저장, {skipped1}개 중복 건너뜀")
+                        print(f"    {subdir.name}/ -> (파일 없음)")
+
+            if sample_files:
+                print(f"    {len(sample_files)}개 디렉토리에서 샘플 파일 선정 완료")
+                for subdir_name, sample_file in sample_files:
+                    print(f"      {subdir_name}/ -> {sample_file.name}")
+
+                # 모아서 한꺼번에 ES에 저장
+                sample_file_paths = [f for _, f in sample_files]
+                processed, skipped1 = process_file_iter(sample_file_paths, skip_check=do_reload)
+                print(f"    {processed}개 카테고리 샘플 저장, {skipped1}개 중복 건너뜀")
 
             # 2단계: 지정된 디렉토리에 바로 속한 파일들
             print("  [2단계] 현재 디렉토리 파일 등록")
