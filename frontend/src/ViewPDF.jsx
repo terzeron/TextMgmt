@@ -37,8 +37,8 @@ export default function ViewPDF({bookId, pageCount = 5}) {
                 const pdf = await loadingTask.promise;
                 setTotalPages(pdf.numPages);
 
-                // 렌더링할 페이지 수 결정 (전체 페이지 수와 pageCount 중 작은 값)
-                const pagesToRender = Math.min(pdf.numPages, pageCount);
+                // 렌더링할 페이지 수 결정 (pageCount가 0이거나 없으면 전체, 아니면 제한)
+                const pagesToRender = pageCount > 0 ? Math.min(pdf.numPages, pageCount) : pdf.numPages;
                 const pageDataArray = [];
 
                 for (let i = 1; i <= pagesToRender; i++) {
