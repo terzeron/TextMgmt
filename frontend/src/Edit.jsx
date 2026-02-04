@@ -39,17 +39,17 @@ export default function Edit() {
     const [viewUrl, setViewUrl] = useState('');
     const [downloadUrl, setDownloadUrl] = useState('');
 
-    // 메시지 자동 사라짐 (10초 후)
+    // 메시지 자동 사라짐 (5초 후)
     useEffect(() => {
         if (successMessage) {
-            const timer = setTimeout(() => setSuccessMessage(''), 10000);
+            const timer = setTimeout(() => setSuccessMessage(''), 5000);
             return () => clearTimeout(timer);
         }
     }, [successMessage]);
 
     useEffect(() => {
         if (errorMessage) {
-            const timer = setTimeout(() => setErrorMessage(''), 10000);
+            const timer = setTimeout(() => setErrorMessage(''), 5000);
             return () => clearTimeout(timer);
         }
     }, [errorMessage]);
