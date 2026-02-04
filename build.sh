@@ -1,16 +1,51 @@
 #!/bin/bash
 
+TARGET=${1:-all}
+
 rm -rf */{nohup.out*,run.log*,.mypy_cache,__pycache__,.idea,.git}
 
-docker build -f backend/Dockerfile --build-arg TM_BACKEND_PORT="$TM_BACKEND_PORT" -t terzeron/tm_backend . && \
-docker tag terzeron/tm_backend:latest registry.terzeron.com/terzeron/tm_backend:latest && \
-docker push registry.terzeron.com/terzeron/tm_backend:latest
+build_backend() {
+    echo "=== Building backend ==="
+    docker build -f backend/Dockerfile --build-arg TM_BACKEND_PORT="$TM_BACKEND_PORT" -t terzeron/tm_backend . && \
+    docker tag terzeron/tm_backend:latest registry.terzeron.com/terzeron/tm_backend:latest && \
+    docker push registry.terzeron.com/terzeron/tm_backend:latest
+}
 
-docker build --build-arg VITE_FACEBOOK_APP_ID=$VITE_FACEBOOK_APP_ID --build-arg VITE_API_URL_PREFIX=$VITE_API_URL_PREFIX --build-arg VITE_ADMIN_EMAIL=$VITE_ADMIN_EMAIL -f frontend/Dockerfile -t terzeron/tm_frontend . && \
-docker tag terzeron/tm_frontend:latest registry.terzeron.com/terzeron/tm_frontend:latest && \
-docker push registry.terzeron.com/terzeron/tm_frontend:latest
+build_frontend() {
+    echo "=== Building frontend ==="
+    docker build --build-arg VITE_FACEBOOK_APP_ID=$VITE_FACEBOOK_APP_ID --build-arg VITE_API_URL_PREFIX=$VITE_API_URL_PREFIX --build-arg VITE_ADMIN_EMAIL=$VITE_ADMIN_EMAIL -f frontend/Dockerfile -t terzeron/tm_frontend . && \
+    docker tag terzeron/tm_frontend:latest registry.terzeron.com/terzeron/tm_frontend:latest && \
+    docker push registry.terzeron.com/terzeron/tm_frontend:latest
+}
 
-echo 'You might deploy the containers;'
-echo 'kubectl apply -f ~/k8s/textmanager/tm-deployment.yml'
-echo 'kubectl rollout restart deployment tm-backend -n textmanager'
-echo 'kubectl rollout restart deployment tm-frontend -n textmanager'
+rollout_backend() {
+    echo "=== Rolling out backend ==="
+    kubectl rollout restart deployment tm-backend -n textmanager
+}
+
+rollout_frontend() {
+    echo "=== Rolling out frontend ==="
+    kubectl rollout restart deployment tm-frontend -n textmanager
+}
+
+case "$TARGET" in
+    backend)
+        build_backend && rollout_backend
+        ;;
+    frontend)
+        build_frontend && rollout_frontend
+        ;;
+    all|"")
+        build_backend && build_frontend && rollout_backend && rollout_frontend
+        ;;
+    *)
+        echo "Usage: $0 [backend|frontend]"
+        echo "  backend  - Build and rollout backend only"
+        echo "  frontend - Build and rollout frontend only"
+        echo "  (no arg) - Build and rollout both"
+        exit 1
+        ;;
+esac
+
+echo ""
+echo "Done! If this is a fresh install, run: ./k8s/k8s_init.sh"

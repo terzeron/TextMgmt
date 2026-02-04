@@ -1,0 +1,28 @@
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: books-pv
+spec:
+  capacity:
+    storage: 3000Gi
+  accessModes:
+    - ReadWriteMany
+  hostPath:
+    path: /mnt/data/text
+
+---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: books-pvc
+  namespace: textmanager
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 3000Gi
+  volumeName: books-pv  # PVC가 바인딩될 PV의 이름
+  storageClassName: ""  # 스토리지 클래스를 비워두어 동적 프로비저닝을 방지

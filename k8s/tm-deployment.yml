@@ -1,0 +1,101 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tm-backend
+  namespace: textmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tm-backend-app
+  template:
+    metadata:
+      labels:
+        app: tm-backend-app
+    spec:
+      containers:
+        - name: tm-backend
+          image: registry.terzeron.com/terzeron/tm_backend:latest
+          ports:
+            - containerPort: 8020
+          env:
+            - name: TM_WORK_DIR
+              value: /books
+            - name: TM_FRONTEND_URL
+              value: https://tm.terzeron.com
+            - name: TM_BACKEND_PORT
+              value: "8020"
+            - name: TM_ES_URL
+              value: http://elasticsearch-es-http:9200
+            - name: TM_ES_INDEX
+              value: tm
+            - name: TM_ES_USER
+              valueFrom: { secretKeyRef: { name: tm-es-cred, key: username } }
+            - name: TM_ES_PASSWORD
+              valueFrom: { secretKeyRef: { name: tm-es-cred, key: password } }
+            - name: TM_FACEBOOK_APP_ID
+              value: "1763789627240387"
+            - name: TM_FACEBOOK_APP_SECRET
+              value: "2c6791615d6cf1cfac9fe1ff1179a0bd"
+          volumeMounts:
+            - name: books-pvc
+              mountPath: /books
+      volumes:
+        - name: books-pvc
+          persistentVolumeClaim:
+            claimName: books-pvc
+
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tm-frontend
+  namespace: textmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tm-frontend-app
+  template:
+    metadata:
+      labels:
+        app: tm-frontend-app
+    spec:
+      containers:
+        - name: tm-frontend
+          image: registry.terzeron.com/terzeron/tm_frontend:latest
+          ports:
+            - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tm-backend
+  namespace: textmanager
+spec:
+  selector:
+    app: tm-backend-app
+  ports:
+    - protocol: TCP
+      port: 8020
+      targetPort: 8020
+  type: NodePort
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tm-frontend
+  namespace: textmanager
+spec:
+  selector:
+    app: tm-frontend-app
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: NodePort
+
