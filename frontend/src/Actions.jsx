@@ -18,8 +18,9 @@ export default function Actions(props) {
         const infoList = props.otherCategoryList?.map(category => {
             const hasSubCategory = category.includes('_');
             if (hasSubCategory) {
+                const prefix = category.split('_')[0];
                 const subCategory = category.split('_')[1];
-                return {key: category, label: subCategory, style: {backgroundColor: getRandomMediumColor(category), color: 'white'}};
+                return {key: category, label: subCategory, style: {backgroundColor: getRandomMediumColor(prefix), color: 'white'}};
             }
             return {key: category, label: category, style: {}, class: 'btn-light'};
         });
