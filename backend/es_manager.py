@@ -8,7 +8,9 @@ import logging.config
 from pathlib import Path
 from typing import Dict, List, Any, Tuple, Union, Set
 from itertools import islice
+import time
 from elasticsearch import Elasticsearch
+from elastic_transport import SerializationError, ConnectionError, ConnectionTimeout
 
 
 logging.config.fileConfig(
@@ -325,7 +327,7 @@ class ESManager:
                          for bucket in result["aggregations"]["unique_values"]["buckets"]]
         return unique_values
 
-    def insert(self, data: Dict[int, Dict[str, Any]], num_docs: int = sys.maxsize) -> List[int]:
+    def insert(self, data: Dict[int, Dict[str, Any]], num_docs: int = sys.maxsize, max_retries: int = 3) -> List[int]:
         LOGGER.debug("insert() %d items", len(data))
         es_data: List[Dict[str, Any]] = []
         data_count = 0
@@ -343,7 +345,21 @@ class ESManager:
                 doc_id_list.append(inode_num)
                 data_count += 1
             LOGGER.info("%d items inserted", int(len(es_data) / 2))
-            self.es.bulk(body=es_data, timeout="60s", refresh=False)
+
+            # 재시도 로직
+            for attempt in range(max_retries):
+                try:
+                    self.es.bulk(body=es_data, timeout="60s", refresh=False)
+                    break
+                except (SerializationError, ConnectionError, ConnectionTimeout) as e:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt  # 지수 백오프: 1, 2, 4초
+                        LOGGER.warning(f"ES bulk 요청 실패 (시도 {attempt + 1}/{max_retries}): {e}. {wait_time}초 후 재시도...")
+                        time.sleep(wait_time)
+                    else:
+                        LOGGER.error(f"ES bulk 요청 최종 실패: {e}")
+                        raise
+
             es_data = []
             if data_count >= num_docs:
                 break
