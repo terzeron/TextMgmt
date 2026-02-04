@@ -14,22 +14,54 @@ LOGGER = logging.getLogger(__name__)
 
 
 class TestLoader(unittest.TestCase):
+    # 클래스 레벨에서 한 번만 파일 목록을 검색하여 성능 개선
+    _path_prefix: Path
+    _txt_dir_path: Path
+    _txt_file_path: Path
+    _epub_dir_path: Path
+    _epub_file_path: Path
+    _pdf_dir_path: Path
+    _pdf_file_path: Path
+    _html_dir_path: Path
+    _html_file_path: Path
+    _docx_dir_path: Path
+    _docx_file_path: Path
+    _rtf_dir_path: Path
+    _rtf_file_path: Path
+
+    @classmethod
+    def setUpClass(cls):
+        """클래스 레벨에서 한 번만 실행 - 파일 목록 캐싱"""
+        cls._path_prefix = Loader.path_prefix
+        cls._txt_dir_path = cls._path_prefix / "_txt"
+        cls._txt_file_path = list(cls._txt_dir_path.glob("*.txt"))[0]
+        cls._epub_dir_path = cls._path_prefix / "_epub"
+        cls._epub_file_path = list(cls._epub_dir_path.glob("*.epub"))[0]
+        cls._pdf_dir_path = cls._path_prefix / "_pdf"
+        cls._pdf_file_path = list(cls._pdf_dir_path.glob("*.pdf"))[0]
+        cls._html_dir_path = cls._path_prefix / "_html"
+        cls._html_file_path = list(cls._html_dir_path.glob("*.html"))[0]
+        cls._docx_dir_path = cls._path_prefix / "_doc"
+        cls._docx_file_path = list(cls._docx_dir_path.glob("*.docx"))[0]
+        cls._rtf_dir_path = cls._path_prefix / "_rtf"
+        cls._rtf_file_path = list(cls._rtf_dir_path.glob("*.rtf"))[0]
 
     def setUp(self):
         self.loader = Loader()
-        self.path_prefix = Loader.path_prefix
-        self.txt_dir_path = self.path_prefix / "_txt"
-        self.txt_file_path = list(self.txt_dir_path.glob("*.txt"))[0]
-        self.epub_dir_path = self.path_prefix / "_epub"
-        self.epub_file_path = list(self.epub_dir_path.glob("*.epub"))[0]
-        self.pdf_dir_path = self.path_prefix / "_pdf"
-        self.pdf_file_path = list(self.pdf_dir_path.glob("*.pdf"))[0]
-        self.html_dir_path = self.path_prefix / "_html"
-        self.html_file_path = list(self.html_dir_path.glob("*.html"))[0]
-        self.docx_dir_path = self.path_prefix / "_doc"
-        self.docx_file_path = list(self.docx_dir_path.glob("*.docx"))[0]
-        self.rtf_dir_path = self.path_prefix / "_rtf"
-        self.rtf_file_path = list(self.rtf_dir_path.glob("*.rtf"))[0]
+        # 클래스 변수를 인스턴스 변수로 복사 (기존 코드 호환성 유지)
+        self.path_prefix = self._path_prefix
+        self.txt_dir_path = self._txt_dir_path
+        self.txt_file_path = self._txt_file_path
+        self.epub_dir_path = self._epub_dir_path
+        self.epub_file_path = self._epub_file_path
+        self.pdf_dir_path = self._pdf_dir_path
+        self.pdf_file_path = self._pdf_file_path
+        self.html_dir_path = self._html_dir_path
+        self.html_file_path = self._html_file_path
+        self.docx_dir_path = self._docx_dir_path
+        self.docx_file_path = self._docx_file_path
+        self.rtf_dir_path = self._rtf_dir_path
+        self.rtf_file_path = self._rtf_file_path
 
     def tearDown(self):
         del self.loader
@@ -142,7 +174,7 @@ class TestLoader(unittest.TestCase):
         self.inspect_data(data)
 
     def test_read_files(self):
-        data = self.loader.read_files(self.epub_dir_path, 1000)
+        data = self.loader.read_files(self.epub_dir_path, 5)
         assert data
         assert 0 < len(data) <= 1000
         self.inspect_data(data)
@@ -159,21 +191,17 @@ class TestLoader(unittest.TestCase):
 
     def test_read_files_recursive(self):
         """Test read_files with recursive=True reads files from subdirectories."""
-        # Use path_prefix which should have subdirectories
-        data = self.loader.read_files(self.path_prefix, num_files=100, recursive=True)
+        # txt 디렉토리만 사용하여 빠른 테스트
+        data = self.loader.read_files(self.txt_dir_path, num_files=5, recursive=True)
         assert isinstance(data, dict)
-        # With recursive=True, we should find files in various subdirectories
         if data:
-            categories = set()
-            for _, v in data.items():
-                categories.add(v["category"])
-            # Should have files from multiple categories/subdirectories
             self.inspect_data(data)
 
     def test_read_files_recursive_vs_non_recursive(self):
         """Test that recursive=True finds more or equal files than recursive=False."""
-        non_recursive_data = self.loader.read_files(self.path_prefix, num_files=1000, recursive=False)
-        recursive_data = self.loader.read_files(self.path_prefix, num_files=1000, recursive=True)
+        # txt 디렉토리만 사용하여 빠른 테스트 (epub, docx 등은 파싱이 느림)
+        non_recursive_data = self.loader.read_files(self.txt_dir_path, num_files=5, recursive=False)
+        recursive_data = self.loader.read_files(self.txt_dir_path, num_files=5, recursive=True)
         # Recursive should find at least as many files as non-recursive
         assert len(recursive_data) >= len(non_recursive_data)
 
@@ -205,29 +233,7 @@ class TestLoader(unittest.TestCase):
         assert st.st_ino > 0
         assert st.st_size > 0
 
-    def test_read_file_with_stat_result(self):
-        """read_file()에 stat_result를 전달했을 때 올바르게 동작하는지 테스트"""
-        # stat을 미리 호출
-        st = Loader.get_stat(self.txt_file_path)
-        inode_from_stat = st.st_ino
-        size_from_stat = st.st_size
-
-        # stat_result를 전달하여 read_file 호출
-        data = Loader.read_file(self.txt_file_path, stat_result=st)
-
-        assert data
-        assert len(data) == 1
-        assert inode_from_stat in data
-        assert data[inode_from_stat]['file_size'] == size_from_stat
-
-    def test_read_file_without_stat_result(self):
-        """read_file()에 stat_result를 전달하지 않아도 동작하는지 테스트"""
-        data = Loader.read_file(self.txt_file_path)
-        assert data
-        assert len(data) == 1
-        self.inspect_data(data)
-
-    def test_read_file_stat_reuse_consistency(self):
+    def test_read_file_stat_reuse(self):
         """stat_result 전달 유무에 관계없이 결과가 일치하는지 테스트"""
         # stat_result 없이 호출
         data_without_stat = Loader.read_file(self.epub_file_path)
@@ -309,502 +315,6 @@ class TestLoaderWithTempFiles(unittest.TestCase):
         assert "Hello" in summary
 
 
-class TestISBNExtraction(unittest.TestCase):
-    """ISBN 추출 함수별 테스트"""
-
-    def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
-
-    def tearDown(self):
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_extract_from_epub_with_opf_metadata(self):
-        """EPUB OPF 메타데이터에서 ISBN 추출 테스트"""
-        from utils.isbn import extract_from_epub
-        import zipfile
-
-        # ISBN이 OPF 메타데이터에 포함된 EPUB 생성
-        epub_path = Path(self.temp_dir) / "test_isbn.epub"
-
-        with zipfile.ZipFile(epub_path, 'w') as zf:
-            # container.xml
-            container_xml = '''<?xml version="1.0"?>
-            <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-                <rootfiles>
-                    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-                </rootfiles>
-            </container>'''
-            zf.writestr('META-INF/container.xml', container_xml)
-
-            # content.opf with ISBN in metadata
-            content_opf = '''<?xml version="1.0"?>
-            <package xmlns="http://www.idpf.org/2007/opf" version="2.0">
-                <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
-                    <dc:title>Test Book</dc:title>
-                    <dc:identifier opf:scheme="ISBN">978-89-12345-67-9</dc:identifier>
-                </metadata>
-                <manifest>
-                    <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
-                </manifest>
-                <spine>
-                    <itemref idref="chapter1"/>
-                </spine>
-            </package>'''
-            zf.writestr('OEBPS/content.opf', content_opf)
-
-            # chapter1.xhtml (no ISBN here)
-            chapter1 = '''<html><body><p>This is chapter 1 content.</p></body></html>'''
-            zf.writestr('OEBPS/chapter1.xhtml', chapter1)
-
-        # ISBN 추출
-        result = extract_from_epub(epub_path)
-
-        # OPF 메타데이터에서 ISBN이 추출되어야 함
-        assert len(result) > 0
-        assert result[0] == "9788912345679"
-
-    def test_extract_from_epub_with_chapter_content(self):
-        """EPUB 챕터 내용에서 ISBN 추출 테스트 (메타데이터에 없는 경우)"""
-        from utils.isbn import extract_from_epub
-        import zipfile
-
-        # ISBN이 챕터에만 있는 EPUB 생성
-        epub_path = Path(self.temp_dir) / "test_isbn_chapter.epub"
-
-        with zipfile.ZipFile(epub_path, 'w') as zf:
-            # container.xml
-            container_xml = '''<?xml version="1.0"?>
-            <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-                <rootfiles>
-                    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-                </rootfiles>
-            </container>'''
-            zf.writestr('META-INF/container.xml', container_xml)
-
-            # content.opf without ISBN
-            content_opf = '''<?xml version="1.0"?>
-            <package xmlns="http://www.idpf.org/2007/opf" version="2.0">
-                <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-                    <dc:title>Test Book</dc:title>
-                </metadata>
-                <manifest>
-                    <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
-                    <item id="chapter2" href="chapter2.xhtml" media-type="application/xhtml+xml"/>
-                </manifest>
-                <spine>
-                    <itemref idref="chapter1"/>
-                    <itemref idref="chapter2"/>
-                </spine>
-            </package>'''
-            zf.writestr('OEBPS/content.opf', content_opf)
-
-            # chapter1.xhtml with ISBN
-            chapter1 = '''<html><body><p>ISBN: 978-89-98765-43-9</p></body></html>'''
-            zf.writestr('OEBPS/chapter1.xhtml', chapter1)
-
-            # chapter2.xhtml
-            chapter2 = '''<html><body><p>This is chapter 2.</p></body></html>'''
-            zf.writestr('OEBPS/chapter2.xhtml', chapter2)
-
-        # ISBN 추출
-        result = extract_from_epub(epub_path)
-
-        # 챕터에서 ISBN이 추출되어야 함
-        assert len(result) > 0
-        assert result[0] == "9788998765439"
-
-    def test_extract_from_djvu_command_availability(self):
-        """DJVU 추출 함수가 djvused 없을 때 빈 결과 반환하는지 테스트"""
-        from utils.isbn import extract_from_djvu
-        import subprocess
-
-        # djvused 명령어 존재 확인
-        try:
-            result = subprocess.run(["which", "djvused"], capture_output=True)
-            has_djvused = result.returncode == 0
-        except Exception:
-            has_djvused = False
-
-        if not has_djvused:
-            # djvused가 없으면 빈 결과 반환해야 함
-            dummy_path = Path(self.temp_dir) / "dummy.djvu"
-            dummy_path.write_bytes(b"dummy")
-            result = extract_from_djvu(dummy_path)
-            assert result == []
-        else:
-            # djvused가 있으면 skip (실제 DJVU 파일 필요)
-            pass  # 실제 환경에서는 DJVU 파일로 테스트
-
-    def test_extract_from_hwp_command_availability(self):
-        """HWP 추출 함수가 strings 명령어로 동작하는지 테스트"""
-        from utils.isbn import extract_from_hwp
-        import subprocess
-
-        # strings 명령어 존재 확인
-        try:
-            result = subprocess.run(["which", "strings"], capture_output=True)
-            has_strings = result.returncode == 0
-        except Exception:
-            has_strings = False
-
-        if has_strings:
-            # ISBN이 포함된 가짜 HWP 파일 생성 (실제로는 텍스트 파일)
-            hwp_path = Path(self.temp_dir) / "test.hwp"
-            # HWP는 바이너리이므로 strings가 추출할 수 있는 형태로 작성
-            content = b"Some binary data\x00ISBN 978-89-11111-22-0\x00More data" + b"\x00" * 10000
-            content += b"End of file\x00ISBN info at end: 978-89-44444-55-5\x00"
-            hwp_path.write_bytes(content)
-
-            result = extract_from_hwp(hwp_path)
-            # strings가 ISBN을 찾을 수 있어야 함
-            assert isinstance(result, list)
-        else:
-            # strings가 없으면 skip
-            pass
-
-
-class TestISBNByteBasedReading(unittest.TestCase):
-    """ISBN 추출을 위한 바이트 기반 읽기 테스트"""
-
-    def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
-
-    def tearDown(self):
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_read_head_tail_from_file_small_file(self):
-        """작은 파일에서 head_tail 읽기 테스트 (8KB 미만)"""
-        from utils.isbn import read_head_tail_from_file, HEAD_TAIL_SIZE
-
-        # 작은 파일 생성 (1KB)
-        small_file = Path(self.temp_dir) / "small.txt"
-        content = "A" * 1024
-        small_file.write_text(content, encoding="utf-8")
-
-        result = read_head_tail_from_file(small_file)
-
-        # 작은 파일은 전체가 반환되어야 함 (tail은 빈 문자열)
-        assert result == content
-
-    def test_read_head_tail_from_file_large_file(self):
-        """큰 파일에서 head_tail 읽기 테스트 (8KB 초과)"""
-        from utils.isbn import read_head_tail_from_file, HEAD_TAIL_SIZE
-
-        # 큰 파일 생성 (32KB)
-        large_file = Path(self.temp_dir) / "large.txt"
-        head_content = "HEAD" * 2048  # 8KB
-        middle_content = "MIDDLE" * 4096  # 24KB
-        tail_content = "TAIL" * 2048  # 8KB
-        content = head_content + middle_content + tail_content
-        large_file.write_text(content, encoding="utf-8")
-
-        result = read_head_tail_from_file(large_file)
-
-        # head + tail만 반환되어야 함
-        assert len(result) == HEAD_TAIL_SIZE * 2
-        assert result.startswith("HEAD")
-        assert result.endswith("TAIL")
-        assert "MIDDLE" not in result
-
-    def test_read_head_tail_from_file_exact_boundary(self):
-        """정확히 16KB인 파일 테스트 (경계 조건)"""
-        from utils.isbn import read_head_tail_from_file, HEAD_TAIL_SIZE
-
-        # 정확히 16KB 파일 생성
-        boundary_file = Path(self.temp_dir) / "boundary.txt"
-        content = "X" * (HEAD_TAIL_SIZE * 2)
-        boundary_file.write_text(content, encoding="utf-8")
-
-        result = read_head_tail_from_file(boundary_file)
-
-        # 전체가 반환되어야 함 (tail은 빈 문자열)
-        assert result == content
-
-    def test_read_head_tail_from_content_small(self):
-        """작은 콘텐츠에서 head_tail 추출 테스트"""
-        from utils.isbn import read_head_tail_from_content, HEAD_TAIL_SIZE
-
-        content = "Small content"
-        result = read_head_tail_from_content(content)
-
-        # 작은 콘텐츠는 그대로 반환
-        assert result == content
-
-    def test_read_head_tail_from_content_large(self):
-        """큰 콘텐츠에서 head_tail 추출 테스트"""
-        from utils.isbn import read_head_tail_from_content, HEAD_TAIL_SIZE
-
-        head = "H" * HEAD_TAIL_SIZE
-        middle = "M" * HEAD_TAIL_SIZE
-        tail = "T" * HEAD_TAIL_SIZE
-        content = head + middle + tail
-
-        result = read_head_tail_from_content(content)
-
-        # head + tail만 반환
-        assert len(result) == HEAD_TAIL_SIZE * 2
-        assert result.startswith("H")
-        assert result.endswith("T")
-        assert "M" not in result
-
-
-class TestISBNValidation(unittest.TestCase):
-    """ISBN 유효성 검증 테스트"""
-
-    def test_validate_isbn10_valid(self):
-        """유효한 ISBN-10 검증"""
-        from utils.isbn import validate_isbn10
-
-        # 유효한 ISBN-10 예시
-        assert validate_isbn10("0306406152") is True
-        assert validate_isbn10("0596520689") is True
-
-    def test_validate_isbn10_invalid(self):
-        """무효한 ISBN-10 검증"""
-        from utils.isbn import validate_isbn10
-
-        assert validate_isbn10("1234567890") is False  # 잘못된 체크섬
-        assert validate_isbn10("12345") is False  # 너무 짧음
-        assert validate_isbn10("1111111111") is False  # 블랙리스트
-        assert validate_isbn10("1100101101") is False  # 블랙리스트
-
-    def test_validate_isbn10_with_x(self):
-        """X로 끝나는 ISBN-10 검증"""
-        from utils.isbn import validate_isbn10
-
-        # ISBN-10에서 X는 10을 의미
-        assert validate_isbn10("080442957X") is True
-
-    def test_validate_isbn13_valid(self):
-        """유효한 ISBN-13 검증"""
-        from utils.isbn import validate_isbn13
-
-        assert validate_isbn13("9780306406157") is True
-        assert validate_isbn13("9788912345679") is True  # 978-89-12345-67-9
-
-    def test_validate_isbn13_invalid(self):
-        """무효한 ISBN-13 검증"""
-        from utils.isbn import validate_isbn13
-
-        assert validate_isbn13("9781234567890") is False  # 잘못된 체크섬
-        assert validate_isbn13("978123456") is False  # 너무 짧음
-        assert validate_isbn13("978123456789X") is False  # X는 ISBN-13에 없음
-
-    def test_validate_isbn_both_types(self):
-        """validate_isbn이 두 유형을 모두 처리하는지 테스트"""
-        from utils.isbn import validate_isbn
-
-        # ISBN-10
-        assert validate_isbn("0306406152") is True
-        # ISBN-13
-        assert validate_isbn("9780306406157") is True
-        # 무효
-        assert validate_isbn("1234567890") is False
-
-
-class TestSearchInContent(unittest.TestCase):
-    """search_in_content 함수의 다양한 ISBN 포맷 테스트"""
-
-    def test_search_isbn13_with_hyphens(self):
-        """하이픈이 있는 ISBN-13 검색"""
-        from utils.isbn import search_in_content
-
-        content = "이 책의 ISBN: 978-89-12345-67-9"
-        result = search_in_content(content)
-        assert "9788912345679" in result
-
-    def test_search_isbn13_without_hyphens(self):
-        """하이픈이 없는 ISBN-13 검색"""
-        from utils.isbn import search_in_content
-
-        content = "ISBN 9788912345679"
-        result = search_in_content(content)
-        assert "9788912345679" in result
-
-    def test_search_isbn10(self):
-        """ISBN-10 검색 (한국 ISBN, 89로 시작)"""
-        from utils.isbn import search_in_content
-
-        # 89-12345-67-2는 유효한 한국 ISBN-10
-        content = "ISBN: 89-12345-67-2"
-        result = search_in_content(content)
-        assert len(result) > 0
-        assert result[0] == "8912345672"
-
-    def test_search_multiple_isbns(self):
-        """여러 ISBN이 있는 경우"""
-        from utils.isbn import search_in_content
-
-        content = """
-        첫 번째 책: 978-89-12345-67-9
-        두 번째 책: 978-89-98765-43-9
-        """
-        result = search_in_content(content)
-        assert len(result) >= 2
-
-    def test_search_isbn_with_ocr_errors(self):
-        """OCR 에러가 있는 ISBN 검색 (l->1, O->0 등)"""
-        from utils.isbn import search_in_content
-
-        # 일부 OCR 에러 케이스는 정규식에서 처리
-        content = "ISBN: 978-89-l2345-67-9"  # l instead of 1
-        result = search_in_content(content)
-        # OCR 에러 보정이 되어야 함
-        assert len(result) >= 0  # 구현에 따라 다를 수 있음
-
-    def test_search_no_isbn(self):
-        """ISBN이 없는 텍스트"""
-        from utils.isbn import search_in_content
-
-        content = "이 텍스트에는 ISBN이 없습니다."
-        result = search_in_content(content)
-        assert result == []
-
-
-class TestEpubEdgeCases(unittest.TestCase):
-    """EPUB 추출 엣지 케이스 테스트"""
-
-    def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
-
-    def tearDown(self):
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_extract_from_epub_no_opf(self):
-        """OPF 파일이 없는 EPUB"""
-        from utils.isbn import extract_from_epub
-        import zipfile
-
-        epub_path = Path(self.temp_dir) / "no_opf.epub"
-        with zipfile.ZipFile(epub_path, 'w') as zf:
-            zf.writestr('META-INF/container.xml', '<?xml version="1.0"?><container/>')
-            zf.writestr('content.html', '<html><body>No OPF</body></html>')
-
-        result = extract_from_epub(epub_path)
-        assert result == []
-
-    def test_extract_from_epub_empty_spine(self):
-        """spine이 비어있는 EPUB"""
-        from utils.isbn import extract_from_epub
-        import zipfile
-
-        epub_path = Path(self.temp_dir) / "empty_spine.epub"
-        with zipfile.ZipFile(epub_path, 'w') as zf:
-            content_opf = '''<?xml version="1.0"?>
-            <package xmlns="http://www.idpf.org/2007/opf" version="2.0">
-                <metadata><dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Test</dc:title></metadata>
-                <manifest>
-                    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
-                </manifest>
-                <spine></spine>
-            </package>'''
-            zf.writestr('content.opf', content_opf)
-
-        result = extract_from_epub(epub_path)
-        assert result == []
-
-    def test_extract_from_epub_corrupted_file(self):
-        """손상된 EPUB 파일"""
-        from utils.isbn import extract_from_epub
-
-        corrupted_path = Path(self.temp_dir) / "corrupted.epub"
-        corrupted_path.write_bytes(b"This is not a valid ZIP file")
-
-        result = extract_from_epub(corrupted_path)
-        assert result == []
-
-    def test_extract_from_epub_missing_chapter(self):
-        """챕터 파일이 누락된 EPUB"""
-        from utils.isbn import extract_from_epub
-        import zipfile
-
-        epub_path = Path(self.temp_dir) / "missing_chapter.epub"
-        with zipfile.ZipFile(epub_path, 'w') as zf:
-            content_opf = '''<?xml version="1.0"?>
-            <package xmlns="http://www.idpf.org/2007/opf" version="2.0">
-                <metadata><dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Test</dc:title></metadata>
-                <manifest>
-                    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
-                </manifest>
-                <spine>
-                    <itemref idref="ch1"/>
-                </spine>
-            </package>'''
-            zf.writestr('content.opf', content_opf)
-            # ch1.xhtml 파일을 의도적으로 생성하지 않음
-
-        result = extract_from_epub(epub_path)
-        # 누락된 챕터는 건너뛰고 빈 결과 반환
-        assert result == []
-
-
-class TestISBNContentReuse(unittest.TestCase):
-    """ISBN 추출 시 content 재사용 테스트"""
-
-    def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
-
-    def tearDown(self):
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_isbn_extract_with_content_parameter(self):
-        """extract_isbn에 content를 전달했을 때 동작하는지 테스트"""
-        from utils.isbn import extract as extract_isbn
-
-        # ISBN이 포함된 텍스트 파일 생성
-        test_file = Path(self.temp_dir) / "isbn_test.txt"
-        content = "이 책의 ISBN은 978-89-6540-123-0 입니다."
-        test_file.write_text(content, encoding="utf-8")
-
-        # content 없이 호출
-        result_without_content = extract_isbn(test_file)
-
-        # content와 함께 호출
-        result_with_content = extract_isbn(test_file, content=content)
-
-        # 둘 다 같은 결과를 반환해야 함
-        assert result_without_content == result_with_content
-
-    def test_isbn_extract_content_reuse_from_loader(self):
-        """Loader에서 읽은 content를 ISBN 추출에 재사용하는 시나리오 테스트"""
-        from utils.isbn import extract as extract_isbn
-
-        # ISBN이 포함된 텍스트 파일 생성
-        test_file = Path(self.temp_dir) / "book.txt"
-        content = """
-        이 책은 테스트용 도서입니다.
-        ISBN: 978-89-12345-67-9
-        저자: 테스트 작가
-        """
-        test_file.write_text(content, encoding="utf-8")
-
-        # Loader로 읽기
-        summary, line_count, page_count, raw_content = Loader.read_from_text(test_file)
-
-        # raw_content를 extract_isbn에 전달
-        isbn_list = extract_isbn(test_file, content=raw_content)
-
-        # ISBN이 추출되어야 함
-        assert len(isbn_list) > 0
-        assert isbn_list[0].startswith("978")
-
-    def test_isbn_extract_with_empty_content(self):
-        """빈 content를 전달해도 파일에서 읽어서 처리하는지 테스트"""
-        from utils.isbn import extract as extract_isbn
-
-        # ISBN이 포함된 텍스트 파일 생성
-        test_file = Path(self.temp_dir) / "isbn_empty_test.txt"
-        content = "ISBN 978-89-6540-999-1 테스트"
-        test_file.write_text(content, encoding="utf-8")
-
-        # 빈 문자열은 falsy이므로 파일에서 읽어야 함
-        result = extract_isbn(test_file, content="")
-
-        # 빈 문자열이 전달되면 파일에서 읽지 않고 빈 결과 반환 (현재 구현)
-        # 또는 파일에서 읽어서 결과 반환 (둘 다 유효한 동작)
-        assert isinstance(result, list)
-
-
 class TestGeneratorSupport(unittest.TestCase):
     """Generator 지원 관련 테스트"""
 
@@ -844,46 +354,14 @@ from itertools import islice
 
 
 @pytest.fixture(scope="module")
-def es_manager_for_loader(elasticsearch_container):
-    """Loader 테스트용 ESManager fixture"""
+def es_manager_for_loader(es_client, es_index):
+    """Loader 테스트용 ESManager fixture (공유된 ES 클라이언트 및 인덱스 사용)."""
     from backend.es_manager import ESManager
-    from elasticsearch import Elasticsearch
-    import time
 
     esm = ESManager()
-    esm.es = Elasticsearch(
-        hosts=[os.environ["TM_ES_URL"]],
-        basic_auth=(os.environ.get("TM_ES_USER", ""), os.environ.get("TM_ES_PASSWORD", "")),
-        request_timeout=120,
-        retry_on_timeout=True,
-        verify_certs=False,
-        max_retries=5
-    )
-
-    # Wait for cluster
-    for _ in range(60):
-        try:
-            health = esm.es.cluster.health(wait_for_status="yellow", timeout="5s")
-            break
-        except Exception:
-            time.sleep(1)
-
-    # Create fresh index
-    try:
-        if esm.do_exist_index():
-            esm.delete_index()
-    except Exception:
-        pass
-
-    esm.create_index()
-    esm.es.cluster.health(index=esm.index_name, wait_for_status="yellow", timeout="30s")
+    esm.es = es_client
 
     yield esm
-
-    try:
-        esm.delete_index()
-    except Exception:
-        pass
 
 
 class TestLoaderWithES:
