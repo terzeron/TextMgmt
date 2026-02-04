@@ -617,11 +617,11 @@ export default function Edit() {
                                                             <InputGroup>
                                                                 <InputGroup.Text>신규 이름</InputGroup.Text>
                                                                 <Form.Control value={newFileName} onChange={newFileNameChanged}/>
-                                                                <Button variant="outline-success" size="sm" onClick={changeButtonClicked} disabled={!selectedEntryId}>
+                                                                <Button variant="outline-success" size="sm" className="btn-xs" onClick={changeButtonClicked} disabled={!selectedEntryId}>
                                                                     변경
                                                                     <FontAwesomeIcon icon={faCheck}/>
                                                                 </Button>
-                                                                <Button variant="outline-danger" size="sm" onClick={deleteButtonClicked} disabled={!selectedEntryId}>
+                                                                <Button variant="outline-danger" size="sm" className="btn-xs" onClick={deleteButtonClicked} disabled={!selectedEntryId}>
                                                                     삭제
                                                                     <FontAwesomeIcon icon={faTrash}/>
                                                                 </Button>
