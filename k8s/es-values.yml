@@ -1,0 +1,25 @@
+---
+eck-elasticsearch:
+  enabled: true
+  fullnameOverride: elasticsearch
+  version: 9.1.0
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: true
+  nodeSets:
+    - name: default
+      count: 1
+      config:
+        node.store.allow_mmap: false
+      podTemplate:
+        spec:
+          initContainers:
+            - name: install-plugins
+              command: ["sh","-c","bin/elasticsearch-plugin list | grep -q '^analysis-nori$' || bin/elasticsearch-plugin install --batch analysis-nori"]
+          containers:
+            - name: elasticsearch
+              resources:
+                requests: { cpu: "200m", memory: "2Gi" }
+                limits:   { cpu: "1",   memory: "2Gi" }
+
