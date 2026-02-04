@@ -58,13 +58,13 @@ export default function BookInfoView(props) {
                         <Form.Control value={isbn || '-'} readOnly disabled/>
                     </InputGroup>
                 </Col>
-                <Col xs="4">
+                <Col xs="3">
                     <InputGroup size="sm">
                         <InputGroup.Text>크기</InputGroup.Text>
                         <Form.Control value={fileSize.toLocaleString()} readOnly disabled/>
                     </InputGroup>
                 </Col>
-                <Col xs="2">
+                <Col xs="3">
                     <InputGroup size="sm">
                         <InputGroup.Text>분량</InputGroup.Text>
                         <Form.Control
