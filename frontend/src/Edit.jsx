@@ -545,9 +545,14 @@ export default function Edit() {
             const bookId = selectedEntryId.split('/')[1];
             const deleteUrl = '/books/' + bookId;
             console.log(deleteUrl);
-            jsonDeleteReq(deleteUrl, null, () => {
+            jsonDeleteReq(deleteUrl, null, (response) => {
                 const displayDirName = (dirName === '' || dirName === '_root') ? '최상위' : dirName;
-                setSuccessMessage(`"${displayDirName}/${newFileName}"이(가) 삭제되었습니다.`);
+                // warning이 있으면 경고 메시지와 함께 표시
+                if (response?.warning) {
+                    setSuccessMessage(`"${displayDirName}/${newFileName}"이(가) 삭제되었습니다. (경고: ${response.warning})`);
+                } else {
+                    setSuccessMessage(`"${displayDirName}/${newFileName}"이(가) 삭제되었습니다.`);
+                }
                 setErrorMessage('');
 
                 const newFolderData = removeEntryFromFolderData(folderData, dirName, bookId);

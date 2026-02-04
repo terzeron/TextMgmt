@@ -138,12 +138,16 @@ async def update_book(book_id: int, book_item: BookModel) -> Dict[str, Any]:
 async def delete_book(book_id: int) -> Dict[str, Any]:
     LOGGER.debug("# delete_book(book_id=%d)", book_id)
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await book_manager.delete_book(book_id)
-    if error is None:
+    result, message = await book_manager.delete_book(book_id)
+    if result == "Ok":
         response_object["status"] = "success"
         response_object["result"] = result
+    elif result == "Warning":
+        response_object["status"] = "success"
+        response_object["result"] = result
+        response_object["warning"] = message
     else:
-        response_object["error"] = error
+        response_object["error"] = message
     return response_object
 
 
