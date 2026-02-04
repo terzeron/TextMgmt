@@ -15,7 +15,8 @@ import ViewImage from "./ViewImage";
 import {Button, Card} from "react-bootstrap";
 
 export default function ViewSingle(props) {
-    const { entryId, fileType: paramFileType, filePath: paramFilePath } = useParams();
+    // '*' (splat) 파라미터로 슬래시가 포함된 filePath 처리
+    const { entryId, fileType: paramFileType, '*': paramFilePath } = useParams();
     const standalone = Boolean(entryId && paramFileType && paramFilePath);
     const [bookId, setBookId] = useState(0);
     const [filePath, setFilePath] = useState('');
