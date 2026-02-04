@@ -145,15 +145,22 @@ class BookManager:
         if not doc:
             return "Ok", None
 
+        warning_message = None
+
         # delete file
         try:
             book = Book(book_id=book_id, info=doc)
             file_path = self.path_prefix / book.file_path
             file_path.unlink()
+        except FileNotFoundError as e:
+            LOGGER.warning("File already deleted for book_id=%d: %s", book_id, e)
+            warning_message = f"파일이 이미 삭제되었습니다: {e}"
         except IOError as e:
             return "Error", f"can't delete a book with '{book_id}', {e}"
 
         # delete book info from ElasticSearch
         if self.es_manager.delete(book_id):
+            if warning_message:
+                return "Warning", warning_message
             return "Ok", None
         return "Error", f"can't delete book information of '{book_id}' from ElasticSearch"

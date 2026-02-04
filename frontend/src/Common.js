@@ -93,7 +93,12 @@ const apiReq = (url, method, payload, type, resolve, reject, final) => {
                                 data['result']['last_responded_time'] = DateTime.fromISO(data['last_responded_time']).setZone('local').toFormat('MM-dd HH:mm');
                             }
                         }
-                        resolve(data['result']);
+                        // warning 필드가 있으면 함께 전달
+                        if (data['warning']) {
+                            resolve({result: data['result'], warning: data['warning']});
+                        } else {
+                            resolve(data['result']);
+                        }
                     } else {
                         reject(data['error']);
                     }
