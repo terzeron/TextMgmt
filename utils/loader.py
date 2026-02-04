@@ -6,11 +6,12 @@ import os
 import re
 import getopt
 import logging.config
+import warnings
 import zipfile
 from datetime import datetime
 from pathlib import Path
 from itertools import islice
-from typing import Dict, Any, List, Set, Tuple, Optional, Iterable, Iterator
+from typing import Dict, Any, List, Set, Tuple, Optional, Iterable
 
 import ebooklib
 from ebooklib import epub
@@ -89,7 +90,9 @@ class Loader:
                     chapter_path = f"{root_dir}/{chapter_file}" if root_dir else chapter_file
                     try:
                         content = zf.read(chapter_path).decode("utf-8", errors="ignore")
-                        soup = BeautifulSoup(content, "lxml")
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", category=UserWarning, message=".*XML.*HTML.*")
+                            soup = BeautifulSoup(content, "lxml")
                         text = soup.get_text()
                         total_text += text
                         if len(result) < Loader.TEXT_SIZE:
@@ -125,7 +128,9 @@ class Loader:
                         result += " " + creator[0]
 
             for doc in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-                soup = BeautifulSoup(doc.get_body_content(), "lxml")
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=UserWarning, message=".*XML.*HTML.*")
+                    soup = BeautifulSoup(doc.get_body_content(), "lxml")
                 text = soup.get_text()
                 total_text += text
                 if len(result) < Loader.TEXT_SIZE:
@@ -194,7 +199,10 @@ class Loader:
             content = infile.read()
             line_count = content.count('\n') + 1
 
-        soup = BeautifulSoup(content, "lxml")
+        # XMLParsedAsHTMLWarning 억제하고 lxml 파서 사용
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning, message=".*XML.*HTML.*")
+            soup = BeautifulSoup(content, "lxml")
         result = soup.get_text()
         result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
 
