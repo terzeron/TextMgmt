@@ -24,74 +24,13 @@ def inspect_search_result_hierarchy(data: Dict[str, Any]) -> None:
 
 
 @pytest.fixture(scope="module")
-def es_manager_with_data(elasticsearch_container):
-    """Create ESManager with test data loaded."""
+def es_manager_with_data(es_client, es_index):
+    """Create ESManager with test data loaded (공유된 ES 클라이언트 및 인덱스 사용)."""
     from backend.es_manager import ESManager
-    from elasticsearch import BadRequestError, Elasticsearch
-    import time
-    import os
 
-    # Create ESManager with longer timeout for testcontainers
+    # ESManager 생성 및 공유된 클라이언트 사용
     esm = ESManager()
-    # Override ES client with longer timeout
-    esm.es = Elasticsearch(
-        hosts=[os.environ["TM_ES_URL"]],
-        basic_auth=(os.environ.get("TM_ES_USER", ""), os.environ.get("TM_ES_PASSWORD", "")),
-        request_timeout=120,
-        retry_on_timeout=True,
-        verify_certs=False,
-        max_retries=5
-    )
-
-    # Wait for cluster to be ready
-    for _ in range(60):
-        try:
-            health = esm.es.cluster.health(wait_for_status="yellow", timeout="5s")
-            LOGGER.info("Cluster health: %s", health["status"])
-            break
-        except Exception as e:
-            LOGGER.warning("Waiting for cluster: %s", e)
-            time.sleep(1)
-
-    # Delete index if exists, then create fresh
-    try:
-        if esm.do_exist_index():
-            esm.delete_index()
-    except Exception as e:
-        LOGGER.warning("Error deleting index: %s", e)
-
-    # Create index with single-node compatible settings (no replicas)
-    try:
-        settings = {
-            "index": {
-                "similarity": {"default": {"type": "BM25"}},
-                "number_of_shards": 1,
-                "number_of_replicas": 0,  # Important for single-node
-            }
-        }
-        mappings = {
-            "properties": {
-                "category": {"type": "keyword"},
-                "title": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
-                "author": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
-                "file_path": {"type": "keyword"},
-                "file_type": {"type": "keyword"},
-                "file_size": {"type": "unsigned_long"},
-                "summary": {"type": "text", "analyzer": "nori"},
-                "updated_time": {"type": "date"},
-            }
-        }
-        esm.es.indices.create(index=esm.index_name, settings=settings, mappings=mappings)
-        LOGGER.info("Index created: %s", esm.index_name)
-    except BadRequestError as e:
-        # Ignore if index already exists (can happen due to retry timing)
-        if "resource_already_exists_exception" not in str(e):
-            raise
-        LOGGER.info("Index already exists")
-
-    # Wait for index to be ready (polling instead of fixed sleep)
-    esm.es.cluster.health(index=esm.index_name, wait_for_status="yellow", timeout="30s")
-    LOGGER.info("Index %s is ready (yellow status)", esm.index_name)
+    esm.es = es_client
 
     # Insert minimal test data
     test_data = {
@@ -102,6 +41,9 @@ def es_manager_with_data(elasticsearch_container):
             "file_path": "/test/path1.txt",
             "file_type": "txt",
             "file_size": 1000,
+            "line_count": 100,
+            "page_count": 0,
+            "isbn": "",
             "summary": "이것은 테스트 문서입니다. 마법사와 드래곤 이야기.",
             "updated_time": "2024-01-01T00:00:00",
         },
@@ -112,6 +54,9 @@ def es_manager_with_data(elasticsearch_container):
             "file_path": "/test/path2.txt",
             "file_type": "txt",
             "file_size": 2000,
+            "line_count": 200,
+            "page_count": 0,
+            "isbn": "",
             "summary": "두 번째 테스트 문서입니다.",
             "updated_time": "2024-01-02T00:00:00",
         },
@@ -122,43 +67,21 @@ def es_manager_with_data(elasticsearch_container):
             "file_path": "/test/path3.txt",
             "file_type": "txt",
             "file_size": 3000,
+            "line_count": 300,
+            "page_count": 0,
+            "isbn": "",
             "summary": "마법사가 드래곤을 만나는 이야기입니다.",
             "updated_time": "2024-01-03T00:00:00",
         },
     }
     try:
         esm.insert(test_data)
+        esm.refresh()
         LOGGER.info("Test data inserted: %d docs", len(test_data))
     except Exception as e:
         LOGGER.warning("Failed to insert test data: %s", e)
 
-    # Refresh and wait for data to be searchable (polling instead of fixed sleep)
-    try:
-        esm.es.indices.refresh(index=esm.index_name)
-    except Exception as e:
-        LOGGER.warning("Failed to refresh index: %s", e)
-
-    # Verify documents are searchable by polling count
-    expected_count = len(test_data)
-    for attempt in range(30):
-        try:
-            count = esm.es.count(index=esm.index_name)["count"]
-            if count >= expected_count:
-                LOGGER.info("Documents ready: %d/%d", count, expected_count)
-                break
-            LOGGER.debug("Waiting for documents: %d/%d (attempt %d)", count, expected_count, attempt)
-        except Exception as e:
-            LOGGER.warning("Count failed (attempt %d): %s", attempt, e)
-        time.sleep(0.2)  # Short polling interval
-    else:
-        LOGGER.warning("Timeout waiting for documents to be searchable")
-
     yield esm
-
-    try:
-        esm.delete_index()
-    except Exception:
-        pass
 
 
 class TestESManager:

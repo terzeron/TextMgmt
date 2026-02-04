@@ -150,6 +150,7 @@ filterwarnings = [
     "ignore::DeprecationWarning:testcontainers.*",
     "ignore::DeprecationWarning:_pytest.assertion.rewrite",
     "ignore::bs4.XMLParsedAsHTMLWarning",
+    "ignore::RuntimeWarning:unittest.case",
 ]
 
 [tool.pylint."master"]

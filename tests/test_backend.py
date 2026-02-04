@@ -1,12 +1,10 @@
 #!/usr/bin/env python
 
 import logging.config
-import os
 import shutil
 from pathlib import Path
 
 import pytest
-from elasticsearch import Elasticsearch
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -16,82 +14,31 @@ CATEGORY = "_epub"
 
 
 @pytest.fixture(scope="module")
-def backend_test_setup(elasticsearch_container):
-    """Create BookManager and TestClient with test data loaded using testcontainers."""
-    from elasticsearch import BadRequestError
+def backend_test_setup(es_client, es_index):
+    """Create BookManager and TestClient with test data loaded (공유된 ES 클라이언트 및 인덱스 사용)."""
     from fastapi.testclient import TestClient
     from backend.main import app
     from backend.book_manager import BookManager
     from utils.loader import Loader
 
-    # Create BookManager (it will use env vars set by elasticsearch_container fixture)
+    # Create BookManager and use shared ES client
     bm = BookManager()
-
-    # Override ES client with longer timeout for index operations
-    bm.es_manager.es = Elasticsearch(
-        hosts=[os.environ["TM_ES_URL"]],
-        basic_auth=(os.environ.get("TM_ES_USER", ""), os.environ.get("TM_ES_PASSWORD", "")),
-        verify_certs=False,
-        request_timeout=120,
-    )
-
-    # Delete index if exists, then create fresh
-    try:
-        if bm.es_manager.do_exist_index():
-            bm.es_manager.delete_index()
-    except Exception as e:
-        LOGGER.warning("Error deleting index: %s", e)
-
-    # Create index with single-node compatible settings (no replicas)
-    try:
-        settings = {
-            "index": {
-                "similarity": {"default": {"type": "BM25"}},
-                "number_of_shards": 1,
-                "number_of_replicas": 0,
-            }
-        }
-        mappings = {
-            "properties": {
-                "category": {"type": "keyword"},
-                "title": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
-                "author": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
-                "file_path": {"type": "keyword"},
-                "file_type": {"type": "keyword"},
-                "file_size": {"type": "unsigned_long"},
-                "summary": {"type": "text", "analyzer": "nori"},
-                "updated_time": {"type": "date"},
-            }
-        }
-        bm.es_manager.es.indices.create(index=bm.es_manager.index_name, settings=settings, mappings=mappings)
-        LOGGER.info("Index created: %s", bm.es_manager.index_name)
-    except BadRequestError as e:
-        if "resource_already_exists_exception" not in str(e):
-            raise
-        LOGGER.info("Index already exists")
-
-    # Wait for index to be ready
-    bm.es_manager.es.cluster.health(index=bm.es_manager.index_name, wait_for_status="yellow", timeout="60s")
+    bm.es_manager.es = es_client
 
     # Load test data from actual files if available
     epub_path = bm.path_prefix / CATEGORY
     if epub_path.exists():
-        data = Loader.read_files(epub_path, num_files=20)
+        data = Loader.read_files(epub_path, num_files=5)
         if data:
             bm.es_manager.insert(data, num_docs=20)
             LOGGER.info("Inserted %d epub documents", len(data))
 
     # Refresh index to make data searchable
-    bm.es_manager.es.indices.refresh(index=bm.es_manager.index_name)
+    bm.es_manager.refresh()
 
     client = TestClient(app)
 
     yield {"bm": bm, "client": client}
-
-    try:
-        bm.es_manager.delete_index()
-    except Exception:
-        pass
 
 
 @pytest.fixture

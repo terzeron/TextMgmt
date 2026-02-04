@@ -260,16 +260,17 @@ def analyze_test_dependencies() -> list[Path]:
 def get_test_methods(test_file: Path) -> list[str]:
     """Extract all test methods from a test file"""
     result = subprocess.run([
-        sys.executable, "-m", "pytest", str(test_file), "--collect-only"
+        sys.executable, "-m", "pytest", str(test_file), "--collect-only", "-q"
     ], capture_output=True, text=True, check=False)
-    
+
     # 모든 테스트 메서드 수집 (Test*::test_* 패턴)
+    # -q 옵션 사용 시 "tests/test_xxx.py::TestClass::test_method" 형식으로 출력됨
     test_methods = []
     for line in result.stdout.splitlines():
         line = line.strip()
-        if line and "::test_" in line:
+        if line and "::test_" in line and line.endswith(")") is False:
             test_methods.append(line)
-    
+
     return test_methods
 
 

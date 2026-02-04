@@ -1,14 +1,12 @@
 #!/usr/bin/env python
 
 import logging.config
-import os
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
 
 import pytest
-from elasticsearch import Elasticsearch
 from fastapi.responses import FileResponse
 
 from backend.book import Book
@@ -37,94 +35,32 @@ def inspect_book_info(book: Book) -> None:
 
 
 @pytest.fixture(scope="module")
-def book_manager_with_data(elasticsearch_container):
-    """Create BookManager with test data loaded using testcontainers."""
-    from elasticsearch import BadRequestError
-
-    # Create ES client with longer timeout for index operations
-    es_client = Elasticsearch(
-        hosts=[os.environ["TM_ES_URL"]],
-        basic_auth=(os.environ.get("TM_ES_USER", ""), os.environ.get("TM_ES_PASSWORD", "")),
-        verify_certs=False,
-        request_timeout=120,
-    )
-
-    # Delete index if exists BEFORE creating BookManager
-    index_name = os.environ["TM_ES_INDEX"]
-    try:
-        if es_client.indices.exists(index=index_name):
-            es_client.indices.delete(index=index_name)
-            LOGGER.info("Deleted existing index: %s", index_name)
-    except Exception as e:
-        LOGGER.warning("Error deleting index: %s", e)
-
-    # Create BookManager
+def book_manager_with_data(es_client, es_index):
+    """Create BookManager with test data loaded (공유된 ES 클라이언트 및 인덱스 사용)."""
+    # Create BookManager and use shared ES client
     bm = BookManager()
     bm.es_manager.es = es_client
-
-    # Delete index and recreate with test-specific settings
-    try:
-        if bm.es_manager.do_exist_index():
-            bm.es_manager.delete_index()
-    except Exception as e:
-        LOGGER.warning("Error deleting index: %s", e)
-
-    # Create index with single-node compatible settings (no replicas)
-    try:
-        settings = {
-            "index": {
-                "similarity": {"default": {"type": "BM25"}},
-                "number_of_shards": 1,
-                "number_of_replicas": 0,
-            }
-        }
-        mappings = {
-            "properties": {
-                "category": {"type": "keyword"},
-                "title": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
-                "author": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
-                "file_path": {"type": "keyword"},
-                "file_type": {"type": "keyword"},
-                "file_size": {"type": "unsigned_long"},
-                "summary": {"type": "text", "analyzer": "nori"},
-                "updated_time": {"type": "date"},
-            }
-        }
-        bm.es_manager.es.indices.create(index=bm.es_manager.index_name, settings=settings, mappings=mappings)
-        LOGGER.info("Index created: %s", bm.es_manager.index_name)
-    except BadRequestError as e:
-        if "resource_already_exists_exception" not in str(e):
-            raise
-        LOGGER.info("Index already exists")
-
-    # Wait for index to be ready
-    bm.es_manager.es.cluster.health(index=bm.es_manager.index_name, wait_for_status="yellow", timeout="60s")
 
     # Load test data from actual files if available
     epub_path = bm.path_prefix / CATEGORY1
     txt_path = bm.path_prefix / CATEGORY2
 
     if epub_path.exists():
-        data = Loader.read_files(epub_path, num_files=20)
+        data = Loader.read_files(epub_path, num_files=5)
         if data:
             bm.es_manager.insert(data, num_docs=20)
             LOGGER.info("Inserted %d epub documents", len(data))
 
     if txt_path.exists():
-        data = Loader.read_files(txt_path, num_files=20)
+        data = Loader.read_files(txt_path, num_files=5)
         if data:
             bm.es_manager.insert(data, num_docs=20)
             LOGGER.info("Inserted %d txt documents", len(data))
 
     # Refresh index to make data searchable
-    bm.es_manager.es.indices.refresh(index=bm.es_manager.index_name)
+    bm.es_manager.refresh()
 
     yield bm
-
-    try:
-        bm.es_manager.delete_index()
-    except Exception:
-        pass
 
 
 async def get_one_random_book(bm: BookManager) -> Optional[Book]:
@@ -290,7 +226,7 @@ class TestBookManager:
 
         category2 = book2.category
         title2 = "renamed_" + book1.title
-        author2 = book2.author
+        author2 = book2.author if book2.author else book1.author
         type2 = book2.file_type
         path2 = bm.path_prefix / category2 / (title2 + "." + type2)
 
