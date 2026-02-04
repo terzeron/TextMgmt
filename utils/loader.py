@@ -340,13 +340,13 @@ class Loader:
             else:
                 file_path_list = []
                 # 1. 하위 디렉토리 각각에서 첫 번째 파일 1개씩
-                for subdir in sorted(path.iterdir()):
+                for subdir in path.iterdir():
                     if subdir.is_dir():
-                        subdir_files = sorted([p for p in subdir.iterdir() if p.is_file()])
-                        if subdir_files:
-                            file_path_list.append(subdir_files[0])
+                        first_file = next((p for p in subdir.iterdir() if p.is_file()), None)
+                        if first_file:
+                            file_path_list.append(first_file)
                 # 2. 지정된 디렉토리에 바로 속한 파일들
-                file_path_list.extend(sorted([p for p in path.iterdir() if p.is_file()]))
+                file_path_list.extend(p for p in path.iterdir() if p.is_file())
         else:
             file_path_list = [path]
         return file_path_list[:num_files]
@@ -518,11 +518,12 @@ def main() -> int:
             # 1단계: 하위 디렉토리 각각에서 첫 번째 파일 1개씩 (모아서 한꺼번에 저장)
             print("  [1단계] 하위 디렉토리별 샘플 파일 등록")
             sample_files: List[Tuple[str, Path]] = []  # (subdir_name, file_path)
-            for subdir in sorted(target_path.iterdir()):
+            for subdir in target_path.iterdir():
                 if subdir.is_dir():
-                    subdir_files = sorted([p for p in subdir.iterdir() if p.is_file()])
-                    if subdir_files:
-                        sample_files.append((subdir.name, subdir_files[0]))
+                    # 첫 번째 파일만 가져옴 (정렬 불필요, iterator 사용)
+                    first_file = next((p for p in subdir.iterdir() if p.is_file()), None)
+                    if first_file:
+                        sample_files.append((subdir.name, first_file))
                     else:
                         print(f"    {subdir.name}/ -> (파일 없음)")
 
@@ -538,7 +539,7 @@ def main() -> int:
 
             # 2단계: 지정된 디렉토리에 바로 속한 파일들
             print("  [2단계] 현재 디렉토리 파일 등록")
-            current_dir_files = sorted([p for p in target_path.iterdir() if p.is_file()])
+            current_dir_files = [p for p in target_path.iterdir() if p.is_file()]
             print(f"    {len(current_dir_files)}개 파일 발견")
             _, skipped2 = process_file_iter(current_dir_files, skip_check=skip_check)
             if skipped2 > 0:
