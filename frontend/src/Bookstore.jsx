@@ -182,9 +182,10 @@ export default function Bookstore(props) {
       <div>
         {/* 검색 버튼들 */}
         <div className="p-2 border-bottom">
-          <ButtonGroup size="sm">
+          <ButtonGroup>
             <Button
               variant={isbn && storeInfo?.supportsIsbn ? "outline-primary" : "outline-secondary"}
+              className="btn-xs"
               onClick={() => fetchWithMethod(storeKey, 'isbn')}
               disabled={result?.loading || !isbn || !storeInfo?.supportsIsbn}
               title={!isbn ? "ISBN 정보 없음" : (!storeInfo?.supportsIsbn ? "이 서점은 ISBN 검색 미지원" : "")}
@@ -193,6 +194,7 @@ export default function Bookstore(props) {
             </Button>
             <Button
               variant={(title || author) ? "outline-primary" : "outline-secondary"}
+              className="btn-xs"
               onClick={() => fetchWithMethod(storeKey, 'title_author')}
               disabled={result?.loading || (!title && !author)}
             >
@@ -201,7 +203,7 @@ export default function Bookstore(props) {
           </ButtonGroup>
           {result?.search_url && (
             <a href={result.search_url} target="_blank" rel="noreferrer" className="ms-2">
-              <Button variant="outline-secondary" size="sm">서점에서 보기</Button>
+              <Button variant="outline-secondary" className="btn-xs">서점에서 보기</Button>
             </a>
           )}
         </div>
