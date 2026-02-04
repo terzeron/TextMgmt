@@ -32,7 +32,81 @@ export default function Bookstore(props) {
     setActiveKey(STORES[0].key);
   }, [props.bookInfo]);
 
-  // 특정 검색 방법으로 검색 수행
+  // Yes24 자동 검색: ISBN → 저자+제목 → 제목 순으로 시도
+  useEffect(() => {
+    const autoSearchYes24 = async () => {
+      const currentIsbn = props.bookInfo.isbn || '';
+      const currentTitle = props.bookInfo.title || '';
+      const currentAuthor = props.bookInfo.author || '';
+
+      if (!currentIsbn && !currentTitle && !currentAuthor) return;
+
+      // 1. ISBN 검색 시도 (ISBN이 있는 경우)
+      if (currentIsbn) {
+        const result = await fetchWithMethodInternal('yes24', 'isbn', currentIsbn, currentTitle, currentAuthor);
+        if (result?.status === 'success' && result?.result?.length > 0) {
+          return; // 결과가 있으면 종료
+        }
+      }
+
+      // 2. 저자+제목 검색 시도
+      if (currentTitle || currentAuthor) {
+        const result = await fetchWithMethodInternal('yes24', 'title_author', currentIsbn, currentTitle, currentAuthor);
+        if (result?.status === 'success' && result?.result?.length > 0) {
+          return; // 결과가 있으면 종료
+        }
+      }
+
+      // 3. 제목만으로 검색 시도 (저자+제목으로 결과가 없는 경우)
+      if (currentTitle) {
+        await fetchWithMethodInternal('yes24', 'title_only', currentIsbn, currentTitle, currentAuthor);
+      }
+    };
+
+    autoSearchYes24();
+  }, [props.bookInfo]);
+
+  // 내부 검색 함수 (자동 검색용, 결과 반환)
+  const fetchWithMethodInternal = async (store, method, isbnVal, titleVal, authorVal) => {
+    setData(prev => ({ ...prev, [store]: { loading: true } }));
+
+    try {
+      const params = new URLSearchParams();
+
+      switch (method) {
+        case 'isbn':
+          if (isbnVal) params.append('isbn', isbnVal);
+          break;
+        case 'title_author':
+          if (titleVal) params.append('title', titleVal);
+          if (authorVal) params.append('author', authorVal);
+          break;
+        case 'title_only':
+          if (titleVal) params.append('title', titleVal);
+          break;
+        default:
+          if (isbnVal) params.append('isbn', isbnVal);
+          if (titleVal) params.append('title', titleVal);
+          if (authorVal) params.append('author', authorVal);
+      }
+
+      if (params.toString() === '') {
+        setData(prev => ({ ...prev, [store]: { error: true, message: '검색어가 없습니다.' } }));
+        return null;
+      }
+
+      const res = await fetch(`${getApiUrlPrefix()}/search/bookstore/${store}?${params.toString()}`);
+      const json = await res.json();
+      setData(prev => ({ ...prev, [store]: json }));
+      return json;
+    } catch (e) {
+      console.error(e);
+      setData(prev => ({ ...prev, [store]: { error: true, message: '검색 중 오류가 발생했습니다.' } }));
+      return null;
+    }
+  };
+
+  // 특정 검색 방법으로 검색 수행 (버튼 클릭용)
   const fetchWithMethod = async (store, method) => {
     const storeInfo = STORES.find(s => s.key === store);
 
