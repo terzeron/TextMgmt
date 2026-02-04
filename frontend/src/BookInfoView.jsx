@@ -98,13 +98,13 @@ export default function BookInfoView(props) {
                                 }
                             }}
                         />
-                        <Button variant="outline-secondary" size="sm" className="btn-xs" onClick={(e) => {
+                        <Button variant="outline-secondary" className="btn-xs" onClick={(e) => {
                             props.onCutAuthorButtonClick(e)
                         }}>
                             분할
                             <FontAwesomeIcon icon={faCut}/>
                         </Button>
-                        <Button variant="outline-secondary" size="sm" className="btn-xs" onClick={props.onExchangeButtonClick}>
+                        <Button variant="outline-secondary" className="btn-xs" onClick={props.onExchangeButtonClick}>
                             교환
                             <FontAwesomeIcon icon={faRotate}/>
                         </Button>
@@ -134,13 +134,13 @@ export default function BookInfoView(props) {
                                 }
                             }}
                         />
-                        <Button variant="outline-secondary" size="sm" className="btn-xs" onClick={(e) => {
+                        <Button variant="outline-secondary" className="btn-xs" onClick={(e) => {
                             props.onCutTitleButtonClick(e)
                         }}>
                             분할
                             <FontAwesomeIcon icon={faCut}/>
                         </Button>
-                        <Button variant="outline-secondary" size="sm" className="btn-xs" onClick={(e) => {
+                        <Button variant="outline-secondary" className="btn-xs" onClick={(e) => {
                             props.onResetButtonClick(e)
                         }}>
                             복원

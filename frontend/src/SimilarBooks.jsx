@@ -35,14 +35,14 @@ export default function SimilarBooks({bookId, onSelect}) {
                                 </span>
                                 <div>
                                     <Button
-                                        variant="outline-warning" size="sm"
+                                        variant="outline-warning" className="btn-xs"
                                         onClick={() => window.open(`/edit/${book.category}/${book.book_id}`, '_blank', 'noopener')}
                                         style={{marginRight: '4px'}}
                                     >
                                         편집
                                     </Button>
                                     <Button
-                                        variant="outline-primary" size="sm"
+                                        variant="outline-primary" className="btn-xs"
                                         onClick={() => window.open(`/view/${book.category}/${book.book_id}`, '_blank', 'noopener')}
                                         style={{marginRight: '4px'}}
                                     >

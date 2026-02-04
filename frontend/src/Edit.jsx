@@ -498,6 +498,11 @@ export default function Edit() {
                 let newFolderData = removeEntryFromFolderData(folderData, dirName, fileName);
                 newFolderData = appendEntryToFolderData(newFolderData, newDirName, newFileName);
                 setFolderData(newFolderData);
+
+                // 디렉토리 이동인 경우 다음 책으로 이동
+                if (dirName !== newDirName && nextEntryId) {
+                    entryClicked(nextEntryId);
+                }
             }, (error) => {
                 setErrorMessage(`책 이름 변경에 실패했습니다. ${error}`);
             });
@@ -505,7 +510,7 @@ export default function Edit() {
             const displayNewDirName = (newDirName === '' || newDirName === '_root') ? '최상위' : newDirName;
             setErrorMessage(`"${displayNewDirName}" 디렉토리에 "${newFileName}"이(가) 이미 존재합니다.`);
         }
-    }, [bookInfo, folderData, checkEntryExistence, appendEntryToFolderData, removeEntryFromFolderData]);
+    }, [bookInfo, folderData, checkEntryExistence, appendEntryToFolderData, removeEntryFromFolderData, nextEntryId, entryClicked]);
 
     const changeButtonClicked = useCallback(() => {
         console.log(`changeButtonClicked: selectedEntryId=${selectedEntryId}, newFileName=${newFileName}`);
@@ -617,11 +622,11 @@ export default function Edit() {
                                                             <InputGroup>
                                                                 <InputGroup.Text>신규 이름</InputGroup.Text>
                                                                 <Form.Control value={newFileName} onChange={newFileNameChanged}/>
-                                                                <Button variant="outline-success" size="sm" className="btn-xs" onClick={changeButtonClicked} disabled={!selectedEntryId}>
+                                                                <Button variant="outline-success" className="btn-xs" onClick={changeButtonClicked} disabled={!selectedEntryId}>
                                                                     변경
                                                                     <FontAwesomeIcon icon={faCheck}/>
                                                                 </Button>
-                                                                <Button variant="outline-danger" size="sm" className="btn-xs" onClick={deleteButtonClicked} disabled={!selectedEntryId}>
+                                                                <Button variant="outline-danger" className="btn-xs" onClick={deleteButtonClicked} disabled={!selectedEntryId}>
                                                                     삭제
                                                                     <FontAwesomeIcon icon={faTrash}/>
                                                                 </Button>
