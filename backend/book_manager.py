@@ -83,11 +83,13 @@ class BookManager:
     async def get_book_content(self, book_id: int) -> Union[str, FileResponse]:
         LOGGER.debug("# get_book_content(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
+        if not doc:
+            return ""
         book = Book(book_id=book_id, info=doc)
-        file_path = self.path_prefix / book.file_path
-        if file_path.is_file():
-            media_type = BookManager.MEDIA_TYPES.get(file_path.suffix, "application/octet-stream")
-            return FileResponse(path=file_path, media_type=media_type)
+        # book.file_path는 이미 path_prefix가 포함된 전체 경로
+        if book.file_path.is_file():
+            media_type = BookManager.MEDIA_TYPES.get(book.file_path.suffix, "application/octet-stream")
+            return FileResponse(path=book.file_path, media_type=media_type)
         return ""
 
     async def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> Tuple[List[Book], Optional[str]]:
