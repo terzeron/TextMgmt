@@ -635,11 +635,6 @@ export default function Edit() {
                                                         </Col>
                                                     </Row>
 
-                                                    <Row className="button_group">
-                                                        <Col>
-                                                            <Bookstore bookInfo={bookInfo}/>
-                                                        </Col>
-                                                    </Row>
                                                 </Card.Body>
                                             }
                                         </Suspense>
@@ -664,6 +659,7 @@ export default function Edit() {
 
                                 <Col id="right_panel" md="6" lg="7" className="ps-0 pe-0">
                                     <SimilarBooks bookId={bookInfo['book_id']} onSelect={entryClicked}/>
+                                    <Bookstore bookInfo={bookInfo}/>
                                 </Col>
                             </Row>
 
