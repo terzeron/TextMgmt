@@ -46,32 +46,29 @@ export default function BookInfoView(props) {
             </Row>
 
             <Row>
-                <Col xs="4">
-                    <InputGroup>
+                <Col xs="2">
+                    <InputGroup size="sm">
                         <InputGroup.Text>종류</InputGroup.Text>
                         <Form.Control value={fileType} readOnly disabled/>
                     </InputGroup>
                 </Col>
-                <Col xs="8">
-                    <InputGroup>
+                <Col xs="4">
+                    <InputGroup size="sm">
                         <InputGroup.Text>ISBN</InputGroup.Text>
                         <Form.Control value={isbn || '-'} readOnly disabled/>
                     </InputGroup>
                 </Col>
-            </Row>
-
-            <Row>
-                <Col xs="6">
-                    <InputGroup>
+                <Col xs="4">
+                    <InputGroup size="sm">
                         <InputGroup.Text>크기</InputGroup.Text>
                         <Form.Control value={fileSize.toLocaleString()} readOnly disabled/>
                     </InputGroup>
                 </Col>
-                <Col xs="6">
-                    <InputGroup>
+                <Col xs="2">
+                    <InputGroup size="sm">
                         <InputGroup.Text>분량</InputGroup.Text>
                         <Form.Control
-                            value={pageCount > 0 ? `${pageCount.toLocaleString()}페이지` : (lineCount > 0 ? `${lineCount.toLocaleString()}행` : '-')}
+                            value={pageCount > 0 ? `${pageCount.toLocaleString()}쪽` : (lineCount > 0 ? `${lineCount.toLocaleString()}행` : '-')}
                             readOnly
                             disabled
                         />
