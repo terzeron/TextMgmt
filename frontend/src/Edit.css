@@ -7,6 +7,11 @@
     font-size: small;
 }
 
+#edit .btn-xs {
+    padding: 0.05rem 0.15rem;
+    font-size: 0.6rem;
+}
+
 #edit .directory-menu {
     height: calc(100vh - 80px);
     overflow-y: auto;
