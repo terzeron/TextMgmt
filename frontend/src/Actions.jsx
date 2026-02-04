@@ -33,7 +33,7 @@ export default function Actions(props) {
                 <Button variant="outline-success" size="sm" onClick={props.toNextEntryClicked}>다음 책으로</Button>
                 {
                     !props.selectedEntryId.startsWith(ROOT_DIRECTORY) > 0 &&
-                    <Button variant="outline-warning" size="sm" onClick={props.moveToUpperButtonClicked} disabled={!props.newFileName}>
+                    <Button variant="outline-warning" size="sm" className="btn-xs" onClick={props.moveToUpperButtonClicked} disabled={!props.newFileName}>
                         상위로
                         <FontAwesomeIcon icon={faUpload}/>
                     </Button>
@@ -60,7 +60,7 @@ export default function Actions(props) {
             <Row>
                 <InputGroup className="ms-0 me-0">
                     <Form.Control value={props.selectedCategory} readOnly/>
-                    <Button variant="outline-warning" size="sm" onClick={props.moveToDirectoryButtonClicked
+                    <Button variant="outline-warning" size="sm" className="btn-xs" onClick={props.moveToDirectoryButtonClicked
                     } disabled={!props.selectedEntryId && !props.selectedCategory}>
                         로 옮기기
                         <FontAwesomeIcon icon={faTruckMoving}/>
