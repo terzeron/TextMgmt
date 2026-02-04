@@ -1,5 +1,5 @@
 import {useEffect, useState} from "react";
-import {useParams} from "react-router-dom";
+import {useParams, useSearchParams} from "react-router-dom";
 import PropTypes from 'prop-types';
 
 import './ViewSingle.css';
@@ -15,9 +15,11 @@ import ViewImage from "./ViewImage";
 import {Button, Card} from "react-bootstrap";
 
 export default function ViewSingle(props) {
-    // '*' (splat) 파라미터로 슬래시가 포함된 filePath 처리
-    const { entryId, fileType: paramFileType, '*': paramFilePath } = useParams();
-    const standalone = Boolean(entryId && paramFileType && paramFilePath);
+    // URL 파라미터와 쿼리 파라미터에서 값 추출
+    const { entryId, fileType: paramFileType } = useParams();
+    const [searchParams] = useSearchParams();
+    const paramFilePath = searchParams.get('path') || '';
+    const standalone = Boolean(entryId && paramFileType);
     const [bookId, setBookId] = useState(0);
     const [filePath, setFilePath] = useState('');
     const [fileType, setFileType] = useState('');

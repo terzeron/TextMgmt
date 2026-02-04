@@ -13,8 +13,8 @@ export default function App() {
         <>
             <Routes>
                 {/* Standalone full-screen viewer without Navigation */}
-                {/* filePath에 슬래시가 포함될 수 있으므로 * (splat) 파라미터 사용 */}
-                <Route path="/view/:fileType/:entryId/*" element={<ViewSingle/>} errorElement={<ErrorPage/>}/>
+                {/* filePath는 쿼리 파라미터(?path=...)로 전달됨 */}
+                <Route path="/view/:fileType/:entryId" element={<ViewSingle/>} errorElement={<ErrorPage/>}/>
                 {/* `/edit/:category/:bookId` is nested under Navigation to provide search context */}
                 {/* Main app with Navigation bar */}
                 <Route path="/" element={<Navigation/>} errorElement={<ErrorPage/>}>

@@ -258,7 +258,7 @@ export default function Edit() {
             setOriginalBookInfo(book);
             const newBook = decomposeTitle(book);
             setBookInfo(newBook);
-            setViewUrl('/view/' + book['file_type'] + '/' + bookId + '/' + encodeURIComponent(book['file_path']));
+            setViewUrl('/view/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
             setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
             const otherCategoryList = categoryList
                 .sort((a, b) => a.localeCompare(b))
@@ -279,7 +279,7 @@ export default function Edit() {
                     // decompose file name to (author, title, extension)
                     const newBook = decomposeTitle(book);
                     setBookInfo(newBook);
-                    setViewUrl('/view/' + book['file_type'] + '/' + bookId + '/' + encodeURIComponent(book['file_path']));
+                    setViewUrl('/view/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
                     setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
 
                     // determine other category list
