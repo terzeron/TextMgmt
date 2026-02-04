@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState, Suspense} from "react";
+import {useEffect, useRef, useState, useCallback} from "react";
 import PropTypes from "prop-types";
 import {getApiUrlPrefix} from "./Common";
 import * as pdfjs from "pdfjs-dist";
@@ -7,75 +7,99 @@ import * as pdfjs from "pdfjs-dist";
 pdfjs.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
 
 export default function ViewPDF({bookId, pageCount = 0}) {
-    const [url, setUrl] = useState("");
-    const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(null);
     const [totalPages, setTotalPages] = useState(0);
-    const [renderedPages, setRenderedPages] = useState([]);
+    const [loadedPages, setLoadedPages] = useState(0);
+    const [isFirstPageReady, setIsFirstPageReady] = useState(false);
     const containerRef = useRef(null);
+    const pdfRef = useRef(null);
+    const canvasRefs = useRef({});
+
+    // 개별 페이지 렌더링 함수
+    const renderPage = useCallback(async (pdf, pageNum) => {
+        try {
+            const page = await pdf.getPage(pageNum);
+            const viewport = page.getViewport({scale: 1.2}); // scale 약간 낮춤
+
+            const canvas = canvasRefs.current[pageNum];
+            if (!canvas) return;
+
+            const context = canvas.getContext("2d");
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+
+            await page.render({
+                canvasContext: context,
+                viewport: viewport,
+            }).promise;
+
+            setLoadedPages(prev => prev + 1);
+
+            // 첫 페이지가 렌더링되면 즉시 표시
+            if (pageNum === 1) {
+                setIsFirstPageReady(true);
+            }
+        } catch (err) {
+            console.error(`페이지 ${pageNum} 렌더링 실패:`, err);
+        }
+    }, []);
 
     useEffect(() => {
         if (!bookId) {
             setError("❌ 유효한 bookId가 제공되지 않았습니다.");
-            setIsLoading(false);
             return;
         }
-        const pdfUrl = getApiUrlPrefix() + "/download/" + bookId;
-        setUrl(pdfUrl);
-    }, [bookId]);
-
-    useEffect(() => {
-        if (!url) return;
 
         const loadPdf = async () => {
-            setIsLoading(true);
             setError(null);
-            setRenderedPages([]);
+            setTotalPages(0);
+            setLoadedPages(0);
+            setIsFirstPageReady(false);
+            canvasRefs.current = {};
 
             try {
-                const loadingTask = pdfjs.getDocument(url);
+                const pdfUrl = getApiUrlPrefix() + "/download/" + bookId;
+                const loadingTask = pdfjs.getDocument(pdfUrl);
                 const pdf = await loadingTask.promise;
-                setTotalPages(pdf.numPages);
+                pdfRef.current = pdf;
 
-                // pageCount가 0이면 전체 페이지, 아니면 제한된 페이지
                 const pagesToRender = pageCount > 0 ? Math.min(pdf.numPages, pageCount) : pdf.numPages;
-                const pageDataArray = [];
+                setTotalPages(pagesToRender);
 
-                for (let i = 1; i <= pagesToRender; i++) {
-                    const page = await pdf.getPage(i);
-                    const viewport = page.getViewport({scale: 1.5});
+                // 첫 페이지 우선 렌더링
+                await renderPage(pdf, 1);
 
-                    const canvas = document.createElement("canvas");
-                    const context = canvas.getContext("2d");
-                    canvas.width = viewport.width;
-                    canvas.height = viewport.height;
-
-                    const renderTask = page.render({
-                        canvasContext: context,
-                        viewport: viewport,
-                    });
-                    await renderTask.promise;
-
-                    pageDataArray.push({
-                        pageNum: i,
-                        dataUrl: canvas.toDataURL(),
-                        width: viewport.width,
-                        height: viewport.height,
-                    });
+                // 나머지 페이지 병렬 렌더링 (2페이지씩 배치 처리)
+                const batchSize = 2;
+                for (let i = 2; i <= pagesToRender; i += batchSize) {
+                    const batch = [];
+                    for (let j = i; j < i + batchSize && j <= pagesToRender; j++) {
+                        batch.push(renderPage(pdf, j));
+                    }
+                    await Promise.all(batch);
                 }
-
-                setRenderedPages(pageDataArray);
-                setError(null);
             } catch (err) {
                 console.error("PDF 로드 실패:", err);
                 setError("❌ PDF 파일을 정상적으로 렌더링하지 못했습니다. 파일이 존재하지 않거나 올바르지 않은 형식일 수 있습니다.");
-            } finally {
-                setIsLoading(false);
             }
         };
 
         loadPdf();
-    }, [url, pageCount]);
+
+        return () => {
+            if (pdfRef.current) {
+                pdfRef.current.destroy();
+                pdfRef.current = null;
+            }
+        };
+    }, [bookId, pageCount, renderPage]);
+
+    // 캔버스 ref 설정 함수
+    const setCanvasRef = useCallback((pageNum) => (el) => {
+        if (el) {
+            canvasRefs.current[pageNum] = el;
+        }
+    }, []);
 
     if (error) {
         return (
@@ -86,39 +110,41 @@ export default function ViewPDF({bookId, pageCount = 0}) {
         );
     }
 
-    if (isLoading) {
+    // 첫 페이지도 준비 안 됨 - 로딩 표시
+    if (!isFirstPageReady && totalPages === 0) {
         return (
             <div className="pdf-container">
                 <div className="loading-container">
                     <div className="spinner"></div>
-                    <span className="blinking">로딩 중...</span>
+                    <span className="blinking">PDF 로딩 중...</span>
                 </div>
                 <style>{pdfStyles}</style>
             </div>
         );
     }
 
+    // 페이지 번호 배열 생성
+    const pageNumbers = Array.from({length: totalPages}, (_, i) => i + 1);
+
     return (
         <div className="pdf-container" ref={containerRef}>
-            {totalPages > 0 && (
-                <div className="pdf-info">
-                    총 {totalPages}페이지 중 {renderedPages.length}페이지 표시
-                </div>
-            )}
-            <Suspense fallback={<div className="loading">로딩 중...</div>}>
-                <div className="pdf-pages">
-                    {renderedPages.map((pageData) => (
-                        <div key={pageData.pageNum} className="pdf-page">
-                            <div className="page-number">페이지 {pageData.pageNum}</div>
-                            <img
-                                src={pageData.dataUrl}
-                                alt={`페이지 ${pageData.pageNum}`}
-                                style={{maxWidth: "100%", height: "auto"}}
-                            />
-                        </div>
-                    ))}
-                </div>
-            </Suspense>
+            <div className="pdf-info">
+                {loadedPages < totalPages
+                    ? `렌더링 중... ${loadedPages}/${totalPages}쪽`
+                    : `총 ${totalPages}쪽 표시`
+                }
+            </div>
+            <div className="pdf-pages">
+                {pageNumbers.map((pageNum) => (
+                    <div key={pageNum} className="pdf-page">
+                        <div className="page-number">{pageNum}쪽</div>
+                        <canvas
+                            ref={setCanvasRef(pageNum)}
+                            style={{maxWidth: "100%", height: "auto"}}
+                        />
+                    </div>
+                ))}
+            </div>
             <style>{pdfStyles}</style>
         </div>
     );
@@ -156,6 +182,30 @@ const pdfStyles = `
         font-size: 12px;
         color: #888;
         margin-bottom: 8px;
+    }
+    .loading-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+    }
+    .spinner {
+        width: 40px;
+        height: 40px;
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #3498db;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    .blinking {
+        animation: blink 1s linear infinite;
+    }
+    @keyframes blink {
+        50% { opacity: 0.5; }
     }
 `;
 
