@@ -175,43 +175,24 @@ export default function Edit() {
 
     const entryClicked = useCallback((selectedEntryId) => {
         const determineNextEntryId = (folderData, selectedEntryId) => {
-            /*
-            let indexClicked = null;
-            if (dirName === ROOT_DIRECTORY) {
-                indexClicked = folderData.findIndex((item) => item.key === fileName);
-                console.log(`determineNextEntryId(): indexClicked=${indexClicked}`);
-
-                if (indexClicked < folderData.length - 1) {
-                    // no last entry
-                    const nextEntryId = folderData[indexClicked + 1].key;
-                    console.log(`determineNextEntryId(): nextEntryId=${nextEntryId}`);
-                    return dirName + '/' + nextEntryId;
+            // root file 처리 (id가 '/'로 시작하는 경우, 예: '/917518')
+            if (selectedEntryId.startsWith('/')) {
+                const rootFiles = folderData.filter(item => item.fileType !== 'folder');
+                const index = rootFiles.findIndex(item => item.id === selectedEntryId);
+                if (index >= 0 && index < rootFiles.length - 1) {
+                    return rootFiles[index + 1].id;
                 }
-            } else {
-                for (let entry of folderData) {
-                    if (entry.key === dirName && entry.nodes && entry.nodes.length > 0) {
-                        console.log(`determineNextEntryId(): entry=`, entry);
-                        indexClicked = entry.nodes.findIndex((item) => item.key === fileName);
-                        console.log(`determineNextEntryId(): indexClicked=${indexClicked}`);
-
-                        if (indexClicked < entry.nodes.length - 1) {
-                            // no last entry
-                            const nextEntryId = entry.nodes[indexClicked + 1].key;
-                            console.log(`determineNextEntryId(): nextEntryId=${nextEntryId}`);
-                            return dirName + '/' + nextEntryId;
-                        }
-                        break;
-                    }
-                }
+                return null;
             }
-            */
+
+            // 폴더 내 파일 처리 (id가 'category/bookId' 형식)
             const category = selectedEntryId.split('/')[0];
             const bookId = selectedEntryId.split('/')[1];
             if (bookId) {
                 const children = folderData.find(obj => obj.id === category)?.children;
                 if (children) {
                     const index = children.findIndex(item => item.id === selectedEntryId);
-                    if (0 <= index && index < (children.length - 2)) {
+                    if (0 <= index && index < (children.length - 1)) {
                         return children[index + 1].id;
                     }
                 }
