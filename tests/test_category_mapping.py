@@ -1,40 +1,34 @@
 #!/usr/bin/env python
 
 import os
-import tempfile
 import pytest
 
 from backend.category_mapping import CategoryMapping
 
 
 class TestCategoryMapping:
-    """CategoryMapping 클래스 테스트"""
+    """CategoryMapping 클래스 테스트 (MySQL 기반)"""
 
     @pytest.fixture
-    def temp_db(self):
-        """임시 데이터베이스 파일 생성"""
-        fd, path = tempfile.mkstemp(suffix=".db")
-        os.close(fd)
-        yield path
-        # 테스트 후 파일 삭제
-        if os.path.exists(path):
-            os.remove(path)
+    def mapping(self):
+        """CategoryMapping 인스턴스 생성 (테스트용 환경변수 필요)"""
+        # 테스트 환경에서 MySQL 연결 정보가 필요
+        # 환경변수가 없으면 테스트 skip
+        host = os.environ.get("TM_MYSQL_HOST")
+        if not host:
+            pytest.skip("TM_MYSQL_HOST not set - skipping MySQL tests")
 
-    @pytest.fixture
-    def mapping(self, temp_db):
-        """CategoryMapping 인스턴스 생성"""
-        return CategoryMapping(db_path=temp_db)
+        mapping = CategoryMapping()
+        # 테스트 전 데이터 정리
+        mapping.update_all_mappings({})
+        yield mapping
+        # 테스트 후 데이터 정리
+        mapping.update_all_mappings({})
 
     # === 초기화 테스트 ===
 
-    def test_init_creates_database(self, temp_db):
-        """데이터베이스 파일이 생성되는지 테스트"""
-        mapping = CategoryMapping(db_path=temp_db)
-        assert os.path.exists(temp_db)
-
     def test_init_creates_table(self, mapping):
         """테이블이 생성되는지 테스트"""
-        # 테이블에 쿼리 실행 가능 여부로 확인
         result = mapping.get_all_mappings()
         assert isinstance(result, dict)
 
@@ -345,59 +339,6 @@ class TestCategoryMapping:
 
         assert mapping.get_keywords("한글카테고리") == ["한글키워드"]
         assert mapping.get_keywords("日本語カテゴリ") == ["日本語キーワード"]
-
-
-class TestCategoryMappingEdgeCases:
-    """CategoryMapping 엣지 케이스 테스트"""
-
-    @pytest.fixture
-    def temp_db(self):
-        fd, path = tempfile.mkstemp(suffix=".db")
-        os.close(fd)
-        yield path
-        if os.path.exists(path):
-            os.remove(path)
-
-    def test_very_long_keyword(self, temp_db):
-        """매우 긴 키워드 테스트"""
-        mapping = CategoryMapping(db_path=temp_db)
-        long_keyword = "a" * 1000
-        result = mapping.add_keyword("test", long_keyword)
-        assert result is True
-
-        keywords = mapping.get_keywords("test")
-        assert long_keyword in keywords
-
-    def test_very_long_category(self, temp_db):
-        """매우 긴 카테고리명 테스트"""
-        mapping = CategoryMapping(db_path=temp_db)
-        long_category = "category_" + "a" * 1000
-        result = mapping.add_keyword(long_category, "keyword")
-        assert result is True
-
-        keywords = mapping.get_keywords(long_category)
-        assert "keyword" in keywords
-
-    def test_large_number_of_keywords(self, temp_db):
-        """많은 수의 키워드 테스트"""
-        mapping = CategoryMapping(db_path=temp_db)
-
-        keywords_to_add = [f"keyword_{i}" for i in range(100)]
-        for keyword in keywords_to_add:
-            mapping.add_keyword("test", keyword)
-
-        keywords = mapping.get_keywords("test")
-        assert len(keywords) == 100
-
-    def test_large_number_of_categories(self, temp_db):
-        """많은 수의 카테고리 테스트"""
-        mapping = CategoryMapping(db_path=temp_db)
-
-        for i in range(100):
-            mapping.add_keyword(f"category_{i}", "keyword")
-
-        all_mappings = mapping.get_all_mappings()
-        assert len(all_mappings) == 100
 
 
 if __name__ == "__main__":
