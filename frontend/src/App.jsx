@@ -7,6 +7,7 @@ import Home from "./Home";
 import Edit from "./Edit";
 import View from "./View";
 import ViewSingle from "./ViewSingle";
+import Admin from "./Admin";
 
 export default function App() {
     return (
@@ -21,6 +22,7 @@ export default function App() {
                     <Route index element={<Home/>} errorElement={<ErrorPage/>}/>
                     <Route path="edit" element={<Edit/>} errorElement={<ErrorPage/>}/>
                     <Route path="view" element={<View/>} errorElement={<ErrorPage/>}/>
+                    <Route path="admin" element={<Admin/>} errorElement={<ErrorPage/>}/>
                     {/* Nested routes handled by main app */}
                     <Route path="edit/:category/:bookId" element={<Edit/>} errorElement={<ErrorPage/>}/>
                     <Route path="view/:category/:bookId" element={<View/>} errorElement={<ErrorPage/>}/>

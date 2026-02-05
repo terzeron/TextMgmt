@@ -30,6 +30,10 @@ export default function Bookstore(props) {
     setIsbn(props.bookInfo.isbn || '');
     setData({});
     setActiveKey(STORES[0].key);
+    // 책이 변경되면 추천 카테고리 초기화
+    if (props.onCategoryFound) {
+      props.onCategoryFound('');
+    }
   }, [props.bookInfo]);
 
   // Yes24 자동 검색: ISBN → 저자+제목 → 제목 순으로 시도
@@ -98,6 +102,15 @@ export default function Bookstore(props) {
       const res = await fetch(`${getApiUrlPrefix()}/search/bookstore/${store}?${params.toString()}`);
       const json = await res.json();
       setData(prev => ({ ...prev, [store]: json }));
+
+      // Yes24 검색 결과의 첫 번째 카테고리를 부모에게 전달
+      if (store === 'yes24' && json?.status === 'success' && json?.result?.length > 0) {
+        const firstCategory = json.result[0]?.category;
+        if (firstCategory && props.onCategoryFound) {
+          props.onCategoryFound(firstCategory);
+        }
+      }
+
       return json;
     } catch (e) {
       console.error(e);
@@ -272,5 +285,6 @@ Bookstore.propTypes = {
     author: PropTypes.string,
     title: PropTypes.string,
     isbn: PropTypes.string
-  }).isRequired
+  }).isRequired,
+  onCategoryFound: PropTypes.func
 };
