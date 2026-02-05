@@ -1,4 +1,5 @@
 import {useEffect, useRef, useState, useCallback} from "react";
+import {flushSync} from "react-dom";
 import PropTypes from "prop-types";
 import {getApiUrlPrefix} from "./Common";
 import * as pdfjs from "pdfjs-dist";
@@ -64,7 +65,11 @@ export default function ViewPDF({bookId, pageCount = 0}) {
                 pdfRef.current = pdf;
 
                 const pagesToRender = pageCount > 0 ? Math.min(pdf.numPages, pageCount) : pdf.numPages;
-                setTotalPages(pagesToRender);
+
+                // flushSync로 상태 업데이트를 동기화하여 canvas가 DOM에 생성된 후 렌더링
+                flushSync(() => {
+                    setTotalPages(pagesToRender);
+                });
 
                 // 첫 페이지 우선 렌더링
                 await renderPage(pdf, 1);
