@@ -76,16 +76,13 @@ const splitBySpecialChars = (str) => {
 
 // 단일 서점 카테고리와 디렉토리의 유사도 점수 계산
 // - 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
-// - 서점 카테고리의 가장 깊은 레벨을 특수기호로 분리하여 사용
+// - 서점 카테고리(이미 마지막 레벨)를 특수기호로 분리하여 사용
 // - { category: score } 형태의 객체 반환
 const calculateCategoryScores = (bookstoreCategory, categoryList) => {
     if (!bookstoreCategory || !categoryList?.length) return {};
 
-    // 서점 카테고리를 '>'로 분리 (예: "국내도서>인문학>심리학>심리학 일반")
-    const categoryParts = bookstoreCategory.split('>').map(s => s.trim());
-    // 가장 깊은 카테고리를 특수기호로 분리하여 키워드 추출
-    const deepestLevel = categoryParts.length > 0 ? categoryParts[categoryParts.length - 1] : '';
-    const deepKeywords = splitBySpecialChars(deepestLevel);
+    // 서점 카테고리를 특수기호로 분리하여 키워드 추출
+    const deepKeywords = splitBySpecialChars(bookstoreCategory);
 
     if (deepKeywords.length === 0) return {};
 
@@ -155,15 +152,12 @@ export const getSimilarityDebugInfo = (suggestedCategories, categoryList, topN =
         categoryDetails: [],   // 각 카테고리별 상세 계산 과정
     };
 
-    // 1. 서점별 추출된 키워드 수집
+    // 1. 서점별 추출된 키워드 수집 (이미 마지막 레벨만 전달됨)
     for (const [store, bookstoreCategory] of Object.entries(suggestedCategories)) {
         if (!bookstoreCategory) continue;
-        const categoryParts = bookstoreCategory.split('>').map(s => s.trim());
-        const deepestLevel = categoryParts.length > 0 ? categoryParts[categoryParts.length - 1] : '';
-        const keywords = splitBySpecialChars(deepestLevel);
+        const keywords = splitBySpecialChars(bookstoreCategory);
         debugInfo.bookstoreKeywords[store] = {
             original: bookstoreCategory,
-            deepestLevel,
             keywords
         };
     }

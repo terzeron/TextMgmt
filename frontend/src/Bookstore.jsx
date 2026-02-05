@@ -7,6 +7,14 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 import { Button, Tabs, Tab, Spinner, Card, ButtonGroup } from 'react-bootstrap';
 import {rawJsonGetReq} from './Common';
 
+// 카테고리에서 가장 마지막 레벨만 추출
+// 예: "소설/시/희곡 > 중국소설" → "중국소설"
+const getDeepestCategory = (category) => {
+  if (!category) return '';
+  const parts = category.split('>').map(s => s.trim());
+  return parts[parts.length - 1] || '';
+};
+
 // 서점 탭 정의 (supportsIsbn: ISBN 검색 지원 여부)
 const STORES = [
   { key: 'yes24', label: 'Yes24', supportsIsbn: true },
@@ -73,14 +81,24 @@ export default function Bookstore(props) {
       const yes24Result = await autoSearch('yes24');
       const aladinResult = await autoSearch('aladin');
 
-      // 두 서점 검색 결과의 카테고리를 수집하여 부모에게 전달
+      // 두 서점 검색 결과의 모든 카테고리(마지막 레벨만)를 수집하여 부모에게 전달
       if (props.onCategoriesFound) {
         const categories = {};
         if (yes24Result?.status === 'success' && yes24Result?.result?.length > 0) {
-          categories.yes24 = yes24Result.result[0]?.category || '';
+          yes24Result.result.forEach((item, idx) => {
+            const deepest = getDeepestCategory(item.category);
+            if (deepest) {
+              categories[`yes24_${idx}`] = deepest;
+            }
+          });
         }
         if (aladinResult?.status === 'success' && aladinResult?.result?.length > 0) {
-          categories.aladin = aladinResult.result[0]?.category || '';
+          aladinResult.result.forEach((item, idx) => {
+            const deepest = getDeepestCategory(item.category);
+            if (deepest) {
+              categories[`aladin_${idx}`] = deepest;
+            }
+          });
         }
         props.onCategoriesFound(categories);
       }
@@ -198,18 +216,28 @@ export default function Bookstore(props) {
         setData(prev => {
           const newData = { ...prev, [store]: json, [cacheKey]: json };
 
-          // Yes24 또는 알라딘 검색 결과의 카테고리를 부모에게 전달
+          // Yes24 또는 알라딘 검색 결과의 모든 카테고리(마지막 레벨만)를 부모에게 전달
           if ((store === 'yes24' || store === 'aladin') && props.onCategoriesFound) {
             const categories = {};
             // yes24 카테고리
             const yes24Data = store === 'yes24' ? json : newData['yes24'];
             if (yes24Data?.status === 'success' && yes24Data?.result?.length > 0) {
-              categories.yes24 = yes24Data.result[0]?.category || '';
+              yes24Data.result.forEach((item, idx) => {
+                const deepest = getDeepestCategory(item.category);
+                if (deepest) {
+                  categories[`yes24_${idx}`] = deepest;
+                }
+              });
             }
             // aladin 카테고리
             const aladinData = store === 'aladin' ? json : newData['aladin'];
             if (aladinData?.status === 'success' && aladinData?.result?.length > 0) {
-              categories.aladin = aladinData.result[0]?.category || '';
+              aladinData.result.forEach((item, idx) => {
+                const deepest = getDeepestCategory(item.category);
+                if (deepest) {
+                  categories[`aladin_${idx}`] = deepest;
+                }
+              });
             }
             props.onCategoriesFound(categories);
           }
