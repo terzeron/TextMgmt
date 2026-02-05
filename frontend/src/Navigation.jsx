@@ -90,7 +90,10 @@ export default function Navigation() {
 
         const profileName = response.name || 'Unknown';
         const profileEmail = response.email || '';
-        const profilePicture = response.picture?.data?.url || '/default.jpg';
+        // Facebook Graph API의 영구적인 프로필 이미지 URL 사용 (임시 URL은 만료됨)
+        const profilePicture = response.id
+            ? `https://graph.facebook.com/${response.id}/picture?width=50&height=50`
+            : '/default.jpg';
 
         setName(profileName);
         setEmail(profileEmail);
