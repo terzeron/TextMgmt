@@ -13,7 +13,7 @@ build_backend() {
 
 build_frontend() {
     echo "=== Building frontend ==="
-    docker build --build-arg VITE_FACEBOOK_APP_ID=$VITE_FACEBOOK_APP_ID --build-arg VITE_API_URL_PREFIX=$VITE_API_URL_PREFIX --build-arg VITE_ADMIN_EMAIL=$VITE_ADMIN_EMAIL -f frontend/Dockerfile -t terzeron/tm_frontend . && \
+    docker build -f frontend/Dockerfile -t terzeron/tm_frontend . && \
     docker tag terzeron/tm_frontend:latest registry.terzeron.com/terzeron/tm_frontend:latest && \
     docker push registry.terzeron.com/terzeron/tm_frontend:latest
 }
