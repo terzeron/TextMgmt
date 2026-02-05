@@ -28,6 +28,8 @@ export const fetchCategoryMappings = () => {
             },
             (error) => {
                 console.error('Failed to fetch category mappings:', error);
+                // API 실패 시에도 초기화 완료로 표시 (무한 재시도 방지)
+                cacheInitialized = true;
                 resolve(cachedMappings);
             }
         );
