@@ -50,11 +50,14 @@ export default function Edit() {
         if (successMessage) {
             const timer = setTimeout(() => {
                 setSuccessMessage('');
-                // 이동 성공 후 다음 책으로 이동 준비
-                if (pendingMoveToNext && nextEntryId) {
+                // 이동 성공 후 처리
+                if (pendingMoveToNext) {
                     setSelectedCategory('');
                     setPendingMoveToNext(false);
-                    setPendingNextEntryId(nextEntryId);
+                    // 다음 책이 있으면 이동
+                    if (nextEntryId) {
+                        setPendingNextEntryId(nextEntryId);
+                    }
                 }
             }, 3000);
             return () => clearTimeout(timer);
