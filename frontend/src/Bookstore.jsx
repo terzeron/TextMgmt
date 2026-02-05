@@ -36,9 +36,9 @@ export default function Bookstore(props) {
     }
   }, [props.bookInfo]);
 
-  // Yes24 자동 검색: ISBN → 저자+제목 → 제목 순으로 시도
+  // Yes24, 알라딘 자동 검색: ISBN → 저자+제목 → 제목 순으로 시도
   useEffect(() => {
-    const autoSearchYes24 = async () => {
+    const autoSearch = async (store) => {
       const currentIsbn = props.bookInfo.isbn || '';
       const currentTitle = props.bookInfo.title || '';
       const currentAuthor = props.bookInfo.author || '';
@@ -47,7 +47,7 @@ export default function Bookstore(props) {
 
       // 1. ISBN 검색 시도 (ISBN이 있는 경우)
       if (currentIsbn) {
-        const result = await fetchWithMethodInternal('yes24', 'isbn', currentIsbn, currentTitle, currentAuthor);
+        const result = await fetchWithMethodInternal(store, 'isbn', currentIsbn, currentTitle, currentAuthor);
         if (result?.status === 'success' && result?.result?.length > 0) {
           return; // 결과가 있으면 종료
         }
@@ -55,7 +55,7 @@ export default function Bookstore(props) {
 
       // 2. 저자+제목 검색 시도
       if (currentTitle || currentAuthor) {
-        const result = await fetchWithMethodInternal('yes24', 'title_author', currentIsbn, currentTitle, currentAuthor);
+        const result = await fetchWithMethodInternal(store, 'title_author', currentIsbn, currentTitle, currentAuthor);
         if (result?.status === 'success' && result?.result?.length > 0) {
           return; // 결과가 있으면 종료
         }
@@ -63,11 +63,16 @@ export default function Bookstore(props) {
 
       // 3. 제목만으로 검색 시도 (저자+제목으로 결과가 없는 경우)
       if (currentTitle) {
-        await fetchWithMethodInternal('yes24', 'title_only', currentIsbn, currentTitle, currentAuthor);
+        await fetchWithMethodInternal(store, 'title_only', currentIsbn, currentTitle, currentAuthor);
       }
     };
 
-    autoSearchYes24();
+    const runAutoSearch = async () => {
+      await autoSearch('yes24');
+      await autoSearch('aladin');
+    };
+
+    runAutoSearch();
   }, [props.bookInfo]);
 
   // 내부 검색 함수 (자동 검색용, 결과 반환)
