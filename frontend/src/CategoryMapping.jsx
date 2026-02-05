@@ -1,4 +1,4 @@
-import {useEffect, useState, useCallback} from 'react';
+import {useEffect, useState, useCallback, useRef} from 'react';
 import PropTypes from 'prop-types';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
@@ -46,6 +46,7 @@ export default function CategoryMapping({categoryList}) {
     const [message, setMessage] = useState('');
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
+    const keywordInputRef = useRef(null);
 
     // 서버에서 데이터 로드
     const loadFromServer = useCallback(async () => {
@@ -98,6 +99,8 @@ export default function CategoryMapping({categoryList}) {
                     return updated;
                 });
                 setNewKeyword('');
+                // 입력 필드에 포커스 유지
+                keywordInputRef.current?.focus();
             },
             (error) => {
                 setMessage(error || '이미 등록된 키워드이거나 추가에 실패했습니다.');
@@ -201,6 +204,7 @@ export default function CategoryMapping({categoryList}) {
                                     <Card.Body>
                                         <InputGroup className="mb-2">
                                             <Form.Control
+                                                ref={keywordInputRef}
                                                 type="text"
                                                 placeholder="새 키워드 입력"
                                                 value={newKeyword}
