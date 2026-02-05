@@ -51,7 +51,7 @@ spec:
             - name: TM_MYSQL_DATABASE
               value: textmanager
             - name: TM_MYSQL_USER
-              value: tmuser
+              value: textmanager
             - name: TM_MYSQL_PASSWORD
               valueFrom:
                 secretKeyRef:
