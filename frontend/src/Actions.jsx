@@ -61,19 +61,19 @@ const calculateSimilarity = (str1, str2) => {
 // 서점 카테고리와 디렉토리의 유사도 계산
 // - 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
 // - 서점 카테고리의 3, 4레벨 키워드와 비교
-const findSimilarCategory = (bookstoreCategory, categoryList) => {
-    if (!bookstoreCategory || !categoryList?.length) return null;
+// - 상위 N개 카테고리 반환
+const findTopSimilarCategories = (bookstoreCategory, categoryList, topN = 3) => {
+    if (!bookstoreCategory || !categoryList?.length) return [];
 
     // 서점 카테고리를 '>'로 분리 (예: "국내도서>인문학>심리학>심리학 일반")
     const categoryParts = bookstoreCategory.split('>').map(s => s.trim());
     // 3, 4 레벨 키워드만 사용 (더 구체적인 분류)
     const deepKeywords = categoryParts.slice(2); // index 2, 3, ... (3레벨 이상)
 
-    if (deepKeywords.length === 0) return null;
+    if (deepKeywords.length === 0) return [];
 
     const mappings = loadCategoryMappings();
-    let bestMatch = null;
-    let bestScore = 0;
+    const scores = [];
 
     for (const category of categoryList) {
         // 디렉토리명에서 숫자 prefix 제거 (예: "4_심리학뇌과학" -> "심리학뇌과학")
@@ -95,18 +95,21 @@ const findSimilarCategory = (bookstoreCategory, categoryList) => {
             }
         }
 
-        if (maxSimilarity > bestScore) {
-            bestScore = maxSimilarity;
-            bestMatch = category;
+        if (maxSimilarity >= 0.4) { // 최소 40% 유사도 이상
+            scores.push({ category, score: maxSimilarity });
         }
     }
 
-    return bestScore >= 0.4 ? bestMatch : null; // 최소 40% 유사도 이상일 때만 반환
+    // 점수 내림차순 정렬 후 상위 N개 반환
+    return scores
+        .sort((a, b) => b.score - a.score)
+        .slice(0, topN)
+        .map(item => item.category);
 };
 
 export default function Actions(props) {
     const [renderingInfoList, setRenderingInfoList] = useState([]);
-    const [highlightedCategory, setHighlightedCategory] = useState(null);
+    const [highlightedCategories, setHighlightedCategories] = useState([]);
     const [mappingsLoaded, setMappingsLoaded] = useState(isCacheInitialized());
 
     // 매핑 캐시 초기화
@@ -116,13 +119,13 @@ export default function Actions(props) {
         }
     }, []);
 
-    // Yes24 카테고리와 유사한 디렉토리 찾기
+    // Yes24 카테고리와 유사한 상위 3개 디렉토리 찾기
     useEffect(() => {
         if (props.suggestedCategory && props.otherCategoryList?.length && mappingsLoaded) {
-            const similar = findSimilarCategory(props.suggestedCategory, props.otherCategoryList);
-            setHighlightedCategory(similar);
+            const topCategories = findTopSimilarCategories(props.suggestedCategory, props.otherCategoryList, 3);
+            setHighlightedCategories(topCategories);
         } else {
-            setHighlightedCategory(null);
+            setHighlightedCategories([]);
         }
     }, [props.suggestedCategory, props.otherCategoryList, mappingsLoaded]);
 
@@ -152,13 +155,13 @@ export default function Actions(props) {
                 }
                 {
                     renderingInfoList.map(info => {
-                        const isHighlighted = highlightedCategory === info['key'];
+                        const isHighlighted = highlightedCategories.includes(info['key']);
                         return (
                             <Button
-                                variant={isHighlighted ? "warning" : "outline-secondary"}
+                                variant="outline-secondary"
                                 key={info['key']}
-                                className={isHighlighted ? `btn-md ${info['class'] || ''}` : `btn-xs ${info['class'] || ''}`}
-                                style={info['style']}
+                                className={`btn-xs ${info['class'] || ''} ${isHighlighted ? 'highlight' : ''}`}
+                                style={isHighlighted ? {} : info['style']}
                                 onClick={(e) => {
                                     props.selectDirectoryButtonClicked(e, info['key']);
                                 }}>
