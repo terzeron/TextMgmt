@@ -42,23 +42,24 @@ export default function Edit() {
     const [suggestedCategories, setSuggestedCategories] = useState({});
     const [pendingMoveToNext, setPendingMoveToNext] = useState(false); // 이동 성공 후 다음 책으로 이동 대기
 
-    // 메시지 자동 사라짐 (3초 후) + 이동 성공 시 다음 책 로딩
+    // 이동 완료 후 다음 책으로 이동할 entryId 저장
+    const [pendingNextEntryId, setPendingNextEntryId] = useState(null);
+
+    // 메시지 자동 사라짐 (3초 후) + 이동 성공 시 다음 책 로딩 준비
     useEffect(() => {
         if (successMessage) {
             const timer = setTimeout(() => {
                 setSuccessMessage('');
-                // 이동 성공 후 다음 책으로 이동
-                if (pendingMoveToNext) {
+                // 이동 성공 후 다음 책으로 이동 준비
+                if (pendingMoveToNext && nextEntryId) {
                     setSelectedCategory('');
                     setPendingMoveToNext(false);
-                    if (nextEntryId) {
-                        entryClicked(nextEntryId);
-                    }
+                    setPendingNextEntryId(nextEntryId);
                 }
             }, 3000);
             return () => clearTimeout(timer);
         }
-    }, [successMessage, pendingMoveToNext, nextEntryId, entryClicked]);
+    }, [successMessage, pendingMoveToNext, nextEntryId]);
 
     useEffect(() => {
         if (errorMessage) {
@@ -300,6 +301,14 @@ export default function Edit() {
         const nextEntryId = determineNextEntryId(folderData, selectedEntryId);
         setNextEntryId(nextEntryId);
     }, [folderData, categoryList, decomposeTitle]);
+
+    // 이동 완료 후 다음 책으로 실제 이동
+    useEffect(() => {
+        if (pendingNextEntryId) {
+            entryClicked(pendingNextEntryId);
+            setPendingNextEntryId(null);
+        }
+    }, [pendingNextEntryId, entryClicked]);
 
     useEffect(() => {
         if (routeCategory && routeBookId && folderData.length > 0) {
