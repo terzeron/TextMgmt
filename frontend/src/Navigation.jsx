@@ -153,6 +153,7 @@ export default function Navigation() {
                     <Nav className="me-auto my-2 my-lg-0" style={{ maxHeight: '100px' }} navbarScroll>
                         <Nav.Link href="/edit">편집</Nav.Link>
                         <Nav.Link href="/view">조회</Nav.Link>
+                        <Nav.Link href="/admin">관리</Nav.Link>
                     </Nav>
                     <div className="d-flex align-items-center ms-auto">
                         <Form onSubmit={e => { e.preventDefault(); handleSearch(); }} className="me-2">

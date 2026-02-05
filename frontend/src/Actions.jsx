@@ -9,10 +9,113 @@ import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import {faTruckMoving, faUpload} from '@fortawesome/free-solid-svg-icons';
 
 import {getRandomMediumColor, ROOT_DIRECTORY} from './Common';
+import {loadCategoryMappings} from './CategoryMapping';
 
+
+// 레벤슈타인 거리 계산
+const levenshteinDistance = (str1, str2) => {
+    const m = str1.length;
+    const n = str2.length;
+    const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+
+    for (let i = 0; i <= m; i++) dp[i][0] = i;
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+
+    for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+            if (str1[i - 1] === str2[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1];
+            } else {
+                dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+            }
+        }
+    }
+    return dp[m][n];
+};
+
+// 레벤슈타인 유사도 (0~1, 1이 완전 일치)
+const levenshteinSimilarity = (str1, str2) => {
+    if (!str1 || !str2) return 0;
+    const distance = levenshteinDistance(str1.toLowerCase(), str2.toLowerCase());
+    const maxLen = Math.max(str1.length, str2.length);
+    return maxLen === 0 ? 1 : 1 - distance / maxLen;
+};
+
+// Yes24 카테고리와 디렉토리명의 유사도 계산
+// 우선순위: 1) 매핑 테이블 키워드 포함 여부, 2) 3,4레벨 키워드와 디렉토리명 간 레벤슈타인 유사도
+const findSimilarCategory = (yes24Category, categoryList) => {
+    if (!yes24Category || !categoryList?.length) return null;
+
+    // Yes24 카테고리를 '>'로 분리 (예: "국내도서>인문학>심리학>심리학 일반")
+    const categoryParts = yes24Category.split('>').map(s => s.trim());
+    const allKeywords = categoryParts.map(s => s.toLowerCase());
+    // 3, 4 레벨 키워드 (depth가 깊은 것이 더 구체적)
+    const deepKeywords = categoryParts.slice(2).map(s => s.toLowerCase()); // index 2, 3 (3레벨, 4레벨)
+
+    const mappings = loadCategoryMappings();
+    let bestMatch = null;
+    let bestScore = 0;
+
+    for (const category of categoryList) {
+        // 디렉토리명에서 숫자 prefix 제거 (예: "4_심리학뇌과학" -> "심리학뇌과학")
+        const categoryName = category.includes('_')
+            ? category.split('_').slice(1).join('_').toLowerCase()
+            : category.toLowerCase();
+
+        let score = 0;
+
+        // 1. 매핑 테이블 키워드 포함 여부 (최우선, 가중치 1000)
+        const mappedKeywords = mappings[category] || [];
+        for (const keyword of mappedKeywords) {
+            const keywordLower = keyword.toLowerCase();
+            for (const bookstoreKeyword of allKeywords) {
+                if (bookstoreKeyword.includes(keywordLower) || keywordLower.includes(bookstoreKeyword)) {
+                    score += 1000; // 매핑 테이블 매칭에 최고 가중치
+                }
+            }
+        }
+
+        // 2. 3, 4 레벨 키워드와 디렉토리명 간 레벤슈타인 유사도 (가중치 100)
+        for (const deepKeyword of deepKeywords) {
+            const similarity = levenshteinSimilarity(categoryName, deepKeyword);
+            if (similarity > 0.3) { // 최소 30% 유사도
+                score += similarity * 100;
+            }
+            // 부분 문자열 포함 체크
+            if (categoryName.includes(deepKeyword) || deepKeyword.includes(categoryName)) {
+                score += 50;
+            }
+        }
+
+        // 3. Fallback: 전체 키워드와의 부분 매칭 (가중치 10)
+        for (const keyword of allKeywords) {
+            if (categoryName.includes(keyword) || keyword.includes(categoryName)) {
+                score += 10;
+            }
+        }
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestMatch = category;
+        }
+    }
+
+    return bestScore > 5 ? bestMatch : null; // 최소 점수 이상일 때만 반환
+};
 
 export default function Actions(props) {
     const [renderingInfoList, setRenderingInfoList] = useState([]);
+    const [highlightedCategory, setHighlightedCategory] = useState(null);
+
+    // Yes24 카테고리와 유사한 디렉토리 찾기
+    useEffect(() => {
+        if (props.suggestedCategory && props.otherCategoryList?.length) {
+            const similar = findSimilarCategory(props.suggestedCategory, props.otherCategoryList);
+            setHighlightedCategory(similar);
+        } else {
+            setHighlightedCategory(null);
+        }
+    }, [props.suggestedCategory, props.otherCategoryList]);
 
     useEffect(() => {
         const infoList = props.otherCategoryList?.map(category => {
@@ -25,7 +128,7 @@ export default function Actions(props) {
             return {key: category, label: category, style: {}, class: 'btn-light'};
         });
         setRenderingInfoList(infoList);
-    }, [props]);
+    }, [props.otherCategoryList]);
 
     return (
         <>
@@ -39,21 +142,21 @@ export default function Actions(props) {
                     </Button>
                 }
                 {
-                    renderingInfoList.map(info =>
-                        (
+                    renderingInfoList.map(info => {
+                        const isHighlighted = highlightedCategory === info['key'];
+                        return (
                             <Button
-                                variant="outline-secondary"
-                                size="sm"
+                                variant={isHighlighted ? "warning" : "outline-secondary"}
                                 key={info['key']}
-                                className={`btn-xs ${info['class'] || ''}`}
+                                className={isHighlighted ? `btn-md ${info['class'] || ''}` : `btn-xs ${info['class'] || ''}`}
                                 style={info['style']}
                                 onClick={(e) => {
                                     props.selectDirectoryButtonClicked(e, info['key']);
                                 }}>
                                 {info['label']}
                             </Button>
-                        )
-                    )
+                        );
+                    })
                 }
             </Row>
 
@@ -81,4 +184,5 @@ Actions.propTypes = {
     selectDirectoryButtonClicked: PropTypes.func,
     newFileName: PropTypes.string.isRequired,
     toNextEntryClicked: PropTypes.func.isRequired,
+    suggestedCategory: PropTypes.string,
 };
