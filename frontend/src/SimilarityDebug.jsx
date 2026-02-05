@@ -68,7 +68,7 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
                                         <td>
                                             <Badge
                                                 style={{
-                                                    backgroundColor: store.startsWith('yes24') ? '#7B2D8E' : '#1565C0',
+                                                    backgroundColor: store.startsWith('yes24') ? '#6A1B9A' : '#0D47A1',
                                                     minWidth: '55px'
                                                 }}
                                             >
@@ -97,13 +97,16 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
                                 <tr>
                                     <th style={{width: '30px'}}>#</th>
                                     <th>디렉토리</th>
-                                    <th>총점</th>
                                     <th>매칭 상세</th>
+                                    <th>총점</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {debugInfo.categoryDetails.map((detail, idx) => (
-                                    <tr key={detail.category}>
+                                {debugInfo.categoryDetails.map((detail, idx) => {
+                                    // 1위: 현재 색상, 2-5위: 옅은 노란색
+                                    const rowStyle = idx === 0 ? {} : (idx < 5 ? {backgroundColor: '#FFF9C4'} : {});
+                                    return (
+                                    <tr key={detail.category} style={rowStyle}>
                                         <td className="text-center">{idx + 1}</td>
                                         <td>
                                             <div><strong>{detail.category}</strong></div>
@@ -111,18 +114,13 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
                                                 {detail.dirKeywords.join(', ')}
                                             </div>
                                         </td>
-                                        <td className="text-center">
-                                            <Badge bg={idx < 3 ? 'success' : 'secondary'}>
-                                                {detail.totalScore.toFixed(2)}
-                                            </Badge>
-                                        </td>
                                         <td style={{fontSize: '0.75rem'}}>
                                             {detail.matchDetails.map((match, mIdx) => (
                                                 <div key={mIdx}>
                                                     <Badge
                                                         className="me-1"
                                                         style={{
-                                                            backgroundColor: match.store.startsWith('yes24') ? '#7B2D8E' : '#1565C0',
+                                                            backgroundColor: match.store.startsWith('yes24') ? '#6A1B9A' : '#0D47A1',
                                                             minWidth: '55px'
                                                         }}
                                                     >
@@ -136,8 +134,14 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
                                                 </div>
                                             ))}
                                         </td>
+                                        <td className="text-center">
+                                            <Badge bg={idx === 0 ? 'success' : 'secondary'}>
+                                                {detail.totalScore.toFixed(2)}
+                                            </Badge>
+                                        </td>
                                     </tr>
-                                ))}
+                                    );
+                                })}
                             </tbody>
                         </Table>
                     </div>
