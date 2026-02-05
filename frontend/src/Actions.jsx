@@ -36,21 +36,40 @@ const levenshteinDistance = (str1, str2) => {
 // 레벤슈타인 유사도 (0~1, 1이 완전 일치)
 const levenshteinSimilarity = (str1, str2) => {
     if (!str1 || !str2) return 0;
-    const distance = levenshteinDistance(str1.toLowerCase(), str2.toLowerCase());
-    const maxLen = Math.max(str1.length, str2.length);
+    const s1 = str1.toLowerCase();
+    const s2 = str2.toLowerCase();
+    const distance = levenshteinDistance(s1, s2);
+    const maxLen = Math.max(s1.length, s2.length);
     return maxLen === 0 ? 1 : 1 - distance / maxLen;
 };
 
-// Yes24 카테고리와 디렉토리명의 유사도 계산
-// 우선순위: 1) 매핑 테이블 키워드 포함 여부, 2) 3,4레벨 키워드와 디렉토리명 간 레벤슈타인 유사도
-const findSimilarCategory = (yes24Category, categoryList) => {
-    if (!yes24Category || !categoryList?.length) return null;
+// 유사도 계산 (레벤슈타인 + 포함 보너스)
+// 포함 관계가 있으면 최소 0.8, 그렇지 않으면 레벤슈타인 유사도
+const calculateSimilarity = (str1, str2) => {
+    if (!str1 || !str2) return 0;
+    const s1 = str1.toLowerCase();
+    const s2 = str2.toLowerCase();
 
-    // Yes24 카테고리를 '>'로 분리 (예: "국내도서>인문학>심리학>심리학 일반")
-    const categoryParts = yes24Category.split('>').map(s => s.trim());
-    const allKeywords = categoryParts.map(s => s.toLowerCase());
-    // 3, 4 레벨 키워드 (depth가 깊은 것이 더 구체적)
-    const deepKeywords = categoryParts.slice(2).map(s => s.toLowerCase()); // index 2, 3 (3레벨, 4레벨)
+    // 포함 관계 체크 (짧은 문자열이 긴 문자열에 포함되면 0.8)
+    if (s1.includes(s2) || s2.includes(s1)) {
+        return 0.8;
+    }
+
+    return levenshteinSimilarity(s1, s2);
+};
+
+// 서점 카테고리와 디렉토리의 유사도 계산
+// - 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
+// - 서점 카테고리의 3, 4레벨 키워드와 비교
+const findSimilarCategory = (bookstoreCategory, categoryList) => {
+    if (!bookstoreCategory || !categoryList?.length) return null;
+
+    // 서점 카테고리를 '>'로 분리 (예: "국내도서>인문학>심리학>심리학 일반")
+    const categoryParts = bookstoreCategory.split('>').map(s => s.trim());
+    // 3, 4 레벨 키워드만 사용 (더 구체적인 분류)
+    const deepKeywords = categoryParts.slice(2); // index 2, 3, ... (3레벨 이상)
+
+    if (deepKeywords.length === 0) return null;
 
     const mappings = loadCategoryMappings();
     let bestMatch = null;
@@ -59,48 +78,30 @@ const findSimilarCategory = (yes24Category, categoryList) => {
     for (const category of categoryList) {
         // 디렉토리명에서 숫자 prefix 제거 (예: "4_심리학뇌과학" -> "심리학뇌과학")
         const categoryName = category.includes('_')
-            ? category.split('_').slice(1).join('_').toLowerCase()
-            : category.toLowerCase();
+            ? category.split('_').slice(1).join('_')
+            : category;
 
-        let score = 0;
+        // 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
+        const dirKeywords = [...(mappings[category] || []), categoryName];
 
-        // 1. 매핑 테이블 키워드 포함 여부 (최우선, 가중치 1000)
-        const mappedKeywords = mappings[category] || [];
-        for (const keyword of mappedKeywords) {
-            const keywordLower = keyword.toLowerCase();
-            for (const bookstoreKeyword of allKeywords) {
-                if (bookstoreKeyword.includes(keywordLower) || keywordLower.includes(bookstoreKeyword)) {
-                    score += 1000; // 매핑 테이블 매칭에 최고 가중치
+        // 서점 3,4레벨 키워드와 디렉토리 키워드 간 최대 유사도 계산
+        let maxSimilarity = 0;
+        for (const deepKeyword of deepKeywords) {
+            for (const dirKeyword of dirKeywords) {
+                const similarity = calculateSimilarity(deepKeyword, dirKeyword);
+                if (similarity > maxSimilarity) {
+                    maxSimilarity = similarity;
                 }
             }
         }
 
-        // 2. 3, 4 레벨 키워드와 디렉토리명 간 레벤슈타인 유사도 (가중치 100)
-        for (const deepKeyword of deepKeywords) {
-            const similarity = levenshteinSimilarity(categoryName, deepKeyword);
-            if (similarity > 0.3) { // 최소 30% 유사도
-                score += similarity * 100;
-            }
-            // 부분 문자열 포함 체크
-            if (categoryName.includes(deepKeyword) || deepKeyword.includes(categoryName)) {
-                score += 50;
-            }
-        }
-
-        // 3. Fallback: 전체 키워드와의 부분 매칭 (가중치 10)
-        for (const keyword of allKeywords) {
-            if (categoryName.includes(keyword) || keyword.includes(categoryName)) {
-                score += 10;
-            }
-        }
-
-        if (score > bestScore) {
-            bestScore = score;
+        if (maxSimilarity > bestScore) {
+            bestScore = maxSimilarity;
             bestMatch = category;
         }
     }
 
-    return bestScore > 5 ? bestMatch : null; // 최소 점수 이상일 때만 반환
+    return bestScore >= 0.4 ? bestMatch : null; // 최소 40% 유사도 이상일 때만 반환
 };
 
 export default function Actions(props) {
