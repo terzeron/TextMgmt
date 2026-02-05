@@ -38,6 +38,19 @@ spec:
               value: "1763789627240387"
             - name: TM_FACEBOOK_APP_SECRET
               value: "2c6791615d6cf1cfac9fe1ff1179a0bd"
+            - name: TM_MYSQL_HOST
+              value: tm-mysql
+            - name: TM_MYSQL_PORT
+              value: "3306"
+            - name: TM_MYSQL_DATABASE
+              value: textmanager
+            - name: TM_MYSQL_USER
+              value: tmuser
+            - name: TM_MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tm-mysql-cred
+                  key: mysql-password
           volumeMounts:
             - name: books-pvc
               mountPath: /books

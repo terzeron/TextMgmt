@@ -1,4 +1,4 @@
-import {useEffect, useState} from "react";
+import {useEffect, useState, useMemo} from "react";
 import PropTypes from 'prop-types';
 
 import './Edit.css';
@@ -60,15 +60,17 @@ const calculateSimilarity = (str1, str2) => {
 
 // 서점 카테고리와 디렉토리의 유사도 계산
 // - 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
-// - 서점 카테고리의 3, 4레벨 키워드와 비교
+// - 서점 카테고리의 하위 레벨 키워드와 비교 (3레벨 이상 우선, 없으면 마지막 2개)
 // - 상위 N개 카테고리 반환
 const findTopSimilarCategories = (bookstoreCategory, categoryList, topN = 3) => {
     if (!bookstoreCategory || !categoryList?.length) return [];
 
     // 서점 카테고리를 '>'로 분리 (예: "국내도서>인문학>심리학>심리학 일반")
     const categoryParts = bookstoreCategory.split('>').map(s => s.trim());
-    // 3, 4 레벨 키워드만 사용 (더 구체적인 분류)
-    const deepKeywords = categoryParts.slice(2); // index 2, 3, ... (3레벨 이상)
+    // 3레벨 이상이 있으면 사용, 없으면 마지막 2개 (최소 1개)
+    const deepKeywords = categoryParts.length > 2
+        ? categoryParts.slice(2)
+        : categoryParts.slice(-Math.min(2, categoryParts.length));
 
     if (deepKeywords.length === 0) return [];
 
@@ -109,24 +111,24 @@ const findTopSimilarCategories = (bookstoreCategory, categoryList, topN = 3) => 
 
 export default function Actions(props) {
     const [renderingInfoList, setRenderingInfoList] = useState([]);
-    const [highlightedCategories, setHighlightedCategories] = useState([]);
-    const [mappingsLoaded, setMappingsLoaded] = useState(isCacheInitialized());
+    const [mappingsLoaded, setMappingsLoaded] = useState(false);
 
     // 매핑 캐시 초기화
     useEffect(() => {
-        if (!isCacheInitialized()) {
+        if (isCacheInitialized()) {
+            // 이미 다른 곳에서 캐시가 초기화됨
+            setMappingsLoaded(true);
+        } else {
             fetchCategoryMappings().then(() => setMappingsLoaded(true));
         }
     }, []);
 
-    // Yes24 카테고리와 유사한 상위 3개 디렉토리 찾기
-    useEffect(() => {
+    // Yes24 카테고리와 유사한 상위 3개 디렉토리 찾기 (useMemo로 동기 계산)
+    const highlightedCategories = useMemo(() => {
         if (props.suggestedCategory && props.otherCategoryList?.length && mappingsLoaded) {
-            const topCategories = findTopSimilarCategories(props.suggestedCategory, props.otherCategoryList, 3);
-            setHighlightedCategories(topCategories);
-        } else {
-            setHighlightedCategories([]);
+            return findTopSimilarCategories(props.suggestedCategory, props.otherCategoryList, 3);
         }
+        return [];
     }, [props.suggestedCategory, props.otherCategoryList, mappingsLoaded]);
 
     useEffect(() => {
