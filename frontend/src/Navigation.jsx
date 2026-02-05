@@ -1,14 +1,13 @@
 import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
-import FacebookLogin, { FacebookLoginClient } from "@greatsumini/react-facebook-login";
+import { GoogleOAuthProvider, GoogleLogin, googleLogout } from "@react-oauth/google";
 import { Button, Form, FormControl, InputGroup, Nav, Navbar, Dropdown } from "react-bootstrap";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSearch, faUser } from "@fortawesome/free-solid-svg-icons";
-import { faFacebook } from "@fortawesome/free-brands-svg-icons";
-import { jsonGetReq, externalJsonGetReq } from "./Common.js";
+import { jsonGetReq, getApiUrlPrefix } from "./Common.js";
 
 export default function Navigation() {
-    const appId = window.__ENV__?.['VITE_FACEBOOK_APP_ID'] || import.meta.env.VITE_FACEBOOK_APP_ID;
+    const clientId = window.__ENV__?.['VITE_GOOGLE_CLIENT_ID'] || import.meta.env.VITE_GOOGLE_CLIENT_ID;
     const adminEmail = window.__ENV__?.['VITE_ADMIN_EMAIL'] || import.meta.env.VITE_ADMIN_EMAIL;
     const [login, setLogin] = useState(false);
     const [authorized, setAuthorized] = useState(false);
@@ -32,8 +31,8 @@ export default function Navigation() {
     };
 
     useEffect(() => {
-        if (!appId) {
-            console.error("The environment variable VITE_FACEBOOK_APP_ID is not set.");
+        if (!clientId) {
+            console.error("The environment variable VITE_GOOGLE_CLIENT_ID is not set.");
             return;
         }
         if (!adminEmail) {
@@ -41,88 +40,56 @@ export default function Navigation() {
             return;
         }
 
-        // 🔹 localStorage에서 저장된 토큰으로 Facebook API 호출하여 프로필 정보 갱신
-        const storedToken = localStorage.getItem('longLivedToken');
+        // localStorage에서 저장된 정보로 로그인 상태 복원
         const storedEmail = localStorage.getItem('email');
+        const storedName = localStorage.getItem('name');
+        const storedPicture = localStorage.getItem('picture');
 
-        if (storedToken && storedEmail === adminEmail) {
+        if (storedEmail && storedEmail === adminEmail) {
             setLogin(true);
             setAuthorized(true);
-
-            // Facebook Graph API로 최신 프로필 정보 가져오기 (프로필 이미지 URL은 만료되므로 매번 갱신)
-            externalJsonGetReq(
-                `https://graph.facebook.com/me?fields=id,name,email,picture.width(50).height(50)&access_token=${storedToken}`,
-                (data) => {
-                    if (data.error) {
-                        console.error('Facebook API Error:', data.error);
-                        // 토큰 만료 시 로그아웃 처리
-                        if (data.error.code === 190) {
-                            setLogin(false);
-                            setAuthorized(false);
-                            localStorage.removeItem('longLivedToken');
-                            localStorage.removeItem('accessToken');
-                            localStorage.removeItem('name');
-                            localStorage.removeItem('email');
-                        }
-                        return;
-                    }
-                    setName(data.name || '');
-                    setEmail(data.email || '');
-                    setPicture(data.picture?.data?.url || '');
-                },
-                (err) => {
-                    console.error('Failed to fetch Facebook profile:', err);
-                    // 오류 시 저장된 정보 사용 (이미지는 깨질 수 있음)
-                    setName(localStorage.getItem('name') || '');
-                    setEmail(storedEmail || '');
-                }
-            );
+            setName(storedName || '');
+            setEmail(storedEmail || '');
+            setPicture(storedPicture || '');
         }
-    }, [adminEmail, appId]);
+    }, [adminEmail, clientId]);
 
-    const onLoginSuccess = async (response) => {
-        console.log('Facebook Login Success:', response);
+    const onLoginSuccess = async (credentialResponse) => {
+        console.log('Google Login Success:', credentialResponse);
 
         try {
-            // changed short-lived token(access token) to long-lived token using backend
-            const res = await fetch(getApiUrlPrefix() + '/auth/facebook', {
+            // 백엔드에서 Google ID Token 검증
+            const res = await fetch(getApiUrlPrefix() + '/auth/google', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ accessToken: response.accessToken }),
+                body: JSON.stringify({ credential: credentialResponse.credential }),
             });
 
             if (!res.ok) throw new Error(`API Error: ${res.status}`);
 
             const data = await res.json();
-            console.log('Long-lived token received:', data.longLivedToken);
+            console.log('Google auth verified:', data);
 
-            if (data.longLivedToken) {
-                localStorage.setItem('longLivedToken', data.longLivedToken);
-                localStorage.setItem('accessToken', response.accessToken);
+            if (data.email) {
+                const profileName = data.name || 'Unknown';
+                const profileEmail = data.email || '';
+                const profilePicture = data.picture || '';
+
+                setName(profileName);
+                setEmail(profileEmail);
+                setPicture(profilePicture);
                 setLogin(true);
+
+                if (profileEmail === adminEmail) {
+                    setAuthorized(true);
+                    localStorage.setItem('name', profileName);
+                    localStorage.setItem('email', profileEmail);
+                    localStorage.setItem('picture', profilePicture);
+                }
             }
         } catch (error) {
-            console.error('Error exchanging token:', error);
-            alert('Facebook 로그인 처리 중 오류가 발생했습니다.');
-        }
-    };
-
-    const onProfileSuccess = (response) => {
-        console.log('Facebook Profile Success:', response);
-
-        const profileName = response.name || 'Unknown';
-        const profileEmail = response.email || '';
-        const profilePicture = response.picture?.data?.url || '';
-
-        setName(profileName);
-        setEmail(profileEmail);
-        setPicture(profilePicture);
-
-        if (profileEmail === adminEmail) {
-            setAuthorized(true);
-            localStorage.setItem('name', profileName);
-            localStorage.setItem('email', profileEmail);
-            // picture는 임시 URL이므로 저장하지 않음 (페이지 로드 시 API로 갱신)
+            console.error('Error verifying Google token:', error);
+            alert('Google 로그인 처리 중 오류가 발생했습니다.');
         }
     };
 
@@ -134,77 +101,64 @@ export default function Navigation() {
         setEmail('');
         setPicture('');
 
-        localStorage.removeItem('longLivedToken');
-        localStorage.removeItem('accessToken');
         localStorage.removeItem('name');
         localStorage.removeItem('email');
         localStorage.removeItem('picture');
 
-        FacebookLoginClient.logout(() => {
-            console.log('Facebook Logout Completed');
-        });
+        googleLogout();
+        console.log('Google Logout Completed');
     };
 
     return (
-        <div>
-            <Navbar bg="light" expand="sm">
-                <Navbar.Brand href="/">Text</Navbar.Brand>
-                <Navbar.Toggle aria-controls="basic-navbar-nav" />
-                <Navbar.Collapse id="basic-navbar-nav">
-                    <Nav className="me-auto my-2 my-lg-0" style={{ maxHeight: '100px' }} navbarScroll>
-                        <Nav.Link href="/edit">편집</Nav.Link>
-                        <Nav.Link href="/view">조회</Nav.Link>
-                        <Nav.Link href="/admin">관리</Nav.Link>
-                    </Nav>
-                    <div className="d-flex align-items-center ms-auto">
-                        <Form onSubmit={e => { e.preventDefault(); handleSearch(); }} className="me-2">
-                            <InputGroup>
-                                <FormControl type="text" placeholder="키워드" className="mr-sm-2" value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)} />
-                                <Button type="button" variant="outline-success" size="sm" onClick={handleSearch}>
-                                    검색<FontAwesomeIcon icon={faSearch} />
-                                </Button>
-                            </InputGroup>
-                        </Form>
-                        {login && (
-                            <Dropdown align="end">
-                                <Dropdown.Toggle as="div" style={{ cursor: 'pointer', display: 'inline-block' }}>
-                                    {picture ? (
-                                        <img src={picture} alt={email} title={email} width="38" height="38" className="rounded-circle" style={{ border: '1px solid #cccccc' }} />
-                                    ) : (
-                                        <FontAwesomeIcon icon={faUser} size="lg" />
-                                    )}
-                                </Dropdown.Toggle>
-                                <Dropdown.Menu>
-                                    <Dropdown.Item onClick={logout}>로그아웃</Dropdown.Item>
-                                </Dropdown.Menu>
-                            </Dropdown>
-                        )}
-                    </div>
-                </Navbar.Collapse>
-            </Navbar>
+        <GoogleOAuthProvider clientId={clientId}>
+            <div>
+                <Navbar bg="light" expand="sm">
+                    <Navbar.Brand href="/">Text</Navbar.Brand>
+                    <Navbar.Toggle aria-controls="basic-navbar-nav" />
+                    <Navbar.Collapse id="basic-navbar-nav">
+                        <Nav className="me-auto my-2 my-lg-0" style={{ maxHeight: '100px' }} navbarScroll>
+                            <Nav.Link href="/edit">편집</Nav.Link>
+                            <Nav.Link href="/view">조회</Nav.Link>
+                            <Nav.Link href="/admin">관리</Nav.Link>
+                        </Nav>
+                        <div className="d-flex align-items-center ms-auto">
+                            <Form onSubmit={e => { e.preventDefault(); handleSearch(); }} className="me-2">
+                                <InputGroup>
+                                    <FormControl type="text" placeholder="키워드" className="mr-sm-2" value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)} />
+                                    <Button type="button" variant="outline-success" size="sm" onClick={handleSearch}>
+                                        검색<FontAwesomeIcon icon={faSearch} />
+                                    </Button>
+                                </InputGroup>
+                            </Form>
+                            {login && (
+                                <Dropdown align="end">
+                                    <Dropdown.Toggle as="div" style={{ cursor: 'pointer', display: 'inline-block' }}>
+                                        {picture ? (
+                                            <img src={picture} alt={email} title={email} width="38" height="38" className="rounded-circle" style={{ border: '1px solid #cccccc' }} />
+                                        ) : (
+                                            <FontAwesomeIcon icon={faUser} size="lg" />
+                                        )}
+                                    </Dropdown.Toggle>
+                                    <Dropdown.Menu>
+                                        <Dropdown.Item onClick={logout}>로그아웃</Dropdown.Item>
+                                    </Dropdown.Menu>
+                                </Dropdown>
+                            )}
+                        </div>
+                    </Navbar.Collapse>
+                </Navbar>
 
-            <div className="container ps-0">
-                {!login && (
-                    <FacebookLogin
-                        appId={appId}
-                        onSuccess={onLoginSuccess}
-                        onFail={() => alert("Facebook 로그인 실패")}
-                        onProfileSuccess={onProfileSuccess}
-                        style={{
-                            backgroundColor: '#4267b2',
-                            color: '#fff',
-                            fontSize: '16px',
-                            padding: '10px',
-                            border: 'none',
-                            borderRadius: '4px',
-                        }}
-                    >
-                        Login with Facebook <FontAwesomeIcon icon={faFacebook} />
-                    </FacebookLogin>
-                )}
-                {authorized && <Outlet context={{ searchResults, hasSearched }} />}
-                {login && !authorized && <div>{name}님으로 로그인하셨습니다. 권한 부족</div>}
+                <div className="container ps-0">
+                    {!login && (
+                        <GoogleLogin
+                            onSuccess={onLoginSuccess}
+                            onError={() => alert("Google 로그인 실패")}
+                        />
+                    )}
+                    {authorized && <Outlet context={{ searchResults, hasSearched }} />}
+                    {login && !authorized && <div>{name}님으로 로그인하셨습니다. 권한 부족</div>}
+                </div>
             </div>
-        </div>
+        </GoogleOAuthProvider>
     );
 }

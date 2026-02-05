@@ -34,10 +34,16 @@ spec:
               valueFrom: { secretKeyRef: { name: tm-es-cred, key: username } }
             - name: TM_ES_PASSWORD
               valueFrom: { secretKeyRef: { name: tm-es-cred, key: password } }
-            - name: TM_FACEBOOK_APP_ID
-              value: "1763789627240387"
-            - name: TM_FACEBOOK_APP_SECRET
-              value: "2c6791615d6cf1cfac9fe1ff1179a0bd"
+            - name: TM_GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: tm-google-cred
+                  key: client-id
+            - name: TM_GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: tm-google-cred
+                  key: client-secret
             - name: TM_MYSQL_HOST
               value: tm-mysql
             - name: TM_MYSQL_PORT
