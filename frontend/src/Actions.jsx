@@ -68,17 +68,26 @@ const calculateSimilarity = (str1, str2) => {
     return levenshteinSimilarity(s1, s2);
 };
 
+// 특수기호로 문자열을 분리하여 키워드 추출
+// 슬래시(/), 괄호(()), 공백 등을 구분자로 사용
+const splitBySpecialChars = (str) => {
+    if (!str) return [];
+    // 슬래시, 괄호, 공백 등으로 분리 후 빈 문자열 제거
+    return str.split(/[\/\(\)\s]+/).map(s => s.trim()).filter(s => s.length >= 2);
+};
+
 // 단일 서점 카테고리와 디렉토리의 유사도 점수 계산
 // - 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
-// - 서점 카테고리의 가장 깊은 레벨만 사용
+// - 서점 카테고리의 가장 깊은 레벨을 특수기호로 분리하여 사용
 // - { category: score } 형태의 객체 반환
 const calculateCategoryScores = (bookstoreCategory, categoryList) => {
     if (!bookstoreCategory || !categoryList?.length) return {};
 
     // 서점 카테고리를 '>'로 분리 (예: "국내도서>인문학>심리학>심리학 일반")
     const categoryParts = bookstoreCategory.split('>').map(s => s.trim());
-    // 가장 깊은 카테고리만 사용
-    const deepKeywords = categoryParts.length > 0 ? [categoryParts[categoryParts.length - 1]] : [];
+    // 가장 깊은 카테고리를 특수기호로 분리하여 키워드 추출
+    const deepestLevel = categoryParts.length > 0 ? categoryParts[categoryParts.length - 1] : '';
+    const deepKeywords = splitBySpecialChars(deepestLevel);
 
     if (deepKeywords.length === 0) return {};
 
@@ -105,7 +114,8 @@ const calculateCategoryScores = (bookstoreCategory, categoryList) => {
             }
         }
 
-        if (maxSimilarity >= 0.4) { // 최소 40% 유사도 이상
+        // 모든 카테고리의 유사도 저장 (0보다 크면)
+        if (maxSimilarity > 0) {
             scores[category] = maxSimilarity;
         }
     }
