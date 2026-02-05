@@ -190,6 +190,14 @@ export default function Bookstore(props) {
       (json) => {
         // 결과를 store와 cacheKey 둘 다에 저장
         setData(prev => ({ ...prev, [store]: json, [cacheKey]: json }));
+
+        // Yes24 검색 결과의 첫 번째 카테고리를 부모에게 전달
+        if (store === 'yes24' && json?.status === 'success' && json?.result?.length > 0) {
+          const firstCategory = json.result[0]?.category;
+          if (firstCategory && props.onCategoryFound) {
+            props.onCategoryFound(firstCategory);
+          }
+        }
       },
       (error) => {
         console.error(error);

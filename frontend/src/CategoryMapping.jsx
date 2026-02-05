@@ -99,8 +99,8 @@ export default function CategoryMapping({categoryList}) {
                     return updated;
                 });
                 setNewKeyword('');
-                // 입력 필드에 포커스 유지
-                keywordInputRef.current?.focus();
+                // 입력 필드에 포커스 유지 (setSaving 후 리렌더 완료 후 실행)
+                setTimeout(() => keywordInputRef.current?.focus(), 0);
             },
             (error) => {
                 setMessage(error || '이미 등록된 키워드이거나 추가에 실패했습니다.');

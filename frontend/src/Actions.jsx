@@ -111,11 +111,14 @@ const findTopSimilarCategories = (bookstoreCategory, categoryList, topN = 3) => 
 
 export default function Actions(props) {
     const [renderingInfoList, setRenderingInfoList] = useState([]);
-    const [mappingsLoaded, setMappingsLoaded] = useState(isCacheInitialized());
+    const [mappingsLoaded, setMappingsLoaded] = useState(false);
 
     // 매핑 캐시 초기화
     useEffect(() => {
-        if (!isCacheInitialized()) {
+        if (isCacheInitialized()) {
+            // 이미 다른 곳에서 캐시가 초기화됨
+            setMappingsLoaded(true);
+        } else {
             fetchCategoryMappings().then(() => setMappingsLoaded(true));
         }
     }, []);
