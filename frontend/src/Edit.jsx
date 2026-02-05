@@ -12,6 +12,7 @@ import {getApiUrlPrefix, jsonDeleteReq, jsonGetReq, jsonPutReq, ROOT_DIRECTORY} 
 import Folder from './Folder';
 import BookInfoView from './BookInfoView';
 import Bookstore from './Bookstore';
+import SimilarityDebug from './SimilarityDebug';
 import Actions from './Actions';
 import SimilarBooks from './SimilarBooks';
 import SearchResult from './SearchResult';
@@ -647,6 +648,7 @@ export default function Edit() {
                                 <Col id="right_panel" md="6" lg="7" className="ps-0 pe-0">
                                     <SimilarBooks bookId={bookInfo['book_id']} onSelect={entryClicked}/>
                                     <Bookstore bookInfo={bookInfo} onCategoriesFound={setSuggestedCategories}/>
+                                    <SimilarityDebug suggestedCategories={suggestedCategories} categoryList={otherCategoryList}/>
                                 </Col>
                             </Row>
 
