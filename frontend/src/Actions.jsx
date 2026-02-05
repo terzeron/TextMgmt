@@ -233,20 +233,13 @@ export default function Actions(props) {
         }
     }, []);
 
-    // 여러 서점 카테고리와 유사한 상위 3개 디렉토리 찾기 (useMemo로 동기 계산)
+    // 여러 서점 카테고리와 유사한 상위 5개 디렉토리 찾기 (useMemo로 동기 계산)
     const highlightedCategories = useMemo(() => {
         if (props.suggestedCategories && Object.keys(props.suggestedCategories).length > 0 && props.otherCategoryList?.length && mappingsLoaded) {
-            return findTopSimilarCategories(props.suggestedCategories, props.otherCategoryList, 3);
+            return findTopSimilarCategories(props.suggestedCategories, props.otherCategoryList, 5);
         }
         return [];
     }, [props.suggestedCategories, props.otherCategoryList, mappingsLoaded]);
-
-    // 유사도 1위 카테고리가 변경되면 자동으로 선택
-    useEffect(() => {
-        if (highlightedCategories.length > 0 && props.selectDirectoryButtonClicked) {
-            props.selectDirectoryButtonClicked(null, highlightedCategories[0]);
-        }
-    }, [highlightedCategories, props.selectDirectoryButtonClicked]);
 
     useEffect(() => {
         const infoList = props.otherCategoryList?.map(category => {
@@ -274,13 +267,16 @@ export default function Actions(props) {
                 }
                 {
                     renderingInfoList.map(info => {
-                        const isHighlighted = Array.isArray(highlightedCategories) && highlightedCategories.includes(info['key']);
+                        const highlightRank = Array.isArray(highlightedCategories) ? highlightedCategories.indexOf(info['key']) : -1;
+                        const isTop1 = highlightRank === 0;
+                        const isTop2to5 = highlightRank >= 1 && highlightRank <= 4;
+                        const highlightClass = isTop1 ? 'highlight' : isTop2to5 ? 'highlight-secondary' : '';
                         return (
                             <Button
                                 variant="outline-secondary"
                                 key={info['key']}
-                                className={`btn-xs ${info['class'] || ''} ${isHighlighted ? 'highlight' : ''}`}
-                                style={isHighlighted ? {} : info['style']}
+                                className={`btn-xs ${info['class'] || ''} ${highlightClass}`}
+                                style={highlightClass ? {} : info['style']}
                                 onClick={(e) => {
                                     props.selectDirectoryButtonClicked(e, info['key']);
                                 }}>

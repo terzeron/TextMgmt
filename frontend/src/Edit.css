@@ -24,6 +24,12 @@
     border-color: #ffc107 !important;
 }
 
+#edit .btn.highlight-secondary {
+    background-color: #fff9c4 !important;
+    color: #000 !important;
+    border-color: #ffe082 !important;
+}
+
 #edit .directory-menu {
     height: calc(100vh - 80px);
     overflow-y: auto;
