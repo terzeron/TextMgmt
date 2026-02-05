@@ -65,9 +65,18 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
                             <tbody>
                                 {Object.entries(debugInfo.bookstoreKeywords).map(([store, info]) => (
                                     <tr key={store}>
-                                        <td><Badge bg="info">{store}</Badge></td>
+                                        <td>
+                                            <Badge
+                                                style={{
+                                                    backgroundColor: store.startsWith('yes24') ? '#7B2D8E' : '#1565C0',
+                                                    minWidth: '55px'
+                                                }}
+                                            >
+                                                {store.startsWith('yes24') ? 'yes24' : 'aladin'}
+                                            </Badge>
+                                        </td>
                                         <td className="text-muted" style={{fontSize: '0.75rem'}}>
-                                            ...{info.deepestLevel}
+                                            {info.original}
                                         </td>
                                         <td>
                                             {info.keywords.map(kw => (
@@ -99,7 +108,7 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
                                         <td>
                                             <div><strong>{detail.category}</strong></div>
                                             <div className="text-muted" style={{fontSize: '0.7rem'}}>
-                                                키워드: {detail.dirKeywords.join(', ')}
+                                                {detail.dirKeywords.join(', ')}
                                             </div>
                                         </td>
                                         <td className="text-center">
@@ -110,13 +119,20 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
                                         <td style={{fontSize: '0.75rem'}}>
                                             {detail.matchDetails.map((match, mIdx) => (
                                                 <div key={mIdx}>
-                                                    <Badge bg="info" className="me-1">{match.store}</Badge>
+                                                    <Badge
+                                                        className="me-1"
+                                                        style={{
+                                                            backgroundColor: match.store.startsWith('yes24') ? '#7B2D8E' : '#1565C0',
+                                                            minWidth: '55px'
+                                                        }}
+                                                    >
+                                                        {match.store.startsWith('yes24') ? 'yes24' : 'aladin'}
+                                                    </Badge>
                                                     <span className="text-primary">{match.bookstoreKeyword}</span>
                                                     {' ↔ '}
                                                     <span className="text-success">{match.dirKeyword}</span>
                                                     {' = '}
                                                     <strong>{match.similarity.toFixed(2)}</strong>
-                                                    {match.isContained && <Badge bg="warning" className="ms-1">포함</Badge>}
                                                 </div>
                                             ))}
                                         </td>
