@@ -6,7 +6,7 @@ import {Button, Card, Form, InputGroup, ListGroup, Badge, Row, Col, Spinner} fro
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import {faPlus, faTrash, faSync} from '@fortawesome/free-solid-svg-icons';
 
-import {getApiUrlPrefix} from './Common';
+import {jsonGetReq, jsonPostReq, jsonDeleteReq} from './Common';
 
 // 메모리 캐시 (동기 접근용)
 let cachedMappings = {};
@@ -18,21 +18,20 @@ export const loadCategoryMappings = () => {
 };
 
 // 카테고리 매핑 데이터를 서버에서 가져와 캐시 갱신
-export const fetchCategoryMappings = async () => {
-    try {
-        const response = await fetch(`${getApiUrlPrefix()}/category-mappings`);
-        const json = await response.json();
-        if (json.status === 'success') {
-            cachedMappings = json.result || {};
-            cacheInitialized = true;
-            return cachedMappings;
-        }
-        console.error('Failed to fetch category mappings:', json.error);
-        return cachedMappings;
-    } catch (e) {
-        console.error('Failed to fetch category mappings:', e);
-        return cachedMappings;
-    }
+export const fetchCategoryMappings = () => {
+    return new Promise((resolve) => {
+        jsonGetReq('/category-mappings', null,
+            (result) => {
+                cachedMappings = result || {};
+                cacheInitialized = true;
+                resolve(cachedMappings);
+            },
+            (error) => {
+                console.error('Failed to fetch category mappings:', error);
+                resolve(cachedMappings);
+            }
+        );
+    });
 };
 
 // 캐시 초기화 여부
@@ -69,7 +68,7 @@ export default function CategoryMapping({categoryList}) {
     }, []);
 
     // 키워드 추가 (서버에 즉시 저장)
-    const handleAddKeyword = useCallback(async () => {
+    const handleAddKeyword = useCallback(() => {
         if (!selectedCategory || !newKeyword.trim()) return;
 
         const keyword = newKeyword.trim();
@@ -82,18 +81,10 @@ export default function CategoryMapping({categoryList}) {
         }
 
         setSaving(true);
-        try {
-            const response = await fetch(
-                `${getApiUrlPrefix()}/category-mappings/${encodeURIComponent(selectedCategory)}/keywords`,
-                {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({keyword})
-                }
-            );
-            const json = await response.json();
-
-            if (json.status === 'success') {
+        jsonPostReq(
+            `/category-mappings/${encodeURIComponent(selectedCategory)}/keywords`,
+            {keyword},
+            () => {
                 // 로컬 상태 및 캐시 업데이트
                 setMappings(prev => {
                     const updated = {...prev};
@@ -105,35 +96,24 @@ export default function CategoryMapping({categoryList}) {
                     return updated;
                 });
                 setNewKeyword('');
-            } else if (json.status === 'duplicate') {
-                setMessage(json.message || '이미 등록된 키워드입니다.');
+            },
+            (error) => {
+                setMessage(error || '이미 등록된 키워드이거나 추가에 실패했습니다.');
                 setTimeout(() => setMessage(''), 3000);
-            } else {
-                setMessage(json.error || '추가에 실패했습니다.');
-                setTimeout(() => setMessage(''), 3000);
-            }
-        } catch (e) {
-            console.error('Failed to add keyword:', e);
-            setMessage('추가 중 오류가 발생했습니다.');
-            setTimeout(() => setMessage(''), 3000);
-        } finally {
-            setSaving(false);
-        }
+            },
+            () => setSaving(false)
+        );
     }, [selectedCategory, newKeyword, mappings]);
 
     // 키워드 삭제 (서버에 즉시 저장)
-    const handleRemoveKeyword = useCallback(async (keyword) => {
+    const handleRemoveKeyword = useCallback((keyword) => {
         if (!selectedCategory) return;
 
         setSaving(true);
-        try {
-            const response = await fetch(
-                `${getApiUrlPrefix()}/category-mappings/${encodeURIComponent(selectedCategory)}/keywords/${encodeURIComponent(keyword)}`,
-                {method: 'DELETE'}
-            );
-            const json = await response.json();
-
-            if (json.status === 'success') {
+        jsonDeleteReq(
+            `/category-mappings/${encodeURIComponent(selectedCategory)}/keywords/${encodeURIComponent(keyword)}`,
+            null,
+            () => {
                 // 로컬 상태 및 캐시 업데이트
                 setMappings(prev => {
                     const updated = {...prev};
@@ -143,17 +123,13 @@ export default function CategoryMapping({categoryList}) {
                     cachedMappings = updated;
                     return updated;
                 });
-            } else {
-                setMessage(json.error || '삭제에 실패했습니다.');
+            },
+            (error) => {
+                setMessage(error || '삭제에 실패했습니다.');
                 setTimeout(() => setMessage(''), 3000);
-            }
-        } catch (e) {
-            console.error('Failed to remove keyword:', e);
-            setMessage('삭제 중 오류가 발생했습니다.');
-            setTimeout(() => setMessage(''), 3000);
-        } finally {
-            setSaving(false);
-        }
+            },
+            () => setSaving(false)
+        );
     }, [selectedCategory]);
 
     // Enter 키 처리

@@ -5,7 +5,7 @@ import { Button, Form, FormControl, InputGroup, Nav, Navbar, Dropdown } from "re
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSearch, faUser } from "@fortawesome/free-solid-svg-icons";
 import { faFacebook } from "@fortawesome/free-brands-svg-icons";
-import { getApiUrlPrefix, jsonGetReq } from "./Common.js";
+import { jsonGetReq, externalJsonGetReq } from "./Common.js";
 
 export default function Navigation() {
     const appId = window.__ENV__?.['VITE_FACEBOOK_APP_ID'] || import.meta.env.VITE_FACEBOOK_APP_ID;
@@ -50,9 +50,9 @@ export default function Navigation() {
             setAuthorized(true);
 
             // Facebook Graph API로 최신 프로필 정보 가져오기 (프로필 이미지 URL은 만료되므로 매번 갱신)
-            fetch(`https://graph.facebook.com/me?fields=id,name,email,picture.width(50).height(50)&access_token=${storedToken}`)
-                .then(res => res.json())
-                .then(data => {
+            externalJsonGetReq(
+                `https://graph.facebook.com/me?fields=id,name,email,picture.width(50).height(50)&access_token=${storedToken}`,
+                (data) => {
                     if (data.error) {
                         console.error('Facebook API Error:', data.error);
                         // 토큰 만료 시 로그아웃 처리
@@ -69,13 +69,14 @@ export default function Navigation() {
                     setName(data.name || '');
                     setEmail(data.email || '');
                     setPicture(data.picture?.data?.url || '');
-                })
-                .catch(err => {
+                },
+                (err) => {
                     console.error('Failed to fetch Facebook profile:', err);
                     // 오류 시 저장된 정보 사용 (이미지는 깨질 수 있음)
                     setName(localStorage.getItem('name') || '');
                     setEmail(storedEmail || '');
-                });
+                }
+            );
         }
     }, [adminEmail, appId]);
 

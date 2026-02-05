@@ -130,4 +130,24 @@ export const jsonDeleteReq = (url, payload, resolve, reject, final) => apiReq(ur
 export const textGetReq = (url, payload, resolve, reject, final) => apiReq(url, 'GET', payload, 'TEXT', resolve, reject, final);
 export const blobGetReq = (url, payload, resolve, reject, final) => apiReq(url, 'GET', payload, 'BLOB', resolve, reject, final);
 
+// 원본 JSON 응답을 그대로 반환 (status 체크 없이, 내부 API용)
+export const rawJsonGetReq = (url, resolve, reject, final) => {
+    fetch(getApiUrlPrefix() + url)
+        .then(handleFetchErrors)
+        .then(response => response.json())
+        .then(data => resolve && resolve(data))
+        .catch(error => reject && reject(error))
+        .finally(() => final && final());
+};
+
+// 외부 API 호출용 (prefix 없이, 원본 JSON 응답 반환)
+export const externalJsonGetReq = (url, resolve, reject, final) => {
+    fetch(url)
+        .then(handleFetchErrors)
+        .then(response => response.json())
+        .then(data => resolve && resolve(data))
+        .catch(error => reject && reject(error))
+        .finally(() => final && final());
+};
+
 export const ROOT_DIRECTORY = '$$rootdir$$';
