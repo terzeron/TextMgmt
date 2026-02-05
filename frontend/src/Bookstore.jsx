@@ -5,7 +5,7 @@ import './Edit.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
 import { Button, Tabs, Tab, Spinner, Card, ButtonGroup } from 'react-bootstrap';
-import {getApiUrlPrefix} from './Common';
+import {rawJsonGetReq} from './Common';
 
 // 서점 탭 정의 (supportsIsbn: ISBN 검색 지원 여부)
 const STORES = [
@@ -76,10 +76,10 @@ export default function Bookstore(props) {
   }, [props.bookInfo]);
 
   // 내부 검색 함수 (자동 검색용, 결과 반환)
-  const fetchWithMethodInternal = async (store, method, isbnVal, titleVal, authorVal) => {
-    setData(prev => ({ ...prev, [store]: { loading: true } }));
+  const fetchWithMethodInternal = (store, method, isbnVal, titleVal, authorVal) => {
+    return new Promise((resolve) => {
+      setData(prev => ({ ...prev, [store]: { loading: true } }));
 
-    try {
       const params = new URLSearchParams();
 
       switch (method) {
@@ -101,31 +101,36 @@ export default function Bookstore(props) {
 
       if (params.toString() === '') {
         setData(prev => ({ ...prev, [store]: { error: true, message: '검색어가 없습니다.' } }));
-        return null;
+        resolve(null);
+        return;
       }
 
-      const res = await fetch(`${getApiUrlPrefix()}/search/bookstore/${store}?${params.toString()}`);
-      const json = await res.json();
-      setData(prev => ({ ...prev, [store]: json }));
+      rawJsonGetReq(
+        `/search/bookstore/${store}?${params.toString()}`,
+        (json) => {
+          setData(prev => ({ ...prev, [store]: json }));
 
-      // Yes24 검색 결과의 첫 번째 카테고리를 부모에게 전달
-      if (store === 'yes24' && json?.status === 'success' && json?.result?.length > 0) {
-        const firstCategory = json.result[0]?.category;
-        if (firstCategory && props.onCategoryFound) {
-          props.onCategoryFound(firstCategory);
+          // Yes24 검색 결과의 첫 번째 카테고리를 부모에게 전달
+          if (store === 'yes24' && json?.status === 'success' && json?.result?.length > 0) {
+            const firstCategory = json.result[0]?.category;
+            if (firstCategory && props.onCategoryFound) {
+              props.onCategoryFound(firstCategory);
+            }
+          }
+
+          resolve(json);
+        },
+        (error) => {
+          console.error(error);
+          setData(prev => ({ ...prev, [store]: { error: true, message: '검색 중 오류가 발생했습니다.' } }));
+          resolve(null);
         }
-      }
-
-      return json;
-    } catch (e) {
-      console.error(e);
-      setData(prev => ({ ...prev, [store]: { error: true, message: '검색 중 오류가 발생했습니다.' } }));
-      return null;
-    }
+      );
+    });
   };
 
   // 특정 검색 방법으로 검색 수행 (버튼 클릭용)
-  const fetchWithMethod = async (store, method) => {
+  const fetchWithMethod = (store, method) => {
     const storeInfo = STORES.find(s => s.key === store);
 
     // 검색어 결정
@@ -159,36 +164,38 @@ export default function Bookstore(props) {
     // 새 검색 시작 시 기존 결과 초기화
     setData(prev => ({ ...prev, [store]: { loading: true } }));
 
-    try {
-      const params = new URLSearchParams();
+    const params = new URLSearchParams();
 
-      switch (method) {
-        case 'isbn':
-          if (isbn) params.append('isbn', isbn);
-          break;
-        case 'title_author':
-          if (title) params.append('title', title);
-          if (author) params.append('author', author);
-          break;
-        default:
-          if (isbn) params.append('isbn', isbn);
-          if (title) params.append('title', title);
-          if (author) params.append('author', author);
-      }
-
-      if (params.toString() === '') {
-        setData(prev => ({ ...prev, [store]: { error: true, message: '검색어가 없습니다.' } }));
-        return;
-      }
-
-      const res = await fetch(`${getApiUrlPrefix()}/search/bookstore/${store}?${params.toString()}`);
-      const json = await res.json();
-      // 결과를 store와 cacheKey 둘 다에 저장
-      setData(prev => ({ ...prev, [store]: json, [cacheKey]: json }));
-    } catch (e) {
-      console.error(e);
-      setData(prev => ({ ...prev, [store]: { error: true, message: '검색 중 오류가 발생했습니다.' } }));
+    switch (method) {
+      case 'isbn':
+        if (isbn) params.append('isbn', isbn);
+        break;
+      case 'title_author':
+        if (title) params.append('title', title);
+        if (author) params.append('author', author);
+        break;
+      default:
+        if (isbn) params.append('isbn', isbn);
+        if (title) params.append('title', title);
+        if (author) params.append('author', author);
     }
+
+    if (params.toString() === '') {
+      setData(prev => ({ ...prev, [store]: { error: true, message: '검색어가 없습니다.' } }));
+      return;
+    }
+
+    rawJsonGetReq(
+      `/search/bookstore/${store}?${params.toString()}`,
+      (json) => {
+        // 결과를 store와 cacheKey 둘 다에 저장
+        setData(prev => ({ ...prev, [store]: json, [cacheKey]: json }));
+      },
+      (error) => {
+        console.error(error);
+        setData(prev => ({ ...prev, [store]: { error: true, message: '검색 중 오류가 발생했습니다.' } }));
+      }
+    );
   };
 
   // 탭 내용 렌더링 함수

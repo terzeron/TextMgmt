@@ -18,6 +18,12 @@
     font-weight: bold;
 }
 
+#edit .btn.highlight {
+    background-color: #ffeb3b !important;
+    color: #000 !important;
+    border-color: #ffc107 !important;
+}
+
 #edit .directory-menu {
     height: calc(100vh - 80px);
     overflow-y: auto;
