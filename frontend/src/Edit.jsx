@@ -505,8 +505,9 @@ export default function Edit() {
                 newFolderData = appendEntryToFolderData(newFolderData, newDirName, newFileName);
                 setFolderData(newFolderData);
 
-                // 디렉토리 이동인 경우 토스트 사라진 후 다음 책으로 이동하도록 플래그 설정
+                // 디렉토리 이동인 경우 selectedCategory 초기화 후 토스트 사라진 후 다음 책으로 이동
                 if (dirName !== newDirName) {
+                    setSelectedCategory('');
                     setPendingMoveToNext(true);
                 }
             }, (error) => {
