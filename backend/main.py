@@ -4,7 +4,7 @@ import sys
 import os
 import logging.config
 from pathlib import Path
-from typing import Dict, Any, Union
+from typing import Dict, Any, Union, List
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +17,7 @@ JSON_MEDIA_TYPE = "application/json"
 from pydantic import BaseModel
 from backend.book_manager import BookManager
 from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
+from backend.category_mapping import CategoryMapping
 from urllib.parse import quote_plus
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
@@ -105,6 +106,9 @@ print("book manager ready")
 
 bookstore = Yes24Bookstore(base_dir=".", verbose=True)
 print("bookstore ready")
+
+category_mapping = CategoryMapping()
+print("category mapping ready")
 
 
 class BookModel(BaseModel):
@@ -334,3 +338,123 @@ async def exchange_facebook_token(exchange_request_body: dict):
     if "access_token" in result:
         return {"longLivedToken": result["access_token"]}
     raise HTTPException(status_code=500, detail="Failed to get long-lived token")
+
+
+# === 카테고리 매핑 API ===
+
+class CategoryKeywordsModel(BaseModel):
+    keywords: List[str]
+
+
+class CategoryMappingsModel(BaseModel):
+    mappings: Dict[str, List[str]]
+
+
+@app.get("/category-mappings")
+async def get_all_category_mappings() -> Dict[str, Any]:
+    """모든 카테고리-키워드 매핑 조회"""
+    LOGGER.debug("# get_all_category_mappings()")
+    try:
+        mappings = category_mapping.get_all_mappings()
+        return {"status": "success", "result": mappings}
+    except Exception as e:
+        LOGGER.error("get_all_category_mappings error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/category-mappings/{category}")
+async def get_category_keywords(category: str) -> Dict[str, Any]:
+    """특정 카테고리의 키워드 목록 조회"""
+    LOGGER.debug("# get_category_keywords(category='%s')", category)
+    try:
+        keywords = category_mapping.get_keywords(category)
+        return {"status": "success", "result": keywords}
+    except Exception as e:
+        LOGGER.error("get_category_keywords error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/category-mappings/{category}")
+async def set_category_keywords(category: str, body: CategoryKeywordsModel) -> Dict[str, Any]:
+    """카테고리의 키워드 목록 설정 (기존 대체)"""
+    LOGGER.debug("# set_category_keywords(category='%s', keywords=%s)", category, body.keywords)
+    try:
+        success = category_mapping.set_keywords(category, body.keywords)
+        if success:
+            return {"status": "success", "result": category_mapping.get_keywords(category)}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to set keywords")
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOGGER.error("set_category_keywords error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/category-mappings/{category}/keywords")
+async def add_category_keyword(category: str, body: Dict[str, str]) -> Dict[str, Any]:
+    """카테고리에 키워드 추가"""
+    keyword = body.get("keyword", "")
+    LOGGER.debug("# add_category_keyword(category='%s', keyword='%s')", category, keyword)
+    if not keyword:
+        raise HTTPException(status_code=400, detail="Keyword is required")
+    try:
+        success = category_mapping.add_keyword(category, keyword)
+        if success:
+            return {"status": "success", "result": category_mapping.get_keywords(category)}
+        else:
+            return {"status": "duplicate", "message": "Keyword already exists", "result": category_mapping.get_keywords(category)}
+    except Exception as e:
+        LOGGER.error("add_category_keyword error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/category-mappings/{category}/keywords/{keyword}")
+async def remove_category_keyword(category: str, keyword: str) -> Dict[str, Any]:
+    """카테고리에서 키워드 삭제"""
+    LOGGER.debug("# remove_category_keyword(category='%s', keyword='%s')", category, keyword)
+    try:
+        success = category_mapping.remove_keyword(category, keyword)
+        if success:
+            return {"status": "success", "result": category_mapping.get_keywords(category)}
+        else:
+            raise HTTPException(status_code=404, detail="Keyword not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOGGER.error("remove_category_keyword error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/category-mappings/{category}")
+async def delete_category_mapping(category: str) -> Dict[str, Any]:
+    """카테고리의 모든 키워드 삭제"""
+    LOGGER.debug("# delete_category_mapping(category='%s')", category)
+    try:
+        success = category_mapping.delete_category(category)
+        if success:
+            return {"status": "success"}
+        else:
+            raise HTTPException(status_code=404, detail="Category not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOGGER.error("delete_category_mapping error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/category-mappings")
+async def update_all_category_mappings(body: CategoryMappingsModel) -> Dict[str, Any]:
+    """전체 매핑 일괄 업데이트"""
+    LOGGER.debug("# update_all_category_mappings()")
+    try:
+        success = category_mapping.update_all_mappings(body.mappings)
+        if success:
+            return {"status": "success", "result": category_mapping.get_all_mappings()}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to update mappings")
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOGGER.error("update_all_category_mappings error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))

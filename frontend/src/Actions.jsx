@@ -9,7 +9,7 @@ import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import {faTruckMoving, faUpload} from '@fortawesome/free-solid-svg-icons';
 
 import {getRandomMediumColor, ROOT_DIRECTORY} from './Common';
-import {loadCategoryMappings} from './CategoryMapping';
+import {loadCategoryMappings, fetchCategoryMappings, isCacheInitialized} from './CategoryMapping';
 
 
 // 레벤슈타인 거리 계산
@@ -107,16 +107,24 @@ const findSimilarCategory = (bookstoreCategory, categoryList) => {
 export default function Actions(props) {
     const [renderingInfoList, setRenderingInfoList] = useState([]);
     const [highlightedCategory, setHighlightedCategory] = useState(null);
+    const [mappingsLoaded, setMappingsLoaded] = useState(isCacheInitialized());
+
+    // 매핑 캐시 초기화
+    useEffect(() => {
+        if (!isCacheInitialized()) {
+            fetchCategoryMappings().then(() => setMappingsLoaded(true));
+        }
+    }, []);
 
     // Yes24 카테고리와 유사한 디렉토리 찾기
     useEffect(() => {
-        if (props.suggestedCategory && props.otherCategoryList?.length) {
+        if (props.suggestedCategory && props.otherCategoryList?.length && mappingsLoaded) {
             const similar = findSimilarCategory(props.suggestedCategory, props.otherCategoryList);
             setHighlightedCategory(similar);
         } else {
             setHighlightedCategory(null);
         }
-    }, [props.suggestedCategory, props.otherCategoryList]);
+    }, [props.suggestedCategory, props.otherCategoryList, mappingsLoaded]);
 
     useEffect(() => {
         const infoList = props.otherCategoryList?.map(category => {
