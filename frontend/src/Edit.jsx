@@ -40,14 +40,25 @@ export default function Edit() {
     const [viewUrl, setViewUrl] = useState('');
     const [downloadUrl, setDownloadUrl] = useState('');
     const [suggestedCategories, setSuggestedCategories] = useState({});
+    const [pendingMoveToNext, setPendingMoveToNext] = useState(false); // 이동 성공 후 다음 책으로 이동 대기
 
-    // 메시지 자동 사라짐 (5초 후)
+    // 메시지 자동 사라짐 (3초 후) + 이동 성공 시 다음 책 로딩
     useEffect(() => {
         if (successMessage) {
-            const timer = setTimeout(() => setSuccessMessage(''), 5000);
+            const timer = setTimeout(() => {
+                setSuccessMessage('');
+                // 이동 성공 후 다음 책으로 이동
+                if (pendingMoveToNext) {
+                    setSelectedCategory('');
+                    setPendingMoveToNext(false);
+                    if (nextEntryId) {
+                        entryClicked(nextEntryId);
+                    }
+                }
+            }, 3000);
             return () => clearTimeout(timer);
         }
-    }, [successMessage]);
+    }, [successMessage, pendingMoveToNext, nextEntryId, entryClicked]);
 
     useEffect(() => {
         if (errorMessage) {
@@ -482,9 +493,9 @@ export default function Edit() {
                 newFolderData = appendEntryToFolderData(newFolderData, newDirName, newFileName);
                 setFolderData(newFolderData);
 
-                // 디렉토리 이동인 경우 다음 책으로 이동
-                if (dirName !== newDirName && nextEntryId) {
-                    entryClicked(nextEntryId);
+                // 디렉토리 이동인 경우 토스트 사라진 후 다음 책으로 이동하도록 플래그 설정
+                if (dirName !== newDirName) {
+                    setPendingMoveToNext(true);
                 }
             }, (error) => {
                 setErrorMessage(`책 이름 변경에 실패했습니다. ${error}`);
