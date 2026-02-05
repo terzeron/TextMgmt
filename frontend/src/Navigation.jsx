@@ -41,20 +41,41 @@ export default function Navigation() {
             return;
         }
 
-        // 🔹 localStorage에서 저장된 정보 가져오기
+        // 🔹 localStorage에서 저장된 토큰으로 Facebook API 호출하여 프로필 정보 갱신
         const storedToken = localStorage.getItem('longLivedToken');
         const storedEmail = localStorage.getItem('email');
-        const storedName = localStorage.getItem('name');
-        const storedPicture = localStorage.getItem('picture');
 
-        if (storedToken) {
+        if (storedToken && storedEmail === adminEmail) {
             setLogin(true);
-            if (storedEmail === adminEmail) {
-                setAuthorized(true);
-                setName(storedName || '');
-                setEmail(storedEmail || '');
-                setPicture(storedPicture || '');
-            }
+            setAuthorized(true);
+
+            // Facebook Graph API로 최신 프로필 정보 가져오기 (프로필 이미지 URL은 만료되므로 매번 갱신)
+            fetch(`https://graph.facebook.com/me?fields=id,name,email,picture.width(50).height(50)&access_token=${storedToken}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) {
+                        console.error('Facebook API Error:', data.error);
+                        // 토큰 만료 시 로그아웃 처리
+                        if (data.error.code === 190) {
+                            setLogin(false);
+                            setAuthorized(false);
+                            localStorage.removeItem('longLivedToken');
+                            localStorage.removeItem('accessToken');
+                            localStorage.removeItem('name');
+                            localStorage.removeItem('email');
+                        }
+                        return;
+                    }
+                    setName(data.name || '');
+                    setEmail(data.email || '');
+                    setPicture(data.picture?.data?.url || '');
+                })
+                .catch(err => {
+                    console.error('Failed to fetch Facebook profile:', err);
+                    // 오류 시 저장된 정보 사용 (이미지는 깨질 수 있음)
+                    setName(localStorage.getItem('name') || '');
+                    setEmail(storedEmail || '');
+                });
         }
     }, [adminEmail, appId]);
 
@@ -90,10 +111,7 @@ export default function Navigation() {
 
         const profileName = response.name || 'Unknown';
         const profileEmail = response.email || '';
-        // Facebook Graph API의 영구적인 프로필 이미지 URL 사용 (임시 URL은 만료됨)
-        const profilePicture = response.id
-            ? `https://graph.facebook.com/${response.id}/picture?width=50&height=50`
-            : '/default.jpg';
+        const profilePicture = response.picture?.data?.url || '';
 
         setName(profileName);
         setEmail(profileEmail);
@@ -103,7 +121,7 @@ export default function Navigation() {
             setAuthorized(true);
             localStorage.setItem('name', profileName);
             localStorage.setItem('email', profileEmail);
-            localStorage.setItem('picture', profilePicture);
+            // picture는 임시 URL이므로 저장하지 않음 (페이지 로드 시 API로 갱신)
         }
     };
 
