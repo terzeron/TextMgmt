@@ -43,8 +43,8 @@ const levenshteinSimilarity = (str1, str2) => {
     return maxLen === 0 ? 1 : 1 - distance / maxLen;
 };
 
-// 유사도 계산 (레벤슈타인 + 포함 보너스)
-// 포함 관계가 있으면 높은 점수, 그렇지 않으면 레벤슈타인 유사도
+// 유사도 계산 (포함 관계가 있을 때만 유사도 부여)
+// 포함 관계가 없으면 0점 (레벤슈타인 유사도 사용하지 않음)
 const calculateSimilarity = (str1, str2) => {
     if (!str1 || !str2) return 0;
     const s1 = str1.toLowerCase();
@@ -53,7 +53,7 @@ const calculateSimilarity = (str1, str2) => {
     // 완전 일치
     if (s1 === s2) return 1.0;
 
-    // 포함 관계 체크 - 짧은 문자열이 2글자 이상이면 포함 보너스
+    // 포함 관계 체크 - 짧은 문자열이 2글자 이상이어야 함
     const shorter = s1.length <= s2.length ? s1 : s2;
     const longer = s1.length > s2.length ? s1 : s2;
 
@@ -63,7 +63,8 @@ const calculateSimilarity = (str1, str2) => {
         return 0.6 + (ratio * 0.3); // 비율 100%면 0.9, 33%면 0.7
     }
 
-    return levenshteinSimilarity(s1, s2);
+    // 포함 관계가 없으면 0점
+    return 0;
 };
 
 // 특수기호로 문자열을 분리하여 키워드 추출
