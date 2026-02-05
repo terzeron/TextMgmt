@@ -155,7 +155,7 @@ export default function Actions(props) {
                 }
                 {
                     renderingInfoList.map(info => {
-                        const isHighlighted = highlightedCategories.includes(info['key']);
+                        const isHighlighted = Array.isArray(highlightedCategories) && highlightedCategories.includes(info['key']);
                         return (
                             <Button
                                 variant="outline-secondary"
