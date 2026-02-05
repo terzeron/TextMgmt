@@ -44,38 +44,46 @@ const levenshteinSimilarity = (str1, str2) => {
 };
 
 // 유사도 계산 (레벤슈타인 + 포함 보너스)
-// 포함 관계가 있으면 최소 0.8, 그렇지 않으면 레벤슈타인 유사도
+// 포함 관계가 있으면 높은 점수, 그렇지 않으면 레벤슈타인 유사도
 const calculateSimilarity = (str1, str2) => {
     if (!str1 || !str2) return 0;
     const s1 = str1.toLowerCase();
     const s2 = str2.toLowerCase();
 
-    // 포함 관계 체크 (짧은 문자열이 긴 문자열에 포함되면 0.8)
-    if (s1.includes(s2) || s2.includes(s1)) {
-        return 0.8;
+    // 완전 일치
+    if (s1 === s2) return 1.0;
+
+    // 포함 관계 체크 - 짧은 문자열이 2글자 이상이고 긴 문자열 길이의 50% 이상일 때만 높은 점수
+    const shorter = s1.length <= s2.length ? s1 : s2;
+    const longer = s1.length > s2.length ? s1 : s2;
+
+    if (longer.includes(shorter) && shorter.length >= 2) {
+        const ratio = shorter.length / longer.length;
+        if (ratio >= 0.5) {
+            return 0.8;
+        }
+        // 비율이 낮으면 레벤슈타인으로 계산
     }
 
     return levenshteinSimilarity(s1, s2);
 };
 
-// 서점 카테고리와 디렉토리의 유사도 계산
+// 단일 서점 카테고리와 디렉토리의 유사도 점수 계산
 // - 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
-// - 서점 카테고리의 하위 레벨 키워드와 비교 (3레벨 이상 우선, 없으면 마지막 2개)
-// - 상위 N개 카테고리 반환
-const findTopSimilarCategories = (bookstoreCategory, categoryList, topN = 3) => {
-    if (!bookstoreCategory || !categoryList?.length) return [];
+// - 서점 카테고리의 가장 깊은 레벨만 사용
+// - { category: score } 형태의 객체 반환
+const calculateCategoryScores = (bookstoreCategory, categoryList) => {
+    if (!bookstoreCategory || !categoryList?.length) return {};
 
     // 서점 카테고리를 '>'로 분리 (예: "국내도서>인문학>심리학>심리학 일반")
     const categoryParts = bookstoreCategory.split('>').map(s => s.trim());
-    // 3레벨 이상이 있으면 사용, 없으면 마지막 2개 (최소 1개)
-    const deepKeywords = categoryParts.length > 2
-        ? categoryParts.slice(2)
-        : categoryParts.slice(-Math.min(2, categoryParts.length));
+    // 가장 깊은 카테고리만 사용
+    const deepKeywords = categoryParts.length > 0 ? [categoryParts[categoryParts.length - 1]] : [];
 
-    if (deepKeywords.length === 0) return [];
+    if (deepKeywords.length === 0) return {};
 
     const mappings = loadCategoryMappings();
-    const scores = [];
+    const scores = {};
 
     for (const category of categoryList) {
         // 디렉토리명에서 숫자 prefix 제거 (예: "4_심리학뇌과학" -> "심리학뇌과학")
@@ -86,7 +94,7 @@ const findTopSimilarCategories = (bookstoreCategory, categoryList, topN = 3) => 
         // 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
         const dirKeywords = [...(mappings[category] || []), categoryName];
 
-        // 서점 3,4레벨 키워드와 디렉토리 키워드 간 최대 유사도 계산
+        // 서점 카테고리와 디렉토리 키워드 간 최대 유사도 계산
         let maxSimilarity = 0;
         for (const deepKeyword of deepKeywords) {
             for (const dirKeyword of dirKeywords) {
@@ -98,15 +106,35 @@ const findTopSimilarCategories = (bookstoreCategory, categoryList, topN = 3) => 
         }
 
         if (maxSimilarity >= 0.4) { // 최소 40% 유사도 이상
-            scores.push({ category, score: maxSimilarity });
+            scores[category] = maxSimilarity;
+        }
+    }
+
+    return scores;
+};
+
+// 여러 서점 카테고리의 유사도를 합산하여 상위 N개 반환
+// - suggestedCategories: { yes24: 'category1', aladin: 'category2', ... }
+const findTopSimilarCategories = (suggestedCategories, categoryList, topN = 3) => {
+    if (!suggestedCategories || !categoryList?.length) return [];
+
+    const combinedScores = {};
+
+    // 각 서점의 카테고리에 대해 유사도 점수 계산 후 합산
+    for (const [store, bookstoreCategory] of Object.entries(suggestedCategories)) {
+        if (!bookstoreCategory) continue;
+
+        const storeScores = calculateCategoryScores(bookstoreCategory, categoryList);
+        for (const [category, score] of Object.entries(storeScores)) {
+            combinedScores[category] = (combinedScores[category] || 0) + score;
         }
     }
 
     // 점수 내림차순 정렬 후 상위 N개 반환
-    return scores
-        .sort((a, b) => b.score - a.score)
+    return Object.entries(combinedScores)
+        .sort((a, b) => b[1] - a[1])
         .slice(0, topN)
-        .map(item => item.category);
+        .map(item => item[0]);
 };
 
 export default function Actions(props) {
@@ -123,13 +151,13 @@ export default function Actions(props) {
         }
     }, []);
 
-    // Yes24 카테고리와 유사한 상위 3개 디렉토리 찾기 (useMemo로 동기 계산)
+    // 여러 서점 카테고리와 유사한 상위 3개 디렉토리 찾기 (useMemo로 동기 계산)
     const highlightedCategories = useMemo(() => {
-        if (props.suggestedCategory && props.otherCategoryList?.length && mappingsLoaded) {
-            return findTopSimilarCategories(props.suggestedCategory, props.otherCategoryList, 3);
+        if (props.suggestedCategories && Object.keys(props.suggestedCategories).length > 0 && props.otherCategoryList?.length && mappingsLoaded) {
+            return findTopSimilarCategories(props.suggestedCategories, props.otherCategoryList, 3);
         }
         return [];
-    }, [props.suggestedCategory, props.otherCategoryList, mappingsLoaded]);
+    }, [props.suggestedCategories, props.otherCategoryList, mappingsLoaded]);
 
     useEffect(() => {
         const infoList = props.otherCategoryList?.map(category => {
@@ -198,5 +226,5 @@ Actions.propTypes = {
     selectDirectoryButtonClicked: PropTypes.func,
     newFileName: PropTypes.string.isRequired,
     toNextEntryClicked: PropTypes.func.isRequired,
-    suggestedCategory: PropTypes.string,
+    suggestedCategories: PropTypes.object,
 };

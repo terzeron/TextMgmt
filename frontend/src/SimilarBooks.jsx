@@ -33,7 +33,7 @@ export default function SimilarBooks({bookId, onSelect}) {
                                 <span style={{cursor: 'pointer'}} onClick={() => onSelect && onSelect(`${book.category}/${book.book_id}`)}>
                                     {book.file_path.split('/').pop()}
                                 </span>
-                                <div>
+                                <div style={{whiteSpace: 'nowrap', flexShrink: 0}}>
                                     <Button
                                         variant="outline-warning" className="btn-xs"
                                         onClick={() => window.open(`/edit/${book.category}/${book.book_id}`, '_blank', 'noopener')}

@@ -31,8 +31,8 @@ export default function Bookstore(props) {
     setData({});
     setActiveKey(STORES[0].key);
     // 책이 변경되면 추천 카테고리 초기화
-    if (props.onCategoryFound) {
-      props.onCategoryFound('');
+    if (props.onCategoriesFound) {
+      props.onCategoriesFound({});
     }
   }, [props.bookInfo]);
 
@@ -43,13 +43,13 @@ export default function Bookstore(props) {
       const currentTitle = props.bookInfo.title || '';
       const currentAuthor = props.bookInfo.author || '';
 
-      if (!currentIsbn && !currentTitle && !currentAuthor) return;
+      if (!currentIsbn && !currentTitle && !currentAuthor) return null;
 
       // 1. ISBN 검색 시도 (ISBN이 있는 경우)
       if (currentIsbn) {
         const result = await fetchWithMethodInternal(store, 'isbn', currentIsbn, currentTitle, currentAuthor);
         if (result?.status === 'success' && result?.result?.length > 0) {
-          return; // 결과가 있으면 종료
+          return result;
         }
       }
 
@@ -57,19 +57,33 @@ export default function Bookstore(props) {
       if (currentTitle || currentAuthor) {
         const result = await fetchWithMethodInternal(store, 'title_author', currentIsbn, currentTitle, currentAuthor);
         if (result?.status === 'success' && result?.result?.length > 0) {
-          return; // 결과가 있으면 종료
+          return result;
         }
       }
 
       // 3. 제목만으로 검색 시도 (저자+제목으로 결과가 없는 경우)
       if (currentTitle) {
-        await fetchWithMethodInternal(store, 'title_only', currentIsbn, currentTitle, currentAuthor);
+        return await fetchWithMethodInternal(store, 'title_only', currentIsbn, currentTitle, currentAuthor);
       }
+
+      return null;
     };
 
     const runAutoSearch = async () => {
-      await autoSearch('yes24');
-      await autoSearch('aladin');
+      const yes24Result = await autoSearch('yes24');
+      const aladinResult = await autoSearch('aladin');
+
+      // 두 서점 검색 결과의 카테고리를 수집하여 부모에게 전달
+      if (props.onCategoriesFound) {
+        const categories = {};
+        if (yes24Result?.status === 'success' && yes24Result?.result?.length > 0) {
+          categories.yes24 = yes24Result.result[0]?.category || '';
+        }
+        if (aladinResult?.status === 'success' && aladinResult?.result?.length > 0) {
+          categories.aladin = aladinResult.result[0]?.category || '';
+        }
+        props.onCategoriesFound(categories);
+      }
     };
 
     runAutoSearch();
@@ -109,14 +123,6 @@ export default function Bookstore(props) {
         `/search/bookstore/${store}?${params.toString()}`,
         (json) => {
           setData(prev => ({ ...prev, [store]: json }));
-
-          // Yes24 검색 결과의 첫 번째 카테고리를 부모에게 전달
-          if (store === 'yes24' && json?.status === 'success' && json?.result?.length > 0) {
-            const firstCategory = json.result[0]?.category;
-            if (firstCategory && props.onCategoryFound) {
-              props.onCategoryFound(firstCategory);
-            }
-          }
 
           resolve(json);
         },
@@ -189,15 +195,27 @@ export default function Bookstore(props) {
       `/search/bookstore/${store}?${params.toString()}`,
       (json) => {
         // 결과를 store와 cacheKey 둘 다에 저장
-        setData(prev => ({ ...prev, [store]: json, [cacheKey]: json }));
+        setData(prev => {
+          const newData = { ...prev, [store]: json, [cacheKey]: json };
 
-        // Yes24 검색 결과의 첫 번째 카테고리를 부모에게 전달
-        if (store === 'yes24' && json?.status === 'success' && json?.result?.length > 0) {
-          const firstCategory = json.result[0]?.category;
-          if (firstCategory && props.onCategoryFound) {
-            props.onCategoryFound(firstCategory);
+          // Yes24 또는 알라딘 검색 결과의 카테고리를 부모에게 전달
+          if ((store === 'yes24' || store === 'aladin') && props.onCategoriesFound) {
+            const categories = {};
+            // yes24 카테고리
+            const yes24Data = store === 'yes24' ? json : newData['yes24'];
+            if (yes24Data?.status === 'success' && yes24Data?.result?.length > 0) {
+              categories.yes24 = yes24Data.result[0]?.category || '';
+            }
+            // aladin 카테고리
+            const aladinData = store === 'aladin' ? json : newData['aladin'];
+            if (aladinData?.status === 'success' && aladinData?.result?.length > 0) {
+              categories.aladin = aladinData.result[0]?.category || '';
+            }
+            props.onCategoriesFound(categories);
           }
-        }
+
+          return newData;
+        });
       },
       (error) => {
         console.error(error);
@@ -306,5 +324,5 @@ Bookstore.propTypes = {
     title: PropTypes.string,
     isbn: PropTypes.string
   }).isRequired,
-  onCategoryFound: PropTypes.func
+  onCategoriesFound: PropTypes.func
 };

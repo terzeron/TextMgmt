@@ -38,7 +38,7 @@ export default function Edit() {
     const [newFileName, setNewFileName] = useState('');
     const [viewUrl, setViewUrl] = useState('');
     const [downloadUrl, setDownloadUrl] = useState('');
-    const [suggestedCategory, setSuggestedCategory] = useState('');
+    const [suggestedCategories, setSuggestedCategories] = useState({});
 
     // 메시지 자동 사라짐 (5초 후)
     useEffect(() => {
@@ -618,7 +618,7 @@ export default function Edit() {
 
                                                     <Row className="button_group">
                                                         <Col>
-                                                            <Actions selectedEntryId={selectedEntryId} selectedCategory={selectedCategory} otherCategoryList={otherCategoryList} newFileName={newFileName} moveToUpperButtonClicked={moveToUpperButtonClicked} moveToDirectoryButtonClicked={moveToDirectoryButtonClicked} selectDirectoryButtonClicked={selectDirectoryButtonClicked} toNextEntryClicked={toNextEntryButtonClicked} suggestedCategory={suggestedCategory}/>
+                                                            <Actions selectedEntryId={selectedEntryId} selectedCategory={selectedCategory} otherCategoryList={otherCategoryList} newFileName={newFileName} moveToUpperButtonClicked={moveToUpperButtonClicked} moveToDirectoryButtonClicked={moveToDirectoryButtonClicked} selectDirectoryButtonClicked={selectDirectoryButtonClicked} toNextEntryClicked={toNextEntryButtonClicked} suggestedCategories={suggestedCategories}/>
                                                         </Col>
                                                     </Row>
 
@@ -646,7 +646,7 @@ export default function Edit() {
 
                                 <Col id="right_panel" md="6" lg="7" className="ps-0 pe-0">
                                     <SimilarBooks bookId={bookInfo['book_id']} onSelect={entryClicked}/>
-                                    <Bookstore bookInfo={bookInfo} onCategoryFound={setSuggestedCategory}/>
+                                    <Bookstore bookInfo={bookInfo} onCategoriesFound={setSuggestedCategories}/>
                                 </Col>
                             </Row>
 

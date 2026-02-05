@@ -3,7 +3,6 @@ import {useOutletContext} from 'react-router-dom';
 
 import './Edit.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
-import {Container, Row, Col} from 'react-bootstrap';
 
 import {jsonGetReq} from './Common';
 import CategoryMapping from './CategoryMapping';
@@ -25,16 +24,11 @@ export default function Admin() {
     }, []);
 
     return (
-        <Container id="edit">
-            <Row>
-                <Col>
-                    <h5 className="mb-3">관리</h5>
-                    {errorMessage && (
-                        <div className="alert alert-danger">{errorMessage}</div>
-                    )}
-                    <CategoryMapping categoryList={categoryList}/>
-                </Col>
-            </Row>
-        </Container>
+        <>
+            {errorMessage && (
+                <div className="alert alert-danger">{errorMessage}</div>
+            )}
+            <CategoryMapping categoryList={categoryList}/>
+        </>
     );
 }
