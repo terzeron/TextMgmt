@@ -241,6 +241,13 @@ export default function Actions(props) {
         return [];
     }, [props.suggestedCategories, props.otherCategoryList, mappingsLoaded]);
 
+    // 유사도 1위 카테고리가 변경되면 자동으로 선택
+    useEffect(() => {
+        if (highlightedCategories.length > 0 && props.selectDirectoryButtonClicked) {
+            props.selectDirectoryButtonClicked(null, highlightedCategories[0]);
+        }
+    }, [highlightedCategories, props.selectDirectoryButtonClicked]);
+
     useEffect(() => {
         const infoList = props.otherCategoryList?.map(category => {
             const hasSubCategory = category.includes('_');
