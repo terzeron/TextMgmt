@@ -32,7 +32,19 @@ echo ""
 echo ">>> Creating TLS Certificate"
 kubectl apply -f "$SCRIPT_DIR/tm-certificate.yml"
 
-# 4. Elasticsearch 설치
+# 4. Google OAuth Secret 생성
+echo ""
+echo ">>> Creating Google OAuth Secret"
+if [ -z "$TM_GOOGLE_CLIENT_ID" ] || [ -z "$TM_GOOGLE_CLIENT_SECRET" ]; then
+    echo "Warning: TM_GOOGLE_CLIENT_ID or TM_GOOGLE_CLIENT_SECRET not set in .env"
+else
+    kubectl -n $NAMESPACE create secret generic tm-google-cred \
+      --from-literal=client-id="$TM_GOOGLE_CLIENT_ID" \
+      --from-literal=client-secret="$TM_GOOGLE_CLIENT_SECRET" \
+      --dry-run=client -o yaml | kubectl apply -f -
+fi
+
+# 5. Elasticsearch 설치
 echo ""
 echo ">>> Installing Elasticsearch (this may take a while)"
 read -p "Install Elasticsearch? (y/N): " install_es
@@ -44,12 +56,12 @@ else
     echo "Skipping Elasticsearch installation"
 fi
 
-# 5. Application Deployment 적용
+# 6. Application Deployment 적용
 echo ""
 echo ">>> Applying application deployments"
 kubectl apply -f "$SCRIPT_DIR/tm-deployment.yml"
 
-# 6. 상태 확인
+# 7. 상태 확인
 echo ""
 echo "=== Deployment Status ==="
 kubectl get all -n $NAMESPACE

@@ -98,8 +98,8 @@ def custom_jsonable_encoder(obj, **kwargs):
 # FastAPI 앱에 커스텀 JSON 인코더 설정
 app.json_encoder = custom_jsonable_encoder
 
-TM_FACEBOOK_APP_ID = os.getenv("TM_FACEBOOK_APP_ID")
-TM_FACEBOOK_APP_SECRET = os.getenv("TM_FACEBOOK_APP_SECRET")
+TM_GOOGLE_CLIENT_ID = os.getenv("TM_GOOGLE_CLIENT_ID")
+TM_GOOGLE_CLIENT_SECRET = os.getenv("TM_GOOGLE_CLIENT_SECRET")
 
 book_manager = BookManager()
 print("book manager ready")
@@ -318,26 +318,33 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
     }
 
 
-@app.post("/auth/facebook")
-async def exchange_facebook_token(exchange_request_body: dict):
-    access_token = exchange_request_body.get("accessToken")
-    if not access_token:
-        raise HTTPException(status_code=400, detail="Access token is required")
+@app.post("/auth/google")
+async def verify_google_token(request_body: dict):
+    credential = request_body.get("credential")
+    if not credential:
+        raise HTTPException(status_code=400, detail="Credential is required")
 
     async with httpx.AsyncClient() as client:
-        url = "https://graph.facebook.com/v12.0/oauth/access_token"
-        params = {
-            "grant_type": "fb_exchange_token",
-            "client_id": TM_FACEBOOK_APP_ID,
-            "client_secret": TM_FACEBOOK_APP_SECRET,
-            "fb_exchange_token": access_token
-        }
-        response = await client.get(url, params=params)
+        # Google ID Token 검증
+        url = f"https://oauth2.googleapis.com/tokeninfo?id_token={credential}"
+        response = await client.get(url)
         result = response.json()
 
-    if "access_token" in result:
-        return {"longLivedToken": result["access_token"]}
-    raise HTTPException(status_code=500, detail="Failed to get long-lived token")
+    if "error" in result:
+        LOGGER.error("Google token verification failed: %s", result.get("error_description", result.get("error")))
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+
+    # Client ID 검증
+    if result.get("aud") != TM_GOOGLE_CLIENT_ID:
+        LOGGER.error("Google token audience mismatch: expected %s, got %s", TM_GOOGLE_CLIENT_ID, result.get("aud"))
+        raise HTTPException(status_code=401, detail="Invalid token audience")
+
+    return {
+        "email": result.get("email"),
+        "name": result.get("name"),
+        "picture": result.get("picture"),
+        "email_verified": result.get("email_verified")
+    }
 
 
 # === 카테고리 매핑 API ===
