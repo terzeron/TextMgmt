@@ -55,7 +55,6 @@ export default function Edit() {
     const [viewUrl, setViewUrl] = useState('');
     const [downloadUrl, setDownloadUrl] = useState('');
     const [suggestedCategories, setSuggestedCategories] = useState({});
-    const [pendingMoveToNext, setPendingMoveToNext] = useState(false); // 이동 성공 후 다음 책으로 이동 대기
 
     // 이동 완료 후 다음 책으로 이동할 entryId 저장
     const [pendingNextEntryId, setPendingNextEntryId] = useState(null);
@@ -65,24 +64,13 @@ export default function Edit() {
     // nextEntryId의 최신 값을 저장하는 ref (타이머 콜백에서 최신 값 참조용)
     const nextEntryIdRef = useRef(null);
 
-    // 메시지 자동 사라짐 (3초 후) + 이동 성공 시 다음 책 로딩 준비
+    // 메시지 자동 사라짐 (3초 후)
     useEffect(() => {
         if (successMessage) {
-            const timer = setTimeout(() => {
-                setSuccessMessage('');
-                // 이동 성공 후 처리
-                if (pendingMoveToNext) {
-                    setSelectedCategory('');
-                    setPendingMoveToNext(false);
-                    // 다음 책이 있으면 이동 (ref를 통해 최신 값 참조)
-                    if (nextEntryIdRef.current) {
-                        setPendingNextEntryId(nextEntryIdRef.current);
-                    }
-                }
-            }, 3000);
+            const timer = setTimeout(() => setSuccessMessage(''), 3000);
             return () => clearTimeout(timer);
         }
-    }, [successMessage, pendingMoveToNext]); // nextEntryId 의존성 제거
+    }, [successMessage]);
 
     useEffect(() => {
         if (errorMessage) {
@@ -547,10 +535,12 @@ export default function Edit() {
                 newFolderData = appendEntryToFolderData(newFolderData, newDirName, newFileName);
                 setFolderData(newFolderData);
 
-                // 디렉토리 이동인 경우 selectedCategory 초기화 후 토스트 사라진 후 다음 책으로 이동
+                // 디렉토리 이동인 경우 바로 다음 책으로 이동 (토스트는 별도로 표시됨)
                 if (dirName !== newDirName) {
                     setSelectedCategory('');
-                    setPendingMoveToNext(true);
+                    if (nextEntryIdRef.current) {
+                        setPendingNextEntryId(nextEntryIdRef.current);
+                    }
                 }
             }, (error) => {
                 setErrorMessage(`책 이름 변경에 실패했습니다. ${error}`);
