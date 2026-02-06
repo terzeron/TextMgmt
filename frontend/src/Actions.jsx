@@ -227,7 +227,8 @@ export default function Actions(props) {
     // 여러 서점 카테고리와 유사한 상위 5개 디렉토리 찾기 (useMemo로 동기 계산)
     const highlightedCategories = useMemo(() => {
         if (props.suggestedCategories && Object.keys(props.suggestedCategories).length > 0 && props.otherCategoryList?.length && mappingsLoaded) {
-            return findTopSimilarCategories(props.suggestedCategories, props.otherCategoryList, 5);
+            const filteredCategoryList = props.otherCategoryList.filter(cat => cat !== '_root');
+            return findTopSimilarCategories(props.suggestedCategories, filteredCategoryList, 5);
         }
         return [];
     }, [props.suggestedCategories, props.otherCategoryList, mappingsLoaded]);
@@ -240,15 +241,17 @@ export default function Actions(props) {
     }, [highlightedCategories, props.selectDirectoryButtonClicked]);
 
     useEffect(() => {
-        const infoList = props.otherCategoryList?.map(category => {
-            const hasSubCategory = category.includes('_');
-            if (hasSubCategory) {
-                const prefix = category.split('_')[0];
-                const subCategory = category.split('_')[1];
-                return {key: category, label: subCategory, style: {backgroundColor: getRandomMediumColor(prefix), color: 'white'}};
-            }
-            return {key: category, label: category, style: {}, class: 'btn-light'};
-        });
+        const infoList = props.otherCategoryList
+            ?.filter(category => category !== '_root')  // _root 카테고리 제외
+            ?.map(category => {
+                const hasSubCategory = category.includes('_');
+                if (hasSubCategory) {
+                    const prefix = category.split('_')[0];
+                    const subCategory = category.split('_')[1];
+                    return {key: category, label: subCategory, style: {backgroundColor: getRandomMediumColor(prefix), color: 'white'}};
+                }
+                return {key: category, label: category, style: {}, class: 'btn-light'};
+            });
         setRenderingInfoList(infoList);
     }, [props.otherCategoryList]);
 
