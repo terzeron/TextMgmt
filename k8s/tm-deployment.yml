@@ -5,7 +5,7 @@ metadata:
   name: tm-backend
   namespace: textmanager
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: tm-backend-app
