@@ -6,8 +6,11 @@ import PropTypes from 'prop-types';
 import {jsonGetReq} from './Common';
 
 import {Card, Button} from 'react-bootstrap';
+import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
+import {faChevronDown, faChevronRight} from "@fortawesome/free-solid-svg-icons";
 
 export default function SimilarBooks({bookId, onSelect}) {
+    const [isOpen, setIsOpen] = useState(false);
     const [similarBooks, setSimilarBooks] = useState([]);
 
     useEffect(() => {
@@ -22,10 +25,14 @@ export default function SimilarBooks({bookId, onSelect}) {
 
     return (
         <Card>
-            <Card.Header>
+            <Card.Header
+                onClick={() => setIsOpen(!isOpen)}
+                style={{cursor: 'pointer', userSelect: 'none'}}
+                className="py-2">
+                <FontAwesomeIcon icon={isOpen ? faChevronDown : faChevronRight} className="me-2"/>
                 유사한 책 목록
             </Card.Header>
-            <Suspense fallback={<div className="loading">로딩 중...</div>}>
+            {isOpen &&
                 <Card.Body>
                     {similarBooks && similarBooks.length > 0 ? (
                         similarBooks.map((book) => (
@@ -55,7 +62,7 @@ export default function SimilarBooks({bookId, onSelect}) {
                         <div>유사한 책이 없습니다.</div>
                     )}
                 </Card.Body>
-            </Suspense>
+            }
         </Card>
     );
 }

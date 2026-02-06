@@ -12,58 +12,48 @@ import {getRandomMediumColor, ROOT_DIRECTORY} from './Common';
 import {loadCategoryMappings, fetchCategoryMappings, isCacheInitialized} from './CategoryMapping';
 
 
-// 레벤슈타인 거리 계산
-const levenshteinDistance = (str1, str2) => {
-    const m = str1.length;
-    const n = str2.length;
+// 최장 공통 부분문자열 길이 계산
+const longestCommonSubstring = (str1, str2) => {
+    const m = str1.length, n = str2.length;
     const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
-
-    for (let i = 0; i <= m; i++) dp[i][0] = i;
-    for (let j = 0; j <= n; j++) dp[0][j] = j;
+    let maxLen = 0;
 
     for (let i = 1; i <= m; i++) {
         for (let j = 1; j <= n; j++) {
             if (str1[i - 1] === str2[j - 1]) {
-                dp[i][j] = dp[i - 1][j - 1];
-            } else {
-                dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+                maxLen = Math.max(maxLen, dp[i][j]);
             }
         }
     }
-    return dp[m][n];
+    return maxLen;
 };
 
-// 레벤슈타인 유사도 (0~1, 1이 완전 일치)
-const levenshteinSimilarity = (str1, str2) => {
-    if (!str1 || !str2) return 0;
-    const s1 = str1.toLowerCase();
-    const s2 = str2.toLowerCase();
-    const distance = levenshteinDistance(s1, s2);
-    const maxLen = Math.max(s1.length, s2.length);
-    return maxLen === 0 ? 1 : 1 - distance / maxLen;
-};
-
-// 유사도 계산 (포함 관계가 있을 때만 유사도 부여)
-// 포함 관계가 없으면 0점 (레벤슈타인 유사도 사용하지 않음)
+// 유사도 계산 (완전일치 > 포함관계 > 공통부분문자열)
 const calculateSimilarity = (str1, str2) => {
     if (!str1 || !str2) return 0;
     const s1 = str1.toLowerCase();
     const s2 = str2.toLowerCase();
 
-    // 완전 일치
+    // 1) 완전 일치 → 1.0
     if (s1 === s2) return 1.0;
 
-    // 포함 관계 체크 - 짧은 문자열이 2글자 이상이어야 함
+    // 2) 포함 관계 → 0.7~0.9
     const shorter = s1.length <= s2.length ? s1 : s2;
     const longer = s1.length > s2.length ? s1 : s2;
-
     if (longer.includes(shorter) && shorter.length >= 2) {
-        // 비율에 따라 점수 차등 (0.6 ~ 0.9)
         const ratio = shorter.length / longer.length;
-        return 0.6 + (ratio * 0.3); // 비율 100%면 0.9, 33%면 0.7
+        return 0.7 + (ratio * 0.2);
     }
 
-    // 포함 관계가 없으면 0점
+    // 3) 공통 부분문자열 기반 → 0.3~0.6
+    const lcsLen = longestCommonSubstring(s1, s2);
+    if (lcsLen >= 2) {  // 최소 2글자 이상 공유
+        const minLen = Math.min(s1.length, s2.length);
+        const ratio = lcsLen / minLen;
+        return 0.3 + (ratio * 0.3);  // 비율에 따라 0.3~0.6
+    }
+
     return 0;
 };
 
