@@ -1,7 +1,7 @@
 import './Edit.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
-import {useCallback, useEffect, useState, Suspense} from 'react';
+import {useCallback, useEffect, useState, useRef, Suspense} from 'react';
 import {useParams, useOutletContext} from 'react-router-dom';
 
 import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-bootstrap';
@@ -60,6 +60,11 @@ export default function Edit() {
     // 이동 완료 후 다음 책으로 이동할 entryId 저장
     const [pendingNextEntryId, setPendingNextEntryId] = useState(null);
 
+    // entryClicked 함수의 최신 참조를 저장하는 ref (useEffect 의존성 문제 해결)
+    const entryClickedRef = useRef(null);
+    // nextEntryId의 최신 값을 저장하는 ref (타이머 콜백에서 최신 값 참조용)
+    const nextEntryIdRef = useRef(null);
+
     // 메시지 자동 사라짐 (3초 후) + 이동 성공 시 다음 책 로딩 준비
     useEffect(() => {
         if (successMessage) {
@@ -69,15 +74,15 @@ export default function Edit() {
                 if (pendingMoveToNext) {
                     setSelectedCategory('');
                     setPendingMoveToNext(false);
-                    // 다음 책이 있으면 이동
-                    if (nextEntryId) {
-                        setPendingNextEntryId(nextEntryId);
+                    // 다음 책이 있으면 이동 (ref를 통해 최신 값 참조)
+                    if (nextEntryIdRef.current) {
+                        setPendingNextEntryId(nextEntryIdRef.current);
                     }
                 }
             }, 3000);
             return () => clearTimeout(timer);
         }
-    }, [successMessage, pendingMoveToNext, nextEntryId]);
+    }, [successMessage, pendingMoveToNext]); // nextEntryId 의존성 제거
 
     useEffect(() => {
         if (errorMessage) {
@@ -321,15 +326,21 @@ export default function Edit() {
         // determine nextEntryId
         const nextEntryId = determineNextEntryId(folderData, selectedEntryId);
         setNextEntryId(nextEntryId);
+        nextEntryIdRef.current = nextEntryId; // ref도 함께 업데이트
     }, [folderData, categoryList, decomposeTitle]);
+
+    // entryClicked ref 업데이트 (최신 함수 참조 유지)
+    useEffect(() => {
+        entryClickedRef.current = entryClicked;
+    }, [entryClicked]);
 
     // 이동 완료 후 다음 책으로 실제 이동
     useEffect(() => {
-        if (pendingNextEntryId) {
-            entryClicked(pendingNextEntryId);
+        if (pendingNextEntryId && entryClickedRef.current) {
+            entryClickedRef.current(pendingNextEntryId);
             setPendingNextEntryId(null);
         }
-    }, [pendingNextEntryId, entryClicked]);
+    }, [pendingNextEntryId]); // entryClicked 의존성 제거 (ref 사용)
 
     useEffect(() => {
         if (routeCategory && routeBookId && folderData.length > 0) {
@@ -548,7 +559,7 @@ export default function Edit() {
             const displayNewDirName = (newDirName === '' || newDirName === '_root') ? '최상위' : newDirName;
             setErrorMessage(`"${displayNewDirName}" 디렉토리에 "${newFileName}"이(가) 이미 존재합니다.`);
         }
-    }, [bookInfo, folderData, checkEntryExistence, appendEntryToFolderData, removeEntryFromFolderData, nextEntryId, entryClicked]);
+    }, [bookInfo, folderData, checkEntryExistence, appendEntryToFolderData, removeEntryFromFolderData]);
 
     const changeButtonClicked = useCallback(() => {
         console.log(`changeButtonClicked: selectedEntryId=${selectedEntryId}, newFileName=${newFileName}`);
