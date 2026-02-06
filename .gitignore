@@ -41,3 +41,5 @@ __pycache__
 .last_test_success
 .test_performance_cache
 .claude*
+.vagrant
+Vagrantfile
