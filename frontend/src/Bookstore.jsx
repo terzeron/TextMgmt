@@ -333,8 +333,7 @@ export default function Bookstore(props) {
               activeKey={activeKey}
               onSelect={(k) => setActiveKey(k)}
               variant="tabs"
-              className="m-0"
-            >
+              className="m-0">
             {STORES.map((store) => (
                 <Tab eventKey={store.key} title={store.label} key={store.key}>
                   {renderTabContent(store.key)}

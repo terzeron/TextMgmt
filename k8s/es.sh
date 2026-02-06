@@ -1,6 +1,7 @@
 #!/bin/bash
 
-source ~/workspace/tm/.env
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../.env"
 
 # helm repo
 helm repo add elastic https://helm.elastic.co

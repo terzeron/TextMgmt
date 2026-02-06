@@ -38,15 +38,13 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
     }
 
     return (
-        <Card className="mt-2">
+        <Card>
             <Card.Header
                 onClick={() => setIsOpen(!isOpen)}
                 style={{cursor: 'pointer', userSelect: 'none'}}
-                className="py-2"
-            >
+                className="py-2">
                 <FontAwesomeIcon icon={isOpen ? faChevronDown : faChevronRight} className="me-2"/>
                 유사도 계산 디버그
-                <Badge bg="secondary" className="ms-2">{debugInfo.categoryDetails.length}개 카테고리</Badge>
             </Card.Header>
 
             {isOpen && (

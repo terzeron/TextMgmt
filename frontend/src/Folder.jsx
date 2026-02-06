@@ -7,6 +7,7 @@ import clsx from 'clsx';
 import {animated, useSpring} from '@react-spring/web';
 import {styled, alpha} from '@mui/material/styles';
 
+import {Card} from "react-bootstrap";
 import Box from '@mui/material/Box';
 import Collapse from '@mui/material/Collapse';
 import Typography from '@mui/material/Typography';
@@ -23,6 +24,8 @@ import {unstable_useTreeItem2 as useTreeItem2} from '@mui/x-tree-view/useTreeIte
 import {TreeItem2Content, TreeItem2IconContainer, TreeItem2Label, TreeItem2Root} from '@mui/x-tree-view/TreeItem2';
 import {TreeItem2Icon} from '@mui/x-tree-view/TreeItem2Icon';
 import {TreeItem2Provider} from '@mui/x-tree-view/TreeItem2Provider';
+import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
+import {faChevronDown, faChevronRight} from "@fortawesome/free-solid-svg-icons";
 
 function DotIcon() {
     return (
@@ -245,6 +248,7 @@ const CustomTreeItem = React.forwardRef(function CustomTreeItem(props, ref) {
 });
 
 export default function Folder(props) {
+    const [isOpen, setIsOpen] = useState(false);
     const [expandedItems, setExpandedItems] = useState([]);
     const defaultExpandedItems = useMemo(() => props.folderData.map(o => o.id), [props.folderData]);
     const treeViewStyles = useMemo(() => ({
@@ -255,31 +259,45 @@ export default function Folder(props) {
     }), []);
 
     return (
-        <div id="dir_list">
-            {props.folderData && (
-                <RichTreeView
-                    items={props.folderData}
-                    aria-label="file explorer"
-                    sx={treeViewStyles}
-                    slots={{item: CustomTreeItem}}
-                    defaultExpandedItems={defaultExpandedItems}
-                    expandedItems={expandedItems}
-                    selectedItems={props.selectedItems}
-                    onSelectedItemsChange={(event, selectedId) => {
-                        setExpandedItems((prevExpandedItems) => {
-                            if (prevExpandedItems.includes(selectedId)) {
-                                return prevExpandedItems.filter(x => x !== selectedId);
-                            } else {
-                                return [...prevExpandedItems, selectedId];
-                            }
-                        });
+        <Card>
+            <Card.Header
+                onClick={() => setIsOpen(!isOpen)}
+                style={{cursor: 'pointer', userSelect: 'none'}}
+                className="py-2">
+                <FontAwesomeIcon icon={isOpen ? faChevronDown : faChevronRight} className="me-2"/>
+                디렉토리
+            </Card.Header>
+            {isOpen && (
+                <Card.Body>
+                    <div id="dir_list">
+                        {props.folderData && (
+                            <RichTreeView
+                                items={props.folderData}
+                                aria-label="file explorer"
+                                sx={treeViewStyles}
+                                slots={{item: CustomTreeItem}}
+                                defaultExpandedItems={defaultExpandedItems}
+                                expandedItems={expandedItems}
+                                selectedItems={props.selectedItems}
+                                onSelectedItemsChange={(event, selectedId) => {
+                                    setExpandedItems((prevExpandedItems) => {
+                                        if (prevExpandedItems.includes(selectedId)) {
+                                            return prevExpandedItems.filter(x => x !== selectedId);
+                                        } else {
+                                            return [...prevExpandedItems, selectedId];
+                                        }
+                                    });
 
-                        props.onClickHandler(selectedId);
-                    }}
-                />
-            )
+                                    props.onClickHandler(selectedId);
+                                }}
+                            />
+                        )
+                        }
+                    </div>
+                </Card.Body>
+                )
             }
-        </div>
+        </Card>
     );
 }
 

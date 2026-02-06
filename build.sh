@@ -1,5 +1,8 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/.env"
+
 TARGET=${1:-all}
 
 rm -rf */{nohup.out*,run.log*,.mypy_cache,__pycache__,.idea,.git}
