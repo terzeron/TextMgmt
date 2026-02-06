@@ -29,6 +29,9 @@ const longestCommonSubstring = (str1, str2) => {
     return maxLen;
 };
 
+// 한글 문자 포함 여부 확인
+const containsKorean = (str) => /[\uAC00-\uD7AF]/.test(str);
+
 // 유사도 계산 (완전일치 > 포함관계 > 공통부분문자열)
 const calculateSimilarity = (str1, str2) => {
     if (!str1 || !str2) return 0;
@@ -41,14 +44,18 @@ const calculateSimilarity = (str1, str2) => {
     // 2) 포함 관계 → 0.7~0.9
     const shorter = s1.length <= s2.length ? s1 : s2;
     const longer = s1.length > s2.length ? s1 : s2;
-    if (longer.includes(shorter) && shorter.length >= 2) {
+    // 한글은 1글자도 의미있으므로 허용, 그 외는 2글자 이상
+    const minLength = containsKorean(shorter) ? 1 : 2;
+    if (longer.includes(shorter) && shorter.length >= minLength) {
         const ratio = shorter.length / longer.length;
         return 0.7 + (ratio * 0.2);
     }
 
     // 3) 공통 부분문자열 기반 → 0.3~0.6
     const lcsLen = longestCommonSubstring(s1, s2);
-    if (lcsLen >= 2) {  // 최소 2글자 이상 공유
+    // 한글은 1글자도 의미있으므로 허용, 그 외는 2글자 이상
+    const minLcsLen = containsKorean(s1) || containsKorean(s2) ? 1 : 2;
+    if (lcsLen >= minLcsLen) {
         const minLen = Math.min(s1.length, s2.length);
         const ratio = lcsLen / minLen;
         return 0.3 + (ratio * 0.3);  // 비율에 따라 0.3~0.6
