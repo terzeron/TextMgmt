@@ -62,7 +62,7 @@ const calculateSimilarity = (str1, str2) => {
 const splitBySpecialChars = (str) => {
     if (!str) return [];
     // 슬래시, 괄호, 공백 등으로 분리 후 빈 문자열 제거
-    return str.split(/[\/\(\)\s]+/).map(s => s.trim()).filter(s => s.length >= 2);
+    return str.split(/[\/\(\)\s]+/).map(s => s.trim()).filter(Boolean);
 };
 
 // 단일 서점 카테고리와 디렉토리의 유사도 점수 계산
