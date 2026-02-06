@@ -341,6 +341,19 @@ export default function Edit() {
         }
     }, [routeCategory, routeBookId, folderData, entryClicked]);
 
+    // 초기 로딩 시 첫 번째 파일 자동 선택
+    useEffect(() => {
+        // URL 파라미터가 없고, folderData가 로드되었고, 아직 선택된 책이 없는 경우
+        if (!routeCategory && !routeBookId && folderData.length > 0 && !selectedEntryId) {
+            // 첫 번째 파일(폴더가 아닌 항목) 찾기
+            const firstFile = folderData.find(item => item.fileType !== 'folder' && item.book);
+            if (firstFile) {
+                setSelectedItems([firstFile.id]);
+                entryClicked(firstFile.id);
+            }
+        }
+    }, [routeCategory, routeBookId, folderData, selectedEntryId, entryClicked]);
+
     useEffect(() => {
         console.log(`bookInfo=${JSON.stringify(bookInfo)}`);
         // determine new file name from author and title
