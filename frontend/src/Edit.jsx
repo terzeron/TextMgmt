@@ -19,8 +19,23 @@ import SearchResult from './SearchResult';
 import ViewSingle from "./ViewSingle";
 import {DateTime} from "luxon";
 
+// 모바일 감지 훅
+function useIsMobile(breakpoint = 768) {
+    const [isMobile, setIsMobile] = useState(
+        typeof window !== 'undefined' ? window.innerWidth < breakpoint : false
+    );
+
+    useEffect(() => {
+        const handleResize = () => setIsMobile(window.innerWidth < breakpoint);
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, [breakpoint]);
+
+    return isMobile;
+}
 
 export default function Edit() {
+    const isMobile = useIsMobile();
     const { category: routeCategory, bookId: routeBookId } = useParams();
     const {searchResults, hasSearched} = useOutletContext();
     const [errorMessage, setErrorMessage] = useState('');
@@ -326,6 +341,19 @@ export default function Edit() {
         }
     }, [routeCategory, routeBookId, folderData, entryClicked]);
 
+    // 초기 로딩 시 첫 번째 파일 자동 선택
+    useEffect(() => {
+        // URL 파라미터가 없고, folderData가 로드되었고, 아직 선택된 책이 없는 경우
+        if (!routeCategory && !routeBookId && folderData.length > 0 && !selectedEntryId) {
+            // 첫 번째 파일(폴더가 아닌 항목) 찾기
+            const firstFile = folderData.find(item => item.fileType !== 'folder' && item.book);
+            if (firstFile) {
+                setSelectedItems([firstFile.id]);
+                entryClicked(firstFile.id);
+            }
+        }
+    }, [routeCategory, routeBookId, folderData, selectedEntryId, entryClicked]);
+
     useEffect(() => {
         console.log(`bookInfo=${JSON.stringify(bookInfo)}`);
         // determine new file name from author and title
@@ -592,16 +620,21 @@ export default function Edit() {
         }
     }, [nextEntryId, entryClicked]);
 
+    // 모바일에서는 directory-menu 클래스를 제거하여 고정 높이 스타일 방지
+    const directoryClassName = isMobile
+        ? "ps-0 pe-0"
+        : "ps-0 pe-0 section directory-menu";
+
     return (
         <Container id="edit">
             <Row fluid="true">
-                <Col md="3" lg="2" className="ps-0 pe-0 section directory-menu">
+                <Col md={isMobile ? 12 : 3} lg={isMobile ? 12 : 2} className={directoryClassName}>
                     <Suspense fallback={<div className="loading">로딩 중...</div>}>
                         <Folder folderData={folderData} selectedItems={selectedItems} onClickHandler={entryClicked}/>
                     </Suspense>
                 </Col>
 
-                <Col md="9" lg="10" className="section">
+                <Col md={isMobile ? 12 : 9} lg={isMobile ? 12 : 10} className={isMobile ? "ps-0 pe-0" : "section"}>
                     {hasSearched &&
                         <SearchResult results={searchResults} showEditButton={true}/>
                     }

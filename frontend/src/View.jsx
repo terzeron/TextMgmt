@@ -13,8 +13,23 @@ import ViewSingle from "./ViewSingle.jsx";
 import BookInfoView from "./BookInfoView.jsx";
 import SearchResult from './SearchResult';
 
+// 모바일 감지 훅
+function useIsMobile(breakpoint = 768) {
+    const [isMobile, setIsMobile] = useState(
+        typeof window !== 'undefined' ? window.innerWidth < breakpoint : false
+    );
+
+    useEffect(() => {
+        const handleResize = () => setIsMobile(window.innerWidth < breakpoint);
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, [breakpoint]);
+
+    return isMobile;
+}
 
 export default function View() {
+    const isMobile = useIsMobile();
     // get optional route params for deep link
     const { category: routeCategory, bookId: routeBookId } = useParams();
     const {searchResults, hasSearched} = useOutletContext();
@@ -173,16 +188,21 @@ export default function View() {
         }
     }, [routeCategory, routeBookId, folderData, entryClicked]);
 
+    // 모바일에서는 directory-menu 클래스를 제거하여 고정 높이 스타일 방지
+    const directoryClassName = isMobile
+        ? "ps-0 pe-0"
+        : "ps-0 pe-0 section directory-menu";
+
     return (
         <Container id="view">
             <Row fluid="true">
-                <Col md="3" lg="2" className="ps-0 pe-0 section directory-menu">
+                <Col md={isMobile ? 12 : 3} lg={isMobile ? 12 : 2} className={directoryClassName}>
                     <Suspense fallback={<div className="loading">로딩 중...</div>}>
                         <Folder folderData={folderData} onClickHandler={entryClicked}/>
                     </Suspense>
                 </Col>
 
-                <Col md="9" lg="10" className="section">
+                <Col md={isMobile ? 12 : 9} lg={isMobile ? 12 : 10} className={isMobile ? "ps-0 pe-0" : "section"}>
                     {hasSearched &&
                         <SearchResult results={searchResults} showEditButton={false}/>
                     }
