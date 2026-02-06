@@ -206,6 +206,9 @@ export default function Edit() {
     }, []);
 
     const entryClicked = useCallback((selectedEntryId) => {
+        // 선택된 항목 업데이트 (UI 동기화)
+        setSelectedItems([selectedEntryId]);
+
         const determineNextEntryId = (folderData, selectedEntryId) => {
             // root file 처리 (id가 '/'로 시작하는 경우, 예: '/917518')
             if (selectedEntryId.startsWith('/')) {
