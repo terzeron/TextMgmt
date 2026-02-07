@@ -260,7 +260,7 @@ export default function Folder(props) {
     const treeViewStyles = useMemo(() => ({
         height: 'fit-content',
         flexGrow: 1,
-        maxWidth: 400,
+        maxWidth: 600,
         overflowY: 'auto',
     }), []);
 
