@@ -372,11 +372,10 @@ class Loader:
 
 
 def print_usage(program_name: str):
-    print(f"Usage:\t{program_name}\t[ --delete ] [ --reload ] [ --recursive ] [ --force ] <file or directory path>")
+    print(f"Usage:\t{program_name}\t[ --delete ] [ --reload ] [ --recursive ] <file or directory path>")
     print("\t\t--delete: delete index and exit (no file path required)")
-    print("\t\t--reload: delete and recreate index before loading")
+    print("\t\t--reload: force reload even if file already exists in ES")
     print("\t\t--recursive: scan subdirectories recursively")
-    print("\t\t--force: force reload even if file already exists in ES")
     print()
     print("\t\tNote: When a file (not directory) is specified, it will be force-reloaded automatically.")
     sys.exit(0)
@@ -388,10 +387,9 @@ def main() -> int:
     do_delete = False
     do_reload = False
     do_recursive = False
-    do_force = False
     args: List[str] = []
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "", ["delete", "reload", "recursive", "force"])
+        opts, args = getopt.getopt(sys.argv[1:], "", ["delete", "reload", "recursive"])
         for opt, _ in opts:
             if opt == "--delete":
                 do_delete = True
@@ -399,8 +397,6 @@ def main() -> int:
                 do_reload = True
             elif opt == "--recursive":
                 do_recursive = True
-            elif opt == "--force":
-                do_force = True
     except getopt.GetoptError as e:
         LOGGER.error(e)
         print_usage(sys.argv[0])
@@ -429,8 +425,6 @@ def main() -> int:
             else:
                 print(f"인덱스 '{es_manager.index_name}'가 존재하지 않습니다")
             return 0
-        if do_reload:
-            es_manager.delete_index()
         es_manager.create_index()
     except Exception as e:
         LOGGER.error(e)
@@ -507,13 +501,13 @@ def main() -> int:
         elif do_recursive:
             # 전체 파일 등록 (generator 사용으로 메모리 효율화)
             file_iter = (p for p in target_path.rglob("*") if p.is_file())
-            skip_check = do_reload or do_force
+            skip_check = do_reload
             processed, skipped_count = process_file_iter(file_iter, skip_check=skip_check)
             print(f"  총 {processed}개 파일 처리됨")
             if skipped_count > 0:
                 print(f"  총 {skipped_count}개 중복 파일 건너뜀")
         else:
-            skip_check = do_reload or do_force
+            skip_check = do_reload
 
             # 1단계: 하위 디렉토리 각각에서 첫 번째 파일 1개씩 (모아서 한꺼번에 저장)
             print("  [1단계] 하위 디렉토리별 샘플 파일 등록")
