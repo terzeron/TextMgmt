@@ -26,6 +26,7 @@ import {TreeItem2Icon} from '@mui/x-tree-view/TreeItem2Icon';
 import {TreeItem2Provider} from '@mui/x-tree-view/TreeItem2Provider';
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {faChevronDown, faChevronRight} from "@fortawesome/free-solid-svg-icons";
+import {findFolderInTree} from './folderUtils';
 
 function DotIcon() {
     return (
@@ -215,7 +216,7 @@ const CustomTreeItem = React.forwardRef(function CustomTreeItem(props, ref) {
     const item = useMemo(() => publicAPI.getItem(itemId), [publicAPI, itemId]);
     const expandable = isExpandable(children);
     const { icon, iconColor } = useMemo(() => {
-        if (expandable) return { icon: FolderRounded, iconColor: '#ffc107' };
+        if (expandable || item?.fileType === 'folder') return { icon: FolderRounded, iconColor: '#ffc107' };
         const result = getIconFromFileType(item?.fileType);
         return { icon: result.icon, iconColor: result.color };
     }, [expandable, item?.fileType]);
@@ -292,7 +293,8 @@ export default function Folder(props) {
                             expandedItems={expandedItems}
                             selectedItems={props.selectedItems}
                             onSelectedItemsChange={(event, selectedId) => {
-                                const isFolder = props.folderData.some(item => item.id === selectedId && item.fileType === 'folder');
+                                const found = findFolderInTree(props.folderData, selectedId);
+                                const isFolder = found && found.fileType === 'folder';
                                 setExpandedItems((prevExpandedItems) => {
                                     if (prevExpandedItems.includes(selectedId)) {
                                         return prevExpandedItems.filter(x => x !== selectedId);

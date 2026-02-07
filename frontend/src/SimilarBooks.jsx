@@ -72,7 +72,7 @@ export default function SimilarBooks({bookId, onSelect}) {
                                     <div style={{whiteSpace: 'nowrap', flexShrink: 0}}>
                                         <Button
                                             variant="outline-warning" className="btn-xs"
-                                            onClick={() => window.open(`/edit/${book.category}/${book.book_id}`, '_blank', 'noopener')}
+                                            onClick={() => window.open(`/edit/${encodeURIComponent(book.category)}/${book.book_id}`, '_blank', 'noopener')}
                                             style={{marginRight: '4px'}}
                                         >
                                             편집

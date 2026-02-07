@@ -12,6 +12,7 @@ import Folder from './Folder.jsx';
 import ViewSingle from "./ViewSingle.jsx";
 import BookInfoView from "./BookInfoView.jsx";
 import SearchResult from './SearchResult';
+import {findCommonPrefix, buildFolderHierarchy, parseEntryId, findFolderInTree, updateFolderInTree} from './folderUtils';
 
 // 모바일 감지 훅
 function useIsMobile(breakpoint = 768) {
@@ -49,37 +50,13 @@ export default function View() {
             const hasRootFiles = categoryList.includes('_root');
             const nonEmptyCategories = categoryList.filter(c => c !== '_root');
 
-            // 공통 prefix 찾기
-            const findCommonPrefix = (strings) => {
-                if (!strings || strings.length === 0) return '';
-                if (strings.length === 1) {
-                    const parts = strings[0].split('/');
-                    return parts.length > 1 ? parts.slice(0, -1).join('/') + '/' : '';
-                }
-                const parts = strings.map(s => s.split('/'));
-                const minLen = Math.min(...parts.map(p => p.length));
-                let commonParts = [];
-                for (let i = 0; i < minLen - 1; i++) {
-                    const part = parts[0][i];
-                    if (parts.every(p => p[i] === part)) {
-                        commonParts.push(part);
-                    } else {
-                        break;
-                    }
-                }
-                return commonParts.length > 0 ? commonParts.join('/') + '/' : '';
-            };
             const commonPrefix = findCommonPrefix(nonEmptyCategories);
 
-            // 폴더 목록 생성
-            let data = nonEmptyCategories.sort((a, b) => a.localeCompare(b))
-                .map(category => {
-                    return {
-                        id: category,
-                        label: commonPrefix ? category.replace(commonPrefix, '') : category,
-                        fileType: 'folder'
-                    };
-                });
+            // 2단계 계층 구조 생성
+            let data = buildFolderHierarchy(
+                nonEmptyCategories.sort((a, b) => a.localeCompare(b)),
+                commonPrefix
+            );
 
             // 최상위 파일이 있으면 가져와서 추가
             if (hasRootFiles) {
@@ -116,33 +93,38 @@ export default function View() {
     }, []);
 
     const entryClicked = useCallback((selectedEntryId) => {
-        const selectedFolderData = folderData.find(o => o.id === selectedEntryId);
+        // 2단계 트리에서 검색
+        const selectedFolderData = findFolderInTree(folderData, selectedEntryId);
         if (selectedFolderData && selectedFolderData.fileType === 'folder') {
             // category entry (폴더)
+
+            // 가상 부모 클릭 시 API 호출 안 함
+            if (selectedFolderData.isVirtualParent) {
+                return;
+            }
+
             const booksInCategoryUrl = '/categories/' + selectedEntryId;
-            const isChildrenLoaded = folderData.find(item => item.id === selectedEntryId && item.children && item.children.length > 0)
-            if (!isChildrenLoaded) {
+            // booksLoaded 플래그로 중복 로딩 방지
+            if (!selectedFolderData.booksLoaded) {
                 jsonGetReq(booksInCategoryUrl, null, (bookList) => {
-                    const data = folderData.map(item => {
-                        if (item.id === selectedEntryId) {
-                            // add book list to the selected category
-                            return {
-                                ...item,
-                                children: bookList
-                                    .sort((a, b) => a['title'].localeCompare(b['title']))
-                                    .map(book => {
-                                        return {
-                                            id: item.id + '/' + book['book_id'].toString(),
-                                            label: book['title'] + '.' + book['file_type'],
-                                            fileType: book['file_type'],
-                                            children: [],
-                                            book: book,
-                                        }
-                                    })
-                            }
-                        } else {
-                            return item;
-                        }
+                    const bookEntries = bookList
+                        .sort((a, b) => a['title'].localeCompare(b['title']))
+                        .map(book => ({
+                            id: selectedEntryId + '/' + book['book_id'].toString(),
+                            label: book['title'] + '.' + book['file_type'],
+                            fileType: book['file_type'],
+                            children: [],
+                            book: book,
+                        }));
+
+                    const data = updateFolderInTree(folderData, selectedEntryId, (item) => {
+                        // 기존 하위 폴더 children 보존 후 책 추가
+                        const existingSubfolders = (item.children || []).filter(c => c.fileType === 'folder');
+                        return {
+                            ...item,
+                            booksLoaded: true,
+                            children: [...existingSubfolders, ...bookEntries],
+                        };
                     });
                     setFolderData(data);
                 });
@@ -156,9 +138,12 @@ export default function View() {
             setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
         } else {
             // book entry (폴더 내 파일)
-            const category = selectedEntryId.split('/')[0];
-            const bookId = selectedEntryId.split('/')[1];
-            const booksInCategory = folderData.find(categoryItem => categoryItem.id === category)?.children;
+            const parsed = parseEntryId(selectedEntryId);
+            if (!parsed) return;
+            const category = parsed.category;
+            const bookId = parsed.bookId;
+            const folder = findFolderInTree(folderData, category);
+            const booksInCategory = folder?.children;
             if (booksInCategory) {
                 const book = booksInCategory.find(bookItem => bookItem.id === selectedEntryId)?.book;
                 if (book) {
@@ -182,10 +167,10 @@ export default function View() {
                 entryClicked('/' + routeBookId);
                 return;
             }
-            const categoryItem = folderData.find(item => item.id === routeCategory);
+            const categoryItem = findFolderInTree(folderData, routeCategory);
             if (!categoryItem) return;
             // If category children not loaded, load them first
-            if (!categoryItem.children || categoryItem.children.length === 0) {
+            if (!categoryItem.booksLoaded) {
                 entryClicked(routeCategory);
             } else {
                 // Children already loaded, select specific book
