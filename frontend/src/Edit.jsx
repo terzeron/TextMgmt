@@ -264,7 +264,7 @@ export default function Edit() {
             setOriginalBookInfo(book);
             const newBook = decomposeTitle(book);
             setBookInfo(newBook);
-            setViewUrl('/view/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
+            setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
             setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
             const otherCategoryList = categoryList
                 .sort((a, b) => a.localeCompare(b))
@@ -285,7 +285,7 @@ export default function Edit() {
                     // decompose file name to (author, title, extension)
                     const newBook = decomposeTitle(book);
                     setBookInfo(newBook);
-                    setViewUrl('/view/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
+                    setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
                     setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
 
                     // determine other category list
@@ -321,6 +321,11 @@ export default function Edit() {
 
     useEffect(() => {
         if (routeCategory && routeBookId && folderData.length > 0) {
+            // _root 카테고리는 folderData에서 /{bookId} 형식으로 저장됨
+            if (routeCategory === '_root') {
+                entryClicked('/' + routeBookId);
+                return;
+            }
             const categoryItem = folderData.find(item => item.id === routeCategory);
             if (!categoryItem) return;
             // load children if not yet

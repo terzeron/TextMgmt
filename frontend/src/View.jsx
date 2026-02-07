@@ -151,7 +151,7 @@ export default function View() {
             const book = selectedFolderData.book;
             const bookId = book['book_id'];
             setBookInfo(book);
-            setViewUrl('/view/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
+            setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
             setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
         } else {
             // book entry (폴더 내 파일)
@@ -162,7 +162,7 @@ export default function View() {
                 const book = booksInCategory.find(bookItem => bookItem.id === selectedEntryId)?.book;
                 if (book) {
                     setBookInfo(book);
-                    setViewUrl('/view/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
+                    setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
                     setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
                 } else {
                     setErrorMessage(`can't find the selected book`);
@@ -176,6 +176,11 @@ export default function View() {
     // if route specifies a category/bookId, auto-select after folderData loads
     useEffect(() => {
         if (routeCategory && routeBookId && folderData.length > 0) {
+            // _root 카테고리는 folderData에서 /{bookId} 형식으로 저장됨
+            if (routeCategory === '_root') {
+                entryClicked('/' + routeBookId);
+                return;
+            }
             const categoryItem = folderData.find(item => item.id === routeCategory);
             if (!categoryItem) return;
             // If category children not loaded, load them first
