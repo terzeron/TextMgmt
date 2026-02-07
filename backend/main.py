@@ -184,7 +184,7 @@ async def get_book(book_id: int) -> Dict[str, Any]:
     return response_object
 
 
-@app.get("/categories/{category}")
+@app.get("/categories/{category:path}")
 async def get_books_in_category(category: str) -> Dict[str, Any]:
     LOGGER.debug("# get_books_in_category(category='%s')", category)
     response_object: Dict[str, Any] = {"status": "failure"}

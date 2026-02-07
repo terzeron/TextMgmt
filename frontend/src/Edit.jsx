@@ -18,6 +18,7 @@ import SimilarBooks from './SimilarBooks';
 import SearchResult from './SearchResult';
 import ViewSingle from "./ViewSingle";
 import {DateTime} from "luxon";
+import {findCommonPrefix, buildFolderHierarchy, parseEntryId, findFolderInTree, updateFolderChildren, updateFolderInTree} from './folderUtils';
 
 // 모바일 감지 훅
 function useIsMobile(breakpoint = 768) {
@@ -84,37 +85,13 @@ export default function Edit() {
             const hasRootFiles = categoryList.includes('_root');
             const nonEmptyCategories = categoryList.filter(c => c !== '_root');
 
-            // 공통 prefix 찾기
-            const findCommonPrefix = (strings) => {
-                if (!strings || strings.length === 0) return '';
-                if (strings.length === 1) {
-                    const parts = strings[0].split('/');
-                    return parts.length > 1 ? parts.slice(0, -1).join('/') + '/' : '';
-                }
-                const parts = strings.map(s => s.split('/'));
-                const minLen = Math.min(...parts.map(p => p.length));
-                let commonParts = [];
-                for (let i = 0; i < minLen - 1; i++) {
-                    const part = parts[0][i];
-                    if (parts.every(p => p[i] === part)) {
-                        commonParts.push(part);
-                    } else {
-                        break;
-                    }
-                }
-                return commonParts.length > 0 ? commonParts.join('/') + '/' : '';
-            };
             const commonPrefix = findCommonPrefix(nonEmptyCategories);
 
-            // 폴더 목록 생성
-            let data = nonEmptyCategories.sort((a, b) => a.localeCompare(b))
-                .map(category => {
-                    return {
-                        id: category,
-                        label: commonPrefix ? category.replace(commonPrefix, '') : category,
-                        fileType: 'folder'
-                    };
-                });
+            // 2단계 계층 구조 생성
+            let data = buildFolderHierarchy(
+                nonEmptyCategories.sort((a, b) => a.localeCompare(b)),
+                commonPrefix
+            );
 
             // 최상위 파일이 있으면 가져와서 추가
             if (hasRootFiles) {
@@ -211,48 +188,55 @@ export default function Edit() {
                 return null;
             }
 
-            // 폴더 내 파일 처리 (id가 'category/bookId' 형식)
-            const category = selectedEntryId.split('/')[0];
-            const bookId = selectedEntryId.split('/')[1];
-            if (bookId) {
-                const children = folderData.find(obj => obj.id === category)?.children;
+            // 폴더 내 파일 처리 - parseEntryId로 카테고리/bookId 분리
+            const parsed = parseEntryId(selectedEntryId);
+            if (parsed && parsed.bookId) {
+                const folder = findFolderInTree(folderData, parsed.category);
+                const children = folder?.children;
                 if (children) {
-                    const index = children.findIndex(item => item.id === selectedEntryId);
-                    if (0 <= index && index < (children.length - 1)) {
-                        return children[index + 1].id;
+                    // children 중 책만 필터 (하위 폴더 제외)
+                    const bookChildren = children.filter(item => item.fileType !== 'folder');
+                    const index = bookChildren.findIndex(item => item.id === selectedEntryId);
+                    if (0 <= index && index < (bookChildren.length - 1)) {
+                        return bookChildren[index + 1].id;
                     }
                 }
             }
             return null;
         };
 
-        const selectedFolderData = folderData.find(o => o.id === selectedEntryId);
+        // 2단계 트리에서 검색
+        const selectedFolderData = findFolderInTree(folderData, selectedEntryId);
         if (selectedFolderData && selectedFolderData.fileType === 'folder') {
             // category entry (폴더)
+
+            // 가상 부모 클릭 시 API 호출 안 함
+            if (selectedFolderData.isVirtualParent) {
+                return;
+            }
+
             const booksInCategoryUrl = '/categories/' + selectedEntryId;
-            const isChildrenLoaded = folderData.find(item => item.id === selectedEntryId && item.children && item.children.length > 0)
-            if (!isChildrenLoaded) {
+            // booksLoaded 플래그로 중복 로딩 방지
+            if (!selectedFolderData.booksLoaded) {
                 jsonGetReq(booksInCategoryUrl, null, (bookList) => {
-                    const data = folderData.map(item => {
-                        if (item.id === selectedEntryId) {
-                            // add book list to the selected category
-                            return {
-                                ...item,
-                                children: bookList
-                                    .sort((a, b) => a['title'].localeCompare(b['title']))
-                                    .map(book => {
-                                        return {
-                                            id: item.id + '/' + book['book_id'].toString(),
-                                            label: book['title'] + '.' + book['file_type'],
-                                            fileType: book['file_type'],
-                                            children: [],
-                                            book: book,
-                                        }
-                                    })
-                            }
-                        } else {
-                            return item;
-                        }
+                    const bookEntries = bookList
+                        .sort((a, b) => a['title'].localeCompare(b['title']))
+                        .map(book => ({
+                            id: selectedEntryId + '/' + book['book_id'].toString(),
+                            label: book['title'] + '.' + book['file_type'],
+                            fileType: book['file_type'],
+                            children: [],
+                            book: book,
+                        }));
+
+                    const data = updateFolderInTree(folderData, selectedEntryId, (item) => {
+                        // 기존 하위 폴더 children 보존 후 책 추가
+                        const existingSubfolders = (item.children || []).filter(c => c.fileType === 'folder');
+                        return {
+                            ...item,
+                            booksLoaded: true,
+                            children: [...existingSubfolders, ...bookEntries],
+                        };
                     });
                     setFolderData(data);
                 });
@@ -273,9 +257,12 @@ export default function Edit() {
             setOtherCategoryList(otherCategoryList);
         } else {
             // book entry
-            const category = selectedEntryId.split('/')[0];
-            const bookId = selectedEntryId.split('/')[1];
-            const booksInCategory = folderData.find(categoryItem => categoryItem.id === category)?.children;
+            const parsed = parseEntryId(selectedEntryId);
+            if (!parsed) return;
+            const category = parsed.category;
+            const bookId = parsed.bookId;
+            const folder = findFolderInTree(folderData, category);
+            const booksInCategory = folder?.children;
             setSelectedEntryId(selectedEntryId);
             if (booksInCategory) {
                 const book = booksInCategory.find(bookItem => bookItem.id === selectedEntryId)?.book;
@@ -327,10 +314,10 @@ export default function Edit() {
                 entryClicked('/' + routeBookId);
                 return;
             }
-            const categoryItem = folderData.find(item => item.id === routeCategory);
+            const categoryItem = findFolderInTree(folderData, routeCategory);
             if (!categoryItem) return;
             // load children if not yet
-            if (!categoryItem.children || categoryItem.children.length === 0) {
+            if (!categoryItem.booksLoaded) {
                 entryClicked(routeCategory);
             } else {
                 entryClicked(`${routeCategory}/${routeBookId}`);
@@ -423,8 +410,8 @@ export default function Edit() {
             // 최상위 파일 확인
             return folderData.some(entry => entry.label === targetLabel);
         } else {
-            // 폴더 내 파일 확인
-            const folder = folderData.find(entry => entry.id === newDirName);
+            // 2단계 트리에서 폴더 검색
+            const folder = findFolderInTree(folderData, newDirName);
             if (folder && folder.children) {
                 return folder.children.some(item => item.label === targetLabel);
             }
@@ -440,17 +427,11 @@ export default function Edit() {
             newFolderData = newFolderData.filter(item => item.id !== entryId);
             console.log(`removeEntryFromFolderData(): removed root file ${entryId}`);
         } else {
-            // 폴더 내 파일 제거
+            // 2단계 트리에서 폴더 내 파일 제거
             const entryId = dirName + '/' + fileName;
-            newFolderData = newFolderData.map(entry => {
-                if (entry.id === dirName && entry.children) {
-                    return {
-                        ...entry,
-                        children: entry.children.filter(item => item.id !== entryId)
-                    };
-                }
-                return entry;
-            });
+            newFolderData = updateFolderChildren(newFolderData, dirName, (children) =>
+                children.filter(item => item.id !== entryId)
+            );
             console.log(`removeEntryFromFolderData(): removed ${entryId}`);
         }
         return newFolderData;
@@ -483,16 +464,10 @@ export default function Edit() {
             }
             console.log(`appendEntryToFolderData(): pushed ${newFileName} to root`);
         } else {
-            // 폴더 내 파일 추가
-            newFolderData = newFolderData.map(entry => {
-                if (entry.id === newDirName && entry.children) {
-                    return {
-                        ...entry,
-                        children: [...entry.children, newEntry]
-                    };
-                }
-                return entry;
-            });
+            // 2단계 트리에서 폴더 내 파일 추가
+            newFolderData = updateFolderChildren(newFolderData, newDirName, (children) =>
+                [...children, newEntry]
+            );
             console.log(`appendEntryToFolderData(): pushed ${newFileName} to ${newDirName}`);
         }
         return newFolderData;
@@ -557,18 +532,20 @@ export default function Edit() {
     const changeButtonClicked = useCallback(() => {
         console.log(`changeButtonClicked: selectedEntryId=${selectedEntryId}, newFileName=${newFileName}`);
         if (selectedEntryId?.includes('/')) {
-            const dirName = selectedEntryId.split('/')[0];
-            const fileName = selectedEntryId.split('/')[1];
-            updateFile(dirName, fileName, dirName, newFileName);
+            const parsed = parseEntryId(selectedEntryId);
+            if (parsed) {
+                updateFile(parsed.category, parsed.bookId, parsed.category, newFileName);
+            }
         }
     }, [updateFile, selectedEntryId, newFileName]);
 
     const moveToUpperButtonClicked = useCallback(() => {
         console.log(`move to upper directory as '${newFileName}'`);
         if (selectedEntryId?.includes('/')) {
-            const dirName = selectedEntryId.split('/')[0];
-            const fileName = selectedEntryId.split('/')[1];
-            updateFile(dirName, fileName, '_root', newFileName);
+            const parsed = parseEntryId(selectedEntryId);
+            if (parsed) {
+                updateFile(parsed.category, parsed.bookId, '_root', newFileName);
+            }
         }
     }, [updateFile, selectedEntryId, newFileName]);
 
@@ -579,17 +556,20 @@ export default function Edit() {
     const moveToDirectoryButtonClicked = useCallback(() => {
         console.log(`move to '${selectedCategory}' as '${newFileName}'`);
         if (selectedEntryId?.includes('/')) {
-            const dirName = selectedEntryId.split('/')[0];
-            const fileName = selectedEntryId.split('/')[1];
-            updateFile(dirName, fileName, selectedCategory, newFileName);
+            const parsed = parseEntryId(selectedEntryId);
+            if (parsed) {
+                updateFile(parsed.category, parsed.bookId, selectedCategory, newFileName);
+            }
         }
     }, [updateFile, selectedEntryId, selectedCategory, newFileName]);
 
     const deleteButtonClicked = useCallback(() => {
         console.log(`deleteButtonClicked: entryId=${selectedEntryId}`);
         if (selectedEntryId?.includes('/')) {
-            const dirName = selectedEntryId.split('/')[0];
-            const bookId = selectedEntryId.split('/')[1];
+            const parsed = parseEntryId(selectedEntryId);
+            if (!parsed) return;
+            const dirName = parsed.category;
+            const bookId = parsed.bookId;
             const deleteUrl = '/books/' + bookId;
             console.log(deleteUrl);
             jsonDeleteReq(deleteUrl, null, (response) => {
