@@ -17,7 +17,7 @@ spec:
       initContainers:
         - name: wait-for-es
           image: busybox:1.37
-          command: ['sh', '-c', 'until wget -q --spider http://elasticsearch-es-http:9200; do echo "waiting for elasticsearch..."; sleep 5; done']
+          command: ['sh', '-c', 'until wget --spider http://elasticsearch-es-http:9200 2>&1 | grep -q "HTTP/"; do echo "waiting for elasticsearch..."; sleep 5; done']
       containers:
         - name: tm-backend
           image: registry.terzeron.com/terzeron/tm_backend:latest
