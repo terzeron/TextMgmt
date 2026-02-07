@@ -1,0 +1,27 @@
+# Git
+.git
+
+# Dependencies (installed inside container)
+**/node_modules
+
+# Build artifacts
+**/dist
+**/__pycache__
+**/.mypy_cache
+
+# IDE / OS
+**/.idea
+**/.vscode
+**/.DS_Store
+
+# Logs
+**/nohup.out*
+**/run.log*
+
+# Docker
+**/Dockerfile
+.dockerignore
+
+# Misc
+*.md
+.env
