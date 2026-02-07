@@ -4,6 +4,25 @@ import { render, screen, waitFor, cleanup } from '@testing-library/react';
 
 afterEach(cleanup);
 
+// IntersectionObserver mock (jsdom에 없으므로 직접 구현)
+globalThis.IntersectionObserver = class MockIntersectionObserver {
+    constructor(callback) {
+        this.callback = callback;
+        this.elements = new Set();
+    }
+    observe(element) {
+        this.elements.add(element);
+        // 즉시 visible 처리 → 테스트에서 모든 페이지가 바로 렌더링됨
+        this.callback([{isIntersecting: true, target: element}], this);
+    }
+    unobserve(element) {
+        this.elements.delete(element);
+    }
+    disconnect() {
+        this.elements.clear();
+    }
+};
+
 const { mockGetDocument } = vi.hoisted(() => ({
     mockGetDocument: vi.fn(),
 }));
@@ -76,7 +95,9 @@ describe('ViewPDF', () => {
 
         render(<ViewPDF bookId={42} />);
 
-        expect(mockGetDocument).toHaveBeenCalledWith('http://localhost:8000/download/42');
+        expect(mockGetDocument).toHaveBeenCalledWith(expect.objectContaining({
+            url: 'http://localhost:8000/download/42',
+        }));
     });
 
     it('bookId 변경 시 새 URL로 getDocument를 호출한다', async () => {
@@ -88,10 +109,30 @@ describe('ViewPDF', () => {
             .mockReturnValueOnce({ promise: deferred2.promise, destroy: vi.fn() });
 
         const { rerender } = render(<ViewPDF bookId={1} />);
-        expect(mockGetDocument).toHaveBeenCalledWith('http://localhost:8000/download/1');
+        expect(mockGetDocument).toHaveBeenCalledWith(expect.objectContaining({
+            url: 'http://localhost:8000/download/1',
+        }));
 
         rerender(<ViewPDF bookId={99} />);
-        expect(mockGetDocument).toHaveBeenCalledWith('http://localhost:8000/download/99');
+        expect(mockGetDocument).toHaveBeenCalledWith(expect.objectContaining({
+            url: 'http://localhost:8000/download/99',
+        }));
+    });
+
+    it('Range 요청 옵션이 올바르게 설정된다', () => {
+        const deferred = createDeferred();
+        mockGetDocument.mockReturnValue({
+            promise: deferred.promise,
+            destroy: vi.fn(),
+        });
+
+        render(<ViewPDF bookId={1} />);
+
+        expect(mockGetDocument).toHaveBeenCalledWith(expect.objectContaining({
+            rangeChunkSize: 65536,
+            disableAutoFetch: true,
+            disableRange: false,
+        }));
     });
 
     // ── 정상 렌더링 ──
@@ -146,10 +187,13 @@ describe('ViewPDF', () => {
     });
 
     it('렌더링 진행 중 "렌더링 중... X/Y쪽" 상태를 표시한다', async () => {
-        const pageDeferred = createDeferred();
+        // getPage는 즉시 resolve하되, render의 promise는 영원히 pending
         const mockPdf = {
             numPages: 2,
-            getPage: vi.fn(() => pageDeferred.promise),
+            getPage: vi.fn(() => Promise.resolve({
+                getViewport: () => ({ width: 800, height: 600 }),
+                render: () => ({ promise: new Promise(() => {}) }),
+            })),
             destroy: vi.fn(),
         };
         mockGetDocument.mockReturnValue({
@@ -237,12 +281,10 @@ describe('ViewPDF', () => {
     });
 
     it('개별 페이지 렌더링 실패 시 전체 에러 상태가 되지 않는다', async () => {
-        let callCount = 0;
         const mockPdf = {
             numPages: 3,
-            getPage: vi.fn(() => {
-                callCount++;
-                if (callCount === 2) {
+            getPage: vi.fn((pageNum) => {
+                if (pageNum === 2) {
                     return Promise.reject(new Error('page 2 corrupt'));
                 }
                 return Promise.resolve({
