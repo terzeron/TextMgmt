@@ -383,7 +383,7 @@ class ESManager:
     def search_and_aggregate_by_category(self) -> Dict[str, int]:
         LOGGER.debug("search_and_aggregate_by_category()")
         field_name = "category"
-        size = 100
+        size = 10000
         body = {"size": 1, "aggs": {"unique_values": {
             "terms": {"field": field_name, "size": size}}}}
         result = self.es.search(index=self.index_name, body=body)
