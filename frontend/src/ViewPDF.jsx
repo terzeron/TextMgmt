@@ -17,15 +17,23 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
     const pdfRef = useRef(null);
     const loadingTaskRef = useRef(null);
     const canvasRefs = useRef({});
+    const renderedPagesRef = useRef(new Set());
+    const observerRef = useRef(null);
 
     // 개별 페이지 렌더링 함수
     const renderPage = useCallback(async (pdf, pageNum) => {
+        if (renderedPagesRef.current.has(pageNum)) return;
+        renderedPagesRef.current.add(pageNum);
+
         try {
             const page = await pdf.getPage(pageNum);
             const viewport = page.getViewport({scale: 1.2});
 
             const canvas = canvasRefs.current[pageNum];
-            if (!canvas) return;
+            if (!canvas) {
+                renderedPagesRef.current.delete(pageNum);
+                return;
+            }
 
             const context = canvas.getContext("2d");
             canvas.width = viewport.width;
@@ -43,6 +51,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                 setIsFirstPageReady(true);
             }
         } catch (err) {
+            renderedPagesRef.current.delete(pageNum);
             console.error(`페이지 ${pageNum} 렌더링 실패:`, err);
         }
     }, []);
@@ -62,6 +71,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
             setDownloadProgress(0);
             setIsFirstPageReady(false);
             canvasRefs.current = {};
+            renderedPagesRef.current = new Set();
 
             try {
                 const pdfUrl = preview
@@ -71,10 +81,12 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                 // Range 요청을 활성화하여 점진적 로딩 지원
                 // - rangeChunkSize: 페이지 데이터를 64KB 청크 단위로 가져옴
                 // - disableAutoFetch: 전체 파일을 미리 받지 않고, 페이지 렌더링 시 필요한 데이터만 요청
+                // - disableRange: false → Range 요청 명시적 활성화
                 const loadingTask = pdfjs.getDocument({
                     url: pdfUrl,
                     rangeChunkSize: 65536,
                     disableAutoFetch: true,
+                    disableRange: false,
                 });
 
                 loadingTask.onProgress = ({loaded, total}) => {
@@ -96,19 +108,56 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
 
                 const pagesToRender = preview ? pdf.numPages : (pageCount > 0 ? Math.min(pdf.numPages, pageCount) : pdf.numPages);
 
+                // 첫 페이지 viewport로 모든 canvas placeholder 크기 결정
+                const firstPage = await pdf.getPage(1);
+                const firstViewport = firstPage.getViewport({scale: 1.2});
+
+                if (cancelled) return;
+
                 // flushSync로 상태 업데이트를 동기화하여 canvas가 DOM에 생성된 후 렌더링
                 flushSync(() => {
                     setTotalPages(pagesToRender);
                 });
 
+                // 모든 canvas에 추정 크기 설정 (placeholder로 레이아웃 확보)
+                for (let i = 1; i <= pagesToRender; i++) {
+                    const canvas = canvasRefs.current[i];
+                    if (canvas) {
+                        canvas.width = firstViewport.width;
+                        canvas.height = firstViewport.height;
+                    }
+                }
+
                 // 첫 페이지 우선 렌더링
                 if (cancelled) return;
                 await renderPage(pdf, 1);
 
-                // 나머지 페이지 순차 렌더링 (Range 요청으로 페이지별 데이터를 온디맨드 로딩)
+                if (cancelled || pagesToRender <= 1) return;
+
+                // 나머지 페이지: 뷰포트에 들어올 때 렌더링 (IntersectionObserver)
+                const observer = new IntersectionObserver(
+                    (entries) => {
+                        for (const entry of entries) {
+                            if (entry.isIntersecting) {
+                                const pageNum = parseInt(entry.target.dataset.page);
+                                if (pageNum && !renderedPagesRef.current.has(pageNum) && pdfRef.current) {
+                                    renderPage(pdfRef.current, pageNum);
+                                }
+                                observer.unobserve(entry.target);
+                            }
+                        }
+                    },
+                    {rootMargin: '500px 0px'}
+                );
+
+                observerRef.current = observer;
+
                 for (let i = 2; i <= pagesToRender; i++) {
-                    if (cancelled) return;
-                    await renderPage(pdf, i);
+                    const canvas = canvasRefs.current[i];
+                    if (canvas) {
+                        canvas.dataset.page = String(i);
+                        observer.observe(canvas);
+                    }
                 }
             } catch (err) {
                 if (cancelled) return;
@@ -121,6 +170,10 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
 
         return () => {
             cancelled = true;
+            if (observerRef.current) {
+                observerRef.current.disconnect();
+                observerRef.current = null;
+            }
             if (loadingTaskRef.current) {
                 loadingTaskRef.current.destroy();
                 loadingTaskRef.current = null;
