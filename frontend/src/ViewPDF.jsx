@@ -134,16 +134,23 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
 
                 if (cancelled || pagesToRender <= 1) return;
 
-                // 나머지 페이지: 뷰포트에 들어올 때 렌더링 (IntersectionObserver)
+                // 나머지 페이지: 뷰포트에 들어올 때 + 최대 10페이지 선렌더링 (IntersectionObserver)
+                const PRERENDER_AHEAD = 10;
                 const observer = new IntersectionObserver(
                     (entries) => {
                         for (const entry of entries) {
                             if (entry.isIntersecting) {
                                 const pageNum = parseInt(entry.target.dataset.page);
-                                if (pageNum && !renderedPagesRef.current.has(pageNum) && pdfRef.current) {
-                                    renderPage(pdfRef.current, pageNum);
+                                if (!pageNum || !pdfRef.current) continue;
+                                // 현재 페이지 + 최대 10페이지 선렌더링
+                                const end = Math.min(pageNum + PRERENDER_AHEAD, pagesToRender);
+                                for (let i = pageNum; i <= end; i++) {
+                                    if (!renderedPagesRef.current.has(i)) {
+                                        renderPage(pdfRef.current, i);
+                                    }
+                                    const c = canvasRefs.current[i];
+                                    if (c) observer.unobserve(c);
                                 }
-                                observer.unobserve(entry.target);
                             }
                         }
                     },
