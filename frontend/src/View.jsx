@@ -33,6 +33,7 @@ export default function View() {
     // get optional route params for deep link
     const { category: routeCategory, bookId: routeBookId } = useParams();
     const {searchResults, hasSearched, searchTotal, handleLoadMore, searchLoading} = useOutletContext();
+    const [isFolderOpen, setIsFolderOpen] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
     // removed selectedEntryId state as it's not needed
@@ -201,13 +202,20 @@ export default function View() {
     return (
         <Container id="view">
             <Row fluid="true">
-                <Col md={isMobile ? 12 : 3} lg={isMobile ? 12 : 2} className={directoryClassName}>
-                    <Suspense fallback={<div className="loading">로딩 중...</div>}>
-                        <Folder folderData={folderData} onClickHandler={entryClicked}/>
-                    </Suspense>
-                </Col>
+                {isFolderOpen && (
+                    <Col md={isMobile ? 12 : 3} lg={isMobile ? 12 : 2} className={directoryClassName}>
+                        <Suspense fallback={<div className="loading">로딩 중...</div>}>
+                            <Folder folderData={folderData} isOpen={true} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
+                        </Suspense>
+                    </Col>
+                )}
 
-                <Col md={isMobile ? 12 : 9} lg={isMobile ? 12 : 10} className={isMobile ? "ps-0 pe-0" : "section"}>
+                <Col md={isMobile ? 12 : (isFolderOpen ? 9 : 12)} lg={isMobile ? 12 : (isFolderOpen ? 10 : 12)} className={isMobile ? "ps-0 pe-0" : "section"}>
+                    {!isFolderOpen && (
+                        <Suspense fallback={<div className="loading">로딩 중...</div>}>
+                            <Folder folderData={folderData} isOpen={false} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
+                        </Suspense>
+                    )}
                     {hasSearched &&
                         <SearchResult
                             results={searchResults}

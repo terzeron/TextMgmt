@@ -2,26 +2,33 @@ import './Edit.css';
 import './SearchResult.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
-import {Suspense} from 'react';
+import {Suspense, useState} from 'react';
 import PropTypes from 'prop-types';
 
 import {Card, Button} from 'react-bootstrap';
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
-import {faChevronDown} from "@fortawesome/free-solid-svg-icons";
+import {faChevronDown, faChevronRight} from "@fortawesome/free-solid-svg-icons";
 
 export default function SearchResult({results, showEditButton = true, onLoadMore, hasMore = false, loading = false}) {
+    const [isOpen, setIsOpen] = useState(true);
+
     return (
         <Card>
-            <Card.Header>
+            <Card.Header
+                onClick={() => setIsOpen(!isOpen)}
+                style={{cursor: 'pointer', userSelect: 'none'}}
+                className="py-2">
+                <FontAwesomeIcon icon={isOpen ? faChevronDown : faChevronRight} className="me-2"/>
                 검색 결과
             </Card.Header>
+            {isOpen && (
             <Suspense fallback={<div className="loading">로딩 중...</div>}>
                 <Card.Body>
                     {results && results.length > 0 ? (
                         <>
                             {results.map((book) => (
                                 <div key={book.book_id} style={{padding: '4px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
-                                    <span>{book.title} - {book.author}</span>
+                                    <span>{book.category}/{book.file_path.split('/').pop()}</span>
                                     <div>
                                         {showEditButton && (
                                             <Button
@@ -70,6 +77,7 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                     )}
                 </Card.Body>
             </Suspense>
+            )}
         </Card>
     );
 }
