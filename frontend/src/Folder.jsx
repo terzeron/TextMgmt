@@ -120,6 +120,8 @@ const StyledTreeItemLabelText = styled(Typography)({
     color: 'inherit',
     fontFamily: 'General Sans',
     fontWeight: 500,
+    flex: 1,
+    minWidth: 0,
 });
 
 
@@ -145,7 +147,7 @@ function CustomLabel({icon: Icon, iconColor, expandable, count, children, ...oth
             {Icon && <MemoizedIcon Icon={Icon} color={iconColor} />}
             <StyledTreeItemLabelText variant="body2">{children}</StyledTreeItemLabelText>
             {count > 0 && (
-                <Typography variant="caption" sx={{ ml: 0.5, color: 'text.secondary', fontWeight: 400, transform: 'scale(0.6)', transformOrigin: 'left center' }}>
+                <Typography variant="caption" sx={{ ml: 0.5, color: 'text.secondary', fontWeight: 400, transform: 'scale(0.6)', transformOrigin: 'left center', flexShrink: 0, whiteSpace: 'nowrap' }}>
                     ({count})
                 </Typography>
             )}
