@@ -142,6 +142,8 @@ function CustomLabel({icon: Icon, iconColor, expandable, count, children, ...oth
             sx={{
                 display: 'flex',
                 alignItems: 'center',
+                width: '100%',
+                overflow: 'hidden',
             }}
         >
             {Icon && <MemoizedIcon Icon={Icon} color={iconColor} />}
