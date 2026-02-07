@@ -280,6 +280,7 @@ export default function Folder(props) {
                                 expandedItems={expandedItems}
                                 selectedItems={props.selectedItems}
                                 onSelectedItemsChange={(event, selectedId) => {
+                                    const isFolder = props.folderData.some(item => item.id === selectedId && item.fileType === 'folder');
                                     setExpandedItems((prevExpandedItems) => {
                                         if (prevExpandedItems.includes(selectedId)) {
                                             return prevExpandedItems.filter(x => x !== selectedId);
@@ -289,6 +290,9 @@ export default function Folder(props) {
                                     });
 
                                     props.onClickHandler(selectedId);
+                                    if (!isFolder) {
+                                        setIsOpen(false);
+                                    }
                                 }}
                             />
                         )

@@ -5,5 +5,5 @@ export function determineRole(email, adminEmail, allowedEmails) {
 }
 
 export function isViewerAllowedPath(pathname) {
-    return pathname === '/' || pathname === '/view' || pathname.startsWith('/view/');
+    return pathname === '/' || pathname === '/view' || pathname.startsWith('/view/') || pathname.startsWith('/viewer/');
 }

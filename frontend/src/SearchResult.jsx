@@ -3,7 +3,6 @@ import './SearchResult.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
 import {Suspense} from 'react';
-import {useNavigate} from 'react-router-dom';
 import PropTypes from 'prop-types';
 
 import {Card, Button} from 'react-bootstrap';
@@ -11,7 +10,6 @@ import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {faChevronDown} from "@fortawesome/free-solid-svg-icons";
 
 export default function SearchResult({results, showEditButton = true, onLoadMore, hasMore = false, loading = false}) {
-    const navigate = useNavigate();
     return (
         <Card>
             <Card.Header>
@@ -28,7 +26,7 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                         {showEditButton && (
                                             <Button
                                                 variant="outline-warning" size="sm"
-                                                onClick={() => window.open(`/edit/${encodeURIComponent(book.category)}/${book.book_id}`, '_blank', 'noopener')}
+                                                onClick={() => window.open(`/edit/${book.category}/${book.book_id}`, '_blank', 'noopener')}
                                                 style={{marginRight: '4px'}}
                                             >
                                                 편집
@@ -43,9 +41,9 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                         </Button>
                                         {showEditButton || (
                                             <Button
-                                                    variant="outline-secondary" size="sm"
-                                                    onClick={() => window.open(`/view/${book.file_type}/${book.book_id}/${encodeURIComponent(book.file_path)}`, '_blank', 'noopener')}
-                                                >
+                                                variant="outline-secondary" size="sm"
+                                                onClick={() => window.open(`/viewer/${book.file_type}/${book.book_id}?path=${encodeURIComponent(book.file_path)}`, '_blank', 'noopener')}
+                                            >
                                                 새 창에서 전체 보기
                                             </Button>
                                         )}

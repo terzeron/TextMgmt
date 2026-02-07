@@ -79,7 +79,7 @@ export default function SimilarBooks({bookId, onSelect}) {
                                         </Button>
                                         <Button
                                             variant="outline-primary" className="btn-xs"
-                                            onClick={() => window.open(`/view/${book.category}/${book.book_id}`, '_blank', 'noopener')}
+                                            onClick={() => window.open(`/view/${encodeURIComponent(book.category)}/${book.book_id}`, '_blank', 'noopener')}
                                             style={{marginRight: '4px'}}
                                         >
                                             조회
