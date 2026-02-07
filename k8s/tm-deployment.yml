@@ -14,6 +14,10 @@ spec:
       labels:
         app: tm-backend-app
     spec:
+      initContainers:
+        - name: wait-for-es
+          image: busybox:1.37
+          command: ['sh', '-c', 'until wget -q --spider http://elasticsearch-es-http:9200; do echo "waiting for elasticsearch..."; sleep 5; done']
       containers:
         - name: tm-backend
           image: registry.terzeron.com/terzeron/tm_backend:latest
