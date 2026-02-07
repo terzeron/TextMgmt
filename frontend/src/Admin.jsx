@@ -17,7 +17,7 @@ export default function Admin() {
         jsonGetReq(categoryListUrl, null, (categoryCounts) => {
             // _root 제외하고 정렬
             const categoryList = Object.keys(categoryCounts);
-            const filtered = categoryList.filter(c => c !== '_root').sort((a, b) => a.localeCompare(b));
+            const filtered = categoryList.filter(c => c !== '_root' && !c.includes('/')).sort((a, b) => a.localeCompare(b));
             setCategoryList(filtered);
         }, (error) => {
             setErrorMessage(`카테고리 목록을 불러올 수 없습니다. ${error}`);
