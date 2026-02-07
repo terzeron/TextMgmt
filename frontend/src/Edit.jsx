@@ -80,7 +80,10 @@ export default function Edit() {
 
     useEffect(() => {
         const categoryListUrl = '/categories';
-        jsonGetReq(categoryListUrl, null, (categoryList) => {
+        jsonGetReq(categoryListUrl, null, (categoryCounts) => {
+            // categoryCounts: {"_epub": 5, "_pdf": 3, "_root": 2, ...}
+            const categoryList = Object.keys(categoryCounts);
+
             // _root 카테고리(최상위 파일) 분리
             const hasRootFiles = categoryList.includes('_root');
             const nonEmptyCategories = categoryList.filter(c => c !== '_root');
@@ -90,7 +93,8 @@ export default function Edit() {
             // 2단계 계층 구조 생성
             let data = buildFolderHierarchy(
                 nonEmptyCategories.sort((a, b) => a.localeCompare(b)),
-                commonPrefix
+                commonPrefix,
+                categoryCounts
             );
 
             // 최상위 파일이 있으면 가져와서 추가

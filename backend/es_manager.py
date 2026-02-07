@@ -380,16 +380,15 @@ class ESManager:
             return result_list[0][1]
         return {}
 
-    def search_and_aggregate_by_category(self) -> List[str]:
+    def search_and_aggregate_by_category(self) -> Dict[str, int]:
         LOGGER.debug("search_and_aggregate_by_category()")
         field_name = "category"
         size = 100
         body = {"size": 1, "aggs": {"unique_values": {
             "terms": {"field": field_name, "size": size}}}}
         result = self.es.search(index=self.index_name, body=body)
-        unique_values = [bucket["key"]
-                         for bucket in result["aggregations"]["unique_values"]["buckets"]]
-        return unique_values
+        return {bucket["key"]: bucket["doc_count"]
+                for bucket in result["aggregations"]["unique_values"]["buckets"]}
 
     def insert(self, data: Dict[int, Dict[str, Any]], num_docs: int = sys.maxsize, max_retries: int = 3) -> List[int]:
         LOGGER.debug("insert() %d items", len(data))
