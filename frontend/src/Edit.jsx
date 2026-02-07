@@ -721,6 +721,7 @@ export default function Edit() {
                                         downloadUrl={downloadUrl}
                                         lineCount={100}
                                         pageCount={10}
+                                        preview={true}
                                     />
                                 </Col>
                             </Row>

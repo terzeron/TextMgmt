@@ -45,9 +45,11 @@ export default function ViewSingle(props) {
         };
     }, [props, entryId, paramFileType, paramFilePath]);
 
+    const preview = props.preview || false;
+
     const componentMap = {
-        'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} />,
-        'epub': <ViewEPUB bookId={bookId} filePath={filePath} />,
+        'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} preview={preview} />,
+        'epub': <ViewEPUB bookId={bookId} filePath={filePath} preview={preview} />,
         'doc': <ViewDOC bookId={bookId} />,
         'docx': <ViewDOC bookId={bookId} lineCount={lineCount} />,
         'txt': <ViewTXT bookId={bookId} lineCount={lineCount} />,
@@ -100,5 +102,6 @@ ViewSingle.propTypes = {
     viewUrl: PropTypes.string,
     downloadUrl: PropTypes.string,
     lineCount: PropTypes.number,
-    pageCount: PropTypes.number
+    pageCount: PropTypes.number,
+    preview: PropTypes.bool,
 }
