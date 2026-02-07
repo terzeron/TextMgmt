@@ -40,10 +40,7 @@ export default function ViewSingle(props) {
             setLineCount(props.lineCount);
             setPageCount(props.pageCount);
         }
-        return () => {
-            setBookId(0);
-        };
-    }, [props, entryId, paramFileType, paramFilePath]);
+    }, [props.bookId, props.fileType, props.filePath, props.lineCount, props.pageCount, entryId, paramFileType, paramFilePath]);
 
     const preview = props.preview || false;
 
