@@ -32,7 +32,7 @@ export default function View() {
     const isMobile = useIsMobile();
     // get optional route params for deep link
     const { category: routeCategory, bookId: routeBookId } = useParams();
-    const {searchResults, hasSearched} = useOutletContext();
+    const {searchResults, hasSearched, searchTotal, handleLoadMore, searchLoading} = useOutletContext();
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
     // removed selectedEntryId state as it's not needed
@@ -204,7 +204,13 @@ export default function View() {
 
                 <Col md={isMobile ? 12 : 9} lg={isMobile ? 12 : 10} className={isMobile ? "ps-0 pe-0" : "section"}>
                     {hasSearched &&
-                        <SearchResult results={searchResults} showEditButton={false}/>
+                        <SearchResult
+                            results={searchResults}
+                            showEditButton={false}
+                            onLoadMore={handleLoadMore}
+                            hasMore={searchResults.length < searchTotal}
+                            loading={searchLoading}
+                        />
                     }
                     {bookInfo['book_id'] &&
                         <>

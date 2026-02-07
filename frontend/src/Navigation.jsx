@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Outlet, useLocation, Navigate } from "react-router-dom";
 import { GoogleOAuthProvider, GoogleLogin, googleLogout } from "@react-oauth/google";
 import { Button, Form, FormControl, InputGroup, Nav, Navbar, Dropdown } from "react-bootstrap";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSearch, faUser } from "@fortawesome/free-solid-svg-icons";
-import { jsonGetReq, getApiUrlPrefix } from "./Common.js";
+import { rawJsonGetReq, getApiUrlPrefix } from "./Common.js";
 import { determineRole, isViewerAllowedPath } from "./auth.js";
 
 export default function Navigation() {
@@ -21,6 +21,8 @@ export default function Navigation() {
     const [searchKeyword, setSearchKeyword] = useState('');
     const [searchResults, setSearchResults] = useState([]);
     const [hasSearched, setHasSearched] = useState(false);
+    const [searchTotal, setSearchTotal] = useState(0);
+    const [searchLoading, setSearchLoading] = useState(false);
 
     const location = useLocation();
 
@@ -28,14 +30,38 @@ export default function Navigation() {
     const handleSearch = () => {
         if (searchKeyword) {
             setHasSearched(true);
-            jsonGetReq(
-                `/search/${encodeURIComponent(searchKeyword)}`,
-                null,
-                (data) => { setSearchResults(data); },
+            rawJsonGetReq(
+                `/search/${encodeURIComponent(searchKeyword)}?offset=0&limit=10`,
+                (data) => {
+                    if (data.status === 'success') {
+                        setSearchResults(data.result || []);
+                        setSearchTotal(data.total || 0);
+                    }
+                },
                 (error) => { console.error(error); }
             );
         }
     };
+
+    const handleLoadMore = useCallback(() => {
+        if (searchLoading || !searchKeyword) return;
+        setSearchLoading(true);
+        const offset = searchResults.length;
+        rawJsonGetReq(
+            `/search/${encodeURIComponent(searchKeyword)}?offset=${offset}&limit=10`,
+            (data) => {
+                if (data.status === 'success' && data.result) {
+                    setSearchResults(prev => [...prev, ...data.result]);
+                    setSearchTotal(data.total || 0);
+                }
+                setSearchLoading(false);
+            },
+            (error) => {
+                console.error(error);
+                setSearchLoading(false);
+            }
+        );
+    }, [searchKeyword, searchResults.length, searchLoading]);
 
     useEffect(() => {
         if (!clientId) {
@@ -134,7 +160,7 @@ export default function Navigation() {
             return <Navigate to="/view" replace />;
         }
 
-        return <Outlet context={{ searchResults, hasSearched, role }} />;
+        return <Outlet context={{ searchResults, hasSearched, role, searchTotal, handleLoadMore, searchLoading }} />;
     };
 
     return (

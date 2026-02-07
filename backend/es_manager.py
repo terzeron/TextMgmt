@@ -211,6 +211,25 @@ class ESManager:
 
         return result[:max_result_count]
 
+    def _search_paged(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, size: int = 10, offset: int = 0) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
+        """(results, total_count) 튜플을 반환하는 페이지네이션 검색"""
+        size = min(size, 10000)
+        LOGGER.debug("_search_paged(size=%d, offset=%d, query='%s')", size, offset, query)
+        response = self.es.search(
+            index=self.index_name, query=query,
+            sort=sort, from_=offset, size=size,
+            track_scores=True, track_total_hits=True
+        )
+        total = response['hits']['total']['value']
+        max_score = response['hits']['max_score']
+        if max_score is None:
+            return [], total
+        result = []
+        for hit in response['hits']['hits']:
+            normalized_score = hit['_score'] * 100 / max_score if max_score > 0 else 0
+            result.append((int(hit['_id']), hit['_source'], normalized_score))
+        return result, total
+
     def search_by_title(
         self, title: str, file_type: str = "", file_size: int = 0, max_result_count: int = -1
     ) -> List[Tuple[int, Dict[str, Any], float]]:
@@ -269,6 +288,20 @@ class ESManager:
         }
         return self._search(query, max_result_count=max_result_count)
 
+    def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
+        LOGGER.debug("search_by_keyword_paged(keyword='%s', size=%d, offset=%d)", keyword, size, offset)
+        query = {
+            "bool": {
+                "should": [
+                    {"match": {"title": {"query": keyword, "boost": 10}}},
+                    {"match": {"author": {"query": keyword, "boost": 5}}},
+                    {"match": {"summary": {"query": keyword, "boost": 1}}},
+                ],
+                "minimum_should_match": 1,
+            }
+        }
+        return self._search_paged(query, size=size, offset=offset)
+
     def search_similar_docs(
         self,
         category: str = "",
@@ -307,6 +340,37 @@ class ESManager:
         if exclude_id is not None:
             query["bool"]["must_not"] = [{"term": {"_id": str(exclude_id)}}]
         return self._search(query, max_result_count=max_result_count)
+
+    def search_similar_docs_paged(
+        self,
+        category: str = "",
+        title: str = "",
+        author: str = "",
+        file_type: str = "",
+        file_size: int = 0,
+        summary: str = "",
+        exclude_id: int = None,
+        size: int = 10,
+        offset: int = 0,
+    ) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
+        LOGGER.debug(
+            "search_similar_docs_paged(category='%s', title='%s', author='%s', type='%s', size=%d, offset=%d)",
+            category, title, author, file_type, size, offset,
+        )
+        query = {
+            "bool": {
+                "should": [
+                    {"match": {"title": {"query": title, "boost": 20}}},
+                    {"match": {"author": {"query": author, "boost": 15}}},
+                    {"match": {"summary": {"query": summary, "boost": 3}}},
+                    {"range": {"file_size": {"gte": file_size * 0.9, "lte": file_size * 1.1, "boost": 1}}},
+                ],
+                "minimum_should_match": 1,
+            }
+        }
+        if exclude_id is not None:
+            query["bool"]["must_not"] = [{"term": {"_id": str(exclude_id)}}]
+        return self._search_paged(query, size=size, offset=offset)
 
     def search_by_id(self, doc_id: int) -> Dict[str, Any]:
         LOGGER.debug("search_by_id(doc_id=%d)", doc_id)

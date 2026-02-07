@@ -37,7 +37,7 @@ function useIsMobile(breakpoint = 768) {
 export default function Edit() {
     const isMobile = useIsMobile();
     const { category: routeCategory, bookId: routeBookId } = useParams();
-    const {searchResults, hasSearched} = useOutletContext();
+    const {searchResults, hasSearched, searchTotal, handleLoadMore, searchLoading} = useOutletContext();
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
 
@@ -637,7 +637,13 @@ export default function Edit() {
 
                 <Col md={isMobile ? 12 : 9} lg={isMobile ? 12 : 10} className={isMobile ? "ps-0 pe-0" : "section"}>
                     {hasSearched &&
-                        <SearchResult results={searchResults} showEditButton={true}/>
+                        <SearchResult
+                            results={searchResults}
+                            showEditButton={true}
+                            onLoadMore={handleLoadMore}
+                            hasMore={searchResults.length < searchTotal}
+                            loading={searchLoading}
+                        />
                     }
                     {bookInfo['book_id'] &&
                         <>

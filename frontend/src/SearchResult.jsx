@@ -1,4 +1,5 @@
 import './Edit.css';
+import './SearchResult.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
 import {Suspense} from 'react';
@@ -6,8 +7,10 @@ import {useNavigate} from 'react-router-dom';
 import PropTypes from 'prop-types';
 
 import {Card, Button} from 'react-bootstrap';
+import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
+import {faChevronDown} from "@fortawesome/free-solid-svg-icons";
 
-export default function SearchResult({results, showEditButton = true}) {
+export default function SearchResult({results, showEditButton = true, onLoadMore, hasMore = false, loading = false}) {
     const navigate = useNavigate();
     return (
         <Card>
@@ -17,37 +20,53 @@ export default function SearchResult({results, showEditButton = true}) {
             <Suspense fallback={<div className="loading">로딩 중...</div>}>
                 <Card.Body>
                     {results && results.length > 0 ? (
-                        results.map((book) => (
-                            <div key={book.book_id} style={{padding: '4px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
-                                <span>{book.title} - {book.author}</span>
-                                <div>
-                                    {showEditButton && (
+                        <>
+                            {results.map((book) => (
+                                <div key={book.book_id} style={{padding: '4px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
+                                    <span>{book.title} - {book.author}</span>
+                                    <div>
+                                        {showEditButton && (
+                                            <Button
+                                                variant="outline-warning" size="sm"
+                                                onClick={() => window.open(`/edit/${encodeURIComponent(book.category)}/${book.book_id}`, '_blank', 'noopener')}
+                                                style={{marginRight: '4px'}}
+                                            >
+                                                편집
+                                            </Button>
+                                        )}
                                         <Button
-                                            variant="outline-warning" size="sm"
-                                            onClick={() => window.open(`/edit/${encodeURIComponent(book.category)}/${book.book_id}`, '_blank', 'noopener')}
+                                            variant="outline-primary" size="sm"
+                                            onClick={() => window.open(`/view/${encodeURIComponent(book.category)}/${book.book_id}`, '_blank', 'noopener')}
                                             style={{marginRight: '4px'}}
                                         >
-                                            편집
+                                            조회
                                         </Button>
-                                    )}
-                                    <Button
-                                        variant="outline-primary" size="sm"
-                                        onClick={() => window.open(`/view/${encodeURIComponent(book.category)}/${book.book_id}`, '_blank', 'noopener')}
-                                        style={{marginRight: '4px'}}
-                                    >
-                                        조회
-                                    </Button>
-                                    {showEditButton || (
-                                        <Button
-                                                variant="outline-secondary" size="sm"
-                                                onClick={() => window.open(`/view/${book.file_type}/${book.book_id}/${encodeURIComponent(book.file_path)}`, '_blank', 'noopener')}
-                                            >
-                                            새 창에서 전체 보기
-                                        </Button>
-                                    )}
+                                        {showEditButton || (
+                                            <Button
+                                                    variant="outline-secondary" size="sm"
+                                                    onClick={() => window.open(`/view/${book.file_type}/${book.book_id}/${encodeURIComponent(book.file_path)}`, '_blank', 'noopener')}
+                                                >
+                                                새 창에서 전체 보기
+                                            </Button>
+                                        )}
+                                    </div>
                                 </div>
-                            </div>
-                        ))
+                            ))}
+                            {hasMore && (
+                                <div className="search-result-load-more-wrapper">
+                                    <div
+                                        className={`search-result-load-more${loading ? ' disabled' : ''}`}
+                                        onClick={loading ? undefined : onLoadMore}
+                                        role="button"
+                                        tabIndex={0}
+                                        onKeyDown={(e) => { if (!loading && (e.key === 'Enter' || e.key === ' ')) onLoadMore(); }}
+                                    >
+                                        {loading ? '로딩 중...' : '더 보기'}
+                                        <FontAwesomeIcon icon={faChevronDown} size="sm" />
+                                    </div>
+                                </div>
+                            )}
+                        </>
                     ) : (
                         <div>검색 결과가 없습니다.</div>
                     )}
@@ -59,10 +78,15 @@ export default function SearchResult({results, showEditButton = true}) {
 
 SearchResult.propTypes = {
     results: PropTypes.array,
-    showEditButton: PropTypes.bool
+    showEditButton: PropTypes.bool,
+    onLoadMore: PropTypes.func,
+    hasMore: PropTypes.bool,
+    loading: PropTypes.bool
 };
 
 SearchResult.defaultProps = {
     results: [],
-    showEditButton: true
+    showEditButton: true,
+    hasMore: false,
+    loading: false
 };

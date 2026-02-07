@@ -206,6 +206,13 @@ class BookManager:
             return [Book(book_id=book_id, info=doc) for book_id, doc, _score in result_list], None
         return [], "No books found"
 
+    async def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0) -> Tuple[List[Book], int, Optional[str]]:
+        LOGGER.debug("# search_by_keyword_paged(keyword='%s', size=%d, offset=%d)", keyword, size, offset)
+        result_list, total = self.es_manager.search_by_keyword_paged(keyword, size=size, offset=offset)
+        if result_list:
+            return [Book(book_id=bid, info=doc) for bid, doc, _ in result_list], total, None
+        return [], total, "No books found"
+
     async def search_similar_books(self, book_id: int, max_result_count: int = -1) -> Tuple[List[Book], Optional[str]]:
         LOGGER.debug("# search_similar_books(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
@@ -215,6 +222,20 @@ class BookManager:
         if result_list and len(result_list) > 0:
             return [Book(book_id=doc_id, info=similar_doc) for doc_id, similar_doc, _score in result_list], None
         return [], "No similar books found"
+
+    async def search_similar_books_paged(self, book_id: int, size: int = 10, offset: int = 0) -> Tuple[List[Book], int, Optional[str]]:
+        LOGGER.debug("# search_similar_books_paged(book_id=%d, size=%d, offset=%d)", book_id, size, offset)
+        doc = self.es_manager.search_by_id(book_id)
+        if not doc:
+            return [], 0, f"No book found with id '{book_id}'"
+        result_list, total = self.es_manager.search_similar_docs_paged(
+            doc["category"], doc["title"], doc["author"],
+            doc["file_type"], doc["file_size"], doc["summary"][:3500],
+            exclude_id=book_id, size=size, offset=offset
+        )
+        if result_list:
+            return [Book(book_id=did, info=sdoc) for did, sdoc, _ in result_list], total, None
+        return [], total, "No similar books found"
 
     async def add_book(self, data: Dict[int, Dict[str, Any]]) -> Tuple[Optional[int], Optional[str]]:
         LOGGER.debug("# add_book(data='%r')", data)
