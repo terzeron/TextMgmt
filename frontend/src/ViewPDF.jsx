@@ -14,6 +14,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
     const [isFirstPageReady, setIsFirstPageReady] = useState(false);
     const containerRef = useRef(null);
     const pdfRef = useRef(null);
+    const loadingTaskRef = useRef(null);
     const canvasRefs = useRef({});
 
     // 개별 페이지 렌더링 함수
@@ -51,6 +52,8 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
             return;
         }
 
+        let cancelled = false;
+
         const loadPdf = async () => {
             setError(null);
             setTotalPages(0);
@@ -63,7 +66,15 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                     ? getApiUrlPrefix() + "/preview/" + bookId + "?pages=" + (pageCount > 0 ? pageCount : 5)
                     : getApiUrlPrefix() + "/download/" + bookId;
                 const loadingTask = pdfjs.getDocument(pdfUrl);
+                loadingTaskRef.current = loadingTask;
                 const pdf = await loadingTask.promise;
+                loadingTaskRef.current = null;
+
+                if (cancelled) {
+                    pdf.destroy();
+                    return;
+                }
+
                 pdfRef.current = pdf;
 
                 const pagesToRender = preview ? pdf.numPages : (pageCount > 0 ? Math.min(pdf.numPages, pageCount) : pdf.numPages);
@@ -74,11 +85,13 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                 });
 
                 // 첫 페이지 우선 렌더링
+                if (cancelled) return;
                 await renderPage(pdf, 1);
 
                 // 나머지 페이지 병렬 렌더링 (2페이지씩 배치 처리)
                 const batchSize = 2;
                 for (let i = 2; i <= pagesToRender; i += batchSize) {
+                    if (cancelled) return;
                     const batch = [];
                     for (let j = i; j < i + batchSize && j <= pagesToRender; j++) {
                         batch.push(renderPage(pdf, j));
@@ -86,14 +99,20 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                     await Promise.all(batch);
                 }
             } catch (err) {
+                if (cancelled) return;
                 console.error("PDF 로드 실패:", err);
-                setError("❌ PDF 파일을 정상적으로 렌더링하지 못했습니다. 파일이 존재하지 않거나 올바르지 않은 형식일 수 있습니다.");
+                setError(`❌ PDF 렌더링 실패: ${err.message || "파일이 존재하지 않거나 올바르지 않은 형식일 수 있습니다."}`);
             }
         };
 
         loadPdf();
 
         return () => {
+            cancelled = true;
+            if (loadingTaskRef.current) {
+                loadingTaskRef.current.destroy();
+                loadingTaskRef.current = null;
+            }
             if (pdfRef.current) {
                 pdfRef.current.destroy();
                 pdfRef.current = null;
