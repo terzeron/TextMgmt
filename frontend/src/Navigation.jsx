@@ -54,13 +54,11 @@ export default function Navigation() {
 
         if (storedEmail) {
             const storedRole = determineRole(storedEmail, adminEmail, allowedEmails);
-            if (storedRole) {
-                setLogin(true);
-                setRole(storedRole);
-                setName(storedName || '');
-                setEmail(storedEmail || '');
-                setPicture(storedPicture || '');
-            }
+            setLogin(true);
+            setRole(storedRole);
+            setName(storedName || '');
+            setEmail(storedEmail || '');
+            setPicture(storedPicture || '');
         }
     }, [adminEmail, clientId]);
 
@@ -88,16 +86,13 @@ export default function Navigation() {
                 setName(profileName);
                 setEmail(profileEmail);
                 setPicture(profilePicture);
-                setLogin(true);
-
                 const userRole = determineRole(profileEmail, adminEmail, allowedEmails);
+                setLogin(true);
                 setRole(userRole);
 
-                if (userRole) {
-                    localStorage.setItem('name', profileName);
-                    localStorage.setItem('email', profileEmail);
-                    localStorage.setItem('picture', profilePicture);
-                }
+                localStorage.setItem('name', profileName);
+                localStorage.setItem('email', profileEmail);
+                localStorage.setItem('picture', profilePicture);
             }
         } catch (error) {
             console.error('Error verifying Google token:', error);
