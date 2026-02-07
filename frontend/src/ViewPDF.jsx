@@ -7,7 +7,7 @@ import * as pdfjs from "pdfjs-dist";
 // unpkg CDN에서 워커 로드 (package.json의 pdfjs-dist 버전과 일치)
 pdfjs.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
 
-export default function ViewPDF({bookId, pageCount = 0}) {
+export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
     const [error, setError] = useState(null);
     const [totalPages, setTotalPages] = useState(0);
     const [loadedPages, setLoadedPages] = useState(0);
@@ -59,12 +59,14 @@ export default function ViewPDF({bookId, pageCount = 0}) {
             canvasRefs.current = {};
 
             try {
-                const pdfUrl = getApiUrlPrefix() + "/download/" + bookId;
+                const pdfUrl = preview
+                    ? getApiUrlPrefix() + "/preview/" + bookId + "?pages=" + (pageCount > 0 ? pageCount : 5)
+                    : getApiUrlPrefix() + "/download/" + bookId;
                 const loadingTask = pdfjs.getDocument(pdfUrl);
                 const pdf = await loadingTask.promise;
                 pdfRef.current = pdf;
 
-                const pagesToRender = pageCount > 0 ? Math.min(pdf.numPages, pageCount) : pdf.numPages;
+                const pagesToRender = preview ? pdf.numPages : (pageCount > 0 ? Math.min(pdf.numPages, pageCount) : pdf.numPages);
 
                 // flushSync로 상태 업데이트를 동기화하여 canvas가 DOM에 생성된 후 렌더링
                 flushSync(() => {
@@ -97,7 +99,7 @@ export default function ViewPDF({bookId, pageCount = 0}) {
                 pdfRef.current = null;
             }
         };
-    }, [bookId, pageCount, renderPage]);
+    }, [bookId, pageCount, preview, renderPage]);
 
     // 캔버스 ref 설정 함수
     const setCanvasRef = useCallback((pageNum) => (el) => {
@@ -217,4 +219,5 @@ const pdfStyles = `
 ViewPDF.propTypes = {
     bookId: PropTypes.number.isRequired,
     pageCount: PropTypes.number,
+    preview: PropTypes.bool,
 };

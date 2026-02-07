@@ -1,0 +1,49 @@
+---
+# Gateway API CRDs 설치 필요:
+# kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+
+# GatewayClass - Traefik v3 컨트롤러 참조
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: traefik
+spec:
+  controllerName: traefik.io/gateway-controller
+
+---
+# Gateway
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: main-gateway
+  namespace: textmanager
+spec:
+  gatewayClassName: traefik
+  listeners:
+    - name: http
+      port: 8000
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
+
+---
+# HTTPRoute for Elasticsearch
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: es-route
+  namespace: textmanager
+spec:
+  parentRefs:
+    - name: main-gateway
+  hostnames:
+    - "es.k8s"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: elasticsearch-es-http
+          port: 9200

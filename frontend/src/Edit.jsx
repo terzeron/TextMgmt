@@ -56,10 +56,7 @@ export default function Edit() {
     const [downloadUrl, setDownloadUrl] = useState('');
     const [suggestedCategories, setSuggestedCategories] = useState({});
 
-    // 이동 완료 후 다음 책으로 이동할 entryId 저장
-    const [pendingNextEntryId, setPendingNextEntryId] = useState(null);
-
-    // entryClicked 함수의 최신 참조를 저장하는 ref (useEffect 의존성 문제 해결)
+    // entryClicked 함수의 최신 참조를 저장하는 ref (콜백에서 최신 함수 참조용)
     const entryClickedRef = useRef(null);
     // nextEntryId의 최신 값을 저장하는 ref (타이머 콜백에서 최신 값 참조용)
     const nextEntryIdRef = useRef(null);
@@ -322,14 +319,6 @@ export default function Edit() {
         entryClickedRef.current = entryClicked;
     }, [entryClicked]);
 
-    // 이동 완료 후 다음 책으로 실제 이동
-    useEffect(() => {
-        if (pendingNextEntryId && entryClickedRef.current) {
-            entryClickedRef.current(pendingNextEntryId);
-            setPendingNextEntryId(null);
-        }
-    }, [pendingNextEntryId]); // entryClicked 의존성 제거 (ref 사용)
-
     useEffect(() => {
         if (routeCategory && routeBookId && folderData.length > 0) {
             const categoryItem = folderData.find(item => item.id === routeCategory);
@@ -531,6 +520,14 @@ export default function Edit() {
                 setSuccessMessage(message);
                 setErrorMessage('');
 
+                // bookInfo 업데이트 (file_path, title, category)
+                setBookInfo(prev => ({
+                    ...prev,
+                    file_path: newFilePath,
+                    title: titleOnly,
+                    category: categoryForBackend
+                }));
+
                 let newFolderData = removeEntryFromFolderData(folderData, dirName, fileName);
                 newFolderData = appendEntryToFolderData(newFolderData, newDirName, newFileName);
                 setFolderData(newFolderData);
@@ -538,8 +535,8 @@ export default function Edit() {
                 // 디렉토리 이동인 경우 바로 다음 책으로 이동 (토스트는 별도로 표시됨)
                 if (dirName !== newDirName) {
                     setSelectedCategory('');
-                    if (nextEntryIdRef.current) {
-                        setPendingNextEntryId(nextEntryIdRef.current);
+                    if (nextEntryIdRef.current && entryClickedRef.current) {
+                        entryClickedRef.current(nextEntryIdRef.current);
                     }
                 }
             }, (error) => {
@@ -724,6 +721,7 @@ export default function Edit() {
                                         downloadUrl={downloadUrl}
                                         lineCount={100}
                                         pageCount={10}
+                                        preview={true}
                                     />
                                 </Col>
                             </Row>

@@ -163,6 +163,12 @@ async def get_book_content(book_id: int) -> Union[str, FileResponse]:
     return await book_manager.get_book_content(book_id=book_id)
 
 
+@app.get("/preview/{book_id}", response_model=None)
+async def get_book_preview(book_id: int, pages: int = 5, chapters: int = 3):
+    LOGGER.debug("# get_book_preview(book_id=%d, pages=%d, chapters=%d)", book_id, pages, chapters)
+    return await book_manager.get_book_preview(book_id=book_id, pages=pages, chapters=chapters)
+
+
 @app.get("/books/{book_id}")
 async def get_book(book_id: int) -> Dict[str, Any]:
     LOGGER.debug("# get_book(book_id=%d)", book_id)

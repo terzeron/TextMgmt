@@ -2,11 +2,13 @@
 
 import sys
 import os
+import io
+import base64
 import logging.config
 from pathlib import Path
 from typing import Tuple, Dict, List, Union, Optional, Any
 import chardet
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from backend.es_manager import ESManager
 from backend.book import Book
 
@@ -90,6 +92,111 @@ class BookManager:
         if book.file_path.is_file():
             media_type = BookManager.MEDIA_TYPES.get(book.file_path.suffix, "application/octet-stream")
             return FileResponse(path=book.file_path, media_type=media_type)
+        return ""
+
+    async def get_book_preview(self, book_id: int, pages: int = 5, chapters: int = 3) -> Union[str, Response, FileResponse]:
+        LOGGER.debug("# get_book_preview(book_id=%d, pages=%d, chapters=%d)", book_id, pages, chapters)
+        doc = self.es_manager.search_by_id(book_id)
+        if not doc:
+            return ""
+        book = Book(book_id=book_id, info=doc)
+        if not book.file_path.is_file():
+            return ""
+
+        suffix = book.file_path.suffix.lower()
+        cache_dir = self.path_prefix / ".preview_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        original_mtime = book.file_path.stat().st_mtime
+
+        if suffix == ".pdf":
+            cache_file = cache_dir / f"{book_id}.pdf"
+            if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
+                LOGGER.debug("Preview cache hit for book_id=%d (PDF)", book_id)
+                return FileResponse(path=cache_file, media_type="application/pdf")
+
+            try:
+                from pypdf import PdfReader, PdfWriter
+                reader = PdfReader(str(book.file_path))
+                writer = PdfWriter()
+                pages_to_extract = min(len(reader.pages), pages)
+                for i in range(pages_to_extract):
+                    writer.add_page(reader.pages[i])
+                buf = io.BytesIO()
+                writer.write(buf)
+                preview_bytes = buf.getvalue()
+                cache_file.write_bytes(preview_bytes)
+                LOGGER.debug("Preview generated for book_id=%d (PDF, %d pages)", book_id, pages_to_extract)
+                return Response(content=preview_bytes, media_type="application/pdf")
+            except Exception as e:
+                LOGGER.error("PDF preview generation failed for book_id=%d: %s", book_id, e)
+                return ""
+
+        elif suffix == ".epub":
+            cache_file = cache_dir / f"{book_id}.html"
+            if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
+                LOGGER.debug("Preview cache hit for book_id=%d (EPUB)", book_id)
+                return FileResponse(path=cache_file, media_type="text/html")
+
+            try:
+                import ebooklib
+                from ebooklib import epub
+                from bs4 import BeautifulSoup
+
+                epub_book = epub.read_epub(str(book.file_path), options={"ignore_ncx": True})
+
+                # 이미지를 base64로 인코딩하여 딕셔너리에 저장
+                images = {}
+                for item in epub_book.get_items_of_type(ebooklib.ITEM_IMAGE):
+                    images[item.get_name()] = (
+                        item.get_type(),
+                        base64.b64encode(item.get_content()).decode("ascii")
+                    )
+
+                # CSS 수집
+                css_parts = []
+                for item in epub_book.get_items_of_type(ebooklib.ITEM_STYLE):
+                    css_parts.append(item.get_content().decode("utf-8", errors="replace"))
+
+                # spine 순서대로 앞 N개 챕터 HTML 추출
+                spine_items = []
+                for item in epub_book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+                    spine_items.append(item)
+                chapters_to_extract = spine_items[:chapters]
+
+                html_parts = []
+                for item in chapters_to_extract:
+                    content = item.get_content().decode("utf-8", errors="replace")
+                    soup = BeautifulSoup(content, "html.parser")
+                    # 이미지 src를 base64 data URI로 교체
+                    for img in soup.find_all("img"):
+                        src = img.get("src", "")
+                        # 상대 경로 정규화
+                        from posixpath import normpath, join, dirname
+                        item_dir = dirname(item.get_name())
+                        resolved = normpath(join(item_dir, src)) if src else src
+                        for img_name, (img_type, img_b64) in images.items():
+                            if img_name == resolved or img_name.endswith(src):
+                                # MIME 타입 추정
+                                ext = Path(img_name).suffix.lower()
+                                mime = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".svg": "image/svg+xml", ".webp": "image/webp"}.get(ext, "image/png")
+                                img["src"] = f"data:{mime};base64,{img_b64}"
+                                break
+                    html_parts.append(str(soup))
+
+                inline_css = "\n".join(css_parts)
+                full_html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><style>{inline_css}</style></head>
+<body>{"".join(html_parts)}</body>
+</html>"""
+                cache_file.write_text(full_html, encoding="utf-8")
+                LOGGER.debug("Preview generated for book_id=%d (EPUB, %d chapters)", book_id, len(chapters_to_extract))
+                return Response(content=full_html, media_type="text/html")
+            except Exception as e:
+                LOGGER.error("EPUB preview generation failed for book_id=%d: %s", book_id, e)
+                return ""
+
+        # 지원하지 않는 형식은 빈 문자열 반환
         return ""
 
     async def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> Tuple[List[Book], Optional[str]]:
