@@ -1,22 +1,29 @@
 import { useEffect, useState } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation, Navigate } from "react-router-dom";
 import { GoogleOAuthProvider, GoogleLogin, googleLogout } from "@react-oauth/google";
 import { Button, Form, FormControl, InputGroup, Nav, Navbar, Dropdown } from "react-bootstrap";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSearch, faUser } from "@fortawesome/free-solid-svg-icons";
 import { jsonGetReq, getApiUrlPrefix } from "./Common.js";
+import { determineRole, isViewerAllowedPath } from "./auth.js";
 
 export default function Navigation() {
     const clientId = window.__ENV__?.['VITE_GOOGLE_CLIENT_ID'] || import.meta.env.VITE_GOOGLE_CLIENT_ID;
     const adminEmail = window.__ENV__?.['VITE_ADMIN_EMAIL'] || import.meta.env.VITE_ADMIN_EMAIL;
+    const allowedEmailsRaw = window.__ENV__?.['VITE_ALLOWED_EMAILS'] || import.meta.env.VITE_ALLOWED_EMAILS || '';
+    const allowedEmails = allowedEmailsRaw ? allowedEmailsRaw.split(',').map(e => e.trim()).filter(Boolean) : [];
+
     const [login, setLogin] = useState(false);
-    const [authorized, setAuthorized] = useState(false);
+    const [role, setRole] = useState(null); // 'admin' | 'viewer' | null
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [picture, setPicture] = useState('');
     const [searchKeyword, setSearchKeyword] = useState('');
     const [searchResults, setSearchResults] = useState([]);
     const [hasSearched, setHasSearched] = useState(false);
+
+    const location = useLocation();
+
     // 검색 실행 로직을 함수로 추출
     const handleSearch = () => {
         if (searchKeyword) {
@@ -45,12 +52,15 @@ export default function Navigation() {
         const storedName = localStorage.getItem('name');
         const storedPicture = localStorage.getItem('picture');
 
-        if (storedEmail && storedEmail === adminEmail) {
-            setLogin(true);
-            setAuthorized(true);
-            setName(storedName || '');
-            setEmail(storedEmail || '');
-            setPicture(storedPicture || '');
+        if (storedEmail) {
+            const storedRole = determineRole(storedEmail, adminEmail, allowedEmails);
+            if (storedRole) {
+                setLogin(true);
+                setRole(storedRole);
+                setName(storedName || '');
+                setEmail(storedEmail || '');
+                setPicture(storedPicture || '');
+            }
         }
     }, [adminEmail, clientId]);
 
@@ -80,8 +90,10 @@ export default function Navigation() {
                 setPicture(profilePicture);
                 setLogin(true);
 
-                if (profileEmail === adminEmail) {
-                    setAuthorized(true);
+                const userRole = determineRole(profileEmail, adminEmail, allowedEmails);
+                setRole(userRole);
+
+                if (userRole) {
                     localStorage.setItem('name', profileName);
                     localStorage.setItem('email', profileEmail);
                     localStorage.setItem('picture', profilePicture);
@@ -96,7 +108,7 @@ export default function Navigation() {
     const logout = () => {
         console.log('Logging out...');
         setLogin(false);
-        setAuthorized(false);
+        setRole(null);
         setName('');
         setEmail('');
         setPicture('');
@@ -109,6 +121,27 @@ export default function Navigation() {
         console.log('Google Logout Completed');
     };
 
+    const renderContent = () => {
+        if (!login) {
+            return (
+                <GoogleLogin
+                    onSuccess={onLoginSuccess}
+                    onError={() => alert("Google 로그인 실패")}
+                />
+            );
+        }
+
+        if (!role) {
+            return <div>{name}님으로 로그인하셨습니다. 서비스 접근 권한이 없습니다.</div>;
+        }
+
+        if (role === 'viewer' && !isViewerAllowedPath(location.pathname)) {
+            return <Navigate to="/view" replace />;
+        }
+
+        return <Outlet context={{ searchResults, hasSearched, role }} />;
+    };
+
     return (
         <GoogleOAuthProvider clientId={clientId}>
             <div>
@@ -117,19 +150,21 @@ export default function Navigation() {
                     <Navbar.Toggle aria-controls="basic-navbar-nav" />
                     <Navbar.Collapse id="basic-navbar-nav">
                         <Nav className="me-auto my-2 my-lg-0" style={{ maxHeight: '100px' }} navbarScroll>
-                            <Nav.Link href="/edit">편집</Nav.Link>
-                            <Nav.Link href="/view">조회</Nav.Link>
-                            <Nav.Link href="/admin">관리</Nav.Link>
+                            {role === 'admin' && <Nav.Link href="/edit">편집</Nav.Link>}
+                            {role && <Nav.Link href="/view">조회</Nav.Link>}
+                            {role === 'admin' && <Nav.Link href="/admin">관리</Nav.Link>}
                         </Nav>
                         <div className="d-flex align-items-center ms-auto">
-                            <Form onSubmit={e => { e.preventDefault(); handleSearch(); }} className="me-2">
-                                <InputGroup>
-                                    <FormControl type="text" placeholder="키워드" className="mr-sm-2" value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)} />
-                                    <Button type="button" variant="outline-success" size="sm" onClick={handleSearch}>
-                                        검색<FontAwesomeIcon icon={faSearch} />
-                                    </Button>
-                                </InputGroup>
-                            </Form>
+                            {role && (
+                                <Form onSubmit={e => { e.preventDefault(); handleSearch(); }} className="me-2">
+                                    <InputGroup>
+                                        <FormControl type="text" placeholder="키워드" className="mr-sm-2" value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)} />
+                                        <Button type="button" variant="outline-success" size="sm" onClick={handleSearch}>
+                                            검색<FontAwesomeIcon icon={faSearch} />
+                                        </Button>
+                                    </InputGroup>
+                                </Form>
+                            )}
                             {login && (
                                 <Dropdown align="end">
                                     <Dropdown.Toggle as="div" style={{ cursor: 'pointer', display: 'inline-block' }}>
@@ -149,14 +184,7 @@ export default function Navigation() {
                 </Navbar>
 
                 <div className="container ps-0">
-                    {!login && (
-                        <GoogleLogin
-                            onSuccess={onLoginSuccess}
-                            onError={() => alert("Google 로그인 실패")}
-                        />
-                    )}
-                    {authorized && <Outlet context={{ searchResults, hasSearched }} />}
-                    {login && !authorized && <div>{name}님으로 로그인하셨습니다. 권한 부족</div>}
+                    {renderContent()}
                 </div>
             </div>
         </GoogleOAuthProvider>
