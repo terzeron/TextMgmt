@@ -1,10 +1,18 @@
 .MuiTreeItem-content {
     padding: 0 0 0 0 !important;
+    width: 100% !important;
 }
 
 .MuiTreeItem-label {
     font-size: small !important;
     line-height: 0.9;
+    flex: 1 !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+}
+
+.MuiTreeItem-label .MuiTypography-body2 {
+    width: 100% !important;
 }
 
 div#dir_list {
