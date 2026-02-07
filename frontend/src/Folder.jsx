@@ -248,7 +248,6 @@ const CustomTreeItem = React.forwardRef(function CustomTreeItem(props, ref) {
 });
 
 export default function Folder(props) {
-    const [isOpen, setIsOpen] = useState(false);
     const [expandedItems, setExpandedItems] = useState([]);
     const defaultExpandedItems = useMemo(() => props.folderData.map(o => o.id), [props.folderData]);
     const treeViewStyles = useMemo(() => ({
@@ -258,49 +257,59 @@ export default function Folder(props) {
         overflowY: 'auto',
     }), []);
 
+    if (!props.isOpen) {
+        return (
+            <Card>
+                <Card.Header
+                    onClick={() => props.onToggle(true)}
+                    style={{cursor: 'pointer', userSelect: 'none'}}
+                    className="py-2">
+                    <FontAwesomeIcon icon={faChevronRight} className="me-2"/>
+                    디렉토리
+                </Card.Header>
+            </Card>
+        );
+    }
+
     return (
         <Card>
             <Card.Header
-                onClick={() => setIsOpen(!isOpen)}
+                onClick={() => props.onToggle(false)}
                 style={{cursor: 'pointer', userSelect: 'none'}}
                 className="py-2">
-                <FontAwesomeIcon icon={isOpen ? faChevronDown : faChevronRight} className="me-2"/>
+                <FontAwesomeIcon icon={faChevronDown} className="me-2"/>
                 디렉토리
             </Card.Header>
-            {isOpen && (
-                <Card.Body>
-                    <div id="dir_list">
-                        {props.folderData && (
-                            <RichTreeView
-                                items={props.folderData}
-                                aria-label="file explorer"
-                                sx={treeViewStyles}
-                                slots={{item: CustomTreeItem}}
-                                defaultExpandedItems={defaultExpandedItems}
-                                expandedItems={expandedItems}
-                                selectedItems={props.selectedItems}
-                                onSelectedItemsChange={(event, selectedId) => {
-                                    const isFolder = props.folderData.some(item => item.id === selectedId && item.fileType === 'folder');
-                                    setExpandedItems((prevExpandedItems) => {
-                                        if (prevExpandedItems.includes(selectedId)) {
-                                            return prevExpandedItems.filter(x => x !== selectedId);
-                                        } else {
-                                            return [...prevExpandedItems, selectedId];
-                                        }
-                                    });
-
-                                    props.onClickHandler(selectedId);
-                                    if (!isFolder) {
-                                        setIsOpen(false);
+            <Card.Body>
+                <div id="dir_list">
+                    {props.folderData && (
+                        <RichTreeView
+                            items={props.folderData}
+                            aria-label="file explorer"
+                            sx={treeViewStyles}
+                            slots={{item: CustomTreeItem}}
+                            defaultExpandedItems={defaultExpandedItems}
+                            expandedItems={expandedItems}
+                            selectedItems={props.selectedItems}
+                            onSelectedItemsChange={(event, selectedId) => {
+                                const isFolder = props.folderData.some(item => item.id === selectedId && item.fileType === 'folder');
+                                setExpandedItems((prevExpandedItems) => {
+                                    if (prevExpandedItems.includes(selectedId)) {
+                                        return prevExpandedItems.filter(x => x !== selectedId);
+                                    } else {
+                                        return [...prevExpandedItems, selectedId];
                                     }
-                                }}
-                            />
-                        )
-                        }
-                    </div>
-                </Card.Body>
-                )
-            }
+                                });
+
+                                props.onClickHandler(selectedId);
+                                if (!isFolder) {
+                                    props.onToggle(false);
+                                }
+                            }}
+                        />
+                    )}
+                </div>
+            </Card.Body>
         </Card>
     );
 }
@@ -309,4 +318,6 @@ Folder.propTypes = {
     folderData: PropTypes.array.isRequired,
     selectedItems: PropTypes.array,
     onClickHandler: PropTypes.func.isRequired,
+    isOpen: PropTypes.bool.isRequired,
+    onToggle: PropTypes.func.isRequired,
 }
