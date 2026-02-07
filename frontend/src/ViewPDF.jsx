@@ -11,6 +11,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
     const [error, setError] = useState(null);
     const [totalPages, setTotalPages] = useState(0);
     const [loadedPages, setLoadedPages] = useState(0);
+    const [downloadProgress, setDownloadProgress] = useState(0);
     const [isFirstPageReady, setIsFirstPageReady] = useState(false);
     const containerRef = useRef(null);
     const pdfRef = useRef(null);
@@ -21,7 +22,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
     const renderPage = useCallback(async (pdf, pageNum) => {
         try {
             const page = await pdf.getPage(pageNum);
-            const viewport = page.getViewport({scale: 1.2}); // scale 약간 낮춤
+            const viewport = page.getViewport({scale: 1.2});
 
             const canvas = canvasRefs.current[pageNum];
             if (!canvas) return;
@@ -58,6 +59,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
             setError(null);
             setTotalPages(0);
             setLoadedPages(0);
+            setDownloadProgress(0);
             setIsFirstPageReady(false);
             canvasRefs.current = {};
 
@@ -65,7 +67,22 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                 const pdfUrl = preview
                     ? getApiUrlPrefix() + "/preview/" + bookId + "?pages=" + (pageCount > 0 ? pageCount : 5)
                     : getApiUrlPrefix() + "/download/" + bookId;
-                const loadingTask = pdfjs.getDocument(pdfUrl);
+
+                // Range 요청을 활성화하여 점진적 로딩 지원
+                // - rangeChunkSize: 페이지 데이터를 64KB 청크 단위로 가져옴
+                // - disableAutoFetch: 전체 파일을 미리 받지 않고, 페이지 렌더링 시 필요한 데이터만 요청
+                const loadingTask = pdfjs.getDocument({
+                    url: pdfUrl,
+                    rangeChunkSize: 65536,
+                    disableAutoFetch: true,
+                });
+
+                loadingTask.onProgress = ({loaded, total}) => {
+                    if (total > 0) {
+                        setDownloadProgress(Math.round(loaded / total * 100));
+                    }
+                };
+
                 loadingTaskRef.current = loadingTask;
                 const pdf = await loadingTask.promise;
                 loadingTaskRef.current = null;
@@ -88,15 +105,10 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                 if (cancelled) return;
                 await renderPage(pdf, 1);
 
-                // 나머지 페이지 병렬 렌더링 (2페이지씩 배치 처리)
-                const batchSize = 2;
-                for (let i = 2; i <= pagesToRender; i += batchSize) {
+                // 나머지 페이지 순차 렌더링 (Range 요청으로 페이지별 데이터를 온디맨드 로딩)
+                for (let i = 2; i <= pagesToRender; i++) {
                     if (cancelled) return;
-                    const batch = [];
-                    for (let j = i; j < i + batchSize && j <= pagesToRender; j++) {
-                        batch.push(renderPage(pdf, j));
-                    }
-                    await Promise.all(batch);
+                    await renderPage(pdf, i);
                 }
             } catch (err) {
                 if (cancelled) return;
@@ -136,13 +148,22 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
         );
     }
 
-    // 첫 페이지도 준비 안 됨 - 로딩 표시
+    // 첫 페이지도 준비 안 됨 - 로딩 표시 (다운로드 진행률 포함)
     if (!isFirstPageReady && totalPages === 0) {
         return (
             <div className="pdf-container">
                 <div className="loading-container">
                     <div className="spinner"></div>
-                    <span className="blinking">PDF 로딩 중...</span>
+                    <span className="blinking">
+                        {downloadProgress > 0
+                            ? `PDF 다운로드 중... ${downloadProgress}%`
+                            : 'PDF 로딩 중...'}
+                    </span>
+                    {downloadProgress > 0 && (
+                        <div className="progress-bar-container">
+                            <div className="progress-bar-fill" style={{width: `${downloadProgress}%`}} />
+                        </div>
+                    )}
                 </div>
                 <style>{pdfStyles}</style>
             </div>
@@ -232,6 +253,19 @@ const pdfStyles = `
     }
     @keyframes blink {
         50% { opacity: 0.5; }
+    }
+    .progress-bar-container {
+        width: 200px;
+        height: 4px;
+        background: #e0e0e0;
+        border-radius: 2px;
+        overflow: hidden;
+    }
+    .progress-bar-fill {
+        height: 100%;
+        background: #3498db;
+        border-radius: 2px;
+        transition: width 0.3s ease;
     }
 `;
 
