@@ -73,6 +73,14 @@ class CategoryMapping:
                         INDEX idx_category (category)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS hidden_categories (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        category VARCHAR(255) NOT NULL UNIQUE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        INDEX idx_category (category)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """)
                 conn.commit()
         LOGGER.debug("Database initialized")
 
@@ -308,3 +316,72 @@ class CategoryMapping:
         categories = [row["category"] for row in rows]
         LOGGER.debug("search_by_keyword(%s): %d categories", keyword, len(categories))
         return categories
+
+    def get_hidden_categories(self) -> List[str]:
+        """비노출 카테고리 목록 조회
+
+        Returns:
+            비노출 설정된 카테고리 목록
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT category
+                    FROM hidden_categories
+                    ORDER BY category
+                """)
+                rows = cursor.fetchall()
+
+        categories = [row["category"] for row in rows]
+        LOGGER.debug("get_hidden_categories: %d categories", len(categories))
+        return categories
+
+    def set_hidden(self, category: str, hidden: bool) -> bool:
+        """카테고리의 비노출 설정/해제
+
+        Args:
+            category: 카테고리명
+            hidden: True면 비노출 설정, False면 해제
+
+        Returns:
+            성공 여부
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                if hidden:
+                    try:
+                        cursor.execute("""
+                            INSERT IGNORE INTO hidden_categories (category)
+                            VALUES (%s)
+                        """, (category,))
+                        conn.commit()
+                        LOGGER.info("set_hidden(%s, True): success", category)
+                        return True
+                    except Exception as e:
+                        LOGGER.error("set_hidden(%s, True) failed: %s", category, e)
+                        return False
+                else:
+                    cursor.execute("""
+                        DELETE FROM hidden_categories
+                        WHERE category = %s
+                    """, (category,))
+                    conn.commit()
+                    LOGGER.info("set_hidden(%s, False): success", category)
+                    return True
+
+    def is_hidden(self, category: str) -> bool:
+        """카테고리의 비노출 여부 확인 (prefix 매칭 포함)
+
+        부모 카테고리가 비노출이면 자식 카테고리도 비노출로 판단합니다.
+
+        Args:
+            category: 카테고리명
+
+        Returns:
+            비노출 여부
+        """
+        hidden_categories = self.get_hidden_categories()
+        for hidden_cat in hidden_categories:
+            if category == hidden_cat or category.startswith(hidden_cat + "/"):
+                return True
+        return False

@@ -4,7 +4,7 @@ import PropTypes from 'prop-types';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import {Button, Card, Form, InputGroup, ListGroup, Badge, Row, Col, Spinner} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
-import {faPlus, faTrash, faSync} from '@fortawesome/free-solid-svg-icons';
+import {faPlus, faTrash, faEyeSlash} from '@fortawesome/free-solid-svg-icons';
 
 import {jsonGetReq, jsonPostReq, jsonDeleteReq} from './Common';
 
@@ -46,7 +46,20 @@ export default function CategoryMapping({categoryList}) {
     const [message, setMessage] = useState('');
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [hiddenCategories, setHiddenCategories] = useState(new Set());
     const keywordInputRef = useRef(null);
+
+    // 비노출 카테고리 로드
+    const loadHiddenCategories = useCallback(() => {
+        jsonGetReq('/hidden-categories', null,
+            (result) => {
+                setHiddenCategories(new Set(result || []));
+            },
+            (error) => {
+                console.error('Failed to fetch hidden categories:', error);
+            }
+        );
+    }, []);
 
     // 서버에서 데이터 로드
     const loadFromServer = useCallback(async () => {
@@ -54,10 +67,11 @@ export default function CategoryMapping({categoryList}) {
         try {
             const data = await fetchCategoryMappings();
             setMappings(data);
+            loadHiddenCategories();
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [loadHiddenCategories]);
 
     // 초기 로드
     useEffect(() => {
@@ -137,6 +151,23 @@ export default function CategoryMapping({categoryList}) {
         );
     }, [selectedCategory]);
 
+    // 비노출 토글
+    const handleToggleHidden = useCallback((category, currentlyHidden) => {
+        setSaving(true);
+        jsonPostReq(
+            `/hidden-categories/${encodeURIComponent(category)}`,
+            {hidden: !currentlyHidden},
+            (result) => {
+                setHiddenCategories(new Set(result || []));
+            },
+            (error) => {
+                setMessage(error || '비노출 설정 변경에 실패했습니다.');
+                setTimeout(() => setMessage(''), 3000);
+            },
+            () => setSaving(false)
+        );
+    }, []);
+
     // Enter 키 처리
     const handleKeyDown = useCallback((e) => {
         if (e.key === 'Enter') {
@@ -150,15 +181,7 @@ export default function CategoryMapping({categoryList}) {
     return (
         <Card>
             <Card.Header>
-                카테고리 매핑 관리
-                <Button
-                    variant="outline-secondary"
-                    className="btn-xs float-end"
-                    onClick={loadFromServer}
-                    disabled={loading}
-                >
-                    <FontAwesomeIcon icon={faSync} spin={loading}/> 새로고침
-                </Button>
+                카테고리 관리
             </Card.Header>
             <Card.Body>
                 {message && (
@@ -177,20 +200,31 @@ export default function CategoryMapping({categoryList}) {
                             <Card>
                                 <Card.Header className="py-1">디렉토리 목록</Card.Header>
                                 <ListGroup variant="flush" style={{maxHeight: '400px', overflowY: 'auto'}}>
-                                    {categoryList?.map(category => (
-                                        <ListGroup.Item
-                                            key={category}
-                                            action
-                                            active={selectedCategory === category}
-                                            onClick={() => handleCategorySelect(category)}
-                                            className="py-1 d-flex justify-content-between align-items-center"
-                                        >
-                                            <span style={{fontSize: '0.85rem'}}>{category}</span>
-                                            {mappings[category]?.length > 0 && (
-                                                <Badge bg="secondary" pill>{mappings[category].length}</Badge>
-                                            )}
-                                        </ListGroup.Item>
-                                    ))}
+                                    {categoryList?.map(category => {
+                                        const isHidden = hiddenCategories.has(category);
+                                        return (
+                                            <ListGroup.Item
+                                                key={category}
+                                                action
+                                                active={selectedCategory === category}
+                                                onClick={() => handleCategorySelect(category)}
+                                                className="py-1 d-flex justify-content-between align-items-center"
+                                                style={isHidden ? {opacity: 0.5} : {}}
+                                            >
+                                                <span style={{fontSize: '0.85rem'}}>
+                                                    {category}
+                                                    {isHidden && (
+                                                        <Badge bg="warning" text="dark" className="ms-1" style={{fontSize: '0.65rem'}}>
+                                                            <FontAwesomeIcon icon={faEyeSlash} size="xs"/> 비노출
+                                                        </Badge>
+                                                    )}
+                                                </span>
+                                                {mappings[category]?.length > 0 && (
+                                                    <Badge bg="secondary" pill>{mappings[category].length}</Badge>
+                                                )}
+                                            </ListGroup.Item>
+                                        );
+                                    })}
                                 </ListGroup>
                             </Card>
                         </Col>
@@ -202,6 +236,15 @@ export default function CategoryMapping({categoryList}) {
                                         {saving && <Spinner animation="border" size="sm" className="ms-2"/>}
                                     </Card.Header>
                                     <Card.Body>
+                                        <Form.Check
+                                            type="checkbox"
+                                            id={`hidden-${selectedCategory}`}
+                                            label="사용자 비노출"
+                                            checked={hiddenCategories.has(selectedCategory)}
+                                            onChange={() => handleToggleHidden(selectedCategory, hiddenCategories.has(selectedCategory))}
+                                            disabled={saving}
+                                            className="mb-2"
+                                        />
                                         <InputGroup className="mb-2">
                                             <Form.Control
                                                 ref={keywordInputRef}

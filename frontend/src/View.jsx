@@ -33,7 +33,7 @@ export default function View() {
     const isMobile = useIsMobile();
     // get optional route params for deep link
     const { category: routeCategory, bookId: routeBookId } = useParams();
-    const {searchResults, hasSearched, searchTotal, handleLoadMore, searchLoading} = useOutletContext();
+    const {searchResults, hasSearched, role, searchTotal, handleLoadMore, searchLoading} = useOutletContext();
     const [isFolderOpen, setIsFolderOpen] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
@@ -53,33 +53,56 @@ export default function View() {
             const hasRootFiles = categoryList.includes('_root');
             const nonEmptyCategories = categoryList.filter(c => c !== '_root');
 
-            const commonPrefix = findCommonPrefix(nonEmptyCategories);
+            const buildAndSetFolderData = (filteredCategories, counts) => {
+                const commonPrefix = findCommonPrefix(filteredCategories);
 
-            // 2단계 계층 구조 생성
-            let data = buildFolderHierarchy(
-                nonEmptyCategories.sort((a, b) => a.localeCompare(b)),
-                commonPrefix,
-                categoryCounts
-            );
+                // 2단계 계층 구조 생성
+                let data = buildFolderHierarchy(
+                    filteredCategories.sort((a, b) => a.localeCompare(b)),
+                    commonPrefix,
+                    counts
+                );
 
-            // 최상위 파일이 있으면 가져와서 추가
-            if (hasRootFiles) {
-                jsonGetReq('/categories/_root', null, (bookList) => {
-                    const rootFiles = bookList
-                        .sort((a, b) => a['title'].localeCompare(b['title']))
-                        .map(book => ({
-                            id: '/' + book['book_id'].toString(),
-                            label: book['title'] + '.' + book['file_type'],
-                            fileType: book['file_type'],
-                            children: [],
-                            book: book,
-                        }));
-                    setFolderData([...data, ...rootFiles]);
-                }, () => {
+                // 최상위 파일이 있으면 가져와서 추가
+                if (hasRootFiles) {
+                    jsonGetReq('/categories/_root', null, (bookList) => {
+                        const rootFiles = bookList
+                            .sort((a, b) => a['title'].localeCompare(b['title']))
+                            .map(book => ({
+                                id: '/' + book['book_id'].toString(),
+                                label: book['title'] + '.' + book['file_type'],
+                                fileType: book['file_type'],
+                                children: [],
+                                book: book,
+                            }));
+                        setFolderData([...data, ...rootFiles]);
+                    }, () => {
+                        setFolderData(data);
+                    });
+                } else {
                     setFolderData(data);
+                }
+            };
+
+            // viewer인 경우 비노출 카테고리 필터링
+            if (role === 'viewer') {
+                jsonGetReq('/hidden-categories', null, (hiddenList) => {
+                    const hiddenSet = new Set(hiddenList || []);
+                    const filteredCategories = nonEmptyCategories.filter(cat => {
+                        for (const hidden of hiddenSet) {
+                            if (cat === hidden || cat.startsWith(hidden + '/')) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    });
+                    buildAndSetFolderData(filteredCategories, categoryCounts);
+                }, () => {
+                    // hidden 목록 로드 실패 시 전체 카테고리 표시
+                    buildAndSetFolderData(nonEmptyCategories, categoryCounts);
                 });
             } else {
-                setFolderData(data);
+                buildAndSetFolderData(nonEmptyCategories, categoryCounts);
             }
         }, (error) => {
             setErrorMessage(`can't load directory data, ${error}`);
@@ -94,7 +117,7 @@ export default function View() {
             setViewUrl('');
             setDownloadUrl('');
         }
-    }, []);
+    }, [role]);
 
     const entryClicked = useCallback((selectedEntryId) => {
         // 2단계 트리에서 검색
