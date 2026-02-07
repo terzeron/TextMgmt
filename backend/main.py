@@ -475,3 +475,38 @@ async def update_all_category_mappings(body: CategoryMappingsModel) -> Dict[str,
     except Exception as e:
         LOGGER.error("update_all_category_mappings error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# === 비노출 카테고리 API ===
+
+class HiddenCategoryModel(BaseModel):
+    hidden: bool
+
+
+@app.get("/hidden-categories")
+async def get_hidden_categories() -> Dict[str, Any]:
+    """비노출 카테고리 목록 조회"""
+    LOGGER.debug("# get_hidden_categories()")
+    try:
+        categories = category_mapping.get_hidden_categories()
+        return {"status": "success", "result": categories}
+    except Exception as e:
+        LOGGER.error("get_hidden_categories error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/hidden-categories/{category:path}")
+async def set_hidden_category(category: str, body: HiddenCategoryModel) -> Dict[str, Any]:
+    """카테고리 비노출 설정/해제"""
+    LOGGER.debug("# set_hidden_category(category='%s', hidden=%s)", category, body.hidden)
+    try:
+        success = category_mapping.set_hidden(category, body.hidden)
+        if success:
+            return {"status": "success", "result": category_mapping.get_hidden_categories()}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to update hidden category")
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOGGER.error("set_hidden_category error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
