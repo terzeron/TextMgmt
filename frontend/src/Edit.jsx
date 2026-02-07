@@ -257,7 +257,7 @@ export default function Edit() {
             setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
             const otherCategoryList = categoryList
                 .sort((a, b) => a.localeCompare(b))
-                .filter(cat => cat !== '_root');
+                .filter(cat => cat !== '_root' && !cat.includes('/'));
             setOtherCategoryList(otherCategoryList);
         } else {
             // book entry
@@ -283,7 +283,7 @@ export default function Edit() {
                     // determine other category list
                     const otherCategoryList = categoryList
                         .sort((a, b) => a.localeCompare(b))
-                        .filter(cat => cat !== category)
+                        .filter(cat => cat !== category && cat !== '_root' && !cat.includes('/'))
                     setOtherCategoryList(otherCategoryList);
                 } else {
                     setErrorMessage(`선택한 책을 찾을 수 없습니다. (ID: ${bookId})`);
