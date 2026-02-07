@@ -283,7 +283,7 @@ export default function Actions(props) {
                             <Button
                                 variant="outline-secondary"
                                 key={info['key']}
-                                className={`btn-xs ${info['class'] || ''} ${highlightClass}`}
+                                className={`btn-sm ${info['class'] || ''} ${highlightClass}`}
                                 style={highlightClass ? {} : info['style']}
                                 onClick={(e) => {
                                     props.selectDirectoryButtonClicked(e, info['key']);
