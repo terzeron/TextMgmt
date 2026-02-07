@@ -134,14 +134,14 @@ describe('ViewSingle', () => {
         });
     });
 
-    it('viewUrl이 있으면 "새 창에서 전체 보기" 버튼을 표시한다', async () => {
+    it('viewUrl이 있으면 "전체 보기" 버튼을 표시한다', async () => {
         render(
             <ViewSingle bookId={1} fileType="pdf" filePath="/test.pdf"
                 viewUrl="http://example.com/view/1/pdf" />
         );
 
         await waitFor(() => {
-            const btn = screen.getByText('새 창에서 전체 보기');
+            const btn = screen.getByText('전체 보기');
             expect(btn).toBeTruthy();
             // 링크의 href 확인
             const link = btn.closest('a');
@@ -172,7 +172,7 @@ describe('ViewSingle', () => {
             expect(screen.getByTestId('view-pdf')).toBeTruthy();
         });
 
-        expect(screen.queryByText('새 창에서 전체 보기')).toBeNull();
+        expect(screen.queryByText('전체 보기')).toBeNull();
         expect(screen.queryByText('다운로드')).toBeNull();
     });
 
@@ -183,7 +183,7 @@ describe('ViewSingle', () => {
         );
 
         await waitFor(() => {
-            expect(screen.getByText('새 창에서 전체 보기')).toBeTruthy();
+            expect(screen.getByText('전체 보기')).toBeTruthy();
             expect(screen.getByText('다운로드')).toBeTruthy();
         });
     });

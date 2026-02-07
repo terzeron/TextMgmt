@@ -51,7 +51,7 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                                 variant="outline-secondary" size="sm"
                                                 onClick={() => window.open(`/viewer/${book.file_type}/${book.book_id}?path=${encodeURIComponent(book.file_path)}`, '_blank', 'noopener')}
                                             >
-                                                새 창에서 전체 보기
+                                                전체 보기
                                             </Button>
                                         )}
                                     </div>

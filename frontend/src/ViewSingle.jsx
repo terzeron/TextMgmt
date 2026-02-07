@@ -67,7 +67,7 @@ export default function ViewSingle(props) {
                         {props.viewUrl && (
                             <a href={props.viewUrl} target="_blank" rel="noreferrer">
                                 <Button variant="outline-primary" disabled={!props.viewUrl} className="btn-xs float-end">
-                                    새 창에서 전체 보기
+                                    전체 보기
                                 </Button>
                             </a>
                         )}
