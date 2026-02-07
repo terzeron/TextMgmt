@@ -133,7 +133,7 @@ MemoizedIcon.propTypes = {
 };
 
 // eslint-disable-next-line react/prop-types
-function CustomLabel({icon: Icon, iconColor, expandable, children, ...other}) {
+function CustomLabel({icon: Icon, iconColor, expandable, count, children, ...other}) {
     return (
         <TreeItem2Label
             {...other}
@@ -144,6 +144,11 @@ function CustomLabel({icon: Icon, iconColor, expandable, children, ...other}) {
         >
             {Icon && <MemoizedIcon Icon={Icon} color={iconColor} />}
             <StyledTreeItemLabelText variant="body2">{children}</StyledTreeItemLabelText>
+            {count > 0 && (
+                <Typography variant="caption" sx={{ ml: 0.5, color: 'text.secondary', fontWeight: 400 }}>
+                    ({count})
+                </Typography>
+            )}
             {expandable && <DotIcon/>}
         </TreeItem2Label>
     );
@@ -153,6 +158,7 @@ CustomLabel.propTypes = {
     icon: PropTypes.elementType,
     iconColor: PropTypes.string,
     expandable: PropTypes.bool,
+    count: PropTypes.number,
     children: PropTypes.node,
 };
 
@@ -239,7 +245,7 @@ const CustomTreeItem = React.forwardRef(function CustomTreeItem(props, ref) {
                     </TreeItem2IconContainer>
 
                     <CustomLabel
-                        {...getLabelProps({icon, iconColor, expandable: expandable && status.expanded})}
+                        {...getLabelProps({icon, iconColor, expandable: expandable && status.expanded, count: item?.count})}
                     />
                 </CustomTreeItemContent>
                 {children && <TransitionComponent {...getGroupTransitionProps()} />}

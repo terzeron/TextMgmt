@@ -49,7 +49,7 @@ class BookManager:
     def __del__(self) -> None:
         del self.es_manager
 
-    async def get_categories(self) -> Tuple[List[str], Optional[str]]:
+    async def get_categories(self) -> Tuple[Dict[str, int], Optional[str]]:
         LOGGER.debug("# get_categories()")
         categories = self.es_manager.search_and_aggregate_by_category()
         return categories, None

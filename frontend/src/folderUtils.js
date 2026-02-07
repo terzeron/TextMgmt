@@ -33,9 +33,10 @@ export function findCommonPrefix(strings) {
  *
  * @param {string[]} categories - 정렬된 카테고리 문자열 배열
  * @param {string} commonPrefix - 공통 prefix
+ * @param {Object} [categoryCounts] - 카테고리별 항목 수 (예: {"_epub": 5, "_pdf": 3})
  * @returns {Array} 트리 구조 배열
  */
-export function buildFolderHierarchy(categories, commonPrefix) {
+export function buildFolderHierarchy(categories, commonPrefix, categoryCounts = {}) {
     const groups = new Map(); // parentName -> { categoryIds: [], hasParentCategory: false }
 
     for (const category of categories) {
@@ -70,6 +71,7 @@ export function buildFolderHierarchy(categories, commonPrefix) {
                 label: parentName,
                 fileType: 'folder',
                 booksLoaded: false,
+                count: categoryCounts[group.parentCategoryId] || 0,
             });
         } else {
             // 자식이 있는 경우
@@ -81,17 +83,22 @@ export function buildFolderHierarchy(categories, commonPrefix) {
                     label: childName,
                     fileType: 'folder',
                     booksLoaded: false,
+                    count: categoryCounts[catId] || 0,
                 };
             });
 
+            const childrenTotal = children.reduce((sum, c) => sum + c.count, 0);
+
             if (group.hasParentCategory) {
                 // 부모 카테고리도 존재 → 실제 부모 폴더
+                const ownCount = categoryCounts[group.parentCategoryId] || 0;
                 result.push({
                     id: group.parentCategoryId,
                     label: parentName,
                     fileType: 'folder',
                     isVirtualParent: false,
                     booksLoaded: false,
+                    count: ownCount + childrenTotal,
                     children: children,
                 });
             } else {
@@ -102,6 +109,7 @@ export function buildFolderHierarchy(categories, commonPrefix) {
                     fileType: 'folder',
                     isVirtualParent: true,
                     booksLoaded: false,
+                    count: childrenTotal,
                     children: children,
                 });
             }
