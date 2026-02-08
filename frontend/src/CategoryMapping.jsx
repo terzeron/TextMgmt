@@ -195,7 +195,7 @@ export default function CategoryMapping({categoryList}) {
                         <p className="mt-2">로딩 중...</p>
                     </div>
                 ) : (
-                    <Row>
+                    <Row className="g-0">
                         <Col md={4}>
                             <Card>
                                 <Card.Header className="py-1">디렉토리 목록</Card.Header>
@@ -291,11 +291,6 @@ export default function CategoryMapping({categoryList}) {
                         </Col>
                     </Row>
                 )}
-                <div className="mt-3 text-muted" style={{fontSize: '0.8rem'}}>
-                    <strong>사용법:</strong> 각 디렉토리에 서점 카테고리와 매칭될 키워드를 등록합니다.<br/>
-                    예: "4_심리학뇌과학" → "심리학", "뇌과학", "인지과학" 등<br/>
-                    <em>변경 사항은 자동으로 저장됩니다.</em>
-                </div>
             </Card.Body>
         </Card>
     );
