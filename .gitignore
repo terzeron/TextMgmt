@@ -16,6 +16,7 @@ text/cat2_sub4
 text/testdata
 text/testdata2
 text/testdata3
+text/.preview_cache
 
 backend/.env
 backend/*.pid

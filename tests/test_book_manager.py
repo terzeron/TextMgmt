@@ -250,6 +250,50 @@ class TestBookManager:
                 await bm.update_book(book_id, category1, title1, author1, path1, type1)
 
     @pytest.mark.asyncio
+    async def test_get_category_mismatches(self, book_manager_with_data):
+        bm = book_manager_with_data
+        result = await bm.get_category_mismatches()
+
+        # 반환 구조 검증
+        assert isinstance(result, dict)
+        assert "mismatches" in result
+        assert "es_only" in result
+        assert "fs_only" in result
+        assert isinstance(result["mismatches"], list)
+        assert isinstance(result["es_only"], list)
+        assert isinstance(result["fs_only"], list)
+
+        # mismatches 항목 구조 검증
+        for item in result["mismatches"]:
+            assert "category" in item
+            assert "es_count" in item
+            assert "fs_count" in item
+            assert "diff" in item
+            assert isinstance(item["category"], str)
+            assert isinstance(item["es_count"], int)
+            assert isinstance(item["fs_count"], int)
+            assert item["diff"] == item["es_count"] - item["fs_count"]
+            assert item["es_count"] != item["fs_count"]
+
+        # mismatches가 diff 절대값 내림차순 정렬인지 검증
+        diffs = [abs(item["diff"]) for item in result["mismatches"]]
+        assert diffs == sorted(diffs, reverse=True)
+
+        # es_only 항목 구조 검증
+        for item in result["es_only"]:
+            assert "category" in item
+            assert "es_count" in item
+            assert isinstance(item["category"], str)
+            assert isinstance(item["es_count"], int)
+
+        # fs_only 항목 구조 검증
+        for item in result["fs_only"]:
+            assert "category" in item
+            assert "fs_count" in item
+            assert isinstance(item["category"], str)
+            assert isinstance(item["fs_count"], int)
+
+    @pytest.mark.asyncio
     async def test_delete_book(self, book_manager_with_data):
         bm = book_manager_with_data
         book = await get_one_random_book(bm)
