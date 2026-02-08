@@ -1,23 +1,16 @@
 #!/usr/bin/env python
 
-import os
 import pytest
 
 from backend.category_mapping import CategoryMapping
 
 
 class TestCategoryMapping:
-    """CategoryMapping 클래스 테스트 (MySQL 기반)"""
+    """CategoryMapping 클래스 테스트 (MySQL testcontainer 기반)"""
 
     @pytest.fixture
-    def mapping(self):
-        """CategoryMapping 인스턴스 생성 (테스트용 환경변수 필요)"""
-        # 테스트 환경에서 MySQL 연결 정보가 필요
-        # 환경변수가 없으면 테스트 skip
-        host = os.environ.get("TM_MYSQL_HOST")
-        if not host:
-            pytest.skip("TM_MYSQL_HOST not set - skipping MySQL tests")
-
+    def mapping(self, mysql_container):
+        """CategoryMapping 인스턴스 생성 (testcontainer MySQL 사용)"""
         mapping = CategoryMapping()
         # 테스트 전 데이터 정리
         mapping.update_all_mappings({})
