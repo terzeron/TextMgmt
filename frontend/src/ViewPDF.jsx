@@ -263,6 +263,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                 </div>
                 <div className="pdf-zoom-controls">
                     <button className={`pdf-zoom-btn pdf-zoom-fit-btn ${fitMode ? 'active' : ''}`} onClick={() => setFitMode(prev => !prev)}>
+                        <span className="toggle-track"><span className="toggle-knob" /></span>
                         맞춤
                     </button>
                     <span className="pdf-zoom-separator" />
@@ -327,13 +328,36 @@ const pdfStyles = `
     .pdf-zoom-btn:hover:not(:disabled) {
         background: #e0e0e0;
     }
-    .pdf-zoom-fit-btn.active {
-        background: #4a90d9;
-        color: #fff;
-        border-color: #4a90d9;
+    .pdf-zoom-fit-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 8px 2px 4px;
     }
-    .pdf-zoom-fit-btn.active:hover {
-        background: #3a7bc8;
+    .pdf-zoom-fit-btn .toggle-track {
+        position: relative;
+        width: 28px;
+        height: 16px;
+        border-radius: 8px;
+        background: #ccc;
+        flex-shrink: 0;
+        transition: background 0.2s;
+    }
+    .pdf-zoom-fit-btn .toggle-knob {
+        position: absolute;
+        left: 2px;
+        top: 2px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #fff;
+        transition: left 0.2s;
+    }
+    .pdf-zoom-fit-btn.active .toggle-track {
+        background: #4a90d9;
+    }
+    .pdf-zoom-fit-btn.active .toggle-knob {
+        left: 14px;
     }
     .pdf-zoom-separator {
         width: 1px;
