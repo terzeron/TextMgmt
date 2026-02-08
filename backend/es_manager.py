@@ -172,44 +172,43 @@ class ESManager:
                      max_result_count, size, query)
         result_count = 0
         result = []
-        response = self.es.search(index=self.index_name, query=query,
-                                  sort=sort, scroll="10m", track_scores=True, size=size)
-        # total_hits = response['hits']['total']['value']
-        max_score = response["hits"]["max_score"]
-        if max_score is None:
-            return []
-
-        for hit in response["hits"]["hits"]:
-            normalized_score = hit["_score"] * 100 / \
-                max_score if max_score > 0 else 0
-            # print(hit['_source'], normalized_score)
-            result.append((int(hit["_id"]), hit["_source"], normalized_score))
-            result_count += 1
-            if result_count >= max_result_count:
-                return result[:max_result_count]
-        scroll_id = response["_scroll_id"]
-        scroll_size = response["hits"]["total"]["value"]
-
-        while scroll_size > 0:
-            response = self.es.scroll(scroll_id=scroll_id, scroll="10m")
-            # total_hits = response['hits']['total']['value']
+        scroll_id = None
+        try:
+            response = self.es.search(index=self.index_name, query=query,
+                                      sort=sort, scroll="10m", track_scores=True, size=size)
+            scroll_id = response.get("_scroll_id")
             max_score = response["hits"]["max_score"]
             if max_score is None:
                 return []
+
             for hit in response["hits"]["hits"]:
-                normalized_score = hit["_score"] * 100 / max_score if max_score > 0 else 0
-                # print(hit['_source'], normalized_score)
-                result_item = (int(hit["_id"]), hit["_source"], normalized_score)
-                result.append(result_item)
+                normalized_score = hit["_score"] * 100 / \
+                    max_score if max_score > 0 else 0
+                result.append((int(hit["_id"]), hit["_source"], normalized_score))
                 result_count += 1
                 if result_count >= max_result_count:
                     return result[:max_result_count]
-            scroll_id = response["_scroll_id"]
-            scroll_size = len(response["hits"]["hits"])
-            # print(result_count)
-            # print(len(result))
 
-        return result[:max_result_count]
+            while len(response["hits"]["hits"]) > 0:
+                response = self.es.scroll(scroll_id=scroll_id, scroll="10m")
+                scroll_id = response["_scroll_id"]
+                max_score = response["hits"]["max_score"]
+                if max_score is None:
+                    return []
+                for hit in response["hits"]["hits"]:
+                    normalized_score = hit["_score"] * 100 / max_score if max_score > 0 else 0
+                    result.append((int(hit["_id"]), hit["_source"], normalized_score))
+                    result_count += 1
+                    if result_count >= max_result_count:
+                        return result[:max_result_count]
+
+            return result[:max_result_count]
+        finally:
+            if scroll_id:
+                try:
+                    self.es.clear_scroll(scroll_id=scroll_id)
+                except Exception:
+                    pass
 
     def _search_paged(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, size: int = 10, offset: int = 0) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
         """(results, total_count) 튜플을 반환하는 페이지네이션 검색"""
