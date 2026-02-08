@@ -21,7 +21,7 @@ vi.mock('../src/ViewEPUB', () => ({
     default: ({ bookId, filePath }) => <div data-testid="view-epub">EPUB:{bookId}:fp={filePath}</div>,
 }));
 vi.mock('../src/ViewDOC', () => ({
-    default: ({ bookId, lineCount }) => <div data-testid="view-doc">DOC:{bookId}:lc={lineCount}</div>,
+    default: ({ bookId, fileType, lineCount }) => <div data-testid="view-doc">DOC:{bookId}:ft={fileType}:lc={lineCount}</div>,
 }));
 vi.mock('../src/ViewTXT', () => ({
     default: ({ bookId, lineCount }) => <div data-testid="view-txt">TXT:{bookId}:lc={lineCount}</div>,
@@ -100,10 +100,19 @@ describe('ViewSingle', () => {
         });
     });
 
-    it('ViewDOC(docx)에 lineCount를 전달한다', async () => {
+    it('ViewDOC(doc)에 fileType="doc"을 전달한다', async () => {
+        render(<ViewSingle bookId={1} fileType="doc" filePath="/test.doc" />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/ft=doc/)).toBeTruthy();
+        });
+    });
+
+    it('ViewDOC(docx)에 fileType="docx"와 lineCount를 전달한다', async () => {
         render(<ViewSingle bookId={1} fileType="docx" filePath="/test.docx" lineCount={20} />);
 
         await waitFor(() => {
+            expect(screen.getByText(/ft=docx/)).toBeTruthy();
             expect(screen.getByText(/lc=20/)).toBeTruthy();
         });
     });

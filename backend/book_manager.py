@@ -5,6 +5,9 @@ import os
 import io
 import base64
 import logging.config
+import platform
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Tuple, Dict, List, Union, Optional, Any
 import chardet
@@ -35,6 +38,43 @@ class BookManager:
         ".tiff": "image/tiff",
         ".svg": "image/svg+xml",
     }
+
+    @staticmethod
+    def _fix_doc_encoding(text: str) -> Optional[str]:
+        """textutil이 CP949 바이트를 Latin-1으로 해석한 경우, 원래 CP949으로 복원.
+        Word 6.0/95의 DBCS 바이트 순서 반전도 처리.
+        직접 디코딩과 바이트 스왑 디코딩 중 한글이 더 많은 쪽을 선택."""
+        original_count = sum(1 for c in text[:2000] if '가' <= c <= '힣' or 'ㄱ' <= c <= 'ㅎ')
+        if original_count >= 5:
+            return None  # 이미 한글이 포함됨
+
+        try:
+            raw_bytes = text.encode('latin-1', errors='strict')
+        except UnicodeEncodeError:
+            return None
+
+        # 1차: 직접 CP949 디코딩
+        direct = raw_bytes.decode('cp949', errors='replace')
+        direct_count = sum(1 for c in direct[:2000] if '가' <= c <= '힣' or 'ㄱ' <= c <= 'ㅎ')
+
+        # 2차: Word 6.0/95 DBCS 바이트 순서 반전 복원
+        swapped = bytearray()
+        i = 0
+        while i < len(raw_bytes):
+            if i + 1 < len(raw_bytes) and raw_bytes[i] >= 0x80 and raw_bytes[i + 1] >= 0x80:
+                swapped.append(raw_bytes[i + 1])
+                swapped.append(raw_bytes[i])
+                i += 2
+            else:
+                swapped.append(raw_bytes[i])
+                i += 1
+        swapped_text = bytes(swapped).decode('cp949', errors='replace')
+        swapped_count = sum(1 for c in swapped_text[:2000] if '가' <= c <= '힣' or 'ㄱ' <= c <= 'ㅎ')
+
+        best = max(direct_count, swapped_count)
+        if best < 5:
+            return None
+        return swapped_text if swapped_count > direct_count else direct
 
     def __init__(self) -> None:
         if "TM_WORK_DIR" not in os.environ:
@@ -199,6 +239,43 @@ class BookManager:
                 return Response(content=full_html, media_type="text/html")
             except Exception as e:
                 LOGGER.error("EPUB preview generation failed for book_id=%d: %s", book_id, e)
+                return ""
+
+        elif suffix == ".doc":
+            cache_file = cache_dir / f"{book_id}.html"
+            if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
+                LOGGER.debug("Preview cache hit for book_id=%d (DOC)", book_id)
+                return FileResponse(path=cache_file, media_type="text/html")
+
+            try:
+                if platform.system() == "Darwin":
+                    proc = subprocess.run(
+                        ["textutil", "-convert", "html", "-stdout", str(book.file_path)],
+                        capture_output=True, timeout=30
+                    )
+                    html_content = proc.stdout.decode("utf-8", errors="replace")
+                    # textutil이 CP949 바이트를 Latin-1으로 해석한 경우 재인코딩 시도
+                    html_content = BookManager._fix_doc_encoding(html_content) or html_content
+                else:
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        subprocess.run(
+                            ["libreoffice", "--headless", "--convert-to", "html",
+                             "--outdir", tmpdir, str(book.file_path)],
+                            capture_output=True, timeout=60
+                        )
+                        html_file = Path(tmpdir) / (book.file_path.stem + ".html")
+                        if html_file.exists():
+                            html_content = html_file.read_text(encoding="utf-8", errors="replace")
+                        else:
+                            html_files = list(Path(tmpdir).glob("*.html"))
+                            html_content = html_files[0].read_text(encoding="utf-8", errors="replace") if html_files else ""
+
+                if html_content:
+                    cache_file.write_text(html_content, encoding="utf-8")
+                    LOGGER.debug("Preview generated for book_id=%d (DOC)", book_id)
+                    return Response(content=html_content, media_type="text/html")
+            except Exception as e:
+                LOGGER.error("DOC preview generation failed for book_id=%d: %s", book_id, e)
                 return ""
 
         # 지원하지 않는 형식은 빈 문자열 반환

@@ -28,6 +28,8 @@ class TestLoader(unittest.TestCase):
     _docx_file_path: Path
     _rtf_dir_path: Path
     _rtf_file_path: Path
+    _doc_dir_path: Path
+    _doc_file_path: Path
 
     @classmethod
     def setUpClass(cls):
@@ -45,6 +47,8 @@ class TestLoader(unittest.TestCase):
         cls._docx_file_path = list(cls._docx_dir_path.glob("*.docx"))[0]
         cls._rtf_dir_path = cls._path_prefix / "_rtf"
         cls._rtf_file_path = list(cls._rtf_dir_path.glob("*.rtf"))[0]
+        cls._doc_dir_path = cls._path_prefix / "_doc"
+        cls._doc_file_path = list(cls._doc_dir_path.glob("*.doc"))[0]
 
     def setUp(self):
         self.loader = Loader()
@@ -62,6 +66,8 @@ class TestLoader(unittest.TestCase):
         self.docx_file_path = self._docx_file_path
         self.rtf_dir_path = self._rtf_dir_path
         self.rtf_file_path = self._rtf_file_path
+        self.doc_dir_path = self._doc_dir_path
+        self.doc_file_path = self._doc_file_path
 
     def tearDown(self):
         del self.loader
@@ -166,6 +172,27 @@ class TestLoader(unittest.TestCase):
         assert 0 < len(content) <= Loader.TEXT_SIZE
         assert isinstance(line_count, int)
         assert isinstance(page_count, int)
+
+    def test_read_from_doc(self):
+        result = self.loader.read_from_doc(self.doc_file_path)
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+        content, line_count, page_count = result
+        assert isinstance(content, str)
+        assert 0 < len(content) <= Loader.TEXT_SIZE
+        assert isinstance(line_count, int)
+        assert line_count > 0
+        assert isinstance(page_count, int)
+        assert page_count == 0  # DOC은 page_count가 0
+
+    def test_read_file_doc(self):
+        """read_file이 .doc 파일을 정상 처리하는지 테스트"""
+        data = self.loader.read_file(self.doc_file_path)
+        assert data
+        assert len(data) == 1
+        self.inspect_data(data)
+        for _, v in data.items():
+            assert v["file_type"] == "doc"
 
     def test_read_file(self):
         data = self.loader.read_file(self.epub_file_path)
