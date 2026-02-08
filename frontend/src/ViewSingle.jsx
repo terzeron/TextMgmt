@@ -60,7 +60,7 @@ export default function ViewSingle(props) {
     const renderComponent = componentMap[fileType];
 
     return (
-        <Card>
+        <Card className={standalone ? 'standalone-viewer' : ''}>
             {!standalone && (
                 <Card.Header>
                     책 보기
