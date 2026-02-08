@@ -18,6 +18,42 @@ warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
 os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
 
 from testcontainers.core.container import DockerContainer
+from testcontainers.mysql import MySqlContainer
+
+
+# ========== MySQL 컨테이너 fixture ==========
+
+MYSQL_USER = "testuser"
+MYSQL_PASSWORD = "testpass"
+MYSQL_DATABASE = "testdb"
+MYSQL_ROOT_PASSWORD = "rootpass"
+
+
+@pytest.fixture(scope="session")
+def mysql_container():
+    """Start MySQL container for testing."""
+    print("\n>>> Starting MySQL container...")
+    mysql = MySqlContainer(
+        image="mysql:8.0",
+        username=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        root_password=MYSQL_ROOT_PASSWORD,
+        dbname=MYSQL_DATABASE,
+    )
+
+    with mysql:
+        host = mysql.get_container_host_ip()
+        port = mysql.get_exposed_port(3306)
+        print(f">>> MySQL container ready at {host}:{port}")
+
+        os.environ["TM_MYSQL_HOST"] = host
+        os.environ["TM_MYSQL_PORT"] = str(port)
+        os.environ["TM_MYSQL_DATABASE"] = MYSQL_DATABASE
+        os.environ["TM_MYSQL_USER"] = MYSQL_USER
+        os.environ["TM_MYSQL_PASSWORD"] = MYSQL_PASSWORD
+
+        yield mysql
+    print(">>> MySQL container stopped")
 
 
 # ========== ES 공통 설정 ==========
