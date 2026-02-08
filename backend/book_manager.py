@@ -146,9 +146,11 @@ class BookManager:
         LOGGER.debug("# get_book_preview(book_id=%d, pages=%d, chapters=%d)", book_id, pages, chapters)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
+            LOGGER.warning("get_book_preview: book_id=%d not found in ES", book_id)
             return ""
         book = Book(book_id=book_id, info=doc)
         if not book.file_path.is_file():
+            LOGGER.warning("get_book_preview: file not found: '%s' (book_id=%d)", book.file_path, book_id)
             return ""
 
         suffix = book.file_path.suffix.lower()
