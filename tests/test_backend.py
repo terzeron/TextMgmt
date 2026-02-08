@@ -199,6 +199,32 @@ class TestBackend:
         assert books and len(books) > 0
 
     @pytest.mark.asyncio
+    async def test_get_category_mismatches(self, backend_test_setup):
+        client = backend_test_setup["client"]
+
+        response = client.get("/category-mismatches")
+        assert response
+        assert response.status_code == 200
+        response_data = response.json()
+        assert response_data["status"] == "success"
+
+        result = response_data["result"]
+        assert "mismatches" in result
+        assert "es_only" in result
+        assert "fs_only" in result
+        assert isinstance(result["mismatches"], list)
+        assert isinstance(result["es_only"], list)
+        assert isinstance(result["fs_only"], list)
+
+        # mismatches 항목 구조 검증
+        for item in result["mismatches"]:
+            assert "category" in item
+            assert "es_count" in item
+            assert "fs_count" in item
+            assert "diff" in item
+            assert item["es_count"] != item["fs_count"]
+
+    @pytest.mark.asyncio
     async def test_search_by_keyword(self, test_book):
         book = test_book["book"]
         client = test_book["client"]

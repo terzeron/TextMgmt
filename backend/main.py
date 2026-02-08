@@ -495,6 +495,21 @@ async def get_hidden_categories() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/category-mismatches")
+async def get_category_mismatches() -> Dict[str, Any]:
+    """ES 카테고리별 문서 수와 파일시스템 파일 수의 불일치 검출"""
+    LOGGER.debug("# get_category_mismatches()")
+    response_object: Dict[str, Any] = {"status": "failure"}
+    try:
+        result = await book_manager.get_category_mismatches()
+        response_object["status"] = "success"
+        response_object["result"] = result
+    except Exception as e:
+        LOGGER.error("get_category_mismatches error: %s", e)
+        response_object["error"] = str(e)
+    return response_object
+
+
 @app.post("/hidden-categories/{category:path}")
 async def set_hidden_category(category: str, body: HiddenCategoryModel) -> Dict[str, Any]:
     """카테고리 비노출 설정/해제"""

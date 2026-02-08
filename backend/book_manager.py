@@ -274,6 +274,76 @@ class BookManager:
                 return "Ok", None
         return "Error", f"can't update book information of '{book_id}' in ElasticSearch, no such a book"
 
+    async def get_category_mismatches(self) -> Dict[str, Any]:
+        """파일시스템의 숫자_ prefix 1레벨 디렉토리 기준으로 ES와 파일 수 불일치를 검출"""
+        import os as _os
+        import re
+
+        # 1. ES 카테고리별 문서 수
+        es_cats = self.es_manager.search_and_aggregate_by_category()
+
+        # 2. 파일시스템: 숫자_ prefix 1레벨 디렉토리 + 그 하위 2레벨 스캔
+        base_str = str(self.path_prefix)
+        fs_cats: Dict[str, int] = {}
+        num_prefix = re.compile(r"^\d+_")
+
+        def count_files(dir_path: str) -> int:
+            count = 0
+            try:
+                with _os.scandir(dir_path) as it:
+                    for entry in it:
+                        if entry.is_file(follow_symlinks=False):
+                            count += 1
+            except (PermissionError, OSError):
+                pass
+            return count
+
+        try:
+            with _os.scandir(base_str) as l1_it:
+                for l1 in l1_it:
+                    if not l1.is_dir(follow_symlinks=False) or not num_prefix.match(l1.name):
+                        continue
+                    rel1 = l1.name
+                    c = count_files(l1.path)
+                    if c > 0:
+                        fs_cats[rel1] = c
+                    # 2레벨 하위 디렉토리 스캔
+                    try:
+                        with _os.scandir(l1.path) as l2_it:
+                            for l2 in l2_it:
+                                if not l2.is_dir(follow_symlinks=False) or l2.name.startswith("."):
+                                    continue
+                                rel2 = f"{rel1}/{l2.name}"
+                                c = count_files(l2.path)
+                                if c > 0:
+                                    fs_cats[rel2] = c
+                    except (PermissionError, OSError):
+                        pass
+        except (PermissionError, OSError):
+            pass
+
+        # 3. 비교 (파일시스템 기준, ES에 없는 카테고리도 포함)
+        all_keys = sorted(set(list(fs_cats.keys()) + [k for k in es_cats if k.count("/") <= 1 and num_prefix.match(k.split("/")[0])]))
+        mismatches = []
+        es_only = []
+        fs_only = []
+        for key in all_keys:
+            es_count = es_cats.get(key)
+            fs_count = fs_cats.get(key)
+            if es_count is not None and fs_count is not None:
+                if es_count != fs_count:
+                    mismatches.append({"category": key, "es_count": es_count, "fs_count": fs_count, "diff": es_count - fs_count})
+            elif es_count is not None:
+                es_only.append({"category": key, "es_count": es_count})
+            else:
+                fs_only.append({"category": key, "fs_count": fs_count})
+
+        return {
+            "mismatches": sorted(mismatches, key=lambda x: abs(x["diff"]), reverse=True),
+            "es_only": es_only,
+            "fs_only": fs_only,
+        }
+
     async def delete_book(self, book_id: int) -> Tuple[str, Optional[str]]:
         LOGGER.debug("# delete_book(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
