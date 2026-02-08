@@ -1,26 +1,27 @@
 import {useEffect, useState, useCallback, useMemo} from 'react';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
-import {Card, Spinner} from 'react-bootstrap';
+import {Button, Card, Row, Col, Spinner} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import {faChevronDown, faChevronRight} from '@fortawesome/free-solid-svg-icons';
 
 import {RichTreeView} from '@mui/x-tree-view/RichTreeView';
 
-import {jsonGetReq} from './Common';
+import {jsonGetReq, jsonDeleteReq, jsonPostReq} from './Common';
 import {CustomTreeItem} from './Folder';
-import {findCommonPrefix, buildFolderHierarchy} from './folderUtils';
+import './Folder.css';
+import {findCommonPrefix, buildFolderHierarchy, findFolderInTree, updateFolderInTree} from './folderUtils';
 
 function buildMismatchCounts(mismatchData) {
     const counts = {};
     for (const item of mismatchData.mismatches || []) {
-        counts[item.category] = 1;
+        counts[item.category] = Math.abs(item.diff);
     }
     for (const item of mismatchData.es_only || []) {
-        counts[item.category] = 1;
+        counts[item.category] = item.es_count;
     }
     for (const item of mismatchData.fs_only || []) {
-        counts[item.category] = 1;
+        counts[item.category] = item.fs_count;
     }
     return counts;
 }
@@ -32,11 +33,123 @@ export default function CategoryMismatch() {
     const [error, setError] = useState('');
     const [isOpen, setIsOpen] = useState(false);
     const [expandedItems, setExpandedItems] = useState([]);
+    const [selectedMismatch, setSelectedMismatch] = useState(null);
+    const [actionResult, setActionResult] = useState(null);
+
+    const onItemClick = useCallback((selectedId) => {
+        const selectedFolderData = findFolderInTree(folderData, selectedId);
+        if (!selectedFolderData || selectedFolderData.fileType !== 'folder') return;
+        if (selectedFolderData.isVirtualParent) return;
+        if (!selectedFolderData.count) return;
+        if (selectedFolderData.booksLoaded) return;
+
+        jsonGetReq('/category-mismatches/' + selectedId, null, (result) => {
+            const entries = [];
+
+            // ES에만 있는 항목 (FS에서 삭제됨)
+            for (const item of result.es_only || []) {
+                entries.push({
+                    id: selectedId + '/es_' + item.book_id.toString(),
+                    label: '[ES only] ' + item.title + '.' + item.file_type,
+                    fileType: item.file_type,
+                    children: [],
+                    mismatchType: 'es_only',
+                    bookId: item.book_id,
+                    category: selectedId,
+                    filePath: item.file_path,
+                });
+            }
+
+            // FS에만 있는 항목 (ES에서 삭제됨)
+            for (const item of result.fs_only || []) {
+                entries.push({
+                    id: selectedId + '/fs_' + item.file_name,
+                    label: '[FS only] ' + item.file_name,
+                    fileType: 'unknown',
+                    children: [],
+                    mismatchType: 'fs_only',
+                    category: selectedId,
+                    filePath: item.file_path,
+                });
+            }
+
+            const data = updateFolderInTree(folderData, selectedId, (folder) => {
+                const existingSubfolders = (folder.children || []).filter(c => c.fileType === 'folder');
+                return {
+                    ...folder,
+                    booksLoaded: true,
+                    children: [...existingSubfolders, ...entries],
+                };
+            });
+            setFolderData(data);
+        });
+    }, [folderData]);
+
+    const handleDeleteEsDoc = useCallback(() => {
+        if (!selectedMismatch || selectedMismatch.mismatchType !== 'es_only') return;
+        setActionResult(null);
+        jsonDeleteReq('/books/' + selectedMismatch.bookId, null,
+            (result) => {
+                const warning = result?.warning;
+                const msg = warning ? `책 정보가 삭제되었습니다. (${warning})` : '책 정보가 삭제되었습니다.';
+                setActionResult({type: 'success', message: msg});
+                const data = updateFolderInTree(folderData, selectedMismatch.category, (folder) => ({
+                    ...folder,
+                    children: (folder.children || []).filter(c => c.id !== selectedMismatch.id),
+                }));
+                setFolderData(data);
+                setTotalMismatchCount(prev => Math.max(0, prev - 1));
+                setSelectedMismatch(null);
+            },
+            (error) => {
+                setActionResult({type: 'error', message: `삭제 실패: ${error}`});
+            }
+        );
+    }, [selectedMismatch, folderData]);
+
+    const handleIndexFile = useCallback(() => {
+        if (!selectedMismatch || selectedMismatch.mismatchType !== 'fs_only') return;
+        setActionResult(null);
+        jsonPostReq('/category-mismatches/index-file', {file_path: selectedMismatch.filePath},
+            (result) => {
+                setActionResult({type: 'success', message: 'ES에 적재되었습니다.'});
+                const data = updateFolderInTree(folderData, selectedMismatch.category, (folder) => ({
+                    ...folder,
+                    children: (folder.children || []).filter(c => c.id !== selectedMismatch.id),
+                }));
+                setFolderData(data);
+                setTotalMismatchCount(prev => Math.max(0, prev - 1));
+                setSelectedMismatch(null);
+            },
+            (error) => {
+                setActionResult({type: 'error', message: `ES 적재 실패: ${error}`});
+            }
+        );
+    }, [selectedMismatch, folderData]);
+
+    const handleDeleteFile = useCallback(() => {
+        if (!selectedMismatch || selectedMismatch.mismatchType !== 'fs_only') return;
+        setActionResult(null);
+        jsonPostReq('/category-mismatches/delete-file', {file_path: selectedMismatch.filePath},
+            (result) => {
+                setActionResult({type: 'success', message: '파일이 삭제되었습니다.'});
+                const data = updateFolderInTree(folderData, selectedMismatch.category, (folder) => ({
+                    ...folder,
+                    children: (folder.children || []).filter(c => c.id !== selectedMismatch.id),
+                }));
+                setFolderData(data);
+                setTotalMismatchCount(prev => Math.max(0, prev - 1));
+                setSelectedMismatch(null);
+            },
+            (error) => {
+                setActionResult({type: 'error', message: `파일 삭제 실패: ${error}`});
+            }
+        );
+    }, [selectedMismatch, folderData]);
 
     const treeViewStyles = useMemo(() => ({
         height: 'fit-content',
         flexGrow: 1,
-        maxWidth: 600,
         overflowY: 'auto',
     }), []);
 
@@ -63,10 +176,10 @@ export default function CategoryMismatch() {
             const commonPrefix = findCommonPrefix(allCategories);
             const data = buildFolderHierarchy(allCategories, commonPrefix, mismatchCounts);
 
-            const total = Object.keys(mismatchCounts).length;
+            const total = Object.values(mismatchCounts).reduce((sum, c) => sum + c, 0);
             setTotalMismatchCount(total);
             setFolderData(data);
-            setExpandedItems(data.filter(d => d.count > 0).map(d => d.id));
+            setExpandedItems([]);
             setLoading(false);
         };
 
@@ -122,14 +235,125 @@ export default function CategoryMismatch() {
                 ) : folderData.length === 0 ? (
                     <div className="text-muted p-3">불일치 없음</div>
                 ) : (
-                    <RichTreeView
-                        items={folderData}
-                        aria-label="category mismatches"
-                        sx={treeViewStyles}
-                        slots={{item: CustomTreeItem}}
-                        expandedItems={expandedItems}
-                        onExpandedItemsChange={(event, newExpandedItems) => setExpandedItems(newExpandedItems)}
-                    />
+                    <Row className="g-0">
+                        <Col md={4}>
+                            <Card>
+                                <Card.Header className="py-1">디렉토리 목록</Card.Header>
+                                <div id="dir_list">
+                                    <RichTreeView
+                                        items={folderData}
+                                        aria-label="category mismatches"
+                                        sx={treeViewStyles}
+                                        slots={{item: CustomTreeItem}}
+                                        expandedItems={expandedItems}
+                                        onSelectedItemsChange={(event, selectedId) => {
+                                            // 불일치 항목(leaf) 클릭 확인
+                                            let foundItem = null;
+                                            for (const folder of folderData) {
+                                                for (const child of folder.children || []) {
+                                                    if (child.id === selectedId && child.mismatchType) {
+                                                        foundItem = child;
+                                                        break;
+                                                    }
+                                                    for (const grandchild of child.children || []) {
+                                                        if (grandchild.id === selectedId && grandchild.mismatchType) {
+                                                            foundItem = grandchild;
+                                                            break;
+                                                        }
+                                                    }
+                                                    if (foundItem) break;
+                                                }
+                                                if (foundItem) break;
+                                            }
+
+                                            if (foundItem) {
+                                                setSelectedMismatch(foundItem);
+                                                setActionResult(null);
+                                                return;
+                                            }
+
+                                            // 폴더 클릭 — 펼치기/접기
+                                            setSelectedMismatch(null);
+                                            setActionResult(null);
+                                            const willExpand = !expandedItems.includes(selectedId);
+                                            setExpandedItems((prev) =>
+                                                willExpand
+                                                    ? [...prev, selectedId]
+                                                    : prev.filter(x => x !== selectedId)
+                                            );
+                                            if (willExpand) {
+                                                onItemClick(selectedId);
+                                            }
+                                        }}
+                                    />
+                                </div>
+                            </Card>
+                        </Col>
+                        <Col md={8}>
+                            {selectedMismatch && (
+                                <Card>
+                                    <Card.Header className="py-1">
+                                        <strong>{selectedMismatch.label}</strong>
+                                    </Card.Header>
+                                    <Card.Body>
+                                        <div className="text-muted mb-2" style={{fontSize: '0.85rem'}}>
+                                            {selectedMismatch.mismatchType === 'es_only'
+                                                ? '책 정보만 존재하고 파일시스템에는 존재하지 않습니다.'
+                                                : '책 정보는 없고 파일시스템에만 존재합니다.'}
+                                        </div>
+                                        <div className="d-flex flex-wrap gap-1">
+                                            {selectedMismatch.mismatchType === 'es_only' && (
+                                                <>
+                                                    <Button
+                                                        variant="outline-warning" size="sm"
+                                                        onClick={() => window.open(`/edit/${encodeURIComponent(selectedMismatch.category)}/${selectedMismatch.bookId}`, '_blank', 'noopener')}
+                                                    >
+                                                        편집
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline-primary" size="sm"
+                                                        onClick={() => window.open(`/view/${encodeURIComponent(selectedMismatch.category)}/${selectedMismatch.bookId}`, '_blank', 'noopener')}
+                                                    >
+                                                        조회
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline-danger" size="sm"
+                                                        onClick={handleDeleteEsDoc}
+                                                    >
+                                                        삭제
+                                                    </Button>
+                                                </>
+                                            )}
+                                            {selectedMismatch.mismatchType === 'fs_only' && (
+                                                <>
+                                                    <Button
+                                                        variant="outline-success" size="sm"
+                                                        onClick={handleIndexFile}
+                                                    >
+                                                        ES 적재
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline-danger" size="sm"
+                                                        onClick={handleDeleteFile}
+                                                    >
+                                                        파일 삭제
+                                                    </Button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </Card.Body>
+                                </Card>
+                            )}
+                            {!selectedMismatch && !actionResult && (
+                                <div className="text-muted p-3">왼쪽에서 불일치 항목을 선택하세요.</div>
+                            )}
+                            {actionResult && (
+                                <div className={`p-3 ${actionResult.type === 'success' ? 'text-success' : 'text-danger'}`} style={{fontSize: '0.85rem'}}>
+                                    {actionResult.message}
+                                </div>
+                            )}
+                        </Col>
+                    </Row>
                 )}
             </Card.Body>
         </Card>

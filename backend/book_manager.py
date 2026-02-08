@@ -275,17 +275,15 @@ class BookManager:
         return "Error", f"can't update book information of '{book_id}' in ElasticSearch, no such a book"
 
     async def get_category_mismatches(self) -> Dict[str, Any]:
-        """파일시스템의 숫자_ prefix 1레벨 디렉토리 기준으로 ES와 파일 수 불일치를 검출"""
+        """파일시스템의 1레벨 디렉토리 기준으로 ES와 파일 수 불일치를 검출"""
         import os as _os
-        import re
 
         # 1. ES 카테고리별 문서 수
         es_cats = self.es_manager.search_and_aggregate_by_category()
 
-        # 2. 파일시스템: 숫자_ prefix 1레벨 디렉토리 + 그 하위 2레벨 스캔
+        # 2. 파일시스템: 1레벨 디렉토리 + 그 하위 2레벨 스캔
         base_str = str(self.path_prefix)
         fs_cats: Dict[str, int] = {}
-        num_prefix = re.compile(r"^\d+_")
 
         def count_files(dir_path: str) -> int:
             count = 0
@@ -301,7 +299,7 @@ class BookManager:
         try:
             with _os.scandir(base_str) as l1_it:
                 for l1 in l1_it:
-                    if not l1.is_dir(follow_symlinks=False) or not num_prefix.match(l1.name):
+                    if not l1.is_dir(follow_symlinks=False) or l1.name.startswith("."):
                         continue
                     rel1 = l1.name
                     c = count_files(l1.path)
@@ -323,7 +321,7 @@ class BookManager:
             pass
 
         # 3. 비교 (파일시스템 기준, ES에 없는 카테고리도 포함)
-        all_keys = sorted(set(list(fs_cats.keys()) + [k for k in es_cats if k.count("/") <= 1 and num_prefix.match(k.split("/")[0])]))
+        all_keys = sorted(set(list(fs_cats.keys()) + [k for k in es_cats if k.count("/") <= 1 and not k.startswith(".")]))
         mismatches = []
         es_only = []
         fs_only = []
@@ -343,6 +341,75 @@ class BookManager:
             "es_only": es_only,
             "fs_only": fs_only,
         }
+
+    async def get_category_mismatch_details(self, category: str) -> Dict[str, Any]:
+        """특정 카테고리의 ES 문서와 파일시스템 파일을 비교하여 불일치 항목을 반환"""
+        import os as _os
+
+        # 1. ES 문서 목록 (file_path 기준)
+        doc_list = self.es_manager.search_by_category(category, max_result_count=10000)
+        es_files: Dict[str, Dict[str, Any]] = {}
+        for book_id, doc, _score in doc_list:
+            rel_path = doc.get("file_path", "")
+            es_files[rel_path] = {"book_id": book_id, **doc}
+
+        # 2. 파일시스템 파일 목록
+        cat_dir = self.path_prefix / category
+        fs_files: set = set()
+        try:
+            with _os.scandir(str(cat_dir)) as it:
+                for entry in it:
+                    if entry.is_file(follow_symlinks=False):
+                        rel_path = f"{category}/{entry.name}"
+                        fs_files.add(rel_path)
+        except (PermissionError, OSError):
+            pass
+
+        # 3. 비교
+        es_paths = set(es_files.keys())
+        es_only = []
+        for path in sorted(es_paths - fs_files):
+            info = es_files[path]
+            es_only.append({
+                "book_id": info["book_id"],
+                "title": info.get("title", ""),
+                "file_type": info.get("file_type", ""),
+                "file_path": path,
+            })
+
+        fs_only = []
+        for path in sorted(fs_files - es_paths):
+            name = path.rsplit("/", 1)[-1] if "/" in path else path
+            fs_only.append({
+                "file_name": name,
+                "file_path": path,
+            })
+
+        return {"es_only": es_only, "fs_only": fs_only}
+
+    async def index_single_file(self, file_path: str) -> Tuple[Optional[int], Optional[str]]:
+        """파일시스템의 파일을 읽어 ES에 적재"""
+        from utils.loader import Loader
+        abs_path = self.path_prefix / file_path
+        if not abs_path.is_file():
+            return None, f"파일을 찾을 수 없습니다: {file_path}"
+        data = Loader.read_file(abs_path)
+        if not data:
+            return None, f"지원하지 않는 파일 형식입니다: {file_path}"
+        return await self.add_book(data)
+
+    async def delete_file(self, file_path: str) -> Tuple[str, Optional[str]]:
+        """파일시스템에서 파일을 삭제"""
+        abs_path = self.path_prefix / file_path
+        if not abs_path.is_relative_to(self.path_prefix):
+            return "Error", f"잘못된 경로입니다: {file_path}"
+        if not abs_path.is_file():
+            return "Error", f"파일을 찾을 수 없습니다: {file_path}"
+        try:
+            abs_path.unlink()
+            return "Ok", None
+        except IOError as e:
+            return "Error", f"파일 삭제 실패: {e}"
 
     async def delete_book(self, book_id: int) -> Tuple[str, Optional[str]]:
         LOGGER.debug("# delete_book(book_id=%d)", book_id)

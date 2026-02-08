@@ -510,6 +510,55 @@ async def get_category_mismatches() -> Dict[str, Any]:
     return response_object
 
 
+@app.post("/category-mismatches/index-file")
+async def index_single_file(body: Dict[str, str]) -> Dict[str, Any]:
+    """파일시스템의 파일을 ES에 적재"""
+    LOGGER.debug("# index_single_file(body=%r)", body)
+    file_path = body.get("file_path", "")
+    if not file_path:
+        raise HTTPException(status_code=400, detail="file_path is required")
+    response_object: Dict[str, Any] = {"status": "failure"}
+    book_id, error = await book_manager.index_single_file(file_path)
+    if book_id is not None and error is None:
+        response_object["status"] = "success"
+        response_object["result"] = {"book_id": book_id}
+    else:
+        response_object["error"] = error
+    return response_object
+
+
+@app.post("/category-mismatches/delete-file")
+async def delete_file(body: Dict[str, str]) -> Dict[str, Any]:
+    """파일시스템에서 파일 삭제"""
+    LOGGER.debug("# delete_file(body=%r)", body)
+    file_path = body.get("file_path", "")
+    if not file_path:
+        raise HTTPException(status_code=400, detail="file_path is required")
+    response_object: Dict[str, Any] = {"status": "failure"}
+    result, error = await book_manager.delete_file(file_path)
+    if result == "Ok":
+        response_object["status"] = "success"
+        response_object["result"] = result
+    else:
+        response_object["error"] = error
+    return response_object
+
+
+@app.get("/category-mismatches/{category:path}")
+async def get_category_mismatch_details(category: str) -> Dict[str, Any]:
+    """특정 카테고리의 책 수준 불일치 상세 조회"""
+    LOGGER.debug("# get_category_mismatch_details(category='%s')", category)
+    response_object: Dict[str, Any] = {"status": "failure"}
+    try:
+        result = await book_manager.get_category_mismatch_details(category)
+        response_object["status"] = "success"
+        response_object["result"] = result
+    except Exception as e:
+        LOGGER.error("get_category_mismatch_details error: %s", e)
+        response_object["error"] = str(e)
+    return response_object
+
+
 @app.post("/hidden-categories/{category:path}")
 async def set_hidden_category(category: str, body: HiddenCategoryModel) -> Dict[str, Any]:
     """카테고리 비노출 설정/해제"""

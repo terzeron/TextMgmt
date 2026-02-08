@@ -4,7 +4,7 @@ import PropTypes from 'prop-types';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import {Button, Card, Form, InputGroup, ListGroup, Badge, Row, Col, Spinner} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
-import {faPlus, faTrash, faEyeSlash} from '@fortawesome/free-solid-svg-icons';
+import {faPlus, faTrash, faEyeSlash, faChevronDown, faChevronRight} from '@fortawesome/free-solid-svg-icons';
 
 import {jsonGetReq, jsonPostReq, jsonDeleteReq} from './Common';
 
@@ -47,6 +47,7 @@ export default function CategoryMapping({categoryList}) {
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [hiddenCategories, setHiddenCategories] = useState(new Set());
+    const [isOpen, setIsOpen] = useState(false);
     const keywordInputRef = useRef(null);
 
     // 비노출 카테고리 로드
@@ -178,9 +179,27 @@ export default function CategoryMapping({categoryList}) {
 
     const currentKeywords = selectedCategory ? (mappings[selectedCategory] || []) : [];
 
+    if (!isOpen) {
+        return (
+            <Card>
+                <Card.Header
+                    onClick={() => setIsOpen(true)}
+                    style={{cursor: 'pointer', userSelect: 'none'}}
+                    className="py-2">
+                    <FontAwesomeIcon icon={faChevronRight} className="me-2"/>
+                    카테고리 관리
+                </Card.Header>
+            </Card>
+        );
+    }
+
     return (
         <Card>
-            <Card.Header>
+            <Card.Header
+                onClick={() => setIsOpen(false)}
+                style={{cursor: 'pointer', userSelect: 'none'}}
+                className="py-2">
+                <FontAwesomeIcon icon={faChevronDown} className="me-2"/>
                 카테고리 관리
             </Card.Header>
             <Card.Body>

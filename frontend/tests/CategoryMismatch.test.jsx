@@ -4,13 +4,17 @@ import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/re
 
 afterEach(cleanup);
 
-// jsonGetReq mock — 호출별로 다른 응답을 반환하도록 구성
-const { mockJsonGetReq } = vi.hoisted(() => ({
+// mock 함수 호이스팅
+const { mockJsonGetReq, mockJsonDeleteReq, mockJsonPostReq } = vi.hoisted(() => ({
     mockJsonGetReq: vi.fn(),
+    mockJsonDeleteReq: vi.fn(),
+    mockJsonPostReq: vi.fn(),
 }));
 
 vi.mock('../src/Common', () => ({
     jsonGetReq: mockJsonGetReq,
+    jsonDeleteReq: mockJsonDeleteReq,
+    jsonPostReq: mockJsonPostReq,
     getApiUrlPrefix: () => 'http://localhost:8000',
 }));
 
@@ -63,6 +67,8 @@ function setupMockResponses(categoriesResult, mismatchResult, { categoriesError,
 describe('CategoryMismatch', () => {
     beforeEach(() => {
         mockJsonGetReq.mockReset();
+        mockJsonDeleteReq.mockReset();
+        mockJsonPostReq.mockReset();
     });
 
     // ── 초기 렌더링 (접힌 상태) ──
@@ -82,7 +88,7 @@ describe('CategoryMismatch', () => {
 
         // mismatches:1 + es_only:1 + fs_only:1 = 3건
         await waitFor(() => {
-            expect(screen.getByText('(3건)')).toBeTruthy();
+            expect(screen.getByText('(19건)')).toBeTruthy();
         });
     });
 
@@ -354,7 +360,7 @@ describe('CategoryMismatch', () => {
         resolvers['/category-mismatches'](MISMATCH_RESPONSE_WITH_DATA);
 
         await waitFor(() => {
-            expect(screen.getByText('(3건)')).toBeTruthy();
+            expect(screen.getByText('(19건)')).toBeTruthy();
         });
     });
 
@@ -376,7 +382,7 @@ describe('CategoryMismatch', () => {
         resolvers['/categories'](CATEGORIES_RESPONSE);
 
         await waitFor(() => {
-            expect(screen.getByText('(3건)')).toBeTruthy();
+            expect(screen.getByText('(19건)')).toBeTruthy();
         });
     });
 
@@ -420,9 +426,9 @@ describe('CategoryMismatch', () => {
         setupMockResponses(CATEGORIES_RESPONSE, mismatchData);
         render(<CategoryMismatch />);
 
-        // 중복이지만 buildMismatchCounts는 counts[category] = 1로 덮어쓰므로 1건
+        // 중복: mismatches abs(2)=2, es_only가 덮어써서 es_count=10
         await waitFor(() => {
-            expect(screen.getByText('(1건)')).toBeTruthy();
+            expect(screen.getByText('(10건)')).toBeTruthy();
         });
     });
 
@@ -440,7 +446,7 @@ describe('CategoryMismatch', () => {
         render(<CategoryMismatch />);
 
         await waitFor(() => {
-            expect(screen.getByText('(2건)')).toBeTruthy();
+            expect(screen.getByText('(4건)')).toBeTruthy();
         });
     });
 
@@ -464,9 +470,9 @@ describe('CategoryMismatch', () => {
         setupMockResponses(categories, mismatchData);
         render(<CategoryMismatch />);
 
-        // 2 + 1 + 1 = 4건
+        // abs(2) + abs(-2) + 12 + 9 = 25건
         await waitFor(() => {
-            expect(screen.getByText('(4건)')).toBeTruthy();
+            expect(screen.getByText('(25건)')).toBeTruthy();
         });
     });
 
@@ -480,11 +486,181 @@ describe('CategoryMismatch', () => {
         render(<CategoryMismatch />);
 
         await waitFor(() => {
-            expect(screen.getByText('(1건)')).toBeTruthy();
+            expect(screen.getByText('(2건)')).toBeTruthy();
         });
     });
 
     // ── 트리 뷰 접근성 ──
+
+    // ── 폴더 클릭 시 책 로딩 ──
+
+    it('폴더 클릭 시 /categories/{categoryId} API를 호출하여 책 목록을 로딩한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+        render(<CategoryMismatch />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByRole('tree')).toBeTruthy();
+        });
+
+        // 폴더 클릭을 위해 mock 재설정 — /category-mismatches/{id} 추가
+        mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
+            if (url === '/categories') {
+                resolve(CATEGORIES_RESPONSE);
+            } else if (url === '/category-mismatches') {
+                resolve(MISMATCH_RESPONSE_WITH_DATA);
+            } else if (url.startsWith('/category-mismatches/')) {
+                resolve({
+                    es_only: [
+                        { book_id: 101, title: 'Book A', file_type: 'pdf', file_path: '1_fiction/a.pdf' },
+                    ],
+                    fs_only: [
+                        { file_name: 'orphan.txt', file_path: '1_fiction/orphan.txt' },
+                    ],
+                });
+            }
+        });
+
+        // 트리에서 폴더 항목 클릭 (1_fiction은 불일치가 있는 카테고리)
+        fireEvent.click(screen.getByText('1_fiction'));
+
+        await waitFor(() => {
+            expect(mockJsonGetReq).toHaveBeenCalledWith(
+                '/category-mismatches/1_fiction', null, expect.any(Function)
+            );
+        });
+
+        // 불일치 항목이 트리에 추가되었는지 확인
+        await waitFor(() => {
+            expect(screen.getByText('[ES only] Book A.pdf')).toBeTruthy();
+            expect(screen.getByText('[FS only] orphan.txt')).toBeTruthy();
+        });
+    });
+
+    it('booksLoaded 플래그로 중복 API 호출을 방지한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+        render(<CategoryMismatch />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByRole('tree')).toBeTruthy();
+        });
+
+        let categoryApiCallCount = 0;
+        mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+            if (url === '/categories') {
+                resolve(CATEGORIES_RESPONSE);
+            } else if (url === '/category-mismatches') {
+                resolve(MISMATCH_RESPONSE_WITH_DATA);
+            } else if (url.startsWith('/category-mismatches/')) {
+                categoryApiCallCount++;
+                resolve({
+                    es_only: [{ book_id: 101, title: 'Book A', file_type: 'pdf', file_path: '1_fiction/a.pdf' }],
+                    fs_only: [],
+                });
+            }
+        });
+
+        // 첫 번째 클릭
+        fireEvent.click(screen.getByText('1_fiction'));
+
+        await waitFor(() => {
+            expect(screen.getByText('[ES only] Book A.pdf')).toBeTruthy();
+        });
+
+        expect(categoryApiCallCount).toBe(1);
+
+        // 두 번째 클릭 — booksLoaded가 true이므로 API 호출 없음
+        fireEvent.click(screen.getByText('1_fiction'));
+
+        // 약간의 대기 후에도 카운트가 1인지 확인
+        await new Promise(r => setTimeout(r, 50));
+        expect(categoryApiCallCount).toBe(1);
+    });
+
+    it('가상 부모(isVirtualParent) 클릭 시 API를 호출하지 않는다', async () => {
+        // 가상 부모가 생성되려면: 공통 접두사 없이 슬래시를 포함하는 카테고리
+        // A/fiction, A/science → 공통접두사 'A/' 제거 → fiction, science (1depth)
+        // 가상 부모를 만들려면: 공통접두사가 없는 상태에서 A/fiction, A/science, B_other
+        const categories = {
+            'A/fiction': 10,
+            'A/science': 8,
+            'B_other': 5,
+        };
+        const mismatchData = {
+            mismatches: [{ category: 'A/fiction', es_count: 10, fs_count: 8, diff: 2 }],
+            es_only: [],
+            fs_only: [],
+        };
+
+        setupMockResponses(categories, mismatchData);
+        render(<CategoryMismatch />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByRole('tree')).toBeTruthy();
+        });
+
+        // mock 재설정
+        mockJsonGetReq.mockClear();
+        mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
+            if (url.startsWith('/categories/')) {
+                resolve([]);
+            }
+        });
+
+        // 가상 부모 'A' 클릭 (id: __virtual__A)
+        const virtualParentItem = screen.getByText('A');
+        fireEvent.click(virtualParentItem);
+
+        // 약간의 대기 후 API 호출이 없는지 확인
+        await new Promise(r => setTimeout(r, 50));
+        expect(mockJsonGetReq).not.toHaveBeenCalled();
+    });
+
+    it('불일치가 없는 폴더 클릭 시 API를 호출하지 않는다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+        render(<CategoryMismatch />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByRole('tree')).toBeTruthy();
+        });
+
+        // mock 재설정
+        mockJsonGetReq.mockClear();
+        mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
+            if (url.startsWith('/categories/')) {
+                resolve([]);
+            }
+        });
+
+        // 3_history는 불일치가 없는 카테고리 (count === 0)
+        fireEvent.click(screen.getByText('3_history'));
+
+        await new Promise(r => setTimeout(r, 50));
+        expect(mockJsonGetReq).not.toHaveBeenCalled();
+    });
 
     it('트리 뷰에 "category mismatches" aria-label이 설정된다', async () => {
         setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
@@ -499,5 +675,258 @@ describe('CategoryMismatch', () => {
         await waitFor(() => {
             expect(screen.getByLabelText('category mismatches')).toBeTruthy();
         });
+    });
+
+    // ── ES-only 삭제 ──
+
+    it('ES-only 항목 선택 시 삭제 버튼이 표시된다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+        render(<CategoryMismatch />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByRole('tree')).toBeTruthy();
+        });
+
+        // 폴더 클릭 후 불일치 항목 로딩
+        mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+            if (url === '/categories') resolve(CATEGORIES_RESPONSE);
+            else if (url === '/category-mismatches') resolve(MISMATCH_RESPONSE_WITH_DATA);
+            else if (url.startsWith('/category-mismatches/')) {
+                resolve({
+                    es_only: [{ book_id: 101, title: 'Book A', file_type: 'pdf', file_path: '1_fiction/a.pdf' }],
+                    fs_only: [],
+                });
+            }
+        });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+
+        await waitFor(() => {
+            expect(screen.getByText('[ES only] Book A.pdf')).toBeTruthy();
+        });
+
+        // ES-only 항목 클릭
+        fireEvent.click(screen.getByText('[ES only] Book A.pdf'));
+
+        await waitFor(() => {
+            expect(screen.getByText('삭제')).toBeTruthy();
+            expect(screen.getByText('편집')).toBeTruthy();
+            expect(screen.getByText('조회')).toBeTruthy();
+        });
+    });
+
+    it('삭제 버튼 클릭 시 DELETE /books/{bookId} API를 호출한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+        render(<CategoryMismatch />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByRole('tree')).toBeTruthy();
+        });
+
+        mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+            if (url === '/categories') resolve(CATEGORIES_RESPONSE);
+            else if (url === '/category-mismatches') resolve(MISMATCH_RESPONSE_WITH_DATA);
+            else if (url.startsWith('/category-mismatches/')) {
+                resolve({
+                    es_only: [{ book_id: 101, title: 'Book A', file_type: 'pdf', file_path: '1_fiction/a.pdf' }],
+                    fs_only: [],
+                });
+            }
+        });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+
+        await waitFor(() => {
+            expect(screen.getByText('[ES only] Book A.pdf')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('[ES only] Book A.pdf'));
+
+        await waitFor(() => {
+            expect(screen.getByText('삭제')).toBeTruthy();
+        });
+
+        // 삭제 버튼 클릭
+        mockJsonDeleteReq.mockImplementation((url, _payload, resolve) => {
+            resolve('Ok');
+        });
+
+        fireEvent.click(screen.getByText('삭제'));
+
+        await waitFor(() => {
+            expect(mockJsonDeleteReq).toHaveBeenCalledWith(
+                '/books/101', null, expect.any(Function), expect.any(Function)
+            );
+        });
+
+        // 성공 메시지 표시
+        await waitFor(() => {
+            expect(screen.getByText('책 정보가 삭제되었습니다.')).toBeTruthy();
+        });
+
+        // 삭제된 항목이 트리에서 제거됨
+        expect(screen.queryByText('[ES only] Book A.pdf')).toBeNull();
+    });
+
+    // ── FS-only 적재 ──
+
+    it('FS-only 항목 선택 시 ES 적재 버튼이 표시된다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+        render(<CategoryMismatch />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByRole('tree')).toBeTruthy();
+        });
+
+        mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+            if (url === '/categories') resolve(CATEGORIES_RESPONSE);
+            else if (url === '/category-mismatches') resolve(MISMATCH_RESPONSE_WITH_DATA);
+            else if (url.startsWith('/category-mismatches/')) {
+                resolve({
+                    es_only: [],
+                    fs_only: [{ file_name: 'orphan.txt', file_path: '1_fiction/orphan.txt' }],
+                });
+            }
+        });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+
+        await waitFor(() => {
+            expect(screen.getByText('[FS only] orphan.txt')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('[FS only] orphan.txt'));
+
+        await waitFor(() => {
+            expect(screen.getByText('ES 적재')).toBeTruthy();
+        });
+    });
+
+    it('ES 적재 버튼 클릭 시 POST /category-mismatches/index-file API를 호출한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+        render(<CategoryMismatch />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByRole('tree')).toBeTruthy();
+        });
+
+        mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+            if (url === '/categories') resolve(CATEGORIES_RESPONSE);
+            else if (url === '/category-mismatches') resolve(MISMATCH_RESPONSE_WITH_DATA);
+            else if (url.startsWith('/category-mismatches/')) {
+                resolve({
+                    es_only: [],
+                    fs_only: [{ file_name: 'orphan.txt', file_path: '1_fiction/orphan.txt' }],
+                });
+            }
+        });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+
+        await waitFor(() => {
+            expect(screen.getByText('[FS only] orphan.txt')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('[FS only] orphan.txt'));
+
+        await waitFor(() => {
+            expect(screen.getByText('ES 적재')).toBeTruthy();
+        });
+
+        mockJsonPostReq.mockImplementation((url, payload, resolve) => {
+            resolve({ book_id: 999 });
+        });
+
+        fireEvent.click(screen.getByText('ES 적재'));
+
+        await waitFor(() => {
+            expect(mockJsonPostReq).toHaveBeenCalledWith(
+                '/category-mismatches/index-file',
+                { file_path: '1_fiction/orphan.txt' },
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText('ES에 적재되었습니다.')).toBeTruthy();
+        });
+
+        expect(screen.queryByText('[FS only] orphan.txt')).toBeNull();
+    });
+
+    it('삭제 실패 시 에러 메시지를 표시한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+        render(<CategoryMismatch />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByRole('tree')).toBeTruthy();
+        });
+
+        mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+            if (url === '/categories') resolve(CATEGORIES_RESPONSE);
+            else if (url === '/category-mismatches') resolve(MISMATCH_RESPONSE_WITH_DATA);
+            else if (url.startsWith('/category-mismatches/')) {
+                resolve({
+                    es_only: [{ book_id: 101, title: 'Book A', file_type: 'pdf', file_path: '1_fiction/a.pdf' }],
+                    fs_only: [],
+                });
+            }
+        });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+
+        await waitFor(() => {
+            expect(screen.getByText('[ES only] Book A.pdf')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('[ES only] Book A.pdf'));
+
+        await waitFor(() => {
+            expect(screen.getByText('삭제')).toBeTruthy();
+        });
+
+        mockJsonDeleteReq.mockImplementation((url, _payload, resolve, reject) => {
+            reject('서버 오류');
+        });
+
+        fireEvent.click(screen.getByText('삭제'));
+
+        await waitFor(() => {
+            expect(screen.getByText('삭제 실패: 서버 오류')).toBeTruthy();
+        });
+
+        // 항목은 여전히 존재 (트리 + 선택 패널에 두 번 표시)
+        expect(screen.getAllByText('[ES only] Book A.pdf').length).toBeGreaterThanOrEqual(1);
     });
 });
