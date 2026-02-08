@@ -31,21 +31,25 @@ export default function Bookstore(props) {
   const [activeKey, setActiveKey] = useState(STORES[0].key);
   const [data, setData] = useState({});
 
+  // bookInfo 변경 시 로컬 필드만 동기화 (검색은 트리거하지 않음)
   useEffect(() => {
-    // bookInfo 변경 사항 반영 및 탭 초기화
     setTitle(props.bookInfo.title || '');
     setAuthor(props.bookInfo.author || '');
     setIsbn(props.bookInfo.isbn || '');
+  }, [props.bookInfo]);
+
+  // 책 정보 로딩 또는 이름 변경 시에만 자동 검색 실행
+  useEffect(() => {
+    if (!props.searchTrigger) return; // 초기 마운트 시 스킵
+
+    // 탭 및 데이터 초기화
     setData({});
     setActiveKey(STORES[0].key);
-    // 책이 변경되면 추천 카테고리 초기화
     if (props.onCategoriesFound) {
       props.onCategoriesFound({});
     }
-  }, [props.bookInfo]);
 
-  // Yes24, 알라딘 자동 검색: ISBN → 저자+제목 → 제목 순으로 시도
-  useEffect(() => {
+    // Yes24, 알라딘 자동 검색: ISBN → 저자+제목 → 제목 순으로 시도
     const autoSearch = async (store) => {
       const currentIsbn = props.bookInfo.isbn || '';
       const currentTitle = props.bookInfo.title || '';
@@ -105,7 +109,7 @@ export default function Bookstore(props) {
     };
 
     runAutoSearch();
-  }, [props.bookInfo]);
+  }, [props.searchTrigger]);
 
   // 내부 검색 함수 (자동 검색용, 결과 반환)
   const fetchWithMethodInternal = (store, method, isbnVal, titleVal, authorVal) => {
@@ -351,5 +355,6 @@ Bookstore.propTypes = {
     title: PropTypes.string,
     isbn: PropTypes.string
   }).isRequired,
+  searchTrigger: PropTypes.number,
   onCategoriesFound: PropTypes.func
 };
