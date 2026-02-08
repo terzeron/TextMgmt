@@ -236,7 +236,10 @@ class TestESManager:
     def test_search_and_aggregate_by_category(self, es_manager_with_data):
         esm = es_manager_with_data
         result = esm.search_and_aggregate_by_category()
-        assert isinstance(result, list)
+        assert isinstance(result, dict)
+        for key, value in result.items():
+            assert isinstance(key, str)
+            assert isinstance(value, int)
 
     def test_insert(self, es_manager_with_data):
         esm = es_manager_with_data

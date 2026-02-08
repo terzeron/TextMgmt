@@ -96,10 +96,10 @@ class TestBookManager:
     async def test_get_categories(self, book_manager_with_data):
         bm = book_manager_with_data
         result, _ = await bm.get_categories()
-        assert isinstance(result, list)
-        # May be empty if no data loaded
-        if result:
-            assert isinstance(result[0], str)
+        assert isinstance(result, dict)
+        for key, value in result.items():
+            assert isinstance(key, str)
+            assert isinstance(value, int)
 
     @pytest.mark.asyncio
     async def test_get_books_in_category(self, book_manager_with_data):
