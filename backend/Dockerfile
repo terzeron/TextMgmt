@@ -41,4 +41,4 @@ ENV TM_BACKEND_PORT=$TM_BACKEND_DEFAULT_PORT
 
 EXPOSE $TM_BACKEND_PORT
 
-CMD ["sh", "-c", "uvicorn backend.main:app --workers 1 --host 0.0.0.0 --reload --port ${TM_BACKEND_PORT} --log-config /app/logging.conf"]
+CMD ["sh", "-c", "uvicorn backend.main:app --workers 2 --host 0.0.0.0 --port ${TM_BACKEND_PORT} --log-config /app/logging.conf"]
