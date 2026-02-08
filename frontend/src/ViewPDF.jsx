@@ -78,26 +78,37 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                     ? getApiUrlPrefix() + "/preview/" + bookId + "?pages=" + (pageCount > 0 ? pageCount : 5)
                     : getApiUrlPrefix() + "/download/" + bookId;
 
-                // Range 요청을 활성화하여 점진적 로딩 지원
-                // - rangeChunkSize: 페이지 데이터를 64KB 청크 단위로 가져옴
-                // - disableAutoFetch: 전체 파일을 미리 받지 않고, 페이지 렌더링 시 필요한 데이터만 요청
-                // - disableRange: false → Range 요청 명시적 활성화
-                const loadingTask = pdfjs.getDocument({
-                    url: pdfUrl,
-                    rangeChunkSize: 65536,
-                    disableAutoFetch: true,
-                    disableRange: false,
-                });
+                // Range 요청으로 점진적 로딩 시도, 실패 시 전체 다운로드로 폴백
+                let pdf;
+                try {
+                    const loadingTask = pdfjs.getDocument({
+                        url: pdfUrl,
+                        rangeChunkSize: 65536,
+                        disableAutoFetch: true,
+                        disableRange: false,
+                    });
 
-                loadingTask.onProgress = ({loaded, total}) => {
-                    if (total > 0) {
-                        setDownloadProgress(Math.round(loaded / total * 100));
-                    }
-                };
+                    loadingTask.onProgress = ({loaded, total}) => {
+                        if (total > 0) {
+                            setDownloadProgress(Math.round(loaded / total * 100));
+                        }
+                    };
 
-                loadingTaskRef.current = loadingTask;
-                const pdf = await loadingTask.promise;
-                loadingTaskRef.current = null;
+                    loadingTaskRef.current = loadingTask;
+                    pdf = await loadingTask.promise;
+                    loadingTaskRef.current = null;
+                } catch (rangeErr) {
+                    console.warn("Range 요청 실패, 전체 다운로드로 재시도:", rangeErr.message);
+                    const fallbackTask = pdfjs.getDocument(pdfUrl);
+                    fallbackTask.onProgress = ({loaded, total}) => {
+                        if (total > 0) {
+                            setDownloadProgress(Math.round(loaded / total * 100));
+                        }
+                    };
+                    loadingTaskRef.current = fallbackTask;
+                    pdf = await fallbackTask.promise;
+                    loadingTaskRef.current = null;
+                }
 
                 if (cancelled) {
                     pdf.destroy();
