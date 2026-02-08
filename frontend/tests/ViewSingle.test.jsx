@@ -66,6 +66,7 @@ describe('ViewSingle', () => {
         ['epub', 'view-epub'],
         ['doc', 'view-doc'],
         ['docx', 'view-doc'],
+        ['hwp', 'view-doc'],
         ['txt', 'view-txt'],
         ['html', 'view-html'],
         ['rtf', 'view-rtf'],
@@ -105,6 +106,14 @@ describe('ViewSingle', () => {
 
         await waitFor(() => {
             expect(screen.getByText(/ft=doc/)).toBeTruthy();
+        });
+    });
+
+    it('ViewDOC(hwp)에 fileType="hwp"을 전달한다', async () => {
+        render(<ViewSingle bookId={1} fileType="hwp" filePath="/test.hwp" />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/ft=hwp/)).toBeTruthy();
         });
     });
 

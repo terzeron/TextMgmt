@@ -16,6 +16,8 @@ class Stat:
     docx_total_time = 0.0
     doc_count = 0
     doc_total_time = 0.0
+    hwp_count = 0
+    hwp_total_time = 0.0
     rtf_count = 0
     rtf_total_time = 0.0
     image_count = 0
@@ -37,6 +39,7 @@ class Stat:
         print("html:    %07d / %03.4f" % (cls.html_count, cls._divide(cls.html_total_time, cls.html_count)))
         print("docx:    %07d / %03.4f" % (cls.docx_count, cls._divide(cls.docx_total_time, cls.docx_count)))
         print("doc:     %07d / %03.4f" % (cls.doc_count, cls._divide(cls.doc_total_time, cls.doc_count)))
+        print("hwp:     %07d / %03.4f" % (cls.hwp_count, cls._divide(cls.hwp_total_time, cls.hwp_count)))
         print("rtf:     %07d / %03.4f" % (cls.rtf_count, cls._divide(cls.rtf_total_time, cls.rtf_count)))
         print("image:   %07d / %03.4f" % (cls.image_count, cls._divide(cls.image_total_time, cls.image_count)))
         print("total:   %07d / %03.4f" % (cls.index_count, cls._divide(cls.index_total_time, cls.index_count)))
