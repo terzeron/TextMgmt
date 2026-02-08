@@ -115,7 +115,8 @@ class BookManager:
             cache_file = cache_dir / f"{book_id}.pdf"
             if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
                 LOGGER.debug("Preview cache hit for book_id=%d (PDF)", book_id)
-                return FileResponse(path=cache_file, media_type="application/pdf")
+                return FileResponse(path=cache_file, media_type="application/pdf",
+                                    headers={"Content-Encoding": "identity"})
 
             try:
                 from pypdf import PdfReader, PdfWriter
@@ -129,7 +130,8 @@ class BookManager:
                 preview_bytes = buf.getvalue()
                 cache_file.write_bytes(preview_bytes)
                 LOGGER.debug("Preview generated for book_id=%d (PDF, %d pages)", book_id, pages_to_extract)
-                return Response(content=preview_bytes, media_type="application/pdf")
+                return Response(content=preview_bytes, media_type="application/pdf",
+                                headers={"Content-Encoding": "identity"})
             except Exception as e:
                 LOGGER.error("PDF preview generation failed for book_id=%d: %s", book_id, e)
                 return ""
