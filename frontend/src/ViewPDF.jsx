@@ -13,6 +13,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
     const [loadedPages, setLoadedPages] = useState(0);
     const [downloadProgress, setDownloadProgress] = useState(0);
     const [isFirstPageReady, setIsFirstPageReady] = useState(false);
+    const [fitMode, setFitMode] = useState(true);
     const containerRef = useRef(null);
     const pdfRef = useRef(null);
     const loadingTaskRef = useRef(null);
@@ -246,19 +247,26 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
 
     return (
         <div className="pdf-container" ref={containerRef}>
-            <div className="pdf-info">
-                {loadedPages < totalPages
-                    ? `렌더링 중... ${loadedPages}/${totalPages}쪽`
-                    : `총 ${totalPages}쪽 표시`
-                }
+            <div className="pdf-toolbar">
+                <div className="pdf-info">
+                    {loadedPages < totalPages
+                        ? `렌더링 중... ${loadedPages}/${totalPages}쪽`
+                        : `총 ${totalPages}쪽 표시`
+                    }
+                </div>
+                <button className="pdf-zoom-toggle" onClick={() => setFitMode(prev => !prev)} title={fitMode ? '원본 크기' : '화면 맞춤'}>
+                    {fitMode ? '1:1' : '맞춤'}
+                </button>
             </div>
-            {pageNumbers.map((pageNum) => (
-                <canvas
-                    key={pageNum}
-                    ref={setCanvasRef(pageNum)}
-                    className="pdf-page"
-                />
-            ))}
+            <div className="pdf-content">
+                {pageNumbers.map((pageNum) => (
+                    <canvas
+                        key={pageNum}
+                        ref={setCanvasRef(pageNum)}
+                        className={`pdf-page ${fitMode ? 'pdf-page-fit' : 'pdf-page-actual'}`}
+                    />
+                ))}
+            </div>
             <style>{pdfStyles}</style>
         </div>
     );
@@ -266,23 +274,49 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
 
 const pdfStyles = `
     .pdf-container {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        padding: 20px;
-        text-align: center;
         width: 100%;
+        height: calc(100vh - 10px);
+        overflow-y: auto;
+    }
+    .pdf-toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 4px 8px;
+        background: rgba(255,255,255,0.95);
     }
     .pdf-info {
-        margin-bottom: 15px;
         color: #666;
         font-size: 14px;
     }
+    .pdf-zoom-toggle {
+        padding: 4px 10px;
+        font-size: 12px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: rgba(255,255,255,0.9);
+        cursor: pointer;
+        color: #555;
+    }
+    .pdf-zoom-toggle:hover {
+        background: #e0e0e0;
+    }
+    .pdf-content {
+        overflow-x: auto;
+    }
     .pdf-page {
-        max-width: 100%;
-        height: auto;
         display: block;
+        margin: 0 auto;
+    }
+    .pdf-page-fit {
+        width: 100%;
+        height: auto;
+    }
+    .pdf-page-actual {
+        /* canvas 원본 해상도 그대로 표시 */
     }
     .loading-container {
         display: flex;
