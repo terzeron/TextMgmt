@@ -6,6 +6,9 @@ import os
 import re
 import getopt
 import logging.config
+import platform
+import subprocess
+import tempfile
 import warnings
 import zipfile
 from datetime import datetime
@@ -256,6 +259,95 @@ class Loader:
         return result[:Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
+    def _has_korean(text: str, threshold: int = 5) -> bool:
+        """텍스트에 한글이 threshold 이상 포함되어 있는지 확인"""
+        count = sum(1 for c in text[:1000] if '가' <= c <= '힣' or 'ㄱ' <= c <= 'ㅎ')
+        return count >= threshold
+
+    @staticmethod
+    def _korean_count(text: str) -> int:
+        return sum(1 for c in text[:2000] if '가' <= c <= '힣' or 'ㄱ' <= c <= 'ㅎ')
+
+    @staticmethod
+    def _fix_doc_encoding(text: str) -> Optional[str]:
+        """textutil이 CP949 바이트를 Latin-1으로 해석한 경우, 원래 CP949으로 복원 시도.
+        Word 6.0/95의 바이트 순서 반전(DBCS 스왑)도 처리.
+        직접 디코딩과 바이트 스왑 디코딩 중 한글이 더 많은 쪽을 선택."""
+        try:
+            raw_bytes = text.encode('latin-1', errors='strict')
+        except UnicodeEncodeError:
+            return None
+
+        # 1차: 직접 CP949 디코딩
+        direct = raw_bytes.decode('cp949', errors='replace')
+        direct_count = Loader._korean_count(direct)
+
+        # 2차: Word 6.0/95 DBCS 바이트 순서 반전 복원
+        swapped = bytearray()
+        i = 0
+        while i < len(raw_bytes):
+            if i + 1 < len(raw_bytes) and raw_bytes[i] >= 0x80 and raw_bytes[i + 1] >= 0x80:
+                swapped.append(raw_bytes[i + 1])
+                swapped.append(raw_bytes[i])
+                i += 2
+            else:
+                swapped.append(raw_bytes[i])
+                i += 1
+        swapped_text = bytes(swapped).decode('cp949', errors='replace')
+        swapped_count = Loader._korean_count(swapped_text)
+
+        # 한글이 더 많은 쪽을 선택
+        best = max(direct_count, swapped_count)
+        if best < 5:
+            return None
+        return swapped_text if swapped_count > direct_count else direct
+
+    @staticmethod
+    def read_from_doc(file_path: Path) -> Tuple[str, int, int]:
+        Stat.doc_count += 1
+        start_time = datetime.now()
+
+        result = ""
+        line_count = 0
+        try:
+            if platform.system() == "Darwin":
+                proc = subprocess.run(
+                    ["textutil", "-convert", "txt", "-stdout", str(file_path)],
+                    capture_output=True, timeout=30
+                )
+                raw_text = proc.stdout.decode("utf-8", errors="replace")
+                # textutil이 CP949 바이트를 Latin-1으로 해석한 경우 재인코딩 시도
+                if raw_text and not Loader._has_korean(raw_text):
+                    fixed = Loader._fix_doc_encoding(raw_text)
+                    if fixed:
+                        raw_text = fixed
+                        LOGGER.info(f"DOC re-encoding applied for '{file_path}'")
+            else:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    subprocess.run(
+                        ["libreoffice", "--headless", "--convert-to", "txt:Text",
+                         "--outdir", tmpdir, str(file_path)],
+                        capture_output=True, timeout=60
+                    )
+                    txt_file = Path(tmpdir) / (file_path.stem + ".txt")
+                    if txt_file.exists():
+                        raw_text = txt_file.read_text(encoding="utf-8", errors="replace")
+                    else:
+                        txt_files = list(Path(tmpdir).glob("*.txt"))
+                        raw_text = txt_files[0].read_text(encoding="utf-8", errors="replace") if txt_files else ""
+
+            line_count = raw_text.count('\n') + 1 if raw_text else 0
+            result = raw_text[:Loader.TEXT_SIZE]
+            result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
+        except Exception as e:
+            LOGGER.error(f"can't read doc file '{file_path}': {e}")
+
+        end_time = datetime.now()
+        Stat.doc_total_time += (end_time - start_time).total_seconds()
+
+        return result[:Loader.TEXT_SIZE], line_count, 0
+
+    @staticmethod
     def read_from_image(_file_path: Path) -> Tuple[str, int, int]:
         Stat.image_count += 1
         # 이미지는 line_count, page_count 해당 없음
@@ -295,6 +387,8 @@ class Loader:
                 summary, line_count, page_count = Loader.read_from_pdf(file_path)
             elif file_type == "docx":
                 summary, line_count, page_count = Loader.read_from_docx(file_path)
+            elif file_type == "doc":
+                summary, line_count, page_count = Loader.read_from_doc(file_path)
             elif file_type == "rtf":
                 summary, line_count, page_count = Loader.read_from_rtf(file_path)
             elif file_type == "html":

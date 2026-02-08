@@ -5,6 +5,9 @@ import os
 import io
 import base64
 import logging.config
+import platform
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Tuple, Dict, List, Union, Optional, Any
 import chardet
@@ -35,6 +38,43 @@ class BookManager:
         ".tiff": "image/tiff",
         ".svg": "image/svg+xml",
     }
+
+    @staticmethod
+    def _fix_doc_encoding(text: str) -> Optional[str]:
+        """textutil이 CP949 바이트를 Latin-1으로 해석한 경우, 원래 CP949으로 복원.
+        Word 6.0/95의 DBCS 바이트 순서 반전도 처리.
+        직접 디코딩과 바이트 스왑 디코딩 중 한글이 더 많은 쪽을 선택."""
+        original_count = sum(1 for c in text[:2000] if '가' <= c <= '힣' or 'ㄱ' <= c <= 'ㅎ')
+        if original_count >= 5:
+            return None  # 이미 한글이 포함됨
+
+        try:
+            raw_bytes = text.encode('latin-1', errors='strict')
+        except UnicodeEncodeError:
+            return None
+
+        # 1차: 직접 CP949 디코딩
+        direct = raw_bytes.decode('cp949', errors='replace')
+        direct_count = sum(1 for c in direct[:2000] if '가' <= c <= '힣' or 'ㄱ' <= c <= 'ㅎ')
+
+        # 2차: Word 6.0/95 DBCS 바이트 순서 반전 복원
+        swapped = bytearray()
+        i = 0
+        while i < len(raw_bytes):
+            if i + 1 < len(raw_bytes) and raw_bytes[i] >= 0x80 and raw_bytes[i + 1] >= 0x80:
+                swapped.append(raw_bytes[i + 1])
+                swapped.append(raw_bytes[i])
+                i += 2
+            else:
+                swapped.append(raw_bytes[i])
+                i += 1
+        swapped_text = bytes(swapped).decode('cp949', errors='replace')
+        swapped_count = sum(1 for c in swapped_text[:2000] if '가' <= c <= '힣' or 'ㄱ' <= c <= 'ㅎ')
+
+        best = max(direct_count, swapped_count)
+        if best < 5:
+            return None
+        return swapped_text if swapped_count > direct_count else direct
 
     def __init__(self) -> None:
         if "TM_WORK_DIR" not in os.environ:
@@ -201,6 +241,43 @@ class BookManager:
                 LOGGER.error("EPUB preview generation failed for book_id=%d: %s", book_id, e)
                 return ""
 
+        elif suffix == ".doc":
+            cache_file = cache_dir / f"{book_id}.html"
+            if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
+                LOGGER.debug("Preview cache hit for book_id=%d (DOC)", book_id)
+                return FileResponse(path=cache_file, media_type="text/html")
+
+            try:
+                if platform.system() == "Darwin":
+                    proc = subprocess.run(
+                        ["textutil", "-convert", "html", "-stdout", str(book.file_path)],
+                        capture_output=True, timeout=30
+                    )
+                    html_content = proc.stdout.decode("utf-8", errors="replace")
+                    # textutil이 CP949 바이트를 Latin-1으로 해석한 경우 재인코딩 시도
+                    html_content = BookManager._fix_doc_encoding(html_content) or html_content
+                else:
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        subprocess.run(
+                            ["libreoffice", "--headless", "--convert-to", "html",
+                             "--outdir", tmpdir, str(book.file_path)],
+                            capture_output=True, timeout=60
+                        )
+                        html_file = Path(tmpdir) / (book.file_path.stem + ".html")
+                        if html_file.exists():
+                            html_content = html_file.read_text(encoding="utf-8", errors="replace")
+                        else:
+                            html_files = list(Path(tmpdir).glob("*.html"))
+                            html_content = html_files[0].read_text(encoding="utf-8", errors="replace") if html_files else ""
+
+                if html_content:
+                    cache_file.write_text(html_content, encoding="utf-8")
+                    LOGGER.debug("Preview generated for book_id=%d (DOC)", book_id)
+                    return Response(content=html_content, media_type="text/html")
+            except Exception as e:
+                LOGGER.error("DOC preview generation failed for book_id=%d: %s", book_id, e)
+                return ""
+
         # 지원하지 않는 형식은 빈 문자열 반환
         return ""
 
@@ -275,26 +352,26 @@ class BookManager:
         return "Error", f"can't update book information of '{book_id}' in ElasticSearch, no such a book"
 
     async def get_category_mismatches(self) -> Dict[str, Any]:
-        """파일시스템의 1레벨 디렉토리 기준으로 ES와 파일 수 불일치를 검출"""
+        """파일시스템의 1레벨 디렉토리 기준으로 ES와 파일 경로 불일치를 검출"""
         import os as _os
 
         # 1. ES 카테고리별 문서 수
         es_cats = self.es_manager.search_and_aggregate_by_category()
 
-        # 2. 파일시스템: 1레벨 디렉토리 + 그 하위 2레벨 스캔
+        # 2. 파일시스템: 1레벨 디렉토리 + 그 하위 2레벨 스캔 (경로 집합)
         base_str = str(self.path_prefix)
-        fs_cats: Dict[str, int] = {}
+        fs_cats: Dict[str, set] = {}
 
-        def count_files(dir_path: str) -> int:
-            count = 0
+        def collect_files(dir_path: str, category: str) -> set:
+            paths: set = set()
             try:
                 with _os.scandir(dir_path) as it:
                     for entry in it:
                         if entry.is_file(follow_symlinks=False):
-                            count += 1
+                            paths.add(f"{category}/{entry.name}")
             except (PermissionError, OSError):
                 pass
-            return count
+            return paths
 
         try:
             with _os.scandir(base_str) as l1_it:
@@ -302,9 +379,9 @@ class BookManager:
                     if not l1.is_dir(follow_symlinks=False) or l1.name.startswith("."):
                         continue
                     rel1 = l1.name
-                    c = count_files(l1.path)
-                    if c > 0:
-                        fs_cats[rel1] = c
+                    paths = collect_files(l1.path, rel1)
+                    if paths:
+                        fs_cats[rel1] = paths
                     # 2레벨 하위 디렉토리 스캔
                     try:
                         with _os.scandir(l1.path) as l2_it:
@@ -312,29 +389,33 @@ class BookManager:
                                 if not l2.is_dir(follow_symlinks=False) or l2.name.startswith("."):
                                     continue
                                 rel2 = f"{rel1}/{l2.name}"
-                                c = count_files(l2.path)
-                                if c > 0:
-                                    fs_cats[rel2] = c
+                                paths = collect_files(l2.path, rel2)
+                                if paths:
+                                    fs_cats[rel2] = paths
                     except (PermissionError, OSError):
                         pass
         except (PermissionError, OSError):
             pass
 
-        # 3. 비교 (파일시스템 기준, ES에 없는 카테고리도 포함)
+        # 3. 비교 (경로 기반 집합 비교)
         all_keys = sorted(set(list(fs_cats.keys()) + [k for k in es_cats if k.count("/") <= 1 and not k.startswith(".")]))
         mismatches = []
         es_only = []
         fs_only = []
         for key in all_keys:
             es_count = es_cats.get(key)
-            fs_count = fs_cats.get(key)
-            if es_count is not None and fs_count is not None:
-                if es_count != fs_count:
-                    mismatches.append({"category": key, "es_count": es_count, "fs_count": fs_count, "diff": es_count - fs_count})
+            fs_paths = fs_cats.get(key)
+            if es_count is not None and fs_paths is not None:
+                # 양쪽 다 존재 → 경로 기반 비교
+                doc_list = self.es_manager.search_by_category(key, max_result_count=10000)
+                es_paths = {doc.get("file_path", "") for _, doc, _ in doc_list}
+                diff = len(es_paths - fs_paths) + len(fs_paths - es_paths)
+                if diff > 0:
+                    mismatches.append({"category": key, "es_count": es_count, "fs_count": len(fs_paths), "diff": diff})
             elif es_count is not None:
                 es_only.append({"category": key, "es_count": es_count})
-            else:
-                fs_only.append({"category": key, "fs_count": fs_count})
+            elif fs_paths is not None:
+                fs_only.append({"category": key, "fs_count": len(fs_paths)})
 
         return {
             "mismatches": sorted(mismatches, key=lambda x: abs(x["diff"]), reverse=True),

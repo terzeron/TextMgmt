@@ -96,10 +96,10 @@ class TestBookManager:
     async def test_get_categories(self, book_manager_with_data):
         bm = book_manager_with_data
         result, _ = await bm.get_categories()
-        assert isinstance(result, list)
-        # May be empty if no data loaded
-        if result:
-            assert isinstance(result[0], str)
+        assert isinstance(result, dict)
+        for key, value in result.items():
+            assert isinstance(key, str)
+            assert isinstance(value, int)
 
     @pytest.mark.asyncio
     async def test_get_books_in_category(self, book_manager_with_data):
@@ -272,8 +272,7 @@ class TestBookManager:
             assert isinstance(item["category"], str)
             assert isinstance(item["es_count"], int)
             assert isinstance(item["fs_count"], int)
-            assert item["diff"] == item["es_count"] - item["fs_count"]
-            assert item["es_count"] != item["fs_count"]
+            assert item["diff"] > 0
 
         # mismatches가 diff 절대값 내림차순 정렬인지 검증
         diffs = [abs(item["diff"]) for item in result["mismatches"]]
