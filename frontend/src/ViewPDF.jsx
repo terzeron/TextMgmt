@@ -20,6 +20,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
     const zoomDown = () => setZoomIndex(prev => Math.max(0, prev - 1));
     const zoomUp = () => setZoomIndex(prev => Math.min(ZOOM_STEPS.length - 1, prev + 1));
     const nativeWidthRef = useRef(0);
+    const nativeHeightRef = useRef(0);
     const containerRef = useRef(null);
     const pdfRef = useRef(null);
     const loadingTaskRef = useRef(null);
@@ -34,7 +35,9 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
 
         try {
             const page = await pdf.getPage(pageNum);
-            const viewport = page.getViewport({scale: 1.2});
+            const dpr = window.devicePixelRatio || 1;
+            const cssViewport = page.getViewport({scale: 1.2});
+            const renderViewport = page.getViewport({scale: 1.2 * dpr});
 
             const canvas = canvasRefs.current[pageNum];
             if (!canvas) {
@@ -43,12 +46,12 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
             }
 
             const context = canvas.getContext("2d");
-            canvas.width = viewport.width;
-            canvas.height = viewport.height;
+            canvas.width = renderViewport.width;
+            canvas.height = renderViewport.height;
 
             await page.render({
                 canvasContext: context,
-                viewport: viewport,
+                viewport: renderViewport,
             }).promise;
 
             setLoadedPages(prev => prev + 1);
@@ -128,8 +131,11 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
 
                 // 첫 페이지 viewport로 모든 canvas placeholder 크기 결정
                 const firstPage = await pdf.getPage(1);
-                const firstViewport = firstPage.getViewport({scale: 1.2});
-                nativeWidthRef.current = firstViewport.width;
+                const dpr = window.devicePixelRatio || 1;
+                const firstCssViewport = firstPage.getViewport({scale: 1.2});
+                const firstRenderViewport = firstPage.getViewport({scale: 1.2 * dpr});
+                nativeWidthRef.current = firstCssViewport.width;
+                nativeHeightRef.current = firstCssViewport.height;
 
                 if (cancelled) return;
 
@@ -142,8 +148,8 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                 for (let i = 1; i <= pagesToRender; i++) {
                     const canvas = canvasRefs.current[i];
                     if (canvas) {
-                        canvas.width = firstViewport.width;
-                        canvas.height = firstViewport.height;
+                        canvas.width = firstRenderViewport.width;
+                        canvas.height = firstRenderViewport.height;
                     }
                 }
 
@@ -280,7 +286,8 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                         className="pdf-page"
                         style={fitMode
                             ? {width: '100%', height: 'auto'}
-                            : {width: `${Math.round(nativeWidthRef.current * zoomPercent / 100)}px`, height: 'auto'}
+                            : {width: `${Math.round(nativeWidthRef.current * zoomPercent / 100)}px`,
+                               height: `${Math.round(nativeHeightRef.current * zoomPercent / 100)}px`}
                         }
                     />
                 ))}
