@@ -352,26 +352,26 @@ class BookManager:
         return "Error", f"can't update book information of '{book_id}' in ElasticSearch, no such a book"
 
     async def get_category_mismatches(self) -> Dict[str, Any]:
-        """파일시스템의 1레벨 디렉토리 기준으로 ES와 파일 수 불일치를 검출"""
+        """파일시스템의 1레벨 디렉토리 기준으로 ES와 파일 경로 불일치를 검출"""
         import os as _os
 
         # 1. ES 카테고리별 문서 수
         es_cats = self.es_manager.search_and_aggregate_by_category()
 
-        # 2. 파일시스템: 1레벨 디렉토리 + 그 하위 2레벨 스캔
+        # 2. 파일시스템: 1레벨 디렉토리 + 그 하위 2레벨 스캔 (경로 집합)
         base_str = str(self.path_prefix)
-        fs_cats: Dict[str, int] = {}
+        fs_cats: Dict[str, set] = {}
 
-        def count_files(dir_path: str) -> int:
-            count = 0
+        def collect_files(dir_path: str, category: str) -> set:
+            paths: set = set()
             try:
                 with _os.scandir(dir_path) as it:
                     for entry in it:
                         if entry.is_file(follow_symlinks=False):
-                            count += 1
+                            paths.add(f"{category}/{entry.name}")
             except (PermissionError, OSError):
                 pass
-            return count
+            return paths
 
         try:
             with _os.scandir(base_str) as l1_it:
@@ -379,9 +379,9 @@ class BookManager:
                     if not l1.is_dir(follow_symlinks=False) or l1.name.startswith("."):
                         continue
                     rel1 = l1.name
-                    c = count_files(l1.path)
-                    if c > 0:
-                        fs_cats[rel1] = c
+                    paths = collect_files(l1.path, rel1)
+                    if paths:
+                        fs_cats[rel1] = paths
                     # 2레벨 하위 디렉토리 스캔
                     try:
                         with _os.scandir(l1.path) as l2_it:
@@ -389,29 +389,33 @@ class BookManager:
                                 if not l2.is_dir(follow_symlinks=False) or l2.name.startswith("."):
                                     continue
                                 rel2 = f"{rel1}/{l2.name}"
-                                c = count_files(l2.path)
-                                if c > 0:
-                                    fs_cats[rel2] = c
+                                paths = collect_files(l2.path, rel2)
+                                if paths:
+                                    fs_cats[rel2] = paths
                     except (PermissionError, OSError):
                         pass
         except (PermissionError, OSError):
             pass
 
-        # 3. 비교 (파일시스템 기준, ES에 없는 카테고리도 포함)
+        # 3. 비교 (경로 기반 집합 비교)
         all_keys = sorted(set(list(fs_cats.keys()) + [k for k in es_cats if k.count("/") <= 1 and not k.startswith(".")]))
         mismatches = []
         es_only = []
         fs_only = []
         for key in all_keys:
             es_count = es_cats.get(key)
-            fs_count = fs_cats.get(key)
-            if es_count is not None and fs_count is not None:
-                if es_count != fs_count:
-                    mismatches.append({"category": key, "es_count": es_count, "fs_count": fs_count, "diff": es_count - fs_count})
+            fs_paths = fs_cats.get(key)
+            if es_count is not None and fs_paths is not None:
+                # 양쪽 다 존재 → 경로 기반 비교
+                doc_list = self.es_manager.search_by_category(key, max_result_count=10000)
+                es_paths = {doc.get("file_path", "") for _, doc, _ in doc_list}
+                diff = len(es_paths - fs_paths) + len(fs_paths - es_paths)
+                if diff > 0:
+                    mismatches.append({"category": key, "es_count": es_count, "fs_count": len(fs_paths), "diff": diff})
             elif es_count is not None:
                 es_only.append({"category": key, "es_count": es_count})
-            else:
-                fs_only.append({"category": key, "fs_count": fs_count})
+            elif fs_paths is not None:
+                fs_only.append({"category": key, "fs_count": len(fs_paths)})
 
         return {
             "mismatches": sorted(mismatches, key=lambda x: abs(x["diff"]), reverse=True),
