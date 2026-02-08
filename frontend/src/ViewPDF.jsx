@@ -13,7 +13,13 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
     const [loadedPages, setLoadedPages] = useState(0);
     const [downloadProgress, setDownloadProgress] = useState(0);
     const [isFirstPageReady, setIsFirstPageReady] = useState(false);
+    const ZOOM_STEPS = [25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500];
     const [fitMode, setFitMode] = useState(true);
+    const [zoomIndex, setZoomIndex] = useState(ZOOM_STEPS.indexOf(100));
+    const zoomPercent = ZOOM_STEPS[zoomIndex];
+    const zoomDown = () => setZoomIndex(prev => Math.max(0, prev - 1));
+    const zoomUp = () => setZoomIndex(prev => Math.min(ZOOM_STEPS.length - 1, prev + 1));
+    const nativeWidthRef = useRef(0);
     const containerRef = useRef(null);
     const pdfRef = useRef(null);
     const loadingTaskRef = useRef(null);
@@ -123,6 +129,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                 // 첫 페이지 viewport로 모든 canvas placeholder 크기 결정
                 const firstPage = await pdf.getPage(1);
                 const firstViewport = firstPage.getViewport({scale: 1.2});
+                nativeWidthRef.current = firstViewport.width;
 
                 if (cancelled) return;
 
@@ -254,16 +261,26 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                         : `총 ${totalPages}쪽 표시`
                     }
                 </div>
-                <button className="pdf-zoom-toggle" onClick={() => setFitMode(prev => !prev)} title={fitMode ? '원본 크기' : '화면 맞춤'}>
-                    {fitMode ? '1:1' : '맞춤'}
-                </button>
+                <div className="pdf-zoom-controls">
+                    <button className={`pdf-zoom-btn pdf-zoom-fit-btn ${fitMode ? 'active' : ''}`} onClick={() => setFitMode(prev => !prev)}>
+                        맞춤
+                    </button>
+                    <span className="pdf-zoom-separator" />
+                    <button className="pdf-zoom-btn" onClick={zoomDown} disabled={fitMode || zoomIndex === 0}>−</button>
+                    <span className="pdf-zoom-label">{fitMode ? '-' : `${zoomPercent}%`}</span>
+                    <button className="pdf-zoom-btn" onClick={zoomUp} disabled={fitMode || zoomIndex === ZOOM_STEPS.length - 1}>+</button>
+                </div>
             </div>
             <div className="pdf-content">
                 {pageNumbers.map((pageNum) => (
                     <canvas
                         key={pageNum}
                         ref={setCanvasRef(pageNum)}
-                        className={`pdf-page ${fitMode ? 'pdf-page-fit' : 'pdf-page-actual'}`}
+                        className="pdf-page"
+                        style={fitMode
+                            ? {width: '100%', height: 'auto'}
+                            : {width: `${Math.round(nativeWidthRef.current * zoomPercent / 100)}px`, height: 'auto'}
+                        }
                     />
                 ))}
             </div>
@@ -292,17 +309,47 @@ const pdfStyles = `
         color: #666;
         font-size: 14px;
     }
-    .pdf-zoom-toggle {
-        padding: 4px 10px;
+    .pdf-zoom-controls {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+    }
+    .pdf-zoom-btn {
+        padding: 2px 8px;
         font-size: 12px;
         border: 1px solid #ccc;
         border-radius: 4px;
         background: rgba(255,255,255,0.9);
         cursor: pointer;
         color: #555;
+        line-height: 1.4;
     }
-    .pdf-zoom-toggle:hover {
+    .pdf-zoom-btn:hover:not(:disabled) {
         background: #e0e0e0;
+    }
+    .pdf-zoom-fit-btn.active {
+        background: #4a90d9;
+        color: #fff;
+        border-color: #4a90d9;
+    }
+    .pdf-zoom-fit-btn.active:hover {
+        background: #3a7bc8;
+    }
+    .pdf-zoom-separator {
+        width: 1px;
+        height: 16px;
+        background: #ccc;
+        margin: 0 6px;
+    }
+    .pdf-zoom-btn:disabled {
+        opacity: 0.3;
+        cursor: default;
+    }
+    .pdf-zoom-label {
+        font-size: 11px;
+        color: #555;
+        min-width: 36px;
+        text-align: center;
     }
     .pdf-content {
         overflow-x: auto;
@@ -310,13 +357,6 @@ const pdfStyles = `
     .pdf-page {
         display: block;
         margin: 0 auto;
-    }
-    .pdf-page-fit {
-        width: 100%;
-        height: auto;
-    }
-    .pdf-page-actual {
-        /* canvas 원본 해상도 그대로 표시 */
     }
     .loading-container {
         display: flex;
