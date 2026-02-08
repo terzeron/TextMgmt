@@ -50,7 +50,7 @@ export default function CategoryMismatch() {
             for (const item of result.es_only || []) {
                 entries.push({
                     id: selectedId + '/es_' + item.book_id.toString(),
-                    label: '[ES only] ' + item.title + '.' + item.file_type,
+                    label: item.title + '.' + item.file_type,
                     fileType: item.file_type,
                     children: [],
                     mismatchType: 'es_only',
@@ -64,7 +64,7 @@ export default function CategoryMismatch() {
             for (const item of result.fs_only || []) {
                 entries.push({
                     id: selectedId + '/fs_' + item.file_name,
-                    label: '[FS only] ' + item.file_name,
+                    label: item.file_name,
                     fileType: 'unknown',
                     children: [],
                     mismatchType: 'fs_only',
