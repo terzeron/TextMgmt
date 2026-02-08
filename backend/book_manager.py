@@ -100,7 +100,7 @@ class BookManager:
         return categories, None
 
     async def get_books_in_category(self, category: str) -> Tuple[List[Book], Optional[str]]:
-        doc_list = self.es_manager.search_by_category(category, max_result_count=10000)
+        doc_list = self.es_manager.search_by_category(category, max_result_count=sys.maxsize)
         if doc_list and len(doc_list) > 0:
             return [Book(book_id=book_id, info=doc) for book_id, doc, _score in doc_list], None
         return [], f"No books found in '{category}'"
@@ -393,7 +393,7 @@ class BookManager:
             fs_paths = fs_cats.get(key)
             if es_count is not None and fs_paths is not None:
                 # 양쪽 다 존재 → 경로 기반 비교
-                doc_list = self.es_manager.search_by_category(key, max_result_count=10000)
+                doc_list = self.es_manager.search_by_category(key, max_result_count=max(es_count, len(fs_paths)))
                 es_paths = {doc.get("file_path", "") for _, doc, _ in doc_list}
                 diff = len(es_paths - fs_paths) + len(fs_paths - es_paths)
                 if diff > 0:
@@ -414,7 +414,7 @@ class BookManager:
         import os as _os
 
         # 1. ES 문서 목록 (file_path 기준)
-        doc_list = self.es_manager.search_by_category(category, max_result_count=10000)
+        doc_list = self.es_manager.search_by_category(category, max_result_count=sys.maxsize)
         es_files: Dict[str, Dict[str, Any]] = {}
         for book_id, doc, _score in doc_list:
             rel_path = doc.get("file_path", "")
