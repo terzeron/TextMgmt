@@ -537,8 +537,8 @@ describe('CategoryMismatch', () => {
 
         // 불일치 항목이 트리에 추가되었는지 확인
         await waitFor(() => {
-            expect(screen.getByText('[ES only] Book A.pdf')).toBeTruthy();
-            expect(screen.getByText('[FS only] orphan.txt')).toBeTruthy();
+            expect(screen.getByText('Book A.pdf')).toBeTruthy();
+            expect(screen.getByText('orphan.txt')).toBeTruthy();
         });
     });
 
@@ -575,7 +575,7 @@ describe('CategoryMismatch', () => {
         fireEvent.click(screen.getByText('1_fiction'));
 
         await waitFor(() => {
-            expect(screen.getByText('[ES only] Book A.pdf')).toBeTruthy();
+            expect(screen.getByText('Book A.pdf')).toBeTruthy();
         });
 
         expect(categoryApiCallCount).toBe(1);
@@ -708,11 +708,11 @@ describe('CategoryMismatch', () => {
         fireEvent.click(screen.getByText('1_fiction'));
 
         await waitFor(() => {
-            expect(screen.getByText('[ES only] Book A.pdf')).toBeTruthy();
+            expect(screen.getByText('Book A.pdf')).toBeTruthy();
         });
 
         // ES-only 항목 클릭
-        fireEvent.click(screen.getByText('[ES only] Book A.pdf'));
+        fireEvent.click(screen.getByText('Book A.pdf'));
 
         await waitFor(() => {
             expect(screen.getByText('삭제')).toBeTruthy();
@@ -749,10 +749,10 @@ describe('CategoryMismatch', () => {
         fireEvent.click(screen.getByText('1_fiction'));
 
         await waitFor(() => {
-            expect(screen.getByText('[ES only] Book A.pdf')).toBeTruthy();
+            expect(screen.getByText('Book A.pdf')).toBeTruthy();
         });
 
-        fireEvent.click(screen.getByText('[ES only] Book A.pdf'));
+        fireEvent.click(screen.getByText('Book A.pdf'));
 
         await waitFor(() => {
             expect(screen.getByText('삭제')).toBeTruthy();
@@ -777,7 +777,7 @@ describe('CategoryMismatch', () => {
         });
 
         // 삭제된 항목이 트리에서 제거됨
-        expect(screen.queryByText('[ES only] Book A.pdf')).toBeNull();
+        expect(screen.queryByText('Book A.pdf')).toBeNull();
     });
 
     // ── FS-only 적재 ──
@@ -810,10 +810,10 @@ describe('CategoryMismatch', () => {
         fireEvent.click(screen.getByText('1_fiction'));
 
         await waitFor(() => {
-            expect(screen.getByText('[FS only] orphan.txt')).toBeTruthy();
+            expect(screen.getByText('orphan.txt')).toBeTruthy();
         });
 
-        fireEvent.click(screen.getByText('[FS only] orphan.txt'));
+        fireEvent.click(screen.getByText('orphan.txt'));
 
         await waitFor(() => {
             expect(screen.getByText('ES 적재')).toBeTruthy();
@@ -848,10 +848,10 @@ describe('CategoryMismatch', () => {
         fireEvent.click(screen.getByText('1_fiction'));
 
         await waitFor(() => {
-            expect(screen.getByText('[FS only] orphan.txt')).toBeTruthy();
+            expect(screen.getByText('orphan.txt')).toBeTruthy();
         });
 
-        fireEvent.click(screen.getByText('[FS only] orphan.txt'));
+        fireEvent.click(screen.getByText('orphan.txt'));
 
         await waitFor(() => {
             expect(screen.getByText('ES 적재')).toBeTruthy();
@@ -876,7 +876,7 @@ describe('CategoryMismatch', () => {
             expect(screen.getByText('ES에 적재되었습니다.')).toBeTruthy();
         });
 
-        expect(screen.queryByText('[FS only] orphan.txt')).toBeNull();
+        expect(screen.queryByText('orphan.txt')).toBeNull();
     });
 
     it('삭제 실패 시 에러 메시지를 표시한다', async () => {
@@ -907,10 +907,10 @@ describe('CategoryMismatch', () => {
         fireEvent.click(screen.getByText('1_fiction'));
 
         await waitFor(() => {
-            expect(screen.getByText('[ES only] Book A.pdf')).toBeTruthy();
+            expect(screen.getByText('Book A.pdf')).toBeTruthy();
         });
 
-        fireEvent.click(screen.getByText('[ES only] Book A.pdf'));
+        fireEvent.click(screen.getByText('Book A.pdf'));
 
         await waitFor(() => {
             expect(screen.getByText('삭제')).toBeTruthy();
@@ -927,6 +927,6 @@ describe('CategoryMismatch', () => {
         });
 
         // 항목은 여전히 존재 (트리 + 선택 패널에 두 번 표시)
-        expect(screen.getAllByText('[ES only] Book A.pdf').length).toBeGreaterThanOrEqual(1);
+        expect(screen.getAllByText('Book A.pdf').length).toBeGreaterThanOrEqual(1);
     });
 });
