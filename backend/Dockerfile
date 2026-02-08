@@ -6,6 +6,7 @@ RUN apt-get update && \
     build-essential \
     libpoppler-dev libpoppler-cpp-dev libheif-dev libcairo2-dev \
     libxml2-dev libxslt-dev \
+    libreoffice-writer-nogui \
     curl ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
