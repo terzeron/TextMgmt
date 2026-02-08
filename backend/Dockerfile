@@ -13,8 +13,8 @@ RUN apt-get update && \
 ARG USER_ID=1000
 ARG USER_NAME=terzeron
 RUN useradd -u $USER_ID $USER_NAME && \
-    mkdir -p /app /app/backend /app/utils /books /home/$USER_NAME/.cache/uv /home/$USER_NAME/.local && \
-    chown -R $USER_NAME /app /books /home/$USER_NAME/.cache/uv /home/$USER_NAME/.local
+    mkdir -p /app /app/backend /app/utils /books /home/$USER_NAME/.cache /home/$USER_NAME/.config /home/$USER_NAME/.local && \
+    chown -R $USER_NAME /app /books /home/$USER_NAME
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     cp /root/.local/bin/uv /usr/local/bin/
