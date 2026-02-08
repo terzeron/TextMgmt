@@ -17,8 +17,8 @@ export default function ViewDOC({ bookId, fileType, lineCount }) {
             return;
         }
 
-        if (fileType === 'doc') {
-            // .doc (Word 97-2003): 서버에서 HTML로 변환된 미리보기 사용
+        if (fileType === 'doc' || fileType === 'hwp') {
+            // .doc/.hwp: 서버에서 HTML로 변환된 미리보기 사용
             const previewUri = getApiUrlPrefix() + "/preview/" + bookId;
             fetch(previewUri)
                 .then(response => response.text())

@@ -5,7 +5,7 @@ import os
 import io
 import base64
 import logging.config
-import platform
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -28,6 +28,7 @@ class BookManager:
         ".epub": "application/epub+zip",
         ".doc": "application/msword",
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".hwp": "application/x-hwp",
         ".html": "text/html",
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
@@ -40,41 +41,35 @@ class BookManager:
     }
 
     @staticmethod
-    def _fix_doc_encoding(text: str) -> Optional[str]:
-        """textutil이 CP949 바이트를 Latin-1으로 해석한 경우, 원래 CP949으로 복원.
-        Word 6.0/95의 DBCS 바이트 순서 반전도 처리.
-        직접 디코딩과 바이트 스왑 디코딩 중 한글이 더 많은 쪽을 선택."""
-        original_count = sum(1 for c in text[:2000] if '가' <= c <= '힣' or 'ㄱ' <= c <= 'ㅎ')
-        if original_count >= 5:
-            return None  # 이미 한글이 포함됨
+    def _find_libreoffice() -> str:
+        """LibreOffice 실행 파일 경로를 반환"""
+        for cmd in ["libreoffice", "soffice"]:
+            path = shutil.which(cmd)
+            if path:
+                return path
+        mac_path = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+        if Path(mac_path).exists():
+            return mac_path
+        return "libreoffice"
 
-        try:
-            raw_bytes = text.encode('latin-1', errors='strict')
-        except UnicodeEncodeError:
-            return None
-
-        # 1차: 직접 CP949 디코딩
-        direct = raw_bytes.decode('cp949', errors='replace')
-        direct_count = sum(1 for c in direct[:2000] if '가' <= c <= '힣' or 'ㄱ' <= c <= 'ㅎ')
-
-        # 2차: Word 6.0/95 DBCS 바이트 순서 반전 복원
-        swapped = bytearray()
-        i = 0
-        while i < len(raw_bytes):
-            if i + 1 < len(raw_bytes) and raw_bytes[i] >= 0x80 and raw_bytes[i + 1] >= 0x80:
-                swapped.append(raw_bytes[i + 1])
-                swapped.append(raw_bytes[i])
-                i += 2
-            else:
-                swapped.append(raw_bytes[i])
-                i += 1
-        swapped_text = bytes(swapped).decode('cp949', errors='replace')
-        swapped_count = sum(1 for c in swapped_text[:2000] if '가' <= c <= '힣' or 'ㄱ' <= c <= 'ㅎ')
-
-        best = max(direct_count, swapped_count)
-        if best < 5:
-            return None
-        return swapped_text if swapped_count > direct_count else direct
+    @staticmethod
+    def _convert_with_libreoffice(file_path: Path, output_format: str) -> str:
+        """LibreOffice를 사용하여 파일을 변환하고 결과 텍스트를 반환"""
+        lo_bin = BookManager._find_libreoffice()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                [lo_bin, "--headless", "--convert-to", output_format,
+                 "--outdir", tmpdir, str(file_path)],
+                capture_output=True, timeout=60
+            )
+            ext = output_format.split(":")[0]
+            out_file = Path(tmpdir) / (file_path.stem + "." + ext)
+            if out_file.exists():
+                return out_file.read_text(encoding="utf-8", errors="replace")
+            out_files = list(Path(tmpdir).glob(f"*.{ext}"))
+            if out_files:
+                return out_files[0].read_text(encoding="utf-8", errors="replace")
+        return ""
 
     def __init__(self) -> None:
         if "TM_WORK_DIR" not in os.environ:
@@ -241,41 +236,20 @@ class BookManager:
                 LOGGER.error("EPUB preview generation failed for book_id=%d: %s", book_id, e)
                 return ""
 
-        elif suffix == ".doc":
+        elif suffix in (".doc", ".hwp"):
             cache_file = cache_dir / f"{book_id}.html"
             if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
-                LOGGER.debug("Preview cache hit for book_id=%d (DOC)", book_id)
+                LOGGER.debug("Preview cache hit for book_id=%d (%s)", book_id, suffix)
                 return FileResponse(path=cache_file, media_type="text/html")
 
             try:
-                if platform.system() == "Darwin":
-                    proc = subprocess.run(
-                        ["textutil", "-convert", "html", "-stdout", str(book.file_path)],
-                        capture_output=True, timeout=30
-                    )
-                    html_content = proc.stdout.decode("utf-8", errors="replace")
-                    # textutil이 CP949 바이트를 Latin-1으로 해석한 경우 재인코딩 시도
-                    html_content = BookManager._fix_doc_encoding(html_content) or html_content
-                else:
-                    with tempfile.TemporaryDirectory() as tmpdir:
-                        subprocess.run(
-                            ["libreoffice", "--headless", "--convert-to", "html",
-                             "--outdir", tmpdir, str(book.file_path)],
-                            capture_output=True, timeout=60
-                        )
-                        html_file = Path(tmpdir) / (book.file_path.stem + ".html")
-                        if html_file.exists():
-                            html_content = html_file.read_text(encoding="utf-8", errors="replace")
-                        else:
-                            html_files = list(Path(tmpdir).glob("*.html"))
-                            html_content = html_files[0].read_text(encoding="utf-8", errors="replace") if html_files else ""
-
+                html_content = BookManager._convert_with_libreoffice(book.file_path, "html")
                 if html_content:
                     cache_file.write_text(html_content, encoding="utf-8")
-                    LOGGER.debug("Preview generated for book_id=%d (DOC)", book_id)
+                    LOGGER.debug("Preview generated for book_id=%d (%s)", book_id, suffix)
                     return Response(content=html_content, media_type="text/html")
             except Exception as e:
-                LOGGER.error("DOC preview generation failed for book_id=%d: %s", book_id, e)
+                LOGGER.error("%s preview generation failed for book_id=%d: %s", suffix.upper(), book_id, e)
                 return ""
 
         # 지원하지 않는 형식은 빈 문자열 반환
