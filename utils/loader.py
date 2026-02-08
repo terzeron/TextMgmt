@@ -30,6 +30,8 @@ from utils.isbn import extract as extract_isbn
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger()
 
+# ebooklib 내부에서 XHTML을 HTML 파서로 읽을 때 발생하는 경고 억제
+warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
 
 if "TM_WORK_DIR" not in os.environ:
     LOGGER.error("The environment variable TM_WORK_DIR is not set.")
