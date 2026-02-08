@@ -57,7 +57,7 @@ class BookManager:
         """LibreOffice를 사용하여 파일을 변환하고 결과 텍스트를 반환"""
         lo_bin = BookManager._find_libreoffice()
         with tempfile.TemporaryDirectory() as tmpdir:
-            subprocess.run(
+            proc = subprocess.run(
                 [lo_bin, "--headless", "--convert-to", output_format,
                  "--outdir", tmpdir, str(file_path)],
                 capture_output=True, timeout=60
@@ -66,9 +66,19 @@ class BookManager:
             out_file = Path(tmpdir) / (file_path.stem + "." + ext)
             if out_file.exists():
                 return out_file.read_text(encoding="utf-8", errors="replace")
+            # stem 불일치 시 글로브로 검색
             out_files = list(Path(tmpdir).glob(f"*.{ext}"))
             if out_files:
                 return out_files[0].read_text(encoding="utf-8", errors="replace")
+            # 변환 결과 없음 — 진단 로그
+            all_files = list(Path(tmpdir).iterdir())
+            LOGGER.error(
+                "LibreOffice produced no output: file='%s', format='%s', "
+                "returncode=%d, stderr=%s, tmpdir_files=%s",
+                file_path, output_format, proc.returncode,
+                proc.stderr.decode("utf-8", errors="replace")[:500],
+                [f.name for f in all_files]
+            )
         return ""
 
     def __init__(self) -> None:
