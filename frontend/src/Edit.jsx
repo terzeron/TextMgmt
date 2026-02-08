@@ -57,6 +57,7 @@ export default function Edit() {
     const [viewUrl, setViewUrl] = useState('');
     const [downloadUrl, setDownloadUrl] = useState('');
     const [suggestedCategories, setSuggestedCategories] = useState({});
+    const [searchTrigger, setSearchTrigger] = useState(0);
 
     // entryClicked 함수의 최신 참조를 저장하는 ref (콜백에서 최신 함수 참조용)
     const entryClickedRef = useRef(null);
@@ -253,6 +254,7 @@ export default function Edit() {
             setOriginalBookInfo(book);
             const newBook = decomposeTitle(book);
             setBookInfo(newBook);
+            setSearchTrigger(prev => prev + 1);
             setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
             setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
             const otherCategoryList = categoryList
@@ -277,6 +279,7 @@ export default function Edit() {
                     // decompose file name to (author, title, extension)
                     const newBook = decomposeTitle(book);
                     setBookInfo(newBook);
+                    setSearchTrigger(prev => prev + 1);
                     setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
                     setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
 
@@ -512,6 +515,7 @@ export default function Edit() {
                     title: titleOnly,
                     category: categoryForBackend
                 }));
+                setSearchTrigger(prev => prev + 1);
 
                 let newFolderData = removeEntryFromFolderData(folderData, dirName, fileName);
                 newFolderData = appendEntryToFolderData(newFolderData, newDirName, newFileName);
@@ -708,7 +712,7 @@ export default function Edit() {
 
                                 <Col id="right_panel" md="6" lg="7" className="ps-0 pe-0">
                                     <SimilarBooks bookId={bookInfo['book_id']} onSelect={entryClicked}/>
-                                    <Bookstore bookInfo={bookInfo} onCategoriesFound={setSuggestedCategories}/>
+                                    <Bookstore bookInfo={bookInfo} searchTrigger={searchTrigger} onCategoriesFound={setSuggestedCategories}/>
                                     <SimilarityDebug suggestedCategories={suggestedCategories} categoryList={otherCategoryList}/>
                                 </Col>
                             </Row>
