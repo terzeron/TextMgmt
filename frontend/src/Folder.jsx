@@ -207,7 +207,7 @@ const getIconFromFileType = (fileType) => {
     }
 };
 
-const CustomTreeItem = React.forwardRef(function CustomTreeItem(props, ref) {
+export const CustomTreeItem = React.forwardRef(function CustomTreeItem(props, ref) {
     // eslint-disable-next-line react/prop-types
     const {id, itemId, label, disabled, children, ...other} = props;
 

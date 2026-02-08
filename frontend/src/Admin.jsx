@@ -6,6 +6,7 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 
 import {jsonGetReq} from './Common';
 import CategoryMapping from './CategoryMapping';
+import CategoryMismatch from './CategoryMismatch';
 
 export default function Admin() {
     const {searchResults, hasSearched} = useOutletContext();
@@ -30,6 +31,7 @@ export default function Admin() {
                 <div className="alert alert-danger">{errorMessage}</div>
             )}
             <CategoryMapping categoryList={categoryList}/>
+            <CategoryMismatch/>
         </>
     );
 }
