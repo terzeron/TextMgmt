@@ -252,17 +252,13 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                     : `총 ${totalPages}쪽 표시`
                 }
             </div>
-            <div className="pdf-pages">
-                {pageNumbers.map((pageNum) => (
-                    <div key={pageNum} className="pdf-page">
-                        <div className="page-number">{pageNum}쪽</div>
-                        <canvas
-                            ref={setCanvasRef(pageNum)}
-                            style={{maxWidth: "100%", height: "auto"}}
-                        />
-                    </div>
-                ))}
-            </div>
+            {pageNumbers.map((pageNum) => (
+                <canvas
+                    key={pageNum}
+                    ref={setCanvasRef(pageNum)}
+                    className="pdf-page"
+                />
+            ))}
             <style>{pdfStyles}</style>
         </div>
     );
@@ -283,23 +279,10 @@ const pdfStyles = `
         color: #666;
         font-size: 14px;
     }
-    .pdf-pages {
-        display: flex;
-        flex-direction: column;
-        gap: 20px;
-        align-items: center;
-    }
     .pdf-page {
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        padding: 10px;
-        background: #f9f9f9;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .page-number {
-        font-size: 12px;
-        color: #888;
-        margin-bottom: 8px;
+        max-width: 100%;
+        height: auto;
+        display: block;
     }
     .loading-container {
         display: flex;
