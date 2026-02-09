@@ -521,5 +521,158 @@ class TestBookDownload:
         zf.close()
 
 
+# ── tests: 캐시 정리 (eviction) ────────────────────────────
+
+class TestCacheEviction:
+    """BookManager._evict_old_cache 단위 테스트."""
+
+    def test_old_files_are_deleted(self, tmp_path):
+        """1일 이상 된 파일이 삭제된다."""
+        import time
+        from backend.book_manager import BookManager
+
+        old_file = tmp_path / "old.epub"
+        old_file.write_text("old")
+        # mtime을 2일 전으로 설정
+        old_mtime = time.time() - 2 * 86400
+        import os
+        os.utime(old_file, (old_mtime, old_mtime))
+
+        new_file = tmp_path / "new.epub"
+        new_file.write_text("new")
+
+        BookManager._evict_old_cache(tmp_path)
+
+        assert not old_file.exists()
+        assert new_file.exists()
+
+    def test_recent_files_are_kept(self, tmp_path):
+        """1일 미만 파일은 보존된다."""
+        from backend.book_manager import BookManager
+
+        recent = tmp_path / "recent.pdf"
+        recent.write_text("recent")
+
+        BookManager._evict_old_cache(tmp_path)
+
+        assert recent.exists()
+
+    def test_exactly_one_day_old_is_deleted(self, tmp_path):
+        """정확히 1일 된 파일도 삭제된다."""
+        import time, os
+        from backend.book_manager import BookManager
+
+        edge_file = tmp_path / "edge.html"
+        edge_file.write_text("edge")
+        edge_mtime = time.time() - 86400 - 1  # 1일 + 1초
+        os.utime(edge_file, (edge_mtime, edge_mtime))
+
+        BookManager._evict_old_cache(tmp_path)
+
+        assert not edge_file.exists()
+
+    def test_subdirectories_are_not_deleted(self, tmp_path):
+        """하위 디렉토리는 삭제하지 않는다."""
+        import time, os
+        from backend.book_manager import BookManager
+
+        sub_dir = tmp_path / "subdir"
+        sub_dir.mkdir()
+        old_mtime = time.time() - 2 * 86400
+        os.utime(sub_dir, (old_mtime, old_mtime))
+
+        BookManager._evict_old_cache(tmp_path)
+
+        assert sub_dir.exists()
+
+    def test_empty_directory_no_error(self, tmp_path):
+        """빈 디렉토리에서 에러 없이 동작한다."""
+        from backend.book_manager import BookManager
+
+        BookManager._evict_old_cache(tmp_path)  # 에러 없이 완료
+
+    def test_nonexistent_directory_no_error(self, tmp_path):
+        """존재하지 않는 디렉토리에서 에러 없이 동작한다."""
+        from backend.book_manager import BookManager
+
+        fake_dir = tmp_path / "nonexistent"
+        BookManager._evict_old_cache(fake_dir)  # 에러 없이 완료
+
+    def test_multiple_old_files_all_deleted(self, tmp_path):
+        """오래된 파일이 여러 개일 때 모두 삭제된다."""
+        import time, os
+        from backend.book_manager import BookManager
+
+        old_mtime = time.time() - 2 * 86400
+        old_files = []
+        for i in range(5):
+            f = tmp_path / f"old_{i}.epub"
+            f.write_text(f"old_{i}")
+            os.utime(f, (old_mtime, old_mtime))
+            old_files.append(f)
+
+        new_file = tmp_path / "new.pdf"
+        new_file.write_text("new")
+
+        BookManager._evict_old_cache(tmp_path)
+
+        for f in old_files:
+            assert not f.exists()
+        assert new_file.exists()
+
+    def test_deletion_failure_continues_processing(self, tmp_path):
+        """개별 파일 삭제 실패 시 나머지 파일 처리가 계속된다."""
+        import time, os
+        from unittest.mock import patch
+        from backend.book_manager import BookManager
+
+        old_mtime = time.time() - 2 * 86400
+        files = []
+        for i in range(3):
+            f = tmp_path / f"old_{i}.epub"
+            f.write_text(f"old_{i}")
+            os.utime(f, (old_mtime, old_mtime))
+            files.append(f)
+
+        original_unlink = Path.unlink
+        first_call = [True]
+
+        def mock_unlink(self, *args, **kwargs):
+            if first_call[0]:
+                first_call[0] = False
+                raise PermissionError("mocked deletion failure")
+            original_unlink(self, *args, **kwargs)
+
+        with patch.object(Path, 'unlink', mock_unlink):
+            BookManager._evict_old_cache(tmp_path)
+
+        # 1개는 실패로 남고, 나머지 2개는 삭제됨
+        remaining = [f for f in files if f.exists()]
+        assert len(remaining) == 1
+
+    def test_just_written_cache_file_is_not_evicted(self, tmp_path):
+        """방금 쓴 캐시 파일과 오래된 파일이 공존할 때, 새 파일만 보존된다."""
+        import time, os
+        from backend.book_manager import BookManager
+
+        old_mtime = time.time() - 3 * 86400
+        old_files = []
+        for name in ["1.pdf", "2_ch5.epub", "3.html", "4_p1-3.pdf"]:
+            f = tmp_path / name
+            f.write_text("old")
+            os.utime(f, (old_mtime, old_mtime))
+            old_files.append(f)
+
+        # 방금 생성된 파일
+        just_written = tmp_path / "5_ch10.epub"
+        just_written.write_text("fresh")
+
+        BookManager._evict_old_cache(tmp_path)
+
+        for f in old_files:
+            assert not f.exists(), f"{f.name} should have been evicted"
+        assert just_written.exists()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

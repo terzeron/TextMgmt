@@ -8,6 +8,7 @@ import logging.config
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Tuple, Dict, List, Union, Optional, Any
 import chardet
@@ -39,6 +40,23 @@ class BookManager:
         ".tiff": "image/tiff",
         ".svg": "image/svg+xml",
     }
+
+    CACHE_MAX_AGE_SECONDS = 86400  # 1일
+
+    @staticmethod
+    def _evict_old_cache(cache_dir: Path) -> None:
+        """cache_dir 내 1일 이상 된 파일을 삭제한다."""
+        try:
+            cutoff = time.time() - BookManager.CACHE_MAX_AGE_SECONDS
+            for f in cache_dir.iterdir():
+                try:
+                    if f.is_file() and f.stat().st_mtime < cutoff:
+                        f.unlink()
+                        LOGGER.debug("Evicted old cache file: %s", f.name)
+                except Exception as e:
+                    LOGGER.warning("Failed to evict cache file %s: %s", f.name, e)
+        except Exception as e:
+            LOGGER.warning("Cache eviction failed: %s", e)
 
     @staticmethod
     def _find_libreoffice() -> str:
@@ -202,6 +220,7 @@ class BookManager:
                 writer.write(buf)
                 preview_bytes = buf.getvalue()
                 cache_file.write_bytes(preview_bytes)
+                BookManager._evict_old_cache(cache_dir)
                 LOGGER.debug("Preview generated for book_id=%d (PDF, %d pages)", book_id, pages_to_extract)
                 return FileResponse(path=cache_file, media_type="application/pdf",
                                     headers={"Content-Encoding": "identity",
@@ -355,6 +374,7 @@ class BookManager:
                                 except KeyError:
                                     LOGGER.warning("EPUB preview: missing file in archive: %s", zp)
 
+                BookManager._evict_old_cache(cache_dir)
                 LOGGER.debug("Preview generated for book_id=%d (EPUB, %d chapters)", book_id, len(chapter_idrefs))
                 return FileResponse(path=cache_file, media_type="application/epub+zip",
                                     headers=extra_headers)
@@ -372,6 +392,7 @@ class BookManager:
                 html_content = BookManager._convert_with_libreoffice(book.file_path, "html")
                 if html_content:
                     cache_file.write_text(html_content, encoding="utf-8")
+                    BookManager._evict_old_cache(cache_dir)
                     LOGGER.debug("Preview generated for book_id=%d (%s)", book_id, suffix)
                     return Response(content=html_content, media_type="text/html")
             except Exception as e:
@@ -639,6 +660,7 @@ class BookManager:
 
             # 캐시 저장
             cache_file.write_bytes(pdf_bytes)
+            BookManager._evict_old_cache(cache_dir)
 
             LOGGER.debug("PDF pages extracted for book_id=%d (p%d-%d, total=%d)", book_id, start, end, total_pages)
             return Response(
