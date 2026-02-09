@@ -70,9 +70,12 @@ afterEach(() => {
 import ViewEPUB from '../src/ViewEPUB';
 
 // rendition mock을 만들어주는 헬퍼
-function createMockRendition() {
+function createMockRendition({ destroyThrows = false } = {}) {
     const handlers = {};
     return {
+        destroy: destroyThrows
+            ? vi.fn(() => { throw new Error('already destroyed'); })
+            : vi.fn(),
         themes: {
             fontSize: vi.fn(),
             font: vi.fn(),
@@ -932,5 +935,111 @@ describe('ViewEPUB', () => {
         });
 
         expect(mockRendition.on).not.toHaveBeenCalled();
+    });
+
+    // ══════════════════════════════════════════════
+    // ── rendition 리소스 해제 테스트 ──
+    // ══════════════════════════════════════════════
+
+    it('언마운트 시 rendition.destroy()가 호출된다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // 언마운트
+        cleanup();
+
+        expect(mockRendition.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it('bookId 변경 시 이전 rendition.destroy()가 호출된다', async () => {
+        const { rerender } = render(<ViewEPUB bookId={1} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // bookId 변경 → cleanup → destroy
+        rerender(<ViewEPUB bookId={2} />);
+
+        expect(mockRendition.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it('getRendition 재호출 시 이전 rendition.destroy()가 호출된다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const oldRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(oldRendition);
+        });
+
+        // 새 rendition이 전달되면 이전 것을 destroy
+        const newRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(newRendition);
+        });
+
+        expect(oldRendition.destroy).toHaveBeenCalledTimes(1);
+        expect(newRendition.destroy).not.toHaveBeenCalled();
+    });
+
+    it('rendition.destroy()가 에러를 던져도 크래시하지 않는다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const badRendition = createMockRendition({ destroyThrows: true });
+        await act(async () => {
+            capturedGetRendition(badRendition);
+        });
+
+        // destroy()가 throw해도 언마운트가 정상 동작해야 함
+        expect(() => cleanup()).not.toThrow();
+        expect(badRendition.destroy).toHaveBeenCalled();
+    });
+
+    it('getRendition에서 같은 rendition이 다시 전달되면 destroy하지 않는다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // 동일 rendition 재전달
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        expect(mockRendition.destroy).not.toHaveBeenCalled();
+    });
+
+    it('rendition이 없는 상태에서 언마운트해도 에러가 발생하지 않는다', async () => {
+        const { unmount } = render(<ViewEPUB bookId={42} />);
+
+        // getRendition 호출 전에 바로 언마운트
+        expect(() => unmount()).not.toThrow();
     });
 });

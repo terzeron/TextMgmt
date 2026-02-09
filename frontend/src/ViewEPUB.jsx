@@ -106,6 +106,13 @@ export default function ViewEPUB({ bookId, preview = false }) {
 
         return () => {
             controller.abort();
+            // 이전 rendition 리소스 해제 (epubjs 내부 상태 충돌 방지)
+            if (renditionRef.current) {
+                try {
+                    renditionRef.current.destroy();
+                } catch (_) { /* 이미 파괴된 경우 무시 */ }
+                renditionRef.current = null;
+            }
             setEpubData(null);
         };
     }, [bookId, preview, fetchChapters]);
@@ -192,6 +199,12 @@ export default function ViewEPUB({ bookId, preview = false }) {
     }, []);
 
     const getRendition = useCallback((rendition) => {
+        // 이전 rendition이 남아있으면 정리 (epubKey 변경에 의한 재마운트)
+        if (renditionRef.current && renditionRef.current !== rendition) {
+            try {
+                renditionRef.current.destroy();
+            } catch (_) { /* 이미 파괴된 경우 무시 */ }
+        }
         renditionRef.current = rendition;
         const spine_get = rendition.book.spine.get.bind(rendition.book.spine);
         rendition.book.spine.get = function (target) {
