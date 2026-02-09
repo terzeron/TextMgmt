@@ -1,0 +1,55 @@
+.epub-toolbar {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.9);
+    border-bottom-left-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+.epub-toolbar button {
+    border: 1px solid #ccc;
+    background: #fff;
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.epub-toolbar button:hover {
+    background: #f0f0f0;
+}
+
+.epub-toolbar button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.epub-toolbar select {
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 13px;
+    cursor: pointer;
+    background: #fff;
+}
+
+.epub-page-info {
+    position: absolute;
+    bottom: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    font-size: 13px;
+    color: #666;
+    background: rgba(255, 255, 255, 0.85);
+    padding: 2px 12px;
+    border-radius: 10px;
+    pointer-events: none;
+}
