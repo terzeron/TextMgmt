@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, act, cleanup } from '@testing-library/react';
 
 afterEach(cleanup);
 
-// ReactReader mock
+// ReactReader mock - autoLoad=true이면 즉시 locationChanged 호출
+let autoLoad = true;
 const mockReactReader = vi.fn(({ url, locationChanged }) => {
-    // URL이 설정되면 즉시 locationChanged를 호출하여 로딩 완료 시뮬레이션
-    if (url) {
+    if (url && autoLoad) {
         setTimeout(() => locationChanged?.('epubcfi(/1)'), 0);
     }
     return <div data-testid="react-reader" data-url={url}>ReactReader</div>;
@@ -26,6 +26,7 @@ import ViewEPUB from '../src/ViewEPUB';
 describe('ViewEPUB', () => {
     beforeEach(() => {
         mockReactReader.mockClear();
+        autoLoad = true;
     });
 
     // ── 유효성 검사 ──
@@ -91,6 +92,39 @@ describe('ViewEPUB', () => {
     it('초기 로딩 시 스피너를 표시한다', () => {
         render(<ViewEPUB bookId={1} filePath="a.epub" />);
         expect(screen.getByText('로딩 중...')).toBeTruthy();
+    });
+
+    // ── 로딩 타임아웃 ──
+
+    it('30초 내 로딩 미완료 시 타임아웃 에러를 표시한다', () => {
+        vi.useFakeTimers();
+        autoLoad = false;
+
+        render(<ViewEPUB bookId={1} filePath="a.epub" />);
+        expect(screen.getByText('로딩 중...')).toBeTruthy();
+
+        act(() => { vi.advanceTimersByTime(30000); });
+
+        expect(screen.getByText('미리보기 로딩 시간이 초과되었습니다.')).toBeTruthy();
+        expect(screen.queryByText('로딩 중...')).toBeNull();
+
+        vi.useRealTimers();
+    });
+
+    it('로딩 완료 후에는 타임아웃이 발생하지 않는다', async () => {
+        vi.useFakeTimers();
+        autoLoad = true;
+
+        render(<ViewEPUB bookId={1} filePath="a.epub" />);
+
+        // locationChanged 콜백 실행 (setTimeout 0ms)
+        await act(async () => { vi.advanceTimersByTime(1); });
+
+        // 30초 경과해도 에러 없음
+        act(() => { vi.advanceTimersByTime(30000); });
+        expect(screen.queryByText('미리보기 로딩 시간이 초과되었습니다.')).toBeNull();
+
+        vi.useRealTimers();
     });
 
     // ── cleanup ──
