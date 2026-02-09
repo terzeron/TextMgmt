@@ -2,7 +2,7 @@ import './Edit.css';
 import './SearchResult.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
-import {Suspense, useState} from 'react';
+import {Suspense, useState, useEffect} from 'react';
 import PropTypes from 'prop-types';
 
 import {Card, Button} from 'react-bootstrap';
@@ -11,6 +11,12 @@ import {faChevronDown, faChevronRight} from "@fortawesome/free-solid-svg-icons";
 
 export default function SearchResult({results, showEditButton = true, onLoadMore, hasMore = false, loading = false}) {
     const [isOpen, setIsOpen] = useState(true);
+
+    useEffect(() => {
+        if (results && results.length > 0) {
+            setIsOpen(true);
+        }
+    }, [results]);
 
     return (
         <Card>
