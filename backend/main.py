@@ -31,7 +31,7 @@ app = FastAPI()
 LOGGER.info("app ready")
 origins = [os.getenv("TM_FRONTEND_URL")]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
-                   expose_headers=["Accept-Ranges", "Content-Range", "Content-Length", "Content-Encoding"])
+                   expose_headers=["Accept-Ranges", "Content-Range", "Content-Length", "Content-Encoding", "X-Total-Pages"])
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
@@ -169,6 +169,12 @@ async def get_book_content(book_id: int) -> Union[str, FileResponse]:
 async def get_book_preview(book_id: int, pages: int = 5, chapters: int = 3):
     LOGGER.debug("# get_book_preview(book_id=%d, pages=%d, chapters=%d)", book_id, pages, chapters)
     return await book_manager.get_book_preview(book_id=book_id, pages=pages, chapters=chapters)
+
+
+@app.get("/pdf-pages/{book_id}", response_model=None)
+async def get_pdf_pages(book_id: int, start: int = 1, end: int = 1):
+    LOGGER.debug("# get_pdf_pages(book_id=%d, start=%d, end=%d)", book_id, start, end)
+    return await book_manager.get_pdf_pages(book_id=book_id, start=start, end=end)
 
 
 @app.get("/books/{book_id}")

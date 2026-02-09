@@ -7,6 +7,8 @@ import * as pdfjs from "pdfjs-dist";
 // unpkg CDN에서 워커 로드 (package.json의 pdfjs-dist 버전과 일치)
 pdfjs.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
 
+const CHUNK_SIZE = 10;
+
 export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
     const [error, setError] = useState(null);
     const [totalPages, setTotalPages] = useState(0);
@@ -22,26 +24,98 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
     const nativeWidthRef = useRef(0);
     const nativeHeightRef = useRef(0);
     const containerRef = useRef(null);
-    const pdfRef = useRef(null);
-    const loadingTaskRef = useRef(null);
     const canvasRefs = useRef({});
     const renderedPagesRef = useRef(new Set());
     const observerRef = useRef(null);
 
-    // 개별 페이지 렌더링 함수
-    const renderPage = useCallback(async (pdf, pageNum) => {
-        if (renderedPagesRef.current.has(pageNum)) return;
-        renderedPagesRef.current.add(pageNum);
+    // 청크 단위 로딩을 위한 ref
+    const chunkDocsRef = useRef(new Map());   // key: "start-end", value: pdfDocument
+    const fetchingRef = useRef(new Set());     // 현재 페칭 중인 범위 추적
+    const pendingPagesRef = useRef(new Set()); // 청크 로드 대기 중인 페이지
+    const cancelledRef = useRef(false);
+    const totalPagesRef = useRef(0);
+
+    // 청크 키에서 해당 페이지를 포함하는 청크의 pdfDoc과 로컬 페이지 번호를 반환
+    const findChunkForPage = useCallback((globalPageNum) => {
+        for (const [key, pdfDoc] of chunkDocsRef.current.entries()) {
+            const [s, e] = key.split("-").map(Number);
+            if (globalPageNum >= s && globalPageNum <= e) {
+                return {pdfDoc, localPageNum: globalPageNum - s + 1};
+            }
+        }
+        return null;
+    }, []);
+
+    // 청크 페칭 함수
+    const fetchChunk = useCallback(async (start, end) => {
+        const key = `${start}-${end}`;
+        if (chunkDocsRef.current.has(key) || fetchingRef.current.has(key)) return;
+        fetchingRef.current.add(key);
 
         try {
-            const page = await pdf.getPage(pageNum);
+            const url = getApiUrlPrefix() + `/pdf-pages/${bookId}?start=${start}&end=${end}`;
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            const buffer = await response.arrayBuffer();
+            if (cancelledRef.current) return;
+
+            const pdfDoc = await pdfjs.getDocument({data: buffer}).promise;
+            if (cancelledRef.current) {
+                pdfDoc.destroy();
+                return;
+            }
+
+            chunkDocsRef.current.set(key, pdfDoc);
+
+            // 이 청크에 해당하는 대기 중인 페이지 렌더링
+            for (let i = start; i <= end; i++) {
+                if (pendingPagesRef.current.has(i)) {
+                    pendingPagesRef.current.delete(i);
+                    renderPage(i);
+                }
+            }
+        } catch (err) {
+            if (!cancelledRef.current) {
+                console.error(`청크 ${key} 페칭 실패:`, err);
+            }
+        } finally {
+            fetchingRef.current.delete(key);
+        }
+    }, [bookId]);
+
+    // 글로벌 페이지 번호가 속하는 청크의 start를 계산
+    const getChunkStart = useCallback((globalPageNum) => {
+        // 첫 페이지는 항상 단독 청크
+        if (globalPageNum === 1) return 1;
+        // 2부터 시작해서 CHUNK_SIZE 단위
+        return 2 + Math.floor((globalPageNum - 2) / CHUNK_SIZE) * CHUNK_SIZE;
+    }, []);
+
+    // 페이지 렌더링 함수 (청크 기반)
+    const renderPage = useCallback(async (globalPageNum) => {
+        if (renderedPagesRef.current.has(globalPageNum)) return;
+
+        const chunkInfo = findChunkForPage(globalPageNum);
+        if (!chunkInfo) {
+            // 청크가 아직 로드되지 않음 → 대기 목록에 추가하고 청크 페칭 트리거
+            pendingPagesRef.current.add(globalPageNum);
+            const chunkStart = getChunkStart(globalPageNum);
+            const chunkEnd = Math.min(chunkStart === 1 ? 1 : chunkStart + CHUNK_SIZE - 1, totalPagesRef.current);
+            fetchChunk(chunkStart, chunkEnd);
+            return;
+        }
+
+        renderedPagesRef.current.add(globalPageNum);
+
+        try {
+            const page = await chunkInfo.pdfDoc.getPage(chunkInfo.localPageNum);
             const dpr = window.devicePixelRatio || 1;
-            const cssViewport = page.getViewport({scale: 1.2});
             const renderViewport = page.getViewport({scale: 1.2 * dpr});
 
-            const canvas = canvasRefs.current[pageNum];
+            const canvas = canvasRefs.current[globalPageNum];
             if (!canvas) {
-                renderedPagesRef.current.delete(pageNum);
+                renderedPagesRef.current.delete(globalPageNum);
                 return;
             }
 
@@ -56,23 +130,22 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
 
             setLoadedPages(prev => prev + 1);
 
-            // 첫 페이지가 렌더링되면 즉시 표시
-            if (pageNum === 1) {
+            if (globalPageNum === 1) {
                 setIsFirstPageReady(true);
             }
         } catch (err) {
-            renderedPagesRef.current.delete(pageNum);
-            console.error(`페이지 ${pageNum} 렌더링 실패:`, err);
+            renderedPagesRef.current.delete(globalPageNum);
+            console.error(`페이지 ${globalPageNum} 렌더링 실패:`, err);
         }
-    }, []);
+    }, [findChunkForPage, getChunkStart, fetchChunk]);
 
     useEffect(() => {
         if (!bookId) {
-            setError("❌ 유효한 bookId가 제공되지 않았습니다.");
+            setError("유효한 bookId가 제공되지 않았습니다.");
             return;
         }
 
-        let cancelled = false;
+        cancelledRef.current = false;
 
         const loadPdf = async () => {
             setError(null);
@@ -82,41 +155,50 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
             setIsFirstPageReady(false);
             canvasRefs.current = {};
             renderedPagesRef.current = new Set();
+            chunkDocsRef.current = new Map();
+            fetchingRef.current = new Set();
+            pendingPagesRef.current = new Set();
+            totalPagesRef.current = 0;
 
             try {
-                const pdfUrl = preview
-                    ? getApiUrlPrefix() + "/preview/" + bookId + "?pages=" + (pageCount > 0 ? pageCount : 5)
-                    : getApiUrlPrefix() + "/download/" + bookId;
+                // 1단계: 첫 페이지만 페칭하여 총 페이지 수 확인 및 빠른 렌더링
+                setDownloadProgress(10);
+                const firstUrl = getApiUrlPrefix() + `/pdf-pages/${bookId}?start=1&end=1`;
+                const firstResponse = await fetch(firstUrl);
+                if (!firstResponse.ok) throw new Error(`HTTP ${firstResponse.status}`);
 
-                // pdfjs에 URL 직접 전달: Range 요청으로 필요한 부분만 다운로드하며 점진적 렌더링
-                const loadingTask = pdfjs.getDocument({url: pdfUrl});
-                loadingTask.onProgress = ({loaded, total}) => {
-                    if (total > 0) {
-                        setDownloadProgress(Math.min(100, Math.round(loaded / total * 100)));
-                    }
-                };
-                loadingTaskRef.current = loadingTask;
-                let pdf = await loadingTask.promise;
-                loadingTaskRef.current = null;
+                const serverTotalPages = parseInt(firstResponse.headers.get("X-Total-Pages") || "0", 10);
+                const firstBuffer = await firstResponse.arrayBuffer();
+                if (cancelledRef.current) return;
 
-                if (cancelled) {
-                    pdf.destroy();
+                setDownloadProgress(30);
+
+                const firstPdfDoc = await pdfjs.getDocument({data: firstBuffer}).promise;
+                if (cancelledRef.current) {
+                    firstPdfDoc.destroy();
                     return;
                 }
 
-                pdfRef.current = pdf;
+                chunkDocsRef.current.set("1-1", firstPdfDoc);
 
-                const pagesToRender = preview ? pdf.numPages : (pageCount > 0 ? Math.min(pdf.numPages, pageCount) : pdf.numPages);
+                // 총 페이지 수 결정
+                let pagesToRender;
+                if (preview) {
+                    pagesToRender = Math.min(10, serverTotalPages);
+                } else {
+                    pagesToRender = pageCount > 0 ? Math.min(serverTotalPages, pageCount) : serverTotalPages;
+                }
+                totalPagesRef.current = pagesToRender;
 
                 // 첫 페이지 viewport로 모든 canvas placeholder 크기 결정
-                const firstPage = await pdf.getPage(1);
+                const firstPage = await firstPdfDoc.getPage(1);
                 const dpr = window.devicePixelRatio || 1;
                 const firstCssViewport = firstPage.getViewport({scale: 1.2});
                 const firstRenderViewport = firstPage.getViewport({scale: 1.2 * dpr});
                 nativeWidthRef.current = firstCssViewport.width;
                 nativeHeightRef.current = firstCssViewport.height;
 
-                if (cancelled) return;
+                if (cancelledRef.current) return;
 
                 // flushSync로 상태 업데이트를 동기화하여 canvas가 DOM에 생성된 후 렌더링
                 flushSync(() => {
@@ -132,29 +214,48 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                     }
                 }
 
-                // 첫 페이지 우선 렌더링
-                if (cancelled) return;
-                await renderPage(pdf, 1);
+                // 첫 페이지 렌더링
+                if (cancelledRef.current) return;
+                await renderPage(1);
+                setDownloadProgress(50);
 
-                if (cancelled || pagesToRender <= 1) return;
+                if (cancelledRef.current || pagesToRender <= 1) return;
 
-                // 나머지 페이지: 뷰포트에 들어올 때 + 최대 10페이지 선렌더링 (IntersectionObserver)
-                const PRERENDER_AHEAD = 10;
+                // 2단계: 나머지 페이지 로딩
+                if (preview) {
+                    // 미리보기: 나머지 2~pagesToRender 한 번에 페칭
+                    fetchChunk(2, pagesToRender);
+                } else {
+                    // 전체보기: 2~11페이지 즉시 페칭
+                    const firstBatchEnd = Math.min(1 + CHUNK_SIZE, pagesToRender);
+                    fetchChunk(2, firstBatchEnd);
+                }
+
+                setDownloadProgress(100);
+
+                // IntersectionObserver로 스크롤 기반 청크 페칭 + 렌더링
                 const observer = new IntersectionObserver(
                     (entries) => {
                         for (const entry of entries) {
                             if (entry.isIntersecting) {
                                 const pageNum = parseInt(entry.target.dataset.page);
-                                if (!pageNum || !pdfRef.current) continue;
-                                // 현재 페이지 + 최대 10페이지 선렌더링
-                                const end = Math.min(pageNum + PRERENDER_AHEAD, pagesToRender);
-                                for (let i = pageNum; i <= end; i++) {
-                                    if (!renderedPagesRef.current.has(i)) {
-                                        renderPage(pdfRef.current, i);
-                                    }
-                                    const c = canvasRefs.current[i];
-                                    if (c) observer.unobserve(c);
+                                if (!pageNum) continue;
+
+                                // 현재 페이지 렌더링
+                                if (!renderedPagesRef.current.has(pageNum)) {
+                                    renderPage(pageNum);
                                 }
+
+                                // 선렌더링: 현재 페이지 이후 CHUNK_SIZE 페이지
+                                const prerenderEnd = Math.min(pageNum + CHUNK_SIZE, pagesToRender);
+                                for (let i = pageNum + 1; i <= prerenderEnd; i++) {
+                                    if (!renderedPagesRef.current.has(i)) {
+                                        renderPage(i);
+                                    }
+                                }
+
+                                const c = canvasRefs.current[pageNum];
+                                if (c) observer.unobserve(c);
                             }
                         }
                     },
@@ -171,30 +272,29 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                     }
                 }
             } catch (err) {
-                if (cancelled) return;
+                if (cancelledRef.current) return;
                 console.error("PDF 로드 실패:", err);
-                setError(`❌ PDF 렌더링 실패: ${err.message || "파일이 존재하지 않거나 올바르지 않은 형식일 수 있습니다."}`);
+                setError(`PDF 렌더링 실패: ${err.message || "파일이 존재하지 않거나 올바르지 않은 형식일 수 있습니다."}`);
             }
         };
 
         loadPdf();
 
         return () => {
-            cancelled = true;
+            cancelledRef.current = true;
             if (observerRef.current) {
                 observerRef.current.disconnect();
                 observerRef.current = null;
             }
-            if (loadingTaskRef.current) {
-                loadingTaskRef.current.destroy();
-                loadingTaskRef.current = null;
+            // 모든 청크 pdfDoc 정리
+            for (const pdfDoc of chunkDocsRef.current.values()) {
+                pdfDoc.destroy();
             }
-            if (pdfRef.current) {
-                pdfRef.current.destroy();
-                pdfRef.current = null;
-            }
+            chunkDocsRef.current.clear();
+            fetchingRef.current.clear();
+            pendingPagesRef.current.clear();
         };
-    }, [bookId, pageCount, preview, renderPage]);
+    }, [bookId, pageCount, preview, renderPage, fetchChunk]);
 
     // 캔버스 ref 설정 함수
     const setCanvasRef = useCallback((pageNum) => (el) => {
