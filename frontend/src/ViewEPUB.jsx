@@ -28,6 +28,8 @@ export default function ViewEPUB({ bookId, preview = false }) {
     const initialLoadDoneRef = useRef(false);
     const totalChaptersRef = useRef(0);
     const backgroundFetchDoneRef = useRef(false);
+    const locationsReadyRef = useRef(false);
+    const allChaptersLoadedRef = useRef(false);
 
     const [epubData, setEpubData] = useState(null);
     const [initialLoadDone, setInitialLoadDone] = useState(false);
@@ -78,6 +80,8 @@ export default function ViewEPUB({ bookId, preview = false }) {
         initialLoadDoneRef.current = false;
         backgroundEpubRef.current = null;
         backgroundFetchDoneRef.current = false;
+        locationsReadyRef.current = false;
+        allChaptersLoadedRef.current = false;
         setPageInfo({ page: 0, total: 0 });
 
         // 전체보기: 읽기 위치를 별도 저장 (초기 부분 로드에는 적용하지 않음)
@@ -96,6 +100,7 @@ export default function ViewEPUB({ bookId, preview = false }) {
                 setLoadedChapters(Math.min(initialChapters, total));
                 setTotalChapters(total);
                 totalChaptersRef.current = total;
+                allChaptersLoadedRef.current = Math.min(initialChapters, total) >= total;
                 setEpubKey((k) => k + 1);
             })
             .catch((err) => {
@@ -184,6 +189,7 @@ export default function ViewEPUB({ bookId, preview = false }) {
                 locationRef.current = savedLocationRef.current;
                 savedLocationRef.current = null;
             }
+            allChaptersLoadedRef.current = true;
             setEpubData(fullData);
             setLoadedChapters(totalChaptersRef.current);
             setEpubKey((k) => k + 1);
@@ -219,6 +225,7 @@ export default function ViewEPUB({ bookId, preview = false }) {
             } catch (_) { /* 이미 파괴된 경우 무시 */ }
         }
         renditionRef.current = rendition;
+        locationsReadyRef.current = false;
         const spine_get = rendition.book.spine.get.bind(rendition.book.spine);
         rendition.book.spine.get = function (target) {
             let t = spine_get(target);
@@ -249,13 +256,49 @@ export default function ViewEPUB({ bookId, preview = false }) {
                 rendition.themes.font(savedFont);
             }
 
-            // 페이지 정보 이벤트 리스닝
+            // 전체 페이지 위치 인덱스 생성 (전체 챕터 로드 완료 시)
+            if (allChaptersLoadedRef.current) {
+                const currentRendition = rendition;
+                rendition.book.ready
+                    .then(() => {
+                        if (renditionRef.current !== currentRendition) return null;
+                        return rendition.book.locations.generate(1024);
+                    })
+                    .then((locations) => {
+                        if (!locations || renditionRef.current !== currentRendition) return;
+                        locationsReadyRef.current = true;
+                        if (locationRef.current) {
+                            try {
+                                const idx = rendition.book.locations.locationFromCfi(locationRef.current);
+                                const total = rendition.book.locations.total;
+                                if (idx >= 0 && total > 0) {
+                                    setPageInfo({ page: idx + 1, total });
+                                }
+                            } catch (_) { /* ignore */ }
+                        }
+                    })
+                    .catch(() => {});
+            }
+
+            // 페이지 정보 이벤트 리스닝 (전체 위치 준비 시 전역 페이지, 아니면 챕터 내 페이지)
             rendition.on("relocated", (location) => {
-                if (location && location.start && location.start.displayed) {
-                    setPageInfo({
-                        page: location.start.displayed.page,
-                        total: location.start.displayed.total,
-                    });
+                if (location && location.start) {
+                    if (locationsReadyRef.current && location.start.cfi) {
+                        try {
+                            const idx = renditionRef.current.book.locations.locationFromCfi(location.start.cfi);
+                            const total = renditionRef.current.book.locations.total;
+                            if (idx >= 0 && total > 0) {
+                                setPageInfo({ page: idx + 1, total });
+                                return;
+                            }
+                        } catch (_) { /* fallback */ }
+                    }
+                    if (location.start.displayed) {
+                        setPageInfo({
+                            page: location.start.displayed.page,
+                            total: location.start.displayed.total,
+                        });
+                    }
                 }
             });
         }

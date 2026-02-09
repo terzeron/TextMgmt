@@ -70,8 +70,16 @@ afterEach(() => {
 import ViewEPUB from '../src/ViewEPUB';
 
 // rendition mock을 만들어주는 헬퍼
-function createMockRendition({ destroyThrows = false } = {}) {
+function createMockRendition({ destroyThrows = false, locationsTotal = 300 } = {}) {
     const handlers = {};
+    const locations = {
+        generate: vi.fn(() => {
+            locations.total = locationsTotal;
+            return Promise.resolve(Array(locationsTotal));
+        }),
+        locationFromCfi: vi.fn(() => 44),
+        total: 0,
+    };
     return {
         destroy: destroyThrows
             ? vi.fn(() => { throw new Error('already destroyed'); })
@@ -90,6 +98,8 @@ function createMockRendition({ destroyThrows = false } = {}) {
             loaded: {
                 metadata: Promise.resolve({ title: '테스트 책 제목' }),
             },
+            ready: Promise.resolve(),
+            locations,
         },
         _handlers: handlers,
         _emitRelocated: (location) => {
@@ -1115,6 +1125,163 @@ describe('ViewEPUB', () => {
         });
 
         expect(mockRendition.on).not.toHaveBeenCalled();
+    });
+
+    // ══════════════════════════════════════════════
+    // ── 전역 페이지 번호 (book.locations) 테스트 ──
+    // ══════════════════════════════════════════════
+
+    it('전체 챕터 로드 완료 시 book.locations.generate가 호출된다', async () => {
+        // totalChapters=3 ≤ 5 → allChaptersLoadedRef = true
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve(createFetchResponse(mockArrayBuffer, 3))
+        );
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        expect(mockRendition.book.locations.generate).toHaveBeenCalledWith(1024);
+    });
+
+    it('부분 로드 시에는 book.locations.generate가 호출되지 않는다', async () => {
+        // totalChapters=20, initialChapters=5 → allChaptersLoaded = false
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        expect(mockRendition.book.locations.generate).not.toHaveBeenCalled();
+    });
+
+    it('locations 준비 후 relocated에서 전역 페이지 번호를 표시한다', async () => {
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve(createFetchResponse(mockArrayBuffer, 3))
+        );
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition({ locationsTotal: 300 });
+        mockRendition.book.locations.locationFromCfi.mockReturnValue(44);
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // locations.generate 완료 대기
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        // relocated 이벤트 (cfi 포함)
+        await act(async () => {
+            mockRendition._emitRelocated({
+                start: {
+                    cfi: 'epubcfi(/6/4)',
+                    displayed: { page: 3, total: 12 },
+                },
+            });
+        });
+
+        // 전역 페이지: 44 + 1 = 45 / 300
+        expect(screen.getByTestId('epub-page-info').textContent).toBe('45 / 300');
+    });
+
+    it('locations.generate 완료 시 현재 위치의 전역 페이지로 즉시 업데이트된다', async () => {
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve(createFetchResponse(mockArrayBuffer, 3))
+        );
+
+        render(<ViewEPUB bookId={42} />);
+
+        // autoLoad가 locationRef.current = 'epubcfi(/1)' 설정
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        const mockRendition = createMockRendition({ locationsTotal: 300 });
+        mockRendition.book.locations.locationFromCfi.mockReturnValue(0);
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // generate 완료 → locationRef.current로 즉시 pageInfo 업데이트
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        expect(screen.getByTestId('epub-page-info').textContent).toBe('1 / 300');
+    });
+
+    it('locations.generate 실패 시 챕터 내 페이지로 폴백한다', async () => {
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve(createFetchResponse(mockArrayBuffer, 3))
+        );
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        mockRendition.book.locations.generate.mockRejectedValue(new Error('generate failed'));
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // generate 실패 대기
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        // relocated 이벤트 → 챕터 내 페이지로 폴백
+        await act(async () => {
+            mockRendition._emitRelocated({
+                start: {
+                    cfi: 'epubcfi(/6/4)',
+                    displayed: { page: 3, total: 12 },
+                },
+            });
+        });
+
+        expect(screen.getByTestId('epub-page-info').textContent).toBe('3 / 12');
+    });
+
+    it('미리보기에서는 locations.generate가 호출되지 않는다', async () => {
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve(createFetchResponse(mockArrayBuffer, 2))
+        );
+
+        render(<ViewEPUB bookId={42} preview={true} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        expect(mockRendition.book.locations.generate).not.toHaveBeenCalled();
     });
 
     // ══════════════════════════════════════════════
