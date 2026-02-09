@@ -1,0 +1,474 @@
+#!/usr/bin/env python
+"""EPUB 미리보기(preview) 및 다운로드(download) 엔드포인트 통합 테스트.
+
+테스트용 미니 EPUB을 직접 생성하여 실제 EPUB 파일이 없는 환경에서도 동작한다.
+test_backend.py의 backend_test_setup / test_book fixture 패턴을 기반으로 한다.
+"""
+
+import io
+import logging.config
+import zipfile
+import xml.etree.ElementTree as ET
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+
+logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
+LOGGER = logging.getLogger(__name__)
+logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
+
+CATEGORY = "_epub"
+
+
+# ── EPUB 생성 헬퍼 ────────────────────────────────────────
+
+CONTAINER_XML = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"""
+
+
+def _make_opf(chapter_count: int, include_css: bool = False) -> str:
+    """챕터 N개를 포함한 OPF XML을 생성."""
+    items = []
+    spine_refs = []
+    for i in range(1, chapter_count + 1):
+        items.append(f'    <item id="ch{i}" href="ch{i}.xhtml" media-type="application/xhtml+xml"/>')
+        spine_refs.append(f'    <itemref idref="ch{i}"/>')
+
+    if include_css:
+        items.append('    <item id="style" href="style.css" media-type="text/css"/>')
+
+    return f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Test Book</dc:title>
+    <dc:creator>Test Author</dc:creator>
+  </metadata>
+  <manifest>
+    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+{chr(10).join(items)}
+  </manifest>
+  <spine toc="toc">
+{chr(10).join(spine_refs)}
+  </spine>
+</package>"""
+
+
+def _make_chapter_xhtml(index: int, link_css: bool = False) -> str:
+    css_link = '<link rel="stylesheet" href="style.css"/>' if link_css else ''
+    return f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Chapter {index}</title>{css_link}</head>
+<body><h1>Chapter {index}</h1><p>Content of chapter {index}.</p></body>
+</html>"""
+
+
+def _create_test_epub(path: Path, chapter_count: int = 3, include_css: bool = False) -> None:
+    """테스트용 미니 EPUB을 생성."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        zf.writestr('META-INF/container.xml', CONTAINER_XML)
+        zf.writestr('OEBPS/content.opf', _make_opf(chapter_count, include_css))
+        zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+        for i in range(1, chapter_count + 1):
+            zf.writestr(f'OEBPS/ch{i}.xhtml', _make_chapter_xhtml(i, link_css=include_css))
+        if include_css:
+            zf.writestr('OEBPS/style.css', 'body { margin: 1em; font-family: serif; }')
+
+
+def _create_corrupted_epub(path: Path, chapter_count: int = 3, missing_all: bool = False) -> None:
+    """spine에 챕터가 등록되어 있지만 실제 ZIP에는 파일이 없는 손상 EPUB.
+
+    missing_all=True이면 모든 챕터 파일을 제거한다.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        zf.writestr('META-INF/container.xml', CONTAINER_XML)
+        zf.writestr('OEBPS/content.opf', _make_opf(chapter_count))
+        zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+        if not missing_all:
+            # ch1만 누락, 나머지는 포함
+            for i in range(2, chapter_count + 1):
+                zf.writestr(f'OEBPS/ch{i}.xhtml', _make_chapter_xhtml(i))
+
+
+# ── fixtures ──────────────────────────────────────────────
+
+@pytest.fixture(scope="module")
+def backend_test_setup(es_client, es_index):
+    """BookManager + TestClient (ES 공유)."""
+    from fastapi.testclient import TestClient
+    from backend.main import app
+    from backend.book_manager import BookManager
+
+    bm = BookManager()
+    bm.es_manager.es = es_client
+    bm.es_manager.refresh()
+
+    client = TestClient(app)
+    yield {"bm": bm, "client": client}
+
+
+def _build_epub_data(bm, epub_path: Path) -> dict:
+    """EPUB 파일의 ES 등록용 데이터를 생성."""
+    inode = epub_path.stat().st_ino
+    rel_path = epub_path.relative_to(bm.path_prefix)
+    now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
+
+    return {
+        inode: {
+            "category": CATEGORY,
+            "title": epub_path.stem,
+            "author": "Test Author",
+            "file_path": str(rel_path),
+            "file_type": "epub",
+            "file_size": epub_path.stat().st_size,
+            "line_count": 0,
+            "page_count": 0,
+            "isbn": "",
+            "summary": "test epub",
+            "updated_time": now,
+        }
+    }
+
+
+def _register_epub_sync(bm, epub_path: Path) -> int:
+    """EPUB 파일을 ES에 등록하고 book_id를 반환 (동기)."""
+    import asyncio
+
+    data = _build_epub_data(bm, epub_path)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        book_id, error = loop.run_until_complete(bm.add_book(data))
+        assert book_id and not error, f"Failed to register epub: {error}"
+        return book_id
+    finally:
+        loop.close()
+
+
+async def _register_epub_async(bm, epub_path: Path) -> int:
+    """EPUB 파일을 ES에 등록하고 book_id를 반환 (비동기)."""
+    data = _build_epub_data(bm, epub_path)
+    book_id, error = await bm.add_book(data)
+    assert book_id and not error, f"Failed to register epub: {error}"
+    return book_id
+
+
+def _cleanup_book(client, bm, book_id, epub_path):
+    """테스트 후 정리."""
+    try:
+        client.delete(f"/books/{book_id}")
+    except Exception:
+        pass
+    cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}.epub"
+    cache_file.unlink(missing_ok=True)
+    epub_path.unlink(missing_ok=True)
+
+
+@pytest.fixture
+def test_book(backend_test_setup):
+    """정상 EPUB을 생성·등록하고 테스트 후 정리."""
+    bm = backend_test_setup["bm"]
+    client = backend_test_setup["client"]
+
+    epub_dir = bm.path_prefix / CATEGORY
+    epub_path = epub_dir / "[Test Author] Test Preview Book.epub"
+    _create_test_epub(epub_path, chapter_count=3)
+
+    book_id = _register_epub_sync(bm, epub_path)
+    cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}.epub"
+
+    yield {"book_id": book_id, "bm": bm, "client": client, "epub_path": epub_path}
+
+    # cleanup
+    try:
+        client.delete(f"/books/{book_id}")
+    except Exception:
+        pass
+    cache_file.unlink(missing_ok=True)
+    epub_path.unlink(missing_ok=True)
+
+
+# ── 응답 파싱 헬퍼 ────────────────────────────────────────
+
+def _parse_epub_zip(content: bytes) -> zipfile.ZipFile:
+    return zipfile.ZipFile(io.BytesIO(content), 'r')
+
+
+def _get_spine_idrefs(zf: zipfile.ZipFile) -> list:
+    cnt_ns = 'urn:oasis:names:tc:opendocument:xmlns:container'
+    container = ET.fromstring(zf.read('META-INF/container.xml'))
+    rootfile = container.find(f'.//{{{cnt_ns}}}rootfile')
+    opf_path = rootfile.get('full-path', '')
+
+    opf_ns = 'http://www.idpf.org/2007/opf'
+    opf = ET.fromstring(zf.read(opf_path))
+    spine_el = opf.find(f'.//{{{opf_ns}}}spine')
+    return [ref.get('idref') for ref in spine_el.findall(f'{{{opf_ns}}}itemref')]
+
+
+def _get_manifest_items(zf: zipfile.ZipFile) -> dict:
+    """EPUB ZIP에서 manifest의 {id: {href, media-type}} 딕셔너리를 추출."""
+    cnt_ns = 'urn:oasis:names:tc:opendocument:xmlns:container'
+    container = ET.fromstring(zf.read('META-INF/container.xml'))
+    rootfile = container.find(f'.//{{{cnt_ns}}}rootfile')
+    opf_path = rootfile.get('full-path', '')
+
+    opf_ns = 'http://www.idpf.org/2007/opf'
+    opf = ET.fromstring(zf.read(opf_path))
+    result = {}
+    for item in opf.findall(f'.//{{{opf_ns}}}item'):
+        result[item.get('id', '')] = {
+            'href': item.get('href', ''),
+            'media-type': item.get('media-type', ''),
+        }
+    return result
+
+
+# ── tests: preview 엔드포인트 ─────────────────────────────
+
+class TestBookPreview:
+
+    @pytest.mark.asyncio
+    async def test_preview_returns_valid_epub(self, test_book):
+        """정상 EPUB → 200 + 유효한 ZIP (mimetype, container.xml 포함)."""
+        client = test_book["client"]
+        book_id = test_book["book_id"]
+
+        response = client.get(f"/preview/{book_id}?chapters=3")
+        assert response.status_code == 200
+        assert "epub" in response.headers.get("content-type", "")
+
+        zf = _parse_epub_zip(response.content)
+        assert 'mimetype' in zf.namelist()
+        assert zf.read('mimetype') == b'application/epub+zip'
+        assert 'META-INF/container.xml' in zf.namelist()
+        zf.close()
+
+    @pytest.mark.asyncio
+    async def test_preview_response_headers(self, test_book):
+        """preview 응답에 Content-Encoding: identity와 Cache-Control: no-transform이 포함된다."""
+        client = test_book["client"]
+        book_id = test_book["book_id"]
+
+        response = client.get(f"/preview/{book_id}?chapters=3")
+        assert response.status_code == 200
+        assert response.headers.get("content-encoding") == "identity"
+        assert response.headers.get("cache-control") == "no-transform"
+
+    @pytest.mark.asyncio
+    async def test_preview_limits_chapters(self, test_book):
+        """chapters=1 → spine의 itemref가 1개 이하."""
+        client = test_book["client"]
+        book_id = test_book["book_id"]
+        bm = test_book["bm"]
+
+        # 캐시 무효화
+        cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}.epub"
+        cache_file.unlink(missing_ok=True)
+
+        response = client.get(f"/preview/{book_id}?chapters=1")
+        assert response.status_code == 200
+
+        zf = _parse_epub_zip(response.content)
+        idrefs = _get_spine_idrefs(zf)
+        assert len(idrefs) <= 1
+        zf.close()
+
+    @pytest.mark.asyncio
+    async def test_preview_strips_unreferenced_manifest_items(self, test_book):
+        """preview에서 사용되지 않는 manifest item이 제거된다."""
+        client = test_book["client"]
+        book_id = test_book["book_id"]
+        bm = test_book["bm"]
+
+        cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}.epub"
+        cache_file.unlink(missing_ok=True)
+
+        response = client.get(f"/preview/{book_id}?chapters=1")
+        assert response.status_code == 200
+
+        zf = _parse_epub_zip(response.content)
+        manifest = _get_manifest_items(zf)
+        spine = _get_spine_idrefs(zf)
+
+        # spine에 없고 toc도 아닌 manifest item이 없어야 함 (CSS 제외)
+        for item_id, info in manifest.items():
+            if item_id not in spine and item_id != 'toc' and 'css' not in info['media-type']:
+                pytest.fail(f"Unreferenced manifest item found: {item_id} ({info['href']})")
+        zf.close()
+
+    @pytest.mark.asyncio
+    async def test_preview_caches_result(self, test_book):
+        """두 번째 요청 시 동일 응답 (캐시 히트)."""
+        client = test_book["client"]
+        book_id = test_book["book_id"]
+        bm = test_book["bm"]
+
+        cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}.epub"
+        cache_file.unlink(missing_ok=True)
+
+        resp1 = client.get(f"/preview/{book_id}?chapters=3")
+        assert resp1.status_code == 200
+        assert cache_file.exists()
+
+        resp2 = client.get(f"/preview/{book_id}?chapters=3")
+        assert resp2.status_code == 200
+        assert resp1.content == resp2.content
+
+    @pytest.mark.asyncio
+    async def test_preview_nonexistent_book_returns_404(self, backend_test_setup):
+        """없는 book_id → 404."""
+        client = backend_test_setup["client"]
+        response = client.get("/preview/999999999?chapters=3")
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_preview_missing_chapter_graceful(self, backend_test_setup):
+        """버그 #2 회귀 테스트 — 챕터 파일 1개 누락된 EPUB → 500이 아닌 200.
+
+        spine에 등록된 ch1이 실제 ZIP에 없을 때,
+        KeyError로 인한 500 대신 graceful하게 처리되어야 한다.
+        """
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        corrupted_path = epub_dir / "[Test Author] Corrupted Preview Book.epub"
+        _create_corrupted_epub(corrupted_path, chapter_count=3)
+
+        book_id = await _register_epub_async(bm, corrupted_path)
+
+        try:
+            cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}.epub"
+            cache_file.unlink(missing_ok=True)
+
+            response = client.get(f"/preview/{book_id}?chapters=3")
+            assert response.status_code == 200, \
+                f"Missing chapter should not cause 500, got {response.status_code}"
+        finally:
+            _cleanup_book(client, bm, book_id, corrupted_path)
+
+    @pytest.mark.asyncio
+    async def test_preview_all_chapters_missing_graceful(self, backend_test_setup):
+        """모든 챕터 파일이 누락된 EPUB → 500이 아닌 200."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        corrupted_path = epub_dir / "[Test Author] All Missing Preview Book.epub"
+        _create_corrupted_epub(corrupted_path, chapter_count=3, missing_all=True)
+
+        book_id = await _register_epub_async(bm, corrupted_path)
+
+        try:
+            cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}.epub"
+            cache_file.unlink(missing_ok=True)
+
+            response = client.get(f"/preview/{book_id}?chapters=3")
+            assert response.status_code == 200, \
+                f"All chapters missing should not cause 500, got {response.status_code}"
+        finally:
+            _cleanup_book(client, bm, book_id, corrupted_path)
+
+    @pytest.mark.asyncio
+    async def test_preview_includes_css_resources(self, backend_test_setup):
+        """CSS를 참조하는 EPUB → preview에 CSS 파일이 포함된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        css_path = epub_dir / "[Test Author] CSS Preview Book.epub"
+        _create_test_epub(css_path, chapter_count=2, include_css=True)
+
+        book_id = await _register_epub_async(bm, css_path)
+
+        try:
+            cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}.epub"
+            cache_file.unlink(missing_ok=True)
+
+            response = client.get(f"/preview/{book_id}?chapters=1")
+            assert response.status_code == 200
+
+            zf = _parse_epub_zip(response.content)
+            assert 'OEBPS/style.css' in zf.namelist(), \
+                "CSS file should be included in preview"
+            zf.close()
+        finally:
+            _cleanup_book(client, bm, book_id, css_path)
+
+
+# ── tests: download 엔드포인트 ────────────────────────────
+
+class TestBookDownload:
+
+    @pytest.mark.asyncio
+    async def test_download_by_book_id_only(self, test_book):
+        """book_id만으로 download 요청 → 200 + EPUB 바이너리."""
+        client = test_book["client"]
+        book_id = test_book["book_id"]
+
+        response = client.get(f"/download/{book_id}")
+        assert response.status_code == 200
+        assert len(response.content) > 0
+        content_type = response.headers.get("content-type", "")
+        assert "epub" in content_type or "octet-stream" in content_type
+
+    @pytest.mark.asyncio
+    async def test_download_response_headers(self, test_book):
+        """download 응답에 Content-Encoding: identity와 Cache-Control: no-transform이 포함된다."""
+        client = test_book["client"]
+        book_id = test_book["book_id"]
+
+        response = client.get(f"/download/{book_id}")
+        assert response.status_code == 200
+        assert response.headers.get("content-encoding") == "identity"
+        assert response.headers.get("cache-control") == "no-transform"
+
+    @pytest.mark.asyncio
+    async def test_download_with_path_returns_404(self, test_book):
+        """라우트 제거 후 /download/{id}/{path} → 404 (회귀 테스트)."""
+        client = test_book["client"]
+        book_id = test_book["book_id"]
+
+        response = client.get(f"/download/{book_id}/some/path.epub")
+        # {path:path} 라우트 제거 후, 이 URL은 매칭되는 라우트가 없으므로 404
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_download_nonexistent_book(self, backend_test_setup):
+        """없는 book_id → 200 + 빈 문자열 응답."""
+        client = backend_test_setup["client"]
+        response = client.get("/download/999999999")
+        # get_book_content는 doc 못 찾으면 빈 문자열 반환 (FastAPI가 JSON "\"\"" 또는 "" 직렬화)
+        assert response.status_code == 200
+        assert response.text.strip('"') == ""
+
+    @pytest.mark.asyncio
+    async def test_download_returns_valid_epub_content(self, test_book):
+        """download한 EPUB이 유효한 ZIP 파일이다."""
+        client = test_book["client"]
+        book_id = test_book["book_id"]
+
+        response = client.get(f"/download/{book_id}")
+        assert response.status_code == 200
+
+        # 유효한 ZIP/EPUB인지 확인
+        zf = _parse_epub_zip(response.content)
+        assert 'mimetype' in zf.namelist()
+        assert 'META-INF/container.xml' in zf.namelist()
+        zf.close()
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
