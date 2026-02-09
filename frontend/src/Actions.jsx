@@ -12,21 +12,28 @@ import {getRandomMediumColor, ROOT_DIRECTORY} from './Common';
 import {loadCategoryMappings, fetchCategoryMappings, isCacheInitialized} from './CategoryMapping';
 
 
-// 최장 공통 부분문자열 길이 계산
-const longestCommonSubstring = (str1, str2) => {
-    const m = str1.length, n = str2.length;
-    const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
-    let maxLen = 0;
-
-    for (let i = 1; i <= m; i++) {
-        for (let j = 1; j <= n; j++) {
-            if (str1[i - 1] === str2[j - 1]) {
-                dp[i][j] = dp[i - 1][j - 1] + 1;
-                maxLen = Math.max(maxLen, dp[i][j]);
-            }
-        }
+// 문자열에서 n-gram 집합 생성
+const generateNgrams = (str, n = 2) => {
+    const ngrams = new Set();
+    for (let i = 0; i <= str.length - n; i++) {
+        ngrams.add(str.substring(i, i + n));
     }
-    return maxLen;
+    return ngrams;
+};
+
+// N-gram 기반 Jaccard 유사도 (0~1)
+const ngramSimilarity = (str1, str2, n = 2) => {
+    if (str1.length < n || str2.length < n) {
+        return str1 === str2 ? 1.0 : 0;
+    }
+    const ngrams1 = generateNgrams(str1, n);
+    const ngrams2 = generateNgrams(str2, n);
+    let intersectionSize = 0;
+    for (const ng of ngrams1) {
+        if (ngrams2.has(ng)) intersectionSize++;
+    }
+    const unionSize = ngrams1.size + ngrams2.size - intersectionSize;
+    return unionSize === 0 ? 0 : intersectionSize / unionSize;
 };
 
 // 한글 문자 포함 여부 확인
@@ -51,14 +58,11 @@ const calculateSimilarity = (str1, str2) => {
         return 0.7 + (ratio * 0.2);
     }
 
-    // 3) 공통 부분문자열 기반 → 0.3~0.6
-    const lcsLen = longestCommonSubstring(s1, s2);
-    // 한글은 1글자도 의미있으므로 허용, 그 외는 2글자 이상
-    const minLcsLen = containsKorean(s1) || containsKorean(s2) ? 1 : 2;
-    if (lcsLen >= minLcsLen) {
-        const minLen = Math.min(s1.length, s2.length);
-        const ratio = lcsLen / minLen;
-        return 0.3 + (ratio * 0.3);  // 비율에 따라 0.3~0.6
+    // 3) N-gram 유사도 기반 → 0.3~0.6
+    const ngramScore = ngramSimilarity(s1, s2, 2);
+    const minNgramScore = containsKorean(s1) || containsKorean(s2) ? 0.15 : 0.2;
+    if (ngramScore >= minNgramScore) {
+        return 0.3 + (ngramScore * 0.3);
     }
 
     return 0;
@@ -181,12 +185,16 @@ export const getSimilarityDebugInfo = (suggestedCategories, categoryList, topN =
                     const similarity = calculateSimilarity(deepKeyword, dirKeyword);
                     if (similarity > maxSimilarity) {
                         maxSimilarity = similarity;
+                        const dkLower = deepKeyword.toLowerCase();
+                        const drLower = dirKeyword.toLowerCase();
+                        const isExact = dkLower === drLower;
+                        const isContained = drLower.includes(dkLower) || dkLower.includes(drLower);
                         bestMatch = {
                             bookstoreKeyword: deepKeyword,
                             dirKeyword,
                             similarity,
-                            isContained: dirKeyword.toLowerCase().includes(deepKeyword.toLowerCase()) ||
-                                         deepKeyword.toLowerCase().includes(dirKeyword.toLowerCase())
+                            isContained,
+                            matchType: isExact ? 'exact' : isContained ? 'contains' : 'ngram'
                         };
                     }
                 }

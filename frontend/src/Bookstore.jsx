@@ -7,12 +7,15 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 import { Button, Tabs, Tab, Spinner, Card, ButtonGroup } from 'react-bootstrap';
 import {rawJsonGetReq} from './Common';
 
-// 카테고리에서 가장 마지막 레벨만 추출
-// 예: "소설/시/희곡 > 중국소설" → "중국소설"
-const getDeepestCategory = (category) => {
+// 카테고리에서 최하위 + 바로 상위 두 단계를 추출 (공백으로 연결)
+// 예: "소설/시/희곡 > SF > 한국SF" → "SF 한국SF"
+// 예: "소설/시/희곡 > 중국소설" → "소설/시/희곡 중국소설"
+// 예: "한국SF" → "한국SF"
+const getTwoLevelCategory = (category) => {
   if (!category) return '';
-  const parts = category.split('>').map(s => s.trim());
-  return parts[parts.length - 1] || '';
+  const parts = category.split('>').map(s => s.trim()).filter(Boolean);
+  if (parts.length <= 1) return parts[0] || '';
+  return `${parts[parts.length - 2]} ${parts[parts.length - 1]}`;
 };
 
 // 서점 탭 정의 (supportsIsbn: ISBN 검색 지원 여부)
@@ -90,7 +93,7 @@ export default function Bookstore(props) {
         const categories = {};
         if (yes24Result?.status === 'success' && yes24Result?.result?.length > 0) {
           yes24Result.result.forEach((item, idx) => {
-            const deepest = getDeepestCategory(item.category);
+            const deepest = getTwoLevelCategory(item.category);
             if (deepest) {
               categories[`yes24_${idx}`] = deepest;
             }
@@ -98,7 +101,7 @@ export default function Bookstore(props) {
         }
         if (aladinResult?.status === 'success' && aladinResult?.result?.length > 0) {
           aladinResult.result.forEach((item, idx) => {
-            const deepest = getDeepestCategory(item.category);
+            const deepest = getTwoLevelCategory(item.category);
             if (deepest) {
               categories[`aladin_${idx}`] = deepest;
             }
@@ -227,7 +230,7 @@ export default function Bookstore(props) {
             const yes24Data = store === 'yes24' ? json : newData['yes24'];
             if (yes24Data?.status === 'success' && yes24Data?.result?.length > 0) {
               yes24Data.result.forEach((item, idx) => {
-                const deepest = getDeepestCategory(item.category);
+                const deepest = getTwoLevelCategory(item.category);
                 if (deepest) {
                   categories[`yes24_${idx}`] = deepest;
                 }
@@ -237,7 +240,7 @@ export default function Bookstore(props) {
             const aladinData = store === 'aladin' ? json : newData['aladin'];
             if (aladinData?.status === 'success' && aladinData?.result?.length > 0) {
               aladinData.result.forEach((item, idx) => {
-                const deepest = getDeepestCategory(item.category);
+                const deepest = getTwoLevelCategory(item.category);
                 if (deepest) {
                   categories[`aladin_${idx}`] = deepest;
                 }
