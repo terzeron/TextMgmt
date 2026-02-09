@@ -136,10 +136,11 @@ class BookManager:
         # book.file_path는 이미 path_prefix가 포함된 전체 경로
         if book.file_path.is_file():
             media_type = BookManager.MEDIA_TYPES.get(book.file_path.suffix, "application/octet-stream")
-            # Content-Encoding: identity → GZipMiddleware가 바이너리 파일을 압축하지 않도록 하여
-            # pdf.js 등의 Range 요청이 정상 동작하게 함
+            # Content-Encoding: identity → GZipMiddleware 우회
+            # Cache-Control: no-transform → 외부 프록시(Traefik 등)의 응답 변환(gzip 등) 방지
             return FileResponse(path=book.file_path, media_type=media_type,
-                                headers={"Content-Encoding": "identity"})
+                                headers={"Content-Encoding": "identity",
+                                         "Cache-Control": "no-transform"})
         return ""
 
     async def get_book_preview(self, book_id: int, pages: int = 5, chapters: int = 3) -> Union[str, Response, FileResponse]:
@@ -163,7 +164,8 @@ class BookManager:
             if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
                 LOGGER.debug("Preview cache hit for book_id=%d (PDF)", book_id)
                 return FileResponse(path=cache_file, media_type="application/pdf",
-                                    headers={"Content-Encoding": "identity"})
+                                    headers={"Content-Encoding": "identity",
+                                             "Cache-Control": "no-transform"})
 
             try:
                 from pypdf import PdfReader, PdfWriter
@@ -178,7 +180,8 @@ class BookManager:
                 cache_file.write_bytes(preview_bytes)
                 LOGGER.debug("Preview generated for book_id=%d (PDF, %d pages)", book_id, pages_to_extract)
                 return Response(content=preview_bytes, media_type="application/pdf",
-                                headers={"Content-Encoding": "identity"})
+                                headers={"Content-Encoding": "identity",
+                                         "Cache-Control": "no-transform"})
             except Exception as e:
                 LOGGER.error("PDF preview generation failed for book_id=%d: %s", book_id, e)
                 return ""

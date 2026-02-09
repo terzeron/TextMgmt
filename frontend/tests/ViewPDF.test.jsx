@@ -58,10 +58,47 @@ function createMockPdf(numPages = 2) {
     };
 }
 
+// fetch mock 헬퍼: ReadableStream을 반환하는 Response를 생성
+function createMockFetchResponse(ok = true, status = 200) {
+    const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // %PDF
+    const stream = new ReadableStream({
+        start(controller) {
+            controller.enqueue(pdfBytes);
+            controller.close();
+        }
+    });
+    return {
+        ok,
+        status,
+        statusText: ok ? 'OK' : 'Internal Server Error',
+        headers: new Headers({'Content-Length': String(pdfBytes.length)}),
+        body: { getReader: () => stream.getReader() },
+    };
+}
+
+// fetch가 resolve되지 않는 pending 상태 Response
+function createPendingFetchResponse() {
+    const stream = new ReadableStream({
+        start() { /* never closes */ }
+    });
+    return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({'Content-Length': '0'}),
+        body: { getReader: () => stream.getReader() },
+    };
+}
+
 describe('ViewPDF', () => {
     beforeEach(() => {
         mockGetDocument.mockReset();
         HTMLCanvasElement.prototype.getContext = vi.fn(() => ({}));
+        vi.stubGlobal('fetch', vi.fn());
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
     });
 
     // ── 초기 상태 / 유효성 검사 ──
@@ -72,11 +109,7 @@ describe('ViewPDF', () => {
     });
 
     it('로딩 중 스피너와 "PDF 로딩 중..." 메시지를 표시한다', () => {
-        const deferred = createDeferred();
-        mockGetDocument.mockReturnValue({
-            promise: deferred.promise,
-            destroy: vi.fn(),
-        });
+        fetch.mockReturnValue(new Promise(() => {})); // pending
 
         render(<ViewPDF bookId={1} />);
 
@@ -84,61 +117,39 @@ describe('ViewPDF', () => {
         expect(document.querySelector('.spinner')).toBeTruthy();
     });
 
-    // ── URL 및 getDocument 호출 ──
+    // ── URL 및 fetch 호출 ──
 
-    it('올바른 URL로 getDocument를 호출한다', () => {
-        const deferred = createDeferred();
-        mockGetDocument.mockReturnValue({
-            promise: deferred.promise,
-            destroy: vi.fn(),
-        });
+    it('올바른 URL로 fetch를 호출한다', () => {
+        fetch.mockReturnValue(new Promise(() => {}));
 
         render(<ViewPDF bookId={42} />);
 
-        expect(mockGetDocument).toHaveBeenCalledWith(expect.objectContaining({
-            url: 'http://localhost:8000/download/42',
-        }));
+        expect(fetch).toHaveBeenCalledWith('http://localhost:8000/download/42');
     });
 
-    it('bookId 변경 시 새 URL로 getDocument를 호출한다', async () => {
-        const deferred1 = createDeferred();
-        const deferred2 = createDeferred();
-
-        mockGetDocument
-            .mockReturnValueOnce({ promise: deferred1.promise, destroy: vi.fn() })
-            .mockReturnValueOnce({ promise: deferred2.promise, destroy: vi.fn() });
+    it('bookId 변경 시 새 URL로 fetch를 호출한다', async () => {
+        fetch.mockReturnValue(new Promise(() => {}));
 
         const { rerender } = render(<ViewPDF bookId={1} />);
-        expect(mockGetDocument).toHaveBeenCalledWith(expect.objectContaining({
-            url: 'http://localhost:8000/download/1',
-        }));
+        expect(fetch).toHaveBeenCalledWith('http://localhost:8000/download/1');
 
         rerender(<ViewPDF bookId={99} />);
-        expect(mockGetDocument).toHaveBeenCalledWith(expect.objectContaining({
-            url: 'http://localhost:8000/download/99',
-        }));
+        expect(fetch).toHaveBeenCalledWith('http://localhost:8000/download/99');
     });
 
-    it('Range 요청 옵션이 올바르게 설정된다', () => {
-        const deferred = createDeferred();
-        mockGetDocument.mockReturnValue({
-            promise: deferred.promise,
-            destroy: vi.fn(),
-        });
+    it('preview=true이면 preview URL로 fetch를 호출한다', () => {
+        fetch.mockReturnValue(new Promise(() => {}));
 
-        render(<ViewPDF bookId={1} />);
+        render(<ViewPDF bookId={42} preview={true} pageCount={3} />);
 
-        expect(mockGetDocument).toHaveBeenCalledWith(expect.objectContaining({
-            rangeChunkSize: 65536,
-            disableAutoFetch: true,
-            disableRange: false,
-        }));
+        expect(fetch).toHaveBeenCalledWith('http://localhost:8000/preview/42?pages=3');
     });
 
     // ── 정상 렌더링 ──
 
     it('PDF 로드 성공 후 모든 페이지를 렌더링한다', async () => {
         const mockPdf = createMockPdf(3);
+        fetch.mockResolvedValue(createMockFetchResponse());
         mockGetDocument.mockReturnValue({
             promise: Promise.resolve(mockPdf),
             destroy: vi.fn(),
@@ -149,28 +160,11 @@ describe('ViewPDF', () => {
         await waitFor(() => {
             expect(screen.getByText('총 3쪽 표시')).toBeTruthy();
         });
-    });
-
-    it('각 페이지에 페이지 번호를 표시한다', async () => {
-        const mockPdf = createMockPdf(3);
-        mockGetDocument.mockReturnValue({
-            promise: Promise.resolve(mockPdf),
-            destroy: vi.fn(),
-        });
-
-        render(<ViewPDF bookId={1} />);
-
-        await waitFor(() => {
-            expect(screen.getByText('총 3쪽 표시')).toBeTruthy();
-        });
-
-        expect(screen.getByText('1쪽')).toBeTruthy();
-        expect(screen.getByText('2쪽')).toBeTruthy();
-        expect(screen.getByText('3쪽')).toBeTruthy();
     });
 
     it('각 페이지마다 canvas 요소를 생성한다', async () => {
         const mockPdf = createMockPdf(2);
+        fetch.mockResolvedValue(createMockFetchResponse());
         mockGetDocument.mockReturnValue({
             promise: Promise.resolve(mockPdf),
             destroy: vi.fn(),
@@ -196,6 +190,7 @@ describe('ViewPDF', () => {
             })),
             destroy: vi.fn(),
         };
+        fetch.mockResolvedValue(createMockFetchResponse());
         mockGetDocument.mockReturnValue({
             promise: Promise.resolve(mockPdf),
             destroy: vi.fn(),
@@ -212,6 +207,7 @@ describe('ViewPDF', () => {
 
     it('pageCount로 렌더링 페이지 수를 제한한다', async () => {
         const mockPdf = createMockPdf(10);
+        fetch.mockResolvedValue(createMockFetchResponse());
         mockGetDocument.mockReturnValue({
             promise: Promise.resolve(mockPdf),
             destroy: vi.fn(),
@@ -226,6 +222,7 @@ describe('ViewPDF', () => {
 
     it('pageCount가 numPages보다 크면 numPages만큼 렌더링한다', async () => {
         const mockPdf = createMockPdf(2);
+        fetch.mockResolvedValue(createMockFetchResponse());
         mockGetDocument.mockReturnValue({
             promise: Promise.resolve(mockPdf),
             destroy: vi.fn(),
@@ -240,6 +237,7 @@ describe('ViewPDF', () => {
 
     it('pageCount=0이면 모든 페이지를 렌더링한다', async () => {
         const mockPdf = createMockPdf(5);
+        fetch.mockResolvedValue(createMockFetchResponse());
         mockGetDocument.mockReturnValue({
             promise: Promise.resolve(mockPdf),
             destroy: vi.fn(),
@@ -254,20 +252,32 @@ describe('ViewPDF', () => {
 
     // ── 에러 처리 ──
 
-    it('에러 메시지에 실제 에러 내용을 포함한다', async () => {
+    it('fetch 실패 시 에러 메시지를 표시한다', async () => {
+        fetch.mockResolvedValue(createMockFetchResponse(false, 500));
+
+        render(<ViewPDF bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/HTTP 500/)).toBeTruthy();
+        });
+    });
+
+    it('getDocument 실패 시 에러 메시지를 표시한다', async () => {
+        fetch.mockResolvedValue(createMockFetchResponse());
         mockGetDocument.mockReturnValue({
-            promise: Promise.reject(new Error('Network request failed')),
+            promise: Promise.reject(new Error('Invalid PDF structure')),
             destroy: vi.fn(),
         });
 
         render(<ViewPDF bookId={1} />);
 
         await waitFor(() => {
-            expect(screen.getByText(/Network request failed/)).toBeTruthy();
+            expect(screen.getByText(/Invalid PDF structure/)).toBeTruthy();
         });
     });
 
     it('err.message가 없으면 fallback 에러 메시지를 표시한다', async () => {
+        fetch.mockResolvedValue(createMockFetchResponse());
         mockGetDocument.mockReturnValue({
             promise: Promise.reject({ name: 'UnknownError' }),
             destroy: vi.fn(),
@@ -294,6 +304,7 @@ describe('ViewPDF', () => {
             }),
             destroy: vi.fn(),
         };
+        fetch.mockResolvedValue(createMockFetchResponse());
         mockGetDocument.mockReturnValue({
             promise: Promise.resolve(mockPdf),
             destroy: vi.fn(),
@@ -302,7 +313,8 @@ describe('ViewPDF', () => {
         render(<ViewPDF bookId={1} />);
 
         await waitFor(() => {
-            expect(document.querySelector('.pdf-pages')).toBeTruthy();
+            const canvases = document.querySelectorAll('canvas');
+            expect(canvases.length).toBe(3);
         });
 
         // 에러 메시지가 화면에 표시되지 않음
@@ -311,15 +323,20 @@ describe('ViewPDF', () => {
 
     // ── cleanup / 취소 ──
 
-    it('cleanup 시 진행 중인 loadingTask.destroy()를 호출한다', () => {
+    it('cleanup 시 진행 중인 loadingTask.destroy()를 호출한다', async () => {
         const deferred = createDeferred();
         const destroyFn = vi.fn();
+        fetch.mockResolvedValue(createMockFetchResponse());
         mockGetDocument.mockReturnValue({
             promise: deferred.promise,
             destroy: destroyFn,
         });
 
         const { unmount } = render(<ViewPDF bookId={1} />);
+        // fetch가 완료되고 getDocument가 호출될 때까지 대기
+        await waitFor(() => {
+            expect(mockGetDocument).toHaveBeenCalled();
+        });
         unmount();
 
         expect(destroyFn).toHaveBeenCalledTimes(1);
@@ -328,6 +345,7 @@ describe('ViewPDF', () => {
     it('로딩 완료 후 cleanup에서 loadingTask.destroy()를 호출하지 않는다', async () => {
         const mockPdf = createMockPdf(1);
         const loadingTaskDestroy = vi.fn();
+        fetch.mockResolvedValue(createMockFetchResponse());
         mockGetDocument.mockReturnValue({
             promise: Promise.resolve(mockPdf),
             destroy: loadingTaskDestroy,
@@ -349,6 +367,7 @@ describe('ViewPDF', () => {
         const mockPdf1 = createMockPdf(1);
         const mockPdf2 = createMockPdf(1);
 
+        fetch.mockResolvedValue(createMockFetchResponse());
         mockGetDocument
             .mockReturnValueOnce({ promise: Promise.resolve(mockPdf1), destroy: vi.fn() })
             .mockReturnValueOnce({ promise: Promise.resolve(mockPdf2), destroy: vi.fn() });
@@ -371,13 +390,25 @@ describe('ViewPDF', () => {
         const deferred2 = createDeferred();
         const mockPdf2 = createMockPdf(1);
 
+        // 각 호출마다 새 ReadableStream 생성
+        fetch.mockImplementation(() => Promise.resolve(createMockFetchResponse()));
         mockGetDocument
             .mockReturnValueOnce({ promise: deferred1.promise, destroy: vi.fn() })
             .mockReturnValueOnce({ promise: deferred2.promise, destroy: vi.fn() });
 
         const { rerender } = render(<ViewPDF bookId={1} />);
 
+        // fetch 완료 후 getDocument 호출 대기
+        await waitFor(() => {
+            expect(mockGetDocument).toHaveBeenCalledTimes(1);
+        });
+
         rerender(<ViewPDF bookId={2} />);
+
+        // 두 번째 getDocument 호출 대기
+        await waitFor(() => {
+            expect(mockGetDocument).toHaveBeenCalledTimes(2);
+        });
 
         deferred1.reject(new Error('First load failed'));
         deferred2.resolve(mockPdf2);
