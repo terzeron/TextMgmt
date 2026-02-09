@@ -554,6 +554,72 @@ class BookManager:
         except IOError as e:
             return "Error", f"파일 삭제 실패: {e}"
 
+    async def get_pdf_pages(self, book_id: int, start: int, end: int) -> Response:
+        """PDF에서 start~end 페이지만 추출하여 Response로 반환 (1-based)"""
+        LOGGER.debug("# get_pdf_pages(book_id=%d, start=%d, end=%d)", book_id, start, end)
+        doc = self.es_manager.search_by_id(book_id)
+        if not doc:
+            return Response(status_code=404, content=f"Book not found: {book_id}")
+        book = Book(book_id=book_id, info=doc)
+        if not book.file_path.is_file():
+            return Response(status_code=404, content=f"File not found: {book.file_path}")
+        if book.file_path.suffix.lower() != ".pdf":
+            return Response(status_code=400, content=f"Not a PDF file: {book.file_path}")
+
+        try:
+            from pypdf import PdfReader, PdfWriter
+            reader = PdfReader(str(book.file_path))
+            total_pages = len(reader.pages)
+
+            # 범위 검증
+            start = max(1, start)
+            end = min(end, total_pages)
+            if start > total_pages:
+                return Response(status_code=400, content=f"Start page {start} exceeds total pages {total_pages}")
+
+            # 캐시 확인
+            cache_dir = self.path_prefix / ".preview_cache"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_file = cache_dir / f"{book_id}_p{start}-{end}.pdf"
+            original_mtime = book.file_path.stat().st_mtime
+
+            if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
+                LOGGER.debug("PDF pages cache hit for book_id=%d (p%d-%d)", book_id, start, end)
+                return Response(
+                    content=cache_file.read_bytes(),
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Encoding": "identity",
+                        "Cache-Control": "no-transform",
+                        "X-Total-Pages": str(total_pages),
+                    },
+                )
+
+            # 페이지 추출
+            writer = PdfWriter()
+            for i in range(start - 1, end):
+                writer.add_page(reader.pages[i])
+            buf = io.BytesIO()
+            writer.write(buf)
+            pdf_bytes = buf.getvalue()
+
+            # 캐시 저장
+            cache_file.write_bytes(pdf_bytes)
+
+            LOGGER.debug("PDF pages extracted for book_id=%d (p%d-%d, total=%d)", book_id, start, end, total_pages)
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={
+                    "Content-Encoding": "identity",
+                    "Cache-Control": "no-transform",
+                    "X-Total-Pages": str(total_pages),
+                },
+            )
+        except Exception as e:
+            LOGGER.error("PDF pages extraction failed for book_id=%d: %s", book_id, e)
+            return Response(status_code=500, content=f"PDF pages extraction failed: {e}")
+
     async def delete_book(self, book_id: int) -> Tuple[str, Optional[str]]:
         LOGGER.debug("# delete_book(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
