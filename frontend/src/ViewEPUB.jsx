@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, Suspense } from "react";
+import { useEffect, useRef, useState, useCallback, Suspense } from "react";
 import PropTypes from "prop-types";
 import { getApiUrlPrefix } from "./Common";
 import { ReactReader } from "react-reader";
 
 export default function ViewEPUB({ bookId, filePath, preview = false }) {
     const renditionRef = useRef(null);
+    const timeoutRef = useRef(null);
     const [url, setUrl] = useState("");
     const [location, setLocation] = useState("");
     const [isLoading, setIsLoading] = useState(true);
@@ -29,6 +30,23 @@ export default function ViewEPUB({ bookId, filePath, preview = false }) {
         };
     }, [bookId, filePath, preview]);
 
+    // 로딩 타임아웃: 30초 내 로딩 미완료 시 에러 표시
+    useEffect(() => {
+        if (!url) return;
+        timeoutRef.current = setTimeout(() => {
+            setIsLoading(false);
+            setErrorMessage("미리보기 로딩 시간이 초과되었습니다.");
+        }, 30000);
+        return () => clearTimeout(timeoutRef.current);
+    }, [url]);
+
+    const handleLocationChanged = useCallback((epubcfi) => {
+        setLocation(epubcfi);
+        setIsLoading(false);
+        setErrorMessage(null);
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    }, []);
+
     const containerHeight = preview ? "60vh" : "100vh";
 
     return (
@@ -47,10 +65,7 @@ export default function ViewEPUB({ bookId, filePath, preview = false }) {
             <Suspense fallback={<div className="loading">로딩 중...</div>}>
                 <ReactReader
                     location={location}
-                    locationChanged={(epubcfi) => {
-                        setLocation(epubcfi);
-                        setIsLoading(false);
-                    }}
+                    locationChanged={handleLocationChanged}
                     url={url}
                     getRendition={(rendition) => {
                         renditionRef.current = rendition;

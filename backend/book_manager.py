@@ -200,74 +200,123 @@ class BookManager:
 
             try:
                 import re
-                import ebooklib
-                from ebooklib import epub
+                import zipfile
+                import xml.etree.ElementTree as ET
                 from bs4 import BeautifulSoup
                 from posixpath import normpath, join as pjoin, dirname
 
-                original = epub.read_epub(str(book.file_path), options={"ignore_ncx": True})
+                ET.register_namespace('', 'http://www.idpf.org/2007/opf')
+                ET.register_namespace('dc', 'http://purl.org/dc/elements/1.1/')
 
-                new_book = epub.EpubBook()
+                with zipfile.ZipFile(str(book.file_path), 'r') as zin:
+                    # container.xml에서 OPF 경로 찾기
+                    cnt_ns = 'urn:oasis:names:tc:opendocument:xmlns:container'
+                    container = ET.fromstring(zin.read('META-INF/container.xml'))
+                    rootfile = container.find(f'.//{{{cnt_ns}}}rootfile')
+                    if rootfile is None:
+                        raise ValueError("container.xml: rootfile not found")
+                    opf_path = rootfile.get('full-path', '')
+                    opf_dir = dirname(opf_path)
 
-                # 필수 메타데이터 복사
-                titles = original.get_metadata('DC', 'title')
-                new_book.set_title(titles[0][0] if titles else 'Preview')
-                identifiers = original.get_metadata('DC', 'identifier')
-                new_book.set_identifier(identifiers[0][0] if identifiers else f'preview-{book_id}')
-                languages = original.get_metadata('DC', 'language')
-                new_book.set_language(languages[0][0] if languages else 'ko')
+                    # OPF 파싱
+                    opf_ns = 'http://www.idpf.org/2007/opf'
+                    opf = ET.fromstring(zin.read(opf_path))
 
-                # spine 순서대로 앞 N개 챕터 추출
-                spine_ids = [idref for idref, _linear in original.spine]
-                all_items = {item.get_id(): item for item in original.get_items()}
-                spine_items = [all_items[idref] for idref in spine_ids if idref in all_items]
-                chapters_to_extract = spine_items[:chapters]
+                    # manifest: id → href, media-type
+                    manifest: Dict[str, Dict[str, str]] = {}
+                    href_to_id: Dict[str, str] = {}
+                    for item in opf.findall(f'.//{{{opf_ns}}}item'):
+                        item_id = item.get('id', '')
+                        href = item.get('href', '')
+                        manifest[item_id] = {'href': href, 'media-type': item.get('media-type', '')}
+                        zip_path = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+                        href_to_id[zip_path] = item_id
 
-                # 챕터 HTML에서 참조하는 리소스 경로 수집
-                referenced_resources = set()
-                for item in chapters_to_extract:
-                    content = item.get_content().decode("utf-8", errors="replace")
-                    item_dir = dirname(item.get_name())
-                    # <img src="..."> 태그
-                    soup = BeautifulSoup(content, "html.parser")
-                    for img in soup.find_all("img"):
-                        src = img.get("src", "")
-                        if src:
-                            referenced_resources.add(normpath(pjoin(item_dir, src)))
+                    # spine 순서
+                    spine_el = opf.find(f'.//{{{opf_ns}}}spine')
+                    if spine_el is None:
+                        raise ValueError("OPF: spine element not found")
+                    spine_refs = list(spine_el.findall(f'{{{opf_ns}}}itemref'))
+                    chapter_idrefs = [ref.get('idref') for ref in spine_refs[:chapters]]
 
-                # CSS에서 url() 참조 리소스 수집 (background-image 등)
-                css_url_pattern = re.compile(r'url\(["\']?([^"\')\s]+)["\']?\)')
-                for item in original.get_items_of_type(ebooklib.ITEM_STYLE):
-                    css_content = item.get_content().decode("utf-8", errors="replace")
-                    css_dir = dirname(item.get_name())
-                    for match in css_url_pattern.findall(css_content):
-                        if not match.startswith("data:"):
-                            referenced_resources.add(normpath(pjoin(css_dir, match)))
+                    # 포함할 zip 내 파일 경로
+                    files_to_include = {'META-INF/container.xml', opf_path}
+                    manifest_ids_to_keep = set(chapter_idrefs)
 
-                # CSS 복사
-                for item in original.get_items_of_type(ebooklib.ITEM_STYLE):
-                    new_book.add_item(item)
+                    # 챕터 파일의 zip 경로 계산
+                    chapter_zip_paths = []
+                    for idref in chapter_idrefs:
+                        if idref in manifest:
+                            href = manifest[idref]['href']
+                            zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+                            files_to_include.add(zp)
+                            chapter_zip_paths.append(zp)
 
-                # 폰트 복사
-                for item in original.get_items_of_type(ebooklib.ITEM_FONT):
-                    new_book.add_item(item)
+                    # 챕터 HTML에서 참조 리소스 수집
+                    referenced = set()
+                    for zp in chapter_zip_paths:
+                        content = zin.read(zp).decode('utf-8', errors='replace')
+                        item_dir = dirname(zp)
+                        soup = BeautifulSoup(content, 'html.parser')
+                        for img in soup.find_all('img'):
+                            src = img.get('src', '')
+                            if src and not src.startswith('data:'):
+                                referenced.add(normpath(pjoin(item_dir, src)))
+                        for link in soup.find_all('link'):
+                            href_attr = link.get('href', '')
+                            if href_attr:
+                                referenced.add(normpath(pjoin(item_dir, href_attr)))
 
-                # 참조된 이미지만 복사 (정규화된 경로로 정확히 매칭)
-                for item in original.get_items_of_type(ebooklib.ITEM_IMAGE):
-                    if item.get_name() in referenced_resources:
-                        new_book.add_item(item)
+                    # CSS 추가 및 CSS 내 url() 참조 수집
+                    css_url_pattern = re.compile(r'url\(["\']?([^"\')\s]+)["\']?\)')
+                    for item_id, info in manifest.items():
+                        if 'css' in info.get('media-type', ''):
+                            href = info['href']
+                            zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+                            files_to_include.add(zp)
+                            manifest_ids_to_keep.add(item_id)
+                            try:
+                                css_content = zin.read(zp).decode('utf-8', errors='replace')
+                                css_dir = dirname(zp)
+                                for m in css_url_pattern.findall(css_content):
+                                    if not m.startswith('data:'):
+                                        referenced.add(normpath(pjoin(css_dir, m)))
+                            except KeyError:
+                                pass
 
-                # 챕터 추가
-                for item in chapters_to_extract:
-                    new_book.add_item(item)
+                    # 참조된 이미지/폰트만 추가
+                    for ref_path in referenced:
+                        if ref_path in href_to_id:
+                            files_to_include.add(ref_path)
+                            manifest_ids_to_keep.add(href_to_id[ref_path])
 
-                # spine 및 네비게이션 설정
-                new_book.spine = chapters_to_extract
-                new_book.add_item(epub.EpubNcx())
-                new_book.add_item(epub.EpubNav())
+                    # OPF 수정: manifest에서 불필요한 항목 제거
+                    manifest_el = opf.find(f'.//{{{opf_ns}}}manifest')
+                    if manifest_el is not None:
+                        for item in list(manifest_el.findall(f'{{{opf_ns}}}item')):
+                            if item.get('id') not in manifest_ids_to_keep:
+                                manifest_el.remove(item)
 
-                epub.write_epub(str(cache_file), new_book)
-                LOGGER.debug("Preview generated for book_id=%d (EPUB, %d chapters)", book_id, len(chapters_to_extract))
+                    # spine에서 불필요한 항목 제거
+                    for ref in list(spine_refs):
+                        if ref.get('idref') not in chapter_idrefs:
+                            spine_el.remove(ref)
+
+                    # 새 EPUB 작성
+                    modified_opf = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(opf, encoding='unicode')
+
+                    with zipfile.ZipFile(str(cache_file), 'w', zipfile.ZIP_DEFLATED) as zout:
+                        zout.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+                        for zp in files_to_include:
+                            if zp == opf_path:
+                                zout.writestr(zp, modified_opf)
+                            else:
+                                try:
+                                    zout.writestr(zp, zin.read(zp))
+                                except KeyError:
+                                    LOGGER.warning("EPUB preview: missing file in archive: %s", zp)
+
+                LOGGER.debug("Preview generated for book_id=%d (EPUB, %d chapters)", book_id, len(chapter_idrefs))
                 return FileResponse(path=cache_file, media_type="application/epub+zip",
                                     headers={"Content-Encoding": "identity",
                                              "Cache-Control": "no-transform"})
