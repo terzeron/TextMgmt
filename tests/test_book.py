@@ -59,6 +59,7 @@ class TestBook(unittest.TestCase):
             "page_count": 0,
             "isbn": "",
             "updated_time": "2021-01-01T00:00:00.000000",
+            "score": 0.0,
         }
 
 
