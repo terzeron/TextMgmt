@@ -88,37 +88,37 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                     ? getApiUrlPrefix() + "/preview/" + bookId + "?pages=" + (pageCount > 0 ? pageCount : 5)
                     : getApiUrlPrefix() + "/download/" + bookId;
 
-                // Range 요청으로 점진적 로딩 시도, 실패 시 전체 다운로드로 폴백
-                let pdf;
-                try {
-                    const loadingTask = pdfjs.getDocument({
-                        url: pdfUrl,
-                        rangeChunkSize: 65536,
-                        disableAutoFetch: true,
-                        disableRange: false,
-                    });
-
-                    loadingTask.onProgress = ({loaded, total}) => {
-                        if (total > 0) {
-                            setDownloadProgress(Math.round(loaded / total * 100));
-                        }
-                    };
-
-                    loadingTaskRef.current = loadingTask;
-                    pdf = await loadingTask.promise;
-                    loadingTaskRef.current = null;
-                } catch (rangeErr) {
-                    console.warn("Range 요청 실패, 전체 다운로드로 재시도:", rangeErr.message);
-                    const fallbackTask = pdfjs.getDocument(pdfUrl);
-                    fallbackTask.onProgress = ({loaded, total}) => {
-                        if (total > 0) {
-                            setDownloadProgress(Math.round(loaded / total * 100));
-                        }
-                    };
-                    loadingTaskRef.current = fallbackTask;
-                    pdf = await fallbackTask.promise;
-                    loadingTaskRef.current = null;
+                // fetch로 PDF 바이너리를 직접 다운로드 (프록시의 gzip 압축을 브라우저가 자동 해제)
+                const response = await fetch(pdfUrl);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
+                const contentLength = parseInt(response.headers.get("Content-Length") || "0", 10);
+                const reader = response.body.getReader();
+                const chunks = [];
+                let receivedLength = 0;
+                while (true) {
+                    const {done, value} = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                    receivedLength += value.length;
+                    if (contentLength > 0) {
+                        setDownloadProgress(Math.round(receivedLength / contentLength * 100));
+                    }
+                }
+                if (cancelled) return;
+                const pdfData = new Uint8Array(receivedLength);
+                let offset = 0;
+                for (const chunk of chunks) {
+                    pdfData.set(chunk, offset);
+                    offset += chunk.length;
+                }
+                setDownloadProgress(100);
+
+                const loadingTask = pdfjs.getDocument({data: pdfData});
+                loadingTaskRef.current = loadingTask;
+                let pdf = await loadingTask.promise;
+                loadingTaskRef.current = null;
 
                 if (cancelled) {
                     pdf.destroy();
