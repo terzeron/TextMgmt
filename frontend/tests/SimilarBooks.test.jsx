@@ -130,6 +130,37 @@ describe('SimilarBooks', () => {
         expect(screen.queryByText('편집')).toBeNull();
     });
 
+    it('bookId 변경 시 자동 펼침 상태가 초기화된다', async () => {
+        let callCount = 0;
+        mockRawJsonGetReq.mockImplementation((url, resolve) => {
+            callCount++;
+            if (callCount === 1) {
+                // 첫 번째 책: 90점 이상 → 자동 펼침
+                resolve({ status: 'success', result: [makeBook(1, 95)], total: 1 });
+            } else {
+                // 두 번째 책: 90점 미만 → 접힘
+                resolve({ status: 'success', result: [makeBook(2, 50)], total: 1 });
+            }
+        });
+
+        const { rerender } = render(<SimilarBooks bookId={1} />);
+
+        // 첫 번째 책: 자동 펼침
+        await waitFor(() => {
+            expect(screen.getByText('95')).toBeTruthy();
+        });
+
+        // bookId 변경 → 접힌 상태로 초기화
+        rerender(<SimilarBooks bookId={2} />);
+
+        await waitFor(() => {
+            expect(screen.queryByText('95')).toBeNull();
+        });
+        // 90점 미만이므로 접힌 상태
+        expect(screen.queryByText('50')).toBeNull();
+        expect(screen.queryByText('편집')).toBeNull();
+    });
+
     it('자동 펼침 후 헤더 클릭으로 닫을 수 있다', async () => {
         mockBooks([makeBook(1, 95)]);
 
