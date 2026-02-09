@@ -141,8 +141,8 @@ describe('CategoryMismatch', () => {
         });
     });
 
-    it('헤더 클릭 시 카테고리가 있으면 트리 뷰로 펼쳐진다', async () => {
-        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    it('헤더 클릭 시 불일치 카테고리가 있으면 트리 뷰로 펼쳐진다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
         render(<CategoryMismatch />);
 
         await waitFor(() => {
@@ -217,7 +217,7 @@ describe('CategoryMismatch', () => {
         });
     });
 
-    it('ES 카테고리 중 불일치가 없는 것도 트리에 포함된다', async () => {
+    it('불일치가 없는 ES 카테고리는 트리에서 제외된다', async () => {
         setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
         render(<CategoryMismatch />);
 
@@ -228,9 +228,11 @@ describe('CategoryMismatch', () => {
         fireEvent.click(screen.getByText(/불일치 관리/));
 
         await waitFor(() => {
-            // 3_history는 불일치가 없지만 ES에 존재하므로 트리에 표시
-            expect(screen.getByText('3_history')).toBeTruthy();
+            expect(screen.getByRole('tree')).toBeTruthy();
         });
+
+        // 3_history는 불일치가 없으므로 트리에서 제외
+        expect(screen.queryByText('3_history')).toBeNull();
     });
 
     it('_root 카테고리는 트리에서 제외된다', async () => {
@@ -589,16 +591,19 @@ describe('CategoryMismatch', () => {
     });
 
     it('가상 부모(isVirtualParent) 클릭 시 API를 호출하지 않는다', async () => {
-        // 가상 부모가 생성되려면: 공통 접두사 없이 슬래시를 포함하는 카테고리
-        // A/fiction, A/science → 공통접두사 'A/' 제거 → fiction, science (1depth)
-        // 가상 부모를 만들려면: 공통접두사가 없는 상태에서 A/fiction, A/science, B_other
+        // 가상 부모가 생성되려면: 공통접두사가 없는 상태에서 A/fiction, A/science, B_other
+        // 모두 불일치가 있어야 트리에 포함되어 가상 부모 생성됨
         const categories = {
             'A/fiction': 10,
             'A/science': 8,
             'B_other': 5,
         };
         const mismatchData = {
-            mismatches: [{ category: 'A/fiction', es_count: 10, fs_count: 8, diff: 2 }],
+            mismatches: [
+                { category: 'A/fiction', es_count: 10, fs_count: 8, diff: 2 },
+                { category: 'A/science', es_count: 8, fs_count: 6, diff: 2 },
+                { category: 'B_other', es_count: 5, fs_count: 3, diff: 2 },
+            ],
             es_only: [],
             fs_only: [],
         };
@@ -633,7 +638,7 @@ describe('CategoryMismatch', () => {
         expect(mockJsonGetReq).not.toHaveBeenCalled();
     });
 
-    it('불일치가 없는 폴더 클릭 시 API를 호출하지 않는다', async () => {
+    it('불일치가 없는 카테고리는 트리에 표시되지 않는다', async () => {
         setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
         render(<CategoryMismatch />);
 
@@ -647,19 +652,13 @@ describe('CategoryMismatch', () => {
             expect(screen.getByRole('tree')).toBeTruthy();
         });
 
-        // mock 재설정
-        mockJsonGetReq.mockClear();
-        mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
-            if (url.startsWith('/categories/')) {
-                resolve([]);
-            }
-        });
+        // 불일치가 있는 카테고리는 표시됨
+        expect(screen.getByText('1_fiction')).toBeTruthy();
+        expect(screen.getByText('2_science')).toBeTruthy();
+        expect(screen.getByText('4_fs_only_cat')).toBeTruthy();
 
-        // 3_history는 불일치가 없는 카테고리 (count === 0)
-        fireEvent.click(screen.getByText('3_history'));
-
-        await new Promise(r => setTimeout(r, 50));
-        expect(mockJsonGetReq).not.toHaveBeenCalled();
+        // 불일치가 없는 카테고리는 표시되지 않음
+        expect(screen.queryByText('3_history')).toBeNull();
     });
 
     it('트리 뷰에 "category mismatches" aria-label이 설정된다', async () => {
