@@ -121,7 +121,7 @@ class AbstractBookstore(ABC):
         """검색 URL에서 결과를 가져오는 공통 로직"""
         # 검색 페이지 요청 예외 처리
         try:
-            resp = self.session.get(url, timeout=10, verify=False)
+            resp = self.session.get(url, timeout=10, verify=True)
         except Exception as e:
             logger.error(f"검색 페이지 요청 실패: {e}")
             return []
@@ -135,7 +135,7 @@ class AbstractBookstore(ABC):
             if html is None:
                 # 캐시가 없으면 HTTP 요청 후 저장
                 try:
-                    resp2 = self.session.get(detail_url, timeout=10, verify=False)
+                    resp2 = self.session.get(detail_url, timeout=10, verify=True)
                 except Exception as e:
                     logger.error(f"상세 페이지 요청 실패: {detail_url} - {e}")
                     continue
@@ -487,7 +487,7 @@ class RidibooksBookstore(AbstractBookstore):
         params = {'keyword': keyword}
 
         try:
-            resp = self.session.get(api_url, params=params, timeout=10, verify=False)
+            resp = self.session.get(api_url, params=params, timeout=10, verify=True)
 
             if resp.status_code != 200:
                 if self.verbose:
@@ -667,7 +667,7 @@ class NaverShoppingBookstore(AbstractBookstore):
             "&entities=SEARCH_PAGING"
             "&pagingIndex=1&pagingSize=40&sort=REL&bookTabType=ALL"
         )
-        resp = self.session.get(search_url, timeout=10, verify=False)
+        resp = self.session.get(search_url, timeout=10, verify=True)
         try:
             data = resp.json()
         except Exception:
@@ -683,7 +683,7 @@ class NaverShoppingBookstore(AbstractBookstore):
                 continue
             detail_url = f"{self.BASE_URL}/book/catalog/{item_id}"
             # 상세 페이지 요청
-            resp2 = self.session.get(detail_url, timeout=10, verify=False)
+            resp2 = self.session.get(detail_url, timeout=10, verify=True)
             resp2.encoding = 'utf-8'
             soup = BeautifulSoup(resp2.text, 'html.parser')
             info = self.extract_book_info(soup)
