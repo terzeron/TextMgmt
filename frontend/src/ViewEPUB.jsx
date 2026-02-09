@@ -2,9 +2,22 @@ import { useEffect, useRef, useState, useCallback, Suspense } from "react";
 import PropTypes from "prop-types";
 import { getApiUrlPrefix } from "./Common";
 import { ReactReader } from "react-reader";
+import "./ViewEPUB.css";
 
 const CHAPTERS_PREVIEW = 2;
 const CHAPTERS_FULLVIEW_INITIAL = 5;
+
+const FONT_SIZE_MIN = 80;
+const FONT_SIZE_MAX = 160;
+const FONT_SIZE_STEP = 20;
+
+const FONT_FAMILIES = [
+    { label: "기본", value: "" },
+    { label: "나눔고딕", value: "'Nanum Gothic', sans-serif" },
+    { label: "나눔명조", value: "'Nanum Myeongjo', serif" },
+    { label: "Serif", value: "serif" },
+    { label: "Sans-serif", value: "sans-serif" },
+];
 
 export default function ViewEPUB({ bookId, preview = false }) {
     const renditionRef = useRef(null);
@@ -22,6 +35,19 @@ export default function ViewEPUB({ bookId, preview = false }) {
     const [loadedChapters, setLoadedChapters] = useState(0);
     const [totalChapters, setTotalChapters] = useState(0);
     const [epubKey, setEpubKey] = useState(0);
+
+    // 전체보기 전용 상태
+    const [bookTitle, setBookTitle] = useState("");
+    const [fontSize, setFontSize] = useState(() => {
+        if (preview) return 100;
+        const saved = localStorage.getItem("epub_fontSize");
+        return saved ? parseInt(saved, 10) : 100;
+    });
+    const [fontFamily, setFontFamily] = useState(() => {
+        if (preview) return "";
+        return localStorage.getItem("epub_fontFamily") || "";
+    });
+    const [pageInfo, setPageInfo] = useState({ page: 0, total: 0 });
 
     const fetchChapters = useCallback((chapters, signal) => {
         const url = `${getApiUrlPrefix()}/preview/${bookId}?chapters=${chapters}`;
@@ -49,9 +75,17 @@ export default function ViewEPUB({ bookId, preview = false }) {
         totalChaptersRef.current = 0;
         setInitialLoadDone(false);
         initialLoadDoneRef.current = false;
-        locationRef.current = "";
         backgroundEpubRef.current = null;
         backgroundFetchDoneRef.current = false;
+        setPageInfo({ page: 0, total: 0 });
+
+        // 전체보기: localStorage에서 읽기 위치 복원
+        if (!preview) {
+            const savedLocation = localStorage.getItem(`epub_location_${bookId}`);
+            locationRef.current = savedLocation || "";
+        } else {
+            locationRef.current = "";
+        }
 
         const initialChapters = preview ? CHAPTERS_PREVIEW : CHAPTERS_FULLVIEW_INITIAL;
         const controller = new AbortController();
@@ -100,7 +134,6 @@ export default function ViewEPUB({ bookId, preview = false }) {
                 backgroundEpubRef.current = buf;
             })
             .catch((err) => {
-                // cleanup에 의한 abort만 재시도 허용, 네트워크 에러는 재시도 안 함
                 if (err.name === "AbortError") {
                     backgroundFetchDoneRef.current = false;
                 }
@@ -122,6 +155,11 @@ export default function ViewEPUB({ bookId, preview = false }) {
             return;
         }
 
+        // 전체보기: 읽기 위치 저장
+        if (!preview && bookId) {
+            localStorage.setItem(`epub_location_${bookId}`, epubcfi);
+        }
+
         // 백그라운드 데이터 준비 완료 시 페이지 넘기기에 맞춰 바꿔치기
         if (backgroundEpubRef.current) {
             const fullData = backgroundEpubRef.current;
@@ -130,7 +168,72 @@ export default function ViewEPUB({ bookId, preview = false }) {
             setLoadedChapters(totalChaptersRef.current);
             setEpubKey((k) => k + 1);
         }
+    }, [preview, bookId]);
+
+    // 글자 크기 변경
+    const handleFontSizeChange = useCallback((delta) => {
+        setFontSize((prev) => {
+            const next = Math.max(FONT_SIZE_MIN, Math.min(FONT_SIZE_MAX, prev + delta));
+            localStorage.setItem("epub_fontSize", String(next));
+            if (renditionRef.current) {
+                renditionRef.current.themes.fontSize(`${next}%`);
+            }
+            return next;
+        });
     }, []);
+
+    // 글꼴 변경
+    const handleFontFamilyChange = useCallback((family) => {
+        setFontFamily(family);
+        localStorage.setItem("epub_fontFamily", family);
+        if (renditionRef.current) {
+            renditionRef.current.themes.font(family);
+        }
+    }, []);
+
+    const getRendition = useCallback((rendition) => {
+        renditionRef.current = rendition;
+        const spine_get = rendition.book.spine.get.bind(rendition.book.spine);
+        rendition.book.spine.get = function (target) {
+            let t = spine_get(target);
+            if (!t) {
+                t = spine_get(undefined);
+            }
+            return t;
+        };
+
+        // 전체보기 전용 초기화
+        if (!preview) {
+            // 책 제목 추출
+            rendition.book.loaded.metadata.then((meta) => {
+                if (meta && meta.title) {
+                    setBookTitle(meta.title);
+                }
+            });
+
+            // 저장된 글자 크기 적용
+            const savedSize = localStorage.getItem("epub_fontSize");
+            if (savedSize) {
+                rendition.themes.fontSize(`${savedSize}%`);
+            }
+
+            // 저장된 글꼴 적용
+            const savedFont = localStorage.getItem("epub_fontFamily");
+            if (savedFont) {
+                rendition.themes.font(savedFont);
+            }
+
+            // 페이지 정보 이벤트 리스닝
+            rendition.on("relocated", (location) => {
+                if (location && location.start && location.start.displayed) {
+                    setPageInfo({
+                        page: location.start.displayed.page,
+                        total: location.start.displayed.total,
+                    });
+                }
+            });
+        }
+    }, [preview]);
 
     const containerHeight = preview ? "60vh" : "100vh";
 
@@ -147,25 +250,55 @@ export default function ViewEPUB({ bookId, preview = false }) {
                     {errorMessage}
                 </div>
             )}
+
+            {/* 전체보기 전용 툴바 */}
+            {!preview && !isLoading && epubData && (
+                <div className="epub-toolbar" data-testid="epub-toolbar">
+                    <button
+                        onClick={() => handleFontSizeChange(-FONT_SIZE_STEP)}
+                        disabled={fontSize <= FONT_SIZE_MIN}
+                        aria-label="글자 크기 줄이기"
+                    >
+                        A−
+                    </button>
+                    <button
+                        onClick={() => handleFontSizeChange(FONT_SIZE_STEP)}
+                        disabled={fontSize >= FONT_SIZE_MAX}
+                        aria-label="글자 크기 늘리기"
+                    >
+                        A+
+                    </button>
+                    <select
+                        value={fontFamily}
+                        onChange={(e) => handleFontFamilyChange(e.target.value)}
+                        aria-label="글꼴 선택"
+                    >
+                        {FONT_FAMILIES.map((f) => (
+                            <option key={f.value} value={f.value}>
+                                {f.label}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            )}
+
             <Suspense fallback={<div className="loading">로딩 중...</div>}>
                 {epubData && <ReactReader
                     key={epubKey}
                     location={locationRef.current || undefined}
                     locationChanged={handleLocationChanged}
                     url={epubData}
-                    getRendition={(rendition) => {
-                        renditionRef.current = rendition;
-                        const spine_get = rendition.book.spine.get.bind(rendition.book.spine);
-                        rendition.book.spine.get = function (target) {
-                            let t = spine_get(target);
-                            if (!t) {
-                                t = spine_get(undefined);
-                            }
-                            return t;
-                        };
-                    }}
+                    title={!preview ? bookTitle : undefined}
+                    getRendition={getRendition}
                 />}
             </Suspense>
+
+            {/* 전체보기 전용 페이지 정보 */}
+            {!preview && pageInfo.total > 0 && (
+                <div className="epub-page-info" data-testid="epub-page-info">
+                    {pageInfo.page} / {pageInfo.total}
+                </div>
+            )}
         </div>
     );
 }

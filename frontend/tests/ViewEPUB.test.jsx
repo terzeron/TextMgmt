@@ -1,16 +1,20 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, act, cleanup, waitFor, fireEvent } from '@testing-library/react';
 
 afterEach(cleanup);
 
 // ReactReader mock - autoLoad=true이면 즉시 locationChanged 호출
 let autoLoad = true;
-const mockReactReader = vi.fn(({ url, locationChanged }) => {
+let capturedGetRendition = null;
+const mockReactReader = vi.fn(({ url, locationChanged, getRendition, title }) => {
+    if (getRendition && url) {
+        capturedGetRendition = getRendition;
+    }
     if (url && autoLoad) {
         setTimeout(() => locationChanged?.('epubcfi(/1)'), 0);
     }
-    return <div data-testid="react-reader">ReactReader</div>;
+    return <div data-testid="react-reader">{title && <span data-testid="book-title">{title}</span>}ReactReader</div>;
 });
 
 vi.mock('react-reader', () => ({
@@ -20,6 +24,8 @@ vi.mock('react-reader', () => ({
 vi.mock('../src/Common', () => ({
     getApiUrlPrefix: () => 'http://localhost:8000',
 }));
+
+vi.mock('../src/ViewEPUB.css', () => ({}));
 
 // fetch mock: ArrayBuffer + X-Total-Chapters 헤더를 반환
 const mockArrayBuffer = new ArrayBuffer(8);
@@ -35,8 +41,25 @@ function createFetchResponse(buf = mockArrayBuffer, totalChapters = 20) {
     };
 }
 
+// localStorage mock
+const localStorageMock = (() => {
+    let store = {};
+    return {
+        getItem: vi.fn((key) => store[key] ?? null),
+        setItem: vi.fn((key, value) => { store[key] = String(value); }),
+        removeItem: vi.fn((key) => { delete store[key]; }),
+        clear: vi.fn(() => { store = {}; }),
+        _getStore: () => store,
+    };
+})();
+Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true });
+
 beforeEach(() => {
     mockReactReader.mockClear();
+    capturedGetRendition = null;
+    localStorageMock.clear();
+    localStorageMock.getItem.mockClear();
+    localStorageMock.setItem.mockClear();
     globalThis.fetch = vi.fn(() => Promise.resolve(createFetchResponse()));
 });
 
@@ -46,9 +69,36 @@ afterEach(() => {
 
 import ViewEPUB from '../src/ViewEPUB';
 
+// rendition mock을 만들어주는 헬퍼
+function createMockRendition() {
+    const handlers = {};
+    return {
+        themes: {
+            fontSize: vi.fn(),
+            font: vi.fn(),
+        },
+        on: vi.fn((event, handler) => {
+            handlers[event] = handler;
+        }),
+        book: {
+            spine: {
+                get: vi.fn((target) => target || null),
+            },
+            loaded: {
+                metadata: Promise.resolve({ title: '테스트 책 제목' }),
+            },
+        },
+        _handlers: handlers,
+        _emitRelocated: (location) => {
+            if (handlers['relocated']) handlers['relocated'](location);
+        },
+    };
+}
+
 describe('ViewEPUB', () => {
     beforeEach(() => {
         mockReactReader.mockClear();
+        capturedGetRendition = null;
         autoLoad = true;
     });
 
@@ -511,5 +561,376 @@ describe('ViewEPUB', () => {
 
         await act(async () => { await new Promise(r => setTimeout(r, 50)); });
         expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    // ══════════════════════════════════════════════
+    // ── 전체보기 기능 테스트 ──
+    // ══════════════════════════════════════════════
+
+    // ── 책 제목 표시 ──
+
+    it('전체보기 모드에서 getRendition으로 책 제목을 추출한다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // metadata Promise 해결 대기
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        // title prop이 ReactReader에 전달되는지 확인
+        const calls = mockReactReader.mock.calls;
+        const hasTitle = calls.some(c => c[0].title === '테스트 책 제목');
+        expect(hasTitle).toBe(true);
+    });
+
+    it('미리보기 모드에서는 책 제목을 title prop에 전달하지 않는다', async () => {
+        render(<ViewEPUB bookId={42} preview={true} />);
+
+        await waitFor(() => {
+            expect(mockReactReader).toHaveBeenCalled();
+        });
+
+        // preview 모드의 모든 호출에서 title이 undefined
+        const calls = mockReactReader.mock.calls;
+        calls.forEach((c) => {
+            expect(c[0].title).toBeUndefined();
+        });
+    });
+
+    // ── 글자 크기 조절 ──
+
+    it('전체보기에서 A+/A- 버튼이 표시된다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        // 로딩 완료 대기
+        await waitFor(() => {
+            expect(screen.queryByText('로딩 중...')).toBeNull();
+        });
+
+        expect(screen.getByLabelText('글자 크기 늘리기')).toBeTruthy();
+        expect(screen.getByLabelText('글자 크기 줄이기')).toBeTruthy();
+    });
+
+    it('미리보기에서는 툴바가 표시되지 않는다', async () => {
+        render(<ViewEPUB bookId={42} preview={true} />);
+
+        await waitFor(() => {
+            expect(mockReactReader).toHaveBeenCalled();
+        });
+
+        await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+        expect(screen.queryByTestId('epub-toolbar')).toBeNull();
+    });
+
+    it('A+ 클릭 시 rendition.themes.fontSize가 호출된다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // 로딩 완료 대기
+        await waitFor(() => {
+            expect(screen.queryByText('로딩 중...')).toBeNull();
+        });
+
+        const plusBtn = screen.getByLabelText('글자 크기 늘리기');
+        await act(async () => {
+            fireEvent.click(plusBtn);
+        });
+
+        expect(mockRendition.themes.fontSize).toHaveBeenCalledWith('120%');
+        expect(localStorageMock.setItem).toHaveBeenCalledWith('epub_fontSize', '120');
+    });
+
+    it('A- 클릭 시 글자 크기가 줄어든다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        await waitFor(() => {
+            expect(screen.queryByText('로딩 중...')).toBeNull();
+        });
+
+        const minusBtn = screen.getByLabelText('글자 크기 줄이기');
+        await act(async () => {
+            fireEvent.click(minusBtn);
+        });
+
+        expect(mockRendition.themes.fontSize).toHaveBeenCalledWith('80%');
+        expect(localStorageMock.setItem).toHaveBeenCalledWith('epub_fontSize', '80');
+    });
+
+    it('글자 크기가 최소(80%)이면 A- 버튼이 비활성화된다', async () => {
+        // localStorage에 최소값 설정
+        localStorageMock.getItem.mockImplementation((key) => {
+            if (key === 'epub_fontSize') return '80';
+            return null;
+        });
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(screen.queryByText('로딩 중...')).toBeNull();
+        });
+
+        const minusBtn = screen.getByLabelText('글자 크기 줄이기');
+        expect(minusBtn.disabled).toBe(true);
+    });
+
+    it('글자 크기가 최대(160%)이면 A+ 버튼이 비활성화된다', async () => {
+        localStorageMock.getItem.mockImplementation((key) => {
+            if (key === 'epub_fontSize') return '160';
+            return null;
+        });
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(screen.queryByText('로딩 중...')).toBeNull();
+        });
+
+        const plusBtn = screen.getByLabelText('글자 크기 늘리기');
+        expect(plusBtn.disabled).toBe(true);
+    });
+
+    it('getRendition에서 저장된 글자 크기를 적용한다', async () => {
+        localStorageMock.getItem.mockImplementation((key) => {
+            if (key === 'epub_fontSize') return '140';
+            return null;
+        });
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        expect(mockRendition.themes.fontSize).toHaveBeenCalledWith('140%');
+    });
+
+    // ── 글꼴 변경 ──
+
+    it('전체보기에서 글꼴 선택 드롭다운이 표시된다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(screen.queryByText('로딩 중...')).toBeNull();
+        });
+
+        expect(screen.getByLabelText('글꼴 선택')).toBeTruthy();
+    });
+
+    it('글꼴 변경 시 rendition.themes.font가 호출된다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        await waitFor(() => {
+            expect(screen.queryByText('로딩 중...')).toBeNull();
+        });
+
+        const select = screen.getByLabelText('글꼴 선택');
+        await act(async () => {
+            fireEvent.change(select, { target: { value: 'serif' } });
+        });
+
+        expect(mockRendition.themes.font).toHaveBeenCalledWith('serif');
+        expect(localStorageMock.setItem).toHaveBeenCalledWith('epub_fontFamily', 'serif');
+    });
+
+    it('getRendition에서 저장된 글꼴을 적용한다', async () => {
+        localStorageMock.getItem.mockImplementation((key) => {
+            if (key === 'epub_fontFamily') return 'serif';
+            return null;
+        });
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        expect(mockRendition.themes.font).toHaveBeenCalledWith('serif');
+    });
+
+    // ── 페이지 번호 ──
+
+    it('전체보기에서 relocated 이벤트로 페이지 정보를 표시한다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // relocated 이벤트 시뮬레이션
+        await act(async () => {
+            mockRendition._emitRelocated({
+                start: { displayed: { page: 3, total: 12 } },
+            });
+        });
+
+        expect(screen.getByTestId('epub-page-info').textContent).toBe('3 / 12');
+    });
+
+    it('미리보기에서는 페이지 정보가 표시되지 않는다', async () => {
+        render(<ViewEPUB bookId={42} preview={true} />);
+
+        await waitFor(() => {
+            expect(mockReactReader).toHaveBeenCalled();
+        });
+
+        await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+        expect(screen.queryByTestId('epub-page-info')).toBeNull();
+    });
+
+    // ── 읽기 위치 저장/복원 ──
+
+    it('전체보기에서 페이지 변경 시 위치를 localStorage에 저장한다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        // 초기 로드 완료 대기
+        await waitFor(() => {
+            expect(mockReactReader).toHaveBeenCalled();
+        });
+
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        // 페이지 넘기기 시뮬레이션 (초기 로드 이후)
+        const lastCall = mockReactReader.mock.calls[mockReactReader.mock.calls.length - 1];
+        await act(async () => {
+            lastCall[0].locationChanged('epubcfi(/6/4)');
+        });
+
+        expect(localStorageMock.setItem).toHaveBeenCalledWith('epub_location_42', 'epubcfi(/6/4)');
+    });
+
+    it('미리보기에서는 읽기 위치를 저장하지 않는다', async () => {
+        render(<ViewEPUB bookId={42} preview={true} />);
+
+        await waitFor(() => {
+            expect(mockReactReader).toHaveBeenCalled();
+        });
+
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        const lastCall = mockReactReader.mock.calls[mockReactReader.mock.calls.length - 1];
+        await act(async () => {
+            lastCall[0].locationChanged('epubcfi(/6/4)');
+        });
+
+        const locationSaves = localStorageMock.setItem.mock.calls.filter(
+            c => c[0].startsWith('epub_location_')
+        );
+        expect(locationSaves.length).toBe(0);
+    });
+
+    it('전체보기에서 저장된 읽기 위치를 복원한다', async () => {
+        localStorageMock.getItem.mockImplementation((key) => {
+            if (key === 'epub_location_42') return 'epubcfi(/6/4)';
+            return null;
+        });
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(mockReactReader).toHaveBeenCalled();
+        });
+
+        // ReactReader에 저장된 위치가 전달되는지 확인
+        const calls = mockReactReader.mock.calls;
+        const hasLocation = calls.some(c => c[0].location === 'epubcfi(/6/4)');
+        expect(hasLocation).toBe(true);
+    });
+
+    it('미리보기에서는 저장된 읽기 위치를 무시한다', async () => {
+        localStorageMock.getItem.mockImplementation((key) => {
+            if (key === 'epub_location_42') return 'epubcfi(/6/4)';
+            return null;
+        });
+
+        render(<ViewEPUB bookId={42} preview={true} />);
+
+        await waitFor(() => {
+            expect(mockReactReader).toHaveBeenCalled();
+        });
+
+        // preview 모드에서는 location이 undefined이어야 함
+        const calls = mockReactReader.mock.calls;
+        const hasStoredLocation = calls.some(c => c[0].location === 'epubcfi(/6/4)');
+        expect(hasStoredLocation).toBe(false);
+    });
+
+    // ── getRendition에서 relocated 리스너 등록 ──
+
+    it('전체보기에서 getRendition이 relocated 리스너를 등록한다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        expect(mockRendition.on).toHaveBeenCalledWith('relocated', expect.any(Function));
+    });
+
+    it('미리보기에서는 getRendition이 relocated 리스너를 등록하지 않는다', async () => {
+        render(<ViewEPUB bookId={42} preview={true} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        expect(mockRendition.on).not.toHaveBeenCalled();
     });
 });
