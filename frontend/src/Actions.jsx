@@ -287,12 +287,16 @@ export default function Actions(props) {
                         const isTop1 = highlightRank === 0;
                         const isTop2to5 = highlightRank >= 1 && highlightRank <= 4;
                         const highlightClass = isTop1 ? 'highlight' : isTop2to5 ? 'highlight-secondary' : '';
+                        const isSelected = info['key'] === props.selectedCategory;
+                        const buttonStyle = isSelected
+                            ? {backgroundColor: '#fff', color: '#333'}
+                            : highlightClass ? {} : info['style'];
                         return (
                             <Button
                                 variant="outline-secondary"
                                 key={info['key']}
-                                className={`btn-sm ${info['class'] || ''} ${highlightClass}`}
-                                style={highlightClass ? {} : info['style']}
+                                className={`btn-sm ${info['class'] || ''} ${isSelected ? '' : highlightClass}`}
+                                style={buttonStyle}
                                 onClick={(e) => {
                                     props.selectDirectoryButtonClicked(e, info['key']);
                                 }}>
