@@ -213,6 +213,159 @@ class TestESManager:
         for _, doc, _ in result_list:
             inspect_search_result_hierarchy(doc)
 
+    # ── _get_self_score ──
+
+    def test_get_self_score_returns_positive(self, es_manager_with_data):
+        """존재하는 문서의 self_score는 양수다"""
+        esm = es_manager_with_data
+        should_clauses = [
+            {"match": {"title": {"query": "테스트 문서 1", "boost": 20}}},
+            {"match": {"author": {"query": "테스트 작가", "boost": 15}}},
+            {"match": {"summary": {"query": "이것은 테스트 문서입니다.", "boost": 3}}},
+        ]
+        score = esm._get_self_score(should_clauses, doc_id=1)
+        assert score > 0
+
+    def test_get_self_score_with_none_returns_zero(self, es_manager_with_data):
+        """doc_id가 None이면 0.0을 반환한다"""
+        esm = es_manager_with_data
+        should_clauses = [
+            {"match": {"title": {"query": "테스트", "boost": 20}}},
+        ]
+        score = esm._get_self_score(should_clauses, doc_id=None)
+        assert score == 0.0
+
+    def test_get_self_score_nonexistent_doc(self, es_manager_with_data):
+        """존재하지 않는 문서의 self_score는 0.0이다"""
+        esm = es_manager_with_data
+        should_clauses = [
+            {"match": {"title": {"query": "테스트", "boost": 20}}},
+        ]
+        score = esm._get_self_score(should_clauses, doc_id=999999)
+        assert score == 0.0
+
+    # ── _search_paged ref_score 정규화 ──
+
+    def test_search_paged_without_ref_score_first_is_100(self, es_manager_with_data):
+        """ref_score 없이 호출하면 1등이 100점이다 (기존 동작)"""
+        esm = es_manager_with_data
+        query = {"bool": {"should": [{"match": {"title": {"query": "테스트 문서", "boost": 1}}}]}}
+        results, total = esm._search_paged(query, size=10)
+        if results:
+            assert results[0][2] == 100.0
+
+    def test_search_paged_with_ref_score_normalizes_correctly(self, es_manager_with_data):
+        """ref_score를 지정하면 해당 값 기준으로 정규화된다"""
+        esm = es_manager_with_data
+        query = {"bool": {"should": [{"match": {"title": {"query": "테스트 문서", "boost": 1}}}]}}
+
+        # ref_score 없이 → 1등이 100점
+        results_default, _ = esm._search_paged(query, size=10)
+        # ref_score를 1등 raw_score의 2배로 설정 → 모든 점수가 절반으로
+        if results_default:
+            # 1등의 원래 점수를 역산 (default에서 100점이므로 raw_score = max_score)
+            response = esm.es.search(index=esm.index_name, query=query, size=1, track_scores=True)
+            raw_max = response['hits']['max_score']
+            ref_double = raw_max * 2
+
+            results_ref, _ = esm._search_paged(query, size=10, ref_score=ref_double)
+            if results_ref:
+                # ref_score가 2배이므로 1등 점수는 약 50점
+                assert abs(results_ref[0][2] - 50.0) < 0.1
+
+    def test_search_paged_with_ref_score_caps_at_100(self, es_manager_with_data):
+        """ref_score보다 높은 raw_score가 있어도 100을 초과하지 않는다"""
+        esm = es_manager_with_data
+        query = {"bool": {"should": [{"match": {"title": {"query": "테스트 문서", "boost": 1}}}]}}
+        # 아주 작은 ref_score를 지정
+        results, _ = esm._search_paged(query, size=10, ref_score=0.001)
+        for _, _, score in results:
+            assert score <= 100.0
+
+    # ── search_similar_docs_paged 유사도 정규화 ──
+
+    def test_similar_docs_paged_no_perfect_100(self, es_manager_with_data):
+        """유사 검색에서 원본과 다른 문서는 100점이 되지 않는다"""
+        esm = es_manager_with_data
+        # Doc 1 정보로 유사 검색 (Doc 1 자체는 제외)
+        results, total = esm.search_similar_docs_paged(
+            category="test",
+            title="테스트 문서 1",
+            author="테스트 작가",
+            file_type="txt",
+            file_size=1000,
+            summary="이것은 테스트 문서입니다. 마법사와 드래곤 이야기.",
+            exclude_id=1,
+            size=10,
+        )
+        if results:
+            for doc_id, doc, score in results:
+                assert score < 100, f"Doc {doc_id} ({doc['title']})의 점수 {score}이 100이면 안 됨"
+
+    def test_similar_docs_paged_scores_in_range(self, es_manager_with_data):
+        """유사 검색 점수는 0~100 범위다"""
+        esm = es_manager_with_data
+        results, _ = esm.search_similar_docs_paged(
+            category="test",
+            title="테스트 문서 1",
+            author="테스트 작가",
+            file_type="txt",
+            file_size=1000,
+            summary="이것은 테스트 문서입니다.",
+            exclude_id=1,
+            size=10,
+        )
+        for doc_id, _, score in results:
+            assert 0 <= score <= 100, f"Doc {doc_id} 점수 {score}가 범위 밖"
+
+    def test_similar_docs_paged_same_author_different_title_below_100(self, es_manager_with_data):
+        """같은 작가의 다른 제목 문서는 100점 미만이다 (세네카 사례)"""
+        esm = es_manager_with_data
+        # 추가 테스트 데이터 삽입: 같은 작가, 다른 제목
+        extra_data = {
+            100: {
+                "category": "test", "title": "세네카의 말",
+                "author": "루키우스 안나이우스 세네카",
+                "file_path": "/test/seneca1.epub", "file_type": "epub",
+                "file_size": 5000, "line_count": 0, "page_count": 100,
+                "isbn": "", "summary": "세네카의 명언과 철학을 담은 책.",
+                "updated_time": "2024-01-10T00:00:00",
+            },
+            101: {
+                "category": "test", "title": "세네카의 행복론",
+                "author": "루키우스 안나이우스 세네카",
+                "file_path": "/test/seneca2.epub", "file_type": "epub",
+                "file_size": 6000, "line_count": 0, "page_count": 120,
+                "isbn": "", "summary": "행복에 관한 세네카의 철학 에세이.",
+                "updated_time": "2024-01-11T00:00:00",
+            },
+        }
+        esm.insert(extra_data)
+        esm.refresh()
+
+        try:
+            results, _ = esm.search_similar_docs_paged(
+                category="test",
+                title="세네카의 말",
+                author="루키우스 안나이우스 세네카",
+                file_type="epub",
+                file_size=5000,
+                summary="세네카의 명언과 철학을 담은 책.",
+                exclude_id=100,
+                size=10,
+            )
+            # "세네카의 행복론"은 같은 작가지만 다른 책이므로 100점 미만
+            seneca_results = [(did, doc, s) for did, doc, s in results if did == 101]
+            assert seneca_results, "세네카의 행복론이 결과에 포함되어야 함"
+            score = seneca_results[0][2]
+            assert score < 100, f"같은 작가의 다른 책이 {score}점으로 100점이면 안 됨"
+            assert score > 0, "같은 작가이므로 0점보다는 높아야 함"
+        finally:
+            # 테스트 데이터 정리
+            esm.delete(100)
+            esm.delete(101)
+            esm.refresh()
+
     def test_search_by_id(self, es_manager_with_data):
         esm = es_manager_with_data
         # First get some results to find a valid ID
