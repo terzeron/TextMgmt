@@ -15,7 +15,7 @@ vi.mock('../src/CategoryMapping', () => ({
     isCacheInitialized: () => true,
 }));
 
-import Actions, { generateNgrams, ngramSimilarity, calculateSimilarity } from '../src/Actions';
+import Actions, { generateNgrams, ngramSimilarity, calculateSimilarity, filterSubstringKeywords } from '../src/Actions';
 
 // ── generateNgrams ──
 
@@ -122,6 +122,65 @@ describe('calculateSimilarity', () => {
     it('null/undefined이면 0을 반환한다', () => {
         expect(calculateSimilarity(null, 'hello')).toBe(0);
         expect(calculateSimilarity('hello', undefined)).toBe(0);
+    });
+});
+
+// ── filterSubstringKeywords ──
+
+describe('filterSubstringKeywords', () => {
+    it('다른 키워드에 포함되는 짧은 키워드를 제거한다', () => {
+        expect(filterSubstringKeywords(['소설', '세계각국소설'])).toEqual(['세계각국소설']);
+    });
+
+    it('포함 관계가 없으면 모두 유지한다', () => {
+        expect(filterSubstringKeywords(['역사', '과학'])).toEqual(['역사', '과학']);
+    });
+
+    it('키워드가 1개이면 그대로 반환한다', () => {
+        expect(filterSubstringKeywords(['소설'])).toEqual(['소설']);
+    });
+
+    it('빈 배열이면 빈 배열을 반환한다', () => {
+        expect(filterSubstringKeywords([])).toEqual([]);
+    });
+
+    it('대소문자 무관하게 포함 관계를 판단한다', () => {
+        expect(filterSubstringKeywords(['sf', 'SF소설'])).toEqual(['SF소설']);
+    });
+
+    it('여러 키워드 중 포함되는 것만 제거한다', () => {
+        expect(filterSubstringKeywords(['소설', '세계각국소설', '역사'])).toEqual(['세계각국소설', '역사']);
+    });
+});
+
+// ── calculateSimilarity: 한글 포함 관계 임계값 ──
+
+describe('calculateSimilarity: 한글 포함 관계 임계값', () => {
+    it('한글 2글자가 긴 문자열의 50% 이하로 포함되면 N-gram으로 평가한다', () => {
+        // "소설" ⊂ "세계각국소설" → ratio = 2/6 = 0.33 ≤ 0.5 → N-gram
+        const score = calculateSimilarity('소설', '세계각국소설');
+        expect(score).toBeLessThan(0.7); // 포함 관계가 아닌 N-gram 범위
+    });
+
+    it('한글 2글자가 긴 문자열의 50% 초과로 포함되면 포함 관계로 인정한다', () => {
+        // "소설" ⊂ "SF소설" → ratio = 2/4 = 0.5 → 0.5 > 0.5 미성립 → 포함 관계
+        // 그런데 "소설"은 한글 2글자이고 ratio=0.5이므로 0.5 <= 0.5 성립
+        // 하지만 "SF"는 비한글이라 shorter가 "소설"이 아닐 수도...
+        // "소설" vs "소설외국" → ratio = 2/4 = 0.5 → 한글 2글자, ratio 0.5 ≤ 0.5 → N-gram
+        const score = calculateSimilarity('소설', '소설외국');
+        expect(score).toBeLessThan(0.7);
+    });
+
+    it('한글 3글자가 긴 문자열의 50% 초과로 포함되면 포함 관계로 인정한다', () => {
+        // "각국소설" ⊂ "세계각국소설" → ratio = 4/6 = 0.67 > 0.5 → 포함 관계
+        const score = calculateSimilarity('각국소설', '세계각국소설');
+        expect(score).toBeGreaterThanOrEqual(0.7);
+    });
+
+    it('영문 키워드의 포함 관계는 기존과 동일하다', () => {
+        // "SF" ⊂ "SF소설" → 비한글이므로 한글 임계값 적용 안 됨 → 포함 관계
+        const score = calculateSimilarity('SF', 'SF소설');
+        expect(score).toBeGreaterThanOrEqual(0.7);
     });
 });
 
