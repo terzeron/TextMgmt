@@ -385,6 +385,40 @@ describe('ViewPDF', () => {
         });
     });
 
+    it('fetch abort 시 "PDF 로드 실패" 에러를 로깅하지 않는다', async () => {
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        // fetch가 AbortSignal을 받으면 AbortError를 throw하도록 설정
+        fetch.mockImplementation((url, opts) => {
+            return new Promise((resolve, reject) => {
+                if (opts?.signal) {
+                    opts.signal.addEventListener('abort', () => {
+                        reject(new DOMException('The operation was aborted.', 'AbortError'));
+                    });
+                }
+            });
+        });
+
+        const { unmount } = render(<ViewPDF bookId={1} />);
+
+        await waitFor(() => {
+            expect(fetch).toHaveBeenCalled();
+        });
+
+        unmount();
+
+        // AbortError rejection이 처리될 시간 대기
+        await new Promise(r => setTimeout(r, 50));
+
+        // "PDF 로드 실패" 메시지가 console.error로 출력되지 않아야 함
+        const pdfLoadErrors = consoleError.mock.calls.filter(
+            args => typeof args[0] === 'string' && args[0].includes('PDF 로드 실패')
+        );
+        expect(pdfLoadErrors).toHaveLength(0);
+
+        consoleError.mockRestore();
+    });
+
     it('bookId 변경 시 이전 로딩의 에러가 표시되지 않는다', async () => {
         const deferred1 = createDeferred();
         const deferred2 = createDeferred();

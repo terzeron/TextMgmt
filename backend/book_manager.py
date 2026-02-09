@@ -305,7 +305,7 @@ class BookManager:
             exclude_id=book_id, size=size, offset=offset
         )
         if result_list:
-            return [Book(book_id=did, info=sdoc) for did, sdoc, _ in result_list], total, None
+            return [Book(book_id=did, info=sdoc, score=score) for did, sdoc, score in result_list], total, None
         return [], total, "No similar books found"
 
     async def add_book(self, data: Dict[int, Dict[str, Any]]) -> Tuple[Optional[int], Optional[str]]:

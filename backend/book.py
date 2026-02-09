@@ -19,7 +19,7 @@ if "TM_WORK_DIR" not in os.environ:
 class Book:
     path_prefix = Path(os.environ["TM_WORK_DIR"])
 
-    def __init__(self, book_id: int, info: Dict[str, Any], **kwargs) -> None:
+    def __init__(self, book_id: int, info: Dict[str, Any], score: float = 0.0, **kwargs) -> None:
         self.book_id: int = book_id
         self.category: str = info["category"]
         self.title: str = info["title"]
@@ -32,6 +32,7 @@ class Book:
         self.isbn: str = info.get("isbn", "")
         self.summary: str = info.get("summary", "")
         self.updated_time: datetime = datetime.strptime(info["updated_time"], "%Y-%m-%dT%H:%M:%S.%f")
+        self.score: float = score
 
     def dict(self) -> Dict[str, Any]:
         return {
@@ -46,6 +47,7 @@ class Book:
             "page_count": self.page_count,
             "isbn": self.isbn,
             "updated_time": self.updated_time.strftime("%Y-%m-%dT%H:%M:%S.%f"),
+            "score": self.score,
         }
 
     def json(self) -> str:

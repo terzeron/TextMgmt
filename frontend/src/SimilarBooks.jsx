@@ -70,6 +70,20 @@ export default function SimilarBooks({bookId, onSelect}) {
                                         {book.category}/{book.file_path.split('/').pop()}
                                     </span>
                                     <div style={{whiteSpace: 'nowrap', flexShrink: 0}}>
+                                        {book.score > 0 && (
+                                            <span style={{
+                                                display: 'inline-block',
+                                                backgroundColor: '#6c757d',
+                                                color: '#fff',
+                                                borderRadius: '4px',
+                                                padding: '1px 6px',
+                                                fontSize: '0.75rem',
+                                                marginRight: '4px',
+                                                verticalAlign: 'middle',
+                                            }}>
+                                                {Math.round(book.score)}
+                                            </span>
+                                        )}
                                         <Button
                                             variant="outline-warning" className="btn-xs"
                                             onClick={() => window.open(`/edit/${encodeURIComponent(book.category)}/${book.book_id}`, '_blank', 'noopener')}
