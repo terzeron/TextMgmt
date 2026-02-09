@@ -3,18 +3,21 @@ import PropTypes from "prop-types";
 import { getApiUrlPrefix } from "./Common";
 import { ReactReader } from "react-reader";
 
-const CHAPTERS_INITIAL = 1;
-const CHAPTERS_STEP = 10;
+const CHAPTERS_PREVIEW = 2;
+const CHAPTERS_FULLVIEW_INITIAL = 5;
 
 export default function ViewEPUB({ bookId, preview = false }) {
     const renditionRef = useRef(null);
     const timeoutRef = useRef(null);
     const locationRef = useRef("");
+    const backgroundEpubRef = useRef(null);
+    const initialLoadDoneRef = useRef(false);
+    const totalChaptersRef = useRef(0);
+    const backgroundFetchDoneRef = useRef(false);
 
     const [epubData, setEpubData] = useState(null);
     const [initialLoadDone, setInitialLoadDone] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
-    const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [errorMessage, setErrorMessage] = useState(null);
     const [loadedChapters, setLoadedChapters] = useState(0);
     const [totalChapters, setTotalChapters] = useState(0);
@@ -30,7 +33,7 @@ export default function ViewEPUB({ bookId, preview = false }) {
             });
     }, [bookId]);
 
-    // 초기 로딩: 1챕터로 시작
+    // 초기 로딩: 미리보기 1챕터, 전체보기 5챕터
     useEffect(() => {
         if (!bookId) {
             setErrorMessage("❌ 유효한 bookId가 제공되지 않았습니다.");
@@ -43,15 +46,21 @@ export default function ViewEPUB({ bookId, preview = false }) {
         setEpubData(null);
         setLoadedChapters(0);
         setTotalChapters(0);
+        totalChaptersRef.current = 0;
         setInitialLoadDone(false);
+        initialLoadDoneRef.current = false;
         locationRef.current = "";
+        backgroundEpubRef.current = null;
+        backgroundFetchDoneRef.current = false;
 
+        const initialChapters = preview ? CHAPTERS_PREVIEW : CHAPTERS_FULLVIEW_INITIAL;
         const controller = new AbortController();
-        fetchChapters(CHAPTERS_INITIAL, controller.signal)
+        fetchChapters(initialChapters, controller.signal)
             .then(({ buf, total }) => {
                 setEpubData(buf);
-                setLoadedChapters(CHAPTERS_INITIAL);
+                setLoadedChapters(Math.min(initialChapters, total));
                 setTotalChapters(total);
+                totalChaptersRef.current = total;
                 setEpubKey((k) => k + 1);
             })
             .catch((err) => {
@@ -67,78 +76,63 @@ export default function ViewEPUB({ bookId, preview = false }) {
         };
     }, [bookId, preview, fetchChapters]);
 
-    // 로딩 타임아웃: 15초
+    // 로딩 타임아웃: 초기 로딩 시에만 적용 (15초)
     useEffect(() => {
-        if (!epubData) return;
+        if (!epubData || initialLoadDone) return;
         timeoutRef.current = setTimeout(() => {
             setIsLoading(false);
             setErrorMessage("미리보기 로딩 시간이 초과되었습니다.");
         }, 15000);
         return () => clearTimeout(timeoutRef.current);
-    }, [epubData]);
+    }, [epubData, initialLoadDone]);
 
-    // 첫 렌더링 후 자동으로 추가 챕터 로드
-    // - 미리보기: 1 → 11 챕터까지 1회 자동 로드
-    // - 전체보기: 1 → 11 → 21 → ... → 전체까지 연속 자동 로드
+    // 전체보기: 초기 렌더링 후 백그라운드에서 전체 챕터 페칭 (렌더링하지 않음)
     useEffect(() => {
         if (!initialLoadDone) return;
-        if (loadedChapters >= totalChapters) return;
-        if (totalChapters <= CHAPTERS_INITIAL) return;
-        // 미리보기: 첫 배치(1→11)만 자동 로드
-        if (preview && loadedChapters > CHAPTERS_INITIAL) return;
+        if (preview) return;
+        if (totalChapters <= CHAPTERS_FULLVIEW_INITIAL) return;
+        if (backgroundFetchDoneRef.current) return;
 
-        const nextChapters = Math.min(loadedChapters + CHAPTERS_STEP, totalChapters);
+        backgroundFetchDoneRef.current = true;
         const controller = new AbortController();
-        setIsLoadingMore(true);
-
-        fetchChapters(nextChapters, controller.signal)
-            .then(({ buf, total }) => {
-                setEpubData(buf);
-                setLoadedChapters(nextChapters);
-                setTotalChapters(total);
-                setEpubKey((k) => k + 1);
-                setIsLoadingMore(false);
+        fetchChapters(totalChapters, controller.signal)
+            .then(({ buf }) => {
+                backgroundEpubRef.current = buf;
             })
             .catch((err) => {
-                if (err.name !== "AbortError") {
-                    setIsLoadingMore(false);
+                // cleanup에 의한 abort만 재시도 허용, 네트워크 에러는 재시도 안 함
+                if (err.name === "AbortError") {
+                    backgroundFetchDoneRef.current = false;
                 }
             });
 
         return () => controller.abort();
-    }, [preview, initialLoadDone, loadedChapters, totalChapters, fetchChapters]);
+    }, [initialLoadDone, preview, totalChapters, fetchChapters]);
 
-    const handleLoadMore = useCallback(() => {
-        if (isLoadingMore) return;
-        const nextChapters = Math.min(loadedChapters + CHAPTERS_STEP, totalChapters);
-        if (nextChapters <= loadedChapters) return;
-
-        setIsLoadingMore(true);
-        fetchChapters(nextChapters)
-            .then(({ buf, total }) => {
-                setEpubData(buf);
-                setLoadedChapters(nextChapters);
-                setTotalChapters(total);
-                setEpubKey((k) => k + 1);
-                setIsLoadingMore(false);
-            })
-            .catch((err) => {
-                if (err.name !== "AbortError") {
-                    setIsLoadingMore(false);
-                }
-            });
-    }, [isLoadingMore, loadedChapters, totalChapters, fetchChapters]);
-
+    // 페이지 변경 핸들러
     const handleLocationChanged = useCallback((epubcfi) => {
         locationRef.current = epubcfi;
         setIsLoading(false);
         setErrorMessage(null);
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        setInitialLoadDone(true);
+
+        if (!initialLoadDoneRef.current) {
+            initialLoadDoneRef.current = true;
+            setInitialLoadDone(true);
+            return;
+        }
+
+        // 백그라운드 데이터 준비 완료 시 페이지 넘기기에 맞춰 바꿔치기
+        if (backgroundEpubRef.current) {
+            const fullData = backgroundEpubRef.current;
+            backgroundEpubRef.current = null;
+            setEpubData(fullData);
+            setLoadedChapters(totalChaptersRef.current);
+            setEpubKey((k) => k + 1);
+        }
     }, []);
 
     const containerHeight = preview ? "60vh" : "100vh";
-    const hasMoreChapters = totalChapters > 0 && loadedChapters < totalChapters;
 
     return (
         <div style={{ height: containerHeight, textAlign: "center", position: "relative" }}>
@@ -172,23 +166,6 @@ export default function ViewEPUB({ bookId, preview = false }) {
                     }}
                 />}
             </Suspense>
-            {hasMoreChapters && !isLoading && (
-                <div style={{ padding: "8px", textAlign: "center" }}>
-                    <button
-                        onClick={handleLoadMore}
-                        disabled={isLoadingMore}
-                        style={{
-                            padding: "6px 14px",
-                            cursor: isLoadingMore ? "wait" : "pointer",
-                            opacity: isLoadingMore ? 0.6 : 1,
-                        }}
-                    >
-                        {isLoadingMore
-                            ? `로딩 중... (${loadedChapters}/${totalChapters})`
-                            : `더 보기 (${loadedChapters}/${totalChapters} 챕터 로드됨)`}
-                    </button>
-                </div>
-            )}
         </div>
     );
 }

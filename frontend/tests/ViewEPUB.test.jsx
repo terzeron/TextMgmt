@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act, cleanup, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, act, cleanup, waitFor } from '@testing-library/react';
 
 afterEach(cleanup);
 
@@ -64,12 +64,12 @@ describe('ViewEPUB', () => {
         expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
-    // ── 점진적 로딩: 초기 요청 ──
+    // ── 초기 로딩 ──
 
-    it('preview=true이면 chapters=1로 첫 요청한다', async () => {
+    it('preview=true이면 chapters=2로 첫 요청한다', async () => {
         render(<ViewEPUB bookId={42} preview={true} />);
         expect(globalThis.fetch).toHaveBeenCalledWith(
-            'http://localhost:8000/preview/42?chapters=1',
+            'http://localhost:8000/preview/42?chapters=2',
             expect.objectContaining({ signal: expect.any(AbortSignal) })
         );
         await waitFor(() => {
@@ -79,10 +79,10 @@ describe('ViewEPUB', () => {
         });
     });
 
-    it('preview=false(전체보기)이면 chapters=1로 첫 요청한다', async () => {
+    it('preview=false(전체보기)이면 chapters=5로 첫 요청한다', async () => {
         render(<ViewEPUB bookId={42} />);
         expect(globalThis.fetch).toHaveBeenCalledWith(
-            'http://localhost:8000/preview/42?chapters=1',
+            'http://localhost:8000/preview/42?chapters=5',
             expect.objectContaining({ signal: expect.any(AbortSignal) })
         );
         await waitFor(() => {
@@ -92,56 +92,32 @@ describe('ViewEPUB', () => {
         });
     });
 
-    // ── 점진적 로딩: 자동 추가 로드 ──
+    // ── 미리보기: 추가 로드 없음 ──
 
-    it('미리보기 모드에서 초기 로딩 후 자동으로 chapters=11 요청한다', async () => {
-        let callCount = 0;
-        globalThis.fetch = vi.fn(() => {
-            callCount++;
-            return Promise.resolve(createFetchResponse(
-                callCount === 1 ? mockArrayBuffer : mockArrayBuffer2, 20
-            ));
-        });
-
-        render(<ViewEPUB bookId={42} preview={true} />);
-
-        expect(globalThis.fetch).toHaveBeenCalledWith(
-            'http://localhost:8000/preview/42?chapters=1',
-            expect.any(Object)
-        );
-
-        await waitFor(() => {
-            expect(globalThis.fetch).toHaveBeenCalledWith(
-                'http://localhost:8000/preview/42?chapters=11',
-                expect.any(Object)
-            );
-        });
-    });
-
-    it('미리보기 모드에서 11챕터 이후 추가 자동 로드하지 않는다', async () => {
+    it('미리보기 모드에서 2챕터 이후 추가 페칭하지 않는다', async () => {
         globalThis.fetch = vi.fn(() =>
-            Promise.resolve(createFetchResponse(mockArrayBuffer, 25))
+            Promise.resolve(createFetchResponse(mockArrayBuffer, 20))
         );
 
         render(<ViewEPUB bookId={42} preview={true} />);
 
-        // chapters=11까지 자동 로드 대기
+        // 초기 로드 완료 대기
         await waitFor(() => {
-            expect(globalThis.fetch).toHaveBeenCalledWith(
-                'http://localhost:8000/preview/42?chapters=11',
-                expect.any(Object)
-            );
+            expect(mockReactReader).toHaveBeenCalled();
         });
 
         // 추가 로드 없음 확인
         await act(async () => { await new Promise(r => setTimeout(r, 50)); });
-        expect(globalThis.fetch).not.toHaveBeenCalledWith(
-            'http://localhost:8000/preview/42?chapters=21',
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+            'http://localhost:8000/preview/42?chapters=2',
             expect.any(Object)
         );
     });
 
-    it('전체보기 모드에서 초기 로딩 후 자동으로 chapters=11 요청한다', async () => {
+    // ── 전체보기: 백그라운드 전체 페칭 ──
+
+    it('전체보기 모드에서 초기 렌더 후 전체 챕터를 백그라운드 페칭한다', async () => {
         let callCount = 0;
         globalThis.fetch = vi.fn(() => {
             callCount++;
@@ -153,87 +129,81 @@ describe('ViewEPUB', () => {
         render(<ViewEPUB bookId={42} />);
 
         expect(globalThis.fetch).toHaveBeenCalledWith(
-            'http://localhost:8000/preview/42?chapters=1',
+            'http://localhost:8000/preview/42?chapters=5',
             expect.any(Object)
         );
 
         await waitFor(() => {
             expect(globalThis.fetch).toHaveBeenCalledWith(
-                'http://localhost:8000/preview/42?chapters=11',
+                'http://localhost:8000/preview/42?chapters=20',
                 expect.any(Object)
             );
         });
     });
 
-    it('전체보기 모드에서 연속 자동 로드한다 (1→11→21)', async () => {
+    it('전체보기에서 전체 챕터가 초기 로드 이하이면 백그라운드 페칭하지 않는다', async () => {
         globalThis.fetch = vi.fn(() =>
-            Promise.resolve(createFetchResponse(mockArrayBuffer, 25))
+            Promise.resolve(createFetchResponse(mockArrayBuffer, 3))
         );
 
         render(<ViewEPUB bookId={42} />);
 
         await waitFor(() => {
+            expect(mockReactReader).toHaveBeenCalled();
+        });
+
+        await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+        // 초기 로드 1회만
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    // ── 페이지 넘기기 시 데이터 바꿔치기 ──
+
+    it('백그라운드 데이터 준비 후 페이지 넘기면 전체 데이터로 바꿔치기한다', async () => {
+        let callCount = 0;
+        globalThis.fetch = vi.fn(() => {
+            callCount++;
+            return Promise.resolve(createFetchResponse(
+                callCount === 1 ? mockArrayBuffer : mockArrayBuffer2, 20
+            ));
+        });
+
+        // autoLoad로 첫 locationChanged 자동 호출
+        render(<ViewEPUB bookId={42} />);
+
+        // 백그라운드 페칭 완료 대기
+        await waitFor(() => {
             expect(globalThis.fetch).toHaveBeenCalledWith(
-                'http://localhost:8000/preview/42?chapters=21',
+                'http://localhost:8000/preview/42?chapters=20',
                 expect.any(Object)
             );
         });
-    });
 
-    // ── 챕터 로딩 버튼 ──
+        // 백그라운드 fetch 완료 후 잠시 대기
+        await act(async () => { await new Promise(r => setTimeout(r, 50)); });
 
-    it('자동 로드 진행 중 로딩 버튼이 표시된다', async () => {
-        let callCount = 0;
-        globalThis.fetch = vi.fn(() => {
-            callCount++;
-            if (callCount === 1) {
-                return Promise.resolve(createFetchResponse(mockArrayBuffer, 20));
-            }
-            // 자동 로드 요청은 지연 → 버튼이 보임
-            return new Promise(() => {});
+        // 페이지 넘기기 시뮬레이션: ReactReader의 locationChanged 호출
+        const lastCall = mockReactReader.mock.calls[mockReactReader.mock.calls.length - 1];
+        await act(async () => {
+            lastCall[0].locationChanged('epubcfi(/2)');
         });
 
-        render(<ViewEPUB bookId={42} />);
-
+        // 새 데이터(mockArrayBuffer2)로 ReactReader가 다시 렌더링됨
         await waitFor(() => {
-            expect(screen.getByRole('button', { name: /1\/20/ })).toBeTruthy();
+            const calls = mockReactReader.mock.calls;
+            const hasFullData = calls.some(c => c[0].url === mockArrayBuffer2);
+            expect(hasFullData).toBe(true);
         });
     });
 
-    it('자동 로드 실패 후 "더 보기" 클릭으로 재시도할 수 있다', async () => {
-        let callCount = 0;
-        globalThis.fetch = vi.fn(() => {
-            callCount++;
-            if (callCount === 1) {
-                return Promise.resolve(createFetchResponse(mockArrayBuffer, 20));
-            }
-            if (callCount === 2) {
-                // 자동 로드 실패
-                return Promise.reject(new Error('Network error'));
-            }
-            // 수동 재시도 성공
-            return Promise.resolve(createFetchResponse(mockArrayBuffer2, 20));
-        });
+    // ── "더보기" 버튼 없음 ──
 
-        render(<ViewEPUB bookId={42} />);
+    it('"더 보기" 버튼이 표시되지 않는다', async () => {
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve(createFetchResponse(mockArrayBuffer, 20))
+        );
 
-        // 자동 로드 실패 후 "더 보기" 버튼 표시 대기
-        await waitFor(() => {
-            expect(screen.getByText(/더 보기/)).toBeTruthy();
-        });
-
-        // "더 보기" 클릭으로 재시도
-        fireEvent.click(screen.getByText(/더 보기/));
-
-        await waitFor(() => {
-            expect(globalThis.fetch).toHaveBeenCalledTimes(3);
-        });
-    });
-
-    it('모든 챕터 로드 완료 시 버튼이 숨겨진다', async () => {
-        globalThis.fetch = vi.fn(() => Promise.resolve(createFetchResponse(mockArrayBuffer, 1)));
-
-        render(<ViewEPUB bookId={42} />);
+        render(<ViewEPUB bookId={42} preview={true} />);
 
         await waitFor(() => {
             expect(mockReactReader).toHaveBeenCalled();
@@ -248,7 +218,7 @@ describe('ViewEPUB', () => {
     it('preview URL에 파일 경로나 %2F가 포함되지 않는다', () => {
         render(<ViewEPUB bookId={42} />);
         const fetchUrl = globalThis.fetch.mock.calls[0][0];
-        expect(fetchUrl).toBe('http://localhost:8000/preview/42?chapters=1');
+        expect(fetchUrl).toBe('http://localhost:8000/preview/42?chapters=5');
         expect(fetchUrl).not.toContain('%2F');
     });
 
@@ -258,7 +228,7 @@ describe('ViewEPUB', () => {
         const { rerender } = render(<ViewEPUB bookId={1} />);
         await waitFor(() => {
             expect(globalThis.fetch).toHaveBeenCalledWith(
-                'http://localhost:8000/preview/1?chapters=1',
+                'http://localhost:8000/preview/1?chapters=5',
                 expect.any(Object)
             );
         });
@@ -266,7 +236,7 @@ describe('ViewEPUB', () => {
         rerender(<ViewEPUB bookId={2} />);
         await waitFor(() => {
             expect(globalThis.fetch).toHaveBeenCalledWith(
-                'http://localhost:8000/preview/2?chapters=1',
+                'http://localhost:8000/preview/2?chapters=5',
                 expect.any(Object)
             );
         });
@@ -275,7 +245,7 @@ describe('ViewEPUB', () => {
     it('preview 전환 시 새로 fetch한다', async () => {
         const { rerender } = render(<ViewEPUB bookId={1} preview={true} />);
         expect(globalThis.fetch).toHaveBeenCalledWith(
-            'http://localhost:8000/preview/1?chapters=1',
+            'http://localhost:8000/preview/1?chapters=2',
             expect.any(Object)
         );
 
@@ -283,7 +253,7 @@ describe('ViewEPUB', () => {
         rerender(<ViewEPUB bookId={1} preview={false} />);
         await waitFor(() => {
             expect(globalThis.fetch).toHaveBeenCalledWith(
-                'http://localhost:8000/preview/1?chapters=1',
+                'http://localhost:8000/preview/1?chapters=5',
                 expect.any(Object)
             );
         });
@@ -341,6 +311,31 @@ describe('ViewEPUB', () => {
         vi.useRealTimers();
     });
 
+    it('추가 챕터 로드 시 타임아웃이 재발동되지 않는다', async () => {
+        vi.useFakeTimers();
+        autoLoad = true;
+
+        let callCount = 0;
+        globalThis.fetch = vi.fn(() => {
+            callCount++;
+            return Promise.resolve(createFetchResponse(
+                callCount === 1 ? mockArrayBuffer : mockArrayBuffer2, 20
+            ));
+        });
+
+        render(<ViewEPUB bookId={42} />);
+
+        // 초기 로딩 완료
+        await act(async () => { vi.advanceTimersByTime(1); });
+
+        // 백그라운드 페칭 완료 + 페이지 넘기기로 데이터 바꿔치기 후에도
+        // 타임아웃이 발생하지 않아야 함
+        await act(async () => { vi.advanceTimersByTime(20000); });
+        expect(screen.queryByText('미리보기 로딩 시간이 초과되었습니다.')).toBeNull();
+
+        vi.useRealTimers();
+    });
+
     // ── fetch 에러 ──
 
     it('서버 에러(non-ok) 시 에러 메시지를 표시한다', async () => {
@@ -384,5 +379,137 @@ describe('ViewEPUB', () => {
 
         unmount();
         expect(abortSpy).toHaveBeenCalled();
+    });
+
+    // ── 백그라운드 fetch abort ──
+
+    it('백그라운드 fetch 진행 중 언마운트 시 abort된다', async () => {
+        let bgFetchStarted = false;
+        globalThis.fetch = vi.fn((url) => {
+            if (url.includes('chapters=20')) {
+                bgFetchStarted = true;
+                // 백그라운드 fetch를 지연시켜 진행 중 상태 유지
+                return new Promise(() => {});
+            }
+            return Promise.resolve(createFetchResponse(mockArrayBuffer, 20));
+        });
+
+        const { unmount } = render(<ViewEPUB bookId={42} />);
+
+        // 백그라운드 fetch 시작 대기
+        await waitFor(() => { expect(bgFetchStarted).toBe(true); });
+
+        const abortSpy = vi.spyOn(AbortController.prototype, 'abort');
+        unmount();
+        // 초기 + 백그라운드 controller 모두 abort
+        expect(abortSpy).toHaveBeenCalled();
+    });
+
+    it('백그라운드 fetch 진행 중 bookId 변경 시 이전 fetch가 abort된다', async () => {
+        let bgFetchCount = 0;
+        globalThis.fetch = vi.fn((url) => {
+            if (url.includes('chapters=20')) {
+                bgFetchCount++;
+                if (bgFetchCount === 1) {
+                    return new Promise(() => {}); // 첫 번째 백그라운드는 지연
+                }
+            }
+            return Promise.resolve(createFetchResponse(mockArrayBuffer, 20));
+        });
+
+        const { rerender } = render(<ViewEPUB bookId={1} />);
+
+        // 백그라운드 fetch 시작 대기
+        await waitFor(() => { expect(bgFetchCount).toBe(1); });
+
+        const abortSpy = vi.spyOn(AbortController.prototype, 'abort');
+        rerender(<ViewEPUB bookId={2} />);
+
+        // bookId 변경으로 이전 fetch들이 abort됨
+        expect(abortSpy).toHaveBeenCalled();
+    });
+
+    // ── 백그라운드 fetch 네트워크 에러 시 재시도 안 함 ──
+
+    it('백그라운드 fetch 네트워크 실패 시 재시도하지 않는다', async () => {
+        let bgFetchCount = 0;
+        globalThis.fetch = vi.fn((url) => {
+            if (url.includes('chapters=20')) {
+                bgFetchCount++;
+                return Promise.reject(new Error('Network error'));
+            }
+            return Promise.resolve(createFetchResponse(mockArrayBuffer, 20));
+        });
+
+        render(<ViewEPUB bookId={42} />);
+
+        // 백그라운드 fetch 1회 시도 대기
+        await waitFor(() => { expect(bgFetchCount).toBeGreaterThanOrEqual(1); });
+
+        // 추가 대기 후에도 재시도 없음
+        await act(async () => { await new Promise(r => setTimeout(r, 100)); });
+        expect(bgFetchCount).toBe(1);
+    });
+
+    // ── 바꿔치기 후 두 번째 페이지 넘기기에서 중복 바꿔치기 없음 ──
+
+    it('바꿔치기 완료 후 추가 페이지 넘기기에서 중복 바꿔치기가 없다', async () => {
+        let callCount = 0;
+        globalThis.fetch = vi.fn(() => {
+            callCount++;
+            return Promise.resolve(createFetchResponse(
+                callCount === 1 ? mockArrayBuffer : mockArrayBuffer2, 20
+            ));
+        });
+
+        render(<ViewEPUB bookId={42} />);
+
+        // 백그라운드 페칭 완료 대기
+        await waitFor(() => {
+            expect(globalThis.fetch).toHaveBeenCalledWith(
+                'http://localhost:8000/preview/42?chapters=20',
+                expect.any(Object)
+            );
+        });
+
+        await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+
+        // 첫 번째 페이지 넘기기: 바꿔치기 발생
+        const call1 = mockReactReader.mock.calls[mockReactReader.mock.calls.length - 1];
+        await act(async () => { call1[0].locationChanged('epubcfi(/2)'); });
+
+        await waitFor(() => {
+            const calls = mockReactReader.mock.calls;
+            expect(calls.some(c => c[0].url === mockArrayBuffer2)).toBe(true);
+        });
+
+        const callsAfterSwap = mockReactReader.mock.calls.length;
+
+        // 두 번째 페이지 넘기기: 추가 바꿔치기 없음 (epubKey 변경 없음)
+        const call2 = mockReactReader.mock.calls[mockReactReader.mock.calls.length - 1];
+        await act(async () => { call2[0].locationChanged('epubcfi(/3)'); });
+
+        await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+
+        // 추가 fetch가 없어야 함 (초기 + 백그라운드 = 2회)
+        const bgCalls = globalThis.fetch.mock.calls.filter(c => c[0].includes('chapters=20'));
+        expect(bgCalls.length).toBe(1);
+    });
+
+    // ── 전체 챕터가 정확히 초기 로드와 같을 때 ──
+
+    it('전체 챕터 수가 초기 로드와 정확히 같으면 백그라운드 페칭 안 한다', async () => {
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve(createFetchResponse(mockArrayBuffer, 5))
+        );
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(mockReactReader).toHaveBeenCalled();
+        });
+
+        await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     });
 });
