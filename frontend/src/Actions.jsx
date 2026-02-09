@@ -227,6 +227,7 @@ export const getSimilarityDebugInfo = (suggestedCategories, categoryList, topN =
 
 export default function Actions(props) {
     const [renderingInfoList, setRenderingInfoList] = useState([]);
+    const [manuallyClicked, setManuallyClicked] = useState(false);
     const [mappingsLoaded, setMappingsLoaded] = useState(false);
 
     // 매핑 캐시 초기화
@@ -248,9 +249,10 @@ export default function Actions(props) {
         return [];
     }, [props.suggestedCategories, props.otherCategoryList, mappingsLoaded]);
 
-    // 유사도 1위 카테고리가 변경되면 자동으로 선택
+    // 유사도 1위 카테고리가 변경되면 자동으로 선택 (수동 클릭 상태 초기화)
     useEffect(() => {
         if (highlightedCategories.length > 0 && props.selectDirectoryButtonClicked) {
+            setManuallyClicked(false);
             props.selectDirectoryButtonClicked(null, highlightedCategories[0]);
         }
     }, [highlightedCategories, props.selectDirectoryButtonClicked]);
@@ -288,16 +290,18 @@ export default function Actions(props) {
                         const isTop2to5 = highlightRank >= 1 && highlightRank <= 4;
                         const highlightClass = isTop1 ? 'highlight' : isTop2to5 ? 'highlight-secondary' : '';
                         const isSelected = info['key'] === props.selectedCategory;
+                        const keepHighlight = isSelected && !manuallyClicked && highlightClass;
                         const buttonStyle = isSelected
-                            ? {backgroundColor: '#fff', color: '#333'}
+                            ? (keepHighlight ? {} : {backgroundColor: '#fff', color: '#333'})
                             : highlightClass ? {} : info['style'];
                         return (
                             <Button
                                 variant="outline-secondary"
                                 key={info['key']}
-                                className={`btn-sm ${info['class'] || ''} ${isSelected ? '' : highlightClass}`}
+                                className={`btn-sm ${info['class'] || ''} ${isSelected && !keepHighlight ? '' : highlightClass}`}
                                 style={buttonStyle}
                                 onClick={(e) => {
+                                    setManuallyClicked(true);
                                     props.selectDirectoryButtonClicked(e, info['key']);
                                 }}>
                                 {info['label']}
