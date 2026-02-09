@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, act, cleanup, waitFor, fireEvent } from '@testing-library/react';
 
 afterEach(cleanup);
 
@@ -21,16 +21,23 @@ vi.mock('../src/Common', () => ({
     getApiUrlPrefix: () => 'http://localhost:8000',
 }));
 
-// fetch mock: ArrayBuffer를 반환
+// fetch mock: ArrayBuffer + X-Total-Chapters 헤더를 반환
 const mockArrayBuffer = new ArrayBuffer(8);
+const mockArrayBuffer2 = new ArrayBuffer(16);
+
+function createFetchResponse(buf = mockArrayBuffer, totalChapters = 20) {
+    return {
+        ok: true,
+        headers: {
+            get: (name) => name === 'X-Total-Chapters' ? String(totalChapters) : null,
+        },
+        arrayBuffer: () => Promise.resolve(buf),
+    };
+}
+
 beforeEach(() => {
     mockReactReader.mockClear();
-    globalThis.fetch = vi.fn(() =>
-        Promise.resolve({
-            ok: true,
-            arrayBuffer: () => Promise.resolve(mockArrayBuffer),
-        })
-    );
+    globalThis.fetch = vi.fn(() => Promise.resolve(createFetchResponse()));
 });
 
 afterEach(() => {
@@ -57,12 +64,12 @@ describe('ViewEPUB', () => {
         expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
-    // ── fetch URL 생성 ──
+    // ── 점진적 로딩: 초기 요청 ──
 
-    it('preview=true이면 /preview/ URL로 fetch한다', async () => {
+    it('preview=true이면 chapters=1로 첫 요청한다', async () => {
         render(<ViewEPUB bookId={42} preview={true} />);
         expect(globalThis.fetch).toHaveBeenCalledWith(
-            'http://localhost:8000/preview/42?chapters=3',
+            'http://localhost:8000/preview/42?chapters=1',
             expect.objectContaining({ signal: expect.any(AbortSignal) })
         );
         await waitFor(() => {
@@ -72,10 +79,10 @@ describe('ViewEPUB', () => {
         });
     });
 
-    it('preview=false이면 /download/{bookId}만으로 fetch한다', async () => {
+    it('preview=false(전체보기)이면 chapters=1로 첫 요청한다', async () => {
         render(<ViewEPUB bookId={42} />);
         expect(globalThis.fetch).toHaveBeenCalledWith(
-            'http://localhost:8000/download/42',
+            'http://localhost:8000/preview/42?chapters=1',
             expect.objectContaining({ signal: expect.any(AbortSignal) })
         );
         await waitFor(() => {
@@ -83,24 +90,93 @@ describe('ViewEPUB', () => {
                 expect.objectContaining({ url: mockArrayBuffer })
             );
         });
+    });
+
+    // ── 점진적 로딩: 미리보기 자동 추가 로드 ──
+
+    it('미리보기 모드에서 초기 로딩 후 자동으로 chapters=11 요청한다', async () => {
+        let callCount = 0;
+        globalThis.fetch = vi.fn(() => {
+            callCount++;
+            return Promise.resolve(createFetchResponse(
+                callCount === 1 ? mockArrayBuffer : mockArrayBuffer2, 20
+            ));
+        });
+
+        render(<ViewEPUB bookId={42} preview={true} />);
+
+        // 첫 요청: chapters=1
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+            'http://localhost:8000/preview/42?chapters=1',
+            expect.any(Object)
+        );
+
+        // locationChanged 호출 후 자동으로 추가 요청
+        await waitFor(() => {
+            expect(globalThis.fetch).toHaveBeenCalledWith(
+                'http://localhost:8000/preview/42?chapters=11',
+                expect.any(Object)
+            );
+        });
+    });
+
+    // ── 점진적 로딩: 전체보기 "더 보기" 버튼 ──
+
+    it('전체보기 모드에서 "더 보기" 버튼이 표시된다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/더 보기/)).toBeTruthy();
+        });
+    });
+
+    it('전체보기 모드에서 "더 보기" 클릭 시 추가 챕터를 요청한다', async () => {
+        let callCount = 0;
+        globalThis.fetch = vi.fn(() => {
+            callCount++;
+            return Promise.resolve(createFetchResponse(
+                callCount === 1 ? mockArrayBuffer : mockArrayBuffer2, 20
+            ));
+        });
+
+        render(<ViewEPUB bookId={42} />);
+
+        // 첫 렌더링 대기
+        await waitFor(() => {
+            expect(screen.getByText(/더 보기/)).toBeTruthy();
+        });
+
+        // "더 보기" 클릭
+        fireEvent.click(screen.getByText(/더 보기/));
+
+        await waitFor(() => {
+            expect(globalThis.fetch).toHaveBeenCalledWith(
+                'http://localhost:8000/preview/42?chapters=11',
+                expect.any(Object)
+            );
+        });
+    });
+
+    it('모든 챕터 로드 완료 시 "더 보기" 버튼이 숨겨진다', async () => {
+        // totalChapters=1이면 이미 모두 로드됨
+        globalThis.fetch = vi.fn(() => Promise.resolve(createFetchResponse(mockArrayBuffer, 1)));
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(mockReactReader).toHaveBeenCalled();
+        });
+
+        expect(screen.queryByText(/더 보기/)).toBeNull();
     });
 
     // ── %2F 회귀 방지 (버그 #1 핵심 회귀 테스트) ──
 
-    it('download URL에 파일 경로나 %2F가 포함되지 않는다', () => {
+    it('preview URL에 파일 경로나 %2F가 포함되지 않는다', () => {
         render(<ViewEPUB bookId={42} />);
         const fetchUrl = globalThis.fetch.mock.calls[0][0];
-        expect(fetchUrl).toBe('http://localhost:8000/download/42');
+        expect(fetchUrl).toBe('http://localhost:8000/preview/42?chapters=1');
         expect(fetchUrl).not.toContain('%2F');
-        expect(fetchUrl).not.toMatch(/\/download\/\d+\/.+/);
-    });
-
-    it('한글·특수문자가 포함된 경로여도 URL에 인코딩 문제가 없다', () => {
-        // 이전에는 filePath가 URL에 포함되어 %2F, 괄호 등이 프록시 400을 유발했음
-        // 이제 bookId만 사용하므로 filePath에 무관하게 안전한 URL 생성
-        render(<ViewEPUB bookId={381881} />);
-        const fetchUrl = globalThis.fetch.mock.calls[0][0];
-        expect(fetchUrl).toBe('http://localhost:8000/download/381881');
     });
 
     // ── bookId / preview 변경 ──
@@ -109,7 +185,7 @@ describe('ViewEPUB', () => {
         const { rerender } = render(<ViewEPUB bookId={1} />);
         await waitFor(() => {
             expect(globalThis.fetch).toHaveBeenCalledWith(
-                'http://localhost:8000/download/1',
+                'http://localhost:8000/preview/1?chapters=1',
                 expect.any(Object)
             );
         });
@@ -117,16 +193,16 @@ describe('ViewEPUB', () => {
         rerender(<ViewEPUB bookId={2} />);
         await waitFor(() => {
             expect(globalThis.fetch).toHaveBeenCalledWith(
-                'http://localhost:8000/download/2',
+                'http://localhost:8000/preview/2?chapters=1',
                 expect.any(Object)
             );
         });
     });
 
-    it('preview 전환 시 URL 패턴이 변경된다', async () => {
+    it('preview 전환 시 새로 fetch한다', async () => {
         const { rerender } = render(<ViewEPUB bookId={1} preview={true} />);
         expect(globalThis.fetch).toHaveBeenCalledWith(
-            'http://localhost:8000/preview/1?chapters=3',
+            'http://localhost:8000/preview/1?chapters=1',
             expect.any(Object)
         );
 
@@ -134,7 +210,7 @@ describe('ViewEPUB', () => {
         rerender(<ViewEPUB bookId={1} preview={false} />);
         await waitFor(() => {
             expect(globalThis.fetch).toHaveBeenCalledWith(
-                'http://localhost:8000/download/1',
+                'http://localhost:8000/preview/1?chapters=1',
                 expect.any(Object)
             );
         });
@@ -163,14 +239,14 @@ describe('ViewEPUB', () => {
 
     // ── 로딩 타임아웃 ──
 
-    it('30초 내 로딩 미완료 시 타임아웃 에러를 표시한다', async () => {
+    it('15초 내 로딩 미완료 시 타임아웃 에러를 표시한다', async () => {
         vi.useFakeTimers();
         autoLoad = false;
 
         render(<ViewEPUB bookId={1} />);
 
         await act(async () => { vi.advanceTimersByTime(1); });
-        await act(async () => { vi.advanceTimersByTime(30000); });
+        await act(async () => { vi.advanceTimersByTime(15000); });
 
         expect(screen.getByText('미리보기 로딩 시간이 초과되었습니다.')).toBeTruthy();
         expect(screen.queryByText('로딩 중...')).toBeNull();
@@ -186,7 +262,7 @@ describe('ViewEPUB', () => {
 
         await act(async () => { vi.advanceTimersByTime(1); });
 
-        act(() => { vi.advanceTimersByTime(30000); });
+        act(() => { vi.advanceTimersByTime(15000); });
         expect(screen.queryByText('미리보기 로딩 시간이 초과되었습니다.')).toBeNull();
 
         vi.useRealTimers();
@@ -196,7 +272,11 @@ describe('ViewEPUB', () => {
 
     it('서버 에러(non-ok) 시 에러 메시지를 표시한다', async () => {
         globalThis.fetch = vi.fn(() =>
-            Promise.resolve({ ok: false, status: 500 })
+            Promise.resolve({
+                ok: false,
+                status: 500,
+                headers: { get: () => null },
+            })
         );
         render(<ViewEPUB bookId={1} />);
         await waitFor(() => {
@@ -219,7 +299,6 @@ describe('ViewEPUB', () => {
         globalThis.fetch = vi.fn(() => Promise.reject(abortError));
         render(<ViewEPUB bookId={1} />);
 
-        // AbortError가 에러 메시지를 유발하지 않는 걸 확인하기 위해 짧은 대기
         await act(async () => { await new Promise(r => setTimeout(r, 50)); });
         expect(screen.queryByText(/EPUB 로딩 실패/)).toBeNull();
     });

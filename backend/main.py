@@ -31,7 +31,7 @@ app = FastAPI()
 LOGGER.info("app ready")
 origins = [os.getenv("TM_FRONTEND_URL")]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
-                   expose_headers=["Accept-Ranges", "Content-Range", "Content-Length", "Content-Encoding", "X-Total-Pages"])
+                   expose_headers=["Accept-Ranges", "Content-Range", "Content-Length", "Content-Encoding", "X-Total-Pages", "X-Total-Chapters"])
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 

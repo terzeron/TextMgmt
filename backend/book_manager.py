@@ -53,6 +53,31 @@ class BookManager:
         return "libreoffice"
 
     @staticmethod
+    def _get_epub_total_chapters(file_path: Path) -> int:
+        """EPUB 파일의 총 챕터 수(spine itemref 수)를 반환"""
+        import zipfile
+        import xml.etree.ElementTree as ET
+        from posixpath import dirname
+
+        try:
+            with zipfile.ZipFile(str(file_path), 'r') as zin:
+                cnt_ns = 'urn:oasis:names:tc:opendocument:xmlns:container'
+                container = ET.fromstring(zin.read('META-INF/container.xml'))
+                rootfile = container.find(f'.//{{{cnt_ns}}}rootfile')
+                if rootfile is None:
+                    return 0
+                opf_path = rootfile.get('full-path', '')
+                opf_ns = 'http://www.idpf.org/2007/opf'
+                opf = ET.fromstring(zin.read(opf_path))
+                spine_el = opf.find(f'.//{{{opf_ns}}}spine')
+                if spine_el is None:
+                    return 0
+                return len(spine_el.findall(f'{{{opf_ns}}}itemref'))
+        except Exception as e:
+            LOGGER.warning("Failed to get EPUB total chapters for '%s': %s", file_path, e)
+            return 0
+
+    @staticmethod
     def _convert_with_libreoffice(file_path: Path, output_format: str) -> str:
         """LibreOffice를 사용하여 파일을 변환하고 결과 텍스트를 반환"""
         lo_bin = BookManager._find_libreoffice()
@@ -187,16 +212,22 @@ class BookManager:
                 return Response(status_code=500, content=f"PDF preview failed: {e}")
 
         elif suffix == ".epub":
-            cache_file = cache_dir / f"{book_id}.epub"
-            # 구 HTML 캐시 정리
-            old_html_cache = cache_dir / f"{book_id}.html"
-            if old_html_cache.exists():
-                old_html_cache.unlink()
+            total_chapters = BookManager._get_epub_total_chapters(book.file_path)
+            cache_file = cache_dir / f"{book_id}_ch{chapters}.epub"
+            # 구 형식 캐시 정리 (book_id.epub, book_id.html)
+            for old_name in [f"{book_id}.epub", f"{book_id}.html"]:
+                old_cache = cache_dir / old_name
+                if old_cache.exists():
+                    old_cache.unlink()
+            extra_headers = {
+                "Content-Encoding": "identity",
+                "Cache-Control": "no-transform",
+                "X-Total-Chapters": str(total_chapters),
+            }
             if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
-                LOGGER.debug("Preview cache hit for book_id=%d (EPUB)", book_id)
+                LOGGER.debug("Preview cache hit for book_id=%d (EPUB, ch%d)", book_id, chapters)
                 return FileResponse(path=cache_file, media_type="application/epub+zip",
-                                    headers={"Content-Encoding": "identity",
-                                             "Cache-Control": "no-transform"})
+                                    headers=extra_headers)
 
             try:
                 import re
@@ -322,8 +353,7 @@ class BookManager:
 
                 LOGGER.debug("Preview generated for book_id=%d (EPUB, %d chapters)", book_id, len(chapter_idrefs))
                 return FileResponse(path=cache_file, media_type="application/epub+zip",
-                                    headers={"Content-Encoding": "identity",
-                                             "Cache-Control": "no-transform"})
+                                    headers=extra_headers)
             except Exception as e:
                 LOGGER.error("EPUB preview generation failed for book_id=%d: %s", book_id, e)
                 return Response(status_code=500, content=f"EPUB preview failed: {e}")
