@@ -495,6 +495,7 @@ export default function Edit() {
                 : newDirName + '/' + titleOnly + extensionSuffix;
             const updatedTime = DateTime.now().toFormat('yyyy-MM-dd\'T\'HH:mm:ss.SSS');
             const payload = { ...bookInfo, category: categoryForBackend, file_path: newFilePath, updated_time: updatedTime };
+            console.log(`updateFile: PUT ${updateUrl}, payload.title="${payload.title}", payload.author="${payload.author}", payload.file_path="${payload.file_path}"`);
             jsonPutReq(updateUrl, payload, () => {
                 // 구체적인 성공 메시지 생성
                 const displayDirName = (dirName === '' || dirName === '_root') ? '최상위' : dirName;
@@ -528,10 +529,12 @@ export default function Edit() {
                     }
                 }
             }, (error) => {
+                console.error(`updateFile: PUT 실패 - ${error}`);
                 setErrorMessage(`책 이름 변경에 실패했습니다. ${error}`);
             });
         } else {
             const displayNewDirName = (newDirName === '' || newDirName === '_root') ? '최상위' : newDirName;
+            console.warn(`updateFile: 이미 존재 - "${displayNewDirName}/${newFileName}"`);
             setErrorMessage(`"${displayNewDirName}" 디렉토리에 "${newFileName}"이(가) 이미 존재합니다.`);
         }
     }, [bookInfo, folderData, checkEntryExistence, appendEntryToFolderData, removeEntryFromFolderData]);
