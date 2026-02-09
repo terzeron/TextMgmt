@@ -34,6 +34,7 @@ export default function SimilarBooks({bookId, onSelect}) {
         return () => {
             setSimilarBooks([]);
             setTotal(0);
+            setIsOpen(false);
         };
     }, [bookId]);
 
