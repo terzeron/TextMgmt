@@ -23,6 +23,7 @@ export default function ViewEPUB({ bookId, preview = false }) {
     const renditionRef = useRef(null);
     const timeoutRef = useRef(null);
     const locationRef = useRef("");
+    const savedLocationRef = useRef(null);
     const backgroundEpubRef = useRef(null);
     const initialLoadDoneRef = useRef(false);
     const totalChaptersRef = useRef(0);
@@ -79,13 +80,13 @@ export default function ViewEPUB({ bookId, preview = false }) {
         backgroundFetchDoneRef.current = false;
         setPageInfo({ page: 0, total: 0 });
 
-        // 전체보기: localStorage에서 읽기 위치 복원
+        // 전체보기: 읽기 위치를 별도 저장 (초기 부분 로드에는 적용하지 않음)
         if (!preview) {
-            const savedLocation = localStorage.getItem(`epub_location_${bookId}`);
-            locationRef.current = savedLocation || "";
+            savedLocationRef.current = localStorage.getItem(`epub_location_${bookId}`) || null;
         } else {
-            locationRef.current = "";
+            savedLocationRef.current = null;
         }
+        locationRef.current = "";
 
         const initialChapters = preview ? CHAPTERS_PREVIEW : CHAPTERS_FULLVIEW_INITIAL;
         const controller = new AbortController();
@@ -122,7 +123,7 @@ export default function ViewEPUB({ bookId, preview = false }) {
         if (!epubData || initialLoadDone) return;
         timeoutRef.current = setTimeout(() => {
             setIsLoading(false);
-            setErrorMessage("미리보기 로딩 시간이 초과되었습니다.");
+            setErrorMessage("EPUB 로딩 시간이 초과되었습니다.");
         }, 15000);
         return () => clearTimeout(timeoutRef.current);
     }, [epubData, initialLoadDone]);
@@ -159,6 +160,13 @@ export default function ViewEPUB({ bookId, preview = false }) {
         if (!initialLoadDoneRef.current) {
             initialLoadDoneRef.current = true;
             setInitialLoadDone(true);
+
+            // 전체보기: 전체 챕터가 초기 로드로 충분하면 저장된 위치 즉시 복원
+            if (savedLocationRef.current && totalChaptersRef.current <= CHAPTERS_FULLVIEW_INITIAL) {
+                locationRef.current = savedLocationRef.current;
+                savedLocationRef.current = null;
+                setEpubKey((k) => k + 1);
+            }
             return;
         }
 
@@ -171,6 +179,11 @@ export default function ViewEPUB({ bookId, preview = false }) {
         if (backgroundEpubRef.current) {
             const fullData = backgroundEpubRef.current;
             backgroundEpubRef.current = null;
+            // 저장된 읽기 위치가 있으면 전체 데이터와 함께 복원
+            if (savedLocationRef.current) {
+                locationRef.current = savedLocationRef.current;
+                savedLocationRef.current = null;
+            }
             setEpubData(fullData);
             setLoadedChapters(totalChaptersRef.current);
             setEpubKey((k) => k + 1);

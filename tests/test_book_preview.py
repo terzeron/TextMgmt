@@ -32,7 +32,7 @@ CONTAINER_XML = """\
 </container>"""
 
 
-def _make_opf(chapter_count: int, include_css: bool = False) -> str:
+def _make_opf(chapter_count: int, include_css: bool = False, include_svg_cover: bool = False) -> str:
     """챕터 N개를 포함한 OPF XML을 생성."""
     items = []
     spine_refs = []
@@ -42,6 +42,9 @@ def _make_opf(chapter_count: int, include_css: bool = False) -> str:
 
     if include_css:
         items.append('    <item id="style" href="style.css" media-type="text/css"/>')
+
+    if include_svg_cover:
+        items.append('    <item id="cover-image" href="../media/cover.jpg" media-type="image/jpeg"/>')
 
     return f"""\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -60,6 +63,21 @@ def _make_opf(chapter_count: int, include_css: bool = False) -> str:
 </package>"""
 
 
+def _make_cover_xhtml_with_svg() -> str:
+    """SVG <image> 태그로 커버 이미지를 참조하는 커버 페이지."""
+    return """\
+<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Cover</title></head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="100%" height="100%" viewBox="0 0 600 800">
+  <image xlink:href="../media/cover.jpg" width="600" height="800"/>
+</svg>
+</body>
+</html>"""
+
+
 def _make_chapter_xhtml(index: int, link_css: bool = False) -> str:
     css_link = '<link rel="stylesheet" href="style.css"/>' if link_css else ''
     return f"""\
@@ -70,18 +88,25 @@ def _make_chapter_xhtml(index: int, link_css: bool = False) -> str:
 </html>"""
 
 
-def _create_test_epub(path: Path, chapter_count: int = 3, include_css: bool = False) -> None:
+def _create_test_epub(path: Path, chapter_count: int = 3, include_css: bool = False,
+                      include_svg_cover: bool = False) -> None:
     """테스트용 미니 EPUB을 생성."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
         zf.writestr('META-INF/container.xml', CONTAINER_XML)
-        zf.writestr('OEBPS/content.opf', _make_opf(chapter_count, include_css))
+        zf.writestr('OEBPS/content.opf', _make_opf(chapter_count, include_css, include_svg_cover))
         zf.writestr('OEBPS/toc.ncx', '<ncx/>')
         for i in range(1, chapter_count + 1):
-            zf.writestr(f'OEBPS/ch{i}.xhtml', _make_chapter_xhtml(i, link_css=include_css))
+            if include_svg_cover and i == 1:
+                zf.writestr(f'OEBPS/ch{i}.xhtml', _make_cover_xhtml_with_svg())
+            else:
+                zf.writestr(f'OEBPS/ch{i}.xhtml', _make_chapter_xhtml(i, link_css=include_css))
         if include_css:
             zf.writestr('OEBPS/style.css', 'body { margin: 1em; font-family: serif; }')
+        if include_svg_cover:
+            # 1x1 JPEG placeholder
+            zf.writestr('media/cover.jpg', b'\xff\xd8\xff\xe0\x00\x10JFIF\xff\xd9')
 
 
 def _create_corrupted_epub(path: Path, chapter_count: int = 3, missing_all: bool = False) -> None:
@@ -406,6 +431,32 @@ class TestBookPreview:
             zf.close()
         finally:
             _cleanup_book(client, bm, book_id, css_path)
+
+    @pytest.mark.asyncio
+    async def test_preview_includes_svg_image_cover(self, backend_test_setup):
+        """SVG <image>로 커버를 참조하는 EPUB → preview에 커버 이미지가 포함된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        svg_cover_path = epub_dir / "[Test Author] SVG Cover Book.epub"
+        _create_test_epub(svg_cover_path, chapter_count=2, include_svg_cover=True)
+
+        book_id = await _register_epub_async(bm, svg_cover_path)
+
+        try:
+            cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}.epub"
+            cache_file.unlink(missing_ok=True)
+
+            response = client.get(f"/preview/{book_id}?chapters=1")
+            assert response.status_code == 200
+
+            zf = _parse_epub_zip(response.content)
+            assert 'media/cover.jpg' in zf.namelist(), \
+                "SVG <image> referenced cover.jpg should be included in preview"
+            zf.close()
+        finally:
+            _cleanup_book(client, bm, book_id, svg_cover_path)
 
 
 # ── tests: download 엔드포인트 ────────────────────────────

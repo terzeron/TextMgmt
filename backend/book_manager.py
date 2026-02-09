@@ -296,6 +296,11 @@ class BookManager:
                             src = img.get('src', '')
                             if src and not src.startswith('data:'):
                                 referenced.add(normpath(pjoin(item_dir, src)))
+                        # SVG <image> 태그 (커버 등에서 사용)
+                        for image in soup.find_all('image'):
+                            href = image.get('xlink:href') or image.get('href', '')
+                            if href and not href.startswith('data:'):
+                                referenced.add(normpath(pjoin(item_dir, href)))
                         for link in soup.find_all('link'):
                             href_attr = link.get('href', '')
                             if href_attr:
