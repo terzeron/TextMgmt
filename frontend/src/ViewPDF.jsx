@@ -14,7 +14,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
     const [downloadProgress, setDownloadProgress] = useState(0);
     const [isFirstPageReady, setIsFirstPageReady] = useState(false);
     const ZOOM_STEPS = [25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500];
-    const [fitMode, setFitMode] = useState(true);
+    const [fitMode, setFitMode] = useState(!preview);
     const [zoomIndex, setZoomIndex] = useState(ZOOM_STEPS.indexOf(100));
     const zoomPercent = ZOOM_STEPS[zoomIndex];
     const zoomDown = () => setZoomIndex(prev => Math.max(0, prev - 1));
