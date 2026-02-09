@@ -57,7 +57,6 @@ class BookManager:
         """EPUB 파일의 총 챕터 수(spine itemref 수)를 반환"""
         import zipfile
         import xml.etree.ElementTree as ET
-        from posixpath import dirname
 
         try:
             with zipfile.ZipFile(str(file_path), 'r') as zin:

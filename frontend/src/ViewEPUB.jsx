@@ -77,14 +77,17 @@ export default function ViewEPUB({ bookId, preview = false }) {
         return () => clearTimeout(timeoutRef.current);
     }, [epubData]);
 
-    // 미리보기 모드: 첫 렌더링 후 자동으로 추가 챕터 로드
+    // 첫 렌더링 후 자동으로 추가 챕터 로드
+    // - 미리보기: 1 → 11 챕터까지 1회 자동 로드
+    // - 전체보기: 1 → 11 → 21 → ... → 전체까지 연속 자동 로드
     useEffect(() => {
-        if (!preview) return;
         if (!initialLoadDone) return;
-        if (loadedChapters !== CHAPTERS_INITIAL) return;
+        if (loadedChapters >= totalChapters) return;
         if (totalChapters <= CHAPTERS_INITIAL) return;
+        // 미리보기: 첫 배치(1→11)만 자동 로드
+        if (preview && loadedChapters > CHAPTERS_INITIAL) return;
 
-        const nextChapters = Math.min(CHAPTERS_INITIAL + CHAPTERS_STEP, totalChapters);
+        const nextChapters = Math.min(loadedChapters + CHAPTERS_STEP, totalChapters);
         const controller = new AbortController();
         setIsLoadingMore(true);
 
@@ -110,10 +113,8 @@ export default function ViewEPUB({ bookId, preview = false }) {
         const nextChapters = Math.min(loadedChapters + CHAPTERS_STEP, totalChapters);
         if (nextChapters <= loadedChapters) return;
 
-        const controller = new AbortController();
         setIsLoadingMore(true);
-
-        fetchChapters(nextChapters, controller.signal)
+        fetchChapters(nextChapters)
             .then(({ buf, total }) => {
                 setEpubData(buf);
                 setLoadedChapters(nextChapters);
@@ -171,26 +172,21 @@ export default function ViewEPUB({ bookId, preview = false }) {
                     }}
                 />}
             </Suspense>
-            {!preview && hasMoreChapters && !isLoading && (
-                <div style={{ padding: "10px", textAlign: "center" }}>
+            {hasMoreChapters && !isLoading && (
+                <div style={{ padding: "8px", textAlign: "center" }}>
                     <button
                         onClick={handleLoadMore}
                         disabled={isLoadingMore}
                         style={{
-                            padding: "8px 16px",
+                            padding: "6px 14px",
                             cursor: isLoadingMore ? "wait" : "pointer",
                             opacity: isLoadingMore ? 0.6 : 1,
                         }}
                     >
                         {isLoadingMore
-                            ? "로딩 중..."
+                            ? `로딩 중... (${loadedChapters}/${totalChapters})`
                             : `더 보기 (${loadedChapters}/${totalChapters} 챕터 로드됨)`}
                     </button>
-                </div>
-            )}
-            {isLoadingMore && (
-                <div style={{ padding: "5px", textAlign: "center", fontSize: "0.9em", color: "#666" }}>
-                    추가 챕터 로딩 중...
                 </div>
             )}
         </div>
