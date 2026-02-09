@@ -49,13 +49,20 @@ export const calculateSimilarity = (str1, str2) => {
     if (s1 === s2) return 1.0;
 
     // 2) 포함 관계 → 0.7~0.9
+    //    단, 한글 2글자 이상 키워드가 긴 문자열의 50% 이하이면
+    //    너무 범용적인 매칭이므로 N-gram으로 평가
+    //    (예: "소설" ⊂ "세계각국소설" → N-gram, "SF" ⊂ "SF소설" → 포함)
     const shorter = s1.length <= s2.length ? s1 : s2;
     const longer = s1.length > s2.length ? s1 : s2;
     // 한글은 1글자도 의미있으므로 허용, 그 외는 2글자 이상
     const minLength = containsKorean(shorter) ? 1 : 2;
     if (longer.includes(shorter) && shorter.length >= minLength) {
         const ratio = shorter.length / longer.length;
-        return 0.7 + (ratio * 0.2);
+        if (containsKorean(shorter) && shorter.length >= 2 && ratio <= 0.5) {
+            // 한글 2글자 이상이 절반 이하로 포함 → N-gram으로 평가
+        } else {
+            return 0.7 + (ratio * 0.2);
+        }
     }
 
     // 3) N-gram 유사도 기반 → 0.3~0.6
@@ -76,15 +83,31 @@ const splitBySpecialChars = (str) => {
     return str.split(/[\/\(\)\s]+/).map(s => s.trim()).filter(Boolean);
 };
 
+// 다른 키워드에 포함되는 짧은 키워드를 제거하여 구체적인 키워드만 사용
+// 예: ["소설", "세계각국소설"] → ["세계각국소설"] ("소설"은 "세계각국소설"에 포함)
+export const filterSubstringKeywords = (keywords) => {
+    if (keywords.length <= 1) return keywords;
+    return keywords.filter(kw => {
+        const kwLower = kw.toLowerCase();
+        return !keywords.some(other => {
+            if (other === kw) return false;
+            return other.toLowerCase().includes(kwLower);
+        });
+    });
+};
+
 // 단일 서점 카테고리와 디렉토리의 유사도 점수 계산
 // - 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
 // - 서점 카테고리(이미 마지막 레벨)를 특수기호로 분리하여 사용
+// - 다른 키워드에 포함되는 범용 키워드는 제거 (예: "소설"이 "세계각국소설"에 포함)
+// - 각 키워드별 최선 매칭을 합산하여 모든 키워드가 점수에 기여
 // - { category: score } 형태의 객체 반환
 const calculateCategoryScores = (bookstoreCategory, categoryList) => {
     if (!bookstoreCategory || !categoryList?.length) return {};
 
-    // 서점 카테고리를 특수기호로 분리하여 키워드 추출
-    const deepKeywords = splitBySpecialChars(bookstoreCategory);
+    // 서점 카테고리를 특수기호로 분리 후 부분문자열 키워드 제거
+    const rawKeywords = splitBySpecialChars(bookstoreCategory);
+    const deepKeywords = filterSubstringKeywords(rawKeywords);
 
     if (deepKeywords.length === 0) return {};
 
@@ -100,20 +123,21 @@ const calculateCategoryScores = (bookstoreCategory, categoryList) => {
         // 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
         const dirKeywords = [...(mappings[category] || []), categoryName];
 
-        // 서점 카테고리와 디렉토리 키워드 간 최대 유사도 계산
-        let maxSimilarity = 0;
+        // 각 서점 키워드별 최대 유사도를 구한 뒤 합산
+        let totalScore = 0;
         for (const deepKeyword of deepKeywords) {
+            let bestForKeyword = 0;
             for (const dirKeyword of dirKeywords) {
                 const similarity = calculateSimilarity(deepKeyword, dirKeyword);
-                if (similarity > maxSimilarity) {
-                    maxSimilarity = similarity;
+                if (similarity > bestForKeyword) {
+                    bestForKeyword = similarity;
                 }
             }
+            totalScore += bestForKeyword;
         }
 
-        // 모든 카테고리의 유사도 저장 (0보다 크면)
-        if (maxSimilarity > 0) {
-            scores[category] = maxSimilarity;
+        if (totalScore > 0) {
+            scores[category] = totalScore;
         }
     }
 
@@ -154,10 +178,11 @@ export const getSimilarityDebugInfo = (suggestedCategories, categoryList, topN =
         categoryDetails: [],   // 각 카테고리별 상세 계산 과정
     };
 
-    // 1. 서점별 추출된 키워드 수집 (이미 마지막 레벨만 전달됨)
+    // 1. 서점별 추출된 키워드 수집 (부분문자열 키워드 필터링 적용)
     for (const [store, bookstoreCategory] of Object.entries(suggestedCategories)) {
         if (!bookstoreCategory) continue;
-        const keywords = splitBySpecialChars(bookstoreCategory);
+        const rawKeywords = splitBySpecialChars(bookstoreCategory);
+        const keywords = filterSubstringKeywords(rawKeywords);
         debugInfo.bookstoreKeywords[store] = {
             original: bookstoreCategory,
             keywords
@@ -177,14 +202,15 @@ export const getSimilarityDebugInfo = (suggestedCategories, categoryList, topN =
         let totalScore = 0;
 
         for (const [store, storeInfo] of Object.entries(debugInfo.bookstoreKeywords)) {
-            let maxSimilarity = 0;
-            let bestMatch = null;
-
+            // 각 서점 키워드별 최선 매칭을 개별적으로 기록
             for (const deepKeyword of storeInfo.keywords) {
+                let bestSimilarity = 0;
+                let bestMatch = null;
+
                 for (const dirKeyword of dirKeywords) {
                     const similarity = calculateSimilarity(deepKeyword, dirKeyword);
-                    if (similarity > maxSimilarity) {
-                        maxSimilarity = similarity;
+                    if (similarity > bestSimilarity) {
+                        bestSimilarity = similarity;
                         const dkLower = deepKeyword.toLowerCase();
                         const drLower = dirKeyword.toLowerCase();
                         const isExact = dkLower === drLower;
@@ -198,11 +224,11 @@ export const getSimilarityDebugInfo = (suggestedCategories, categoryList, topN =
                         };
                     }
                 }
-            }
 
-            if (maxSimilarity > 0) {
-                matchDetails.push({ store, ...bestMatch });
-                totalScore += maxSimilarity;
+                if (bestSimilarity > 0) {
+                    matchDetails.push({ store, ...bestMatch });
+                    totalScore += bestSimilarity;
+                }
             }
         }
 
