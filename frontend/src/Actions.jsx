@@ -13,7 +13,7 @@ import {loadCategoryMappings, fetchCategoryMappings, isCacheInitialized} from '.
 
 
 // 문자열에서 n-gram 집합 생성
-const generateNgrams = (str, n = 2) => {
+export const generateNgrams = (str, n = 2) => {
     const ngrams = new Set();
     for (let i = 0; i <= str.length - n; i++) {
         ngrams.add(str.substring(i, i + n));
@@ -22,7 +22,7 @@ const generateNgrams = (str, n = 2) => {
 };
 
 // N-gram 기반 Jaccard 유사도 (0~1)
-const ngramSimilarity = (str1, str2, n = 2) => {
+export const ngramSimilarity = (str1, str2, n = 2) => {
     if (str1.length < n || str2.length < n) {
         return str1 === str2 ? 1.0 : 0;
     }
@@ -39,8 +39,8 @@ const ngramSimilarity = (str1, str2, n = 2) => {
 // 한글 문자 포함 여부 확인
 const containsKorean = (str) => /[\uAC00-\uD7AF]/.test(str);
 
-// 유사도 계산 (완전일치 > 포함관계 > 공통부분문자열)
-const calculateSimilarity = (str1, str2) => {
+// 유사도 계산 (완전일치 > 포함관계 > N-gram 유사도)
+export const calculateSimilarity = (str1, str2) => {
     if (!str1 || !str2) return 0;
     const s1 = str1.toLowerCase();
     const s2 = str2.toLowerCase();

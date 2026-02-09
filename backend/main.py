@@ -124,6 +124,7 @@ class BookModel(BaseModel):
     page_count: int = 0
     isbn: str = ""
     updated_time: str
+    score: float = 0.0
 
 
 @app.put("/books/{book_id}")

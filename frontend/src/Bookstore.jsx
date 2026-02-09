@@ -11,7 +11,7 @@ import {rawJsonGetReq} from './Common';
 // 예: "소설/시/희곡 > SF > 한국SF" → "SF 한국SF"
 // 예: "소설/시/희곡 > 중국소설" → "소설/시/희곡 중국소설"
 // 예: "한국SF" → "한국SF"
-const getTwoLevelCategory = (category) => {
+export const getTwoLevelCategory = (category) => {
   if (!category) return '';
   const parts = category.split('>').map(s => s.trim()).filter(Boolean);
   if (parts.length <= 1) return parts[0] || '';
