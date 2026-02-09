@@ -378,8 +378,20 @@ class BookManager:
                         if ref.get('idref') not in chapter_idrefs:
                             spine_el.remove(ref)
 
+                    # guide에서 존재하지 않는 파일 참조 제거
+                    guide_el = opf.find(f'.//{{{opf_ns}}}guide')
+                    if guide_el is not None:
+                        for ref in list(guide_el.findall(f'{{{opf_ns}}}reference')):
+                            href = ref.get('href', '')
+                            ref_zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+                            if ref_zp not in files_to_include:
+                                guide_el.remove(ref)
+
                     # 새 EPUB 작성
                     modified_opf = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(opf, encoding='unicode')
+
+                    # @font-face 블록 제거용 패턴
+                    font_face_pattern = re.compile(r'@font-face\s*\{[^}]*\}')
 
                     with zipfile.ZipFile(str(cache_file), 'w', zipfile.ZIP_DEFLATED) as zout:
                         zout.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
@@ -388,7 +400,21 @@ class BookManager:
                                 zout.writestr(zp, modified_opf)
                             else:
                                 try:
-                                    zout.writestr(zp, zin.read(zp))
+                                    data = zin.read(zp)
+                                    # CSS에서 제외된 폰트의 @font-face 제거
+                                    if zp.endswith('.css'):
+                                        css_text = data.decode('utf-8', errors='replace')
+                                        css_dir = dirname(zp)
+
+                                        def _strip_missing_font(m):
+                                            for url in css_url_pattern.findall(m.group()):
+                                                if normpath(pjoin(css_dir, url)) not in files_to_include:
+                                                    return ''
+                                            return m.group()
+
+                                        css_text = font_face_pattern.sub(_strip_missing_font, css_text)
+                                        data = css_text.encode('utf-8')
+                                    zout.writestr(zp, data)
                                 except KeyError:
                                     LOGGER.warning("EPUB preview: missing file in archive: %s", zp)
 

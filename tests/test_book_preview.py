@@ -670,6 +670,32 @@ class TestBookPreview:
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
 
+    @pytest.mark.asyncio
+    async def test_preview_strips_font_face_for_excluded_font(self, backend_test_setup):
+        """제외된 대용량 폰트의 @font-face 선언이 CSS에서 제거된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] FontFace Strip Book.epub"
+        _create_epub_with_font(epub_path, font_size=600 * 1024)
+
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=1")
+            assert response.status_code == 200
+
+            zf = _parse_epub_zip(response.content)
+            for name in zf.namelist():
+                if name.endswith('.css'):
+                    css = zf.read(name).decode('utf-8', errors='replace')
+                    assert '@font-face' not in css, \
+                        f"@font-face for excluded font should be stripped from {name}"
+            zf.close()
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
 
 # ── tests: download 엔드포인트 ────────────────────────────
 
