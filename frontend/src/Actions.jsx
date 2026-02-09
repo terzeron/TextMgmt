@@ -49,17 +49,21 @@ export const calculateSimilarity = (str1, str2) => {
     if (s1 === s2) return 1.0;
 
     // 2) 포함 관계 → 0.7~0.9
-    //    단, 한글 2글자 이상 키워드가 긴 문자열의 50% 이하이면
-    //    너무 범용적인 매칭이므로 N-gram으로 평가
-    //    (예: "소설" ⊂ "세계각국소설" → N-gram, "SF" ⊂ "SF소설" → 포함)
+    //    단, 한글 키워드가 우연히 포함되는 경우를 배제:
+    //    - 한글 1글자가 3글자 이상 단어에 포함 → N-gram (예: "시" ⊂ "러시아소설")
+    //    - 한글 2글자 이상이 절반 이하로 포함 → N-gram (예: "소설" ⊂ "세계각국소설")
+    //    - 한글 1글자가 2글자 단어에 포함 → 포함 관계 유지 (예: "소" ⊂ "소설")
     const shorter = s1.length <= s2.length ? s1 : s2;
     const longer = s1.length > s2.length ? s1 : s2;
     // 한글은 1글자도 의미있으므로 허용, 그 외는 2글자 이상
     const minLength = containsKorean(shorter) ? 1 : 2;
     if (longer.includes(shorter) && shorter.length >= minLength) {
         const ratio = shorter.length / longer.length;
-        if (containsKorean(shorter) && shorter.length >= 2 && ratio <= 0.5) {
-            // 한글 2글자 이상이 절반 이하로 포함 → N-gram으로 평가
+        if (containsKorean(shorter) && (
+            (shorter.length === 1 && longer.length > 2) ||
+            (shorter.length >= 2 && ratio <= 0.5)
+        )) {
+            // 한글 우연적 포함 → N-gram으로 평가
         } else {
             return 0.7 + (ratio * 0.2);
         }
