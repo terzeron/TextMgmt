@@ -73,6 +73,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
         }
 
         let cancelled = false;
+        const abortController = new AbortController();
 
         const loadPdf = async () => {
             setError(null);
@@ -89,7 +90,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                     : getApiUrlPrefix() + "/download/" + bookId;
 
                 // fetch로 PDF 바이너리를 직접 다운로드 (프록시의 gzip 압축을 브라우저가 자동 해제)
-                const response = await fetch(pdfUrl);
+                const response = await fetch(pdfUrl, {signal: abortController.signal});
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
@@ -103,7 +104,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                     chunks.push(value);
                     receivedLength += value.length;
                     if (contentLength > 0) {
-                        setDownloadProgress(Math.round(receivedLength / contentLength * 100));
+                        setDownloadProgress(Math.min(100, Math.round(receivedLength / contentLength * 100)));
                     }
                 }
                 if (cancelled) return;
@@ -192,7 +193,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
                     }
                 }
             } catch (err) {
-                if (cancelled) return;
+                if (cancelled || err.name === 'AbortError') return;
                 console.error("PDF 로드 실패:", err);
                 setError(`❌ PDF 렌더링 실패: ${err.message || "파일이 존재하지 않거나 올바르지 않은 형식일 수 있습니다."}`);
             }
@@ -202,6 +203,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
 
         return () => {
             cancelled = true;
+            abortController.abort();
             if (observerRef.current) {
                 observerRef.current.disconnect();
                 observerRef.current = null;

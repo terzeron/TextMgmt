@@ -124,17 +124,17 @@ describe('ViewPDF', () => {
 
         render(<ViewPDF bookId={42} />);
 
-        expect(fetch).toHaveBeenCalledWith('http://localhost:8000/download/42');
+        expect(fetch).toHaveBeenCalledWith('http://localhost:8000/download/42', expect.objectContaining({signal: expect.any(AbortSignal)}));
     });
 
     it('bookId 변경 시 새 URL로 fetch를 호출한다', async () => {
         fetch.mockReturnValue(new Promise(() => {}));
 
         const { rerender } = render(<ViewPDF bookId={1} />);
-        expect(fetch).toHaveBeenCalledWith('http://localhost:8000/download/1');
+        expect(fetch).toHaveBeenCalledWith('http://localhost:8000/download/1', expect.objectContaining({signal: expect.any(AbortSignal)}));
 
         rerender(<ViewPDF bookId={99} />);
-        expect(fetch).toHaveBeenCalledWith('http://localhost:8000/download/99');
+        expect(fetch).toHaveBeenCalledWith('http://localhost:8000/download/99', expect.objectContaining({signal: expect.any(AbortSignal)}));
     });
 
     it('preview=true이면 preview URL로 fetch를 호출한다', () => {
@@ -142,7 +142,7 @@ describe('ViewPDF', () => {
 
         render(<ViewPDF bookId={42} preview={true} pageCount={3} />);
 
-        expect(fetch).toHaveBeenCalledWith('http://localhost:8000/preview/42?pages=3');
+        expect(fetch).toHaveBeenCalledWith('http://localhost:8000/preview/42?pages=3', expect.objectContaining({signal: expect.any(AbortSignal)}));
     });
 
     // ── 정상 렌더링 ──
