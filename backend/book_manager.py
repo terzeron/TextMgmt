@@ -255,7 +255,11 @@ class BookManager:
                     # 챕터 HTML에서 참조 리소스 수집
                     referenced = set()
                     for zp in chapter_zip_paths:
-                        content = zin.read(zp).decode('utf-8', errors='replace')
+                        try:
+                            content = zin.read(zp).decode('utf-8', errors='replace')
+                        except KeyError:
+                            LOGGER.warning("EPUB preview: chapter file missing in archive: %s", zp)
+                            continue
                         item_dir = dirname(zp)
                         soup = BeautifulSoup(content, 'html.parser')
                         for img in soup.find_all('img'):
