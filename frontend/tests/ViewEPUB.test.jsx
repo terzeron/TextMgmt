@@ -21,18 +21,14 @@ vi.mock('../src/Common', () => ({
     getApiUrlPrefix: () => 'http://localhost:8000',
 }));
 
-// fetch mock: Blob을 반환
-const mockBlob = new Blob(['fake epub'], { type: 'application/epub+zip' });
-const mockBlobUrl = 'blob:http://localhost/fake-epub-url';
-
+// fetch mock: ArrayBuffer를 반환
+const mockArrayBuffer = new ArrayBuffer(8);
 beforeEach(() => {
     mockReactReader.mockClear();
-    globalThis.URL.createObjectURL = vi.fn(() => mockBlobUrl);
-    globalThis.URL.revokeObjectURL = vi.fn();
     globalThis.fetch = vi.fn(() =>
         Promise.resolve({
             ok: true,
-            blob: () => Promise.resolve(mockBlob),
+            arrayBuffer: () => Promise.resolve(mockArrayBuffer),
         })
     );
 });
@@ -71,7 +67,7 @@ describe('ViewEPUB', () => {
         );
         await waitFor(() => {
             expect(mockReactReader).toHaveBeenCalledWith(
-                expect.objectContaining({ url: mockBlobUrl })
+                expect.objectContaining({ url: mockArrayBuffer })
             );
         });
     });
@@ -84,7 +80,7 @@ describe('ViewEPUB', () => {
         );
         await waitFor(() => {
             expect(mockReactReader).toHaveBeenCalledWith(
-                expect.objectContaining({ url: mockBlobUrl })
+                expect.objectContaining({ url: mockArrayBuffer })
             );
         });
     });
@@ -139,7 +135,7 @@ describe('ViewEPUB', () => {
         // fetch의 Promise를 resolve시키기 위해 타이머 진행
         await act(async () => { vi.advanceTimersByTime(1); });
 
-        // epubBlobUrl 설정 후 타임아웃 시작, 30초 경과
+        // epubData 설정 후 타임아웃 시작, 30초 경과
         await act(async () => { vi.advanceTimersByTime(30000); });
 
         expect(screen.getByText('미리보기 로딩 시간이 초과되었습니다.')).toBeTruthy();
@@ -174,16 +170,5 @@ describe('ViewEPUB', () => {
         await waitFor(() => {
             expect(screen.getByText(/EPUB 로딩 실패/)).toBeTruthy();
         });
-    });
-
-    // ── cleanup ──
-
-    it('unmount 시 Blob URL을 해제한다', async () => {
-        const { unmount } = render(<ViewEPUB bookId={1} filePath="a.epub" />);
-        await waitFor(() => {
-            expect(globalThis.URL.createObjectURL).toHaveBeenCalled();
-        });
-        unmount();
-        expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith(mockBlobUrl);
     });
 });

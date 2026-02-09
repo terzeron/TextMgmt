@@ -104,7 +104,7 @@ export const filterSubstringKeywords = (keywords) => {
 // - 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
 // - 서점 카테고리(이미 마지막 레벨)를 특수기호로 분리하여 사용
 // - 다른 키워드에 포함되는 범용 키워드는 제거 (예: "소설"이 "세계각국소설"에 포함)
-// - 각 키워드별 최선 매칭을 합산하여 모든 키워드가 점수에 기여
+// - 각 키워드별 최선 매칭의 평균으로 점수 산출 (매칭 건수에 의한 편향 방지)
 // - { category: score } 형태의 객체 반환
 const calculateCategoryScores = (bookstoreCategory, categoryList) => {
     if (!bookstoreCategory || !categoryList?.length) return {};
@@ -127,7 +127,7 @@ const calculateCategoryScores = (bookstoreCategory, categoryList) => {
         // 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
         const dirKeywords = [...(mappings[category] || []), categoryName];
 
-        // 각 서점 키워드별 최대 유사도를 구한 뒤 합산
+        // 각 서점 키워드별 최대 유사도를 구한 뒤 평균
         let totalScore = 0;
         for (const deepKeyword of deepKeywords) {
             let bestForKeyword = 0;
@@ -140,8 +140,9 @@ const calculateCategoryScores = (bookstoreCategory, categoryList) => {
             totalScore += bestForKeyword;
         }
 
-        if (totalScore > 0) {
-            scores[category] = totalScore;
+        const avgScore = totalScore / deepKeywords.length;
+        if (avgScore > 0) {
+            scores[category] = avgScore;
         }
     }
 
@@ -206,7 +207,8 @@ export const getSimilarityDebugInfo = (suggestedCategories, categoryList, topN =
         let totalScore = 0;
 
         for (const [store, storeInfo] of Object.entries(debugInfo.bookstoreKeywords)) {
-            // 각 서점 키워드별 최선 매칭을 개별적으로 기록
+            // 각 서점 키워드별 최선 매칭을 개별적으로 기록, 평균 산출
+            let storeTotal = 0;
             for (const deepKeyword of storeInfo.keywords) {
                 let bestSimilarity = 0;
                 let bestMatch = null;
@@ -231,9 +233,10 @@ export const getSimilarityDebugInfo = (suggestedCategories, categoryList, topN =
 
                 if (bestSimilarity > 0) {
                     matchDetails.push({ store, ...bestMatch });
-                    totalScore += bestSimilarity;
                 }
+                storeTotal += bestSimilarity;
             }
+            totalScore += storeTotal / storeInfo.keywords.length;
         }
 
         if (totalScore > 0) {
