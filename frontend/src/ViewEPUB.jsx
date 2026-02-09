@@ -270,9 +270,10 @@ export default function ViewEPUB({ bookId, preview = false }) {
                         if (locationRef.current) {
                             try {
                                 const idx = rendition.book.locations.locationFromCfi(locationRef.current);
-                                const total = rendition.book.locations.total;
-                                if (idx >= 0 && total > 0) {
-                                    setPageInfo({ page: idx + 1, total });
+                                // locations.total은 0-indexed 최대값 (_locations.length - 1)
+                                const totalPages = rendition.book.locations.total + 1;
+                                if (idx >= 0 && totalPages > 0) {
+                                    setPageInfo({ page: idx + 1, total: totalPages });
                                 }
                             } catch (_) { /* ignore */ }
                         }
@@ -286,9 +287,9 @@ export default function ViewEPUB({ bookId, preview = false }) {
                     if (locationsReadyRef.current && location.start.cfi) {
                         try {
                             const idx = renditionRef.current.book.locations.locationFromCfi(location.start.cfi);
-                            const total = renditionRef.current.book.locations.total;
-                            if (idx >= 0 && total > 0) {
-                                setPageInfo({ page: idx + 1, total });
+                            const totalPages = renditionRef.current.book.locations.total + 1;
+                            if (idx >= 0 && totalPages > 0) {
+                                setPageInfo({ page: idx + 1, total: totalPages });
                                 return;
                             }
                         } catch (_) { /* fallback */ }
