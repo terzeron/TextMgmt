@@ -210,8 +210,9 @@ class ESManager:
                 except Exception:
                     pass
 
-    def _search_paged(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, size: int = 10, offset: int = 0) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
-        """(results, total_count) 튜플을 반환하는 페이지네이션 검색"""
+    def _search_paged(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, size: int = 10, offset: int = 0, ref_score: float = 0.0) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
+        """(results, total_count) 튜플을 반환하는 페이지네이션 검색
+        ref_score: 정규화 기준 점수. 0이면 결과 내 max_score를 사용."""
         size = min(size, 10000)
         LOGGER.debug("_search_paged(size=%d, offset=%d, query='%s')", size, offset, query)
         response = self.es.search(
@@ -220,12 +221,12 @@ class ESManager:
             track_scores=True, track_total_hits=True
         )
         total = response['hits']['total']['value']
-        max_score = response['hits']['max_score']
-        if max_score is None:
+        base_score = ref_score if ref_score > 0 else (response['hits']['max_score'] or 0)
+        if base_score <= 0:
             return [], total
         result = []
         for hit in response['hits']['hits']:
-            normalized_score = hit['_score'] * 100 / max_score if max_score > 0 else 0
+            normalized_score = min(100.0, hit['_score'] * 100 / base_score) if base_score > 0 else 0
             result.append((int(hit['_id']), hit['_source'], normalized_score))
         return result, total
 
@@ -356,20 +357,41 @@ class ESManager:
             "search_similar_docs_paged(category='%s', title='%s', author='%s', type='%s', size=%d, offset=%d)",
             category, title, author, file_type, size, offset,
         )
+        should_clauses = [
+            {"match": {"title": {"query": title, "boost": 20}}},
+            {"match": {"author": {"query": author, "boost": 15}}},
+            {"match": {"summary": {"query": summary, "boost": 3}}},
+            {"range": {"file_size": {"gte": file_size * 0.9, "lte": file_size * 1.1, "boost": 1}}},
+        ]
+
+        # 원본 문서의 자기 자신 매칭 점수를 기준(100점)으로 정규화
+        self_score = self._get_self_score(should_clauses, exclude_id)
+
         query = {
             "bool": {
-                "should": [
-                    {"match": {"title": {"query": title, "boost": 20}}},
-                    {"match": {"author": {"query": author, "boost": 15}}},
-                    {"match": {"summary": {"query": summary, "boost": 3}}},
-                    {"range": {"file_size": {"gte": file_size * 0.9, "lte": file_size * 1.1, "boost": 1}}},
-                ],
+                "should": should_clauses,
                 "minimum_should_match": 1,
             }
         }
         if exclude_id is not None:
             query["bool"]["must_not"] = [{"term": {"_id": str(exclude_id)}}]
-        return self._search_paged(query, size=size, offset=offset)
+        return self._search_paged(query, size=size, offset=offset, ref_score=self_score)
+
+    def _get_self_score(self, should_clauses: list, doc_id: int) -> float:
+        """원본 문서가 동일 쿼리에서 받는 점수를 반환 (정규화 기준값)"""
+        if doc_id is None:
+            return 0.0
+        query = {
+            "bool": {
+                "should": should_clauses,
+                "filter": [{"term": {"_id": str(doc_id)}}],
+            }
+        }
+        response = self.es.search(index=self.index_name, query=query, size=1)
+        hits = response['hits']['hits']
+        if hits:
+            return hits[0]['_score']
+        return 0.0
 
     def search_by_id(self, doc_id: int) -> Dict[str, Any]:
         LOGGER.debug("search_by_id(doc_id=%d)", doc_id)
