@@ -494,7 +494,7 @@ export default function Edit() {
                 ? titleOnly + extensionSuffix
                 : newDirName + '/' + titleOnly + extensionSuffix;
             const updatedTime = DateTime.now().toFormat('yyyy-MM-dd\'T\'HH:mm:ss.SSS');
-            const payload = { ...bookInfo, category: categoryForBackend, title: titleOnly, file_path: newFilePath, updated_time: updatedTime };
+            const payload = { ...bookInfo, category: categoryForBackend, file_path: newFilePath, updated_time: updatedTime };
             jsonPutReq(updateUrl, payload, () => {
                 // 구체적인 성공 메시지 생성
                 const displayDirName = (dirName === '' || dirName === '_root') ? '최상위' : dirName;
@@ -508,11 +508,10 @@ export default function Edit() {
                 setSuccessMessage(message);
                 setErrorMessage('');
 
-                // bookInfo 업데이트 (file_path, title, category)
+                // bookInfo 업데이트 (file_path, category)
                 setBookInfo(prev => ({
                     ...prev,
                     file_path: newFilePath,
-                    title: titleOnly,
                     category: categoryForBackend
                 }));
                 setSearchTrigger(prev => prev + 1);

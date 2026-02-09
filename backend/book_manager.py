@@ -323,11 +323,7 @@ class BookManager:
         if doc:
             book = Book(book_id=book_id, info=doc)
             file_path = self.path_prefix / book.file_path
-            # _root 카테고리는 path_prefix 바로 아래
-            if new_category == "_root":
-                new_full_path = self.path_prefix / (new_title + "." + new_type)
-            else:
-                new_full_path = self.path_prefix / new_category / (new_title + "." + new_type)
+            new_full_path = new_path
             try:
                 new_full_path.parent.mkdir(parents=True, exist_ok=True)
                 file_path.rename(new_full_path)
