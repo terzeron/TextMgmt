@@ -3,7 +3,7 @@ import PropTypes from "prop-types";
 import { getApiUrlPrefix } from "./Common";
 import { ReactReader } from "react-reader";
 
-export default function ViewEPUB({ bookId, filePath, preview = false }) {
+export default function ViewEPUB({ bookId, preview = false }) {
     const renditionRef = useRef(null);
     const timeoutRef = useRef(null);
     const [epubData, setEpubData] = useState(null);
@@ -12,15 +12,15 @@ export default function ViewEPUB({ bookId, filePath, preview = false }) {
     const [errorMessage, setErrorMessage] = useState(null);
 
     useEffect(() => {
-        if (!bookId || (!filePath && !preview)) {
-            setErrorMessage("❌ 유효한 bookId 또는 filePath가 제공되지 않았습니다.");
+        if (!bookId) {
+            setErrorMessage("❌ 유효한 bookId가 제공되지 않았습니다.");
             setIsLoading(false);
             return;
         }
 
         const epubUrl = preview
             ? `${getApiUrlPrefix()}/preview/${bookId}?chapters=3`
-            : `${getApiUrlPrefix()}/download/${bookId}/${encodeURIComponent(filePath)}`;
+            : `${getApiUrlPrefix()}/download/${bookId}`;
 
         setIsLoading(true);
         setErrorMessage(null);
@@ -46,7 +46,7 @@ export default function ViewEPUB({ bookId, filePath, preview = false }) {
             controller.abort();
             setEpubData(null);
         };
-    }, [bookId, filePath, preview]);
+    }, [bookId, preview]);
 
     // 로딩 타임아웃: 30초 내 로딩 미완료 시 에러 표시
     useEffect(() => {
@@ -104,6 +104,5 @@ export default function ViewEPUB({ bookId, filePath, preview = false }) {
 
 ViewEPUB.propTypes = {
     bookId: PropTypes.number.isRequired,
-    filePath: PropTypes.string,
     preview: PropTypes.bool,
 };

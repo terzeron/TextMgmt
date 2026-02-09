@@ -46,7 +46,7 @@ export default function ViewSingle(props) {
 
     const componentMap = {
         'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} preview={preview} />,
-        'epub': <ViewEPUB bookId={bookId} filePath={filePath} preview={preview} />,
+        'epub': <ViewEPUB bookId={bookId} preview={preview} />,
         'doc': <ViewDOC bookId={bookId} fileType="doc" />,
         'docx': <ViewDOC bookId={bookId} fileType="docx" lineCount={lineCount} />,
         'hwp': <ViewDOC bookId={bookId} fileType="hwp" />,

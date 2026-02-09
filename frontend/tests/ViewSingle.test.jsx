@@ -18,7 +18,7 @@ vi.mock('../src/ViewPDF', () => ({
     default: ({ bookId, pageCount }) => <div data-testid="view-pdf">PDF:{bookId}:pc={pageCount}</div>,
 }));
 vi.mock('../src/ViewEPUB', () => ({
-    default: ({ bookId, filePath }) => <div data-testid="view-epub">EPUB:{bookId}:fp={filePath}</div>,
+    default: ({ bookId, preview }) => <div data-testid="view-epub">EPUB:{bookId}:preview={String(!!preview)}</div>,
 }));
 vi.mock('../src/ViewDOC', () => ({
     default: ({ bookId, fileType, lineCount }) => <div data-testid="view-doc">DOC:{bookId}:ft={fileType}:lc={lineCount}</div>,
@@ -134,11 +134,11 @@ describe('ViewSingle', () => {
         });
     });
 
-    it('ViewEPUB에 filePath를 전달한다', async () => {
-        render(<ViewSingle bookId={1} fileType="epub" filePath="/books/test.epub" />);
+    it('ViewEPUB에 preview를 전달한다', async () => {
+        render(<ViewSingle bookId={1} fileType="epub" preview={true} />);
 
         await waitFor(() => {
-            expect(screen.getByText(/fp=\/books\/test.epub/)).toBeTruthy();
+            expect(screen.getByText(/preview=true/)).toBeTruthy();
         });
     });
 
