@@ -6,7 +6,7 @@ import { ReactReader } from "react-reader";
 export default function ViewEPUB({ bookId, filePath, preview = false }) {
     const renditionRef = useRef(null);
     const timeoutRef = useRef(null);
-    const [url, setUrl] = useState("");
+    const [epubData, setEpubData] = useState(null);
     const [location, setLocation] = useState("");
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState(null);
@@ -20,25 +20,41 @@ export default function ViewEPUB({ bookId, filePath, preview = false }) {
 
         const epubUrl = preview
             ? `${getApiUrlPrefix()}/preview/${bookId}?chapters=3`
-            : `${getApiUrlPrefix()}/download/${bookId}/${filePath}`;
-        setUrl(epubUrl);
+            : `${getApiUrlPrefix()}/download/${bookId}/${encodeURIComponent(filePath)}`;
+
         setIsLoading(true);
         setErrorMessage(null);
+        setEpubData(null);
+
+        const controller = new AbortController();
+        fetch(epubUrl, { signal: controller.signal })
+            .then((res) => {
+                if (!res.ok) throw new Error(`서버 응답 오류: ${res.status}`);
+                return res.arrayBuffer();
+            })
+            .then((buf) => setEpubData(buf))
+            .catch((err) => {
+                if (err.name !== "AbortError") {
+                    setErrorMessage(`EPUB 로딩 실패: ${err.message}`);
+                    setIsLoading(false);
+                }
+            });
 
         return () => {
-            setUrl("");
+            controller.abort();
+            setEpubData(null);
         };
     }, [bookId, filePath, preview]);
 
     // 로딩 타임아웃: 30초 내 로딩 미완료 시 에러 표시
     useEffect(() => {
-        if (!url) return;
+        if (!epubData) return;
         timeoutRef.current = setTimeout(() => {
             setIsLoading(false);
             setErrorMessage("미리보기 로딩 시간이 초과되었습니다.");
         }, 30000);
         return () => clearTimeout(timeoutRef.current);
-    }, [url]);
+    }, [epubData]);
 
     const handleLocationChanged = useCallback((epubcfi) => {
         setLocation(epubcfi);
@@ -63,10 +79,10 @@ export default function ViewEPUB({ bookId, filePath, preview = false }) {
                 </div>
             )}
             <Suspense fallback={<div className="loading">로딩 중...</div>}>
-                <ReactReader
+                {epubData && <ReactReader
                     location={location}
                     locationChanged={handleLocationChanged}
-                    url={url}
+                    url={epubData}
                     getRendition={(rendition) => {
                         renditionRef.current = rendition;
                         const spine_get = rendition.book.spine.get.bind(rendition.book.spine);
@@ -78,7 +94,7 @@ export default function ViewEPUB({ bookId, filePath, preview = false }) {
                             return t;
                         };
                     }}
-                />
+                />}
             </Suspense>
         </div>
     );
