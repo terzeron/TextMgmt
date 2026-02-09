@@ -6,7 +6,8 @@ import { ReactReader } from "react-reader";
 export default function ViewEPUB({ bookId, filePath, preview = false }) {
     const renditionRef = useRef(null);
     const timeoutRef = useRef(null);
-    const [epubData, setEpubData] = useState(null);
+    const blobUrlRef = useRef(null);
+    const [epubBlobUrl, setEpubBlobUrl] = useState(null);
     const [location, setLocation] = useState("");
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState(null);
@@ -24,15 +25,19 @@ export default function ViewEPUB({ bookId, filePath, preview = false }) {
 
         setIsLoading(true);
         setErrorMessage(null);
-        setEpubData(null);
+        setEpubBlobUrl(null);
 
         const controller = new AbortController();
         fetch(epubUrl, { signal: controller.signal })
             .then((res) => {
                 if (!res.ok) throw new Error(`서버 응답 오류: ${res.status}`);
-                return res.arrayBuffer();
+                return res.blob();
             })
-            .then((buf) => setEpubData(buf))
+            .then((blob) => {
+                const blobUrl = URL.createObjectURL(blob);
+                blobUrlRef.current = blobUrl;
+                setEpubBlobUrl(blobUrl);
+            })
             .catch((err) => {
                 if (err.name !== "AbortError") {
                     setErrorMessage(`EPUB 로딩 실패: ${err.message}`);
@@ -42,19 +47,23 @@ export default function ViewEPUB({ bookId, filePath, preview = false }) {
 
         return () => {
             controller.abort();
-            setEpubData(null);
+            if (blobUrlRef.current) {
+                URL.revokeObjectURL(blobUrlRef.current);
+                blobUrlRef.current = null;
+            }
+            setEpubBlobUrl(null);
         };
     }, [bookId, filePath, preview]);
 
     // 로딩 타임아웃: 30초 내 로딩 미완료 시 에러 표시
     useEffect(() => {
-        if (!epubData) return;
+        if (!epubBlobUrl) return;
         timeoutRef.current = setTimeout(() => {
             setIsLoading(false);
             setErrorMessage("미리보기 로딩 시간이 초과되었습니다.");
         }, 30000);
         return () => clearTimeout(timeoutRef.current);
-    }, [epubData]);
+    }, [epubBlobUrl]);
 
     const handleLocationChanged = useCallback((epubcfi) => {
         setLocation(epubcfi);
@@ -79,10 +88,10 @@ export default function ViewEPUB({ bookId, filePath, preview = false }) {
                 </div>
             )}
             <Suspense fallback={<div className="loading">로딩 중...</div>}>
-                {epubData && <ReactReader
+                {epubBlobUrl && <ReactReader
                     location={location}
                     locationChanged={handleLocationChanged}
-                    url={epubData}
+                    url={epubBlobUrl}
                     getRendition={(rendition) => {
                         renditionRef.current = rendition;
                         const spine_get = rendition.book.spine.get.bind(rendition.book.spine);
