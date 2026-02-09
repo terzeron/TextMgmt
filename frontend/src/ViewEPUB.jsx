@@ -11,13 +11,15 @@ export default function ViewEPUB({ bookId, filePath, preview = false }) {
     const [errorMessage, setErrorMessage] = useState(null);
 
     useEffect(() => {
-        if (!bookId || !filePath) {
+        if (!bookId || (!filePath && !preview)) {
             setErrorMessage("❌ 유효한 bookId 또는 filePath가 제공되지 않았습니다.");
             setIsLoading(false);
             return;
         }
 
-        const epubUrl = `${getApiUrlPrefix()}/download/${bookId}/${filePath}`;
+        const epubUrl = preview
+            ? `${getApiUrlPrefix()}/preview/${bookId}?chapters=3`
+            : `${getApiUrlPrefix()}/download/${bookId}/${filePath}`;
         setUrl(epubUrl);
         setIsLoading(true);
         setErrorMessage(null);
@@ -25,7 +27,7 @@ export default function ViewEPUB({ bookId, filePath, preview = false }) {
         return () => {
             setUrl("");
         };
-    }, [bookId, filePath]);
+    }, [bookId, filePath, preview]);
 
     const containerHeight = preview ? "60vh" : "100vh";
 
