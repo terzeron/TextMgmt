@@ -286,7 +286,8 @@ class BookManager:
                     if spine_el is None:
                         raise ValueError("OPF: spine element not found")
                     spine_refs = list(spine_el.findall(f'{{{opf_ns}}}itemref'))
-                    chapter_idrefs = [ref.get('idref') for ref in spine_refs[:chapters]]
+                    chapter_idrefs = [ref.get('idref') for ref in spine_refs[:chapters]
+                                      if ref.get('idref') in manifest]
 
                     # 포함할 zip 내 파일 경로
                     files_to_include = {'META-INF/container.xml', opf_path}
@@ -325,28 +326,45 @@ class BookManager:
                             if href_attr:
                                 referenced.add(normpath(pjoin(item_dir, href_attr)))
 
-                    # CSS 추가 및 CSS 내 url() 참조 수집
+                    # 챕터에서 참조된 CSS만 포함 및 CSS 내 url() 참조 수집
                     css_url_pattern = re.compile(r'url\(["\']?([^"\')\s]+)["\']?\)')
-                    for item_id, info in manifest.items():
-                        if 'css' in info.get('media-type', ''):
-                            href = info['href']
-                            zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
-                            files_to_include.add(zp)
-                            manifest_ids_to_keep.add(item_id)
-                            try:
-                                css_content = zin.read(zp).decode('utf-8', errors='replace')
-                                css_dir = dirname(zp)
-                                for m in css_url_pattern.findall(css_content):
-                                    if not m.startswith('data:'):
-                                        referenced.add(normpath(pjoin(css_dir, m)))
-                            except KeyError:
-                                pass
+                    css_refs = [r for r in referenced if r in href_to_id
+                                and 'css' in manifest[href_to_id[r]].get('media-type', '')]
+                    referenced -= set(css_refs)  # CSS는 별도 처리
+                    for zp in css_refs:
+                        item_id = href_to_id[zp]
+                        files_to_include.add(zp)
+                        manifest_ids_to_keep.add(item_id)
+                        try:
+                            css_content = zin.read(zp).decode('utf-8', errors='replace')
+                            css_dir = dirname(zp)
+                            for m in css_url_pattern.findall(css_content):
+                                if not m.startswith('data:'):
+                                    referenced.add(normpath(pjoin(css_dir, m)))
+                        except KeyError:
+                            pass
 
-                    # 참조된 이미지/폰트만 추가
+                    # 참조된 이미지/폰트 추가 (대용량 폰트 제외)
+                    FONT_SIZE_LIMIT = 500 * 1024  # 500KB
+                    FONT_EXTENSIONS = {'.ttf', '.otf', '.woff', '.woff2'}
+                    FONT_MEDIA_TYPES = {'font/ttf', 'font/otf', 'font/woff', 'font/woff2',
+                                        'application/font-ttf', 'application/font-woff',
+                                        'application/font-woff2', 'application/x-font-ttf'}
                     for ref_path in referenced:
                         if ref_path in href_to_id:
+                            item_id = href_to_id[ref_path]
+                            info = manifest[item_id]
+                            ext = os.path.splitext(ref_path)[1].lower()
+                            if ext in FONT_EXTENSIONS or info.get('media-type', '') in FONT_MEDIA_TYPES:
+                                try:
+                                    font_size = zin.getinfo(ref_path).file_size
+                                    if font_size > FONT_SIZE_LIMIT:
+                                        LOGGER.debug("EPUB preview: skipping large font %s (%d bytes)", ref_path, font_size)
+                                        continue
+                                except KeyError:
+                                    continue
                             files_to_include.add(ref_path)
-                            manifest_ids_to_keep.add(href_to_id[ref_path])
+                            manifest_ids_to_keep.add(item_id)
 
                     # OPF 수정: manifest에서 불필요한 항목 제거
                     manifest_el = opf.find(f'.//{{{opf_ns}}}manifest')
