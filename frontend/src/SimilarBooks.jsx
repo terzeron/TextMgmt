@@ -20,8 +20,12 @@ export default function SimilarBooks({bookId, onSelect}) {
         if (bookId) {
             rawJsonGetReq(`/similar/${bookId}?offset=0&limit=10`, (data) => {
                 if (data.status === 'success') {
-                    setSimilarBooks(data.result || []);
+                    const books = data.result || [];
+                    setSimilarBooks(books);
                     setTotal(data.total || 0);
+                    if (books.some(b => b.score >= 90)) {
+                        setIsOpen(true);
+                    }
                 }
             }, (error) => {
                 console.error(error);

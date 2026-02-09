@@ -55,8 +55,8 @@ describe('SimilarBooks', () => {
         mockBooks([makeBook(1, 92.6)]);
 
         render(<SimilarBooks bookId={1} />);
-        fireEvent.click(screen.getByText('유사한 책 목록'));
 
+        // score >= 90이므로 자동 펼침
         await waitFor(() => {
             expect(screen.getByText('93')).toBeTruthy();
         });
@@ -81,12 +81,67 @@ describe('SimilarBooks', () => {
         mockBooks([makeBook(1, 95), makeBook(2, 72), makeBook(3, 0)]);
 
         render(<SimilarBooks bookId={1} />);
-        fireEvent.click(screen.getByText('유사한 책 목록'));
 
+        // score >= 90인 책이 있으므로 자동 펼침
         await waitFor(() => {
             expect(screen.getByText('95')).toBeTruthy();
             expect(screen.getByText('72')).toBeTruthy();
         });
+    });
+
+    // ── 자동 펼침 ──
+
+    it('90점 이상인 책이 있으면 자동으로 펼쳐진다', async () => {
+        mockBooks([makeBook(1, 91), makeBook(2, 60)]);
+
+        render(<SimilarBooks bookId={1} />);
+
+        // 클릭 없이도 자동으로 펼쳐져 책 목록이 보여야 함
+        await waitFor(() => {
+            expect(screen.getByText('91')).toBeTruthy();
+            expect(screen.getByText('60')).toBeTruthy();
+        });
+    });
+
+    it('90점 미만이면 접힌 상태를 유지한다', async () => {
+        mockBooks([makeBook(1, 89), makeBook(2, 50)]);
+
+        render(<SimilarBooks bookId={1} />);
+
+        // 접힌 상태이므로 책 목록이 보이지 않아야 함
+        expect(screen.queryByText('편집')).toBeNull();
+    });
+
+    it('정확히 90점이면 자동으로 펼쳐진다 (경계값)', async () => {
+        mockBooks([makeBook(1, 90)]);
+
+        render(<SimilarBooks bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('90')).toBeTruthy();
+        });
+    });
+
+    it('89.9점이면 자동으로 펼쳐지지 않는다 (경계값)', () => {
+        mockBooks([makeBook(1, 89.9)]);
+
+        render(<SimilarBooks bookId={1} />);
+
+        expect(screen.queryByText('편집')).toBeNull();
+    });
+
+    it('자동 펼침 후 헤더 클릭으로 닫을 수 있다', async () => {
+        mockBooks([makeBook(1, 95)]);
+
+        render(<SimilarBooks bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('95')).toBeTruthy();
+        });
+
+        // 헤더 클릭으로 닫기
+        fireEvent.click(screen.getByText('유사한 책 목록'));
+        expect(screen.queryByText('95')).toBeNull();
     });
 
     // ── 기본 동작 ──
@@ -124,5 +179,150 @@ describe('SimilarBooks', () => {
         await waitFor(() => {
             expect(screen.getByText('유사한 책이 없습니다.')).toBeTruthy();
         });
+    });
+
+    // ── onSelect 콜백 ──
+
+    it('책 항목 클릭 시 onSelect을 category/book_id로 호출한다', async () => {
+        mockBooks([makeBook(42, 95)]);
+        const onSelect = vi.fn();
+
+        render(<SimilarBooks bookId={1} onSelect={onSelect} />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/Book 42\.pdf/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/Book 42\.pdf/));
+        expect(onSelect).toHaveBeenCalledWith('test_category/42');
+    });
+
+    it('onSelect이 없어도 책 항목 클릭 시 에러가 발생하지 않는다', async () => {
+        mockBooks([makeBook(1, 95)]);
+
+        render(<SimilarBooks bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/Book 1\.pdf/)).toBeTruthy();
+        });
+
+        expect(() => {
+            fireEvent.click(screen.getByText(/Book 1\.pdf/));
+        }).not.toThrow();
+    });
+
+    // ── 더 보기 ──
+
+    it('total > 표시된 수일 때 "더 보기" 버튼을 표시한다', async () => {
+        mockRawJsonGetReq.mockImplementation((url, resolve) => {
+            resolve({ status: 'success', result: [makeBook(1, 95)], total: 5 });
+        });
+
+        render(<SimilarBooks bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('더 보기')).toBeTruthy();
+        });
+    });
+
+    it('total === 표시된 수이면 "더 보기" 버튼을 표시하지 않는다', async () => {
+        mockBooks([makeBook(1, 95)]);
+
+        render(<SimilarBooks bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('95')).toBeTruthy();
+        });
+
+        expect(screen.queryByText('더 보기')).toBeNull();
+    });
+
+    it('"더 보기" 클릭 시 추가 데이터를 로드한다', async () => {
+        let callCount = 0;
+        mockRawJsonGetReq.mockImplementation((url, resolve) => {
+            callCount++;
+            if (callCount === 1) {
+                resolve({ status: 'success', result: [makeBook(1, 95)], total: 2 });
+            } else {
+                resolve({ status: 'success', result: [makeBook(2, 80)], total: 2 });
+            }
+        });
+
+        render(<SimilarBooks bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('더 보기')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('더 보기'));
+
+        await waitFor(() => {
+            expect(screen.getByText('80')).toBeTruthy();
+        });
+
+        // 추가 로드 후 total과 같아지면 "더 보기" 사라짐
+        expect(screen.queryByText('더 보기')).toBeNull();
+    });
+
+    // ── API 호출 ──
+
+    it('올바른 URL로 API를 호출한다', () => {
+        mockBooks([]);
+
+        render(<SimilarBooks bookId={42} />);
+
+        expect(mockRawJsonGetReq).toHaveBeenCalledWith(
+            '/similar/42?offset=0&limit=10',
+            expect.any(Function),
+            expect.any(Function)
+        );
+    });
+
+    it('bookId 변경 시 새 API를 호출한다', () => {
+        mockBooks([]);
+
+        const { rerender } = render(<SimilarBooks bookId={1} />);
+        expect(mockRawJsonGetReq).toHaveBeenCalledWith(
+            '/similar/1?offset=0&limit=10',
+            expect.any(Function),
+            expect.any(Function)
+        );
+
+        rerender(<SimilarBooks bookId={99} />);
+        expect(mockRawJsonGetReq).toHaveBeenCalledWith(
+            '/similar/99?offset=0&limit=10',
+            expect.any(Function),
+            expect.any(Function)
+        );
+    });
+
+    it('API 에러 시 console.error를 호출한다', () => {
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+        mockRawJsonGetReq.mockImplementation((url, resolve, reject) => {
+            reject(new Error('Network error'));
+        });
+
+        render(<SimilarBooks bookId={1} />);
+
+        expect(consoleError).toHaveBeenCalled();
+        consoleError.mockRestore();
+    });
+
+    // ── 파일명 표시 ──
+
+    it('file_path에서 파일명만 추출하여 표시한다', async () => {
+        mockBooks([{
+            ...makeBook(1, 95),
+            file_path: 'deep/nested/category/MyBook.epub',
+        }]);
+
+        render(<SimilarBooks bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/MyBook\.epub/)).toBeTruthy();
+        });
+
+        // 전체 경로가 아닌 파일명만 표시
+        expect(screen.queryByText(/deep\/nested/)).toBeNull();
     });
 });
