@@ -92,7 +92,7 @@ describe('ViewEPUB', () => {
         });
     });
 
-    // ── 점진적 로딩: 미리보기 자동 추가 로드 ──
+    // ── 점진적 로딩: 자동 추가 로드 ──
 
     it('미리보기 모드에서 초기 로딩 후 자동으로 chapters=11 요청한다', async () => {
         let callCount = 0;
@@ -105,13 +105,11 @@ describe('ViewEPUB', () => {
 
         render(<ViewEPUB bookId={42} preview={true} />);
 
-        // 첫 요청: chapters=1
         expect(globalThis.fetch).toHaveBeenCalledWith(
             'http://localhost:8000/preview/42?chapters=1',
             expect.any(Object)
         );
 
-        // locationChanged 호출 후 자동으로 추가 요청
         await waitFor(() => {
             expect(globalThis.fetch).toHaveBeenCalledWith(
                 'http://localhost:8000/preview/42?chapters=11',
@@ -120,17 +118,30 @@ describe('ViewEPUB', () => {
         });
     });
 
-    // ── 점진적 로딩: 전체보기 "더 보기" 버튼 ──
+    it('미리보기 모드에서 11챕터 이후 추가 자동 로드하지 않는다', async () => {
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve(createFetchResponse(mockArrayBuffer, 25))
+        );
 
-    it('전체보기 모드에서 "더 보기" 버튼이 표시된다', async () => {
-        render(<ViewEPUB bookId={42} />);
+        render(<ViewEPUB bookId={42} preview={true} />);
 
+        // chapters=11까지 자동 로드 대기
         await waitFor(() => {
-            expect(screen.getByText(/더 보기/)).toBeTruthy();
+            expect(globalThis.fetch).toHaveBeenCalledWith(
+                'http://localhost:8000/preview/42?chapters=11',
+                expect.any(Object)
+            );
         });
+
+        // 추가 로드 없음 확인
+        await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+        expect(globalThis.fetch).not.toHaveBeenCalledWith(
+            'http://localhost:8000/preview/42?chapters=21',
+            expect.any(Object)
+        );
     });
 
-    it('전체보기 모드에서 "더 보기" 클릭 시 추가 챕터를 요청한다', async () => {
+    it('전체보기 모드에서 초기 로딩 후 자동으로 chapters=11 요청한다', async () => {
         let callCount = 0;
         globalThis.fetch = vi.fn(() => {
             callCount++;
@@ -141,13 +152,10 @@ describe('ViewEPUB', () => {
 
         render(<ViewEPUB bookId={42} />);
 
-        // 첫 렌더링 대기
-        await waitFor(() => {
-            expect(screen.getByText(/더 보기/)).toBeTruthy();
-        });
-
-        // "더 보기" 클릭
-        fireEvent.click(screen.getByText(/더 보기/));
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+            'http://localhost:8000/preview/42?chapters=1',
+            expect.any(Object)
+        );
 
         await waitFor(() => {
             expect(globalThis.fetch).toHaveBeenCalledWith(
@@ -157,8 +165,72 @@ describe('ViewEPUB', () => {
         });
     });
 
-    it('모든 챕터 로드 완료 시 "더 보기" 버튼이 숨겨진다', async () => {
-        // totalChapters=1이면 이미 모두 로드됨
+    it('전체보기 모드에서 연속 자동 로드한다 (1→11→21)', async () => {
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve(createFetchResponse(mockArrayBuffer, 25))
+        );
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(globalThis.fetch).toHaveBeenCalledWith(
+                'http://localhost:8000/preview/42?chapters=21',
+                expect.any(Object)
+            );
+        });
+    });
+
+    // ── 챕터 로딩 버튼 ──
+
+    it('자동 로드 진행 중 로딩 버튼이 표시된다', async () => {
+        let callCount = 0;
+        globalThis.fetch = vi.fn(() => {
+            callCount++;
+            if (callCount === 1) {
+                return Promise.resolve(createFetchResponse(mockArrayBuffer, 20));
+            }
+            // 자동 로드 요청은 지연 → 버튼이 보임
+            return new Promise(() => {});
+        });
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(screen.getByRole('button', { name: /1\/20/ })).toBeTruthy();
+        });
+    });
+
+    it('자동 로드 실패 후 "더 보기" 클릭으로 재시도할 수 있다', async () => {
+        let callCount = 0;
+        globalThis.fetch = vi.fn(() => {
+            callCount++;
+            if (callCount === 1) {
+                return Promise.resolve(createFetchResponse(mockArrayBuffer, 20));
+            }
+            if (callCount === 2) {
+                // 자동 로드 실패
+                return Promise.reject(new Error('Network error'));
+            }
+            // 수동 재시도 성공
+            return Promise.resolve(createFetchResponse(mockArrayBuffer2, 20));
+        });
+
+        render(<ViewEPUB bookId={42} />);
+
+        // 자동 로드 실패 후 "더 보기" 버튼 표시 대기
+        await waitFor(() => {
+            expect(screen.getByText(/더 보기/)).toBeTruthy();
+        });
+
+        // "더 보기" 클릭으로 재시도
+        fireEvent.click(screen.getByText(/더 보기/));
+
+        await waitFor(() => {
+            expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+        });
+    });
+
+    it('모든 챕터 로드 완료 시 버튼이 숨겨진다', async () => {
         globalThis.fetch = vi.fn(() => Promise.resolve(createFetchResponse(mockArrayBuffer, 1)));
 
         render(<ViewEPUB bookId={42} />);
@@ -168,9 +240,10 @@ describe('ViewEPUB', () => {
         });
 
         expect(screen.queryByText(/더 보기/)).toBeNull();
+        expect(screen.queryByRole('button', { name: /챕터/ })).toBeNull();
     });
 
-    // ── %2F 회귀 방지 (버그 #1 핵심 회귀 테스트) ──
+    // ── %2F 회귀 방지 ──
 
     it('preview URL에 파일 경로나 %2F가 포함되지 않는다', () => {
         render(<ViewEPUB bookId={42} />);

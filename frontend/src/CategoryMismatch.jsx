@@ -168,10 +168,12 @@ export default function CategoryMismatch() {
 
             const mismatchCounts = buildMismatchCounts(mismatchResult);
 
-            // fs_only 카테고리는 ES에 없을 수 있으므로 병합
+            // 불일치가 있는 카테고리만 표시
             const esCategories = Object.keys(categoriesResult).filter(c => c !== '_root');
             const fsOnlyCategories = (mismatchResult.fs_only || []).map(item => item.category);
-            const allCategories = [...new Set([...esCategories, ...fsOnlyCategories])].sort((a, b) => a.localeCompare(b));
+            const allCategories = [...new Set([...esCategories, ...fsOnlyCategories])]
+                .filter(cat => mismatchCounts[cat] > 0)
+                .sort((a, b) => a.localeCompare(b));
 
             const commonPrefix = findCommonPrefix(allCategories);
             const data = buildFolderHierarchy(allCategories, commonPrefix, mismatchCounts);
