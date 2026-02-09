@@ -182,6 +182,18 @@ describe('calculateSimilarity: 한글 포함 관계 임계값', () => {
         const score = calculateSimilarity('SF', 'SF소설');
         expect(score).toBeGreaterThanOrEqual(0.7);
     });
+
+    it('한글 1글자가 3글자 이상 단어에 포함되면 N-gram으로 평가한다', () => {
+        // "시" ⊂ "러시아소설" → 1글자, longer=5글자 → 우연적 포함
+        expect(calculateSimilarity('시', '러시아소설')).toBeLessThan(0.7);
+        // "시" ⊂ "레시피" → 1글자, longer=3글자 → 우연적 포함
+        expect(calculateSimilarity('시', '레시피')).toBeLessThan(0.7);
+    });
+
+    it('한글 1글자가 2글자 단어에 포함되면 포함 관계로 인정한다', () => {
+        // "시" ⊂ "시집" → 1글자, longer=2글자 → 의미 있는 포함
+        expect(calculateSimilarity('시', '시집')).toBeGreaterThanOrEqual(0.7);
+    });
 });
 
 // ── 카테고리 버튼 하이라이트/선택 스타일 ──
