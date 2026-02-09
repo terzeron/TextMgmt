@@ -8,6 +8,7 @@ import logging.config
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Tuple, Dict, List, Union, Optional, Any
 import chardet
@@ -39,6 +40,23 @@ class BookManager:
         ".tiff": "image/tiff",
         ".svg": "image/svg+xml",
     }
+
+    CACHE_MAX_AGE_SECONDS = 86400  # 1일
+
+    @staticmethod
+    def _evict_old_cache(cache_dir: Path) -> None:
+        """cache_dir 내 1일 이상 된 파일을 삭제한다."""
+        try:
+            cutoff = time.time() - BookManager.CACHE_MAX_AGE_SECONDS
+            for f in cache_dir.iterdir():
+                try:
+                    if f.is_file() and f.stat().st_mtime < cutoff:
+                        f.unlink()
+                        LOGGER.debug("Evicted old cache file: %s", f.name)
+                except Exception as e:
+                    LOGGER.warning("Failed to evict cache file %s: %s", f.name, e)
+        except Exception as e:
+            LOGGER.warning("Cache eviction failed: %s", e)
 
     @staticmethod
     def _find_libreoffice() -> str:
@@ -202,6 +220,7 @@ class BookManager:
                 writer.write(buf)
                 preview_bytes = buf.getvalue()
                 cache_file.write_bytes(preview_bytes)
+                BookManager._evict_old_cache(cache_dir)
                 LOGGER.debug("Preview generated for book_id=%d (PDF, %d pages)", book_id, pages_to_extract)
                 return FileResponse(path=cache_file, media_type="application/pdf",
                                     headers={"Content-Encoding": "identity",
@@ -267,7 +286,8 @@ class BookManager:
                     if spine_el is None:
                         raise ValueError("OPF: spine element not found")
                     spine_refs = list(spine_el.findall(f'{{{opf_ns}}}itemref'))
-                    chapter_idrefs = [ref.get('idref') for ref in spine_refs[:chapters]]
+                    chapter_idrefs = [ref.get('idref') for ref in spine_refs[:chapters]
+                                      if ref.get('idref') in manifest]
 
                     # 포함할 zip 내 파일 경로
                     files_to_include = {'META-INF/container.xml', opf_path}
@@ -306,28 +326,45 @@ class BookManager:
                             if href_attr:
                                 referenced.add(normpath(pjoin(item_dir, href_attr)))
 
-                    # CSS 추가 및 CSS 내 url() 참조 수집
+                    # 챕터에서 참조된 CSS만 포함 및 CSS 내 url() 참조 수집
                     css_url_pattern = re.compile(r'url\(["\']?([^"\')\s]+)["\']?\)')
-                    for item_id, info in manifest.items():
-                        if 'css' in info.get('media-type', ''):
-                            href = info['href']
-                            zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
-                            files_to_include.add(zp)
-                            manifest_ids_to_keep.add(item_id)
-                            try:
-                                css_content = zin.read(zp).decode('utf-8', errors='replace')
-                                css_dir = dirname(zp)
-                                for m in css_url_pattern.findall(css_content):
-                                    if not m.startswith('data:'):
-                                        referenced.add(normpath(pjoin(css_dir, m)))
-                            except KeyError:
-                                pass
+                    css_refs = [r for r in referenced if r in href_to_id
+                                and 'css' in manifest[href_to_id[r]].get('media-type', '')]
+                    referenced -= set(css_refs)  # CSS는 별도 처리
+                    for zp in css_refs:
+                        item_id = href_to_id[zp]
+                        files_to_include.add(zp)
+                        manifest_ids_to_keep.add(item_id)
+                        try:
+                            css_content = zin.read(zp).decode('utf-8', errors='replace')
+                            css_dir = dirname(zp)
+                            for m in css_url_pattern.findall(css_content):
+                                if not m.startswith('data:'):
+                                    referenced.add(normpath(pjoin(css_dir, m)))
+                        except KeyError:
+                            pass
 
-                    # 참조된 이미지/폰트만 추가
+                    # 참조된 이미지/폰트 추가 (대용량 폰트 제외)
+                    FONT_SIZE_LIMIT = 500 * 1024  # 500KB
+                    FONT_EXTENSIONS = {'.ttf', '.otf', '.woff', '.woff2'}
+                    FONT_MEDIA_TYPES = {'font/ttf', 'font/otf', 'font/woff', 'font/woff2',
+                                        'application/font-ttf', 'application/font-woff',
+                                        'application/font-woff2', 'application/x-font-ttf'}
                     for ref_path in referenced:
                         if ref_path in href_to_id:
+                            item_id = href_to_id[ref_path]
+                            info = manifest[item_id]
+                            ext = os.path.splitext(ref_path)[1].lower()
+                            if ext in FONT_EXTENSIONS or info.get('media-type', '') in FONT_MEDIA_TYPES:
+                                try:
+                                    font_size = zin.getinfo(ref_path).file_size
+                                    if font_size > FONT_SIZE_LIMIT:
+                                        LOGGER.debug("EPUB preview: skipping large font %s (%d bytes)", ref_path, font_size)
+                                        continue
+                                except KeyError:
+                                    continue
                             files_to_include.add(ref_path)
-                            manifest_ids_to_keep.add(href_to_id[ref_path])
+                            manifest_ids_to_keep.add(item_id)
 
                     # OPF 수정: manifest에서 불필요한 항목 제거
                     manifest_el = opf.find(f'.//{{{opf_ns}}}manifest')
@@ -355,6 +392,7 @@ class BookManager:
                                 except KeyError:
                                     LOGGER.warning("EPUB preview: missing file in archive: %s", zp)
 
+                BookManager._evict_old_cache(cache_dir)
                 LOGGER.debug("Preview generated for book_id=%d (EPUB, %d chapters)", book_id, len(chapter_idrefs))
                 return FileResponse(path=cache_file, media_type="application/epub+zip",
                                     headers=extra_headers)
@@ -372,6 +410,7 @@ class BookManager:
                 html_content = BookManager._convert_with_libreoffice(book.file_path, "html")
                 if html_content:
                     cache_file.write_text(html_content, encoding="utf-8")
+                    BookManager._evict_old_cache(cache_dir)
                     LOGGER.debug("Preview generated for book_id=%d (%s)", book_id, suffix)
                     return Response(content=html_content, media_type="text/html")
             except Exception as e:
@@ -639,6 +678,7 @@ class BookManager:
 
             # 캐시 저장
             cache_file.write_bytes(pdf_bytes)
+            BookManager._evict_old_cache(cache_dir)
 
             LOGGER.debug("PDF pages extracted for book_id=%d (p%d-%d, total=%d)", book_id, start, end, total_pages)
             return Response(

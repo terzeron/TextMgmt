@@ -109,6 +109,115 @@ def _create_test_epub(path: Path, chapter_count: int = 3, include_css: bool = Fa
             zf.writestr('media/cover.jpg', b'\xff\xd8\xff\xe0\x00\x10JFIF\xff\xd9')
 
 
+def _create_epub_with_font(path: Path, font_size: int) -> None:
+    """CSS url()로 폰트를 참조하는 EPUB. font_size로 폰트 크기를 제어."""
+    opf = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Font Test</dc:title>
+  </metadata>
+  <manifest>
+    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="style" href="style.css" media-type="text/css"/>
+    <item id="testfont" href="fonts/test.ttf" media-type="font/ttf"/>
+  </manifest>
+  <spine toc="toc">
+    <itemref idref="ch1"/>
+  </spine>
+</package>"""
+
+    chapter = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Ch1</title><link rel="stylesheet" href="style.css"/></head>
+<body><p>Font test chapter</p></body>
+</html>"""
+
+    css = "@font-face { font-family: 'Test'; src: url('fonts/test.ttf'); }\nbody { font-family: 'Test', serif; }"
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        zf.writestr('META-INF/container.xml', CONTAINER_XML)
+        zf.writestr('OEBPS/content.opf', opf)
+        zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+        zf.writestr('OEBPS/ch1.xhtml', chapter)
+        zf.writestr('OEBPS/style.css', css)
+        zf.writestr('OEBPS/fonts/test.ttf', b'\x00' * font_size)
+
+
+def _create_epub_with_invalid_spine(path: Path) -> None:
+    """manifest에 없는 idref(coverpage)를 spine에 포함하는 EPUB."""
+    opf = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Invalid Spine Test</dc:title>
+  </metadata>
+  <manifest>
+    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="toc">
+    <itemref idref="coverpage"/>
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>"""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        zf.writestr('META-INF/container.xml', CONTAINER_XML)
+        zf.writestr('OEBPS/content.opf', opf)
+        zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+        zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+        zf.writestr('OEBPS/ch2.xhtml', _make_chapter_xhtml(2))
+
+
+def _create_epub_with_unreferenced_css(path: Path) -> None:
+    """챕터에서 참조하지 않는 CSS(대용량 폰트 url() 포함)를 가진 EPUB."""
+    opf = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Unreferenced CSS Test</dc:title>
+  </metadata>
+  <manifest>
+    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="used-style" href="used.css" media-type="text/css"/>
+    <item id="unused-style" href="unused.css" media-type="text/css"/>
+    <item id="bigfont" href="fonts/big.ttf" media-type="font/ttf"/>
+  </manifest>
+  <spine toc="toc">
+    <itemref idref="ch1"/>
+  </spine>
+</package>"""
+
+    chapter = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Ch1</title><link rel="stylesheet" href="used.css"/></head>
+<body><p>Content</p></body>
+</html>"""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        zf.writestr('META-INF/container.xml', CONTAINER_XML)
+        zf.writestr('OEBPS/content.opf', opf)
+        zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+        zf.writestr('OEBPS/ch1.xhtml', chapter)
+        zf.writestr('OEBPS/used.css', 'body { margin: 1em; }')
+        zf.writestr('OEBPS/unused.css',
+                     "@font-face { font-family: 'Big'; src: url('fonts/big.ttf'); }")
+        zf.writestr('OEBPS/fonts/big.ttf', b'\x00' * (600 * 1024))
+
+
 def _create_corrupted_epub(path: Path, chapter_count: int = 3, missing_all: bool = False) -> None:
     """spine에 챕터가 등록되어 있지만 실제 ZIP에는 파일이 없는 손상 EPUB.
 
@@ -195,8 +304,9 @@ def _cleanup_book(client, bm, book_id, epub_path):
         client.delete(f"/books/{book_id}")
     except Exception:
         pass
-    cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}.epub"
-    cache_file.unlink(missing_ok=True)
+    cache_dir = bm.path_prefix / ".preview_cache"
+    for p in cache_dir.glob(f"{book_id}*"):
+        p.unlink(missing_ok=True)
     epub_path.unlink(missing_ok=True)
 
 
@@ -340,7 +450,7 @@ class TestBookPreview:
         book_id = test_book["book_id"]
         bm = test_book["bm"]
 
-        cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}.epub"
+        cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}_ch3.epub"
         cache_file.unlink(missing_ok=True)
 
         resp1 = client.get(f"/preview/{book_id}?chapters=3")
@@ -458,6 +568,108 @@ class TestBookPreview:
         finally:
             _cleanup_book(client, bm, book_id, svg_cover_path)
 
+    @pytest.mark.asyncio
+    async def test_preview_excludes_large_font(self, backend_test_setup):
+        """500KB 초과 폰트 파일은 미리보기에서 제외된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Large Font Book.epub"
+        _create_epub_with_font(epub_path, font_size=600 * 1024)
+
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=1")
+            assert response.status_code == 200
+
+            zf = _parse_epub_zip(response.content)
+            assert 'OEBPS/fonts/test.ttf' not in zf.namelist(), \
+                "Large font (>500KB) should be excluded from preview"
+            assert 'OEBPS/style.css' in zf.namelist(), \
+                "CSS should still be included even when its referenced font is excluded"
+            zf.close()
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_preview_includes_small_font(self, backend_test_setup):
+        """500KB 이하 폰트 파일은 미리보기에 포함된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Small Font Book.epub"
+        _create_epub_with_font(epub_path, font_size=100 * 1024)
+
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=1")
+            assert response.status_code == 200
+
+            zf = _parse_epub_zip(response.content)
+            assert 'OEBPS/fonts/test.ttf' in zf.namelist(), \
+                "Small font (<=500KB) should be included in preview"
+            zf.close()
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_preview_skips_invalid_spine_items(self, backend_test_setup):
+        """manifest에 없는 spine idref는 필터링되고 정상 동작한다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Invalid Spine Book.epub"
+        _create_epub_with_invalid_spine(epub_path)
+
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=3")
+            assert response.status_code == 200
+
+            zf = _parse_epub_zip(response.content)
+            spine = _get_spine_idrefs(zf)
+            assert 'coverpage' not in spine, \
+                "Invalid spine idref (not in manifest) should be filtered out"
+            assert 'ch1' in spine
+            assert 'ch2' in spine
+            zf.close()
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_preview_excludes_unreferenced_css(self, backend_test_setup):
+        """챕터에서 참조하지 않는 CSS와 그 CSS가 참조하는 폰트가 미리보기에서 제외된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Unreferenced CSS Book.epub"
+        _create_epub_with_unreferenced_css(epub_path)
+
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=1")
+            assert response.status_code == 200
+
+            zf = _parse_epub_zip(response.content)
+            names = zf.namelist()
+            assert 'OEBPS/used.css' in names, \
+                "Referenced CSS should be included"
+            assert 'OEBPS/unused.css' not in names, \
+                "Unreferenced CSS should NOT be included"
+            assert 'OEBPS/fonts/big.ttf' not in names, \
+                "Font referenced only by unreferenced CSS should NOT be included"
+            zf.close()
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
 
 # ── tests: download 엔드포인트 ────────────────────────────
 
@@ -519,6 +731,159 @@ class TestBookDownload:
         assert 'mimetype' in zf.namelist()
         assert 'META-INF/container.xml' in zf.namelist()
         zf.close()
+
+
+# ── tests: 캐시 정리 (eviction) ────────────────────────────
+
+class TestCacheEviction:
+    """BookManager._evict_old_cache 단위 테스트."""
+
+    def test_old_files_are_deleted(self, tmp_path):
+        """1일 이상 된 파일이 삭제된다."""
+        import time
+        from backend.book_manager import BookManager
+
+        old_file = tmp_path / "old.epub"
+        old_file.write_text("old")
+        # mtime을 2일 전으로 설정
+        old_mtime = time.time() - 2 * 86400
+        import os
+        os.utime(old_file, (old_mtime, old_mtime))
+
+        new_file = tmp_path / "new.epub"
+        new_file.write_text("new")
+
+        BookManager._evict_old_cache(tmp_path)
+
+        assert not old_file.exists()
+        assert new_file.exists()
+
+    def test_recent_files_are_kept(self, tmp_path):
+        """1일 미만 파일은 보존된다."""
+        from backend.book_manager import BookManager
+
+        recent = tmp_path / "recent.pdf"
+        recent.write_text("recent")
+
+        BookManager._evict_old_cache(tmp_path)
+
+        assert recent.exists()
+
+    def test_exactly_one_day_old_is_deleted(self, tmp_path):
+        """정확히 1일 된 파일도 삭제된다."""
+        import time, os
+        from backend.book_manager import BookManager
+
+        edge_file = tmp_path / "edge.html"
+        edge_file.write_text("edge")
+        edge_mtime = time.time() - 86400 - 1  # 1일 + 1초
+        os.utime(edge_file, (edge_mtime, edge_mtime))
+
+        BookManager._evict_old_cache(tmp_path)
+
+        assert not edge_file.exists()
+
+    def test_subdirectories_are_not_deleted(self, tmp_path):
+        """하위 디렉토리는 삭제하지 않는다."""
+        import time, os
+        from backend.book_manager import BookManager
+
+        sub_dir = tmp_path / "subdir"
+        sub_dir.mkdir()
+        old_mtime = time.time() - 2 * 86400
+        os.utime(sub_dir, (old_mtime, old_mtime))
+
+        BookManager._evict_old_cache(tmp_path)
+
+        assert sub_dir.exists()
+
+    def test_empty_directory_no_error(self, tmp_path):
+        """빈 디렉토리에서 에러 없이 동작한다."""
+        from backend.book_manager import BookManager
+
+        BookManager._evict_old_cache(tmp_path)  # 에러 없이 완료
+
+    def test_nonexistent_directory_no_error(self, tmp_path):
+        """존재하지 않는 디렉토리에서 에러 없이 동작한다."""
+        from backend.book_manager import BookManager
+
+        fake_dir = tmp_path / "nonexistent"
+        BookManager._evict_old_cache(fake_dir)  # 에러 없이 완료
+
+    def test_multiple_old_files_all_deleted(self, tmp_path):
+        """오래된 파일이 여러 개일 때 모두 삭제된다."""
+        import time, os
+        from backend.book_manager import BookManager
+
+        old_mtime = time.time() - 2 * 86400
+        old_files = []
+        for i in range(5):
+            f = tmp_path / f"old_{i}.epub"
+            f.write_text(f"old_{i}")
+            os.utime(f, (old_mtime, old_mtime))
+            old_files.append(f)
+
+        new_file = tmp_path / "new.pdf"
+        new_file.write_text("new")
+
+        BookManager._evict_old_cache(tmp_path)
+
+        for f in old_files:
+            assert not f.exists()
+        assert new_file.exists()
+
+    def test_deletion_failure_continues_processing(self, tmp_path):
+        """개별 파일 삭제 실패 시 나머지 파일 처리가 계속된다."""
+        import time, os
+        from unittest.mock import patch
+        from backend.book_manager import BookManager
+
+        old_mtime = time.time() - 2 * 86400
+        files = []
+        for i in range(3):
+            f = tmp_path / f"old_{i}.epub"
+            f.write_text(f"old_{i}")
+            os.utime(f, (old_mtime, old_mtime))
+            files.append(f)
+
+        original_unlink = Path.unlink
+        first_call = [True]
+
+        def mock_unlink(self, *args, **kwargs):
+            if first_call[0]:
+                first_call[0] = False
+                raise PermissionError("mocked deletion failure")
+            original_unlink(self, *args, **kwargs)
+
+        with patch.object(Path, 'unlink', mock_unlink):
+            BookManager._evict_old_cache(tmp_path)
+
+        # 1개는 실패로 남고, 나머지 2개는 삭제됨
+        remaining = [f for f in files if f.exists()]
+        assert len(remaining) == 1
+
+    def test_just_written_cache_file_is_not_evicted(self, tmp_path):
+        """방금 쓴 캐시 파일과 오래된 파일이 공존할 때, 새 파일만 보존된다."""
+        import time, os
+        from backend.book_manager import BookManager
+
+        old_mtime = time.time() - 3 * 86400
+        old_files = []
+        for name in ["1.pdf", "2_ch5.epub", "3.html", "4_p1-3.pdf"]:
+            f = tmp_path / name
+            f.write_text("old")
+            os.utime(f, (old_mtime, old_mtime))
+            old_files.append(f)
+
+        # 방금 생성된 파일
+        just_written = tmp_path / "5_ch10.epub"
+        just_written.write_text("fresh")
+
+        BookManager._evict_old_cache(tmp_path)
+
+        for f in old_files:
+            assert not f.exists(), f"{f.name} should have been evicted"
+        assert just_written.exists()
 
 
 if __name__ == "__main__":
