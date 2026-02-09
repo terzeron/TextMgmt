@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+
+afterEach(cleanup);
 
 vi.mock('../src/Common', () => ({
     getRandomMediumColor: () => '#000000',
@@ -7,12 +10,12 @@ vi.mock('../src/Common', () => ({
 }));
 
 vi.mock('../src/CategoryMapping', () => ({
-    loadCategoryMappings: () => ({}),
+    loadCategoryMappings: () => ({ '소설': ['fiction', '소설'] }),
     fetchCategoryMappings: () => Promise.resolve(),
-    isCacheInitialized: () => false,
+    isCacheInitialized: () => true,
 }));
 
-import { generateNgrams, ngramSimilarity, calculateSimilarity } from '../src/Actions';
+import Actions, { generateNgrams, ngramSimilarity, calculateSimilarity } from '../src/Actions';
 
 // ── generateNgrams ──
 
@@ -119,5 +122,128 @@ describe('calculateSimilarity', () => {
     it('null/undefined이면 0을 반환한다', () => {
         expect(calculateSimilarity(null, 'hello')).toBe(0);
         expect(calculateSimilarity('hello', undefined)).toBe(0);
+    });
+});
+
+// ── 카테고리 버튼 하이라이트/선택 스타일 ──
+
+const defaultProps = {
+    selectedEntryId: 'test/1',
+    selectedCategory: '',
+    otherCategoryList: ['소설', '역사', '과학'],
+    newFileName: 'test.pdf',
+    toNextEntryClicked: vi.fn(),
+    moveToUpperButtonClicked: vi.fn(),
+    moveToDirectoryButtonClicked: vi.fn(),
+    selectDirectoryButtonClicked: vi.fn(),
+    suggestedCategories: {},
+};
+
+describe('카테고리 버튼 하이라이트', () => {
+    it('유사도 자동 선택 시 highlight 클래스를 유지한다 (노란색)', () => {
+        const selectFn = vi.fn();
+        render(
+            <Actions
+                {...defaultProps}
+                suggestedCategories={{ yes24: '소설' }}
+                selectedCategory="소설"
+                selectDirectoryButtonClicked={selectFn}
+            />
+        );
+        // 자동 선택으로 selectDirectoryButtonClicked가 호출됨
+        expect(selectFn).toHaveBeenCalledWith(null, '소설');
+        // 버튼에 highlight 클래스가 유지되어야 함
+        const btn = screen.getByText('소설');
+        expect(btn.className).toContain('highlight');
+        // 흰색 배경이 아님
+        expect(btn.style.backgroundColor).not.toBe('rgb(255, 255, 255)');
+    });
+
+    it('수동 클릭 시 흰색 배경을 적용한다', () => {
+        const selectFn = vi.fn();
+        const { rerender } = render(
+            <Actions
+                {...defaultProps}
+                suggestedCategories={{ yes24: '소설' }}
+                selectedCategory="소설"
+                selectDirectoryButtonClicked={selectFn}
+            />
+        );
+        // 사용자가 '역사' 버튼을 클릭
+        fireEvent.click(screen.getByText('역사'));
+        expect(selectFn).toHaveBeenCalledWith(expect.anything(), '역사');
+
+        // 부모가 selectedCategory를 '역사'로 업데이트
+        rerender(
+            <Actions
+                {...defaultProps}
+                suggestedCategories={{ yes24: '소설' }}
+                selectedCategory="역사"
+                selectDirectoryButtonClicked={selectFn}
+            />
+        );
+        const btn = screen.getByText('역사');
+        expect(btn.style.backgroundColor).toBe('rgb(255, 255, 255)');
+        expect(btn.className).not.toContain('highlight');
+    });
+
+    it('수동 클릭 후에도 유사 카테고리의 highlight 클래스는 유지된다', () => {
+        const selectFn = vi.fn();
+        const { rerender } = render(
+            <Actions
+                {...defaultProps}
+                suggestedCategories={{ yes24: '소설' }}
+                selectedCategory="소설"
+                selectDirectoryButtonClicked={selectFn}
+            />
+        );
+        // 사용자가 다른 버튼 클릭
+        fireEvent.click(screen.getByText('역사'));
+        rerender(
+            <Actions
+                {...defaultProps}
+                suggestedCategories={{ yes24: '소설' }}
+                selectedCategory="역사"
+                selectDirectoryButtonClicked={selectFn}
+            />
+        );
+        // '소설' 버튼은 선택 해제되었지만 여전히 highlight 클래스를 가짐
+        const novelBtn = screen.getByText('소설');
+        expect(novelBtn.className).toContain('highlight');
+    });
+
+    it('suggestedCategories 변경 시 manuallyClicked가 초기화된다', () => {
+        const selectFn = vi.fn();
+        const { rerender } = render(
+            <Actions
+                {...defaultProps}
+                suggestedCategories={{ yes24: '소설' }}
+                selectedCategory="소설"
+                selectDirectoryButtonClicked={selectFn}
+            />
+        );
+        // 수동 클릭
+        fireEvent.click(screen.getByText('역사'));
+        rerender(
+            <Actions
+                {...defaultProps}
+                suggestedCategories={{ yes24: '소설' }}
+                selectedCategory="역사"
+                selectDirectoryButtonClicked={selectFn}
+            />
+        );
+        // suggestedCategories가 변경되면 자동 선택으로 돌아감
+        rerender(
+            <Actions
+                {...defaultProps}
+                suggestedCategories={{ yes24: '역사' }}
+                selectedCategory="역사"
+                selectDirectoryButtonClicked={selectFn}
+            />
+        );
+        const btn = screen.getByText('역사');
+        // 자동 선택이므로 highlight 클래스 유지
+        expect(btn.className).toContain('highlight');
+        expect(btn.style.backgroundColor).not.toBe('rgb(255, 255, 255)');
     });
 });
