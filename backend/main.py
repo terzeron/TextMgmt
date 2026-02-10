@@ -325,6 +325,9 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
             # author 정보가 비어있으면 상세 페이지에서 재추출
             if not item['author'] and info.get('author'):
                 item['author'] = info['author']
+            # 상세 페이지의 카테고리가 더 풍부하면 업데이트
+            if info.get('category') and info['category'].count('||') > item.get('category', '').count('||'):
+                item['category'] = info['category']
         books_data.append(item)
 
     if not books_data:
