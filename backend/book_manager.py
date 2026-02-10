@@ -590,6 +590,15 @@ class BookManager:
             return paths
 
         try:
+            # 최상위 디렉토리의 파일을 _root 카테고리로 수집
+            root_paths: set = set()
+            with _os.scandir(base_str) as l1_it:
+                for l1 in l1_it:
+                    if l1.is_file(follow_symlinks=False):
+                        root_paths.add(l1.name)
+            if root_paths:
+                fs_cats["_root"] = root_paths
+
             with _os.scandir(base_str) as l1_it:
                 for l1 in l1_it:
                     if not l1.is_dir(follow_symlinks=False) or l1.name.startswith("."):
@@ -651,13 +660,19 @@ class BookManager:
             es_files[rel_path] = {"book_id": book_id, **doc}
 
         # 2. 파일시스템 파일 목록
-        cat_dir = self.path_prefix / category
+        if category == "_root":
+            cat_dir = self.path_prefix
+        else:
+            cat_dir = self.path_prefix / category
         fs_files: set = set()
         try:
             with _os.scandir(str(cat_dir)) as it:
                 for entry in it:
                     if entry.is_file(follow_symlinks=False):
-                        rel_path = f"{category}/{entry.name}"
+                        if category == "_root":
+                            rel_path = entry.name
+                        else:
+                            rel_path = f"{category}/{entry.name}"
                         fs_files.add(rel_path)
         except (PermissionError, OSError):
             pass

@@ -82,18 +82,8 @@ describe('CategoryMismatch', () => {
         });
     });
 
-    it('불일치가 있으면 총 건수를 헤더에 표시한다', async () => {
+    it('헤더에 총 건수를 표시하지 않는다', async () => {
         setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
-        render(<CategoryMismatch />);
-
-        // mismatches:1 + es_only:1 + fs_only:1 = 3건
-        await waitFor(() => {
-            expect(screen.getByText('(19건)')).toBeTruthy();
-        });
-    });
-
-    it('불일치가 없으면 건수를 표시하지 않는다', async () => {
-        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
         render(<CategoryMismatch />);
 
         await waitFor(() => {
@@ -355,15 +345,14 @@ describe('CategoryMismatch', () => {
         // 카테고리 먼저 응답
         resolvers['/categories'](CATEGORIES_RESPONSE);
 
-        // 아직 불일치 미응답 → 건수 미표시
-        expect(screen.queryByText(/건\)/)).toBeNull();
-
         // 불일치 나중에 응답
         resolvers['/category-mismatches'](MISMATCH_RESPONSE_WITH_DATA);
 
         await waitFor(() => {
-            expect(screen.getByText('(19건)')).toBeTruthy();
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
         });
+        // 건수는 표시하지 않음
+        expect(screen.queryByText(/건\)/)).toBeNull();
     });
 
     it('불일치 API가 먼저 응답하고 카테고리 API가 나중에 응답해도 정상 동작한다', async () => {
@@ -377,15 +366,14 @@ describe('CategoryMismatch', () => {
         // 불일치 먼저 응답
         resolvers['/category-mismatches'](MISMATCH_RESPONSE_WITH_DATA);
 
-        // 아직 카테고리 미응답
-        expect(screen.queryByText(/건\)/)).toBeNull();
-
         // 카테고리 나중에 응답
         resolvers['/categories'](CATEGORIES_RESPONSE);
 
         await waitFor(() => {
-            expect(screen.getByText('(19건)')).toBeTruthy();
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
         });
+        // 건수는 표시하지 않음
+        expect(screen.queryByText(/건\)/)).toBeNull();
     });
 
     // ── 계층 구조 카테고리 ──
@@ -418,7 +406,7 @@ describe('CategoryMismatch', () => {
 
     // ── buildMismatchCounts 로직 검증 (통합) ──
 
-    it('같은 카테고리가 여러 배열에 중복 등장해도 건수는 유니크하게 카운트한다', async () => {
+    it('같은 카테고리가 여러 배열에 중복 등장해도 트리에 한 번만 표시한다', async () => {
         const mismatchData = {
             mismatches: [{ category: '1_fiction', es_count: 10, fs_count: 8, diff: 2 }],
             es_only: [{ category: '1_fiction', es_count: 10 }], // 중복
@@ -428,13 +416,19 @@ describe('CategoryMismatch', () => {
         setupMockResponses(CATEGORIES_RESPONSE, mismatchData);
         render(<CategoryMismatch />);
 
-        // 중복: mismatches abs(2)=2, es_only가 덮어써서 es_count=10
         await waitFor(() => {
-            expect(screen.getByText('(10건)')).toBeTruthy();
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByRole('tree')).toBeTruthy();
+            expect(screen.getByText('1_fiction')).toBeTruthy();
         });
     });
 
-    it('mismatches만 있고 es_only, fs_only가 빈 경우 해당 건수만 카운트한다', async () => {
+    it('mismatches만 있고 es_only, fs_only가 빈 경우 해당 카테고리만 트리에 표시한다', async () => {
         const mismatchData = {
             mismatches: [
                 { category: '1_fiction', es_count: 10, fs_count: 8, diff: 2 },
@@ -448,11 +442,18 @@ describe('CategoryMismatch', () => {
         render(<CategoryMismatch />);
 
         await waitFor(() => {
-            expect(screen.getByText('(4건)')).toBeTruthy();
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByText('1_fiction')).toBeTruthy();
+            expect(screen.getByText('2_science')).toBeTruthy();
         });
     });
 
-    it('mismatches, es_only, fs_only 각각의 카테고리를 불일치로 카운트한다', async () => {
+    it('mismatches, es_only, fs_only 각각의 카테고리를 트리에 표시한다', async () => {
         const mismatchData = {
             mismatches: [
                 { category: '1_fiction', es_count: 10, fs_count: 8, diff: 2 },
@@ -472,9 +473,17 @@ describe('CategoryMismatch', () => {
         setupMockResponses(categories, mismatchData);
         render(<CategoryMismatch />);
 
-        // abs(2) + abs(-2) + 12 + 9 = 25건
         await waitFor(() => {
-            expect(screen.getByText('(25건)')).toBeTruthy();
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByText('1_fiction')).toBeTruthy();
+            expect(screen.getByText('2_science')).toBeTruthy();
+            expect(screen.getByText('5_es_cat')).toBeTruthy();
+            expect(screen.getByText('6_fs_cat')).toBeTruthy();
         });
     });
 
@@ -488,7 +497,13 @@ describe('CategoryMismatch', () => {
         render(<CategoryMismatch />);
 
         await waitFor(() => {
-            expect(screen.getByText('(2건)')).toBeTruthy();
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByText('1_fiction')).toBeTruthy();
         });
     });
 
