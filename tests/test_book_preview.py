@@ -218,6 +218,117 @@ def _create_epub_with_unreferenced_css(path: Path) -> None:
         zf.writestr('OEBPS/fonts/big.ttf', b'\x00' * (600 * 1024))
 
 
+def _create_epub_with_unbound_prefix(path: Path) -> None:
+    """OPF에 선언되지 않은 네임스페이스 프리픽스(opf:role)가 있는 EPUB."""
+    opf = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Unbound Prefix Test</dc:title>
+    <dc:creator opf:role="aut" opf:file-as="Author, Test">Test Author</dc:creator>
+  </metadata>
+  <manifest>
+    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="toc">
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        zf.writestr('META-INF/container.xml', CONTAINER_XML)
+        zf.writestr('OEBPS/content.opf', opf)
+        zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+        zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+        zf.writestr('OEBPS/ch2.xhtml', _make_chapter_xhtml(2))
+
+
+def _create_epub_without_container_xml(path: Path) -> None:
+    """container.xml이 없지만 OPF는 존재하는 EPUB."""
+    opf = _make_opf(2)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        # container.xml 없음
+        zf.writestr('OEBPS/content.opf', opf)
+        zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+        zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+        zf.writestr('OEBPS/ch2.xhtml', _make_chapter_xhtml(2))
+
+
+def _create_epub_without_spine(path: Path) -> None:
+    """spine 요소가 없는 OPF를 가진 EPUB."""
+    opf = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>No Spine Test</dc:title>
+  </metadata>
+  <manifest>
+    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+</package>"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        zf.writestr('META-INF/container.xml', CONTAINER_XML)
+        zf.writestr('OEBPS/content.opf', opf)
+        zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+        zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+        zf.writestr('OEBPS/ch2.xhtml', _make_chapter_xhtml(2))
+
+
+def _create_epub_with_corrupted_container_xml(path: Path) -> None:
+    """container.xml이 깨진 XML이지만 full-path 속성은 regex로 추출 가능한 EPUB."""
+    bad_container = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"
+              calibre:unknown-attr="value"/>
+  </rootfiles>
+</container>"""
+    opf = _make_opf(2)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        zf.writestr('META-INF/container.xml', bad_container)
+        zf.writestr('OEBPS/content.opf', opf)
+        zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+        zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+        zf.writestr('OEBPS/ch2.xhtml', _make_chapter_xhtml(2))
+
+
+def _create_epub_with_missing_opf(path: Path) -> None:
+    """container.xml이 존재하지 않는 OPF 경로를 가리키는 EPUB."""
+    container = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/nonexistent.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        zf.writestr('META-INF/container.xml', container)
+        # OPF 파일 없음
+
+
+def _create_epub_with_no_opf_at_all(path: Path) -> None:
+    """container.xml도 없고 .opf 파일도 없는 EPUB."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+
+
 def _create_corrupted_epub(path: Path, chapter_count: int = 3, missing_all: bool = False) -> None:
     """spine에 챕터가 등록되어 있지만 실제 ZIP에는 파일이 없는 손상 EPUB.
 
@@ -695,6 +806,321 @@ class TestBookPreview:
             zf.close()
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
+
+
+# ── tests: EPUB 구조 오류 복원 ────────────────────────────
+
+class TestEpubErrorRecovery:
+    """다양한 EPUB 구조 오류에서 500 대신 정상 미리보기 또는 적절한 응답을 반환하는지 검증."""
+
+    # ── unbound namespace prefix ─────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_preview_unbound_namespace_prefix(self, backend_test_setup):
+        """OPF에 선언되지 않은 네임스페이스 프리픽스(opf:role)가 있어도 미리보기가 생성된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Unbound Prefix Book.epub"
+        _create_epub_with_unbound_prefix(epub_path)
+
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=2")
+            assert response.status_code == 200, \
+                f"Unbound prefix should not cause 500, got {response.status_code}: {response.text}"
+
+            zf = _parse_epub_zip(response.content)
+            assert 'mimetype' in zf.namelist()
+            names = zf.namelist()
+            assert any('ch1' in n for n in names), "ch1 should be in preview"
+            assert any('ch2' in n for n in names), "ch2 should be in preview"
+            assert response.headers.get("x-total-chapters") == "2"
+            zf.close()
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_total_chapters_unbound_prefix(self, backend_test_setup):
+        """OPF에 선언되지 않은 프리픽스가 있어도 총 챕터 수가 올바르게 반환된다."""
+        from backend.book_manager import BookManager
+
+        bm = backend_test_setup["bm"]
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Unbound Prefix Chapters.epub"
+        _create_epub_with_unbound_prefix(epub_path)
+
+        try:
+            count = BookManager._get_epub_total_chapters(epub_path)
+            assert count == 2, f"Expected 2 chapters, got {count}"
+        finally:
+            epub_path.unlink(missing_ok=True)
+
+    # ── missing container.xml ────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_preview_missing_container_xml(self, backend_test_setup):
+        """container.xml이 없어도 OPF를 직접 탐색하여 미리보기가 생성된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] No Container Book.epub"
+        _create_epub_without_container_xml(epub_path)
+
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=2")
+            assert response.status_code == 200, \
+                f"Missing container.xml should not cause 500, got {response.status_code}: {response.text}"
+
+            zf = _parse_epub_zip(response.content)
+            names = zf.namelist()
+            assert 'mimetype' in names
+            assert any('ch1' in n for n in names), "ch1 should be in preview"
+            assert any('ch2' in n for n in names), "ch2 should be in preview"
+            # container.xml이 원본에 없으므로 미리보기에도 없어야 함
+            assert 'META-INF/container.xml' not in names
+            zf.close()
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_total_chapters_missing_container_xml(self, backend_test_setup):
+        """container.xml이 없어도 총 챕터 수가 올바르게 반환된다."""
+        from backend.book_manager import BookManager
+
+        bm = backend_test_setup["bm"]
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] No Container Chapters.epub"
+        _create_epub_without_container_xml(epub_path)
+
+        try:
+            count = BookManager._get_epub_total_chapters(epub_path)
+            assert count == 2, f"Expected 2 chapters, got {count}"
+        finally:
+            epub_path.unlink(missing_ok=True)
+
+    # ── corrupted container.xml (regex fallback) ─────────
+
+    @pytest.mark.asyncio
+    async def test_preview_corrupted_container_xml(self, backend_test_setup):
+        """container.xml이 깨진 XML이어도 regex 폴백으로 미리보기가 생성된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Bad Container Book.epub"
+        _create_epub_with_corrupted_container_xml(epub_path)
+
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=2")
+            assert response.status_code == 200, \
+                f"Corrupted container.xml should not cause 500, got {response.status_code}: {response.text}"
+
+            zf = _parse_epub_zip(response.content)
+            names = zf.namelist()
+            assert any('ch1' in n for n in names), "ch1 should be in preview"
+            assert any('ch2' in n for n in names), "ch2 should be in preview"
+            zf.close()
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    # ── missing spine ────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_preview_missing_spine(self, backend_test_setup):
+        """spine이 없어도 manifest의 XHTML 문서 순서로 미리보기가 생성된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] No Spine Book.epub"
+        _create_epub_without_spine(epub_path)
+
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=2")
+            assert response.status_code == 200, \
+                f"Missing spine should not cause 500, got {response.status_code}: {response.text}"
+
+            zf = _parse_epub_zip(response.content)
+            names = zf.namelist()
+            assert 'mimetype' in names
+            assert any('ch1' in n for n in names), "ch1 should be in preview"
+            assert any('ch2' in n for n in names), "ch2 should be in preview"
+            # toc.ncx는 비문서 항목이므로 챕터로 선택되면 안 됨
+            assert not any('toc.ncx' in n for n in names), \
+                "toc.ncx (non-XHTML) should not be selected as chapter"
+            zf.close()
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_total_chapters_missing_spine(self, backend_test_setup):
+        """spine이 없으면 총 챕터 수가 0으로 반환된다."""
+        from backend.book_manager import BookManager
+
+        bm = backend_test_setup["bm"]
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] No Spine Chapters.epub"
+        _create_epub_without_spine(epub_path)
+
+        try:
+            count = BookManager._get_epub_total_chapters(epub_path)
+            assert count == 0, f"Expected 0 (no spine), got {count}"
+        finally:
+            epub_path.unlink(missing_ok=True)
+
+    # ── OPF missing in archive ───────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_preview_opf_missing_in_archive(self, backend_test_setup):
+        """container.xml이 존재하지 않는 OPF를 가리키면 422를 반환한다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Missing OPF Book.epub"
+        _create_epub_with_missing_opf(epub_path)
+
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=2")
+            assert response.status_code == 422, \
+                f"Missing OPF in archive should return 422, got {response.status_code}"
+            assert "OPF" in response.text
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    # ── no OPF at all ────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_preview_no_opf_at_all(self, backend_test_setup):
+        """container.xml도 없고 .opf 파일도 없으면 422를 반환한다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] No OPF Book.epub"
+        _create_epub_with_no_opf_at_all(epub_path)
+
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=2")
+            assert response.status_code == 422, \
+                f"No OPF at all should return 422, got {response.status_code}"
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    # ── bad ZIP ──────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_preview_bad_zip_file(self, backend_test_setup):
+        """손상된 ZIP 파일은 422를 반환한다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Bad Zip Book.epub"
+        epub_path.parent.mkdir(parents=True, exist_ok=True)
+        epub_path.write_bytes(b"this is not a zip file at all")
+
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=2")
+            assert response.status_code == 422, \
+                f"Bad ZIP should return 422, got {response.status_code}"
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_total_chapters_bad_zip(self, backend_test_setup):
+        """손상된 ZIP 파일에 대해 총 챕터 수가 0으로 반환된다."""
+        from backend.book_manager import BookManager
+
+        bm = backend_test_setup["bm"]
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Bad Zip Chapters.epub"
+        epub_path.parent.mkdir(parents=True, exist_ok=True)
+        epub_path.write_bytes(b"not a zip")
+
+        try:
+            count = BookManager._get_epub_total_chapters(epub_path)
+            assert count == 0
+        finally:
+            epub_path.unlink(missing_ok=True)
+
+
+# ── tests: _find_opf_path 단위 테스트 ────────────────────
+
+class TestFindOpfPath:
+    """BookManager._find_opf_path 헬퍼 단위 테스트."""
+
+    def test_normal_container_xml(self, tmp_path):
+        """정상 container.xml에서 OPF 경로를 추출한다."""
+        from backend.book_manager import BookManager
+        epub_path = tmp_path / "test.epub"
+        with zipfile.ZipFile(str(epub_path), 'w') as zf:
+            zf.writestr('META-INF/container.xml', CONTAINER_XML)
+            zf.writestr('OEBPS/content.opf', '<package/>')
+        with zipfile.ZipFile(str(epub_path), 'r') as zin:
+            assert BookManager._find_opf_path(zin) == 'OEBPS/content.opf'
+
+    def test_missing_container_xml_finds_opf(self, tmp_path):
+        """container.xml이 없으면 ZIP 내 .opf 파일을 직접 찾는다."""
+        from backend.book_manager import BookManager
+        epub_path = tmp_path / "test.epub"
+        with zipfile.ZipFile(str(epub_path), 'w') as zf:
+            zf.writestr('content.opf', '<package/>')
+        with zipfile.ZipFile(str(epub_path), 'r') as zin:
+            assert BookManager._find_opf_path(zin) == 'content.opf'
+
+    def test_corrupted_container_xml_regex_fallback(self, tmp_path):
+        """container.xml이 깨진 XML이면 regex로 full-path를 추출한다."""
+        from backend.book_manager import BookManager
+        bad_container = b'<container><rootfiles><rootfile full-path="OEBPS/pkg.opf" broken:attr="x"/></rootfiles></container>'
+        epub_path = tmp_path / "test.epub"
+        with zipfile.ZipFile(str(epub_path), 'w') as zf:
+            zf.writestr('META-INF/container.xml', bad_container)
+            zf.writestr('OEBPS/pkg.opf', '<package/>')
+        with zipfile.ZipFile(str(epub_path), 'r') as zin:
+            result = BookManager._find_opf_path(zin)
+            assert result == 'OEBPS/pkg.opf', f"Regex fallback should find OPF, got '{result}'"
+
+    def test_no_opf_returns_empty(self, tmp_path):
+        """container.xml도 .opf 파일도 없으면 빈 문자열을 반환한다."""
+        from backend.book_manager import BookManager
+        epub_path = tmp_path / "test.epub"
+        with zipfile.ZipFile(str(epub_path), 'w') as zf:
+            zf.writestr('mimetype', 'application/epub+zip')
+        with zipfile.ZipFile(str(epub_path), 'r') as zin:
+            assert BookManager._find_opf_path(zin) == ''
+
+    def test_container_xml_empty_rootfile(self, tmp_path):
+        """container.xml에 rootfile이 있지만 full-path가 비어있으면 .opf 직접 탐색으로 폴백."""
+        from backend.book_manager import BookManager
+        container = """\
+<?xml version="1.0"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"""
+        epub_path = tmp_path / "test.epub"
+        with zipfile.ZipFile(str(epub_path), 'w') as zf:
+            zf.writestr('META-INF/container.xml', container)
+            zf.writestr('OPS/book.opf', '<package/>')
+        with zipfile.ZipFile(str(epub_path), 'r') as zin:
+            result = BookManager._find_opf_path(zin)
+            assert result == 'OPS/book.opf', f"Should fallback to direct scan, got '{result}'"
 
 
 # ── tests: download 엔드포인트 ────────────────────────────

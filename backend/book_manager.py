@@ -71,27 +71,57 @@ class BookManager:
         return "libreoffice"
 
     @staticmethod
+    def _find_opf_path(zin) -> str:
+        """ZIP 내 OPF 파일 경로를 찾는다. container.xml → regex 폴백 → 직접 탐색 순으로 시도."""
+        import re
+        from lxml import etree
+
+        cnt_ns = 'urn:oasis:names:tc:opendocument:xmlns:container'
+        # 1) container.xml에서 OPF 경로 추출
+        try:
+            container_xml = zin.read('META-INF/container.xml')
+            try:
+                container = etree.fromstring(container_xml, etree.XMLParser(recover=True))
+                rootfile = container.find(f'.//{{{cnt_ns}}}rootfile')
+                if rootfile is not None:
+                    opf_path = rootfile.get('full-path', '')
+                    if opf_path:
+                        return opf_path
+            except Exception:
+                pass
+            # XML 파싱 실패 시 regex 폴백
+            m = re.search(rb'full-path=["\']([^"\']+)', container_xml)
+            if m:
+                return m.group(1).decode('utf-8')
+        except KeyError:
+            pass
+
+        # 2) container.xml이 없거나 파싱 실패 시 ZIP 내 .opf 파일 직접 탐색
+        opf_candidates = [n for n in zin.namelist() if n.lower().endswith('.opf')]
+        if opf_candidates:
+            return opf_candidates[0]
+
+        return ''
+
+    @staticmethod
     def _get_epub_total_chapters(file_path: Path) -> int:
         """EPUB 파일의 총 챕터 수(spine itemref 수)를 반환"""
         import zipfile
-        import xml.etree.ElementTree as ET
+        from lxml import etree
 
         try:
             with zipfile.ZipFile(str(file_path), 'r') as zin:
-                cnt_ns = 'urn:oasis:names:tc:opendocument:xmlns:container'
-                container = ET.fromstring(zin.read('META-INF/container.xml'))
-                rootfile = container.find(f'.//{{{cnt_ns}}}rootfile')
-                if rootfile is None:
+                opf_path = BookManager._find_opf_path(zin)
+                if not opf_path:
                     return 0
-                opf_path = rootfile.get('full-path', '')
                 opf_ns = 'http://www.idpf.org/2007/opf'
-                opf = ET.fromstring(zin.read(opf_path))
+                opf = etree.fromstring(zin.read(opf_path), etree.XMLParser(recover=True))
                 spine_el = opf.find(f'.//{{{opf_ns}}}spine')
                 if spine_el is None:
                     return 0
                 return len(spine_el.findall(f'{{{opf_ns}}}itemref'))
-        except Exception as e:
-            LOGGER.warning("Failed to get EPUB total chapters for '%s': %s", file_path, e)
+        except Exception:
+            LOGGER.exception("Failed to get EPUB total chapters for '%s'", file_path)
             return 0
 
     @staticmethod
@@ -247,29 +277,31 @@ class BookManager:
                 return FileResponse(path=cache_file, media_type="application/epub+zip",
                                     headers=extra_headers)
 
+            import zipfile
             try:
                 import re
-                import zipfile
-                import xml.etree.ElementTree as ET
+                from lxml import etree
                 from bs4 import BeautifulSoup
                 from posixpath import normpath, join as pjoin, dirname
 
-                ET.register_namespace('', 'http://www.idpf.org/2007/opf')
-                ET.register_namespace('dc', 'http://purl.org/dc/elements/1.1/')
-
                 with zipfile.ZipFile(str(book.file_path), 'r') as zin:
-                    # container.xml에서 OPF 경로 찾기
-                    cnt_ns = 'urn:oasis:names:tc:opendocument:xmlns:container'
-                    container = ET.fromstring(zin.read('META-INF/container.xml'))
-                    rootfile = container.find(f'.//{{{cnt_ns}}}rootfile')
-                    if rootfile is None:
-                        raise ValueError("container.xml: rootfile not found")
-                    opf_path = rootfile.get('full-path', '')
+                    # OPF 경로 찾기 (container.xml → regex → 직접 탐색)
+                    opf_path = BookManager._find_opf_path(zin)
+                    if not opf_path:
+                        LOGGER.warning("EPUB preview: OPF file not found for book_id=%d", book_id)
+                        return Response(status_code=422,
+                                        content="EPUB structure error: OPF file not found")
                     opf_dir = dirname(opf_path)
 
-                    # OPF 파싱
+                    # OPF 파싱 (recover=True: 선언되지 않은 네임스페이스 프리픽스 허용)
                     opf_ns = 'http://www.idpf.org/2007/opf'
-                    opf = ET.fromstring(zin.read(opf_path))
+                    try:
+                        opf_bytes = zin.read(opf_path)
+                    except KeyError:
+                        LOGGER.warning("EPUB preview: OPF file missing in archive: %s (book_id=%d)", opf_path, book_id)
+                        return Response(status_code=422,
+                                        content=f"EPUB structure error: OPF file missing: {opf_path}")
+                    opf = etree.fromstring(opf_bytes, etree.XMLParser(recover=True))
 
                     # manifest: id → href, media-type
                     manifest: Dict[str, Dict[str, str]] = {}
@@ -284,13 +316,19 @@ class BookManager:
                     # spine 순서
                     spine_el = opf.find(f'.//{{{opf_ns}}}spine')
                     if spine_el is None:
-                        raise ValueError("OPF: spine element not found")
-                    spine_refs = list(spine_el.findall(f'{{{opf_ns}}}itemref'))
-                    chapter_idrefs = [ref.get('idref') for ref in spine_refs[:chapters]
-                                      if ref.get('idref') in manifest]
+                        LOGGER.warning("EPUB preview: spine not found for book_id=%d, trying manifest order", book_id)
+                        spine_refs = []
+                        chapter_idrefs = [mid for mid, info in manifest.items()
+                                          if info.get('media-type') == 'application/xhtml+xml'][:chapters]
+                    else:
+                        spine_refs = list(spine_el.findall(f'{{{opf_ns}}}itemref'))
+                        chapter_idrefs = [ref.get('idref') for ref in spine_refs[:chapters]
+                                          if ref.get('idref') in manifest]
 
                     # 포함할 zip 내 파일 경로
-                    files_to_include = {'META-INF/container.xml', opf_path}
+                    files_to_include = {opf_path}
+                    if 'META-INF/container.xml' in zin.namelist():
+                        files_to_include.add('META-INF/container.xml')
                     manifest_ids_to_keep = set(chapter_idrefs)
 
                     # 챕터 파일의 zip 경로 계산
@@ -374,9 +412,10 @@ class BookManager:
                                 manifest_el.remove(item)
 
                     # spine에서 불필요한 항목 제거
-                    for ref in list(spine_refs):
-                        if ref.get('idref') not in chapter_idrefs:
-                            spine_el.remove(ref)
+                    if spine_el is not None:
+                        for ref in list(spine_refs):
+                            if ref.get('idref') not in chapter_idrefs:
+                                spine_el.remove(ref)
 
                     # guide에서 존재하지 않는 파일 참조 제거
                     guide_el = opf.find(f'.//{{{opf_ns}}}guide')
@@ -388,7 +427,7 @@ class BookManager:
                                 guide_el.remove(ref)
 
                     # 새 EPUB 작성
-                    modified_opf = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(opf, encoding='unicode')
+                    modified_opf = '<?xml version="1.0" encoding="UTF-8"?>\n' + etree.tostring(opf, encoding='unicode')
 
                     # @font-face 블록 제거용 패턴
                     font_face_pattern = re.compile(r'@font-face\s*\{[^}]*\}')
@@ -422,8 +461,11 @@ class BookManager:
                 LOGGER.debug("Preview generated for book_id=%d (EPUB, %d chapters)", book_id, len(chapter_idrefs))
                 return FileResponse(path=cache_file, media_type="application/epub+zip",
                                     headers=extra_headers)
+            except zipfile.BadZipFile:
+                LOGGER.exception("EPUB preview: corrupted ZIP for book_id=%d", book_id)
+                return Response(status_code=422, content="EPUB file is corrupted or not a valid ZIP")
             except Exception as e:
-                LOGGER.error("EPUB preview generation failed for book_id=%d: %s", book_id, e)
+                LOGGER.exception("EPUB preview generation failed for book_id=%d", book_id)
                 return Response(status_code=500, content=f"EPUB preview failed: {e}")
 
         elif suffix in (".doc", ".hwp"):
