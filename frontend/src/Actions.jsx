@@ -308,10 +308,10 @@ export default function Actions(props) {
     return (
         <>
             <Row className="button_group">
-                <Button variant="outline-success" className="btn-xs" onClick={props.toNextEntryClicked}>다음 책으로</Button>
+                <Button variant="outline-success" className="btn-xs" onClick={props.toNextEntryClicked} disabled={props.isProcessing}>다음 책으로</Button>
                 {
                     !props.selectedEntryId.startsWith(ROOT_DIRECTORY) > 0 &&
-                    <Button variant="outline-warning" className="btn-xs" onClick={props.moveToUpperButtonClicked} disabled={!props.newFileName}>
+                    <Button variant="outline-warning" className="btn-xs" onClick={props.moveToUpperButtonClicked} disabled={!props.newFileName || props.isProcessing}>
                         상위로
                         <FontAwesomeIcon icon={faUpload}/>
                     </Button>
@@ -348,7 +348,7 @@ export default function Actions(props) {
                 <InputGroup className="ms-0 me-0">
                     <Form.Control value={props.selectedCategory} readOnly/>
                     <Button variant="outline-warning" className="btn-xs" onClick={props.moveToDirectoryButtonClicked
-                    } disabled={!props.selectedEntryId && !props.selectedCategory}>
+                    } disabled={(!props.selectedEntryId && !props.selectedCategory) || props.isProcessing}>
                         로 옮기기
                         <FontAwesomeIcon icon={faTruckMoving}/>
                     </Button>
@@ -369,4 +369,5 @@ Actions.propTypes = {
     newFileName: PropTypes.string.isRequired,
     toNextEntryClicked: PropTypes.func.isRequired,
     suggestedCategories: PropTypes.object,
+    isProcessing: PropTypes.bool,
 };

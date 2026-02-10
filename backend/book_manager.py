@@ -534,14 +534,27 @@ class BookManager:
             return doc_id_list[0], None
         return None, f"can't add book '{data}' to ElasticSearch"
 
-    async def update_book(self, book_id: int, new_category: str, new_title: str, new_author: str, new_path: Path, new_type: str) -> Tuple[str, Optional[str]]:
-        LOGGER.debug("# update_book(book_id=%d, new_category='%s', new_title='%s', new_author='%s', new_path='%r', new_file_type='%s')", book_id, new_category, new_title, new_author, new_path, new_type)
+    async def update_book(self, book_id: int, new_category: str, new_title: str, new_author: str, new_path: Path, new_type: str, force: bool = False) -> Tuple[str, Optional[str]]:
+        LOGGER.debug("# update_book(book_id=%d, new_category='%s', new_title='%s', new_author='%s', new_path='%r', new_file_type='%s', force=%s)", book_id, new_category, new_title, new_author, new_path, new_type, force)
         # rename file
         doc = self.es_manager.search_by_id(book_id)
         if doc:
             book = Book(book_id=book_id, info=doc)
             file_path = self.path_prefix / book.file_path
             new_full_path = new_path
+
+            # 대상 경로에 다른 파일이 이미 존재하는지 확인
+            if new_full_path.exists():
+                try:
+                    is_same_file = file_path.exists() and file_path.samefile(new_full_path)
+                except OSError:
+                    is_same_file = False
+                if not is_same_file:
+                    if not force:
+                        relative = new_full_path.relative_to(self.path_prefix)
+                        return "Error", f"CONFLICT:대상 경로에 파일이 이미 존재합니다: {relative}"
+                    LOGGER.warning("update_book: force overwriting existing file '%s' (book_id=%d)", new_full_path, book_id)
+
             try:
                 new_full_path.parent.mkdir(parents=True, exist_ok=True)
                 file_path.rename(new_full_path)
