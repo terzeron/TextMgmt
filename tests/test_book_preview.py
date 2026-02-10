@@ -343,6 +343,34 @@ def _create_epub_with_binary_garbage_container(path: Path) -> None:
         zf.writestr('OEBPS/ch2.xhtml', _make_chapter_xhtml(2))
 
 
+def _create_epub_with_ncx_extra_refs(path: Path, chapter_count: int = 3, total_ncx_points: int = 10) -> None:
+    """NCX에 실제 챕터보다 많은 navPoint가 포함된 EPUB 생성.
+
+    chapter_count개의 챕터 파일만 포함하고, NCX에는 total_ncx_points개의 navPoint를 생성.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ncx_ns = 'http://www.daisy.org/z3986/2005/ncx/'
+    nav_points = []
+    for i in range(1, total_ncx_points + 1):
+        nav_points.append(f'''  <navPoint id="np-{i}" playOrder="{i}">
+    <navLabel><text>Chapter {i}</text></navLabel>
+    <content src="ch{i}.xhtml#frag{i}"/>
+  </navPoint>''')
+    ncx = f'''<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="{ncx_ns}" version="2005-1">
+  <navMap>
+{chr(10).join(nav_points)}
+  </navMap>
+</ncx>'''
+    with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        zf.writestr('META-INF/container.xml', CONTAINER_XML)
+        zf.writestr('OEBPS/content.opf', _make_opf(chapter_count))
+        zf.writestr('OEBPS/toc.ncx', ncx)
+        for i in range(1, chapter_count + 1):
+            zf.writestr(f'OEBPS/ch{i}.xhtml', _make_chapter_xhtml(i))
+
+
 def _create_corrupted_epub(path: Path, chapter_count: int = 3, missing_all: bool = False) -> None:
     """spine에 챕터가 등록되어 있지만 실제 ZIP에는 파일이 없는 손상 EPUB.
 
@@ -1635,6 +1663,168 @@ class TestValidatePreviewEpub:
         assert valid is True
         mtime_after = os.path.getmtime(epub)
         assert mtime_before == mtime_after, "clean EPUB should not be rewritten"
+
+
+class TestNcxFiltering:
+    """미리보기 EPUB 생성 시 NCX navPoint 필터링 테스트."""
+
+    @pytest.mark.asyncio
+    async def test_preview_strips_ncx_extra_navpoints(self, backend_test_setup):
+        """NCX에서 미리보기에 포함되지 않은 파일 참조 navPoint가 제거된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] NCX Extra Refs.epub"
+        _create_epub_with_ncx_extra_refs(epub_path, chapter_count=5, total_ncx_points=10)
+
+        book_id = await _register_epub_async(bm, epub_path)
+        try:
+            cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}.epub"
+            cache_file.unlink(missing_ok=True)
+
+            response = client.get(f"/preview/{book_id}?chapters=2")
+            assert response.status_code == 200
+
+            zf = _parse_epub_zip(response.content)
+            ncx_data = zf.read('OEBPS/toc.ncx').decode('utf-8')
+            zf.close()
+
+            ncx_tree = ET.fromstring(ncx_data)
+            ncx_ns = 'http://www.daisy.org/z3986/2005/ncx/'
+            nav_points = ncx_tree.findall(f'.//{{{ncx_ns}}}navPoint')
+
+            # 2챕터만 요청했으므로 ch1, ch2만 포함
+            assert len(nav_points) <= 2, \
+                f"NCX should have at most 2 navPoints, got {len(nav_points)}"
+
+            # 남아있는 navPoint의 src가 모두 ch1 또는 ch2를 참조
+            for np in nav_points:
+                content = np.find(f'{{{ncx_ns}}}content')
+                src = content.get('src', '')
+                src_file = src.split('#')[0]
+                assert src_file in ('ch1.xhtml', 'ch2.xhtml'), \
+                    f"NCX navPoint references unexpected file: {src_file}"
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_preview_keeps_fragment_only_navpoints(self, backend_test_setup):
+        """NCX에서 fragment-only src를 가진 navPoint는 유지된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] NCX Fragment Only.epub"
+        epub_path.parent.mkdir(parents=True, exist_ok=True)
+
+        ncx_ns = 'http://www.daisy.org/z3986/2005/ncx/'
+        ncx = f'''<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="{ncx_ns}" version="2005-1">
+  <navMap>
+    <navPoint id="np-1" playOrder="1">
+      <navLabel><text>Chapter 1</text></navLabel>
+      <content src="ch1.xhtml"/>
+    </navPoint>
+    <navPoint id="np-frag" playOrder="2">
+      <navLabel><text>Fragment Ref</text></navLabel>
+      <content src="#bookmark"/>
+    </navPoint>
+    <navPoint id="np-missing" playOrder="3">
+      <navLabel><text>Missing</text></navLabel>
+      <content src="ch99.xhtml"/>
+    </navPoint>
+  </navMap>
+</ncx>'''
+
+        with zipfile.ZipFile(str(epub_path), 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+            zf.writestr('META-INF/container.xml', CONTAINER_XML)
+            zf.writestr('OEBPS/content.opf', _make_opf(2))
+            zf.writestr('OEBPS/toc.ncx', ncx)
+            zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+            zf.writestr('OEBPS/ch2.xhtml', _make_chapter_xhtml(2))
+
+        book_id = await _register_epub_async(bm, epub_path)
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=2")
+            assert response.status_code == 200
+
+            zf = _parse_epub_zip(response.content)
+            ncx_data = zf.read('OEBPS/toc.ncx').decode('utf-8')
+            zf.close()
+
+            ncx_tree = ET.fromstring(ncx_data)
+            nav_points = ncx_tree.findall(f'.//{{{ncx_ns}}}navPoint')
+            nav_ids = [np.get('id') for np in nav_points]
+
+            assert 'np-1' in nav_ids, "ch1 navPoint should be kept"
+            assert 'np-frag' in nav_ids, "fragment-only navPoint should be kept"
+            assert 'np-missing' not in nav_ids, "missing file navPoint should be removed"
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_preview_guide_href_with_fragment(self, backend_test_setup):
+        """guide reference의 href에 fragment가 포함되어도 올바르게 처리된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Guide Fragment.epub"
+        epub_path.parent.mkdir(parents=True, exist_ok=True)
+
+        opf = '''\
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Guide Fragment Test</dc:title>
+  </metadata>
+  <manifest>
+    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="toc">
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+  <guide>
+    <reference type="text" title="Start" href="ch1.xhtml#start"/>
+    <reference type="toc" title="TOC" href="missing.xhtml#toc"/>
+  </guide>
+</package>'''
+
+        with zipfile.ZipFile(str(epub_path), 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+            zf.writestr('META-INF/container.xml', CONTAINER_XML)
+            zf.writestr('OEBPS/content.opf', opf)
+            zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+            zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+            zf.writestr('OEBPS/ch2.xhtml', _make_chapter_xhtml(2))
+
+        book_id = await _register_epub_async(bm, epub_path)
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=2")
+            assert response.status_code == 200
+
+            zf = _parse_epub_zip(response.content)
+            opf_data = zf.read('OEBPS/content.opf').decode('utf-8')
+            zf.close()
+
+            opf_tree = ET.fromstring(opf_data)
+            opf_ns = 'http://www.idpf.org/2007/opf'
+            guide_refs = opf_tree.findall(f'.//{{{opf_ns}}}reference')
+
+            # ch1.xhtml#start → ch1.xhtml은 포함되어 있으므로 유지
+            # missing.xhtml#toc → missing.xhtml은 없으므로 제거
+            hrefs = [r.get('href', '') for r in guide_refs]
+            assert any('ch1.xhtml' in h for h in hrefs), \
+                "guide reference to ch1.xhtml#start should be kept"
+            assert not any('missing.xhtml' in h for h in hrefs), \
+                "guide reference to missing.xhtml should be removed"
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
 
 
 if __name__ == "__main__":

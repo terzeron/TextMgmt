@@ -455,13 +455,12 @@ class BookManager:
                     manifest_ids_to_keep = set(chapter_idrefs)
 
                     # spine toc 속성이 참조하는 NCX 파일 포함
-                    if spine_el is not None:
-                        toc_id = spine_el.get('toc', '')
-                        if toc_id and toc_id in manifest:
-                            manifest_ids_to_keep.add(toc_id)
-                            toc_href = manifest[toc_id]['href']
-                            toc_zp = normpath(pjoin(opf_dir, toc_href)) if opf_dir else normpath(toc_href)
-                            files_to_include.add(toc_zp)
+                    toc_id = spine_el.get('toc', '') if spine_el is not None else ''
+                    if toc_id and toc_id in manifest:
+                        manifest_ids_to_keep.add(toc_id)
+                        toc_href = manifest[toc_id]['href']
+                        toc_zp = normpath(pjoin(opf_dir, toc_href)) if opf_dir else normpath(toc_href)
+                        files_to_include.add(toc_zp)
 
                     # 챕터 파일의 zip 경로 계산
                     chapter_zip_paths = []
@@ -554,7 +553,7 @@ class BookManager:
                     guide_el = opf.find(f'.//{{{opf_ns}}}guide')
                     if guide_el is not None:
                         for ref in list(guide_el.findall(f'{{{opf_ns}}}reference')):
-                            href = ref.get('href', '')
+                            href = ref.get('href', '').split('#')[0]
                             ref_zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
                             if ref_zp not in files_to_include:
                                 guide_el.remove(ref)
@@ -565,11 +564,42 @@ class BookManager:
                     # @font-face 블록 제거용 패턴
                     font_face_pattern = re.compile(r'@font-face\s*\{[^}]*\}')
 
+                    # NCX에서 미리보기에 포함되지 않은 파일 참조 제거
+                    # (epub.js가 존재하지 않는 파일 참조로 인해 초기화 중단될 수 있음)
+                    ncx_ns = 'http://www.daisy.org/z3986/2005/ncx/'
+                    ncx_zp = None
+                    if toc_id and toc_id in manifest:
+                        ncx_href = manifest[toc_id]['href']
+                        ncx_zp = normpath(pjoin(opf_dir, ncx_href)) if opf_dir else normpath(ncx_href)
+
                     with zipfile.ZipFile(str(cache_file), 'w', zipfile.ZIP_DEFLATED) as zout:
                         zout.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
                         for zp in files_to_include:
                             if zp == opf_path:
                                 zout.writestr(zp, modified_opf)
+                            elif zp == ncx_zp:
+                                # NCX 파일: 미리보기에 없는 파일 참조 navPoint 제거
+                                try:
+                                    ncx_data = zin.read(zp)
+                                    ncx_tree = etree.fromstring(ncx_data)
+                                    nav_map = ncx_tree.find(f'{{{ncx_ns}}}navMap')
+                                    if nav_map is not None:
+                                        ncx_dir = dirname(zp)
+                                        for np in list(nav_map.findall(f'{{{ncx_ns}}}navPoint')):
+                                            content_el = np.find(f'{{{ncx_ns}}}content')
+                                            if content_el is not None:
+                                                src = content_el.get('src', '')
+                                                src_file = src.split('#')[0]
+                                                if not src_file:
+                                                    continue  # fragment-only src는 유지
+                                                src_zp = normpath(pjoin(ncx_dir, src_file)) if ncx_dir else normpath(src_file)
+                                                if src_zp not in files_to_include:
+                                                    nav_map.remove(np)
+                                    ncx_out = '<?xml version="1.0" encoding="UTF-8"?>\n' + etree.tostring(ncx_tree, encoding='unicode')
+                                    zout.writestr(zp, ncx_out)
+                                except Exception as e:
+                                    LOGGER.warning("EPUB preview: NCX filtering failed: %s", e)
+                                    zout.writestr(zp, zin.read(zp))
                             else:
                                 try:
                                     data = zin.read(zp)
