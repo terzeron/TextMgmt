@@ -1873,6 +1873,212 @@ describe('ViewEPUB', () => {
         });
     });
 
+    // ══════════════════════════════════════════════
+    // ── display 폴백 (CFI 이동 실패 시 첫 페이지 복구) ──
+    // ══════════════════════════════════════════════
+
+    it('display(target) 실패 시 target 없이 재시도하여 첫 페이지로 폴백한다', async () => {
+        autoLoad = false;
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        const origDisplayMock = vi.fn((target) =>
+            target
+                ? Promise.reject(new Error('No startContainer found for epubcfi(/6/32!/4/1:0)'))
+                : Promise.resolve({ ok: true })
+        );
+        mockRendition.display = origDisplayMock;
+
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // target으로 display → 실패 → 폴백(무인수) → 성공
+        const result = await mockRendition.display('epubcfi(/6/32!/4/1:0)');
+        expect(result).toEqual({ ok: true });
+
+        // origDisplay가 2번 호출됨: target 1번, 무인수 1번
+        expect(origDisplayMock).toHaveBeenCalledTimes(2);
+        expect(origDisplayMock.mock.calls[0][0]).toBe('epubcfi(/6/32!/4/1:0)');
+        expect(origDisplayMock.mock.calls[1].length).toBe(0);
+
+        // 에러 메시지가 표시되지 않아야 함 (폴백 성공)
+        expect(screen.queryByText(/EPUB 표시 실패/)).toBeNull();
+    });
+
+    it('display 폴백 성공 시 localStorage에서 저장된 위치를 제거한다', async () => {
+        autoLoad = false;
+        // 미리 저장된 위치 설정
+        localStorageMock.setItem('epub_location_42', 'epubcfi(/6/32!/4/1:0)');
+        localStorageMock.removeItem.mockClear();
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        mockRendition.display = vi.fn((target) =>
+            target
+                ? Promise.reject(new Error('No startContainer found'))
+                : Promise.resolve({ ok: true })
+        );
+
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        await mockRendition.display('epubcfi(/6/32!/4/1:0)');
+
+        expect(localStorageMock.removeItem).toHaveBeenCalledWith('epub_location_42');
+    });
+
+    it('display(undefined) 실패 시 폴백 없이 바로 에러를 표시한다', async () => {
+        autoLoad = false;
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        mockRendition.display = vi.fn(() => Promise.reject(new Error('Render failed')));
+
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // target이 undefined → 폴백 시도 없이 즉시 에러
+        await expect(mockRendition.display(undefined)).rejects.toThrow('Render failed');
+
+        await waitFor(() => {
+            expect(screen.getByText(/EPUB 표시 실패: Render failed/)).toBeTruthy();
+        });
+    });
+
+    it('display("") 실패 시 폴백 없이 바로 에러를 표시한다', async () => {
+        autoLoad = false;
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        mockRendition.display = vi.fn(() => Promise.reject(new Error('Empty target fail')));
+
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // 빈 문자열 target → falsy이므로 폴백 없음
+        await expect(mockRendition.display('')).rejects.toThrow('Empty target fail');
+
+        await waitFor(() => {
+            expect(screen.getByText(/EPUB 표시 실패: Empty target fail/)).toBeTruthy();
+        });
+    });
+
+    it('display 폴백 성공 시 에러 메시지와 로딩 상태가 정상 유지된다', async () => {
+        autoLoad = false;
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        mockRendition.display = vi.fn((target) =>
+            target
+                ? Promise.reject(new Error('No startContainer found'))
+                : Promise.resolve({ ok: true })
+        );
+
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        await act(async () => {
+            await mockRendition.display('epubcfi(/6/32!/4/1:0)');
+        });
+
+        // 폴백 성공 → 에러 메시지 없음
+        expect(screen.queryByText(/EPUB 표시 실패/)).toBeNull();
+        expect(screen.queryByText(/EPUB 렌더링 오류/)).toBeNull();
+    });
+
+    it('display(target) + 폴백 모두 실패 시 폴백 에러를 표시하고 재전파한다', async () => {
+        autoLoad = false;
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        let callCount = 0;
+        mockRendition.display = vi.fn(() => {
+            callCount++;
+            return callCount === 1
+                ? Promise.reject(new Error('No startContainer found'))
+                : Promise.reject(new Error('Fallback also failed'));
+        });
+
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        await expect(mockRendition.display('epubcfi(/6/32!/4/1:0)')).rejects.toThrow('Fallback also failed');
+
+        await waitFor(() => {
+            expect(screen.getByText(/EPUB 표시 실패: Fallback also failed/)).toBeTruthy();
+        });
+    });
+
+    it('전체 데이터 swap 시 저장된 위치가 ReactReader location prop으로 전달된다', async () => {
+        // 저장된 위치 설정
+        localStorageMock.getItem.mockImplementation((key) => {
+            if (key === 'epub_location_42') return 'epubcfi(/6/32!/4/1:0)';
+            return null;
+        });
+
+        let bgResolve;
+        globalThis.fetch = vi.fn((url) => {
+            if (url.includes('chapters=20')) {
+                return new Promise((resolve) => { bgResolve = resolve; });
+            }
+            return Promise.resolve(createFetchResponse(mockArrayBuffer, 20));
+        });
+
+        render(<ViewEPUB bookId={42} />);
+
+        // 초기 로드 + autoLoad 완료 대기
+        await waitFor(() => {
+            expect(screen.queryByText('로딩 중...')).toBeNull();
+        });
+
+        // 백그라운드 fetch 완료 → swap
+        await act(async () => {
+            bgResolve(createFetchResponse(mockArrayBuffer2, 20));
+        });
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        // swap 후 ReactReader에 저장된 위치가 전달됨
+        // (epub.js가 이 위치로 display를 시도하고, 실패하면 폴백이 동작)
+        await waitFor(() => {
+            const calls = mockReactReader.mock.calls;
+            const hasSwappedWithLocation = calls.some(c =>
+                c[0].url === mockArrayBuffer2 && c[0].location === 'epubcfi(/6/32!/4/1:0)'
+            );
+            expect(hasSwappedWithLocation).toBe(true);
+        });
+    });
+
     it('타임아웃 시 rendition manager 진단 정보가 포함된다', async () => {
         vi.useFakeTimers();
         autoLoad = false;
