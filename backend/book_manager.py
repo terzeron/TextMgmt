@@ -414,7 +414,7 @@ class BookManager:
             return None, f"Failed to open PDF: {e}"
 
         try:
-            issues = pdf.check()
+            issues = pdf.check_pdf_syntax()
             messages = [{"severity": "WARNING", "message": msg} for msg in issues]
 
             # 메타데이터 추출
