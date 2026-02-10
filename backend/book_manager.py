@@ -419,6 +419,12 @@ class BookManager:
                         LOGGER.warning("EPUB preview: OPF file missing in archive: %s (book_id=%d)", opf_path, book_id)
                         return Response(status_code=422,
                                         content=f"EPUB structure error: OPF file missing: {opf_path}")
+                    # opf: 프리픽스가 선언 없이 사용된 경우 추가
+                    # (lxml recover가 보존하지만 재직렬화 시 xmlns:opf 누락 → 브라우저 파싱 실패)
+                    opf_text = opf_bytes.decode('utf-8', errors='replace')
+                    if 'opf:' in opf_text and 'xmlns:opf=' not in opf_text:
+                        opf_text = opf_text.replace('<package ', f'<package xmlns:opf="{opf_ns}" ', 1)
+                        opf_bytes = opf_text.encode('utf-8')
                     opf = etree.fromstring(opf_bytes, etree.XMLParser(recover=True))
 
                     # manifest: id → href, media-type
