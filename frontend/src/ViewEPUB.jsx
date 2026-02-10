@@ -185,11 +185,11 @@ export default function ViewEPUB({ bookId, preview = false }) {
         const fullData = backgroundEpubRef.current;
         backgroundEpubRef.current = null;
 
-        // savedLocationRef는 보존 (handleLocationChanged에서 렌더링 성공 후 복원)
-        // 저장된 CFI를 location prop으로 직접 전달하면 epub.js가 해당 위치로
-        // display()를 호출하는데, CFI가 유효하지 않으면 빈 화면이 됨
+        // 저장된 CFI를 location prop이나 display()로 전달하면 epub.js가
+        // 해당 위치로 이동하는데, CFI가 무효하면 빈 화면이 됨
         // (에러가 console.log로만 출력되고 promise reject가 아니라 catch 불가)
         locationRef.current = "";
+        savedLocationRef.current = null;
 
         allChaptersLoadedRef.current = true;
         setEpubData(fullData);
@@ -213,21 +213,11 @@ export default function ViewEPUB({ bookId, preview = false }) {
                 locationRef.current = savedLocationRef.current;
                 savedLocationRef.current = null;
                 setEpubKey((k) => k + 1);
+            } else {
+                // 다중 챕터: 초기 1-챕터 EPUB에서는 위치 복원 불가
+                // swap 후에도 이전 세션의 CFI가 무효할 수 있으므로 첫 페이지부터 시작
+                savedLocationRef.current = null;
             }
-            return;
-        }
-
-        // 전체보기: swap 후 저장된 위치 복원 시도
-        // (렌더링 성공 후 rendition.display()로 이동 → 실패해도 현재 페이지 유지)
-        if (savedLocationRef.current && renditionRef.current) {
-            const savedLoc = savedLocationRef.current;
-            savedLocationRef.current = null;
-            renditionRef.current.display(savedLoc).catch(() => {
-                console.warn("[epub.js] 저장된 위치 복원 실패, 첫 페이지 유지:", savedLoc);
-                if (bookId) {
-                    localStorage.removeItem(`epub_location_${bookId}`);
-                }
-            });
             return;
         }
 
@@ -453,7 +443,6 @@ export default function ViewEPUB({ bookId, preview = false }) {
                     url={epubData}
                     title={!preview ? bookTitle : undefined}
                     getRendition={getRendition}
-                    epubOptions={{ allowScriptedContent: true }}
                 />}
             </Suspense>
 
