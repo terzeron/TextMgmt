@@ -55,14 +55,14 @@ function renderSeverityGroups(items, getLabel, getLocation) {
                             {msgs.length}건 — {SEVERITY_DESC[sev]}
                         </span>
                     </span>
-                    <Table size="sm" bordered className="mt-1 mb-1">
+                    <Table size="sm" bordered className="mt-1 mb-1" style={{tableLayout: 'fixed'}}>
                         <tbody>
                             {msgs.map((msg, idx) => (
                                 <tr key={idx}>
-                                    <td style={{fontSize: '0.75rem', wordBreak: 'break-word'}}>
+                                    <td style={{width: '50%', fontSize: '0.75rem', wordBreak: 'break-word'}}>
                                         {msg._text || ''}
                                     </td>
-                                    <td style={{fontSize: '0.7rem', whiteSpace: 'nowrap'}} className="text-muted">
+                                    <td style={{width: '50%', fontSize: '0.7rem', wordBreak: 'break-word'}} className="text-muted">
                                         {getLocation(msg) || ''}
                                     </td>
                                 </tr>
