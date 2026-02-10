@@ -507,7 +507,12 @@ class RidibooksBookstore(AbstractBookstore):
                 book_id = book.get('b_id', '')
                 title = book.get('title', '')
                 author = book.get('author', '')
-                category = book.get('category_name', '') or book.get('parent_category_name', '')
+                parent_cat = book.get('parent_category_name', '')
+                child_cat = book.get('category_name', '')
+                if parent_cat and child_cat:
+                    category = f"{parent_cat} > {child_cat}"
+                else:
+                    category = child_cat or parent_cat
 
                 detail_url = f"{self.BASE_URL}/books/{book_id}" if book_id else ''
 
