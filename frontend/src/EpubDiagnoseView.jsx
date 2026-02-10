@@ -90,9 +90,11 @@ export default function EpubDiagnoseView({bookId, fileType}) {
     const [frontendLoading, setFrontendLoading] = useState(false);
 
     const isEpub = fileType === 'epub';
+    const isPdf = fileType === 'pdf';
+    const isValidatable = isEpub || isPdf;
 
     const runDiagnosis = useCallback(() => {
-        if (!bookId || !isEpub) return;
+        if (!bookId || !isValidatable) return;
 
         // 이전 요청 취소
         if (abortRef.current) abortRef.current.abort();
@@ -101,7 +103,7 @@ export default function EpubDiagnoseView({bookId, fileType}) {
 
         setHasRun(true);
 
-        // Backend: epubcheck
+        // Backend 진단 호출
         setBackendLoading(true);
         setBackendData(null);
         setBackendError(null);
@@ -120,28 +122,30 @@ export default function EpubDiagnoseView({bookId, fileType}) {
             }
         );
 
-        // Frontend: 브라우저 진단
-        setFrontendLoading(true);
-        setFrontendData(null);
-        setFrontendError(null);
-        const url = `${getApiUrlPrefix()}/download/${bookId}`;
-        fetch(url, {signal: controller.signal})
-            .then((res) => {
-                if (!res.ok) throw new Error(`서버 응답 오류: ${res.status}`);
-                return res.arrayBuffer();
-            })
-            .then((buf) => diagnoseEpub(buf))
-            .then((result) => {
-                if (controller.signal.aborted) return;
-                setFrontendData(result);
-                setFrontendLoading(false);
-            })
-            .catch((err) => {
-                if (err.name === 'AbortError' || controller.signal.aborted) return;
-                setFrontendError(err.message);
-                setFrontendLoading(false);
-            });
-    }, [bookId, isEpub]);
+        // Frontend: 브라우저 진단 (EPUB만 — PDF는 DOMParser 진단 불가)
+        if (isEpub) {
+            setFrontendLoading(true);
+            setFrontendData(null);
+            setFrontendError(null);
+            const url = `${getApiUrlPrefix()}/download/${bookId}`;
+            fetch(url, {signal: controller.signal})
+                .then((res) => {
+                    if (!res.ok) throw new Error(`서버 응답 오류: ${res.status}`);
+                    return res.arrayBuffer();
+                })
+                .then((buf) => diagnoseEpub(buf))
+                .then((result) => {
+                    if (controller.signal.aborted) return;
+                    setFrontendData(result);
+                    setFrontendLoading(false);
+                })
+                .catch((err) => {
+                    if (err.name === 'AbortError' || controller.signal.aborted) return;
+                    setFrontendError(err.message);
+                    setFrontendLoading(false);
+                });
+        }
+    }, [bookId, isEpub, isValidatable]);
 
     // 카드 열릴 때 진단 실행
     useEffect(() => {
@@ -170,7 +174,7 @@ export default function EpubDiagnoseView({bookId, fileType}) {
         };
     }, []);
 
-    if (!isEpub) return null;
+    if (!isValidatable) return null;
 
     return (
         <Card>
@@ -185,9 +189,9 @@ export default function EpubDiagnoseView({bookId, fileType}) {
             {isOpen && (
                 <Card.Body className="p-2" style={{fontSize: '0.8rem'}}>
 
-                    {/* Backend 진단 (epubcheck) */}
+                    {/* Backend 진단 */}
                     <div className="mb-3">
-                        <strong>Backend 진단 (epubcheck)</strong>
+                        <strong>Backend 진단 ({isEpub ? 'epubcheck' : 'pikepdf'})</strong>
                         {backendLoading && <Spinner animation="border" size="sm" className="ms-2"/>}
 
                         {backendError && (
@@ -209,8 +213,14 @@ export default function EpubDiagnoseView({bookId, fileType}) {
 
                                 {backendData.publication && (
                                     <div className="text-muted mb-1" style={{fontSize: '0.75rem'}}>
-                                        {[backendData.publication.title, backendData.publication.creator, backendData.publication.publisher]
-                                            .filter(Boolean).join(' / ')}
+                                        {[
+                                            backendData.publication.title,
+                                            backendData.publication.creator,
+                                            backendData.publication.publisher,
+                                            backendData.publication.producer,
+                                            backendData.publication.page_count != null && `${backendData.publication.page_count}p`,
+                                            backendData.publication.pdf_version && `PDF ${backendData.publication.pdf_version}`,
+                                        ].filter(Boolean).join(' / ')}
                                     </div>
                                 )}
 
@@ -230,47 +240,49 @@ export default function EpubDiagnoseView({bookId, fileType}) {
                         )}
                     </div>
 
-                    <hr className="my-2"/>
+                    {/* Frontend 진단 (브라우저) — EPUB만 */}
+                    {isEpub && (
+                        <>
+                            <hr className="my-2"/>
+                            <div>
+                                <strong>Frontend 진단 (브라우저 DOMParser)</strong>
+                                {frontendLoading && <Spinner animation="border" size="sm" className="ms-2"/>}
 
-                    {/* Frontend 진단 (브라우저) */}
-                    <div>
-                        <strong>Frontend 진단 (브라우저 DOMParser)</strong>
-                        {frontendLoading && <Spinner animation="border" size="sm" className="ms-2"/>}
+                                {frontendError && (
+                                    <div className="text-danger mt-1">{frontendError}</div>
+                                )}
 
-                        {frontendError && (
-                            <div className="text-danger mt-1">{frontendError}</div>
-                        )}
-
-                        {frontendData && (() => {
-                            const hasIssues = frontendData.summary.fatal > 0 || frontendData.summary.errors > 0;
-                            // severity가 있는 항목만 추출 (error/warn), 섹션명을 location으로
-                            const allItems = [];
-                            for (const section of frontendData.sections) {
-                                for (const item of section.results) {
-                                    if (item.severity) {
-                                        allItems.push({...item, _text: item.text, _section: section.name});
+                                {frontendData && (() => {
+                                    const hasIssues = frontendData.summary.fatal > 0 || frontendData.summary.errors > 0;
+                                    const allItems = [];
+                                    for (const section of frontendData.sections) {
+                                        for (const item of section.results) {
+                                            if (item.severity) {
+                                                allItems.push({...item, _text: item.text, _section: section.name});
+                                            }
+                                        }
                                     }
-                                }
-                            }
-                            return (
-                                <div className="mt-1">
-                                    <div className="mb-1">
-                                        <Badge bg={hasIssues ? 'danger' : 'success'}>
-                                            {hasIssues ? 'FAIL' : 'PASS'}
-                                        </Badge>
-                                    </div>
-                                    {allItems.length > 0
-                                        ? renderSeverityGroups(
-                                            allItems,
-                                            (m) => m.severity,
-                                            (m) => m._section
-                                        )
-                                        : <div className="text-success">이상 없음</div>
-                                    }
-                                </div>
-                            );
-                        })()}
-                    </div>
+                                    return (
+                                        <div className="mt-1">
+                                            <div className="mb-1">
+                                                <Badge bg={hasIssues ? 'danger' : 'success'}>
+                                                    {hasIssues ? 'FAIL' : 'PASS'}
+                                                </Badge>
+                                            </div>
+                                            {allItems.length > 0
+                                                ? renderSeverityGroups(
+                                                    allItems,
+                                                    (m) => m.severity,
+                                                    (m) => m._section
+                                                )
+                                                : <div className="text-success">이상 없음</div>
+                                            }
+                                        </div>
+                                    );
+                                })()}
+                            </div>
+                        </>
+                    )}
                 </Card.Body>
             )}
         </Card>

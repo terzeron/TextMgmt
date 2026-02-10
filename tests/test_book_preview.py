@@ -1997,32 +1997,32 @@ class TestValidateEpub:
             _cleanup_book(client, bm, book_id, epub_path)
 
     @pytest.mark.asyncio
-    async def test_validate_non_epub(self, backend_test_setup):
-        """비-EPUB 파일 → failure + 에러 메시지."""
+    async def test_validate_unsupported_type(self, backend_test_setup):
+        """지원하지 않는 파일 타입 → failure + 에러 메시지."""
         bm = backend_test_setup["bm"]
         client = backend_test_setup["client"]
 
-        # PDF 타입의 book 등록
-        pdf_dir = bm.path_prefix / "_pdf"
-        pdf_dir.mkdir(parents=True, exist_ok=True)
-        pdf_path = pdf_dir / "[Test Author] Not Epub.pdf"
-        pdf_path.write_bytes(b"%PDF-1.4 fake pdf content")
+        # TXT 타입의 book 등록
+        txt_dir = bm.path_prefix / "_txt"
+        txt_dir.mkdir(parents=True, exist_ok=True)
+        txt_path = txt_dir / "[Test Author] Plain Text.txt"
+        txt_path.write_text("plain text content", encoding="utf-8")
 
-        inode = pdf_path.stat().st_ino
-        rel_path = pdf_path.relative_to(bm.path_prefix)
+        inode = txt_path.stat().st_ino
+        rel_path = txt_path.relative_to(bm.path_prefix)
         now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
         data = {
             inode: {
-                "category": "_pdf",
-                "title": "Not Epub",
+                "category": "_txt",
+                "title": "Plain Text",
                 "author": "Test Author",
                 "file_path": str(rel_path),
-                "file_type": "pdf",
-                "file_size": pdf_path.stat().st_size,
-                "line_count": 0,
+                "file_type": "txt",
+                "file_size": txt_path.stat().st_size,
+                "line_count": 1,
                 "page_count": 0,
                 "isbn": "",
-                "summary": "test pdf",
+                "summary": "test txt",
                 "updated_time": now,
             }
         }
@@ -2033,13 +2033,13 @@ class TestValidateEpub:
             assert response.status_code == 200
             body = response.json()
             assert body["status"] == "failure"
-            assert "Not an EPUB" in body["error"]
+            assert "not supported" in body["error"].lower()
         finally:
             try:
                 client.delete(f"/books/{book_id}")
             except Exception:
                 pass
-            pdf_path.unlink(missing_ok=True)
+            txt_path.unlink(missing_ok=True)
 
     @pytest.mark.asyncio
     async def test_validate_file_not_found(self, backend_test_setup):
@@ -2130,6 +2130,449 @@ class TestValidateEpub:
             mock_proc.wait.assert_awaited_once()
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
+
+
+# ── tests: epubcheck validate_epub 단위 테스트 (Docker 불필요) ──
+
+class TestValidateEpubUnit:
+    """validate_epub 메서드의 에지 케이스를 Docker 없이 직접 테스트."""
+
+    @staticmethod
+    def _make_mock_book(tmp_path, file_type="epub"):
+        """가짜 Book 객체 생성."""
+        from types import SimpleNamespace
+        epub_path = tmp_path / "test.epub"
+        epub_path.write_bytes(b"PK fake epub")
+        return SimpleNamespace(
+            book_id=1, file_type=file_type,
+            file_path=epub_path,
+        )
+
+    @staticmethod
+    def _make_epubcheck_json(valid=True, messages=None, publication=None):
+        import json
+        data = {
+            "messages": messages or [],
+            "checker": {
+                "nFatal": 0, "nError": 0 if valid else 1,
+                "nWarning": 0, "nUsage": 0, "nInfo": 0,
+            },
+        }
+        if publication:
+            data["publication"] = publication
+        if not valid and not messages:
+            data["messages"] = [{
+                "severity": "ERROR", "id": "RSC-005",
+                "message": "Test error", "locations": [{"path": "ch1.xhtml", "line": 10, "column": 5}],
+            }]
+        return json.dumps(data)
+
+    @staticmethod
+    def _mock_exec_writing(content_str, returncode=0):
+        """subprocess mock: json_path에 content_str을 기록."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        async def _side_effect(*args, **kwargs):
+            json_path = args[3]  # ("epubcheck", book_path, "--json", json_path)
+            with open(json_path, 'w', encoding='utf-8') as f:
+                f.write(content_str)
+            mock_proc = AsyncMock()
+            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_proc.returncode = returncode
+            mock_proc.kill = MagicMock()
+            return mock_proc
+
+        return _side_effect
+
+    @staticmethod
+    def _mock_exec_noop(returncode=0):
+        """subprocess mock: json_path에 아무것도 기록하지 않음."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        async def _side_effect(*args, **kwargs):
+            mock_proc = AsyncMock()
+            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_proc.returncode = returncode
+            mock_proc.kill = MagicMock()
+            return mock_proc
+
+        return _side_effect
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_output(self, tmp_path):
+        """epubcheck가 유효하지 않은 JSON을 출력 → parse error."""
+        from unittest.mock import AsyncMock, patch
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path)
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        with patch("asyncio.create_subprocess_exec",
+                   side_effect=self._mock_exec_writing("NOT VALID JSON {{{}", returncode=0)):
+            result, error = await bm.validate_epub(1)
+
+        assert result is None
+        assert "Failed to parse epubcheck output" in error
+
+    @pytest.mark.asyncio
+    async def test_empty_json_file(self, tmp_path):
+        """epubcheck가 빈 파일을 남김 → parse error."""
+        from unittest.mock import AsyncMock, patch
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path)
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        with patch("asyncio.create_subprocess_exec",
+                   side_effect=self._mock_exec_noop(returncode=0)):
+            result, error = await bm.validate_epub(1)
+
+        assert result is None
+        assert "Failed to parse epubcheck output" in error
+
+    @pytest.mark.asyncio
+    async def test_temp_file_cleanup_on_success(self, tmp_path):
+        """성공 시 임시 JSON 파일이 삭제되는지 검증."""
+        import os
+        import tempfile
+        from unittest.mock import AsyncMock, patch
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path)
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        created_paths = []
+        original_mkstemp = tempfile.mkstemp
+
+        def tracking_mkstemp(*args, **kwargs):
+            fd, path = original_mkstemp(*args, **kwargs)
+            created_paths.append(path)
+            return fd, path
+
+        valid_json = self._make_epubcheck_json(valid=True)
+        with patch("tempfile.mkstemp", side_effect=tracking_mkstemp):
+            with patch("asyncio.create_subprocess_exec",
+                       side_effect=self._mock_exec_writing(valid_json, returncode=0)):
+                result, error = await bm.validate_epub(1)
+
+        assert error is None
+        assert len(created_paths) == 1
+        assert not os.path.exists(created_paths[0]), "Temp file should be cleaned up"
+
+    @pytest.mark.asyncio
+    async def test_temp_file_cleanup_on_parse_error(self, tmp_path):
+        """JSON 파싱 실패 시에도 임시 파일이 삭제되는지 검증."""
+        import os
+        import tempfile
+        from unittest.mock import AsyncMock, patch
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path)
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        created_paths = []
+        original_mkstemp = tempfile.mkstemp
+
+        def tracking_mkstemp(*args, **kwargs):
+            fd, path = original_mkstemp(*args, **kwargs)
+            created_paths.append(path)
+            return fd, path
+
+        with patch("tempfile.mkstemp", side_effect=tracking_mkstemp):
+            with patch("asyncio.create_subprocess_exec",
+                       side_effect=self._mock_exec_writing("BROKEN", returncode=0)):
+                result, error = await bm.validate_epub(1)
+
+        assert result is None
+        assert len(created_paths) == 1
+        assert not os.path.exists(created_paths[0]), "Temp file should be cleaned up even on error"
+
+    @pytest.mark.asyncio
+    async def test_no_publication_in_result(self, tmp_path):
+        """publication 없는 결과에서 publication 키가 빠지는지 검증."""
+        from unittest.mock import AsyncMock, patch
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path)
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        valid_json = self._make_epubcheck_json(valid=True)  # publication 없음
+        with patch("asyncio.create_subprocess_exec",
+                   side_effect=self._mock_exec_writing(valid_json, returncode=0)):
+            result, error = await bm.validate_epub(1)
+
+        assert error is None
+        assert result["valid"] is True
+        assert "publication" not in result
+
+    @pytest.mark.asyncio
+    async def test_with_publication_metadata(self, tmp_path):
+        """publication 메타데이터가 결과에 포함되는지 검증."""
+        from unittest.mock import AsyncMock, patch
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path)
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        pub = {"title": "Test", "creator": "Author", "date": "2024", "publisher": "Pub"}
+        valid_json = self._make_epubcheck_json(valid=True, publication=pub)
+        with patch("asyncio.create_subprocess_exec",
+                   side_effect=self._mock_exec_writing(valid_json, returncode=0)):
+            result, error = await bm.validate_epub(1)
+
+        assert error is None
+        assert result["publication"]["title"] == "Test"
+        assert result["publication"]["creator"] == "Author"
+
+    @pytest.mark.asyncio
+    async def test_multiple_messages_parsed(self, tmp_path):
+        """여러 메시지가 올바르게 파싱되는지 검증."""
+        from unittest.mock import AsyncMock, patch
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path)
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        messages = [
+            {"severity": "ERROR", "id": "RSC-005", "message": "err1",
+             "locations": [{"path": "ch1.xhtml", "line": 1, "column": 1}]},
+            {"severity": "WARNING", "id": "HTM-003", "message": "warn1",
+             "locations": [{"path": "ch2.xhtml", "line": 5, "column": 10}]},
+        ]
+        json_str = self._make_epubcheck_json(valid=False, messages=messages)
+        with patch("asyncio.create_subprocess_exec",
+                   side_effect=self._mock_exec_writing(json_str, returncode=1)):
+            result, error = await bm.validate_epub(1)
+
+        assert error is None
+        assert result["valid"] is False
+        assert len(result["messages"]) == 2
+        assert result["messages"][0]["severity"] == "ERROR"
+        assert result["messages"][1]["severity"] == "WARNING"
+        assert result["messages"][1]["location"]["path"] == "ch2.xhtml"
+
+
+class TestValidatePdfUnit:
+    """validate_pdf 메서드의 단위 테스트 (pikepdf mock)."""
+
+    @staticmethod
+    def _make_mock_book(tmp_path, file_type="pdf"):
+        from types import SimpleNamespace
+        pdf_path = tmp_path / "test.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4 fake")
+        return SimpleNamespace(
+            book_id=1, file_type=file_type,
+            file_path=pdf_path,
+        )
+
+    @staticmethod
+    def _make_mock_pdf(issues=None, docinfo=None, page_count=10, pdf_version="1.7"):
+        from unittest.mock import MagicMock
+        mock_pdf = MagicMock()
+        mock_pdf.check.return_value = issues or []
+        mock_pdf.docinfo = docinfo or {}
+        mock_pdf.pages = [None] * page_count
+        mock_pdf.pdf_version = pdf_version
+        mock_pdf.close = MagicMock()
+        return mock_pdf
+
+    @pytest.mark.asyncio
+    async def test_valid_pdf(self, tmp_path):
+        """정상 PDF → valid=True, messages 비어있음."""
+        from unittest.mock import AsyncMock, patch
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path)
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        mock_pdf = self._make_mock_pdf()
+        with patch("pikepdf.open", return_value=mock_pdf):
+            result, error = await bm.validate_pdf(1)
+
+        assert error is None
+        assert result["valid"] is True
+        assert result["messages"] == []
+        assert result["summary"]["warning"] == 0
+
+    @pytest.mark.asyncio
+    async def test_pdf_with_syntax_issues(self, tmp_path):
+        """구문 문제 있는 PDF → valid=False, messages에 WARNING 포함."""
+        from unittest.mock import AsyncMock, patch
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path)
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        issues = ["cross-reference table mismatch", "missing object stream"]
+        mock_pdf = self._make_mock_pdf(issues=issues)
+        with patch("pikepdf.open", return_value=mock_pdf):
+            result, error = await bm.validate_pdf(1)
+
+        assert error is None
+        assert result["valid"] is False
+        assert len(result["messages"]) == 2
+        assert result["messages"][0]["severity"] == "WARNING"
+        assert result["messages"][0]["message"] == "cross-reference table mismatch"
+        assert result["summary"]["warning"] == 2
+
+    @pytest.mark.asyncio
+    async def test_corrupted_pdf_open_fails(self, tmp_path):
+        """열기 실패 (손상 파일) → error 반환."""
+        from unittest.mock import AsyncMock, patch
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path)
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        with patch("pikepdf.open", side_effect=Exception("not a PDF file")):
+            result, error = await bm.validate_pdf(1)
+
+        assert result is None
+        assert "Failed to open PDF" in error
+
+    @pytest.mark.asyncio
+    async def test_metadata_extraction(self, tmp_path):
+        """메타데이터 추출 검증 (title, author, page count)."""
+        from unittest.mock import AsyncMock, patch
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path)
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        docinfo = {
+            "/Title": "Test PDF Title",
+            "/Author": "Test Author",
+            "/Producer": "Test Producer",
+            "/CreationDate": "D:20240101120000",
+        }
+        mock_pdf = self._make_mock_pdf(docinfo=docinfo, page_count=42, pdf_version="1.5")
+        with patch("pikepdf.open", return_value=mock_pdf):
+            result, error = await bm.validate_pdf(1)
+
+        assert error is None
+        pub = result["publication"]
+        assert pub["title"] == "Test PDF Title"
+        assert pub["creator"] == "Test Author"
+        assert pub["producer"] == "Test Producer"
+        assert pub["page_count"] == 42
+        assert pub["pdf_version"] == "1.5"
+
+    @pytest.mark.asyncio
+    async def test_non_pdf_file_type(self, tmp_path):
+        """비-PDF 파일 → error 반환."""
+        from unittest.mock import AsyncMock
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path, file_type="epub")
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        result, error = await bm.validate_pdf(1)
+
+        assert result is None
+        assert "Not a PDF file" in error
+
+    @pytest.mark.asyncio
+    async def test_file_not_found(self, tmp_path):
+        """파일 미존재 → error 반환."""
+        from unittest.mock import AsyncMock
+        from types import SimpleNamespace
+        from backend.book_manager import BookManager
+
+        missing_path = tmp_path / "nonexistent.pdf"
+        book = SimpleNamespace(
+            book_id=1, file_type="pdf",
+            file_path=missing_path,
+        )
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        result, error = await bm.validate_pdf(1)
+
+        assert result is None
+        assert "File not found" in error
+
+    @pytest.mark.asyncio
+    async def test_book_not_found(self, tmp_path):
+        """존재하지 않는 book_id → error 반환."""
+        from unittest.mock import AsyncMock
+        from backend.book_manager import BookManager
+
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(None, "No book found"))
+        bm.path_prefix = tmp_path
+
+        result, error = await bm.validate_pdf(1)
+
+        assert result is None
+        assert "Book not found" in error
+
+    @pytest.mark.asyncio
+    async def test_empty_docinfo(self, tmp_path):
+        """docinfo가 비어있는 PDF → publication에 page_count/pdf_version만 존재."""
+        from unittest.mock import AsyncMock, patch
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path)
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        mock_pdf = self._make_mock_pdf(docinfo={}, page_count=5, pdf_version="2.0")
+        with patch("pikepdf.open", return_value=mock_pdf):
+            result, error = await bm.validate_pdf(1)
+
+        assert error is None
+        pub = result["publication"]
+        assert "title" not in pub
+        assert "creator" not in pub
+        assert "producer" not in pub
+        assert pub["page_count"] == 5
+        assert pub["pdf_version"] == "2.0"
+
+    @pytest.mark.asyncio
+    async def test_close_called_on_check_exception(self, tmp_path):
+        """check() 예외 발생 시에도 pdf.close()가 호출되는지 검증."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from backend.book_manager import BookManager
+
+        book = self._make_mock_book(tmp_path)
+        bm = BookManager()
+        bm.get_book = AsyncMock(return_value=(book, None))
+        bm.path_prefix = tmp_path
+
+        mock_pdf = MagicMock()
+        mock_pdf.check.side_effect = RuntimeError("internal check error")
+        mock_pdf.close = MagicMock()
+        with patch("pikepdf.open", return_value=mock_pdf):
+            with pytest.raises(RuntimeError, match="internal check error"):
+                await bm.validate_pdf(1)
+
+        mock_pdf.close.assert_called_once()
 
 
 if __name__ == "__main__":
