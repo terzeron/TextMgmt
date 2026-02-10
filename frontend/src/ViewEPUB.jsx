@@ -293,6 +293,21 @@ export default function ViewEPUB({ bookId, preview = false }) {
                     })
                     .catch((err) => {
                         console.error("[epub.js] display() rejected:", err);
+                        // 저장된 위치로 이동 실패 시 첫 페이지로 폴백
+                        if (target) {
+                            console.warn("[epub.js] 저장된 위치 이동 실패, 첫 페이지로 이동:", target);
+                            if (bookId) {
+                                localStorage.removeItem(`epub_location_${bookId}`);
+                            }
+                            locationRef.current = "";
+                            return origDisplay().catch((fallbackErr) => {
+                                console.error("[epub.js] fallback display() also failed:", fallbackErr);
+                                setErrorMessage(`EPUB 표시 실패: ${fallbackErr?.message || String(fallbackErr)}`);
+                                setIsLoading(false);
+                                if (timeoutRef.current) clearTimeout(timeoutRef.current);
+                                throw fallbackErr;
+                            });
+                        }
                         setErrorMessage(`EPUB 표시 실패: ${err?.message || String(err)}`);
                         setIsLoading(false);
                         if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -365,7 +380,7 @@ export default function ViewEPUB({ bookId, preview = false }) {
                 }
             });
         }
-    }, [preview]);
+    }, [preview, bookId]);
 
     const containerHeight = preview ? "60vh" : "100vh";
 
