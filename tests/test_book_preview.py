@@ -1827,5 +1827,65 @@ class TestNcxFiltering:
             _cleanup_book(client, bm, book_id, epub_path)
 
 
+class TestOpfNamespaceFix:
+    """OPF에 선언되지 않은 네임스페이스 프리픽스(opf:role 등)가 있을 때 수정 검증."""
+
+    @pytest.mark.asyncio
+    async def test_preview_fixes_undeclared_opf_prefix(self, backend_test_setup):
+        """opf:role이 xmlns:opf 없이 사용된 OPF가 유효한 XML로 출력된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] OPF Prefix.epub"
+        epub_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # xmlns:opf 선언 없이 opf:role 사용 (실제 EPUB에서 흔한 패턴)
+        opf = '''\
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="BookId">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="BookId">urn:uuid:test</dc:identifier>
+    <dc:title>OPF Prefix Test</dc:title>
+    <dc:creator opf:role="aut">Author</dc:creator>
+  </metadata>
+  <manifest>
+    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="toc">
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>'''
+
+        with zipfile.ZipFile(str(epub_path), 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+            zf.writestr('META-INF/container.xml', CONTAINER_XML)
+            zf.writestr('OEBPS/content.opf', opf)
+            zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+            zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+            zf.writestr('OEBPS/ch2.xhtml', _make_chapter_xhtml(2))
+
+        book_id = await _register_epub_async(bm, epub_path)
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=2")
+            assert response.status_code == 200
+
+            zf = _parse_epub_zip(response.content)
+            opf_data = zf.read('OEBPS/content.opf').decode('utf-8')
+            zf.close()
+
+            # 출력 OPF가 유효한 XML인지 확인 (strict 파싱)
+            ET.fromstring(opf_data)  # 파싱 실패 시 예외 발생
+
+            # xmlns:opf 선언이 추가되었는지 확인
+            assert 'xmlns:opf=' in opf_data, "xmlns:opf declaration should be added"
+            assert 'opf:role="aut"' in opf_data, "opf:role attribute should be preserved"
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
