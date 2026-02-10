@@ -2383,7 +2383,7 @@ class TestValidatePdfUnit:
     def _make_mock_pdf(issues=None, docinfo=None, page_count=10, pdf_version="1.7"):
         from unittest.mock import MagicMock
         mock_pdf = MagicMock()
-        mock_pdf.check.return_value = issues or []
+        mock_pdf.check_pdf_syntax.return_value = issues or []
         mock_pdf.docinfo = docinfo or {}
         mock_pdf.pages = [None] * page_count
         mock_pdf.pdf_version = pdf_version
@@ -2566,7 +2566,7 @@ class TestValidatePdfUnit:
         bm.path_prefix = tmp_path
 
         mock_pdf = MagicMock()
-        mock_pdf.check.side_effect = RuntimeError("internal check error")
+        mock_pdf.check_pdf_syntax.side_effect = RuntimeError("internal check error")
         mock_pdf.close = MagicMock()
         with patch("pikepdf.open", return_value=mock_pdf):
             with pytest.raises(RuntimeError, match="internal check error"):
