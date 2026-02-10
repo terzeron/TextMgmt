@@ -15,8 +15,13 @@ vi.mock('../src/EpubDiagnose', () => ({
     diagnoseEpub: vi.fn(),
 }));
 
+vi.mock('../src/PdfDiagnose', () => ({
+    diagnosePdf: vi.fn(),
+}));
+
 import { jsonGetReq } from '../src/Common';
 import { diagnoseEpub } from '../src/EpubDiagnose';
+import { diagnosePdf } from '../src/PdfDiagnose';
 import EpubDiagnoseView from '../src/EpubDiagnoseView';
 
 const MOCK_BACKEND_DATA = {
@@ -72,7 +77,26 @@ const MOCK_FRONTEND_DATA_MIXED = {
     summary: { fatal: 0, errors: 1, warnings: 1 },
 };
 
-function setupMocks({ backendData = MOCK_BACKEND_DATA, backendError = null, frontendData = MOCK_FRONTEND_DATA, frontendError = null } = {}) {
+const MOCK_PDF_FRONTEND_DATA = {
+    sections: [
+        { name: 'PDF 파싱', results: [{ type: 'ok', text: 'pdf.js 파싱: 정상' }] },
+        { name: '메타데이터', results: [{ type: 'ok', text: '메타데이터 필드 3개 확인' }] },
+        { name: '페이지 구조', results: [{ type: 'ok', text: '샘플 5개 페이지 접근 정상' }] },
+        { name: '텍스트 추출', results: [{ type: 'ok', text: '첫 페이지 텍스트 추출: 500자' }] },
+    ],
+    summary: { fatal: 0, errors: 0, warnings: 0 },
+};
+
+const MOCK_PDF_FRONTEND_DATA_WITH_WARNINGS = {
+    sections: [
+        { name: 'PDF 파싱', results: [{ type: 'ok', text: 'pdf.js 파싱: 정상' }] },
+        { name: '메타데이터', results: [{ type: 'warn', severity: 'WARNING', text: '문서 메타데이터 없음' }] },
+        { name: '텍스트 추출', results: [{ type: 'warn', severity: 'WARNING', text: '첫 페이지에서 텍스트 추출 불가 (이미지 기반 PDF일 수 있음)' }] },
+    ],
+    summary: { fatal: 0, errors: 0, warnings: 2 },
+};
+
+function setupMocks({ backendData = MOCK_BACKEND_DATA, backendError = null, frontendData = MOCK_FRONTEND_DATA, frontendError = null, pdfFrontendData = MOCK_PDF_FRONTEND_DATA, pdfFrontendError = null } = {}) {
     jsonGetReq.mockImplementation((url, payload, resolve, reject) => {
         if (backendError) {
             reject(backendError);
@@ -90,6 +114,12 @@ function setupMocks({ backendData = MOCK_BACKEND_DATA, backendError = null, fron
         diagnoseEpub.mockRejectedValue(new Error(frontendError));
     } else {
         diagnoseEpub.mockResolvedValue(frontendData);
+    }
+
+    if (pdfFrontendError) {
+        diagnosePdf.mockRejectedValue(new Error(pdfFrontendError));
+    } else {
+        diagnosePdf.mockResolvedValue(pdfFrontendData);
     }
 }
 
@@ -437,7 +467,7 @@ describe('EpubDiagnoseView', () => {
             });
         });
 
-        it('PDF에서 Frontend 진단 섹션이 표시되지 않는다', async () => {
+        it('PDF에서 Frontend 진단(pdf.js) 헤더가 표시된다', async () => {
             setupMocks({ backendData: MOCK_PDF_BACKEND_DATA });
             render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
 
@@ -446,12 +476,25 @@ describe('EpubDiagnoseView', () => {
             });
 
             await waitFor(() => {
-                expect(screen.getByText(/Backend 진단/)).toBeTruthy();
+                expect(screen.getByText(/Frontend 진단 \(pdf\.js\)/)).toBeTruthy();
             });
-            expect(screen.queryByText(/Frontend 진단/)).toBeNull();
         });
 
-        it('PDF에서 fetch(프론트엔드 진단용)를 호출하지 않는다', async () => {
+        it('PDF에서 fetch를 호출하여 프론트엔드 진단을 수행한다', async () => {
+            setupMocks({ backendData: MOCK_PDF_BACKEND_DATA });
+            render(<EpubDiagnoseView bookId={42} fileType="pdf" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            expect(globalThis.fetch).toHaveBeenCalledWith(
+                'http://localhost:8000/download/42',
+                expect.objectContaining({ signal: expect.any(AbortSignal) })
+            );
+        });
+
+        it('PDF에서 frontend 진단 정상 시 PASS 배지가 표시된다', async () => {
             setupMocks({ backendData: MOCK_PDF_BACKEND_DATA });
             render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
 
@@ -459,7 +502,99 @@ describe('EpubDiagnoseView', () => {
                 fireEvent.click(screen.getByText(/파일 정합성 진단/));
             });
 
-            expect(globalThis.fetch).not.toHaveBeenCalled();
+            await waitFor(() => {
+                expect(screen.getByText('PASS')).toBeTruthy();
+                expect(screen.getByText('이상 없음')).toBeTruthy();
+            });
+        });
+
+        it('PDF에서 frontend 진단 WARNING 시 심각도 그룹이 표시된다', async () => {
+            setupMocks({ backendData: MOCK_PDF_BACKEND_DATA, pdfFrontendData: MOCK_PDF_FRONTEND_DATA_WITH_WARNINGS });
+            render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText('WARNING')).toBeTruthy();
+                expect(screen.getByText(/이미지 기반 PDF/)).toBeTruthy();
+            });
+        });
+
+        it('PDF에서 frontend 진단 FATAL 시 FAIL 배지가 표시된다', async () => {
+            const fatalData = {
+                sections: [
+                    { name: 'PDF 파싱', results: [{ type: 'error', severity: 'FATAL', text: 'pdf.js 파싱 실패: Invalid PDF structure' }] },
+                ],
+                summary: { fatal: 1, errors: 0, warnings: 0 },
+            };
+            setupMocks({ backendData: MOCK_PDF_BACKEND_DATA, pdfFrontendData: fatalData });
+            render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText('FAIL')).toBeTruthy();
+                expect(screen.getByText('FATAL')).toBeTruthy();
+                expect(screen.getByText(/Invalid PDF structure/)).toBeTruthy();
+            });
+        });
+
+        it('PDF에서 frontend 진단 fetch 실패 시 에러 메시지를 표시한다', async () => {
+            setupMocks({ backendData: MOCK_PDF_BACKEND_DATA, pdfFrontendError: 'pdf.js worker 로드 실패' });
+            render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText('pdf.js worker 로드 실패')).toBeTruthy();
+            });
+        });
+
+        it('PDF에서 diagnoseEpub이 호출되지 않고 diagnosePdf가 호출된다', async () => {
+            setupMocks({ backendData: MOCK_PDF_BACKEND_DATA });
+            render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            await waitFor(() => {
+                expect(diagnosePdf).toHaveBeenCalled();
+            });
+            expect(diagnoseEpub).not.toHaveBeenCalled();
+        });
+
+        it('EPUB에서 diagnosePdf가 호출되지 않고 diagnoseEpub이 호출된다', async () => {
+            setupMocks();
+            render(<EpubDiagnoseView bookId={1} fileType="epub" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            await waitFor(() => {
+                expect(diagnoseEpub).toHaveBeenCalled();
+            });
+            expect(diagnosePdf).not.toHaveBeenCalled();
+        });
+
+        it('EPUB에서는 Frontend 진단(브라우저 DOMParser) 헤더가 표시된다', async () => {
+            setupMocks();
+            render(<EpubDiagnoseView bookId={1} fileType="epub" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText(/Frontend 진단 \(브라우저 DOMParser\)/)).toBeTruthy();
+            });
         });
 
         it('유효한 PDF에서 VALID 배지와 메타데이터가 표시된다', async () => {
