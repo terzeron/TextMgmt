@@ -183,7 +183,7 @@ export default function EpubDiagnoseView({bookId, fileType}) {
             </Card.Header>
 
             {isOpen && (
-                <Card.Body className="p-2" style={{fontSize: '0.8rem', maxHeight: '500px', overflowY: 'auto'}}>
+                <Card.Body className="p-2" style={{fontSize: '0.8rem'}}>
 
                     {/* Backend 진단 (epubcheck) */}
                     <div className="mb-3">

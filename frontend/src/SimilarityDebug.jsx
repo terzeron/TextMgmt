@@ -48,7 +48,7 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
             </Card.Header>
 
             {isOpen && (
-                <Card.Body className="p-2" style={{fontSize: '0.8rem', maxHeight: '400px', overflowY: 'auto'}}>
+                <Card.Body className="p-2" style={{fontSize: '0.8rem'}}>
                     {/* 서점별 추출된 키워드 */}
                     <div className="mb-3">
                         <strong>서점 카테고리에서 추출된 키워드:</strong>
