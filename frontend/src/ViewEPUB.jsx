@@ -30,7 +30,6 @@ export default function ViewEPUB({ bookId, preview = false }) {
     const backgroundFetchDoneRef = useRef(false);
     const locationsReadyRef = useRef(false);
     const allChaptersLoadedRef = useRef(false);
-    const diagTimerRef = useRef(null);
     const diagStateRef = useRef("fetch");
 
     const [epubData, setEpubData] = useState(null);
@@ -180,7 +179,6 @@ export default function ViewEPUB({ bookId, preview = false }) {
         setIsLoading(false);
         setErrorMessage(null);
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        if (diagTimerRef.current) clearTimeout(diagTimerRef.current);
 
         if (!initialLoadDoneRef.current) {
             initialLoadDoneRef.current = true;
@@ -290,6 +288,7 @@ export default function ViewEPUB({ bookId, preview = false }) {
                         setErrorMessage(`EPUB 표시 실패: ${err?.message || String(err)}`);
                         setIsLoading(false);
                         if (timeoutRef.current) clearTimeout(timeoutRef.current);
+                        throw err;
                     });
             };
         }

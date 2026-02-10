@@ -1763,4 +1763,168 @@ describe('ViewEPUB', () => {
         const displayerrorCalls = mockRendition.on.mock.calls.filter(c => c[0] === 'displayerror');
         expect(displayerrorCalls.length).toBe(1);
     });
+
+    // ══════════════════════════════════════════════
+    // ── 진단/display monkey-patch 테스트 ──
+    // ══════════════════════════════════════════════
+
+    it('getRendition에서 started/rendered 이벤트 리스너가 등록된다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        const startedCalls = mockRendition.on.mock.calls.filter(c => c[0] === 'started');
+        const renderedCalls = mockRendition.on.mock.calls.filter(c => c[0] === 'rendered');
+        expect(startedCalls.length).toBe(1);
+        expect(renderedCalls.length).toBe(1);
+    });
+
+    it('미리보기에서도 started/rendered 이벤트 리스너가 등록된다', async () => {
+        render(<ViewEPUB bookId={42} preview={true} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        const startedCalls = mockRendition.on.mock.calls.filter(c => c[0] === 'started');
+        const renderedCalls = mockRendition.on.mock.calls.filter(c => c[0] === 'rendered');
+        expect(startedCalls.length).toBe(1);
+        expect(renderedCalls.length).toBe(1);
+    });
+
+    it('rendition.display가 있으면 monkey-patch하여 성공 시 diagState를 업데이트한다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        let displayResolveFn;
+        const displayPromise = new Promise((resolve) => { displayResolveFn = resolve; });
+        const mockRendition = createMockRendition();
+        mockRendition.display = vi.fn(() => displayPromise);
+
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // display가 monkey-patch되었는지 확인: 원래 mock.fn이 아님
+        expect(mockRendition.display).not.toBe(vi.fn());
+
+        // display 호출 후 resolve
+        const resultPromise = mockRendition.display('test-target');
+        displayResolveFn({ test: true });
+        const result = await resultPromise;
+        expect(result).toEqual({ test: true });
+    });
+
+    it('rendition.display가 reject되면 에러 메시지를 표시하고 에러를 재전파한다', async () => {
+        autoLoad = false;
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        mockRendition.display = vi.fn(() => Promise.reject(new Error('Display failed')));
+
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // display 호출 시 에러가 재전파됨
+        await expect(mockRendition.display('target')).rejects.toThrow('Display failed');
+
+        await waitFor(() => {
+            expect(screen.getByText(/EPUB 표시 실패: Display failed/)).toBeTruthy();
+        });
+    });
+
+    it('타임아웃 시 rendition manager 진단 정보가 포함된다', async () => {
+        vi.useFakeTimers();
+        autoLoad = false;
+
+        render(<ViewEPUB bookId={42} />);
+
+        await act(async () => { vi.advanceTimersByTime(1); });
+        expect(capturedGetRendition).toBeTruthy();
+
+        const mockRendition = createMockRendition();
+        // manager 속성 추가
+        mockRendition.manager = {
+            visible: () => [1],
+            views: { displayed: () => [1, 2] },
+            container: { offsetWidth: 800, offsetHeight: 600 },
+        };
+
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // 15초 타임아웃 트리거
+        await act(async () => { vi.advanceTimersByTime(15000); });
+
+        // manager 진단 정보가 포함된 메시지 확인
+        const errorEl = screen.getByText(/EPUB 로딩 시간이 초과되었습니다/);
+        expect(errorEl.textContent).toMatch(/mgr=true/);
+        expect(errorEl.textContent).toMatch(/vis=1/);
+        expect(errorEl.textContent).toMatch(/disp=2/);
+        expect(errorEl.textContent).toMatch(/container=800x600/);
+
+        vi.useRealTimers();
+    });
+
+    it('타임아웃 시 manager가 없으면 stage만 표시된다', async () => {
+        vi.useFakeTimers();
+        autoLoad = false;
+
+        render(<ViewEPUB bookId={42} />);
+
+        await act(async () => { vi.advanceTimersByTime(1); });
+        expect(capturedGetRendition).toBeTruthy();
+
+        // manager 없는 rendition
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        await act(async () => { vi.advanceTimersByTime(15000); });
+
+        const errorEl = screen.getByText(/EPUB 로딩 시간이 초과되었습니다/);
+        // stage는 있지만 mgr 정보는 없음 (manager가 undefined)
+        expect(errorEl.textContent).toMatch(/stage=/);
+        expect(errorEl.textContent).not.toMatch(/mgr=true/);
+
+        vi.useRealTimers();
+    });
+
+    it('getRendition 호출 전 타임아웃 시 stage=fetch이다', async () => {
+        vi.useFakeTimers();
+        autoLoad = false;
+
+        // getRendition을 호출하지 않는 상태로 타임아웃
+        render(<ViewEPUB bookId={42} />);
+
+        await act(async () => { vi.advanceTimersByTime(1); });
+        await act(async () => { vi.advanceTimersByTime(15000); });
+
+        const errorEl = screen.getByText(/EPUB 로딩 시간이 초과되었습니다/);
+        expect(errorEl.textContent).toMatch(/stage=fetch/);
+
+        vi.useRealTimers();
+    });
 });
