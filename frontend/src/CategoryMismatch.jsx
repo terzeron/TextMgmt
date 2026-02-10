@@ -28,7 +28,7 @@ function buildMismatchCounts(mismatchData) {
 
 export default function CategoryMismatch() {
     const [folderData, setFolderData] = useState([]);
-    const [totalMismatchCount, setTotalMismatchCount] = useState(0);
+
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [isOpen, setIsOpen] = useState(false);
@@ -98,7 +98,7 @@ export default function CategoryMismatch() {
                     children: (folder.children || []).filter(c => c.id !== selectedMismatch.id),
                 }));
                 setFolderData(data);
-                setTotalMismatchCount(prev => Math.max(0, prev - 1));
+
                 setSelectedMismatch(null);
             },
             (error) => {
@@ -118,7 +118,7 @@ export default function CategoryMismatch() {
                     children: (folder.children || []).filter(c => c.id !== selectedMismatch.id),
                 }));
                 setFolderData(data);
-                setTotalMismatchCount(prev => Math.max(0, prev - 1));
+
                 setSelectedMismatch(null);
             },
             (error) => {
@@ -138,7 +138,7 @@ export default function CategoryMismatch() {
                     children: (folder.children || []).filter(c => c.id !== selectedMismatch.id),
                 }));
                 setFolderData(data);
-                setTotalMismatchCount(prev => Math.max(0, prev - 1));
+
                 setSelectedMismatch(null);
             },
             (error) => {
@@ -178,8 +178,6 @@ export default function CategoryMismatch() {
             const commonPrefix = findCommonPrefix(allCategories);
             const data = buildFolderHierarchy(allCategories, commonPrefix, mismatchCounts);
 
-            const total = Object.values(mismatchCounts).reduce((sum, c) => sum + c, 0);
-            setTotalMismatchCount(total);
             setFolderData(data);
             setExpandedItems([]);
             setLoading(false);
@@ -209,7 +207,6 @@ export default function CategoryMismatch() {
                     className="py-2">
                     <FontAwesomeIcon icon={faChevronRight} className="me-2"/>
                     불일치 관리
-                    {totalMismatchCount > 0 && <span className="text-muted ms-2">({totalMismatchCount}건)</span>}
                 </Card.Header>
             </Card>
         );
@@ -223,7 +220,6 @@ export default function CategoryMismatch() {
                 className="py-2">
                 <FontAwesomeIcon icon={faChevronDown} className="me-2"/>
                 불일치 관리
-                {totalMismatchCount > 0 && <span className="text-muted ms-2">({totalMismatchCount}건)</span>}
             </Card.Header>
             <Card.Body>
                 {error && (
