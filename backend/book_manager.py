@@ -469,6 +469,13 @@ class BookManager:
                 return Response(status_code=500, content=f"PDF preview failed: {e}")
 
         elif suffix == ".epub":
+            # chapters=0: 원본 EPUB 파일을 그대로 반환 (전체보기용)
+            if chapters <= 0:
+                LOGGER.debug("Serving original EPUB for book_id=%d", book_id)
+                return FileResponse(path=book.file_path, media_type="application/epub+zip",
+                                    headers={"Content-Encoding": "identity",
+                                             "Cache-Control": "no-transform"})
+
             total_chapters = BookManager._get_epub_total_chapters(book.file_path)
             cache_file = cache_dir / f"{book_id}_ch{chapters}.epub"
             # 구 형식 캐시 정리 (book_id.epub, book_id.html)
