@@ -55,10 +55,14 @@ export default function ViewEPUB({ bookId, preview = false }) {
     const fetchChapters = useCallback((chapters, signal) => {
         const url = `${getApiUrlPrefix()}/preview/${bookId}?chapters=${chapters}`;
         return fetch(url, { signal })
-            .then((res) => {
-                if (!res.ok) throw new Error(`서버 응답 오류: ${res.status}`);
+            .then(async (res) => {
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(errText || `서버 응답 오류: ${res.status}`);
+                }
                 const total = parseInt(res.headers.get("X-Total-Chapters") || "0", 10);
-                return res.arrayBuffer().then((buf) => ({ buf, total }));
+                const buf = await res.arrayBuffer();
+                return { buf, total };
             });
     }, [bookId]);
 
@@ -128,10 +132,10 @@ export default function ViewEPUB({ bookId, preview = false }) {
         if (!epubData || initialLoadDone) return;
         timeoutRef.current = setTimeout(() => {
             setIsLoading(false);
-            setErrorMessage("EPUB 로딩 시간이 초과되었습니다.");
+            setErrorMessage(`EPUB 로딩 시간이 초과되었습니다. (book_id=${bookId})`);
         }, 15000);
         return () => clearTimeout(timeoutRef.current);
-    }, [epubData, initialLoadDone]);
+    }, [epubData, initialLoadDone, bookId]);
 
     // 전체보기: 초기 렌더링 후 백그라운드에서 전체 챕터 페칭 (렌더링하지 않음)
     useEffect(() => {
@@ -235,6 +239,22 @@ export default function ViewEPUB({ bookId, preview = false }) {
             return t;
         };
 
+        // epub.js display 에러 수신
+        rendition.on("displayerror", (err) => {
+            console.error("[epub.js] display error:", err);
+            setErrorMessage(`EPUB 렌더링 오류: ${err?.message || String(err)}`);
+            setIsLoading(false);
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        });
+
+        // book 로드 에러 수신
+        rendition.book.ready.catch((err) => {
+            console.error("[epub.js] book load error:", err);
+            setErrorMessage(`EPUB 파싱 오류: ${err?.message || String(err)}`);
+            setIsLoading(false);
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        });
+
         // 전체보기 전용 초기화
         if (!preview) {
             // 책 제목 추출
@@ -278,7 +298,7 @@ export default function ViewEPUB({ bookId, preview = false }) {
                             } catch (_) { /* ignore */ }
                         }
                     })
-                    .catch(() => {});
+                    .catch((err) => console.warn("[epub.js] locations error:", err));
             }
 
             // 페이지 정보 이벤트 리스닝 (전체 위치 준비 시 전역 페이지, 아니면 챕터 내 페이지)
