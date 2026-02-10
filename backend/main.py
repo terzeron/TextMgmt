@@ -176,6 +176,19 @@ async def get_pdf_pages(book_id: int, start: int = 1, end: int = 1):
     return await book_manager.get_pdf_pages(book_id=book_id, start=start, end=end)
 
 
+@app.get("/validate/{book_id}")
+async def validate_epub(book_id: int) -> Dict[str, Any]:
+    LOGGER.debug("# validate_epub(book_id=%d)", book_id)
+    response_object: Dict[str, Any] = {"status": "failure"}
+    result, error = await book_manager.validate_epub(book_id)
+    if result is not None and error is None:
+        response_object["status"] = "success"
+        response_object["result"] = result
+    else:
+        response_object["error"] = error
+    return response_object
+
+
 @app.get("/books/{book_id}")
 async def get_book(book_id: int) -> Dict[str, Any]:
     LOGGER.debug("# get_book(book_id=%d)", book_id)
