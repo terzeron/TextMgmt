@@ -7,7 +7,7 @@ afterEach(cleanup);
 // ReactReader mock - autoLoad=true이면 즉시 locationChanged 호출
 let autoLoad = true;
 let capturedGetRendition = null;
-const mockReactReader = vi.fn(({ url, locationChanged, getRendition, title }) => {
+const mockReactReader = vi.fn(({ url, locationChanged, getRendition, title, epubOptions }) => {
     if (getRendition && url) {
         capturedGetRendition = getRendition;
     }
@@ -333,6 +333,22 @@ describe('ViewEPUB', () => {
                 expect.any(Object)
             );
         });
+    });
+
+    // ── epubOptions ──
+
+    it('ReactReader에 allowScriptedContent: true가 전달된다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(mockReactReader).toHaveBeenCalled();
+        });
+
+        const calls = mockReactReader.mock.calls;
+        const hasScriptedContent = calls.some(c =>
+            c[0].epubOptions && c[0].epubOptions.allowScriptedContent === true
+        );
+        expect(hasScriptedContent).toBe(true);
     });
 
     // ── 컨테이너 높이 ──
@@ -922,7 +938,7 @@ describe('ViewEPUB', () => {
         expect(firstCall[0].location).toBeUndefined();
     });
 
-    it('전체보기에서 전체 데이터 바꿔치기 시 저장된 위치를 복원한다', async () => {
+    it('전체보기에서 전체 데이터 바꿔치기 시 첫 페이지로 렌더링 후 저장 위치로 복원한다', async () => {
         localStorageMock.getItem.mockImplementation((key) => {
             if (key === 'epub_location_42') return 'epubcfi(/6/4)';
             return null;
@@ -943,20 +959,37 @@ describe('ViewEPUB', () => {
             expect(screen.queryByText('로딩 중...')).toBeNull();
         });
 
+        // swap 후 autoLoad 비활성화 (수동 제어를 위해)
+        autoLoad = false;
+
         // 백그라운드 fetch 완료 → 자동 swap
         await act(async () => {
             bgResolve(createFetchResponse(mockArrayBuffer2, 20));
         });
         await act(async () => { await new Promise(r => setTimeout(r, 10)); });
 
-        // 전체 데이터 바꿔치기 후 저장된 위치가 복원됨
-        await waitFor(() => {
-            const calls = mockReactReader.mock.calls;
-            const hasRestoredLocation = calls.some(c =>
-                c[0].url === mockArrayBuffer2 && c[0].location === 'epubcfi(/6/4)'
-            );
-            expect(hasRestoredLocation).toBe(true);
+        // swap 후 ReactReader에 저장된 CFI가 location prop으로 직접 전달되지 않음
+        const calls = mockReactReader.mock.calls;
+        const swapCall = calls.find(c => c[0].url === mockArrayBuffer2);
+        expect(swapCall[0].location).toBeUndefined();
+
+        // swap 후 새 rendition mock 주입 (monkey-patch 전 원본 spy 보존)
+        await waitFor(() => { expect(capturedGetRendition).toBeTruthy(); });
+        const newRendition = createMockRendition();
+        const origDisplaySpy = vi.fn(() => Promise.resolve());
+        newRendition.display = origDisplaySpy;
+        await act(async () => {
+            capturedGetRendition(newRendition);
         });
+
+        // swap 렌더링 완료 시뮬레이션: locationChanged 수동 호출
+        const lastCall = mockReactReader.mock.calls[mockReactReader.mock.calls.length - 1];
+        await act(async () => {
+            lastCall[0].locationChanged('epubcfi(/1)');
+        });
+
+        // 저장된 위치 복원: monkey-patch 내부에서 origDisplay(savedLoc)이 호출됨
+        expect(origDisplaySpy).toHaveBeenCalledWith('epubcfi(/6/4)');
     });
 
     it('전체 챕터가 초기 로드로 충분하면 저장된 위치를 즉시 복원한다', async () => {
@@ -1073,23 +1106,34 @@ describe('ViewEPUB', () => {
             expect(screen.queryByText('로딩 중...')).toBeNull();
         });
 
-        // 백그라운드 fetch 완료 → 자동 swap + 위치 복원
+        // rendition mock 주입 (monkey-patch 전 원본 spy 보존)
+        await waitFor(() => { expect(capturedGetRendition).toBeTruthy(); });
+        const mockRendition = createMockRendition();
+        const origDisplaySpy2 = vi.fn(() => Promise.resolve());
+        mockRendition.display = origDisplaySpy2;
+        await act(async () => { capturedGetRendition(mockRendition); });
+
+        // 백그라운드 fetch 완료 → 자동 swap
         await act(async () => {
             bgResolve(createFetchResponse(mockArrayBuffer2, 20));
         });
         await act(async () => { await new Promise(r => setTimeout(r, 10)); });
 
-        await waitFor(() => {
-            const calls = mockReactReader.mock.calls;
-            expect(calls.some(c => c[0].location === 'epubcfi(/6/4)')).toBe(true);
-        });
+        // swap 후 autoLoad → locationChanged → rendition.display(savedLoc) 호출
+        const getLastCall = () => mockReactReader.mock.calls[mockReactReader.mock.calls.length - 1];
+        await act(async () => { getLastCall()[0].locationChanged('epubcfi(/1)'); });
 
-        // swap 후 페이지 넘기기 → 저장된 위치가 다시 사용되지 않음
-        const lastCall = mockReactReader.mock.calls[mockReactReader.mock.calls.length - 1];
-        await act(async () => { lastCall[0].locationChanged('epubcfi(/7)'); });
+        // 저장된 위치가 소비됨 (origDisplay 호출)
+        expect(origDisplaySpy2).toHaveBeenCalledWith('epubcfi(/6/4)');
+        origDisplaySpy2.mockClear();
 
-        // localStorage에 최신 위치가 저장됨 (복원된 위치가 아닌 현재 위치)
+        // 이후 페이지 넘기기 → 저장된 위치가 다시 사용되지 않음
+        await act(async () => { getLastCall()[0].locationChanged('epubcfi(/7)'); });
+
+        // localStorage에 최신 위치가 저장됨
         expect(localStorageMock.setItem).toHaveBeenCalledWith('epub_location_42', 'epubcfi(/7)');
+        // origDisplay가 다시 호출되지 않음 (저장된 위치는 이미 소비됨)
+        expect(origDisplaySpy2).not.toHaveBeenCalled();
     });
 
     it('미리보기에서는 저장된 읽기 위치를 무시한다', async () => {
@@ -2040,8 +2084,7 @@ describe('ViewEPUB', () => {
         });
     });
 
-    it('전체 데이터 swap 시 저장된 위치가 ReactReader location prop으로 전달된다', async () => {
-        // 저장된 위치 설정
+    it('전체 데이터 swap 시 저장된 CFI가 location prop이 아닌 rendition.display()로 복원된다', async () => {
         localStorageMock.getItem.mockImplementation((key) => {
             if (key === 'epub_location_42') return 'epubcfi(/6/32!/4/1:0)';
             return null;
@@ -2057,10 +2100,16 @@ describe('ViewEPUB', () => {
 
         render(<ViewEPUB bookId={42} />);
 
-        // 초기 로드 + autoLoad 완료 대기
         await waitFor(() => {
             expect(screen.queryByText('로딩 중...')).toBeNull();
         });
+
+        // rendition mock 주입 (monkey-patch 전 원본 spy 보존)
+        await waitFor(() => { expect(capturedGetRendition).toBeTruthy(); });
+        const mockRendition = createMockRendition();
+        const origDisplaySpy = vi.fn(() => Promise.resolve());
+        mockRendition.display = origDisplaySpy;
+        await act(async () => { capturedGetRendition(mockRendition); });
 
         // 백그라운드 fetch 완료 → swap
         await act(async () => {
@@ -2068,15 +2117,59 @@ describe('ViewEPUB', () => {
         });
         await act(async () => { await new Promise(r => setTimeout(r, 10)); });
 
-        // swap 후 ReactReader에 저장된 위치가 전달됨
-        // (epub.js가 이 위치로 display를 시도하고, 실패하면 폴백이 동작)
-        await waitFor(() => {
-            const calls = mockReactReader.mock.calls;
-            const hasSwappedWithLocation = calls.some(c =>
-                c[0].url === mockArrayBuffer2 && c[0].location === 'epubcfi(/6/32!/4/1:0)'
-            );
-            expect(hasSwappedWithLocation).toBe(true);
+        // swap 후 ReactReader의 location prop은 undefined (첫 페이지)
+        const calls = mockReactReader.mock.calls;
+        const swapCall = calls.find(c => c[0].url === mockArrayBuffer2);
+        expect(swapCall[0].location).toBeUndefined();
+
+        // swap 후 locationChanged 호출 시 rendition.display(savedLoc) 호출
+        const lastCall = mockReactReader.mock.calls[mockReactReader.mock.calls.length - 1];
+        await act(async () => { lastCall[0].locationChanged('epubcfi(/1)'); });
+
+        // monkey-patch 내부에서 origDisplay(savedLoc)이 호출됨
+        expect(origDisplaySpy).toHaveBeenCalledWith('epubcfi(/6/32!/4/1:0)');
+    });
+
+    it('swap 후 rendition.display(savedLoc) 실패 시 localStorage에서 저장 위치를 제거한다', async () => {
+        localStorageMock.getItem.mockImplementation((key) => {
+            if (key === 'epub_location_42') return 'epubcfi(/6/32!/4/1:0)';
+            return null;
         });
+
+        let bgResolve;
+        globalThis.fetch = vi.fn((url) => {
+            if (url.includes('chapters=20')) {
+                return new Promise((resolve) => { bgResolve = resolve; });
+            }
+            return Promise.resolve(createFetchResponse(mockArrayBuffer, 20));
+        });
+
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(screen.queryByText('로딩 중...')).toBeNull();
+        });
+
+        // rendition mock: display가 reject되도록 설정
+        await waitFor(() => { expect(capturedGetRendition).toBeTruthy(); });
+        const mockRendition = createMockRendition();
+        mockRendition.display = vi.fn(() => Promise.reject(new Error('No startContainer')));
+        await act(async () => { capturedGetRendition(mockRendition); });
+        localStorageMock.removeItem.mockClear();
+
+        // 백그라운드 fetch 완료 → swap
+        await act(async () => {
+            bgResolve(createFetchResponse(mockArrayBuffer2, 20));
+        });
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        // swap 후 locationChanged → rendition.display(savedLoc) → reject
+        const lastCall = mockReactReader.mock.calls[mockReactReader.mock.calls.length - 1];
+        await act(async () => { lastCall[0].locationChanged('epubcfi(/1)'); });
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        // 실패한 저장 위치가 localStorage에서 제거됨
+        expect(localStorageMock.removeItem).toHaveBeenCalledWith('epub_location_42');
     });
 
     it('타임아웃 시 rendition manager 진단 정보가 포함된다', async () => {
