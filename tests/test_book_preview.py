@@ -1917,10 +1917,27 @@ class TestValidateEpub:
             }]
         return json.dumps(data).encode("utf-8")
 
+    def _mock_epubcheck_exec(self, json_bytes, returncode=0):
+        """epubcheck subprocess mock: JSON을 임시 파일에 기록하는 side_effect 반환."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        async def _side_effect(*args, **kwargs):
+            # args = ("epubcheck", book_path, "--json", json_path)
+            json_path = args[3]
+            with open(json_path, 'w', encoding='utf-8') as f:
+                f.write(json_bytes.decode('utf-8'))
+            mock_proc = AsyncMock()
+            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_proc.returncode = returncode
+            mock_proc.kill = MagicMock()
+            return mock_proc
+
+        return _side_effect
+
     @pytest.mark.asyncio
     async def test_validate_valid_epub(self, backend_test_setup):
         """정상 EPUB → valid=true 응답."""
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import patch
         bm = backend_test_setup["bm"]
         client = backend_test_setup["client"]
 
@@ -1930,18 +1947,13 @@ class TestValidateEpub:
         book_id = await _register_epub_async(bm, epub_path)
 
         try:
-            mock_proc = AsyncMock()
-            mock_proc.communicate = AsyncMock(return_value=(
-                self._make_epubcheck_json(valid=True, publication={
-                    "title": "Test Book", "creator": "Test Author",
-                    "date": "", "publisher": "",
-                }),
-                b"",
-            ))
-            mock_proc.returncode = 0
-            mock_proc.kill = MagicMock()
+            json_bytes = self._make_epubcheck_json(valid=True, publication={
+                "title": "Test Book", "creator": "Test Author",
+                "date": "", "publisher": "",
+            })
 
-            with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            with patch("asyncio.create_subprocess_exec",
+                       side_effect=self._mock_epubcheck_exec(json_bytes, returncode=0)):
                 response = client.get(f"/validate/{book_id}")
 
             assert response.status_code == 200
@@ -1956,7 +1968,7 @@ class TestValidateEpub:
     @pytest.mark.asyncio
     async def test_validate_epub_with_errors(self, backend_test_setup):
         """에러가 있는 EPUB → valid=false, messages 포함."""
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import patch
         bm = backend_test_setup["bm"]
         client = backend_test_setup["client"]
 
@@ -1966,15 +1978,10 @@ class TestValidateEpub:
         book_id = await _register_epub_async(bm, epub_path)
 
         try:
-            mock_proc = AsyncMock()
-            mock_proc.communicate = AsyncMock(return_value=(
-                self._make_epubcheck_json(valid=False),
-                b"",
-            ))
-            mock_proc.returncode = 1
-            mock_proc.kill = MagicMock()
+            json_bytes = self._make_epubcheck_json(valid=False)
 
-            with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            with patch("asyncio.create_subprocess_exec",
+                       side_effect=self._mock_epubcheck_exec(json_bytes, returncode=1)):
                 response = client.get(f"/validate/{book_id}")
 
             assert response.status_code == 200

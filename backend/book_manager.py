@@ -306,6 +306,8 @@ class BookManager:
         """epubcheck를 실행하여 EPUB 파일의 구조적 유효성을 검증한다."""
         import asyncio
         import json as json_mod
+        import tempfile
+        import os
 
         LOGGER.debug("# validate_epub(book_id=%d)", book_id)
         book, error = await self.get_book(book_id)
@@ -316,24 +318,32 @@ class BookManager:
         if not book.file_path.exists():
             return None, f"File not found: {book.file_path}"
 
+        # 임시 파일에 JSON 출력 (stdout에 상태 메시지가 섞이는 문제 방지)
+        fd, json_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
         try:
             proc = await asyncio.create_subprocess_exec(
-                "epubcheck", str(book.file_path), "--json", "-",
+                "epubcheck", str(book.file_path), "--json", json_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            await asyncio.wait_for(proc.communicate(), timeout=60)
         except FileNotFoundError:
+            os.unlink(json_path)
             return None, "epubcheck is not installed"
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
+            os.unlink(json_path)
             return None, "epubcheck timed out (60s)"
 
         try:
-            data = json_mod.loads(stdout)
-        except json_mod.JSONDecodeError:
-            return None, f"Failed to parse epubcheck output (exit_code={proc.returncode})"
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json_mod.load(f)
+        except (json_mod.JSONDecodeError, OSError) as e:
+            return None, f"Failed to parse epubcheck output (exit_code={proc.returncode}): {e}"
+        finally:
+            os.unlink(json_path)
 
         # 결과 구조화
         messages = []
