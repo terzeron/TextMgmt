@@ -30,6 +30,8 @@ export default function ViewEPUB({ bookId, preview = false }) {
     const backgroundFetchDoneRef = useRef(false);
     const locationsReadyRef = useRef(false);
     const allChaptersLoadedRef = useRef(false);
+    const diagTimerRef = useRef(null);
+    const diagStateRef = useRef("fetch");
 
     const [epubData, setEpubData] = useState(null);
     const [initialLoadDone, setInitialLoadDone] = useState(false);
@@ -131,8 +133,21 @@ export default function ViewEPUB({ bookId, preview = false }) {
     useEffect(() => {
         if (!epubData || initialLoadDone) return;
         timeoutRef.current = setTimeout(() => {
+            // epub.js 내부 상태 진단 수집
+            let diag = diagStateRef.current;
+            const r = renditionRef.current;
+            if (r) {
+                try {
+                    const mgr = r.manager;
+                    const vis = mgr?.visible?.()?.length ?? "?";
+                    const disp = mgr?.views?.displayed?.()?.length ?? "?";
+                    const cw = mgr?.container?.offsetWidth ?? "?";
+                    const ch = mgr?.container?.offsetHeight ?? "?";
+                    diag += ` mgr=${!!mgr} vis=${vis} disp=${disp} container=${cw}x${ch}`;
+                } catch (_) {}
+            }
             setIsLoading(false);
-            setErrorMessage(`EPUB 로딩 시간이 초과되었습니다. (book_id=${bookId})`);
+            setErrorMessage(`EPUB 로딩 시간이 초과되었습니다. (book_id=${bookId}, stage=${diag})`);
         }, 15000);
         return () => clearTimeout(timeoutRef.current);
     }, [epubData, initialLoadDone, bookId]);
@@ -165,6 +180,7 @@ export default function ViewEPUB({ bookId, preview = false }) {
         setIsLoading(false);
         setErrorMessage(null);
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        if (diagTimerRef.current) clearTimeout(diagTimerRef.current);
 
         if (!initialLoadDoneRef.current) {
             initialLoadDoneRef.current = true;
@@ -230,6 +246,8 @@ export default function ViewEPUB({ bookId, preview = false }) {
         }
         renditionRef.current = rendition;
         locationsReadyRef.current = false;
+        diagStateRef.current = "getRendition";
+
         const spine_get = rendition.book.spine.get.bind(rendition.book.spine);
         rendition.book.spine.get = function (target) {
             let t = spine_get(target);
@@ -248,12 +266,37 @@ export default function ViewEPUB({ bookId, preview = false }) {
         });
 
         // book 로드 에러 수신
-        rendition.book.ready.catch((err) => {
-            console.error("[epub.js] book load error:", err);
-            setErrorMessage(`EPUB 파싱 오류: ${err?.message || String(err)}`);
-            setIsLoading(false);
-            if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        });
+        rendition.book.ready
+            .then(() => { diagStateRef.current = "bookReady"; })
+            .catch((err) => {
+                console.error("[epub.js] book load error:", err);
+                setErrorMessage(`EPUB 파싱 오류: ${err?.message || String(err)}`);
+                setIsLoading(false);
+                if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            });
+
+        // rendition.display 실패를 적극적으로 잡기 (react-reader가 미처리)
+        if (typeof rendition.display === "function") {
+            const origDisplay = rendition.display.bind(rendition);
+            rendition.display = function (target) {
+                diagStateRef.current = `display(${String(target).slice(0, 40)})`;
+                return origDisplay(target)
+                    .then((result) => {
+                        diagStateRef.current = "displayed";
+                        return result;
+                    })
+                    .catch((err) => {
+                        console.error("[epub.js] display() rejected:", err);
+                        setErrorMessage(`EPUB 표시 실패: ${err?.message || String(err)}`);
+                        setIsLoading(false);
+                        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+                    });
+            };
+        }
+
+        // rendered 이벤트 추적
+        rendition.on("started", () => { diagStateRef.current = "started"; });
+        rendition.on("rendered", () => { diagStateRef.current = "rendered"; });
 
         // 전체보기 전용 초기화
         if (!preview) {
