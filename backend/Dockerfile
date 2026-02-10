@@ -7,8 +7,19 @@ RUN apt-get update && \
     libpoppler-dev libpoppler-cpp-dev libheif-dev libcairo2-dev \
     libxml2-dev libxslt-dev \
     libreoffice-writer-nogui \
+    default-jre-headless \
+    unzip \
     curl ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# epubcheck 설치
+ARG EPUBCHECK_VERSION=5.1.0
+RUN curl -L https://github.com/w3c/epubcheck/releases/download/v${EPUBCHECK_VERSION}/epubcheck-${EPUBCHECK_VERSION}.zip \
+    -o /tmp/epubcheck.zip && \
+    unzip /tmp/epubcheck.zip -d /opt && \
+    rm /tmp/epubcheck.zip && \
+    printf '#!/bin/sh\nexec java -jar /opt/epubcheck-%s/epubcheck.jar "$@"\n' "${EPUBCHECK_VERSION}" > /usr/local/bin/epubcheck && \
+    chmod +x /usr/local/bin/epubcheck
 
 ARG USER_ID=1000
 ARG USER_NAME=terzeron

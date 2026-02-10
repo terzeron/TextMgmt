@@ -13,6 +13,7 @@ import Folder from './Folder';
 import BookInfoView from './BookInfoView';
 import Bookstore from './Bookstore';
 import SimilarityDebug from './SimilarityDebug';
+import EpubDiagnoseView from './EpubDiagnoseView';
 import Actions from './Actions';
 import SimilarBooks from './SimilarBooks';
 import SearchResult from './SearchResult';
@@ -755,6 +756,7 @@ export default function Edit() {
                                     <SimilarBooks bookId={bookInfo['book_id']} onSelect={entryClicked}/>
                                     <Bookstore bookInfo={bookInfo} searchTrigger={searchTrigger} onCategoriesFound={setSuggestedCategories}/>
                                     <SimilarityDebug suggestedCategories={suggestedCategories} categoryList={otherCategoryList}/>
+                                    <EpubDiagnoseView bookId={bookInfo['book_id']} fileType={bookInfo['file_type']}/>
                                 </Col>
                             </Row>
 

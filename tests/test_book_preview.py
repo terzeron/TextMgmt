@@ -1887,5 +1887,243 @@ class TestOpfNamespaceFix:
             _cleanup_book(client, bm, book_id, epub_path)
 
 
+# ── tests: epubcheck 검증 API ─────────────────────────────
+
+class TestValidateEpub:
+    """GET /validate/{book_id} 엔드포인트 테스트 (epubcheck mock)."""
+
+    @staticmethod
+    def _make_epubcheck_json(valid: bool = True, messages=None, publication=None):
+        """epubcheck --json 출력을 흉내내는 JSON 바이트를 반환."""
+        import json
+        data = {
+            "messages": messages or [],
+            "checker": {
+                "nFatal": 0,
+                "nError": 0 if valid else 1,
+                "nWarning": 0,
+                "nUsage": 0,
+                "nInfo": 0,
+            },
+        }
+        if publication:
+            data["publication"] = publication
+        if not valid and not messages:
+            data["messages"] = [{
+                "severity": "ERROR",
+                "id": "RSC-005",
+                "message": "Test error message",
+                "locations": [{"path": "OEBPS/ch1.xhtml", "line": 10, "column": 5}],
+            }]
+        return json.dumps(data).encode("utf-8")
+
+    @pytest.mark.asyncio
+    async def test_validate_valid_epub(self, backend_test_setup):
+        """정상 EPUB → valid=true 응답."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Valid Epub Check.epub"
+        _create_test_epub(epub_path, chapter_count=2)
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            mock_proc = AsyncMock()
+            mock_proc.communicate = AsyncMock(return_value=(
+                self._make_epubcheck_json(valid=True, publication={
+                    "title": "Test Book", "creator": "Test Author",
+                    "date": "", "publisher": "",
+                }),
+                b"",
+            ))
+            mock_proc.returncode = 0
+            mock_proc.kill = MagicMock()
+
+            with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+                response = client.get(f"/validate/{book_id}")
+
+            assert response.status_code == 200
+            body = response.json()
+            assert body["status"] == "success"
+            assert body["result"]["valid"] is True
+            assert body["result"]["summary"]["error"] == 0
+            assert "publication" in body["result"]
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_validate_epub_with_errors(self, backend_test_setup):
+        """에러가 있는 EPUB → valid=false, messages 포함."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Error Epub Check.epub"
+        _create_test_epub(epub_path, chapter_count=2)
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            mock_proc = AsyncMock()
+            mock_proc.communicate = AsyncMock(return_value=(
+                self._make_epubcheck_json(valid=False),
+                b"",
+            ))
+            mock_proc.returncode = 1
+            mock_proc.kill = MagicMock()
+
+            with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+                response = client.get(f"/validate/{book_id}")
+
+            assert response.status_code == 200
+            body = response.json()
+            assert body["status"] == "success"
+            assert body["result"]["valid"] is False
+            assert body["result"]["summary"]["error"] == 1
+            assert len(body["result"]["messages"]) > 0
+            msg = body["result"]["messages"][0]
+            assert msg["severity"] == "ERROR"
+            assert msg["location"]["path"] == "OEBPS/ch1.xhtml"
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_validate_non_epub(self, backend_test_setup):
+        """비-EPUB 파일 → failure + 에러 메시지."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        # PDF 타입의 book 등록
+        pdf_dir = bm.path_prefix / "_pdf"
+        pdf_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = pdf_dir / "[Test Author] Not Epub.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4 fake pdf content")
+
+        inode = pdf_path.stat().st_ino
+        rel_path = pdf_path.relative_to(bm.path_prefix)
+        now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
+        data = {
+            inode: {
+                "category": "_pdf",
+                "title": "Not Epub",
+                "author": "Test Author",
+                "file_path": str(rel_path),
+                "file_type": "pdf",
+                "file_size": pdf_path.stat().st_size,
+                "line_count": 0,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "test pdf",
+                "updated_time": now,
+            }
+        }
+        book_id, error = await bm.add_book(data)
+
+        try:
+            response = client.get(f"/validate/{book_id}")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["status"] == "failure"
+            assert "Not an EPUB" in body["error"]
+        finally:
+            try:
+                client.delete(f"/books/{book_id}")
+            except Exception:
+                pass
+            pdf_path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_validate_file_not_found(self, backend_test_setup):
+        """파일이 존재하지 않는 EPUB → failure + 에러 메시지."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Missing File.epub"
+        _create_test_epub(epub_path, chapter_count=1)
+        book_id = await _register_epub_async(bm, epub_path)
+        # 파일 삭제
+        epub_path.unlink()
+
+        try:
+            response = client.get(f"/validate/{book_id}")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["status"] == "failure"
+            assert "File not found" in body["error"]
+        finally:
+            try:
+                client.delete(f"/books/{book_id}")
+            except Exception:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_validate_book_not_found(self, backend_test_setup):
+        """존재하지 않는 book_id → failure + 에러 메시지."""
+        client = backend_test_setup["client"]
+
+        response = client.get("/validate/999999999")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "failure"
+        assert "Book not found" in body["error"]
+
+    @pytest.mark.asyncio
+    async def test_validate_epubcheck_not_installed(self, backend_test_setup):
+        """epubcheck 미설치 → failure + 에러 메시지."""
+        from unittest.mock import patch
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] No Epubcheck.epub"
+        _create_test_epub(epub_path, chapter_count=1)
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError):
+                response = client.get(f"/validate/{book_id}")
+
+            assert response.status_code == 200
+            body = response.json()
+            assert body["status"] == "failure"
+            assert "not installed" in body["error"]
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_validate_epubcheck_timeout(self, backend_test_setup):
+        """epubcheck 타임아웃 → failure + 에러 메시지."""
+        import asyncio as _asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Timeout Epubcheck.epub"
+        _create_test_epub(epub_path, chapter_count=1)
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            mock_proc = AsyncMock()
+            mock_proc.kill = MagicMock()
+            mock_proc.wait = AsyncMock()
+
+            with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+                with patch("asyncio.wait_for", side_effect=_asyncio.TimeoutError):
+                    response = client.get(f"/validate/{book_id}")
+
+            assert response.status_code == 200
+            body = response.json()
+            assert body["status"] == "failure"
+            assert "timed out" in body["error"]
+            mock_proc.kill.assert_called_once()
+            mock_proc.wait.assert_awaited_once()
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

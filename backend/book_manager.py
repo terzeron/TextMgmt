@@ -302,6 +302,87 @@ class BookManager:
             return Book(book_id=book_id, info=doc), None
         return None, f"No book found by '{book_id}'"
 
+    async def validate_epub(self, book_id: int) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """epubcheck를 실행하여 EPUB 파일의 구조적 유효성을 검증한다."""
+        import asyncio
+        import json as json_mod
+
+        LOGGER.debug("# validate_epub(book_id=%d)", book_id)
+        book, error = await self.get_book(book_id)
+        if not book:
+            return None, f"Book not found: {book_id}"
+        if book.file_type != "epub":
+            return None, f"Not an EPUB file (type: {book.file_type})"
+        if not book.file_path.exists():
+            return None, f"File not found: {book.file_path}"
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "epubcheck", str(book.file_path), "--json", "-",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        except FileNotFoundError:
+            return None, "epubcheck is not installed"
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return None, "epubcheck timed out (60s)"
+
+        try:
+            data = json_mod.loads(stdout)
+        except json_mod.JSONDecodeError:
+            return None, f"Failed to parse epubcheck output (exit_code={proc.returncode})"
+
+        # 결과 구조화
+        messages = []
+        for msg in data.get("messages", []):
+            locations = msg.get("locations", [])
+            loc = locations[0] if locations else {}
+            messages.append({
+                "severity": msg.get("severity", ""),
+                "id": msg.get("id", ""),
+                "message": msg.get("message", ""),
+                "location": {
+                    "path": loc.get("path", ""),
+                    "line": loc.get("line", -1),
+                    "column": loc.get("column", -1),
+                } if loc else None,
+            })
+
+        # publication 메타데이터
+        pub_raw = data.get("publication", {})
+        publication = None
+        if pub_raw:
+            publication = {
+                "title": pub_raw.get("title", ""),
+                "creator": pub_raw.get("creator", ""),
+                "date": pub_raw.get("date", ""),
+                "publisher": pub_raw.get("publisher", ""),
+            }
+
+        # 요약 카운트
+        checker = data.get("checker", {})
+
+        rel_path = str(book.file_path.relative_to(self.path_prefix))
+        result = {
+            "valid": proc.returncode == 0,
+            "file_path": rel_path,
+            "messages": messages,
+            "summary": {
+                "fatal": checker.get("nFatal", 0),
+                "error": checker.get("nError", 0),
+                "warning": checker.get("nWarning", 0),
+                "usage": checker.get("nUsage", 0),
+                "info": checker.get("nInfo", 0),
+            },
+        }
+        if publication:
+            result["publication"] = publication
+
+        return result, None
+
     @staticmethod
     def determine_file_content_and_encoding(file_path: Path) -> str:
         LOGGER.debug("# determine_file_content_and_encoding(file_path='%s')", file_path)
