@@ -18,7 +18,7 @@ import SimilarBooks from './SimilarBooks';
 import SearchResult from './SearchResult';
 import ViewSingle from "./ViewSingle";
 import {DateTime} from "luxon";
-import {findCommonPrefix, buildFolderHierarchy, parseEntryId, findFolderInTree, updateFolderChildren, updateFolderInTree} from './folderUtils';
+import {findCommonPrefix, buildFolderHierarchy, parseEntryId, findFolderInTree, updateFolderChildren, updateFolderInTree, determineNextEntryId, determinePrevEntryId} from './folderUtils';
 
 // 모바일 감지 훅
 function useIsMobile(breakpoint = 768) {
@@ -59,10 +59,16 @@ export default function Edit() {
     const [suggestedCategories, setSuggestedCategories] = useState({});
     const [searchTrigger, setSearchTrigger] = useState(0);
 
+    // 비멱등 버튼 중복 실행 방지 가드
+    const isProcessingRef = useRef(false);
+    const [isProcessing, setIsProcessing] = useState(false);
+
     // entryClicked 함수의 최신 참조를 저장하는 ref (콜백에서 최신 함수 참조용)
     const entryClickedRef = useRef(null);
     // nextEntryId의 최신 값을 저장하는 ref (타이머 콜백에서 최신 값 참조용)
     const nextEntryIdRef = useRef(null);
+    // prevEntryId의 최신 값을 저장하는 ref
+    const prevEntryIdRef = useRef(null);
 
     // 메시지 자동 사라짐 (3초 후)
     useEffect(() => {
@@ -179,36 +185,11 @@ export default function Edit() {
     }, []);
 
     const entryClicked = useCallback((selectedEntryId) => {
+        // 처리 중에는 폴더 클릭을 무시하여 ref 덮어쓰기 방지
+        if (isProcessingRef.current) return;
+
         // 선택된 항목 업데이트 (UI 동기화)
         setSelectedItems([selectedEntryId]);
-
-        const determineNextEntryId = (folderData, selectedEntryId) => {
-            // root file 처리 (id가 '/'로 시작하는 경우, 예: '/917518')
-            if (selectedEntryId.startsWith('/')) {
-                const rootFiles = folderData.filter(item => item.fileType !== 'folder');
-                const index = rootFiles.findIndex(item => item.id === selectedEntryId);
-                if (index >= 0 && index < rootFiles.length - 1) {
-                    return rootFiles[index + 1].id;
-                }
-                return null;
-            }
-
-            // 폴더 내 파일 처리 - parseEntryId로 카테고리/bookId 분리
-            const parsed = parseEntryId(selectedEntryId);
-            if (parsed && parsed.bookId) {
-                const folder = findFolderInTree(folderData, parsed.category);
-                const children = folder?.children;
-                if (children) {
-                    // children 중 책만 필터 (하위 폴더 제외)
-                    const bookChildren = children.filter(item => item.fileType !== 'folder');
-                    const index = bookChildren.findIndex(item => item.id === selectedEntryId);
-                    if (0 <= index && index < (bookChildren.length - 1)) {
-                        return bookChildren[index + 1].id;
-                    }
-                }
-            }
-            return null;
-        };
 
         // 2단계 트리에서 검색
         const selectedFolderData = findFolderInTree(folderData, selectedEntryId);
@@ -306,7 +287,10 @@ export default function Edit() {
         // determine nextEntryId
         const nextEntryId = determineNextEntryId(folderData, selectedEntryId);
         setNextEntryId(nextEntryId);
-        nextEntryIdRef.current = nextEntryId; // ref도 함께 업데이트
+        nextEntryIdRef.current = nextEntryId;
+
+        // determine prevEntryId
+        prevEntryIdRef.current = determinePrevEntryId(folderData, selectedEntryId);
     }, [folderData, categoryList, decomposeTitle]);
 
     // entryClicked ref 업데이트 (최신 함수 참조 유지)
@@ -480,63 +464,99 @@ export default function Edit() {
         return newFolderData;
     }, [bookInfo]);
 
-    const updateFile = useCallback((dirName, fileName, newDirName, newFileName) => {
-        if (checkEntryExistence(folderData, newDirName, newFileName) === false) {
-            const updateUrl = '/books/' + bookInfo['book_id'];
-            // 백엔드는 '_root'를 기대하므로 빈 문자열을 '_root'로 변환
-            const categoryForBackend = (newDirName === '' || newDirName === '_root') ? '_root' : newDirName;
-            // newFileName에서 확장자 제거 (백엔드는 title에 확장자가 없어야 함)
-            const extensionSuffix = '.' + bookInfo['file_type'];
-            const titleOnly = newFileName.endsWith(extensionSuffix)
-                ? newFileName.slice(0, -extensionSuffix.length)
-                : newFileName;
-            const newFilePath = categoryForBackend === '_root'
-                ? titleOnly + extensionSuffix
-                : newDirName + '/' + titleOnly + extensionSuffix;
-            const updatedTime = DateTime.now().toFormat('yyyy-MM-dd\'T\'HH:mm:ss.SSS');
-            const payload = { ...bookInfo, category: categoryForBackend, file_path: newFilePath, updated_time: updatedTime };
-            console.log(`updateFile: PUT ${updateUrl}, payload.title="${payload.title}", payload.author="${payload.author}", payload.file_path="${payload.file_path}"`);
-            jsonPutReq(updateUrl, payload, () => {
-                // 구체적인 성공 메시지 생성
-                const displayDirName = (dirName === '' || dirName === '_root') ? '최상위' : dirName;
-                const displayNewDirName = (newDirName === '' || newDirName === '_root') ? '최상위' : newDirName;
-                let message;
-                if (dirName !== newDirName) {
-                    message = `"${newFileName}"을(를) "${displayNewDirName}" 디렉토리로 이동했습니다.`;
+    const updateFile = useCallback((dirName, fileName, newDirName, newFileName, force = false) => {
+        if (isProcessingRef.current) return;
+
+        const baseUrl = '/books/' + bookInfo['book_id'];
+        // 백엔드는 '_root'를 기대하므로 빈 문자열을 '_root'로 변환
+        const categoryForBackend = (newDirName === '' || newDirName === '_root') ? '_root' : newDirName;
+        // newFileName에서 확장자 제거 (백엔드는 title에 확장자가 없어야 함)
+        const extensionSuffix = '.' + bookInfo['file_type'];
+        const titleOnly = newFileName.endsWith(extensionSuffix)
+            ? newFileName.slice(0, -extensionSuffix.length)
+            : newFileName;
+        const newFilePath = categoryForBackend === '_root'
+            ? titleOnly + extensionSuffix
+            : newDirName + '/' + titleOnly + extensionSuffix;
+        const isSameFilePath = bookInfo['file_path'] === newFilePath;
+
+        // 파일 경로가 변경되고 대상에 동일 이름이 이미 존재하면 confirm
+        if (!force && !isSameFilePath && checkEntryExistence(folderData, newDirName, newFileName)) {
+            const displayNewDirName = (newDirName === '' || newDirName === '_root') ? '최상위' : newDirName;
+            if (!window.confirm(`"${displayNewDirName}/${newFileName}"이(가) 이미 존재합니다.\n기존 파일을 덮어쓰시겠습니까?`)) {
+                return;
+            }
+            force = true;
+        }
+
+        // 가드 시작
+        isProcessingRef.current = true;
+        setIsProcessing(true);
+
+        const requestUrl = force ? baseUrl + '?force=true' : baseUrl;
+        const updatedTime = DateTime.now().toFormat('yyyy-MM-dd\'T\'HH:mm:ss.SSS');
+        const payload = { ...bookInfo, category: categoryForBackend, file_path: newFilePath, updated_time: updatedTime };
+        console.log(`updateFile: PUT ${requestUrl}, payload.title="${payload.title}", payload.author="${payload.author}", payload.file_path="${payload.file_path}"`);
+
+        const handleSuccess = () => {
+            isProcessingRef.current = false;
+            setIsProcessing(false);
+
+            const displayDirName = (dirName === '' || dirName === '_root') ? '최상위' : dirName;
+            const displayNewDirName = (newDirName === '' || newDirName === '_root') ? '최상위' : newDirName;
+            let message;
+            if (dirName !== newDirName) {
+                message = `"${newFileName}"을(를) "${displayNewDirName}" 디렉토리로 이동했습니다.`;
+            } else {
+                message = `"${displayDirName}"의 파일 이름을 "${newFileName}"(으)로 변경했습니다.`;
+            }
+            setSuccessMessage(message);
+            setErrorMessage('');
+
+            setBookInfo(prev => ({
+                ...prev,
+                file_path: newFilePath,
+                category: categoryForBackend
+            }));
+            setSearchTrigger(prev => prev + 1);
+
+            let newFolderData = removeEntryFromFolderData(folderData, dirName, fileName);
+            newFolderData = appendEntryToFolderData(newFolderData, newDirName, newFileName);
+            setFolderData(newFolderData);
+
+            if (dirName !== newDirName) {
+                setSelectedCategory('');
+                // 폴백 내비게이션: next → prev → 메시지
+                if (nextEntryIdRef.current && entryClickedRef.current) {
+                    entryClickedRef.current(nextEntryIdRef.current);
+                } else if (prevEntryIdRef.current && entryClickedRef.current) {
+                    entryClickedRef.current(prevEntryIdRef.current);
                 } else {
-                    message = `"${displayDirName}"의 파일 이름을 "${newFileName}"(으)로 변경했습니다.`;
+                    setSuccessMessage(message + ' (마지막 책이었습니다.)');
                 }
-                setSuccessMessage(message);
-                setErrorMessage('');
+            }
+        };
 
-                // bookInfo 업데이트 (file_path, category)
-                setBookInfo(prev => ({
-                    ...prev,
-                    file_path: newFilePath,
-                    category: categoryForBackend
-                }));
-                setSearchTrigger(prev => prev + 1);
-
-                let newFolderData = removeEntryFromFolderData(folderData, dirName, fileName);
-                newFolderData = appendEntryToFolderData(newFolderData, newDirName, newFileName);
-                setFolderData(newFolderData);
-
-                // 디렉토리 이동인 경우 바로 다음 책으로 이동 (토스트는 별도로 표시됨)
-                if (dirName !== newDirName) {
-                    setSelectedCategory('');
-                    if (nextEntryIdRef.current && entryClickedRef.current) {
-                        entryClickedRef.current(nextEntryIdRef.current);
-                    }
+        jsonPutReq(requestUrl, payload, handleSuccess, (error) => {
+            // 서버 측 충돌 감지: CONFLICT: 접두사로 시작하는 에러
+            if (!force && typeof error === 'string' && error.startsWith('CONFLICT:')) {
+                if (window.confirm(error.substring('CONFLICT:'.length) + '\n기존 파일을 덮어쓰시겠습니까?')) {
+                    jsonPutReq(baseUrl + '?force=true', payload, handleSuccess, (retryError) => {
+                        isProcessingRef.current = false;
+                        setIsProcessing(false);
+                        setErrorMessage(`책 변경에 실패했습니다. ${retryError}`);
+                    });
+                } else {
+                    isProcessingRef.current = false;
+                    setIsProcessing(false);
                 }
-            }, (error) => {
+            } else {
+                isProcessingRef.current = false;
+                setIsProcessing(false);
                 console.error(`updateFile: PUT 실패 - ${error}`);
                 setErrorMessage(`책 이름 변경에 실패했습니다. ${error}`);
-            });
-        } else {
-            const displayNewDirName = (newDirName === '' || newDirName === '_root') ? '최상위' : newDirName;
-            console.warn(`updateFile: 이미 존재 - "${displayNewDirName}/${newFileName}"`);
-            setErrorMessage(`"${displayNewDirName}" 디렉토리에 "${newFileName}"이(가) 이미 존재합니다.`);
-        }
+            }
+        });
     }, [bookInfo, folderData, checkEntryExistence, appendEntryToFolderData, removeEntryFromFolderData]);
 
     const changeButtonClicked = useCallback(() => {
@@ -574,40 +594,59 @@ export default function Edit() {
     }, [updateFile, selectedEntryId, selectedCategory, newFileName]);
 
     const deleteButtonClicked = useCallback(() => {
+        if (isProcessingRef.current) return;
         console.log(`deleteButtonClicked: entryId=${selectedEntryId}`);
         if (selectedEntryId?.includes('/')) {
             const parsed = parseEntryId(selectedEntryId);
             if (!parsed) return;
+            if (!window.confirm(`"${newFileName}"을(를) 삭제하시겠습니까?`)) return;
+
+            // 가드 시작
+            isProcessingRef.current = true;
+            setIsProcessing(true);
+
             const dirName = parsed.category;
             const bookId = parsed.bookId;
             const deleteUrl = '/books/' + bookId;
             console.log(deleteUrl);
             jsonDeleteReq(deleteUrl, null, (response) => {
+                isProcessingRef.current = false;
+                setIsProcessing(false);
+
                 const displayDirName = (dirName === '' || dirName === '_root') ? '최상위' : dirName;
                 // warning이 있으면 경고 메시지와 함께 표시
+                let message;
                 if (response?.warning) {
-                    setSuccessMessage(`"${displayDirName}/${newFileName}"이(가) 삭제되었습니다. (경고: ${response.warning})`);
+                    message = `"${displayDirName}/${newFileName}"이(가) 삭제되었습니다. (경고: ${response.warning})`;
                 } else {
-                    setSuccessMessage(`"${displayDirName}/${newFileName}"이(가) 삭제되었습니다.`);
+                    message = `"${displayDirName}/${newFileName}"이(가) 삭제되었습니다.`;
                 }
+                setSuccessMessage(message);
                 setErrorMessage('');
 
                 const newFolderData = removeEntryFromFolderData(folderData, dirName, bookId);
                 setFolderData(newFolderData);
 
-                if (nextEntryId) {
-                    console.log(`deleteButtonClicked(): nextEntryId=${nextEntryId}`);
-                    entryClicked(nextEntryId);
+                // 폴백 내비게이션: next → prev → 메시지
+                if (nextEntryIdRef.current && entryClickedRef.current) {
+                    console.log(`deleteButtonClicked(): nextEntryId=${nextEntryIdRef.current}`);
+                    entryClickedRef.current(nextEntryIdRef.current);
+                } else if (prevEntryIdRef.current && entryClickedRef.current) {
+                    console.log(`deleteButtonClicked(): prevEntryId=${prevEntryIdRef.current}`);
+                    entryClickedRef.current(prevEntryIdRef.current);
                 } else {
-                    setErrorMessage('마지막 책입니다.');
+                    setSuccessMessage(message + ' (마지막 책이었습니다.)');
                 }
             }, (error) => {
+                isProcessingRef.current = false;
+                setIsProcessing(false);
                 setErrorMessage(`책 삭제에 실패했습니다. ${error}`);
             });
         }
-    }, [selectedEntryId, nextEntryId, folderData, entryClicked, removeEntryFromFolderData, newFileName]);
+    }, [selectedEntryId, folderData, removeEntryFromFolderData, newFileName]);
 
     const toNextEntryButtonClicked = useCallback(() => {
+        if (isProcessingRef.current) return;
         console.log(`toNextEntryButtonClicked: nextEntryId=${nextEntryId}`);
         if (nextEntryId) {
             setSelectedItems([nextEntryId]);
@@ -672,11 +711,11 @@ export default function Edit() {
                                                             <InputGroup>
                                                                 <InputGroup.Text>신규 이름</InputGroup.Text>
                                                                 <Form.Control value={newFileName} onChange={newFileNameChanged}/>
-                                                                <Button variant="outline-success" className="btn-xs" onClick={changeButtonClicked} disabled={!selectedEntryId}>
+                                                                <Button variant="outline-success" className="btn-xs" onClick={changeButtonClicked} disabled={!selectedEntryId || isProcessing}>
                                                                     변경
                                                                     <FontAwesomeIcon icon={faCheck}/>
                                                                 </Button>
-                                                                <Button variant="outline-danger" className="btn-xs" onClick={deleteButtonClicked} disabled={!selectedEntryId}>
+                                                                <Button variant="outline-danger" className="btn-xs" onClick={deleteButtonClicked} disabled={!selectedEntryId || isProcessing}>
                                                                     삭제
                                                                     <FontAwesomeIcon icon={faTrash}/>
                                                                 </Button>
@@ -686,7 +725,7 @@ export default function Edit() {
 
                                                     <Row className="button_group">
                                                         <Col>
-                                                            <Actions selectedEntryId={selectedEntryId} selectedCategory={selectedCategory} otherCategoryList={otherCategoryList} newFileName={newFileName} moveToUpperButtonClicked={moveToUpperButtonClicked} moveToDirectoryButtonClicked={moveToDirectoryButtonClicked} selectDirectoryButtonClicked={selectDirectoryButtonClicked} toNextEntryClicked={toNextEntryButtonClicked} suggestedCategories={suggestedCategories}/>
+                                                            <Actions selectedEntryId={selectedEntryId} selectedCategory={selectedCategory} otherCategoryList={otherCategoryList} newFileName={newFileName} moveToUpperButtonClicked={moveToUpperButtonClicked} moveToDirectoryButtonClicked={moveToDirectoryButtonClicked} selectDirectoryButtonClicked={selectDirectoryButtonClicked} toNextEntryClicked={toNextEntryButtonClicked} suggestedCategories={suggestedCategories} isProcessing={isProcessing}/>
                                                         </Col>
                                                     </Row>
 

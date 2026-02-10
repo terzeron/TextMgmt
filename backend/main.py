@@ -128,10 +128,10 @@ class BookModel(BaseModel):
 
 
 @app.put("/books/{book_id}")
-async def update_book(book_id: int, book_item: BookModel) -> Dict[str, Any]:
-    LOGGER.debug("# update_book(book_id=%d, book=%r)", book_id, book_item)
+async def update_book(book_id: int, book_item: BookModel, force: bool = False) -> Dict[str, Any]:
+    LOGGER.debug("# update_book(book_id=%d, book=%r, force=%s)", book_id, book_item, force)
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await book_manager.update_book(book_id, new_category=book_item.category, new_title=book_item.title, new_author=book_item.author, new_path=book_manager.path_prefix / book_item.file_path, new_type=book_item.file_type)
+    result, error = await book_manager.update_book(book_id, new_category=book_item.category, new_title=book_item.title, new_author=book_item.author, new_path=book_manager.path_prefix / book_item.file_path, new_type=book_item.file_type, force=force)
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = result

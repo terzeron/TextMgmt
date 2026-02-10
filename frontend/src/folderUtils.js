@@ -208,3 +208,74 @@ export function updateFolderChildren(folderData, categoryId, updater) {
         children: updater(item.children || []),
     }));
 }
+
+/**
+ * 선택된 항목의 다음 항목 ID를 결정한다.
+ * root file과 폴더 내 파일 모두 처리.
+ *
+ * @param {Array} folderData - 폴더 트리 데이터
+ * @param {string} selectedEntryId - 현재 선택된 항목 ID
+ * @returns {string|null} 다음 항목 ID 또는 null
+ */
+export function determineNextEntryId(folderData, selectedEntryId) {
+    // root file 처리 (id가 '/'로 시작하는 경우, 예: '/917518')
+    if (selectedEntryId.startsWith('/')) {
+        const rootFiles = folderData.filter(item => item.fileType !== 'folder');
+        const index = rootFiles.findIndex(item => item.id === selectedEntryId);
+        if (index >= 0 && index < rootFiles.length - 1) {
+            return rootFiles[index + 1].id;
+        }
+        return null;
+    }
+
+    // 폴더 내 파일 처리 - parseEntryId로 카테고리/bookId 분리
+    const parsed = parseEntryId(selectedEntryId);
+    if (parsed && parsed.bookId) {
+        const folder = findFolderInTree(folderData, parsed.category);
+        const children = folder?.children;
+        if (children) {
+            // children 중 책만 필터 (하위 폴더 제외)
+            const bookChildren = children.filter(item => item.fileType !== 'folder');
+            const index = bookChildren.findIndex(item => item.id === selectedEntryId);
+            if (0 <= index && index < (bookChildren.length - 1)) {
+                return bookChildren[index + 1].id;
+            }
+        }
+    }
+    return null;
+}
+
+/**
+ * 선택된 항목의 이전 항목 ID를 결정한다.
+ * root file과 폴더 내 파일 모두 처리.
+ *
+ * @param {Array} folderData - 폴더 트리 데이터
+ * @param {string} selectedEntryId - 현재 선택된 항목 ID
+ * @returns {string|null} 이전 항목 ID 또는 null
+ */
+export function determinePrevEntryId(folderData, selectedEntryId) {
+    // root file 처리
+    if (selectedEntryId.startsWith('/')) {
+        const rootFiles = folderData.filter(item => item.fileType !== 'folder');
+        const index = rootFiles.findIndex(item => item.id === selectedEntryId);
+        if (index > 0) {
+            return rootFiles[index - 1].id;
+        }
+        return null;
+    }
+
+    // 폴더 내 파일 처리
+    const parsed = parseEntryId(selectedEntryId);
+    if (parsed && parsed.bookId) {
+        const folder = findFolderInTree(folderData, parsed.category);
+        const children = folder?.children;
+        if (children) {
+            const bookChildren = children.filter(item => item.fileType !== 'folder');
+            const index = bookChildren.findIndex(item => item.id === selectedEntryId);
+            if (index > 0) {
+                return bookChildren[index - 1].id;
+            }
+        }
+    }
+    return null;
+}

@@ -196,7 +196,7 @@ describe('calculateSimilarity: 한글 포함 관계 임계값', () => {
     });
 });
 
-// ── 카테고리 버튼 하이라이트/선택 스타일 ──
+// ── 공통 props ──
 
 const defaultProps = {
     selectedEntryId: 'test/1',
@@ -209,6 +209,70 @@ const defaultProps = {
     selectDirectoryButtonClicked: vi.fn(),
     suggestedCategories: {},
 };
+
+// ── isProcessing 버튼 비활성화 ──
+
+describe('isProcessing 버튼 비활성화', () => {
+    it('isProcessing=false이면 "다음 책으로" 버튼이 활성화된다', () => {
+        render(<Actions {...defaultProps} isProcessing={false} />);
+        expect(screen.getByText('다음 책으로').disabled).toBe(false);
+    });
+
+    it('isProcessing=true이면 "다음 책으로" 버튼이 비활성화된다', () => {
+        render(<Actions {...defaultProps} isProcessing={true} />);
+        expect(screen.getByText('다음 책으로').disabled).toBe(true);
+    });
+
+    it('isProcessing=true이면 "상위로" 버튼이 비활성화된다', () => {
+        render(<Actions {...defaultProps} isProcessing={true} />);
+        const btn = screen.getByText((content, element) =>
+            element.tagName === 'BUTTON' && element.textContent.includes('상위로')
+        );
+        expect(btn.disabled).toBe(true);
+    });
+
+    it('isProcessing=true이면 "로 옮기기" 버튼이 비활성화된다', () => {
+        render(<Actions {...defaultProps} selectedCategory="소설" isProcessing={true} />);
+        const btn = screen.getByText((content, element) =>
+            element.tagName === 'BUTTON' && element.textContent.includes('로 옮기기')
+        );
+        expect(btn.disabled).toBe(true);
+    });
+
+    it('isProcessing=false이면 "로 옮기기" 버튼이 활성화된다 (selectedCategory 있을 때)', () => {
+        render(<Actions {...defaultProps} selectedCategory="소설" isProcessing={false} />);
+        const btn = screen.getByText((content, element) =>
+            element.tagName === 'BUTTON' && element.textContent.includes('로 옮기기')
+        );
+        expect(btn.disabled).toBe(false);
+    });
+
+    it('isProcessing가 undefined이면 기존 disabled 로직만 적용된다', () => {
+        render(<Actions {...defaultProps} />);
+        // "다음 책으로"는 isProcessing 없으므로 활성화
+        expect(screen.getByText('다음 책으로').disabled).toBe(false);
+    });
+
+    it('isProcessing=true일 때 "다음 책으로" 클릭해도 핸들러가 호출되지 않는다', () => {
+        const fn = vi.fn();
+        render(<Actions {...defaultProps} toNextEntryClicked={fn} isProcessing={true} />);
+        const btn = screen.getByText('다음 책으로');
+        fireEvent.click(btn);
+        expect(fn).not.toHaveBeenCalled();
+    });
+
+    it('isProcessing=true일 때 "로 옮기기" 클릭해도 핸들러가 호출되지 않는다', () => {
+        const fn = vi.fn();
+        render(<Actions {...defaultProps} selectedCategory="소설" moveToDirectoryButtonClicked={fn} isProcessing={true} />);
+        const btn = screen.getByText((content, element) =>
+            element.tagName === 'BUTTON' && element.textContent.includes('로 옮기기')
+        );
+        fireEvent.click(btn);
+        expect(fn).not.toHaveBeenCalled();
+    });
+});
+
+// ── 카테고리 버튼 하이라이트/선택 스타일 ──
 
 describe('카테고리 버튼 하이라이트', () => {
     it('유사도 자동 선택 시 highlight 클래스를 유지한다 (노란색)', () => {

@@ -240,5 +240,273 @@ class TestBackend:
         assert book.book_id in [b["book_id"] for b in books]
 
 
+class TestUpdateBookConflict:
+    """update_book 충돌 감지 및 force 덮어쓰기 테스트."""
+
+    @staticmethod
+    def _make_test_file(path: Path, content: bytes = b"test content") -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    @staticmethod
+    async def _register_book(bm, file_path: Path, category: str = CATEGORY) -> int:
+        from datetime import datetime
+        rel = file_path.relative_to(bm.path_prefix)
+        now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
+        data = {
+            file_path.stat().st_ino: {
+                "category": category,
+                "title": file_path.stem,
+                "author": "Test Author",
+                "file_path": str(rel),
+                "file_type": file_path.suffix.lstrip('.'),
+                "file_size": file_path.stat().st_size,
+                "line_count": 0,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "conflict test",
+                "updated_time": now,
+            }
+        }
+        book_id, error = await bm.add_book(data)
+        assert book_id and not error, f"Failed to register: {error}"
+        return book_id
+
+    @pytest.mark.asyncio
+    async def test_conflict_detected_when_destination_exists(self, backend_test_setup):
+        """대상 경로에 다른 파일이 이미 존재하면 CONFLICT: 에러를 반환한다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        src_path = bm.path_prefix / CATEGORY / "conflict_src.epub"
+        dst_path = bm.path_prefix / CATEGORY / "conflict_dst.epub"
+        self._make_test_file(src_path, b"source")
+        self._make_test_file(dst_path, b"existing")
+
+        book_id = await self._register_book(bm, src_path)
+
+        try:
+            doc = {
+                "book_id": book_id,
+                "category": CATEGORY,
+                "title": "conflict_dst",
+                "author": "Test Author",
+                "file_path": f"{CATEGORY}/conflict_dst.epub",
+                "file_type": "epub",
+                "file_size": 100,
+                "updated_time": "2021-01-01T00:00:00.000000",
+            }
+
+            response = client.put(f"/books/{book_id}", json=doc)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "failure"
+            assert "CONFLICT:" in data["error"]
+            assert src_path.exists(), "Source file should not have been moved"
+            assert dst_path.read_bytes() == b"existing", "Destination should be unchanged"
+        finally:
+            try:
+                client.delete(f"/books/{book_id}")
+            except Exception:
+                pass
+            src_path.unlink(missing_ok=True)
+            dst_path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_conflict_error_contains_relative_path(self, backend_test_setup):
+        """CONFLICT 에러 메시지에 상대 경로가 포함된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        src_path = bm.path_prefix / CATEGORY / "conflict_relpath_src.epub"
+        dst_path = bm.path_prefix / CATEGORY / "conflict_relpath_dst.epub"
+        self._make_test_file(src_path)
+        self._make_test_file(dst_path)
+
+        book_id = await self._register_book(bm, src_path)
+
+        try:
+            doc = {
+                "book_id": book_id,
+                "category": CATEGORY,
+                "title": "conflict_relpath_dst",
+                "author": "Test Author",
+                "file_path": f"{CATEGORY}/conflict_relpath_dst.epub",
+                "file_type": "epub",
+                "file_size": 100,
+                "updated_time": "2021-01-01T00:00:00.000000",
+            }
+
+            response = client.put(f"/books/{book_id}", json=doc)
+            data = response.json()
+            error_msg = data.get("error", "")
+            assert f"{CATEGORY}/conflict_relpath_dst.epub" in error_msg, \
+                f"CONFLICT error should contain relative path, got: {error_msg}"
+        finally:
+            try:
+                client.delete(f"/books/{book_id}")
+            except Exception:
+                pass
+            src_path.unlink(missing_ok=True)
+            dst_path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_force_overwrite_succeeds(self, backend_test_setup):
+        """force=true이면 대상 경로의 기존 파일을 덮어쓰고 성공한다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        src_path = bm.path_prefix / CATEGORY / "force_src.epub"
+        dst_path = bm.path_prefix / CATEGORY / "force_dst.epub"
+        self._make_test_file(src_path, b"source content")
+        self._make_test_file(dst_path, b"existing content")
+
+        book_id = await self._register_book(bm, src_path)
+
+        try:
+            doc = {
+                "book_id": book_id,
+                "category": CATEGORY,
+                "title": "force_dst",
+                "author": "Test Author",
+                "file_path": f"{CATEGORY}/force_dst.epub",
+                "file_type": "epub",
+                "file_size": 100,
+                "updated_time": "2021-01-01T00:00:00.000000",
+            }
+
+            response = client.put(f"/books/{book_id}?force=true", json=doc)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert data["result"] == "Ok"
+
+            assert not src_path.exists(), "Source should have been moved"
+            assert dst_path.exists(), "Destination should exist"
+            assert dst_path.read_bytes() == b"source content"
+        finally:
+            try:
+                client.delete(f"/books/{book_id}")
+            except Exception:
+                pass
+            src_path.unlink(missing_ok=True)
+            dst_path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_same_file_no_conflict(self, backend_test_setup):
+        """동일 파일 경로에 대한 메타데이터 변경 시 충돌이 발생하지 않는다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        file_path = bm.path_prefix / CATEGORY / "samefile_test.epub"
+        self._make_test_file(file_path)
+
+        book_id = await self._register_book(bm, file_path)
+
+        try:
+            doc = {
+                "book_id": book_id,
+                "category": CATEGORY,
+                "title": "samefile_test",
+                "author": "Changed Author Name",
+                "file_path": f"{CATEGORY}/samefile_test.epub",
+                "file_type": "epub",
+                "file_size": 100,
+                "updated_time": "2021-01-01T00:00:00.000000",
+            }
+
+            response = client.put(f"/books/{book_id}", json=doc)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success", \
+                f"Same file path should not cause conflict, got: {data}"
+            assert file_path.exists(), "File should still exist"
+        finally:
+            try:
+                client.delete(f"/books/{book_id}")
+            except Exception:
+                pass
+            file_path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_move_to_new_directory_succeeds(self, backend_test_setup):
+        """다른 디렉토리로 이동 시 정상 동작한다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        new_dir = "_conflict_test_dir"
+        src_path = bm.path_prefix / CATEGORY / "movedir_test.epub"
+        dst_path = bm.path_prefix / new_dir / "movedir_test.epub"
+        self._make_test_file(src_path)
+
+        book_id = await self._register_book(bm, src_path)
+
+        try:
+            doc = {
+                "book_id": book_id,
+                "category": new_dir,
+                "title": "movedir_test",
+                "author": "Test Author",
+                "file_path": f"{new_dir}/movedir_test.epub",
+                "file_type": "epub",
+                "file_size": 100,
+                "updated_time": "2021-01-01T00:00:00.000000",
+            }
+
+            response = client.put(f"/books/{book_id}", json=doc)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+
+            assert not src_path.exists(), "Source should have been moved"
+            assert dst_path.exists(), "Destination should exist"
+        finally:
+            try:
+                client.delete(f"/books/{book_id}")
+            except Exception:
+                pass
+            src_path.unlink(missing_ok=True)
+            dst_path.unlink(missing_ok=True)
+            new_dir_path = bm.path_prefix / new_dir
+            if new_dir_path.exists() and not any(new_dir_path.iterdir()):
+                new_dir_path.rmdir()
+
+    @pytest.mark.asyncio
+    async def test_source_missing_returns_error(self, backend_test_setup):
+        """원본 파일이 없으면 이동 실패 에러를 반환한다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        src_path = bm.path_prefix / CATEGORY / "missing_src.epub"
+        self._make_test_file(src_path)
+
+        book_id = await self._register_book(bm, src_path)
+        # 등록 후 원본 파일 삭제
+        src_path.unlink()
+
+        try:
+            doc = {
+                "book_id": book_id,
+                "category": CATEGORY,
+                "title": "missing_renamed",
+                "author": "Test Author",
+                "file_path": f"{CATEGORY}/missing_renamed.epub",
+                "file_type": "epub",
+                "file_size": 100,
+                "updated_time": "2021-01-01T00:00:00.000000",
+            }
+
+            response = client.put(f"/books/{book_id}", json=doc)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "failure"
+            assert "can't move" in data.get("error", "").lower() or "error" in data.get("error", "").lower()
+        finally:
+            try:
+                client.delete(f"/books/{book_id}")
+            except Exception:
+                pass
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
