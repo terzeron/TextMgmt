@@ -322,28 +322,30 @@ class BookManager:
         fd, json_path = tempfile.mkstemp(suffix=".json")
         os.close(fd)
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "epubcheck", str(book.file_path), "--json", json_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await asyncio.wait_for(proc.communicate(), timeout=60)
-        except FileNotFoundError:
-            os.unlink(json_path)
-            return None, "epubcheck is not installed"
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            os.unlink(json_path)
-            return None, "epubcheck timed out (60s)"
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "epubcheck", str(book.file_path), "--json", json_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await asyncio.wait_for(proc.communicate(), timeout=60)
+            except FileNotFoundError:
+                return None, "epubcheck is not installed"
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return None, "epubcheck timed out (60s)"
 
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                data = json_mod.load(f)
-        except (json_mod.JSONDecodeError, OSError) as e:
-            return None, f"Failed to parse epubcheck output (exit_code={proc.returncode}): {e}"
+            try:
+                with open(json_path, "r", encoding="utf-8") as f:
+                    data = json_mod.load(f)
+            except (json_mod.JSONDecodeError, OSError) as e:
+                return None, f"Failed to parse epubcheck output (exit_code={proc.returncode}): {e}"
         finally:
-            os.unlink(json_path)
+            try:
+                os.unlink(json_path)
+            except OSError:
+                pass
 
         # 결과 구조화
         messages = []
@@ -392,6 +394,59 @@ class BookManager:
             result["publication"] = publication
 
         return result, None
+
+    async def validate_pdf(self, book_id: int) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """pikepdf를 사용하여 PDF 파일의 구문 유효성을 검증하고 메타데이터를 추출한다."""
+        import pikepdf
+
+        LOGGER.debug("# validate_pdf(book_id=%d)", book_id)
+        book, error = await self.get_book(book_id)
+        if not book:
+            return None, f"Book not found: {book_id}"
+        if book.file_type != "pdf":
+            return None, f"Not a PDF file (type: {book.file_type})"
+        if not book.file_path.exists():
+            return None, f"File not found: {book.file_path}"
+
+        try:
+            pdf = pikepdf.open(book.file_path)
+        except Exception as e:
+            return None, f"Failed to open PDF: {e}"
+
+        try:
+            issues = pdf.check()
+            messages = [{"severity": "WARNING", "message": msg} for msg in issues]
+
+            # 메타데이터 추출
+            publication = {}
+            docinfo = pdf.docinfo
+            if docinfo.get("/Title"):
+                publication["title"] = str(docinfo["/Title"])
+            if docinfo.get("/Author"):
+                publication["creator"] = str(docinfo["/Author"])
+            if docinfo.get("/Producer"):
+                publication["producer"] = str(docinfo["/Producer"])
+            if docinfo.get("/CreationDate"):
+                publication["creation_date"] = str(docinfo["/CreationDate"])
+            publication["page_count"] = len(pdf.pages)
+            publication["pdf_version"] = pdf.pdf_version
+
+            rel_path = str(book.file_path.relative_to(self.path_prefix))
+            result = {
+                "valid": len(issues) == 0,
+                "file_path": rel_path,
+                "messages": messages,
+                "summary": {
+                    "error": 0,
+                    "warning": len(issues),
+                },
+            }
+            if publication:
+                result["publication"] = publication
+
+            return result, None
+        finally:
+            pdf.close()
 
     @staticmethod
     def determine_file_content_and_encoding(file_path: Path) -> str:

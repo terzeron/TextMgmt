@@ -5,6 +5,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
     libpoppler-dev libpoppler-cpp-dev libheif-dev libcairo2-dev \
+    libqpdf-dev \
     libxml2-dev libxslt-dev \
     libreoffice-writer-nogui \
     default-jre-headless \

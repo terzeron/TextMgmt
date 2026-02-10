@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, act, waitFor } from '@testing-library/react';
 
 vi.mock('../src/Common', () => ({
     rawJsonGetReq: vi.fn(),
@@ -9,7 +10,8 @@ vi.mock('../src/Common', () => ({
     ROOT_DIRECTORY: '$$rootdir$$',
 }));
 
-import { getTwoLevelCategory, extractMultiPathCategories } from '../src/Bookstore';
+import { rawJsonGetReq } from '../src/Common';
+import Bookstore, { getTwoLevelCategory, extractMultiPathCategories } from '../src/Bookstore';
 
 describe('getTwoLevelCategory', () => {
     it('3단계 카테고리에서 하위 2단계를 추출한다', () => {
@@ -81,5 +83,138 @@ describe('extractMultiPathCategories', () => {
     it('빈 경로는 필터링한다', () => {
         expect(extractMultiPathCategories('소설 > 한국소설 || || 소설 > SF'))
             .toEqual(['소설 한국소설', '소설 SF']);
+    });
+});
+
+describe('Bookstore 카테고리 수집', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    // rawJsonGetReq mock helper: URL 패턴별 응답 매핑
+    const mockSearchResponses = (responses) => {
+        rawJsonGetReq.mockImplementation((url, onSuccess) => {
+            for (const [pattern, data] of Object.entries(responses)) {
+                if (url.includes(pattern)) {
+                    setTimeout(() => onSuccess(data), 0);
+                    return;
+                }
+            }
+            // 기본: 빈 결과
+            setTimeout(() => onSuccess({ status: 'not_found', result: [] }), 0);
+        });
+    };
+
+    it('자동 검색 시 yes24, aladin, ridi 세 서점의 카테고리를 수집한다', async () => {
+        const onCategoriesFound = vi.fn();
+
+        mockSearchResponses({
+            '/search/bookstore/yes24': {
+                status: 'success',
+                result: [{ title: 'T', author: 'A', category: '소설 > 한국소설', book_url: 'u1' }]
+            },
+            '/search/bookstore/aladin': {
+                status: 'success',
+                result: [{ title: 'T', author: 'A', category: '문학 > 한국문학', book_url: 'u2' }]
+            },
+            '/search/bookstore/ridi': {
+                status: 'success',
+                result: [{ title: 'T', author: 'A', category: '소설 > 한국소설 || 소설 > 추리/미스터리', book_url: 'u3' }]
+            },
+        });
+
+        await act(async () => {
+            render(<Bookstore
+                bookInfo={{ title: '테스트', author: '저자', isbn: '' }}
+                searchTrigger={1}
+                onCategoriesFound={onCategoriesFound}
+            />);
+        });
+
+        // 비동기 검색 완료 대기
+        await waitFor(() => {
+            const calls = onCategoriesFound.mock.calls;
+            // 마지막 호출이 카테고리를 포함해야 함 (첫 호출은 빈 {} 초기화)
+            const lastCall = calls[calls.length - 1]?.[0];
+            expect(lastCall).toBeDefined();
+            expect(Object.keys(lastCall).length).toBeGreaterThan(0);
+        });
+
+        const lastCall = onCategoriesFound.mock.calls[onCategoriesFound.mock.calls.length - 1][0];
+
+        // yes24 카테고리
+        expect(Object.values(lastCall)).toContain('소설 한국소설');
+        // aladin 카테고리
+        expect(Object.values(lastCall)).toContain('문학 한국문학');
+        // ridi 다중 경로 카테고리 (두 개 모두 존재)
+        expect(Object.values(lastCall)).toContain('소설 추리/미스터리');
+    });
+
+    it('RIDI 다중 경로가 개별 키로 분리되어 수집된다', async () => {
+        const onCategoriesFound = vi.fn();
+
+        mockSearchResponses({
+            '/search/bookstore/ridi': {
+                status: 'success',
+                result: [{ title: 'T', author: 'A', category: '소설 > 한국소설 || 소설 > SF', book_url: 'u' }]
+            },
+        });
+
+        await act(async () => {
+            render(<Bookstore
+                bookInfo={{ title: '테스트', author: '저자', isbn: '' }}
+                searchTrigger={1}
+                onCategoriesFound={onCategoriesFound}
+            />);
+        });
+
+        await waitFor(() => {
+            const calls = onCategoriesFound.mock.calls;
+            const lastCall = calls[calls.length - 1]?.[0];
+            expect(lastCall).toBeDefined();
+            const ridiKeys = Object.keys(lastCall).filter(k => k.startsWith('ridi_'));
+            expect(ridiKeys.length).toBeGreaterThanOrEqual(2);
+        });
+
+        const lastCall = onCategoriesFound.mock.calls[onCategoriesFound.mock.calls.length - 1][0];
+
+        // 하나의 검색 결과에서 두 경로가 별도 키로 수집됨
+        const ridiKeys = Object.keys(lastCall).filter(k => k.startsWith('ridi_'));
+        const ridiValues = ridiKeys.map(k => lastCall[k]);
+        expect(ridiValues).toContain('소설 한국소설');
+        expect(ridiValues).toContain('소설 SF');
+    });
+
+    it('검색 결과가 없는 서점은 카테고리에 포함되지 않는다', async () => {
+        const onCategoriesFound = vi.fn();
+
+        mockSearchResponses({
+            '/search/bookstore/yes24': {
+                status: 'success',
+                result: [{ title: 'T', author: 'A', category: '소설 > 판타지', book_url: 'u' }]
+            },
+            // aladin, ridi는 기본값(not_found) 사용
+        });
+
+        await act(async () => {
+            render(<Bookstore
+                bookInfo={{ title: '테스트', author: '저자', isbn: '' }}
+                searchTrigger={1}
+                onCategoriesFound={onCategoriesFound}
+            />);
+        });
+
+        await waitFor(() => {
+            const calls = onCategoriesFound.mock.calls;
+            const lastCall = calls[calls.length - 1]?.[0];
+            expect(lastCall).toBeDefined();
+            expect(Object.keys(lastCall).some(k => k.startsWith('yes24_'))).toBe(true);
+        });
+
+        const lastCall = onCategoriesFound.mock.calls[onCategoriesFound.mock.calls.length - 1][0];
+
+        expect(Object.keys(lastCall).filter(k => k.startsWith('yes24_'))).toHaveLength(1);
+        expect(Object.keys(lastCall).filter(k => k.startsWith('aladin_'))).toHaveLength(0);
+        expect(Object.keys(lastCall).filter(k => k.startsWith('ridi_'))).toHaveLength(0);
     });
 });

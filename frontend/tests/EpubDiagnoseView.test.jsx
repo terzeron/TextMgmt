@@ -110,13 +110,18 @@ afterEach(() => {
 describe('EpubDiagnoseView', () => {
 
     describe('조건부 렌더링', () => {
-        it('fileType이 epub이 아니면 렌더링하지 않는다', () => {
-            const { container } = render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
+        it('fileType이 epub/pdf가 아니면 렌더링하지 않는다', () => {
+            const { container } = render(<EpubDiagnoseView bookId={1} fileType="txt" />);
             expect(container.firstChild).toBeNull();
         });
 
         it('fileType이 epub이면 카드 헤더를 렌더링한다', () => {
             render(<EpubDiagnoseView bookId={1} fileType="epub" />);
+            expect(screen.getByText(/파일 정합성 진단/)).toBeTruthy();
+        });
+
+        it('fileType이 pdf이면 카드 헤더를 렌더링한다', () => {
+            render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
             expect(screen.getByText(/파일 정합성 진단/)).toBeTruthy();
         });
 
@@ -397,6 +402,153 @@ describe('EpubDiagnoseView', () => {
             });
 
             expect(firstCallSignal.aborted).toBe(true);
+        });
+    });
+
+    describe('PDF 지원', () => {
+        const MOCK_PDF_BACKEND_DATA = {
+            valid: true,
+            file_path: 'books/test.pdf',
+            messages: [],
+            summary: { error: 0, warning: 0 },
+            publication: { title: 'PDF Book', creator: 'PDF Author', producer: 'Test Producer', page_count: 42, pdf_version: '1.7' },
+        };
+
+        const MOCK_PDF_BACKEND_DATA_INVALID = {
+            valid: false,
+            file_path: 'books/bad.pdf',
+            messages: [
+                { severity: 'WARNING', message: 'cross-reference table mismatch' },
+            ],
+            summary: { error: 0, warning: 1 },
+            publication: { page_count: 10, pdf_version: '1.5' },
+        };
+
+        it('PDF에서 카드를 열면 Backend 진단(pikepdf) 헤더가 표시된다', async () => {
+            setupMocks({ backendData: MOCK_PDF_BACKEND_DATA });
+            render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText(/Backend 진단 \(pikepdf\)/)).toBeTruthy();
+            });
+        });
+
+        it('PDF에서 Frontend 진단 섹션이 표시되지 않는다', async () => {
+            setupMocks({ backendData: MOCK_PDF_BACKEND_DATA });
+            render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText(/Backend 진단/)).toBeTruthy();
+            });
+            expect(screen.queryByText(/Frontend 진단/)).toBeNull();
+        });
+
+        it('PDF에서 fetch(프론트엔드 진단용)를 호출하지 않는다', async () => {
+            setupMocks({ backendData: MOCK_PDF_BACKEND_DATA });
+            render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            expect(globalThis.fetch).not.toHaveBeenCalled();
+        });
+
+        it('유효한 PDF에서 VALID 배지와 메타데이터가 표시된다', async () => {
+            setupMocks({ backendData: MOCK_PDF_BACKEND_DATA });
+            render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText('VALID')).toBeTruthy();
+                expect(screen.getByText(/PDF Book/)).toBeTruthy();
+                expect(screen.getByText(/42p/)).toBeTruthy();
+                expect(screen.getByText(/PDF 1\.7/)).toBeTruthy();
+            });
+        });
+
+        it('문제 있는 PDF에서 INVALID 배지와 WARNING 메시지가 표시된다', async () => {
+            setupMocks({ backendData: MOCK_PDF_BACKEND_DATA_INVALID });
+            render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText('INVALID')).toBeTruthy();
+                expect(screen.getByText('WARNING')).toBeTruthy();
+                expect(screen.getByText(/cross-reference table mismatch/)).toBeTruthy();
+            });
+        });
+
+        it('EPUB에서는 Backend 진단(epubcheck) 헤더가 표시된다', async () => {
+            setupMocks();
+            render(<EpubDiagnoseView bookId={1} fileType="epub" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText(/Backend 진단 \(epubcheck\)/)).toBeTruthy();
+            });
+        });
+
+        it('PDF에서 백엔드 에러 시 에러 메시지를 표시한다', async () => {
+            setupMocks({ backendError: 'Failed to open PDF: not a PDF file' });
+            render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText('Failed to open PDF: not a PDF file')).toBeTruthy();
+            });
+        });
+
+        it('PDF에서 bookId 변경 시 상태가 초기화된다', async () => {
+            setupMocks({ backendData: MOCK_PDF_BACKEND_DATA });
+            const { rerender } = render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+            await waitFor(() => expect(screen.getByText('VALID')).toBeTruthy());
+
+            await act(async () => {
+                rerender(<EpubDiagnoseView bookId={2} fileType="pdf" />);
+            });
+
+            expect(screen.queryByText('VALID')).toBeNull();
+            expect(screen.queryByText(/Backend 진단/)).toBeNull();
+        });
+
+        it('PDF에서 카드를 토글할 수 있다', async () => {
+            setupMocks({ backendData: MOCK_PDF_BACKEND_DATA });
+            render(<EpubDiagnoseView bookId={1} fileType="pdf" />);
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+            await waitFor(() => expect(screen.getByText(/Backend 진단/)).toBeTruthy());
+
+            await act(async () => {
+                fireEvent.click(screen.getByText(/파일 정합성 진단/));
+            });
+            expect(screen.queryByText(/Backend 진단/)).toBeNull();
         });
     });
 

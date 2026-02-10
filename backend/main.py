@@ -177,10 +177,23 @@ async def get_pdf_pages(book_id: int, start: int = 1, end: int = 1):
 
 
 @app.get("/validate/{book_id}")
-async def validate_epub(book_id: int) -> Dict[str, Any]:
-    LOGGER.debug("# validate_epub(book_id=%d)", book_id)
+async def validate_book(book_id: int) -> Dict[str, Any]:
+    LOGGER.debug("# validate_book(book_id=%d)", book_id)
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await book_manager.validate_epub(book_id)
+
+    book, err = await book_manager.get_book(book_id)
+    if not book:
+        response_object["error"] = f"Book not found: {book_id}"
+        return response_object
+
+    if book.file_type == "epub":
+        result, error = await book_manager.validate_epub(book_id)
+    elif book.file_type == "pdf":
+        result, error = await book_manager.validate_pdf(book_id)
+    else:
+        response_object["error"] = f"Validation not supported for type: {book.file_type}"
+        return response_object
+
     if result is not None and error is None:
         response_object["status"] = "success"
         response_object["result"] = result
@@ -325,9 +338,13 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
             # author 정보가 비어있으면 상세 페이지에서 재추출
             if not item['author'] and info.get('author'):
                 item['author'] = info['author']
-            # 상세 페이지의 카테고리가 더 풍부하면 업데이트
-            if info.get('category') and info['category'].count('||') > item.get('category', '').count('||'):
-                item['category'] = info['category']
+            # 상세 페이지의 카테고리가 더 풍부하면 업데이트 (유효 경로 개수 비교)
+            detail_cat = info.get('category', '')
+            current_cat = item.get('category', '')
+            detail_paths = len([p for p in detail_cat.split('||') if p.strip()]) if detail_cat else 0
+            current_paths = len([p for p in current_cat.split('||') if p.strip()]) if current_cat else 0
+            if detail_paths > current_paths:
+                item['category'] = detail_cat
         books_data.append(item)
 
     if not books_data:

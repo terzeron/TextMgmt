@@ -633,6 +633,80 @@ class TestRidibooksBookstore(unittest.TestCase):
                              f"카테고리 불일치: {api_fields} → "
                              f"기대={expected_category}, 실제={results[0][2]}")
 
+    @patch('backend.bookstore.requests.Session')
+    def test_search_multi_category_combinations(self, mock_session_class):
+        """다중 카테고리 조합: category2 필드 에지 케이스"""
+        mock_session = MagicMock()
+        mock_session_class.return_value = mock_session
+
+        test_cases = [
+            # category2만 있는 경우 (category1 비어있음)
+            ({"category_name2": "판타지", "parent_category_name2": "소설"},
+             "소설 > 판타지"),
+            # category1 + category2 모두 있는 경우
+            ({"category_name": "한국소설", "parent_category_name": "소설",
+              "category_name2": "추리/미스터리", "parent_category_name2": "소설"},
+             "소설 > 한국소설 || 소설 > 추리/미스터리"),
+            # category2에서 parent만 있는 경우
+            ({"category_name": "한국소설", "parent_category_name": "소설",
+              "parent_category_name2": "에세이"},
+             "소설 > 한국소설 || 에세이"),
+            # category2에서 child만 있는 경우
+            ({"category_name": "한국소설", "parent_category_name": "소설",
+              "category_name2": "SF"},
+             "소설 > 한국소설 || SF"),
+            # category1 없고 category2만 parent+child 완전 조합
+            ({"parent_category_name2": "웹소설", "category_name2": "로맨스"},
+             "웹소설 > 로맨스"),
+        ]
+
+        for api_fields, expected_category in test_cases:
+            book = {"b_id": "999", "title": "테스트", "author": "저자", **api_fields}
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"books": [book]}
+            mock_session.get.return_value = mock_response
+
+            store = RidibooksBookstore(verbose=False)
+            store.session = mock_session
+
+            results = store.search_by_keyword("테스트")
+
+            self.assertEqual(len(results), 1, f"케이스 실패: {api_fields}")
+            self.assertEqual(results[0][2], expected_category,
+                             f"카테고리 불일치: {api_fields} → "
+                             f"기대={expected_category}, 실제={results[0][2]}")
+
+    def test_extract_book_info_single_category(self):
+        """상세 페이지에서 단일 카테고리 경로 추출"""
+        html = """
+        <html><head><meta property="og:title" content="단일 카테고리 책"></head>
+        <body>
+        <section id="books_contents"><section class="detail_body">
+            <ul><li><a href="/category/100">소설</a><a href="/category/101">판타지</a></li></ul>
+        </section></section>
+        </body></html>
+        """
+        store = RidibooksBookstore(verbose=False)
+        soup = BeautifulSoup(html, 'html.parser')
+        info = store.extract_book_info(soup)
+        self.assertEqual(info['category'], '소설 > 판타지')
+
+    def test_extract_book_info_no_category(self):
+        """상세 페이지에 카테고리가 없는 경우"""
+        html = """
+        <html><head><meta property="og:title" content="카테고리 없음"></head>
+        <body>
+        <section id="books_contents"><section class="detail_body">
+            <ul><li>카테고리 링크 없음</li></ul>
+        </section></section>
+        </body></html>
+        """
+        store = RidibooksBookstore(verbose=False)
+        soup = BeautifulSoup(html, 'html.parser')
+        info = store.extract_book_info(soup)
+        self.assertEqual(info['category'], '')
+
 
 class TestNaverShoppingBookstore(unittest.TestCase):
     """네이버쇼핑 서점 테스트"""
