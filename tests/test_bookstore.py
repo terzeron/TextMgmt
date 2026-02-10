@@ -116,6 +116,8 @@ RIDI_API_RESPONSE = {
             "author": "테스트 저자",
             "category_name": "역사/시대물",
             "parent_category_name": "로맨스 e북",
+            "category_name2": "한국소설",
+            "parent_category_name2": "소설",
         },
         {
             "b_id": "789012",
@@ -135,7 +137,10 @@ RIDI_DETAIL_HTML = """
 <body>
 <section id="books_contents">
     <section class="detail_body">
-        <ul><li><a href="/category/100">판타지</a></li></ul>
+        <ul>
+            <li><a href="/category/100">소설</a><a href="/category/101">판타지</a></li>
+            <li><a href="/category/100">소설</a><a href="/category/107">추리/미스터리</a></li>
+        </ul>
     </section>
 </section>
 <div>ISBN</div>
@@ -547,8 +552,8 @@ class TestRidibooksBookstore(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertEqual(results[0][0], "테스트 도서")
         self.assertEqual(results[0][1], "테스트 저자")
-        # parent + child → 전체 경로
-        self.assertEqual(results[0][2], "로맨스 e북 > 역사/시대물")
+        # parent + child 두 쌍 → " || "로 구분된 다중 경로
+        self.assertEqual(results[0][2], "로맨스 e북 > 역사/시대물 || 소설 > 한국소설")
         # parent만 → parent
         self.assertEqual(results[1][2], "로맨스")
 
@@ -577,7 +582,7 @@ class TestRidibooksBookstore(unittest.TestCase):
         info = store.extract_book_info(soup)
 
         self.assertEqual(info['title'], '테스트 도서')
-        self.assertIn('판타지', info['category'])
+        self.assertEqual(info['category'], '소설 > 판타지 || 소설 > 추리/미스터리')
         self.assertEqual(info['isbn'], '9788983920799')
 
     def test_extract_ridi_isbn(self):
