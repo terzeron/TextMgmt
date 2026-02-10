@@ -189,23 +189,10 @@ export default function ViewEPUB({ bookId, preview = false }) {
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
         });
 
-        // display() 래퍼: 첫 호출 가로채기 + 에러 핸들링
-        // react-reader initReader()가 display(toc[0].href)를 호출하는데,
-        // 일부 EPUB에서 CFI 생성이 실패하므로 첫 호출은 무인자 display()로 대체
+        // display() 실패 시 저장된 위치 삭제 후 첫 페이지로 폴백
         if (typeof rendition.display === "function") {
             const origDisplay = rendition.display.bind(rendition);
-            let isFirstDisplay = true;
             rendition.display = function (target) {
-                if (isFirstDisplay) {
-                    isFirstDisplay = false;
-                    return origDisplay().catch((err) => {
-                        console.error("[epub.js] initial display() failed:", err);
-                        setErrorMessage(`EPUB 표시 실패: ${err?.message || String(err)}`);
-                        setIsLoading(false);
-                        if (timeoutRef.current) clearTimeout(timeoutRef.current);
-                        throw err;
-                    });
-                }
                 return origDisplay(target).catch((err) => {
                     console.error("[epub.js] display() rejected:", err);
                     if (target) {
