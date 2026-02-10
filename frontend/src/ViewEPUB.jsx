@@ -22,6 +22,8 @@ export default function ViewEPUB({ bookId, preview = false }) {
     const renditionRef = useRef(null);
     const timeoutRef = useRef(null);
     const locationRef = useRef("");
+    const savedLocationRef = useRef(null);
+    const firstRenderRef = useRef(false);
     const locationsReadyRef = useRef(false);
 
     const [epubData, setEpubData] = useState(null);
@@ -56,13 +58,15 @@ export default function ViewEPUB({ bookId, preview = false }) {
         setPageInfo({ page: 0, total: 0 });
         setLocationsReady(false);
         locationsReadyRef.current = false;
+        firstRenderRef.current = false;
 
-        // 전체보기: 저장된 읽기 위치 복원
-        if (!preview) {
-            locationRef.current = localStorage.getItem(`epub_location_${bookId}`) || "";
-        } else {
-            locationRef.current = "";
-        }
+        // 저장된 읽기 위치를 별도 보관 (초기 렌더링 후 복원)
+        // 초기 location prop으로 전달하면 epub.js가 무효 CFI에서 조용히 실패하므로
+        // 첫 렌더링은 항상 처음부터 시작하고, 성공 후 저장된 위치로 이동
+        savedLocationRef.current = !preview
+            ? localStorage.getItem(`epub_location_${bookId}`) || null
+            : null;
+        locationRef.current = "";
 
         const chapters = preview ? CHAPTERS_PREVIEW : 0;
         const controller = new AbortController();
@@ -112,6 +116,20 @@ export default function ViewEPUB({ bookId, preview = false }) {
         setIsLoading(false);
         setErrorMessage(null);
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
+        // 첫 렌더링 성공 후 저장된 위치로 이동 시도
+        if (!firstRenderRef.current) {
+            firstRenderRef.current = true;
+            if (savedLocationRef.current && renditionRef.current) {
+                const loc = savedLocationRef.current;
+                savedLocationRef.current = null;
+                renditionRef.current.display(loc).catch(() => {
+                    console.warn("[epub.js] 저장된 위치 복원 실패, 현재 위치 유지");
+                    if (bookId) localStorage.removeItem(`epub_location_${bookId}`);
+                });
+                return;
+            }
+        }
 
         // 전체보기: 읽기 위치 저장
         if (!preview && bookId) {
