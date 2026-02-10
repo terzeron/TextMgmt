@@ -665,23 +665,22 @@ class BookManager:
                             if zp == opf_path:
                                 zout.writestr(zp, modified_opf)
                             elif zp == ncx_zp:
-                                # NCX 파일: 미리보기에 없는 파일 참조 navPoint 제거
+                                # NCX 파일: 미리보기에 없는 파일 참조 navPoint 제거 (중첩 포함)
                                 try:
                                     ncx_data = zin.read(zp)
                                     ncx_tree = etree.fromstring(ncx_data)
-                                    nav_map = ncx_tree.find(f'{{{ncx_ns}}}navMap')
-                                    if nav_map is not None:
-                                        ncx_dir = dirname(zp)
-                                        for np in list(nav_map.findall(f'{{{ncx_ns}}}navPoint')):
-                                            content_el = np.find(f'{{{ncx_ns}}}content')
-                                            if content_el is not None:
-                                                src = content_el.get('src', '')
-                                                src_file = src.split('#')[0]
-                                                if not src_file:
-                                                    continue  # fragment-only src는 유지
-                                                src_zp = normpath(pjoin(ncx_dir, src_file)) if ncx_dir else normpath(src_file)
-                                                if src_zp not in files_to_include:
-                                                    nav_map.remove(np)
+                                    ncx_dir = dirname(zp)
+                                    # 모든 깊이의 navPoint를 순회하며 누락 파일 참조 제거
+                                    for np in list(ncx_tree.iter(f'{{{ncx_ns}}}navPoint')):
+                                        content_el = np.find(f'{{{ncx_ns}}}content')
+                                        if content_el is not None:
+                                            src = content_el.get('src', '')
+                                            src_file = src.split('#')[0]
+                                            if not src_file:
+                                                continue  # fragment-only src는 유지
+                                            src_zp = normpath(pjoin(ncx_dir, src_file)) if ncx_dir else normpath(src_file)
+                                            if src_zp not in files_to_include:
+                                                np.getparent().remove(np)
                                     ncx_out = '<?xml version="1.0" encoding="UTF-8"?>\n' + etree.tostring(ncx_tree, encoding='unicode')
                                     zout.writestr(zp, ncx_out)
                                 except Exception as e:
