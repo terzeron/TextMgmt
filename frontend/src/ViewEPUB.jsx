@@ -4,7 +4,7 @@ import { getApiUrlPrefix } from "./Common";
 import { ReactReader } from "react-reader";
 import "./ViewEPUB.css";
 
-const CHAPTERS_PREVIEW = 2;
+const CHAPTERS_PREVIEW = 3;
 
 const FONT_SIZE_MIN = 80;
 const FONT_SIZE_MAX = 160;
