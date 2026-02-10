@@ -313,7 +313,7 @@ export default function ViewEPUB({ bookId, preview = false }) {
 
             <Suspense fallback={<div className="loading">로딩 중...</div>}>
                 {epubData && <ReactReader
-                    location={locationRef.current || undefined}
+                    location={locationRef.current}
                     locationChanged={handleLocationChanged}
                     url={epubData}
                     title={!preview ? bookTitle : undefined}
