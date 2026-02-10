@@ -18,6 +18,28 @@ export const getTwoLevelCategory = (category) => {
   return `${parts[parts.length - 2]} ${parts[parts.length - 1]}`;
 };
 
+// 다중 카테고리 경로(" || "로 구분)에서 각 경로의 마지막 두 단계를 추출
+// 예: "소설 > 한국소설 || 소설 > 추리/미스터리/스릴러" → ["소설 한국소설", "소설 추리/미스터리/스릴러"]
+export const extractMultiPathCategories = (category) => {
+  if (!category) return [];
+  return category.split('||').map(p => getTwoLevelCategory(p.trim())).filter(Boolean);
+};
+
+// 검색 결과에서 카테고리를 수집하여 categories 객체에 추가
+const collectStoreCategories = (storeData, storeKey, categories) => {
+  if (storeData?.status === 'success' && storeData?.result?.length > 0) {
+    storeData.result.forEach((item, idx) => {
+      const cats = extractMultiPathCategories(item.category);
+      cats.forEach((cat, pathIdx) => {
+        categories[`${storeKey}_${idx}_${pathIdx}`] = cat;
+      });
+    });
+  }
+};
+
+// 카테고리 유사도 판정에 참여하는 서점 목록
+const CATEGORY_STORES = ['yes24', 'aladin', 'ridi'];
+
 // 서점 탭 정의 (supportsIsbn: ISBN 검색 지원 여부)
 const STORES = [
   { key: 'yes24', label: 'Yes24', supportsIsbn: true },
@@ -52,7 +74,7 @@ export default function Bookstore(props) {
       props.onCategoriesFound({});
     }
 
-    // Yes24, 알라딘 자동 검색: ISBN → 저자+제목 → 제목 순으로 시도
+    // 자동 검색: ISBN → 저자+제목 → 제목 순으로 시도
     const autoSearch = async (store) => {
       const currentIsbn = props.bookInfo.isbn || '';
       const currentTitle = props.bookInfo.title || '';
@@ -85,27 +107,16 @@ export default function Bookstore(props) {
     };
 
     const runAutoSearch = async () => {
-      const yes24Result = await autoSearch('yes24');
-      const aladinResult = await autoSearch('aladin');
+      const results = {};
+      for (const storeKey of CATEGORY_STORES) {
+        results[storeKey] = await autoSearch(storeKey);
+      }
 
-      // 두 서점 검색 결과의 모든 카테고리(마지막 레벨만)를 수집하여 부모에게 전달
+      // 서점 검색 결과의 모든 카테고리를 수집하여 부모에게 전달
       if (props.onCategoriesFound) {
         const categories = {};
-        if (yes24Result?.status === 'success' && yes24Result?.result?.length > 0) {
-          yes24Result.result.forEach((item, idx) => {
-            const deepest = getTwoLevelCategory(item.category);
-            if (deepest) {
-              categories[`yes24_${idx}`] = deepest;
-            }
-          });
-        }
-        if (aladinResult?.status === 'success' && aladinResult?.result?.length > 0) {
-          aladinResult.result.forEach((item, idx) => {
-            const deepest = getTwoLevelCategory(item.category);
-            if (deepest) {
-              categories[`aladin_${idx}`] = deepest;
-            }
-          });
+        for (const storeKey of CATEGORY_STORES) {
+          collectStoreCategories(results[storeKey], storeKey, categories);
         }
         props.onCategoriesFound(categories);
       }
@@ -223,28 +234,12 @@ export default function Bookstore(props) {
         setData(prev => {
           const newData = { ...prev, [store]: json, [cacheKey]: json };
 
-          // Yes24 또는 알라딘 검색 결과의 모든 카테고리(마지막 레벨만)를 부모에게 전달
-          if ((store === 'yes24' || store === 'aladin') && props.onCategoriesFound) {
+          // 카테고리 유사도 판정 서점의 검색 결과를 부모에게 전달
+          if (CATEGORY_STORES.includes(store) && props.onCategoriesFound) {
             const categories = {};
-            // yes24 카테고리
-            const yes24Data = store === 'yes24' ? json : newData['yes24'];
-            if (yes24Data?.status === 'success' && yes24Data?.result?.length > 0) {
-              yes24Data.result.forEach((item, idx) => {
-                const deepest = getTwoLevelCategory(item.category);
-                if (deepest) {
-                  categories[`yes24_${idx}`] = deepest;
-                }
-              });
-            }
-            // aladin 카테고리
-            const aladinData = store === 'aladin' ? json : newData['aladin'];
-            if (aladinData?.status === 'success' && aladinData?.result?.length > 0) {
-              aladinData.result.forEach((item, idx) => {
-                const deepest = getTwoLevelCategory(item.category);
-                if (deepest) {
-                  categories[`aladin_${idx}`] = deepest;
-                }
-              });
+            for (const storeKey of CATEGORY_STORES) {
+              const storeResult = storeKey === store ? json : newData[storeKey];
+              collectStoreCategories(storeResult, storeKey, categories);
             }
             props.onCategoriesFound(categories);
           }

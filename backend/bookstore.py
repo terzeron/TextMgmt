@@ -509,10 +509,19 @@ class RidibooksBookstore(AbstractBookstore):
                 author = book.get('author', '')
                 parent_cat = book.get('parent_category_name', '')
                 child_cat = book.get('category_name', '')
+                parent_cat2 = book.get('parent_category_name2', '')
+                child_cat2 = book.get('category_name2', '')
+
+                paths = []
                 if parent_cat and child_cat:
-                    category = f"{parent_cat} > {child_cat}"
-                else:
-                    category = child_cat or parent_cat
+                    paths.append(f"{parent_cat} > {child_cat}")
+                elif child_cat or parent_cat:
+                    paths.append(child_cat or parent_cat)
+                if parent_cat2 and child_cat2:
+                    paths.append(f"{parent_cat2} > {child_cat2}")
+                elif child_cat2 or parent_cat2:
+                    paths.append(child_cat2 or parent_cat2)
+                category = ' || '.join(paths) if paths else ''
 
                 detail_url = f"{self.BASE_URL}/books/{book_id}" if book_id else ''
 
@@ -577,15 +586,15 @@ class RidibooksBookstore(AbstractBookstore):
                 m = re.search(r'저자[:：]\s*([^,]+)', desc)
                 if m:
                     info['author'] = m.group(1).strip()
-        # 카테고리 추출: /category/숫자열 링크 텍스트
-        categories = []
-        selector = "#books_contents section.detail_body ul li a[href^='/category/']"
-        for link in soup.select(selector):
-            text = link.get_text(strip=True)
-            if text:
-                categories.append(text)
-        if categories:
-            info['category'] = ' > '.join(categories)
+        # 카테고리 추출: 각 li가 하나의 카테고리 경로 (다중 경로는 " || "로 구분)
+        paths = []
+        for li in soup.select("#books_contents section.detail_body ul li"):
+            links = li.select("a[href^='/category/']")
+            parts = [link.get_text(strip=True) for link in links if link.get_text(strip=True)]
+            if parts:
+                paths.append(' > '.join(parts))
+        if paths:
+            info['category'] = ' || '.join(paths)
         # ISBN 추출
         isbn_code = self._extract_ridi_isbn(soup)
         if isbn_code:

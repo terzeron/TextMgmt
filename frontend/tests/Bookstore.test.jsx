@@ -9,7 +9,7 @@ vi.mock('../src/Common', () => ({
     ROOT_DIRECTORY: '$$rootdir$$',
 }));
 
-import { getTwoLevelCategory } from '../src/Bookstore';
+import { getTwoLevelCategory, extractMultiPathCategories } from '../src/Bookstore';
 
 describe('getTwoLevelCategory', () => {
     it('3단계 카테고리에서 하위 2단계를 추출한다', () => {
@@ -47,5 +47,39 @@ describe('getTwoLevelCategory', () => {
     it('빈 세그먼트가 있으면 무시한다', () => {
         // "A > B > " → trim → ["A", "B", ""] → filter → ["A", "B"]
         expect(getTwoLevelCategory('A > B > ')).toBe('A B');
+    });
+});
+
+describe('extractMultiPathCategories', () => {
+    it('다중 경로에서 각 경로의 마지막 두 단계를 추출한다', () => {
+        expect(extractMultiPathCategories('소설 > 한국소설 || 소설 > 추리/미스터리/스릴러'))
+            .toEqual(['소설 한국소설', '소설 추리/미스터리/스릴러']);
+    });
+
+    it('단일 경로도 배열로 반환한다', () => {
+        expect(extractMultiPathCategories('소설 > 한국소설'))
+            .toEqual(['소설 한국소설']);
+    });
+
+    it('3개 이상의 경로도 처리한다', () => {
+        expect(extractMultiPathCategories('A > B || C > D || E > F'))
+            .toEqual(['A B', 'C D', 'E F']);
+    });
+
+    it('빈 문자열이면 빈 배열을 반환한다', () => {
+        expect(extractMultiPathCategories('')).toEqual([]);
+    });
+
+    it('null이면 빈 배열을 반환한다', () => {
+        expect(extractMultiPathCategories(null)).toEqual([]);
+    });
+
+    it('undefined이면 빈 배열을 반환한다', () => {
+        expect(extractMultiPathCategories(undefined)).toEqual([]);
+    });
+
+    it('빈 경로는 필터링한다', () => {
+        expect(extractMultiPathCategories('소설 > 한국소설 || || 소설 > SF'))
+            .toEqual(['소설 한국소설', '소설 SF']);
     });
 });
