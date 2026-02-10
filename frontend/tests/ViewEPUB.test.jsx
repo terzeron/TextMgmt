@@ -367,7 +367,7 @@ describe('ViewEPUB', () => {
         await act(async () => { vi.advanceTimersByTime(1); });
         await act(async () => { vi.advanceTimersByTime(15000); });
 
-        expect(screen.getByText(/EPUB 로딩 시간이 초과되었습니다\. \(book_id=1\)/)).toBeTruthy();
+        expect(screen.getByText(/EPUB 로딩 시간이 초과되었습니다\. \(book_id=1, stage=/)).toBeTruthy();
         expect(screen.queryByText('로딩 중...')).toBeNull();
 
         vi.useRealTimers();
@@ -1587,7 +1587,7 @@ describe('ViewEPUB', () => {
         await act(async () => { vi.advanceTimersByTime(1); });
         await act(async () => { vi.advanceTimersByTime(15000); });
 
-        expect(screen.getByText(/EPUB 로딩 시간이 초과되었습니다\. \(book_id=99\)/)).toBeTruthy();
+        expect(screen.getByText(/EPUB 로딩 시간이 초과되었습니다\. \(book_id=99, stage=/)).toBeTruthy();
 
         vi.useRealTimers();
     });
