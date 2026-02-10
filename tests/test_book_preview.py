@@ -621,7 +621,7 @@ class TestBookPreview:
 
     @pytest.mark.asyncio
     async def test_preview_all_chapters_missing_graceful(self, backend_test_setup):
-        """모든 챕터 파일이 누락된 EPUB → 500이 아닌 200."""
+        """모든 챕터 파일이 누락된 EPUB → 유효성 검증에서 422 반환."""
         bm = backend_test_setup["bm"]
         client = backend_test_setup["client"]
 
@@ -636,8 +636,9 @@ class TestBookPreview:
             cache_file.unlink(missing_ok=True)
 
             response = client.get(f"/preview/{book_id}?chapters=3")
-            assert response.status_code == 200, \
-                f"All chapters missing should not cause 500, got {response.status_code}"
+            assert response.status_code == 422, \
+                f"All chapters missing should return 422, got {response.status_code}"
+            assert "no valid spine chapters" in response.text
         finally:
             _cleanup_book(client, bm, book_id, corrupted_path)
 

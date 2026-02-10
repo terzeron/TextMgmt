@@ -435,9 +435,14 @@ class BookManager:
                     spine_el = opf.find(f'.//{{{opf_ns}}}spine')
                     if spine_el is None:
                         LOGGER.warning("EPUB preview: spine not found for book_id=%d, trying manifest order", book_id)
-                        spine_refs = []
                         chapter_idrefs = [mid for mid, info in manifest.items()
                                           if info.get('media-type') == 'application/xhtml+xml'][:chapters]
+                        # 출력 OPF에 spine 요소 생성 (검증 통과를 위해)
+                        spine_el = etree.SubElement(opf, f'{{{opf_ns}}}spine')
+                        for idref in chapter_idrefs:
+                            itemref = etree.SubElement(spine_el, f'{{{opf_ns}}}itemref')
+                            itemref.set('idref', idref)
+                        spine_refs = list(spine_el.findall(f'{{{opf_ns}}}itemref'))
                     else:
                         spine_refs = list(spine_el.findall(f'{{{opf_ns}}}itemref'))
                         chapter_idrefs = [ref.get('idref') for ref in spine_refs[:chapters]
