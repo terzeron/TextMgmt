@@ -329,6 +329,20 @@ def _create_epub_with_no_opf_at_all(path: Path) -> None:
         zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
 
 
+def _create_epub_with_binary_garbage_container(path: Path) -> None:
+    """container.xml이 완전한 바이너리 쓰레기이지만 regex로 full-path를 추출할 수 있는 EPUB."""
+    garbage = b'\x89PNG\r\n not XML at all full-path="OEBPS/content.opf" end of garbage'
+    opf = _make_opf(2)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        zf.writestr('META-INF/container.xml', garbage)
+        zf.writestr('OEBPS/content.opf', opf)
+        zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+        zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+        zf.writestr('OEBPS/ch2.xhtml', _make_chapter_xhtml(2))
+
+
 def _create_corrupted_epub(path: Path, chapter_count: int = 3, missing_all: bool = False) -> None:
     """spine에 챕터가 등록되어 있지만 실제 ZIP에는 파일이 없는 손상 EPUB.
 
@@ -904,11 +918,11 @@ class TestEpubErrorRecovery:
         finally:
             epub_path.unlink(missing_ok=True)
 
-    # ── corrupted container.xml (regex fallback) ─────────
+    # ── corrupted container.xml (lxml recover) ───────────
 
     @pytest.mark.asyncio
     async def test_preview_corrupted_container_xml(self, backend_test_setup):
-        """container.xml이 깨진 XML이어도 regex 폴백으로 미리보기가 생성된다."""
+        """container.xml에 선언되지 않은 네임스페이스 프리픽스가 있어도 lxml recover로 미리보기가 생성된다."""
         bm = backend_test_setup["bm"]
         client = backend_test_setup["client"]
 
@@ -1021,6 +1035,65 @@ class TestEpubErrorRecovery:
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
 
+    # ── binary garbage container.xml (regex fallback) ───
+
+    @pytest.mark.asyncio
+    async def test_preview_binary_garbage_container_xml(self, backend_test_setup):
+        """container.xml이 완전한 바이너리 쓰레기여도 regex 폴백으로 미리보기가 생성된다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Binary Garbage Container Book.epub"
+        _create_epub_with_binary_garbage_container(epub_path)
+
+        book_id = await _register_epub_async(bm, epub_path)
+
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=2")
+            assert response.status_code == 200, \
+                f"Binary garbage container.xml should not cause 500, got {response.status_code}: {response.text}"
+
+            zf = _parse_epub_zip(response.content)
+            names = zf.namelist()
+            assert any('ch1' in n for n in names), "ch1 should be in preview"
+            assert any('ch2' in n for n in names), "ch2 should be in preview"
+            zf.close()
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_total_chapters_corrupted_container_xml(self, backend_test_setup):
+        """container.xml이 깨진 XML이어도 총 챕터 수가 올바르게 반환된다."""
+        from backend.book_manager import BookManager
+
+        bm = backend_test_setup["bm"]
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Corrupted Container Chapters.epub"
+        _create_epub_with_corrupted_container_xml(epub_path)
+
+        try:
+            count = BookManager._get_epub_total_chapters(epub_path)
+            assert count == 2, f"Expected 2 chapters, got {count}"
+        finally:
+            epub_path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_total_chapters_binary_garbage_container(self, backend_test_setup):
+        """container.xml이 바이너리 쓰레기여도 regex 폴백으로 총 챕터 수가 반환된다."""
+        from backend.book_manager import BookManager
+
+        bm = backend_test_setup["bm"]
+        epub_dir = bm.path_prefix / CATEGORY
+        epub_path = epub_dir / "[Test Author] Garbage Container Chapters.epub"
+        _create_epub_with_binary_garbage_container(epub_path)
+
+        try:
+            count = BookManager._get_epub_total_chapters(epub_path)
+            assert count == 2, f"Expected 2 chapters, got {count}"
+        finally:
+            epub_path.unlink(missing_ok=True)
+
     # ── bad ZIP ──────────────────────────────────────────
 
     @pytest.mark.asyncio
@@ -1121,6 +1194,18 @@ class TestFindOpfPath:
         with zipfile.ZipFile(str(epub_path), 'r') as zin:
             result = BookManager._find_opf_path(zin)
             assert result == 'OPS/book.opf', f"Should fallback to direct scan, got '{result}'"
+
+    def test_binary_garbage_container_regex_fallback(self, tmp_path):
+        """container.xml이 완전한 바이너리 쓰레기여도 regex로 full-path를 추출한다."""
+        from backend.book_manager import BookManager
+        garbage = b'\x89PNG\r\n not XML at all full-path="OPS/pkg.opf" end'
+        epub_path = tmp_path / "test.epub"
+        with zipfile.ZipFile(str(epub_path), 'w') as zf:
+            zf.writestr('META-INF/container.xml', garbage)
+            zf.writestr('OPS/pkg.opf', '<package/>')
+        with zipfile.ZipFile(str(epub_path), 'r') as zin:
+            result = BookManager._find_opf_path(zin)
+            assert result == 'OPS/pkg.opf', f"Binary garbage regex fallback should find OPF, got '{result}'"
 
 
 # ── tests: download 엔드포인트 ────────────────────────────
