@@ -114,7 +114,8 @@ RIDI_API_RESPONSE = {
             "b_id": "123456",
             "title": "테스트 도서",
             "author": "테스트 저자",
-            "category_name": "판타지",
+            "category_name": "역사/시대물",
+            "parent_category_name": "로맨스 e북",
         },
         {
             "b_id": "789012",
@@ -546,6 +547,10 @@ class TestRidibooksBookstore(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertEqual(results[0][0], "테스트 도서")
         self.assertEqual(results[0][1], "테스트 저자")
+        # parent + child → 전체 경로
+        self.assertEqual(results[0][2], "로맨스 e북 > 역사/시대물")
+        # parent만 → parent
+        self.assertEqual(results[1][2], "로맨스")
 
     @patch('backend.bookstore.requests.Session')
     def test_search_by_keyword_api_error(self, mock_session_class):
@@ -587,6 +592,41 @@ class TestRidibooksBookstore(unittest.TestCase):
         isbn = store._extract_ridi_isbn(soup)
 
         self.assertEqual(isbn, '9788983920799')
+
+    @patch('backend.bookstore.requests.Session')
+    def test_search_category_combinations(self, mock_session_class):
+        """카테고리 조합: parent+child, parent만, child만, 둘 다 없음"""
+        mock_session = MagicMock()
+        mock_session_class.return_value = mock_session
+
+        test_cases = [
+            # (API 응답 books, 기대 카테고리)
+            ({"category_name": "역사/시대물", "parent_category_name": "로맨스 e북"},
+             "로맨스 e북 > 역사/시대물"),
+            ({"parent_category_name": "로맨스"},
+             "로맨스"),
+            ({"category_name": "판타지"},
+             "판타지"),
+            ({},
+             ""),
+        ]
+
+        for api_fields, expected_category in test_cases:
+            book = {"b_id": "999", "title": "테스트", "author": "저자", **api_fields}
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"books": [book]}
+            mock_session.get.return_value = mock_response
+
+            store = RidibooksBookstore(verbose=False)
+            store.session = mock_session
+
+            results = store.search_by_keyword("테스트")
+
+            self.assertEqual(len(results), 1, f"케이스 실패: {api_fields}")
+            self.assertEqual(results[0][2], expected_category,
+                             f"카테고리 불일치: {api_fields} → "
+                             f"기대={expected_category}, 실제={results[0][2]}")
 
 
 class TestNaverShoppingBookstore(unittest.TestCase):
