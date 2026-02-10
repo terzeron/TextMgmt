@@ -621,7 +621,7 @@ class TestBookPreview:
 
     @pytest.mark.asyncio
     async def test_preview_all_chapters_missing_graceful(self, backend_test_setup):
-        """모든 챕터 파일이 누락된 EPUB → 500이 아닌 200."""
+        """모든 챕터 파일이 누락된 EPUB → 유효성 검증에서 422 반환."""
         bm = backend_test_setup["bm"]
         client = backend_test_setup["client"]
 
@@ -636,8 +636,9 @@ class TestBookPreview:
             cache_file.unlink(missing_ok=True)
 
             response = client.get(f"/preview/{book_id}?chapters=3")
-            assert response.status_code == 200, \
-                f"All chapters missing should not cause 500, got {response.status_code}"
+            assert response.status_code == 422, \
+                f"All chapters missing should return 422, got {response.status_code}"
+            assert "no valid spine chapters" in response.text
         finally:
             _cleanup_book(client, bm, book_id, corrupted_path)
 
@@ -1421,6 +1422,219 @@ class TestCacheEviction:
         for f in old_files:
             assert not f.exists(), f"{f.name} should have been evicted"
         assert just_written.exists()
+
+
+class TestValidatePreviewEpub:
+    """BookManager._validate_preview_epub 단위 테스트."""
+
+    def test_valid_epub_passes(self, tmp_path):
+        """정상 EPUB은 (True, None)을 반환한다."""
+        from backend.book_manager import BookManager
+
+        epub = tmp_path / "valid.epub"
+        _create_test_epub(epub, chapter_count=3)
+
+        valid, err = BookManager._validate_preview_epub(epub)
+        assert valid is True
+        assert err is None
+
+    def test_missing_mimetype_rejected(self, tmp_path):
+        """mimetype 파일이 없으면 거부된다."""
+        from backend.book_manager import BookManager
+
+        epub = tmp_path / "no_mimetype.epub"
+        epub.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(str(epub), 'w') as zf:
+            zf.writestr('META-INF/container.xml', CONTAINER_XML)
+            zf.writestr('OEBPS/content.opf', _make_opf(1))
+            zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+            zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+
+        valid, err = BookManager._validate_preview_epub(epub)
+        assert valid is False
+        assert "mimetype" in err
+
+    def test_invalid_mimetype_rejected(self, tmp_path):
+        """mimetype 내용이 잘못되면 거부된다."""
+        from backend.book_manager import BookManager
+
+        epub = tmp_path / "bad_mimetype.epub"
+        epub.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(str(epub), 'w') as zf:
+            zf.writestr('mimetype', 'text/plain', compress_type=zipfile.ZIP_STORED)
+            zf.writestr('META-INF/container.xml', CONTAINER_XML)
+            zf.writestr('OEBPS/content.opf', _make_opf(1))
+            zf.writestr('OEBPS/toc.ncx', '<ncx/>')
+            zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+
+        valid, err = BookManager._validate_preview_epub(epub)
+        assert valid is False
+        assert "invalid mimetype" in err
+
+    def test_missing_opf_rejected(self, tmp_path):
+        """OPF 파일이 없으면 거부된다."""
+        from backend.book_manager import BookManager
+
+        epub = tmp_path / "no_opf.epub"
+        epub.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(str(epub), 'w') as zf:
+            zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+            zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+
+        valid, err = BookManager._validate_preview_epub(epub)
+        assert valid is False
+        assert "OPF" in err
+
+    def test_no_valid_spine_chapters_rejected(self, tmp_path):
+        """유효한 spine 챕터가 0개이면 거부된다."""
+        from backend.book_manager import BookManager
+
+        epub = tmp_path / "empty_spine.epub"
+        _create_corrupted_epub(epub, chapter_count=2, missing_all=True)
+
+        valid, err = BookManager._validate_preview_epub(epub)
+        assert valid is False
+        assert "no valid spine chapters" in err
+
+    def test_missing_ncx_toc_attribute_removed(self, tmp_path):
+        """NCX 파일이 ZIP에 없으면 toc 속성이 제거되고 통과한다."""
+        from backend.book_manager import BookManager
+        from lxml import etree
+
+        opf_ns = 'http://www.idpf.org/2007/opf'
+        # toc="toc"이 있지만 toc.ncx 파일 없는 EPUB
+        epub = tmp_path / "no_ncx.epub"
+        epub.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(str(epub), 'w') as zf:
+            zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+            zf.writestr('META-INF/container.xml', CONTAINER_XML)
+            zf.writestr('OEBPS/content.opf', _make_opf(2))
+            # toc.ncx 파일 생략
+            zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+            zf.writestr('OEBPS/ch2.xhtml', _make_chapter_xhtml(2))
+
+        valid, err = BookManager._validate_preview_epub(epub)
+        assert valid is True, f"Expected valid, got: {err}"
+
+        # 수정된 EPUB에서 toc 속성이 제거되었는지 확인
+        with zipfile.ZipFile(str(epub), 'r') as zf:
+            opf = etree.fromstring(zf.read('OEBPS/content.opf'))
+            spine_el = opf.find(f'.//{{{opf_ns}}}spine')
+            assert spine_el.get('toc') is None, "toc attribute should be removed"
+
+    def test_invalid_spine_idref_removed(self, tmp_path):
+        """manifest에 없는 spine idref가 자동 제거되고 통과한다."""
+        from backend.book_manager import BookManager
+        from lxml import etree
+
+        opf_ns = 'http://www.idpf.org/2007/opf'
+        epub = tmp_path / "bad_idref.epub"
+        _create_epub_with_invalid_spine(epub)
+
+        valid, err = BookManager._validate_preview_epub(epub)
+        assert valid is True, f"Expected valid, got: {err}"
+
+        # 수정된 EPUB에서 coverpage idref가 제거되었는지 확인
+        with zipfile.ZipFile(str(epub), 'r') as zf:
+            opf = etree.fromstring(zf.read('OEBPS/content.opf'))
+            spine_el = opf.find(f'.//{{{opf_ns}}}spine')
+            idrefs = [ref.get('idref') for ref in spine_el.findall(f'{{{opf_ns}}}itemref')]
+            assert 'coverpage' not in idrefs, "invalid idref should be removed"
+            assert 'ch1' in idrefs
+            assert 'ch2' in idrefs
+
+    def test_spine_item_missing_from_zip_removed(self, tmp_path):
+        """manifest에는 있지만 ZIP에 파일이 없는 spine 항목이 자동 제거된다."""
+        from backend.book_manager import BookManager
+        from lxml import etree
+
+        opf_ns = 'http://www.idpf.org/2007/opf'
+        # ch1이 누락된 EPUB (ch2, ch3은 존재)
+        epub = tmp_path / "missing_ch1.epub"
+        _create_corrupted_epub(epub, chapter_count=3, missing_all=False)
+
+        valid, err = BookManager._validate_preview_epub(epub)
+        assert valid is True, f"Expected valid, got: {err}"
+
+        # ch1이 spine에서 제거되었는지 확인
+        with zipfile.ZipFile(str(epub), 'r') as zf:
+            opf = etree.fromstring(zf.read('OEBPS/content.opf'))
+            spine_el = opf.find(f'.//{{{opf_ns}}}spine')
+            idrefs = [ref.get('idref') for ref in spine_el.findall(f'{{{opf_ns}}}itemref')]
+            assert 'ch1' not in idrefs, "missing ch1 should be removed from spine"
+            assert 'ch2' in idrefs
+            assert 'ch3' in idrefs
+
+    def test_corrupted_zip_rejected(self, tmp_path):
+        """손상된 ZIP 파일은 거부된다."""
+        from backend.book_manager import BookManager
+
+        epub = tmp_path / "corrupted.epub"
+        epub.write_bytes(b'this is not a zip file')
+
+        valid, err = BookManager._validate_preview_epub(epub)
+        assert valid is False
+        assert "corrupted ZIP" in err
+
+    def test_missing_spine_element_rejected(self, tmp_path):
+        """spine 요소가 없는 OPF는 거부된다."""
+        from backend.book_manager import BookManager
+
+        epub = tmp_path / "no_spine.epub"
+        _create_epub_without_spine(epub)
+
+        valid, err = BookManager._validate_preview_epub(epub)
+        assert valid is False
+        assert "spine" in err
+
+    def test_toc_id_not_in_manifest_removed(self, tmp_path):
+        """toc 속성이 manifest에 없는 ID를 참조하면 제거된다."""
+        from backend.book_manager import BookManager
+        from lxml import etree
+
+        opf_ns = 'http://www.idpf.org/2007/opf'
+        opf_content = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Test</dc:title>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="nonexistent_toc">
+    <itemref idref="ch1"/>
+  </spine>
+</package>"""
+
+        epub = tmp_path / "bad_toc_id.epub"
+        with zipfile.ZipFile(str(epub), 'w') as zf:
+            zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+            zf.writestr('META-INF/container.xml', CONTAINER_XML)
+            zf.writestr('OEBPS/content.opf', opf_content)
+            zf.writestr('OEBPS/ch1.xhtml', _make_chapter_xhtml(1))
+
+        valid, err = BookManager._validate_preview_epub(epub)
+        assert valid is True, f"Expected valid, got: {err}"
+
+        with zipfile.ZipFile(str(epub), 'r') as zf:
+            opf = etree.fromstring(zf.read('OEBPS/content.opf'))
+            spine_el = opf.find(f'.//{{{opf_ns}}}spine')
+            assert spine_el.get('toc') is None
+
+    def test_no_rewrite_when_clean(self, tmp_path):
+        """문제가 없는 EPUB은 재작성하지 않는다 (mtime 불변)."""
+        import os
+        from backend.book_manager import BookManager
+
+        epub = tmp_path / "clean.epub"
+        _create_test_epub(epub, chapter_count=2)
+        mtime_before = os.path.getmtime(epub)
+
+        valid, err = BookManager._validate_preview_epub(epub)
+        assert valid is True
+        mtime_after = os.path.getmtime(epub)
+        assert mtime_before == mtime_after, "clean EPUB should not be rewritten"
 
 
 if __name__ == "__main__":

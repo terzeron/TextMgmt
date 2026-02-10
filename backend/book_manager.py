@@ -44,6 +44,124 @@ class BookManager:
     CACHE_MAX_AGE_SECONDS = 86400  # 1일
 
     @staticmethod
+    def _validate_preview_epub(cache_file: Path) -> Tuple[bool, Optional[str]]:
+        """생성된 미리보기 EPUB의 구조적 유효성을 검증하고 경미한 문제는 자동 수정한다."""
+        import zipfile
+        from lxml import etree
+        from posixpath import normpath, join as pjoin, dirname
+
+        opf_ns = 'http://www.idpf.org/2007/opf'
+
+        try:
+            with zipfile.ZipFile(str(cache_file), 'r') as zin:
+                names = set(zin.namelist())
+
+                # 1) mimetype 검증
+                if 'mimetype' not in names:
+                    return False, "mimetype file missing"
+                mt = zin.read('mimetype').decode('ascii', errors='replace').strip()
+                if mt != 'application/epub+zip':
+                    return False, f"invalid mimetype: {mt}"
+
+                # 2) OPF 찾기 및 파싱
+                opf_path = BookManager._find_opf_path(zin)
+                if not opf_path:
+                    return False, "OPF file not found"
+                try:
+                    opf_bytes = zin.read(opf_path)
+                except KeyError:
+                    return False, f"OPF file missing in archive: {opf_path}"
+                try:
+                    opf = etree.fromstring(opf_bytes, etree.XMLParser(recover=True))
+                except Exception as e:
+                    return False, f"OPF parse error: {e}"
+
+                opf_dir = dirname(opf_path)
+
+                # 3) manifest / spine 존재 확인
+                manifest_el = opf.find(f'.//{{{opf_ns}}}manifest')
+                spine_el = opf.find(f'.//{{{opf_ns}}}spine')
+                if manifest_el is None:
+                    return False, "manifest element missing"
+                if spine_el is None:
+                    return False, "spine element missing"
+
+                # manifest 맵 구축
+                manifest: Dict[str, str] = {}  # id → href
+                for item in manifest_el.findall(f'{{{opf_ns}}}item'):
+                    manifest[item.get('id', '')] = item.get('href', '')
+
+                # 4) spine itemref 검증: manifest에 없는 항목 제거
+                needs_rewrite = False
+                spine_refs = list(spine_el.findall(f'{{{opf_ns}}}itemref'))
+                for ref in spine_refs:
+                    idref = ref.get('idref', '')
+                    if idref not in manifest:
+                        LOGGER.warning("EPUB validate: spine idref '%s' not in manifest, removing", idref)
+                        spine_el.remove(ref)
+                        needs_rewrite = True
+
+                # 5) manifest 항목의 파일이 ZIP에 존재하는지 검증 (spine 항목만)
+                for ref in list(spine_el.findall(f'{{{opf_ns}}}itemref')):
+                    idref = ref.get('idref', '')
+                    href = manifest.get(idref, '')
+                    zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+                    if zp not in names:
+                        LOGGER.warning("EPUB validate: spine item '%s' (href=%s) not in ZIP, removing", idref, href)
+                        spine_el.remove(ref)
+                        # manifest XML 및 dict에서도 제거
+                        for item in list(manifest_el.findall(f'{{{opf_ns}}}item')):
+                            if item.get('id') == idref:
+                                manifest_el.remove(item)
+                                break
+                        manifest.pop(idref, None)
+                        needs_rewrite = True
+
+                # 6) 유효한 spine 챕터 수 확인
+                remaining_refs = spine_el.findall(f'{{{opf_ns}}}itemref')
+                if len(remaining_refs) == 0:
+                    return False, "no valid spine chapters remain"
+
+                # 7) toc 속성이 참조하는 NCX 검증
+                toc_id = spine_el.get('toc', '')
+                if toc_id:
+                    if toc_id not in manifest:
+                        LOGGER.warning("EPUB validate: toc='%s' not in manifest, removing toc attribute", toc_id)
+                        del spine_el.attrib['toc']
+                        needs_rewrite = True
+                    else:
+                        toc_href = manifest[toc_id]
+                        toc_zp = normpath(pjoin(opf_dir, toc_href)) if opf_dir else normpath(toc_href)
+                        if toc_zp not in names:
+                            LOGGER.warning("EPUB validate: toc NCX '%s' not in ZIP, removing toc attribute", toc_zp)
+                            del spine_el.attrib['toc']
+                            needs_rewrite = True
+
+                # 8) 필요 시 OPF 재작성
+                if needs_rewrite:
+                    LOGGER.info("EPUB validate: rewriting OPF in %s", cache_file.name)
+                    modified_opf = '<?xml version="1.0" encoding="UTF-8"?>\n' + etree.tostring(opf, encoding='unicode')
+                    # ZIP 내 OPF만 교체 (다른 파일 보존)
+                    tmp_path = cache_file.with_suffix('.tmp')
+                    with zipfile.ZipFile(str(cache_file), 'r') as zin_r, \
+                         zipfile.ZipFile(str(tmp_path), 'w', zipfile.ZIP_DEFLATED) as zout:
+                        for name in zin_r.namelist():
+                            if name == opf_path:
+                                zout.writestr(name, modified_opf)
+                            elif name == 'mimetype':
+                                zout.writestr(name, zin_r.read(name), compress_type=zipfile.ZIP_STORED)
+                            else:
+                                zout.writestr(name, zin_r.read(name))
+                    tmp_path.replace(cache_file)
+
+        except zipfile.BadZipFile:
+            return False, "corrupted ZIP file"
+        except Exception as e:
+            return False, f"validation error: {e}"
+
+        return True, None
+
+    @staticmethod
     def _evict_old_cache(cache_dir: Path) -> None:
         """cache_dir 내 1일 이상 된 파일을 삭제한다."""
         try:
@@ -317,9 +435,14 @@ class BookManager:
                     spine_el = opf.find(f'.//{{{opf_ns}}}spine')
                     if spine_el is None:
                         LOGGER.warning("EPUB preview: spine not found for book_id=%d, trying manifest order", book_id)
-                        spine_refs = []
                         chapter_idrefs = [mid for mid, info in manifest.items()
                                           if info.get('media-type') == 'application/xhtml+xml'][:chapters]
+                        # 출력 OPF에 spine 요소 생성 (검증 통과를 위해)
+                        spine_el = etree.SubElement(opf, f'{{{opf_ns}}}spine')
+                        for idref in chapter_idrefs:
+                            itemref = etree.SubElement(spine_el, f'{{{opf_ns}}}itemref')
+                            itemref.set('idref', idref)
+                        spine_refs = list(spine_el.findall(f'{{{opf_ns}}}itemref'))
                     else:
                         spine_refs = list(spine_el.findall(f'{{{opf_ns}}}itemref'))
                         chapter_idrefs = [ref.get('idref') for ref in spine_refs[:chapters]
@@ -330,6 +453,15 @@ class BookManager:
                     if 'META-INF/container.xml' in zin.namelist():
                         files_to_include.add('META-INF/container.xml')
                     manifest_ids_to_keep = set(chapter_idrefs)
+
+                    # spine toc 속성이 참조하는 NCX 파일 포함
+                    if spine_el is not None:
+                        toc_id = spine_el.get('toc', '')
+                        if toc_id and toc_id in manifest:
+                            manifest_ids_to_keep.add(toc_id)
+                            toc_href = manifest[toc_id]['href']
+                            toc_zp = normpath(pjoin(opf_dir, toc_href)) if opf_dir else normpath(toc_href)
+                            files_to_include.add(toc_zp)
 
                     # 챕터 파일의 zip 경로 계산
                     chapter_zip_paths = []
@@ -380,7 +512,7 @@ class BookManager:
                                 if not m.startswith('data:'):
                                     referenced.add(normpath(pjoin(css_dir, m)))
                         except KeyError:
-                            pass
+                            LOGGER.warning("EPUB preview: CSS file missing in archive: %s", zp)
 
                     # 참조된 이미지/폰트 추가 (대용량 폰트 제외)
                     FONT_SIZE_LIMIT = 500 * 1024  # 500KB
@@ -400,6 +532,7 @@ class BookManager:
                                         LOGGER.debug("EPUB preview: skipping large font %s (%d bytes)", ref_path, font_size)
                                         continue
                                 except KeyError:
+                                    LOGGER.warning("EPUB preview: font file missing in archive: %s", ref_path)
                                     continue
                             files_to_include.add(ref_path)
                             manifest_ids_to_keep.add(item_id)
@@ -456,6 +589,13 @@ class BookManager:
                                     zout.writestr(zp, data)
                                 except KeyError:
                                     LOGGER.warning("EPUB preview: missing file in archive: %s", zp)
+
+                # 생성된 EPUB 유효성 검증
+                valid, err = BookManager._validate_preview_epub(cache_file)
+                if not valid:
+                    cache_file.unlink(missing_ok=True)
+                    LOGGER.error("EPUB preview validation failed for book_id=%d: %s", book_id, err)
+                    return Response(status_code=422, content=f"EPUB preview validation failed: {err}")
 
                 BookManager._evict_old_cache(cache_dir)
                 LOGGER.debug("Preview generated for book_id=%d (EPUB, %d chapters)", book_id, len(chapter_idrefs))

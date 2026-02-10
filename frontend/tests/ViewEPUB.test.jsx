@@ -38,6 +38,16 @@ function createFetchResponse(buf = mockArrayBuffer, totalChapters = 20) {
             get: (name) => name === 'X-Total-Chapters' ? String(totalChapters) : null,
         },
         arrayBuffer: () => Promise.resolve(buf),
+        text: () => Promise.resolve(''),
+    };
+}
+
+function createErrorFetchResponse(status = 500, body = '') {
+    return {
+        ok: false,
+        status,
+        headers: { get: () => null },
+        text: () => Promise.resolve(body),
     };
 }
 
@@ -55,6 +65,7 @@ const localStorageMock = (() => {
 Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true });
 
 beforeEach(() => {
+    autoLoad = true;
     mockReactReader.mockClear();
     capturedGetRendition = null;
     localStorageMock.clear();
@@ -64,13 +75,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
 });
 
 import ViewEPUB from '../src/ViewEPUB';
 
 // rendition mock을 만들어주는 헬퍼
-function createMockRendition({ destroyThrows = false, locationsTotal = 300 } = {}) {
+function createMockRendition({ destroyThrows = false, locationsTotal = 300, readyReject = null } = {}) {
     const handlers = {};
     const locations = {
         generate: vi.fn(() => {
@@ -99,7 +111,7 @@ function createMockRendition({ destroyThrows = false, locationsTotal = 300 } = {
             loaded: {
                 metadata: Promise.resolve({ title: '테스트 책 제목' }),
             },
-            ready: Promise.resolve(),
+            ready: readyReject ? Promise.reject(readyReject) : Promise.resolve(),
             locations,
         },
         _handlers: handlers,
@@ -355,7 +367,7 @@ describe('ViewEPUB', () => {
         await act(async () => { vi.advanceTimersByTime(1); });
         await act(async () => { vi.advanceTimersByTime(15000); });
 
-        expect(screen.getByText('EPUB 로딩 시간이 초과되었습니다.')).toBeTruthy();
+        expect(screen.getByText(/EPUB 로딩 시간이 초과되었습니다\. \(book_id=1\)/)).toBeTruthy();
         expect(screen.queryByText('로딩 중...')).toBeNull();
 
         vi.useRealTimers();
@@ -370,7 +382,7 @@ describe('ViewEPUB', () => {
         await act(async () => { vi.advanceTimersByTime(1); });
 
         act(() => { vi.advanceTimersByTime(15000); });
-        expect(screen.queryByText('EPUB 로딩 시간이 초과되었습니다.')).toBeNull();
+        expect(screen.queryByText(/EPUB 로딩 시간이 초과되었습니다/)).toBeNull();
 
         vi.useRealTimers();
     });
@@ -395,7 +407,7 @@ describe('ViewEPUB', () => {
         // 백그라운드 페칭 완료 + 페이지 넘기기로 데이터 바꿔치기 후에도
         // 타임아웃이 발생하지 않아야 함
         await act(async () => { vi.advanceTimersByTime(20000); });
-        expect(screen.queryByText('EPUB 로딩 시간이 초과되었습니다.')).toBeNull();
+        expect(screen.queryByText(/EPUB 로딩 시간이 초과되었습니다/)).toBeNull();
 
         vi.useRealTimers();
     });
@@ -404,11 +416,7 @@ describe('ViewEPUB', () => {
 
     it('서버 에러(non-ok) 시 에러 메시지를 표시한다', async () => {
         globalThis.fetch = vi.fn(() =>
-            Promise.resolve({
-                ok: false,
-                status: 500,
-                headers: { get: () => null },
-            })
+            Promise.resolve(createErrorFetchResponse(500))
         );
         render(<ViewEPUB bookId={1} />);
         await waitFor(() => {
@@ -991,7 +999,7 @@ describe('ViewEPUB', () => {
 
         // 15초 후에도 타임아웃 에러 없음
         await act(async () => { vi.advanceTimersByTime(15000); });
-        expect(screen.queryByText('EPUB 로딩 시간이 초과되었습니다.')).toBeNull();
+        expect(screen.queryByText(/EPUB 로딩 시간이 초과되었습니다/)).toBeNull();
 
         vi.useRealTimers();
     });
@@ -1125,7 +1133,9 @@ describe('ViewEPUB', () => {
             capturedGetRendition(mockRendition);
         });
 
-        expect(mockRendition.on).not.toHaveBeenCalled();
+        // displayerror는 등록되지만 relocated는 등록되지 않음
+        const relocatedCalls = mockRendition.on.mock.calls.filter(c => c[0] === 'relocated');
+        expect(relocatedCalls.length).toBe(0);
     });
 
     // ══════════════════════════════════════════════
@@ -1522,5 +1532,235 @@ describe('ViewEPUB', () => {
 
         // getRendition 호출 전에 바로 언마운트
         expect(() => unmount()).not.toThrow();
+    });
+
+    // ══════════════════════════════════════════════
+    // ── 에러 처리 강화 테스트 ──
+    // ══════════════════════════════════════════════
+
+    it('서버 에러 시 응답 본문을 에러 메시지에 표시한다', async () => {
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve(createErrorFetchResponse(422, 'EPUB preview validation failed: no valid spine chapters remain'))
+        );
+        render(<ViewEPUB bookId={1} />);
+        await waitFor(() => {
+            expect(screen.getByText(/EPUB preview validation failed/)).toBeTruthy();
+        });
+    });
+
+    it('서버 에러 본문이 비어있으면 status 코드를 표시한다', async () => {
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve(createErrorFetchResponse(500, ''))
+        );
+        render(<ViewEPUB bookId={1} />);
+        await waitFor(() => {
+            expect(screen.getByText(/서버 응답 오류: 500/)).toBeTruthy();
+        });
+    });
+
+    it('book.ready reject 시 에러 메시지를 표시한다', async () => {
+        autoLoad = false;
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition({ readyReject: new Error('Parsing failed') });
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        await waitFor(() => {
+            expect(screen.getByText(/EPUB 파싱 오류: Parsing failed/)).toBeTruthy();
+        });
+    });
+
+    it('타임아웃 에러 메시지에 bookId가 포함된다', async () => {
+        vi.useFakeTimers();
+        autoLoad = false;
+
+        render(<ViewEPUB bookId={99} />);
+
+        await act(async () => { vi.advanceTimersByTime(1); });
+        await act(async () => { vi.advanceTimersByTime(15000); });
+
+        expect(screen.getByText(/EPUB 로딩 시간이 초과되었습니다\. \(book_id=99\)/)).toBeTruthy();
+
+        vi.useRealTimers();
+    });
+
+    it('displayerror 이벤트 발생 시 에러 메시지를 표시한다', async () => {
+        autoLoad = false;
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // displayerror 이벤트 시뮬레이션
+        await act(async () => {
+            if (mockRendition._handlers['displayerror']) {
+                mockRendition._handlers['displayerror'](new Error('Section not found'));
+            }
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText(/EPUB 렌더링 오류: Section not found/)).toBeTruthy();
+        });
+    });
+
+    it('displayerror 발생 시 로딩 타임아웃이 취소된다', async () => {
+        vi.useFakeTimers();
+        autoLoad = false;
+
+        render(<ViewEPUB bookId={42} />);
+
+        // fetch 완료 대기 (epubData 설정) - fake timers에서는 waitFor 대신 act+advanceTimersByTime 사용
+        await act(async () => { vi.advanceTimersByTime(1); });
+        expect(capturedGetRendition).toBeTruthy();
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // displayerror 발생 → 타임아웃 취소
+        await act(async () => {
+            mockRendition._handlers['displayerror']?.(new Error('fail'));
+        });
+
+        // 15초 경과 후에도 타임아웃 에러가 아닌 displayerror 메시지만 표시
+        await act(async () => { vi.advanceTimersByTime(15000); });
+        expect(screen.queryByText(/EPUB 로딩 시간이 초과되었습니다/)).toBeNull();
+        expect(screen.getByText(/EPUB 렌더링 오류/)).toBeTruthy();
+    });
+
+    it('book.ready reject 시 로딩 타임아웃이 취소된다', async () => {
+        vi.useFakeTimers();
+        autoLoad = false;
+
+        render(<ViewEPUB bookId={42} />);
+
+        // fake timers에서는 waitFor 대신 act+advanceTimersByTime 사용
+        await act(async () => { vi.advanceTimersByTime(1); });
+        expect(capturedGetRendition).toBeTruthy();
+
+        const mockRendition = createMockRendition({ readyReject: new Error('Book corrupt') });
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // ready reject 처리 대기
+        await act(async () => { vi.advanceTimersByTime(1); });
+
+        // 15초 경과 후에도 타임아웃 에러 없음
+        await act(async () => { vi.advanceTimersByTime(15000); });
+        expect(screen.queryByText(/EPUB 로딩 시간이 초과되었습니다/)).toBeNull();
+        expect(screen.getByText(/EPUB 파싱 오류: Book corrupt/)).toBeTruthy();
+    });
+
+    it('미리보기에서도 displayerror가 에러를 표시한다', async () => {
+        autoLoad = false;
+        render(<ViewEPUB bookId={42} preview={true} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        await act(async () => {
+            mockRendition._handlers['displayerror']?.(new Error('Preview render fail'));
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText(/EPUB 렌더링 오류: Preview render fail/)).toBeTruthy();
+        });
+    });
+
+    it('미리보기에서도 book.ready reject가 에러를 표시한다', async () => {
+        autoLoad = false;
+        render(<ViewEPUB bookId={42} preview={true} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition({ readyReject: new Error('Preview parse fail') });
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+
+        await waitFor(() => {
+            expect(screen.getByText(/EPUB 파싱 오류: Preview parse fail/)).toBeTruthy();
+        });
+    });
+
+    it('displayerror에 문자열이 전달되면 String()으로 표시한다', async () => {
+        autoLoad = false;
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        // 문자열 에러 전달
+        await act(async () => {
+            mockRendition._handlers['displayerror']?.('raw string error');
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText(/EPUB 렌더링 오류: raw string error/)).toBeTruthy();
+        });
+    });
+
+    it('전체보기에서 displayerror 리스너가 등록된다', async () => {
+        render(<ViewEPUB bookId={42} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        const displayerrorCalls = mockRendition.on.mock.calls.filter(c => c[0] === 'displayerror');
+        expect(displayerrorCalls.length).toBe(1);
+    });
+
+    it('미리보기에서도 displayerror 리스너가 등록된다', async () => {
+        render(<ViewEPUB bookId={42} preview={true} />);
+
+        await waitFor(() => {
+            expect(capturedGetRendition).toBeTruthy();
+        });
+
+        const mockRendition = createMockRendition();
+        await act(async () => {
+            capturedGetRendition(mockRendition);
+        });
+
+        const displayerrorCalls = mockRendition.on.mock.calls.filter(c => c[0] === 'displayerror');
+        expect(displayerrorCalls.length).toBe(1);
     });
 });
