@@ -233,6 +233,58 @@ class TestAbstractBookstore(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
+    def test_truncate_title_with_hyphen_spaces(self):
+        """제목에 ' - ' 포함 시 왼쪽만 추출"""
+        store = Yes24Bookstore(verbose=False)
+        self.assertEqual(store._truncate_title('해리포터 - 마법사의 돌'), '해리포터')
+
+    def test_truncate_title_with_hyphen(self):
+        """제목에 '-' 포함 시 왼쪽만 추출"""
+        store = Yes24Bookstore(verbose=False)
+        self.assertEqual(store._truncate_title('해리포터-마법사의 돌'), '해리포터')
+
+    def test_truncate_title_with_fullwidth_colon(self):
+        """제목에 '：' (전각 콜론) 포함 시 왼쪽만 추출"""
+        store = Yes24Bookstore(verbose=False)
+        self.assertEqual(store._truncate_title('소설의 세계：현대 한국 문학'), '소설의 세계')
+
+    def test_truncate_title_with_fullwidth_hyphen(self):
+        """제목에 '－' (전각 하이픈) 포함 시 왼쪽만 추출"""
+        store = Yes24Bookstore(verbose=False)
+        self.assertEqual(store._truncate_title('해리포터－마법사의 돌'), '해리포터')
+
+    def test_truncate_title_no_separator(self):
+        """구분자가 없는 제목은 그대로 반환"""
+        store = Yes24Bookstore(verbose=False)
+        self.assertEqual(store._truncate_title('해리포터와 마법사의 돌'), '해리포터와 마법사의 돌')
+
+    def test_truncate_title_multiple_separators(self):
+        """여러 구분자가 있을 때 첫 번째 기준으로 잘라냄"""
+        store = Yes24Bookstore(verbose=False)
+        self.assertEqual(store._truncate_title('제목 - 부제：설명'), '제목')
+
+    def test_search_truncates_title_before_search(self):
+        """search() 호출 시 제목이 잘려서 검색되는지 확인"""
+        store = Yes24Bookstore(verbose=False)
+
+        with patch.object(store, 'search_by_keyword') as mock_keyword:
+            mock_keyword.return_value = [('제목', '저자', '카테고리', 'url', 'search_url')]
+            _results, keyword, method = store.search(title='해리포터 - 마법사의 돌')
+
+            mock_keyword.assert_called_once_with('해리포터')
+            self.assertEqual(method, 'title')
+
+    def test_search_truncates_title_with_author(self):
+        """제목+저자 검색 시에도 제목이 잘려서 검색되는지 확인"""
+        store = Yes24Bookstore(verbose=False)
+
+        with patch.object(store, 'search_by_keyword') as mock_keyword:
+            mock_keyword.return_value = [('제목', '저자', '카테고리', 'url', 'search_url')]
+            _results, keyword, method = store.search(title='소설의 세계：현대 한국 문학', author='저자명')
+
+            mock_keyword.assert_called_once_with('소설의 세계 저자명')
+            self.assertEqual(method, 'title_author')
+
     def test_search_priority_isbn_first(self):
         """search() 메서드의 우선순위 테스트: ISBN이 최우선"""
         store = Yes24Bookstore(verbose=False)

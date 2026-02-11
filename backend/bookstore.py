@@ -74,6 +74,14 @@ class AbstractBookstore(ABC):
         url = self.build_isbn_search_url(isbn)
         return self._fetch_search_results(url)
 
+    @staticmethod
+    def _truncate_title(title: str) -> str:
+        """제목에서 부제 구분자('-', '：') 왼쪽 부분만 추출"""
+        for sep in [' - ', '－', '-', '：']:
+            if sep in title:
+                title = title.split(sep, 1)[0].strip()
+        return title
+
     def search(self, isbn: str = '', title: str = '', author: str = '') -> Tuple[List[Tuple[str, str, str, str, str]], str, str]:
         """
         ISBN, 제목, 저자를 선택적으로 사용하여 검색
@@ -82,6 +90,10 @@ class AbstractBookstore(ABC):
         Returns:
             (results, actual_keyword, search_method) 튜플
         """
+        # 부제 구분자로 제목 잘라내기
+        if title:
+            title = self._truncate_title(title)
+
         # 1. ISBN이 있고 지원되면 ISBN 검색 시도
         if isbn and self.SUPPORTS_ISBN_SEARCH:
             results = self.search_by_isbn(isbn)
