@@ -175,6 +175,50 @@ describe('SimilarBooks', () => {
         expect(screen.queryByText('95')).toBeNull();
     });
 
+    // ── 90점 이상 하이라이트 ──
+
+    it('90점 이상인 책 행에 highlight-secondary 클래스가 적용된다', async () => {
+        mockBooks([makeBook(1, 95), makeBook(2, 70)]);
+
+        render(<SimilarBooks bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('95')).toBeTruthy();
+        });
+
+        const row95 = screen.getByText('95').closest('div[class]');
+        const row70 = screen.getByText('70').closest('div[class]');
+        expect(row95.classList.contains('highlight-secondary')).toBe(true);
+        expect(row70.classList.contains('highlight-secondary')).toBe(false);
+    });
+
+    it('정확히 90점이면 highlight-secondary가 적용된다', async () => {
+        mockBooks([makeBook(1, 90)]);
+
+        render(<SimilarBooks bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('90')).toBeTruthy();
+        });
+
+        const row = screen.getByText('90').closest('div[class]');
+        expect(row.classList.contains('highlight-secondary')).toBe(true);
+    });
+
+    it('89점이면 highlight-secondary가 적용되지 않는다', async () => {
+        mockBooks([makeBook(1, 89)]);
+
+        render(<SimilarBooks bookId={1} />);
+        fireEvent.click(screen.getByText('유사한 책 목록'));
+
+        await waitFor(() => {
+            expect(screen.getByText('89')).toBeTruthy();
+        });
+
+        const row = screen.getByText('89').closest('div[class]');
+        expect(row.classList.contains('highlight-secondary')).toBe(false);
+    });
+
     // ── 기본 동작 ──
 
     it('bookId가 없으면 API를 호출하지 않는다', () => {

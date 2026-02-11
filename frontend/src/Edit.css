@@ -24,6 +24,10 @@
     border-color: #ffc107 !important;
 }
 
+#edit .highlight-secondary {
+    background-color: #fff9c4 !important;
+}
+
 #edit .btn.highlight-secondary {
     background-color: #fff9c4 !important;
     color: #000 !important;

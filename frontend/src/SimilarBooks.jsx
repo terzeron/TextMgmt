@@ -70,7 +70,7 @@ export default function SimilarBooks({bookId, onSelect}) {
                     {similarBooks && similarBooks.length > 0 ? (
                         <>
                             {similarBooks.map((book) => (
-                                <div key={book.book_id} style={{padding: '4px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
+                                <div key={book.book_id} className={book.score >= 90 ? 'highlight-secondary' : ''} style={{padding: '4px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
                                     <span style={{cursor: 'pointer'}} onClick={() => onSelect && onSelect(`${book.category}/${book.book_id}`)}>
                                         {book.category}/{book.file_path.split('/').pop()}
                                     </span>
