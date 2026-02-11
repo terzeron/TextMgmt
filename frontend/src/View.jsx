@@ -32,7 +32,11 @@ function useIsMobile(breakpoint = 768) {
 export default function View() {
     const isMobile = useIsMobile();
     // get optional route params for deep link
-    const { category: routeCategory, bookId: routeBookId } = useParams();
+    const params = useParams();
+    const routeWildcard = params['*'] || '';
+    const routeParsed = routeWildcard ? parseEntryId(routeWildcard) : null;
+    const routeCategory = routeParsed?.category;
+    const routeBookId = routeParsed?.bookId;
     const {searchResults, hasSearched, role, searchTotal, handleLoadMore, searchLoading} = useOutletContext();
     const [isFolderOpen, setIsFolderOpen] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
@@ -195,7 +199,17 @@ export default function View() {
                 return;
             }
             const categoryItem = findFolderInTree(folderData, routeCategory);
-            if (!categoryItem) return;
+            if (!categoryItem) {
+                // 폴더 트리에 없는 경로 (3레벨 이상) - 백엔드에서 직접 조회
+                jsonGetReq('/books/' + routeBookId, null, (book) => {
+                    setBookInfo(book);
+                    setViewUrl('/viewer/' + book['file_type'] + '/' + routeBookId + '?path=' + encodeURIComponent(book['file_path']));
+                    setDownloadUrl(getApiUrlPrefix() + '/download/' + routeBookId);
+                }, (error) => {
+                    setErrorMessage(`책 정보를 불러올 수 없습니다. ${error}`);
+                });
+                return;
+            }
             // If category children not loaded, load them first
             if (!categoryItem.booksLoaded) {
                 entryClicked(routeCategory);

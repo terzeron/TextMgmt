@@ -20,12 +20,9 @@ export default function App() {
                 {/* Main app with Navigation bar */}
                 <Route path="/" element={<Navigation/>} errorElement={<ErrorPage/>}>
                     <Route index element={<Home/>} errorElement={<ErrorPage/>}/>
-                    <Route path="edit" element={<Edit/>} errorElement={<ErrorPage/>}/>
-                    <Route path="view" element={<View/>} errorElement={<ErrorPage/>}/>
+                    <Route path="edit/*" element={<Edit/>} errorElement={<ErrorPage/>}/>
+                    <Route path="view/*" element={<View/>} errorElement={<ErrorPage/>}/>
                     <Route path="admin" element={<Admin/>} errorElement={<ErrorPage/>}/>
-                    {/* Nested routes handled by main app */}
-                    <Route path="edit/:category/:bookId" element={<Edit/>} errorElement={<ErrorPage/>}/>
-                    <Route path="view/:category/:bookId" element={<View/>} errorElement={<ErrorPage/>}/>
                 </Route>
                 {/* Other standalone or fallback routes */}
             </Routes>

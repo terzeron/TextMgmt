@@ -38,7 +38,11 @@ function useIsMobile(breakpoint = 768) {
 
 export default function Edit() {
     const isMobile = useIsMobile();
-    const { category: routeCategory, bookId: routeBookId } = useParams();
+    const params = useParams();
+    const routeWildcard = params['*'] || '';
+    const routeParsed = routeWildcard ? parseEntryId(routeWildcard) : null;
+    const routeCategory = routeParsed?.category;
+    const routeBookId = routeParsed?.bookId;
     const {searchResults, hasSearched, searchTotal, handleLoadMore, searchLoading} = useOutletContext();
     const [isFolderOpen, setIsFolderOpen] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
@@ -307,7 +311,25 @@ export default function Edit() {
                 return;
             }
             const categoryItem = findFolderInTree(folderData, routeCategory);
-            if (!categoryItem) return;
+            if (!categoryItem) {
+                // 폴더 트리에 없는 경로 (3레벨 이상) - 백엔드에서 직접 조회
+                jsonGetReq('/books/' + routeBookId, null, (book) => {
+                    setSelectedEntryId(`${routeCategory}/${routeBookId}`);
+                    setOriginalBookInfo(book);
+                    const newBook = decomposeTitle(book);
+                    setBookInfo(newBook);
+                    setSearchTrigger(prev => prev + 1);
+                    setViewUrl('/viewer/' + book['file_type'] + '/' + routeBookId + '?path=' + encodeURIComponent(book['file_path']));
+                    setDownloadUrl(getApiUrlPrefix() + '/download/' + routeBookId);
+                    const otherCats = categoryList
+                        .sort((a, b) => a.localeCompare(b))
+                        .filter(cat => cat !== routeCategory && cat !== '_root' && !cat.includes('/'));
+                    setOtherCategoryList(otherCats);
+                }, (error) => {
+                    setErrorMessage(`책 정보를 불러올 수 없습니다. ${error}`);
+                });
+                return;
+            }
             // load children if not yet
             if (!categoryItem.booksLoaded) {
                 entryClicked(routeCategory);
@@ -315,7 +337,7 @@ export default function Edit() {
                 entryClicked(`${routeCategory}/${routeBookId}`);
             }
         }
-    }, [routeCategory, routeBookId, folderData, entryClicked]);
+    }, [routeCategory, routeBookId, folderData, categoryList, decomposeTitle, entryClicked]);
 
     // 초기 로딩 시 첫 번째 파일 자동 선택
     useEffect(() => {
