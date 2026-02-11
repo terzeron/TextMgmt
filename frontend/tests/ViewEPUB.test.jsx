@@ -272,10 +272,10 @@ describe('ViewEPUB', () => {
         expect(div.style.height).toBe('60vh');
     });
 
-    it('preview=false이면 컨테이너 높이가 100vh이다', () => {
+    it('preview=false이면 컨테이너 높이가 100dvh이다', () => {
         const { container } = render(<ViewEPUB bookId={1} />);
         const div = container.firstChild;
-        expect(div.style.height).toBe('100vh');
+        expect(div.style.height).toBe('100dvh');
     });
 
     // ── 로딩 상태 ──
