@@ -307,6 +307,18 @@ export default function Edit() {
         entryClickedRef.current = entryClicked;
     }, [entryClicked]);
 
+    // folderData 변경 시 next/prev 참조를 최신 상태로 재계산
+    // (책 옮기기 후 entryClicked 클로저가 stale folderData로 계산한 값을 보정)
+    useEffect(() => {
+        if (selectedEntryId && folderData.length > 0) {
+            const next = determineNextEntryId(folderData, selectedEntryId);
+            const prev = determinePrevEntryId(folderData, selectedEntryId);
+            nextEntryIdRef.current = next;
+            setNextEntryId(next);
+            prevEntryIdRef.current = prev;
+        }
+    }, [folderData, selectedEntryId]);
+
     useEffect(() => {
         if (routeCategory && routeBookId && folderData.length > 0) {
             // _root 카테고리는 folderData에서 /{bookId} 형식으로 저장됨
