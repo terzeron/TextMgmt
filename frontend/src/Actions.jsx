@@ -100,6 +100,16 @@ export const filterSubstringKeywords = (keywords) => {
     });
 };
 
+// 유사도 비교에 노이즈를 주는 부분문자열 제거
+// 예: "경영일반" → "경영", "중문일반" → "중문"
+const NOISE_PATTERNS = [/일반/g];
+
+export const stripNoiseWords = (keywords) => {
+    return keywords
+        .map(kw => NOISE_PATTERNS.reduce((s, pat) => s.replace(pat, ''), kw).trim())
+        .filter(Boolean);
+};
+
 // 단일 서점 카테고리와 디렉토리의 유사도 점수 계산
 // - 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
 // - 서점 카테고리(이미 마지막 레벨)를 특수기호로 분리하여 사용
@@ -109,9 +119,9 @@ export const filterSubstringKeywords = (keywords) => {
 const calculateCategoryScores = (bookstoreCategory, categoryList) => {
     if (!bookstoreCategory || !categoryList?.length) return {};
 
-    // 서점 카테고리를 특수기호로 분리 후 부분문자열 키워드 제거
+    // 서점 카테고리를 특수기호로 분리 후 부분문자열 키워드 제거 + 노이즈 제거
     const rawKeywords = splitBySpecialChars(bookstoreCategory);
-    const deepKeywords = filterSubstringKeywords(rawKeywords);
+    const deepKeywords = stripNoiseWords(filterSubstringKeywords(rawKeywords));
 
     if (deepKeywords.length === 0) return {};
 
@@ -124,8 +134,8 @@ const calculateCategoryScores = (bookstoreCategory, categoryList) => {
             ? category.split('_').slice(1).join('_')
             : category;
 
-        // 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
-        const dirKeywords = [...(mappings[category] || []), categoryName];
+        // 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체 (노이즈 제거)
+        const dirKeywords = stripNoiseWords([...(mappings[category] || []), categoryName]);
 
         // 각 서점 키워드별 최대 유사도를 구한 뒤 평균
         let totalScore = 0;
@@ -183,11 +193,11 @@ export const getSimilarityDebugInfo = (suggestedCategories, categoryList, topN =
         categoryDetails: [],   // 각 카테고리별 상세 계산 과정
     };
 
-    // 1. 서점별 추출된 키워드 수집 (부분문자열 키워드 필터링 적용)
+    // 1. 서점별 추출된 키워드 수집 (부분문자열 필터링 + 노이즈 제거)
     for (const [store, bookstoreCategory] of Object.entries(suggestedCategories)) {
         if (!bookstoreCategory) continue;
         const rawKeywords = splitBySpecialChars(bookstoreCategory);
-        const keywords = filterSubstringKeywords(rawKeywords);
+        const keywords = stripNoiseWords(filterSubstringKeywords(rawKeywords));
         debugInfo.bookstoreKeywords[store] = {
             original: bookstoreCategory,
             keywords
@@ -201,7 +211,7 @@ export const getSimilarityDebugInfo = (suggestedCategories, categoryList, topN =
         const categoryName = category.includes('_')
             ? category.split('_').slice(1).join('_')
             : category;
-        const dirKeywords = [...(mappings[category] || []), categoryName];
+        const dirKeywords = stripNoiseWords([...(mappings[category] || []), categoryName]);
 
         const matchDetails = []; // 어떤 키워드 쌍이 매칭되었는지
         let totalScore = 0;

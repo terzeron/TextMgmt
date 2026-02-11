@@ -45,6 +45,7 @@ const STORES = [
   { key: 'yes24', label: 'Yes24', supportsIsbn: true },
   { key: 'aladin', label: '알라딘', supportsIsbn: true },
   { key: 'ridi', label: 'RIDI', supportsIsbn: false },
+  { key: 'naver', label: '네이버쇼핑', supportsIsbn: false },
   { key: 'munpia', label: '문피아', supportsIsbn: false },
   { key: 'naverseries', label: '시리즈', supportsIsbn: false }
 ];

@@ -77,7 +77,7 @@ class AbstractBookstore(ABC):
     def search(self, isbn: str = '', title: str = '', author: str = '') -> Tuple[List[Tuple[str, str, str, str, str]], str, str]:
         """
         ISBN, 제목, 저자를 선택적으로 사용하여 검색
-        우선순위: ISBN > 제목+저자 > 제목 > 저자
+        우선순위: ISBN > 제목+저자 > 제목
 
         Returns:
             (results, actual_keyword, search_method) 튜플
@@ -101,20 +101,12 @@ class AbstractBookstore(ABC):
             if results:
                 return results, title, "title"
 
-        # 4. 저자만으로 검색
-        if author:
-            results = self.search_by_keyword(author)
-            if results:
-                return results, author, "author"
-
         # 검색 결과 없음 - 가장 구체적인 키워드 반환
         if title and author:
             keyword = f"{author} {title}" if self.AUTHOR_FIRST_SEARCH else f"{title} {author}"
             return [], keyword, "title_author"
         elif title:
             return [], title, "title"
-        elif author:
-            return [], author, "author"
         elif isbn:
             return [], isbn, "isbn"
         return [], "", "unknown"
@@ -655,58 +647,40 @@ class NaverShoppingBookstore(AbstractBookstore):
     def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
         """
         네이버쇼핑 상세 페이지에서 책 정보를 추출합니다.
+        CSS 클래스에 해시 접미사가 붙으므로 부분 매칭(lambda)을 사용합니다.
         """
         info: Dict[str, str] = {'title': '', 'author': '', 'category': ''}
         try:
-            # 제목
-            title_elem = soup.find('div', class_='bookTitle_book_name__')
+            # 제목: h2.bookTitle_book_name__*
+            title_elem = soup.find('h2', class_=re.compile(r'^bookTitle_book_name__'))
+            if not title_elem:
+                # 기존 호환: div.bookTitle_book_name__
+                title_elem = soup.find('div', class_=re.compile(r'^bookTitle_book_name__'))
             if title_elem:
                 info['title'] = title_elem.get_text(strip=True)
-            # 저자
-            author_elem = soup.find('div', class_='bookTitle_info_content__')
-            if author_elem:
-                info['author'] = author_elem.get_text(strip=True)
+
+            # 저자: "저자" 라벨이 있는 info_title 다음의 info_content
+            for info_title in soup.find_all('div', class_=re.compile(r'^bookTitle_info_title__')):
+                if info_title.get_text(strip=True) == '저자':
+                    info_content = info_title.find_next_sibling('div', class_=re.compile(r'^bookTitle_info_content__'))
+                    if info_content:
+                        info['author'] = info_content.get_text(strip=True)
+                    break
+            if not info['author']:
+                # 기존 호환: 첫 번째 info_content
+                author_elem = soup.find('div', class_=re.compile(r'^bookTitle_info_content__'))
+                if author_elem:
+                    info['author'] = author_elem.get_text(strip=True)
+
             # 카테고리
-            category_elem = soup.find('div', class_='bookCatalogTop_breadcrumb__')
+            category_elem = soup.find('div', class_=re.compile(r'^bookCatalogTop_breadcrumb__'))
             if category_elem:
-                parts = [p.strip() for p in category_elem.get_text().split('>')]
+                text = category_elem.get_text()
+                parts = [p.strip() for p in text.split('>')]
                 info['category'] = ' > '.join(parts)
         except Exception as e:
             logger.error(f"네이버쇼핑 상세 정보 추출 중 오류: {e}")
         return info
-
-    def search_by_keyword(self, keyword: str) -> List[Tuple[str, str, str, str, str]]:
-        """
-        네이버쇼핑 API 를 사용하여 키워드 검색 후 상세 페이지 메타데이터를 반환합니다.
-        """
-        encoded = quote(keyword)
-        search_url = (
-            f"{self.BASE_URL}/api/search?query={encoded}"
-            "&entities=SEARCH_PAGING"
-            "&pagingIndex=1&pagingSize=40&sort=REL&bookTabType=ALL"
-        )
-        resp = self.session.get(search_url, timeout=10, verify=True)
-        try:
-            data = resp.json()
-        except Exception:
-            if self.verbose:
-                logger.error("네이버쇼핑 API 응답을 JSON으로 파싱하지 못했습니다")
-            return []
-        # API 응답 구조에서 item list 접근
-        items = data.get('searchResult', {}).get('items', [])
-        results: List[Tuple[str, str, str, str, str]] = []
-        for item in items[:self.MAX_RESULTS]:
-            item_id = item.get('id')
-            if not item_id:
-                continue
-            detail_url = f"{self.BASE_URL}/book/catalog/{item_id}"
-            # 상세 페이지 요청
-            resp2 = self.session.get(detail_url, timeout=10, verify=True)
-            resp2.encoding = 'utf-8'
-            soup = BeautifulSoup(resp2.text, 'html.parser')
-            info = self.extract_book_info(soup)
-            results.append((info.get('title',''), info.get('author',''), info.get('category',''), detail_url, search_url))
-        return results
 
 class MunpiaBookstore(AbstractBookstore):
     BASE_URL = 'https://novel.munpia.com'
