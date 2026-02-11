@@ -16,7 +16,7 @@ export default function App() {
                 {/* Standalone full-screen viewer without Navigation */}
                 {/* filePath는 쿼리 파라미터(?path=...)로 전달됨 */}
                 <Route path="/viewer/:fileType/:entryId" element={<ViewSingle/>} errorElement={<ErrorPage/>}/>
-                {/* `/edit/:category/:bookId` is nested under Navigation to provide search context */}
+                {/* /edit/* and /view/* support multi-level category paths */}
                 {/* Main app with Navigation bar */}
                 <Route path="/" element={<Navigation/>} errorElement={<ErrorPage/>}>
                     <Route index element={<Home/>} errorElement={<ErrorPage/>}/>
