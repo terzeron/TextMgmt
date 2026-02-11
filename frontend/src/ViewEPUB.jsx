@@ -264,10 +264,10 @@ export default function ViewEPUB({ bookId, preview = false }) {
         }
     }, [preview, bookId]);
 
-    const containerHeight = preview ? "60vh" : "100vh";
+    const containerHeight = preview ? "60vh" : "100dvh";
 
     return (
-        <div style={{ height: containerHeight, textAlign: "center", position: "relative" }}>
+        <div style={{ height: containerHeight, textAlign: "center", position: "relative", overflow: "hidden", overscrollBehavior: "none" }}>
             {isLoading && (
                 <div className="loading-container">
                     <div className="spinner"></div>
