@@ -149,21 +149,13 @@ RIDI_DETAIL_HTML = """
 </html>
 """
 
-NAVER_SHOPPING_API_RESPONSE = {
-    "searchResult": {
-        "items": [
-            {"id": "item123"},
-            {"id": "item456"},
-        ]
-    }
-}
-
 NAVER_SHOPPING_DETAIL_HTML = """
 <html>
 <body>
-<div class="bookTitle_book_name__">네이버 테스트 도서</div>
-<div class="bookTitle_info_content__">네이버 저자</div>
-<div class="bookCatalogTop_breadcrumb__">국내도서 > 소설 > 판타지</div>
+<h2 class="bookTitle_book_name__iDaSl">네이버 테스트 도서</h2>
+<div class="bookTitle_info_title__4RSYO">저자</div>
+<div class="bookTitle_info_content__Us8Pl">네이버 저자</div>
+<div class="bookCatalogTop_breadcrumb__Ql835">국내도서 > 소설 > 판타지</div>
 </body>
 </html>
 """
@@ -277,16 +269,17 @@ class TestAbstractBookstore(unittest.TestCase):
             mock_keyword.assert_called_once_with('해리포터')
             self.assertEqual(method, 'title')
 
-    def test_search_priority_author_fourth(self):
-        """search() 메서드의 우선순위 테스트: 저자만"""
+    def test_search_author_only_returns_empty(self):
+        """search() 메서드: 저자만 입력 시 빈 결과 반환 (저자만 fallback 제거됨)"""
         store = Yes24Bookstore(verbose=False)
 
         with patch.object(store, 'search_by_keyword') as mock_keyword:
-            mock_keyword.return_value = [('제목', '저자', '카테고리', 'url', 'search_url')]
-            _results, _keyword, method = store.search(author='롤링')
+            results, keyword, method = store.search(author='롤링')
 
-            mock_keyword.assert_called_once_with('롤링')
-            self.assertEqual(method, 'author')
+            mock_keyword.assert_not_called()
+            self.assertEqual(results, [])
+            self.assertEqual(keyword, '')
+            self.assertEqual(method, 'unknown')
 
     def test_aladin_author_first_search(self):
         """알라딘: 제목+저자 검색 시 '저자 제목' 순서"""
@@ -812,18 +805,29 @@ class TestNaverShoppingBookstore(unittest.TestCase):
 
     @patch('backend.bookstore.requests.Session')
     def test_search_by_keyword(self, mock_session_class):
-        """키워드 검색 테스트"""
+        """키워드 검색 테스트 (HTML 기반 공통 _fetch_search_results 사용)"""
         mock_session = MagicMock()
         mock_session_class.return_value = mock_session
 
-        mock_api_response = MagicMock()
-        mock_api_response.json.return_value = NAVER_SHOPPING_API_RESPONSE
+        # 검색 페이지 HTML (JSON 스크립트 포함)
+        search_html = """
+        <html><body>
+        <script>{"props":{"pageProps":{"dehydratedState":{"queries":[
+            {"queryKey":["SearchAll"],"state":{"data":{"SearchAll":{"bookSasResult":{"itemList":[
+                {"id":"item123"}
+            ]}}}}}
+        ]}}}}</script>
+        </body></html>
+        """
+        mock_search_response = MagicMock()
+        mock_search_response.text = search_html
+        mock_search_response.encoding = 'utf-8'
 
         mock_detail_response = MagicMock()
         mock_detail_response.text = NAVER_SHOPPING_DETAIL_HTML
         mock_detail_response.encoding = 'utf-8'
 
-        mock_session.get.side_effect = [mock_api_response, mock_detail_response, mock_detail_response]
+        mock_session.get.side_effect = [mock_search_response, mock_detail_response]
 
         store = NaverShoppingBookstore(verbose=False)
         store.session = mock_session
@@ -831,6 +835,8 @@ class TestNaverShoppingBookstore(unittest.TestCase):
         results = store.search_by_keyword("테스트")
 
         self.assertIsInstance(results, list)
+        self.assertGreater(len(results), 0)
+        self.assertEqual(results[0][0], '네이버 테스트 도서')
 
 
 class TestNaverSeriesBookstore(unittest.TestCase):
