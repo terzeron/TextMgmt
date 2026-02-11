@@ -1,8 +1,14 @@
 .standalone-viewer {
     border: none !important;
     padding: 0 !important;
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: auto;
 }
 
 .standalone-viewer .card-body {
     padding: 0 !important;
+    height: 100%;
 }
