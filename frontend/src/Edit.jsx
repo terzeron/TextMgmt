@@ -251,6 +251,7 @@ export default function Edit() {
                 .sort((a, b) => a.localeCompare(b))
                 .filter(cat => cat !== '_root' && !cat.includes('/'));
             setOtherCategoryList(otherCategoryList);
+            window.history.replaceState(null, '', `/edit/${bookId}?category=${encodeURIComponent(book['category'] || '_root')}`);
         } else {
             // book entry
             const parsed = parseEntryId(selectedEntryId);
@@ -278,6 +279,7 @@ export default function Edit() {
                         .sort((a, b) => a.localeCompare(b))
                         .filter(cat => cat !== category && cat !== '_root' && !cat.includes('/'))
                     setOtherCategoryList(otherCategoryList);
+                    window.history.replaceState(null, '', `/edit/${bookId}?category=${encodeURIComponent(category)}`);
                 } else {
                     setErrorMessage(`선택한 책을 찾을 수 없습니다. (ID: ${bookId})`);
                 }
