@@ -42,6 +42,35 @@ export default function ViewSingle(props) {
         }
     }, [props.bookId, props.fileType, props.filePath, props.lineCount, props.pageCount, entryId, paramFileType, paramFilePath]);
 
+    // standalone 모드에서 body/html 스크롤 잠금 (iOS 바운스 방지)
+    useEffect(() => {
+        if (!standalone) return;
+        const html = document.documentElement;
+        const body = document.body;
+        const saved = {
+            htmlOverflow: html.style.overflow,
+            htmlHeight: html.style.height,
+            bodyOverflow: body.style.overflow,
+            bodyHeight: body.style.height,
+            bodyPosition: body.style.position,
+            bodyWidth: body.style.width,
+        };
+        html.style.overflow = 'hidden';
+        html.style.height = '100%';
+        body.style.overflow = 'hidden';
+        body.style.height = '100%';
+        body.style.position = 'fixed';
+        body.style.width = '100%';
+        return () => {
+            html.style.overflow = saved.htmlOverflow;
+            html.style.height = saved.htmlHeight;
+            body.style.overflow = saved.bodyOverflow;
+            body.style.height = saved.bodyHeight;
+            body.style.position = saved.bodyPosition;
+            body.style.width = saved.bodyWidth;
+        };
+    }, [standalone]);
+
     const preview = props.preview || false;
 
     const componentMap = {
