@@ -252,6 +252,12 @@ export default function Edit() {
                 .filter(cat => cat !== '_root' && !cat.includes('/'));
             setOtherCategoryList(otherCategoryList);
             window.history.replaceState(null, '', `/edit/${bookId}?category=${encodeURIComponent(book['category'] || '_root')}`);
+
+            // determine nextEntryId / prevEntryId
+            const nextEntryId = determineNextEntryId(folderData, selectedEntryId);
+            setNextEntryId(nextEntryId);
+            nextEntryIdRef.current = nextEntryId;
+            prevEntryIdRef.current = determinePrevEntryId(folderData, selectedEntryId);
         } else {
             // book entry
             const parsed = parseEntryId(selectedEntryId);
@@ -280,6 +286,12 @@ export default function Edit() {
                         .filter(cat => cat !== category && cat !== '_root' && !cat.includes('/'))
                     setOtherCategoryList(otherCategoryList);
                     window.history.replaceState(null, '', `/edit/${bookId}?category=${encodeURIComponent(category)}`);
+
+                    // determine nextEntryId / prevEntryId
+                    const nextEntryId = determineNextEntryId(folderData, selectedEntryId);
+                    setNextEntryId(nextEntryId);
+                    nextEntryIdRef.current = nextEntryId;
+                    prevEntryIdRef.current = determinePrevEntryId(folderData, selectedEntryId);
                 } else {
                     setErrorMessage(`선택한 책을 찾을 수 없습니다. (ID: ${bookId})`);
                 }
@@ -288,20 +300,6 @@ export default function Edit() {
             }
         }
 
-        /*
-        if (selectedEntryId.indexOf('/') <= 0) {
-            selectedEntryId = ROOT_DIRECTORY + '/' + selectedEntryId;
-            console.log(`entryClicked(): key=${selectedEntryId}`);
-        }
-        */
-
-        // determine nextEntryId
-        const nextEntryId = determineNextEntryId(folderData, selectedEntryId);
-        setNextEntryId(nextEntryId);
-        nextEntryIdRef.current = nextEntryId;
-
-        // determine prevEntryId
-        prevEntryIdRef.current = determinePrevEntryId(folderData, selectedEntryId);
     }, [folderData, categoryList, decomposeTitle]);
 
     // entryClicked ref 업데이트 (최신 함수 참조 유지)
@@ -487,9 +485,19 @@ export default function Edit() {
             console.log(`appendEntryToFolderData(): pushed ${newFileName} to root`);
         } else {
             // 2단계 트리에서 폴더 내 파일 추가
-            newFolderData = updateFolderChildren(newFolderData, newDirName, (children) =>
-                [...children, newEntry]
-            );
+            newFolderData = updateFolderChildren(newFolderData, newDirName, (children) => {
+                const folders = children.filter(c => c.fileType === 'folder');
+                const books = children.filter(c => c.fileType !== 'folder');
+                const insertIdx = books.findIndex(b =>
+                    newEntry.label.localeCompare(b.label) < 0
+                );
+                if (insertIdx === -1) {
+                    books.push(newEntry);
+                } else {
+                    books.splice(insertIdx, 0, newEntry);
+                }
+                return [...folders, ...books];
+            });
             console.log(`appendEntryToFolderData(): pushed ${newFileName} to ${newDirName}`);
         }
         return newFolderData;

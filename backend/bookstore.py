@@ -360,6 +360,16 @@ class AladinBookstore(AbstractBookstore):
     SUPPORTS_ISBN_SEARCH = True
     AUTHOR_FIRST_SEARCH = True
 
+    @staticmethod
+    def _strip_trailing_number(title: str) -> str:
+        """제목 끝의 권수 번호를 제거 (예: '마왕의 딸 3' → '마왕의 딸')"""
+        return re.sub(r'\s+\d+\s*$', '', title)
+
+    def search(self, isbn: str = '', title: str = '', author: str = '') -> Tuple[List[Tuple[str, str, str, str, str]], str, str]:
+        if title:
+            title = self._strip_trailing_number(title)
+        return super().search(isbn=isbn, title=title, author=author)
+
     def build_search_url(self, keyword: str) -> str:
         """알라딘 검색 URL을 생성합니다."""
         encoded_keyword = quote(keyword)
