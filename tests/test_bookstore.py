@@ -641,6 +641,25 @@ class TestAladinBookstore(unittest.TestCase):
         store = AladinBookstore(verbose=False)
         self.assertTrue(store.SUPPORTS_ISBN_SEARCH)
 
+    def test_strip_trailing_number(self):
+        """제목 끝 번호 제거 테스트"""
+        store = AladinBookstore(verbose=False)
+        self.assertEqual(store._strip_trailing_number('마왕의 딸 3'), '마왕의 딸')
+        self.assertEqual(store._strip_trailing_number('원펀맨 25'), '원펀맨')
+        self.assertEqual(store._strip_trailing_number('1984'), '1984')
+        self.assertEqual(store._strip_trailing_number('해리포터'), '해리포터')
+
+    def test_search_strips_trailing_number(self):
+        """알라딘 search() 호출 시 제목 끝 번호가 제거되는지 확인"""
+        store = AladinBookstore(verbose=False)
+
+        with patch.object(store, 'search_by_keyword') as mock_keyword:
+            mock_keyword.return_value = [('제목', '저자', '카테고리', 'url', 'search_url')]
+            _results, keyword, method = store.search(title='마왕의 딸 3')
+
+            mock_keyword.assert_called_once_with('마왕의 딸')
+            self.assertEqual(method, 'title')
+
 
 class TestRidibooksBookstore(unittest.TestCase):
     """리디북스 서점 테스트"""
