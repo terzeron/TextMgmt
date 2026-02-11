@@ -819,9 +819,9 @@ class BookManager:
             return [Book(book_id=book_id, info=doc) for book_id, doc, _score in result_list], None
         return [], "No books found"
 
-    async def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0) -> Tuple[List[Book], int, Optional[str]]:
-        LOGGER.debug("# search_by_keyword_paged(keyword='%s', size=%d, offset=%d)", keyword, size, offset)
-        result_list, total = self.es_manager.search_by_keyword_paged(keyword, size=size, offset=offset)
+    async def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: List[str] = None) -> Tuple[List[Book], int, Optional[str]]:
+        LOGGER.debug("# search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s)", keyword, size, offset, exclude_categories)
+        result_list, total = self.es_manager.search_by_keyword_paged(keyword, size=size, offset=offset, exclude_categories=exclude_categories)
         if result_list:
             return [Book(book_id=bid, info=doc) for bid, doc, _ in result_list], total, None
         return [], total, "No books found"

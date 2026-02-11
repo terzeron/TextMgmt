@@ -239,6 +239,40 @@ class TestBackend:
         assert books and len(books) > 0
         assert book.book_id in [b["book_id"] for b in books]
 
+    @pytest.mark.asyncio
+    async def test_search_by_keyword_with_exclude_categories(self, test_book):
+        book = test_book["book"]
+        client = test_book["client"]
+
+        keyword = book.title
+        # exclude_categories에 해당 책의 카테고리를 넣으면 결과에서 제외됨
+        response = client.get(f"/search/{keyword}?exclude_categories={book.category}")
+        assert response.status_code == 200
+        response_data = response.json()
+        if response_data["status"] == "success" and response_data.get("result"):
+            excluded_ids = [b["book_id"] for b in response_data["result"]
+                           if b["category"] == book.category]
+            assert len(excluded_ids) == 0, f"제외된 카테고리 '{book.category}'의 책이 포함됨"
+
+    @pytest.mark.asyncio
+    async def test_search_by_keyword_without_exclude_categories(self, test_book):
+        book = test_book["book"]
+        client = test_book["client"]
+
+        keyword = book.title
+        # exclude_categories 없이 검색하면 결과 포함
+        response = client.get(f"/search/{keyword}")
+        assert response.status_code == 200
+        response_data = response.json()
+        assert response_data["status"] == "success"
+
+        # 빈 exclude_categories도 동일하게 동작
+        response2 = client.get(f"/search/{keyword}?exclude_categories=")
+        assert response2.status_code == 200
+        response_data2 = response2.json()
+        assert response_data2["status"] == "success"
+        assert response_data2.get("total", 0) == response_data.get("total", 0)
+
 
 class TestUpdateBookConflict:
     """update_book 충돌 감지 및 force 덮어쓰기 테스트."""
