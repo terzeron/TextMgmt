@@ -9,6 +9,18 @@ import {faChevronDown, faChevronRight} from '@fortawesome/free-solid-svg-icons';
 import {getSimilarityDebugInfo} from './Actions';
 import {isCacheInitialized, fetchCategoryMappings} from './CategoryMapping';
 
+// 카테고리 키(예: "aladin_0_0")에서 서점명 추출
+const getStoreName = (key) => {
+    const idx = key.indexOf('_');
+    return idx > 0 ? key.substring(0, idx) : key;
+};
+
+const STORE_COLORS = {
+    yes24: '#6A1B9A',
+    aladin: '#0D47A1',
+    ridi: '#00897B',
+};
+
 export default function SimilarityDebug({suggestedCategories, categoryList}) {
     const [isOpen, setIsOpen] = useState(false);
     const [debugInfo, setDebugInfo] = useState(null);
@@ -61,16 +73,18 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
                                 </tr>
                             </thead>
                             <tbody>
-                                {Object.entries(debugInfo.bookstoreKeywords).map(([store, info]) => (
+                                {Object.entries(debugInfo.bookstoreKeywords).map(([store, info]) => {
+                                    const name = getStoreName(store);
+                                    return (
                                     <tr key={store}>
                                         <td>
                                             <Badge
                                                 style={{
-                                                    backgroundColor: store.startsWith('yes24') ? '#6A1B9A' : '#0D47A1',
+                                                    backgroundColor: STORE_COLORS[name] || '#455A64',
                                                     minWidth: '55px'
                                                 }}
                                             >
-                                                {store.startsWith('yes24') ? 'yes24' : 'aladin'}
+                                                {name}
                                             </Badge>
                                         </td>
                                         <td className="text-muted" style={{fontSize: '0.75rem'}}>
@@ -82,7 +96,8 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
                                             ))}
                                         </td>
                                     </tr>
-                                ))}
+                                    );
+                                })}
                             </tbody>
                         </Table>
                     </div>
@@ -113,16 +128,18 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
                                             </div>
                                         </td>
                                         <td style={{fontSize: '0.75rem'}}>
-                                            {detail.matchDetails.map((match, mIdx) => (
+                                            {detail.matchDetails.map((match, mIdx) => {
+                                                const matchName = getStoreName(match.store);
+                                                return (
                                                 <div key={mIdx}>
                                                     <Badge
                                                         className="me-1"
                                                         style={{
-                                                            backgroundColor: match.store.startsWith('yes24') ? '#6A1B9A' : '#0D47A1',
+                                                            backgroundColor: STORE_COLORS[matchName] || '#455A64',
                                                             minWidth: '55px'
                                                         }}
                                                     >
-                                                        {match.store.startsWith('yes24') ? 'yes24' : 'aladin'}
+                                                        {matchName}
                                                     </Badge>
                                                     <span className="text-primary">{match.bookstoreKeyword}</span>
                                                     {' ↔ '}
@@ -130,7 +147,8 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
                                                     {' = '}
                                                     <strong>{match.similarity.toFixed(2)}</strong>
                                                 </div>
-                                            ))}
+                                                );
+                                            })}
                                         </td>
                                         <td className="text-center">
                                             <Badge bg={idx === 0 ? 'success' : 'secondary'}>
