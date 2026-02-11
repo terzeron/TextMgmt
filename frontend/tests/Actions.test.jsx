@@ -5,7 +5,7 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 afterEach(cleanup);
 
 vi.mock('../src/Common', () => ({
-    getRandomMediumColor: () => '#000000',
+    getRandomLightColor: () => '#cccccc',
     ROOT_DIRECTORY: '$$rootdir$$',
 }));
 

@@ -8,7 +8,7 @@ import {Button, Form, InputGroup, Row} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import {faTruckMoving, faUpload} from '@fortawesome/free-solid-svg-icons';
 
-import {getRandomMediumColor, ROOT_DIRECTORY} from './Common';
+import {getRandomLightColor, ROOT_DIRECTORY} from './Common';
 import {loadCategoryMappings, fetchCategoryMappings, isCacheInitialized} from './CategoryMapping';
 
 
@@ -308,7 +308,7 @@ export default function Actions(props) {
                 if (hasSubCategory) {
                     const prefix = category.split('_')[0];
                     const subCategory = category.split('_')[1];
-                    return {key: category, label: subCategory, style: {backgroundColor: getRandomMediumColor(prefix), color: 'white'}};
+                    return {key: category, label: subCategory, style: {backgroundColor: getRandomLightColor(prefix), color: '#333'}};
                 }
                 return {key: category, label: category, style: {}, class: 'btn-light'};
             });
