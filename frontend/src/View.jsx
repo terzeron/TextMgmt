@@ -47,6 +47,7 @@ export default function View() {
     const [successMessage, setSuccessMessage] = useState('');
     // removed selectedEntryId state as it's not needed
     const [folderData, setFolderData] = useState([]);
+    const [hiddenCategories, setHiddenCategories] = useState(new Set());
     const [bookInfo, setBookInfo] = useState({});
     const [viewUrl, setViewUrl] = useState('');
     const [downloadUrl, setDownloadUrl] = useState('');
@@ -96,6 +97,7 @@ export default function View() {
             if (role === 'viewer') {
                 jsonGetReq('/hidden-categories', null, (hiddenList) => {
                     const hiddenSet = new Set(hiddenList || []);
+                    setHiddenCategories(hiddenSet);
                     const filteredCategories = nonEmptyCategories.filter(cat => {
                         for (const hidden of hiddenSet) {
                             if (cat === hidden || cat.startsWith(hidden + '/')) {
@@ -206,6 +208,16 @@ export default function View() {
             if (!categoryItem) {
                 // 폴더 트리에 없는 경로 (3레벨 이상) - 백엔드에서 직접 조회
                 jsonGetReq('/books/' + routeBookId, null, (book) => {
+                    // viewer인 경우 hidden 카테고리 접근 차단
+                    if (role === 'viewer' && hiddenCategories.size > 0) {
+                        const bookCat = book['category'] || '';
+                        for (const hidden of hiddenCategories) {
+                            if (bookCat === hidden || bookCat.startsWith(hidden + '/')) {
+                                setErrorMessage('접근 권한이 없는 카테고리입니다.');
+                                return;
+                            }
+                        }
+                    }
                     setBookInfo(book);
                     setViewUrl('/viewer/' + book['file_type'] + '/' + routeBookId + '?path=' + encodeURIComponent(book['file_path']));
                     setDownloadUrl(getApiUrlPrefix() + '/download/' + routeBookId);
