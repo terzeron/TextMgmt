@@ -105,7 +105,7 @@ describe('Bookstore 카테고리 수집', () => {
         });
     };
 
-    it('자동 검색 시 yes24, aladin, ridi 세 서점의 카테고리를 수집한다', async () => {
+    it('자동 검색 시 yes24, aladin, naver 세 서점의 카테고리를 수집한다', async () => {
         const onCategoriesFound = vi.fn();
 
         mockSearchResponses({
@@ -117,9 +117,9 @@ describe('Bookstore 카테고리 수집', () => {
                 status: 'success',
                 result: [{ title: 'T', author: 'A', category: '문학 > 한국문학', book_url: 'u2' }]
             },
-            '/search/bookstore/ridi': {
+            '/search/bookstore/naver': {
                 status: 'success',
-                result: [{ title: 'T', author: 'A', category: '소설 > 한국소설 || 소설 > 추리/미스터리', book_url: 'u3' }]
+                result: [{ title: 'T', author: 'A', category: '도서 > 소설 > 추리/미스터리', book_url: 'u3' }]
             },
         });
 
@@ -146,15 +146,15 @@ describe('Bookstore 카테고리 수집', () => {
         expect(Object.values(lastCall)).toContain('소설 한국소설');
         // aladin 카테고리
         expect(Object.values(lastCall)).toContain('문학 한국문학');
-        // ridi 다중 경로 카테고리 (두 개 모두 존재)
+        // naver 카테고리
         expect(Object.values(lastCall)).toContain('소설 추리/미스터리');
     });
 
-    it('RIDI 다중 경로가 개별 키로 분리되어 수집된다', async () => {
+    it('네이버쇼핑 다중 경로가 개별 키로 분리되어 수집된다', async () => {
         const onCategoriesFound = vi.fn();
 
         mockSearchResponses({
-            '/search/bookstore/ridi': {
+            '/search/bookstore/naver': {
                 status: 'success',
                 result: [{ title: 'T', author: 'A', category: '소설 > 한국소설 || 소설 > SF', book_url: 'u' }]
             },
@@ -172,17 +172,17 @@ describe('Bookstore 카테고리 수집', () => {
             const calls = onCategoriesFound.mock.calls;
             const lastCall = calls[calls.length - 1]?.[0];
             expect(lastCall).toBeDefined();
-            const ridiKeys = Object.keys(lastCall).filter(k => k.startsWith('ridi_'));
-            expect(ridiKeys.length).toBeGreaterThanOrEqual(2);
+            const naverKeys = Object.keys(lastCall).filter(k => k.startsWith('naver_'));
+            expect(naverKeys.length).toBeGreaterThanOrEqual(2);
         });
 
         const lastCall = onCategoriesFound.mock.calls[onCategoriesFound.mock.calls.length - 1][0];
 
         // 하나의 검색 결과에서 두 경로가 별도 키로 수집됨
-        const ridiKeys = Object.keys(lastCall).filter(k => k.startsWith('ridi_'));
-        const ridiValues = ridiKeys.map(k => lastCall[k]);
-        expect(ridiValues).toContain('소설 한국소설');
-        expect(ridiValues).toContain('소설 SF');
+        const naverKeys = Object.keys(lastCall).filter(k => k.startsWith('naver_'));
+        const naverValues = naverKeys.map(k => lastCall[k]);
+        expect(naverValues).toContain('소설 한국소설');
+        expect(naverValues).toContain('소설 SF');
     });
 
     it('검색 결과가 없는 서점은 카테고리에 포함되지 않는다', async () => {

@@ -38,7 +38,7 @@ const collectStoreCategories = (storeData, storeKey, categories) => {
 };
 
 // 카테고리 유사도 판정에 참여하는 서점 목록
-const CATEGORY_STORES = ['yes24', 'aladin', 'ridi'];
+const CATEGORY_STORES = ['yes24', 'aladin', 'naver'];
 
 // 자동 검색 대상 서점 목록 (카테고리 판정 서점 + 추가 자동 검색 서점)
 const AUTO_SEARCH_STORES = ['yes24', 'aladin', 'naver', 'ridi'];
@@ -111,10 +111,11 @@ export default function Bookstore(props) {
     };
 
     const runAutoSearch = async () => {
-      const results = {};
-      for (const storeKey of AUTO_SEARCH_STORES) {
-        results[storeKey] = await autoSearch(storeKey);
-      }
+      // 서점 검색을 병렬 실행 (서점 간 의존성 없음)
+      const entries = await Promise.all(
+        AUTO_SEARCH_STORES.map(async (storeKey) => [storeKey, await autoSearch(storeKey)])
+      );
+      const results = Object.fromEntries(entries);
 
       // 카테고리 유사도 판정 서점의 결과만 수집하여 부모에게 전달
       if (props.onCategoriesFound) {
