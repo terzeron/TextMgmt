@@ -63,6 +63,10 @@ export const getRandomMediumColor = (str) => {
     return getRandomColorWithRange(str, 96, 96);
 }
 
+export const getRandomLightColor = (str) => {
+    return getRandomColorWithRange(str, 224, 31);
+}
+
 const apiReq = (url, method, payload, type, resolve, reject, final) => {
     try {
         fetch(getApiUrlPrefix() + url, payload ? {

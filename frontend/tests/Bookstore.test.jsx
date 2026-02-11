@@ -6,7 +6,7 @@ vi.mock('../src/Common', () => ({
     rawJsonGetReq: vi.fn(),
     getApiUrlPrefix: () => 'http://localhost:8000',
     handleFetchErrors: (r) => r,
-    getRandomMediumColor: () => '#000',
+    getRandomLightColor: () => '#ccc',
     ROOT_DIRECTORY: '$$rootdir$$',
 }));
 
