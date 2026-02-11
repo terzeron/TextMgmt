@@ -67,14 +67,14 @@ export default function ViewSingle(props) {
                     <span>
                         {props.viewUrl && (
                             <a href={props.viewUrl} target="_blank" rel="noreferrer">
-                                <Button variant="outline-primary" disabled={!props.viewUrl} className="btn-xs float-end">
+                                <Button variant="outline-primary" disabled={!props.viewUrl} size="sm" className="float-end">
                                     전체 보기
                                 </Button>
                             </a>
                         )}
                         {props.downloadUrl && (
                             <a href={props.downloadUrl} target="_blank" rel="noreferrer">
-                                <Button variant="outline-primary" disabled={!props.downloadUrl} className="btn-xs float-end">
+                                <Button variant="outline-primary" disabled={!props.downloadUrl} size="sm" className="float-end">
                                     다운로드
                                 </Button>
                             </a>
