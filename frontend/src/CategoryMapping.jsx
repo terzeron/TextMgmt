@@ -156,7 +156,7 @@ export default function CategoryMapping({categoryList}) {
     const handleToggleHidden = useCallback((category, currentlyHidden) => {
         setSaving(true);
         jsonPostReq(
-            `/hidden-categories/${encodeURIComponent(category)}`,
+            `/hidden-categories/${category.split('/').map(encodeURIComponent).join('/')}`,
             {hidden: !currentlyHidden},
             (result) => {
                 setHiddenCategories(new Set(result || []));

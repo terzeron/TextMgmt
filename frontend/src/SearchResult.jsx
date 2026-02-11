@@ -39,7 +39,7 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                         {showEditButton && (
                                             <Button
                                                 variant="outline-warning" size="sm"
-                                                onClick={() => window.open(`/edit/${encodeURIComponent(book.category)}/${book.book_id}`, '_blank', 'noopener')}
+                                                onClick={() => window.open(`/edit/${book.category.split('/').map(encodeURIComponent).join('/')}/${book.book_id}`, '_blank', 'noopener')}
                                                 style={{marginRight: '4px'}}
                                             >
                                                 편집
@@ -47,7 +47,7 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                         )}
                                         <Button
                                             variant="outline-primary" size="sm"
-                                            onClick={() => window.open(`/view/${encodeURIComponent(book.category)}/${book.book_id}`, '_blank', 'noopener')}
+                                            onClick={() => window.open(`/view/${book.category.split('/').map(encodeURIComponent).join('/')}/${book.book_id}`, '_blank', 'noopener')}
                                             style={{marginRight: '4px'}}
                                         >
                                             조회
