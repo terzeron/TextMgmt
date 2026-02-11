@@ -173,6 +173,7 @@ export default function View() {
             setBookInfo(book);
             setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
             setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
+            window.history.replaceState(null, '', `/view/${bookId}?category=${encodeURIComponent(book['category'] || '_root')}`);
         } else {
             // book entry (폴더 내 파일)
             const parsed = parseEntryId(selectedEntryId);
@@ -187,6 +188,7 @@ export default function View() {
                     setBookInfo(book);
                     setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
                     setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
+                    window.history.replaceState(null, '', `/view/${bookId}?category=${encodeURIComponent(category)}`);
                 } else {
                     setErrorMessage(`can't find the selected book`);
                 }
