@@ -1,6 +1,24 @@
-import { sprintf } from 'sprintf-js';
 import { str } from 'crc-32';
 import { DateTime } from 'luxon';
+
+const GOLDEN_RATIO_CONJUGATE = 0.6180339887498949; // 1/φ
+
+// R1 시퀀스: 황금비 기반 equidistributed 수열
+export const quasiRandomHue = (index) => {
+    return (index * GOLDEN_RATIO_CONJUGATE) % 1.0;
+};
+
+// Van der Corput 시퀀스 (대안 준난수열)
+export const vanDerCorput = (n, base = 2) => {
+    let result = 0;
+    let denom = 1;
+    while (n > 0) {
+        denom *= base;
+        result += (n % base) / denom;
+        n = Math.floor(n / base);
+    }
+    return result;
+};
 
 export function getApiUrlPrefix() {
     const api_url_prefix = window.__ENV__?.['VITE_API_URL_PREFIX'] || import.meta.env.VITE_API_URL_PREFIX;
@@ -17,55 +35,19 @@ export function handleFetchErrors(response) {
     return response;
 }
 
-const getRandomColorWithRange = (key, base, range) => {
-    let i = str(key + "_saltstring") % (256 * 256 * 256);
-    if (i < 0) {
-        i = i * -1;
-    }
-    let i1 = ((i >> 0) % range) + base;
-    let i2 = ((i >> 8) % range) + base;
-    let i3 = ((i >> 16) % range) + base;
+export const getRandomLightColor = (key) => {
+    let index = str(key + "_saltstring") % (256 * 256 * 256);
+    if (index < 0) index = -index;
+    const hue = Math.round(quasiRandomHue(index) * 360);
+    return `hsl(${hue}, 55%, 90%)`;
+};
 
-    if (i1 > i2 && i1 > i3) {
-        if (i2 > i3) {
-            i2 = i2 * 0.6;
-            i3 = i3 * 0.3;
-        } else {
-            i2 = i2 * 0.3;
-            i3 = i3 * 0.6;
-        }
-    }
-    if (i2 > i1 && i2 > i3) {
-        if (i1 > i3) {
-            i3 = i3 * 0.1;
-            i1 = i1 * 0.7;
-        } else {
-            i3 = i3 * 0.7;
-            i1 = i1 * 0.1;
-        }
-    }
-    if (i3 > i1 && i3 > i2) {
-        i3 = i3 * 0.8;
-        if (i1 > i2) {
-            i1 = i1 * 0.6;
-            i2 = i2 * 0.3;
-        } else {
-            i1 = i1 * 0.3;
-            i2 = i2 * 0.6;
-        }
-    }
-
-    return sprintf("#%02x%02x%02x", i1, i2, i3);
-}
-
-
-export const getRandomMediumColor = (str) => {
-    return getRandomColorWithRange(str, 96, 96);
-}
-
-export const getRandomLightColor = (str) => {
-    return getRandomColorWithRange(str, 240, 15);
-}
+export const getRandomMediumColor = (key) => {
+    let index = str(key + "_saltstring") % (256 * 256 * 256);
+    if (index < 0) index = -index;
+    const hue = Math.round(quasiRandomHue(index) * 360);
+    return `hsl(${hue}, 50%, 55%)`;
+};
 
 const apiReq = (url, method, payload, type, resolve, reject, final) => {
     try {
