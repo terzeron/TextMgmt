@@ -1,5 +1,5 @@
 import {useEffect, useState, useCallback, Suspense} from 'react';
-import {useParams, useOutletContext} from 'react-router-dom';
+import {useParams, useSearchParams, useOutletContext} from 'react-router-dom';
 
 import {getApiUrlPrefix} from './Common';
 
@@ -33,10 +33,14 @@ export default function View() {
     const isMobile = useIsMobile();
     // get optional route params for deep link
     const params = useParams();
+    const [searchParams] = useSearchParams();
+    // 방법 B: /view/bookId?category=... (우선) → 하위호환: /view/category/bookId (폴백)
     const routeWildcard = params['*'] || '';
-    const routeParsed = routeWildcard ? parseEntryId(routeWildcard) : null;
-    const routeCategory = routeParsed?.category;
-    const routeBookId = routeParsed?.bookId;
+    const qCategory = searchParams.get('category');
+    const routeCategory = qCategory || (routeWildcard ? parseEntryId(routeWildcard)?.category : undefined);
+    const routeBookId = qCategory
+        ? (/^\d+$/.test(routeWildcard) ? routeWildcard : undefined)
+        : (routeWildcard ? parseEntryId(routeWildcard)?.bookId : undefined);
     const {searchResults, hasSearched, role, searchTotal, handleLoadMore, searchLoading} = useOutletContext();
     const [isFolderOpen, setIsFolderOpen] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');

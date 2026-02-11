@@ -2,7 +2,7 @@ import './Edit.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
 import {useCallback, useEffect, useState, useRef, Suspense} from 'react';
-import {useParams, useOutletContext} from 'react-router-dom';
+import {useParams, useSearchParams, useOutletContext} from 'react-router-dom';
 
 import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
@@ -39,10 +39,14 @@ function useIsMobile(breakpoint = 768) {
 export default function Edit() {
     const isMobile = useIsMobile();
     const params = useParams();
+    const [searchParams] = useSearchParams();
+    // 방법 B: /edit/bookId?category=... (우선) → 하위호환: /edit/category/bookId (폴백)
     const routeWildcard = params['*'] || '';
-    const routeParsed = routeWildcard ? parseEntryId(routeWildcard) : null;
-    const routeCategory = routeParsed?.category;
-    const routeBookId = routeParsed?.bookId;
+    const qCategory = searchParams.get('category');
+    const routeCategory = qCategory || (routeWildcard ? parseEntryId(routeWildcard)?.category : undefined);
+    const routeBookId = qCategory
+        ? (/^\d+$/.test(routeWildcard) ? routeWildcard : undefined)
+        : (routeWildcard ? parseEntryId(routeWildcard)?.bookId : undefined);
     const {searchResults, hasSearched, searchTotal, handleLoadMore, searchLoading} = useOutletContext();
     const [isFolderOpen, setIsFolderOpen] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
@@ -314,7 +318,9 @@ export default function Edit() {
             if (!categoryItem) {
                 // 폴더 트리에 없는 경로 (3레벨 이상) - 백엔드에서 직접 조회
                 jsonGetReq('/books/' + routeBookId, null, (book) => {
-                    setSelectedEntryId(`${routeCategory}/${routeBookId}`);
+                    // URL의 category 대신 API 응답의 실제 category 사용 (위조 방지)
+                    const realCategory = book['category'] || routeCategory;
+                    setSelectedEntryId(`${realCategory}/${routeBookId}`);
                     setOriginalBookInfo(book);
                     const newBook = decomposeTitle(book);
                     setBookInfo(newBook);
@@ -323,7 +329,7 @@ export default function Edit() {
                     setDownloadUrl(getApiUrlPrefix() + '/download/' + routeBookId);
                     const otherCats = categoryList
                         .sort((a, b) => a.localeCompare(b))
-                        .filter(cat => cat !== routeCategory && cat !== '_root' && !cat.includes('/'));
+                        .filter(cat => cat !== realCategory && cat !== '_root' && !cat.includes('/'));
                     setOtherCategoryList(otherCats);
                 }, (error) => {
                     setErrorMessage(`책 정보를 불러올 수 없습니다. ${error}`);

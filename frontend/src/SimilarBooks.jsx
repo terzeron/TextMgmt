@@ -91,14 +91,14 @@ export default function SimilarBooks({bookId, onSelect}) {
                                         )}
                                         <Button
                                             variant="outline-warning" className="btn-xs"
-                                            onClick={() => window.open(`/edit/${book.category.split('/').map(encodeURIComponent).join('/')}/${book.book_id}`, '_blank', 'noopener')}
+                                            onClick={() => window.open(`/edit/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
                                             style={{marginRight: '4px'}}
                                         >
                                             편집
                                         </Button>
                                         <Button
                                             variant="outline-primary" className="btn-xs"
-                                            onClick={() => window.open(`/view/${book.category.split('/').map(encodeURIComponent).join('/')}/${book.book_id}`, '_blank', 'noopener')}
+                                            onClick={() => window.open(`/view/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
                                             style={{marginRight: '4px'}}
                                         >
                                             조회
