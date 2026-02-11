@@ -15,7 +15,7 @@ vi.mock('../src/CategoryMapping', () => ({
     isCacheInitialized: () => true,
 }));
 
-import Actions, { generateNgrams, ngramSimilarity, calculateSimilarity, filterSubstringKeywords } from '../src/Actions';
+import Actions, { generateNgrams, ngramSimilarity, calculateSimilarity, filterSubstringKeywords, stripNoiseWords } from '../src/Actions';
 
 // ── generateNgrams ──
 
@@ -150,6 +150,40 @@ describe('filterSubstringKeywords', () => {
 
     it('여러 키워드 중 포함되는 것만 제거한다', () => {
         expect(filterSubstringKeywords(['소설', '세계각국소설', '역사'])).toEqual(['세계각국소설', '역사']);
+    });
+});
+
+// ── stripNoiseWords ──
+
+describe('stripNoiseWords', () => {
+    it('"일반"을 제거한다', () => {
+        expect(stripNoiseWords(['경영일반'])).toEqual(['경영']);
+    });
+
+    it('여러 키워드에서 "일반"을 제거한다', () => {
+        expect(stripNoiseWords(['중문일반', '영문일반', '교육일반']))
+            .toEqual(['중문', '영문', '교육']);
+    });
+
+    it('"일반"이 없는 키워드는 그대로 유지한다', () => {
+        expect(stripNoiseWords(['소설', '역사'])).toEqual(['소설', '역사']);
+    });
+
+    it('"일반"만 있는 키워드는 제거한다 (빈 문자열 필터)', () => {
+        expect(stripNoiseWords(['일반'])).toEqual([]);
+    });
+
+    it('혼합: "일반" 포함과 미포함 키워드를 올바르게 처리한다', () => {
+        expect(stripNoiseWords(['경영일반', '소설', '건강일반']))
+            .toEqual(['경영', '소설', '건강']);
+    });
+
+    it('빈 배열이면 빈 배열을 반환한다', () => {
+        expect(stripNoiseWords([])).toEqual([]);
+    });
+
+    it('키워드 중간에 있는 "일반"도 제거한다', () => {
+        expect(stripNoiseWords(['일반소설'])).toEqual(['소설']);
     });
 });
 
