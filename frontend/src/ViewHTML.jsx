@@ -4,7 +4,6 @@ import { getApiUrlPrefix } from "./Common";
 
 export default function ViewHTML({ bookId }) {
     const ref = useRef(null);
-    const [iframeHeight, setIframeHeight] = useState(0);
     const [url, setUrl] = useState("");
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState(null);
@@ -18,7 +17,6 @@ export default function ViewHTML({ bookId }) {
             return;
         }
 
-        setIframeHeight(document.body.scrollHeight);
         const iframeUrl = getApiUrlPrefix() + "/download/" + bookId;
         console.log(iframeUrl);
         setUrl(iframeUrl);
@@ -27,7 +25,6 @@ export default function ViewHTML({ bookId }) {
 
         return () => {
             setUrl("");
-            setIframeHeight(0);
         };
     }, [bookId]);
 
@@ -52,7 +49,7 @@ export default function ViewHTML({ bookId }) {
                 style={{
                     display: isLoading || errorMessage ? "none" : "block",
                     width: "100%",
-                    height: iframeHeight,
+                    height: "100vh",
                     overflow: "visible",
                     border: "none"
                 }}
