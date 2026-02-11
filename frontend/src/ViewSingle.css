@@ -2,3 +2,7 @@
     border: none !important;
     padding: 0 !important;
 }
+
+.standalone-viewer .card-body {
+    padding: 0 !important;
+}
