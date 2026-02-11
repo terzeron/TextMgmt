@@ -78,6 +78,8 @@ export default function Edit() {
     const nextEntryIdRef = useRef(null);
     // prevEntryId의 최신 값을 저장하는 ref
     const prevEntryIdRef = useRef(null);
+    // URL 기반 초기 선택 완료 여부 (삭제 후 재선택 방지)
+    const routeInitializedRef = useRef(false);
 
     // 메시지 자동 사라짐 (3초 후)
     useEffect(() => {
@@ -307,16 +309,27 @@ export default function Edit() {
         entryClickedRef.current = entryClicked;
     }, [entryClicked]);
 
+    // 라우트 파라미터가 실제로 변경되면 초기화 플래그 리셋
     useEffect(() => {
+        routeInitializedRef.current = false;
+    }, [routeCategory, routeBookId]);
+
+    useEffect(() => {
+        // 이미 URL 기반 초기 선택이 완료된 경우 재실행 방지
+        // (삭제/변경 후 folderData 변경으로 인한 삭제된 항목 재선택 버그 방지)
+        if (routeInitializedRef.current) return;
+
         if (routeCategory && routeBookId && folderData.length > 0) {
             // _root 카테고리는 folderData에서 /{bookId} 형식으로 저장됨
             if (routeCategory === '_root') {
+                routeInitializedRef.current = true;
                 entryClicked('/' + routeBookId);
                 return;
             }
             const categoryItem = findFolderInTree(folderData, routeCategory);
             if (!categoryItem) {
                 // 폴더 트리에 없는 경로 (3레벨 이상) - 백엔드에서 직접 조회
+                routeInitializedRef.current = true;
                 jsonGetReq('/books/' + routeBookId, null, (book) => {
                     // URL의 category 대신 API 응답의 실제 category 사용 (위조 방지)
                     const realCategory = book['category'] || routeCategory;
@@ -338,8 +351,10 @@ export default function Edit() {
             }
             // load children if not yet
             if (!categoryItem.booksLoaded) {
+                // 카테고리 로딩만 트리거 (아직 초기화 완료 아님 - 로딩 후 재실행 필요)
                 entryClicked(routeCategory);
             } else {
+                routeInitializedRef.current = true;
                 entryClicked(`${routeCategory}/${routeBookId}`);
             }
         }
