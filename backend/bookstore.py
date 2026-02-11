@@ -27,6 +27,7 @@ class AbstractBookstore(ABC):
     BASE_URL: str
     MAX_RESULTS: int = 2
     SUPPORTS_ISBN_SEARCH: bool = False  # ISBN 검색 지원 여부
+    AUTHOR_FIRST_SEARCH: bool = False  # 저자+제목 검색 시 저자를 앞에 배치
 
     def __init__(self, base_dir: str = '.', verbose: bool = True):
         self.base_dir = base_dir
@@ -89,7 +90,7 @@ class AbstractBookstore(ABC):
 
         # 2. 제목과 저자가 모두 있으면 조합 검색
         if title and author:
-            keyword = f"{title} {author}"
+            keyword = f"{author} {title}" if self.AUTHOR_FIRST_SEARCH else f"{title} {author}"
             results = self.search_by_keyword(keyword)
             if results:
                 return results, keyword, "title_author"
@@ -108,7 +109,8 @@ class AbstractBookstore(ABC):
 
         # 검색 결과 없음 - 가장 구체적인 키워드 반환
         if title and author:
-            return [], f"{title} {author}", "title_author"
+            keyword = f"{author} {title}" if self.AUTHOR_FIRST_SEARCH else f"{title} {author}"
+            return [], keyword, "title_author"
         elif title:
             return [], title, "title"
         elif author:
@@ -352,6 +354,7 @@ class AladinBookstore(AbstractBookstore):
     """알라딘 서점 검색 구현 스텁"""
     BASE_URL = 'https://www.aladin.co.kr'
     SUPPORTS_ISBN_SEARCH = True
+    AUTHOR_FIRST_SEARCH = True
 
     def build_search_url(self, keyword: str) -> str:
         """알라딘 검색 URL을 생성합니다."""
@@ -453,6 +456,7 @@ class AladinBookstore(AbstractBookstore):
 class RidibooksBookstore(AbstractBookstore):
     BASE_URL = 'https://ridibooks.com'
     SUPPORTS_ISBN_SEARCH = False  # RIDI는 ISBN 검색 미지원
+    AUTHOR_FIRST_SEARCH = True
 
     def _extract_ridi_isbn(self, soup: BeautifulSoup) -> str:
         """
@@ -706,6 +710,7 @@ class NaverShoppingBookstore(AbstractBookstore):
 
 class MunpiaBookstore(AbstractBookstore):
     BASE_URL = 'https://novel.munpia.com'
+    AUTHOR_FIRST_SEARCH = True
 
     def build_search_url(self, keyword: str) -> str:
         """문피아 검색 URL을 구성합니다 (공백은 %20으로 인코딩)."""

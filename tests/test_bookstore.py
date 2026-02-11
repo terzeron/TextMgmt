@@ -288,6 +288,61 @@ class TestAbstractBookstore(unittest.TestCase):
             mock_keyword.assert_called_once_with('롤링')
             self.assertEqual(method, 'author')
 
+    def test_aladin_author_first_search(self):
+        """알라딘: 제목+저자 검색 시 '저자 제목' 순서"""
+        store = AladinBookstore(verbose=False)
+        self.assertTrue(store.AUTHOR_FIRST_SEARCH)
+
+        with patch.object(store, 'search_by_keyword') as mock_keyword:
+            mock_keyword.return_value = [('제목', '저자', '카테고리', 'url', 'search_url')]
+            _results, keyword, method = store.search(title='해리포터', author='롤링')
+
+            mock_keyword.assert_called_once_with('롤링 해리포터')
+            self.assertEqual(keyword, '롤링 해리포터')
+            self.assertEqual(method, 'title_author')
+
+    def test_ridi_author_first_search(self):
+        """RIDI: 제목+저자 검색 시 '저자 제목' 순서"""
+        store = RidibooksBookstore(verbose=False)
+        self.assertTrue(store.AUTHOR_FIRST_SEARCH)
+
+        with patch.object(store, 'search_by_keyword') as mock_keyword:
+            mock_keyword.return_value = [('제목', '저자', '카테고리', 'url', 'search_url')]
+            _results, keyword, method = store.search(title='해리포터', author='롤링')
+
+            mock_keyword.assert_called_once_with('롤링 해리포터')
+            self.assertEqual(keyword, '롤링 해리포터')
+            self.assertEqual(method, 'title_author')
+
+    def test_munpia_author_first_search(self):
+        """문피아: 제목+저자 검색 시 '저자 제목' 순서"""
+        store = MunpiaBookstore(verbose=False)
+        self.assertTrue(store.AUTHOR_FIRST_SEARCH)
+
+        with patch.object(store, 'search_by_keyword') as mock_keyword:
+            mock_keyword.return_value = [('제목', '저자', '카테고리', 'url', 'search_url')]
+            _results, keyword, method = store.search(title='해리포터', author='롤링')
+
+            mock_keyword.assert_called_once_with('롤링 해리포터')
+            self.assertEqual(keyword, '롤링 해리포터')
+            self.assertEqual(method, 'title_author')
+
+    def test_yes24_title_first_search(self):
+        """Yes24: 제목+저자 검색 시 '제목 저자' 순서 (기본값)"""
+        store = Yes24Bookstore(verbose=False)
+        self.assertFalse(store.AUTHOR_FIRST_SEARCH)
+
+    def test_author_first_no_results_keyword(self):
+        """AUTHOR_FIRST_SEARCH: 검색 결과 없을 때도 '저자 제목' 순서 키워드 반환"""
+        store = AladinBookstore(verbose=False)
+
+        with patch.object(store, 'search_by_keyword') as mock_keyword:
+            mock_keyword.return_value = []
+            results, keyword, method = store.search(title='없는책', author='없는저자')
+
+            self.assertEqual(results, [])
+            self.assertEqual(keyword, '없는저자 없는책')
+
     def test_search_fallback_when_no_results(self):
         """search() 메서드: 검색 결과 없을 때 fallback"""
         store = Yes24Bookstore(verbose=False)
