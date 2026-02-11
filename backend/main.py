@@ -268,10 +268,11 @@ async def search_similar_books(book_id: int, offset: int = 0, limit: int = 10) -
 
 
 @app.get("/search/{keyword}")
-async def search_by_keyword(keyword: str, offset: int = 0, limit: int = 10) -> Dict[str, Any]:
-    LOGGER.debug("# search(keyword=%s, offset=%d, limit=%d)", keyword, offset, limit)
+async def search_by_keyword(keyword: str, offset: int = 0, limit: int = 10, exclude_categories: str = "") -> Dict[str, Any]:
+    LOGGER.debug("# search(keyword=%s, offset=%d, limit=%d, exclude_categories=%s)", keyword, offset, limit, exclude_categories)
     response_object: Dict[str, Any] = {"status": "failure"}
-    result, total, error = await book_manager.search_by_keyword_paged(keyword, size=limit, offset=offset)
+    excluded = [c.strip() for c in exclude_categories.split(",") if c.strip()] if exclude_categories else None
+    result, total, error = await book_manager.search_by_keyword_paged(keyword, size=limit, offset=offset, exclude_categories=excluded)
     if error is None:
         response_object["status"] = "success"
         response_object["result"] = [BookModel(**book.dict()) for book in result]

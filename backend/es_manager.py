@@ -288,18 +288,26 @@ class ESManager:
         }
         return self._search(query, max_result_count=max_result_count)
 
-    def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
-        LOGGER.debug("search_by_keyword_paged(keyword='%s', size=%d, offset=%d)", keyword, size, offset)
-        query = {
+    def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: List[str] = None) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
+        LOGGER.debug("search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s)", keyword, size, offset, exclude_categories)
+        query: Dict[str, Any] = {
             "bool": {
-                "should": [
-                    {"match": {"title": {"query": keyword, "boost": 10}}},
-                    {"match": {"author": {"query": keyword, "boost": 5}}},
-                    {"match": {"summary": {"query": keyword, "boost": 1}}},
-                ],
-                "minimum_should_match": 1,
+                "must": [{
+                    "bool": {
+                        "should": [
+                            {"match": {"title": {"query": keyword, "boost": 10}}},
+                            {"match": {"author": {"query": keyword, "boost": 5}}},
+                            {"match": {"summary": {"query": keyword, "boost": 1}}},
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                }],
             }
         }
+        if exclude_categories:
+            query["bool"]["must_not"] = [
+                {"prefix": {"category": cat}} for cat in exclude_categories
+            ]
         return self._search_paged(query, size=size, offset=offset)
 
     def search_similar_docs(

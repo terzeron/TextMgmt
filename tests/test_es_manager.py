@@ -282,6 +282,54 @@ class TestESManager:
         for _, _, score in results:
             assert score <= 100.0
 
+    # ── search_by_keyword_paged exclude_categories ──
+
+    def test_keyword_paged_exclude_categories_filters_results(self, es_manager_with_data):
+        """exclude_categories로 특정 카테고리를 제외하면 해당 카테고리 결과가 없다"""
+        esm = es_manager_with_data
+        # "마법" 키워드는 category="test"(doc1,2)와 category="_txt"(doc3) 모두 매칭 가능
+        results_all, total_all = esm.search_by_keyword_paged("마법", size=10)
+        results_filtered, total_filtered = esm.search_by_keyword_paged("마법", size=10, exclude_categories=["test"])
+
+        # 필터링된 결과에는 "test" 카테고리 문서가 없어야 함
+        for _, doc, _ in results_filtered:
+            assert doc["category"] != "test", f"제외된 카테고리 'test' 문서가 포함됨: {doc['title']}"
+
+        # 필터링된 total이 전체보다 작거나 같아야 함
+        assert total_filtered <= total_all
+
+    def test_keyword_paged_exclude_categories_prefix_match(self, es_manager_with_data):
+        """exclude_categories는 prefix 매칭으로 하위 카테고리도 제외한다"""
+        esm = es_manager_with_data
+        # "test"로 시작하는 카테고리를 가진 임시 데이터 삽입
+        extra_data = {
+            200: {
+                "category": "test/sub", "title": "하위 카테고리 마법 문서",
+                "author": "테스트", "file_path": "/test/sub.txt", "file_type": "txt",
+                "file_size": 500, "line_count": 50, "page_count": 0,
+                "isbn": "", "summary": "하위 카테고리 테스트.",
+                "updated_time": "2024-01-05T00:00:00",
+            },
+        }
+        esm.insert(extra_data)
+        esm.refresh()
+
+        try:
+            results, _ = esm.search_by_keyword_paged("마법", size=10, exclude_categories=["test"])
+            for _, doc, _ in results:
+                assert not doc["category"].startswith("test"), \
+                    f"'test' prefix 카테고리 문서가 포함됨: {doc['category']}"
+        finally:
+            esm.delete(200)
+            esm.refresh()
+
+    def test_keyword_paged_no_exclude_returns_all(self, es_manager_with_data):
+        """exclude_categories가 None이면 모든 결과를 반환한다"""
+        esm = es_manager_with_data
+        results_none, total_none = esm.search_by_keyword_paged("테스트", size=10, exclude_categories=None)
+        results_empty, total_empty = esm.search_by_keyword_paged("테스트", size=10, exclude_categories=[])
+        assert total_none == total_empty
+
     # ── search_similar_docs_paged 유사도 정규화 ──
 
     def test_similar_docs_paged_no_perfect_100(self, es_manager_with_data):

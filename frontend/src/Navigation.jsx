@@ -23,15 +23,40 @@ export default function Navigation() {
     const [hasSearched, setHasSearched] = useState(false);
     const [searchTotal, setSearchTotal] = useState(0);
     const [searchLoading, setSearchLoading] = useState(false);
+    const [hiddenCategories, setHiddenCategories] = useState([]);
 
     const location = useLocation();
+
+    // viewer일 때 비노출 카테고리 목록 로드
+    useEffect(() => {
+        if (role === 'viewer') {
+            rawJsonGetReq('/hidden-categories',
+                (data) => {
+                    if (data.status === 'success') {
+                        setHiddenCategories(data.result || []);
+                    }
+                },
+                () => { setHiddenCategories([]); }
+            );
+        } else {
+            setHiddenCategories([]);
+        }
+    }, [role]);
+
+    const buildSearchUrl = (keyword, offset, limit) => {
+        let url = `/search/${encodeURIComponent(keyword)}?offset=${offset}&limit=${limit}`;
+        if (hiddenCategories.length > 0) {
+            url += `&exclude_categories=${encodeURIComponent(hiddenCategories.join(','))}`;
+        }
+        return url;
+    };
 
     // 검색 실행 로직을 함수로 추출
     const handleSearch = () => {
         if (searchKeyword) {
             setHasSearched(true);
             rawJsonGetReq(
-                `/search/${encodeURIComponent(searchKeyword)}?offset=0&limit=10`,
+                buildSearchUrl(searchKeyword, 0, 10),
                 (data) => {
                     if (data.status === 'success') {
                         setSearchResults(data.result || []);
@@ -48,7 +73,7 @@ export default function Navigation() {
         setSearchLoading(true);
         const offset = searchResults.length;
         rawJsonGetReq(
-            `/search/${encodeURIComponent(searchKeyword)}?offset=${offset}&limit=10`,
+            buildSearchUrl(searchKeyword, offset, 10),
             (data) => {
                 if (data.status === 'success' && data.result) {
                     setSearchResults(prev => [...prev, ...data.result]);
@@ -61,7 +86,7 @@ export default function Navigation() {
                 setSearchLoading(false);
             }
         );
-    }, [searchKeyword, searchResults.length, searchLoading]);
+    }, [searchKeyword, searchResults.length, searchLoading, hiddenCategories]);
 
     useEffect(() => {
         if (!clientId) {
