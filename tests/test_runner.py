@@ -559,51 +559,53 @@ def clear_lastfailed_for_files(test_file_prefixes: list[str]) -> None:
 
 def run_failed_tests() -> bool:
     """Run only failed tests"""
-    failed_tests = get_failed_or_skipped_tests()
-    if not failed_tests:
+    all_failed_tests_from_cache = get_failed_or_skipped_tests() # Get all failed tests from cache initially
+    
+    # Extract unique test file paths from all_failed_tests_from_cache
+    test_files_to_run: list[Path] = []
+    seen_files: set[Path] = set()
+
+    if not all_failed_tests_from_cache:
         return True
 
-    # Extract test file paths and convert to absolute paths
-    test_files: list[Path] = []
-    for t in failed_tests:
-        file_path = t.split("::")[0]  # Remove test method part
-        if file_path.startswith("tests/"):
-            # Convert relative path to absolute path
-            absolute_path = PROJECT_ROOT / file_path
-            if absolute_path.resolve() != Path(__file__).resolve():
-                test_files.append(absolute_path)
+    for t in all_failed_tests_from_cache:
+        file_path_str = t.split("::")[0]
+        if file_path_str.startswith("tests/"):
+            absolute_path = PROJECT_ROOT / file_path_str
+            if absolute_path.exists() and absolute_path not in seen_files:
+                test_files_to_run.append(absolute_path)
+                seen_files.add(absolute_path)
 
-    # Remove duplicates while preserving order
-    unique_test_files: list[Path] = []
-    seen: set[Path] = set()
-    for t in test_files:
-        if t not in seen:
-            unique_test_files.append(t)
-            seen.add(t)
+    if not test_files_to_run:
+        return True
 
     print("Running only failed test modules:")
-    for t in unique_test_files:
+    for t in test_files_to_run:
         print(f"  - {t}")
 
-    # 실패한 파일 목록을 받아오지만, 여기서는 성공 여부만 중요
-    success, _, _, _ = run_test_modules_sequentially(unique_test_files)
-    if not success:
-        return False
+    success, _, _, _ = run_test_modules_sequentially(test_files_to_run)
 
-    # 성공한 테스트 파일의 lastfailed 항목을 명시적으로 제거
-    # (삭제/이름변경된 테스트의 stale 항목이 남는 문제 방지)
-    file_prefixes = []
-    for t in unique_test_files:
-        try:
-            rel = t.relative_to(PROJECT_ROOT)
-            file_prefixes.append(str(rel))
-        except ValueError:
-            pass
-    if file_prefixes:
-        clear_lastfailed_for_files(file_prefixes)
+    if success:
+        # If all *run* failed tests passed, clear the entire lastfailed cache
+        candidate_cache_dirs = [
+            TEST_DIR / ".pytest_cache/v/cache",
+            PROJECT_ROOT / ".pytest_cache/v/cache",
+        ]
 
-    print("All failed tests passed. Now running changed test modules (if any)...")
-    return True
+        for cache_dir in candidate_cache_dirs:
+            lastfailed_file = cache_dir / "lastfailed"
+            if lastfailed_file.exists():
+                try:
+                    lastfailed_file.unlink()
+                    print(f"✅ Cleared lastfailed cache: {lastfailed_file}")
+                except (OSError, PermissionError) as e:
+                    print(f"⚠️  Failed to clear lastfailed cache: {e}")
+
+        print("All failed tests passed. Now running changed test modules (if any)...")
+    else:
+        print("Some previously failed tests are still failing.")
+
+    return success
 
 def run_changed_tests() -> bool:
     """Run tests for changed files with dependency consideration"""
