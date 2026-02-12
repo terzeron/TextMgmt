@@ -132,6 +132,22 @@ describe('diagnoseEpub', () => {
             expect(opfSection.results.some(r => r.type === 'ok' && r.text.includes('DOMParser'))).toBe(true);
         });
 
+        it('container.xml에서 OPF 경로를 찾을 수 없으면 에러', async () => {
+            const badContainerXml = `<?xml version="1.0" encoding="UTF-8"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+  <rootfiles>
+  </rootfiles>
+</container>`;
+            const zip = new JSZip();
+            zip.file('mimetype', 'application/epub+zip');
+            zip.file('META-INF/container.xml', badContainerXml);
+            const buf = await zip.generateAsync({ type: 'arraybuffer' });
+
+            const result = await diagnoseEpub(buf);
+            const opfSection = result.sections.find(s => s.name === 'OPF 파싱');
+            expect(opfSection.results.some(r => r.type === 'error' && r.text.includes('OPF 경로를 찾을 수 없음'))).toBe(true);
+        });
+
         it('OPF 파일이 ZIP에 없으면 에러', async () => {
             const buf = await buildEpub(() => {
                 // OPF 파일을 생성하지 않음
@@ -338,6 +354,61 @@ describe('diagnoseEpub', () => {
             expect(ncxSection.results.some(r => r.type === 'error' && r.text.includes('1건'))).toBe(true);
         });
 
+        it('toc 속성이 있으나 manifest에 해당 item이 없으면 에러', async () => {
+            const buf = await buildEpub((zip) => {
+                zip.file('OEBPS/content.opf', makeOpf({
+                    items: [{ id: 'ch1', href: 'ch1.xhtml' }],
+                    spineRefs: ['ch1'],
+                    tocId: 'nonexistent_ncx',
+                }));
+                zip.file('OEBPS/ch1.xhtml', VALID_XHTML);
+            });
+
+            const result = await diagnoseEpub(buf);
+            const ncxSection = result.sections.find(s => s.name === 'NCX');
+            expect(ncxSection.results.some(r => r.type === 'error' && r.text.includes('manifest에 해당 item 없음'))).toBe(true);
+        });
+
+        it('NCX 파일이 ZIP에 없으면 에러', async () => {
+            const buf = await buildEpub((zip) => {
+                zip.file('OEBPS/content.opf', makeOpf({
+                    items: [
+                        { id: 'ch1', href: 'ch1.xhtml' },
+                        { id: 'ncx', href: 'toc.ncx', mediaType: 'application/x-dtbncx+xml' },
+                    ],
+                    spineRefs: ['ch1'],
+                    tocId: 'ncx',
+                }));
+                zip.file('OEBPS/ch1.xhtml', VALID_XHTML);
+                // toc.ncx를 ZIP에 추가하지 않음
+            });
+
+            const result = await diagnoseEpub(buf);
+            const ncxSection = result.sections.find(s => s.name === 'NCX');
+            expect(ncxSection.results.some(r => r.type === 'error' && r.text.includes('NCX 파일이 ZIP에 없음'))).toBe(true);
+        });
+
+        it('NCX 파싱 실패 시 에러', async () => {
+            const invalidNcx = '<ncx><broken>invalid xml';
+
+            const buf = await buildEpub((zip) => {
+                zip.file('OEBPS/content.opf', makeOpf({
+                    items: [
+                        { id: 'ch1', href: 'ch1.xhtml' },
+                        { id: 'ncx', href: 'toc.ncx', mediaType: 'application/x-dtbncx+xml' },
+                    ],
+                    spineRefs: ['ch1'],
+                    tocId: 'ncx',
+                }));
+                zip.file('OEBPS/ch1.xhtml', VALID_XHTML);
+                zip.file('OEBPS/toc.ncx', invalidNcx);
+            });
+
+            const result = await diagnoseEpub(buf);
+            const ncxSection = result.sections.find(s => s.name === 'NCX');
+            expect(ncxSection.results.some(r => r.type === 'error' && r.text.includes('NCX 브라우저 DOMParser 파싱 실패'))).toBe(true);
+        });
+
         it('NCX manifest item의 href가 id 앞에 와도 정상 동작 (DOM 기반)', async () => {
             // id/href 속성 순서가 반대인 OPF
             const opfWithReversedAttrs = `<?xml version="1.0" encoding="UTF-8"?>
@@ -381,6 +452,61 @@ describe('diagnoseEpub', () => {
             const result = await diagnoseEpub(buf);
             const guideSection = result.sections.find(s => s.name === 'Guide');
             expect(guideSection.results.some(r => r.type === 'info' && r.text.includes('guide 섹션 없음'))).toBe(true);
+        });
+
+        it('guide 참조 파일이 모두 존재하면 통과', async () => {
+            const opfWithGuide = `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier>test</dc:identifier><dc:title>Test</dc:title><dc:language>ko</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+  <guide>
+    <reference type="cover" href="cover.xhtml"/>
+    <reference type="text" href="ch1.xhtml"/>
+  </guide>
+</package>`;
+
+            const buf = await buildEpub((zip) => {
+                zip.file('OEBPS/content.opf', opfWithGuide);
+                zip.file('OEBPS/ch1.xhtml', VALID_XHTML);
+                zip.file('OEBPS/cover.xhtml', VALID_XHTML);
+            });
+
+            const result = await diagnoseEpub(buf);
+            const guideSection = result.sections.find(s => s.name === 'Guide');
+            expect(guideSection.results.some(r => r.type === 'ok' && r.text.includes('guide 참조 파일 모두 존재'))).toBe(true);
+        });
+
+        it('guide 참조 파일이 없으면 경고', async () => {
+            const opfWithGuide = `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier>test</dc:identifier><dc:title>Test</dc:title><dc:language>ko</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+  <guide>
+    <reference type="cover" href="missing_cover.xhtml"/>
+    <reference type="toc" href="missing_toc.xhtml"/>
+  </guide>
+</package>`;
+
+            const buf = await buildEpub((zip) => {
+                zip.file('OEBPS/content.opf', opfWithGuide);
+                zip.file('OEBPS/ch1.xhtml', VALID_XHTML);
+            });
+
+            const result = await diagnoseEpub(buf);
+            const guideSection = result.sections.find(s => s.name === 'Guide');
+            expect(guideSection.results.some(r => r.type === 'warn' && r.text.includes('2건'))).toBe(true);
+            expect(result.summary.warnings).toBeGreaterThan(0);
         });
     });
 

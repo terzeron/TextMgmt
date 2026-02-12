@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
-import { determineNextEntryId, determinePrevEntryId } from '../src/folderUtils';
+import { determineNextEntryId, determinePrevEntryId, findCommonPrefix, buildFolderHierarchy, parseEntryId, findFolderInTree, updateFolderInTree, updateFolderChildren } from '../src/folderUtils';
 
 // ── 테스트 데이터 ──
 
@@ -195,5 +195,174 @@ describe('next/prev 대칭성', () => {
     it('유일한 항목은 next=null, prev=null이다', () => {
         expect(determineNextEntryId(mixedFolderData, 'Science/40')).toBeNull();
         expect(determinePrevEntryId(mixedFolderData, 'Science/40')).toBeNull();
+    });
+});
+
+// ── findCommonPrefix ──
+
+describe('findCommonPrefix', () => {
+    it('빈 배열이면 빈 문자열을 반환한다', () => {
+        expect(findCommonPrefix([])).toBe('');
+    });
+
+    it('null이면 빈 문자열을 반환한다', () => {
+        expect(findCommonPrefix(null)).toBe('');
+    });
+
+    it('단일 항목에서 부모 prefix를 추출한다', () => {
+        expect(findCommonPrefix(['소설/SF/한국SF'])).toBe('소설/SF/');
+    });
+
+    it('단일 항목에 슬래시가 없으면 빈 문자열을 반환한다', () => {
+        expect(findCommonPrefix(['소설'])).toBe('');
+    });
+
+    it('공통 prefix를 찾는다', () => {
+        expect(findCommonPrefix(['문학/소설', '문학/시'])).toBe('문학/');
+    });
+
+    it('공통 prefix가 없으면 빈 문자열을 반환한다', () => {
+        expect(findCommonPrefix(['소설/SF', '역사/한국사'])).toBe('');
+    });
+
+    it('다단계 공통 prefix를 찾는다', () => {
+        expect(findCommonPrefix(['A/B/C/D', 'A/B/C/E', 'A/B/C/F'])).toBe('A/B/C/');
+    });
+
+    it('완전히 동일한 문자열이면 마지막 세그먼트를 제외한 prefix를 반환한다', () => {
+        expect(findCommonPrefix(['소설/SF', '소설/SF'])).toBe('소설/');
+    });
+});
+
+// ── parseEntryId ──
+
+describe('parseEntryId', () => {
+    it('null이면 null을 반환한다', () => {
+        expect(parseEntryId(null)).toBeNull();
+    });
+
+    it('빈 문자열이면 null을 반환한다', () => {
+        expect(parseEntryId('')).toBeNull();
+    });
+
+    it('root file ID를 파싱한다', () => {
+        expect(parseEntryId('/12345')).toEqual({ category: '_root', bookId: '12345' });
+    });
+
+    it('카테고리/bookId를 분리한다', () => {
+        expect(parseEntryId('Fiction/100')).toEqual({ category: 'Fiction', bookId: '100' });
+    });
+
+    it('다단계 카테고리를 파싱한다', () => {
+        expect(parseEntryId('Fiction/Novels/12345')).toEqual({ category: 'Fiction/Novels', bookId: '12345' });
+    });
+
+    it('bookId가 숫자가 아니면 null을 반환한다', () => {
+        expect(parseEntryId('Fiction/subfolder')).toBeNull();
+    });
+
+    it('슬래시가 없는 문자열이면 null을 반환한다', () => {
+        expect(parseEntryId('noSlash')).toBeNull();
+    });
+});
+
+// ── buildFolderHierarchy ──
+
+describe('buildFolderHierarchy', () => {
+    it('1 depth 카테고리를 폴더로 생성한다', () => {
+        const result = buildFolderHierarchy(['소설', '역사'], '');
+        expect(result).toHaveLength(2);
+        expect(result[0].label).toBe('소설');
+        expect(result[0].fileType).toBe('folder');
+    });
+
+    it('2 depth 카테고리에서 부모-자식 관계를 생성한다', () => {
+        const result = buildFolderHierarchy(['문학/소설', '문학/시'], '');
+        expect(result).toHaveLength(1);
+        expect(result[0].label).toBe('문학');
+        expect(result[0].isVirtualParent).toBe(true);
+        expect(result[0].children).toHaveLength(2);
+    });
+
+    it('부모 카테고리가 있으면 isVirtualParent=false로 생성한다', () => {
+        const result = buildFolderHierarchy(['문학', '문학/소설', '문학/시'], '');
+        expect(result).toHaveLength(1);
+        expect(result[0].isVirtualParent).toBe(false);
+        expect(result[0].children).toHaveLength(2);
+    });
+
+    it('prefix를 제거하고 계층 구조를 생성한다', () => {
+        const result = buildFolderHierarchy(['Library/소설', 'Library/역사'], 'Library/');
+        expect(result).toHaveLength(2);
+        expect(result[0].label).toBe('소설');
+    });
+
+    it('categoryCounts를 반영한다', () => {
+        const counts = { '소설': 10, '역사': 5 };
+        const result = buildFolderHierarchy(['소설', '역사'], '', counts);
+        expect(result[0].count).toBe(10);
+        expect(result[1].count).toBe(5);
+    });
+});
+
+// ── findFolderInTree ──
+
+describe('findFolderInTree', () => {
+    const tree = [
+        { id: '소설', label: '소설', children: [{ id: '소설/SF', label: 'SF' }] },
+        { id: '역사', label: '역사' },
+    ];
+
+    it('1단계에서 폴더를 찾는다', () => {
+        expect(findFolderInTree(tree, '소설').label).toBe('소설');
+    });
+
+    it('2단계 children에서 폴더를 찾는다', () => {
+        expect(findFolderInTree(tree, '소설/SF').label).toBe('SF');
+    });
+
+    it('존재하지 않는 ID는 null을 반환한다', () => {
+        expect(findFolderInTree(tree, '과학')).toBeNull();
+    });
+});
+
+// ── updateFolderInTree ──
+
+describe('updateFolderInTree', () => {
+    const tree = [
+        { id: '소설', label: '소설', children: [{ id: '소설/SF', label: 'SF', count: 0 }] },
+        { id: '역사', label: '역사' },
+    ];
+
+    it('1단계 항목을 업데이트한다', () => {
+        const result = updateFolderInTree(tree, '역사', item => ({ ...item, count: 5 }));
+        expect(result.find(i => i.id === '역사').count).toBe(5);
+    });
+
+    it('2단계 children 항목을 업데이트한다', () => {
+        const result = updateFolderInTree(tree, '소설/SF', item => ({ ...item, count: 3 }));
+        const child = result.find(i => i.id === '소설').children.find(c => c.id === '소설/SF');
+        expect(child.count).toBe(3);
+    });
+
+    it('존재하지 않는 ID는 원본을 유지한다', () => {
+        const result = updateFolderInTree(tree, '과학', item => ({ ...item, count: 1 }));
+        expect(result).toEqual(tree);
+    });
+});
+
+// ── updateFolderChildren ──
+
+describe('updateFolderChildren', () => {
+    it('children 배열을 업데이트한다', () => {
+        const tree = [{ id: '소설', children: [{ id: 'a' }, { id: 'b' }] }];
+        const result = updateFolderChildren(tree, '소설', children => [...children, { id: 'c' }]);
+        expect(result[0].children).toHaveLength(3);
+    });
+
+    it('children이 없는 항목도 빈 배열로 처리한다', () => {
+        const tree = [{ id: '역사' }];
+        const result = updateFolderChildren(tree, '역사', children => [...children, { id: 'x' }]);
+        expect(result[0].children).toHaveLength(1);
     });
 });
