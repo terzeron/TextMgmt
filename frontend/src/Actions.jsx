@@ -6,7 +6,7 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 
 import {Button, Form, InputGroup, Row} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
-import {faTruckMoving, faUpload} from '@fortawesome/free-solid-svg-icons';
+import {faTruckMoving, faUpload, faSpinner} from '@fortawesome/free-solid-svg-icons';
 
 import {getRandomLightColor, ROOT_DIRECTORY} from './Common';
 import {loadCategoryMappings, fetchCategoryMappings, isCacheInitialized} from './CategoryMapping';
@@ -318,12 +318,15 @@ export default function Actions(props) {
     return (
         <>
             <Row className="button_group">
-                <Button variant="outline-success" className="btn-xs" onClick={props.toNextEntryClicked} disabled={props.isProcessing}>다음 책으로</Button>
+                <Button variant="outline-success" className="btn-xs" onClick={props.toNextEntryClicked} disabled={props.isProcessing}>
+                    다음 책으로
+                    {props.isProcessing && <FontAwesomeIcon icon={faSpinner} spin/>}
+                </Button>
                 {
                     !props.selectedEntryId.startsWith(ROOT_DIRECTORY) > 0 &&
                     <Button variant="outline-warning" className="btn-xs" onClick={props.moveToUpperButtonClicked} disabled={!props.newFileName || props.isProcessing}>
                         상위로
-                        <FontAwesomeIcon icon={faUpload}/>
+                        <FontAwesomeIcon icon={props.isProcessing ? faSpinner : faUpload} spin={props.isProcessing}/>
                     </Button>
                 }
                 {
@@ -360,7 +363,7 @@ export default function Actions(props) {
                     <Button variant="outline-warning" className="btn-xs" onClick={props.moveToDirectoryButtonClicked
                     } disabled={(!props.selectedEntryId && !props.selectedCategory) || props.isProcessing}>
                         로 옮기기
-                        <FontAwesomeIcon icon={faTruckMoving}/>
+                        <FontAwesomeIcon icon={props.isProcessing ? faSpinner : faTruckMoving} spin={props.isProcessing}/>
                     </Button>
                 </InputGroup>
             </Row>

@@ -6,7 +6,7 @@ import {useParams, useSearchParams, useOutletContext} from 'react-router-dom';
 
 import {Alert, Button, Card, Col, Container, Form, InputGroup, Row} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
-import {faCheck, faTrash} from '@fortawesome/free-solid-svg-icons';
+import {faCheck, faTrash, faSpinner} from '@fortawesome/free-solid-svg-icons';
 
 import {getApiUrlPrefix, jsonDeleteReq, jsonGetReq, jsonPutReq, ROOT_DIRECTORY} from './Common';
 import Folder from './Folder';
@@ -779,11 +779,11 @@ export default function Edit() {
                                                                 <Form.Control value={newFileName} onChange={newFileNameChanged}/>
                                                                 <Button variant="outline-success" className="btn-xs" onClick={changeButtonClicked} disabled={!selectedEntryId || isProcessing}>
                                                                     변경
-                                                                    <FontAwesomeIcon icon={faCheck}/>
+                                                                    <FontAwesomeIcon icon={isProcessing ? faSpinner : faCheck} spin={isProcessing}/>
                                                                 </Button>
                                                                 <Button variant="outline-danger" className="btn-xs" onClick={deleteButtonClicked} disabled={!selectedEntryId || isProcessing}>
                                                                     삭제
-                                                                    <FontAwesomeIcon icon={faTrash}/>
+                                                                    <FontAwesomeIcon icon={isProcessing ? faSpinner : faTrash} spin={isProcessing}/>
                                                                 </Button>
                                                             </InputGroup>
                                                         </Col>

@@ -5,6 +5,8 @@ import './Edit.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
 import { Button, Tabs, Tab, Spinner, Card, ButtonGroup } from 'react-bootstrap';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faSpinner } from '@fortawesome/free-solid-svg-icons';
 import {rawJsonGetReq} from './Common';
 
 // 카테고리에서 최하위 + 바로 상위 두 단계를 추출 (공백으로 연결)
@@ -277,6 +279,7 @@ export default function Bookstore(props) {
               title={!isbn ? "ISBN 정보 없음" : (!storeInfo?.supportsIsbn ? "이 서점은 ISBN 검색 미지원" : "")}
             >
               ISBN
+              {result?.loading && <FontAwesomeIcon icon={faSpinner} spin className="ms-1"/>}
             </Button>
             <Button
               variant={(title || author) ? "outline-primary" : "outline-secondary"}
@@ -285,6 +288,7 @@ export default function Bookstore(props) {
               disabled={result?.loading || (!title && !author)}
             >
               저자+제목
+              {result?.loading && <FontAwesomeIcon icon={faSpinner} spin className="ms-1"/>}
             </Button>
           </ButtonGroup>
           {result?.search_url && (
