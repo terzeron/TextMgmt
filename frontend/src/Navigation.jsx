@@ -3,7 +3,7 @@ import { Outlet, useLocation, Navigate } from "react-router-dom";
 import { GoogleOAuthProvider, GoogleLogin, googleLogout } from "@react-oauth/google";
 import { Button, Form, FormControl, InputGroup, Nav, Navbar, Dropdown } from "react-bootstrap";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faSearch, faUser } from "@fortawesome/free-solid-svg-icons";
+import { faSearch, faSpinner, faUser } from "@fortawesome/free-solid-svg-icons";
 import { rawJsonGetReq, getApiUrlPrefix } from "./Common.js";
 import { determineRole, isViewerAllowedPath } from "./auth.js";
 
@@ -23,6 +23,7 @@ export default function Navigation() {
     const [hasSearched, setHasSearched] = useState(false);
     const [searchTotal, setSearchTotal] = useState(0);
     const [searchLoading, setSearchLoading] = useState(false);
+    const [searchInProgress, setSearchInProgress] = useState(false);
     const [hiddenCategories, setHiddenCategories] = useState([]);
 
     const location = useLocation();
@@ -55,6 +56,7 @@ export default function Navigation() {
     const handleSearch = () => {
         if (searchKeyword) {
             setHasSearched(true);
+            setSearchInProgress(true);
             rawJsonGetReq(
                 buildSearchUrl(searchKeyword, 0, 10),
                 (data) => {
@@ -62,8 +64,9 @@ export default function Navigation() {
                         setSearchResults(data.result || []);
                         setSearchTotal(data.total || 0);
                     }
+                    setSearchInProgress(false);
                 },
-                (error) => { console.error(error); }
+                (error) => { console.error(error); setSearchInProgress(false); }
             );
         }
     };
@@ -205,8 +208,8 @@ export default function Navigation() {
                                 <Form onSubmit={e => { e.preventDefault(); handleSearch(); }} className="me-2">
                                     <InputGroup>
                                         <FormControl type="text" placeholder="키워드" className="mr-sm-2" value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)} />
-                                        <Button type="button" variant="outline-success" size="sm" onClick={handleSearch}>
-                                            검색<FontAwesomeIcon icon={faSearch} />
+                                        <Button type="button" variant="outline-success" size="sm" onClick={handleSearch} disabled={searchInProgress}>
+                                            검색<FontAwesomeIcon icon={searchInProgress ? faSpinner : faSearch} spin={searchInProgress} />
                                         </Button>
                                     </InputGroup>
                                 </Form>
