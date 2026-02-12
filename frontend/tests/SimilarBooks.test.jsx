@@ -400,4 +400,108 @@ describe('SimilarBooks', () => {
         // 전체 경로가 아닌 파일명만 표시
         expect(screen.queryByText(/deep\/nested/)).toBeNull();
     });
+
+    it('"더 보기" 로드 중 에러 발생 시 loadingMore가 해제된다', async () => {
+        let callCount = 0;
+        mockRawJsonGetReq.mockImplementation((url, resolve, reject) => {
+            callCount++;
+            if (callCount === 1) {
+                resolve({ status: 'success', result: [makeBook(1, 95)], total: 2 });
+            } else {
+                reject(new Error('Network error'));
+            }
+        });
+
+        const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        render(<SimilarBooks bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('더 보기')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('더 보기'));
+
+        // 에러 후 loadingMore가 false로 돌아와 "더 보기"가 다시 표시됨
+        await waitFor(() => {
+            expect(screen.getByText('더 보기')).toBeTruthy();
+            expect(consoleSpy).toHaveBeenCalled();
+        });
+        consoleSpy.mockRestore();
+    });
+
+    it('"더 보기" Enter 키 입력 시 추가 데이터를 로드한다', async () => {
+        let callCount = 0;
+        mockRawJsonGetReq.mockImplementation((url, resolve) => {
+            callCount++;
+            if (callCount === 1) {
+                resolve({ status: 'success', result: [makeBook(1, 95)], total: 2 });
+            } else {
+                resolve({ status: 'success', result: [makeBook(2, 80)], total: 2 });
+            }
+        });
+
+        render(<SimilarBooks bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('더 보기')).toBeTruthy();
+        });
+
+        const loadMoreEl = screen.getByText('더 보기').closest('[role="button"]');
+        fireEvent.keyDown(loadMoreEl, { key: 'Enter' });
+
+        await waitFor(() => {
+            expect(screen.getByText('80')).toBeTruthy();
+        });
+    });
+
+    it('"더 보기" Space 키 입력 시 추가 데이터를 로드한다', async () => {
+        let callCount = 0;
+        mockRawJsonGetReq.mockImplementation((url, resolve) => {
+            callCount++;
+            if (callCount === 1) {
+                resolve({ status: 'success', result: [makeBook(1, 95)], total: 2 });
+            } else {
+                resolve({ status: 'success', result: [makeBook(2, 70)], total: 2 });
+            }
+        });
+
+        render(<SimilarBooks bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('더 보기')).toBeTruthy();
+        });
+
+        const loadMoreEl = screen.getByText('더 보기').closest('[role="button"]');
+        fireEvent.keyDown(loadMoreEl, { key: ' ' });
+
+        await waitFor(() => {
+            expect(screen.getByText('70')).toBeTruthy();
+        });
+    });
+
+    it('편집/조회 버튼 클릭 시 window.open을 호출한다', async () => {
+        mockBooks([makeBook(42, 95)]);
+        const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+
+        render(<SimilarBooks bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/Book 42\.pdf/)).toBeTruthy();
+        });
+
+        const editBtns = screen.getAllByText('편집');
+        fireEvent.click(editBtns[0]);
+        expect(openSpy).toHaveBeenCalledWith(
+            expect.stringContaining('/edit/42'),
+            '_blank', 'noopener'
+        );
+
+        const viewBtns = screen.getAllByText('조회');
+        fireEvent.click(viewBtns[0]);
+        expect(openSpy).toHaveBeenCalledWith(
+            expect.stringContaining('/view/42'),
+            '_blank', 'noopener'
+        );
+        openSpy.mockRestore();
+    });
 });

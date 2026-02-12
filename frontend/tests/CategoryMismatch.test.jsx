@@ -943,4 +943,159 @@ describe('CategoryMismatch', () => {
         // 항목은 여전히 존재 (트리 + 선택 패널에 두 번 표시)
         expect(screen.getAllByText('Book A.pdf').length).toBeGreaterThanOrEqual(1);
     });
+
+    it('ES 적재 실패 시 에러 메시지를 표시한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+        render(<CategoryMismatch />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByRole('tree')).toBeTruthy();
+        });
+
+        mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+            if (url === '/categories') resolve(CATEGORIES_RESPONSE);
+            else if (url === '/category-mismatches') resolve(MISMATCH_RESPONSE_WITH_DATA);
+            else if (url.startsWith('/category-mismatches/')) {
+                resolve({
+                    es_only: [],
+                    fs_only: [{ file_name: 'orphan.txt', file_path: '1_fiction/orphan.txt' }],
+                });
+            }
+        });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+
+        await waitFor(() => {
+            expect(screen.getByText('orphan.txt')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('orphan.txt'));
+
+        await waitFor(() => {
+            expect(screen.getByText('ES 적재')).toBeTruthy();
+        });
+
+        mockJsonPostReq.mockImplementation((url, payload, resolve, reject) => {
+            reject('적재 오류');
+        });
+
+        fireEvent.click(screen.getByText('ES 적재'));
+
+        await waitFor(() => {
+            expect(screen.getByText('ES 적재 실패: 적재 오류')).toBeTruthy();
+        });
+    });
+
+    it('FS-only 항목에서 파일 삭제 버튼 클릭 시 POST /category-mismatches/delete-file API를 호출한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+        render(<CategoryMismatch />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByRole('tree')).toBeTruthy();
+        });
+
+        mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+            if (url === '/categories') resolve(CATEGORIES_RESPONSE);
+            else if (url === '/category-mismatches') resolve(MISMATCH_RESPONSE_WITH_DATA);
+            else if (url.startsWith('/category-mismatches/')) {
+                resolve({
+                    es_only: [],
+                    fs_only: [{ file_name: 'orphan.txt', file_path: '1_fiction/orphan.txt' }],
+                });
+            }
+        });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+
+        await waitFor(() => {
+            expect(screen.getByText('orphan.txt')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('orphan.txt'));
+
+        await waitFor(() => {
+            expect(screen.getByText('파일 삭제')).toBeTruthy();
+        });
+
+        mockJsonPostReq.mockImplementation((url, payload, resolve) => {
+            resolve({ success: true });
+        });
+
+        fireEvent.click(screen.getByText('파일 삭제'));
+
+        await waitFor(() => {
+            expect(mockJsonPostReq).toHaveBeenCalledWith(
+                '/category-mismatches/delete-file',
+                { file_path: '1_fiction/orphan.txt' },
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText('파일이 삭제되었습니다.')).toBeTruthy();
+        });
+
+        expect(screen.queryByText('orphan.txt')).toBeNull();
+    });
+
+    it('파일 삭제 실패 시 에러 메시지를 표시한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+        render(<CategoryMismatch />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/불일치 관리/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/불일치 관리/));
+
+        await waitFor(() => {
+            expect(screen.getByRole('tree')).toBeTruthy();
+        });
+
+        mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+            if (url === '/categories') resolve(CATEGORIES_RESPONSE);
+            else if (url === '/category-mismatches') resolve(MISMATCH_RESPONSE_WITH_DATA);
+            else if (url.startsWith('/category-mismatches/')) {
+                resolve({
+                    es_only: [],
+                    fs_only: [{ file_name: 'orphan.txt', file_path: '1_fiction/orphan.txt' }],
+                });
+            }
+        });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+
+        await waitFor(() => {
+            expect(screen.getByText('orphan.txt')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('orphan.txt'));
+
+        await waitFor(() => {
+            expect(screen.getByText('파일 삭제')).toBeTruthy();
+        });
+
+        mockJsonPostReq.mockImplementation((url, payload, resolve, reject) => {
+            reject('삭제 실패');
+        });
+
+        fireEvent.click(screen.getByText('파일 삭제'));
+
+        await waitFor(() => {
+            expect(screen.getByText('파일 삭제 실패: 삭제 실패')).toBeTruthy();
+        });
+    });
 });

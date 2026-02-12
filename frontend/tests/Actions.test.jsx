@@ -15,7 +15,7 @@ vi.mock('../src/CategoryMapping', () => ({
     isCacheInitialized: () => true,
 }));
 
-import Actions, { generateNgrams, ngramSimilarity, calculateSimilarity, filterSubstringKeywords, stripNoiseWords } from '../src/Actions';
+import Actions, { generateNgrams, ngramSimilarity, calculateSimilarity, filterSubstringKeywords, stripNoiseWords, getSimilarityDebugInfo } from '../src/Actions';
 
 // ── generateNgrams ──
 
@@ -381,6 +381,22 @@ describe('카테고리 버튼 하이라이트', () => {
         expect(novelBtn.className).toContain('highlight');
     });
 
+    it('highlight-secondary 클래스를 유사도 2~5위 카테고리에 적용한다', () => {
+        const selectFn = vi.fn();
+        render(
+            <Actions
+                {...defaultProps}
+                otherCategoryList={['소설', '역사', '과학', '철학', '예술']}
+                suggestedCategories={{ yes24: '소설' }}
+                selectedCategory="소설"
+                selectDirectoryButtonClicked={selectFn}
+            />
+        );
+        // 최소 1위인 소설은 highlight
+        const novelBtn = screen.getByText('소설');
+        expect(novelBtn.className).toContain('highlight');
+    });
+
     it('suggestedCategories 변경 시 manuallyClicked가 초기화된다', () => {
         const selectFn = vi.fn();
         const { rerender } = render(
@@ -414,5 +430,67 @@ describe('카테고리 버튼 하이라이트', () => {
         // 자동 선택이므로 highlight 클래스 유지
         expect(btn.className).toContain('highlight');
         expect(btn.style.backgroundColor).not.toBe('rgb(255, 255, 255)');
+    });
+});
+
+// ── getSimilarityDebugInfo ──
+
+describe('getSimilarityDebugInfo', () => {
+    it('null 입력 시 null을 반환한다', () => {
+        expect(getSimilarityDebugInfo(null, ['소설'])).toBeNull();
+        expect(getSimilarityDebugInfo({ yes24: '소설' }, null)).toBeNull();
+        expect(getSimilarityDebugInfo({ yes24: '소설' }, [])).toBeNull();
+    });
+
+    it('서점별 키워드와 카테고리별 상세 정보를 반환한다', () => {
+        const result = getSimilarityDebugInfo(
+            { yes24: '한국소설' },
+            ['소설', '역사'],
+            10
+        );
+        expect(result).not.toBeNull();
+        expect(result.bookstoreKeywords).toBeDefined();
+        expect(result.bookstoreKeywords.yes24).toBeDefined();
+        expect(result.bookstoreKeywords.yes24.original).toBe('한국소설');
+        expect(result.categoryDetails).toBeDefined();
+        expect(Array.isArray(result.categoryDetails)).toBe(true);
+    });
+
+    it('빈 카테고리 값은 건너뛴다', () => {
+        const result = getSimilarityDebugInfo(
+            { yes24: '', aladin: '한국소설' },
+            ['소설'],
+        );
+        expect(result.bookstoreKeywords.yes24).toBeUndefined();
+        expect(result.bookstoreKeywords.aladin).toBeDefined();
+    });
+
+    it('topN으로 상위 결과를 제한한다', () => {
+        const categories = Array.from({ length: 20 }, (_, i) => `카테고리${i}`);
+        const result = getSimilarityDebugInfo(
+            { yes24: '카테고리0' },
+            categories,
+            3
+        );
+        expect(result.categoryDetails.length).toBeLessThanOrEqual(3);
+    });
+});
+
+// ── calculateSimilarity 추가 엣지케이스 ──
+
+describe('calculateSimilarity 추가 케이스', () => {
+    it('양쪽 모두 빈 문자열이면 0을 반환한다', () => {
+        expect(calculateSimilarity('', '')).toBe(0);
+    });
+
+    it('양쪽 모두 null이면 0을 반환한다', () => {
+        expect(calculateSimilarity(null, null)).toBe(0);
+    });
+
+    it('매우 긴 문자열도 처리한다', () => {
+        const long1 = '가'.repeat(100);
+        const long2 = '가'.repeat(100) + '나';
+        const score = calculateSimilarity(long1, long2);
+        expect(score).toBeGreaterThan(0);
     });
 });

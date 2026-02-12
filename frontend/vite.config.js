@@ -29,5 +29,12 @@ export default defineConfig({
     },
     test: {
         include: ['tests/**/*.test.{js,jsx}'],
+        setupFiles: ['tests/setup.js'],
+        reporters: ['./tests/reporter.js'],
+        coverage: {
+            provider: 'v8',
+            reporter: ['text'],
+            include: ['src/**/*.{js,jsx}'],
+        },
     },
 })
