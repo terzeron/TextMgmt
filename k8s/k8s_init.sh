@@ -14,8 +14,65 @@ else
 fi
 
 NAMESPACE="textmanager"
+LIMA_VM="docker"
+K3D_CLUSTER="dev"
 
 echo "=== K8s Initialization for TextManager ==="
+
+# 0-1. Lima VM 생성 (Docker runtime용)
+echo ""
+echo ">>> [0-1] Setting up Lima VM: $LIMA_VM"
+if limactl list --format '{{.Name}}' 2>/dev/null | grep -qx "$LIMA_VM"; then
+    STATUS=$(limactl list --format '{{.Status}}' --filter "Name=$LIMA_VM" 2>/dev/null || true)
+    if [ "$STATUS" = "Running" ]; then
+        echo "Lima VM '$LIMA_VM' already running, skipping"
+    else
+        echo "Lima VM '$LIMA_VM' exists but stopped, starting..."
+        limactl start "$LIMA_VM"
+    fi
+else
+    echo "Creating Lima VM '$LIMA_VM' from lima-docker.yaml..."
+    limactl create --name="$LIMA_VM" "$SCRIPT_DIR/lima-docker.yaml"
+    limactl start "$LIMA_VM"
+fi
+
+# Docker 소켓 경로 설정
+export DOCKER_HOST="unix://$HOME/.lima/$LIMA_VM/sock/docker.sock"
+echo "DOCKER_HOST=$DOCKER_HOST"
+
+# Docker 접속 확인
+echo "Waiting for Docker daemon..."
+for i in $(seq 1 30); do
+    if docker info &>/dev/null; then
+        echo "Docker is ready"
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        echo "Error: Docker daemon not responding"
+        exit 1
+    fi
+    sleep 2
+done
+
+# 0-2. k3d 클러스터 생성
+echo ""
+echo ">>> [0-2] Setting up k3d cluster: $K3D_CLUSTER"
+if k3d cluster list 2>/dev/null | grep -q "$K3D_CLUSTER"; then
+    echo "k3d cluster '$K3D_CLUSTER' already exists, skipping"
+else
+    echo "Creating k3d cluster '$K3D_CLUSTER'..."
+    k3d cluster create "$K3D_CLUSTER" \
+        --servers 1 \
+        --agents 1 \
+        --port "80:80@loadbalancer" \
+        --port "443:443@loadbalancer" \
+        --port "30300-30310:30300-30310@loadbalancer" \
+        --wait
+fi
+
+# kubectl context 설정
+kubectl config use-context "k3d-$K3D_CLUSTER"
+kubectl cluster-info
 
 # 1. Namespace 생성
 echo ""
