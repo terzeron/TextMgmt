@@ -11,4 +11,5 @@
 .standalone-viewer .card-body {
     padding: 0 !important;
     height: 100%;
+    overflow-y: auto;
 }
