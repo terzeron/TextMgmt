@@ -559,48 +559,44 @@ def clear_lastfailed_for_files(test_file_prefixes: list[str]) -> None:
 
 def run_failed_tests() -> bool:
     """Run only failed tests"""
-    all_failed_tests_from_cache = get_failed_or_skipped_tests() # Get all failed tests from cache initially
-    
-    # Extract unique test file paths from all_failed_tests_from_cache
-    test_files_to_run: list[Path] = []
-    seen_files: set[Path] = set()
-
-    if not all_failed_tests_from_cache:
+    failed_tests = get_failed_or_skipped_tests()
+    if not failed_tests:
         return True
 
-    for t in all_failed_tests_from_cache:
-        file_path_str = t.split("::")[0]
-        if file_path_str.startswith("tests/"):
-            absolute_path = PROJECT_ROOT / file_path_str
-            if absolute_path.exists() and absolute_path not in seen_files:
-                test_files_to_run.append(absolute_path)
-                seen_files.add(absolute_path)
+    # 테스트 파일 추출 + 중복 제거 + 존재 확인을 한 패스로 처리
+    test_files: list[Path] = []
+    seen: set[Path] = set()
+    for t in failed_tests:
+        file_path = t.split("::")[0]
+        if file_path.startswith("tests/"):
+            absolute_path = PROJECT_ROOT / file_path
+            if (absolute_path.exists()
+                    and absolute_path.resolve() != Path(__file__).resolve()
+                    and absolute_path not in seen):
+                test_files.append(absolute_path)
+                seen.add(absolute_path)
 
-    if not test_files_to_run:
+    if not test_files:
         return True
 
     print("Running only failed test modules:")
-    for t in test_files_to_run:
+    for t in test_files:
         print(f"  - {t}")
 
-    success, _, _, _ = run_test_modules_sequentially(test_files_to_run)
+    success, _, _, _ = run_test_modules_sequentially(test_files)
 
     if success:
-        # If all *run* failed tests passed, clear the entire lastfailed cache
-        candidate_cache_dirs = [
-            TEST_DIR / ".pytest_cache/v/cache",
-            PROJECT_ROOT / ".pytest_cache/v/cache",
-        ]
-
-        for cache_dir in candidate_cache_dirs:
-            lastfailed_file = cache_dir / "lastfailed"
-            if lastfailed_file.exists():
-                try:
-                    lastfailed_file.unlink()
-                    print(f"✅ Cleared lastfailed cache: {lastfailed_file}")
-                except (OSError, PermissionError) as e:
-                    print(f"⚠️  Failed to clear lastfailed cache: {e}")
-
+        # 성공한 테스트 파일의 lastfailed 항목을 선택적으로 제거
+        # (삭제/이름변경된 테스트의 stale 항목이 남는 문제 방지)
+        file_prefixes = []
+        for t in test_files:
+            try:
+                rel = t.relative_to(PROJECT_ROOT)
+                file_prefixes.append(str(rel))
+            except ValueError:
+                pass
+        if file_prefixes:
+            clear_lastfailed_for_files(file_prefixes)
         print("All failed tests passed. Now running changed test modules (if any)...")
     else:
         print("Some previously failed tests are still failing.")
