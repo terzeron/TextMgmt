@@ -538,9 +538,9 @@ describe('ViewPDF', () => {
         expect(chunk2Calls.length).toBe(1);
     });
 
-    // ── aspectRatio 종횡비 유지 ──
+    // ── 종횡비 유지 ──
 
-    it('맞춤 모드(fitMode)에서 canvas에 aspectRatio 스타일이 적용된다', async () => {
+    it('맞춤 모드(fitMode)에서 canvas에 width:100%와 height:auto가 적용된다', async () => {
         globalThis.fetch = createMockFetch(2);
         setupGetDocument(() => createMockPdf(1));
 
@@ -553,14 +553,13 @@ describe('ViewPDF', () => {
 
         const canvases = document.querySelectorAll('canvas');
         expect(canvases.length).toBe(2);
-        // mock getViewport는 width:800, height:600 반환
         for (const canvas of canvases) {
             expect(canvas.style.width).toBe('100%');
-            expect(canvas.style.aspectRatio).toBe('800 / 600');
+            expect(canvas.style.height).toBe('auto');
         }
     });
 
-    it('수동 줌 모드에서도 canvas에 aspectRatio 스타일이 적용된다', async () => {
+    it('수동 줌 모드에서 canvas에 명시적 width/height가 적용된다', async () => {
         globalThis.fetch = createMockFetch(1);
         setupGetDocument(() => createMockPdf(1));
 
@@ -573,40 +572,8 @@ describe('ViewPDF', () => {
 
         const canvas = document.querySelector('canvas');
         expect(canvas).toBeTruthy();
-        // 수동 줌 모드에서 width는 px 단위, aspectRatio가 설정됨
-        expect(canvas.style.aspectRatio).toBe('800 / 600');
+        // 수동 줌 모드에서 width와 height 모두 px 단위
         expect(canvas.style.width).toContain('px');
-    });
-
-    it('첫 페이지 로드 전 canvas에 A4 fallback 비율이 적용된다', async () => {
-        // fetch가 영원히 pending → nativeWidthRef/nativeHeightRef가 0인 상태
-        // 하지만 totalPages가 0이면 canvas가 생성되지 않으므로,
-        // getDocument가 느리게 resolve되는 시나리오를 구성
-        let resolveGetDoc;
-        globalThis.fetch = createMockFetch(2);
-        mockGetDocument.mockImplementation(() => ({
-            promise: new Promise((resolve) => { resolveGetDoc = resolve; }),
-        }));
-
-        render(<ViewPDF bookId={1} preview={false} />);
-
-        // fetch는 성공했지만 getDocument는 아직 resolve 안 됨
-        // 이 시점에서는 totalPages=0이므로 canvas가 아직 없음 → 로딩 표시
-        await waitFor(() => {
-            expect(screen.getByText(/PDF 다운로드 중/)).toBeTruthy();
-        });
-
-        // getDocument resolve → 첫 페이지 로드 → canvas 생성
-        const mockPdf = createMockPdf(1);
-        resolveGetDoc(mockPdf);
-
-        await waitFor(() => {
-            const canvases = document.querySelectorAll('canvas');
-            expect(canvases.length).toBe(2);
-        });
-
-        // nativeWidthRef가 설정된 후이므로 실제 비율이 적용됨
-        const canvas = document.querySelector('canvas');
-        expect(canvas.style.aspectRatio).toBe('800 / 600');
+        expect(canvas.style.height).toContain('px');
     });
 });
