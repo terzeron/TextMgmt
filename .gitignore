@@ -1,4 +1,4 @@
-books/.preview_cache
+.preview_cache
 
 backend/.env
 backend/*.pid
