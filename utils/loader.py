@@ -385,7 +385,12 @@ class Loader:
             elif file_type == "epub":
                 summary, line_count, page_count = Loader.read_from_epub(file_path)
             elif file_type == "pdf":
-                summary, line_count, page_count = Loader.read_from_pdf(file_path)
+                if file_path.is_relative_to(Loader.comics_path_prefix):
+                    # comics: 이미지 기반 PDF이므로 텍스트 추출 생략
+                    summary, line_count, page_count = "", 0, 0
+                    Stat.pdf_count += 1
+                else:
+                    summary, line_count, page_count = Loader.read_from_pdf(file_path)
             elif file_type == "docx":
                 summary, line_count, page_count = Loader.read_from_docx(file_path)
             elif file_type == "doc":
@@ -435,17 +440,20 @@ class Loader:
         """
         if path.is_dir():
             if recursive:
-                file_path_list = [p for p in path.rglob("*") if p.is_file()]
+                file_path_list = [
+                    p for p in path.rglob("*")
+                    if p.is_file() and not any(part.startswith('.') for part in p.relative_to(path).parts)
+                ]
             else:
                 file_path_list = []
                 # 1. 하위 디렉토리 각각에서 첫 번째 파일 1개씩
                 for subdir in path.iterdir():
-                    if subdir.is_dir():
-                        first_file = next((p for p in subdir.iterdir() if p.is_file()), None)
+                    if subdir.is_dir() and not subdir.name.startswith('.'):
+                        first_file = next((p for p in subdir.iterdir() if p.is_file() and not p.name.startswith('.')), None)
                         if first_file:
                             file_path_list.append(first_file)
                 # 2. 지정된 디렉토리에 바로 속한 파일들
-                file_path_list.extend(p for p in path.iterdir() if p.is_file())
+                file_path_list.extend(p for p in path.iterdir() if p.is_file() and not p.name.startswith('.'))
         else:
             file_path_list = [path]
         return file_path_list[:num_files]
@@ -615,8 +623,11 @@ def main() -> int:
             else:
                 print(f"  파일 적재 실패 (지원하지 않는 형식일 수 있음)")
         elif do_recursive:
-            # 전체 파일 등록 (generator 사용으로 메모리 효율화)
-            file_iter = (p for p in target_path.rglob("*") if p.is_file())
+            # 전체 파일 등록 (generator 사용으로 메모리 효율화, hidden directory 제외)
+            file_iter = (
+                p for p in target_path.rglob("*")
+                if p.is_file() and not any(part.startswith('.') for part in p.relative_to(target_path).parts)
+            )
             skip_check = do_reload
             processed, skipped_count = process_file_iter(file_iter, skip_check=skip_check)
             print(f"  총 {processed}개 파일 처리됨")
@@ -629,9 +640,9 @@ def main() -> int:
             print("  [1단계] 하위 디렉토리별 샘플 파일 등록")
             sample_files: List[Tuple[str, Path]] = []  # (subdir_name, file_path)
             for subdir in target_path.iterdir():
-                if subdir.is_dir():
+                if subdir.is_dir() and not subdir.name.startswith('.'):
                     # 첫 번째 파일만 가져옴 (정렬 불필요, iterator 사용)
-                    first_file = next((p for p in subdir.iterdir() if p.is_file()), None)
+                    first_file = next((p for p in subdir.iterdir() if p.is_file() and not p.name.startswith('.')), None)
                     if first_file:
                         sample_files.append((subdir.name, first_file))
                     else:
@@ -649,7 +660,7 @@ def main() -> int:
 
             # 2단계: 지정된 디렉토리에 바로 속한 파일들
             print("  [2단계] 현재 디렉토리 파일 등록")
-            current_dir_files = [p for p in target_path.iterdir() if p.is_file()]
+            current_dir_files = [p for p in target_path.iterdir() if p.is_file() and not p.name.startswith('.')]
             print(f"    {len(current_dir_files)}개 파일 발견")
             _, skipped2 = process_file_iter(current_dir_files, skip_check=skip_check)
             if skipped2 > 0:
