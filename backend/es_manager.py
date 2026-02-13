@@ -41,6 +41,23 @@ class ESManager:
             retry_on_timeout=True,
         )
 
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                self.es.info()
+                LOGGER.info("Elasticsearch 연결 성공")
+                break
+            except (ConnectionError, ConnectionTimeout) as e:
+                if attempt < max_retries - 1:
+                    wait = min(2 ** (attempt + 1), 10)
+                    LOGGER.warning(
+                        "ES 연결 실패 (시도 %d/%d): %s. %d초 후 재시도...",
+                        attempt + 1, max_retries, e, wait)
+                    time.sleep(wait)
+                else:
+                    LOGGER.error("ES 연결 최종 실패: %s", e)
+                    raise
+
     def __del__(self) -> None:
         del self.es
 
