@@ -247,14 +247,14 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
         <Container id="view">
             <Row fluid="true">
                 {isFolderOpen && (
-                    <Col md={isMobile ? 12 : 3} lg={isMobile ? 12 : 2} className={directoryClassName}>
+                    <Col md={isMobile ? 12 : 5} lg={isMobile ? 12 : 4} className={directoryClassName}>
                         <Suspense fallback={<div className="loading">로딩 중...</div>}>
                             <Folder folderData={folderData} isOpen={true} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
                         </Suspense>
                     </Col>
                 )}
 
-                <Col md={isMobile ? 12 : (isFolderOpen ? 9 : 12)} lg={isMobile ? 12 : (isFolderOpen ? 10 : 12)} className={isMobile ? "ps-0 pe-0" : "section"}>
+                <Col md={isMobile ? 12 : (isFolderOpen ? 7 : 12)} lg={isMobile ? 12 : (isFolderOpen ? 8 : 12)} className={isMobile ? "ps-0 pe-0" : "section"}>
                     {!isFolderOpen && (
                         <Suspense fallback={<div className="loading">로딩 중...</div>}>
                             <Folder folderData={folderData} isOpen={false} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
