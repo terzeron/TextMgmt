@@ -3,7 +3,7 @@ import PropTypes from "prop-types";
 import { RTFJS } from "rtf.js";
 import { textGetReq } from "./Common";
 
-export default function ViewRTF({ bookId }) {
+export default function ViewRTF({ bookId, apiPrefix = '' }) {
     const parentRef = useRef(null);
     const [errorMessage, setErrorMessage] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -26,7 +26,7 @@ export default function ViewRTF({ bookId }) {
             return;
         }
 
-        const downloadUrl = `/download/${bookId}`;
+        const downloadUrl = `${apiPrefix}/download/${bookId}`;
         console.log("Downloading RTF from:", downloadUrl);
 
         RTFJS.loggingEnabled(false);
@@ -61,7 +61,7 @@ export default function ViewRTF({ bookId }) {
                 setIsLoading(false);
             }
         );
-    }, [bookId]);
+    }, [bookId, apiPrefix]);
 
     return (
         <div>
@@ -85,4 +85,5 @@ export default function ViewRTF({ bookId }) {
 
 ViewRTF.propTypes = {
     bookId: PropTypes.number.isRequired,
+    apiPrefix: PropTypes.string,
 };

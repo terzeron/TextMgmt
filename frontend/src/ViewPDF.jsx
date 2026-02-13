@@ -9,7 +9,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4.10.38/buil
 
 const CHUNK_SIZE = 10;
 
-export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
+export default function ViewPDF({bookId, pageCount = 0, preview = false, apiPrefix = ''}) {
     const [error, setError] = useState(null);
     const [totalPages, setTotalPages] = useState(0);
     const [loadedPages, setLoadedPages] = useState(0);
@@ -53,7 +53,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
         fetchingRef.current.add(key);
 
         try {
-            const url = getApiUrlPrefix() + `/pdf-pages/${bookId}?start=${start}&end=${end}`;
+            const url = getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}?start=${start}&end=${end}`;
             const response = await fetch(url);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
@@ -163,7 +163,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false}) {
             try {
                 // 1단계: 첫 페이지만 페칭하여 총 페이지 수 확인 및 빠른 렌더링
                 setDownloadProgress(10);
-                const firstUrl = getApiUrlPrefix() + `/pdf-pages/${bookId}?start=1&end=1`;
+                const firstUrl = getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}?start=1&end=1`;
                 const firstResponse = await fetch(firstUrl);
                 if (!firstResponse.ok) throw new Error(`HTTP ${firstResponse.status}`);
 
@@ -511,4 +511,5 @@ ViewPDF.propTypes = {
     bookId: PropTypes.number.isRequired,
     pageCount: PropTypes.number,
     preview: PropTypes.bool,
+    apiPrefix: PropTypes.string,
 };

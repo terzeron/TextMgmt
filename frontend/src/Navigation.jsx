@@ -27,10 +27,12 @@ export default function Navigation() {
     const [hiddenCategories, setHiddenCategories] = useState([]);
 
     const location = useLocation();
+    const isComicsContext = location.pathname.startsWith('/comics-');
+    const searchPrefix = isComicsContext ? '/comics' : '';
 
-    // viewer일 때 비노출 카테고리 목록 로드
+    // viewer일 때 비노출 카테고리 목록 로드 (책 전용)
     useEffect(() => {
-        if (role === 'viewer') {
+        if (role === 'viewer' && !isComicsContext) {
             rawJsonGetReq('/hidden-categories',
                 (data) => {
                     if (data.status === 'success') {
@@ -42,11 +44,11 @@ export default function Navigation() {
         } else {
             setHiddenCategories([]);
         }
-    }, [role]);
+    }, [role, isComicsContext]);
 
     const buildSearchUrl = (keyword, offset, limit) => {
-        let url = `/search/${encodeURIComponent(keyword)}?offset=${offset}&limit=${limit}`;
-        if (hiddenCategories.length > 0) {
+        let url = `${searchPrefix}/search/${encodeURIComponent(keyword)}?offset=${offset}&limit=${limit}`;
+        if (!isComicsContext && hiddenCategories.length > 0) {
             url += `&exclude_categories=${encodeURIComponent(hiddenCategories.join(','))}`;
         }
         return url;
@@ -89,7 +91,7 @@ export default function Navigation() {
                 setSearchLoading(false);
             }
         );
-    }, [searchKeyword, searchResults.length, searchLoading, hiddenCategories]);
+    }, [searchKeyword, searchResults.length, searchLoading, hiddenCategories, searchPrefix]);
 
     useEffect(() => {
         if (!clientId) {
@@ -185,7 +187,7 @@ export default function Navigation() {
         }
 
         if (role === 'viewer' && (location.pathname === '/' || !isViewerAllowedPath(location.pathname))) {
-            return <Navigate to="/view" replace />;
+            return <Navigate to="/book-view" replace />;
         }
 
         return <Outlet context={{ searchResults, hasSearched, role, searchTotal, handleLoadMore, searchLoading }} />;
@@ -199,8 +201,10 @@ export default function Navigation() {
                     <Navbar.Toggle aria-controls="basic-navbar-nav" />
                     <Navbar.Collapse id="basic-navbar-nav">
                         <Nav className="me-auto my-2 my-lg-0" style={{ maxHeight: '100px' }} navbarScroll>
-                            {role === 'admin' && <Nav.Link href="/edit">편집</Nav.Link>}
-                            {role && <Nav.Link href="/view">조회</Nav.Link>}
+                            {role === 'admin' && <Nav.Link href="/book-edit">책 편집</Nav.Link>}
+                            {role && <Nav.Link href="/book-view">책</Nav.Link>}
+                            {role === 'admin' && <Nav.Link href="/comics-edit">만화 편집</Nav.Link>}
+                            {role && <Nav.Link href="/comics-view">만화</Nav.Link>}
                             {role === 'admin' && <Nav.Link href="/admin">관리</Nav.Link>}
                         </Nav>
                         <div className="d-flex align-items-center ms-auto">

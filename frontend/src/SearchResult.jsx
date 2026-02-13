@@ -9,7 +9,7 @@ import {Card, Button} from 'react-bootstrap';
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {faChevronDown, faChevronRight} from "@fortawesome/free-solid-svg-icons";
 
-export default function SearchResult({results, showEditButton = true, onLoadMore, hasMore = false, loading = false}) {
+export default function SearchResult({results, showEditButton = true, onLoadMore, hasMore = false, loading = false, basePath = '/book-edit'}) {
     const [isOpen, setIsOpen] = useState(true);
 
     useEffect(() => {
@@ -39,7 +39,7 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                         {showEditButton && (
                                             <Button
                                                 variant="outline-warning" size="sm"
-                                                onClick={() => window.open(`/edit/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
+                                                onClick={() => window.open(`${basePath}/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
                                                 style={{marginRight: '4px'}}
                                             >
                                                 편집
@@ -47,7 +47,7 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                         )}
                                         <Button
                                             variant="outline-primary" size="sm"
-                                            onClick={() => window.open(`/view/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
+                                            onClick={() => window.open(`${basePath.replace('-edit', '-view')}/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
                                             style={{marginRight: '4px'}}
                                         >
                                             조회
@@ -55,7 +55,10 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                         {showEditButton || (
                                             <Button
                                                 variant="outline-secondary" size="sm"
-                                                onClick={() => window.open(`/viewer/${book.file_type}/${book.book_id}?path=${encodeURIComponent(book.file_path)}`, '_blank', 'noopener')}
+                                                onClick={() => {
+                                                    const apiParam = basePath.startsWith('/comics') ? '&api=%2Fcomics' : '';
+                                                    window.open(`/viewer/${book.file_type}/${book.book_id}?path=${encodeURIComponent(book.file_path)}${apiParam}`, '_blank', 'noopener');
+                                                }}
                                             >
                                                 전체 보기
                                             </Button>
@@ -93,7 +96,8 @@ SearchResult.propTypes = {
     showEditButton: PropTypes.bool,
     onLoadMore: PropTypes.func,
     hasMore: PropTypes.bool,
-    loading: PropTypes.bool
+    loading: PropTypes.bool,
+    basePath: PropTypes.string,
 };
 
 SearchResult.defaultProps = {

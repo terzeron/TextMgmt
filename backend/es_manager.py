@@ -22,14 +22,14 @@ logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 class ESManager:
     DEFAULT_MAX_RESULT_COUNT = 10
 
-    def __init__(self) -> None:
-        for env in ["TM_ES_INDEX", "TM_ES_URL", "TM_ES_USER", "TM_ES_PASSWORD"]:
+    def __init__(self, index_name: str = "") -> None:
+        for env in ["TM_ES_BOOK_INDEX", "TM_ES_URL", "TM_ES_USER", "TM_ES_PASSWORD"]:
             print(f"{env}={os.environ[env]}")
             if env not in os.environ:
                 LOGGER.error(f"The environment variable {env} is not set.")
                 sys.exit(-1)
 
-        self.index_name = os.environ["TM_ES_INDEX"]
+        self.index_name = index_name or os.environ["TM_ES_BOOK_INDEX"]
         url = os.environ["TM_ES_URL"]
         user = os.environ["TM_ES_USER"]
         password = os.environ["TM_ES_PASSWORD"]
@@ -40,6 +40,23 @@ class ESManager:
             request_timeout=10,
             retry_on_timeout=True,
         )
+
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                self.es.info()
+                LOGGER.info("Elasticsearch 연결 성공")
+                break
+            except (ConnectionError, ConnectionTimeout) as e:
+                if attempt < max_retries - 1:
+                    wait = min(2 ** (attempt + 1), 10)
+                    LOGGER.warning(
+                        "ES 연결 실패 (시도 %d/%d): %s. %d초 후 재시도...",
+                        attempt + 1, max_retries, e, wait)
+                    time.sleep(wait)
+                else:
+                    LOGGER.error("ES 연결 최종 실패: %s", e)
+                    raise
 
     def __del__(self) -> None:
         del self.es

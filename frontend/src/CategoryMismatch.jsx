@@ -304,13 +304,13 @@ export default function CategoryMismatch() {
                                                 <>
                                                     <Button
                                                         variant="outline-warning" size="sm"
-                                                        onClick={() => window.open(`/edit/${selectedMismatch.bookId}?category=${encodeURIComponent(selectedMismatch.category)}`, '_blank', 'noopener')}
+                                                        onClick={() => window.open(`/book-edit/${selectedMismatch.bookId}?category=${encodeURIComponent(selectedMismatch.category)}`, '_blank', 'noopener')}
                                                     >
                                                         편집
                                                     </Button>
                                                     <Button
                                                         variant="outline-primary" size="sm"
-                                                        onClick={() => window.open(`/view/${selectedMismatch.bookId}?category=${encodeURIComponent(selectedMismatch.category)}`, '_blank', 'noopener')}
+                                                        onClick={() => window.open(`/book-view/${selectedMismatch.bookId}?category=${encodeURIComponent(selectedMismatch.category)}`, '_blank', 'noopener')}
                                                     >
                                                         조회
                                                     </Button>

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import { getApiUrlPrefix } from "./Common";
 
-export default function ViewHTML({ bookId }) {
+export default function ViewHTML({ bookId, apiPrefix = '' }) {
     const ref = useRef(null);
     const [url, setUrl] = useState("");
     const [isLoading, setIsLoading] = useState(true);
@@ -17,7 +17,7 @@ export default function ViewHTML({ bookId }) {
             return;
         }
 
-        const iframeUrl = getApiUrlPrefix() + "/download/" + bookId;
+        const iframeUrl = getApiUrlPrefix() + apiPrefix + "/download/" + bookId;
         console.log(iframeUrl);
         setUrl(iframeUrl);
         setIsLoading(true);
@@ -26,7 +26,7 @@ export default function ViewHTML({ bookId }) {
         return () => {
             setUrl("");
         };
-    }, [bookId]);
+    }, [bookId, apiPrefix]);
 
     return (
         <div className="html-container">
@@ -60,4 +60,5 @@ export default function ViewHTML({ bookId }) {
 
 ViewHTML.propTypes = {
     bookId: PropTypes.number.isRequired,
+    apiPrefix: PropTypes.string,
 };

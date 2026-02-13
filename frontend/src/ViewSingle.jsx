@@ -19,6 +19,7 @@ export default function ViewSingle(props) {
     const { entryId, fileType: paramFileType } = useParams();
     const [searchParams] = useSearchParams();
     const paramFilePath = searchParams.get('path') || '';
+    const paramApiPrefix = searchParams.get('api') || '';
     const standalone = Boolean(entryId && paramFileType);
     const [bookId, setBookId] = useState(0);
     const [filePath, setFilePath] = useState('');
@@ -73,18 +74,19 @@ export default function ViewSingle(props) {
 
     const preview = props.preview || false;
 
+    const ap = standalone ? paramApiPrefix : (props.apiPrefix || '');
     const componentMap = {
-        'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} preview={preview} />,
-        'epub': <ViewEPUB bookId={bookId} preview={preview} />,
-        'doc': <ViewDOC bookId={bookId} fileType="doc" />,
-        'docx': <ViewDOC bookId={bookId} fileType="docx" lineCount={lineCount} />,
-        'hwp': <ViewDOC bookId={bookId} fileType="hwp" />,
-        'txt': <ViewTXT bookId={bookId} lineCount={lineCount} />,
-        'html': <ViewHTML bookId={bookId} />,
-        'rtf': <ViewRTF bookId={bookId} />,
-        'jpg': <ViewImage bookId={bookId} />,
-        'gif': <ViewImage bookId={bookId} />,
-        'png': <ViewImage bookId={bookId} />
+        'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} preview={preview} apiPrefix={ap} />,
+        'epub': <ViewEPUB bookId={bookId} preview={preview} apiPrefix={ap} />,
+        'doc': <ViewDOC bookId={bookId} fileType="doc" apiPrefix={ap} />,
+        'docx': <ViewDOC bookId={bookId} fileType="docx" lineCount={lineCount} apiPrefix={ap} />,
+        'hwp': <ViewDOC bookId={bookId} fileType="hwp" apiPrefix={ap} />,
+        'txt': <ViewTXT bookId={bookId} lineCount={lineCount} apiPrefix={ap} />,
+        'html': <ViewHTML bookId={bookId} apiPrefix={ap} />,
+        'rtf': <ViewRTF bookId={bookId} apiPrefix={ap} />,
+        'jpg': <ViewImage bookId={bookId} apiPrefix={ap} />,
+        'gif': <ViewImage bookId={bookId} apiPrefix={ap} />,
+        'png': <ViewImage bookId={bookId} apiPrefix={ap} />
     };
     const renderComponent = componentMap[fileType];
 
@@ -131,4 +133,5 @@ ViewSingle.propTypes = {
     lineCount: PropTypes.number,
     pageCount: PropTypes.number,
     preview: PropTypes.bool,
+    apiPrefix: PropTypes.string,
 }

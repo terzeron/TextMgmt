@@ -492,14 +492,91 @@ describe('SimilarBooks', () => {
         const editBtns = screen.getAllByText('편집');
         fireEvent.click(editBtns[0]);
         expect(openSpy).toHaveBeenCalledWith(
-            expect.stringContaining('/edit/42'),
+            expect.stringContaining('/book-edit/42'),
             '_blank', 'noopener'
         );
 
         const viewBtns = screen.getAllByText('조회');
         fireEvent.click(viewBtns[0]);
         expect(openSpy).toHaveBeenCalledWith(
-            expect.stringContaining('/view/42'),
+            expect.stringContaining('/book-view/42'),
+            '_blank', 'noopener'
+        );
+        openSpy.mockRestore();
+    });
+
+    // ── 만화 컨텍스트 (apiPrefix, basePath) ──
+
+    it('apiPrefix="/comics"일 때 /comics/similar/ URL로 API를 호출한다', () => {
+        mockBooks([]);
+
+        render(<SimilarBooks bookId={42} apiPrefix="/comics" />);
+
+        expect(mockRawJsonGetReq).toHaveBeenCalledWith(
+            '/comics/similar/42?offset=0&limit=10',
+            expect.any(Function),
+            expect.any(Function)
+        );
+    });
+
+    it('apiPrefix="/comics"일 때 "더 보기" 클릭 시 /comics prefix로 API를 호출한다', async () => {
+        let callCount = 0;
+        mockRawJsonGetReq.mockImplementation((url, resolve) => {
+            callCount++;
+            if (callCount === 1) {
+                resolve({ status: 'success', result: [makeBook(1, 95)], total: 2 });
+            } else {
+                resolve({ status: 'success', result: [makeBook(2, 80)], total: 2 });
+            }
+        });
+
+        render(<SimilarBooks bookId={1} apiPrefix="/comics" />);
+
+        await waitFor(() => {
+            expect(screen.getByText('더 보기')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('더 보기'));
+
+        await waitFor(() => {
+            const secondCall = mockRawJsonGetReq.mock.calls[1];
+            expect(secondCall[0]).toMatch(/^\/comics\/similar\//);
+        });
+    });
+
+    it('basePath="/comics-edit"일 때 편집 버튼이 comics-edit URL로 열린다', async () => {
+        mockBooks([makeBook(42, 95)]);
+        const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+
+        render(<SimilarBooks bookId={1} basePath="/comics-edit" />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/Book 42\.pdf/)).toBeTruthy();
+        });
+
+        const editBtns = screen.getAllByText('편집');
+        fireEvent.click(editBtns[0]);
+        expect(openSpy).toHaveBeenCalledWith(
+            expect.stringContaining('/comics-edit/42'),
+            '_blank', 'noopener'
+        );
+        openSpy.mockRestore();
+    });
+
+    it('basePath="/comics-edit"일 때 조회 버튼이 comics-view URL로 열린다', async () => {
+        mockBooks([makeBook(42, 95)]);
+        const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+
+        render(<SimilarBooks bookId={1} basePath="/comics-edit" />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/Book 42\.pdf/)).toBeTruthy();
+        });
+
+        const viewBtns = screen.getAllByText('조회');
+        fireEvent.click(viewBtns[0]);
+        expect(openSpy).toHaveBeenCalledWith(
+            expect.stringContaining('/comics-view/42'),
             '_blank', 'noopener'
         );
         openSpy.mockRestore();

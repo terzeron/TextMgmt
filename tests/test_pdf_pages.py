@@ -48,9 +48,11 @@ def test_pdf_path(temp_dir):
 def mock_book_manager(temp_dir, test_pdf_path):
     """ESManager를 mock한 BookManager."""
     with patch.dict(os.environ, {
-        "TM_WORK_DIR": str(temp_dir),
+        "TM_BOOK_DIR": str(temp_dir),
+        "TM_COMICS_DIR": str(temp_dir),
+        "TM_ES_COMICS_INDEX": "test_comics",
         "TM_ES_URL": "http://localhost:9200",
-        "TM_ES_INDEX": "test",
+        "TM_ES_BOOK_INDEX": "test",
         "TM_ES_USER": "",
         "TM_ES_PASSWORD": "",
         "TM_FRONTEND_URL": "http://localhost:3000",
@@ -199,11 +201,17 @@ class TestPdfPagesEndpoint:
         with patch.dict(os.environ, {
             "TM_FRONTEND_URL": "http://localhost:3000",
         }):
-            # main.py의 book_manager를 mock된 것으로 교체
-            from backend import main
-            original_bm = main.book_manager
-            main.book_manager = bm
-            self.client = TestClient(main.app)
+            # main.py 모듈 초기화 시 ComicsManager(ES)와 CategoryMapping(MySQL)도 mock
+            with patch("backend.comics_manager.ESManager") as MockComicsES, \
+                 patch("backend.category_mapping.CategoryMapping._init_db"):
+                mock_comics_es = MagicMock()
+                MockComicsES.return_value = mock_comics_es
+                mock_comics_es.create_index.return_value = None
+
+                from backend import main
+                original_bm = main.book_manager
+                main.book_manager = bm
+                self.client = TestClient(main.app)
             yield
             main.book_manager = original_bm
 

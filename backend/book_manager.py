@@ -23,6 +23,7 @@ logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
 class BookManager:
     ROOT_DIRECTORY = "$$rootdir$$"
+    item_class = Book
     MEDIA_TYPES = {
         ".txt": "text/plain",
         ".pdf": "application/pdf",
@@ -272,11 +273,11 @@ class BookManager:
         return ""
 
     def __init__(self) -> None:
-        if "TM_WORK_DIR" not in os.environ:
-            LOGGER.error("The environment variable TM_WORK_DIR is not set.")
+        if "TM_BOOK_DIR" not in os.environ:
+            LOGGER.error("The environment variable TM_BOOK_DIR is not set.")
             sys.exit(-1)
 
-        self.path_prefix = Path(os.environ["TM_WORK_DIR"])
+        self.path_prefix = Path(os.environ["TM_BOOK_DIR"])
         LOGGER.debug(self.path_prefix)
         self.es_manager = ESManager()
         self.es_manager.create_index()
@@ -292,14 +293,14 @@ class BookManager:
     async def get_books_in_category(self, category: str) -> Tuple[List[Book], Optional[str]]:
         doc_list = self.es_manager.search_by_category(category, max_result_count=sys.maxsize)
         if doc_list and len(doc_list) > 0:
-            return [Book(book_id=book_id, info=doc) for book_id, doc, _score in doc_list], None
+            return [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in doc_list], None
         return [], f"No books found in '{category}'"
 
     async def get_book(self, book_id: int) -> Tuple[Optional[Book], Optional[str]]:
         LOGGER.debug("# get_book(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
         if doc:
-            return Book(book_id=book_id, info=doc), None
+            return self.item_class(book_id=book_id, info=doc), None
         return None, f"No book found by '{book_id}'"
 
     async def validate_epub(self, book_id: int) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -468,7 +469,7 @@ class BookManager:
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
             return ""
-        book = Book(book_id=book_id, info=doc)
+        book = self.item_class(book_id=book_id, info=doc)
         # book.file_path는 이미 path_prefix가 포함된 전체 경로
         if book.file_path.is_file():
             media_type = BookManager.MEDIA_TYPES.get(book.file_path.suffix, "application/octet-stream")
@@ -485,7 +486,7 @@ class BookManager:
         if not doc:
             LOGGER.warning("get_book_preview: book_id=%d not found in ES", book_id)
             return Response(status_code=404, content=f"Book not found: {book_id}")
-        book = Book(book_id=book_id, info=doc)
+        book = self.item_class(book_id=book_id, info=doc)
         if not book.file_path.is_file():
             LOGGER.warning("get_book_preview: file not found: '%s' (book_id=%d)", book.file_path, book_id)
             return Response(status_code=404, content=f"File not found: {book.file_path}")
@@ -816,14 +817,14 @@ class BookManager:
         LOGGER.debug("# search_by_keyword(keyword='%s')", keyword)
         result_list = self.es_manager.search_by_keyword(keyword, max_result_count=max_result_count)
         if result_list and len(result_list) > 0:
-            return [Book(book_id=book_id, info=doc) for book_id, doc, _score in result_list], None
+            return [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in result_list], None
         return [], "No books found"
 
     async def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: List[str] = None) -> Tuple[List[Book], int, Optional[str]]:
         LOGGER.debug("# search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s)", keyword, size, offset, exclude_categories)
         result_list, total = self.es_manager.search_by_keyword_paged(keyword, size=size, offset=offset, exclude_categories=exclude_categories)
         if result_list:
-            return [Book(book_id=bid, info=doc) for bid, doc, _ in result_list], total, None
+            return [self.item_class(book_id=bid, info=doc) for bid, doc, _ in result_list], total, None
         return [], total, "No books found"
 
     async def search_similar_books(self, book_id: int, max_result_count: int = -1) -> Tuple[List[Book], Optional[str]]:
@@ -833,7 +834,7 @@ class BookManager:
             return [], f"No book found with id '{book_id}'"
         result_list = self.es_manager.search_similar_docs(doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], exclude_id=book_id, max_result_count=max_result_count)
         if result_list and len(result_list) > 0:
-            return [Book(book_id=doc_id, info=similar_doc) for doc_id, similar_doc, _score in result_list], None
+            return [self.item_class(book_id=doc_id, info=similar_doc) for doc_id, similar_doc, _score in result_list], None
         return [], "No similar books found"
 
     async def search_similar_books_paged(self, book_id: int, size: int = 10, offset: int = 0) -> Tuple[List[Book], int, Optional[str]]:
@@ -847,7 +848,7 @@ class BookManager:
             exclude_id=book_id, size=size, offset=offset
         )
         if result_list:
-            return [Book(book_id=did, info=sdoc, score=score) for did, sdoc, score in result_list], total, None
+            return [self.item_class(book_id=did, info=sdoc, score=score) for did, sdoc, score in result_list], total, None
         return [], total, "No similar books found"
 
     async def add_book(self, data: Dict[int, Dict[str, Any]]) -> Tuple[Optional[int], Optional[str]]:
@@ -863,7 +864,7 @@ class BookManager:
         # rename file
         doc = self.es_manager.search_by_id(book_id)
         if doc:
-            book = Book(book_id=book_id, info=doc)
+            book = self.item_class(book_id=book_id, info=doc)
             file_path = self.path_prefix / book.file_path
             new_full_path = new_path
 
@@ -1053,7 +1054,7 @@ class BookManager:
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
             return Response(status_code=404, content=f"Book not found: {book_id}")
-        book = Book(book_id=book_id, info=doc)
+        book = self.item_class(book_id=book_id, info=doc)
         if not book.file_path.is_file():
             return Response(status_code=404, content=f"File not found: {book.file_path}")
         if book.file_path.suffix.lower() != ".pdf":
@@ -1124,7 +1125,7 @@ class BookManager:
 
         # delete file
         try:
-            book = Book(book_id=book_id, info=doc)
+            book = self.item_class(book_id=book_id, info=doc)
             file_path = self.path_prefix / book.file_path
             file_path.unlink()
         except FileNotFoundError as e:

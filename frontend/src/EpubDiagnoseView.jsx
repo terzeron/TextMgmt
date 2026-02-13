@@ -75,7 +75,7 @@ function renderSeverityGroups(items, getLabel, getLocation) {
         });
 }
 
-export default function EpubDiagnoseView({bookId, fileType}) {
+export default function EpubDiagnoseView({bookId, fileType, apiPrefix = ''}) {
     const [isOpen, setIsOpen] = useState(false);
     const [hasRun, setHasRun] = useState(false);
     const abortRef = useRef(null);
@@ -109,7 +109,7 @@ export default function EpubDiagnoseView({bookId, fileType}) {
         setBackendData(null);
         setBackendError(null);
         jsonGetReq(
-            '/validate/' + bookId,
+            apiPrefix + '/validate/' + bookId,
             null,
             (result) => {
                 if (controller.signal.aborted) return;
@@ -127,7 +127,7 @@ export default function EpubDiagnoseView({bookId, fileType}) {
         setFrontendLoading(true);
         setFrontendData(null);
         setFrontendError(null);
-        const url = `${getApiUrlPrefix()}/download/${bookId}`;
+        const url = `${getApiUrlPrefix()}${apiPrefix}/download/${bookId}`;
         fetch(url, {signal: controller.signal})
             .then((res) => {
                 if (!res.ok) throw new Error(`서버 응답 오류: ${res.status}`);
@@ -144,7 +144,7 @@ export default function EpubDiagnoseView({bookId, fileType}) {
                 setFrontendError(err.message);
                 setFrontendLoading(false);
             });
-    }, [bookId, isEpub, isValidatable]);
+    }, [bookId, isEpub, isValidatable, apiPrefix]);
 
     // 카드 열릴 때 진단 실행
     useEffect(() => {
@@ -287,4 +287,5 @@ export default function EpubDiagnoseView({bookId, fileType}) {
 EpubDiagnoseView.propTypes = {
     bookId: PropTypes.number,
     fileType: PropTypes.string,
+    apiPrefix: PropTypes.string,
 };

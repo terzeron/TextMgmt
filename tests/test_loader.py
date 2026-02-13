@@ -33,8 +33,10 @@ class TestLoader(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        """클래스 레벨에서 한 번만 실행 - 파일 목록 캐싱"""
-        cls._path_prefix = Loader.path_prefix
+        """클래스 레벨에서 한 번만 실행 - tests/ 하위 테스트 데이터 사용"""
+        cls._path_prefix = Path(__file__).parent
+        cls._original_path_prefix = Loader.path_prefix
+        Loader.path_prefix = cls._path_prefix
         cls._txt_dir_path = cls._path_prefix / "_txt"
         cls._txt_file_path = list(cls._txt_dir_path.glob("*.txt"))[0]
         cls._epub_dir_path = cls._path_prefix / "_epub"
@@ -44,11 +46,16 @@ class TestLoader(unittest.TestCase):
         cls._html_dir_path = cls._path_prefix / "_html"
         cls._html_file_path = list(cls._html_dir_path.glob("*.html"))[0]
         cls._docx_dir_path = cls._path_prefix / "_doc"
-        cls._docx_file_path = list(cls._docx_dir_path.glob("*.docx"))[0]
+        cls._docx_file_path = next(cls._docx_dir_path.glob("*.docx"), None)
         cls._rtf_dir_path = cls._path_prefix / "_rtf"
         cls._rtf_file_path = list(cls._rtf_dir_path.glob("*.rtf"))[0]
         cls._doc_dir_path = cls._path_prefix / "_doc"
         cls._doc_file_path = list(cls._doc_dir_path.glob("*.doc"))[0]
+
+    @classmethod
+    def tearDownClass(cls):
+        """원래 path_prefix 복원"""
+        Loader.path_prefix = cls._original_path_prefix
 
     def setUp(self):
         self.loader = Loader()
@@ -154,6 +161,8 @@ class TestLoader(unittest.TestCase):
         assert isinstance(page_count, int)
 
     def test_read_from_docx(self):
+        if self.docx_file_path is None:
+            self.skipTest("docx 테스트 파일이 없습니다")
         result = self.loader.read_from_docx(self.docx_file_path)
         assert isinstance(result, tuple)
         assert len(result) == 3
@@ -346,7 +355,7 @@ class TestGeneratorSupport(unittest.TestCase):
     """Generator 지원 관련 테스트"""
 
     def setUp(self):
-        self.path_prefix = Loader.path_prefix
+        self.path_prefix = Path(__file__).parent
         self.txt_dir_path = self.path_prefix / "_txt"
 
     def test_get_file_list_returns_list(self):
@@ -397,7 +406,7 @@ class TestLoaderWithES:
     def test_insert_with_stat_reuse(self, es_manager_for_loader):
         """stat 재사용하여 ES에 삽입하는 테스트"""
         esm = es_manager_for_loader
-        path_prefix = Loader.path_prefix
+        path_prefix = Path(__file__).parent
         txt_dir = path_prefix / "_txt"
 
         if not txt_dir.exists():
@@ -414,8 +423,11 @@ class TestLoaderWithES:
         st = Loader.get_stat(file_path)
         inode = st.st_ino
 
-        # stat_result를 전달하여 read_file 호출
+        # stat_result를 전달하여 read_file 호출 (path_prefix 임시 변경)
+        original_prefix = Loader.path_prefix
+        Loader.path_prefix = path_prefix
         data = Loader.read_file(file_path, stat_result=st)
+        Loader.path_prefix = original_prefix
         assert data
         assert inode in data
 
@@ -431,7 +443,7 @@ class TestLoaderWithES:
     def test_batch_insert_with_generator(self, es_manager_for_loader):
         """Generator로 파일을 배치 처리하여 ES에 삽입하는 테스트"""
         esm = es_manager_for_loader
-        path_prefix = Loader.path_prefix
+        path_prefix = Path(__file__).parent
         epub_dir = path_prefix / "_epub"
 
         if not epub_dir.exists():
@@ -447,13 +459,18 @@ class TestLoaderWithES:
         if not batch:
             pytest.skip("No epub files found")
 
-        # 배치 처리
+        # 배치 처리 (path_prefix 임시 변경)
+        original_prefix = Loader.path_prefix
+        Loader.path_prefix = path_prefix
         batch_data: Dict[int, Dict[str, Any]] = {}
-        for file_path in batch:
-            st = Loader.get_stat(file_path)
-            data = Loader.read_file(file_path, stat_result=st)
-            if data:
-                batch_data.update(data)
+        try:
+            for file_path in batch:
+                st = Loader.get_stat(file_path)
+                data = Loader.read_file(file_path, stat_result=st)
+                if data:
+                    batch_data.update(data)
+        finally:
+            Loader.path_prefix = original_prefix
 
         assert len(batch_data) > 0
 

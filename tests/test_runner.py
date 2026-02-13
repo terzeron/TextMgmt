@@ -387,7 +387,18 @@ def run_test_modules_sequentially(test_targets: list[Path]) -> tuple[bool, int, 
         test_file_name = t.name
         update_test_performance_cache(test_file_name, execution_time)
 
-        if result.returncode != 0:
+        if result.returncode == 2:
+            # Exit code 2 = collection error (e.g. import failure, missing env var)
+            # Clear lastfailed entries for this file to prevent infinite retry
+            print(f"⚠️  {t.name} COLLECTION ERROR (import/환경변수 문제). lastfailed 캐시에서 제거합니다.")
+            try:
+                rel = t.relative_to(PROJECT_ROOT)
+                clear_lastfailed_for_files([str(rel)])
+            except ValueError:
+                pass
+            failed_count += 1
+            failed_files.append(t)
+        elif result.returncode != 0:
             print(f"❌ {t.name} FAILED.")
             failed_count += 1
             failed_files.append(t)
@@ -547,7 +558,7 @@ def clear_lastfailed_for_files(test_file_prefixes: list[str]) -> None:
 
             cleaned = {
                 key: val for key, val in data.items()
-                if not any(key.startswith(prefix + "::") for prefix in test_file_prefixes)
+                if not any(key == prefix or key.startswith(prefix + "::") for prefix in test_file_prefixes)
             }
 
             if cleaned != data:

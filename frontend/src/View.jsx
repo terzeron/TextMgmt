@@ -29,7 +29,7 @@ function useIsMobile(breakpoint = 768) {
     return isMobile;
 }
 
-export default function View() {
+export default function View({ basePath = '/book-view', apiPrefix = '' }) {
     const isMobile = useIsMobile();
     // get optional route params for deep link
     const params = useParams();
@@ -53,7 +53,7 @@ export default function View() {
     const [downloadUrl, setDownloadUrl] = useState('');
 
     useEffect(() => {
-        const categoryListUrl = '/categories';
+        const categoryListUrl = apiPrefix + '/categories';
         jsonGetReq(categoryListUrl, null, (categoryCounts) => {
             // categoryCounts: {"_epub": 5, "_pdf": 3, "_root": 2, ...}
             const categoryList = Object.keys(categoryCounts);
@@ -74,7 +74,7 @@ export default function View() {
 
                 // 최상위 파일이 있으면 가져와서 추가
                 if (hasRootFiles) {
-                    jsonGetReq('/categories/_root', null, (bookList) => {
+                    jsonGetReq(apiPrefix + '/categories/_root', null, (bookList) => {
                         const rootFiles = bookList
                             .sort((a, b) => a['title'].localeCompare(b['title']))
                             .map(book => ({
@@ -93,8 +93,8 @@ export default function View() {
                 }
             };
 
-            // viewer인 경우 비노출 카테고리 필터링
-            if (role === 'viewer') {
+            // viewer인 경우 비노출 카테고리 필터링 (책 전용)
+            if (role === 'viewer' && apiPrefix === '') {
                 jsonGetReq('/hidden-categories', null, (hiddenList) => {
                     const hiddenSet = new Set(hiddenList || []);
                     setHiddenCategories(hiddenSet);
@@ -127,7 +127,7 @@ export default function View() {
             setViewUrl('');
             setDownloadUrl('');
         }
-    }, [role]);
+    }, [role, apiPrefix]);
 
     const entryClicked = useCallback((selectedEntryId) => {
         // 2단계 트리에서 검색
@@ -140,7 +140,7 @@ export default function View() {
                 return;
             }
 
-            const booksInCategoryUrl = '/categories/' + selectedEntryId;
+            const booksInCategoryUrl = apiPrefix + '/categories/' + selectedEntryId;
             // booksLoaded 플래그로 중복 로딩 방지
             if (!selectedFolderData.booksLoaded) {
                 jsonGetReq(booksInCategoryUrl, null, (bookList) => {
@@ -171,9 +171,9 @@ export default function View() {
             const book = selectedFolderData.book;
             const bookId = book['book_id'];
             setBookInfo(book);
-            setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
-            setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
-            window.history.replaceState(null, '', `/view/${bookId}?category=${encodeURIComponent(book['category'] || '_root')}`);
+            setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
+            setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + bookId);
+            window.history.replaceState(null, '', `${basePath}/${bookId}?category=${encodeURIComponent(book['category'] || '_root')}`);
         } else {
             // book entry (폴더 내 파일)
             const parsed = parseEntryId(selectedEntryId);
@@ -186,9 +186,9 @@ export default function View() {
                 const book = booksInCategory.find(bookItem => bookItem.id === selectedEntryId)?.book;
                 if (book) {
                     setBookInfo(book);
-                    setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
-                    setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
-                    window.history.replaceState(null, '', `/view/${bookId}?category=${encodeURIComponent(category)}`);
+                    setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
+                    setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + bookId);
+                    window.history.replaceState(null, '', `${basePath}/${bookId}?category=${encodeURIComponent(category)}`);
                 } else {
                     setErrorMessage(`can't find the selected book`);
                 }
@@ -196,7 +196,7 @@ export default function View() {
                 setErrorMessage(`can't find the selected category`);
             }
         }
-    }, [folderData]);
+    }, [folderData, apiPrefix, basePath]);
 
     // if route specifies a category/bookId, auto-select after folderData loads
     useEffect(() => {
@@ -209,7 +209,7 @@ export default function View() {
             const categoryItem = findFolderInTree(folderData, routeCategory);
             if (!categoryItem) {
                 // 폴더 트리에 없는 경로 (3레벨 이상) - 백엔드에서 직접 조회
-                jsonGetReq('/books/' + routeBookId, null, (book) => {
+                jsonGetReq(apiPrefix + '/books/' + routeBookId, null, (book) => {
                     // viewer인 경우 hidden 카테고리 접근 차단
                     if (role === 'viewer' && hiddenCategories.size > 0) {
                         const bookCat = book['category'] || '';
@@ -221,8 +221,8 @@ export default function View() {
                         }
                     }
                     setBookInfo(book);
-                    setViewUrl('/viewer/' + book['file_type'] + '/' + routeBookId + '?path=' + encodeURIComponent(book['file_path']));
-                    setDownloadUrl(getApiUrlPrefix() + '/download/' + routeBookId);
+                    setViewUrl('/viewer/' + book['file_type'] + '/' + routeBookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
+                    setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + routeBookId);
                 }, (error) => {
                     setErrorMessage(`책 정보를 불러올 수 없습니다. ${error}`);
                 });
@@ -267,6 +267,7 @@ export default function View() {
                             onLoadMore={handleLoadMore}
                             hasMore={searchResults.length < searchTotal}
                             loading={searchLoading}
+                            basePath={basePath}
                         />
                     }
                     {bookInfo['book_id'] &&
@@ -297,7 +298,7 @@ export default function View() {
                                 <Col id="right_panel" className="ps-0 pe-0">
                                     {
                                         bookInfo['book_id'] &&
-                                        <ViewSingle key={bookInfo['book_id']} bookId={bookInfo['book_id']} filePath={bookInfo['file_path']} fileType={bookInfo['file_type']} viewUrl={viewUrl} downloadUrl={downloadUrl} lineCount={100} pageCount={10}/>
+                                        <ViewSingle key={bookInfo['book_id']} bookId={bookInfo['book_id']} filePath={bookInfo['file_path']} fileType={bookInfo['file_type']} viewUrl={viewUrl} downloadUrl={downloadUrl} lineCount={100} pageCount={10} apiPrefix={apiPrefix}/>
                                     }
                                 </Col>
                             </Row>

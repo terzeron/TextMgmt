@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 
+import os
 import math
 import logging.config
 from pathlib import Path
 from typing import Dict, Any
+from unittest.mock import patch
 import pytest
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
@@ -511,6 +513,71 @@ class TestESManager:
         # Verify deletion
         result = esm.search_by_id(doc_id)
         assert result == {}
+
+
+class TestESManagerEnvVars:
+    """환경 변수 이름 변경 (TM_ES_INDEX → TM_ES_BOOK_INDEX) 관련 테스트."""
+
+    REQUIRED_ENVS = {
+        "TM_ES_BOOK_INDEX": "test_idx",
+        "TM_ES_URL": "http://localhost:9200",
+        "TM_ES_USER": "elastic",
+        "TM_ES_PASSWORD": "",
+    }
+
+    def test_uses_tm_es_book_index_env(self):
+        """TM_ES_BOOK_INDEX 환경 변수로 기본 인덱스명을 결정한다."""
+        with patch.dict(os.environ, self.REQUIRED_ENVS, clear=False):
+            from backend.es_manager import ESManager
+            esm = ESManager()
+            assert esm.index_name == "test_idx"
+
+    def test_explicit_index_name_overrides_env(self):
+        """index_name 인자가 주어지면 환경 변수보다 우선한다."""
+        with patch.dict(os.environ, self.REQUIRED_ENVS, clear=False):
+            from backend.es_manager import ESManager
+            esm = ESManager(index_name="custom_index")
+            assert esm.index_name == "custom_index"
+
+    def test_old_tm_es_index_not_used(self):
+        """이전 환경 변수 TM_ES_INDEX만 설정하면 KeyError가 발생한다."""
+        env = {
+            "TM_ES_INDEX": "old_name",
+            "TM_ES_URL": "http://localhost:9200",
+            "TM_ES_USER": "elastic",
+            "TM_ES_PASSWORD": "",
+        }
+        # TM_ES_BOOK_INDEX가 없으므로 KeyError
+        cleaned = {k: v for k, v in os.environ.items() if k != "TM_ES_BOOK_INDEX"}
+        cleaned.update(env)
+        with patch.dict(os.environ, cleaned, clear=True):
+            from backend.es_manager import ESManager
+            with pytest.raises(KeyError):
+                ESManager()
+
+    def test_comics_manager_uses_tm_es_comics_index(self):
+        """ComicsManager는 TM_ES_COMICS_INDEX 환경 변수를 사용한다."""
+        env = {
+            **self.REQUIRED_ENVS,
+            "TM_COMICS_DIR": "/tmp",
+            "TM_ES_COMICS_INDEX": "my_comics",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch("backend.es_manager.Elasticsearch"):
+                from backend.comics_manager import ComicsManager
+                cm = ComicsManager()
+                assert cm.es_manager.index_name == "my_comics"
+
+    def test_comics_manager_default_index(self):
+        """TM_ES_COMICS_INDEX 미설정 시 기본값 tm_comics를 사용한다."""
+        env = {**self.REQUIRED_ENVS, "TM_COMICS_DIR": "/tmp"}
+        cleaned = {k: v for k, v in os.environ.items() if k != "TM_ES_COMICS_INDEX"}
+        cleaned.update(env)
+        with patch.dict(os.environ, cleaned, clear=True):
+            with patch("backend.es_manager.Elasticsearch"):
+                from backend.comics_manager import ComicsManager
+                cm = ComicsManager()
+                assert cm.es_manager.index_name == "tm_comics"
 
 
 if __name__ == "__main__":

@@ -25,8 +25,8 @@ RUN curl -L https://github.com/w3c/epubcheck/releases/download/v${EPUBCHECK_VERS
 ARG USER_ID=1000
 ARG USER_NAME=terzeron
 RUN useradd -u $USER_ID $USER_NAME && \
-    mkdir -p /app /app/backend /app/utils /books /home/$USER_NAME/.cache /home/$USER_NAME/.config /home/$USER_NAME/.local && \
-    chown -R $USER_NAME /app /books /home/$USER_NAME
+    mkdir -p /app /app/backend /app/utils /books /comics /home/$USER_NAME/.cache /home/$USER_NAME/.config /home/$USER_NAME/.local && \
+    chown -R $USER_NAME /app /books /comics /home/$USER_NAME
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     cp /root/.local/bin/uv /usr/local/bin/
@@ -45,6 +45,7 @@ COPY backend /app/backend
 COPY utils /app/utils
 
 VOLUME /books
+VOLUME /comics
 
 ENV PATH="/app/.venv/bin:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:/home/$USER_NAME/.local/bin:/app/utils"
 ENV PYTHONPATH="/app"

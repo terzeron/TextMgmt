@@ -158,7 +158,7 @@ def elasticsearch_container():
         print(f">>> Elasticsearch container ready at {es.get_url()}")
         # Set environment variables for ESManager
         os.environ["TM_ES_URL"] = es.get_url()
-        os.environ["TM_ES_INDEX"] = "test_index"
+        os.environ["TM_ES_BOOK_INDEX"] = "test_index"
         os.environ["TM_ES_USER"] = "elastic"
         os.environ["TM_ES_PASSWORD"] = ""
         # Set environment variables for backend/main.py
@@ -202,7 +202,7 @@ def es_index(es_client):
     """Module-scoped ES index (모듈마다 인덱스 재생성)."""
     from elasticsearch import BadRequestError
 
-    index_name = os.environ["TM_ES_INDEX"]
+    index_name = os.environ["TM_ES_BOOK_INDEX"]
 
     # 기존 인덱스 삭제
     try:

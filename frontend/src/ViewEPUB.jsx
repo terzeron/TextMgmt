@@ -18,7 +18,7 @@ const FONT_FAMILIES = [
     { label: "Sans-serif", value: "sans-serif" },
 ];
 
-export default function ViewEPUB({ bookId, preview = false }) {
+export default function ViewEPUB({ bookId, preview = false, apiPrefix = '' }) {
     const renditionRef = useRef(null);
     const timeoutRef = useRef(null);
     const locationRef = useRef("");
@@ -70,7 +70,7 @@ export default function ViewEPUB({ bookId, preview = false }) {
 
         const chapters = preview ? CHAPTERS_PREVIEW : 0;
         const controller = new AbortController();
-        const url = `${getApiUrlPrefix()}/preview/${bookId}?chapters=${chapters}`;
+        const url = `${getApiUrlPrefix()}${apiPrefix}/preview/${bookId}?chapters=${chapters}`;
 
         fetch(url, { signal: controller.signal })
             .then(async (res) => {
@@ -335,4 +335,5 @@ export default function ViewEPUB({ bookId, preview = false }) {
 ViewEPUB.propTypes = {
     bookId: PropTypes.number.isRequired,
     preview: PropTypes.bool,
+    apiPrefix: PropTypes.string,
 };

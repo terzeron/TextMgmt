@@ -10,7 +10,7 @@ import {Card, Button} from 'react-bootstrap';
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {faChevronDown, faChevronRight} from "@fortawesome/free-solid-svg-icons";
 
-export default function SimilarBooks({bookId, onSelect}) {
+export default function SimilarBooks({bookId, onSelect, apiPrefix = '', basePath = '/book-edit'}) {
     const [isOpen, setIsOpen] = useState(false);
     const [similarBooks, setSimilarBooks] = useState([]);
     const [total, setTotal] = useState(0);
@@ -18,7 +18,7 @@ export default function SimilarBooks({bookId, onSelect}) {
 
     useEffect(() => {
         if (bookId) {
-            rawJsonGetReq(`/similar/${bookId}?offset=0&limit=10`, (data) => {
+            rawJsonGetReq(`${apiPrefix}/similar/${bookId}?offset=0&limit=10`, (data) => {
                 if (data.status === 'success') {
                     const books = data.result || [];
                     setSimilarBooks(books);
@@ -36,13 +36,13 @@ export default function SimilarBooks({bookId, onSelect}) {
             setTotal(0);
             setIsOpen(false);
         };
-    }, [bookId]);
+    }, [bookId, apiPrefix]);
 
     const handleLoadMore = useCallback(() => {
         if (loadingMore) return;
         setLoadingMore(true);
         const offset = similarBooks.length;
-        rawJsonGetReq(`/similar/${bookId}?offset=${offset}&limit=10`, (data) => {
+        rawJsonGetReq(`${apiPrefix}/similar/${bookId}?offset=${offset}&limit=10`, (data) => {
             if (data.status === 'success' && data.result) {
                 setSimilarBooks(prev => [...prev, ...data.result]);
                 setTotal(data.total || 0);
@@ -52,7 +52,7 @@ export default function SimilarBooks({bookId, onSelect}) {
             console.error(error);
             setLoadingMore(false);
         });
-    }, [bookId, similarBooks.length, loadingMore]);
+    }, [bookId, similarBooks.length, loadingMore, apiPrefix]);
 
     const hasMore = similarBooks.length < total;
 
@@ -91,14 +91,14 @@ export default function SimilarBooks({bookId, onSelect}) {
                                         )}
                                         <Button
                                             variant="outline-warning" className="btn-xs"
-                                            onClick={() => window.open(`/edit/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
+                                            onClick={() => window.open(`${basePath}/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
                                             style={{marginRight: '4px'}}
                                         >
                                             편집
                                         </Button>
                                         <Button
                                             variant="outline-primary" className="btn-xs"
-                                            onClick={() => window.open(`/view/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
+                                            onClick={() => window.open(`${basePath.replace('-edit', '-view')}/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
                                             style={{marginRight: '4px'}}
                                         >
                                             조회
@@ -132,5 +132,7 @@ export default function SimilarBooks({bookId, onSelect}) {
 
 SimilarBooks.propTypes = {
     bookId: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
-    onSelect: PropTypes.func
+    onSelect: PropTypes.func,
+    apiPrefix: PropTypes.string,
+    basePath: PropTypes.string,
 };

@@ -66,9 +66,11 @@ describe('Navigation', () => {
         localStorage.setItem('email', 'admin@test.com');
         localStorage.setItem('name', 'Admin');
         render(<Navigation />);
-        // admin 역할이면 편집/조회/관리 링크 표시
-        expect(screen.getByText('편집')).toBeTruthy();
-        expect(screen.getByText('조회')).toBeTruthy();
+        // admin 역할이면 책 편집/책/만화 편집/만화/관리 링크 표시
+        expect(screen.getByText('책 편집')).toBeTruthy();
+        expect(screen.getByText('책')).toBeTruthy();
+        expect(screen.getByText('만화 편집')).toBeTruthy();
+        expect(screen.getByText('만화')).toBeTruthy();
         expect(screen.getByText('관리')).toBeTruthy();
     });
 
@@ -76,9 +78,11 @@ describe('Navigation', () => {
         localStorage.setItem('email', 'viewer@test.com');
         localStorage.setItem('name', 'Viewer');
         render(<Navigation />);
-        // viewer 역할이면 조회만 표시
-        expect(screen.getByText('조회')).toBeTruthy();
-        expect(screen.queryByText('편집')).toBeNull();
+        // viewer 역할이면 책/만화만 표시
+        expect(screen.getByText('책')).toBeTruthy();
+        expect(screen.getByText('만화')).toBeTruthy();
+        expect(screen.queryByText('책 편집')).toBeNull();
+        expect(screen.queryByText('만화 편집')).toBeNull();
         expect(screen.queryByText('관리')).toBeNull();
     });
 
@@ -209,7 +213,7 @@ describe('Navigation', () => {
 
         // 에러가 발생해도 컴포넌트는 정상 렌더링
         await waitFor(() => {
-            expect(screen.getByText('조회')).toBeTruthy();
+            expect(screen.getByText('책')).toBeTruthy();
         });
     });
 
@@ -267,7 +271,7 @@ describe('Navigation', () => {
         localStorage.setItem('email', 'admin@test.com');
         localStorage.setItem('name', 'Admin');
         render(<Navigation />);
-        expect(screen.queryByText('편집')).toBeNull();
+        expect(screen.queryByText('책 편집')).toBeNull();
     });
 
     it('VITE_ADMIN_EMAIL이 없으면 로그인 상태를 복원하지 않는다', () => {
@@ -278,7 +282,7 @@ describe('Navigation', () => {
         localStorage.setItem('email', 'admin@test.com');
         localStorage.setItem('name', 'Admin');
         render(<Navigation />);
-        expect(screen.queryByText('편집')).toBeNull();
+        expect(screen.queryByText('책 편집')).toBeNull();
     });
 
     it('Google 로그인 백엔드 검증 실패 시 alert를 표시한다', async () => {
@@ -306,6 +310,23 @@ describe('Navigation', () => {
 
         fireEvent.click(screen.getByText('검색'));
         expect(mockRawJsonGetReq).not.toHaveBeenCalled();
+    });
+
+    it('책 컨텍스트에서 검색 시 prefix 없이 /search/ URL을 호출한다', async () => {
+        localStorage.setItem('email', 'admin@test.com');
+        localStorage.setItem('name', 'Admin');
+        render(<Navigation />);
+
+        const searchInput = screen.getByPlaceholderText('키워드');
+        fireEvent.change(searchInput, { target: { value: '소설' } });
+        fireEvent.click(screen.getByText('검색'));
+
+        await waitFor(() => {
+            const searchCall = mockRawJsonGetReq.mock.calls.find(c => c[0].includes('/search/'));
+            expect(searchCall).toBeTruthy();
+            expect(searchCall[0]).toMatch(/^\/search\//);
+            expect(searchCall[0]).not.toMatch(/^\/comics/);
+        });
     });
 
     it('viewer에서 hidden categories가 있으면 검색 URL에 exclude_categories를 포함한다', async () => {
