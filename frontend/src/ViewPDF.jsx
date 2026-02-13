@@ -364,9 +364,9 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false, apiPref
                         ref={setCanvasRef(pageNum)}
                         className="pdf-page"
                         style={fitMode
-                            ? {width: '100%', height: 'auto'}
+                            ? {width: '100%', aspectRatio: `${nativeWidthRef.current} / ${nativeHeightRef.current}`}
                             : {width: `${Math.round(nativeWidthRef.current * zoomPercent / 100)}px`,
-                               height: `${Math.round(nativeHeightRef.current * zoomPercent / 100)}px`}
+                               aspectRatio: `${nativeWidthRef.current} / ${nativeHeightRef.current}`}
                         }
                     />
                 ))}
