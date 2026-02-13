@@ -197,10 +197,10 @@ export default function Navigation() {
         <GoogleOAuthProvider clientId={clientId}>
             <div>
                 <Navbar bg="light" expand="sm">
-                    <Navbar.Brand href="/">Text</Navbar.Brand>
+                    <Navbar.Brand href="/"><img src="/book.png" alt="Text" width="32" height="32" /></Navbar.Brand>
                     <Navbar.Toggle aria-controls="basic-navbar-nav" />
                     <Navbar.Collapse id="basic-navbar-nav">
-                        <Nav className="me-auto my-2 my-lg-0" style={{ maxHeight: '100px' }} navbarScroll>
+                        <Nav className="me-auto my-2 my-lg-0">
                             {role === 'admin' && <Nav.Link href="/book-edit">책 편집</Nav.Link>}
                             {role && <Nav.Link href="/book-view">책</Nav.Link>}
                             {role === 'admin' && <Nav.Link href="/comics-edit">만화 편집</Nav.Link>}
@@ -211,7 +211,7 @@ export default function Navigation() {
                             {role && (
                                 <Form onSubmit={e => { e.preventDefault(); handleSearch(); }} className="me-2">
                                     <InputGroup>
-                                        <FormControl type="text" placeholder="키워드" className="mr-sm-2" value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)} />
+                                        <FormControl type="text" placeholder="키워드" className="mr-sm-2" style={{ maxWidth: '120px' }} value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)} />
                                         <Button type="button" variant="outline-success" size="sm" onClick={handleSearch} disabled={searchInProgress}>
                                             검색<FontAwesomeIcon icon={searchInProgress ? faSpinner : faSearch} spin={searchInProgress} />
                                         </Button>

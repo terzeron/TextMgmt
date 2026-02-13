@@ -38,6 +38,26 @@
     padding-right: 20px !important;
 }
 
+/* 모바일: 햄버거 메뉴 펼침 시 메뉴 + 검색을 세로 배치 */
+@media (max-width: 575.98px) {
+    .navbar .navbar-collapse .d-flex {
+        flex-direction: column;
+        align-items: stretch;
+        width: 100%;
+        margin-top: 0.5rem;
+        gap: 0.5rem;
+    }
+
+    .navbar .navbar-collapse .d-flex .me-2 {
+        margin-right: 0 !important;
+        width: 100%;
+    }
+
+    .navbar .navbar-collapse .form-control {
+        max-width: 100% !important;
+    }
+}
+
 .section {
     display: inline-block;
     overflow-y: auto;

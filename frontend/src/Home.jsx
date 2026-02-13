@@ -3,8 +3,8 @@ export default function Home() {
         <div>
             <div className="jumbotron jumbotron-fluid">
                 <div className="container mt-3 ms-3">
-                    <h1 className="display-5">텍스트 파일 관리</h1>
-                    <p className="lead">txt, epub, pdf 파일 뷰어 및 관리 기능</p>
+                    <h1 className="display-5">낡은 책 창고</h1>
+                    <p className="lead">책과 만화가 잠들어 있는 창고에 오신 것을 환영합니다.</p>
                 </div>
             </div>
         </div>
