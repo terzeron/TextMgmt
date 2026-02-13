@@ -731,14 +731,14 @@ export default function Edit({ basePath = '/book-edit', apiPrefix = '' }) {
         <Container id="edit">
             <Row fluid="true">
                 {isFolderOpen && (
-                    <Col md={isMobile ? 12 : (bookInfo['book_id'] ? 3 : 12)} lg={isMobile ? 12 : (bookInfo['book_id'] ? 2 : 12)} className={directoryClassName}>
+                    <Col md={isMobile ? 12 : 3} lg={isMobile ? 12 : 2} className={directoryClassName}>
                         <Suspense fallback={<div className="loading">로딩 중...</div>}>
                             <Folder folderData={folderData} selectedItems={selectedItems} isOpen={true} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
                         </Suspense>
                     </Col>
                 )}
 
-                <Col md={isMobile ? 12 : (isFolderOpen && bookInfo['book_id'] ? 9 : 12)} lg={isMobile ? 12 : (isFolderOpen && bookInfo['book_id'] ? 10 : 12)} className={isMobile ? "ps-0 pe-0" : "section"}>
+                <Col md={isMobile ? 12 : (isFolderOpen ? 9 : 12)} lg={isMobile ? 12 : (isFolderOpen ? 10 : 12)} className={isMobile ? "ps-0 pe-0" : "section"}>
                     {!isFolderOpen && (
                         <Suspense fallback={<div className="loading">로딩 중...</div>}>
                             <Folder folderData={folderData} selectedItems={selectedItems} isOpen={false} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>

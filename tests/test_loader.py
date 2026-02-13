@@ -350,6 +350,81 @@ class TestLoaderWithTempFiles(unittest.TestCase):
         assert "\ufeff" not in summary
         assert "Hello" in summary
 
+    def test_comics_pdf_skips_text_extraction(self):
+        """comics 경로의 PDF는 텍스트 추출을 건너뛰는지 테스트"""
+        original_comics_prefix = Loader.comics_path_prefix
+        try:
+            Loader.comics_path_prefix = Path(self.temp_dir)
+
+            # PDF 테스트 파일 복사
+            src_pdf = Path(__file__).parent / "_pdf"
+            pdf_files = list(src_pdf.glob("*.pdf"))
+            if not pdf_files:
+                self.skipTest("PDF 테스트 파일이 없습니다")
+
+            dest_pdf = Path(self.temp_dir) / pdf_files[0].name
+            shutil.copy2(pdf_files[0], dest_pdf)
+
+            data = Loader.read_file(dest_pdf)
+            assert data
+            for _, v in data.items():
+                # comics PDF: summary가 비어 있어야 함
+                assert v["summary"] == ""
+                assert v["file_type"] == "pdf"
+        finally:
+            Loader.comics_path_prefix = original_comics_prefix
+
+    def test_hidden_directory_excluded_from_get_file_list(self):
+        """숨김 디렉토리가 get_file_list에서 제외되는지 테스트"""
+        # 일반 디렉토리에 파일 생성
+        normal_dir = Path(self.temp_dir) / "normal"
+        normal_dir.mkdir()
+        (normal_dir / "test.txt").write_text("normal", encoding="utf-8")
+
+        # 숨김 디렉토리에 파일 생성
+        hidden_dir = Path(self.temp_dir) / ".hidden"
+        hidden_dir.mkdir()
+        (hidden_dir / "secret.txt").write_text("hidden", encoding="utf-8")
+
+        # non-recursive: 숨김 디렉토리의 파일이 제외되어야 함
+        file_list = Loader.get_file_list(Path(self.temp_dir))
+        file_names = [f.name for f in file_list]
+        assert "test.txt" in file_names
+        assert "secret.txt" not in file_names
+
+    def test_hidden_directory_excluded_recursive(self):
+        """recursive 모드에서 숨김 디렉토리가 제외되는지 테스트"""
+        # 일반 디렉토리에 파일 생성
+        normal_dir = Path(self.temp_dir) / "normal"
+        normal_dir.mkdir()
+        (normal_dir / "test.txt").write_text("normal", encoding="utf-8")
+
+        # 숨김 디렉토리에 파일 생성
+        hidden_dir = Path(self.temp_dir) / ".preview_cache"
+        hidden_dir.mkdir()
+        (hidden_dir / "cached.txt").write_text("cached", encoding="utf-8")
+
+        # 중첩된 숨김 디렉토리
+        nested_hidden = normal_dir / ".hidden_sub"
+        nested_hidden.mkdir()
+        (nested_hidden / "nested.txt").write_text("nested hidden", encoding="utf-8")
+
+        file_list = Loader.get_file_list(Path(self.temp_dir), recursive=True)
+        file_names = [f.name for f in file_list]
+        assert "test.txt" in file_names
+        assert "cached.txt" not in file_names
+        assert "nested.txt" not in file_names
+
+    def test_hidden_file_excluded(self):
+        """숨김 파일(.으로 시작하는 파일)이 제외되는지 테스트"""
+        (Path(self.temp_dir) / "normal.txt").write_text("normal", encoding="utf-8")
+        (Path(self.temp_dir) / ".DS_Store").write_text("hidden", encoding="utf-8")
+
+        file_list = Loader.get_file_list(Path(self.temp_dir))
+        file_names = [f.name for f in file_list]
+        assert "normal.txt" in file_names
+        assert ".DS_Store" not in file_names
+
 
 class TestGeneratorSupport(unittest.TestCase):
     """Generator 지원 관련 테스트"""
