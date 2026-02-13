@@ -283,7 +283,8 @@ class BookManager:
         self.es_manager.create_index()
 
     def __del__(self) -> None:
-        del self.es_manager
+        if hasattr(self, 'es_manager'):
+            del self.es_manager
 
     async def get_categories(self) -> Tuple[Dict[str, int], Optional[str]]:
         LOGGER.debug("# get_categories()")
