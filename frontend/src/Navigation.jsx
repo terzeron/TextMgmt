@@ -186,8 +186,8 @@ export default function Navigation() {
             return <div>{name}님으로 로그인하셨습니다. 서비스 접근 권한이 없습니다.</div>;
         }
 
-        if (role === 'viewer' && (location.pathname === '/' || !isViewerAllowedPath(location.pathname))) {
-            return <Navigate to="/book-view" replace />;
+        if (role === 'viewer' && !isViewerAllowedPath(location.pathname)) {
+            return <Navigate to="/" replace />;
         }
 
         return <Outlet context={{ searchResults, hasSearched, role, searchTotal, handleLoadMore, searchLoading }} />;
