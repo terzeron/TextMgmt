@@ -33,14 +33,26 @@ LOGGER = logging.getLogger()
 # ebooklib 내부에서 XHTML을 HTML 파서로 읽을 때 발생하는 경고 억제
 warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
 
-if "TM_WORK_DIR" not in os.environ:
-    LOGGER.error("The environment variable TM_WORK_DIR is not set.")
+if "TM_BOOK_DIR" not in os.environ:
+    LOGGER.error("The environment variable TM_BOOK_DIR is not set.")
+    sys.exit(-1)
+
+if "TM_COMICS_DIR" not in os.environ:
+    LOGGER.error("The environment variable TM_COMICS_DIR is not set.")
     sys.exit(-1)
 
 
 class Loader:
     TEXT_SIZE = 4096
-    path_prefix = Path(os.environ["TM_WORK_DIR"])
+    path_prefix = Path(os.environ["TM_BOOK_DIR"])
+    comics_path_prefix = Path(os.environ["TM_COMICS_DIR"])
+
+    @staticmethod
+    def get_path_prefix(file_path: Path) -> Path:
+        """파일 경로에 해당하는 path_prefix를 반환"""
+        if file_path.is_relative_to(Loader.comics_path_prefix):
+            return Loader.comics_path_prefix
+        return Loader.path_prefix
 
     @staticmethod
     def read_from_text(file_path: Path) -> Tuple[str, int, int, str]:
@@ -349,7 +361,8 @@ class Loader:
             st = stat_result if stat_result else file_path.stat()
             inode_num = st.st_ino
             file_size = st.st_size
-            category = str(file_path.parent.relative_to(Loader.path_prefix))
+            prefix = Loader.get_path_prefix(file_path)
+            category = str(file_path.parent.relative_to(prefix))
             if category == ".":
                 category = "_root"
             m = re.search(r"^\[(?P<author>[^\]]+)\]\s*(?P<title>.+)$", file_path.stem)
@@ -385,6 +398,8 @@ class Loader:
                 summary, line_count, page_count = Loader.read_from_html(file_path)
             elif file_type in ("jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg"):
                 summary, line_count, page_count = Loader.read_from_image(file_path)
+            elif file_type == "cbz":
+                summary, line_count, page_count = Loader.read_from_image(file_path)
             else:
                 return {}
 
@@ -397,7 +412,7 @@ class Loader:
                     "category": category,
                     "title": title,
                     "author": author,
-                    "file_path": str(file_path.relative_to(Loader.path_prefix)),
+                    "file_path": str(file_path.relative_to(prefix)),
                     "file_type": file_type,
                     "file_size": int(file_size),
                     "line_count": line_count,
@@ -456,7 +471,8 @@ class Loader:
 
 
 def print_usage(program_name: str):
-    print(f"Usage:\t{program_name}\t[ --delete ] [ --reload ] [ --recursive ] <file or directory path>")
+    print(f"Usage:\t{program_name}\t[ --delete ] [ --reload ] [ --recursive ] <index_name> [file or directory path ...]")
+    print("\t\tindex_name: book | comics")
     print("\t\t--delete: delete index and exit (no file path required)")
     print("\t\t--reload: force reload even if file already exists in ES")
     print("\t\t--recursive: scan subdirectories recursively")
@@ -485,34 +501,51 @@ def main() -> int:
         LOGGER.error(e)
         print_usage(sys.argv[0])
 
-    if not do_delete and len(args) < 1:
+    # 인덱스명 파싱
+    INDEX_MAP = {
+        "book": os.environ.get("TM_ES_BOOK_INDEX", "book"),
+        "comics": os.environ.get("TM_ES_COMICS_INDEX", "comics"),
+    }
+
+    if len(args) < 1:
+        print_usage(sys.argv[0])
+
+    index_name_arg = args[0]
+    if index_name_arg not in INDEX_MAP:
+        LOGGER.error(f"유효하지 않은 인덱스명: '{index_name_arg}' (book 또는 comics만 가능)")
+        print_usage(sys.argv[0])
+
+    file_args = args[1:]
+
+    if not do_delete and len(file_args) < 1:
         print_usage(sys.argv[0])
 
     start_time: datetime = datetime.now()
 
-    es_manager = ESManager()
-
-    # ES 접속 테스트
+    # ESManager 초기화 (한 번의 실행에서 하나의 인덱스만 사용)
+    idx = INDEX_MAP[index_name_arg]
+    es_manager = ESManager(index_name=idx)
     try:
         if not es_manager.es.ping():
             LOGGER.error("Elasticsearch 서버에 연결할 수 없습니다.")
-            return -1
+            sys.exit(-1)
     except Exception as e:
         LOGGER.error(f"Elasticsearch 접속 실패: {e}")
-        return -1
+        sys.exit(-1)
+    es_manager.create_index()
+    print(f"ES 인덱스: {idx}")
 
-    try:
-        if do_delete:
+    if do_delete:
+        try:
             if es_manager.do_exist_index():
                 es_manager.delete_index()
                 print(f"인덱스 '{es_manager.index_name}' 삭제 완료")
             else:
                 print(f"인덱스 '{es_manager.index_name}'가 존재하지 않습니다")
-            return 0
-        es_manager.create_index()
-    except Exception as e:
-        LOGGER.error(e)
-        return -1
+        except Exception as e:
+            LOGGER.error(e)
+            return -1
+        return 0
 
     def process_file_iter(file_iter: Iterable[Path], skip_check: bool = False) -> Tuple[int, int]:
         """파일 iterator를 배치 처리하여 ES에 저장. 반환: (처리 수, 건너뜀 수)"""
@@ -563,15 +596,14 @@ def main() -> int:
 
         return processed_count, skipped_count
 
-    for arg in args:
+    for arg in file_args:
         target_path = Path(arg)
         if not target_path.exists():
             LOGGER.error("can't find such a file or directory '%s'", target_path)
             return 0
-        if not target_path.is_relative_to(Loader.path_prefix):
-            LOGGER.error(f"{target_path} is not in $TM_WORK_DIR({Loader.path_prefix}).")
+        if not target_path.is_relative_to(Loader.path_prefix) and not target_path.is_relative_to(Loader.comics_path_prefix):
+            LOGGER.error(f"{target_path} is not in $TM_BOOK_DIR({Loader.path_prefix}) or $TM_COMICS_DIR({Loader.comics_path_prefix}).")
             continue
-
         print(f"====== {target_path} ======")
 
         # 파일이 지정된 경우: 강제 재적재 (skip_check=True)

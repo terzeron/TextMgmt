@@ -36,7 +36,7 @@ function useIsMobile(breakpoint = 768) {
     return isMobile;
 }
 
-export default function Edit() {
+export default function Edit({ basePath = '/book-edit', apiPrefix = '' }) {
     const isMobile = useIsMobile();
     const params = useParams();
     const [searchParams] = useSearchParams();
@@ -97,7 +97,7 @@ export default function Edit() {
     }, [errorMessage]);
 
     useEffect(() => {
-        const categoryListUrl = '/categories';
+        const categoryListUrl = apiPrefix + '/categories';
         jsonGetReq(categoryListUrl, null, (categoryCounts) => {
             // categoryCounts: {"_epub": 5, "_pdf": 3, "_root": 2, ...}
             const categoryList = Object.keys(categoryCounts);
@@ -117,7 +117,7 @@ export default function Edit() {
 
             // 최상위 파일이 있으면 가져와서 추가
             if (hasRootFiles) {
-                jsonGetReq('/categories/_root', null, (bookList) => {
+                jsonGetReq(apiPrefix + '/categories/_root', null, (bookList) => {
                     const rootFiles = bookList
                         .sort((a, b) => a['title'].localeCompare(b['title']))
                         .map(book => ({
@@ -149,7 +149,7 @@ export default function Edit() {
             setViewUrl('');
             setDownloadUrl('');
         };
-    }, [] /* rendered once */);
+    }, [apiPrefix] /* rendered once per apiPrefix */);
 
     const decomposeTitle = useCallback((book) => {
         let title = '';
@@ -212,7 +212,7 @@ export default function Edit() {
                 return;
             }
 
-            const booksInCategoryUrl = '/categories/' + selectedEntryId;
+            const booksInCategoryUrl = apiPrefix + '/categories/' + selectedEntryId;
             // booksLoaded 플래그로 중복 로딩 방지
             if (!selectedFolderData.booksLoaded) {
                 jsonGetReq(booksInCategoryUrl, null, (bookList) => {
@@ -247,13 +247,13 @@ export default function Edit() {
             const newBook = decomposeTitle(book);
             setBookInfo(newBook);
             setSearchTrigger(prev => prev + 1);
-            setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
-            setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
+            setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
+            setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + bookId);
             const otherCategoryList = categoryList
                 .sort((a, b) => a.localeCompare(b))
                 .filter(cat => cat !== '_root' && !cat.includes('/'));
             setOtherCategoryList(otherCategoryList);
-            window.history.replaceState(null, '', `/edit/${bookId}?category=${encodeURIComponent(book['category'] || '_root')}`);
+            window.history.replaceState(null, '', `${basePath}/${bookId}?category=${encodeURIComponent(book['category'] || '_root')}`);
 
             // determine nextEntryId / prevEntryId
             const nextEntryId = determineNextEntryId(folderData, selectedEntryId);
@@ -279,15 +279,15 @@ export default function Edit() {
                     const newBook = decomposeTitle(book);
                     setBookInfo(newBook);
                     setSearchTrigger(prev => prev + 1);
-                    setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']));
-                    setDownloadUrl(getApiUrlPrefix() + '/download/' + bookId);
+                    setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
+                    setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + bookId);
 
                     // determine other category list
                     const otherCategoryList = categoryList
                         .sort((a, b) => a.localeCompare(b))
                         .filter(cat => cat !== category && cat !== '_root' && !cat.includes('/'))
                     setOtherCategoryList(otherCategoryList);
-                    window.history.replaceState(null, '', `/edit/${bookId}?category=${encodeURIComponent(category)}`);
+                    window.history.replaceState(null, '', `${basePath}/${bookId}?category=${encodeURIComponent(category)}`);
 
                     // determine nextEntryId / prevEntryId
                     const nextEntryId = determineNextEntryId(folderData, selectedEntryId);
@@ -302,7 +302,7 @@ export default function Edit() {
             }
         }
 
-    }, [folderData, categoryList, decomposeTitle]);
+    }, [folderData, categoryList, decomposeTitle, apiPrefix, basePath]);
 
     // entryClicked ref 업데이트 (최신 함수 참조 유지)
     useEffect(() => {
@@ -342,7 +342,7 @@ export default function Edit() {
             if (!categoryItem) {
                 // 폴더 트리에 없는 경로 (3레벨 이상) - 백엔드에서 직접 조회
                 routeInitializedRef.current = true;
-                jsonGetReq('/books/' + routeBookId, null, (book) => {
+                jsonGetReq(apiPrefix + '/books/' + routeBookId, null, (book) => {
                     // URL의 category 대신 API 응답의 실제 category 사용 (위조 방지)
                     const realCategory = book['category'] || routeCategory;
                     setSelectedEntryId(`${realCategory}/${routeBookId}`);
@@ -350,8 +350,8 @@ export default function Edit() {
                     const newBook = decomposeTitle(book);
                     setBookInfo(newBook);
                     setSearchTrigger(prev => prev + 1);
-                    setViewUrl('/viewer/' + book['file_type'] + '/' + routeBookId + '?path=' + encodeURIComponent(book['file_path']));
-                    setDownloadUrl(getApiUrlPrefix() + '/download/' + routeBookId);
+                    setViewUrl('/viewer/' + book['file_type'] + '/' + routeBookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
+                    setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + routeBookId);
                     const otherCats = categoryList
                         .sort((a, b) => a.localeCompare(b))
                         .filter(cat => cat !== realCategory && cat !== '_root' && !cat.includes('/'));
@@ -533,7 +533,7 @@ export default function Edit() {
     const updateFile = useCallback((dirName, fileName, newDirName, newFileName, force = false) => {
         if (isProcessingRef.current) return;
 
-        const baseUrl = '/books/' + bookInfo['book_id'];
+        const baseUrl = apiPrefix + '/books/' + bookInfo['book_id'];
         // 백엔드는 '_root'를 기대하므로 빈 문자열을 '_root'로 변환
         const categoryForBackend = (newDirName === '' || newDirName === '_root') ? '_root' : newDirName;
         // newFileName에서 확장자 제거 (백엔드는 title에 확장자가 없어야 함)
@@ -673,7 +673,7 @@ export default function Edit() {
 
             const dirName = parsed.category;
             const bookId = parsed.bookId;
-            const deleteUrl = '/books/' + bookId;
+            const deleteUrl = apiPrefix + '/books/' + bookId;
             console.log(deleteUrl);
             jsonDeleteReq(deleteUrl, null, (response) => {
                 isProcessingRef.current = false;
@@ -751,6 +751,7 @@ export default function Edit() {
                             onLoadMore={handleLoadMore}
                             hasMore={searchResults.length < searchTotal}
                             loading={searchLoading}
+                            basePath={basePath}
                         />
                     }
                     {bookInfo['book_id'] &&
@@ -818,10 +819,10 @@ export default function Edit() {
                                 </Col>
 
                                 <Col id="right_panel" md="6" lg="7" className="ps-0 pe-0">
-                                    <SimilarBooks bookId={bookInfo['book_id']} onSelect={entryClicked}/>
-                                    <Bookstore bookInfo={bookInfo} searchTrigger={searchTrigger} onCategoriesFound={setSuggestedCategories}/>
-                                    <SimilarityDebug suggestedCategories={suggestedCategories} categoryList={otherCategoryList}/>
-                                    <EpubDiagnoseView bookId={bookInfo['book_id']} fileType={bookInfo['file_type']}/>
+                                    <SimilarBooks bookId={bookInfo['book_id']} onSelect={entryClicked} apiPrefix={apiPrefix} basePath={basePath}/>
+                                    {apiPrefix === '' && <Bookstore bookInfo={bookInfo} searchTrigger={searchTrigger} onCategoriesFound={setSuggestedCategories}/>}
+                                    {apiPrefix === '' && <SimilarityDebug suggestedCategories={suggestedCategories} categoryList={otherCategoryList}/>}
+                                    <EpubDiagnoseView bookId={bookInfo['book_id']} fileType={bookInfo['file_type']} apiPrefix={apiPrefix}/>
                                 </Col>
                             </Row>
 
@@ -837,6 +838,7 @@ export default function Edit() {
                                         lineCount={100}
                                         pageCount={10}
                                         preview={true}
+                                        apiPrefix={apiPrefix}
                                     />
                                 </Col>
                             </Row>

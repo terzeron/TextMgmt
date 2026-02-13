@@ -2,7 +2,7 @@ import {useEffect, useState} from "react";
 import PropTypes from "prop-types";
 import {getApiUrlPrefix} from "./Common";
 
-export default function ViewImage({bookId}) {
+export default function ViewImage({bookId, apiPrefix = ''}) {
     const [url, setUrl] = useState("");
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState(null);
@@ -16,12 +16,12 @@ export default function ViewImage({bookId}) {
             return;
         }
 
-        const imageUrl = getApiUrlPrefix() + "/download/" + bookId;
+        const imageUrl = getApiUrlPrefix() + apiPrefix + "/download/" + bookId;
         console.log(imageUrl);
         setUrl(imageUrl);
         setIsLoading(true);
         setErrorMessage(null);
-    }, [bookId]);
+    }, [bookId, apiPrefix]);
 
     return (
         <div className="image-container">
@@ -56,5 +56,6 @@ export default function ViewImage({bookId}) {
 
 ViewImage.propTypes = {
     bookId: PropTypes.number.isRequired,
+    apiPrefix: PropTypes.string,
 };
 

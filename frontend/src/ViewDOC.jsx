@@ -3,7 +3,7 @@ import PropTypes from "prop-types";
 import { getApiUrlPrefix } from "./Common";
 import mammoth from "mammoth";
 
-export default function ViewDOC({ bookId, fileType, lineCount }) {
+export default function ViewDOC({ bookId, fileType, lineCount, apiPrefix = '' }) {
     const [content, setContent] = useState("");
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState(null);
@@ -19,7 +19,7 @@ export default function ViewDOC({ bookId, fileType, lineCount }) {
 
         if (fileType === 'doc' || fileType === 'hwp') {
             // .doc/.hwp: 서버에서 HTML로 변환된 미리보기 사용
-            const previewUri = getApiUrlPrefix() + "/preview/" + bookId;
+            const previewUri = getApiUrlPrefix() + apiPrefix + "/preview/" + bookId;
             fetch(previewUri)
                 .then(response => response.text())
                 .then(html => {
@@ -33,7 +33,7 @@ export default function ViewDOC({ bookId, fileType, lineCount }) {
                 });
         } else {
             // .docx: mammoth 사용
-            const uri = getApiUrlPrefix() + "/download/" + bookId;
+            const uri = getApiUrlPrefix() + apiPrefix + "/download/" + bookId;
             fetch(uri)
                 .then(response => response.arrayBuffer())
                 .then(buffer => mammoth.convertToHtml({ arrayBuffer: buffer }))
@@ -76,4 +76,5 @@ ViewDOC.propTypes = {
     bookId: PropTypes.number.isRequired,
     fileType: PropTypes.string,
     lineCount: PropTypes.number,
+    apiPrefix: PropTypes.string,
 };

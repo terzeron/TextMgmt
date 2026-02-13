@@ -2,7 +2,7 @@ import {useEffect, useState, Suspense} from "react";
 import PropTypes from "prop-types";
 import {textGetReq} from "./Common";
 
-export default function ViewTXT({bookId, lineCount}) {
+export default function ViewTXT({bookId, lineCount, apiPrefix = ''}) {
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState(null);
     const [fileContent, setFileContent] = useState([]);
@@ -14,7 +14,7 @@ export default function ViewTXT({bookId, lineCount}) {
             return;
         }
 
-        const downloadUrl = "/download/" + bookId;
+        const downloadUrl = apiPrefix + "/download/" + bookId;
         setIsLoading(true);
         setErrorMessage(null);
 
@@ -36,7 +36,7 @@ export default function ViewTXT({bookId, lineCount}) {
         return () => {
             setFileContent([]);
         };
-    }, [bookId, lineCount]);
+    }, [bookId, lineCount, apiPrefix]);
 
     return (
         <div className="txt-container">
@@ -65,4 +65,5 @@ export default function ViewTXT({bookId, lineCount}) {
 ViewTXT.propTypes = {
     bookId: PropTypes.number.isRequired,
     lineCount: PropTypes.number,
+    apiPrefix: PropTypes.string,
 };

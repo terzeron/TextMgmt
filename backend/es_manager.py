@@ -22,14 +22,14 @@ logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 class ESManager:
     DEFAULT_MAX_RESULT_COUNT = 10
 
-    def __init__(self) -> None:
-        for env in ["TM_ES_INDEX", "TM_ES_URL", "TM_ES_USER", "TM_ES_PASSWORD"]:
+    def __init__(self, index_name: str = "") -> None:
+        for env in ["TM_ES_BOOK_INDEX", "TM_ES_URL", "TM_ES_USER", "TM_ES_PASSWORD"]:
             print(f"{env}={os.environ[env]}")
             if env not in os.environ:
                 LOGGER.error(f"The environment variable {env} is not set.")
                 sys.exit(-1)
 
-        self.index_name = os.environ["TM_ES_INDEX"]
+        self.index_name = index_name or os.environ["TM_ES_BOOK_INDEX"]
         url = os.environ["TM_ES_URL"]
         user = os.environ["TM_ES_USER"]
         password = os.environ["TM_ES_PASSWORD"]

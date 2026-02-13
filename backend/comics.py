@@ -1,4 +1,4 @@
-#!/usr/bin/env pyhton
+#!/usr/bin/env python
 
 import sys
 import os
@@ -11,13 +11,13 @@ from typing import Dict, Any
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
 
-if "TM_BOOK_DIR" not in os.environ:
-    LOGGER.error("The environment variable TM_BOOK_DIR is not set.")
+if "TM_COMICS_DIR" not in os.environ:
+    LOGGER.error("The environment variable TM_COMICS_DIR is not set.")
     sys.exit(-1)
 
 
-class Book:
-    path_prefix = Path(os.environ["TM_BOOK_DIR"])
+class Comics:
+    path_prefix = Path(os.environ["TM_COMICS_DIR"])
 
     def __init__(self, book_id: int, info: Dict[str, Any], score: float = 0.0, **kwargs) -> None:
         self.book_id: int = book_id

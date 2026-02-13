@@ -15,25 +15,25 @@ vi.mock('react-router-dom', () => ({
 }));
 
 vi.mock('../src/ViewPDF', () => ({
-    default: ({ bookId, pageCount }) => <div data-testid="view-pdf">PDF:{bookId}:pc={pageCount}</div>,
+    default: ({ bookId, pageCount, apiPrefix }) => <div data-testid="view-pdf">PDF:{bookId}:pc={pageCount}:ap={apiPrefix || ''}</div>,
 }));
 vi.mock('../src/ViewEPUB', () => ({
-    default: ({ bookId, preview }) => <div data-testid="view-epub">EPUB:{bookId}:preview={String(!!preview)}</div>,
+    default: ({ bookId, preview, apiPrefix }) => <div data-testid="view-epub">EPUB:{bookId}:preview={String(!!preview)}:ap={apiPrefix || ''}</div>,
 }));
 vi.mock('../src/ViewDOC', () => ({
-    default: ({ bookId, fileType, lineCount }) => <div data-testid="view-doc">DOC:{bookId}:ft={fileType}:lc={lineCount}</div>,
+    default: ({ bookId, fileType, lineCount, apiPrefix }) => <div data-testid="view-doc">DOC:{bookId}:ft={fileType}:lc={lineCount}:ap={apiPrefix || ''}</div>,
 }));
 vi.mock('../src/ViewTXT', () => ({
-    default: ({ bookId, lineCount }) => <div data-testid="view-txt">TXT:{bookId}:lc={lineCount}</div>,
+    default: ({ bookId, lineCount, apiPrefix }) => <div data-testid="view-txt">TXT:{bookId}:lc={lineCount}:ap={apiPrefix || ''}</div>,
 }));
 vi.mock('../src/ViewHTML', () => ({
-    default: ({ bookId }) => <div data-testid="view-html">HTML:{bookId}</div>,
+    default: ({ bookId, apiPrefix }) => <div data-testid="view-html">HTML:{bookId}:ap={apiPrefix || ''}</div>,
 }));
 vi.mock('../src/ViewRTF', () => ({
-    default: ({ bookId }) => <div data-testid="view-rtf">RTF:{bookId}</div>,
+    default: ({ bookId, apiPrefix }) => <div data-testid="view-rtf">RTF:{bookId}:ap={apiPrefix || ''}</div>,
 }));
 vi.mock('../src/ViewImage', () => ({
-    default: ({ bookId }) => <div data-testid="view-image">IMG:{bookId}</div>,
+    default: ({ bookId, apiPrefix }) => <div data-testid="view-image">IMG:{bookId}:ap={apiPrefix || ''}</div>,
 }));
 
 import ViewSingle from '../src/ViewSingle';
@@ -279,6 +279,49 @@ describe('ViewSingle', () => {
 
         await waitFor(() => {
             expect(screen.getByTestId('view-epub')).toBeTruthy();
+        });
+    });
+
+    // ── apiPrefix 전달 ──
+
+    it('apiPrefix prop이 자식 뷰어에 전달된다', async () => {
+        render(<ViewSingle bookId={1} fileType="pdf" filePath="/test.pdf" apiPrefix="/comics" />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/ap=\/comics/)).toBeTruthy();
+        });
+    });
+
+    it('apiPrefix가 없으면 빈 문자열이 자식 뷰어에 전달된다', async () => {
+        render(<ViewSingle bookId={1} fileType="epub" filePath="/test.epub" />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/ap=$/m)).toBeTruthy();
+        });
+    });
+
+    it('standalone 모드에서 ?api= 쿼리 파라미터가 apiPrefix로 사용된다', async () => {
+        mockUseParams.mockReturnValue({ entryId: '10', fileType: 'pdf' });
+        mockUseSearchParams.mockReturnValue([new URLSearchParams('path=/test.pdf&api=/comics')]);
+
+        render(<ViewSingle />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('view-pdf')).toBeTruthy();
+            expect(screen.getByText(/ap=\/comics/)).toBeTruthy();
+        });
+    });
+
+    it('standalone 모드에서 ?api= 파라미터가 없으면 빈 apiPrefix를 사용한다', async () => {
+        mockUseParams.mockReturnValue({ entryId: '10', fileType: 'epub' });
+        mockUseSearchParams.mockReturnValue([new URLSearchParams('path=/test.epub')]);
+
+        render(<ViewSingle />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('view-epub')).toBeTruthy();
+            // ap= 뒤에 아무 값도 없어야 함
+            expect(screen.getByText(/EPUB:10:preview=false:ap=$/)).toBeTruthy();
         });
     });
 });

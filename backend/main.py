@@ -6,7 +6,7 @@ import logging.config
 from pathlib import Path
 from typing import Dict, Any, Union, List
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
@@ -16,6 +16,7 @@ ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
 JSON_MEDIA_TYPE = "application/json"
 from pydantic import BaseModel
 from backend.book_manager import BookManager
+from backend.comics_manager import ComicsManager
 from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
 from backend.category_mapping import CategoryMapping
 from urllib.parse import quote_plus
@@ -105,6 +106,9 @@ TM_GOOGLE_CLIENT_SECRET = os.getenv("TM_GOOGLE_CLIENT_SECRET")
 book_manager = BookManager()
 print("book manager ready")
 
+comics_manager = ComicsManager()
+print("comics manager ready")
+
 bookstore = Yes24Bookstore(base_dir=".", verbose=True)
 print("bookstore ready")
 
@@ -127,159 +131,152 @@ class BookModel(BaseModel):
     score: float = 0.0
 
 
-@app.put("/books/{book_id}")
-async def update_book(book_id: int, book_item: BookModel, force: bool = False) -> Dict[str, Any]:
-    LOGGER.debug("# update_book(book_id=%d, book=%r, force=%s)", book_id, book_item, force)
-    response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await book_manager.update_book(book_id, new_category=book_item.category, new_title=book_item.title, new_author=book_item.author, new_path=book_manager.path_prefix / book_item.file_path, new_type=book_item.file_type, force=force)
-    if error is None:
-        response_object["status"] = "success"
-        response_object["result"] = result
-    else:
-        response_object["error"] = error
-    return response_object
+def create_item_router(manager) -> APIRouter:
+    """공통 CRUD 엔드포인트를 생성하는 라우터 팩토리"""
+    router = APIRouter()
 
-
-@app.delete("/books/{book_id}")
-async def delete_book(book_id: int) -> Dict[str, Any]:
-    LOGGER.debug("# delete_book(book_id=%d)", book_id)
-    response_object: Dict[str, Any] = {"status": "failure"}
-    result, message = await book_manager.delete_book(book_id)
-    if result == "Ok":
-        response_object["status"] = "success"
-        response_object["result"] = result
-    elif result == "Warning":
-        response_object["status"] = "success"
-        response_object["result"] = result
-        response_object["warning"] = message
-    else:
-        response_object["error"] = message
-    return response_object
-
-
-# JSON 대신 파일 바이너리 다운로드를 위해 response_model를 None으로 지정
-@app.get("/download/{book_id}", response_model=None)
-async def get_book_content(book_id: int) -> Union[str, FileResponse]:
-    LOGGER.debug("# get_book(book_id=%d)", book_id)
-    return await book_manager.get_book_content(book_id=book_id)
-
-
-@app.get("/preview/{book_id}", response_model=None)
-async def get_book_preview(book_id: int, pages: int = 5, chapters: int = 3):
-    LOGGER.debug("# get_book_preview(book_id=%d, pages=%d, chapters=%d)", book_id, pages, chapters)
-    return await book_manager.get_book_preview(book_id=book_id, pages=pages, chapters=chapters)
-
-
-@app.get("/pdf-pages/{book_id}", response_model=None)
-async def get_pdf_pages(book_id: int, start: int = 1, end: int = 1):
-    LOGGER.debug("# get_pdf_pages(book_id=%d, start=%d, end=%d)", book_id, start, end)
-    return await book_manager.get_pdf_pages(book_id=book_id, start=start, end=end)
-
-
-@app.get("/validate/{book_id}")
-async def validate_book(book_id: int) -> Dict[str, Any]:
-    LOGGER.debug("# validate_book(book_id=%d)", book_id)
-    response_object: Dict[str, Any] = {"status": "failure"}
-
-    book, err = await book_manager.get_book(book_id)
-    if not book:
-        response_object["error"] = f"Book not found: {book_id}"
+    @router.put("/books/{book_id}")
+    async def update_book(book_id: int, book_item: BookModel, force: bool = False) -> Dict[str, Any]:
+        LOGGER.debug("# update_book(book_id=%d, book=%r, force=%s)", book_id, book_item, force)
+        response_object: Dict[str, Any] = {"status": "failure"}
+        result, error = await manager.update_book(book_id, new_category=book_item.category, new_title=book_item.title, new_author=book_item.author, new_path=manager.path_prefix / book_item.file_path, new_type=book_item.file_type, force=force)
+        if error is None:
+            response_object["status"] = "success"
+            response_object["result"] = result
+        else:
+            response_object["error"] = error
         return response_object
 
-    if book.file_type == "epub":
-        result, error = await book_manager.validate_epub(book_id)
-    elif book.file_type == "pdf":
-        result, error = await book_manager.validate_pdf(book_id)
-    else:
-        response_object["error"] = f"Validation not supported for type: {book.file_type}"
+    @router.delete("/books/{book_id}")
+    async def delete_book(book_id: int) -> Dict[str, Any]:
+        LOGGER.debug("# delete_book(book_id=%d)", book_id)
+        response_object: Dict[str, Any] = {"status": "failure"}
+        result, message = await manager.delete_book(book_id)
+        if result == "Ok":
+            response_object["status"] = "success"
+            response_object["result"] = result
+        elif result == "Warning":
+            response_object["status"] = "success"
+            response_object["result"] = result
+            response_object["warning"] = message
+        else:
+            response_object["error"] = message
         return response_object
 
-    if result is not None and error is None:
-        response_object["status"] = "success"
-        response_object["result"] = result
-    else:
-        response_object["error"] = error
-    return response_object
+    @router.get("/download/{book_id}", response_model=None)
+    async def get_book_content(book_id: int) -> Union[str, FileResponse]:
+        LOGGER.debug("# get_book(book_id=%d)", book_id)
+        return await manager.get_book_content(book_id=book_id)
 
+    @router.get("/preview/{book_id}", response_model=None)
+    async def get_book_preview(book_id: int, pages: int = 5, chapters: int = 3):
+        LOGGER.debug("# get_book_preview(book_id=%d, pages=%d, chapters=%d)", book_id, pages, chapters)
+        return await manager.get_book_preview(book_id=book_id, pages=pages, chapters=chapters)
 
-@app.get("/books/{book_id}")
-async def get_book(book_id: int) -> Dict[str, Any]:
-    LOGGER.debug("# get_book(book_id=%d)", book_id)
-    response_object: Dict[str, Any] = {"status": "failure"}
-    book, error = await book_manager.get_book(book_id)
-    if book and error is None:
-        response_object["status"] = "success"
-        response_object["result"] = BookModel(**book.dict())
-    else:
-        response_object["error"] = error
-    # LOGGER.debug(response_object)
-    return response_object
+    @router.get("/pdf-pages/{book_id}", response_model=None)
+    async def get_pdf_pages(book_id: int, start: int = 1, end: int = 1):
+        LOGGER.debug("# get_pdf_pages(book_id=%d, start=%d, end=%d)", book_id, start, end)
+        return await manager.get_pdf_pages(book_id=book_id, start=start, end=end)
 
+    @router.get("/validate/{book_id}")
+    async def validate_book(book_id: int) -> Dict[str, Any]:
+        LOGGER.debug("# validate_book(book_id=%d)", book_id)
+        response_object: Dict[str, Any] = {"status": "failure"}
 
-@app.get("/categories/{category:path}")
-async def get_books_in_category(category: str) -> Dict[str, Any]:
-    LOGGER.debug("# get_books_in_category(category='%s')", category)
-    response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await book_manager.get_books_in_category(category)
-    if error is None:
-        response_object["status"] = "success"
-        response_object["result"] = [BookModel(**book.dict()) for book in result]
-    else:
-        response_object["error"] = error
-    #LOGGER.debug(response_object)
-    return response_object
+        book, err = await manager.get_book(book_id)
+        if not book:
+            response_object["error"] = f"Book not found: {book_id}"
+            return response_object
 
+        if book.file_type == "epub":
+            result, error = await manager.validate_epub(book_id)
+        elif book.file_type == "pdf":
+            result, error = await manager.validate_pdf(book_id)
+        else:
+            response_object["error"] = f"Validation not supported for type: {book.file_type}"
+            return response_object
 
-@app.get("/categories")
-async def get_categories() -> Dict[str, Any]:
-    LOGGER.debug("# get_categories()")
-    response_object: Dict[str, Any] = {"status": "failure"}
-    result, error = await book_manager.get_categories()
-    if error is None:
-        response_object["status"] = "success"
-        response_object["result"] = result
-    else:
-        response_object["error"] = error
-    # LOGGER.debug(response_object)
-    return response_object
-
-
-@app.get("/similar/{book_id}")
-async def search_similar_books(book_id: int, offset: int = 0, limit: int = 10) -> Dict[str, Any]:
-    LOGGER.debug("# search_similar_books(book_id=%d, offset=%d, limit=%d)", book_id, offset, limit)
-    response_object: Dict[str, Any] = {"status": "failure"}
-    # 우선 유사 도서 검색
-    similar_list, total, error = await book_manager.search_similar_books_paged(book_id, size=limit, offset=offset)
-    if similar_list and error is None:
-        response_object["status"] = "success"
-        response_object["result"] = [BookModel(**book.dict()) for book in similar_list]
-        response_object["total"] = total
+        if result is not None and error is None:
+            response_object["status"] = "success"
+            response_object["result"] = result
+        else:
+            response_object["error"] = error
         return response_object
-    # 유사 도서를 찾지 못한 경우 원본 도서 정보로 fallback
-    book, err2 = await book_manager.get_book(book_id)
-    if book and err2 is None:
-        response_object["status"] = "success"
-        response_object["result"] = [BookModel(**book.dict())]
-        response_object["total"] = 1
-    else:
-        # 원본 도서도 조회 실패 시 error 반환
-        response_object["error"] = error or err2
-    return response_object
+
+    @router.get("/books/{book_id}")
+    async def get_book(book_id: int) -> Dict[str, Any]:
+        LOGGER.debug("# get_book(book_id=%d)", book_id)
+        response_object: Dict[str, Any] = {"status": "failure"}
+        book, error = await manager.get_book(book_id)
+        if book and error is None:
+            response_object["status"] = "success"
+            response_object["result"] = BookModel(**book.dict())
+        else:
+            response_object["error"] = error
+        return response_object
+
+    @router.get("/categories/{category:path}")
+    async def get_books_in_category(category: str) -> Dict[str, Any]:
+        LOGGER.debug("# get_books_in_category(category='%s')", category)
+        response_object: Dict[str, Any] = {"status": "failure"}
+        result, error = await manager.get_books_in_category(category)
+        if error is None:
+            response_object["status"] = "success"
+            response_object["result"] = [BookModel(**book.dict()) for book in result]
+        else:
+            response_object["error"] = error
+        return response_object
+
+    @router.get("/categories")
+    async def get_categories() -> Dict[str, Any]:
+        LOGGER.debug("# get_categories()")
+        response_object: Dict[str, Any] = {"status": "failure"}
+        result, error = await manager.get_categories()
+        if error is None:
+            response_object["status"] = "success"
+            response_object["result"] = result
+        else:
+            response_object["error"] = error
+        return response_object
+
+    @router.get("/similar/{book_id}")
+    async def search_similar_books(book_id: int, offset: int = 0, limit: int = 10) -> Dict[str, Any]:
+        LOGGER.debug("# search_similar_books(book_id=%d, offset=%d, limit=%d)", book_id, offset, limit)
+        response_object: Dict[str, Any] = {"status": "failure"}
+        similar_list, total, error = await manager.search_similar_books_paged(book_id, size=limit, offset=offset)
+        if similar_list and error is None:
+            response_object["status"] = "success"
+            response_object["result"] = [BookModel(**book.dict()) for book in similar_list]
+            response_object["total"] = total
+            return response_object
+        book, err2 = await manager.get_book(book_id)
+        if book and err2 is None:
+            response_object["status"] = "success"
+            response_object["result"] = [BookModel(**book.dict())]
+            response_object["total"] = 1
+        else:
+            response_object["error"] = error or err2
+        return response_object
+
+    @router.get("/search/{keyword}")
+    async def search_by_keyword(keyword: str, offset: int = 0, limit: int = 10, exclude_categories: str = "") -> Dict[str, Any]:
+        LOGGER.debug("# search(keyword=%s, offset=%d, limit=%d, exclude_categories=%s)", keyword, offset, limit, exclude_categories)
+        response_object: Dict[str, Any] = {"status": "failure"}
+        excluded = [c.strip() for c in exclude_categories.split(",") if c.strip()] if exclude_categories else None
+        result, total, error = await manager.search_by_keyword_paged(keyword, size=limit, offset=offset, exclude_categories=excluded)
+        if error is None:
+            response_object["status"] = "success"
+            response_object["result"] = [BookModel(**book.dict()) for book in result]
+            response_object["total"] = total
+        else:
+            response_object["error"] = error
+        return response_object
+
+    return router
 
 
-@app.get("/search/{keyword}")
-async def search_by_keyword(keyword: str, offset: int = 0, limit: int = 10, exclude_categories: str = "") -> Dict[str, Any]:
-    LOGGER.debug("# search(keyword=%s, offset=%d, limit=%d, exclude_categories=%s)", keyword, offset, limit, exclude_categories)
-    response_object: Dict[str, Any] = {"status": "failure"}
-    excluded = [c.strip() for c in exclude_categories.split(",") if c.strip()] if exclude_categories else None
-    result, total, error = await book_manager.search_by_keyword_paged(keyword, size=limit, offset=offset, exclude_categories=excluded)
-    if error is None:
-        response_object["status"] = "success"
-        response_object["result"] = [BookModel(**book.dict()) for book in result]
-        response_object["total"] = total
-    else:
-        response_object["error"] = error
-    return response_object
+app.include_router(create_item_router(book_manager))
+app.include_router(create_item_router(comics_manager), prefix="/comics")
 
 
 @app.get("/search/bookstore/{store_name}")

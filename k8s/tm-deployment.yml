@@ -24,20 +24,24 @@ spec:
           ports:
             - containerPort: 8020
           env:
-            - name: TM_WORK_DIR
+            - name: TM_BOOK_DIR
               value: /books
+            - name: TM_COMICS_DIR
+              value: /comics
             - name: TM_FRONTEND_URL
               value: https://tm.terzeron.com
             - name: TM_BACKEND_PORT
               value: "8020"
             - name: TM_ES_URL
               value: http://elasticsearch-es-http:9200
-            - name: TM_ES_INDEX
-              value: tm
             - name: TM_ES_USER
               valueFrom: { secretKeyRef: { name: tm-es-cred, key: username } }
             - name: TM_ES_PASSWORD
               valueFrom: { secretKeyRef: { name: tm-es-cred, key: password } }
+            - name: TM_ES_BOOK_INDEX
+              value: book
+            - name: TM_ES_COMICS_INDEX
+              value: comics
             - name: TM_GOOGLE_CLIENT_ID
               valueFrom:
                 secretKeyRef:
@@ -64,10 +68,15 @@ spec:
           volumeMounts:
             - name: books-pvc
               mountPath: /books
+            - name: comics-pvc
+              mountPath: /comics
       volumes:
         - name: books-pvc
           persistentVolumeClaim:
             claimName: books-pvc
+        - name: comics-pvc
+          persistentVolumeClaim:
+            claimName: comics-pvc
 
 
 ---

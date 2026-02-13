@@ -89,7 +89,7 @@ describe('SearchResult', () => {
         const editButtons = screen.getAllByText('편집');
         fireEvent.click(editButtons[0]);
         expect(mockOpen).toHaveBeenCalledWith(
-            `/edit/1?category=${encodeURIComponent('소설')}`,
+            `/book-edit/1?category=${encodeURIComponent('소설')}`,
             '_blank',
             'noopener'
         );
@@ -103,7 +103,7 @@ describe('SearchResult', () => {
         const viewButtons = screen.getAllByText('조회');
         fireEvent.click(viewButtons[0]);
         expect(mockOpen).toHaveBeenCalledWith(
-            `/view/1?category=${encodeURIComponent('소설')}`,
+            `/book-view/1?category=${encodeURIComponent('소설')}`,
             '_blank',
             'noopener'
         );
@@ -161,5 +161,63 @@ describe('SearchResult', () => {
         ];
         rerender(<SearchResult results={newResults} />);
         expect(screen.getByText('과학/science.pdf')).toBeTruthy();
+    });
+
+    // ── 만화 컨텍스트 (basePath="/comics-edit") ──
+
+    it('basePath="/comics-edit" 편집 버튼 클릭 시 comics-edit URL로 열린다', () => {
+        const mockOpen = vi.fn();
+        vi.stubGlobal('open', mockOpen);
+        render(<SearchResult results={sampleResults} showEditButton={true} basePath="/comics-edit" />);
+        const editButtons = screen.getAllByText('편집');
+        fireEvent.click(editButtons[0]);
+        expect(mockOpen).toHaveBeenCalledWith(
+            `/comics-edit/1?category=${encodeURIComponent('소설')}`,
+            '_blank',
+            'noopener'
+        );
+        vi.unstubAllGlobals();
+    });
+
+    it('basePath="/comics-edit" 조회 버튼 클릭 시 comics-view URL로 열린다', () => {
+        const mockOpen = vi.fn();
+        vi.stubGlobal('open', mockOpen);
+        render(<SearchResult results={sampleResults} showEditButton={true} basePath="/comics-edit" />);
+        const viewButtons = screen.getAllByText('조회');
+        fireEvent.click(viewButtons[0]);
+        expect(mockOpen).toHaveBeenCalledWith(
+            `/comics-view/1?category=${encodeURIComponent('소설')}`,
+            '_blank',
+            'noopener'
+        );
+        vi.unstubAllGlobals();
+    });
+
+    it('basePath="/comics-view" 전체 보기 버튼 클릭 시 api 파라미터가 포함된다', () => {
+        const mockOpen = vi.fn();
+        vi.stubGlobal('open', mockOpen);
+        render(<SearchResult results={sampleResults} showEditButton={false} basePath="/comics-view" />);
+        const viewAllButtons = screen.getAllByText('전체 보기');
+        fireEvent.click(viewAllButtons[0]);
+        expect(mockOpen).toHaveBeenCalledWith(
+            expect.stringContaining('&api=%2Fcomics'),
+            '_blank',
+            'noopener'
+        );
+        vi.unstubAllGlobals();
+    });
+
+    it('basePath="/book-view" 전체 보기 버튼 클릭 시 api 파라미터가 포함되지 않는다', () => {
+        const mockOpen = vi.fn();
+        vi.stubGlobal('open', mockOpen);
+        render(<SearchResult results={sampleResults} showEditButton={false} basePath="/book-view" />);
+        const viewAllButtons = screen.getAllByText('전체 보기');
+        fireEvent.click(viewAllButtons[0]);
+        expect(mockOpen).toHaveBeenCalledWith(
+            expect.not.stringContaining('&api='),
+            '_blank',
+            'noopener'
+        );
+        vi.unstubAllGlobals();
     });
 });
