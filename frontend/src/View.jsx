@@ -42,7 +42,7 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
         ? (/^\d+$/.test(routeWildcard) ? routeWildcard : undefined)
         : (routeWildcard ? parseEntryId(routeWildcard)?.bookId : undefined);
     const {searchResults, hasSearched, role, searchTotal, handleLoadMore, searchLoading} = useOutletContext();
-    const [isFolderOpen, setIsFolderOpen] = useState(false);
+    const [isFolderOpen, setIsFolderOpen] = useState(true);
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
     // removed selectedEntryId state as it's not needed
@@ -247,14 +247,14 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
         <Container id="view">
             <Row fluid="true">
                 {isFolderOpen && (
-                    <Col md={isMobile ? 12 : 5} lg={isMobile ? 12 : 4} className={directoryClassName}>
+                    <Col md={isMobile ? 12 : (bookInfo['book_id'] ? 5 : 12)} lg={isMobile ? 12 : (bookInfo['book_id'] ? 4 : 12)} className={directoryClassName}>
                         <Suspense fallback={<div className="loading">로딩 중...</div>}>
                             <Folder folderData={folderData} isOpen={true} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
                         </Suspense>
                     </Col>
                 )}
 
-                <Col md={isMobile ? 12 : (isFolderOpen ? 7 : 12)} lg={isMobile ? 12 : (isFolderOpen ? 8 : 12)} className={isMobile ? "ps-0 pe-0" : "section"}>
+                <Col md={isMobile ? 12 : (isFolderOpen && bookInfo['book_id'] ? 7 : 12)} lg={isMobile ? 12 : (isFolderOpen && bookInfo['book_id'] ? 8 : 12)} className={isMobile ? "ps-0 pe-0" : "section"}>
                     {!isFolderOpen && (
                         <Suspense fallback={<div className="loading">로딩 중...</div>}>
                             <Folder folderData={folderData} isOpen={false} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
