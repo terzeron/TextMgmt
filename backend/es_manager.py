@@ -59,7 +59,8 @@ class ESManager:
                     raise
 
     def __del__(self) -> None:
-        del self.es
+        if hasattr(self, 'es'):
+            del self.es
 
     def do_exist_index(self) -> bool:
         LOGGER.debug("do_exist_index()")
