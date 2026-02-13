@@ -262,7 +262,6 @@ export default function Folder(props) {
     const treeViewStyles = useMemo(() => ({
         height: 'fit-content',
         flexGrow: 1,
-        maxWidth: 600,
         overflowY: 'auto',
     }), []);
 
@@ -281,7 +280,7 @@ export default function Folder(props) {
     }
 
     return (
-        <Card>
+        <Card className="h-100">
             <Card.Header
                 onClick={() => props.onToggle(false)}
                 style={{cursor: 'pointer', userSelect: 'none'}}
@@ -289,7 +288,7 @@ export default function Folder(props) {
                 <FontAwesomeIcon icon={faChevronDown} className="me-2"/>
                 디렉토리
             </Card.Header>
-            <Card.Body>
+            <Card.Body className="overflow-auto">
                 <div id="dir_list">
                     {props.folderData && (
                         <RichTreeView
