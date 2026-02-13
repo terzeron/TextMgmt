@@ -559,7 +559,7 @@ describe('ViewPDF', () => {
         }
     });
 
-    it('수동 줌 모드에서 canvas에 명시적 width/height가 적용된다', async () => {
+    it('수동 줌 모드에서 canvas에 width는 px, height는 auto가 적용된다', async () => {
         globalThis.fetch = createMockFetch(1);
         setupGetDocument(() => createMockPdf(1));
 
@@ -572,8 +572,8 @@ describe('ViewPDF', () => {
 
         const canvas = document.querySelector('canvas');
         expect(canvas).toBeTruthy();
-        // 수동 줌 모드에서 width와 height 모두 px 단위
+        // 수동 줌 모드에서 width는 px 단위, height는 auto
         expect(canvas.style.width).toContain('px');
-        expect(canvas.style.height).toContain('px');
+        expect(canvas.style.height).toBe('auto');
     });
 });

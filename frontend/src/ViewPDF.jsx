@@ -366,7 +366,7 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false, apiPref
                         style={fitMode
                             ? {width: '100%', height: 'auto'}
                             : {width: `${Math.round(nativeWidthRef.current * zoomPercent / 100)}px`,
-                               height: `${Math.round(nativeHeightRef.current * zoomPercent / 100)}px`}
+                               height: 'auto'}
                         }
                     />
                 ))}
