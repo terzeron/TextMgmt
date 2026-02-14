@@ -630,6 +630,123 @@ class TestESManager:
         assert result["deleted"] == 0
         assert result["failures"] == []
 
+    def test_delete_by_category_prefix(self, es_manager_with_data):
+        """delete_by_category(prefix=True)로 하위 카테고리 문서도 함께 삭제된다"""
+        esm = es_manager_with_data
+        test_data = {
+            320: {
+                "category": "prefix_del",
+                "title": "Prefix Del Root",
+                "author": "Author",
+                "file_path": "prefix_del/root.txt",
+                "file_type": "txt",
+                "file_size": 100,
+                "line_count": 10,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "prefix delete test",
+                "updated_time": "2024-01-01T00:00:00",
+            },
+            321: {
+                "category": "prefix_del/sub1",
+                "title": "Prefix Del Sub1",
+                "author": "Author",
+                "file_path": "prefix_del/sub1/test.txt",
+                "file_type": "txt",
+                "file_size": 100,
+                "line_count": 10,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "prefix delete sub1",
+                "updated_time": "2024-01-01T00:00:00",
+            },
+            322: {
+                "category": "prefix_del/sub2",
+                "title": "Prefix Del Sub2",
+                "author": "Author",
+                "file_path": "prefix_del/sub2/test.txt",
+                "file_type": "txt",
+                "file_size": 100,
+                "line_count": 10,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "prefix delete sub2",
+                "updated_time": "2024-01-01T00:00:00",
+            },
+        }
+        esm.insert(test_data)
+        esm.refresh()
+
+        try:
+            # prefix=False는 정확 매칭만
+            assert esm.count_by_category("prefix_del") == 1
+            # prefix=True는 하위 카테고리 포함
+            assert esm.count_by_category("prefix_del", prefix=True) == 3
+
+            result = esm.delete_by_category("prefix_del", prefix=True)
+            assert result["deleted"] == 3
+            assert result["failures"] == []
+
+            # 모든 문서 삭제 확인
+            assert esm.count_by_category("prefix_del", prefix=True) == 0
+            assert esm.search_by_id(320) == {}
+            assert esm.search_by_id(321) == {}
+            assert esm.search_by_id(322) == {}
+        finally:
+            for doc_id in [320, 321, 322]:
+                try:
+                    esm.delete(doc_id)
+                except Exception:
+                    pass
+            esm.refresh()
+
+    def test_count_by_category_prefix(self, es_manager_with_data):
+        """count_by_category(prefix=True)가 하위 카테고리 문서도 포함한다"""
+        esm = es_manager_with_data
+        test_data = {
+            330: {
+                "category": "count_pfx",
+                "title": "Count Prefix Root",
+                "author": "Author",
+                "file_path": "count_pfx/root.txt",
+                "file_type": "txt",
+                "file_size": 100,
+                "line_count": 10,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "count prefix test",
+                "updated_time": "2024-01-01T00:00:00",
+            },
+            331: {
+                "category": "count_pfx/child",
+                "title": "Count Prefix Child",
+                "author": "Author",
+                "file_path": "count_pfx/child/test.txt",
+                "file_type": "txt",
+                "file_size": 100,
+                "line_count": 10,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "count prefix child",
+                "updated_time": "2024-01-01T00:00:00",
+            },
+        }
+        esm.insert(test_data)
+        esm.refresh()
+
+        try:
+            assert esm.count_by_category("count_pfx") == 1
+            assert esm.count_by_category("count_pfx", prefix=True) == 2
+            assert esm.count_by_category("count_pfx/child") == 1
+            assert esm.count_by_category("count_pfx/child", prefix=True) == 1
+        finally:
+            for doc_id in [330, 331]:
+                try:
+                    esm.delete(doc_id)
+                except Exception:
+                    pass
+            esm.refresh()
+
     def test_search_by_id(self, es_manager_with_data):
         esm = es_manager_with_data
         # First get some results to find a valid ID

@@ -528,10 +528,27 @@ class ESManager:
                     return False
         return True
 
-    def count_by_category(self, category: str) -> int:
-        """특정 카테고리의 문서 수를 반환"""
-        LOGGER.debug("count_by_category(category='%s')", category)
-        result = self.es.count(index=self.index_name, query={"term": {"category": category}})
+    def count_by_category(self, category: str, prefix: bool = False) -> int:
+        """특정 카테고리의 문서 수를 반환
+
+        Args:
+            category: 카테고리명
+            prefix: True이면 하위 카테고리(category/*)도 포함하여 카운트
+        """
+        LOGGER.debug("count_by_category(category='%s', prefix=%s)", category, prefix)
+        if prefix:
+            query = {
+                "bool": {
+                    "should": [
+                        {"term": {"category": category}},
+                        {"prefix": {"category": category + "/"}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        else:
+            query = {"term": {"category": category}}
+        result = self.es.count(index=self.index_name, query=query)
         return result["count"]
 
     def rename_category(self, old_category: str, new_category: str) -> Dict[str, Any]:
@@ -571,16 +588,32 @@ class ESManager:
             "failures": result.get("failures", []),
         }
 
-    def delete_by_category(self, category: str) -> Dict[str, Any]:
+    def delete_by_category(self, category: str, prefix: bool = False) -> Dict[str, Any]:
         """특정 카테고리의 모든 문서를 삭제
+
+        Args:
+            category: 카테고리명
+            prefix: True이면 하위 카테고리(category/*)도 포함하여 삭제
 
         Returns:
             {"deleted": int, "failures": list}
         """
-        LOGGER.debug("delete_by_category(category='%s')", category)
+        LOGGER.debug("delete_by_category(category='%s', prefix=%s)", category, prefix)
+        if prefix:
+            query = {
+                "bool": {
+                    "should": [
+                        {"term": {"category": category}},
+                        {"prefix": {"category": category + "/"}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        else:
+            query = {"term": {"category": category}}
         result = self.es.delete_by_query(
             index=self.index_name,
-            query={"term": {"category": category}},
+            query=query,
             conflicts="abort",
             refresh=True,
         )

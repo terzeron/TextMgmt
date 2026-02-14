@@ -248,9 +248,15 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         response_object: Dict[str, Any] = {"status": "failure"}
         result, error = await manager.delete_category(body.category)
         if error is None:
-            # MySQL 카테고리 매핑 삭제
-            mapping_deleted = category_mapping.delete_category(body.category, content_type=content_type)
-            hidden_removed = category_mapping.set_hidden(body.category, False, content_type=content_type)
+            # MySQL 카테고리 매핑 삭제 (하위 카테고리 포함)
+            mapping_deleted = category_mapping.delete_category(body.category, content_type=content_type, prefix=True)
+            # hidden_categories에서 해당 카테고리 및 하위 카테고리 정리
+            category_mapping.set_hidden(body.category, False, content_type=content_type)
+            hidden_list = category_mapping.get_hidden_categories(content_type=content_type)
+            prefix = body.category + "/"
+            for hidden_cat in hidden_list:
+                if hidden_cat.startswith(prefix):
+                    category_mapping.set_hidden(hidden_cat, False, content_type=content_type)
             if not mapping_deleted:
                 LOGGER.warning("delete_category: MySQL 키워드 매핑 삭제 대상 없음 (category='%s')", body.category)
             result["mapping_deleted"] = mapping_deleted

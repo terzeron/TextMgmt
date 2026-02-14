@@ -2,11 +2,11 @@ import {useEffect, useState, useCallback, useRef} from 'react';
 import PropTypes from 'prop-types';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
-import {Button, Card, Form, InputGroup, ListGroup, Badge, Row, Col, Spinner} from 'react-bootstrap';
+import {Button, Card, Form, InputGroup, ListGroup, Badge, Row, Col, Spinner, Modal} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
-import {faPlus, faTrash, faEyeSlash, faChevronDown, faChevronRight} from '@fortawesome/free-solid-svg-icons';
+import {faPlus, faTrash, faEyeSlash, faChevronDown, faChevronRight, faEdit} from '@fortawesome/free-solid-svg-icons';
 
-import {jsonGetReq, jsonPostReq, jsonDeleteReq} from './Common';
+import {jsonGetReq, jsonPostReq, jsonPutReq, jsonDeleteReq} from './Common';
 
 // 메모리 캐시 (동기 접근용) - content_type별 분리
 let cachedMappings = {book: {}, comic: {}};
@@ -39,7 +39,7 @@ export const fetchCategoryMappings = (contentType = 'book') => {
 // 캐시 초기화 여부
 export const isCacheInitialized = (contentType = 'book') => cacheInitialized[contentType];
 
-export default function CategoryMapping({categoryList, contentType = 'book', title = '카테고리 관리'}) {
+export default function CategoryMapping({categoryList, contentType = 'book', title = '카테고리 관리', onCategoryChanged}) {
     const [mappings, setMappings] = useState({});
     const [selectedCategory, setSelectedCategory] = useState('');
     const [newKeyword, setNewKeyword] = useState('');
@@ -49,6 +49,14 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
     const [hiddenCategories, setHiddenCategories] = useState(new Set());
     const [isOpen, setIsOpen] = useState(false);
     const keywordInputRef = useRef(null);
+
+    // rename/delete 모달 상태
+    const [showRenameModal, setShowRenameModal] = useState(false);
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [newCategoryName, setNewCategoryName] = useState('');
+
+    // API prefix (comic이면 /comics 경로)
+    const apiPrefix = contentType === 'comic' ? '/comics' : '';
 
     // 비노출 카테고리 로드
     const loadHiddenCategories = useCallback(() => {
@@ -169,6 +177,64 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
         );
     }, [contentType]);
 
+    // 카테고리 이름 변경
+    const handleRenameCategory = useCallback(() => {
+        if (!selectedCategory || !newCategoryName.trim()) return;
+        const trimmed = newCategoryName.trim();
+        if (trimmed === selectedCategory) {
+            setMessage('현재 이름과 동일합니다.');
+            setTimeout(() => setMessage(''), 3000);
+            return;
+        }
+
+        setSaving(true);
+        jsonPutReq(
+            `${apiPrefix}/categories/rename`,
+            {old_category: selectedCategory, new_category: trimmed},
+            (result) => {
+                setMessage(`카테고리 '${selectedCategory}'을(를) '${trimmed}'(으)로 변경했습니다.`);
+                setTimeout(() => setMessage(''), 5000);
+                setShowRenameModal(false);
+                setSelectedCategory('');
+                // 매핑 캐시 갱신
+                loadFromServer();
+                // 부모 컴포넌트에 카테고리 변경 알림
+                onCategoryChanged?.();
+            },
+            (error) => {
+                setMessage(error || '이름 변경에 실패했습니다.');
+                setTimeout(() => setMessage(''), 5000);
+            },
+            () => setSaving(false)
+        );
+    }, [selectedCategory, newCategoryName, apiPrefix, loadFromServer, onCategoryChanged]);
+
+    // 카테고리 삭제
+    const handleDeleteCategory = useCallback(() => {
+        if (!selectedCategory) return;
+
+        setSaving(true);
+        jsonPostReq(
+            `${apiPrefix}/categories/delete`,
+            {category: selectedCategory},
+            (result) => {
+                setMessage(`카테고리 '${selectedCategory}'이(가) 삭제되었습니다. (${result.deleted_count}건)`);
+                setTimeout(() => setMessage(''), 5000);
+                setShowDeleteModal(false);
+                setSelectedCategory('');
+                // 매핑 캐시 갱신
+                loadFromServer();
+                // 부모 컴포넌트에 카테고리 변경 알림
+                onCategoryChanged?.();
+            },
+            (error) => {
+                setMessage(error || '삭제에 실패했습니다.');
+                setTimeout(() => setMessage(''), 5000);
+            },
+            () => setSaving(false)
+        );
+    }, [selectedCategory, apiPrefix, loadFromServer, onCategoryChanged]);
+
     // Enter 키 처리
     const handleKeyDown = useCallback((e) => {
         if (e.key === 'Enter') {
@@ -176,6 +242,14 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
             handleAddKeyword();
         }
     }, [handleAddKeyword]);
+
+    // rename 모달 Enter 키 처리
+    const handleRenameKeyDown = useCallback((e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            handleRenameCategory();
+        }
+    }, [handleRenameCategory]);
 
     const currentKeywords = selectedCategory ? (mappings[selectedCategory] || []) : [];
 
@@ -250,9 +324,35 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
                         <Col md={8}>
                             {selectedCategory ? (
                                 <Card>
-                                    <Card.Header className="py-1">
-                                        <strong>{selectedCategory}</strong> 키워드
-                                        {saving && <Spinner animation="border" size="sm" className="ms-2"/>}
+                                    <Card.Header className="py-1 d-flex justify-content-between align-items-center">
+                                        <span>
+                                            <strong>{selectedCategory}</strong> 키워드
+                                            {saving && <Spinner animation="border" size="sm" className="ms-2"/>}
+                                        </span>
+                                        <span>
+                                            <Button
+                                                variant="outline-secondary"
+                                                size="sm"
+                                                className="me-1"
+                                                disabled={saving}
+                                                onClick={() => {
+                                                    setNewCategoryName(selectedCategory);
+                                                    setShowRenameModal(true);
+                                                }}
+                                                title="이름 변경"
+                                            >
+                                                <FontAwesomeIcon icon={faEdit}/>
+                                            </Button>
+                                            <Button
+                                                variant="outline-danger"
+                                                size="sm"
+                                                disabled={saving}
+                                                onClick={() => setShowDeleteModal(true)}
+                                                title="카테고리 삭제"
+                                            >
+                                                <FontAwesomeIcon icon={faTrash}/>
+                                            </Button>
+                                        </span>
                                     </Card.Header>
                                     <Card.Body>
                                         <Form.Check
@@ -311,6 +411,62 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
                     </Row>
                 )}
             </Card.Body>
+
+            {/* 이름 변경 모달 */}
+            <Modal show={showRenameModal} onHide={() => setShowRenameModal(false)} centered>
+                <Modal.Header closeButton>
+                    <Modal.Title>카테고리 이름 변경</Modal.Title>
+                </Modal.Header>
+                <Modal.Body>
+                    <Form.Group>
+                        <Form.Label>현재 이름</Form.Label>
+                        <Form.Control type="text" value={selectedCategory} disabled />
+                    </Form.Group>
+                    <Form.Group className="mt-3">
+                        <Form.Label>새 이름</Form.Label>
+                        <Form.Control
+                            type="text"
+                            value={newCategoryName}
+                            onChange={(e) => setNewCategoryName(e.target.value)}
+                            onKeyDown={handleRenameKeyDown}
+                            autoFocus
+                        />
+                    </Form.Group>
+                </Modal.Body>
+                <Modal.Footer>
+                    <Button variant="secondary" onClick={() => setShowRenameModal(false)}>취소</Button>
+                    <Button
+                        variant="primary"
+                        onClick={handleRenameCategory}
+                        disabled={saving || !newCategoryName.trim() || newCategoryName.trim() === selectedCategory}
+                    >
+                        {saving ? <Spinner animation="border" size="sm" /> : '변경'}
+                    </Button>
+                </Modal.Footer>
+            </Modal>
+
+            {/* 삭제 확인 모달 */}
+            <Modal show={showDeleteModal} onHide={() => setShowDeleteModal(false)} centered>
+                <Modal.Header closeButton>
+                    <Modal.Title>카테고리 삭제</Modal.Title>
+                </Modal.Header>
+                <Modal.Body>
+                    <p className="text-danger fw-bold">
+                        카테고리 &apos;{selectedCategory}&apos; 및 하위 카테고리의 모든 문서가 삭제됩니다.
+                    </p>
+                    <p className="text-muted">이 작업은 되돌릴 수 없습니다.</p>
+                </Modal.Body>
+                <Modal.Footer>
+                    <Button variant="secondary" onClick={() => setShowDeleteModal(false)}>취소</Button>
+                    <Button
+                        variant="danger"
+                        onClick={handleDeleteCategory}
+                        disabled={saving}
+                    >
+                        {saving ? <Spinner animation="border" size="sm" /> : '삭제'}
+                    </Button>
+                </Modal.Footer>
+            </Modal>
         </Card>
     );
 }
@@ -319,4 +475,5 @@ CategoryMapping.propTypes = {
     categoryList: PropTypes.array.isRequired,
     contentType: PropTypes.string,
     title: PropTypes.string,
+    onCategoryChanged: PropTypes.func,
 };

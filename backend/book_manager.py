@@ -1218,14 +1218,14 @@ class BookManager:
         if not dir_check.is_relative_to(self.path_prefix.resolve()):
             return {}, f"잘못된 경로입니다: {category}"
 
-        # ES에서 문서 수 확인
-        doc_count = self.es_manager.count_by_category(category)
+        # ES에서 문서 수 확인 (하위 카테고리 포함)
+        doc_count = self.es_manager.count_by_category(category, prefix=True)
         if doc_count == 0:
             return {}, f"카테고리 '{category}'에 문서가 없습니다"
 
-        # ES delete_by_query 실행
+        # ES delete_by_query 실행 (하위 카테고리 포함)
         try:
-            es_result = self.es_manager.delete_by_category(category)
+            es_result = self.es_manager.delete_by_category(category, prefix=True)
         except Exception as e:
             return {}, f"ES 삭제 실패: {e}"
 
