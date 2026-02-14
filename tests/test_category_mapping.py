@@ -251,6 +251,34 @@ class TestCategoryMapping:
         assert mapping.get_keywords("4_심리학뇌과학") == []
         assert mapping.get_keywords("5_철학종교") == ["철학"]
 
+    def test_delete_category_prefix(self, mapping):
+        """prefix=True로 하위 카테고리 키워드도 함께 삭제되는지 테스트"""
+        mapping.add_keyword("fiction", "소설")
+        mapping.add_keyword("fiction/fantasy", "판타지")
+        mapping.add_keyword("fiction/romance", "로맨스")
+        mapping.add_keyword("nonfiction", "논픽션")
+
+        result = mapping.delete_category("fiction", prefix=True)
+        assert result is True
+
+        assert mapping.get_keywords("fiction") == []
+        assert mapping.get_keywords("fiction/fantasy") == []
+        assert mapping.get_keywords("fiction/romance") == []
+        # 다른 카테고리는 영향 없음
+        assert mapping.get_keywords("nonfiction") == ["논픽션"]
+
+    def test_delete_category_prefix_false_exact_only(self, mapping):
+        """prefix=False(기본값)는 정확 매칭만 삭제"""
+        mapping.add_keyword("fiction", "소설")
+        mapping.add_keyword("fiction/fantasy", "판타지")
+
+        result = mapping.delete_category("fiction")
+        assert result is True
+
+        assert mapping.get_keywords("fiction") == []
+        # 하위 카테고리는 남아있음
+        assert mapping.get_keywords("fiction/fantasy") == ["판타지"]
+
     # === get_categories_with_keywords 테스트 ===
 
     def test_get_categories_with_keywords_empty(self, mapping):

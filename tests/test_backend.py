@@ -471,6 +471,47 @@ class TestDeleteCategory:
         assert "문서가 없습니다" in data["error"]
 
     @pytest.mark.asyncio
+    async def test_delete_category_with_subcategories(self, backend_test_setup):
+        """삭제 시 하위 카테고리 문서도 함께 삭제"""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        cat = "_delete_sub_test"
+        sub_cat = f"{cat}/sub"
+        cat_dir = bm.path_prefix / cat
+        sub_dir = bm.path_prefix / sub_cat
+
+        # 준비: 디렉토리 + 파일 + ES 문서
+        cat_dir.mkdir(parents=True, exist_ok=True)
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        (cat_dir / "root.txt").write_text("root content")
+        (sub_dir / "child.txt").write_text("child content")
+        root_ids = await self._insert_docs(bm, cat, 1, start_id=850)
+        sub_ids = await self._insert_docs(bm, sub_cat, 1, start_id=860)
+
+        try:
+            response = client.post("/categories/delete", json={"category": cat})
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert data["result"]["deleted_count"] == 2
+            assert data["result"]["fs_deleted"] is True
+
+            # ES에서 하위 카테고리도 삭제 확인
+            assert bm.es_manager.count_by_category(cat, prefix=True) == 0
+            # FS에서 삭제 확인 (shutil.rmtree가 하위까지 삭제)
+            assert not cat_dir.exists()
+        finally:
+            for doc_id in root_ids + sub_ids:
+                try:
+                    bm.es_manager.delete(doc_id)
+                except Exception:
+                    pass
+            bm.es_manager.refresh()
+            if cat_dir.exists():
+                shutil.rmtree(cat_dir)
+
+    @pytest.mark.asyncio
     async def test_delete_category_no_fs_dir(self, backend_test_setup):
         """FS 디렉토리 없이 ES만 있는 경우 ES는 삭제되고 fs_deleted=False"""
         bm = backend_test_setup["bm"]

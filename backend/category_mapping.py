@@ -306,26 +306,33 @@ class CategoryMapping:
                     LOGGER.error("update_all_mappings(%s) failed: %s", content_type, e)
                     return False
 
-    def delete_category(self, category: str, content_type: str = "book") -> bool:
+    def delete_category(self, category: str, content_type: str = "book", prefix: bool = False) -> bool:
         """카테고리의 모든 키워드 삭제
 
         Args:
             category: 카테고리명
             content_type: 콘텐츠 유형
+            prefix: True이면 하위 카테고리(category/*)도 포함하여 삭제
 
         Returns:
             성공 여부
         """
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
-                    DELETE FROM category_keywords
-                    WHERE category = %s AND content_type = %s
-                """, (category, content_type))
+                if prefix:
+                    cursor.execute("""
+                        DELETE FROM category_keywords
+                        WHERE (category = %s OR category LIKE %s) AND content_type = %s
+                    """, (category, category + "/%", content_type))
+                else:
+                    cursor.execute("""
+                        DELETE FROM category_keywords
+                        WHERE category = %s AND content_type = %s
+                    """, (category, content_type))
                 conn.commit()
                 deleted = cursor.rowcount > 0
 
-        LOGGER.info("delete_category(%s, %s): %s", category, content_type, "success" if deleted else "not found")
+        LOGGER.info("delete_category(%s, %s, prefix=%s): %s", category, content_type, prefix, "success" if deleted else "not found")
         return deleted
 
     def get_categories_with_keywords(self, content_type: str = "book") -> List[str]:
