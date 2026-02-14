@@ -369,6 +369,41 @@ class CategoryMapping:
                     LOGGER.info("set_hidden(%s, False): success", category)
                     return True
 
+    def rename_category(self, old_category: str, new_category: str) -> bool:
+        """카테고리명을 변경 (category_keywords, hidden_categories 테이블 모두 갱신)
+
+        트랜잭션으로 원자적 처리한다.
+
+        Args:
+            old_category: 기존 카테고리명
+            new_category: 새 카테고리명
+
+        Returns:
+            성공 여부
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                try:
+                    cursor.execute("""
+                        UPDATE category_keywords
+                        SET category = %s
+                        WHERE category = %s
+                    """, (new_category, old_category))
+
+                    cursor.execute("""
+                        UPDATE hidden_categories
+                        SET category = %s
+                        WHERE category = %s
+                    """, (new_category, old_category))
+
+                    conn.commit()
+                    LOGGER.info("rename_category(%s -> %s): success", old_category, new_category)
+                    return True
+                except Exception as e:
+                    conn.rollback()
+                    LOGGER.error("rename_category(%s -> %s) failed: %s", old_category, new_category, e)
+                    return False
+
     def is_hidden(self, category: str) -> bool:
         """카테고리의 비노출 여부 확인 (prefix 매칭 포함)
 

@@ -131,6 +131,15 @@ class BookModel(BaseModel):
     score: float = 0.0
 
 
+class CategoryRenameModel(BaseModel):
+    old_category: str
+    new_category: str
+
+
+class CategoryDeleteModel(BaseModel):
+    category: str
+
+
 def create_item_router(manager) -> APIRouter:
     """공통 CRUD 엔드포인트를 생성하는 라우터 팩토리"""
     router = APIRouter()
@@ -211,6 +220,42 @@ def create_item_router(manager) -> APIRouter:
         if book and error is None:
             response_object["status"] = "success"
             response_object["result"] = BookModel(**book.dict())
+        else:
+            response_object["error"] = error
+        return response_object
+
+    @router.put("/categories/rename")
+    async def rename_category(body: CategoryRenameModel) -> Dict[str, Any]:
+        LOGGER.debug("# rename_category(old='%s', new='%s')", body.old_category, body.new_category)
+        response_object: Dict[str, Any] = {"status": "failure"}
+        result, error = await manager.rename_category(body.old_category, body.new_category)
+        if error is None:
+            # MySQL 카테고리 매핑 갱신
+            mapping_updated = category_mapping.rename_category(body.old_category, body.new_category)
+            if not mapping_updated:
+                LOGGER.warning("rename_category: MySQL 매핑 갱신 실패 (old='%s', new='%s')",
+                               body.old_category, body.new_category)
+            result["mapping_updated"] = mapping_updated
+            response_object["status"] = "success"
+            response_object["result"] = result
+        else:
+            response_object["error"] = error
+        return response_object
+
+    @router.post("/categories/delete")
+    async def delete_category(body: CategoryDeleteModel) -> Dict[str, Any]:
+        LOGGER.debug("# delete_category(category='%s')", body.category)
+        response_object: Dict[str, Any] = {"status": "failure"}
+        result, error = await manager.delete_category(body.category)
+        if error is None:
+            # MySQL 카테고리 매핑 삭제
+            mapping_deleted = category_mapping.delete_category(body.category)
+            hidden_removed = category_mapping.set_hidden(body.category, False)
+            if not mapping_deleted:
+                LOGGER.warning("delete_category: MySQL 키워드 매핑 삭제 대상 없음 (category='%s')", body.category)
+            result["mapping_deleted"] = mapping_deleted
+            response_object["status"] = "success"
+            response_object["result"] = result
         else:
             response_object["error"] = error
         return response_object

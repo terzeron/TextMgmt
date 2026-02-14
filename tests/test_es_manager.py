@@ -416,6 +416,130 @@ class TestESManager:
             esm.delete(101)
             esm.refresh()
 
+    # ── count_by_category / rename_category ──
+
+    def test_count_by_category(self, es_manager_with_data):
+        """count_by_category가 문서 수를 정확히 반환한다"""
+        esm = es_manager_with_data
+        count = esm.count_by_category("test")
+        assert isinstance(count, int)
+        assert count >= 2  # test 카테고리에 doc 1, 2가 존재
+
+    def test_count_by_category_empty(self, es_manager_with_data):
+        """존재하지 않는 카테고리는 0을 반환한다"""
+        esm = es_manager_with_data
+        count = esm.count_by_category("nonexistent_category_xyz")
+        assert count == 0
+
+    def test_rename_category(self, es_manager_with_data):
+        """rename_category로 category와 file_path가 변경된다"""
+        esm = es_manager_with_data
+        # 테스트 데이터 삽입
+        test_data = {
+            300: {
+                "category": "rename_src",
+                "title": "Rename Test Doc",
+                "author": "Author",
+                "file_path": "rename_src/test.txt",
+                "file_type": "txt",
+                "file_size": 100,
+                "line_count": 10,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "rename test",
+                "updated_time": "2024-01-01T00:00:00",
+            },
+        }
+        esm.insert(test_data)
+        esm.refresh()
+
+        try:
+            result = esm.rename_category("rename_src", "rename_dst")
+            assert result["updated"] == 1
+            assert result["failures"] == []
+
+            # 변경 확인
+            doc = esm.search_by_id(300)
+            assert doc["category"] == "rename_dst"
+            assert doc["file_path"] == "rename_dst/test.txt"
+
+            # old_category에 문서가 없어야 함
+            assert esm.count_by_category("rename_src") == 0
+            assert esm.count_by_category("rename_dst") == 1
+        finally:
+            esm.delete(300)
+            esm.refresh()
+
+    def test_rename_category_empty(self, es_manager_with_data):
+        """존재하지 않는 카테고리 rename 시 updated=0"""
+        esm = es_manager_with_data
+        result = esm.rename_category("empty_category_xyz", "new_empty")
+        assert result["updated"] == 0
+
+    # ── delete_by_category ──
+
+    def test_delete_by_category(self, es_manager_with_data):
+        """delete_by_category로 카테고리의 모든 문서가 삭제된다"""
+        esm = es_manager_with_data
+        # 테스트 데이터 삽입
+        test_data = {
+            310: {
+                "category": "delete_target",
+                "title": "Delete Test 1",
+                "author": "Author",
+                "file_path": "delete_target/test1.txt",
+                "file_type": "txt",
+                "file_size": 100,
+                "line_count": 10,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "delete test",
+                "updated_time": "2024-01-01T00:00:00",
+            },
+            311: {
+                "category": "delete_target",
+                "title": "Delete Test 2",
+                "author": "Author",
+                "file_path": "delete_target/test2.txt",
+                "file_type": "txt",
+                "file_size": 200,
+                "line_count": 20,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "delete test 2",
+                "updated_time": "2024-01-01T00:00:00",
+            },
+        }
+        esm.insert(test_data)
+        esm.refresh()
+
+        try:
+            assert esm.count_by_category("delete_target") == 2
+
+            result = esm.delete_by_category("delete_target")
+            assert result["deleted"] == 2
+            assert result["failures"] == []
+
+            # 삭제 확인
+            assert esm.count_by_category("delete_target") == 0
+            assert esm.search_by_id(310) == {}
+            assert esm.search_by_id(311) == {}
+        finally:
+            # 혹시 남아있으면 정리
+            for doc_id in [310, 311]:
+                try:
+                    esm.delete(doc_id)
+                except Exception:
+                    pass
+            esm.refresh()
+
+    def test_delete_by_category_empty(self, es_manager_with_data):
+        """존재하지 않는 카테고리 delete 시 deleted=0"""
+        esm = es_manager_with_data
+        result = esm.delete_by_category("nonexistent_del_xyz")
+        assert result["deleted"] == 0
+        assert result["failures"] == []
+
     def test_search_by_id(self, es_manager_with_data):
         esm = es_manager_with_data
         # First get some results to find a valid ID
@@ -528,16 +652,18 @@ class TestESManagerEnvVars:
     def test_uses_tm_es_book_index_env(self):
         """TM_ES_BOOK_INDEX 환경 변수로 기본 인덱스명을 결정한다."""
         with patch.dict(os.environ, self.REQUIRED_ENVS, clear=False):
-            from backend.es_manager import ESManager
-            esm = ESManager()
-            assert esm.index_name == "test_idx"
+            with patch("backend.es_manager.Elasticsearch"):
+                from backend.es_manager import ESManager
+                esm = ESManager()
+                assert esm.index_name == "test_idx"
 
     def test_explicit_index_name_overrides_env(self):
         """index_name 인자가 주어지면 환경 변수보다 우선한다."""
         with patch.dict(os.environ, self.REQUIRED_ENVS, clear=False):
-            from backend.es_manager import ESManager
-            esm = ESManager(index_name="custom_index")
-            assert esm.index_name == "custom_index"
+            with patch("backend.es_manager.Elasticsearch"):
+                from backend.es_manager import ESManager
+                esm = ESManager(index_name="custom_index")
+                assert esm.index_name == "custom_index"
 
     def test_old_tm_es_index_not_used(self):
         """이전 환경 변수 TM_ES_INDEX만 설정하면 KeyError가 발생한다."""

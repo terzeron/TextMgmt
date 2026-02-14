@@ -274,6 +274,227 @@ class TestBackend:
         assert response_data2.get("total", 0) == response_data.get("total", 0)
 
 
+class TestRenameCategory:
+    """카테고리 일괄 변경 API 테스트."""
+
+    @staticmethod
+    def _make_test_dir(path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    async def _insert_docs(bm, category: str, count: int, start_id: int = 400) -> list:
+        """테스트 문서를 ES에 삽입"""
+        from datetime import datetime
+        ids = []
+        for i in range(count):
+            doc_id = start_id + i
+            data = {
+                doc_id: {
+                    "category": category,
+                    "title": f"Rename Test {i}",
+                    "author": "Test Author",
+                    "file_path": f"{category}/rename_test_{i}.txt",
+                    "file_type": "txt",
+                    "file_size": 100,
+                    "line_count": 10,
+                    "page_count": 0,
+                    "isbn": "",
+                    "summary": "rename test doc",
+                    "updated_time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f"),
+                }
+            }
+            book_id, error = await bm.add_book(data)
+            assert book_id and not error
+            ids.append(book_id)
+        return ids
+
+    @pytest.mark.asyncio
+    async def test_rename_category(self, backend_test_setup):
+        """정상 rename: ES + FS 모두 변경"""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        old_cat = "_rename_test_src"
+        new_cat = "_rename_test_dst"
+        old_dir = bm.path_prefix / old_cat
+        new_dir = bm.path_prefix / new_cat
+
+        # 준비: 디렉토리 + ES 문서
+        self._make_test_dir(old_dir)
+        (old_dir / "rename_test_0.txt").write_text("test content")
+        doc_ids = await self._insert_docs(bm, old_cat, 1)
+
+        try:
+            response = client.put("/categories/rename", json={
+                "old_category": old_cat,
+                "new_category": new_cat,
+            })
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert data["result"]["old_category"] == old_cat
+            assert data["result"]["new_category"] == new_cat
+            assert data["result"]["updated_count"] == 1
+            assert data["result"]["fs_renamed"] is True
+        finally:
+            # 정리
+            for doc_id in doc_ids:
+                bm.es_manager.delete(doc_id)
+            bm.es_manager.refresh()
+            if new_dir.exists():
+                shutil.rmtree(new_dir)
+            if old_dir.exists():
+                shutil.rmtree(old_dir)
+
+    @pytest.mark.asyncio
+    async def test_rename_category_conflict(self, backend_test_setup):
+        """대상 카테고리에 문서가 이미 존재하면 에러"""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        old_cat = "_rename_conflict_src"
+        new_cat = "_rename_conflict_dst"
+
+        # 양쪽 모두에 문서 삽입
+        old_ids = await self._insert_docs(bm, old_cat, 1, start_id=500)
+        new_ids = await self._insert_docs(bm, new_cat, 1, start_id=600)
+
+        try:
+            response = client.put("/categories/rename", json={
+                "old_category": old_cat,
+                "new_category": new_cat,
+            })
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "failure"
+            assert "이미" in data["error"]
+        finally:
+            for doc_id in old_ids + new_ids:
+                bm.es_manager.delete(doc_id)
+            bm.es_manager.refresh()
+
+    @pytest.mark.asyncio
+    async def test_rename_category_not_found(self, backend_test_setup):
+        """없는 카테고리 rename 시 에러"""
+        client = backend_test_setup["client"]
+
+        response = client.put("/categories/rename", json={
+            "old_category": "_nonexistent_cat_xyz",
+            "new_category": "_new_cat_xyz",
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "failure"
+        assert "문서가 없습니다" in data["error"]
+
+
+class TestDeleteCategory:
+    """카테고리 일괄 삭제 API 테스트."""
+
+    @staticmethod
+    async def _insert_docs(bm, category: str, count: int, start_id: int = 700) -> list:
+        """테스트 문서를 ES에 삽입"""
+        from datetime import datetime
+        ids = []
+        for i in range(count):
+            doc_id = start_id + i
+            data = {
+                doc_id: {
+                    "category": category,
+                    "title": f"Delete Test {i}",
+                    "author": "Test Author",
+                    "file_path": f"{category}/delete_test_{i}.txt",
+                    "file_type": "txt",
+                    "file_size": 100,
+                    "line_count": 10,
+                    "page_count": 0,
+                    "isbn": "",
+                    "summary": "delete test doc",
+                    "updated_time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f"),
+                }
+            }
+            book_id, error = await bm.add_book(data)
+            assert book_id and not error
+            ids.append(book_id)
+        return ids
+
+    @pytest.mark.asyncio
+    async def test_delete_category(self, backend_test_setup):
+        """정상 삭제: ES + FS 모두 삭제"""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        cat = "_delete_test_cat"
+        cat_dir = bm.path_prefix / cat
+
+        # 준비: 디렉토리 + 파일 + ES 문서
+        cat_dir.mkdir(parents=True, exist_ok=True)
+        (cat_dir / "delete_test_0.txt").write_text("test content")
+        (cat_dir / "delete_test_1.txt").write_text("test content 2")
+        doc_ids = await self._insert_docs(bm, cat, 2)
+
+        try:
+            response = client.post("/categories/delete", json={"category": cat})
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert data["result"]["category"] == cat
+            assert data["result"]["deleted_count"] == 2
+            assert data["result"]["fs_deleted"] is True
+
+            # ES에서 삭제 확인
+            assert bm.es_manager.count_by_category(cat) == 0
+            # FS에서 삭제 확인
+            assert not cat_dir.exists()
+        finally:
+            # 혹시 남아있으면 정리
+            for doc_id in doc_ids:
+                try:
+                    bm.es_manager.delete(doc_id)
+                except Exception:
+                    pass
+            bm.es_manager.refresh()
+            if cat_dir.exists():
+                shutil.rmtree(cat_dir)
+
+    @pytest.mark.asyncio
+    async def test_delete_category_not_found(self, backend_test_setup):
+        """없는 카테고리 삭제 시 에러"""
+        client = backend_test_setup["client"]
+
+        response = client.post("/categories/delete", json={
+            "category": "_nonexistent_del_xyz",
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "failure"
+        assert "문서가 없습니다" in data["error"]
+
+    @pytest.mark.asyncio
+    async def test_delete_category_no_fs_dir(self, backend_test_setup):
+        """FS 디렉토리 없이 ES만 있는 경우 ES는 삭제되고 fs_deleted=False"""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        cat = "_delete_no_fs_cat"
+        doc_ids = await self._insert_docs(bm, cat, 1, start_id=800)
+
+        try:
+            response = client.post("/categories/delete", json={"category": cat})
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert data["result"]["deleted_count"] == 1
+            assert data["result"]["fs_deleted"] is False
+        finally:
+            for doc_id in doc_ids:
+                try:
+                    bm.es_manager.delete(doc_id)
+                except Exception:
+                    pass
+            bm.es_manager.refresh()
+
+
 class TestUpdateBookConflict:
     """update_book 충돌 감지 및 force 덮어쓰기 테스트."""
 

@@ -505,6 +505,67 @@ class ESManager:
                     return False
         return True
 
+    def count_by_category(self, category: str) -> int:
+        """특정 카테고리의 문서 수를 반환"""
+        LOGGER.debug("count_by_category(category='%s')", category)
+        result = self.es.count(index=self.index_name, query={"term": {"category": category}})
+        return result["count"]
+
+    def rename_category(self, old_category: str, new_category: str) -> Dict[str, Any]:
+        """ES에서 특정 카테고리의 모든 문서를 새 카테고리로 변경
+
+        category 필드와 file_path의 카테고리 prefix를 갱신한다.
+
+        Returns:
+            {"updated": int, "failures": list}
+        """
+        LOGGER.debug("rename_category(old='%s', new='%s')", old_category, new_category)
+        old_prefix = old_category + "/"
+        new_prefix = new_category + "/"
+        script = {
+            "source": """
+                ctx._source.category = params.new_category;
+                if (ctx._source.file_path.startsWith(params.old_prefix)) {
+                    ctx._source.file_path = params.new_prefix + ctx._source.file_path.substring(params.old_prefix.length());
+                }
+            """,
+            "lang": "painless",
+            "params": {
+                "new_category": new_category,
+                "old_prefix": old_prefix,
+                "new_prefix": new_prefix,
+            },
+        }
+        result = self.es.update_by_query(
+            index=self.index_name,
+            query={"term": {"category": old_category}},
+            script=script,
+            conflicts="abort",
+            refresh=True,
+        )
+        return {
+            "updated": result.get("updated", 0),
+            "failures": result.get("failures", []),
+        }
+
+    def delete_by_category(self, category: str) -> Dict[str, Any]:
+        """특정 카테고리의 모든 문서를 삭제
+
+        Returns:
+            {"deleted": int, "failures": list}
+        """
+        LOGGER.debug("delete_by_category(category='%s')", category)
+        result = self.es.delete_by_query(
+            index=self.index_name,
+            query={"term": {"category": category}},
+            conflicts="abort",
+            refresh=True,
+        )
+        return {
+            "deleted": result.get("deleted", 0),
+            "failures": result.get("failures", []),
+        }
+
     def delete(self, doc_id: int) -> bool:
         LOGGER.debug("delete(doc_id=%d)", doc_id)
         result = self.es.delete(index=self.index_name, id=str(doc_id), refresh=True)
