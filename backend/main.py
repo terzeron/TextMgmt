@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import asyncio
 import sys
 import os
 import logging.config
@@ -416,8 +417,8 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
     author = author.strip() if author else ""
     isbn = isbn.strip() if isbn else ""
 
-    # 통합 검색 메서드 사용 - 실제 사용된 키워드와 검색 방법도 반환
-    results, search_keyword, search_method = bookstore.search(isbn=isbn, title=title, author=author)
+    # 통합 검색 메서드 사용 - 이벤트 루프 차단 방지를 위해 스레드에서 실행
+    results, search_keyword, search_method = await asyncio.to_thread(bookstore.search, isbn=isbn, title=title, author=author)
 
     # 결과가 튜플 리스트이므로 딕셔너리로 변환
     books_data = []
