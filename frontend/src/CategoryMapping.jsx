@@ -293,7 +293,7 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
                         <Col md={4}>
                             <Card>
                                 <Card.Header className="py-1">디렉토리 목록</Card.Header>
-                                <ListGroup variant="flush" style={{maxHeight: '400px', overflowY: 'auto'}}>
+                                <ListGroup variant="flush">
                                     {categoryList?.map(category => {
                                         const isHidden = hiddenCategories.has(category);
                                         const depth = category.split('/').length - 1;
