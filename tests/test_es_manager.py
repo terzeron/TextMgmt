@@ -416,6 +416,66 @@ class TestESManager:
             esm.delete(101)
             esm.refresh()
 
+    # ── count_by_category / rename_category ──
+
+    def test_count_by_category(self, es_manager_with_data):
+        """count_by_category가 문서 수를 정확히 반환한다"""
+        esm = es_manager_with_data
+        count = esm.count_by_category("test")
+        assert isinstance(count, int)
+        assert count >= 2  # test 카테고리에 doc 1, 2가 존재
+
+    def test_count_by_category_empty(self, es_manager_with_data):
+        """존재하지 않는 카테고리는 0을 반환한다"""
+        esm = es_manager_with_data
+        count = esm.count_by_category("nonexistent_category_xyz")
+        assert count == 0
+
+    def test_rename_category(self, es_manager_with_data):
+        """rename_category로 category와 file_path가 변경된다"""
+        esm = es_manager_with_data
+        # 테스트 데이터 삽입
+        test_data = {
+            300: {
+                "category": "rename_src",
+                "title": "Rename Test Doc",
+                "author": "Author",
+                "file_path": "rename_src/test.txt",
+                "file_type": "txt",
+                "file_size": 100,
+                "line_count": 10,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "rename test",
+                "updated_time": "2024-01-01T00:00:00",
+            },
+        }
+        esm.insert(test_data)
+        esm.refresh()
+
+        try:
+            result = esm.rename_category("rename_src", "rename_dst")
+            assert result["updated"] == 1
+            assert result["failures"] == []
+
+            # 변경 확인
+            doc = esm.search_by_id(300)
+            assert doc["category"] == "rename_dst"
+            assert doc["file_path"] == "rename_dst/test.txt"
+
+            # old_category에 문서가 없어야 함
+            assert esm.count_by_category("rename_src") == 0
+            assert esm.count_by_category("rename_dst") == 1
+        finally:
+            esm.delete(300)
+            esm.refresh()
+
+    def test_rename_category_empty(self, es_manager_with_data):
+        """존재하지 않는 카테고리 rename 시 updated=0"""
+        esm = es_manager_with_data
+        result = esm.rename_category("empty_category_xyz", "new_empty")
+        assert result["updated"] == 0
+
     def test_search_by_id(self, es_manager_with_data):
         esm = es_manager_with_data
         # First get some results to find a valid ID
