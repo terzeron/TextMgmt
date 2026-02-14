@@ -29,7 +29,7 @@ vi.mock('../src/CategoryMapping', () => ({
 }));
 
 vi.mock('../src/CategoryMismatch', () => ({
-    default: () => <div data-testid="category-mismatch">불일치</div>,
+    default: ({ contentType }) => <div data-testid={`category-mismatch-${contentType || 'book'}`}>불일치</div>,
 }));
 
 import Admin from '../src/Admin';
@@ -78,7 +78,8 @@ describe('Admin', () => {
         await waitFor(() => {
             expect(screen.getByTestId('category-mapping-book')).toBeTruthy();
             expect(screen.getByTestId('category-mapping-comic')).toBeTruthy();
-            expect(screen.getByTestId('category-mismatch')).toBeTruthy();
+            expect(screen.getByTestId('category-mismatch-book')).toBeTruthy();
+            expect(screen.getByTestId('category-mismatch-comic')).toBeTruthy();
         });
     });
 });

@@ -46,15 +46,15 @@ const MISMATCH_RESPONSE_EMPTY = {
     fs_only: [],
 };
 
-function setupMockResponses(categoriesResult, mismatchResult, { categoriesError, mismatchError } = {}) {
+function setupMockResponses(categoriesResult, mismatchResult, { categoriesError, mismatchError, apiPrefix = '' } = {}) {
     mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
-        if (url === '/categories') {
+        if (url === apiPrefix + '/categories') {
             if (categoriesError) {
                 reject(categoriesError);
             } else {
                 resolve(categoriesResult);
             }
-        } else if (url === '/category-mismatches') {
+        } else if (url === apiPrefix + '/category-mismatches') {
             if (mismatchError) {
                 reject(mismatchError);
             } else {
@@ -1096,6 +1096,174 @@ describe('CategoryMismatch', () => {
 
         await waitFor(() => {
             expect(screen.getByText('파일 삭제 실패: 삭제 실패')).toBeTruthy();
+        });
+    });
+
+    // ── 만화 contentType 테스트 ──
+
+    describe('contentType="comic"', () => {
+        it('만화 불일치 관리 타이틀을 표시한다', async () => {
+            setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, { apiPrefix: '/comics' });
+            render(<CategoryMismatch contentType="comic" title="만화 불일치 관리" apiPrefix="/comics" />);
+
+            await waitFor(() => {
+                expect(screen.getByText('만화 불일치 관리')).toBeTruthy();
+            });
+        });
+
+        it('/comics prefix로 API를 호출한다', async () => {
+            setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, { apiPrefix: '/comics' });
+            render(<CategoryMismatch contentType="comic" title="만화 불일치 관리" apiPrefix="/comics" />);
+
+            await waitFor(() => {
+                expect(mockJsonGetReq).toHaveBeenCalledWith('/comics/categories', null, expect.any(Function), expect.any(Function));
+                expect(mockJsonGetReq).toHaveBeenCalledWith('/comics/category-mismatches', null, expect.any(Function), expect.any(Function));
+            });
+        });
+
+        it('ES-only 항목 삭제 시 /comics/books/{id} API를 호출한다', async () => {
+            setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA, { apiPrefix: '/comics' });
+            render(<CategoryMismatch contentType="comic" title="만화 불일치 관리" apiPrefix="/comics" />);
+
+            await waitFor(() => {
+                expect(screen.getByText('만화 불일치 관리')).toBeTruthy();
+            });
+
+            fireEvent.click(screen.getByText('만화 불일치 관리'));
+
+            await waitFor(() => {
+                expect(screen.getByRole('tree')).toBeTruthy();
+            });
+
+            mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+                if (url === '/comics/categories') resolve(CATEGORIES_RESPONSE);
+                else if (url === '/comics/category-mismatches') resolve(MISMATCH_RESPONSE_WITH_DATA);
+                else if (url.startsWith('/comics/category-mismatches/')) {
+                    resolve({
+                        es_only: [{ book_id: 201, title: 'Comic A', file_type: 'zip', file_path: '1_fiction/a.zip' }],
+                        fs_only: [],
+                    });
+                }
+            });
+
+            fireEvent.click(screen.getByText('1_fiction'));
+
+            await waitFor(() => {
+                expect(screen.getByText('Comic A.zip')).toBeTruthy();
+            });
+
+            fireEvent.click(screen.getByText('Comic A.zip'));
+
+            await waitFor(() => {
+                expect(screen.getByText('삭제')).toBeTruthy();
+            });
+
+            mockJsonDeleteReq.mockImplementation((url, _payload, resolve) => {
+                resolve('Ok');
+            });
+
+            fireEvent.click(screen.getByText('삭제'));
+
+            await waitFor(() => {
+                expect(mockJsonDeleteReq).toHaveBeenCalledWith(
+                    '/comics/books/201', null, expect.any(Function), expect.any(Function)
+                );
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText('만화 정보가 삭제되었습니다.')).toBeTruthy();
+            });
+        });
+
+        it('FS-only 항목 ES 적재 시 /comics/category-mismatches/index-file API를 호출한다', async () => {
+            setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA, { apiPrefix: '/comics' });
+            render(<CategoryMismatch contentType="comic" title="만화 불일치 관리" apiPrefix="/comics" />);
+
+            await waitFor(() => {
+                expect(screen.getByText('만화 불일치 관리')).toBeTruthy();
+            });
+
+            fireEvent.click(screen.getByText('만화 불일치 관리'));
+
+            await waitFor(() => {
+                expect(screen.getByRole('tree')).toBeTruthy();
+            });
+
+            mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+                if (url === '/comics/categories') resolve(CATEGORIES_RESPONSE);
+                else if (url === '/comics/category-mismatches') resolve(MISMATCH_RESPONSE_WITH_DATA);
+                else if (url.startsWith('/comics/category-mismatches/')) {
+                    resolve({
+                        es_only: [],
+                        fs_only: [{ file_name: 'orphan.zip', file_path: '1_fiction/orphan.zip' }],
+                    });
+                }
+            });
+
+            fireEvent.click(screen.getByText('1_fiction'));
+
+            await waitFor(() => {
+                expect(screen.getByText('orphan.zip')).toBeTruthy();
+            });
+
+            fireEvent.click(screen.getByText('orphan.zip'));
+
+            await waitFor(() => {
+                expect(screen.getByText('ES 적재')).toBeTruthy();
+            });
+
+            mockJsonPostReq.mockImplementation((url, payload, resolve) => {
+                resolve({ book_id: 999 });
+            });
+
+            fireEvent.click(screen.getByText('ES 적재'));
+
+            await waitFor(() => {
+                expect(mockJsonPostReq).toHaveBeenCalledWith(
+                    '/comics/category-mismatches/index-file',
+                    { file_path: '1_fiction/orphan.zip' },
+                    expect.any(Function),
+                    expect.any(Function)
+                );
+            });
+        });
+
+        it('만화 정보 설명 텍스트를 올바르게 표시한다', async () => {
+            setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA, { apiPrefix: '/comics' });
+            render(<CategoryMismatch contentType="comic" title="만화 불일치 관리" apiPrefix="/comics" />);
+
+            await waitFor(() => {
+                expect(screen.getByText('만화 불일치 관리')).toBeTruthy();
+            });
+
+            fireEvent.click(screen.getByText('만화 불일치 관리'));
+
+            await waitFor(() => {
+                expect(screen.getByRole('tree')).toBeTruthy();
+            });
+
+            mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+                if (url === '/comics/categories') resolve(CATEGORIES_RESPONSE);
+                else if (url === '/comics/category-mismatches') resolve(MISMATCH_RESPONSE_WITH_DATA);
+                else if (url.startsWith('/comics/category-mismatches/')) {
+                    resolve({
+                        es_only: [{ book_id: 201, title: 'Comic A', file_type: 'zip', file_path: '1_fiction/a.zip' }],
+                        fs_only: [],
+                    });
+                }
+            });
+
+            fireEvent.click(screen.getByText('1_fiction'));
+
+            await waitFor(() => {
+                expect(screen.getByText('Comic A.zip')).toBeTruthy();
+            });
+
+            fireEvent.click(screen.getByText('Comic A.zip'));
+
+            await waitFor(() => {
+                expect(screen.getByText('만화 정보만 존재하고 파일시스템에는 존재하지 않습니다.')).toBeTruthy();
+            });
         });
     });
 });
