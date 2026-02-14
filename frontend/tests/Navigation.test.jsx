@@ -57,9 +57,9 @@ describe('Navigation', () => {
         expect(screen.getByTestId('google-login')).toBeTruthy();
     });
 
-    it('Navbar에 브랜드명 "Text"를 표시한다', () => {
+    it('Navbar에 브랜드 이미지를 표시한다', () => {
         render(<Navigation />);
-        expect(screen.getByText('Text')).toBeTruthy();
+        expect(screen.getByAltText('Text')).toBeTruthy();
     });
 
     it('localStorage에 저장된 admin 이메일로 자동 로그인한다', () => {

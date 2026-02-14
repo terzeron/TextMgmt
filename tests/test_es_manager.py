@@ -652,16 +652,18 @@ class TestESManagerEnvVars:
     def test_uses_tm_es_book_index_env(self):
         """TM_ES_BOOK_INDEX 환경 변수로 기본 인덱스명을 결정한다."""
         with patch.dict(os.environ, self.REQUIRED_ENVS, clear=False):
-            from backend.es_manager import ESManager
-            esm = ESManager()
-            assert esm.index_name == "test_idx"
+            with patch("backend.es_manager.Elasticsearch"):
+                from backend.es_manager import ESManager
+                esm = ESManager()
+                assert esm.index_name == "test_idx"
 
     def test_explicit_index_name_overrides_env(self):
         """index_name 인자가 주어지면 환경 변수보다 우선한다."""
         with patch.dict(os.environ, self.REQUIRED_ENVS, clear=False):
-            from backend.es_manager import ESManager
-            esm = ESManager(index_name="custom_index")
-            assert esm.index_name == "custom_index"
+            with patch("backend.es_manager.Elasticsearch"):
+                from backend.es_manager import ESManager
+                esm = ESManager(index_name="custom_index")
+                assert esm.index_name == "custom_index"
 
     def test_old_tm_es_index_not_used(self):
         """이전 환경 변수 TM_ES_INDEX만 설정하면 KeyError가 발생한다."""
