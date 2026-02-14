@@ -201,7 +201,7 @@ export default function CategoryMismatch({ contentType = 'book', title = 'ì±… ë¶
 
     if (!isOpen) {
         return (
-            <Card className="mt-3">
+            <Card>
                 <Card.Header
                     onClick={() => setIsOpen(true)}
                     style={{cursor: 'pointer', userSelect: 'none'}}
@@ -214,7 +214,7 @@ export default function CategoryMismatch({ contentType = 'book', title = 'ì±… ë¶
     }
 
     return (
-        <Card className="mt-3">
+        <Card>
             <Card.Header
                 onClick={() => setIsOpen(false)}
                 style={{cursor: 'pointer', userSelect: 'none'}}
