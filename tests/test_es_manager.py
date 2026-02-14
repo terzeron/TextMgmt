@@ -192,6 +192,96 @@ class TestESManager:
         for _, doc, _ in result_list:
             inspect_search_result_hierarchy(doc)
 
+    def test_search_by_keyword_no_category_overlap(self, es_manager_with_data):
+        """카테고리와 제목+저자에 겹치는 글자가 없는 문서를 삽입하고 키워드 검색한다"""
+        esm = es_manager_with_data
+        doc_id = 435
+        test_doc = {
+            doc_id: {
+                "category": "1_한국고전국역총서",
+                "title": "열하일기",
+                "author": "박지원",
+                "file_path": "1_한국고전국역총서/열하일기.epub",
+                "file_type": "epub",
+                "file_size": 5000,
+                "line_count": 0,
+                "page_count": 200,
+                "isbn": "",
+                "summary": "청나라 여행을 통해 조선 사회의 문제점을 비판한 기행문학의 걸작.",
+                "updated_time": "2024-06-01T00:00:00",
+            },
+        }
+        esm.insert(test_doc)
+        esm.refresh()
+
+        try:
+            # 제목으로 검색
+            result_list = esm.search_by_keyword("열하일기", max_result_count=5)
+            assert len(result_list) >= 1
+            found_ids = [doc_id_ for doc_id_, _, _ in result_list]
+            assert doc_id in found_ids, f"doc {doc_id}이 검색 결과에 없음: {found_ids}"
+
+            # 저자로 검색
+            result_list = esm.search_by_keyword("박지원", max_result_count=5)
+            assert len(result_list) >= 1
+            found_ids = [doc_id_ for doc_id_, _, _ in result_list]
+            assert doc_id in found_ids, f"doc {doc_id}이 저자 검색 결과에 없음: {found_ids}"
+
+            # 결과 구조 검증
+            for _, doc, score in result_list:
+                inspect_search_result_hierarchy(doc)
+                assert score > 0
+        finally:
+            esm.delete(doc_id)
+            esm.refresh()
+
+    def test_search_by_partial_tokens(self, es_manager_with_data):
+        """카테고리/제목/저자의 일부 토큰으로 검색하면 해당 문서가 검색된다"""
+        esm = es_manager_with_data
+        doc_id = 435
+        test_doc = {
+            doc_id: {
+                "category": "1_한국고전국역총서",
+                "title": "열하일기",
+                "author": "박지원",
+                "file_path": "1_한국고전국역총서/열하일기.epub",
+                "file_type": "epub",
+                "file_size": 5000,
+                "line_count": 0,
+                "page_count": 200,
+                "isbn": "",
+                "summary": "청나라 여행을 통해 조선 사회의 문제점을 비판한 기행문학의 걸작.",
+                "updated_time": "2024-06-01T00:00:00",
+            },
+        }
+        esm.insert(test_doc)
+        esm.refresh()
+
+        try:
+            # 제목 일부 토큰 "열하"로 검색 (nori가 "열하일기" → "열하"+"일기" 분리 기대)
+            result_list = esm.search_by_keyword("열하", max_result_count=10)
+            found_ids = [did for did, _, _ in result_list]
+            assert doc_id in found_ids, f"제목 부분 토큰 '열하'로 검색 실패: {found_ids}"
+
+            # 제목 일부 토큰 "일기"로 검색
+            result_list = esm.search_by_keyword("일기", max_result_count=10)
+            found_ids = [did for did, _, _ in result_list]
+            assert doc_id in found_ids, f"제목 부분 토큰 '일기'로 검색 실패: {found_ids}"
+
+            # 저자 토큰 "박지원"으로 검색
+            result_list = esm.search_by_keyword("박지원", max_result_count=10)
+            found_ids = [did for did, _, _ in result_list]
+            assert doc_id in found_ids, f"저자 토큰 '박지원'으로 검색 실패: {found_ids}"
+
+            # 카테고리 일부 토큰 "한국고전"으로 키워드 검색
+            # category 필드가 text(nori) 타입이므로 search_by_keyword로 부분 매칭 가능
+            result_list = esm.search_by_keyword("한국고전", max_result_count=10)
+            found_ids = [did for did, _, _ in result_list]
+            assert doc_id in found_ids, f"카테고리 부분 토큰 '한국고전'으로 검색 실패: {found_ids}"
+        finally:
+            esm.delete(doc_id)
+            esm.refresh()
+
     def test_search_similar_docs(self, es_manager_with_data):
         esm = es_manager_with_data
         doc_to_search: Dict[str, Any] = {

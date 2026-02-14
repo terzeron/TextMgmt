@@ -8,38 +8,38 @@ import {faPlus, faTrash, faEyeSlash, faChevronDown, faChevronRight} from '@forta
 
 import {jsonGetReq, jsonPostReq, jsonDeleteReq} from './Common';
 
-// 메모리 캐시 (동기 접근용)
-let cachedMappings = {};
-let cacheInitialized = false;
+// 메모리 캐시 (동기 접근용) - content_type별 분리
+let cachedMappings = {book: {}, comic: {}};
+let cacheInitialized = {book: false, comic: false};
 
 // 카테고리 매핑 데이터 로드 (동기, 캐시에서)
-export const loadCategoryMappings = () => {
-    return cachedMappings;
+export const loadCategoryMappings = (contentType = 'book') => {
+    return cachedMappings[contentType] || {};
 };
 
 // 카테고리 매핑 데이터를 서버에서 가져와 캐시 갱신
-export const fetchCategoryMappings = () => {
+export const fetchCategoryMappings = (contentType = 'book') => {
     return new Promise((resolve) => {
-        jsonGetReq('/category-mappings', null,
+        jsonGetReq(`/category-mappings?content_type=${contentType}`, null,
             (result) => {
-                cachedMappings = result || {};
-                cacheInitialized = true;
-                resolve(cachedMappings);
+                cachedMappings[contentType] = result || {};
+                cacheInitialized[contentType] = true;
+                resolve(cachedMappings[contentType]);
             },
             (error) => {
                 console.error('Failed to fetch category mappings:', error);
                 // API 실패 시에도 초기화 완료로 표시 (무한 재시도 방지)
-                cacheInitialized = true;
-                resolve(cachedMappings);
+                cacheInitialized[contentType] = true;
+                resolve(cachedMappings[contentType]);
             }
         );
     });
 };
 
 // 캐시 초기화 여부
-export const isCacheInitialized = () => cacheInitialized;
+export const isCacheInitialized = (contentType = 'book') => cacheInitialized[contentType];
 
-export default function CategoryMapping({categoryList}) {
+export default function CategoryMapping({categoryList, contentType = 'book', title = '카테고리 관리'}) {
     const [mappings, setMappings] = useState({});
     const [selectedCategory, setSelectedCategory] = useState('');
     const [newKeyword, setNewKeyword] = useState('');
@@ -52,7 +52,7 @@ export default function CategoryMapping({categoryList}) {
 
     // 비노출 카테고리 로드
     const loadHiddenCategories = useCallback(() => {
-        jsonGetReq('/hidden-categories', null,
+        jsonGetReq(`/hidden-categories?content_type=${contentType}`, null,
             (result) => {
                 setHiddenCategories(new Set(result || []));
             },
@@ -60,19 +60,19 @@ export default function CategoryMapping({categoryList}) {
                 console.error('Failed to fetch hidden categories:', error);
             }
         );
-    }, []);
+    }, [contentType]);
 
     // 서버에서 데이터 로드
     const loadFromServer = useCallback(async () => {
         setLoading(true);
         try {
-            const data = await fetchCategoryMappings();
+            const data = await fetchCategoryMappings(contentType);
             setMappings(data);
             loadHiddenCategories();
         } finally {
             setLoading(false);
         }
-    }, [loadHiddenCategories]);
+    }, [contentType, loadHiddenCategories]);
 
     // 초기 로드
     useEffect(() => {
@@ -100,7 +100,7 @@ export default function CategoryMapping({categoryList}) {
 
         setSaving(true);
         jsonPostReq(
-            `/category-mappings/${encodeURIComponent(selectedCategory)}/keywords`,
+            `/category-mappings/${encodeURIComponent(selectedCategory)}/keywords?content_type=${contentType}`,
             {keyword},
             () => {
                 // 로컬 상태 및 캐시 업데이트
@@ -110,7 +110,7 @@ export default function CategoryMapping({categoryList}) {
                         updated[selectedCategory] = [];
                     }
                     updated[selectedCategory] = [...updated[selectedCategory], keyword];
-                    cachedMappings = updated;
+                    cachedMappings[contentType] = updated;
                     return updated;
                 });
                 setNewKeyword('');
@@ -123,7 +123,7 @@ export default function CategoryMapping({categoryList}) {
             },
             () => setSaving(false)
         );
-    }, [selectedCategory, newKeyword, mappings]);
+    }, [selectedCategory, newKeyword, mappings, contentType]);
 
     // 키워드 삭제 (서버에 즉시 저장)
     const handleRemoveKeyword = useCallback((keyword) => {
@@ -131,7 +131,7 @@ export default function CategoryMapping({categoryList}) {
 
         setSaving(true);
         jsonDeleteReq(
-            `/category-mappings/${encodeURIComponent(selectedCategory)}/keywords/${encodeURIComponent(keyword)}`,
+            `/category-mappings/${encodeURIComponent(selectedCategory)}/keywords/${encodeURIComponent(keyword)}?content_type=${contentType}`,
             null,
             () => {
                 // 로컬 상태 및 캐시 업데이트
@@ -140,7 +140,7 @@ export default function CategoryMapping({categoryList}) {
                     if (updated[selectedCategory]) {
                         updated[selectedCategory] = updated[selectedCategory].filter(k => k !== keyword);
                     }
-                    cachedMappings = updated;
+                    cachedMappings[contentType] = updated;
                     return updated;
                 });
             },
@@ -150,13 +150,13 @@ export default function CategoryMapping({categoryList}) {
             },
             () => setSaving(false)
         );
-    }, [selectedCategory]);
+    }, [selectedCategory, contentType]);
 
     // 비노출 토글
     const handleToggleHidden = useCallback((category, currentlyHidden) => {
         setSaving(true);
         jsonPostReq(
-            `/hidden-categories/${category.split('/').map(encodeURIComponent).join('/')}`,
+            `/hidden-categories/${category.split('/').map(encodeURIComponent).join('/')}?content_type=${contentType}`,
             {hidden: !currentlyHidden},
             (result) => {
                 setHiddenCategories(new Set(result || []));
@@ -167,7 +167,7 @@ export default function CategoryMapping({categoryList}) {
             },
             () => setSaving(false)
         );
-    }, []);
+    }, [contentType]);
 
     // Enter 키 처리
     const handleKeyDown = useCallback((e) => {
@@ -187,7 +187,7 @@ export default function CategoryMapping({categoryList}) {
                     style={{cursor: 'pointer', userSelect: 'none'}}
                     className="py-2">
                     <FontAwesomeIcon icon={faChevronRight} className="me-2"/>
-                    카테고리 관리
+                    {title}
                 </Card.Header>
             </Card>
         );
@@ -200,7 +200,7 @@ export default function CategoryMapping({categoryList}) {
                 style={{cursor: 'pointer', userSelect: 'none'}}
                 className="py-2">
                 <FontAwesomeIcon icon={faChevronDown} className="me-2"/>
-                카테고리 관리
+                {title}
             </Card.Header>
             <Card.Body>
                 {message && (
@@ -257,7 +257,7 @@ export default function CategoryMapping({categoryList}) {
                                     <Card.Body>
                                         <Form.Check
                                             type="checkbox"
-                                            id={`hidden-${selectedCategory}`}
+                                            id={`hidden-${contentType}-${selectedCategory}`}
                                             label="사용자 비노출"
                                             checked={hiddenCategories.has(selectedCategory)}
                                             onChange={() => handleToggleHidden(selectedCategory, hiddenCategories.has(selectedCategory))}
@@ -317,4 +317,6 @@ export default function CategoryMapping({categoryList}) {
 
 CategoryMapping.propTypes = {
     categoryList: PropTypes.array.isRequired,
+    contentType: PropTypes.string,
+    title: PropTypes.string,
 };
