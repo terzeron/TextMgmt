@@ -12,7 +12,7 @@ import Folder from './Folder.jsx';
 import ViewSingle from "./ViewSingle.jsx";
 import BookInfoView from "./BookInfoView.jsx";
 import SearchResult from './SearchResult';
-import {findCommonPrefix, buildFolderHierarchy, parseEntryId, findFolderInTree, updateFolderInTree} from './folderUtils';
+import {findCommonPrefix, buildFolderHierarchy, parseEntryId, findFolderInTree, updateFolderInTree, determineNextEntryId} from './folderUtils';
 
 // 모바일 감지 훅
 function useIsMobile(breakpoint = 768) {
@@ -45,7 +45,8 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
     const [isFolderOpen, setIsFolderOpen] = useState(true);
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
-    // removed selectedEntryId state as it's not needed
+    const [selectedEntryId, setSelectedEntryId] = useState('');
+    const [nextEntryId, setNextEntryId] = useState('');
     const [folderData, setFolderData] = useState([]);
     const [hiddenCategories, setHiddenCategories] = useState(new Set());
     const [bookInfo, setBookInfo] = useState({});
@@ -121,7 +122,8 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
         return () => {
             setErrorMessage('');
             setSuccessMessage('');
-            // selectedEntryId state removed
+            setSelectedEntryId('');
+            setNextEntryId('');
             setFolderData([]);
             setBookInfo({});
             setViewUrl('');
@@ -170,10 +172,12 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
             // 최상위 파일 (folderData에 직접 포함된 파일)
             const book = selectedFolderData.book;
             const bookId = book['book_id'];
+            setSelectedEntryId(selectedEntryId);
             setBookInfo(book);
             setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
             setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + bookId);
             window.history.replaceState(null, '', `${basePath}/${bookId}?category=${encodeURIComponent(book['category'] || '_root')}`);
+            setNextEntryId(determineNextEntryId(folderData, selectedEntryId));
         } else {
             // book entry (폴더 내 파일)
             const parsed = parseEntryId(selectedEntryId);
@@ -182,6 +186,7 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
             const bookId = parsed.bookId;
             const folder = findFolderInTree(folderData, category);
             const booksInCategory = folder?.children;
+            setSelectedEntryId(selectedEntryId);
             if (booksInCategory) {
                 const book = booksInCategory.find(bookItem => bookItem.id === selectedEntryId)?.book;
                 if (book) {
@@ -189,6 +194,7 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
                     setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
                     setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + bookId);
                     window.history.replaceState(null, '', `${basePath}/${bookId}?category=${encodeURIComponent(category)}`);
+                    setNextEntryId(determineNextEntryId(folderData, selectedEntryId));
                 } else {
                     setErrorMessage(`can't find the selected book`);
                 }
@@ -197,6 +203,13 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
             }
         }
     }, [folderData, apiPrefix, basePath]);
+
+    // folderData 변경 시 nextEntryId 재계산
+    useEffect(() => {
+        if (selectedEntryId && folderData.length > 0) {
+            setNextEntryId(determineNextEntryId(folderData, selectedEntryId));
+        }
+    }, [folderData, selectedEntryId]);
 
     // if route specifies a category/bookId, auto-select after folderData loads
     useEffect(() => {
@@ -237,6 +250,18 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
             }
         }
     }, [routeCategory, routeBookId, folderData, entryClicked]);
+
+    const toNextEntryButtonClicked = useCallback(() => {
+        if (nextEntryId) {
+            entryClicked(nextEntryId);
+        }
+    }, [nextEntryId, entryClicked]);
+
+    // editUrl 계산: basePath의 -view를 -edit로 변환
+    const editBasePath = basePath.replace('-view', '-edit');
+    const editUrl = bookInfo['book_id']
+        ? `${editBasePath}/${bookInfo['book_id']}?category=${encodeURIComponent(bookInfo['category'] || '_root')}`
+        : '';
 
     // 모바일에서는 directory-menu 클래스를 제거하여 고정 높이 스타일 방지
     const directoryClassName = isMobile
@@ -298,7 +323,7 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
                                 <Col id="right_panel" className="ps-0 pe-0">
                                     {
                                         bookInfo['book_id'] &&
-                                        <ViewSingle key={bookInfo['book_id']} bookId={bookInfo['book_id']} filePath={bookInfo['file_path']} fileType={bookInfo['file_type']} viewUrl={viewUrl} downloadUrl={downloadUrl} lineCount={100} pageCount={10} apiPrefix={apiPrefix}/>
+                                        <ViewSingle key={bookInfo['book_id']} bookId={bookInfo['book_id']} filePath={bookInfo['file_path']} fileType={bookInfo['file_type']} viewUrl={viewUrl} downloadUrl={downloadUrl} lineCount={100} pageCount={10} apiPrefix={apiPrefix} editUrl={editUrl} onNextBook={toNextEntryButtonClicked} hasNextBook={!!nextEntryId} role={role}/>
                                     }
                                 </Col>
                             </Row>

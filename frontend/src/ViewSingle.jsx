@@ -110,6 +110,18 @@ export default function ViewSingle(props) {
                                 </Button>
                             </a>
                         )}
+                        {props.onNextBook && (
+                            <Button variant="outline-primary" size="sm" className="float-end" onClick={props.onNextBook} disabled={!props.hasNextBook}>
+                                다음 책으로
+                            </Button>
+                        )}
+                        {props.role === 'admin' && props.editUrl && (
+                            <a href={props.editUrl}>
+                                <Button variant="outline-secondary" size="sm" className="float-end">
+                                    편집
+                                </Button>
+                            </a>
+                        )}
                     </span>
                 </Card.Header>
             )}
@@ -134,4 +146,8 @@ ViewSingle.propTypes = {
     pageCount: PropTypes.number,
     preview: PropTypes.bool,
     apiPrefix: PropTypes.string,
+    editUrl: PropTypes.string,
+    onNextBook: PropTypes.func,
+    hasNextBook: PropTypes.bool,
+    role: PropTypes.string,
 }
