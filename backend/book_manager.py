@@ -896,9 +896,11 @@ class BookManager:
     async def get_category_mismatches(self) -> Dict[str, Any]:
         """파일시스템의 1레벨 디렉토리 기준으로 ES와 파일 경로 불일치를 검출"""
         import os as _os
+        from concurrent.futures import ThreadPoolExecutor
 
-        # 1. ES 카테고리별 문서 수
-        es_cats = self.es_manager.search_and_aggregate_by_category()
+        # 1. ES: 단일 scroll로 카테고리별 file_path 집합 조회
+        es_file_paths = self.es_manager.get_all_file_paths_grouped()
+        es_cats = {cat: len(paths) for cat, paths in es_file_paths.items()}
 
         # 2. 파일시스템: 1레벨 디렉토리 + 그 하위 2레벨 스캔 (경로 집합)
         base_str = str(self.path_prefix)
@@ -925,26 +927,31 @@ class BookManager:
             if root_paths:
                 fs_cats["_root"] = root_paths
 
+            # L1/L2 디렉토리 목록 수집 (빠름 — 디렉토리 이름만 읽기)
+            scan_tasks: List[Tuple[str, str]] = []  # (dir_path, category)
             with _os.scandir(base_str) as l1_it:
                 for l1 in l1_it:
                     if not l1.is_dir(follow_symlinks=False) or l1.name.startswith("."):
                         continue
                     rel1 = l1.name
-                    paths = collect_files(l1.path, rel1)
-                    if paths:
-                        fs_cats[rel1] = paths
-                    # 2레벨 하위 디렉토리 스캔
+                    scan_tasks.append((l1.path, rel1))
                     try:
                         with _os.scandir(l1.path) as l2_it:
                             for l2 in l2_it:
                                 if not l2.is_dir(follow_symlinks=False) or l2.name.startswith("."):
                                     continue
-                                rel2 = f"{rel1}/{l2.name}"
-                                paths = collect_files(l2.path, rel2)
-                                if paths:
-                                    fs_cats[rel2] = paths
+                                scan_tasks.append((l2.path, f"{rel1}/{l2.name}"))
                     except (PermissionError, OSError):
                         pass
+
+            # 병렬 FS 스캔
+            with ThreadPoolExecutor() as executor:
+                futures = {executor.submit(collect_files, dp, cat): cat for dp, cat in scan_tasks}
+                for future in futures:
+                    cat = futures[future]
+                    paths = future.result()
+                    if paths:
+                        fs_cats[cat] = paths
         except (PermissionError, OSError):
             pass
 
@@ -957,9 +964,8 @@ class BookManager:
             es_count = es_cats.get(key)
             fs_paths = fs_cats.get(key)
             if es_count is not None and fs_paths is not None:
-                # 양쪽 다 존재 → 경로 기반 비교
-                doc_list = self.es_manager.search_by_category(key, max_result_count=max(es_count, len(fs_paths)))
-                es_paths = {doc.get("file_path", "") for _, doc, _ in doc_list}
+                # 양쪽 다 존재 → 경로 기반 비교 (이미 메모리에 있음)
+                es_paths = es_file_paths.get(key, set())
                 diff = len(es_paths - fs_paths) + len(fs_paths - es_paths)
                 if diff > 0:
                     mismatches.append({"category": key, "es_count": es_count, "fs_count": len(fs_paths), "diff": diff})
@@ -1140,13 +1146,13 @@ class BookManager:
         if not new_dir_check.is_relative_to(self.path_prefix.resolve()):
             return {}, f"잘못된 경로입니다: {new_category}"
 
-        # ES에서 old_category 문서 수 확인
-        old_count = self.es_manager.count_by_category(old_category)
+        # ES에서 old/new 카테고리 문서 수를 msearch로 한 번에 확인
+        counts = self.es_manager.count_by_categories([old_category, new_category])
+        old_count = counts[old_category]
         if old_count == 0:
             return {}, f"카테고리 '{old_category}'에 문서가 없습니다"
 
-        # ES에서 new_category 문서 수 확인 (충돌 방지)
-        new_count = self.es_manager.count_by_category(new_category)
+        new_count = counts[new_category]
         if new_count > 0:
             return {}, f"대상 카테고리 '{new_category}'에 이미 {new_count}개의 문서가 존재합니다"
 

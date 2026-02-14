@@ -46,7 +46,8 @@ export default function Admin() {
             )}
             <CategoryMapping categoryList={categoryList} contentType="book" title="책 카테고리 관리" onCategoryChanged={loadBookCategories}/>
             <CategoryMapping categoryList={comicsCategoryList} contentType="comic" title="만화 카테고리 관리" onCategoryChanged={loadComicsCategories}/>
-            <CategoryMismatch/>
+            <CategoryMismatch contentType="book" title="책 불일치 관리" apiPrefix=""/>
+            <CategoryMismatch contentType="comic" title="만화 불일치 관리" apiPrefix="/comics"/>
         </>
     );
 }
