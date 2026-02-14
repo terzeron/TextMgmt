@@ -201,10 +201,10 @@ export default function Navigation() {
                     <Navbar.Toggle aria-controls="basic-navbar-nav" />
                     <Navbar.Collapse id="basic-navbar-nav">
                         <Nav className="me-auto my-2 my-lg-0">
-                            {role === 'admin' && <Nav.Link href="/book-edit">책 편집</Nav.Link>}
                             {role && <Nav.Link href="/book-view">책</Nav.Link>}
-                            {role === 'admin' && <Nav.Link href="/comics-edit">만화 편집</Nav.Link>}
                             {role && <Nav.Link href="/comics-view">만화</Nav.Link>}
+                            {role === 'admin' && <Nav.Link href="/book-edit">책 편집</Nav.Link>}
+                            {role === 'admin' && <Nav.Link href="/comics-edit">만화 편집</Nav.Link>}
                             {role === 'admin' && <Nav.Link href="/admin">관리</Nav.Link>}
                         </Nav>
                         <div className="d-flex align-items-center ms-auto">

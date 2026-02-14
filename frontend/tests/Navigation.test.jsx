@@ -66,7 +66,7 @@ describe('Navigation', () => {
         localStorage.setItem('email', 'admin@test.com');
         localStorage.setItem('name', 'Admin');
         render(<Navigation />);
-        // admin 역할이면 책 편집/책/만화 편집/만화/관리 링크 표시
+        // admin 역할이면 책/만화/책 편집/만화 편집/관리 링크 표시
         expect(screen.getByText('책 편집')).toBeTruthy();
         expect(screen.getByText('책')).toBeTruthy();
         expect(screen.getByText('만화 편집')).toBeTruthy();
