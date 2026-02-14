@@ -139,7 +139,7 @@ class ESManager:
         }
         mappings = {
             "properties": {
-                "category": {"type": "keyword"},
+                "category": {"type": "keyword", "fields": {"nori": {"type": "text", "analyzer": "nori_analyzer"}}},
                 "title": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
                 "author": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
                 "file_path": {"type": "keyword"},
@@ -156,14 +156,37 @@ class ESManager:
         }
 
         if self.do_exist_index():
+            self._ensure_category_nori_subfield()
             return {"acknowledged": True}
         try:
             return self.es.indices.create(index=self.index_name, body={"settings": settings, "mappings": mappings})
         except BadRequestError as e:
             if "resource_already_exists_exception" in str(e):
                 LOGGER.info("Index %s already exists, skipping creation", self.index_name)
+                self._ensure_category_nori_subfield()
                 return {"acknowledged": True}
             raise
+
+    def _ensure_category_nori_subfield(self) -> None:
+        """기존 인덱스에 category.nori 서브필드가 없으면 추가"""
+        try:
+            mapping = self.es.indices.get_mapping(index=self.index_name)
+            cat_props = mapping[self.index_name]["mappings"]["properties"].get("category", {})
+            if "fields" in cat_props and "nori" in cat_props["fields"]:
+                return
+            LOGGER.info("Adding category.nori sub-field to index %s", self.index_name)
+            self.es.indices.put_mapping(
+                index=self.index_name,
+                properties={
+                    "category": {
+                        "type": "keyword",
+                        "fields": {"nori": {"type": "text", "analyzer": "nori_analyzer"}},
+                    }
+                },
+            )
+            LOGGER.info("category.nori sub-field added successfully")
+        except Exception as e:
+            LOGGER.warning("Failed to add category.nori sub-field: %s", e)
 
     def delete_index(self) -> None:
         LOGGER.debug("delete_index()")
@@ -297,6 +320,7 @@ class ESManager:
                 "should": [
                     {"match": {"title": {"query": keyword, "boost": 10}}},
                     {"match": {"author": {"query": keyword, "boost": 5}}},
+                    {"match": {"category.nori": {"query": keyword, "boost": 3}}},
                     {"match": {"summary": {"query": keyword, "boost": 1}}},
                 ],
                 "minimum_should_match": 1,
@@ -313,6 +337,7 @@ class ESManager:
                         "should": [
                             {"match": {"title": {"query": keyword, "boost": 10}}},
                             {"match": {"author": {"query": keyword, "boost": 5}}},
+                            {"match": {"category.nori": {"query": keyword, "boost": 3}}},
                             {"match": {"summary": {"query": keyword, "boost": 1}}},
                         ],
                         "minimum_should_match": 1,
