@@ -26,7 +26,8 @@ function buildMismatchCounts(mismatchData) {
     return counts;
 }
 
-export default function CategoryMismatch() {
+export default function CategoryMismatch({ contentType = 'book', title = '책 불일치 관리', apiPrefix = '' }) {
+    const contentLabel = contentType === 'comic' ? '만화' : '책';
     const [folderData, setFolderData] = useState([]);
 
     const [loading, setLoading] = useState(false);
@@ -43,7 +44,7 @@ export default function CategoryMismatch() {
         if (!selectedFolderData.count) return;
         if (selectedFolderData.booksLoaded) return;
 
-        jsonGetReq('/category-mismatches/' + selectedId, null, (result) => {
+        jsonGetReq(apiPrefix + '/category-mismatches/' + selectedId, null, (result) => {
             const entries = [];
 
             // ES에만 있는 항목 (FS에서 삭제됨)
@@ -83,15 +84,15 @@ export default function CategoryMismatch() {
             });
             setFolderData(data);
         });
-    }, [folderData]);
+    }, [folderData, apiPrefix]);
 
     const handleDeleteEsDoc = useCallback(() => {
         if (!selectedMismatch || selectedMismatch.mismatchType !== 'es_only') return;
         setActionResult(null);
-        jsonDeleteReq('/books/' + selectedMismatch.bookId, null,
+        jsonDeleteReq(apiPrefix + '/books/' + selectedMismatch.bookId, null,
             (result) => {
                 const warning = result?.warning;
-                const msg = warning ? `책 정보가 삭제되었습니다. (${warning})` : '책 정보가 삭제되었습니다.';
+                const msg = warning ? `${contentLabel} 정보가 삭제되었습니다. (${warning})` : `${contentLabel} 정보가 삭제되었습니다.`;
                 setActionResult({type: 'success', message: msg});
                 const data = updateFolderInTree(folderData, selectedMismatch.category, (folder) => ({
                     ...folder,
@@ -105,12 +106,12 @@ export default function CategoryMismatch() {
                 setActionResult({type: 'error', message: `삭제 실패: ${error}`});
             }
         );
-    }, [selectedMismatch, folderData]);
+    }, [selectedMismatch, folderData, apiPrefix, contentLabel]);
 
     const handleIndexFile = useCallback(() => {
         if (!selectedMismatch || selectedMismatch.mismatchType !== 'fs_only') return;
         setActionResult(null);
-        jsonPostReq('/category-mismatches/index-file', {file_path: selectedMismatch.filePath},
+        jsonPostReq(apiPrefix + '/category-mismatches/index-file', {file_path: selectedMismatch.filePath},
             (result) => {
                 setActionResult({type: 'success', message: 'ES에 적재되었습니다.'});
                 const data = updateFolderInTree(folderData, selectedMismatch.category, (folder) => ({
@@ -125,12 +126,12 @@ export default function CategoryMismatch() {
                 setActionResult({type: 'error', message: `ES 적재 실패: ${error}`});
             }
         );
-    }, [selectedMismatch, folderData]);
+    }, [selectedMismatch, folderData, apiPrefix]);
 
     const handleDeleteFile = useCallback(() => {
         if (!selectedMismatch || selectedMismatch.mismatchType !== 'fs_only') return;
         setActionResult(null);
-        jsonPostReq('/category-mismatches/delete-file', {file_path: selectedMismatch.filePath},
+        jsonPostReq(apiPrefix + '/category-mismatches/delete-file', {file_path: selectedMismatch.filePath},
             (result) => {
                 setActionResult({type: 'success', message: '파일이 삭제되었습니다.'});
                 const data = updateFolderInTree(folderData, selectedMismatch.category, (folder) => ({
@@ -145,7 +146,7 @@ export default function CategoryMismatch() {
                 setActionResult({type: 'error', message: `파일 삭제 실패: ${error}`});
             }
         );
-    }, [selectedMismatch, folderData]);
+    }, [selectedMismatch, folderData, apiPrefix]);
 
     const treeViewStyles = useMemo(() => ({
         height: 'fit-content',
@@ -183,16 +184,16 @@ export default function CategoryMismatch() {
             setLoading(false);
         };
 
-        jsonGetReq('/categories', null,
+        jsonGetReq(apiPrefix + '/categories', null,
             (result) => { categoriesResult = result; tryBuild(); },
             (err) => { hasError = true; setError(`카테고리 목록을 불러올 수 없습니다. ${err}`); setLoading(false); }
         );
 
-        jsonGetReq('/category-mismatches', null,
+        jsonGetReq(apiPrefix + '/category-mismatches', null,
             (result) => { mismatchResult = result; tryBuild(); },
             (err) => { hasError = true; setError(`불일치 데이터를 불러올 수 없습니다. ${err}`); setLoading(false); }
         );
-    }, []);
+    }, [apiPrefix]);
 
     useEffect(() => {
         loadData();
@@ -206,7 +207,7 @@ export default function CategoryMismatch() {
                     style={{cursor: 'pointer', userSelect: 'none'}}
                     className="py-2">
                     <FontAwesomeIcon icon={faChevronRight} className="me-2"/>
-                    불일치 관리
+                    {title}
                 </Card.Header>
             </Card>
         );
@@ -219,7 +220,7 @@ export default function CategoryMismatch() {
                 style={{cursor: 'pointer', userSelect: 'none'}}
                 className="py-2">
                 <FontAwesomeIcon icon={faChevronDown} className="me-2"/>
-                불일치 관리
+                {title}
             </Card.Header>
             <Card.Body>
                 {error && (
@@ -296,21 +297,21 @@ export default function CategoryMismatch() {
                                     <Card.Body>
                                         <div className="text-muted mb-2" style={{fontSize: '0.85rem'}}>
                                             {selectedMismatch.mismatchType === 'es_only'
-                                                ? '책 정보만 존재하고 파일시스템에는 존재하지 않습니다.'
-                                                : '책 정보는 없고 파일시스템에만 존재합니다.'}
+                                                ? `${contentLabel} 정보만 존재하고 파일시스템에는 존재하지 않습니다.`
+                                                : `${contentLabel} 정보는 없고 파일시스템에만 존재합니다.`}
                                         </div>
                                         <div className="d-flex flex-wrap gap-1">
                                             {selectedMismatch.mismatchType === 'es_only' && (
                                                 <>
                                                     <Button
                                                         variant="outline-warning" size="sm"
-                                                        onClick={() => window.open(`/book-edit/${selectedMismatch.bookId}?category=${encodeURIComponent(selectedMismatch.category)}`, '_blank', 'noopener')}
+                                                        onClick={() => window.open(`/${contentType === 'comic' ? 'comics-edit' : 'book-edit'}/${selectedMismatch.bookId}?category=${encodeURIComponent(selectedMismatch.category)}`, '_blank', 'noopener')}
                                                     >
                                                         편집
                                                     </Button>
                                                     <Button
                                                         variant="outline-primary" size="sm"
-                                                        onClick={() => window.open(`/book-view/${selectedMismatch.bookId}?category=${encodeURIComponent(selectedMismatch.category)}`, '_blank', 'noopener')}
+                                                        onClick={() => window.open(`/${contentType === 'comic' ? 'comics-view' : 'book-view'}/${selectedMismatch.bookId}?category=${encodeURIComponent(selectedMismatch.category)}`, '_blank', 'noopener')}
                                                     >
                                                         조회
                                                     </Button>
