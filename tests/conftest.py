@@ -67,7 +67,7 @@ ES_INDEX_SETTINGS = {
 
 ES_INDEX_MAPPINGS = {
     "properties": {
-        "category": {"type": "keyword"},
+        "category": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
         "title": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
         "author": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
         "file_path": {"type": "keyword"},

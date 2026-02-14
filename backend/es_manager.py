@@ -140,7 +140,9 @@ class ESManager:
         mappings = {
             "properties": {
                 "category": {
-                    "type": "keyword",
+                    "type": "text",
+                    "analyzer": "nori_analyzer",
+                    "fields": {"keyword": {"type": "keyword"}},
                 },
                 "title": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
                 "author": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
@@ -284,7 +286,7 @@ class ESManager:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_category(category='%s')", category)
-        query = {"match": {"category": category}}
+        query = {"term": {"category.keyword": category}}
         sort = ["author.keyword", "title.keyword"]
 
         return self._search(query, sort=sort, max_result_count=max_result_count)
@@ -299,6 +301,7 @@ class ESManager:
                 "should": [
                     {"match": {"title": {"query": keyword, "boost": 10}}},
                     {"match": {"author": {"query": keyword, "boost": 5}}},
+                    {"match": {"category": {"query": keyword, "boost": 3}}},
                     {"match": {"summary": {"query": keyword, "boost": 1}}},
                 ],
                 "minimum_should_match": 1,
@@ -315,6 +318,7 @@ class ESManager:
                         "should": [
                             {"match": {"title": {"query": keyword, "boost": 10}}},
                             {"match": {"author": {"query": keyword, "boost": 5}}},
+                            {"match": {"category": {"query": keyword, "boost": 3}}},
                             {"match": {"summary": {"query": keyword, "boost": 1}}},
                         ],
                         "minimum_should_match": 1,
@@ -324,7 +328,7 @@ class ESManager:
         }
         if exclude_categories:
             query["bool"]["must_not"] = [
-                {"prefix": {"category": cat}} for cat in exclude_categories
+                {"prefix": {"category.keyword": cat}} for cat in exclude_categories
             ]
         return self._search_paged(query, size=size, offset=offset)
 
@@ -429,7 +433,7 @@ class ESManager:
 
     def search_and_aggregate_by_category(self) -> Dict[str, int]:
         LOGGER.debug("search_and_aggregate_by_category()")
-        field_name = "category"
+        field_name = "category.keyword"
         size = 10000
         body = {"size": 1, "aggs": {"unique_values": {
             "terms": {"field": field_name, "size": size}}}}
@@ -508,7 +512,7 @@ class ESManager:
     def count_by_category(self, category: str) -> int:
         """특정 카테고리의 문서 수를 반환"""
         LOGGER.debug("count_by_category(category='%s')", category)
-        result = self.es.count(index=self.index_name, query={"term": {"category": category}})
+        result = self.es.count(index=self.index_name, query={"term": {"category.keyword": category}})
         return result["count"]
 
     def rename_category(self, old_category: str, new_category: str) -> Dict[str, Any]:
@@ -538,7 +542,7 @@ class ESManager:
         }
         result = self.es.update_by_query(
             index=self.index_name,
-            query={"term": {"category": old_category}},
+            query={"term": {"category.keyword": old_category}},
             script=script,
             conflicts="abort",
             refresh=True,
@@ -557,7 +561,7 @@ class ESManager:
         LOGGER.debug("delete_by_category(category='%s')", category)
         result = self.es.delete_by_query(
             index=self.index_name,
-            query={"term": {"category": category}},
+            query={"term": {"category.keyword": category}},
             conflicts="abort",
             refresh=True,
         )

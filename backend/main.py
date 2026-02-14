@@ -140,7 +140,7 @@ class CategoryDeleteModel(BaseModel):
     category: str
 
 
-def create_item_router(manager) -> APIRouter:
+def create_item_router(manager, content_type: str = "book") -> APIRouter:
     """공통 CRUD 엔드포인트를 생성하는 라우터 팩토리"""
     router = APIRouter()
 
@@ -231,7 +231,7 @@ def create_item_router(manager) -> APIRouter:
         result, error = await manager.rename_category(body.old_category, body.new_category)
         if error is None:
             # MySQL 카테고리 매핑 갱신
-            mapping_updated = category_mapping.rename_category(body.old_category, body.new_category)
+            mapping_updated = category_mapping.rename_category(body.old_category, body.new_category, content_type=content_type)
             if not mapping_updated:
                 LOGGER.warning("rename_category: MySQL 매핑 갱신 실패 (old='%s', new='%s')",
                                body.old_category, body.new_category)
@@ -249,8 +249,8 @@ def create_item_router(manager) -> APIRouter:
         result, error = await manager.delete_category(body.category)
         if error is None:
             # MySQL 카테고리 매핑 삭제
-            mapping_deleted = category_mapping.delete_category(body.category)
-            hidden_removed = category_mapping.set_hidden(body.category, False)
+            mapping_deleted = category_mapping.delete_category(body.category, content_type=content_type)
+            hidden_removed = category_mapping.set_hidden(body.category, False, content_type=content_type)
             if not mapping_deleted:
                 LOGGER.warning("delete_category: MySQL 키워드 매핑 삭제 대상 없음 (category='%s')", body.category)
             result["mapping_deleted"] = mapping_deleted
@@ -320,8 +320,8 @@ def create_item_router(manager) -> APIRouter:
     return router
 
 
-app.include_router(create_item_router(book_manager))
-app.include_router(create_item_router(comics_manager), prefix="/comics")
+app.include_router(create_item_router(book_manager, content_type="book"))
+app.include_router(create_item_router(comics_manager, content_type="comic"), prefix="/comics")
 
 
 @app.get("/search/bookstore/{store_name}")
@@ -450,11 +450,11 @@ class CategoryMappingsModel(BaseModel):
 
 
 @app.get("/category-mappings")
-async def get_all_category_mappings() -> Dict[str, Any]:
+async def get_all_category_mappings(content_type: str = "book") -> Dict[str, Any]:
     """모든 카테고리-키워드 매핑 조회"""
-    LOGGER.debug("# get_all_category_mappings()")
+    LOGGER.debug("# get_all_category_mappings(content_type=%s)", content_type)
     try:
-        mappings = category_mapping.get_all_mappings()
+        mappings = category_mapping.get_all_mappings(content_type=content_type)
         return {"status": "success", "result": mappings}
     except Exception as e:
         LOGGER.error("get_all_category_mappings error: %s", e)
@@ -462,11 +462,11 @@ async def get_all_category_mappings() -> Dict[str, Any]:
 
 
 @app.get("/category-mappings/{category}")
-async def get_category_keywords(category: str) -> Dict[str, Any]:
+async def get_category_keywords(category: str, content_type: str = "book") -> Dict[str, Any]:
     """특정 카테고리의 키워드 목록 조회"""
-    LOGGER.debug("# get_category_keywords(category='%s')", category)
+    LOGGER.debug("# get_category_keywords(category='%s', content_type=%s)", category, content_type)
     try:
-        keywords = category_mapping.get_keywords(category)
+        keywords = category_mapping.get_keywords(category, content_type=content_type)
         return {"status": "success", "result": keywords}
     except Exception as e:
         LOGGER.error("get_category_keywords error: %s", e)
@@ -474,13 +474,13 @@ async def get_category_keywords(category: str) -> Dict[str, Any]:
 
 
 @app.put("/category-mappings/{category}")
-async def set_category_keywords(category: str, body: CategoryKeywordsModel) -> Dict[str, Any]:
+async def set_category_keywords(category: str, body: CategoryKeywordsModel, content_type: str = "book") -> Dict[str, Any]:
     """카테고리의 키워드 목록 설정 (기존 대체)"""
-    LOGGER.debug("# set_category_keywords(category='%s', keywords=%s)", category, body.keywords)
+    LOGGER.debug("# set_category_keywords(category='%s', keywords=%s, content_type=%s)", category, body.keywords, content_type)
     try:
-        success = category_mapping.set_keywords(category, body.keywords)
+        success = category_mapping.set_keywords(category, body.keywords, content_type=content_type)
         if success:
-            return {"status": "success", "result": category_mapping.get_keywords(category)}
+            return {"status": "success", "result": category_mapping.get_keywords(category, content_type=content_type)}
         else:
             raise HTTPException(status_code=500, detail="Failed to set keywords")
     except HTTPException:
@@ -491,31 +491,31 @@ async def set_category_keywords(category: str, body: CategoryKeywordsModel) -> D
 
 
 @app.post("/category-mappings/{category}/keywords")
-async def add_category_keyword(category: str, body: Dict[str, str]) -> Dict[str, Any]:
+async def add_category_keyword(category: str, body: Dict[str, str], content_type: str = "book") -> Dict[str, Any]:
     """카테고리에 키워드 추가"""
     keyword = body.get("keyword", "")
-    LOGGER.debug("# add_category_keyword(category='%s', keyword='%s')", category, keyword)
+    LOGGER.debug("# add_category_keyword(category='%s', keyword='%s', content_type=%s)", category, keyword, content_type)
     if not keyword:
         raise HTTPException(status_code=400, detail="Keyword is required")
     try:
-        success = category_mapping.add_keyword(category, keyword)
+        success = category_mapping.add_keyword(category, keyword, content_type=content_type)
         if success:
-            return {"status": "success", "result": category_mapping.get_keywords(category)}
+            return {"status": "success", "result": category_mapping.get_keywords(category, content_type=content_type)}
         else:
-            return {"status": "duplicate", "message": "Keyword already exists", "result": category_mapping.get_keywords(category)}
+            return {"status": "duplicate", "message": "Keyword already exists", "result": category_mapping.get_keywords(category, content_type=content_type)}
     except Exception as e:
         LOGGER.error("add_category_keyword error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/category-mappings/{category}/keywords/{keyword}")
-async def remove_category_keyword(category: str, keyword: str) -> Dict[str, Any]:
+async def remove_category_keyword(category: str, keyword: str, content_type: str = "book") -> Dict[str, Any]:
     """카테고리에서 키워드 삭제"""
-    LOGGER.debug("# remove_category_keyword(category='%s', keyword='%s')", category, keyword)
+    LOGGER.debug("# remove_category_keyword(category='%s', keyword='%s', content_type=%s)", category, keyword, content_type)
     try:
-        success = category_mapping.remove_keyword(category, keyword)
+        success = category_mapping.remove_keyword(category, keyword, content_type=content_type)
         if success:
-            return {"status": "success", "result": category_mapping.get_keywords(category)}
+            return {"status": "success", "result": category_mapping.get_keywords(category, content_type=content_type)}
         else:
             raise HTTPException(status_code=404, detail="Keyword not found")
     except HTTPException:
@@ -526,11 +526,11 @@ async def remove_category_keyword(category: str, keyword: str) -> Dict[str, Any]
 
 
 @app.delete("/category-mappings/{category}")
-async def delete_category_mapping(category: str) -> Dict[str, Any]:
+async def delete_category_mapping(category: str, content_type: str = "book") -> Dict[str, Any]:
     """카테고리의 모든 키워드 삭제"""
-    LOGGER.debug("# delete_category_mapping(category='%s')", category)
+    LOGGER.debug("# delete_category_mapping(category='%s', content_type=%s)", category, content_type)
     try:
-        success = category_mapping.delete_category(category)
+        success = category_mapping.delete_category(category, content_type=content_type)
         if success:
             return {"status": "success"}
         else:
@@ -543,13 +543,13 @@ async def delete_category_mapping(category: str) -> Dict[str, Any]:
 
 
 @app.put("/category-mappings")
-async def update_all_category_mappings(body: CategoryMappingsModel) -> Dict[str, Any]:
+async def update_all_category_mappings(body: CategoryMappingsModel, content_type: str = "book") -> Dict[str, Any]:
     """전체 매핑 일괄 업데이트"""
-    LOGGER.debug("# update_all_category_mappings()")
+    LOGGER.debug("# update_all_category_mappings(content_type=%s)", content_type)
     try:
-        success = category_mapping.update_all_mappings(body.mappings)
+        success = category_mapping.update_all_mappings(body.mappings, content_type=content_type)
         if success:
-            return {"status": "success", "result": category_mapping.get_all_mappings()}
+            return {"status": "success", "result": category_mapping.get_all_mappings(content_type=content_type)}
         else:
             raise HTTPException(status_code=500, detail="Failed to update mappings")
     except HTTPException:
@@ -566,11 +566,11 @@ class HiddenCategoryModel(BaseModel):
 
 
 @app.get("/hidden-categories")
-async def get_hidden_categories() -> Dict[str, Any]:
+async def get_hidden_categories(content_type: str = "book") -> Dict[str, Any]:
     """비노출 카테고리 목록 조회"""
-    LOGGER.debug("# get_hidden_categories()")
+    LOGGER.debug("# get_hidden_categories(content_type=%s)", content_type)
     try:
-        categories = category_mapping.get_hidden_categories()
+        categories = category_mapping.get_hidden_categories(content_type=content_type)
         return {"status": "success", "result": categories}
     except Exception as e:
         LOGGER.error("get_hidden_categories error: %s", e)
@@ -642,13 +642,13 @@ async def get_category_mismatch_details(category: str) -> Dict[str, Any]:
 
 
 @app.post("/hidden-categories/{category:path}")
-async def set_hidden_category(category: str, body: HiddenCategoryModel) -> Dict[str, Any]:
+async def set_hidden_category(category: str, body: HiddenCategoryModel, content_type: str = "book") -> Dict[str, Any]:
     """카테고리 비노출 설정/해제"""
-    LOGGER.debug("# set_hidden_category(category='%s', hidden=%s)", category, body.hidden)
+    LOGGER.debug("# set_hidden_category(category='%s', hidden=%s, content_type=%s)", category, body.hidden, content_type)
     try:
-        success = category_mapping.set_hidden(category, body.hidden)
+        success = category_mapping.set_hidden(category, body.hidden, content_type=content_type)
         if success:
-            return {"status": "success", "result": category_mapping.get_hidden_categories()}
+            return {"status": "success", "result": category_mapping.get_hidden_categories(content_type=content_type)}
         else:
             raise HTTPException(status_code=500, detail="Failed to update hidden category")
     except HTTPException:

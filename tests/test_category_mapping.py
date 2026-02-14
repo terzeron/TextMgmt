@@ -12,11 +12,13 @@ class TestCategoryMapping:
     def mapping(self, mysql_container):
         """CategoryMapping 인스턴스 생성 (testcontainer MySQL 사용)"""
         mapping = CategoryMapping()
-        # 테스트 전 데이터 정리
-        mapping.update_all_mappings({})
+        # 테스트 전 데이터 정리 (book, comic 모두)
+        mapping.update_all_mappings({}, content_type="book")
+        mapping.update_all_mappings({}, content_type="comic")
         yield mapping
         # 테스트 후 데이터 정리
-        mapping.update_all_mappings({})
+        mapping.update_all_mappings({}, content_type="book")
+        mapping.update_all_mappings({}, content_type="comic")
 
     # === 초기화 테스트 ===
 
@@ -332,6 +334,132 @@ class TestCategoryMapping:
 
         assert mapping.get_keywords("한글카테고리") == ["한글키워드"]
         assert mapping.get_keywords("日本語カテゴリ") == ["日本語キーワード"]
+
+    # === content_type 분리 테스트 ===
+
+    def test_content_type_isolation_keywords(self, mapping):
+        """book과 comic의 키워드가 독립적으로 관리되는지 테스트"""
+        mapping.add_keyword("카테고리A", "키워드1", content_type="book")
+        mapping.add_keyword("카테고리A", "키워드2", content_type="comic")
+
+        book_keywords = mapping.get_keywords("카테고리A", content_type="book")
+        comic_keywords = mapping.get_keywords("카테고리A", content_type="comic")
+
+        assert book_keywords == ["키워드1"]
+        assert comic_keywords == ["키워드2"]
+
+    def test_content_type_isolation_mappings(self, mapping):
+        """book과 comic의 전체 매핑이 독립적으로 조회되는지 테스트"""
+        mapping.add_keyword("책카테고리", "책키워드", content_type="book")
+        mapping.add_keyword("만화카테고리", "만화키워드", content_type="comic")
+
+        book_mappings = mapping.get_all_mappings(content_type="book")
+        comic_mappings = mapping.get_all_mappings(content_type="comic")
+
+        assert "책카테고리" in book_mappings
+        assert "만화카테고리" not in book_mappings
+        assert "만화카테고리" in comic_mappings
+        assert "책카테고리" not in comic_mappings
+
+    def test_content_type_same_keyword_both_types(self, mapping):
+        """같은 카테고리+키워드가 서로 다른 content_type에 독립 등록 가능"""
+        result1 = mapping.add_keyword("공통카테고리", "공통키워드", content_type="book")
+        result2 = mapping.add_keyword("공통카테고리", "공통키워드", content_type="comic")
+
+        assert result1 is True
+        assert result2 is True
+
+        book_keywords = mapping.get_keywords("공통카테고리", content_type="book")
+        comic_keywords = mapping.get_keywords("공통카테고리", content_type="comic")
+
+        assert "공통키워드" in book_keywords
+        assert "공통키워드" in comic_keywords
+
+    def test_content_type_remove_keyword_isolation(self, mapping):
+        """한쪽 content_type에서 삭제해도 다른 쪽에 영향 없음"""
+        mapping.add_keyword("카테고리", "키워드", content_type="book")
+        mapping.add_keyword("카테고리", "키워드", content_type="comic")
+
+        mapping.remove_keyword("카테고리", "키워드", content_type="book")
+
+        assert mapping.get_keywords("카테고리", content_type="book") == []
+        assert mapping.get_keywords("카테고리", content_type="comic") == ["키워드"]
+
+    def test_content_type_hidden_categories_isolation(self, mapping):
+        """book과 comic의 비노출 카테고리가 독립적으로 관리되는지 테스트"""
+        mapping.set_hidden("숨김카테고리", True, content_type="book")
+
+        book_hidden = mapping.get_hidden_categories(content_type="book")
+        comic_hidden = mapping.get_hidden_categories(content_type="comic")
+
+        assert "숨김카테고리" in book_hidden
+        assert "숨김카테고리" not in comic_hidden
+
+    def test_content_type_set_hidden_both_types(self, mapping):
+        """같은 카테고리를 양쪽에 독립적으로 비노출 설정"""
+        mapping.set_hidden("카테고리", True, content_type="book")
+        mapping.set_hidden("카테고리", True, content_type="comic")
+
+        assert "카테고리" in mapping.get_hidden_categories(content_type="book")
+        assert "카테고리" in mapping.get_hidden_categories(content_type="comic")
+
+        mapping.set_hidden("카테고리", False, content_type="book")
+
+        assert "카테고리" not in mapping.get_hidden_categories(content_type="book")
+        assert "카테고리" in mapping.get_hidden_categories(content_type="comic")
+
+    def test_content_type_is_hidden_isolation(self, mapping):
+        """is_hidden이 content_type별로 독립 동작"""
+        mapping.set_hidden("숨김", True, content_type="comic")
+
+        assert mapping.is_hidden("숨김", content_type="comic") is True
+        assert mapping.is_hidden("숨김", content_type="book") is False
+
+    def test_content_type_delete_category_isolation(self, mapping):
+        """delete_category가 content_type별로 독립 동작"""
+        mapping.add_keyword("삭제대상", "키워드", content_type="book")
+        mapping.add_keyword("삭제대상", "키워드", content_type="comic")
+
+        mapping.delete_category("삭제대상", content_type="book")
+
+        assert mapping.get_keywords("삭제대상", content_type="book") == []
+        assert mapping.get_keywords("삭제대상", content_type="comic") == ["키워드"]
+
+    def test_content_type_update_all_mappings_isolation(self, mapping):
+        """update_all_mappings가 해당 content_type만 영향"""
+        mapping.add_keyword("책카테고리", "책키워드", content_type="book")
+        mapping.add_keyword("만화카테고리", "만화키워드", content_type="comic")
+
+        mapping.update_all_mappings({"새책카테고리": ["새키워드"]}, content_type="book")
+
+        book_mappings = mapping.get_all_mappings(content_type="book")
+        comic_mappings = mapping.get_all_mappings(content_type="comic")
+
+        assert "책카테고리" not in book_mappings
+        assert "새책카테고리" in book_mappings
+        assert "만화카테고리" in comic_mappings
+
+    def test_content_type_rename_category_isolation(self, mapping):
+        """rename_category가 content_type별로 독립 동작"""
+        mapping.add_keyword("원래이름", "키워드", content_type="book")
+        mapping.add_keyword("원래이름", "키워드", content_type="comic")
+
+        mapping.rename_category("원래이름", "새이름", content_type="book")
+
+        assert mapping.get_keywords("새이름", content_type="book") == ["키워드"]
+        assert mapping.get_keywords("원래이름", content_type="book") == []
+        assert mapping.get_keywords("원래이름", content_type="comic") == ["키워드"]
+
+    def test_content_type_default_is_book(self, mapping):
+        """content_type 미지정 시 기본값 'book' 동작 확인"""
+        mapping.add_keyword("기본카테고리", "기본키워드")
+
+        # 기본값으로 조회
+        assert mapping.get_keywords("기본카테고리") == ["기본키워드"]
+        # book으로 명시 조회
+        assert mapping.get_keywords("기본카테고리", content_type="book") == ["기본키워드"]
+        # comic에는 없음
+        assert mapping.get_keywords("기본카테고리", content_type="comic") == []
 
 
 if __name__ == "__main__":
