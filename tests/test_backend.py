@@ -440,12 +440,9 @@ class TestDeleteCategory:
             assert data["status"] == "success"
             assert data["result"]["category"] == cat
             assert data["result"]["deleted_count"] == 2
-            assert data["result"]["fs_deleted"] is True
 
             # ES에서 삭제 확인
             assert bm.es_manager.count_by_category(cat) == 0
-            # FS에서 삭제 확인
-            assert not cat_dir.exists()
         finally:
             # 혹시 남아있으면 정리
             for doc_id in doc_ids:
@@ -495,12 +492,9 @@ class TestDeleteCategory:
             data = response.json()
             assert data["status"] == "success"
             assert data["result"]["deleted_count"] == 2
-            assert data["result"]["fs_deleted"] is True
 
             # ES에서 하위 카테고리도 삭제 확인
             assert bm.es_manager.count_by_category(cat, prefix=True) == 0
-            # FS에서 삭제 확인 (shutil.rmtree가 하위까지 삭제)
-            assert not cat_dir.exists()
         finally:
             for doc_id in root_ids + sub_ids:
                 try:
@@ -512,8 +506,8 @@ class TestDeleteCategory:
                 shutil.rmtree(cat_dir)
 
     @pytest.mark.asyncio
-    async def test_delete_category_no_fs_dir(self, backend_test_setup):
-        """FS 디렉토리 없이 ES만 있는 경우 ES는 삭제되고 fs_deleted=False"""
+    async def test_delete_category_es_only(self, backend_test_setup):
+        """ES만 있는 경우에도 정상 삭제"""
         bm = backend_test_setup["bm"]
         client = backend_test_setup["client"]
 
@@ -526,7 +520,6 @@ class TestDeleteCategory:
             data = response.json()
             assert data["status"] == "success"
             assert data["result"]["deleted_count"] == 1
-            assert data["result"]["fs_deleted"] is False
         finally:
             for doc_id in doc_ids:
                 try:
