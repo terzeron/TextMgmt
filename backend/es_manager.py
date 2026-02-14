@@ -209,6 +209,23 @@ class ESManager:
 
         LOGGER.debug("_search(max_result_count=%d, size=%d, query='%s')",
                      max_result_count, size, query)
+
+        # 10,000개 이하면 scroll 없이 단순 검색 (scroll 컨텍스트 오버헤드 회피)
+        if max_result_count <= 10000:
+            response = self.es.search(
+                index=self.index_name, query=query,
+                sort=sort, size=size, track_scores=True
+            )
+            max_score = response["hits"]["max_score"]
+            if max_score is None:
+                return []
+            result = []
+            for hit in response["hits"]["hits"]:
+                normalized_score = hit["_score"] * 100 / max_score if max_score > 0 else 0
+                result.append((int(hit["_id"]), hit["_source"], normalized_score))
+            return result[:max_result_count]
+
+        # 10,000개 초과일 때만 scroll 사용
         result_count = 0
         result = []
         scroll_id = None
@@ -500,11 +517,12 @@ class ESManager:
 
     def search_by_id(self, doc_id: int) -> Dict[str, Any]:
         LOGGER.debug("search_by_id(doc_id=%d)", doc_id)
-        query = {"match": {"_id": str(doc_id)}}
-        result_list = self._search(query, max_result_count=1)
-        if result_list and len(result_list) > 0:
-            return result_list[0][1]
-        return {}
+        from elasticsearch import NotFoundError
+        try:
+            response = self.es.get(index=self.index_name, id=str(doc_id))
+            return response["_source"]
+        except NotFoundError:
+            return {}
 
     def search_and_aggregate_by_category(self) -> Dict[str, int]:
         LOGGER.debug("search_and_aggregate_by_category()")

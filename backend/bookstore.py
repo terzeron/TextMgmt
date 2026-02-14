@@ -61,11 +61,11 @@ class AbstractBookstore(ABC):
         """상세 페이지에서 책 정보 추출"""
         pass
 
-    def search_by_keyword(self, keyword: str) -> List[Tuple[str, str, str, str, str]]:
+    def search_by_keyword(self, keyword: str) -> List[Tuple[str, str, str, str, str, str]]:
         url = self.build_search_url(keyword)
         return self._fetch_search_results(url)
 
-    def search_by_isbn(self, isbn: str) -> List[Tuple[str, str, str, str, str]]:
+    def search_by_isbn(self, isbn: str) -> List[Tuple[str, str, str, str, str, str]]:
         """ISBN으로 검색"""
         if not self.SUPPORTS_ISBN_SEARCH:
             if self.verbose:
@@ -82,7 +82,7 @@ class AbstractBookstore(ABC):
                 title = title.split(sep, 1)[0].strip()
         return title
 
-    def search(self, isbn: str = '', title: str = '', author: str = '') -> Tuple[List[Tuple[str, str, str, str, str]], str, str]:
+    def search(self, isbn: str = '', title: str = '', author: str = '') -> Tuple[List[Tuple[str, str, str, str, str, str]], str, str]:
         """
         ISBN, 제목, 저자를 선택적으로 사용하여 검색
         우선순위: ISBN > 제목+저자 > 제목
@@ -123,7 +123,7 @@ class AbstractBookstore(ABC):
             return [], isbn, "isbn"
         return [], "", "unknown"
 
-    def _fetch_search_results(self, url: str) -> List[Tuple[str, str, str, str, str]]:
+    def _fetch_search_results(self, url: str) -> List[Tuple[str, str, str, str, str, str]]:
         """검색 URL에서 결과를 가져오는 공통 로직"""
         from concurrent.futures import ThreadPoolExecutor
 
@@ -163,7 +163,7 @@ class AbstractBookstore(ABC):
             with ThreadPoolExecutor(max_workers=min(len(detail_urls), 8)) as executor:
                 html_list = list(executor.map(fetch_detail, detail_urls))
 
-        results: List[Tuple[str, str, str, str, str]] = []
+        results: List[Tuple[str, str, str, str, str, str]] = []
         for detail_url, html in zip(detail_urls, html_list):
             if not html or not html.strip():
                 if self.verbose:
@@ -174,11 +174,12 @@ class AbstractBookstore(ABC):
             found_title = info.get('title', '')
             found_author = info.get('author', '')
             category = info.get('category', '')
+            isbn = info.get('isbn', '')
             # 카테고리 기본 처리 (비디오/판타지)
             if category:
                 parts = [p.strip() for p in category.split('>')]
                 category = ' > '.join(parts[:3])
-            results.append((found_title, found_author, category, detail_url, url))
+            results.append((found_title, found_author, category, detail_url, url, isbn))
         return results
 
     def _save_html_to_tmp(self, html: str, url: str):
@@ -382,7 +383,7 @@ class AladinBookstore(AbstractBookstore):
         """제목 끝의 권수 번호를 제거 (예: '마왕의 딸 3' → '마왕의 딸')"""
         return re.sub(r'\s+\d+\s*$', '', title)
 
-    def search(self, isbn: str = '', title: str = '', author: str = '') -> Tuple[List[Tuple[str, str, str, str, str]], str, str]:
+    def search(self, isbn: str = '', title: str = '', author: str = '') -> Tuple[List[Tuple[str, str, str, str, str, str]], str, str]:
         if title:
             title = self._strip_trailing_number(title)
         return super().search(isbn=isbn, title=title, author=author)
@@ -513,7 +514,7 @@ class RidibooksBookstore(AbstractBookstore):
         encoded = quote(keyword)
         return f"{self.BASE_URL}/search?q={encoded}&adult_exclude=n"
 
-    def search_by_keyword(self, keyword: str) -> List[Tuple[str, str, str, str, str]]:
+    def search_by_keyword(self, keyword: str) -> List[Tuple[str, str, str, str, str, str]]:
         """RIDI 검색 API 직접 호출"""
         search_url = self.build_search_url(keyword)
 
@@ -537,7 +538,7 @@ class RidibooksBookstore(AbstractBookstore):
                     logger.info("RIDI 검색 결과가 없습니다")
                 return []
 
-            results: List[Tuple[str, str, str, str, str]] = []
+            results: List[Tuple[str, str, str, str, str, str]] = []
             for book in books[:self.MAX_RESULTS]:
                 book_id = book.get('b_id', '')
                 title = book.get('title', '')
@@ -561,7 +562,7 @@ class RidibooksBookstore(AbstractBookstore):
                 detail_url = f"{self.BASE_URL}/books/{book_id}" if book_id else ''
 
                 if title and detail_url:
-                    results.append((title, author, category, detail_url, search_url))
+                    results.append((title, author, category, detail_url, search_url, ''))
 
             if self.verbose:
                 logger.info(f"RIDI에서 {len(results)}개의 검색 결과를 찾았습니다")

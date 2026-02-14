@@ -281,6 +281,9 @@ class BookManager:
         LOGGER.debug(self.path_prefix)
         self.es_manager = ESManager()
         self.es_manager.create_index()
+        # FS 캐시 (get_category_mismatches → get_category_mismatch_details 재사용)
+        self._fs_cats_cache: Optional[Dict[str, set]] = None
+        self._fs_cats_cache_time: float = 0.0
 
     def __del__(self) -> None:
         if hasattr(self, 'es_manager'):
@@ -955,6 +958,11 @@ class BookManager:
         except (PermissionError, OSError):
             pass
 
+        # FS 캐시 저장 (get_category_mismatch_details에서 재사용, TTL 60초)
+        # time을 먼저 설정하여 캐시 읽기 측에서 stale 시간을 과대평가하지 않도록 함
+        self._fs_cats_cache_time = time.time()
+        self._fs_cats_cache = fs_cats
+
         # 3. 비교 (경로 기반 집합 비교)
         all_keys = sorted(set(list(fs_cats.keys()) + [k for k in es_cats if k.count("/") <= 1 and not k.startswith(".")]))
         mismatches = []
@@ -991,23 +999,26 @@ class BookManager:
             rel_path = doc.get("file_path", "")
             es_files[rel_path] = {"book_id": book_id, **doc}
 
-        # 2. 파일시스템 파일 목록
-        if category == "_root":
-            cat_dir = self.path_prefix
-        else:
-            cat_dir = self.path_prefix / category
+        # 2. 파일시스템 파일 목록 (캐시 활용, TTL 60초)
         fs_files: set = set()
-        try:
-            with _os.scandir(str(cat_dir)) as it:
-                for entry in it:
-                    if entry.is_file(follow_symlinks=False):
-                        if category == "_root":
-                            rel_path = entry.name
-                        else:
-                            rel_path = f"{category}/{entry.name}"
-                        fs_files.add(rel_path)
-        except (PermissionError, OSError):
-            pass
+        if self._fs_cats_cache is not None and (time.time() - self._fs_cats_cache_time) < 60:
+            fs_files = self._fs_cats_cache.get(category, set())
+        else:
+            if category == "_root":
+                cat_dir = self.path_prefix
+            else:
+                cat_dir = self.path_prefix / category
+            try:
+                with _os.scandir(str(cat_dir)) as it:
+                    for entry in it:
+                        if entry.is_file(follow_symlinks=False):
+                            if category == "_root":
+                                rel_path = entry.name
+                            else:
+                                rel_path = f"{category}/{entry.name}"
+                            fs_files.add(rel_path)
+            except (PermissionError, OSError):
+                pass
 
         # 3. 비교
         es_paths = set(es_files.keys())

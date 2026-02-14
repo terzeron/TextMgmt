@@ -254,12 +254,12 @@ class CategoryMapping:
                         WHERE category = %s AND content_type = %s
                     """, (category, content_type))
 
-                    # 새 키워드 추가
-                    for keyword in keywords:
-                        cursor.execute("""
-                            INSERT INTO category_keywords (category, keyword, content_type)
-                            VALUES (%s, %s, %s)
-                        """, (category, keyword, content_type))
+                    # 새 키워드 일괄 추가
+                    if keywords:
+                        cursor.executemany(
+                            "INSERT INTO category_keywords (category, keyword, content_type) VALUES (%s, %s, %s)",
+                            [(category, kw, content_type) for kw in keywords]
+                        )
 
                     conn.commit()
                     LOGGER.info("set_keywords(%s, %s): %d keywords set", category, content_type, len(keywords))
@@ -285,15 +285,18 @@ class CategoryMapping:
                     # 해당 content_type의 기존 데이터 삭제
                     cursor.execute("DELETE FROM category_keywords WHERE content_type = %s", (content_type,))
 
-                    # 새 데이터 추가
+                    # 새 데이터 일괄 추가
+                    rows = []
                     for category, keywords in mappings.items():
                         for keyword in keywords:
                             keyword = keyword.strip()
                             if keyword:
-                                cursor.execute("""
-                                    INSERT IGNORE INTO category_keywords (category, keyword, content_type)
-                                    VALUES (%s, %s, %s)
-                                """, (category, keyword, content_type))
+                                rows.append((category, keyword, content_type))
+                    if rows:
+                        cursor.executemany(
+                            "INSERT IGNORE INTO category_keywords (category, keyword, content_type) VALUES (%s, %s, %s)",
+                            rows
+                        )
 
                     conn.commit()
                     LOGGER.info("update_all_mappings(%s): %d categories updated", content_type, len(mappings))
