@@ -548,6 +548,24 @@ class ESManager:
             "failures": result.get("failures", []),
         }
 
+    def delete_by_category(self, category: str) -> Dict[str, Any]:
+        """특정 카테고리의 모든 문서를 삭제
+
+        Returns:
+            {"deleted": int, "failures": list}
+        """
+        LOGGER.debug("delete_by_category(category='%s')", category)
+        result = self.es.delete_by_query(
+            index=self.index_name,
+            query={"term": {"category": category}},
+            conflicts="abort",
+            refresh=True,
+        )
+        return {
+            "deleted": result.get("deleted", 0),
+            "failures": result.get("failures", []),
+        }
+
     def delete(self, doc_id: int) -> bool:
         LOGGER.debug("delete(doc_id=%d)", doc_id)
         result = self.es.delete(index=self.index_name, id=str(doc_id), refresh=True)

@@ -476,6 +476,70 @@ class TestESManager:
         result = esm.rename_category("empty_category_xyz", "new_empty")
         assert result["updated"] == 0
 
+    # ── delete_by_category ──
+
+    def test_delete_by_category(self, es_manager_with_data):
+        """delete_by_category로 카테고리의 모든 문서가 삭제된다"""
+        esm = es_manager_with_data
+        # 테스트 데이터 삽입
+        test_data = {
+            310: {
+                "category": "delete_target",
+                "title": "Delete Test 1",
+                "author": "Author",
+                "file_path": "delete_target/test1.txt",
+                "file_type": "txt",
+                "file_size": 100,
+                "line_count": 10,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "delete test",
+                "updated_time": "2024-01-01T00:00:00",
+            },
+            311: {
+                "category": "delete_target",
+                "title": "Delete Test 2",
+                "author": "Author",
+                "file_path": "delete_target/test2.txt",
+                "file_type": "txt",
+                "file_size": 200,
+                "line_count": 20,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "delete test 2",
+                "updated_time": "2024-01-01T00:00:00",
+            },
+        }
+        esm.insert(test_data)
+        esm.refresh()
+
+        try:
+            assert esm.count_by_category("delete_target") == 2
+
+            result = esm.delete_by_category("delete_target")
+            assert result["deleted"] == 2
+            assert result["failures"] == []
+
+            # 삭제 확인
+            assert esm.count_by_category("delete_target") == 0
+            assert esm.search_by_id(310) == {}
+            assert esm.search_by_id(311) == {}
+        finally:
+            # 혹시 남아있으면 정리
+            for doc_id in [310, 311]:
+                try:
+                    esm.delete(doc_id)
+                except Exception:
+                    pass
+            esm.refresh()
+
+    def test_delete_by_category_empty(self, es_manager_with_data):
+        """존재하지 않는 카테고리 delete 시 deleted=0"""
+        esm = es_manager_with_data
+        result = esm.delete_by_category("nonexistent_del_xyz")
+        assert result["deleted"] == 0
+        assert result["failures"] == []
+
     def test_search_by_id(self, es_manager_with_data):
         esm = es_manager_with_data
         # First get some results to find a valid ID

@@ -1199,6 +1199,65 @@ class BookManager:
             "fs_renamed": fs_renamed,
         }, None
 
+    async def delete_category(self, category: str) -> Tuple[Dict[str, Any], Optional[str]]:
+        """카테고리의 모든 문서를 일괄 삭제 (ES + FS)
+
+        Returns:
+            (result_dict, error_message) 튜플
+        """
+        LOGGER.debug("# delete_category(category='%s')", category)
+
+        # 입력 검증
+        if not category:
+            return {}, "카테고리 이름이 비어있습니다"
+        if '..' in category:
+            return {}, "카테고리 이름에 '..'는 사용할 수 없습니다"
+
+        # 경로 검증 (Path Traversal 방지)
+        dir_check = (self.path_prefix / category).resolve()
+        if not dir_check.is_relative_to(self.path_prefix.resolve()):
+            return {}, f"잘못된 경로입니다: {category}"
+
+        # ES에서 문서 수 확인
+        doc_count = self.es_manager.count_by_category(category)
+        if doc_count == 0:
+            return {}, f"카테고리 '{category}'에 문서가 없습니다"
+
+        # ES delete_by_query 실행
+        try:
+            es_result = self.es_manager.delete_by_category(category)
+        except Exception as e:
+            return {}, f"ES 삭제 실패: {e}"
+
+        if es_result.get("failures"):
+            return {}, f"ES 삭제 부분 실패: {es_result['failures']}"
+
+        # 파일시스템 디렉토리 삭제
+        import shutil
+        cat_dir = self.path_prefix / category
+        fs_deleted = False
+        fs_warning = None
+
+        if cat_dir.is_dir():
+            try:
+                shutil.rmtree(cat_dir)
+                fs_deleted = True
+            except OSError as e:
+                LOGGER.warning("delete_category: 디렉토리 삭제 실패 '%s': %s", cat_dir, e)
+                fs_warning = f"디렉토리 삭제 실패: {e}"
+        else:
+            LOGGER.warning("delete_category: 디렉토리 없음 '%s'", cat_dir)
+
+        result: Dict[str, Any] = {
+            "category": category,
+            "deleted_count": es_result["deleted"],
+            "fs_deleted": fs_deleted,
+        }
+        if fs_warning:
+            result["fs_warning"] = fs_warning
+
+        return result, None
+
     async def delete_book(self, book_id: int) -> Tuple[str, Optional[str]]:
         LOGGER.debug("# delete_book(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
