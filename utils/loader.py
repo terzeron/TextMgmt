@@ -386,8 +386,15 @@ class Loader:
                 summary, line_count, page_count = Loader.read_from_epub(file_path)
             elif file_type == "pdf":
                 if file_path.is_relative_to(Loader.comics_path_prefix):
-                    # comics: 이미지 기반 PDF이므로 텍스트 추출 생략
-                    summary, line_count, page_count = "", 0, 0
+                    # comics: 텍스트 추출은 생략하되 페이지 수만 추출
+                    page_count = 0
+                    try:
+                        with file_path.open("rb") as f:
+                            page_count = len(pypdf.PdfReader(f).pages)
+                    except Exception as e:
+                        LOGGER.error(file_path)
+                        LOGGER.error(e)
+                    summary, line_count = "", 0
                     Stat.pdf_count += 1
                 else:
                     summary, line_count, page_count = Loader.read_from_pdf(file_path)
