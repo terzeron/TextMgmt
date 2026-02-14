@@ -413,18 +413,74 @@ class ESManager:
             {"range": {"file_size": {"gte": file_size * 0.9, "lte": file_size * 1.1, "boost": 1}}},
         ]
 
-        # 원본 문서의 자기 자신 매칭 점수를 기준(100점)으로 정규화
-        self_score = self._get_self_score(should_clauses, exclude_id)
+        # exclude_id가 있으면 msearch로 self-score + 본 검색을 1 roundtrip으로 실행
+        if exclude_id is not None:
+            return self._search_paged_with_self_score(should_clauses, exclude_id, size=size, offset=offset)
 
+        # exclude_id가 없으면 기존 경로
         query = {
             "bool": {
                 "should": should_clauses,
                 "minimum_should_match": 1,
             }
         }
-        if exclude_id is not None:
-            query["bool"]["must_not"] = [{"term": {"_id": str(exclude_id)}}]
-        return self._search_paged(query, size=size, offset=offset, ref_score=self_score)
+        return self._search_paged(query, size=size, offset=offset)
+
+    def _search_paged_with_self_score(
+        self, should_clauses: list, exclude_id: int, size: int = 10, offset: int = 0
+    ) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
+        """msearch로 self-score 쿼리와 본 검색을 한 번의 왕복으로 실행"""
+        LOGGER.debug("_search_paged_with_self_score(exclude_id=%s, size=%d, offset=%d)", exclude_id, size, offset)
+        size = min(size, 10000)
+
+        # self-score 쿼리: 원본 문서만 매칭
+        self_score_query = {
+            "bool": {
+                "should": should_clauses,
+                "filter": [{"term": {"_id": str(exclude_id)}}],
+            }
+        }
+        # 본 검색 쿼리: 원본 제외
+        search_query = {
+            "bool": {
+                "should": should_clauses,
+                "minimum_should_match": 1,
+                "must_not": [{"term": {"_id": str(exclude_id)}}],
+            }
+        }
+
+        searches: List[Dict[str, Any]] = [
+            {"index": self.index_name},
+            {"size": 1, "query": self_score_query},
+            {"index": self.index_name},
+            {"size": size, "from": offset, "query": search_query, "track_scores": True, "track_total_hits": True},
+        ]
+        response = self.es.msearch(searches=searches)
+        responses = response["responses"]
+
+        # self-score 추출
+        if "error" in responses[0]:
+            LOGGER.error("msearch self-score query error: %s", responses[0]["error"])
+            base_score = 0.0
+        else:
+            self_hits = responses[0]["hits"]["hits"]
+            base_score = self_hits[0]["_score"] if self_hits else 0.0
+
+        # 본 검색 결과
+        if "error" in responses[1]:
+            LOGGER.error("msearch search query error: %s", responses[1]["error"])
+            return [], 0
+
+        search_resp = responses[1]
+        total = search_resp["hits"]["total"]["value"]
+        if base_score <= 0:
+            return [], total
+
+        result = []
+        for hit in search_resp["hits"]["hits"]:
+            normalized_score = min(100.0, hit["_score"] * 100 / base_score)
+            result.append((int(hit["_id"]), hit["_source"], normalized_score))
+        return result, total
 
     def _get_self_score(self, should_clauses: list, doc_id: int) -> float:
         """원본 문서가 동일 쿼리에서 받는 점수를 반환 (정규화 기준값)"""
@@ -459,6 +515,39 @@ class ESManager:
         result = self.es.search(index=self.index_name, body=body)
         return {bucket["key"]: bucket["doc_count"]
                 for bucket in result["aggregations"]["unique_values"]["buckets"]}
+
+    def get_all_file_paths_grouped(self) -> Dict[str, Set[str]]:
+        """scroll로 전체 인덱스를 순회하여 카테고리별 file_path 집합을 반환"""
+        LOGGER.debug("get_all_file_paths_grouped()")
+        result: Dict[str, Set[str]] = {}
+        scroll_id = None
+        try:
+            response = self.es.search(
+                index=self.index_name,
+                body={"query": {"match_all": {}}, "_source": ["category", "file_path"]},
+                scroll="10m", size=10000,
+            )
+            scroll_id = response.get("_scroll_id")
+
+            while True:
+                hits = response["hits"]["hits"]
+                if not hits:
+                    break
+                for hit in hits:
+                    src = hit["_source"]
+                    cat = src.get("category", "")
+                    fp = src.get("file_path", "")
+                    if cat:
+                        result.setdefault(cat, set()).add(fp)
+                response = self.es.scroll(scroll_id=scroll_id, scroll="10m")
+                scroll_id = response["_scroll_id"]
+        finally:
+            if scroll_id:
+                try:
+                    self.es.clear_scroll(scroll_id=scroll_id)
+                except Exception:
+                    pass
+        return result
 
     def insert(self, data: Dict[int, Dict[str, Any]], num_docs: int = sys.maxsize, max_retries: int = 3) -> List[int]:
         LOGGER.debug("insert() %d items", len(data))
@@ -528,11 +617,47 @@ class ESManager:
                     return False
         return True
 
-    def count_by_category(self, category: str) -> int:
-        """특정 카테고리의 문서 수를 반환"""
-        LOGGER.debug("count_by_category(category='%s')", category)
-        result = self.es.count(index=self.index_name, query={"term": {"category": category}})
+    def count_by_category(self, category: str, prefix: bool = False) -> int:
+        """특정 카테고리의 문서 수를 반환
+
+        Args:
+            category: 카테고리명
+            prefix: True이면 하위 카테고리(category/*)도 포함하여 카운트
+        """
+        LOGGER.debug("count_by_category(category='%s', prefix=%s)", category, prefix)
+        if prefix:
+            query = {
+                "bool": {
+                    "should": [
+                        {"term": {"category": category}},
+                        {"prefix": {"category": category + "/"}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        else:
+            query = {"term": {"category": category}}
+        result = self.es.count(index=self.index_name, query=query)
         return result["count"]
+
+    def count_by_categories(self, categories: List[str]) -> Dict[str, int]:
+        """여러 카테고리의 문서 수를 msearch로 한 번에 조회"""
+        if len(categories) == 1:
+            return {categories[0]: self.count_by_category(categories[0])}
+        LOGGER.debug("count_by_categories(categories=%s)", categories)
+        searches: List[Dict[str, Any]] = []
+        for cat in categories:
+            searches.append({"index": self.index_name})
+            searches.append({"size": 0, "track_total_hits": True, "query": {"term": {"category": cat}}})
+        response = self.es.msearch(searches=searches)
+        result: Dict[str, int] = {}
+        for cat, resp in zip(categories, response["responses"]):
+            if "error" in resp:
+                LOGGER.error("msearch error for category '%s': %s", cat, resp["error"])
+                result[cat] = 0
+            else:
+                result[cat] = resp["hits"]["total"]["value"]
+        return result
 
     def rename_category(self, old_category: str, new_category: str) -> Dict[str, Any]:
         """ES에서 특정 카테고리의 모든 문서를 새 카테고리로 변경
@@ -571,16 +696,32 @@ class ESManager:
             "failures": result.get("failures", []),
         }
 
-    def delete_by_category(self, category: str) -> Dict[str, Any]:
+    def delete_by_category(self, category: str, prefix: bool = False) -> Dict[str, Any]:
         """특정 카테고리의 모든 문서를 삭제
+
+        Args:
+            category: 카테고리명
+            prefix: True이면 하위 카테고리(category/*)도 포함하여 삭제
 
         Returns:
             {"deleted": int, "failures": list}
         """
-        LOGGER.debug("delete_by_category(category='%s')", category)
+        LOGGER.debug("delete_by_category(category='%s', prefix=%s)", category, prefix)
+        if prefix:
+            query = {
+                "bool": {
+                    "should": [
+                        {"term": {"category": category}},
+                        {"prefix": {"category": category + "/"}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        else:
+            query = {"term": {"category": category}}
         result = self.es.delete_by_query(
             index=self.index_name,
-            query={"term": {"category": category}},
+            query=query,
             conflicts="abort",
             refresh=True,
         )

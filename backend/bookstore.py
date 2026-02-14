@@ -125,6 +125,8 @@ class AbstractBookstore(ABC):
 
     def _fetch_search_results(self, url: str) -> List[Tuple[str, str, str, str, str]]:
         """검색 URL에서 결과를 가져오는 공통 로직"""
+        from concurrent.futures import ThreadPoolExecutor
+
         # 검색 페이지 요청 예외 처리
         try:
             resp = self.session.get(url, timeout=10, verify=True)
@@ -134,20 +136,35 @@ class AbstractBookstore(ABC):
         resp.encoding = 'utf-8'
         soup = BeautifulSoup(resp.text, 'html.parser')
         links = self.extract_search_links(soup)
-        results: List[Tuple[str, str, str, str, str]] = []
-        for detail_url in links[:self.MAX_RESULTS]:
-            # 캐시된 HTML 로드 시도
+        detail_urls = links[:self.MAX_RESULTS]
+
+        # 상세 페이지 HTML을 병렬로 fetch (캐시 미스인 경우만)
+        def fetch_detail(detail_url: str) -> Optional[str]:
             html = self._load_html_from_tmp(detail_url)
-            if html is None:
-                # 캐시가 없으면 HTTP 요청 후 저장
-                try:
-                    resp2 = self.session.get(detail_url, timeout=10, verify=True)
-                except Exception as e:
-                    logger.error(f"상세 페이지 요청 실패: {detail_url} - {e}")
-                    continue
+            if html is not None:
+                return html
+            # requests.Session은 thread-safe하지 않으므로 별도 세션 사용
+            try:
+                s = requests.Session()
+                s.headers.update(self.session.headers)
+                s.cookies.update(self.session.cookies)
+                resp2 = s.get(detail_url, timeout=10, verify=True)
                 resp2.encoding = 'utf-8'
                 html = resp2.text
                 self._save_html_to_tmp(html, detail_url)
+                return html
+            except Exception as e:
+                logger.error(f"상세 페이지 요청 실패: {detail_url} - {e}")
+                return None
+
+        # 병렬 fetch 실행 (순서 보존)
+        html_list: List[Optional[str]] = []
+        if detail_urls:
+            with ThreadPoolExecutor(max_workers=min(len(detail_urls), 8)) as executor:
+                html_list = list(executor.map(fetch_detail, detail_urls))
+
+        results: List[Tuple[str, str, str, str, str]] = []
+        for detail_url, html in zip(detail_urls, html_list):
             if not html or not html.strip():
                 if self.verbose:
                     logger.warning(f"상세 페이지가 비어있습니다: {detail_url}")

@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import asyncio
 import sys
 import os
 import logging.config
@@ -248,9 +249,15 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         response_object: Dict[str, Any] = {"status": "failure"}
         result, error = await manager.delete_category(body.category)
         if error is None:
-            # MySQL 카테고리 매핑 삭제
-            mapping_deleted = category_mapping.delete_category(body.category, content_type=content_type)
-            hidden_removed = category_mapping.set_hidden(body.category, False, content_type=content_type)
+            # MySQL 카테고리 매핑 삭제 (하위 카테고리 포함)
+            mapping_deleted = category_mapping.delete_category(body.category, content_type=content_type, prefix=True)
+            # hidden_categories에서 해당 카테고리 및 하위 카테고리 정리
+            category_mapping.set_hidden(body.category, False, content_type=content_type)
+            hidden_list = category_mapping.get_hidden_categories(content_type=content_type)
+            prefix = body.category + "/"
+            for hidden_cat in hidden_list:
+                if hidden_cat.startswith(prefix):
+                    category_mapping.set_hidden(hidden_cat, False, content_type=content_type)
             if not mapping_deleted:
                 LOGGER.warning("delete_category: MySQL 키워드 매핑 삭제 대상 없음 (category='%s')", body.category)
             result["mapping_deleted"] = mapping_deleted
@@ -416,8 +423,8 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
     author = author.strip() if author else ""
     isbn = isbn.strip() if isbn else ""
 
-    # 통합 검색 메서드 사용 - 실제 사용된 키워드와 검색 방법도 반환
-    results, search_keyword, search_method = bookstore.search(isbn=isbn, title=title, author=author)
+    # 통합 검색 메서드 사용 - 이벤트 루프 차단 방지를 위해 스레드에서 실행
+    results, search_keyword, search_method = await asyncio.to_thread(bookstore.search, isbn=isbn, title=title, author=author)
 
     # 결과가 튜플 리스트이므로 딕셔너리로 변환
     books_data = []
