@@ -346,7 +346,7 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
                                                 }}
                                                 title="이름 변경"
                                             >
-                                                <FontAwesomeIcon icon={faEdit}/>
+                                                이름 변경 <FontAwesomeIcon icon={faEdit}/>
                                             </Button>
                                             <Button
                                                 variant="outline-danger"
@@ -355,7 +355,7 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
                                                 onClick={() => setShowDeleteModal(true)}
                                                 title="카테고리 삭제"
                                             >
-                                                <FontAwesomeIcon icon={faTrash}/>
+                                                삭제 <FontAwesomeIcon icon={faTrash}/>
                                             </Button>
                                         </span>
                                     </Card.Header>
