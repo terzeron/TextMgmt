@@ -251,6 +251,7 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
         }
     }, [handleRenameCategory]);
 
+    const isSubcategory = selectedCategory.includes('/');
     const currentKeywords = selectedCategory ? (mappings[selectedCategory] || []) : [];
 
     if (!isOpen) {
@@ -295,6 +296,7 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
                                 <ListGroup variant="flush" style={{maxHeight: '400px', overflowY: 'auto'}}>
                                     {categoryList?.map(category => {
                                         const isHidden = hiddenCategories.has(category);
+                                        const depth = category.split('/').length - 1;
                                         return (
                                             <ListGroup.Item
                                                 key={category}
@@ -302,10 +304,13 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
                                                 active={selectedCategory === category}
                                                 onClick={() => handleCategorySelect(category)}
                                                 className="py-1 d-flex justify-content-between align-items-center"
-                                                style={isHidden ? {opacity: 0.5} : {}}
+                                                style={{
+                                                    ...(isHidden ? {opacity: 0.5} : {}),
+                                                    ...(depth > 0 ? {paddingLeft: `${0.75 + depth * 1.2}rem`} : {}),
+                                                }}
                                             >
                                                 <span style={{fontSize: '0.85rem'}}>
-                                                    {category}
+                                                    {depth > 0 ? category.split('/').pop() : category}
                                                     {isHidden && (
                                                         <Badge bg="warning" text="dark" className="ms-1" style={{fontSize: '0.65rem'}}>
                                                             <FontAwesomeIcon icon={faEyeSlash} size="xs"/> 비노출
@@ -326,7 +331,7 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
                                 <Card>
                                     <Card.Header className="py-1 d-flex justify-content-between align-items-center">
                                         <span>
-                                            <strong>{selectedCategory}</strong> 키워드
+                                            <strong>{selectedCategory}</strong>
                                             {saving && <Spinner animation="border" size="sm" className="ms-2"/>}
                                         </span>
                                         <span>
@@ -364,44 +369,48 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
                                             disabled={saving}
                                             className="mb-2"
                                         />
-                                        <InputGroup className="mb-2">
-                                            <Form.Control
-                                                ref={keywordInputRef}
-                                                type="text"
-                                                placeholder="새 키워드 입력"
-                                                value={newKeyword}
-                                                onChange={(e) => setNewKeyword(e.target.value)}
-                                                onKeyDown={handleKeyDown}
-                                                disabled={saving}
-                                            />
-                                            <Button
-                                                variant="outline-primary"
-                                                onClick={handleAddKeyword}
-                                                disabled={saving || !newKeyword.trim()}
-                                            >
-                                                <FontAwesomeIcon icon={faPlus}/> 추가
-                                            </Button>
-                                        </InputGroup>
-                                        <div className="d-flex flex-wrap gap-1">
-                                            {currentKeywords.map(keyword => (
-                                                <Badge
-                                                    key={keyword}
-                                                    bg="info"
-                                                    className="d-flex align-items-center gap-1"
-                                                    style={{fontSize: '0.85rem', padding: '0.4rem 0.6rem'}}
-                                                >
-                                                    {keyword}
-                                                    <FontAwesomeIcon
-                                                        icon={faTrash}
-                                                        style={{cursor: saving ? 'not-allowed' : 'pointer', marginLeft: '4px'}}
-                                                        onClick={() => !saving && handleRemoveKeyword(keyword)}
+                                        {!isSubcategory && (
+                                            <>
+                                                <InputGroup className="mb-2">
+                                                    <Form.Control
+                                                        ref={keywordInputRef}
+                                                        type="text"
+                                                        placeholder="새 키워드 입력"
+                                                        value={newKeyword}
+                                                        onChange={(e) => setNewKeyword(e.target.value)}
+                                                        onKeyDown={handleKeyDown}
+                                                        disabled={saving}
                                                     />
-                                                </Badge>
-                                            ))}
-                                            {currentKeywords.length === 0 && (
-                                                <span className="text-muted">등록된 키워드가 없습니다.</span>
-                                            )}
-                                        </div>
+                                                    <Button
+                                                        variant="outline-primary"
+                                                        onClick={handleAddKeyword}
+                                                        disabled={saving || !newKeyword.trim()}
+                                                    >
+                                                        <FontAwesomeIcon icon={faPlus}/> 추가
+                                                    </Button>
+                                                </InputGroup>
+                                                <div className="d-flex flex-wrap gap-1">
+                                                    {currentKeywords.map(keyword => (
+                                                        <Badge
+                                                            key={keyword}
+                                                            bg="info"
+                                                            className="d-flex align-items-center gap-1"
+                                                            style={{fontSize: '0.85rem', padding: '0.4rem 0.6rem'}}
+                                                        >
+                                                            {keyword}
+                                                            <FontAwesomeIcon
+                                                                icon={faTrash}
+                                                                style={{cursor: saving ? 'not-allowed' : 'pointer', marginLeft: '4px'}}
+                                                                onClick={() => !saving && handleRemoveKeyword(keyword)}
+                                                            />
+                                                        </Badge>
+                                                    ))}
+                                                    {currentKeywords.length === 0 && (
+                                                        <span className="text-muted">등록된 키워드가 없습니다.</span>
+                                                    )}
+                                                </div>
+                                            </>
+                                        )}
                                     </Card.Body>
                                 </Card>
                             ) : (

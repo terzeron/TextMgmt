@@ -17,7 +17,7 @@ export default function Admin() {
     const loadBookCategories = useCallback(() => {
         jsonGetReq('/categories', null, (categoryCounts) => {
             const categoryList = Object.keys(categoryCounts);
-            const filtered = categoryList.filter(c => c !== '_root' && !c.includes('/')).sort((a, b) => a.localeCompare(b));
+            const filtered = categoryList.filter(c => c !== '_root').sort((a, b) => a.localeCompare(b));
             setCategoryList(filtered);
         }, (error) => {
             setErrorMessage(`카테고리 목록을 불러올 수 없습니다. ${error}`);
@@ -27,7 +27,7 @@ export default function Admin() {
     const loadComicsCategories = useCallback(() => {
         jsonGetReq('/comics/categories', null, (categoryCounts) => {
             const categoryList = Object.keys(categoryCounts);
-            const filtered = categoryList.filter(c => c !== '_root' && !c.includes('/')).sort((a, b) => a.localeCompare(b));
+            const filtered = categoryList.filter(c => c !== '_root').sort((a, b) => a.localeCompare(b));
             setComicsCategoryList(filtered);
         }, (error) => {
             setErrorMessage(`만화 카테고리 목록을 불러올 수 없습니다. ${error}`);
