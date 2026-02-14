@@ -578,12 +578,13 @@ class TestYes24Bookstore(unittest.TestCase):
         self.assertGreater(len(results), 0)
 
         # 결과 구조 검증
-        title, author, category, book_url, search_url = results[0]
+        title, author, category, book_url, search_url, isbn = results[0]
         self.assertIsInstance(title, str)
         self.assertIsInstance(author, str)
         self.assertIsInstance(category, str)
         self.assertIsInstance(book_url, str)
         self.assertIsInstance(search_url, str)
+        self.assertIsInstance(isbn, str)
 
 
 class TestAladinBookstore(unittest.TestCase):

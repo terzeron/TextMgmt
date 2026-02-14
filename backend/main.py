@@ -232,7 +232,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         result, error = await manager.rename_category(body.old_category, body.new_category)
         if error is None:
             # MySQL 카테고리 매핑 갱신
-            mapping_updated = category_mapping.rename_category(body.old_category, body.new_category, content_type=content_type)
+            mapping_updated = await asyncio.to_thread(category_mapping.rename_category, body.old_category, body.new_category, content_type=content_type)
             if not mapping_updated:
                 LOGGER.warning("rename_category: MySQL 매핑 갱신 실패 (old='%s', new='%s')",
                                body.old_category, body.new_category)
@@ -250,8 +250,8 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         result, error = await manager.delete_category(body.category)
         if error is None:
             # MySQL 카테고리 매핑 삭제
-            mapping_deleted = category_mapping.delete_category(body.category, content_type=content_type)
-            hidden_removed = category_mapping.set_hidden(body.category, False, content_type=content_type)
+            mapping_deleted = await asyncio.to_thread(category_mapping.delete_category, body.category, content_type=content_type)
+            hidden_removed = await asyncio.to_thread(category_mapping.set_hidden, body.category, False, content_type=content_type)
             if not mapping_deleted:
                 LOGGER.warning("delete_category: MySQL 키워드 매핑 삭제 대상 없음 (category='%s')", body.category)
             result["mapping_deleted"] = mapping_deleted
@@ -420,35 +420,18 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
     # 통합 검색 메서드 사용 - 이벤트 루프 차단 방지를 위해 스레드에서 실행
     results, search_keyword, search_method = await asyncio.to_thread(bookstore.search, isbn=isbn, title=title, author=author)
 
-    # 결과가 튜플 리스트이므로 딕셔너리로 변환
+    # 결과가 튜플 리스트이므로 딕셔너리로 변환 (isbn은 튜플 6번째 원소로 이미 포함)
     books_data = []
-    from bs4 import BeautifulSoup
-    # 상위 5개만 선택하여 isbn 필드도 포함
     for r in results[:5]:
-        book_title, book_author, category, book_url, _ = r
+        book_title, book_author, category, book_url, _, book_isbn = r
         item = {
             "title": book_title,
             "author": book_author,
             "category": category,
             "book_url": book_url
         }
-        # ISBN 추출: 캐시된 HTML에서 extract_book_info 사용
-        html = bookstore._load_html_from_tmp(book_url)
-        if html:
-            soup = BeautifulSoup(html, 'html.parser')
-            info = bookstore.extract_book_info(soup)
-            if info.get('isbn'):
-                item["isbn"] = info['isbn']
-            # author 정보가 비어있으면 상세 페이지에서 재추출
-            if not item['author'] and info.get('author'):
-                item['author'] = info['author']
-            # 상세 페이지의 카테고리가 더 풍부하면 업데이트 (유효 경로 개수 비교)
-            detail_cat = info.get('category', '')
-            current_cat = item.get('category', '')
-            detail_paths = len([p for p in detail_cat.split('||') if p.strip()]) if detail_cat else 0
-            current_paths = len([p for p in current_cat.split('||') if p.strip()]) if current_cat else 0
-            if detail_paths > current_paths:
-                item['category'] = detail_cat
+        if book_isbn:
+            item["isbn"] = book_isbn
         books_data.append(item)
 
     if not books_data:
@@ -515,7 +498,7 @@ async def get_all_category_mappings(content_type: str = "book") -> Dict[str, Any
     """모든 카테고리-키워드 매핑 조회"""
     LOGGER.debug("# get_all_category_mappings(content_type=%s)", content_type)
     try:
-        mappings = category_mapping.get_all_mappings(content_type=content_type)
+        mappings = await asyncio.to_thread(category_mapping.get_all_mappings, content_type=content_type)
         return {"status": "success", "result": mappings}
     except Exception as e:
         LOGGER.error("get_all_category_mappings error: %s", e)
@@ -527,7 +510,7 @@ async def get_category_keywords(category: str, content_type: str = "book") -> Di
     """특정 카테고리의 키워드 목록 조회"""
     LOGGER.debug("# get_category_keywords(category='%s', content_type=%s)", category, content_type)
     try:
-        keywords = category_mapping.get_keywords(category, content_type=content_type)
+        keywords = await asyncio.to_thread(category_mapping.get_keywords, category, content_type=content_type)
         return {"status": "success", "result": keywords}
     except Exception as e:
         LOGGER.error("get_category_keywords error: %s", e)
@@ -539,9 +522,9 @@ async def set_category_keywords(category: str, body: CategoryKeywordsModel, cont
     """카테고리의 키워드 목록 설정 (기존 대체)"""
     LOGGER.debug("# set_category_keywords(category='%s', keywords=%s, content_type=%s)", category, body.keywords, content_type)
     try:
-        success = category_mapping.set_keywords(category, body.keywords, content_type=content_type)
+        success = await asyncio.to_thread(category_mapping.set_keywords, category, body.keywords, content_type=content_type)
         if success:
-            return {"status": "success", "result": category_mapping.get_keywords(category, content_type=content_type)}
+            return {"status": "success", "result": await asyncio.to_thread(category_mapping.get_keywords, category, content_type=content_type)}
         else:
             raise HTTPException(status_code=500, detail="Failed to set keywords")
     except HTTPException:
@@ -559,11 +542,11 @@ async def add_category_keyword(category: str, body: Dict[str, str], content_type
     if not keyword:
         raise HTTPException(status_code=400, detail="Keyword is required")
     try:
-        success = category_mapping.add_keyword(category, keyword, content_type=content_type)
+        success = await asyncio.to_thread(category_mapping.add_keyword, category, keyword, content_type=content_type)
         if success:
-            return {"status": "success", "result": category_mapping.get_keywords(category, content_type=content_type)}
+            return {"status": "success", "result": await asyncio.to_thread(category_mapping.get_keywords, category, content_type=content_type)}
         else:
-            return {"status": "duplicate", "message": "Keyword already exists", "result": category_mapping.get_keywords(category, content_type=content_type)}
+            return {"status": "duplicate", "message": "Keyword already exists", "result": await asyncio.to_thread(category_mapping.get_keywords, category, content_type=content_type)}
     except Exception as e:
         LOGGER.error("add_category_keyword error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -574,9 +557,9 @@ async def remove_category_keyword(category: str, keyword: str, content_type: str
     """카테고리에서 키워드 삭제"""
     LOGGER.debug("# remove_category_keyword(category='%s', keyword='%s', content_type=%s)", category, keyword, content_type)
     try:
-        success = category_mapping.remove_keyword(category, keyword, content_type=content_type)
+        success = await asyncio.to_thread(category_mapping.remove_keyword, category, keyword, content_type=content_type)
         if success:
-            return {"status": "success", "result": category_mapping.get_keywords(category, content_type=content_type)}
+            return {"status": "success", "result": await asyncio.to_thread(category_mapping.get_keywords, category, content_type=content_type)}
         else:
             raise HTTPException(status_code=404, detail="Keyword not found")
     except HTTPException:
@@ -591,7 +574,7 @@ async def delete_category_mapping(category: str, content_type: str = "book") -> 
     """카테고리의 모든 키워드 삭제"""
     LOGGER.debug("# delete_category_mapping(category='%s', content_type=%s)", category, content_type)
     try:
-        success = category_mapping.delete_category(category, content_type=content_type)
+        success = await asyncio.to_thread(category_mapping.delete_category, category, content_type=content_type)
         if success:
             return {"status": "success"}
         else:
@@ -608,9 +591,9 @@ async def update_all_category_mappings(body: CategoryMappingsModel, content_type
     """전체 매핑 일괄 업데이트"""
     LOGGER.debug("# update_all_category_mappings(content_type=%s)", content_type)
     try:
-        success = category_mapping.update_all_mappings(body.mappings, content_type=content_type)
+        success = await asyncio.to_thread(category_mapping.update_all_mappings, body.mappings, content_type=content_type)
         if success:
-            return {"status": "success", "result": category_mapping.get_all_mappings(content_type=content_type)}
+            return {"status": "success", "result": await asyncio.to_thread(category_mapping.get_all_mappings, content_type=content_type)}
         else:
             raise HTTPException(status_code=500, detail="Failed to update mappings")
     except HTTPException:
@@ -631,7 +614,7 @@ async def get_hidden_categories(content_type: str = "book") -> Dict[str, Any]:
     """비노출 카테고리 목록 조회"""
     LOGGER.debug("# get_hidden_categories(content_type=%s)", content_type)
     try:
-        categories = category_mapping.get_hidden_categories(content_type=content_type)
+        categories = await asyncio.to_thread(category_mapping.get_hidden_categories, content_type=content_type)
         return {"status": "success", "result": categories}
     except Exception as e:
         LOGGER.error("get_hidden_categories error: %s", e)
@@ -643,9 +626,9 @@ async def set_hidden_category(category: str, body: HiddenCategoryModel, content_
     """카테고리 비노출 설정/해제"""
     LOGGER.debug("# set_hidden_category(category='%s', hidden=%s, content_type=%s)", category, body.hidden, content_type)
     try:
-        success = category_mapping.set_hidden(category, body.hidden, content_type=content_type)
+        success = await asyncio.to_thread(category_mapping.set_hidden, category, body.hidden, content_type=content_type)
         if success:
-            return {"status": "success", "result": category_mapping.get_hidden_categories(content_type=content_type)}
+            return {"status": "success", "result": await asyncio.to_thread(category_mapping.get_hidden_categories, content_type=content_type)}
         else:
             raise HTTPException(status_code=500, detail="Failed to update hidden category")
     except HTTPException:
