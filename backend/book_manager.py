@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+import asyncio
+import re
 import sys
 import os
 import io
@@ -1059,6 +1061,50 @@ class BookManager:
             return "Ok", None
         except IOError as e:
             return "Error", f"파일 삭제 실패: {e}"
+
+    async def reload_category(self, category: str, content_type: str = "book") -> Tuple[Dict[str, Any], Optional[str]]:
+        """카테고리 전체를 ES에 재적재 (loader.py --recursive --reload 호출)"""
+        LOGGER.debug("# reload_category(category='%s', content_type='%s')", category, content_type)
+
+        if not category:
+            return {}, "카테고리 이름이 비어있습니다"
+        if '..' in category:
+            return {}, "카테고리 이름에 '..'는 사용할 수 없습니다"
+
+        abs_dir = (self.path_prefix / category).resolve()
+        if not abs_dir.is_relative_to(self.path_prefix.resolve()):
+            return {}, f"잘못된 경로입니다: {category}"
+        if not abs_dir.is_dir():
+            return {}, f"디렉토리를 찾을 수 없습니다: {category}"
+
+        index_name = "comics" if content_type == "comic" else "book"
+        loader_path = str(Path(__file__).parent.parent / "utils" / "loader.py")
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, loader_path,
+                "--recursive", "--reload",
+                index_name, str(abs_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
+        except asyncio.TimeoutError:
+            return {}, "재적재 시간이 초과되었습니다 (10분)"
+        except Exception as e:
+            return {}, f"재적재 실행 실패: {e}"
+
+        if proc.returncode != 0:
+            err_msg = stderr.decode("utf-8", errors="replace").strip()
+            return {}, f"재적재 실패 (exit {proc.returncode}): {err_msg}"
+
+        stdout_text = stdout.decode("utf-8", errors="replace")
+        processed = 0
+        match = re.search(r"총\s+(\d+)개\s+파일\s+처리됨", stdout_text)
+        if match:
+            processed = int(match.group(1))
+
+        return {"category": category, "processed_count": processed}, None
 
     async def get_pdf_pages(self, book_id: int, start: int, end: int) -> Response:
         """PDF에서 start~end 페이지만 추출하여 Response로 반환 (1-based)"""

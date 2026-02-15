@@ -5,7 +5,7 @@ import PropTypes from 'prop-types';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import {Button, Card, Form, InputGroup, Badge, Row, Col, Spinner, Modal} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
-import {faPlus, faTrash, faEyeSlash, faChevronDown, faChevronRight, faEdit} from '@fortawesome/free-solid-svg-icons';
+import {faPlus, faTrash, faEyeSlash, faChevronDown, faChevronRight, faEdit, faRotate} from '@fortawesome/free-solid-svg-icons';
 
 import {RichTreeView} from '@mui/x-tree-view/RichTreeView';
 import {TreeItem2Content, TreeItem2IconContainer, TreeItem2Label, TreeItem2Root} from '@mui/x-tree-view/TreeItem2';
@@ -214,6 +214,8 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
     // rename/delete 모달
     const [showRenameModal, setShowRenameModal] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [showReloadModal, setShowReloadModal] = useState(false);
+    const [reloading, setReloading] = useState(false);
     const [newCategoryName, setNewCategoryName] = useState('');
 
     const apiPrefix = contentType === 'comic' ? '/comics' : '';
@@ -541,6 +543,29 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
         );
     }, [selectedCategory, apiPrefix, loadData]);
 
+    const handleReloadCategory = useCallback(() => {
+        if (!selectedCategory) return;
+        setReloading(true);
+        setSaving(true);
+        jsonPostReq(
+            `${apiPrefix}/category-mismatches/reload`,
+            {category: selectedCategory},
+            (result) => {
+                setMessage(`카테고리 '${selectedCategory}' ES 재적재 완료 (${result.processed_count}건 처리)`);
+                setTimeout(() => setMessage(''), 5000);
+                setShowReloadModal(false);
+            },
+            (error) => {
+                setMessage(error || 'ES 재적재에 실패했습니다.');
+                setTimeout(() => setMessage(''), 5000);
+            },
+            () => {
+                setReloading(false);
+                setSaving(false);
+            }
+        );
+    }, [selectedCategory, apiPrefix]);
+
     // ── 불일치 관리 핸들러 ──
 
     const handleDeleteEsDoc = useCallback(() => {
@@ -715,6 +740,16 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                                 title="카테고리 삭제"
                                             >
                                                 삭제 <FontAwesomeIcon icon={faTrash}/>
+                                            </Button>
+                                            <Button
+                                                variant="outline-success"
+                                                size="sm"
+                                                className="ms-1"
+                                                disabled={saving}
+                                                onClick={() => setShowReloadModal(true)}
+                                                title="ES 재적재"
+                                            >
+                                                {reloading ? <Spinner animation="border" size="sm"/> : <>ES 재적재 <FontAwesomeIcon icon={faRotate}/></>}
                                             </Button>
                                         </span>
                                     </Card.Header>
@@ -896,6 +931,29 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                         disabled={saving}
                     >
                         {saving ? <Spinner animation="border" size="sm" /> : '삭제'}
+                    </Button>
+                </Modal.Footer>
+            </Modal>
+
+            {/* ES 재적재 확인 모달 */}
+            <Modal show={showReloadModal} onHide={() => setShowReloadModal(false)} centered>
+                <Modal.Header closeButton>
+                    <Modal.Title>ES 재적재</Modal.Title>
+                </Modal.Header>
+                <Modal.Body>
+                    <p className="fw-bold">
+                        카테고리 &apos;{selectedCategory}&apos;의 모든 파일을 ES에 재적재합니다.
+                    </p>
+                    <p className="text-muted">하위 디렉토리를 포함하여 전체 재적재하며, 파일 수에 따라 수 분이 소요될 수 있습니다.</p>
+                </Modal.Body>
+                <Modal.Footer>
+                    <Button variant="secondary" onClick={() => setShowReloadModal(false)}>취소</Button>
+                    <Button
+                        variant="success"
+                        onClick={handleReloadCategory}
+                        disabled={saving}
+                    >
+                        {reloading ? <Spinner animation="border" size="sm" /> : '재적재'}
                     </Button>
                 </Modal.Footer>
             </Modal>
