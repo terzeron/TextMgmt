@@ -1044,6 +1044,15 @@ class BookManager:
             docs = path_docs[path]
             if len(docs) <= 1:
                 continue
+            file_exists = path in fs_files
+            # 파일의 실제 inode를 조회하여 ES doc _id(=inode)와 비교
+            linked_id = None
+            if file_exists:
+                try:
+                    abs_path = self.path_prefix / path
+                    linked_id = _os.stat(str(abs_path)).st_ino
+                except OSError:
+                    pass
             dup_docs = []
             for d in docs:
                 dup_docs.append({
@@ -1051,10 +1060,11 @@ class BookManager:
                     "title": d.get("title", ""),
                     "author": d.get("author", ""),
                     "file_type": d.get("file_type", ""),
+                    "file_linked": d["book_id"] == linked_id,
                 })
             duplicates.append({
                 "file_path": path,
-                "file_exists": path in fs_files,
+                "file_exists": file_exists,
                 "docs": dup_docs,
             })
 
