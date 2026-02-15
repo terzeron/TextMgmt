@@ -81,7 +81,7 @@ export default function ViewSingle(props) {
         if (!standalone || !paramCategory || paramCategory === '_root') return;
         const apiUrl = paramApiPrefix + '/categories/' + paramCategory.split('/').map(encodeURIComponent).join('/');
         jsonGetReq(apiUrl, null, (books) => {
-            books.sort((a, b) => a.book_id - b.book_id);
+            books.sort((a, b) => a.title.localeCompare(b.title));
             const currentIndex = books.findIndex(b => b.book_id === Number(entryId));
             setPrevBook(currentIndex > 0 ? books[currentIndex - 1] : null);
             setNextBook(currentIndex >= 0 && currentIndex < books.length - 1 ? books[currentIndex + 1] : null);
