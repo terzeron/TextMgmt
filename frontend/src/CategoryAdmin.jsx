@@ -323,44 +323,63 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
         if (!selectedFolderData.count) return;
         if (selectedFolderData.booksLoaded) return;
 
-        jsonGetReq(apiPrefix + '/category-mismatches/' + selectedId, null, (result) => {
-            const entries = [];
+        jsonGetReq(apiPrefix + '/category-mismatches/' + selectedId, null,
+            (result) => {
+                const entries = [];
 
-            for (const item of result.es_only || []) {
-                entries.push({
-                    id: selectedId + '/es_' + item.book_id.toString(),
-                    label: item.title + '.' + item.file_type,
-                    fileType: item.file_type,
-                    children: [],
-                    mismatchType: 'es_only',
-                    bookId: item.book_id,
-                    category: selectedId,
-                    filePath: item.file_path,
+                for (const item of result.es_only || []) {
+                    entries.push({
+                        id: selectedId + '/es_' + item.book_id.toString(),
+                        label: item.title + '.' + item.file_type,
+                        fileType: item.file_type,
+                        children: [],
+                        mismatchType: 'es_only',
+                        bookId: item.book_id,
+                        category: selectedId,
+                        filePath: item.file_path,
+                    });
+                }
+
+                for (const item of result.fs_only || []) {
+                    entries.push({
+                        id: selectedId + '/fs_' + item.file_name,
+                        label: item.file_name,
+                        fileType: 'unknown',
+                        children: [],
+                        mismatchType: 'fs_only',
+                        category: selectedId,
+                        filePath: item.file_path,
+                    });
+                }
+
+                for (const item of result.duplicates || []) {
+                    entries.push({
+                        id: selectedId + '/dup_' + item.book_ids.join('_'),
+                        label: `[중복] ${item.title}.${item.file_type} (ID: ${item.book_ids.join(', ')})`,
+                        fileType: item.file_type,
+                        children: [],
+                        mismatchType: 'duplicate',
+                        bookIds: item.book_ids,
+                        category: selectedId,
+                        filePath: item.file_path,
+                    });
+                }
+
+                const data = updateFolderInTree(folderData, selectedId, (folder) => {
+                    const existingSubfolders = (folder.children || []).filter(c => c.fileType === 'folder');
+                    return {
+                        ...folder,
+                        booksLoaded: true,
+                        children: [...existingSubfolders, ...entries],
+                    };
                 });
+                setFolderData(data);
+            },
+            (error) => {
+                setMessage(error || '불일치 상세 조회에 실패했습니다.');
+                setTimeout(() => setMessage(''), 5000);
             }
-
-            for (const item of result.fs_only || []) {
-                entries.push({
-                    id: selectedId + '/fs_' + item.file_name,
-                    label: item.file_name,
-                    fileType: 'unknown',
-                    children: [],
-                    mismatchType: 'fs_only',
-                    category: selectedId,
-                    filePath: item.file_path,
-                });
-            }
-
-            const data = updateFolderInTree(folderData, selectedId, (folder) => {
-                const existingSubfolders = (folder.children || []).filter(c => c.fileType === 'folder');
-                return {
-                    ...folder,
-                    booksLoaded: true,
-                    children: [...existingSubfolders, ...entries],
-                };
-            });
-            setFolderData(data);
-        });
+        );
     }, [folderData, apiPrefix]);
 
     // ── 트리 아이템 클릭 핸들러 ──
@@ -819,7 +838,9 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                         <div className="text-muted mb-2" style={{fontSize: '0.85rem'}}>
                                             {selectedMismatch.mismatchType === 'es_only'
                                                 ? `${contentLabel} 정보만 존재하고 파일시스템에는 존재하지 않습니다.`
-                                                : `${contentLabel} 정보는 없고 파일시스템에만 존재합니다.`}
+                                                : selectedMismatch.mismatchType === 'duplicate'
+                                                    ? `동일한 파일 경로로 ES에 중복 문서가 존재합니다. (ID: ${selectedMismatch.bookIds.join(', ')})`
+                                                    : `${contentLabel} 정보는 없고 파일시스템에만 존재합니다.`}
                                         </div>
                                         <div className="d-flex flex-wrap gap-1">
                                             {selectedMismatch.mismatchType === 'es_only' && (
@@ -843,6 +864,27 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                                         삭제
                                                     </Button>
                                                 </>
+                                            )}
+                                            {selectedMismatch.mismatchType === 'duplicate' && (
+                                                <>{selectedMismatch.bookIds.map(id => (
+                                                    <Button
+                                                        key={id}
+                                                        variant="outline-danger" size="sm"
+                                                        onClick={() => {
+                                                            if (!window.confirm(`ID ${id} 문서를 삭제하시겠습니까?`)) return;
+                                                            jsonDeleteReq(apiPrefix + '/books/' + id, null,
+                                                                () => {
+                                                                    setActionResult({type: 'success', message: `ID ${id} 문서가 삭제되었습니다.`});
+                                                                    setSelectedMismatch(null);
+                                                                    loadData();
+                                                                },
+                                                                (error) => setActionResult({type: 'danger', message: error || '삭제 실패'})
+                                                            );
+                                                        }}
+                                                    >
+                                                        ID {id} 삭제
+                                                    </Button>
+                                                ))}</>
                                             )}
                                             {selectedMismatch.mismatchType === 'fs_only' && (
                                                 <>
