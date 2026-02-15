@@ -9,7 +9,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4.10.38/buil
 
 const CHUNK_SIZE = 10;
 
-export default function ViewPDF({bookId, pageCount = 0, preview = false, apiPrefix = '', onPrevBook, onNextBook, hasPrevBook, hasNextBook}) {
+export default function ViewPDF({bookId, pageCount = 0, preview = false, apiPrefix = ''}) {
     const [error, setError] = useState(null);
     const [totalPages, setTotalPages] = useState(0);
     const [loadedPages, setLoadedPages] = useState(0);
@@ -347,13 +347,6 @@ export default function ViewPDF({bookId, pageCount = 0, preview = false, apiPref
                     }
                 </div>
                 <div className="pdf-zoom-controls">
-                    {(onPrevBook || onNextBook) && (
-                        <>
-                            <button className="pdf-zoom-btn pdf-nav-btn" onClick={onPrevBook} disabled={!hasPrevBook} title="이전 책">◀</button>
-                            <button className="pdf-zoom-btn pdf-nav-btn" onClick={onNextBook} disabled={!hasNextBook} title="다음 책">▶</button>
-                            <span className="pdf-zoom-separator" />
-                        </>
-                    )}
                     <button className={`pdf-zoom-btn pdf-zoom-fit-btn ${fitMode ? 'active' : ''}`} onClick={() => setFitMode(prev => !prev)}>
                         <span className="toggle-track"><span className="toggle-knob" /></span>
                         맞춤
@@ -458,10 +451,6 @@ const pdfStyles = `
         background: #ccc;
         margin: 0 6px;
     }
-    .pdf-nav-btn {
-        font-size: 11px !important;
-        padding: 2px 6px !important;
-    }
     .pdf-zoom-btn:disabled {
         opacity: 0.3;
         cursor: default;
@@ -523,8 +512,4 @@ ViewPDF.propTypes = {
     pageCount: PropTypes.number,
     preview: PropTypes.bool,
     apiPrefix: PropTypes.string,
-    onPrevBook: PropTypes.func,
-    onNextBook: PropTypes.func,
-    hasPrevBook: PropTypes.bool,
-    hasNextBook: PropTypes.bool,
 };
