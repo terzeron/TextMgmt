@@ -98,24 +98,18 @@ export default function ViewSingle(props) {
 
     const preview = props.preview || false;
 
-    // PDF 뷰어에 전달할 네비게이션 props
-    const pdfNavProps = standalone
-        ? {
-            onPrevBook: prevBook ? () => navigateToBook(prevBook) : undefined,
-            onNextBook: nextBook ? () => navigateToBook(nextBook) : undefined,
-            hasPrevBook: !!prevBook,
-            hasNextBook: !!nextBook,
-        }
-        : {
-            onPrevBook: props.onPrevBook,
-            onNextBook: props.onNextBook,
-            hasPrevBook: props.hasPrevBook,
-            hasNextBook: props.hasNextBook,
-        };
+    // 이전/다음 책 네비게이션 (미리보기/전체보기 공통)
+    const showBookNav = standalone
+        ? (prevBook || nextBook)
+        : (props.onPrevBook || props.onNextBook);
+    const navPrevDisabled = standalone ? !prevBook : !props.hasPrevBook;
+    const navNextDisabled = standalone ? !nextBook : !props.hasNextBook;
+    const navPrevClick = standalone ? () => prevBook && navigateToBook(prevBook) : props.onPrevBook;
+    const navNextClick = standalone ? () => nextBook && navigateToBook(nextBook) : props.onNextBook;
 
     const ap = standalone ? paramApiPrefix : (props.apiPrefix || '');
     const componentMap = {
-        'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} preview={preview} apiPrefix={ap} {...pdfNavProps} />,
+        'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} preview={preview} apiPrefix={ap} />,
         'epub': <ViewEPUB bookId={bookId} preview={preview} apiPrefix={ap} />,
         'doc': <ViewDOC bookId={bookId} fileType="doc" apiPrefix={ap} />,
         'docx': <ViewDOC bookId={bookId} fileType="docx" lineCount={lineCount} apiPrefix={ap} />,
@@ -149,16 +143,6 @@ export default function ViewSingle(props) {
                                 </Button>
                             </a>
                         )}
-                        {props.onNextBook && (
-                            <Button variant="outline-warning" size="sm" className="float-end" onClick={props.onNextBook} disabled={!props.hasNextBook}>
-                                다음 책으로
-                            </Button>
-                        )}
-                        {props.onPrevBook && (
-                            <Button variant="outline-warning" size="sm" className="float-end" onClick={props.onPrevBook} disabled={!props.hasPrevBook}>
-                                이전 책으로
-                            </Button>
-                        )}
                         {props.role === 'admin' && props.editUrl && (
                             <a href={props.editUrl}>
                                 <Button variant="outline-secondary" size="sm" className="float-end">
@@ -170,12 +154,12 @@ export default function ViewSingle(props) {
                 </Card.Header>
             )}
             <Card.Body>
-                {standalone && (prevBook || nextBook) && fileType !== 'pdf' && (
+                {showBookNav && (
                     <div className="standalone-nav">
-                        <button className="standalone-nav-btn" onClick={() => navigateToBook(prevBook)} disabled={!prevBook}>
+                        <button className="standalone-nav-btn" onClick={navPrevClick} disabled={navPrevDisabled}>
                             ◀ 이전 책으로
                         </button>
-                        <button className="standalone-nav-btn" onClick={() => navigateToBook(nextBook)} disabled={!nextBook}>
+                        <button className="standalone-nav-btn" onClick={navNextClick} disabled={navNextDisabled}>
                             다음 책으로 ▶
                         </button>
                     </div>
