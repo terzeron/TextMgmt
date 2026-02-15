@@ -318,11 +318,11 @@ export default function Actions(props) {
     return (
         <>
             <Row className="button_group">
-                <Button variant="outline-secondary" className="btn-xs" onClick={props.toPrevEntryClicked} disabled={props.isProcessing}>
+                <Button variant="outline-warning" className="btn-xs" onClick={props.toPrevEntryClicked} disabled={props.isProcessing}>
                     이전 책으로
                     {props.isProcessing && <FontAwesomeIcon icon={faSpinner} spin/>}
                 </Button>
-                <Button variant="outline-success" className="btn-xs" onClick={props.toNextEntryClicked} disabled={props.isProcessing}>
+                <Button variant="outline-warning" className="btn-xs" onClick={props.toNextEntryClicked} disabled={props.isProcessing}>
                     다음 책으로
                     {props.isProcessing && <FontAwesomeIcon icon={faSpinner} spin/>}
                 </Button>

@@ -1,6 +1,7 @@
-import {useEffect, useState} from "react";
+import {useEffect, useState, useCallback} from "react";
 import {useParams, useSearchParams} from "react-router-dom";
 import PropTypes from 'prop-types';
+import {jsonGetReq, getApiUrlPrefix} from "./Common";
 
 import './ViewSingle.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
@@ -20,12 +21,15 @@ export default function ViewSingle(props) {
     const [searchParams] = useSearchParams();
     const paramFilePath = searchParams.get('path') || '';
     const paramApiPrefix = searchParams.get('api') || '';
+    const paramCategory = searchParams.get('category') || '';
     const standalone = Boolean(entryId && paramFileType);
     const [bookId, setBookId] = useState(0);
     const [filePath, setFilePath] = useState('');
     const [fileType, setFileType] = useState('');
     const [lineCount, setLineCount] = useState(0);
     const [pageCount, setPageCount] = useState(0);
+    const [prevBook, setPrevBook] = useState(null);
+    const [nextBook, setNextBook] = useState(null);
 
     useEffect(() => {
         if (entryId && paramFileType && paramFilePath) {
@@ -72,6 +76,26 @@ export default function ViewSingle(props) {
         };
     }, [standalone]);
 
+    // standalone 모드: 카테고리 내 이전/다음 책 결정
+    useEffect(() => {
+        if (!standalone || !paramCategory || paramCategory === '_root') return;
+        const apiUrl = getApiUrlPrefix() + paramApiPrefix + '/categories/' + encodeURIComponent(paramCategory);
+        jsonGetReq(apiUrl, null, (books) => {
+            books.sort((a, b) => a.book_id - b.book_id);
+            const currentIndex = books.findIndex(b => b.book_id === Number(entryId));
+            setPrevBook(currentIndex > 0 ? books[currentIndex - 1] : null);
+            setNextBook(currentIndex >= 0 && currentIndex < books.length - 1 ? books[currentIndex + 1] : null);
+        });
+    }, [standalone, paramCategory, paramApiPrefix, entryId]);
+
+    const navigateToBook = useCallback((book) => {
+        const url = '/viewer/' + book.file_type + '/' + book.book_id
+            + '?path=' + encodeURIComponent(book.file_path)
+            + (paramApiPrefix ? '&api=' + encodeURIComponent(paramApiPrefix) : '')
+            + '&category=' + encodeURIComponent(paramCategory);
+        window.location.href = url;
+    }, [paramApiPrefix, paramCategory]);
+
     const preview = props.preview || false;
 
     const ap = standalone ? paramApiPrefix : (props.apiPrefix || '');
@@ -111,12 +135,12 @@ export default function ViewSingle(props) {
                             </a>
                         )}
                         {props.onNextBook && (
-                            <Button variant="outline-primary" size="sm" className="float-end" onClick={props.onNextBook} disabled={!props.hasNextBook}>
+                            <Button variant="outline-warning" size="sm" className="float-end" onClick={props.onNextBook} disabled={!props.hasNextBook}>
                                 다음 책으로
                             </Button>
                         )}
                         {props.onPrevBook && (
-                            <Button variant="outline-secondary" size="sm" className="float-end" onClick={props.onPrevBook} disabled={!props.hasPrevBook}>
+                            <Button variant="outline-warning" size="sm" className="float-end" onClick={props.onPrevBook} disabled={!props.hasPrevBook}>
                                 이전 책으로
                             </Button>
                         )}
@@ -131,6 +155,16 @@ export default function ViewSingle(props) {
                 </Card.Header>
             )}
             <Card.Body>
+                {standalone && (prevBook || nextBook) && (
+                    <div className="standalone-nav">
+                        <button className="standalone-nav-btn" onClick={() => navigateToBook(prevBook)} disabled={!prevBook}>
+                            ◀ 이전 책으로
+                        </button>
+                        <button className="standalone-nav-btn" onClick={() => navigateToBook(nextBook)} disabled={!nextBook}>
+                            다음 책으로 ▶
+                        </button>
+                    </div>
+                )}
                 {bookId ? (
                     renderComponent
                 ) : (
