@@ -1064,7 +1064,7 @@ class BookManager:
 
     async def reload_category(self, category: str, content_type: str = "book") -> Tuple[Dict[str, Any], Optional[str]]:
         """카테고리 전체를 ES에 재적재 (loader.py --recursive --reload 호출)"""
-        LOGGER.debug("# reload_category(category='%s', content_type='%s')", category, content_type)
+        LOGGER.info("reload_category 시작: category='%s', content_type='%s'", category, content_type)
 
         if not category:
             return {}, "카테고리 이름이 비어있습니다"
@@ -1075,10 +1075,12 @@ class BookManager:
         if not abs_dir.is_relative_to(self.path_prefix.resolve()):
             return {}, f"잘못된 경로입니다: {category}"
         if not abs_dir.is_dir():
+            LOGGER.error("reload_category: 디렉토리 없음 — %s", abs_dir)
             return {}, f"디렉토리를 찾을 수 없습니다: {category}"
 
         index_name = "comics" if content_type == "comic" else "book"
         loader_path = str(Path(__file__).parent.parent / "utils" / "loader.py")
+        LOGGER.info("reload_category: loader 실행 — index=%s, path=%s", index_name, abs_dir)
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -1090,20 +1092,28 @@ class BookManager:
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
         except asyncio.TimeoutError:
+            LOGGER.error("reload_category: 타임아웃 (10분 초과) — category='%s'", category)
             return {}, "재적재 시간이 초과되었습니다 (10분)"
         except Exception as e:
+            LOGGER.error("reload_category: subprocess 실행 실패 — %s", e)
             return {}, f"재적재 실행 실패: {e}"
 
-        if proc.returncode != 0:
-            err_msg = stderr.decode("utf-8", errors="replace").strip()
-            return {}, f"재적재 실패 (exit {proc.returncode}): {err_msg}"
-
         stdout_text = stdout.decode("utf-8", errors="replace")
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+
+        if proc.returncode != 0:
+            LOGGER.error("reload_category: 실패 (exit %d) — stderr: %s", proc.returncode, stderr_text)
+            return {}, f"재적재 실패 (exit {proc.returncode}): {stderr_text}"
+
+        if stderr_text:
+            LOGGER.warning("reload_category: stderr 출력 — %s", stderr_text)
+
         processed = 0
         match = re.search(r"총\s+(\d+)개\s+파일\s+처리됨", stdout_text)
         if match:
             processed = int(match.group(1))
 
+        LOGGER.info("reload_category 완료: category='%s', processed=%d", category, processed)
         return {"category": category, "processed_count": processed}, None
 
     async def get_pdf_pages(self, book_id: int, start: int, end: int) -> Response:

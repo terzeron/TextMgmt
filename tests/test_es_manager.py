@@ -986,16 +986,16 @@ class TestESManagerEnvVars:
                 cm = ComicsManager()
                 assert cm.es_manager.index_name == "my_comics"
 
-    def test_comics_manager_default_index(self):
-        """TM_ES_COMICS_INDEX 미설정 시 기본값 tm_comics를 사용한다."""
+    def test_comics_manager_missing_index_env(self):
+        """TM_ES_COMICS_INDEX 미설정 시 KeyError가 발생한다."""
         env = {**self.REQUIRED_ENVS, "TM_COMICS_DIR": "/tmp"}
         cleaned = {k: v for k, v in os.environ.items() if k != "TM_ES_COMICS_INDEX"}
         cleaned.update(env)
         with patch.dict(os.environ, cleaned, clear=True):
             with patch("backend.es_manager.Elasticsearch"):
                 from backend.comics_manager import ComicsManager
-                cm = ComicsManager()
-                assert cm.es_manager.index_name == "tm_comics"
+                with pytest.raises(KeyError):
+                    ComicsManager()
 
 
 if __name__ == "__main__":
