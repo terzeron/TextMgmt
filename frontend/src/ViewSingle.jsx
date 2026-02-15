@@ -79,7 +79,7 @@ export default function ViewSingle(props) {
     // standalone 모드: 카테고리 내 이전/다음 책 결정
     useEffect(() => {
         if (!standalone || !paramCategory || paramCategory === '_root') return;
-        const apiUrl = getApiUrlPrefix() + paramApiPrefix + '/categories/' + encodeURIComponent(paramCategory);
+        const apiUrl = paramApiPrefix + '/categories/' + encodeURIComponent(paramCategory);
         jsonGetReq(apiUrl, null, (books) => {
             books.sort((a, b) => a.book_id - b.book_id);
             const currentIndex = books.findIndex(b => b.book_id === Number(entryId));
