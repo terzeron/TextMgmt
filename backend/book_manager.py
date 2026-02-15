@@ -991,11 +991,13 @@ class BookManager:
         """특정 카테고리의 ES 문서와 파일시스템 파일을 비교하여 불일치 항목을 반환"""
         import os as _os
 
-        # 1. ES 문서 목록 (file_path 기준)
+        # 1. ES 문서 목록 (file_path 기준, 중복 감지 포함)
         doc_list = self.es_manager.search_by_category(category, max_result_count=sys.maxsize)
         es_files: Dict[str, Dict[str, Any]] = {}
+        path_book_ids: Dict[str, List[int]] = {}
         for book_id, doc, _score in doc_list:
             rel_path = doc.get("file_path", "")
+            path_book_ids.setdefault(rel_path, []).append(book_id)
             es_files[rel_path] = {"book_id": book_id, **doc}
 
         # 2. 파일시스템 파일 목록
@@ -1036,7 +1038,19 @@ class BookManager:
                 "file_path": path,
             })
 
-        return {"es_only": es_only, "fs_only": fs_only}
+        # 4. 중복 ES 문서 감지 (동일 file_path에 여러 book_id)
+        duplicates = []
+        for path, ids in sorted(path_book_ids.items()):
+            if len(ids) > 1:
+                info = es_files[path]
+                duplicates.append({
+                    "book_ids": ids,
+                    "title": info.get("title", ""),
+                    "file_type": info.get("file_type", ""),
+                    "file_path": path,
+                })
+
+        return {"es_only": es_only, "fs_only": fs_only, "duplicates": duplicates}
 
     async def index_single_file(self, file_path: str) -> Tuple[Optional[int], Optional[str]]:
         """파일시스템의 파일을 읽어 ES에 적재"""
