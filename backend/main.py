@@ -370,6 +370,17 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
+    @router.delete("/category-mismatches/es-doc/{book_id}")
+    async def delete_es_doc_only(book_id: int) -> Dict[str, Any]:
+        """ES 문서만 삭제 (파일은 유지) — 중복 문서 정리용"""
+        LOGGER.debug("# delete_es_doc_only(book_id=%d)", book_id)
+        response_object: Dict[str, Any] = {"status": "failure"}
+        if manager.es_manager.delete(book_id):
+            response_object["status"] = "success"
+        else:
+            response_object["error"] = f"ES 문서 삭제 실패: {book_id}"
+        return response_object
+
     @router.post("/category-mismatches/reload")
     async def reload_category(body: CategoryDeleteModel) -> Dict[str, Any]:
         """카테고리 전체를 ES에 재적재"""
