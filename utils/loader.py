@@ -14,7 +14,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from itertools import islice
-from typing import Dict, Any, List, Tuple, Optional, Iterable
+from typing import Dict, Any, List, Set, Tuple, Optional, Iterable
 
 import ebooklib
 from ebooklib import epub
@@ -625,13 +625,14 @@ def main() -> int:
             if skip_check:
                 # --reload 모드: 존재 여부 무시, 전부 파싱
                 new_inodes = set(file_stat_map.keys())
-                path_updates: Dict[int, Dict[str, str]] = {}
+                path_changed_inodes: Set[int] = set()
+                existing_paths: Dict[int, str] = {}
             else:
                 # 기존 경로 조회 (inode → file_path)
                 existing_paths = es_manager.get_existing_paths(list(file_stat_map.keys()))
 
-                # 경로 동기화: ES에 있고 file_path가 다른 경우
-                path_updates: Dict[int, Dict[str, str]] = {}
+                # 경로 변경 감지: ES에 있고 file_path가 다른 경우 → 재적재 대상
+                path_changed_inodes: Set[int] = set()
                 for inode, es_file_path in existing_paths.items():
                     if inode not in file_stat_map:
                         continue
@@ -639,21 +640,13 @@ def main() -> int:
                     prefix = Loader.get_path_prefix(file_path)
                     current_file_path = str(file_path.relative_to(prefix))
                     if current_file_path != es_file_path:
-                        category = str(file_path.parent.relative_to(prefix))
-                        if category == ".":
-                            category = "_root"
-                        path_updates[inode] = {"file_path": current_file_path, "category": category}
+                        path_changed_inodes.add(inode)
+                        print(f"  [경로 변경 감지] inode={inode}: {es_file_path} → {current_file_path}")
 
-                # 신규 파일: ES에 없는 inode
-                new_inodes = set(file_stat_map.keys()) - set(existing_paths.keys())
-                skipped_count += len(existing_paths) - len(path_updates)
-
-            # 경로 동기화 실행
-            if path_updates:
-                es_manager.bulk_update_paths(path_updates)
-                synced_count += len(path_updates)
-                for inode, fields in path_updates.items():
-                    print(f"  [경로 동기화] inode={inode}: {fields['file_path']}")
+                # 신규 파일 + 경로 변경 파일: 전체 재적재 대상
+                new_inodes = (set(file_stat_map.keys()) - set(existing_paths.keys())) | path_changed_inodes
+                skipped_count += len(existing_paths) - len(path_changed_inodes)
+                synced_count += len(path_changed_inodes)
 
             # 파일 파싱 (stat 결과 재사용)
             batch_data: Dict[int, Dict[str, Any]] = {}
@@ -677,8 +670,8 @@ def main() -> int:
                 if skip_check:
                     print(f"  [배치 저장: {len(batch_data)}개]")
                 else:
-                    synced_msg = f", 경로동기화: {len(path_updates)}개" if path_updates else ""
-                    skip_batch = len(set(existing_paths.keys()) - set(path_updates.keys()))
+                    synced_msg = f", 경로변경 재적재: {len(path_changed_inodes)}개" if path_changed_inodes else ""
+                    skip_batch = len(existing_paths) - len(path_changed_inodes)
                     print(f"  [배치 저장: {len(batch_data)}개, 건너뜀: {skip_batch}개{synced_msg}]")
 
         return processed_count, skipped_count, synced_count
