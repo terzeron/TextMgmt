@@ -1058,7 +1058,7 @@ class BookManager:
                 "docs": dup_docs,
             })
 
-        return {"es_only": es_only, "fs_only": fs_only, "duplicates": duplicates}
+        return {"es_only": es_only, "fs_only": fs_only, "duplicates": duplicates, "fs_count": len(fs_files)}
 
     async def index_single_file(self, file_path: str) -> Tuple[Optional[int], Optional[str]]:
         """파일시스템의 파일을 읽어 ES에 적재"""

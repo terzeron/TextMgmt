@@ -201,6 +201,7 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
     const [expandedItems, setExpandedItems] = useState([]);
     const [hiddenCategories, setHiddenCategories] = useState(new Set());
     const [esDocCounts, setEsDocCounts] = useState({});
+    const [fsFileCounts, setFsFileCounts] = useState({}); // lazy-loaded per category
 
     // 선택 상태
     const [selectedCategory, setSelectedCategory] = useState('');
@@ -371,6 +372,11 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                         category: selectedId,
                         filePath: item.file_path,
                     });
+                }
+
+                // FS 파일 수 저장
+                if (result.fs_count != null) {
+                    setFsFileCounts(prev => ({...prev, [selectedId]: result.fs_count}));
                 }
 
                 const data = updateFolderInTree(folderData, selectedId, (folder) => {
@@ -746,9 +752,16 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                             <strong>{selectedCategory}</strong>
                                             {saving && <Spinner animation="border" size="sm" className="ms-2"/>}
                                         </span>
-                                        <Badge bg="secondary" className="ms-2">
-                                            {contentLabel} {esDocCounts[selectedCategory] ?? 0}건
-                                        </Badge>
+                                        <span className="d-flex gap-1">
+                                            <Badge bg="secondary">
+                                                ES {esDocCounts[selectedCategory] ?? 0}건
+                                            </Badge>
+                                            {fsFileCounts[selectedCategory] != null && (
+                                                <Badge bg="info">
+                                                    파일 {fsFileCounts[selectedCategory]}건
+                                                </Badge>
+                                            )}
+                                        </span>
                                     </Card.Header>
                                     <Card.Body>
                                         <Form.Check
@@ -863,17 +876,13 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                         </div>
                                         {selectedMismatch.mismatchType === 'duplicate' && selectedMismatch.dupDocs && (
                                             <>
-                                            <div className="mb-2">
-                                                <Badge bg={selectedMismatch.fileExists ? 'success' : 'danger'}>
-                                                    파일 {selectedMismatch.fileExists ? '존재' : '없음'}
-                                                </Badge>
-                                            </div>
                                             <table className="table table-sm table-bordered mb-2" style={{fontSize: '0.8rem'}}>
                                                 <thead>
                                                     <tr>
                                                         <th>ID</th>
                                                         <th>제목</th>
                                                         <th>저자</th>
+                                                        <th>파일</th>
                                                         <th>액션</th>
                                                     </tr>
                                                 </thead>
@@ -883,6 +892,11 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                                             <td>{doc.book_id}</td>
                                                             <td>{doc.title}</td>
                                                             <td>{doc.author}</td>
+                                                            <td className="text-center">
+                                                                <Badge bg={selectedMismatch.fileExists ? 'success' : 'danger'} style={{fontSize: '0.7rem'}}>
+                                                                    {selectedMismatch.fileExists ? '존재' : '없음'}
+                                                                </Badge>
+                                                            </td>
                                                             <td>
                                                                 <Button
                                                                     variant="outline-primary" size="sm" className="me-1 py-0"
