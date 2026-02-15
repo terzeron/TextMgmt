@@ -1,4 +1,4 @@
-import {useEffect, useState, useCallback, useRef} from 'react';
+import {useEffect, useState, useCallback, useRef, useMemo} from 'react';
 import PropTypes from 'prop-types';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
@@ -38,6 +38,46 @@ export const fetchCategoryMappings = (contentType = 'book') => {
 
 // 캐시 초기화 여부
 export const isCacheInitialized = (contentType = 'book') => cacheInitialized[contentType];
+
+// 카테고리 목록 트리 프리픽스 생성 (pstree 스타일)
+function buildTreePrefixes(categoryList) {
+    const prefixes = new Map();
+    if (!categoryList) return prefixes;
+
+    for (let i = 0; i < categoryList.length; i++) {
+        const category = categoryList[i];
+        const parts = category.split('/');
+        const depth = parts.length - 1;
+
+        if (depth === 0) {
+            prefixes.set(category, '');
+            continue;
+        }
+
+        let prefix = '';
+        for (let l = 1; l <= depth; l++) {
+            const parent = parts.slice(0, l).join('/');
+            const branch = parts.slice(0, l + 1).join('/');
+
+            const hasMoreSiblings = categoryList.slice(i + 1).some(c => {
+                const cParts = c.split('/');
+                if (cParts.length <= l) return false;
+                return cParts.slice(0, l).join('/') === parent &&
+                       cParts.slice(0, l + 1).join('/') !== branch;
+            });
+
+            if (l === depth) {
+                prefix += hasMoreSiblings ? '├── ' : '└── ';
+            } else {
+                prefix += hasMoreSiblings ? '│   ' : '    ';
+            }
+        }
+
+        prefixes.set(category, prefix);
+    }
+
+    return prefixes;
+}
 
 export default function CategoryMapping({categoryList, contentType = 'book', title = '카테고리 관리', onCategoryChanged}) {
     const [mappings, setMappings] = useState({});
@@ -251,6 +291,8 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
         }
     }, [handleRenameCategory]);
 
+    const treePrefixes = useMemo(() => buildTreePrefixes(categoryList), [categoryList]);
+
     const isSubcategory = selectedCategory.includes('/');
     const currentKeywords = selectedCategory ? (mappings[selectedCategory] || []) : [];
 
@@ -297,6 +339,7 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
                                     {categoryList?.map(category => {
                                         const isHidden = hiddenCategories.has(category);
                                         const depth = category.split('/').length - 1;
+                                        const treePrefix = treePrefixes.get(category) || '';
                                         return (
                                             <ListGroup.Item
                                                 key={category}
@@ -306,10 +349,17 @@ export default function CategoryMapping({categoryList, contentType = 'book', tit
                                                 className="py-1 d-flex justify-content-between align-items-center"
                                                 style={{
                                                     ...(isHidden ? {opacity: 0.5} : {}),
-                                                    ...(depth > 0 ? {paddingLeft: `${0.75 + depth * 1.2}rem`} : {}),
                                                 }}
                                             >
                                                 <span style={{fontSize: '0.85rem'}}>
+                                                    {treePrefix && (
+                                                        <span style={{
+                                                            fontFamily: 'monospace',
+                                                            whiteSpace: 'pre',
+                                                            opacity: 0.6,
+                                                            userSelect: 'none',
+                                                        }}>{treePrefix}</span>
+                                                    )}
                                                     {depth > 0 ? category.split('/').pop() : category}
                                                     {isHidden && (
                                                         <Badge bg="warning" text="dark" className="ms-1" style={{fontSize: '0.65rem'}}>
