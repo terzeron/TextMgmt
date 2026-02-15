@@ -373,14 +373,16 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     @router.post("/category-mismatches/reload")
     async def reload_category(body: CategoryDeleteModel) -> Dict[str, Any]:
         """카테고리 전체를 ES에 재적재"""
-        LOGGER.debug("# reload_category(category='%s')", body.category)
+        LOGGER.info("reload_category 요청: category='%s', content_type='%s'", body.category, content_type)
         response_object: Dict[str, Any] = {"status": "failure"}
         result, error = await manager.reload_category(body.category, content_type=content_type)
         if error is None:
             response_object["status"] = "success"
             response_object["result"] = result
+            LOGGER.info("reload_category 응답: success — %s", result)
         else:
             response_object["error"] = error
+            LOGGER.error("reload_category 응답: failure — %s", error)
         return response_object
 
     @router.get("/category-mismatches/{category:path}")
