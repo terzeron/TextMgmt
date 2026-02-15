@@ -4,7 +4,7 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 
 afterEach(cleanup);
 
-vi.mock('../src/CategoryMapping', () => ({
+vi.mock('../src/categoryMappingCache', () => ({
     loadCategoryMappings: () => ({}),
     fetchCategoryMappings: () => Promise.resolve(),
     isCacheInitialized: () => true,

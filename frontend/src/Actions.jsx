@@ -9,7 +9,7 @@ import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import {faTruckMoving, faUpload, faSpinner} from '@fortawesome/free-solid-svg-icons';
 
 import {getRandomLightColor, ROOT_DIRECTORY} from './Common';
-import {loadCategoryMappings, fetchCategoryMappings, isCacheInitialized} from './CategoryMapping';
+import {loadCategoryMappings, fetchCategoryMappings, isCacheInitialized} from './categoryMappingCache';
 
 
 // 문자열에서 n-gram 집합 생성

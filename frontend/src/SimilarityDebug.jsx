@@ -7,7 +7,7 @@ import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import {faChevronDown, faChevronRight} from '@fortawesome/free-solid-svg-icons';
 
 import {getSimilarityDebugInfo} from './Actions';
-import {isCacheInitialized, fetchCategoryMappings} from './CategoryMapping';
+import {isCacheInitialized, fetchCategoryMappings} from './categoryMappingCache';
 
 // 카테고리 키(예: "aladin_0_0")에서 서점명 추출
 const getStoreName = (key) => {
