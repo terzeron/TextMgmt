@@ -870,8 +870,8 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                                                 <Button
                                                                     variant="outline-danger" size="sm" className="py-0"
                                                                     onClick={() => {
-                                                                        if (!window.confirm(`ID ${doc.book_id} (${doc.title}) 문서를 삭제하시겠습니까?`)) return;
-                                                                        jsonDeleteReq(apiPrefix + '/books/' + doc.book_id, null,
+                                                                        if (!window.confirm(`ID ${doc.book_id} (${doc.title}) ES 문서를 삭제하시겠습니까? (파일은 유지됩니다)`)) return;
+                                                                        jsonDeleteReq(apiPrefix + '/category-mismatches/es-doc/' + doc.book_id, null,
                                                                             () => {
                                                                                 setActionResult({type: 'success', message: `ID ${doc.book_id} 문서가 삭제되었습니다.`});
                                                                                 setSelectedMismatch(null);
