@@ -30,10 +30,12 @@ export default function Navigation() {
     const isComicsContext = location.pathname.startsWith('/comics-');
     const searchPrefix = isComicsContext ? '/comics' : '';
 
-    // viewer일 때 비노출 카테고리 목록 로드 (책 전용)
+    // viewer일 때 비노출 카테고리 목록 로드
     useEffect(() => {
-        if (role === 'viewer' && !isComicsContext) {
-            rawJsonGetReq('/hidden-categories',
+        if (role === 'viewer') {
+            const contentType = isComicsContext ? 'comic' : 'book';
+            setHiddenCategories([]); // 컨텍스트 전환 시 stale 데이터 방지
+            rawJsonGetReq(`/hidden-categories?content_type=${contentType}`,
                 (data) => {
                     if (data.status === 'success') {
                         setHiddenCategories(data.result || []);
@@ -48,7 +50,7 @@ export default function Navigation() {
 
     const buildSearchUrl = (keyword, offset, limit) => {
         let url = `${searchPrefix}/search/${encodeURIComponent(keyword)}?offset=${offset}&limit=${limit}`;
-        if (!isComicsContext && hiddenCategories.length > 0) {
+        if (hiddenCategories.length > 0) {
             url += `&exclude_categories=${encodeURIComponent(hiddenCategories.join(','))}`;
         }
         return url;

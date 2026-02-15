@@ -195,7 +195,7 @@ describe('View', () => {
         mockJsonGetReq.mockImplementation((url, payload, resolve) => {
             if (url === '/categories') {
                 resolve({ '소설': 10, '비공개': 5, '역사': 3 });
-            } else if (url === '/hidden-categories') {
+            } else if (url === '/hidden-categories?content_type=book') {
                 resolve(['비공개']);
             }
         });
@@ -208,7 +208,7 @@ describe('View', () => {
 
         // hidden-categories API가 호출됨
         const calls = mockJsonGetReq.mock.calls;
-        expect(calls.find(c => c[0] === '/hidden-categories')).toBeTruthy();
+        expect(calls.find(c => c[0] === '/hidden-categories?content_type=book')).toBeTruthy();
     });
 
     it('viewer 역할에서 hidden-categories 로드 실패 시 전체 카테고리를 표시한다', async () => {
@@ -217,7 +217,7 @@ describe('View', () => {
         mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
             if (url === '/categories') {
                 resolve({ '소설': 10 });
-            } else if (url === '/hidden-categories') {
+            } else if (url === '/hidden-categories?content_type=book') {
                 reject('로드 실패');
             }
         });
@@ -391,7 +391,7 @@ describe('View', () => {
         mockJsonGetReq.mockImplementation((url, payload, resolve) => {
             if (url === '/categories') {
                 resolve({ '소설': 10 });
-            } else if (url === '/hidden-categories') {
+            } else if (url === '/hidden-categories?content_type=book') {
                 resolve(['비공개']);
             } else if (url === '/books/50') {
                 resolve({

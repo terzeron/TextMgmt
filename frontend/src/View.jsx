@@ -94,9 +94,10 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
                 }
             };
 
-            // viewer인 경우 비노출 카테고리 필터링 (책 전용)
-            if (role === 'viewer' && apiPrefix === '') {
-                jsonGetReq('/hidden-categories', null, (hiddenList) => {
+            // viewer인 경우 비노출 카테고리 필터링
+            if (role === 'viewer') {
+                const contentType = apiPrefix === '' ? 'book' : 'comic';
+                jsonGetReq(`/hidden-categories?content_type=${contentType}`, null, (hiddenList) => {
                     const hiddenSet = new Set(hiddenList || []);
                     setHiddenCategories(hiddenSet);
                     const filteredCategories = nonEmptyCategories.filter(cat => {

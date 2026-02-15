@@ -192,7 +192,7 @@ describe('Navigation', () => {
 
         await waitFor(() => {
             expect(mockRawJsonGetReq).toHaveBeenCalledWith(
-                '/hidden-categories',
+                '/hidden-categories?content_type=book',
                 expect.any(Function),
                 expect.any(Function)
             );
@@ -204,7 +204,7 @@ describe('Navigation', () => {
         localStorage.setItem('name', 'Viewer');
 
         mockRawJsonGetReq.mockImplementation((url, onSuccess, onError) => {
-            if (url === '/hidden-categories') {
+            if (url === '/hidden-categories?content_type=book') {
                 onError('서버 오류');
             }
         });
@@ -334,7 +334,7 @@ describe('Navigation', () => {
         localStorage.setItem('name', 'Viewer');
 
         mockRawJsonGetReq.mockImplementation((url, onSuccess) => {
-            if (url === '/hidden-categories') {
+            if (url === '/hidden-categories?content_type=book') {
                 onSuccess({ status: 'success', result: ['비공개', '비밀'] });
             }
         });
@@ -343,7 +343,7 @@ describe('Navigation', () => {
 
         // hidden categories 로드 대기
         await waitFor(() => {
-            expect(mockRawJsonGetReq).toHaveBeenCalledWith('/hidden-categories', expect.any(Function), expect.any(Function));
+            expect(mockRawJsonGetReq).toHaveBeenCalledWith('/hidden-categories?content_type=book', expect.any(Function), expect.any(Function));
         });
 
         // 검색 실행
