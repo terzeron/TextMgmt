@@ -75,6 +75,54 @@ class ESManager:
         response = self.es.mget(docs=docs, source=False)
         return {int(doc["_id"]) for doc in response["docs"] if doc.get("found", False)}
 
+    def get_existing_paths(self, doc_ids: List[int]) -> Dict[int, str]:
+        """주어진 ID 목록의 기존 file_path를 조회. 반환: {inode: file_path}"""
+        if not doc_ids:
+            return {}
+        LOGGER.debug("get_existing_paths(%d ids)", len(doc_ids))
+        docs = [{"_index": self.index_name, "_id": str(doc_id)} for doc_id in doc_ids]
+        response = self.es.mget(docs=docs, source=["file_path"])
+        result: Dict[int, str] = {}
+        for doc in response["docs"]:
+            if doc.get("found", False):
+                result[int(doc["_id"])] = doc["_source"]["file_path"]
+        return result
+
+    def bulk_update_paths(self, updates: Dict[int, Dict[str, str]], max_retries: int = 3) -> int:
+        """inode → {"file_path": ..., "category": ...} 맵을 받아 bulk partial update 수행.
+        반환: 업데이트된 문서 수"""
+        if not updates:
+            return 0
+        LOGGER.debug("bulk_update_paths(%d items)", len(updates))
+        updated_count = 0
+        iter_items = iter(updates.items())
+        chunk_size = 100
+
+        while True:
+            chunk = list(islice(iter_items, chunk_size))
+            if not chunk:
+                break
+            es_data: List[Dict[str, Any]] = []
+            for inode, fields in chunk:
+                es_data.append({"update": {"_index": self.index_name, "_id": str(inode)}})
+                es_data.append({"doc": fields})
+
+            for attempt in range(max_retries):
+                try:
+                    self.es.bulk(body=es_data, timeout="60s", refresh=False)
+                    break
+                except (SerializationError, ConnectionError, ConnectionTimeout) as e:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt
+                        LOGGER.warning(f"ES bulk_update_paths 실패 (시도 {attempt + 1}/{max_retries}): {e}. {wait_time}초 후 재시도...")
+                        time.sleep(wait_time)
+                    else:
+                        LOGGER.error(f"ES bulk_update_paths 최종 실패: {e}")
+                        raise
+
+            updated_count += len(chunk)
+        return updated_count
+
     def create_index(self) -> dict[str, Any]:
         LOGGER.debug("create_index()")
         from elasticsearch import BadRequestError

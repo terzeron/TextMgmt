@@ -747,6 +747,91 @@ class TestESManager:
                     pass
             esm.refresh()
 
+    def test_get_existing_paths(self, es_manager_with_data):
+        """get_existing_paths가 inode → file_path 매핑을 반환한다"""
+        esm = es_manager_with_data
+        # doc 1, 2, 3이 존재
+        result = esm.get_existing_paths([1, 2, 3, 999999])
+        assert isinstance(result, dict)
+        assert 1 in result
+        assert result[1] == "/test/path1.txt"
+        assert 2 in result
+        assert result[2] == "/test/path2.txt"
+        assert 999999 not in result  # 존재하지 않는 ID
+
+    def test_get_existing_paths_empty(self, es_manager_with_data):
+        """빈 ID 목록은 빈 dict를 반환한다"""
+        esm = es_manager_with_data
+        assert esm.get_existing_paths([]) == {}
+
+    def test_bulk_update_paths(self, es_manager_with_data):
+        """bulk_update_paths로 file_path와 category가 업데이트된다"""
+        esm = es_manager_with_data
+        # 테스트 데이터 삽입
+        test_data = {
+            400: {
+                "category": "old_cat",
+                "title": "Path Update Test",
+                "author": "Author",
+                "file_path": "old_cat/test.txt",
+                "file_type": "txt",
+                "file_size": 100,
+                "line_count": 10,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "path update test",
+                "updated_time": "2024-01-01T00:00:00",
+            },
+            401: {
+                "category": "old_cat",
+                "title": "Path Update Test 2",
+                "author": "Author",
+                "file_path": "old_cat/test2.txt",
+                "file_type": "txt",
+                "file_size": 200,
+                "line_count": 20,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "path update test 2",
+                "updated_time": "2024-01-01T00:00:00",
+            },
+        }
+        esm.insert(test_data)
+        esm.refresh()
+
+        try:
+            # 경로 업데이트
+            updates = {
+                400: {"file_path": "new_cat/test.txt", "category": "new_cat"},
+                401: {"file_path": "new_cat/test2.txt", "category": "new_cat"},
+            }
+            count = esm.bulk_update_paths(updates)
+            assert count == 2
+            esm.refresh()
+
+            # 업데이트 확인
+            doc400 = esm.search_by_id(400)
+            assert doc400["file_path"] == "new_cat/test.txt"
+            assert doc400["category"] == "new_cat"
+            # 다른 필드는 변경되지 않아야 함
+            assert doc400["title"] == "Path Update Test"
+
+            doc401 = esm.search_by_id(401)
+            assert doc401["file_path"] == "new_cat/test2.txt"
+            assert doc401["category"] == "new_cat"
+        finally:
+            for doc_id in [400, 401]:
+                try:
+                    esm.delete(doc_id)
+                except Exception:
+                    pass
+            esm.refresh()
+
+    def test_bulk_update_paths_empty(self, es_manager_with_data):
+        """빈 업데이트는 0을 반환한다"""
+        esm = es_manager_with_data
+        assert esm.bulk_update_paths({}) == 0
+
     def test_search_by_id(self, es_manager_with_data):
         esm = es_manager_with_data
         # First get some results to find a valid ID
