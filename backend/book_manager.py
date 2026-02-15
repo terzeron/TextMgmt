@@ -869,7 +869,7 @@ class BookManager:
         doc = self.es_manager.search_by_id(book_id)
         if doc:
             book = self.item_class(book_id=book_id, info=doc)
-            file_path = self.path_prefix / book.file_path
+            file_path = book.file_path
             new_full_path = new_path
 
             # 대상 경로에 다른 파일이 이미 존재하는지 확인
@@ -892,8 +892,20 @@ class BookManager:
 
             # update book info in ElasticSearch
             new_relative_path = new_full_path.relative_to(self.path_prefix)
-            if self.es_manager.update(book_id, category=new_category, title=new_title, author=new_author, file_path=str(new_relative_path), file_type=new_type):
-                return "Ok", None
+            try:
+                if self.es_manager.update(book_id, category=new_category, title=new_title, author=new_author, file_path=str(new_relative_path), file_type=new_type):
+                    return "Ok", None
+                # ES 업데이트 실패 시 파일을 원래 위치로 롤백
+                LOGGER.error("update_book: ES update failed for book_id=%d, rolling back file move", book_id)
+                new_full_path.rename(file_path)
+            except Exception as e:
+                # ES 예외 발생 시에도 파일 롤백 시도
+                LOGGER.error("update_book: ES update exception for book_id=%d: %s, rolling back file move", book_id, e)
+                try:
+                    new_full_path.rename(file_path)
+                except IOError as rollback_err:
+                    LOGGER.error("update_book: rollback failed for book_id=%d: %s", book_id, rollback_err)
+                    return "Error", f"ES 업데이트와 파일 롤백 모두 실패: ES={e}, rollback={rollback_err}"
         return "Error", f"can't update book information of '{book_id}' in ElasticSearch, no such a book"
 
     async def get_category_mismatches(self) -> Dict[str, Any]:
@@ -1267,7 +1279,7 @@ class BookManager:
         # delete file
         try:
             book = self.item_class(book_id=book_id, info=doc)
-            file_path = self.path_prefix / book.file_path
+            file_path = book.file_path
             file_path.unlink()
         except FileNotFoundError as e:
             LOGGER.warning("File already deleted for book_id=%d: %s", book_id, e)
