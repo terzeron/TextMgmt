@@ -664,8 +664,13 @@ def main() -> int:
                 if data_item:
                     batch_data.update(data_item)
 
-            # 데이터 저장
+            # 데이터 저장 (중복 file_path 문서 선제거 후 insert)
             if batch_data:
+                new_file_paths = [v["file_path"] for v in batch_data.values() if "file_path" in v]
+                new_ids = list(batch_data.keys())
+                cleaned = es_manager.delete_by_file_paths(new_file_paths, exclude_ids=new_ids)
+                if cleaned > 0:
+                    print(f"  [중복 제거: {cleaned}개 기존 문서 삭제]")
                 es_manager.insert(batch_data)
                 processed_count += len(batch_data)
                 Stat.index_count += len(batch_data)

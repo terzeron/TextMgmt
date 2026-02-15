@@ -6,7 +6,7 @@ import math
 import warnings
 import logging.config
 from pathlib import Path
-from typing import Dict, List, Any, Tuple, Union, Set
+from typing import Dict, List, Any, Optional, Tuple, Union, Set
 from itertools import islice
 import time
 from elasticsearch import Elasticsearch
@@ -614,6 +614,34 @@ class ESManager:
                 except Exception:
                     pass
         return result
+
+    def delete_by_file_paths(self, file_paths: List[str], exclude_ids: Optional[List[int]] = None) -> int:
+        """주어진 file_path 목록에 해당하는 기존 문서를 삭제 (중복 방지용).
+        exclude_ids가 지정되면 해당 ID는 삭제하지 않음.
+        반환: 삭제된 문서 수"""
+        if not file_paths:
+            return 0
+        must_clauses: List[Dict[str, Any]] = [{"terms": {"file_path.keyword": file_paths}}]
+        must_not_clauses: List[Dict[str, Any]] = []
+        if exclude_ids:
+            must_not_clauses.append({"ids": {"values": [str(i) for i in exclude_ids]}})
+        query: Dict[str, Any] = {"bool": {"must": must_clauses}}
+        if must_not_clauses:
+            query["bool"]["must_not"] = must_not_clauses
+        try:
+            result = self.es.delete_by_query(
+                index=self.index_name,
+                body={"query": query},
+                conflicts="proceed",
+                refresh=False,
+            )
+            deleted = result.get("deleted", 0)
+            if deleted > 0:
+                LOGGER.info("delete_by_file_paths: %d docs deleted for %d paths", deleted, len(file_paths))
+            return deleted
+        except Exception as e:
+            LOGGER.error("delete_by_file_paths error: %s", e)
+            return 0
 
     def insert(self, data: Dict[int, Dict[str, Any]], num_docs: int = sys.maxsize, max_retries: int = 3) -> List[int]:
         LOGGER.debug("insert() %d items", len(data))

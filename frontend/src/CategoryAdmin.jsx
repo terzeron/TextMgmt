@@ -353,13 +353,15 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                 }
 
                 for (const item of result.duplicates || []) {
+                    const ids = item.docs.map(d => d.book_id);
+                    const fileName = item.file_path.split('/').pop();
                     entries.push({
-                        id: selectedId + '/dup_' + item.book_ids.join('_'),
-                        label: `[중복] ${item.title}.${item.file_type} (ID: ${item.book_ids.join(', ')})`,
-                        fileType: item.file_type,
+                        id: selectedId + '/dup_' + ids.join('_'),
+                        label: `[중복] ${fileName} (${item.docs.length}건)`,
+                        fileType: item.docs[0]?.file_type || 'unknown',
                         children: [],
                         mismatchType: 'duplicate',
-                        bookIds: item.book_ids,
+                        dupDocs: item.docs,
                         category: selectedId,
                         filePath: item.file_path,
                     });
@@ -839,9 +841,54 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                             {selectedMismatch.mismatchType === 'es_only'
                                                 ? `${contentLabel} 정보만 존재하고 파일시스템에는 존재하지 않습니다.`
                                                 : selectedMismatch.mismatchType === 'duplicate'
-                                                    ? `동일한 파일 경로로 ES에 중복 문서가 존재합니다. (ID: ${selectedMismatch.bookIds.join(', ')})`
+                                                    ? '동일한 파일 경로로 ES에 중복 문서가 존재합니다. 파일 삭제 후 재적재 시 발생할 수 있습니다.'
                                                     : `${contentLabel} 정보는 없고 파일시스템에만 존재합니다.`}
                                         </div>
+                                        {selectedMismatch.mismatchType === 'duplicate' && selectedMismatch.dupDocs && (
+                                            <table className="table table-sm table-bordered mb-2" style={{fontSize: '0.8rem'}}>
+                                                <thead>
+                                                    <tr>
+                                                        <th>ID</th>
+                                                        <th>제목</th>
+                                                        <th>저자</th>
+                                                        <th>액션</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {selectedMismatch.dupDocs.map(doc => (
+                                                        <tr key={doc.book_id}>
+                                                            <td>{doc.book_id}</td>
+                                                            <td>{doc.title}</td>
+                                                            <td>{doc.author}</td>
+                                                            <td>
+                                                                <Button
+                                                                    variant="outline-primary" size="sm" className="me-1 py-0"
+                                                                    onClick={() => window.open(`/${contentType === 'comic' ? 'comics-view' : 'book-view'}/${doc.book_id}?category=${encodeURIComponent(selectedMismatch.category)}`, '_blank', 'noopener')}
+                                                                >
+                                                                    조회
+                                                                </Button>
+                                                                <Button
+                                                                    variant="outline-danger" size="sm" className="py-0"
+                                                                    onClick={() => {
+                                                                        if (!window.confirm(`ID ${doc.book_id} (${doc.title}) 문서를 삭제하시겠습니까?`)) return;
+                                                                        jsonDeleteReq(apiPrefix + '/books/' + doc.book_id, null,
+                                                                            () => {
+                                                                                setActionResult({type: 'success', message: `ID ${doc.book_id} 문서가 삭제되었습니다.`});
+                                                                                setSelectedMismatch(null);
+                                                                                loadData();
+                                                                            },
+                                                                            (error) => setActionResult({type: 'danger', message: error || '삭제 실패'})
+                                                                        );
+                                                                    }}
+                                                                >
+                                                                    삭제
+                                                                </Button>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        )}
                                         <div className="d-flex flex-wrap gap-1">
                                             {selectedMismatch.mismatchType === 'es_only' && (
                                                 <>
@@ -864,27 +911,6 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                                         삭제
                                                     </Button>
                                                 </>
-                                            )}
-                                            {selectedMismatch.mismatchType === 'duplicate' && (
-                                                <>{selectedMismatch.bookIds.map(id => (
-                                                    <Button
-                                                        key={id}
-                                                        variant="outline-danger" size="sm"
-                                                        onClick={() => {
-                                                            if (!window.confirm(`ID ${id} 문서를 삭제하시겠습니까?`)) return;
-                                                            jsonDeleteReq(apiPrefix + '/books/' + id, null,
-                                                                () => {
-                                                                    setActionResult({type: 'success', message: `ID ${id} 문서가 삭제되었습니다.`});
-                                                                    setSelectedMismatch(null);
-                                                                    loadData();
-                                                                },
-                                                                (error) => setActionResult({type: 'danger', message: error || '삭제 실패'})
-                                                            );
-                                                        }}
-                                                    >
-                                                        ID {id} 삭제
-                                                    </Button>
-                                                ))}</>
                                             )}
                                             {selectedMismatch.mismatchType === 'fs_only' && (
                                                 <>
