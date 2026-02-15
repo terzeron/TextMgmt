@@ -9,7 +9,7 @@ vi.mock('../src/Common', () => ({
     ROOT_DIRECTORY: '$$rootdir$$',
 }));
 
-vi.mock('../src/CategoryMapping', () => ({
+vi.mock('../src/categoryMappingCache', () => ({
     loadCategoryMappings: () => ({ '소설': ['fiction', '소설'] }),
     fetchCategoryMappings: () => Promise.resolve(),
     isCacheInitialized: () => true,
