@@ -897,6 +897,7 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                                                 >
                                                                     조회
                                                                 </Button>
+                                                                {!doc.file_linked && (
                                                                 <Button
                                                                     variant="outline-danger" size="sm" className="py-0"
                                                                     onClick={() => {
@@ -913,6 +914,7 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                                                 >
                                                                     삭제
                                                                 </Button>
+                                                                )}
                                                             </td>
                                                         </tr>
                                                     ))}
