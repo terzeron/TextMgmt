@@ -281,9 +281,6 @@ class BookManager:
         LOGGER.debug(self.path_prefix)
         self.es_manager = ESManager()
         self.es_manager.create_index()
-        # FS 캐시 (get_category_mismatches → get_category_mismatch_details 재사용)
-        self._fs_cats_cache: Optional[Dict[str, set]] = None
-        self._fs_cats_cache_time: float = 0.0
 
     def __del__(self) -> None:
         if hasattr(self, 'es_manager'):
@@ -913,36 +910,31 @@ class BookManager:
         import os as _os
         from concurrent.futures import ThreadPoolExecutor
 
-        # 1. ES: 단일 scroll로 카테고리별 file_path 집합 조회
-        es_file_paths = self.es_manager.get_all_file_paths_grouped()
-        es_cats = {cat: len(paths) for cat, paths in es_file_paths.items()}
+        # 1. ES: terms aggregation으로 카테고리별 문서 수 조회 (scroll 대비 수십 배 빠름)
+        es_cats = self.es_manager.search_and_aggregate_by_category()
 
-        # 2. 파일시스템: 1레벨 디렉토리 + 그 하위 2레벨 스캔 (경로 집합)
+        # 2. 파일시스템: 1레벨 디렉토리 + 그 하위 2레벨 스캔 (파일 수만 카운트)
         base_str = str(self.path_prefix)
-        fs_cats: Dict[str, set] = {}
+        fs_cats: Dict[str, int] = {}
 
-        def collect_files(dir_path: str, category: str) -> set:
-            paths: set = set()
+        def count_files(dir_path: str) -> int:
+            count = 0
             try:
                 with _os.scandir(dir_path) as it:
                     for entry in it:
                         if entry.is_file(follow_symlinks=False):
-                            paths.add(f"{category}/{entry.name}")
+                            count += 1
             except (PermissionError, OSError):
                 pass
-            return paths
+            return count
 
         try:
-            # 최상위 디렉토리의 파일을 _root 카테고리로 수집
-            root_paths: set = set()
-            with _os.scandir(base_str) as l1_it:
-                for l1 in l1_it:
-                    if l1.is_file(follow_symlinks=False):
-                        root_paths.add(l1.name)
-            if root_paths:
-                fs_cats["_root"] = root_paths
+            # 최상위 디렉토리의 파일을 _root 카테고리로 카운트
+            root_count = count_files(base_str)
+            if root_count > 0:
+                fs_cats["_root"] = root_count
 
-            # L1/L2 디렉토리 목록 수집 (빠름 — 디렉토리 이름만 읽기)
+            # L1/L2 디렉토리 목록 수집
             scan_tasks: List[Tuple[str, str]] = []  # (dir_path, category)
             with _os.scandir(base_str) as l1_it:
                 for l1 in l1_it:
@@ -961,38 +953,31 @@ class BookManager:
 
             # 병렬 FS 스캔
             with ThreadPoolExecutor() as executor:
-                futures = {executor.submit(collect_files, dp, cat): cat for dp, cat in scan_tasks}
+                futures = {executor.submit(count_files, dp): cat for dp, cat in scan_tasks}
                 for future in futures:
                     cat = futures[future]
-                    paths = future.result()
-                    if paths:
-                        fs_cats[cat] = paths
+                    count = future.result()
+                    if count > 0:
+                        fs_cats[cat] = count
         except (PermissionError, OSError):
             pass
 
-        # FS 캐시 저장 (get_category_mismatch_details에서 재사용, TTL 60초)
-        # time을 먼저 설정하여 캐시 읽기 측에서 stale 시간을 과대평가하지 않도록 함
-        self._fs_cats_cache_time = time.time()
-        self._fs_cats_cache = fs_cats
-
-        # 3. 비교 (경로 기반 집합 비교)
+        # 3. 비교 (건수 기반 비교 — 상세 경로 비교는 detail API에서 lazy 수행)
         all_keys = sorted(set(list(fs_cats.keys()) + [k for k in es_cats if k.count("/") <= 1 and not k.startswith(".")]))
         mismatches = []
         es_only = []
         fs_only = []
         for key in all_keys:
             es_count = es_cats.get(key)
-            fs_paths = fs_cats.get(key)
-            if es_count is not None and fs_paths is not None:
-                # 양쪽 다 존재 → 경로 기반 비교 (이미 메모리에 있음)
-                es_paths = es_file_paths.get(key, set())
-                diff = len(es_paths - fs_paths) + len(fs_paths - es_paths)
+            fs_count = fs_cats.get(key)
+            if es_count is not None and fs_count is not None:
+                diff = abs(es_count - fs_count)
                 if diff > 0:
-                    mismatches.append({"category": key, "es_count": es_count, "fs_count": len(fs_paths), "diff": diff})
+                    mismatches.append({"category": key, "es_count": es_count, "fs_count": fs_count, "diff": diff})
             elif es_count is not None:
                 es_only.append({"category": key, "es_count": es_count})
-            elif fs_paths is not None:
-                fs_only.append({"category": key, "fs_count": len(fs_paths)})
+            elif fs_count is not None:
+                fs_only.append({"category": key, "fs_count": fs_count})
 
         return {
             "mismatches": sorted(mismatches, key=lambda x: abs(x["diff"]), reverse=True),
@@ -1011,26 +996,23 @@ class BookManager:
             rel_path = doc.get("file_path", "")
             es_files[rel_path] = {"book_id": book_id, **doc}
 
-        # 2. 파일시스템 파일 목록 (캐시 활용, TTL 60초)
+        # 2. 파일시스템 파일 목록
         fs_files: set = set()
-        if self._fs_cats_cache is not None and (time.time() - self._fs_cats_cache_time) < 60:
-            fs_files = self._fs_cats_cache.get(category, set())
+        if category == "_root":
+            cat_dir = self.path_prefix
         else:
-            if category == "_root":
-                cat_dir = self.path_prefix
-            else:
-                cat_dir = self.path_prefix / category
-            try:
-                with _os.scandir(str(cat_dir)) as it:
-                    for entry in it:
-                        if entry.is_file(follow_symlinks=False):
-                            if category == "_root":
-                                rel_path = entry.name
-                            else:
-                                rel_path = f"{category}/{entry.name}"
-                            fs_files.add(rel_path)
-            except (PermissionError, OSError):
-                pass
+            cat_dir = self.path_prefix / category
+        try:
+            with _os.scandir(str(cat_dir)) as it:
+                for entry in it:
+                    if entry.is_file(follow_symlinks=False):
+                        if category == "_root":
+                            rel_path = entry.name
+                        else:
+                            rel_path = f"{category}/{entry.name}"
+                        fs_files.add(rel_path)
+        except (PermissionError, OSError):
+            pass
 
         # 3. 비교
         es_paths = set(es_files.keys())
