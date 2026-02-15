@@ -14,7 +14,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from itertools import islice
-from typing import Dict, Any, List, Set, Tuple, Optional, Iterable
+from typing import Dict, Any, List, Tuple, Optional, Iterable
 
 import ebooklib
 from ebooklib import epub
@@ -354,7 +354,7 @@ class Loader:
         return "", 0, 0
 
     @staticmethod
-    def read_file(file_path: Path, stat_result: Optional[os.stat_result] = None) -> Dict[int, Dict[str, Any]]:
+    def read_file(file_path: Path, stat_result: Optional[os.stat_result] = None, skip_text: bool = False) -> Dict[int, Dict[str, Any]]:
         if file_path.is_file():
             sys.stdout.flush()
             # read metadata of each file (stat 결과 재사용)
@@ -374,6 +374,44 @@ class Loader:
                 title = file_path.stem
 
             file_type = file_path.suffix[1:]
+
+            # skip_text: 텍스트 추출 건너뛰기 (만화 등 이미지 기반 파일)
+            if skip_text:
+                summary = ""
+                line_count = 0
+                page_count = 0
+                isbn_list = []
+                # PDF만 예외: page_count 추출 유지
+                if file_type == "pdf":
+                    try:
+                        with file_path.open("rb") as f:
+                            page_count = len(pypdf.PdfReader(f).pages)
+                    except Exception as e:
+                        LOGGER.error(file_path)
+                        LOGGER.error(e)
+                    Stat.pdf_count += 1
+                # 지원하지 않는 확장자는 기존 동작 유지 (빈 dict 반환)
+                supported_types = {"txt", "epub", "pdf", "docx", "doc", "hwp", "rtf", "html",
+                                   "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg", "cbz"}
+                if file_type not in supported_types:
+                    return {}
+
+                return {
+                    inode_num: {
+                        "category": category,
+                        "title": title,
+                        "author": author,
+                        "file_path": str(file_path.relative_to(prefix)),
+                        "file_type": file_type,
+                        "file_size": int(file_size),
+                        "line_count": line_count,
+                        "page_count": page_count,
+                        "isbn": "",
+                        "summary": summary,
+                        "updated_time": datetime.now().isoformat()
+                    }
+                }
+
             # read content of each file
             summary = ""
             line_count = 0
@@ -562,10 +600,11 @@ def main() -> int:
             return -1
         return 0
 
-    def process_file_iter(file_iter: Iterable[Path], skip_check: bool = False) -> Tuple[int, int]:
-        """파일 iterator를 배치 처리하여 ES에 저장. 반환: (처리 수, 건너뜀 수)"""
+    def process_file_iter(file_iter: Iterable[Path], skip_check: bool = False, skip_text: bool = False) -> Tuple[int, int, int]:
+        """파일 iterator를 배치 처리하여 ES에 저장. 반환: (처리 수, 건너뜀 수, 경로동기화 수)"""
         skipped_count = 0
         processed_count = 0
+        synced_count = 0
         file_iterator = iter(file_iter)
 
         while True:
@@ -583,19 +622,45 @@ def main() -> int:
                 except OSError:
                     continue
 
-            # 존재 여부 검사 (skip_check가 False일 때만)
-            existing_ids: Set[int] = set()
-            if not skip_check:
-                existing_ids = es_manager.get_existing_ids(list(file_stat_map.keys()))
-                skipped_count += len(existing_ids)
+            if skip_check:
+                # --reload 모드: 존재 여부 무시, 전부 파싱
+                new_inodes = set(file_stat_map.keys())
+                path_updates: Dict[int, Dict[str, str]] = {}
+            else:
+                # 기존 경로 조회 (inode → file_path)
+                existing_paths = es_manager.get_existing_paths(list(file_stat_map.keys()))
+
+                # 경로 동기화: ES에 있고 file_path가 다른 경우
+                path_updates: Dict[int, Dict[str, str]] = {}
+                for inode, es_file_path in existing_paths.items():
+                    if inode not in file_stat_map:
+                        continue
+                    file_path, _ = file_stat_map[inode]
+                    prefix = Loader.get_path_prefix(file_path)
+                    current_file_path = str(file_path.relative_to(prefix))
+                    if current_file_path != es_file_path:
+                        category = str(file_path.parent.relative_to(prefix))
+                        if category == ".":
+                            category = "_root"
+                        path_updates[inode] = {"file_path": current_file_path, "category": category}
+
+                # 신규 파일: ES에 없는 inode
+                new_inodes = set(file_stat_map.keys()) - set(existing_paths.keys())
+                skipped_count += len(existing_paths) - len(path_updates)
+
+            # 경로 동기화 실행
+            if path_updates:
+                es_manager.bulk_update_paths(path_updates)
+                synced_count += len(path_updates)
+                for inode, fields in path_updates.items():
+                    print(f"  [경로 동기화] inode={inode}: {fields['file_path']}")
 
             # 파일 파싱 (stat 결과 재사용)
             batch_data: Dict[int, Dict[str, Any]] = {}
-            for inode, (file_path, st) in file_stat_map.items():
-                if inode in existing_ids:
-                    continue  # 이미 존재하면 건너뜀
+            for inode in new_inodes:
+                file_path, st = file_stat_map[inode]
                 print(f"* {file_path}")
-                data_item = Loader.read_file(file_path, stat_result=st)
+                data_item = Loader.read_file(file_path, stat_result=st, skip_text=skip_text)
                 if data_item:
                     batch_data.update(data_item)
 
@@ -607,9 +672,11 @@ def main() -> int:
                 if skip_check:
                     print(f"  [배치 저장: {len(batch_data)}개]")
                 else:
-                    print(f"  [배치 저장: {len(batch_data)}개, 건너뜀: {len(existing_ids)}개]")
+                    synced_msg = f", 경로동기화: {len(path_updates)}개" if path_updates else ""
+                    skip_batch = len(set(existing_paths.keys()) - set(path_updates.keys()))
+                    print(f"  [배치 저장: {len(batch_data)}개, 건너뜀: {skip_batch}개{synced_msg}]")
 
-        return processed_count, skipped_count
+        return processed_count, skipped_count, synced_count
 
     for arg in file_args:
         target_path = Path(arg)
@@ -621,10 +688,13 @@ def main() -> int:
             continue
         print(f"====== {target_path} ======")
 
+        # comics 인덱스는 텍스트 추출 건너뛰기
+        skip_text = index_name_arg == "comics"
+
         # 파일이 지정된 경우: 강제 재적재 (skip_check=True)
         if target_path.is_file():
             print(f"  [파일 강제 재적재] {target_path.name}")
-            processed, _ = process_file_iter([target_path], skip_check=True)
+            processed, _, _ = process_file_iter([target_path], skip_check=True, skip_text=skip_text)
             if processed > 0:
                 print(f"  파일 재적재 완료")
             else:
@@ -636,10 +706,12 @@ def main() -> int:
                 if p.is_file() and not any(part.startswith('.') for part in p.relative_to(target_path).parts)
             )
             skip_check = do_reload
-            processed, skipped_count = process_file_iter(file_iter, skip_check=skip_check)
+            processed, skipped_count, synced_count = process_file_iter(file_iter, skip_check=skip_check, skip_text=skip_text)
             print(f"  총 {processed}개 파일 처리됨")
             if skipped_count > 0:
                 print(f"  총 {skipped_count}개 중복 파일 건너뜀")
+            if synced_count > 0:
+                print(f"  총 {synced_count}개 경로 동기화")
         else:
             skip_check = do_reload
 
@@ -662,16 +734,20 @@ def main() -> int:
 
                 # 모아서 한꺼번에 ES에 저장
                 sample_file_paths = [f for _, f in sample_files]
-                processed, skipped1 = process_file_iter(sample_file_paths, skip_check=skip_check)
+                processed, skipped1, synced1 = process_file_iter(sample_file_paths, skip_check=skip_check, skip_text=skip_text)
                 print(f"    {processed}개 카테고리 샘플 저장, {skipped1}개 중복 건너뜀")
+                if synced1 > 0:
+                    print(f"    {synced1}개 경로 동기화")
 
             # 2단계: 지정된 디렉토리에 바로 속한 파일들
             print("  [2단계] 현재 디렉토리 파일 등록")
             current_dir_files = [p for p in target_path.iterdir() if p.is_file() and not p.name.startswith('.')]
             print(f"    {len(current_dir_files)}개 파일 발견")
-            _, skipped2 = process_file_iter(current_dir_files, skip_check=skip_check)
+            _, skipped2, synced2 = process_file_iter(current_dir_files, skip_check=skip_check, skip_text=skip_text)
             if skipped2 > 0:
                 print(f"    {skipped2}개 중복 파일 건너뜀")
+            if synced2 > 0:
+                print(f"    {synced2}개 경로 동기화")
 
         print("================================")
 

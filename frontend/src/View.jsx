@@ -12,7 +12,7 @@ import Folder from './Folder.jsx';
 import ViewSingle from "./ViewSingle.jsx";
 import BookInfoView from "./BookInfoView.jsx";
 import SearchResult from './SearchResult';
-import {findCommonPrefix, buildFolderHierarchy, parseEntryId, findFolderInTree, updateFolderInTree, determineNextEntryId} from './folderUtils';
+import {findCommonPrefix, buildFolderHierarchy, parseEntryId, findFolderInTree, updateFolderInTree, determineNextEntryId, determinePrevEntryId} from './folderUtils';
 
 // 모바일 감지 훅
 function useIsMobile(breakpoint = 768) {
@@ -47,6 +47,7 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
     const [successMessage, setSuccessMessage] = useState('');
     const [selectedEntryId, setSelectedEntryId] = useState('');
     const [nextEntryId, setNextEntryId] = useState('');
+    const [prevEntryId, setPrevEntryId] = useState('');
     const [folderData, setFolderData] = useState([]);
     const [hiddenCategories, setHiddenCategories] = useState(new Set());
     const [bookInfo, setBookInfo] = useState({});
@@ -175,10 +176,11 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
             const bookId = book['book_id'];
             setSelectedEntryId(selectedEntryId);
             setBookInfo(book);
-            setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
+            setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : '') + '&category=' + encodeURIComponent(book['category'] || '_root'));
             setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + bookId);
             window.history.replaceState(null, '', `${basePath}/${bookId}?category=${encodeURIComponent(book['category'] || '_root')}`);
             setNextEntryId(determineNextEntryId(folderData, selectedEntryId));
+            setPrevEntryId(determinePrevEntryId(folderData, selectedEntryId));
         } else {
             // book entry (폴더 내 파일)
             const parsed = parseEntryId(selectedEntryId);
@@ -192,10 +194,11 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
                 const book = booksInCategory.find(bookItem => bookItem.id === selectedEntryId)?.book;
                 if (book) {
                     setBookInfo(book);
-                    setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
+                    setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : '') + '&category=' + encodeURIComponent(category));
                     setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + bookId);
                     window.history.replaceState(null, '', `${basePath}/${bookId}?category=${encodeURIComponent(category)}`);
                     setNextEntryId(determineNextEntryId(folderData, selectedEntryId));
+                    setPrevEntryId(determinePrevEntryId(folderData, selectedEntryId));
                 } else {
                     setErrorMessage(`can't find the selected book`);
                 }
@@ -205,10 +208,11 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
         }
     }, [folderData, apiPrefix, basePath]);
 
-    // folderData 변경 시 nextEntryId 재계산
+    // folderData 변경 시 nextEntryId/prevEntryId 재계산
     useEffect(() => {
         if (selectedEntryId && folderData.length > 0) {
             setNextEntryId(determineNextEntryId(folderData, selectedEntryId));
+            setPrevEntryId(determinePrevEntryId(folderData, selectedEntryId));
         }
     }, [folderData, selectedEntryId]);
 
@@ -235,7 +239,7 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
                         }
                     }
                     setBookInfo(book);
-                    setViewUrl('/viewer/' + book['file_type'] + '/' + routeBookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
+                    setViewUrl('/viewer/' + book['file_type'] + '/' + routeBookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : '') + '&category=' + encodeURIComponent(book['category'] || ''));
                     setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + routeBookId);
                 }, (error) => {
                     setErrorMessage(`책 정보를 불러올 수 없습니다. ${error}`);
@@ -257,6 +261,12 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
             entryClicked(nextEntryId);
         }
     }, [nextEntryId, entryClicked]);
+
+    const toPrevEntryButtonClicked = useCallback(() => {
+        if (prevEntryId) {
+            entryClicked(prevEntryId);
+        }
+    }, [prevEntryId, entryClicked]);
 
     // editUrl 계산: basePath의 -view를 -edit로 변환
     const editBasePath = basePath.replace('-view', '-edit');
@@ -324,7 +334,7 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
                                 <Col id="right_panel" className="ps-0 pe-0">
                                     {
                                         bookInfo['book_id'] &&
-                                        <ViewSingle key={bookInfo['book_id']} bookId={bookInfo['book_id']} filePath={bookInfo['file_path']} fileType={bookInfo['file_type']} viewUrl={viewUrl} downloadUrl={downloadUrl} lineCount={100} pageCount={10} apiPrefix={apiPrefix} editUrl={editUrl} onNextBook={toNextEntryButtonClicked} hasNextBook={!!nextEntryId} role={role}/>
+                                        <ViewSingle key={bookInfo['book_id']} bookId={bookInfo['book_id']} filePath={bookInfo['file_path']} fileType={bookInfo['file_type']} viewUrl={viewUrl} downloadUrl={downloadUrl} lineCount={100} pageCount={10} apiPrefix={apiPrefix} editUrl={editUrl} onNextBook={toNextEntryButtonClicked} hasNextBook={!!nextEntryId} onPrevBook={toPrevEntryButtonClicked} hasPrevBook={!!prevEntryId} role={role}/>
                                     }
                                 </Col>
                             </Row>

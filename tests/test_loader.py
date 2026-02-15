@@ -374,6 +374,65 @@ class TestLoaderWithTempFiles(unittest.TestCase):
         finally:
             Loader.comics_path_prefix = original_comics_prefix
 
+    def test_skip_text_txt(self):
+        """skip_text=True일 때 TXT 파일의 summary가 비어 있고 메타데이터는 정상"""
+        test_file = Path(self.temp_dir) / "test.txt"
+        test_file.write_text("Hello, World! 안녕하세요.\n두 번째 줄", encoding="utf-8")
+
+        data = Loader.read_file(test_file, skip_text=True)
+        assert data
+        for _, v in data.items():
+            assert v["summary"] == ""
+            assert v["line_count"] == 0
+            assert v["page_count"] == 0
+            assert v["isbn"] == ""
+            assert v["file_type"] == "txt"
+            assert v["file_size"] > 0
+            assert v["title"] == "test"
+
+    def test_skip_text_pdf_keeps_page_count(self):
+        """skip_text=True일 때 PDF는 page_count가 유지되는지 테스트"""
+        src_pdf = Path(__file__).parent / "_pdf"
+        pdf_files = list(src_pdf.glob("*.pdf"))
+        if not pdf_files:
+            self.skipTest("PDF 테스트 파일이 없습니다")
+
+        dest_pdf = Path(self.temp_dir) / pdf_files[0].name
+        shutil.copy2(pdf_files[0], dest_pdf)
+
+        data = Loader.read_file(dest_pdf, skip_text=True)
+        assert data
+        for _, v in data.items():
+            assert v["summary"] == ""
+            assert v["page_count"] > 0  # PDF는 page_count 유지
+            assert v["isbn"] == ""
+
+    def test_skip_text_unsupported_type_returns_empty(self):
+        """skip_text=True일 때 지원하지 않는 확장자는 빈 dict 반환"""
+        test_file = Path(self.temp_dir) / "test.xyz"
+        test_file.write_text("unsupported", encoding="utf-8")
+
+        data = Loader.read_file(test_file, skip_text=True)
+        assert data == {}
+
+    def test_skip_text_epub(self):
+        """skip_text=True일 때 EPUB 파일의 summary가 비어 있고 메타데이터는 정상"""
+        src_epub = Path(__file__).parent / "_epub"
+        epub_files = list(src_epub.glob("*.epub"))
+        if not epub_files:
+            self.skipTest("EPUB 테스트 파일이 없습니다")
+
+        dest_epub = Path(self.temp_dir) / epub_files[0].name
+        shutil.copy2(epub_files[0], dest_epub)
+
+        data = Loader.read_file(dest_epub, skip_text=True)
+        assert data
+        for _, v in data.items():
+            assert v["summary"] == ""
+            assert v["line_count"] == 0
+            assert v["isbn"] == ""
+            assert v["file_type"] == "epub"
+
     def test_hidden_directory_excluded_from_get_file_list(self):
         """숨김 디렉토리가 get_file_list에서 제외되는지 테스트"""
         # 일반 디렉토리에 파일 생성

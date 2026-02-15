@@ -1,6 +1,7 @@
-import {useEffect, useState} from "react";
+import {useEffect, useState, useCallback} from "react";
 import {useParams, useSearchParams} from "react-router-dom";
 import PropTypes from 'prop-types';
+import {jsonGetReq, getApiUrlPrefix} from "./Common";
 
 import './ViewSingle.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
@@ -20,12 +21,15 @@ export default function ViewSingle(props) {
     const [searchParams] = useSearchParams();
     const paramFilePath = searchParams.get('path') || '';
     const paramApiPrefix = searchParams.get('api') || '';
+    const paramCategory = searchParams.get('category') || '';
     const standalone = Boolean(entryId && paramFileType);
     const [bookId, setBookId] = useState(0);
     const [filePath, setFilePath] = useState('');
     const [fileType, setFileType] = useState('');
     const [lineCount, setLineCount] = useState(0);
     const [pageCount, setPageCount] = useState(0);
+    const [prevBook, setPrevBook] = useState(null);
+    const [nextBook, setNextBook] = useState(null);
 
     useEffect(() => {
         if (entryId && paramFileType && paramFilePath) {
@@ -72,7 +76,36 @@ export default function ViewSingle(props) {
         };
     }, [standalone]);
 
+    // standalone 모드: 카테고리 내 이전/다음 책 결정
+    useEffect(() => {
+        if (!standalone || !paramCategory || paramCategory === '_root') return;
+        const apiUrl = paramApiPrefix + '/categories/' + paramCategory.split('/').map(encodeURIComponent).join('/');
+        jsonGetReq(apiUrl, null, (books) => {
+            books.sort((a, b) => a.title.localeCompare(b.title));
+            const currentIndex = books.findIndex(b => b.book_id === Number(entryId));
+            setPrevBook(currentIndex > 0 ? books[currentIndex - 1] : null);
+            setNextBook(currentIndex >= 0 && currentIndex < books.length - 1 ? books[currentIndex + 1] : null);
+        });
+    }, [standalone, paramCategory, paramApiPrefix, entryId]);
+
+    const navigateToBook = useCallback((book) => {
+        const url = '/viewer/' + book.file_type + '/' + book.book_id
+            + '?path=' + encodeURIComponent(book.file_path)
+            + (paramApiPrefix ? '&api=' + encodeURIComponent(paramApiPrefix) : '')
+            + '&category=' + encodeURIComponent(paramCategory);
+        window.location.href = url;
+    }, [paramApiPrefix, paramCategory]);
+
     const preview = props.preview || false;
+
+    // 이전/다음 책 네비게이션 (미리보기/전체보기 공통)
+    const showBookNav = standalone
+        ? (prevBook || nextBook)
+        : (props.onPrevBook || props.onNextBook);
+    const navPrevDisabled = standalone ? !prevBook : !props.hasPrevBook;
+    const navNextDisabled = standalone ? !nextBook : !props.hasNextBook;
+    const navPrevClick = standalone ? () => prevBook && navigateToBook(prevBook) : props.onPrevBook;
+    const navNextClick = standalone ? () => nextBook && navigateToBook(nextBook) : props.onNextBook;
 
     const ap = standalone ? paramApiPrefix : (props.apiPrefix || '');
     const componentMap = {
@@ -110,11 +143,6 @@ export default function ViewSingle(props) {
                                 </Button>
                             </a>
                         )}
-                        {props.onNextBook && (
-                            <Button variant="outline-primary" size="sm" className="float-end" onClick={props.onNextBook} disabled={!props.hasNextBook}>
-                                다음 책으로
-                            </Button>
-                        )}
                         {props.role === 'admin' && props.editUrl && (
                             <a href={props.editUrl}>
                                 <Button variant="outline-secondary" size="sm" className="float-end">
@@ -126,6 +154,16 @@ export default function ViewSingle(props) {
                 </Card.Header>
             )}
             <Card.Body>
+                {showBookNav && (
+                    <div className="standalone-nav">
+                        <button className="standalone-nav-btn" onClick={navPrevClick} disabled={navPrevDisabled}>
+                            ◀ 이전 책으로
+                        </button>
+                        <button className="standalone-nav-btn" onClick={navNextClick} disabled={navNextDisabled}>
+                            다음 책으로 ▶
+                        </button>
+                    </div>
+                )}
                 {bookId ? (
                     renderComponent
                 ) : (
@@ -149,5 +187,7 @@ ViewSingle.propTypes = {
     editUrl: PropTypes.string,
     onNextBook: PropTypes.func,
     hasNextBook: PropTypes.bool,
+    onPrevBook: PropTypes.func,
+    hasPrevBook: PropTypes.bool,
     role: PropTypes.string,
 }
