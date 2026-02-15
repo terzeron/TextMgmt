@@ -79,7 +79,7 @@ export default function ViewSingle(props) {
     // standalone 모드: 카테고리 내 이전/다음 책 결정
     useEffect(() => {
         if (!standalone || !paramCategory || paramCategory === '_root') return;
-        const apiUrl = paramApiPrefix + '/categories/' + encodeURIComponent(paramCategory);
+        const apiUrl = paramApiPrefix + '/categories/' + paramCategory.split('/').map(encodeURIComponent).join('/');
         jsonGetReq(apiUrl, null, (books) => {
             books.sort((a, b) => a.book_id - b.book_id);
             const currentIndex = books.findIndex(b => b.book_id === Number(entryId));
@@ -98,9 +98,24 @@ export default function ViewSingle(props) {
 
     const preview = props.preview || false;
 
+    // PDF 뷰어에 전달할 네비게이션 props
+    const pdfNavProps = standalone
+        ? {
+            onPrevBook: prevBook ? () => navigateToBook(prevBook) : undefined,
+            onNextBook: nextBook ? () => navigateToBook(nextBook) : undefined,
+            hasPrevBook: !!prevBook,
+            hasNextBook: !!nextBook,
+        }
+        : {
+            onPrevBook: props.onPrevBook,
+            onNextBook: props.onNextBook,
+            hasPrevBook: props.hasPrevBook,
+            hasNextBook: props.hasNextBook,
+        };
+
     const ap = standalone ? paramApiPrefix : (props.apiPrefix || '');
     const componentMap = {
-        'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} preview={preview} apiPrefix={ap} />,
+        'pdf': <ViewPDF bookId={bookId} pageCount={pageCount} preview={preview} apiPrefix={ap} {...pdfNavProps} />,
         'epub': <ViewEPUB bookId={bookId} preview={preview} apiPrefix={ap} />,
         'doc': <ViewDOC bookId={bookId} fileType="doc" apiPrefix={ap} />,
         'docx': <ViewDOC bookId={bookId} fileType="docx" lineCount={lineCount} apiPrefix={ap} />,
@@ -155,7 +170,7 @@ export default function ViewSingle(props) {
                 </Card.Header>
             )}
             <Card.Body>
-                {standalone && (prevBook || nextBook) && (
+                {standalone && (prevBook || nextBook) && fileType !== 'pdf' && (
                     <div className="standalone-nav">
                         <button className="standalone-nav-btn" onClick={() => navigateToBook(prevBook)} disabled={!prevBook}>
                             ◀ 이전 책으로
