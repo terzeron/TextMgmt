@@ -545,6 +545,7 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
 
     const handleReloadCategory = useCallback(() => {
         if (!selectedCategory) return;
+        setShowReloadModal(false);
         setReloading(true);
         setSaving(true);
         jsonPostReq(
@@ -553,7 +554,6 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
             (result) => {
                 setMessage(`카테고리 '${selectedCategory}' ES 재적재 완료 (${result.processed_count}건 처리)`);
                 setTimeout(() => setMessage(''), 5000);
-                setShowReloadModal(false);
             },
             (error) => {
                 setMessage(error || 'ES 재적재에 실패했습니다.');
