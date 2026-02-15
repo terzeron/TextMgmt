@@ -556,8 +556,8 @@ def main() -> int:
 
     # 인덱스명 파싱
     INDEX_MAP = {
-        "book": os.environ.get("TM_ES_BOOK_INDEX", "book"),
-        "comics": os.environ.get("TM_ES_COMICS_INDEX", "comics"),
+        "book": os.environ["TM_ES_BOOK_INDEX"],
+        "comics": os.environ["TM_ES_COMICS_INDEX"],
     }
 
     if len(args) < 1:

@@ -23,5 +23,5 @@ class ComicsManager(BookManager):
 
         self.path_prefix = Path(os.environ["TM_COMICS_DIR"])
         LOGGER.debug(self.path_prefix)
-        self.es_manager = ESManager(index_name=os.environ.get("TM_ES_COMICS_INDEX", "tm_comics"))
+        self.es_manager = ESManager(index_name=os.environ["TM_ES_COMICS_INDEX"])
         self.es_manager.create_index()
