@@ -214,6 +214,7 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
     // rename/delete 모달
     const [showRenameModal, setShowRenameModal] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [showDeleteDirModal, setShowDeleteDirModal] = useState(false);
     const [showReloadModal, setShowReloadModal] = useState(false);
     const [reloading, setReloading] = useState(false);
     const [newCategoryName, setNewCategoryName] = useState('');
@@ -553,6 +554,7 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                 setMessage(`카테고리 '${selectedCategory}'이(가) 삭제되었습니다. (${result.deleted_count}건)`);
                 setTimeout(() => setMessage(''), 5000);
                 setShowDeleteModal(false);
+                setShowDeleteDirModal(false);
                 setSelectedCategory('');
                 loadData();
             },
@@ -761,6 +763,16 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                                 title="카테고리 삭제"
                                             >
                                                 삭제 <FontAwesomeIcon icon={faTrash}/>
+                                            </Button>
+                                            <Button
+                                                variant="outline-warning"
+                                                size="sm"
+                                                className="ms-1"
+                                                disabled={saving}
+                                                onClick={() => setShowDeleteDirModal(true)}
+                                                title="디렉토리 삭제 (ES 문서 정리)"
+                                            >
+                                                디렉토리 삭제 <FontAwesomeIcon icon={faTrash}/>
                                             </Button>
                                             <Button
                                                 variant="outline-success"
@@ -999,6 +1011,32 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                         disabled={saving}
                     >
                         {saving ? <Spinner animation="border" size="sm" /> : '삭제'}
+                    </Button>
+                </Modal.Footer>
+            </Modal>
+
+            {/* 디렉토리 삭제 확인 모달 */}
+            <Modal show={showDeleteDirModal} onHide={() => setShowDeleteDirModal(false)} centered>
+                <Modal.Header closeButton>
+                    <Modal.Title>디렉토리 삭제</Modal.Title>
+                </Modal.Header>
+                <Modal.Body>
+                    <p className="text-danger fw-bold">
+                        카테고리 &apos;{selectedCategory}&apos;의 모든 ES 문서가 삭제됩니다.
+                    </p>
+                    <p className="text-muted">
+                        파일시스템에 디렉토리가 존재하지 않는 경우, ES에 남아있는 문서를 정리하는 용도로 사용합니다.
+                        이 작업은 되돌릴 수 없습니다.
+                    </p>
+                </Modal.Body>
+                <Modal.Footer>
+                    <Button variant="secondary" onClick={() => setShowDeleteDirModal(false)}>취소</Button>
+                    <Button
+                        variant="warning"
+                        onClick={handleDeleteCategory}
+                        disabled={saving}
+                    >
+                        {saving ? <Spinner animation="border" size="sm" /> : '디렉토리 삭제'}
                     </Button>
                 </Modal.Footer>
             </Modal>
