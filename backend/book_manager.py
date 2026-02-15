@@ -994,10 +994,10 @@ class BookManager:
         # 1. ES 문서 목록 (file_path 기준, 중복 감지 포함)
         doc_list = self.es_manager.search_by_category(category, max_result_count=sys.maxsize)
         es_files: Dict[str, Dict[str, Any]] = {}
-        path_book_ids: Dict[str, List[int]] = {}
+        path_docs: Dict[str, List[Dict[str, Any]]] = {}
         for book_id, doc, _score in doc_list:
             rel_path = doc.get("file_path", "")
-            path_book_ids.setdefault(rel_path, []).append(book_id)
+            path_docs.setdefault(rel_path, []).append({"book_id": book_id, **doc})
             es_files[rel_path] = {"book_id": book_id, **doc}
 
         # 2. 파일시스템 파일 목록
@@ -1040,15 +1040,22 @@ class BookManager:
 
         # 4. 중복 ES 문서 감지 (동일 file_path에 여러 book_id)
         duplicates = []
-        for path, ids in sorted(path_book_ids.items()):
-            if len(ids) > 1:
-                info = es_files[path]
-                duplicates.append({
-                    "book_ids": ids,
-                    "title": info.get("title", ""),
-                    "file_type": info.get("file_type", ""),
-                    "file_path": path,
+        for path in sorted(path_docs.keys()):
+            docs = path_docs[path]
+            if len(docs) <= 1:
+                continue
+            dup_docs = []
+            for d in docs:
+                dup_docs.append({
+                    "book_id": d["book_id"],
+                    "title": d.get("title", ""),
+                    "author": d.get("author", ""),
+                    "file_type": d.get("file_type", ""),
                 })
+            duplicates.append({
+                "file_path": path,
+                "docs": dup_docs,
+            })
 
         return {"es_only": es_only, "fs_only": fs_only, "duplicates": duplicates}
 
