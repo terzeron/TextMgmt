@@ -58,6 +58,7 @@ export default function Edit({ basePath = '/book-edit', apiPrefix = '' }) {
     const [selectedEntryId, setSelectedEntryId] = useState('');
     const [selectedItems, setSelectedItems] = useState([]);
     const [nextEntryId, setNextEntryId] = useState('');
+    const [prevEntryId, setPrevEntryId] = useState('');
     const [selectedCategory, setSelectedCategory] = useState('');
 
     const [originalBookInfo, setOriginalBookInfo] = useState({});
@@ -259,7 +260,9 @@ export default function Edit({ basePath = '/book-edit', apiPrefix = '' }) {
             const nextEntryId = determineNextEntryId(folderData, selectedEntryId);
             setNextEntryId(nextEntryId);
             nextEntryIdRef.current = nextEntryId;
-            prevEntryIdRef.current = determinePrevEntryId(folderData, selectedEntryId);
+            const prevEntryId = determinePrevEntryId(folderData, selectedEntryId);
+            setPrevEntryId(prevEntryId);
+            prevEntryIdRef.current = prevEntryId;
         } else {
             // book entry
             const parsed = parseEntryId(selectedEntryId);
@@ -293,7 +296,9 @@ export default function Edit({ basePath = '/book-edit', apiPrefix = '' }) {
                     const nextEntryId = determineNextEntryId(folderData, selectedEntryId);
                     setNextEntryId(nextEntryId);
                     nextEntryIdRef.current = nextEntryId;
-                    prevEntryIdRef.current = determinePrevEntryId(folderData, selectedEntryId);
+                    const prevEntryId = determinePrevEntryId(folderData, selectedEntryId);
+                    setPrevEntryId(prevEntryId);
+                    prevEntryIdRef.current = prevEntryId;
                 } else {
                     setErrorMessage(`선택한 책을 찾을 수 없습니다. (ID: ${bookId})`);
                 }
@@ -318,6 +323,7 @@ export default function Edit({ basePath = '/book-edit', apiPrefix = '' }) {
             nextEntryIdRef.current = next;
             setNextEntryId(next);
             prevEntryIdRef.current = prev;
+            setPrevEntryId(prev);
         }
     }, [folderData, selectedEntryId]);
 
@@ -722,6 +728,17 @@ export default function Edit({ basePath = '/book-edit', apiPrefix = '' }) {
         }
     }, [nextEntryId, entryClicked]);
 
+    const toPrevEntryButtonClicked = useCallback(() => {
+        if (isProcessingRef.current) return;
+        console.log(`toPrevEntryButtonClicked: prevEntryId=${prevEntryId}`);
+        if (prevEntryId) {
+            setSelectedItems([prevEntryId]);
+            entryClicked(prevEntryId);
+        } else {
+            setErrorMessage('첫 번째 책입니다.');
+        }
+    }, [prevEntryId, entryClicked]);
+
     // 모바일에서는 directory-menu 클래스를 제거하여 고정 높이 스타일 방지
     const directoryClassName = isMobile
         ? "ps-0 pe-0"
@@ -792,7 +809,7 @@ export default function Edit({ basePath = '/book-edit', apiPrefix = '' }) {
 
                                                     <Row className="button_group">
                                                         <Col>
-                                                            <Actions selectedEntryId={selectedEntryId} selectedCategory={selectedCategory} otherCategoryList={otherCategoryList} newFileName={newFileName} moveToUpperButtonClicked={moveToUpperButtonClicked} moveToDirectoryButtonClicked={moveToDirectoryButtonClicked} selectDirectoryButtonClicked={selectDirectoryButtonClicked} toNextEntryClicked={toNextEntryButtonClicked} suggestedCategories={suggestedCategories} isProcessing={isProcessing}/>
+                                                            <Actions selectedEntryId={selectedEntryId} selectedCategory={selectedCategory} otherCategoryList={otherCategoryList} newFileName={newFileName} moveToUpperButtonClicked={moveToUpperButtonClicked} moveToDirectoryButtonClicked={moveToDirectoryButtonClicked} selectDirectoryButtonClicked={selectDirectoryButtonClicked} toNextEntryClicked={toNextEntryButtonClicked} toPrevEntryClicked={toPrevEntryButtonClicked} suggestedCategories={suggestedCategories} isProcessing={isProcessing}/>
                                                         </Col>
                                                     </Row>
 

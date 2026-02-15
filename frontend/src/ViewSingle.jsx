@@ -115,6 +115,11 @@ export default function ViewSingle(props) {
                                 다음 책으로
                             </Button>
                         )}
+                        {props.onPrevBook && (
+                            <Button variant="outline-secondary" size="sm" className="float-end" onClick={props.onPrevBook} disabled={!props.hasPrevBook}>
+                                이전 책으로
+                            </Button>
+                        )}
                         {props.role === 'admin' && props.editUrl && (
                             <a href={props.editUrl}>
                                 <Button variant="outline-secondary" size="sm" className="float-end">
@@ -149,5 +154,7 @@ ViewSingle.propTypes = {
     editUrl: PropTypes.string,
     onNextBook: PropTypes.func,
     hasNextBook: PropTypes.bool,
+    onPrevBook: PropTypes.func,
+    hasPrevBook: PropTypes.bool,
     role: PropTypes.string,
 }
