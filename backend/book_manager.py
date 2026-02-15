@@ -1054,6 +1054,7 @@ class BookManager:
                 })
             duplicates.append({
                 "file_path": path,
+                "file_exists": path in fs_files,
                 "docs": dup_docs,
             })
 
