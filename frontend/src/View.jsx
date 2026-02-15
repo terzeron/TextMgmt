@@ -175,7 +175,7 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
             const bookId = book['book_id'];
             setSelectedEntryId(selectedEntryId);
             setBookInfo(book);
-            setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
+            setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : '') + '&category=' + encodeURIComponent(book['category'] || '_root'));
             setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + bookId);
             window.history.replaceState(null, '', `${basePath}/${bookId}?category=${encodeURIComponent(book['category'] || '_root')}`);
             setNextEntryId(determineNextEntryId(folderData, selectedEntryId));
@@ -193,7 +193,7 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
                 const book = booksInCategory.find(bookItem => bookItem.id === selectedEntryId)?.book;
                 if (book) {
                     setBookInfo(book);
-                    setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
+                    setViewUrl('/viewer/' + book['file_type'] + '/' + bookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : '') + '&category=' + encodeURIComponent(category));
                     setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + bookId);
                     window.history.replaceState(null, '', `${basePath}/${bookId}?category=${encodeURIComponent(category)}`);
                     setNextEntryId(determineNextEntryId(folderData, selectedEntryId));
@@ -238,7 +238,7 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
                         }
                     }
                     setBookInfo(book);
-                    setViewUrl('/viewer/' + book['file_type'] + '/' + routeBookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : ''));
+                    setViewUrl('/viewer/' + book['file_type'] + '/' + routeBookId + '?path=' + encodeURIComponent(book['file_path']) + (apiPrefix ? '&api=' + encodeURIComponent(apiPrefix) : '') + '&category=' + encodeURIComponent(book['category'] || ''));
                     setDownloadUrl(getApiUrlPrefix() + apiPrefix + '/download/' + routeBookId);
                 }, (error) => {
                     setErrorMessage(`책 정보를 불러올 수 없습니다. ${error}`);
