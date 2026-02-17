@@ -255,7 +255,7 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
             const mismatchCounts = buildMismatchCounts(mismatchResult);
 
             // 모든 카테고리 목록
-            const esCategories = Object.keys(categoriesResult).filter(c => c !== '_root');
+            const esCategories = Object.keys(categoriesResult);
             const fsOnlyCategories = (mismatchResult.fs_only || []).map(item => item.category);
             const allCategories = [...new Set([...esCategories, ...fsOnlyCategories])].sort((a, b) => a.localeCompare(b));
 

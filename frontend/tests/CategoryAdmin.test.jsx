@@ -176,14 +176,14 @@ describe('CategoryAdmin', () => {
         });
     });
 
-    it('_root 카테고리는 트리에서 제외된다', async () => {
+    it('_root 카테고리가 트리에 포함된다', async () => {
         setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
         render(<CategoryAdmin />);
         fireEvent.click(screen.getByText('카테고리 관리'));
         await waitFor(() => {
             expect(screen.getByRole('tree')).toBeTruthy();
         });
-        expect(screen.queryByText('_root')).toBeNull();
+        expect(screen.getByText('_root')).toBeTruthy();
     });
 
     // ── 로딩 상태 ──
