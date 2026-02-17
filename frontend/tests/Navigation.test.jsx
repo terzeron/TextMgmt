@@ -24,11 +24,16 @@ vi.mock('@react-oauth/google', () => ({
     googleLogout: vi.fn(),
 }));
 
+const { mockNavigate } = vi.hoisted(() => ({
+    mockNavigate: vi.fn(),
+}));
+
 vi.mock('react-router-dom', async () => {
     const actual = await vi.importActual('react-router-dom');
     return {
         ...actual,
         useLocation: () => ({ pathname: '/' }),
+        useNavigate: () => mockNavigate,
         Outlet: (props) => <div data-testid="outlet">Outlet</div>,
         Navigate: ({ to }) => <div data-testid="navigate">Navigate to {to}</div>,
     };
@@ -140,6 +145,20 @@ describe('Navigation', () => {
             expect.any(Function),
             expect.any(Function)
         );
+    });
+
+    it('홈 화면에서 검색 시 /book-view로 이동한다', async () => {
+        localStorage.setItem('email', 'admin@test.com');
+        localStorage.setItem('name', 'Admin');
+        render(<Navigation />);
+
+        const searchInput = screen.getByPlaceholderText('키워드');
+        fireEvent.change(searchInput, { target: { value: '테스트' } });
+
+        const searchBtn = screen.getByText('검색');
+        fireEvent.click(searchBtn);
+
+        expect(mockNavigate).toHaveBeenCalledWith('/book-view');
     });
 
     it('프로필 사진이 있으면 이미지로 표시한다', () => {
