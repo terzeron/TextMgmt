@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import warnings
+import zlib
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -114,7 +115,7 @@ class Loader:
                         total_text += text
                         if len(result) < Loader.TEXT_SIZE:
                             result += text
-                    except KeyError:
+                    except Exception:
                         continue
         except zipfile.BadZipFile as e:
             LOGGER.error(file_path)
@@ -167,7 +168,7 @@ class Loader:
 
             try:
                 result, line_count = Loader.read_from_epub_with_extracting_zip(file_path)
-            except epub.EpubException as e2:
+            except Exception as e2:
                 LOGGER.error(file_path)
                 LOGGER.error(e2)
 
@@ -354,6 +355,323 @@ class Loader:
         return "", 0, 0
 
     @staticmethod
+    def _find_xref_offset(xref_data: bytes, obj_num: int) -> Optional[int]:
+        """traditional xref 테이블에서 특정 object의 파일 내 offset을 찾는다."""
+        xref_text = xref_data.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
+        lines = xref_text.split(b'\n')
+
+        i = 0
+        while i < len(lines) and lines[i].strip() != b'xref':
+            i += 1
+        i += 1  # 'xref' 건너뛰기
+
+        while i < len(lines):
+            line = lines[i].strip()
+            if not line:
+                i += 1
+                continue
+            if line.startswith(b'trailer'):
+                break
+            parts = line.split()
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                sub_start = int(parts[0])
+                sub_count = int(parts[1])
+                if sub_start <= obj_num < sub_start + sub_count:
+                    entry_idx = i + 1 + (obj_num - sub_start)
+                    if entry_idx < len(lines):
+                        entry_parts = lines[entry_idx].strip().split()
+                        if len(entry_parts) >= 3 and entry_parts[2] == b'n':
+                            return int(entry_parts[0])
+                    return None
+                i += 1 + sub_count
+                continue
+            i += 1
+        return None
+
+    @staticmethod
+    def _apply_png_predictor(data: bytes, columns: int) -> bytes:
+        """PNG predictor 해제 (xref stream 디코딩용). Sub/Up 필터 지원."""
+        stride = 1 + columns  # filter byte + row data
+        rows = len(data) // stride
+        result = bytearray()
+        prev_row = bytes(columns)
+        for i in range(rows):
+            offset = i * stride
+            fb = data[offset]
+            row = bytearray(data[offset + 1:offset + 1 + columns])
+            if fb == 1:  # Sub
+                for j in range(1, columns):
+                    row[j] = (row[j] + row[j - 1]) & 0xFF
+            elif fb == 2:  # Up
+                for j in range(columns):
+                    row[j] = (row[j] + prev_row[j]) & 0xFF
+            result.extend(row)
+            prev_row = bytes(row)
+        return bytes(result)
+
+    @staticmethod
+    def _xref_stream_find_entry(data: bytes, w: List[int], index_ranges: List[int], obj_num: int) -> Optional[Tuple[int, int, int]]:
+        """xref stream에서 특정 object의 entry를 찾는다.
+        반환: (type, field2, field3) 또는 None.
+        type 0: free, type 1: (1, file_offset, gen), type 2: (2, obj_stream_num, index)"""
+        w1, w2, w3 = w
+        entry_size = w1 + w2 + w3
+        if entry_size == 0:
+            return None
+        pos = 0
+        for i in range(0, len(index_ranges) - 1, 2):
+            start_obj = index_ranges[i]
+            count = index_ranges[i + 1]
+            for j in range(count):
+                if pos + entry_size > len(data):
+                    return None
+                if start_obj + j == obj_num:
+                    entry = data[pos:pos + entry_size]
+                    type_val = int.from_bytes(entry[:w1], 'big') if w1 > 0 else 1
+                    field2 = int.from_bytes(entry[w1:w1 + w2], 'big') if w2 > 0 else 0
+                    field3 = int.from_bytes(entry[w1 + w2:w1 + w2 + w3], 'big') if w3 > 0 else 0
+                    return (type_val, field2, field3)
+                pos += entry_size
+        return None
+
+    @staticmethod
+    def _read_from_obj_stream(f, stream_offset: int, target_obj_num: int) -> Optional[bytes]:
+        """Object stream에서 특정 object의 딕셔너리 데이터를 읽는다."""
+        f.seek(stream_offset)
+        header = f.read(4096)
+
+        first_match = re.search(rb'/First\s+(\d+)', header)
+        length_match = re.search(rb'/Length\s+(\d+)', header)
+        if not first_match or not length_match:
+            return None
+        if re.search(rb'/Length\s+\d+\s+\d+\s+R', header):
+            return None
+
+        first_offset = int(first_match.group(1))
+        stream_length = int(length_match.group(1))
+
+        stream_start = re.search(rb'stream\r?\n', header)
+        if not stream_start:
+            return None
+
+        f.seek(stream_offset + stream_start.end())
+        raw = f.read(stream_length)
+
+        filter_match = re.search(rb'/Filter\s*/(\w+)', header)
+        if filter_match:
+            if filter_match.group(1) != b'FlateDecode':
+                return None
+            try:
+                raw = zlib.decompress(raw)
+            except zlib.error:
+                return None
+
+        # 헤더 파싱: "obj_num offset obj_num offset ..."
+        header_text = raw[:first_offset].decode('ascii', errors='replace')
+        tokens = header_text.split()
+
+        target_offset = None
+        next_offset = len(raw)
+        for i in range(0, len(tokens) - 1, 2):
+            if int(tokens[i]) == target_obj_num:
+                target_offset = int(tokens[i + 1]) + first_offset
+                if i + 3 < len(tokens):
+                    next_offset = int(tokens[i + 3]) + first_offset
+                break
+
+        if target_offset is None:
+            return None
+        return raw[target_offset:next_offset]
+
+    @staticmethod
+    def _parse_one_xref_stream(f, xref_offset: int) -> Optional[tuple]:
+        """단일 xref stream을 파싱하여 (decompressed, w, index_ranges, prev_offset)를 반환.
+        실패 시 None."""
+        f.seek(xref_offset)
+        stream_obj_data = f.read(4096)
+
+        w_match = re.search(rb'/W\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s*\]', stream_obj_data)
+        if not w_match:
+            return None
+        w = [int(w_match.group(i)) for i in (1, 2, 3)]
+
+        size_match = re.search(rb'/Size\s+(\d+)', stream_obj_data)
+        if not size_match:
+            return None
+        xref_size = int(size_match.group(1))
+
+        index_match = re.search(rb'/Index\s*\[([^\]]+)\]', stream_obj_data)
+        index_ranges = [int(x) for x in index_match.group(1).split()] if index_match else [0, xref_size]
+
+        # /Length가 indirect reference이면 포기
+        if re.search(rb'/Length\s+\d+\s+\d+\s+R', stream_obj_data):
+            return None
+        length_match = re.search(rb'/Length\s+(\d+)', stream_obj_data)
+        if not length_match:
+            return None
+        stream_length = int(length_match.group(1))
+
+        stream_start = re.search(rb'stream\r?\n', stream_obj_data)
+        if not stream_start:
+            return None
+
+        f.seek(xref_offset + stream_start.end())
+        raw_stream = f.read(stream_length)
+
+        # 필터 처리
+        filter_match = re.search(rb'/Filter\s*/(\w+)', stream_obj_data)
+        if filter_match:
+            if filter_match.group(1) != b'FlateDecode':
+                return None
+            try:
+                decompressed = zlib.decompress(raw_stream)
+            except zlib.error:
+                return None
+        else:
+            decompressed = raw_stream
+
+        # PNG predictor 처리
+        parms_match = re.search(rb'/DecodeParms\s*<<([^>]*)>>', stream_obj_data)
+        if parms_match:
+            pred_match = re.search(rb'/Predictor\s+(\d+)', parms_match.group(1))
+            if pred_match and int(pred_match.group(1)) >= 10:
+                cols_match = re.search(rb'/Columns\s+(\d+)', parms_match.group(1))
+                columns = int(cols_match.group(1)) if cols_match else sum(w)
+                decompressed = Loader._apply_png_predictor(decompressed, columns)
+
+        prev_match = re.search(rb'/Prev\s+(\d+)', stream_obj_data)
+        prev_offset = int(prev_match.group(1)) if prev_match else None
+
+        return decompressed, w, index_ranges, prev_offset
+
+    @staticmethod
+    def _fast_pdf_page_count(file_path: Path) -> Optional[int]:
+        """PDF xref/trailer에서 페이지 수만 경량 추출 (전체 파싱 없이).
+
+        trailer → /Root → /Pages → /Count 경로를 따라 필요한 객체만 읽는다.
+        traditional xref table과 xref stream을 모두 지원하며,
+        /Prev 체인을 따라 이전 xref 섹션도 탐색한다.
+        실패 시 None 반환 (pypdf fallback용).
+        """
+        try:
+            with file_path.open('rb') as f:
+                f.seek(0, 2)
+                file_size = f.tell()
+
+                # 1. 파일 끝에서 startxref 찾기
+                tail_size = min(4096, file_size)
+                f.seek(-tail_size, 2)
+                tail = f.read()
+
+                m = re.search(rb'startxref\s+(\d+)', tail)
+                if not m:
+                    return None
+
+                # 2. xref 체인을 따라가며 lookup 함수들 수집
+                # lookups: [('traditional', fn) | ('stream', fn)] newest→oldest
+                root_obj_num = None
+                lookups: List[Tuple[str, Any]] = []
+                xref_offset: Optional[int] = int(m.group(1))
+                max_depth = 10
+
+                while xref_offset is not None and max_depth > 0:
+                    max_depth -= 1
+                    f.seek(xref_offset)
+                    xref_header = f.read(256)
+
+                    if xref_header.lstrip().startswith(b'xref'):
+                        # === Traditional xref table ===
+                        header_match = re.search(rb'xref\s+\d+\s+(\d+)', xref_header)
+                        entry_count = int(header_match.group(1)) if header_match else 5000
+                        xref_read_size = min(entry_count * 20 + 4096, file_size - xref_offset)
+                        f.seek(xref_offset)
+                        xref_data = f.read(xref_read_size)
+
+                        if root_obj_num is None:
+                            root_match = re.search(rb'/Root\s+(\d+)\s+\d+\s+R', xref_data)
+                            if root_match:
+                                root_obj_num = int(root_match.group(1))
+
+                        lookups.append(('traditional', lambda obj_num, xd=xref_data: Loader._find_xref_offset(xd, obj_num)))
+
+                        prev_match = re.search(rb'/Prev\s+(\d+)', xref_data)
+                        xref_offset = int(prev_match.group(1)) if prev_match else None
+                    else:
+                        # === Xref stream ===
+                        f.seek(xref_offset)
+                        peek = f.read(512)
+
+                        if root_obj_num is None:
+                            root_match = re.search(rb'/Root\s+(\d+)\s+\d+\s+R', peek)
+                            if root_match:
+                                root_obj_num = int(root_match.group(1))
+
+                        parsed = Loader._parse_one_xref_stream(f, xref_offset)
+                        if parsed is None:
+                            break
+                        decompressed, w, index_ranges, prev_offset = parsed
+                        lookups.append((
+                            'stream',
+                            lambda obj_num, d=decompressed, ww=list(w), ir=list(index_ranges):
+                                Loader._xref_stream_find_entry(d, ww, ir, obj_num)
+                        ))
+                        xref_offset = prev_offset
+
+                if root_obj_num is None:
+                    return None
+
+                def find_file_offset(obj_num: int) -> Optional[int]:
+                    """type 1 (직접 저장) object의 파일 offset을 찾는다."""
+                    for kind, lookup in lookups:
+                        if kind == 'traditional':
+                            offset = lookup(obj_num)
+                            if offset is not None:
+                                return offset
+                        else:
+                            entry = lookup(obj_num)
+                            if entry is not None and entry[0] == 1:
+                                return entry[1]
+                    return None
+
+                def read_object_data(obj_num: int, read_size: int = 4096) -> Optional[bytes]:
+                    """object 데이터를 읽는다 (type 1: 직접, type 2: object stream)."""
+                    # type 1 시도
+                    offset = find_file_offset(obj_num)
+                    if offset is not None:
+                        f.seek(offset)
+                        return f.read(read_size)
+                    # type 2 시도 (object stream에 압축 저장)
+                    for kind, lookup in lookups:
+                        if kind != 'stream':
+                            continue
+                        entry = lookup(obj_num)
+                        if entry is not None and entry[0] == 2:
+                            stream_offset = find_file_offset(entry[1])
+                            if stream_offset is not None:
+                                return Loader._read_from_obj_stream(f, stream_offset, obj_num)
+                    return None
+
+                # 3. Root object → /Pages 참조 찾기
+                root_data = read_object_data(root_obj_num, 1024)
+                if root_data is None:
+                    return None
+                pages_match = re.search(rb'/Pages\s+(\d+)\s+\d+\s+R', root_data)
+                if not pages_match:
+                    return None
+                pages_obj_num = int(pages_match.group(1))
+
+                # 4. Pages object → /Count 추출
+                pages_data = read_object_data(pages_obj_num)
+                if pages_data is None:
+                    return None
+                count_match = re.search(rb'/Count\s+(\d+)', pages_data)
+                if count_match:
+                    return int(count_match.group(1))
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
     def read_file(file_path: Path, stat_result: Optional[os.stat_result] = None, skip_text: bool = False) -> Dict[int, Dict[str, Any]]:
         if file_path.is_file():
             sys.stdout.flush()
@@ -381,14 +699,17 @@ class Loader:
                 line_count = 0
                 page_count = 0
                 isbn_list = []
-                # PDF만 예외: page_count 추출 유지
+                # PDF만 예외: page_count 추출 유지 (경량 방식 우선, 실패 시 pypdf fallback)
                 if file_type == "pdf":
-                    try:
-                        with file_path.open("rb") as f:
-                            page_count = len(pypdf.PdfReader(f).pages)
-                    except Exception as e:
-                        LOGGER.error(file_path)
-                        LOGGER.error(e)
+                    page_count = Loader._fast_pdf_page_count(file_path)
+                    if page_count is None:
+                        page_count = 0
+                        try:
+                            with file_path.open("rb") as f:
+                                page_count = len(pypdf.PdfReader(f).pages)
+                        except Exception as e:
+                            LOGGER.error(file_path)
+                            LOGGER.error(e)
                     Stat.pdf_count += 1
                 # 지원하지 않는 확장자는 기존 동작 유지 (빈 dict 반환)
                 supported_types = {"txt", "epub", "pdf", "docx", "doc", "hwp", "rtf", "html",
@@ -424,14 +745,16 @@ class Loader:
                 summary, line_count, page_count = Loader.read_from_epub(file_path)
             elif file_type == "pdf":
                 if file_path.is_relative_to(Loader.comics_path_prefix):
-                    # comics: 텍스트 추출은 생략하되 페이지 수만 추출
-                    page_count = 0
-                    try:
-                        with file_path.open("rb") as f:
-                            page_count = len(pypdf.PdfReader(f).pages)
-                    except Exception as e:
-                        LOGGER.error(file_path)
-                        LOGGER.error(e)
+                    # comics: 텍스트 추출은 생략하되 페이지 수만 추출 (경량 방식 우선)
+                    page_count = Loader._fast_pdf_page_count(file_path)
+                    if page_count is None:
+                        page_count = 0
+                        try:
+                            with file_path.open("rb") as f:
+                                page_count = len(pypdf.PdfReader(f).pages)
+                        except Exception as e:
+                            LOGGER.error(file_path)
+                            LOGGER.error(e)
                     summary, line_count = "", 0
                     Stat.pdf_count += 1
                 else:

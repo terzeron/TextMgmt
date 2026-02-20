@@ -407,6 +407,20 @@ class TestLoaderWithTempFiles(unittest.TestCase):
             assert v["page_count"] > 0  # PDF는 page_count 유지
             assert v["isbn"] == ""
 
+    def test_fast_pdf_page_count_xref_stream(self):
+        """_fast_pdf_page_count가 xref stream PDF에서 정확한 페이지 수를 반환하는지 테스트"""
+        src_pdf = Path(__file__).parent / "_pdf"
+        pdf_files = list(src_pdf.glob("*.pdf"))
+        if not pdf_files:
+            self.skipTest("PDF 테스트 파일이 없습니다")
+
+        import pypdf
+        for pdf_file in pdf_files:
+            fast_count = Loader._fast_pdf_page_count(pdf_file)
+            with pdf_file.open("rb") as f:
+                pypdf_count = len(pypdf.PdfReader(f).pages)
+            assert fast_count == pypdf_count, f"{pdf_file.name}: fast={fast_count}, pypdf={pypdf_count}"
+
     def test_skip_text_unsupported_type_returns_empty(self):
         """skip_text=True일 때 지원하지 않는 확장자는 빈 dict 반환"""
         test_file = Path(self.temp_dir) / "test.xyz"
