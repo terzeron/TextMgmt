@@ -1,6 +1,6 @@
 import './Folder.css';
 
-import React, {useState, useMemo} from "react";
+import React, {useMemo} from "react";
 import PropTypes from 'prop-types';
 
 import clsx from 'clsx';
@@ -257,7 +257,6 @@ export const CustomTreeItem = React.forwardRef(function CustomTreeItem(props, re
 });
 
 export default function Folder(props) {
-    const [expandedItems, setExpandedItems] = useState([]);
     const defaultExpandedItems = useMemo(() => props.folderData.map(o => o.id), [props.folderData]);
     const treeViewStyles = useMemo(() => ({
         height: 'fit-content',
@@ -297,12 +296,12 @@ export default function Folder(props) {
                             sx={treeViewStyles}
                             slots={{item: CustomTreeItem}}
                             defaultExpandedItems={defaultExpandedItems}
-                            expandedItems={expandedItems}
+                            expandedItems={props.expandedItems}
                             selectedItems={props.selectedItems}
                             onSelectedItemsChange={(event, selectedId) => {
                                 const found = findFolderInTree(props.folderData, selectedId);
                                 const isFolder = found && found.fileType === 'folder';
-                                setExpandedItems((prevExpandedItems) => {
+                                props.onExpandedItemsChange((prevExpandedItems) => {
                                     if (prevExpandedItems.includes(selectedId)) {
                                         return prevExpandedItems.filter(x => x !== selectedId);
                                     } else {
@@ -326,6 +325,8 @@ export default function Folder(props) {
 Folder.propTypes = {
     folderData: PropTypes.array.isRequired,
     selectedItems: PropTypes.array,
+    expandedItems: PropTypes.array.isRequired,
+    onExpandedItemsChange: PropTypes.func.isRequired,
     onClickHandler: PropTypes.func.isRequired,
     isOpen: PropTypes.bool.isRequired,
     onToggle: PropTypes.func.isRequired,

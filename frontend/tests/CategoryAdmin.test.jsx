@@ -265,7 +265,7 @@ describe('CategoryAdmin', () => {
 
         await waitFor(() => {
             expect(mockJsonGetReq).toHaveBeenCalledWith(
-                '/category-mismatches/1_fiction', null, expect.any(Function)
+                '/category-mismatches/1_fiction', null, expect.any(Function), expect.any(Function)
             );
         });
 

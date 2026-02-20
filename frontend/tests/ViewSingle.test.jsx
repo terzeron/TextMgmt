@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
 
 afterEach(cleanup);
 
@@ -322,6 +322,118 @@ describe('ViewSingle', () => {
             expect(screen.getByTestId('view-epub')).toBeTruthy();
             // ap= 뒤에 아무 값도 없어야 함
             expect(screen.getByText(/EPUB:10:preview=false:ap=$/)).toBeTruthy();
+        });
+    });
+
+    // ── 편집 버튼 ──
+
+    it('role=admin이고 editUrl이 있으면 "편집" 버튼을 표시한다', async () => {
+        render(
+            <ViewSingle bookId={1} fileType="pdf" filePath="/test.pdf"
+                role="admin" editUrl="/book-edit/1?category=fiction" />
+        );
+
+        await waitFor(() => {
+            const btn = screen.getByText('편집');
+            expect(btn).toBeTruthy();
+            const link = btn.closest('a');
+            expect(link.getAttribute('href')).toBe('/book-edit/1?category=fiction');
+        });
+    });
+
+    it('role=admin이 아니면 "편집" 버튼을 표시하지 않는다', async () => {
+        render(
+            <ViewSingle bookId={1} fileType="pdf" filePath="/test.pdf"
+                role="user" editUrl="/book-edit/1" />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('view-pdf')).toBeTruthy();
+        });
+        expect(screen.queryByText('편집')).toBeNull();
+    });
+
+    it('editUrl이 없으면 "편집" 버튼을 표시하지 않는다', async () => {
+        render(
+            <ViewSingle bookId={1} fileType="pdf" filePath="/test.pdf" role="admin" />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('view-pdf')).toBeTruthy();
+        });
+        expect(screen.queryByText('편집')).toBeNull();
+    });
+
+    // ── 이전/다음 책 네비게이션 (nested 모드) ──
+
+    it('onPrevBook/onNextBook이 있으면 네비게이션 버튼을 표시한다', async () => {
+        const onPrev = vi.fn();
+        const onNext = vi.fn();
+        render(
+            <ViewSingle bookId={1} fileType="pdf" filePath="/test.pdf"
+                onPrevBook={onPrev} onNextBook={onNext}
+                hasPrevBook={true} hasNextBook={true} />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText(/이전 책으로/)).toBeTruthy();
+            expect(screen.getByText(/다음 책으로/)).toBeTruthy();
+        });
+    });
+
+    it('이전 책 버튼 클릭 시 onPrevBook을 호출한다', async () => {
+        const onPrev = vi.fn();
+        render(
+            <ViewSingle bookId={1} fileType="pdf" filePath="/test.pdf"
+                onPrevBook={onPrev} hasPrevBook={true} />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText(/이전 책으로/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/이전 책으로/));
+        expect(onPrev).toHaveBeenCalled();
+    });
+
+    it('다음 책 버튼 클릭 시 onNextBook을 호출한다', async () => {
+        const onNext = vi.fn();
+        render(
+            <ViewSingle bookId={1} fileType="pdf" filePath="/test.pdf"
+                onNextBook={onNext} hasNextBook={true} />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText(/다음 책으로/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/다음 책으로/));
+        expect(onNext).toHaveBeenCalled();
+    });
+
+    it('hasPrevBook=false이면 이전 버튼이 비활성화된다', async () => {
+        render(
+            <ViewSingle bookId={1} fileType="pdf" filePath="/test.pdf"
+                onPrevBook={vi.fn()} onNextBook={vi.fn()}
+                hasPrevBook={false} hasNextBook={true} />
+        );
+
+        await waitFor(() => {
+            const prevBtn = screen.getByText(/이전 책으로/);
+            expect(prevBtn.disabled).toBe(true);
+        });
+    });
+
+    it('hasNextBook=false이면 다음 버튼이 비활성화된다', async () => {
+        render(
+            <ViewSingle bookId={1} fileType="pdf" filePath="/test.pdf"
+                onPrevBook={vi.fn()} onNextBook={vi.fn()}
+                hasPrevBook={true} hasNextBook={false} />
+        );
+
+        await waitFor(() => {
+            const nextBtn = screen.getByText(/다음 책으로/);
+            expect(nextBtn.disabled).toBe(true);
         });
     });
 });

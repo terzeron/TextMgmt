@@ -49,6 +49,7 @@ export default function Edit({ basePath = '/book-edit', apiPrefix = '' }) {
         : (routeWildcard ? parseEntryId(routeWildcard)?.bookId : undefined);
     const {searchResults, hasSearched, searchTotal, handleLoadMore, searchLoading} = useOutletContext();
     const [isFolderOpen, setIsFolderOpen] = useState(true);
+    const [expandedItems, setExpandedItems] = useState([]);
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
 
@@ -750,7 +751,7 @@ export default function Edit({ basePath = '/book-edit', apiPrefix = '' }) {
                 {isFolderOpen && (
                     <Col md={isMobile ? 12 : 3} lg={isMobile ? 12 : 2} className={directoryClassName}>
                         <Suspense fallback={<div className="loading">로딩 중...</div>}>
-                            <Folder folderData={folderData} selectedItems={selectedItems} isOpen={true} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
+                            <Folder folderData={folderData} selectedItems={selectedItems} expandedItems={expandedItems} onExpandedItemsChange={setExpandedItems} isOpen={true} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
                         </Suspense>
                     </Col>
                 )}
@@ -758,7 +759,7 @@ export default function Edit({ basePath = '/book-edit', apiPrefix = '' }) {
                 <Col md={isMobile ? 12 : (isFolderOpen ? 9 : 12)} lg={isMobile ? 12 : (isFolderOpen ? 10 : 12)} className={isMobile ? "ps-0 pe-0" : "section"}>
                     {!isFolderOpen && (
                         <Suspense fallback={<div className="loading">로딩 중...</div>}>
-                            <Folder folderData={folderData} selectedItems={selectedItems} isOpen={false} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
+                            <Folder folderData={folderData} selectedItems={selectedItems} expandedItems={expandedItems} onExpandedItemsChange={setExpandedItems} isOpen={false} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
                         </Suspense>
                     )}
                     {hasSearched &&
