@@ -330,7 +330,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         LOGGER.debug("# get_category_mismatches()")
         response_object: Dict[str, Any] = {"status": "failure"}
         try:
-            result = await manager.get_category_mismatches()
+            result = await asyncio.to_thread(manager.get_category_mismatches)
             response_object["status"] = "success"
             response_object["result"] = result
         except Exception as e:
@@ -402,7 +402,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         LOGGER.debug("# get_category_mismatch_details(category='%s')", category)
         response_object: Dict[str, Any] = {"status": "failure"}
         try:
-            result = await manager.get_category_mismatch_details(category)
+            result = await asyncio.to_thread(manager.get_category_mismatch_details, category)
             response_object["status"] = "success"
             response_object["result"] = result
         except Exception as e:

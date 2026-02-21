@@ -265,7 +265,7 @@ class TestBookManager:
             (tmp_path / "_txt" / "test.txt").write_text("test")
 
             bm.path_prefix = tmp_path
-            result = await bm.get_category_mismatches()
+            result = bm.get_category_mismatches()
         finally:
             bm.path_prefix = original_prefix
 
