@@ -33,8 +33,8 @@ class TestLoader(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        """클래스 레벨에서 한 번만 실행 - tests/ 하위 테스트 데이터 사용"""
-        cls._path_prefix = Path(__file__).parent
+        """클래스 레벨에서 한 번만 실행 - tests/books/ 하위 테스트 데이터 사용"""
+        cls._path_prefix = Path(__file__).parent / "books"
         cls._original_path_prefix = Loader.path_prefix
         Loader.path_prefix = cls._path_prefix
         cls._txt_dir_path = cls._path_prefix / "_txt"
@@ -357,7 +357,7 @@ class TestLoaderWithTempFiles(unittest.TestCase):
             Loader.comics_path_prefix = Path(self.temp_dir)
 
             # PDF 테스트 파일 복사
-            src_pdf = Path(__file__).parent / "_pdf"
+            src_pdf = Path(__file__).parent / "books" / "_pdf"
             pdf_files = list(src_pdf.glob("*.pdf"))
             if not pdf_files:
                 self.skipTest("PDF 테스트 파일이 없습니다")
@@ -392,7 +392,7 @@ class TestLoaderWithTempFiles(unittest.TestCase):
 
     def test_skip_text_pdf_keeps_page_count(self):
         """skip_text=True일 때 PDF는 page_count가 유지되는지 테스트"""
-        src_pdf = Path(__file__).parent / "_pdf"
+        src_pdf = Path(__file__).parent / "books" / "_pdf"
         pdf_files = list(src_pdf.glob("*.pdf"))
         if not pdf_files:
             self.skipTest("PDF 테스트 파일이 없습니다")
@@ -417,7 +417,7 @@ class TestLoaderWithTempFiles(unittest.TestCase):
 
     def test_skip_text_epub(self):
         """skip_text=True일 때 EPUB 파일의 summary가 비어 있고 메타데이터는 정상"""
-        src_epub = Path(__file__).parent / "_epub"
+        src_epub = Path(__file__).parent / "books" / "_epub"
         epub_files = list(src_epub.glob("*.epub"))
         if not epub_files:
             self.skipTest("EPUB 테스트 파일이 없습니다")
@@ -489,7 +489,7 @@ class TestGeneratorSupport(unittest.TestCase):
     """Generator 지원 관련 테스트"""
 
     def setUp(self):
-        self.path_prefix = Path(__file__).parent
+        self.path_prefix = Path(__file__).parent / "books"
         self.txt_dir_path = self.path_prefix / "_txt"
 
     def test_get_file_list_returns_list(self):
@@ -540,7 +540,7 @@ class TestLoaderWithES:
     def test_insert_with_stat_reuse(self, es_manager_for_loader):
         """stat 재사용하여 ES에 삽입하는 테스트"""
         esm = es_manager_for_loader
-        path_prefix = Path(__file__).parent
+        path_prefix = Path(__file__).parent / "books"
         txt_dir = path_prefix / "_txt"
 
         if not txt_dir.exists():
@@ -577,7 +577,7 @@ class TestLoaderWithES:
     def test_batch_insert_with_generator(self, es_manager_for_loader):
         """Generator로 파일을 배치 처리하여 ES에 삽입하는 테스트"""
         esm = es_manager_for_loader
-        path_prefix = Path(__file__).parent
+        path_prefix = Path(__file__).parent / "books"
         epub_dir = path_prefix / "_epub"
 
         if not epub_dir.exists():
