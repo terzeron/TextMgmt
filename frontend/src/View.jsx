@@ -43,6 +43,7 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
         : (routeWildcard ? parseEntryId(routeWildcard)?.bookId : undefined);
     const {searchResults, hasSearched, role, searchTotal, handleLoadMore, searchLoading} = useOutletContext();
     const [isFolderOpen, setIsFolderOpen] = useState(true);
+    const [expandedItems, setExpandedItems] = useState([]);
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
     const [selectedEntryId, setSelectedEntryId] = useState('');
@@ -285,7 +286,7 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
                 {isFolderOpen && (
                     <Col md={isMobile ? 12 : 5} lg={isMobile ? 12 : 4} className={directoryClassName}>
                         <Suspense fallback={<div className="loading">로딩 중...</div>}>
-                            <Folder folderData={folderData} isOpen={true} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
+                            <Folder folderData={folderData} expandedItems={expandedItems} onExpandedItemsChange={setExpandedItems} isOpen={true} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
                         </Suspense>
                     </Col>
                 )}
@@ -293,7 +294,7 @@ export default function View({ basePath = '/book-view', apiPrefix = '' }) {
                 <Col md={isMobile ? 12 : (isFolderOpen ? 7 : 12)} lg={isMobile ? 12 : (isFolderOpen ? 8 : 12)} className={isMobile ? "ps-0 pe-0" : "section"}>
                     {!isFolderOpen && (
                         <Suspense fallback={<div className="loading">로딩 중...</div>}>
-                            <Folder folderData={folderData} isOpen={false} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
+                            <Folder folderData={folderData} expandedItems={expandedItems} onExpandedItemsChange={setExpandedItems} isOpen={false} onToggle={setIsFolderOpen} onClickHandler={entryClicked}/>
                         </Suspense>
                     )}
                     {hasSearched &&

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Outlet, useLocation, Navigate } from "react-router-dom";
+import { Outlet, useLocation, useNavigate, Navigate } from "react-router-dom";
 import { GoogleOAuthProvider, GoogleLogin, googleLogout } from "@react-oauth/google";
 import { Button, Form, FormControl, InputGroup, Nav, Navbar, Dropdown } from "react-bootstrap";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -27,6 +27,7 @@ export default function Navigation() {
     const [hiddenCategories, setHiddenCategories] = useState([]);
 
     const location = useLocation();
+    const navigate = useNavigate();
     const isComicsContext = location.pathname.startsWith('/comics-');
     const searchPrefix = isComicsContext ? '/comics' : '';
 
@@ -59,6 +60,10 @@ export default function Navigation() {
     // 검색 실행 로직을 함수로 추출
     const handleSearch = () => {
         if (searchKeyword) {
+            // 홈 화면에서 검색 시 책 조회 페이지로 이동
+            if (location.pathname === '/') {
+                navigate('/book-view');
+            }
             setHasSearched(true);
             setSearchInProgress(true);
             rawJsonGetReq(

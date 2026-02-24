@@ -128,15 +128,18 @@ class TestBookManager:
         assert book.category == randomly_chosen_book.category
         assert book.title == randomly_chosen_book.title
 
-    def test_determine_file_content_and_encoding(self, book_manager_with_data):
+    def test_determine_file_content_and_encoding(self, book_manager_with_data, tmp_path):
         bm = book_manager_with_data
-        # Find any epub file for testing
-        epub_files = list(bm.path_prefix.glob("**/*.epub"))
-        if not epub_files:
-            pytest.skip("No epub files available")
-        file_path = epub_files[0]
-        content = bm.determine_file_content_and_encoding(file_path)
-        assert isinstance(content, str)
+        # txt 파일: 인코딩 감지 경로 테스트
+        txt_file = tmp_path / "test.txt"
+        txt_file.write_text("Hello, world! 안녕하세요", encoding="utf-8")
+        encoding = bm.determine_file_content_and_encoding(txt_file)
+        assert isinstance(encoding, str)
+
+        # 비-txt 파일: "binary" 반환 경로 테스트
+        epub_file = tmp_path / "test.epub"
+        epub_file.write_bytes(b"PK\x03\x04")
+        assert bm.determine_file_content_and_encoding(epub_file) == "binary"
 
     @pytest.mark.asyncio
     async def test_get_book_content(self, book_manager_with_data):
@@ -250,9 +253,21 @@ class TestBookManager:
                 await bm.update_book(book_id, category1, title1, author1, path1, type1)
 
     @pytest.mark.asyncio
-    async def test_get_category_mismatches(self, book_manager_with_data):
+    async def test_get_category_mismatches(self, book_manager_with_data, tmp_path):
         bm = book_manager_with_data
-        result = await bm.get_category_mismatches()
+        # 프로덕션 디렉토리 전체 스캔 방지: 임시 디렉토리로 교체
+        original_prefix = bm.path_prefix
+        try:
+            # 테스트용 디렉토리 구조 생성
+            (tmp_path / "_epub").mkdir()
+            (tmp_path / "_txt").mkdir()
+            (tmp_path / "_epub" / "test.epub").write_bytes(b"test")
+            (tmp_path / "_txt" / "test.txt").write_text("test")
+
+            bm.path_prefix = tmp_path
+            result = bm.get_category_mismatches()
+        finally:
+            bm.path_prefix = original_prefix
 
         # 반환 구조 검증
         assert isinstance(result, dict)

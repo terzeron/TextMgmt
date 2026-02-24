@@ -767,7 +767,12 @@ def update_test_performance_cache(test_file: str, execution_time: float) -> None
 
     if test_file in file_durations:
         old_time = file_durations[test_file]
-        new_time = alpha * execution_time + (1 - alpha) * old_time
+        ratio = execution_time / old_time if old_time > 0 else float('inf')
+        if ratio > 2.0 or ratio < 0.5:
+            # 급격한 변화(2배 이상 차이): EMA 대신 즉시 반영
+            new_time = execution_time
+        else:
+            new_time = alpha * execution_time + (1 - alpha) * old_time
     else:
         new_time = execution_time
 

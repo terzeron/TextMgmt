@@ -200,6 +200,8 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
     const [folderData, setFolderData] = useState([]);
     const [expandedItems, setExpandedItems] = useState([]);
     const [hiddenCategories, setHiddenCategories] = useState(new Set());
+    const [esDocCounts, setEsDocCounts] = useState({});
+    const [fsFileCounts, setFsFileCounts] = useState({}); // lazy-loaded per category
 
     // 선택 상태
     const [selectedCategory, setSelectedCategory] = useState('');
@@ -214,7 +216,6 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
     // rename/delete 모달
     const [showRenameModal, setShowRenameModal] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
-    const [showDeleteDirModal, setShowDeleteDirModal] = useState(false);
     const [showReloadModal, setShowReloadModal] = useState(false);
     const [reloading, setReloading] = useState(false);
     const [newCategoryName, setNewCategoryName] = useState('');
@@ -247,11 +248,14 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
             // 비노출 카테고리 설정
             setHiddenCategories(new Set(hiddenResult || []));
 
+            // ES 문서 수 저장
+            setEsDocCounts(categoriesResult || {});
+
             // 불일치 건수
             const mismatchCounts = buildMismatchCounts(mismatchResult);
 
             // 모든 카테고리 목록
-            const esCategories = Object.keys(categoriesResult).filter(c => c !== '_root');
+            const esCategories = Object.keys(categoriesResult);
             const fsOnlyCategories = (mismatchResult.fs_only || []).map(item => item.category);
             const allCategories = [...new Set([...esCategories, ...fsOnlyCategories])].sort((a, b) => a.localeCompare(b));
 
@@ -363,9 +367,15 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                         children: [],
                         mismatchType: 'duplicate',
                         dupDocs: item.docs,
+                        fileExists: item.file_exists,
                         category: selectedId,
                         filePath: item.file_path,
                     });
+                }
+
+                // FS 파일 수 저장
+                if (result.fs_count != null) {
+                    setFsFileCounts(prev => ({...prev, [selectedId]: result.fs_count}));
                 }
 
                 const data = updateFolderInTree(folderData, selectedId, (folder) => {
@@ -554,7 +564,6 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                 setMessage(`카테고리 '${selectedCategory}'이(가) 삭제되었습니다. (${result.deleted_count}건)`);
                 setTimeout(() => setMessage(''), 5000);
                 setShowDeleteModal(false);
-                setShowDeleteDirModal(false);
                 setSelectedCategory('');
                 loadData();
             },
@@ -741,11 +750,31 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                             <strong>{selectedCategory}</strong>
                                             {saving && <Spinner animation="border" size="sm" className="ms-2"/>}
                                         </span>
-                                        <span>
+                                        <span className="d-flex gap-1">
+                                            <Badge bg="secondary">
+                                                ES {esDocCounts[selectedCategory] ?? 0}건
+                                            </Badge>
+                                            {fsFileCounts[selectedCategory] != null && (
+                                                <Badge bg="info">
+                                                    파일 {fsFileCounts[selectedCategory]}건
+                                                </Badge>
+                                            )}
+                                        </span>
+                                    </Card.Header>
+                                    <Card.Body>
+                                        <Form.Check
+                                            type="checkbox"
+                                            id={`hidden-${contentType}-${selectedCategory}`}
+                                            label="사용자 비노출"
+                                            checked={hiddenCategories.has(selectedCategory)}
+                                            onChange={() => handleToggleHidden(selectedCategory, hiddenCategories.has(selectedCategory))}
+                                            disabled={saving}
+                                            className="mb-2"
+                                        />
+                                        <div className="d-flex flex-wrap gap-1 mb-2">
                                             <Button
                                                 variant="outline-secondary"
                                                 size="sm"
-                                                className="me-1"
                                                 disabled={saving}
                                                 onClick={() => {
                                                     setNewCategoryName(selectedCategory);
@@ -765,37 +794,15 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                                 삭제 <FontAwesomeIcon icon={faTrash}/>
                                             </Button>
                                             <Button
-                                                variant="outline-warning"
-                                                size="sm"
-                                                className="ms-1"
-                                                disabled={saving}
-                                                onClick={() => setShowDeleteDirModal(true)}
-                                                title="디렉토리 삭제 (ES 문서 정리)"
-                                            >
-                                                디렉토리 삭제 <FontAwesomeIcon icon={faTrash}/>
-                                            </Button>
-                                            <Button
                                                 variant="outline-success"
                                                 size="sm"
-                                                className="ms-1"
                                                 disabled={saving}
                                                 onClick={() => setShowReloadModal(true)}
                                                 title="ES 재적재"
                                             >
                                                 {reloading ? <Spinner animation="border" size="sm"/> : <>ES 재적재 <FontAwesomeIcon icon={faRotate}/></>}
                                             </Button>
-                                        </span>
-                                    </Card.Header>
-                                    <Card.Body>
-                                        <Form.Check
-                                            type="checkbox"
-                                            id={`hidden-${contentType}-${selectedCategory}`}
-                                            label="사용자 비노출"
-                                            checked={hiddenCategories.has(selectedCategory)}
-                                            onChange={() => handleToggleHidden(selectedCategory, hiddenCategories.has(selectedCategory))}
-                                            disabled={saving}
-                                            className="mb-2"
-                                        />
+                                        </div>
                                         {!isSubcategory && (
                                             <>
                                                 <InputGroup className="mb-2">
@@ -857,12 +864,14 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                                     : `${contentLabel} 정보는 없고 파일시스템에만 존재합니다.`}
                                         </div>
                                         {selectedMismatch.mismatchType === 'duplicate' && selectedMismatch.dupDocs && (
+                                            <>
                                             <table className="table table-sm table-bordered mb-2" style={{fontSize: '0.8rem'}}>
                                                 <thead>
                                                     <tr>
                                                         <th>ID</th>
                                                         <th>제목</th>
                                                         <th>저자</th>
+                                                        <th>파일 연결</th>
                                                         <th>액션</th>
                                                     </tr>
                                                 </thead>
@@ -872,6 +881,15 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                                             <td>{doc.book_id}</td>
                                                             <td>{doc.title}</td>
                                                             <td>{doc.author}</td>
+                                                            <td className="text-center">
+                                                                {selectedMismatch.fileExists ? (
+                                                                    <Badge bg={doc.file_linked ? 'success' : 'warning'} style={{fontSize: '0.7rem'}}>
+                                                                        {doc.file_linked ? '연결됨' : '미연결'}
+                                                                    </Badge>
+                                                                ) : (
+                                                                    <Badge bg="danger" style={{fontSize: '0.7rem'}}>파일 없음</Badge>
+                                                                )}
+                                                            </td>
                                                             <td>
                                                                 <Button
                                                                     variant="outline-primary" size="sm" className="me-1 py-0"
@@ -879,6 +897,7 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                                                 >
                                                                     조회
                                                                 </Button>
+                                                                {!doc.file_linked && (
                                                                 <Button
                                                                     variant="outline-danger" size="sm" className="py-0"
                                                                     onClick={() => {
@@ -895,11 +914,13 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                                                                 >
                                                                     삭제
                                                                 </Button>
+                                                                )}
                                                             </td>
                                                         </tr>
                                                     ))}
                                                 </tbody>
                                             </table>
+                                            </>
                                         )}
                                         <div className="d-flex flex-wrap gap-1">
                                             {selectedMismatch.mismatchType === 'es_only' && (
@@ -1011,32 +1032,6 @@ export default function CategoryAdmin({contentType = 'book', title = '카테고�
                         disabled={saving}
                     >
                         {saving ? <Spinner animation="border" size="sm" /> : '삭제'}
-                    </Button>
-                </Modal.Footer>
-            </Modal>
-
-            {/* 디렉토리 삭제 확인 모달 */}
-            <Modal show={showDeleteDirModal} onHide={() => setShowDeleteDirModal(false)} centered>
-                <Modal.Header closeButton>
-                    <Modal.Title>디렉토리 삭제</Modal.Title>
-                </Modal.Header>
-                <Modal.Body>
-                    <p className="text-danger fw-bold">
-                        카테고리 &apos;{selectedCategory}&apos;의 모든 ES 문서가 삭제됩니다.
-                    </p>
-                    <p className="text-muted">
-                        파일시스템에 디렉토리가 존재하지 않는 경우, ES에 남아있는 문서를 정리하는 용도로 사용합니다.
-                        이 작업은 되돌릴 수 없습니다.
-                    </p>
-                </Modal.Body>
-                <Modal.Footer>
-                    <Button variant="secondary" onClick={() => setShowDeleteDirModal(false)}>취소</Button>
-                    <Button
-                        variant="warning"
-                        onClick={handleDeleteCategory}
-                        disabled={saving}
-                    >
-                        {saving ? <Spinner animation="border" size="sm" /> : '디렉토리 삭제'}
                     </Button>
                 </Modal.Footer>
             </Modal>

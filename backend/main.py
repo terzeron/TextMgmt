@@ -330,7 +330,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         LOGGER.debug("# get_category_mismatches()")
         response_object: Dict[str, Any] = {"status": "failure"}
         try:
-            result = await manager.get_category_mismatches()
+            result = await asyncio.to_thread(manager.get_category_mismatches)
             response_object["status"] = "success"
             response_object["result"] = result
         except Exception as e:
@@ -402,7 +402,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         LOGGER.debug("# get_category_mismatch_details(category='%s')", category)
         response_object: Dict[str, Any] = {"status": "failure"}
         try:
-            result = await manager.get_category_mismatch_details(category)
+            result = await asyncio.to_thread(manager.get_category_mismatch_details, category)
             response_object["status"] = "success"
             response_object["result"] = result
         except Exception as e:
@@ -415,6 +415,18 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
 
 app.include_router(create_item_router(book_manager, content_type="book"))
 app.include_router(create_item_router(comics_manager, content_type="comic"), prefix="/comics")
+
+
+@app.get("/wake")
+async def wake_storage():
+    """USB HDD를 깨우기 위해 책 볼륨 최상위 디렉토리에 접근"""
+    book_dir = os.environ.get("TM_BOOK_DIR", "/books")
+    try:
+        entries = await asyncio.to_thread(os.listdir, book_dir)
+        return {"status": "success", "count": len(entries)}
+    except Exception as e:
+        LOGGER.warning("wake_storage failed: %s", e)
+        return {"status": "failure", "error": str(e)}
 
 
 @app.get("/search/bookstore/{store_name}")

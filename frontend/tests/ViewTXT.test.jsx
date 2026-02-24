@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
 
 afterEach(cleanup);
 
@@ -74,6 +74,110 @@ describe('ViewTXT', () => {
         await waitFor(() => {
             expect(screen.getByText('줄1')).toBeTruthy();
             expect(screen.getByText('줄3')).toBeTruthy();
+        });
+    });
+
+    // ── 줄 합치기 (merged mode) ──
+
+    it('로딩 완료 후 "줄 합치기" 버튼을 표시한다', async () => {
+        mockTextGetReq.mockImplementation((url, payload, resolve) => {
+            resolve('줄1\n줄2');
+        });
+        render(<ViewTXT bookId={1} />);
+        await waitFor(() => {
+            expect(screen.getByText('줄 합치기')).toBeTruthy();
+        });
+    });
+
+    it('줄 합치기 토글 시 merged 모드로 전환된다', async () => {
+        mockTextGetReq.mockImplementation((url, payload, resolve) => {
+            resolve('제목\n\n본문 내용입니다.');
+        });
+        render(<ViewTXT bookId={1} />);
+        await waitFor(() => {
+            expect(screen.getByText('줄 합치기')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('줄 합치기'));
+        // merged 모드에서 빈 줄 기준 컨트롤이 표시됨
+        await waitFor(() => {
+            expect(screen.getByText('빈 줄 기준')).toBeTruthy();
+        });
+    });
+
+    it('merged 모드에서 다시 토글하면 원래 줄 표시로 복귀한다', async () => {
+        mockTextGetReq.mockImplementation((url, payload, resolve) => {
+            resolve('줄1\n줄2');
+        });
+        render(<ViewTXT bookId={1} />);
+        await waitFor(() => {
+            expect(screen.getByText('줄 합치기')).toBeTruthy();
+        });
+
+        // 토글 ON
+        fireEvent.click(screen.getByText('줄 합치기'));
+        await waitFor(() => {
+            expect(screen.getByText('빈 줄 기준')).toBeTruthy();
+        });
+
+        // 토글 OFF
+        fireEvent.click(screen.getByText('줄 합치기'));
+        await waitFor(() => {
+            expect(screen.queryByText('빈 줄 기준')).toBeNull();
+        });
+    });
+
+    // ── 빈 줄 기준 컨트롤 ──
+
+    it('빈 줄 기준 + 버튼으로 minBlank를 증가시킨다', async () => {
+        mockTextGetReq.mockImplementation((url, payload, resolve) => {
+            resolve('줄1\n\n줄2');
+        });
+        render(<ViewTXT bookId={1} />);
+        await waitFor(() => {
+            expect(screen.getByText('줄 합치기')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('줄 합치기'));
+        await waitFor(() => {
+            expect(screen.getByText('1')).toBeTruthy(); // 초기값
+        });
+
+        fireEvent.click(screen.getByText('+'));
+        await waitFor(() => {
+            expect(screen.getByText('2')).toBeTruthy();
+        });
+    });
+
+    it('빈 줄 기준 − 버튼은 1 미만으로 내릴 수 없다', async () => {
+        mockTextGetReq.mockImplementation((url, payload, resolve) => {
+            resolve('줄1\n줄2');
+        });
+        render(<ViewTXT bookId={1} />);
+        await waitFor(() => {
+            expect(screen.getByText('줄 합치기')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('줄 합치기'));
+        await waitFor(() => {
+            expect(screen.getByText('빈 줄 기준')).toBeTruthy();
+        });
+
+        // minBlank=1일 때 − 버튼은 disabled
+        const minusBtn = screen.getByText('−');
+        expect(minusBtn.disabled).toBe(true);
+    });
+
+    it('apiPrefix를 URL에 포함한다', async () => {
+        mockTextGetReq.mockImplementation((url, payload, resolve) => {
+            resolve('내용');
+        });
+        render(<ViewTXT bookId={1} apiPrefix="/comics" />);
+        await waitFor(() => {
+            expect(mockTextGetReq).toHaveBeenCalledWith(
+                '/comics/download/1', null,
+                expect.any(Function), expect.any(Function)
+            );
         });
     });
 });

@@ -283,6 +283,8 @@ class BookManager:
         LOGGER.debug(self.path_prefix)
         self.es_manager = ESManager()
         self.es_manager.create_index()
+        self._mismatch_cache: Optional[Dict[str, Any]] = None
+        self._mismatch_cache_time: float = 0.0
 
     def __del__(self) -> None:
         if hasattr(self, 'es_manager'):
@@ -907,10 +909,16 @@ class BookManager:
                     return "Error", f"ES 업데이트와 파일 롤백 모두 실패: ES={e}, rollback={rollback_err}"
         return "Error", f"can't update book information of '{book_id}' in ElasticSearch, no such a book"
 
-    async def get_category_mismatches(self) -> Dict[str, Any]:
+    def get_category_mismatches(self) -> Dict[str, Any]:
         """파일시스템의 1레벨 디렉토리 기준으로 ES와 파일 경로 불일치를 검출"""
+        import time as _time
         import os as _os
         from concurrent.futures import ThreadPoolExecutor
+
+        # TTL 캐시 (5분)
+        now = _time.monotonic()
+        if self._mismatch_cache is not None and (now - self._mismatch_cache_time) < 300:
+            return self._mismatch_cache
 
         # 1. ES: terms aggregation으로 카테고리별 문서 수 조회 (scroll 대비 수십 배 빠름)
         es_cats = self.es_manager.search_and_aggregate_by_category()
@@ -981,13 +989,16 @@ class BookManager:
             elif fs_count is not None:
                 fs_only.append({"category": key, "fs_count": fs_count})
 
-        return {
+        result = {
             "mismatches": sorted(mismatches, key=lambda x: abs(x["diff"]), reverse=True),
             "es_only": es_only,
             "fs_only": fs_only,
         }
+        self._mismatch_cache = result
+        self._mismatch_cache_time = now
+        return result
 
-    async def get_category_mismatch_details(self, category: str) -> Dict[str, Any]:
+    def get_category_mismatch_details(self, category: str) -> Dict[str, Any]:
         """특정 카테고리의 ES 문서와 파일시스템 파일을 비교하여 불일치 항목을 반환"""
         import os as _os
 
@@ -1044,6 +1055,15 @@ class BookManager:
             docs = path_docs[path]
             if len(docs) <= 1:
                 continue
+            file_exists = path in fs_files
+            # 파일의 실제 inode를 조회하여 ES doc _id(=inode)와 비교
+            linked_id = None
+            if file_exists:
+                try:
+                    abs_path = self.path_prefix / path
+                    linked_id = _os.stat(str(abs_path)).st_ino
+                except OSError:
+                    pass
             dup_docs = []
             for d in docs:
                 dup_docs.append({
@@ -1051,13 +1071,15 @@ class BookManager:
                     "title": d.get("title", ""),
                     "author": d.get("author", ""),
                     "file_type": d.get("file_type", ""),
+                    "file_linked": d["book_id"] == linked_id,
                 })
             duplicates.append({
                 "file_path": path,
+                "file_exists": file_exists,
                 "docs": dup_docs,
             })
 
-        return {"es_only": es_only, "fs_only": fs_only, "duplicates": duplicates}
+        return {"es_only": es_only, "fs_only": fs_only, "duplicates": duplicates, "fs_count": len(fs_files)}
 
     async def index_single_file(self, file_path: str) -> Tuple[Optional[int], Optional[str]]:
         """파일시스템의 파일을 읽어 ES에 적재"""
