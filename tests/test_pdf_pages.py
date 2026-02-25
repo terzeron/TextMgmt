@@ -13,19 +13,48 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from pypdf import PdfWriter
+from pypdf import PdfWriter, PdfReader
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
+
+_ENV = {
+    "TM_BOOK_DIR": "",  # temp_dir로 덮어씌움
+    "TM_COMICS_DIR": "",
+    "TM_ES_COMICS_INDEX": "test_comics",
+    "TM_ES_URL": "http://localhost:9200",
+    "TM_ES_BOOK_INDEX": "test",
+    "TM_ES_USER": "",
+    "TM_ES_PASSWORD": "",
+    "TM_FRONTEND_URL": "http://localhost:3000",
+}
 
 
 def create_test_pdf(num_pages: int, output_path: Path) -> None:
     """지정 페이지 수의 테스트 PDF 생성."""
     writer = PdfWriter()
-    for i in range(num_pages):
+    for _ in range(num_pages):
         writer.add_blank_page(width=612, height=792)
     with open(output_path, "wb") as f:
         writer.write(f)
+
+
+def _make_doc(relative_path: str, file_size: int, page_count: int = 5,
+              file_type: str = "pdf") -> dict:
+    """ES 문서 dict 생성 헬퍼."""
+    return {
+        "category": "test_category",
+        "title": "Test Book",
+        "author": "Author",
+        "file_path": relative_path,
+        "file_type": file_type,
+        "file_size": file_size,
+        "line_count": 0,
+        "page_count": page_count,
+        "isbn": "",
+        "summary": "test",
+        "updated_time": "2024-01-01T00:00:00.000000",
+    }
 
 
 @pytest.fixture(scope="module")
@@ -45,51 +74,47 @@ def test_pdf_path(temp_dir):
 
 
 @pytest.fixture(scope="module")
-def mock_book_manager(temp_dir, test_pdf_path):
-    """ESManager를 mock한 BookManager."""
-    with patch.dict(os.environ, {
-        "TM_BOOK_DIR": str(temp_dir),
-        "TM_COMICS_DIR": str(temp_dir),
-        "TM_ES_COMICS_INDEX": "test_comics",
-        "TM_ES_URL": "http://localhost:9200",
-        "TM_ES_BOOK_INDEX": "test",
-        "TM_ES_USER": "",
-        "TM_ES_PASSWORD": "",
-        "TM_FRONTEND_URL": "http://localhost:3000",
-    }):
+def _default_doc(temp_dir, test_pdf_path):
+    """기본 ES 문서 (모듈 전체에서 재사용)."""
+    relative_path = str(test_pdf_path.relative_to(temp_dir))
+    return _make_doc(relative_path, test_pdf_path.stat().st_size)
+
+
+@pytest.fixture(scope="module")
+def book_manager_module(temp_dir, _default_doc):
+    """ESManager를 mock한 BookManager (모듈 스코프)."""
+    env = {**_ENV, "TM_BOOK_DIR": str(temp_dir), "TM_COMICS_DIR": str(temp_dir)}
+    with patch.dict(os.environ, env):
         with patch("backend.book_manager.ESManager") as MockES:
             mock_es = MagicMock()
             MockES.return_value = mock_es
             mock_es.create_index.return_value = None
+            mock_es.search_by_id.return_value = _default_doc
 
             from backend.book_manager import BookManager
+            from backend.book import Book
             bm = BookManager()
-
-            # search_by_id가 테스트 PDF를 가리키는 문서를 반환
-            relative_path = str(test_pdf_path.relative_to(temp_dir))
-            mock_es.search_by_id.return_value = {
-                "category": "test_category",
-                "title": "Test Book",
-                "author": "Author",
-                "file_path": relative_path,
-                "file_type": "pdf",
-                "file_size": test_pdf_path.stat().st_size,
-                "line_count": 0,
-                "page_count": 5,
-                "isbn": "",
-                "summary": "test",
-                "updated_time": "2024-01-01T00:00:00.000000",
-            }
-
+            # Book.path_prefix는 import 시점에 고정되므로 temp_dir로 패치
+            original_prefix = Book.path_prefix
+            Book.path_prefix = temp_dir
             yield bm, mock_es
+            Book.path_prefix = original_prefix
+
+
+@pytest.fixture(autouse=True)
+def _reset_mock_es(book_manager_module, _default_doc):
+    """각 테스트 전에 mock_es.search_by_id를 기본 상태로 리셋."""
+    _, mock_es = book_manager_module
+    mock_es.search_by_id.return_value = _default_doc
+    yield
 
 
 class TestGetPdfPages:
     """BookManager.get_pdf_pages 단위 테스트."""
 
     @pytest.mark.asyncio
-    async def test_returns_single_page(self, mock_book_manager):
-        bm, _ = mock_book_manager
+    async def test_returns_single_page(self, book_manager_module):
+        bm, _ = book_manager_module
         response = await bm.get_pdf_pages(book_id=1, start=1, end=1)
 
         assert response.status_code == 200
@@ -97,65 +122,56 @@ class TestGetPdfPages:
         assert response.media_type == "application/pdf"
         assert response.headers.get("Content-Encoding") == "identity"
 
-        # 반환된 PDF가 1페이지인지 확인
-        from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(response.body))
         assert len(reader.pages) == 1
 
     @pytest.mark.asyncio
-    async def test_returns_page_range(self, mock_book_manager):
-        bm, _ = mock_book_manager
+    async def test_returns_page_range(self, book_manager_module):
+        bm, _ = book_manager_module
         response = await bm.get_pdf_pages(book_id=1, start=2, end=4)
 
         assert response.status_code == 200
         assert response.headers.get("X-Total-Pages") == "5"
 
-        from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(response.body))
         assert len(reader.pages) == 3  # 2, 3, 4
 
     @pytest.mark.asyncio
-    async def test_returns_all_pages(self, mock_book_manager):
-        bm, _ = mock_book_manager
+    async def test_returns_all_pages(self, book_manager_module):
+        bm, _ = book_manager_module
         response = await bm.get_pdf_pages(book_id=1, start=1, end=5)
 
         assert response.status_code == 200
-        from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(response.body))
         assert len(reader.pages) == 5
 
     @pytest.mark.asyncio
-    async def test_end_clamped_to_total_pages(self, mock_book_manager):
-        bm, _ = mock_book_manager
+    async def test_end_clamped_to_total_pages(self, book_manager_module):
+        bm, _ = book_manager_module
         response = await bm.get_pdf_pages(book_id=1, start=3, end=100)
 
         assert response.status_code == 200
-        from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(response.body))
         assert len(reader.pages) == 3  # 3, 4, 5
 
     @pytest.mark.asyncio
-    async def test_start_exceeds_total_pages(self, mock_book_manager):
-        bm, _ = mock_book_manager
+    async def test_start_exceeds_total_pages(self, book_manager_module):
+        bm, _ = book_manager_module
         response = await bm.get_pdf_pages(book_id=1, start=100, end=200)
 
         assert response.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_book_not_found(self, mock_book_manager):
-        bm, mock_es = mock_book_manager
-
-        original = mock_es.search_by_id.return_value
+    async def test_book_not_found(self, book_manager_module):
+        bm, mock_es = book_manager_module
         mock_es.search_by_id.return_value = None
 
         response = await bm.get_pdf_pages(book_id=999, start=1, end=1)
         assert response.status_code == 404
 
-        mock_es.search_by_id.return_value = original
-
     @pytest.mark.asyncio
-    async def test_cache_hit(self, mock_book_manager, temp_dir):
-        bm, _ = mock_book_manager
+    async def test_cache_hit(self, book_manager_module, temp_dir):
+        bm, _ = book_manager_module
 
         # 첫 번째 호출: 캐시 생성
         response1 = await bm.get_pdf_pages(book_id=1, start=1, end=2)
@@ -171,49 +187,52 @@ class TestGetPdfPages:
         assert response2.headers.get("X-Total-Pages") == "5"
 
     @pytest.mark.asyncio
-    async def test_not_a_pdf_file(self, mock_book_manager, temp_dir):
-        bm, mock_es = mock_book_manager
+    async def test_not_a_pdf_file(self, book_manager_module, temp_dir):
+        bm, mock_es = book_manager_module
 
-        # txt 파일 생성
         txt_path = temp_dir / "test_category" / "test.txt"
         txt_path.write_text("hello")
 
-        original = mock_es.search_by_id.return_value
-        mock_es.search_by_id.return_value = {
-            **original,
-            "file_path": "test_category/test.txt",
-            "file_type": "txt",
-        }
+        mock_es.search_by_id.return_value = _make_doc(
+            "test_category/test.txt", txt_path.stat().st_size, file_type="txt",
+        )
 
         response = await bm.get_pdf_pages(book_id=1, start=1, end=1)
         assert response.status_code == 400
-
-        mock_es.search_by_id.return_value = original
 
 
 class TestPdfPagesEndpoint:
     """FastAPI /pdf-pages/{book_id} 엔드포인트 테스트."""
 
     @pytest.fixture(autouse=True)
-    def setup_client(self, mock_book_manager):
-        bm, _ = mock_book_manager
+    def setup_client(self, book_manager_module, temp_dir, _default_doc):
+        _, mock_es = book_manager_module
 
-        with patch.dict(os.environ, {
-            "TM_FRONTEND_URL": "http://localhost:3000",
-        }):
-            # main.py 모듈 초기화 시 ComicsManager(ES)와 CategoryMapping(MySQL)도 mock
-            with patch("backend.comics_manager.ESManager") as MockComicsES, \
-                 patch("backend.category_mapping.CategoryMapping._init_db"):
-                mock_comics_es = MagicMock()
-                MockComicsES.return_value = mock_comics_es
-                mock_comics_es.create_index.return_value = None
+        with patch("backend.comics_manager.ESManager") as MockComicsES, \
+             patch("backend.category_mapping.CategoryMapping._init_db"):
+            mock_comics_es = MagicMock()
+            MockComicsES.return_value = mock_comics_es
+            mock_comics_es.create_index.return_value = None
 
-                from backend import main
-                original_bm = main.book_manager
-                main.book_manager = bm
-                self.client = TestClient(main.app)
+            from backend import main
+            from backend.book import Book
+
+            # 라우터 클로저가 캡처한 manager의 내부 속성을 패치
+            orig_es = main.book_manager.es_manager
+            orig_prefix = main.book_manager.path_prefix
+            orig_book_prefix = Book.path_prefix
+
+            main.book_manager.es_manager = mock_es
+            main.book_manager.path_prefix = temp_dir
+            Book.path_prefix = temp_dir
+            mock_es.search_by_id.return_value = _default_doc
+
+            self.client = TestClient(main.app)
             yield
-            main.book_manager = original_bm
+
+            main.book_manager.es_manager = orig_es
+            main.book_manager.path_prefix = orig_prefix
+            Book.path_prefix = orig_book_prefix
 
     def test_get_pdf_pages_default_params(self):
         response = self.client.get("/pdf-pages/1")
@@ -229,7 +248,6 @@ class TestPdfPagesEndpoint:
     def test_get_pdf_pages_x_total_pages_exposed(self):
         response = self.client.get("/pdf-pages/1?start=1&end=1")
         assert response.status_code == 200
-        # X-Total-Pages 헤더가 CORS expose_headers에 포함되어야 함
         assert response.headers.get("X-Total-Pages") == "5"
 
     def test_get_pdf_pages_start_exceeds_total(self):
