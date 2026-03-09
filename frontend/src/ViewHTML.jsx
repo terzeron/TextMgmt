@@ -45,7 +45,8 @@ export default function ViewHTML({ bookId, apiPrefix = '' }) {
                 title="html viewer"
                 src={url}
                 ref={ref}
-                onLoad={() => setIsLoading(false)} // ✅ iframe 로드 완료 시 로딩 숨김
+                sandbox="allow-same-origin"
+                onLoad={() => setIsLoading(false)}
                 style={{
                     display: isLoading || errorMessage ? "none" : "block",
                     width: "100%",

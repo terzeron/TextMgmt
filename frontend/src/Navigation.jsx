@@ -5,13 +5,19 @@ import { Button, Form, FormControl, InputGroup, Nav, Navbar, Dropdown } from "re
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSearch, faSpinner, faUser } from "@fortawesome/free-solid-svg-icons";
 import { rawJsonGetReq, getApiUrlPrefix } from "./Common.js";
-import { determineRole, isViewerAllowedPath } from "./auth.js";
+import { isViewerAllowedPath } from "./auth.js";
+
+function decodeJwtPayload(token) {
+    try {
+        const payload = token.split('.')[1];
+        return JSON.parse(atob(payload));
+    } catch {
+        return null;
+    }
+}
 
 export default function Navigation() {
     const clientId = window.__ENV__?.['VITE_GOOGLE_CLIENT_ID'] || import.meta.env.VITE_GOOGLE_CLIENT_ID;
-    const adminEmail = window.__ENV__?.['VITE_ADMIN_EMAIL'] || import.meta.env.VITE_ADMIN_EMAIL;
-    const allowedEmailsRaw = window.__ENV__?.['VITE_ALLOWED_EMAILS'] || import.meta.env.VITE_ALLOWED_EMAILS || '';
-    const allowedEmails = allowedEmailsRaw ? allowedEmailsRaw.split(',').map(e => e.trim()).filter(Boolean) : [];
 
     const [login, setLogin] = useState(false);
     const [role, setRole] = useState(null); // 'admin' | 'viewer' | null
@@ -105,25 +111,26 @@ export default function Navigation() {
             console.error("The environment variable VITE_GOOGLE_CLIENT_ID is not set.");
             return;
         }
-        if (!adminEmail) {
-            console.error("The environment variable VITE_ADMIN_EMAIL is not set.");
-            return;
-        }
 
-        // localStorage에서 저장된 정보로 로그인 상태 복원
-        const storedEmail = localStorage.getItem('email');
-        const storedName = localStorage.getItem('name');
-        const storedPicture = localStorage.getItem('picture');
-
-        if (storedEmail) {
-            const storedRole = determineRole(storedEmail, adminEmail, allowedEmails);
-            setLogin(true);
-            setRole(storedRole);
-            setName(storedName || '');
-            setEmail(storedEmail || '');
-            setPicture(storedPicture || '');
+        // localStorage의 JWT 토큰으로 로그인 상태 복원
+        const storedToken = localStorage.getItem('tm_token');
+        if (storedToken) {
+            const payload = decodeJwtPayload(storedToken);
+            if (payload && payload.exp > Date.now() / 1000) {
+                setLogin(true);
+                setRole(payload.role);
+                setName(payload.name || '');
+                setEmail(payload.email || '');
+                setPicture(payload.picture || '');
+            } else {
+                // 만료된 토큰 제거
+                localStorage.removeItem('tm_token');
+                localStorage.removeItem('name');
+                localStorage.removeItem('email');
+                localStorage.removeItem('picture');
+            }
         }
-    }, [adminEmail, clientId]);
+    }, [clientId]);
 
     const onLoginSuccess = async (credentialResponse) => {
         console.log('Google Login Success:', credentialResponse);
@@ -141,21 +148,17 @@ export default function Navigation() {
             const data = await res.json();
             console.log('Google auth verified:', data);
 
-            if (data.email) {
-                const profileName = data.name || 'Unknown';
-                const profileEmail = data.email || '';
-                const profilePicture = data.picture || '';
-
-                setName(profileName);
-                setEmail(profileEmail);
-                setPicture(profilePicture);
-                const userRole = determineRole(profileEmail, adminEmail, allowedEmails);
+            if (data.token && data.role) {
+                setName(data.name || 'Unknown');
+                setEmail(data.email || '');
+                setPicture(data.picture || '');
                 setLogin(true);
-                setRole(userRole);
+                setRole(data.role);
 
-                localStorage.setItem('name', profileName);
-                localStorage.setItem('email', profileEmail);
-                localStorage.setItem('picture', profilePicture);
+                localStorage.setItem('tm_token', data.token);
+                localStorage.setItem('name', data.name || '');
+                localStorage.setItem('email', data.email || '');
+                localStorage.setItem('picture', data.picture || '');
             }
         } catch (error) {
             console.error('Error verifying Google token:', error);
@@ -171,6 +174,7 @@ export default function Navigation() {
         setEmail('');
         setPicture('');
 
+        localStorage.removeItem('tm_token');
         localStorage.removeItem('name');
         localStorage.removeItem('email');
         localStorage.removeItem('picture');

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import PropTypes from "prop-types";
+import DOMPurify from "dompurify";
 import { getApiUrlPrefix } from "./Common";
 import mammoth from "mammoth";
 
@@ -23,7 +24,7 @@ export default function ViewDOC({ bookId, fileType, lineCount, apiPrefix = '' })
             fetch(previewUri)
                 .then(response => response.text())
                 .then(html => {
-                    setContent(html);
+                    setContent(DOMPurify.sanitize(html));
                     setIsLoading(false);
                 })
                 .catch(error => {
@@ -39,7 +40,7 @@ export default function ViewDOC({ bookId, fileType, lineCount, apiPrefix = '' })
                 .then(buffer => mammoth.convertToHtml({ arrayBuffer: buffer }))
                 .then(result => {
                     const paragraphs = result.value.split("</p>").slice(0, lineCount).join("</p>") + "</p>";
-                    setContent(paragraphs);
+                    setContent(DOMPurify.sanitize(paragraphs));
                     setIsLoading(false);
                 })
                 .catch(error => {
