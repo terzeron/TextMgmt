@@ -1,0 +1,64 @@
+# tm.terzeron.com (frontend)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: tm-frontend-route
+  namespace: textmanager
+spec:
+  parentRefs:
+    - name: main-gateway
+      namespace: traefik
+  hostnames:
+    - "tm.terzeron.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: tm-frontend
+          port: 80
+
+---
+# api-tm.terzeron.com (backend)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: tm-backend-route
+  namespace: textmanager
+spec:
+  parentRefs:
+    - name: main-gateway
+      namespace: traefik
+  hostnames:
+    - "api-tm.terzeron.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: tm-backend
+          port: 8020
+
+---
+# es.terzeron.com (Elasticsearch)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: es-route
+  namespace: textmanager
+spec:
+  parentRefs:
+    - name: main-gateway
+      namespace: traefik
+  hostnames:
+    - "es.terzeron.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: elasticsearch-es-http
+          port: 9200
