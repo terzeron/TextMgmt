@@ -79,25 +79,13 @@ echo ""
 echo ">>> Creating namespace: $NAMESPACE"
 kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
-# 2. cert-manager 설치 (TLS Certificate 생성에 필요)
-echo ""
-echo ">>> Installing cert-manager"
-if kubectl get namespace cert-manager &>/dev/null; then
-    echo "cert-manager already installed, skipping"
-else
-    kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
-    echo "Waiting for cert-manager to be ready..."
-    kubectl wait --for=condition=Available deployment --all -n cert-manager --timeout=180s
-fi
-
-# 3. Gateway API CRD 설치 + RBAC + Gateway/HTTPRoute 설정
+# 2. Gateway API CRD 설치 + HTTPRoute 설정
 echo ""
 echo ">>> Installing Gateway API"
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/latest/download/standard-install.yaml
-kubectl apply -f "$SCRIPT_DIR/traefik-gateway-rbac.yml"
-kubectl apply -f "$SCRIPT_DIR/gateway.yml"
+kubectl apply -f "$SCRIPT_DIR/httproute.yml"
 
-# 4. Traefik v3 업그레이드 + Gateway API provider 활성화
+# 3. Traefik v3 업그레이드 + Gateway API provider 활성화
 echo ""
 echo ">>> Configuring Traefik for Gateway API"
 kubectl -n kube-system set image deploy/traefik traefik=traefik:v3.3
@@ -109,17 +97,12 @@ if ! echo "$CURRENT_ARGS" | grep -q "kubernetesgateway"; then
 fi
 kubectl rollout status deploy/traefik -n kube-system --timeout=120s
 
-# 5. PersistentVolume & PersistentVolumeClaim 생성
+# 4. PersistentVolume & PersistentVolumeClaim 생성
 echo ""
 echo ">>> Creating PersistentVolume and PersistentVolumeClaim"
 kubectl apply -f "$SCRIPT_DIR/books-volume.yml"
 
-# 6. TLS Certificate 생성 (cert-manager 필요)
-echo ""
-echo ">>> Creating TLS Certificate"
-kubectl apply -f "$SCRIPT_DIR/tm-certificate.yml" || echo "Warning: TLS Certificate creation failed (cert-manager ClusterIssuer may not exist)"
-
-# 7. Google OAuth Secret 생성
+# 5. Google OAuth Secret 생성
 echo ""
 echo ">>> Creating Google OAuth Secret"
 if [ -z "$TM_GOOGLE_CLIENT_ID" ] || [ -z "$TM_GOOGLE_CLIENT_SECRET" ]; then
@@ -131,7 +114,7 @@ else
       --dry-run=client -o yaml | kubectl apply -f -
 fi
 
-# 8. Elasticsearch 설치
+# 6. Elasticsearch 설치
 echo ""
 echo ">>> Installing Elasticsearch (this may take a while)"
 read -p "Install Elasticsearch? (y/N): " install_es
@@ -143,7 +126,7 @@ else
     echo "Skipping Elasticsearch installation"
 fi
 
-# 9. MySQL 설치
+# 7. MySQL 설치
 echo ""
 read -p "Install MySQL? (y/N): " install_mysql
 if [ "$install_mysql" = "y" ] || [ "$install_mysql" = "Y" ]; then
@@ -154,12 +137,12 @@ else
     echo "Skipping MySQL installation"
 fi
 
-# 10. Application Deployment 적용
+# 8. Application Deployment 적용
 echo ""
 echo ">>> Applying application deployments"
 kubectl apply -f "$SCRIPT_DIR/tm-deployment.yml"
 
-# 11. 상태 확인
+# 9. 상태 확인
 echo ""
 echo "=== Deployment Status ==="
 kubectl get all -n $NAMESPACE
