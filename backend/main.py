@@ -7,7 +7,7 @@ import logging.config
 from pathlib import Path
 from typing import Dict, Any, Union, List
 import httpx
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
@@ -16,6 +16,7 @@ from fastapi.exceptions import RequestValidationError
 ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
 JSON_MEDIA_TYPE = "application/json"
 from pydantic import BaseModel
+from backend.auth import require_auth, require_admin, determine_role, create_jwt_token
 from backend.book_manager import BookManager
 from backend.comics_manager import ComicsManager
 from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
@@ -45,7 +46,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     from fastapi.responses import JSONResponse
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors(), "body": str(exc.body)},
+        content={"detail": "입력값이 올바르지 않습니다"},
     )
 
 
@@ -68,7 +69,7 @@ async def general_exception_handler(request: Request, exc: Exception):
     from fastapi.responses import JSONResponse
     return JSONResponse(
         status_code=500,
-        content={"detail": str(exc)},
+        content={"detail": "서버 내부 오류가 발생했습니다"},
     )
 
 
@@ -143,9 +144,11 @@ class CategoryDeleteModel(BaseModel):
 
 def create_item_router(manager, content_type: str = "book") -> APIRouter:
     """공통 CRUD 엔드포인트를 생성하는 라우터 팩토리"""
+    auth_dep = [Depends(require_auth)]
+    admin_dep = [Depends(require_admin)]
     router = APIRouter()
 
-    @router.put("/books/{book_id}")
+    @router.put("/books/{book_id}", dependencies=admin_dep)
     async def update_book(book_id: int, book_item: BookModel, force: bool = False) -> Dict[str, Any]:
         LOGGER.debug("# update_book(book_id=%d, book=%r, force=%s)", book_id, book_item, force)
         response_object: Dict[str, Any] = {"status": "failure"}
@@ -157,7 +160,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
-    @router.delete("/books/{book_id}")
+    @router.delete("/books/{book_id}", dependencies=admin_dep)
     async def delete_book(book_id: int) -> Dict[str, Any]:
         LOGGER.debug("# delete_book(book_id=%d)", book_id)
         response_object: Dict[str, Any] = {"status": "failure"}
@@ -173,22 +176,22 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = message
         return response_object
 
-    @router.get("/download/{book_id}", response_model=None)
+    @router.get("/download/{book_id}", response_model=None, dependencies=auth_dep)
     async def get_book_content(book_id: int) -> Union[str, FileResponse]:
         LOGGER.debug("# get_book(book_id=%d)", book_id)
         return await manager.get_book_content(book_id=book_id)
 
-    @router.get("/preview/{book_id}", response_model=None)
+    @router.get("/preview/{book_id}", response_model=None, dependencies=auth_dep)
     async def get_book_preview(book_id: int, pages: int = 5, chapters: int = 3):
         LOGGER.debug("# get_book_preview(book_id=%d, pages=%d, chapters=%d)", book_id, pages, chapters)
         return await manager.get_book_preview(book_id=book_id, pages=pages, chapters=chapters)
 
-    @router.get("/pdf-pages/{book_id}", response_model=None)
+    @router.get("/pdf-pages/{book_id}", response_model=None, dependencies=auth_dep)
     async def get_pdf_pages(book_id: int, start: int = 1, end: int = 1):
         LOGGER.debug("# get_pdf_pages(book_id=%d, start=%d, end=%d)", book_id, start, end)
         return await manager.get_pdf_pages(book_id=book_id, start=start, end=end)
 
-    @router.get("/validate/{book_id}")
+    @router.get("/validate/{book_id}", dependencies=auth_dep)
     async def validate_book(book_id: int) -> Dict[str, Any]:
         LOGGER.debug("# validate_book(book_id=%d)", book_id)
         response_object: Dict[str, Any] = {"status": "failure"}
@@ -213,7 +216,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
-    @router.get("/books/{book_id}")
+    @router.get("/books/{book_id}", dependencies=auth_dep)
     async def get_book(book_id: int) -> Dict[str, Any]:
         LOGGER.debug("# get_book(book_id=%d)", book_id)
         response_object: Dict[str, Any] = {"status": "failure"}
@@ -225,7 +228,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
-    @router.put("/categories/rename")
+    @router.put("/categories/rename", dependencies=admin_dep)
     async def rename_category(body: CategoryRenameModel) -> Dict[str, Any]:
         LOGGER.debug("# rename_category(old='%s', new='%s')", body.old_category, body.new_category)
         response_object: Dict[str, Any] = {"status": "failure"}
@@ -243,7 +246,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
-    @router.post("/categories/delete")
+    @router.post("/categories/delete", dependencies=admin_dep)
     async def delete_category(body: CategoryDeleteModel) -> Dict[str, Any]:
         LOGGER.debug("# delete_category(category='%s')", body.category)
         response_object: Dict[str, Any] = {"status": "failure"}
@@ -267,7 +270,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
-    @router.get("/categories/{category:path}")
+    @router.get("/categories/{category:path}", dependencies=auth_dep)
     async def get_books_in_category(category: str) -> Dict[str, Any]:
         LOGGER.debug("# get_books_in_category(category='%s')", category)
         response_object: Dict[str, Any] = {"status": "failure"}
@@ -279,7 +282,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
-    @router.get("/categories")
+    @router.get("/categories", dependencies=auth_dep)
     async def get_categories() -> Dict[str, Any]:
         LOGGER.debug("# get_categories()")
         response_object: Dict[str, Any] = {"status": "failure"}
@@ -291,7 +294,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
-    @router.get("/similar/{book_id}")
+    @router.get("/similar/{book_id}", dependencies=auth_dep)
     async def search_similar_books(book_id: int, offset: int = 0, limit: int = 10) -> Dict[str, Any]:
         LOGGER.debug("# search_similar_books(book_id=%d, offset=%d, limit=%d)", book_id, offset, limit)
         response_object: Dict[str, Any] = {"status": "failure"}
@@ -310,7 +313,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error or err2
         return response_object
 
-    @router.get("/search/{keyword}")
+    @router.get("/search/{keyword}", dependencies=auth_dep)
     async def search_by_keyword(keyword: str, offset: int = 0, limit: int = 10, exclude_categories: str = "") -> Dict[str, Any]:
         LOGGER.debug("# search(keyword=%s, offset=%d, limit=%d, exclude_categories=%s)", keyword, offset, limit, exclude_categories)
         response_object: Dict[str, Any] = {"status": "failure"}
@@ -324,7 +327,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
-    @router.get("/category-mismatches")
+    @router.get("/category-mismatches", dependencies=admin_dep)
     async def get_category_mismatches() -> Dict[str, Any]:
         """ES 카테고리별 문서 수와 파일시스템 파일 수의 불일치 검출"""
         LOGGER.debug("# get_category_mismatches()")
@@ -338,7 +341,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = str(e)
         return response_object
 
-    @router.post("/category-mismatches/index-file")
+    @router.post("/category-mismatches/index-file", dependencies=admin_dep)
     async def index_single_file(body: Dict[str, str]) -> Dict[str, Any]:
         """파일시스템의 파일을 ES에 적재"""
         LOGGER.debug("# index_single_file(body=%r)", body)
@@ -354,7 +357,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
-    @router.post("/category-mismatches/delete-file")
+    @router.post("/category-mismatches/delete-file", dependencies=admin_dep)
     async def delete_file(body: Dict[str, str]) -> Dict[str, Any]:
         """파일시스템에서 파일 삭제"""
         LOGGER.debug("# delete_file(body=%r)", body)
@@ -370,7 +373,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
-    @router.delete("/category-mismatches/es-doc/{book_id}")
+    @router.delete("/category-mismatches/es-doc/{book_id}", dependencies=admin_dep)
     async def delete_es_doc_only(book_id: int) -> Dict[str, Any]:
         """ES 문서만 삭제 (파일은 유지) — 중복 문서 정리용"""
         LOGGER.debug("# delete_es_doc_only(book_id=%d)", book_id)
@@ -381,7 +384,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = f"ES 문서 삭제 실패: {book_id}"
         return response_object
 
-    @router.post("/category-mismatches/reload")
+    @router.post("/category-mismatches/reload", dependencies=admin_dep)
     async def reload_category(body: CategoryDeleteModel) -> Dict[str, Any]:
         """카테고리 전체를 ES에 재적재"""
         LOGGER.info("reload_category 요청: category='%s', content_type='%s'", body.category, content_type)
@@ -396,7 +399,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             LOGGER.error("reload_category 응답: failure — %s", error)
         return response_object
 
-    @router.get("/category-mismatches/{category:path}")
+    @router.get("/category-mismatches/{category:path}", dependencies=admin_dep)
     async def get_category_mismatch_details(category: str) -> Dict[str, Any]:
         """특정 카테고리의 책 수준 불일치 상세 조회"""
         LOGGER.debug("# get_category_mismatch_details(category='%s')", category)
@@ -429,7 +432,7 @@ async def wake_storage():
         return {"status": "failure", "error": str(e)}
 
 
-@app.get("/search/bookstore/{store_name}")
+@app.get("/search/bookstore/{store_name}", dependencies=[Depends(require_auth)])
 async def search_bookstore_api(store_name: str, title: str = "", author: str = "", isbn: str = ""):
     """
     지정된 온라인 서점에서 책을 검색하여 상위 결과의 메타데이터를 반환합니다.
@@ -519,11 +522,25 @@ async def verify_google_token(request_body: dict):
         LOGGER.error("Google token audience mismatch: expected %s, got %s", TM_GOOGLE_CLIENT_ID, result.get("aud"))
         raise HTTPException(status_code=401, detail="Invalid token audience")
 
+    email = result.get("email", "")
+    name = result.get("name", "")
+    picture = result.get("picture", "")
+
+    # 서버 측 role 결정
+    role = determine_role(email)
+    if role is None:
+        LOGGER.warning("Unauthorized email login attempt: %s", email)
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # JWT 토큰 발급
+    token = create_jwt_token(email=email, role=role, name=name, picture=picture)
+
     return {
-        "email": result.get("email"),
-        "name": result.get("name"),
-        "picture": result.get("picture"),
-        "email_verified": result.get("email_verified")
+        "token": token,
+        "email": email,
+        "name": name,
+        "picture": picture,
+        "role": role,
     }
 
 
@@ -537,7 +554,7 @@ class CategoryMappingsModel(BaseModel):
     mappings: Dict[str, List[str]]
 
 
-@app.get("/category-mappings")
+@app.get("/category-mappings", dependencies=[Depends(require_auth)])
 async def get_all_category_mappings(content_type: str = "book") -> Dict[str, Any]:
     """모든 카테고리-키워드 매핑 조회"""
     LOGGER.debug("# get_all_category_mappings(content_type=%s)", content_type)
@@ -549,7 +566,7 @@ async def get_all_category_mappings(content_type: str = "book") -> Dict[str, Any
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/category-mappings/{category}")
+@app.get("/category-mappings/{category}", dependencies=[Depends(require_auth)])
 async def get_category_keywords(category: str, content_type: str = "book") -> Dict[str, Any]:
     """특정 카테고리의 키워드 목록 조회"""
     LOGGER.debug("# get_category_keywords(category='%s', content_type=%s)", category, content_type)
@@ -561,7 +578,7 @@ async def get_category_keywords(category: str, content_type: str = "book") -> Di
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.put("/category-mappings/{category}")
+@app.put("/category-mappings/{category}", dependencies=[Depends(require_admin)])
 async def set_category_keywords(category: str, body: CategoryKeywordsModel, content_type: str = "book") -> Dict[str, Any]:
     """카테고리의 키워드 목록 설정 (기존 대체)"""
     LOGGER.debug("# set_category_keywords(category='%s', keywords=%s, content_type=%s)", category, body.keywords, content_type)
@@ -578,7 +595,7 @@ async def set_category_keywords(category: str, body: CategoryKeywordsModel, cont
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/category-mappings/{category}/keywords")
+@app.post("/category-mappings/{category}/keywords", dependencies=[Depends(require_admin)])
 async def add_category_keyword(category: str, body: Dict[str, str], content_type: str = "book") -> Dict[str, Any]:
     """카테고리에 키워드 추가"""
     keyword = body.get("keyword", "")
@@ -596,7 +613,7 @@ async def add_category_keyword(category: str, body: Dict[str, str], content_type
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/category-mappings/{category}/keywords/{keyword}")
+@app.delete("/category-mappings/{category}/keywords/{keyword}", dependencies=[Depends(require_admin)])
 async def remove_category_keyword(category: str, keyword: str, content_type: str = "book") -> Dict[str, Any]:
     """카테고리에서 키워드 삭제"""
     LOGGER.debug("# remove_category_keyword(category='%s', keyword='%s', content_type=%s)", category, keyword, content_type)
@@ -613,7 +630,7 @@ async def remove_category_keyword(category: str, keyword: str, content_type: str
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/category-mappings/{category}")
+@app.delete("/category-mappings/{category}", dependencies=[Depends(require_admin)])
 async def delete_category_mapping(category: str, content_type: str = "book") -> Dict[str, Any]:
     """카테고리의 모든 키워드 삭제"""
     LOGGER.debug("# delete_category_mapping(category='%s', content_type=%s)", category, content_type)
@@ -630,7 +647,7 @@ async def delete_category_mapping(category: str, content_type: str = "book") -> 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.put("/category-mappings")
+@app.put("/category-mappings", dependencies=[Depends(require_admin)])
 async def update_all_category_mappings(body: CategoryMappingsModel, content_type: str = "book") -> Dict[str, Any]:
     """전체 매핑 일괄 업데이트"""
     LOGGER.debug("# update_all_category_mappings(content_type=%s)", content_type)
@@ -653,7 +670,7 @@ class HiddenCategoryModel(BaseModel):
     hidden: bool
 
 
-@app.get("/hidden-categories")
+@app.get("/hidden-categories", dependencies=[Depends(require_auth)])
 async def get_hidden_categories(content_type: str = "book") -> Dict[str, Any]:
     """비노출 카테고리 목록 조회"""
     LOGGER.debug("# get_hidden_categories(content_type=%s)", content_type)
@@ -665,7 +682,7 @@ async def get_hidden_categories(content_type: str = "book") -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/hidden-categories/{category:path}")
+@app.post("/hidden-categories/{category:path}", dependencies=[Depends(require_admin)])
 async def set_hidden_category(category: str, body: HiddenCategoryModel, content_type: str = "book") -> Dict[str, Any]:
     """카테고리 비노출 설정/해제"""
     LOGGER.debug("# set_hidden_category(category='%s', hidden=%s, content_type=%s)", category, body.hidden, content_type)

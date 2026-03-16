@@ -1,0 +1,64 @@
+import os
+import time
+import logging
+
+import jwt
+from fastapi import HTTPException, Request
+
+LOGGER = logging.getLogger(__name__)
+
+JWT_SECRET = os.getenv("TM_JWT_SECRET", "")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_SECONDS = 7 * 24 * 3600  # 7일
+
+TM_ADMIN_EMAIL = os.getenv("TM_ADMIN_EMAIL", "")
+_allowed_raw = os.getenv("TM_ALLOWED_EMAILS", "")
+TM_ALLOWED_EMAILS = [e.strip() for e in _allowed_raw.split(",") if e.strip()]
+
+
+def determine_role(email: str) -> str | None:
+    if email == TM_ADMIN_EMAIL:
+        return "admin"
+    if email in TM_ALLOWED_EMAILS:
+        return "viewer"
+    return None
+
+
+def create_jwt_token(email: str, role: str, name: str = "", picture: str = "") -> str:
+    now = int(time.time())
+    payload = {
+        "email": email,
+        "role": role,
+        "name": name,
+        "picture": picture,
+        "exp": now + JWT_EXPIRATION_SECONDS,
+        "iat": now,
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def _extract_payload(request: Request) -> dict:
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    token = auth_header[7:]
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+async def require_auth(request: Request) -> dict:
+    payload = _extract_payload(request)
+    if payload.get("role") not in ("admin", "viewer"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    return payload
+
+
+async def require_admin(request: Request) -> dict:
+    payload = _extract_payload(request)
+    if payload.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return payload

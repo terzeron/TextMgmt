@@ -28,7 +28,31 @@ export function getApiUrlPrefix() {
     return api_url_prefix;
 }
 
+export function getAuthToken() {
+    return localStorage.getItem('tm_token');
+}
+
+function getAuthHeaders(includeContentType = false) {
+    const headers = {};
+    if (includeContentType) {
+        headers['Content-Type'] = 'application/json';
+    }
+    const token = getAuthToken();
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
+}
+
 export function handleFetchErrors(response) {
+    if (response.status === 401) {
+        localStorage.removeItem('tm_token');
+        localStorage.removeItem('name');
+        localStorage.removeItem('email');
+        localStorage.removeItem('picture');
+        window.location.reload();
+        throw Error('Authentication required');
+    }
     if (!response.ok) {
         throw Error(response.statusText);
     }
@@ -53,9 +77,9 @@ const apiReq = (url, method, payload, type, resolve, reject, final) => {
     try {
         fetch(getApiUrlPrefix() + url, payload ? {
             method: method,
-            headers: { 'Content-Type': 'application/json' },
+            headers: getAuthHeaders(true),
             body: JSON.stringify(payload)
-        } : { method: method })
+        } : { method: method, headers: getAuthHeaders() })
             .then(handleFetchErrors)
             .then((response) => {
                 let promise;
@@ -118,7 +142,7 @@ export const blobGetReq = (url, payload, resolve, reject, final) => apiReq(url, 
 
 // 원본 JSON 응답을 그대로 반환 (status 체크 없이, 내부 API용)
 export const rawJsonGetReq = (url, resolve, reject, final) => {
-    fetch(getApiUrlPrefix() + url)
+    fetch(getApiUrlPrefix() + url, { headers: getAuthHeaders() })
         .then(handleFetchErrors)
         .then(response => response.json())
         .then(data => resolve && resolve(data))

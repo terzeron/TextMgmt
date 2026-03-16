@@ -1084,7 +1084,9 @@ class BookManager:
     async def index_single_file(self, file_path: str) -> Tuple[Optional[int], Optional[str]]:
         """파일시스템의 파일을 읽어 ES에 적재"""
         from utils.loader import Loader
-        abs_path = self.path_prefix / file_path
+        abs_path = (self.path_prefix / file_path).resolve()
+        if not abs_path.is_relative_to(self.path_prefix.resolve()):
+            return None, "잘못된 경로입니다"
         if not abs_path.is_file():
             return None, f"파일을 찾을 수 없습니다: {file_path}"
         data = Loader.read_file(abs_path)
@@ -1094,9 +1096,9 @@ class BookManager:
 
     async def delete_file(self, file_path: str) -> Tuple[str, Optional[str]]:
         """파일시스템에서 파일을 삭제"""
-        abs_path = self.path_prefix / file_path
-        if not abs_path.is_relative_to(self.path_prefix):
-            return "Error", f"잘못된 경로입니다: {file_path}"
+        abs_path = (self.path_prefix / file_path).resolve()
+        if not abs_path.is_relative_to(self.path_prefix.resolve()):
+            return "Error", "잘못된 경로입니다"
         if not abs_path.is_file():
             return "Error", f"파일을 찾을 수 없습니다: {file_path}"
         try:

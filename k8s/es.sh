@@ -23,11 +23,11 @@ es_curl() {
   return 1
 }
 
-echo "=== [1/6] Helm repo 설정 ==="
+echo "=== [1/5] Helm repo 설정 ==="
 helm repo add elastic https://helm.elastic.co 2>/dev/null || true
 helm repo update
 
-echo "=== [2/6] ECK CRD & Operator 설치 ==="
+echo "=== [2/5] ECK CRD & Operator 설치 ==="
 kubectl apply --server-side -f https://download.elastic.co/downloads/eck/3.1.0/crds.yaml
 CRD_COUNT=$(kubectl get crd | grep -c k8s.elastic.co)
 echo "  CRD 개수: $CRD_COUNT (10개 이상이면 정상)"
@@ -39,23 +39,19 @@ helm upgrade --install elastic-operator elastic/eck-operator \
     --set installCRDs=false
 kubectl -n "$NS" rollout status sts/elastic-operator --timeout=3m
 
-echo "=== [3/6] K8s Secret 생성 ==="
+echo "=== [3/5] K8s Secret 생성 ==="
 kubectl -n "$NS" create secret generic tm-es-cred \
   --from-literal=username="$TM_ES_USER" \
   --from-literal=password="$TM_ES_PASSWORD" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-echo "=== [4/6] Elasticsearch 클러스터 배포 ==="
+echo "=== [4/5] Elasticsearch 클러스터 배포 ==="
 helm upgrade --install es-kb-quickstart elastic/eck-stack \
     -n "$NS" \
     --create-namespace \
     -f "$SCRIPT_DIR/es-values.yml"
 
-echo "=== [5/6] Gateway API 설정 ==="
-kubectl apply -f "$SCRIPT_DIR/traefik-gateway-rbac.yml"
-kubectl apply -f "$SCRIPT_DIR/gateway.yml"
-
-echo "=== [6/6] ES 준비 대기 및 사용자 설정 ==="
+echo "=== [5/5] ES 준비 대기 및 사용자 설정 ==="
 echo "  pod ready 대기 중..."
 kubectl -n "$NS" wait --for=condition=ready pod/elasticsearch-es-default-0 --timeout=5m
 
