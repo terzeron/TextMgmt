@@ -114,7 +114,20 @@ else
       --dry-run=client -o yaml | kubectl apply -f -
 fi
 
-# 6. Elasticsearch 설치
+# 6. Auth Secret 생성 (JWT, Admin/Allowed Emails)
+echo ""
+echo ">>> Creating Auth Secret"
+if [ -z "$TM_JWT_SECRET" ] || [ -z "$TM_ADMIN_EMAIL" ]; then
+    echo "Warning: TM_JWT_SECRET or TM_ADMIN_EMAIL not set in .env"
+else
+    kubectl -n $NAMESPACE create secret generic tm-auth-cred \
+      --from-literal=jwt-secret="$TM_JWT_SECRET" \
+      --from-literal=admin-email="$TM_ADMIN_EMAIL" \
+      --from-literal=allowed-emails="${TM_ALLOWED_EMAILS:-}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+fi
+
+# 7. Elasticsearch 설치
 echo ""
 echo ">>> Installing Elasticsearch (this may take a while)"
 read -p "Install Elasticsearch? (y/N): " install_es
@@ -126,7 +139,7 @@ else
     echo "Skipping Elasticsearch installation"
 fi
 
-# 7. MySQL 설치
+# 8. MySQL 설치
 echo ""
 read -p "Install MySQL? (y/N): " install_mysql
 if [ "$install_mysql" = "y" ] || [ "$install_mysql" = "Y" ]; then
@@ -137,7 +150,7 @@ else
     echo "Skipping MySQL installation"
 fi
 
-# 8. Application Deployment 적용
+# 9. Application Deployment 적용
 echo ""
 echo ">>> Applying application deployments"
 kubectl apply -f "$SCRIPT_DIR/tm-deployment.yml"

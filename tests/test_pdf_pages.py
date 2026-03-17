@@ -15,7 +15,9 @@ import pytest
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter, PdfReader
 
-logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
+logging.config.fileConfig(
+    Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False
+)
 LOGGER = logging.getLogger(__name__)
 
 _ENV = {
@@ -27,6 +29,9 @@ _ENV = {
     "TM_ES_USER": "",
     "TM_ES_PASSWORD": "",
     "TM_FRONTEND_URL": "http://localhost:3000",
+    "TM_JWT_SECRET": "test_jwt_secret_for_testing_minimum_32bytes",
+    "TM_ADMIN_EMAIL": "admin@test.com",
+    "TM_ALLOWED_EMAILS": "viewer@test.com",
 }
 
 
@@ -39,8 +44,9 @@ def create_test_pdf(num_pages: int, output_path: Path) -> None:
         writer.write(f)
 
 
-def _make_doc(relative_path: str, file_size: int, page_count: int = 5,
-              file_type: str = "pdf") -> dict:
+def _make_doc(
+    relative_path: str, file_size: int, page_count: int = 5, file_type: str = "pdf"
+) -> dict:
     """ES 문서 dict 생성 헬퍼."""
     return {
         "category": "test_category",
@@ -93,6 +99,7 @@ def book_manager_module(temp_dir, _default_doc):
 
             from backend.book_manager import BookManager
             from backend.book import Book
+
             bm = BookManager()
             # Book.path_prefix는 import 시점에 고정되므로 temp_dir로 패치
             original_prefix = Book.path_prefix
@@ -194,7 +201,9 @@ class TestGetPdfPages:
         txt_path.write_text("hello")
 
         mock_es.search_by_id.return_value = _make_doc(
-            "test_category/test.txt", txt_path.stat().st_size, file_type="txt",
+            "test_category/test.txt",
+            txt_path.stat().st_size,
+            file_type="txt",
         )
 
         response = await bm.get_pdf_pages(book_id=1, start=1, end=1)
@@ -208,8 +217,10 @@ class TestPdfPagesEndpoint:
     def setup_client(self, book_manager_module, temp_dir, _default_doc):
         _, mock_es = book_manager_module
 
-        with patch("backend.comics_manager.ESManager") as MockComicsES, \
-             patch("backend.category_mapping.CategoryMapping._init_db"):
+        with (
+            patch("backend.comics_manager.ESManager") as MockComicsES,
+            patch("backend.category_mapping.CategoryMapping._init_db"),
+        ):
             mock_comics_es = MagicMock()
             MockComicsES.return_value = mock_comics_es
             mock_comics_es.create_index.return_value = None
@@ -227,7 +238,14 @@ class TestPdfPagesEndpoint:
             Book.path_prefix = temp_dir
             mock_es.search_by_id.return_value = _default_doc
 
-            self.client = TestClient(main.app)
+            from backend.auth import create_jwt_token
+
+            token = create_jwt_token(
+                email="admin@test.com", role="admin", name="Test Admin"
+            )
+            self.client = TestClient(
+                main.app, headers={"Authorization": f"Bearer {token}"}
+            )
             yield
 
             main.book_manager.es_manager = orig_es

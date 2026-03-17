@@ -67,9 +67,20 @@ ES_INDEX_SETTINGS = {
 
 ES_INDEX_MAPPINGS = {
     "properties": {
-        "category": {"type": "keyword", "fields": {"nori": {"type": "text", "analyzer": "nori"}}},
-        "title": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
-        "author": {"type": "text", "analyzer": "nori", "fields": {"keyword": {"type": "keyword"}}},
+        "category": {
+            "type": "keyword",
+            "fields": {"nori": {"type": "text", "analyzer": "nori"}},
+        },
+        "title": {
+            "type": "text",
+            "analyzer": "nori",
+            "fields": {"keyword": {"type": "keyword"}},
+        },
+        "author": {
+            "type": "text",
+            "analyzer": "nori",
+            "fields": {"keyword": {"type": "keyword"}},
+        },
         "file_path": {"type": "keyword"},
         "file_type": {"type": "keyword"},
         "file_size": {"type": "unsigned_long"},
@@ -85,7 +96,9 @@ ES_INDEX_MAPPINGS = {
 class ElasticsearchContainer(DockerContainer):
     """Custom Elasticsearch container for ES 9.x support with nori plugin."""
 
-    def __init__(self, image: str = "docker.elastic.co/elasticsearch/elasticsearch:8.15.0"):
+    def __init__(
+        self, image: str = "docker.elastic.co/elasticsearch/elasticsearch:8.15.0"
+    ):
         super().__init__(image)
         self.with_exposed_ports(9200)
         self.with_env("discovery.type", "single-node")
@@ -112,14 +125,20 @@ class ElasticsearchContainer(DockerContainer):
                 req = urllib.request.Request(url)
                 with urllib.request.urlopen(req, timeout=10) as response:
                     if response.status == 200:
-                        data = json.loads(response.read().decode('utf-8'))
+                        data = json.loads(response.read().decode("utf-8"))
                         status = data.get("status")
                         if status in ("green", "yellow"):
                             print(f">>> Cluster health: {status}")
                             break
                         print(f">>> Cluster status: {status}, waiting...")
-            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
-                    ConnectionRefusedError, OSError, json.JSONDecodeError) as e:
+            except (
+                urllib.error.URLError,
+                urllib.error.HTTPError,
+                TimeoutError,
+                ConnectionRefusedError,
+                OSError,
+                json.JSONDecodeError,
+            ) as e:
                 print(f">>> Waiting for ES: {type(e).__name__}")
             time.sleep(2)
         else:
@@ -151,7 +170,9 @@ class ElasticsearchContainer(DockerContainer):
 @pytest.fixture(scope="session")
 def elasticsearch_container():
     """Start Elasticsearch container for testing."""
-    print("\n>>> Starting Elasticsearch container (this may take a while for nori plugin installation)...")
+    print(
+        "\n>>> Starting Elasticsearch container (this may take a while for nori plugin installation)..."
+    )
     es = ElasticsearchContainer()
 
     with es:
@@ -165,6 +186,12 @@ def elasticsearch_container():
         os.environ.setdefault("TM_FRONTEND_URL", "http://localhost:3000")
         os.environ.setdefault("VITE_FACEBOOK_APP_ID", "test_app_id")
         os.environ.setdefault("VITE_FACEBOOK_APP_SECRET", "test_app_secret")
+        # JWT 인증 테스트용 환경변수
+        os.environ.setdefault(
+            "TM_JWT_SECRET", "test_jwt_secret_for_testing_minimum_32bytes"
+        )
+        os.environ.setdefault("TM_ADMIN_EMAIL", "admin@test.com")
+        os.environ.setdefault("TM_ALLOWED_EMAILS", "viewer@test.com")
         yield es
     print(">>> Elasticsearch container stopped")
 
@@ -176,11 +203,14 @@ def es_client(elasticsearch_container):
 
     client = Elasticsearch(
         hosts=[os.environ["TM_ES_URL"]],
-        basic_auth=(os.environ.get("TM_ES_USER", ""), os.environ.get("TM_ES_PASSWORD", "")),
+        basic_auth=(
+            os.environ.get("TM_ES_USER", ""),
+            os.environ.get("TM_ES_PASSWORD", ""),
+        ),
         request_timeout=120,
         retry_on_timeout=True,
         verify_certs=False,
-        max_retries=10
+        max_retries=10,
     )
 
     # 클러스터가 완전히 준비될 때까지 대기
@@ -215,9 +245,7 @@ def es_index(es_client):
     # 인덱스 생성
     try:
         es_client.indices.create(
-            index=index_name,
-            settings=ES_INDEX_SETTINGS,
-            mappings=ES_INDEX_MAPPINGS
+            index=index_name, settings=ES_INDEX_SETTINGS, mappings=ES_INDEX_MAPPINGS
         )
         LOGGER.info("Created index: %s", index_name)
     except BadRequestError as e:
@@ -239,15 +267,22 @@ def es_index(es_client):
         LOGGER.warning("Error cleaning up index: %s", e)
 
 
+@pytest.fixture(scope="session")
+def admin_auth_header():
+    """테스트용 admin JWT 토큰 헤더."""
+    from backend.auth import create_jwt_token
+
+    token = create_jwt_token(email="admin@test.com", role="admin", name="Test Admin")
+    return {"Authorization": f"Bearer {token}"}
+
+
 @pytest.fixture(scope="function")
 def es_clean_data(es_client, es_index):
     """Function-scoped fixture: 테스트 전/후 데이터만 삭제 (인덱스 유지)."""
     # 테스트 전 데이터 삭제
     try:
         es_client.delete_by_query(
-            index=es_index,
-            body={"query": {"match_all": {}}},
-            refresh=True
+            index=es_index, body={"query": {"match_all": {}}}, refresh=True
         )
     except Exception:
         pass  # 인덱스가 비어있으면 무시
@@ -257,9 +292,7 @@ def es_clean_data(es_client, es_index):
     # 테스트 후 데이터 삭제
     try:
         es_client.delete_by_query(
-            index=es_index,
-            body={"query": {"match_all": {}}},
-            refresh=True
+            index=es_index, body={"query": {"match_all": {}}}, refresh=True
         )
     except Exception:
         pass
