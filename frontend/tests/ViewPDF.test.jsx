@@ -1,579 +1,618 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor, cleanup } from "@testing-library/react";
 
 afterEach(cleanup);
 
 // IntersectionObserver mock (jsdom에 없으므로 직접 구현)
 globalThis.IntersectionObserver = class MockIntersectionObserver {
-    constructor(callback) {
-        this.callback = callback;
-        this.elements = new Set();
-    }
-    observe(element) {
-        this.elements.add(element);
-        // 즉시 visible 처리 → 테스트에서 모든 페이지가 바로 렌더링됨
-        this.callback([{isIntersecting: true, target: element}], this);
-    }
-    unobserve(element) {
-        this.elements.delete(element);
-    }
-    disconnect() {
-        this.elements.clear();
-    }
+  constructor(callback) {
+    this.callback = callback;
+    this.elements = new Set();
+  }
+  observe(element) {
+    this.elements.add(element);
+    // 즉시 visible 처리 → 테스트에서 모든 페이지가 바로 렌더링됨
+    this.callback([{ isIntersecting: true, target: element }], this);
+  }
+  unobserve(element) {
+    this.elements.delete(element);
+  }
+  disconnect() {
+    this.elements.clear();
+  }
 };
 
 const { mockGetDocument } = vi.hoisted(() => ({
-    mockGetDocument: vi.fn(),
+  mockGetDocument: vi.fn(),
 }));
 
-vi.mock('pdfjs-dist', () => ({
-    getDocument: mockGetDocument,
-    GlobalWorkerOptions: { workerSrc: '' },
+vi.mock("pdfjs-dist", () => ({
+  getDocument: mockGetDocument,
+  GlobalWorkerOptions: { workerSrc: "" },
 }));
 
-vi.mock('../src/Common', () => ({
-    getApiUrlPrefix: () => 'http://localhost:8000',
+vi.mock("../src/Common", () => ({
+  getApiUrlPrefix: () => "http://localhost:8000",
+  getAuthToken: () => "test-token",
 }));
 
-import ViewPDF from '../src/ViewPDF';
+import ViewPDF from "../src/ViewPDF";
 
 function createMockPdf(numPages = 2) {
-    return {
-        numPages,
-        getPage: vi.fn(() => Promise.resolve({
-            getViewport: () => ({ width: 800, height: 600 }),
-            render: () => ({ promise: Promise.resolve() }),
-        })),
-        destroy: vi.fn(),
-    };
+  return {
+    numPages,
+    getPage: vi.fn(() =>
+      Promise.resolve({
+        getViewport: () => ({ width: 800, height: 600 }),
+        render: () => ({ promise: Promise.resolve() }),
+      }),
+    ),
+    destroy: vi.fn(),
+  };
 }
 
 // fetch mock 헬퍼: /pdf-pages/ 요청에 대해 X-Total-Pages 헤더 포함 응답
 function createMockFetch(totalPages, options = {}) {
-    const { failUrls = [], pendingUrls = [] } = options;
+  const { failUrls = [], pendingUrls = [] } = options;
 
-    return vi.fn((url) => {
-        // 실패하는 URL
-        for (const failUrl of failUrls) {
-            if (url.includes(failUrl)) {
-                return Promise.resolve({
-                    ok: false,
-                    status: 500,
-                    headers: new Headers(),
-                    arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
-                });
-            }
-        }
-
-        // 영원히 pending하는 URL
-        for (const pending of pendingUrls) {
-            if (url.includes(pending)) {
-                return new Promise(() => {});
-            }
-        }
-
+  return vi.fn((url) => {
+    // 실패하는 URL
+    for (const failUrl of failUrls) {
+      if (url.includes(failUrl)) {
         return Promise.resolve({
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'X-Total-Pages': String(totalPages) }),
-            arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
+          ok: false,
+          status: 500,
+          headers: new Headers(),
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
         });
+      }
+    }
+
+    // 영원히 pending하는 URL
+    for (const pending of pendingUrls) {
+      if (url.includes(pending)) {
+        return new Promise(() => {});
+      }
+    }
+
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "X-Total-Pages": String(totalPages) }),
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
     });
+  });
 }
 
 // pdfjs.getDocument mock 헬퍼: {data: ArrayBuffer}를 받아 pdfDoc 반환
 function setupGetDocument(mockPdfFactory) {
-    mockGetDocument.mockImplementation(({data}) => {
-        const pdfDoc = typeof mockPdfFactory === 'function' ? mockPdfFactory() : mockPdfFactory;
-        return { promise: Promise.resolve(pdfDoc) };
-    });
+  mockGetDocument.mockImplementation(({ data }) => {
+    const pdfDoc =
+      typeof mockPdfFactory === "function" ? mockPdfFactory() : mockPdfFactory;
+    return { promise: Promise.resolve(pdfDoc) };
+  });
 }
 
 // pdfjs.getDocument가 실패하는 mock
 function setupGetDocumentFailing(error) {
-    mockGetDocument.mockImplementation(() => ({
-        promise: Promise.reject(error),
-    }));
+  mockGetDocument.mockImplementation(() => ({
+    promise: Promise.reject(error),
+  }));
 }
 
-describe('ViewPDF', () => {
-    let originalFetch;
+describe("ViewPDF", () => {
+  let originalFetch;
 
-    beforeEach(() => {
-        mockGetDocument.mockReset();
-        originalFetch = globalThis.fetch;
-        HTMLCanvasElement.prototype.getContext = vi.fn(() => ({}));
+  beforeEach(() => {
+    mockGetDocument.mockReset();
+    originalFetch = globalThis.fetch;
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({}));
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  // ── 초기 상태 / 유효성 검사 ──
+
+  it("bookId가 0이면 에러를 표시한다", () => {
+    render(<ViewPDF bookId={0} />);
+    expect(
+      screen.getByText(/유효한 bookId가 제공되지 않았습니다/),
+    ).toBeTruthy();
+  });
+
+  it("로딩 중 스피너와 다운로드 진행 메시지를 표시한다", () => {
+    // fetch가 영원히 pending → 로딩 상태 유지
+    globalThis.fetch = vi.fn(() => new Promise(() => {}));
+
+    render(<ViewPDF bookId={1} />);
+
+    // loadPdf에서 setDownloadProgress(10)이 먼저 호출되므로 진행률 표시
+    expect(screen.getByText(/PDF 다운로드 중/)).toBeTruthy();
+    expect(document.querySelector(".spinner")).toBeTruthy();
+  });
+
+  // ── URL 및 fetch 호출 ──
+
+  it("첫 페이지 요청으로 /pdf-pages/{bookId}?start=1&end=1을 fetch한다", () => {
+    globalThis.fetch = vi.fn(() => new Promise(() => {}));
+
+    render(<ViewPDF bookId={42} />);
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://localhost:8000/pdf-pages/42?start=1&end=1",
+      expect.objectContaining({ headers: expect.any(Object) }),
+    );
+  });
+
+  it("bookId 변경 시 새 URL로 fetch를 호출한다", async () => {
+    globalThis.fetch = vi.fn(() => new Promise(() => {}));
+
+    const { rerender } = render(<ViewPDF bookId={1} />);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://localhost:8000/pdf-pages/1?start=1&end=1",
+      expect.objectContaining({ headers: expect.any(Object) }),
+    );
+
+    rerender(<ViewPDF bookId={99} />);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://localhost:8000/pdf-pages/99?start=1&end=1",
+      expect.objectContaining({ headers: expect.any(Object) }),
+    );
+  });
+
+  // ── 정상 렌더링 ──
+
+  it("PDF 로드 성공 후 모든 페이지를 렌더링한다", async () => {
+    globalThis.fetch = createMockFetch(3);
+    setupGetDocument(() => createMockPdf(1));
+
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 3쪽 표시")).toBeTruthy();
+    });
+  });
+
+  it("각 페이지마다 canvas 요소를 생성한다", async () => {
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => createMockPdf(1));
+
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
     });
 
-    afterEach(() => {
-        globalThis.fetch = originalFetch;
-        vi.restoreAllMocks();
+    const canvases = document.querySelectorAll("canvas");
+    expect(canvases.length).toBe(2);
+  });
+
+  it('렌더링 진행 중 "렌더링 중... X/Y쪽" 상태를 표시한다', async () => {
+    // fetch 성공하지만 pdfjs.getDocument의 render가 영원히 pending
+    globalThis.fetch = createMockFetch(2);
+    const mockPdf = {
+      numPages: 1,
+      getPage: vi.fn(() =>
+        Promise.resolve({
+          getViewport: () => ({ width: 800, height: 600 }),
+          render: () => ({ promise: new Promise(() => {}) }),
+        }),
+      ),
+      destroy: vi.fn(),
+    };
+    setupGetDocument(mockPdf);
+
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("렌더링 중... 0/2쪽")).toBeTruthy();
+    });
+  });
+
+  // ── pageCount 제한 ──
+
+  it("pageCount로 렌더링 페이지 수를 제한한다 (전체보기)", async () => {
+    globalThis.fetch = createMockFetch(10);
+    setupGetDocument(() => createMockPdf(1));
+
+    render(<ViewPDF bookId={1} pageCount={3} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 3쪽 표시")).toBeTruthy();
+    });
+  });
+
+  it("pageCount가 serverTotalPages보다 크면 serverTotalPages만큼 렌더링한다", async () => {
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => createMockPdf(1));
+
+    render(<ViewPDF bookId={1} pageCount={100} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
+    });
+  });
+
+  it("pageCount=0이면 모든 페이지를 렌더링한다", async () => {
+    globalThis.fetch = createMockFetch(5);
+    setupGetDocument(() => createMockPdf(1));
+
+    render(<ViewPDF bookId={1} pageCount={0} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 5쪽 표시")).toBeTruthy();
+    });
+  });
+
+  // ── 에러 처리 ──
+
+  it("fetch 실패 시 에러 메시지를 표시한다", async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 500,
+        headers: new Headers(),
+      }),
+    );
+
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/HTTP 500/)).toBeTruthy();
+    });
+  });
+
+  it("fetch 네트워크 에러 시 에러 메시지를 표시한다", async () => {
+    globalThis.fetch = vi.fn(() => Promise.reject(new Error("Network error")));
+
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Network error/)).toBeTruthy();
+    });
+  });
+
+  it("pdfjs.getDocument 실패 시 에러 메시지를 표시한다", async () => {
+    globalThis.fetch = createMockFetch(3);
+    setupGetDocumentFailing(new Error("Invalid PDF structure"));
+
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Invalid PDF structure/)).toBeTruthy();
+    });
+  });
+
+  it("err.message가 없으면 fallback 에러 메시지를 표시한다", async () => {
+    globalThis.fetch = createMockFetch(3);
+    setupGetDocumentFailing({ name: "UnknownError" });
+
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/파일이 존재하지 않거나 올바르지 않은 형식/),
+      ).toBeTruthy();
+    });
+  });
+
+  // ── cleanup / 취소 ──
+
+  it("cleanup 시 모든 청크 pdfDoc을 destroy한다", async () => {
+    const mockPdf = createMockPdf(1);
+    globalThis.fetch = createMockFetch(1);
+    setupGetDocument(mockPdf);
+
+    const { unmount } = render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
     });
 
-    // ── 초기 상태 / 유효성 검사 ──
+    unmount();
 
-    it('bookId가 0이면 에러를 표시한다', () => {
-        render(<ViewPDF bookId={0} />);
-        expect(screen.getByText(/유효한 bookId가 제공되지 않았습니다/)).toBeTruthy();
+    expect(mockPdf.destroy).toHaveBeenCalled();
+  });
+
+  it("bookId 변경 시 이전 청크를 모두 destroy한다", async () => {
+    const mockPdf1 = createMockPdf(1);
+    const mockPdf2 = createMockPdf(1);
+    let callCount = 0;
+    globalThis.fetch = createMockFetch(1);
+    mockGetDocument.mockImplementation(() => {
+      callCount++;
+      const pdf = callCount === 1 ? mockPdf1 : mockPdf2;
+      return { promise: Promise.resolve(pdf) };
     });
 
-    it('로딩 중 스피너와 다운로드 진행 메시지를 표시한다', () => {
-        // fetch가 영원히 pending → 로딩 상태 유지
-        globalThis.fetch = vi.fn(() => new Promise(() => {}));
+    const { rerender } = render(<ViewPDF bookId={1} />);
 
-        render(<ViewPDF bookId={1} />);
-
-        // loadPdf에서 setDownloadProgress(10)이 먼저 호출되므로 진행률 표시
-        expect(screen.getByText(/PDF 다운로드 중/)).toBeTruthy();
-        expect(document.querySelector('.spinner')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
     });
 
-    // ── URL 및 fetch 호출 ──
+    rerender(<ViewPDF bookId={2} />);
 
-    it('첫 페이지 요청으로 /pdf-pages/{bookId}?start=1&end=1을 fetch한다', () => {
-        globalThis.fetch = vi.fn(() => new Promise(() => {}));
+    await waitFor(() => {
+      expect(mockPdf1.destroy).toHaveBeenCalled();
+    });
+  });
 
-        render(<ViewPDF bookId={42} />);
+  it("bookId 변경 시 이전 로딩의 에러가 표시되지 않는다", async () => {
+    // 첫 번째 bookId → fetch 영원히 pending
+    // 두 번째 bookId → fetch 성공
+    let callNum = 0;
+    globalThis.fetch = vi.fn((url) => {
+      callNum++;
+      if (callNum === 1) {
+        // 첫 번째 요청: 영원히 pending (이후 cancelled)
+        return new Promise(() => {});
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "X-Total-Pages": "1" }),
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
+      });
+    });
+    setupGetDocument(() => createMockPdf(1));
 
-        expect(globalThis.fetch).toHaveBeenCalledWith('http://localhost:8000/pdf-pages/42?start=1&end=1');
+    const { rerender } = render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     });
 
-    it('bookId 변경 시 새 URL로 fetch를 호출한다', async () => {
-        globalThis.fetch = vi.fn(() => new Promise(() => {}));
+    rerender(<ViewPDF bookId={2} />);
 
-        const { rerender } = render(<ViewPDF bookId={1} />);
-        expect(globalThis.fetch).toHaveBeenCalledWith('http://localhost:8000/pdf-pages/1?start=1&end=1');
-
-        rerender(<ViewPDF bookId={99} />);
-        expect(globalThis.fetch).toHaveBeenCalledWith('http://localhost:8000/pdf-pages/99?start=1&end=1');
+    await waitFor(() => {
+      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
     });
 
-    // ── 정상 렌더링 ──
+    // 에러 메시지가 없어야 함
+    expect(screen.queryByText(/렌더링 실패/)).toBeNull();
+    expect(screen.queryByText(/에러/i)).toBeNull();
+  });
 
-    it('PDF 로드 성공 후 모든 페이지를 렌더링한다', async () => {
-        globalThis.fetch = createMockFetch(3);
-        setupGetDocument(() => createMockPdf(1));
+  // ── preview 모드 ──
 
-        render(<ViewPDF bookId={1} />);
+  it("preview=true이면 최대 10페이지까지만 표시한다", async () => {
+    globalThis.fetch = createMockFetch(20);
+    setupGetDocument(() => createMockPdf(1));
 
-        await waitFor(() => {
-            expect(screen.getByText('총 3쪽 표시')).toBeTruthy();
-        });
+    render(<ViewPDF bookId={1} preview={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 10쪽 표시")).toBeTruthy();
+    });
+  });
+
+  it("preview=true이고 서버 총 페이지가 10 미만이면 서버 페이지만큼 표시한다", async () => {
+    globalThis.fetch = createMockFetch(5);
+    setupGetDocument(() => createMockPdf(1));
+
+    render(<ViewPDF bookId={1} preview={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 5쪽 표시")).toBeTruthy();
+    });
+  });
+
+  it("preview=true이면 나머지 페이지를 한 번에 페칭한다", async () => {
+    globalThis.fetch = createMockFetch(5);
+    setupGetDocument(() => createMockPdf(1));
+
+    render(<ViewPDF bookId={1} preview={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 5쪽 표시")).toBeTruthy();
     });
 
-    it('각 페이지마다 canvas 요소를 생성한다', async () => {
-        globalThis.fetch = createMockFetch(2);
-        setupGetDocument(() => createMockPdf(1));
+    // 첫 페이지 + 나머지 (2~5) 요청
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://localhost:8000/pdf-pages/1?start=1&end=1",
+      expect.objectContaining({ headers: expect.any(Object) }),
+    );
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://localhost:8000/pdf-pages/1?start=2&end=5",
+      expect.objectContaining({ headers: expect.any(Object) }),
+    );
+  });
 
-        render(<ViewPDF bookId={1} />);
+  // ── 전체보기 모드 ──
 
-        await waitFor(() => {
-            expect(screen.getByText('총 2쪽 표시')).toBeTruthy();
-        });
+  it("preview=false이면 모든 페이지를 표시한다", async () => {
+    globalThis.fetch = createMockFetch(25);
+    setupGetDocument(() => createMockPdf(1));
 
-        const canvases = document.querySelectorAll('canvas');
-        expect(canvases.length).toBe(2);
+    render(<ViewPDF bookId={1} preview={false} />);
+
+    await waitFor(() => {
+      // 총 25쪽 canvas가 생성되어야 함
+      const canvases = document.querySelectorAll("canvas");
+      expect(canvases.length).toBe(25);
     });
+  });
 
-    it('렌더링 진행 중 "렌더링 중... X/Y쪽" 상태를 표시한다', async () => {
-        // fetch 성공하지만 pdfjs.getDocument의 render가 영원히 pending
-        globalThis.fetch = createMockFetch(2);
-        const mockPdf = {
-            numPages: 1,
-            getPage: vi.fn(() => Promise.resolve({
-                getViewport: () => ({ width: 800, height: 600 }),
-                render: () => ({ promise: new Promise(() => {}) }),
-            })),
-            destroy: vi.fn(),
-        };
-        setupGetDocument(mockPdf);
+  it("전체보기에서 첫 페이지 후 2~11페이지 청크를 즉시 페칭한다", async () => {
+    globalThis.fetch = createMockFetch(20);
+    setupGetDocument(() => createMockPdf(1));
 
-        render(<ViewPDF bookId={1} />);
+    render(<ViewPDF bookId={1} preview={false} />);
 
-        await waitFor(() => {
-            expect(screen.getByText('렌더링 중... 0/2쪽')).toBeTruthy();
-        });
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "http://localhost:8000/pdf-pages/1?start=1&end=1",
+        expect.objectContaining({ headers: expect.any(Object) }),
+      );
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "http://localhost:8000/pdf-pages/1?start=2&end=11",
+        expect.objectContaining({ headers: expect.any(Object) }),
+      );
     });
+  });
 
-    // ── pageCount 제한 ──
+  // ── X-Total-Pages 헤더 ──
 
-    it('pageCount로 렌더링 페이지 수를 제한한다 (전체보기)', async () => {
-        globalThis.fetch = createMockFetch(10);
-        setupGetDocument(() => createMockPdf(1));
+  it("X-Total-Pages 헤더에서 총 페이지 수를 읽는다", async () => {
+    globalThis.fetch = createMockFetch(7);
+    setupGetDocument(() => createMockPdf(1));
 
-        render(<ViewPDF bookId={1} pageCount={3} />);
+    render(<ViewPDF bookId={1} />);
 
-        await waitFor(() => {
-            expect(screen.getByText('총 3쪽 표시')).toBeTruthy();
-        });
+    await waitFor(() => {
+      const canvases = document.querySelectorAll("canvas");
+      expect(canvases.length).toBe(7);
     });
+  });
 
-    it('pageCount가 serverTotalPages보다 크면 serverTotalPages만큼 렌더링한다', async () => {
-        globalThis.fetch = createMockFetch(2);
-        setupGetDocument(() => createMockPdf(1));
+  it("X-Total-Pages 헤더가 없으면 0으로 처리하여 1페이지만 표시한다", async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers(), // X-Total-Pages 없음
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
+      }),
+    );
+    setupGetDocument(() => createMockPdf(1));
 
-        render(<ViewPDF bookId={1} pageCount={100} />);
+    render(<ViewPDF bookId={1} />);
 
-        await waitFor(() => {
-            expect(screen.getByText('총 2쪽 표시')).toBeTruthy();
-        });
+    await waitFor(() => {
+      // totalPages=0이면 pagesToRender=0, 최소 1페이지는 처리되어야 하나
+      // serverTotalPages=0 → pagesToRender=0으로 canvas가 0개 생성
+      // 이 경우 첫 페이지 렌더링은 시도하지만 totalPages=0이므로 canvas 미생성
+      // 실제로는 에러 없이 로딩만 보이거나 0쪽 표시
+      expect(true).toBeTruthy();
     });
-
-    it('pageCount=0이면 모든 페이지를 렌더링한다', async () => {
-        globalThis.fetch = createMockFetch(5);
-        setupGetDocument(() => createMockPdf(1));
-
-        render(<ViewPDF bookId={1} pageCount={0} />);
-
-        await waitFor(() => {
-            expect(screen.getByText('총 5쪽 표시')).toBeTruthy();
-        });
-    });
-
-    // ── 에러 처리 ──
-
-    it('fetch 실패 시 에러 메시지를 표시한다', async () => {
-        globalThis.fetch = vi.fn(() => Promise.resolve({
-            ok: false,
-            status: 500,
-            headers: new Headers(),
-        }));
-
-        render(<ViewPDF bookId={1} />);
-
-        await waitFor(() => {
-            expect(screen.getByText(/HTTP 500/)).toBeTruthy();
-        });
-    });
-
-    it('fetch 네트워크 에러 시 에러 메시지를 표시한다', async () => {
-        globalThis.fetch = vi.fn(() => Promise.reject(new Error('Network error')));
-
-        render(<ViewPDF bookId={1} />);
-
-        await waitFor(() => {
-            expect(screen.getByText(/Network error/)).toBeTruthy();
-        });
-    });
-
-    it('pdfjs.getDocument 실패 시 에러 메시지를 표시한다', async () => {
-        globalThis.fetch = createMockFetch(3);
-        setupGetDocumentFailing(new Error('Invalid PDF structure'));
-
-        render(<ViewPDF bookId={1} />);
-
-        await waitFor(() => {
-            expect(screen.getByText(/Invalid PDF structure/)).toBeTruthy();
-        });
-    });
-
-    it('err.message가 없으면 fallback 에러 메시지를 표시한다', async () => {
-        globalThis.fetch = createMockFetch(3);
-        setupGetDocumentFailing({ name: 'UnknownError' });
-
-        render(<ViewPDF bookId={1} />);
-
-        await waitFor(() => {
-            expect(screen.getByText(/파일이 존재하지 않거나 올바르지 않은 형식/)).toBeTruthy();
-        });
-    });
-
-    // ── cleanup / 취소 ──
-
-    it('cleanup 시 모든 청크 pdfDoc을 destroy한다', async () => {
-        const mockPdf = createMockPdf(1);
-        globalThis.fetch = createMockFetch(1);
-        setupGetDocument(mockPdf);
-
-        const { unmount } = render(<ViewPDF bookId={1} />);
-
-        await waitFor(() => {
-            expect(screen.getByText('총 1쪽 표시')).toBeTruthy();
-        });
-
-        unmount();
-
-        expect(mockPdf.destroy).toHaveBeenCalled();
-    });
-
-    it('bookId 변경 시 이전 청크를 모두 destroy한다', async () => {
-        const mockPdf1 = createMockPdf(1);
-        const mockPdf2 = createMockPdf(1);
-        let callCount = 0;
-        globalThis.fetch = createMockFetch(1);
-        mockGetDocument.mockImplementation(() => {
-            callCount++;
-            const pdf = callCount === 1 ? mockPdf1 : mockPdf2;
-            return { promise: Promise.resolve(pdf) };
-        });
-
-        const { rerender } = render(<ViewPDF bookId={1} />);
-
-        await waitFor(() => {
-            expect(screen.getByText('총 1쪽 표시')).toBeTruthy();
-        });
-
-        rerender(<ViewPDF bookId={2} />);
-
-        await waitFor(() => {
-            expect(mockPdf1.destroy).toHaveBeenCalled();
-        });
-    });
-
-    it('bookId 변경 시 이전 로딩의 에러가 표시되지 않는다', async () => {
-        // 첫 번째 bookId → fetch 영원히 pending
-        // 두 번째 bookId → fetch 성공
-        let callNum = 0;
-        globalThis.fetch = vi.fn((url) => {
-            callNum++;
-            if (callNum === 1) {
-                // 첫 번째 요청: 영원히 pending (이후 cancelled)
-                return new Promise(() => {});
-            }
-            return Promise.resolve({
-                ok: true,
-                status: 200,
-                headers: new Headers({ 'X-Total-Pages': '1' }),
-                arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
-            });
-        });
-        setupGetDocument(() => createMockPdf(1));
-
-        const { rerender } = render(<ViewPDF bookId={1} />);
-
-        await waitFor(() => {
-            expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-        });
-
-        rerender(<ViewPDF bookId={2} />);
-
-        await waitFor(() => {
-            expect(screen.getByText('총 1쪽 표시')).toBeTruthy();
-        });
-
-        // 에러 메시지가 없어야 함
-        expect(screen.queryByText(/렌더링 실패/)).toBeNull();
-        expect(screen.queryByText(/에러/i)).toBeNull();
-    });
-
-    // ── preview 모드 ──
-
-    it('preview=true이면 최대 10페이지까지만 표시한다', async () => {
-        globalThis.fetch = createMockFetch(20);
-        setupGetDocument(() => createMockPdf(1));
-
-        render(<ViewPDF bookId={1} preview={true} />);
-
-        await waitFor(() => {
-            expect(screen.getByText('총 10쪽 표시')).toBeTruthy();
-        });
-    });
-
-    it('preview=true이고 서버 총 페이지가 10 미만이면 서버 페이지만큼 표시한다', async () => {
-        globalThis.fetch = createMockFetch(5);
-        setupGetDocument(() => createMockPdf(1));
-
-        render(<ViewPDF bookId={1} preview={true} />);
-
-        await waitFor(() => {
-            expect(screen.getByText('총 5쪽 표시')).toBeTruthy();
-        });
-    });
-
-    it('preview=true이면 나머지 페이지를 한 번에 페칭한다', async () => {
-        globalThis.fetch = createMockFetch(5);
-        setupGetDocument(() => createMockPdf(1));
-
-        render(<ViewPDF bookId={1} preview={true} />);
-
-        await waitFor(() => {
-            expect(screen.getByText('총 5쪽 표시')).toBeTruthy();
-        });
-
-        // 첫 페이지 + 나머지 (2~5) 요청
-        expect(globalThis.fetch).toHaveBeenCalledWith('http://localhost:8000/pdf-pages/1?start=1&end=1');
-        expect(globalThis.fetch).toHaveBeenCalledWith('http://localhost:8000/pdf-pages/1?start=2&end=5');
-    });
-
-    // ── 전체보기 모드 ──
-
-    it('preview=false이면 모든 페이지를 표시한다', async () => {
-        globalThis.fetch = createMockFetch(25);
-        setupGetDocument(() => createMockPdf(1));
-
-        render(<ViewPDF bookId={1} preview={false} />);
-
-        await waitFor(() => {
-            // 총 25쪽 canvas가 생성되어야 함
-            const canvases = document.querySelectorAll('canvas');
-            expect(canvases.length).toBe(25);
-        });
-    });
-
-    it('전체보기에서 첫 페이지 후 2~11페이지 청크를 즉시 페칭한다', async () => {
-        globalThis.fetch = createMockFetch(20);
-        setupGetDocument(() => createMockPdf(1));
-
-        render(<ViewPDF bookId={1} preview={false} />);
-
-        await waitFor(() => {
-            expect(globalThis.fetch).toHaveBeenCalledWith('http://localhost:8000/pdf-pages/1?start=1&end=1');
-            expect(globalThis.fetch).toHaveBeenCalledWith('http://localhost:8000/pdf-pages/1?start=2&end=11');
-        });
-    });
-
-    // ── X-Total-Pages 헤더 ──
-
-    it('X-Total-Pages 헤더에서 총 페이지 수를 읽는다', async () => {
-        globalThis.fetch = createMockFetch(7);
-        setupGetDocument(() => createMockPdf(1));
-
-        render(<ViewPDF bookId={1} />);
-
-        await waitFor(() => {
-            const canvases = document.querySelectorAll('canvas');
-            expect(canvases.length).toBe(7);
-        });
-    });
-
-    it('X-Total-Pages 헤더가 없으면 0으로 처리하여 1페이지만 표시한다', async () => {
-        globalThis.fetch = vi.fn(() => Promise.resolve({
-            ok: true,
-            status: 200,
-            headers: new Headers(),  // X-Total-Pages 없음
-            arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
-        }));
-        setupGetDocument(() => createMockPdf(1));
-
-        render(<ViewPDF bookId={1} />);
-
-        await waitFor(() => {
-            // totalPages=0이면 pagesToRender=0, 최소 1페이지는 처리되어야 하나
-            // serverTotalPages=0 → pagesToRender=0으로 canvas가 0개 생성
-            // 이 경우 첫 페이지 렌더링은 시도하지만 totalPages=0이므로 canvas 미생성
-            // 실제로는 에러 없이 로딩만 보이거나 0쪽 표시
-            expect(true).toBeTruthy();
-        });
-    });
-
-    // ── 개별 페이지 렌더링 실패 ──
-
-    it('개별 페이지 렌더링 실패 시 전체 에러 상태가 되지 않는다', async () => {
-        globalThis.fetch = createMockFetch(3);
-        let pageCallCount = 0;
-        const mockPdf = {
-            numPages: 1,
-            getPage: vi.fn((localPageNum) => {
-                pageCallCount++;
-                // 두 번째 호출(2페이지 청크의 첫 페이지)에서 실패
-                if (pageCallCount === 2) {
-                    return Promise.reject(new Error('page corrupt'));
-                }
-                return Promise.resolve({
-                    getViewport: () => ({ width: 800, height: 600 }),
-                    render: () => ({ promise: Promise.resolve() }),
-                });
-            }),
-            destroy: vi.fn(),
-        };
-        setupGetDocument(mockPdf);
-
-        render(<ViewPDF bookId={1} />);
-
-        await waitFor(() => {
-            const canvases = document.querySelectorAll('canvas');
-            expect(canvases.length).toBe(3);
-        });
-
-        // 전체 에러 메시지가 화면에 표시되지 않음
-        expect(screen.queryByText(/렌더링 실패/)).toBeNull();
-    });
-
-    // ── 후속 청크 fetch 실패 ──
-
-    it('후속 청크 fetch 실패 시 첫 페이지는 정상 표시된다', async () => {
-        // 첫 페이지 요청만 성공, 나머지 실패
-        globalThis.fetch = vi.fn((url) => {
-            if (url.includes('start=1&end=1')) {
-                return Promise.resolve({
-                    ok: true,
-                    status: 200,
-                    headers: new Headers({ 'X-Total-Pages': '5' }),
-                    arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
-                });
-            }
-            return Promise.resolve({ ok: false, status: 500, headers: new Headers() });
-        });
-        setupGetDocument(() => createMockPdf(1));
-
-        render(<ViewPDF bookId={1} />);
-
-        await waitFor(() => {
-            // 첫 페이지는 렌더링됨 (isFirstPageReady=true)
-            const info = document.querySelector('.pdf-info');
-            expect(info).toBeTruthy();
-        });
-
-        // 에러 화면으로 전환되지 않음 (error state가 아님)
-        expect(screen.queryByText(/PDF 렌더링 실패/)).toBeNull();
-    });
-
-    // ── 중복 페칭 방지 ──
-
-    it('동일 청크를 중복 페칭하지 않는다', async () => {
-        globalThis.fetch = createMockFetch(3);
-        setupGetDocument(() => createMockPdf(1));
-
-        render(<ViewPDF bookId={1} />);
-
-        await waitFor(() => {
-            expect(screen.getByText('총 3쪽 표시')).toBeTruthy();
-        });
-
-        // start=2&end=3 요청이 한 번만 발생
-        const chunk2Calls = globalThis.fetch.mock.calls.filter(
-            ([url]) => url.includes('start=2')
-        );
-        expect(chunk2Calls.length).toBe(1);
-    });
-
-    // ── 종횡비 유지 ──
-
-    it('맞춤 모드(fitMode)에서 canvas에 width:100%와 height:auto가 적용된다', async () => {
-        globalThis.fetch = createMockFetch(2);
-        setupGetDocument(() => createMockPdf(1));
-
-        // preview=false → fitMode=true (기본)
-        render(<ViewPDF bookId={1} preview={false} />);
-
-        await waitFor(() => {
-            expect(screen.getByText('총 2쪽 표시')).toBeTruthy();
-        });
-
-        const canvases = document.querySelectorAll('canvas');
-        expect(canvases.length).toBe(2);
-        for (const canvas of canvases) {
-            expect(canvas.style.width).toBe('100%');
-            expect(canvas.style.height).toBe('auto');
+  });
+
+  // ── 개별 페이지 렌더링 실패 ──
+
+  it("개별 페이지 렌더링 실패 시 전체 에러 상태가 되지 않는다", async () => {
+    globalThis.fetch = createMockFetch(3);
+    let pageCallCount = 0;
+    const mockPdf = {
+      numPages: 1,
+      getPage: vi.fn((localPageNum) => {
+        pageCallCount++;
+        // 두 번째 호출(2페이지 청크의 첫 페이지)에서 실패
+        if (pageCallCount === 2) {
+          return Promise.reject(new Error("page corrupt"));
         }
-    });
-
-    it('수동 줌 모드에서 canvas에 width는 px, height는 auto가 적용된다', async () => {
-        globalThis.fetch = createMockFetch(1);
-        setupGetDocument(() => createMockPdf(1));
-
-        // preview=true → fitMode=false (수동 줌 모드)
-        render(<ViewPDF bookId={1} preview={true} />);
-
-        await waitFor(() => {
-            expect(screen.getByText('총 1쪽 표시')).toBeTruthy();
+        return Promise.resolve({
+          getViewport: () => ({ width: 800, height: 600 }),
+          render: () => ({ promise: Promise.resolve() }),
         });
+      }),
+      destroy: vi.fn(),
+    };
+    setupGetDocument(mockPdf);
 
-        const canvas = document.querySelector('canvas');
-        expect(canvas).toBeTruthy();
-        // 수동 줌 모드에서 width는 px 단위, height는 auto
-        expect(canvas.style.width).toContain('px');
-        expect(canvas.style.height).toBe('auto');
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      const canvases = document.querySelectorAll("canvas");
+      expect(canvases.length).toBe(3);
     });
+
+    // 전체 에러 메시지가 화면에 표시되지 않음
+    expect(screen.queryByText(/렌더링 실패/)).toBeNull();
+  });
+
+  // ── 후속 청크 fetch 실패 ──
+
+  it("후속 청크 fetch 실패 시 첫 페이지는 정상 표시된다", async () => {
+    // 첫 페이지 요청만 성공, 나머지 실패
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes("start=1&end=1")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers({ "X-Total-Pages": "5" }),
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
+        });
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 500,
+        headers: new Headers(),
+      });
+    });
+    setupGetDocument(() => createMockPdf(1));
+
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      // 첫 페이지는 렌더링됨 (isFirstPageReady=true)
+      const info = document.querySelector(".pdf-info");
+      expect(info).toBeTruthy();
+    });
+
+    // 에러 화면으로 전환되지 않음 (error state가 아님)
+    expect(screen.queryByText(/PDF 렌더링 실패/)).toBeNull();
+  });
+
+  // ── 중복 페칭 방지 ──
+
+  it("동일 청크를 중복 페칭하지 않는다", async () => {
+    globalThis.fetch = createMockFetch(3);
+    setupGetDocument(() => createMockPdf(1));
+
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 3쪽 표시")).toBeTruthy();
+    });
+
+    // start=2&end=3 요청이 한 번만 발생
+    const chunk2Calls = globalThis.fetch.mock.calls.filter(([url]) =>
+      url.includes("start=2"),
+    );
+    expect(chunk2Calls.length).toBe(1);
+  });
+
+  // ── 종횡비 유지 ──
+
+  it("맞춤 모드(fitMode)에서 canvas에 width:100%와 height:auto가 적용된다", async () => {
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => createMockPdf(1));
+
+    // preview=false → fitMode=true (기본)
+    render(<ViewPDF bookId={1} preview={false} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
+    });
+
+    const canvases = document.querySelectorAll("canvas");
+    expect(canvases.length).toBe(2);
+    for (const canvas of canvases) {
+      expect(canvas.style.width).toBe("100%");
+      expect(canvas.style.height).toBe("auto");
+    }
+  });
+
+  it("수동 줌 모드에서 canvas에 width는 px, height는 auto가 적용된다", async () => {
+    globalThis.fetch = createMockFetch(1);
+    setupGetDocument(() => createMockPdf(1));
+
+    // preview=true → fitMode=false (수동 줌 모드)
+    render(<ViewPDF bookId={1} preview={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
+    });
+
+    const canvas = document.querySelector("canvas");
+    expect(canvas).toBeTruthy();
+    // 수동 줌 모드에서 width는 px 단위, height는 auto
+    expect(canvas.style.width).toContain("px");
+    expect(canvas.style.height).toBe("auto");
+  });
 });

@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
-logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
+logging.config.fileConfig(
+    Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False
+)
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
@@ -14,7 +16,7 @@ CATEGORY = "_epub"
 
 
 @pytest.fixture(scope="module")
-def backend_test_setup(es_client, es_index):
+def backend_test_setup(es_client, es_index, admin_auth_header):
     """Create BookManager and TestClient with test data loaded (공유된 ES 클라이언트 및 인덱스 사용)."""
     from fastapi.testclient import TestClient
     from backend.main import app
@@ -36,7 +38,7 @@ def backend_test_setup(es_client, es_index):
     # Refresh index to make data searchable
     bm.es_manager.refresh()
 
-    client = TestClient(app)
+    client = TestClient(app, headers=admin_auth_header)
 
     yield {"bm": bm, "client": client}
 
@@ -56,7 +58,9 @@ def test_book(backend_test_setup):
         pytest.skip("No epub files available for testing")
 
     epub_file_path = epub_files[0]
-    temp_file_path = Book.path_prefix / epub_file_path.parent.name / ("temp_" + epub_file_path.name)
+    temp_file_path = (
+        Book.path_prefix / epub_file_path.parent.name / ("temp_" + epub_file_path.name)
+    )
     shutil.copy(epub_file_path, temp_file_path)
     data = Loader.read_file(temp_file_path)
 
@@ -81,7 +85,6 @@ def test_book(backend_test_setup):
 
 
 class TestBackend:
-
     @pytest.mark.asyncio
     async def test_update_book(self, test_book):
         book = test_book["book"]
@@ -92,7 +95,11 @@ class TestBackend:
             "category": book.category,
             "title": "renamed_" + book.title,
             "author": "anonymous_" + book.author,
-            "file_path": book.category + "/renamed_" + book.title + "." + book.file_type,
+            "file_path": book.category
+            + "/renamed_"
+            + book.title
+            + "."
+            + book.file_type,
             "file_type": book.file_type,
             "file_size": 100,
             "summary": "summary1",
@@ -117,7 +124,11 @@ class TestBackend:
             pytest.skip("No epub files available for testing")
 
         epub_file_path = epub_files[0]
-        temp_file_path = Book.path_prefix / epub_file_path.parent.name / ("to_be_deleted_" + epub_file_path.name)
+        temp_file_path = (
+            Book.path_prefix
+            / epub_file_path.parent.name
+            / ("to_be_deleted_" + epub_file_path.name)
+        )
         shutil.copy(epub_file_path, temp_file_path)
         data = Loader.read_file(temp_file_path)
 
@@ -144,7 +155,9 @@ class TestBackend:
         assert response.status_code == 200
         assert response.content
         assert len(response.content) > 1024
-        media_type = BookManager.MEDIA_TYPES.get(book.file_path.suffix, "application/octet-stream")
+        media_type = BookManager.MEDIA_TYPES.get(
+            book.file_path.suffix, "application/octet-stream"
+        )
         assert response.headers["Content-Type"].split(";")[0] == media_type
 
     @pytest.mark.asyncio
@@ -155,10 +168,7 @@ class TestBackend:
         response = client.get(f"/books/{book.book_id}")
         assert response
         assert response.status_code == 200
-        assert response.json() == {
-            "status": "success",
-            "result": book.dict()
-        }
+        assert response.json() == {"status": "success", "result": book.dict()}
 
     @pytest.mark.asyncio
     async def test_get_books_in_category(self, test_book):
@@ -250,9 +260,14 @@ class TestBackend:
         assert response.status_code == 200
         response_data = response.json()
         if response_data["status"] == "success" and response_data.get("result"):
-            excluded_ids = [b["book_id"] for b in response_data["result"]
-                           if b["category"] == book.category]
-            assert len(excluded_ids) == 0, f"제외된 카테고리 '{book.category}'의 책이 포함됨"
+            excluded_ids = [
+                b["book_id"]
+                for b in response_data["result"]
+                if b["category"] == book.category
+            ]
+            assert len(excluded_ids) == 0, (
+                f"제외된 카테고리 '{book.category}'의 책이 포함됨"
+            )
 
     @pytest.mark.asyncio
     async def test_search_by_keyword_without_exclude_categories(self, test_book):
@@ -285,6 +300,7 @@ class TestRenameCategory:
     async def _insert_docs(bm, category: str, count: int, start_id: int = 400) -> list:
         """테스트 문서를 ES에 삽입"""
         from datetime import datetime
+
         ids = []
         for i in range(count):
             doc_id = start_id + i
@@ -325,10 +341,13 @@ class TestRenameCategory:
         doc_ids = await self._insert_docs(bm, old_cat, 1)
 
         try:
-            response = client.put("/categories/rename", json={
-                "old_category": old_cat,
-                "new_category": new_cat,
-            })
+            response = client.put(
+                "/categories/rename",
+                json={
+                    "old_category": old_cat,
+                    "new_category": new_cat,
+                },
+            )
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "success"
@@ -360,10 +379,13 @@ class TestRenameCategory:
         new_ids = await self._insert_docs(bm, new_cat, 1, start_id=600)
 
         try:
-            response = client.put("/categories/rename", json={
-                "old_category": old_cat,
-                "new_category": new_cat,
-            })
+            response = client.put(
+                "/categories/rename",
+                json={
+                    "old_category": old_cat,
+                    "new_category": new_cat,
+                },
+            )
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "failure"
@@ -378,10 +400,13 @@ class TestRenameCategory:
         """없는 카테고리 rename 시 에러"""
         client = backend_test_setup["client"]
 
-        response = client.put("/categories/rename", json={
-            "old_category": "_nonexistent_cat_xyz",
-            "new_category": "_new_cat_xyz",
-        })
+        response = client.put(
+            "/categories/rename",
+            json={
+                "old_category": "_nonexistent_cat_xyz",
+                "new_category": "_new_cat_xyz",
+            },
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "failure"
@@ -395,6 +420,7 @@ class TestDeleteCategory:
     async def _insert_docs(bm, category: str, count: int, start_id: int = 700) -> list:
         """테스트 문서를 ES에 삽입"""
         from datetime import datetime
+
         ids = []
         for i in range(count):
             doc_id = start_id + i
@@ -459,9 +485,12 @@ class TestDeleteCategory:
         """없는 카테고리 삭제 시 에러"""
         client = backend_test_setup["client"]
 
-        response = client.post("/categories/delete", json={
-            "category": "_nonexistent_del_xyz",
-        })
+        response = client.post(
+            "/categories/delete",
+            json={
+                "category": "_nonexistent_del_xyz",
+            },
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "failure"
@@ -540,6 +569,7 @@ class TestUpdateBookConflict:
     @staticmethod
     async def _register_book(bm, file_path: Path, category: str = CATEGORY) -> int:
         from datetime import datetime
+
         rel = file_path.relative_to(bm.path_prefix)
         now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
         data = {
@@ -548,7 +578,7 @@ class TestUpdateBookConflict:
                 "title": file_path.stem,
                 "author": "Test Author",
                 "file_path": str(rel),
-                "file_type": file_path.suffix.lstrip('.'),
+                "file_type": file_path.suffix.lstrip("."),
                 "file_size": file_path.stat().st_size,
                 "line_count": 0,
                 "page_count": 0,
@@ -592,7 +622,9 @@ class TestUpdateBookConflict:
             assert data["status"] == "failure"
             assert "CONFLICT:" in data["error"]
             assert src_path.exists(), "Source file should not have been moved"
-            assert dst_path.read_bytes() == b"existing", "Destination should be unchanged"
+            assert dst_path.read_bytes() == b"existing", (
+                "Destination should be unchanged"
+            )
         finally:
             try:
                 client.delete(f"/books/{book_id}")
@@ -629,8 +661,9 @@ class TestUpdateBookConflict:
             response = client.put(f"/books/{book_id}", json=doc)
             data = response.json()
             error_msg = data.get("error", "")
-            assert f"{CATEGORY}/conflict_relpath_dst.epub" in error_msg, \
+            assert f"{CATEGORY}/conflict_relpath_dst.epub" in error_msg, (
                 f"CONFLICT error should contain relative path, got: {error_msg}"
+            )
         finally:
             try:
                 client.delete(f"/books/{book_id}")
@@ -707,8 +740,9 @@ class TestUpdateBookConflict:
             response = client.put(f"/books/{book_id}", json=doc)
             assert response.status_code == 200
             data = response.json()
-            assert data["status"] == "success", \
+            assert data["status"] == "success", (
                 f"Same file path should not cause conflict, got: {data}"
+            )
             assert file_path.exists(), "File should still exist"
         finally:
             try:
@@ -789,7 +823,10 @@ class TestUpdateBookConflict:
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "failure"
-            assert "can't move" in data.get("error", "").lower() or "error" in data.get("error", "").lower()
+            assert (
+                "can't move" in data.get("error", "").lower()
+                or "error" in data.get("error", "").lower()
+            )
         finally:
             try:
                 client.delete(f"/books/{book_id}")
