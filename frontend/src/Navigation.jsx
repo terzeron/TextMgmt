@@ -284,7 +284,7 @@ export default function Navigation() {
                       type="text"
                       placeholder="키워드"
                       className="mr-sm-2"
-                      style={{ maxWidth: "120px" }}
+                      style={{ maxWidth: "180px" }}
                       value={searchKeyword}
                       onChange={(e) => setSearchKeyword(e.target.value)}
                     />
