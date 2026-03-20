@@ -253,6 +253,31 @@ class TestBookManager:
                 await bm.update_book(book_id, category1, title1, author1, path1, type1)
 
     @pytest.mark.asyncio
+    async def test_update_book_rejects_path_traversal(self, book_manager_with_data, tmp_path):
+        bm = book_manager_with_data
+        book = await get_one_random_book(bm)
+        if not book:
+            pytest.skip("No books found for this test")
+
+        if not book.file_path.is_file():
+            pytest.skip("Source file does not exist")
+
+        # 경로 탈출 시도: path_prefix 외부
+        outside_path = tmp_path / "outside.txt"
+        result, error = await bm.update_book(
+            book.book_id,
+            book.category,
+            book.title,
+            book.author,
+            outside_path,
+            book.file_type,
+        )
+
+        assert result == "Error"
+        assert error == "잘못된 경로입니다"
+        assert book.file_path.is_file()
+
+    @pytest.mark.asyncio
     async def test_get_category_mismatches(self, book_manager_with_data, tmp_path):
         bm = book_manager_with_data
         # 프로덕션 디렉토리 전체 스캔 방지: 임시 디렉토리로 교체

@@ -799,6 +799,12 @@ class BookManager:
 
     async def update_book(self, book_id: int, new_category: str, new_title: str, new_author: str, new_path: Path, new_type: str, force: bool = False) -> Tuple[str, Optional[str]]:
         LOGGER.debug("# update_book(book_id=%d, new_category='%s', new_title='%s', new_author='%s', new_path='%r', new_file_type='%s', force=%s)", book_id, new_category, new_title, new_author, new_path, new_type, force)
+        # 경로 탈출 방지: path_prefix 외부 이동 금지
+        try:
+            if not new_path.resolve().is_relative_to(self.path_prefix.resolve()):
+                return ("Error", "잘못된 경로입니다")
+        except OSError:
+            return ("Error", "잘못된 경로입니다")
         # rename file
         doc = self.es_manager.search_by_id(book_id)
         if doc:
