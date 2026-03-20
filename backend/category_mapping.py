@@ -16,14 +16,7 @@ LOGGER = logging.getLogger(__name__)
 class CategoryMapping:
     """카테고리별 키워드 매핑을 관리하는 클래스 (MySQL 기반)"""
 
-    def __init__(
-        self,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-        database: Optional[str] = None,
-        user: Optional[str] = None,
-        password: Optional[str] = None
-    ) -> None:
+    def __init__(self, host: Optional[str] = None, port: Optional[int] = None, database: Optional[str] = None, user: Optional[str] = None, password: Optional[str] = None) -> None:
         """
         Args:
             host: MySQL 호스트. None이면 환경변수 사용
@@ -38,22 +31,13 @@ class CategoryMapping:
         self.user = user or os.environ.get("TM_MYSQL_USER", "tmuser")
         self.password = password or os.environ.get("TM_MYSQL_PASSWORD", "")
 
-        LOGGER.info("CategoryMapping initialized with MySQL host: %s:%d, database: %s",
-                    self.host, self.port, self.database)
+        LOGGER.info("CategoryMapping initialized with MySQL host: %s:%d, database: %s", self.host, self.port, self.database)
         self._init_db()
 
     @contextmanager
     def _get_connection(self):
         """MySQL 연결을 관리하는 context manager"""
-        conn = pymysql.connect(
-            host=self.host,
-            port=self.port,
-            database=self.database,
-            user=self.user,
-            password=self.password,
-            charset='utf8mb4',
-            cursorclass=DictCursor
-        )
+        conn = pymysql.connect(host=self.host, port=self.port, database=self.database, user=self.user, password=self.password, charset="utf8mb4", cursorclass=DictCursor)
         try:
             yield conn
         finally:
@@ -63,29 +47,12 @@ class CategoryMapping:
         """데이터베이스 테이블 초기화"""
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS category_keywords (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        category VARCHAR(255) NOT NULL,
-                        keyword VARCHAR(255) NOT NULL,
-                        content_type VARCHAR(10) NOT NULL DEFAULT 'book',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE KEY unique_category_keyword (category, keyword, content_type),
-                        INDEX idx_category (category),
-                        INDEX idx_content_type (content_type)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-                """)
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS hidden_categories (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        category VARCHAR(255) NOT NULL,
-                        content_type VARCHAR(10) NOT NULL DEFAULT 'book',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE KEY unique_category_content_type (category, content_type),
-                        INDEX idx_category (category),
-                        INDEX idx_content_type (content_type)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-                """)
+                cursor.execute(
+                    "CREATE TABLE IF NOT EXISTS category_keywords (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(255) NOT NULL, keyword VARCHAR(255) NOT NULL, content_type VARCHAR(10) NOT NULL DEFAULT 'book', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY unique_category_keyword (category, keyword, content_type), INDEX idx_category (category), INDEX idx_content_type (content_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+                )
+                cursor.execute(
+                    "CREATE TABLE IF NOT EXISTS hidden_categories (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(255) NOT NULL, content_type VARCHAR(10) NOT NULL DEFAULT 'book', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY unique_category_content_type (category, content_type), INDEX idx_category (category), INDEX idx_content_type (content_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+                )
                 # 기존 테이블 마이그레이션: content_type 컬럼이 없으면 추가
                 self._migrate_add_content_type(cursor)
                 conn.commit()
@@ -94,35 +61,23 @@ class CategoryMapping:
     def _migrate_add_content_type(self, cursor) -> None:
         """기존 테이블에 content_type 컬럼 추가 마이그레이션"""
         for table in ("category_keywords", "hidden_categories"):
-            cursor.execute(f"""
-                SELECT COUNT(*) AS cnt FROM information_schema.columns
-                WHERE table_schema = %s AND table_name = %s AND column_name = 'content_type'
-            """, (self.database, table))
+            cursor.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = %s AND table_name = %s AND column_name = 'content_type'", (self.database, table))
             row = cursor.fetchone()
             if row and row["cnt"] == 0:
                 LOGGER.info("Migrating table %s: adding content_type column", table)
-                cursor.execute(f"""
-                    ALTER TABLE {table}
-                    ADD COLUMN content_type VARCHAR(10) NOT NULL DEFAULT 'book'
-                """)
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN content_type VARCHAR(10) NOT NULL DEFAULT 'book'")
                 if table == "category_keywords":
                     try:
                         cursor.execute(f"ALTER TABLE {table} DROP INDEX unique_category_keyword")
-                    except Exception:
-                        pass
-                    cursor.execute(f"""
-                        ALTER TABLE {table}
-                        ADD UNIQUE KEY unique_category_keyword (category, keyword, content_type)
-                    """)
+                    except Exception as e:
+                        LOGGER.debug("Index unique_category_keyword not found, skipping: %s", e)
+                    cursor.execute(f"ALTER TABLE {table} ADD UNIQUE KEY unique_category_keyword (category, keyword, content_type)")
                 elif table == "hidden_categories":
                     try:
                         cursor.execute(f"ALTER TABLE {table} DROP INDEX category")
-                    except Exception:
-                        pass
-                    cursor.execute(f"""
-                        ALTER TABLE {table}
-                        ADD UNIQUE KEY unique_category_content_type (category, content_type)
-                    """)
+                    except Exception as e:
+                        LOGGER.debug("Index category not found, skipping: %s", e)
+                    cursor.execute(f"ALTER TABLE {table} ADD UNIQUE KEY unique_category_content_type (category, content_type)")
 
     def get_all_mappings(self, content_type: str = "book") -> Dict[str, List[str]]:
         """모든 카테고리-키워드 매핑 조회
@@ -135,12 +90,7 @@ class CategoryMapping:
         """
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT category, keyword
-                    FROM category_keywords
-                    WHERE content_type = %s
-                    ORDER BY category, keyword
-                """, (content_type,))
+                cursor.execute("SELECT category, keyword FROM category_keywords WHERE content_type = %s ORDER BY category, keyword", (content_type,))
                 rows = cursor.fetchall()
 
         mappings: Dict[str, List[str]] = {}
@@ -166,12 +116,7 @@ class CategoryMapping:
         """
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT keyword
-                    FROM category_keywords
-                    WHERE category = %s AND content_type = %s
-                    ORDER BY keyword
-                """, (category, content_type))
+                cursor.execute("SELECT keyword FROM category_keywords WHERE category = %s AND content_type = %s ORDER BY keyword", (category, content_type))
                 rows = cursor.fetchall()
 
         keywords = [row["keyword"] for row in rows]
@@ -197,10 +142,7 @@ class CategoryMapping:
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
                 try:
-                    cursor.execute("""
-                        INSERT INTO category_keywords (category, keyword, content_type)
-                        VALUES (%s, %s, %s)
-                    """, (category, keyword, content_type))
+                    cursor.execute("INSERT INTO category_keywords (category, keyword, content_type) VALUES (%s, %s, %s)", (category, keyword, content_type))
                     conn.commit()
                     LOGGER.info("add_keyword(%s, %s, %s): success", category, keyword, content_type)
                     return True
@@ -221,10 +163,7 @@ class CategoryMapping:
         """
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
-                    DELETE FROM category_keywords
-                    WHERE category = %s AND keyword = %s AND content_type = %s
-                """, (category, keyword, content_type))
+                cursor.execute("DELETE FROM category_keywords WHERE category = %s AND keyword = %s AND content_type = %s", (category, keyword, content_type))
                 conn.commit()
                 deleted = cursor.rowcount > 0
 
@@ -249,17 +188,11 @@ class CategoryMapping:
             with conn.cursor() as cursor:
                 try:
                     # 기존 키워드 삭제
-                    cursor.execute("""
-                        DELETE FROM category_keywords
-                        WHERE category = %s AND content_type = %s
-                    """, (category, content_type))
+                    cursor.execute("DELETE FROM category_keywords WHERE category = %s AND content_type = %s", (category, content_type))
 
                     # 새 키워드 일괄 추가
                     if keywords:
-                        cursor.executemany(
-                            "INSERT INTO category_keywords (category, keyword, content_type) VALUES (%s, %s, %s)",
-                            [(category, kw, content_type) for kw in keywords]
-                        )
+                        cursor.executemany("INSERT INTO category_keywords (category, keyword, content_type) VALUES (%s, %s, %s)", [(category, kw, content_type) for kw in keywords])
 
                     conn.commit()
                     LOGGER.info("set_keywords(%s, %s): %d keywords set", category, content_type, len(keywords))
@@ -293,10 +226,7 @@ class CategoryMapping:
                             if keyword:
                                 rows.append((category, keyword, content_type))
                     if rows:
-                        cursor.executemany(
-                            "INSERT IGNORE INTO category_keywords (category, keyword, content_type) VALUES (%s, %s, %s)",
-                            rows
-                        )
+                        cursor.executemany("INSERT IGNORE INTO category_keywords (category, keyword, content_type) VALUES (%s, %s, %s)", rows)
 
                     conn.commit()
                     LOGGER.info("update_all_mappings(%s): %d categories updated", content_type, len(mappings))
@@ -320,15 +250,9 @@ class CategoryMapping:
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
                 if prefix:
-                    cursor.execute("""
-                        DELETE FROM category_keywords
-                        WHERE (category = %s OR category LIKE %s) AND content_type = %s
-                    """, (category, category + "/%", content_type))
+                    cursor.execute("DELETE FROM category_keywords WHERE (category = %s OR category LIKE %s) AND content_type = %s", (category, category + "/%", content_type))
                 else:
-                    cursor.execute("""
-                        DELETE FROM category_keywords
-                        WHERE category = %s AND content_type = %s
-                    """, (category, content_type))
+                    cursor.execute("DELETE FROM category_keywords WHERE category = %s AND content_type = %s", (category, content_type))
                 conn.commit()
                 deleted = cursor.rowcount > 0
 
@@ -346,12 +270,7 @@ class CategoryMapping:
         """
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT DISTINCT category
-                    FROM category_keywords
-                    WHERE content_type = %s
-                    ORDER BY category
-                """, (content_type,))
+                cursor.execute("SELECT DISTINCT category FROM category_keywords WHERE content_type = %s ORDER BY category", (content_type,))
                 rows = cursor.fetchall()
 
         categories = [row["category"] for row in rows]
@@ -370,12 +289,7 @@ class CategoryMapping:
         """
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT DISTINCT category
-                    FROM category_keywords
-                    WHERE keyword LIKE %s AND content_type = %s
-                    ORDER BY category
-                """, (f"%{keyword}%", content_type))
+                cursor.execute("SELECT DISTINCT category FROM category_keywords WHERE keyword LIKE %s AND content_type = %s ORDER BY category", (f"%{keyword}%", content_type))
                 rows = cursor.fetchall()
 
         categories = [row["category"] for row in rows]
@@ -393,12 +307,7 @@ class CategoryMapping:
         """
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT category
-                    FROM hidden_categories
-                    WHERE content_type = %s
-                    ORDER BY category
-                """, (content_type,))
+                cursor.execute("SELECT category FROM hidden_categories WHERE content_type = %s ORDER BY category", (content_type,))
                 rows = cursor.fetchall()
 
         categories = [row["category"] for row in rows]
@@ -420,10 +329,7 @@ class CategoryMapping:
             with conn.cursor() as cursor:
                 if hidden:
                     try:
-                        cursor.execute("""
-                            INSERT IGNORE INTO hidden_categories (category, content_type)
-                            VALUES (%s, %s)
-                        """, (category, content_type))
+                        cursor.execute("INSERT IGNORE INTO hidden_categories (category, content_type) VALUES (%s, %s)", (category, content_type))
                         conn.commit()
                         LOGGER.info("set_hidden(%s, True, %s): success", category, content_type)
                         return True
@@ -431,10 +337,7 @@ class CategoryMapping:
                         LOGGER.error("set_hidden(%s, True, %s) failed: %s", category, content_type, e)
                         return False
                 else:
-                    cursor.execute("""
-                        DELETE FROM hidden_categories
-                        WHERE category = %s AND content_type = %s
-                    """, (category, content_type))
+                    cursor.execute("DELETE FROM hidden_categories WHERE category = %s AND content_type = %s", (category, content_type))
                     conn.commit()
                     LOGGER.info("set_hidden(%s, False, %s): success", category, content_type)
                     return True
@@ -455,18 +358,8 @@ class CategoryMapping:
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
                 try:
-                    cursor.execute("""
-                        UPDATE category_keywords
-                        SET category = %s
-                        WHERE category = %s AND content_type = %s
-                    """, (new_category, old_category, content_type))
-
-                    cursor.execute("""
-                        UPDATE hidden_categories
-                        SET category = %s
-                        WHERE category = %s AND content_type = %s
-                    """, (new_category, old_category, content_type))
-
+                    cursor.execute("UPDATE category_keywords SET category = %s WHERE category = %s AND content_type = %s", (new_category, old_category, content_type))
+                    cursor.execute("UPDATE hidden_categories SET category = %s WHERE category = %s AND content_type = %s", (new_category, old_category, content_type))
                     conn.commit()
                     LOGGER.info("rename_category(%s -> %s, %s): success", old_category, new_category, content_type)
                     return True

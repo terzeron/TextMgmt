@@ -58,10 +58,10 @@ def create_refresh_token(email: str, role: str) -> str:
 def decode_refresh_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Refresh token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    except jwt.ExpiredSignatureError as err:
+        raise HTTPException(status_code=401, detail="Refresh token expired") from err
+    except jwt.InvalidTokenError as err:
+        raise HTTPException(status_code=401, detail="Invalid refresh token") from err
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid token type")
     return payload
@@ -70,16 +70,14 @@ def decode_refresh_token(token: str) -> dict:
 def _extract_payload(request: Request) -> dict:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401, detail="Missing or invalid Authorization header"
-        )
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
     token = auth_header[7:]
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    except jwt.ExpiredSignatureError as err:
+        raise HTTPException(status_code=401, detail="Token expired") from err
+    except jwt.InvalidTokenError as err:
+        raise HTTPException(status_code=401, detail="Invalid token") from err
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid token type")
     return payload

@@ -3,7 +3,6 @@
 import sys
 import os
 import math
-import warnings
 import logging.config
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
@@ -13,9 +12,7 @@ from elasticsearch import Elasticsearch
 from elastic_transport import SerializationError, ConnectionError, ConnectionTimeout
 
 
-logging.config.fileConfig(
-    Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False
-)
+logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
@@ -92,9 +89,7 @@ class ESManager:
                 result[int(doc["_id"])] = doc["_source"]["file_path"]
         return result
 
-    def bulk_update_paths(
-        self, updates: Dict[int, Dict[str, str]], max_retries: int = 3
-    ) -> int:
+    def bulk_update_paths(self, updates: Dict[int, Dict[str, str]], max_retries: int = 3) -> int:
         """inode → {"file_path": ..., "category": ...} 맵을 받아 bulk partial update 수행.
         반환: 업데이트된 문서 수"""
         if not updates:
@@ -110,9 +105,7 @@ class ESManager:
                 break
             es_data: List[Dict[str, Any]] = []
             for inode, fields in chunk:
-                es_data.append(
-                    {"update": {"_index": self.index_name, "_id": str(inode)}}
-                )
+                es_data.append({"update": {"_index": self.index_name, "_id": str(inode)}})
                 es_data.append({"doc": fields})
 
             for attempt in range(max_retries):
@@ -122,9 +115,7 @@ class ESManager:
                 except (SerializationError, ConnectionError, ConnectionTimeout) as e:
                     if attempt < max_retries - 1:
                         wait_time = 2**attempt
-                        LOGGER.warning(
-                            f"ES bulk_update_paths 실패 (시도 {attempt + 1}/{max_retries}): {e}. {wait_time}초 후 재시도..."
-                        )
+                        LOGGER.warning(f"ES bulk_update_paths 실패 (시도 {attempt + 1}/{max_retries}): {e}. {wait_time}초 후 재시도...")
                         time.sleep(wait_time)
                     else:
                         LOGGER.error(f"ES bulk_update_paths 최종 실패: {e}")
@@ -228,14 +219,10 @@ class ESManager:
             self._ensure_category_nori_subfield()
             return {"acknowledged": True}
         try:
-            return self.es.indices.create(
-                index=self.index_name, body={"settings": settings, "mappings": mappings}
-            )
+            return self.es.indices.create(index=self.index_name, body={"settings": settings, "mappings": mappings})
         except BadRequestError as e:
             if "resource_already_exists_exception" in str(e):
-                LOGGER.info(
-                    "Index %s already exists, skipping creation", self.index_name
-                )
+                LOGGER.info("Index %s already exists, skipping creation", self.index_name)
                 self._ensure_category_nori_subfield()
                 return {"acknowledged": True}
             raise
@@ -244,9 +231,7 @@ class ESManager:
         """기존 인덱스에 category.nori 서브필드가 없으면 추가"""
         try:
             mapping = self.es.indices.get_mapping(index=self.index_name)
-            cat_props = mapping[self.index_name]["mappings"]["properties"].get(
-                "category", {}
-            )
+            cat_props = mapping[self.index_name]["mappings"]["properties"].get("category", {})
             if "fields" in cat_props and "nori" in cat_props["fields"]:
                 return
             LOGGER.info("Adding category.nori sub-field to index %s", self.index_name)
@@ -255,9 +240,7 @@ class ESManager:
                 properties={
                     "category": {
                         "type": "keyword",
-                        "fields": {
-                            "nori": {"type": "text", "analyzer": "nori_analyzer"}
-                        },
+                        "fields": {"nori": {"type": "text", "analyzer": "nori_analyzer"}},
                     }
                 },
             )
@@ -273,9 +256,7 @@ class ESManager:
     def get_mappings(self) -> dict[str, Any]:
         LOGGER.debug("get_mappings()")
         if self.do_exist_index():
-            return self.es.indices.get_mapping(index=self.index_name)[self.index_name][
-                "mappings"
-            ]
+            return self.es.indices.get_mapping(index=self.index_name)[self.index_name]["mappings"]
         else:
             return {}
 
@@ -312,9 +293,7 @@ class ESManager:
                 return []
             result = []
             for hit in response["hits"]["hits"]:
-                normalized_score = (
-                    hit["_score"] * 100 / max_score if max_score > 0 else 0
-                )
+                normalized_score = hit["_score"] * 100 / max_score if max_score > 0 else 0
                 result.append((int(hit["_id"]), hit["_source"], normalized_score))
             return result[:max_result_count]
 
@@ -337,9 +316,7 @@ class ESManager:
                 return []
 
             for hit in response["hits"]["hits"]:
-                normalized_score = (
-                    hit["_score"] * 100 / max_score if max_score > 0 else 0
-                )
+                normalized_score = hit["_score"] * 100 / max_score if max_score > 0 else 0
                 result.append((int(hit["_id"]), hit["_source"], normalized_score))
                 result_count += 1
                 if result_count >= max_result_count:
@@ -352,9 +329,7 @@ class ESManager:
                 if max_score is None:
                     return []
                 for hit in response["hits"]["hits"]:
-                    normalized_score = (
-                        hit["_score"] * 100 / max_score if max_score > 0 else 0
-                    )
+                    normalized_score = hit["_score"] * 100 / max_score if max_score > 0 else 0
                     result.append((int(hit["_id"]), hit["_source"], normalized_score))
                     result_count += 1
                     if result_count >= max_result_count:
@@ -365,8 +340,8 @@ class ESManager:
             if scroll_id:
                 try:
                     self.es.clear_scroll(scroll_id=scroll_id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    LOGGER.debug("Failed to clear scroll: %s", e)
 
     def _search_paged(
         self,
@@ -379,9 +354,7 @@ class ESManager:
         """(results, total_count) 튜플을 반환하는 페이지네이션 검색
         ref_score: 정규화 기준 점수. 0이면 결과 내 max_score를 사용."""
         size = min(size, 10000)
-        LOGGER.debug(
-            "_search_paged(size=%d, offset=%d, query='%s')", size, offset, query
-        )
+        LOGGER.debug("_search_paged(size=%d, offset=%d, query='%s')", size, offset, query)
         response = self.es.search(
             index=self.index_name,
             query=query,
@@ -392,16 +365,12 @@ class ESManager:
             track_total_hits=True,
         )
         total = response["hits"]["total"]["value"]
-        base_score = (
-            ref_score if ref_score > 0 else (response["hits"]["max_score"] or 0)
-        )
+        base_score = ref_score if ref_score > 0 else (response["hits"]["max_score"] or 0)
         if base_score <= 0:
             return [], total
         result = []
         for hit in response["hits"]["hits"]:
-            normalized_score = (
-                min(100.0, hit["_score"] * 100 / base_score) if base_score > 0 else 0
-            )
+            normalized_score = min(100.0, hit["_score"] * 100 / base_score) if base_score > 0 else 0
             result.append((int(hit["_id"]), hit["_source"], normalized_score))
         return result, total
 
@@ -439,9 +408,7 @@ class ESManager:
         }
         return self._search(query, max_result_count=max_result_count)
 
-    def search_by_summary(
-        self, summary: str, max_result_count: int = -1
-    ) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_summary(self, summary: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug(
@@ -452,9 +419,7 @@ class ESManager:
         query = {"match": {"summary": summary}}
         return self._search(query, max_result_count=max_result_count)
 
-    def search_by_category(
-        self, category: str, max_result_count: int = -1
-    ) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_category(self, category: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_category(category='%s')", category)
@@ -463,9 +428,7 @@ class ESManager:
 
         return self._search(query, sort=sort, max_result_count=max_result_count)
 
-    def search_by_keyword(
-        self, keyword: str, max_result_count: int = -1
-    ) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug(
@@ -508,11 +471,7 @@ class ESManager:
                             "should": [
                                 {"match": {"title": {"query": keyword, "boost": 10}}},
                                 {"match": {"author": {"query": keyword, "boost": 5}}},
-                                {
-                                    "match": {
-                                        "category.nori": {"query": keyword, "boost": 3}
-                                    }
-                                },
+                                {"match": {"category.nori": {"query": keyword, "boost": 3}}},
                                 {"match": {"summary": {"query": keyword, "boost": 1}}},
                             ],
                             "minimum_should_match": 1,
@@ -522,9 +481,7 @@ class ESManager:
             }
         }
         if exclude_categories:
-            query["bool"]["must_not"] = [
-                {"prefix": {"category": cat}} for cat in exclude_categories
-            ]
+            query["bool"]["must_not"] = [{"prefix": {"category": cat}} for cat in exclude_categories]
         return self._search_paged(query, size=size, offset=offset)
 
     def search_similar_docs(
@@ -611,9 +568,7 @@ class ESManager:
 
         # exclude_id가 있으면 msearch로 self-score + 본 검색을 1 roundtrip으로 실행
         if exclude_id is not None:
-            return self._search_paged_with_self_score(
-                should_clauses, exclude_id, size=size, offset=offset
-            )
+            return self._search_paged_with_self_score(should_clauses, exclude_id, size=size, offset=offset)
 
         # exclude_id가 없으면 기존 경로
         query = {
@@ -624,9 +579,7 @@ class ESManager:
         }
         return self._search_paged(query, size=size, offset=offset)
 
-    def _search_paged_with_self_score(
-        self, should_clauses: list, exclude_id: int, size: int = 10, offset: int = 0
-    ) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
+    def _search_paged_with_self_score(self, should_clauses: list, exclude_id: int, size: int = 10, offset: int = 0) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
         """msearch로 self-score 쿼리와 본 검색을 한 번의 왕복으로 실행"""
         LOGGER.debug(
             "_search_paged_with_self_score(exclude_id=%s, size=%d, offset=%d)",
@@ -726,10 +679,7 @@ class ESManager:
             "aggs": {"unique_values": {"terms": {"field": field_name, "size": size}}},
         }
         result = self.es.search(index=self.index_name, body=body)
-        return {
-            bucket["key"]: bucket["doc_count"]
-            for bucket in result["aggregations"]["unique_values"]["buckets"]
-        }
+        return {bucket["key"]: bucket["doc_count"] for bucket in result["aggregations"]["unique_values"]["buckets"]}
 
     def get_all_file_paths_grouped(self) -> Dict[str, Set[str]]:
         """scroll로 전체 인덱스를 순회하여 카테고리별 file_path 집합을 반환"""
@@ -761,21 +711,17 @@ class ESManager:
             if scroll_id:
                 try:
                     self.es.clear_scroll(scroll_id=scroll_id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    LOGGER.debug("Failed to clear scroll: %s", e)
         return result
 
-    def delete_by_file_paths(
-        self, file_paths: List[str], exclude_ids: Optional[List[int]] = None
-    ) -> int:
+    def delete_by_file_paths(self, file_paths: List[str], exclude_ids: Optional[List[int]] = None) -> int:
         """주어진 file_path 목록에 해당하는 기존 문서를 삭제 (중복 방지용).
         exclude_ids가 지정되면 해당 ID는 삭제하지 않음.
         반환: 삭제된 문서 수"""
         if not file_paths:
             return 0
-        must_clauses: List[Dict[str, Any]] = [
-            {"terms": {"file_path.keyword": file_paths}}
-        ]
+        must_clauses: List[Dict[str, Any]] = [{"terms": {"file_path.keyword": file_paths}}]
         must_not_clauses: List[Dict[str, Any]] = []
         if exclude_ids:
             must_not_clauses.append({"ids": {"values": [str(i) for i in exclude_ids]}})
@@ -818,9 +764,7 @@ class ESManager:
             if not chunk:
                 break
             for inode_num, path_and_size in chunk:
-                es_data.append(
-                    {"index": {"_index": self.index_name, "_id": str(inode_num)}}
-                )
+                es_data.append({"index": {"_index": self.index_name, "_id": str(inode_num)}})
                 es_data.append(path_and_size)
                 doc_id_list.append(inode_num)
                 data_count += 1
@@ -834,9 +778,7 @@ class ESManager:
                 except (SerializationError, ConnectionError, ConnectionTimeout) as e:
                     if attempt < max_retries - 1:
                         wait_time = 2**attempt  # 지수 백오프: 1, 2, 4초
-                        LOGGER.warning(
-                            f"ES bulk 요청 실패 (시도 {attempt + 1}/{max_retries}): {e}. {wait_time}초 후 재시도..."
-                        )
+                        LOGGER.warning(f"ES bulk 요청 실패 (시도 {attempt + 1}/{max_retries}): {e}. {wait_time}초 후 재시도...")
                         time.sleep(wait_time)
                     else:
                         LOGGER.error(f"ES bulk 요청 최종 실패: {e}")
@@ -890,9 +832,7 @@ class ESManager:
         if summary:
             doc.update({"summary": summary})
         body = {"doc": doc}
-        result = self.es.update(
-            index=self.index_name, id=str(doc_id), body=body, refresh=True
-        )
+        result = self.es.update(index=self.index_name, id=str(doc_id), body=body, refresh=True)
         if "_shards" in result:
             if "failed" in result["_shards"]:
                 if result["_shards"]["failed"] > 0:

@@ -8,12 +8,12 @@ import requests
 from urllib.parse import quote, urljoin
 from typing import Tuple, Optional, List, Dict
 from bs4 import BeautifulSoup
-import time
-import sys
 import os
+import tempfile
 import logging
 import json
 import http.client
+
 http.client._MAXHEADERS = 1000  # allow more response headers
 from abc import ABC, abstractmethod
 import uuid
@@ -21,26 +21,22 @@ import uuid
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 # 추상 베이스 클래스
 class AbstractBookstore(ABC):
     """서점 검색을 위한 베이스 인터페이스"""
+
     BASE_URL: str
     MAX_RESULTS: int = 2
     SUPPORTS_ISBN_SEARCH: bool = False  # ISBN 검색 지원 여부
     AUTHOR_FIRST_SEARCH: bool = False  # 저자+제목 검색 시 저자를 앞에 배치
 
-    def __init__(self, base_dir: str = '.', verbose: bool = True):
+    def __init__(self, base_dir: str = ".", verbose: bool = True):
         self.base_dir = base_dir
         self.verbose = verbose
         # 세션/헤더 초기화
         self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'curl/7.79.1',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate',
-            'Referer': self.BASE_URL
-        })
+        self.session.headers.update({"User-Agent": "curl/7.79.1", "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7", "Accept-Encoding": "gzip, deflate", "Referer": self.BASE_URL})
 
     @abstractmethod
     def build_search_url(self, keyword: str) -> str:
@@ -77,12 +73,12 @@ class AbstractBookstore(ABC):
     @staticmethod
     def _truncate_title(title: str) -> str:
         """제목에서 부제 구분자('-', '：') 왼쪽 부분만 추출"""
-        for sep in [' - ', '－', '-', '：']:
+        for sep in [" - ", "－", "-", "："]:
             if sep in title:
                 title = title.split(sep, 1)[0].strip()
         return title
 
-    def search(self, isbn: str = '', title: str = '', author: str = '') -> Tuple[List[Tuple[str, str, str, str, str, str]], str, str]:
+    def search(self, isbn: str = "", title: str = "", author: str = "") -> Tuple[List[Tuple[str, str, str, str, str, str]], str, str]:
         """
         ISBN, 제목, 저자를 선택적으로 사용하여 검색
         우선순위: ISBN > 제목+저자 > 제목
@@ -133,10 +129,10 @@ class AbstractBookstore(ABC):
         except Exception as e:
             logger.error(f"검색 페이지 요청 실패: {e}")
             return []
-        resp.encoding = 'utf-8'
-        soup = BeautifulSoup(resp.text, 'html.parser')
+        resp.encoding = "utf-8"
+        soup = BeautifulSoup(resp.text, "html.parser")
         links = self.extract_search_links(soup)
-        detail_urls = links[:self.MAX_RESULTS]
+        detail_urls = links[: self.MAX_RESULTS]
 
         # 상세 페이지 HTML을 병렬로 fetch (캐시 미스인 경우만)
         def fetch_detail(detail_url: str) -> Optional[str]:
@@ -149,7 +145,7 @@ class AbstractBookstore(ABC):
                 s.headers.update(self.session.headers)
                 s.cookies.update(self.session.cookies)
                 resp2 = s.get(detail_url, timeout=10, verify=True)
-                resp2.encoding = 'utf-8'
+                resp2.encoding = "utf-8"
                 html = resp2.text
                 self._save_html_to_tmp(html, detail_url)
                 return html
@@ -169,16 +165,16 @@ class AbstractBookstore(ABC):
                 if self.verbose:
                     logger.warning(f"상세 페이지가 비어있습니다: {detail_url}")
                 continue
-            detail_soup = BeautifulSoup(html, 'html.parser')
+            detail_soup = BeautifulSoup(html, "html.parser")
             info = self.extract_book_info(detail_soup)
-            found_title = info.get('title', '')
-            found_author = info.get('author', '')
-            category = info.get('category', '')
-            isbn = info.get('isbn', '')
+            found_title = info.get("title", "")
+            found_author = info.get("author", "")
+            category = info.get("category", "")
+            isbn = info.get("isbn", "")
             # 카테고리 기본 처리 (비디오/판타지)
             if category:
-                parts = [p.strip() for p in category.split('>')]
-                category = ' > '.join(parts[:3])
+                parts = [p.strip() for p in category.split(">")]
+                category = " > ".join(parts[:3])
             results.append((found_title, found_author, category, detail_url, url, isbn))
         return results
 
@@ -186,8 +182,8 @@ class AbstractBookstore(ABC):
         try:
             # URL 기반 deterministic UUID 생성
             filename = f"{uuid.uuid5(uuid.NAMESPACE_URL, url)}.html"
-            path = os.path.join('/tmp', filename)
-            with open(path, 'w', encoding='utf-8') as f:
+            path = os.path.join(tempfile.gettempdir(), filename)
+            with open(path, "w", encoding="utf-8") as f:
                 f.write(html)
             if self.verbose:
                 logger.info(f"Saved HTML to {path}")
@@ -200,19 +196,20 @@ class AbstractBookstore(ABC):
         """
         try:
             filename = f"{uuid.uuid5(uuid.NAMESPACE_URL, url)}.html"
-            path = os.path.join('/tmp', filename)
+            path = os.path.join(tempfile.gettempdir(), filename)
             if os.path.exists(path):
                 if self.verbose:
                     logger.info(f"Loading cached HTML from {path}")
-                with open(path, 'r', encoding='utf-8') as f:
+                with open(path, "r", encoding="utf-8") as f:
                     return f.read()
         except Exception as e:
             logger.error(f"Failed to load HTML from tmp: {e}")
         return None
 
+
 # Yes24 구현
 class Yes24Bookstore(AbstractBookstore):
-    BASE_URL = 'https://www.yes24.com'
+    BASE_URL = "https://www.yes24.com"
     SUPPORTS_ISBN_SEARCH = True
 
     def build_search_url(self, keyword: str) -> str:
@@ -226,14 +223,11 @@ class Yes24Bookstore(AbstractBookstore):
     def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
         """yes24 검색 결과 페이지에서 상세 페이지 링크를 CSS selector로 추출합니다."""
         # 1) 계층적 선택자 우선 사용
-        selector = (
-            'ul#yesSchList > li > div.itemUnit > div.item_info > '
-            'div.info_row.info_name a.gd_name[href^="/product/goods/"]'
-        )
+        selector = 'ul#yesSchList > li > div.itemUnit > div.item_info > div.info_row.info_name a.gd_name[href^="/product/goods/"]'
         links: List[str] = []
         seen = set()
         for a_tag in soup.select(selector):
-            href = a_tag['href']
+            href = a_tag["href"]
             full = urljoin(self.BASE_URL, href)
             if full not in seen:
                 seen.add(full)
@@ -242,9 +236,9 @@ class Yes24Bookstore(AbstractBookstore):
         if not links:
             if self.verbose:
                 logger.info("계층적 방식으로 링크 추출 실패, fallback 로직 실행")
-            for a_tag in soup.find_all('a', class_='gd_name', href=True):
-                href = a_tag['href']
-                if href.startswith('/product/goods/'):
+            for a_tag in soup.find_all("a", class_="gd_name", href=True):
+                href = a_tag["href"]
+                if href.startswith("/product/goods/"):
                     full = urljoin(self.BASE_URL, href)
                     if full not in seen:
                         seen.add(full)
@@ -263,37 +257,32 @@ class Yes24Bookstore(AbstractBookstore):
         Returns:
             책 정보 딕셔너리
         """
-        book_info = {
-            'title': '',
-            'author': '',
-            'category': '',
-            'isbn': ''
-        }
+        book_info = {"title": "", "author": "", "category": "", "isbn": ""}
 
         try:
             # 책 제목 추출
-            title_elem = soup.find('h2', class_='gd_name')
+            title_elem = soup.find("h2", class_="gd_name")
             if title_elem:
-                book_info['title'] = title_elem.get_text(strip=True)
+                book_info["title"] = title_elem.get_text(strip=True)
 
             # 저자 정보 추출: span.gd_auth의 하위 <a> 텍스트 사용
-            author_elem = soup.find('span', class_='gd_auth')
+            author_elem = soup.find("span", class_="gd_auth")
             if author_elem:
-                a_tag = author_elem.find('a')
+                a_tag = author_elem.find("a")
                 if a_tag:
-                    book_info['author'] = a_tag.get_text(strip=True)
+                    book_info["author"] = a_tag.get_text(strip=True)
                 else:
-                    book_info['author'] = author_elem.get_text(strip=True)
+                    book_info["author"] = author_elem.get_text(strip=True)
 
             # 카테고리 정보 추출 (실제 구조에 맞게 수정)
             category_text = self._extract_yes24_category(soup)
             if category_text:
-                book_info['category'] = category_text
+                book_info["category"] = category_text
 
             # ISBN 추출 (실제 구조에 맞게 수정)
             isbn_text = self._extract_yes24_isbn(soup)
             if isbn_text:
-                book_info['isbn'] = isbn_text
+                book_info["isbn"] = isbn_text
 
         except Exception as e:
             logger.error(f"책 정보 추출 중 오류: {e}")
@@ -312,13 +301,13 @@ class Yes24Bookstore(AbstractBookstore):
         """
         try:
             # "관련분류" 텍스트를 포함하는 요소 찾기
-            related_category_elements = soup.find_all(string=lambda text: text and '관련분류' in text)
+            related_category_elements = soup.find_all(string=lambda text: text and "관련분류" in text)
 
             for elem in related_category_elements:
                 parent = elem.parent
                 if parent:
                     # 관련분류 섹션에서 카테고리 링크들 찾기
-                    category_links = parent.find_all('a', href=lambda href: href and '/product/category/display/' in href)
+                    category_links = parent.find_all("a", href=lambda href: href and "/product/category/display/" in href)
 
                     if category_links:
                         # 카테고리 경로 구성
@@ -329,13 +318,13 @@ class Yes24Bookstore(AbstractBookstore):
                                 category_path.append(category_text)
 
                         if category_path:
-                            return ' > '.join(category_path)
+                            return " > ".join(category_path)
 
-            return ''
+            return ""
 
         except Exception as e:
             logger.error(f"카테고리 추출 중 오류: {e}")
-            return ''
+            return ""
 
     def _extract_yes24_isbn(self, soup: BeautifulSoup) -> str:
         """
@@ -349,41 +338,37 @@ class Yes24Bookstore(AbstractBookstore):
         """
         try:
             # ISBN 패턴을 포함하는 텍스트 찾기
-            isbn_patterns = [
-                r'ISBN13\s*(\d{13})',
-                r'ISBN10\s*(\d{10})',
-                r'ISBN\s*(\d{10,13})',
-                r'(\d{10,13})'
-            ]
+            isbn_patterns = [r"ISBN13\s*(\d{13})", r"ISBN10\s*(\d{10})", r"ISBN\s*(\d{10,13})", r"(\d{10,13})"]
 
             # 전체 페이지 텍스트에서 ISBN 패턴 검색
             page_text = soup.get_text()
 
             for pattern in isbn_patterns:
-                import re
                 match = re.search(pattern, page_text)
                 if match:
                     return match.group(1)
 
-            return ''
+            return ""
 
         except Exception as e:
             logger.error(f"ISBN 추출 중 오류: {e}")
-            return ''
+            return ""
+
 
 # AladinBookstore stub
 class AladinBookstore(AbstractBookstore):
     """알라딘 서점 검색 구현 스텁"""
-    BASE_URL = 'https://www.aladin.co.kr'
+
+    BASE_URL = "https://www.aladin.co.kr"
     SUPPORTS_ISBN_SEARCH = True
     AUTHOR_FIRST_SEARCH = True
 
     @staticmethod
     def _strip_trailing_number(title: str) -> str:
         """제목 끝의 권수 번호를 제거 (예: '마왕의 딸 3' → '마왕의 딸')"""
-        return re.sub(r'\s+\d+\s*$', '', title)
+        return re.sub(r"\s+\d+\s*$", "", title)
 
-    def search(self, isbn: str = '', title: str = '', author: str = '') -> Tuple[List[Tuple[str, str, str, str, str, str]], str, str]:
+    def search(self, isbn: str = "", title: str = "", author: str = "") -> Tuple[List[Tuple[str, str, str, str, str, str]], str, str]:
         if title:
             title = self._strip_trailing_number(title)
         return super().search(isbn=isbn, title=title, author=author)
@@ -401,16 +386,16 @@ class AladinBookstore(AbstractBookstore):
         """알라딘 검색 결과에서 상세 페이지 링크를 추출합니다."""
         links = []
         seen_urls = set()
-        search_result_div = soup.find('div', id='Search3_Result')
+        search_result_div = soup.find("div", id="Search3_Result")
         if search_result_div:
             # 상세 페이지 링크는 /shop/wproduct.aspx?ItemId=... 형태
-            for a_tag in search_result_div.find_all('a', href=re.compile(r'/shop/wproduct\.aspx\?ItemId=\d+')):
+            for a_tag in search_result_div.find_all("a", href=re.compile(r"/shop/wproduct\.aspx\?ItemId=\d+")):
                 if len(links) >= self.MAX_RESULTS:
                     break
 
-                href = a_tag.get('href')
+                href = a_tag.get("href")
                 # 리뷰 링크는 제외하고, 고유한 URL만 추가
-                if href and '_CommentReview' not in href:
+                if href and "_CommentReview" not in href:
                     full_url = urljoin(self.BASE_URL, href)
                     if full_url not in seen_urls:
                         links.append(full_url)
@@ -422,39 +407,39 @@ class AladinBookstore(AbstractBookstore):
 
     def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
         """알라딘 상세 페이지에서 책 정보를 추출합니다."""
-        info = {'title': '', 'author': '', 'category': '', 'isbn': ''}
+        info = {"title": "", "author": "", "category": "", "isbn": ""}
 
         # 1. <title> 태그에서 제목, 저자 추출
-        title_tag = soup.find('title')
+        title_tag = soup.find("title")
         if title_tag and title_tag.string:
-            parts = [p.strip() for p in title_tag.string.split('|')]
+            parts = [p.strip() for p in title_tag.string.split("|")]
             if len(parts) >= 3:
-                info['author'] = parts[-2]
-                info['title'] = ' | '.join(parts[:-2])
+                info["author"] = parts[-2]
+                info["title"] = " | ".join(parts[:-2])
 
         # 1.5 메타 태그에서 저자 추출 (name 또는 og:author)
-        meta_author = soup.find('meta', attrs={'name': 'author'}) or soup.find('meta', attrs={'property': 'og:author'})
-        if meta_author and meta_author.get('content'):
-            info['author'] = meta_author['content']
+        meta_author = soup.find("meta", attrs={"name": "author"}) or soup.find("meta", attrs={"property": "og:author"})
+        if meta_author and meta_author.get("content"):
+            info["author"] = meta_author["content"]
 
         # 1.6 메타 태그에서 제목 추출 (og:title)
-        meta_title = soup.find('meta', attrs={'property': 'og:title'}) or soup.find('meta', attrs={'name': 'title'})
-        if meta_title and meta_title.get('content'):
-            info['title'] = meta_title['content']
+        meta_title = soup.find("meta", attrs={"property": "og:title"}) or soup.find("meta", attrs={"name": "title"})
+        if meta_title and meta_title.get("content"):
+            info["title"] = meta_title["content"]
 
         # 2. ul id="ulCategory"에서 카테고리 추출
-        category_ul = soup.find('ul', id='ulCategory')
+        category_ul = soup.find("ul", id="ulCategory")
         if category_ul:
-            category_links = category_ul.find_all('a')
+            category_links = category_ul.find_all("a")
             if category_links:
                 category_parts = [link.get_text(strip=True) for link in category_links]
                 # 첫 번째 링크는 "국내도서" 같은 최상위 카테고리이므로 필요시 포함/제외
-                info['category'] = ' > '.join(category_parts)
+                info["category"] = " > ".join(category_parts)
 
         # ISBN 추출
         isbn_code = self._extract_aladin_isbn(soup)
         if isbn_code:
-            info['isbn'] = isbn_code
+            info["isbn"] = isbn_code
 
         return info
 
@@ -463,30 +448,31 @@ class AladinBookstore(AbstractBookstore):
         알라딘 상세 페이지에서 ISBN13 코드 추출
         """
         try:
-            selector = '#Ere_prod_allwrap div.Ere_prod_mconts_R > div.conts_info_list1 > ul li'
+            selector = "#Ere_prod_allwrap div.Ere_prod_mconts_R > div.conts_info_list1 > ul li"
             for li in soup.select(selector):
                 text = li.get_text(strip=True)
-                if text.startswith('ISBN'):
-                    match = re.search(r'(\d{13})', text)
+                if text.startswith("ISBN"):
+                    match = re.search(r"(\d{13})", text)
                     if match:
                         return match.group(1)
             # fallback: middlewrap 영역 하위 ul li 중 ISBN 포함 항목 추출
             # ISBN 위치가 다른 경우 fallback selector 사용
-            fallback_sel = '#Ere_prod_allwrap > div.Ere_prod_middlewrap div.Ere_prod_mconts_R ul > li'
+            fallback_sel = "#Ere_prod_allwrap > div.Ere_prod_middlewrap div.Ere_prod_mconts_R ul > li"
             for li in soup.select(fallback_sel):
                 text2 = li.get_text(strip=True)
-                if 'ISBN' in text2:
-                    m2 = re.search(r'(\d{10,13})', text2)
+                if "ISBN" in text2:
+                    m2 = re.search(r"(\d{10,13})", text2)
                     if m2:
                         return m2.group(1)
-            return ''
+            return ""
         except Exception as e:
             logger.error(f"ISBN 알라딘 추출 중 오류: {e}")
-            return ''
+            return ""
+
 
 # RidibooksBookstore implementation
 class RidibooksBookstore(AbstractBookstore):
-    BASE_URL = 'https://ridibooks.com'
+    BASE_URL = "https://ridibooks.com"
     SUPPORTS_ISBN_SEARCH = False  # RIDI는 ISBN 검색 미지원
     AUTHOR_FIRST_SEARCH = True
 
@@ -497,18 +483,18 @@ class RidibooksBookstore(AbstractBookstore):
         """
         try:
             # 'ISBN' 텍스트를 가진 div 요소 찾기
-            labels = soup.find_all(lambda tag: tag.name == 'div' and tag.get_text(strip=True) == 'ISBN')
+            labels = soup.find_all(lambda tag: tag.name == "div" and tag.get_text(strip=True) == "ISBN")
             for label in labels:
                 # 다음 형제 div에서 코드 추출
-                sibling = label.find_next_sibling('div')
+                sibling = label.find_next_sibling("div")
                 if sibling:
                     code = sibling.get_text(strip=True)
-                    if re.match(r'^\d{13}$', code):
+                    if re.match(r"^\d{13}$", code):
                         return code
-            return ''
+            return ""
         except Exception as e:
             logger.error(f"ISBN 리디북스 추출 중 오류: {e}")
-            return ''
+            return ""
 
     def build_search_url(self, keyword: str) -> str:
         encoded = quote(keyword)
@@ -520,7 +506,7 @@ class RidibooksBookstore(AbstractBookstore):
 
         # RIDI 검색 API
         api_url = "https://search-api.ridibooks.com/search"
-        params = {'keyword': keyword}
+        params = {"keyword": keyword}
 
         try:
             resp = self.session.get(api_url, params=params, timeout=10, verify=True)
@@ -531,7 +517,7 @@ class RidibooksBookstore(AbstractBookstore):
                 return []
 
             data = resp.json()
-            books = data.get('books', [])
+            books = data.get("books", [])
 
             if not books:
                 if self.verbose:
@@ -539,14 +525,14 @@ class RidibooksBookstore(AbstractBookstore):
                 return []
 
             results: List[Tuple[str, str, str, str, str, str]] = []
-            for book in books[:self.MAX_RESULTS]:
-                book_id = book.get('b_id', '')
-                title = book.get('title', '')
-                author = book.get('author', '')
-                parent_cat = book.get('parent_category_name', '')
-                child_cat = book.get('category_name', '')
-                parent_cat2 = book.get('parent_category_name2', '')
-                child_cat2 = book.get('category_name2', '')
+            for book in books[: self.MAX_RESULTS]:
+                book_id = book.get("b_id", "")
+                title = book.get("title", "")
+                author = book.get("author", "")
+                parent_cat = book.get("parent_category_name", "")
+                child_cat = book.get("category_name", "")
+                parent_cat2 = book.get("parent_category_name2", "")
+                child_cat2 = book.get("category_name2", "")
 
                 paths = []
                 if parent_cat and child_cat:
@@ -557,12 +543,12 @@ class RidibooksBookstore(AbstractBookstore):
                     paths.append(f"{parent_cat2} > {child_cat2}")
                 elif child_cat2 or parent_cat2:
                     paths.append(child_cat2 or parent_cat2)
-                category = ' || '.join(paths) if paths else ''
+                category = " || ".join(paths) if paths else ""
 
-                detail_url = f"{self.BASE_URL}/books/{book_id}" if book_id else ''
+                detail_url = f"{self.BASE_URL}/books/{book_id}" if book_id else ""
 
                 if title and detail_url:
-                    results.append((title, author, category, detail_url, search_url, ''))
+                    results.append((title, author, category, detail_url, search_url, ""))
 
             if self.verbose:
                 logger.info(f"RIDI에서 {len(results)}개의 검색 결과를 찾았습니다")
@@ -578,67 +564,68 @@ class RidibooksBookstore(AbstractBookstore):
         return []
 
     def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
-        info = {'title': '', 'author': '', 'category': '', 'isbn': ''}
+        info = {"title": "", "author": "", "category": "", "isbn": ""}
         # 제목 추출: og:title 메타 태그 우선, 실패 시 <h1> 태그 사용
-        meta = soup.find('meta', property='og:title') or soup.find('meta', attrs={'name': 'title'})
-        if meta and meta.get('content'):
-            info['title'] = meta['content'].strip()
+        meta = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "title"})
+        if meta and meta.get("content"):
+            info["title"] = meta["content"].strip()
         else:
-            h1 = soup.select_one('h1')
+            h1 = soup.select_one("h1")
             if h1 and h1.get_text(strip=True):
-                info['title'] = h1.get_text(strip=True)
+                info["title"] = h1.get_text(strip=True)
         # RidiBooks 헤더 영역에서 author 정보 우선 추출 (ID 이름 오타 가능성 포함)
-        header_li = soup.select('div#ISLANDS__Header ul > li > li') or soup.select('div#iSLANDS__Header ul > li > li')
+        header_li = soup.select("div#ISLANDS__Header ul > li > li") or soup.select("div#iSLANDS__Header ul > li > li")
         if header_li:
             raw = header_li[0].get_text(strip=True)
-            author_text = raw.replace('저자', '').strip()
+            author_text = raw.replace("저자", "").strip()
             if author_text:
-                info['author'] = author_text
+                info["author"] = author_text
         # li 태그 중 '저자' 포함 요소에서 prefix 텍스트 추출
-        if not info['author']:
-            for li in soup.find_all('li'):
-                txt = li.get_text(separator=' ', strip=True)
-                if txt.endswith('저자') and len(txt) > len('저자'):
+        if not info["author"]:
+            for li in soup.find_all("li"):
+                txt = li.get_text(separator=" ", strip=True)
+                if txt.endswith("저자") and len(txt) > len("저자"):
                     raw = txt[:-2]  # '저자' 제거
                     # '외13명' 형태에 스페이스 삽입
-                    raw = re.sub(r'외(\d+명)', r' 외 \1', raw)
-                    info['author'] = raw.strip()
+                    raw = re.sub(r"외(\d+명)", r" 외 \1", raw)
+                    info["author"] = raw.strip()
                     break
         # author가 비어있으면 /author 링크 사용
-        if not info['author']:
-            author_elem = soup.find('a', href=re.compile(r'/author'))
+        if not info["author"]:
+            author_elem = soup.find("a", href=re.compile(r"/author"))
             if author_elem and author_elem.get_text(strip=True):
-                info['author'] = author_elem.get_text(strip=True)
+                info["author"] = author_elem.get_text(strip=True)
         # author가 비어있으면 메타 태그
-        if not info['author']:
-            meta_author = soup.find('meta', attrs={'name': 'author'}) or soup.find('meta', attrs={'property': 'og:author'})
-            if meta_author and meta_author.get('content'):
-                info['author'] = meta_author['content'].strip()
+        if not info["author"]:
+            meta_author = soup.find("meta", attrs={"name": "author"}) or soup.find("meta", attrs={"property": "og:author"})
+            if meta_author and meta_author.get("content"):
+                info["author"] = meta_author["content"].strip()
         # author가 비어있으면 meta description에서 키워드 추출
-        if not info['author']:
-            meta_desc = soup.find('meta', attrs={'property': 'og:description'}) or soup.find('meta', attrs={'name': 'description'})
-            if meta_desc and meta_desc.get('content'):
-                desc = meta_desc['content']
-                m = re.search(r'저자[:：]\s*([^,]+)', desc)
+        if not info["author"]:
+            meta_desc = soup.find("meta", attrs={"property": "og:description"}) or soup.find("meta", attrs={"name": "description"})
+            if meta_desc and meta_desc.get("content"):
+                desc = meta_desc["content"]
+                m = re.search(r"저자[:：]\s*([^,]+)", desc)
                 if m:
-                    info['author'] = m.group(1).strip()
+                    info["author"] = m.group(1).strip()
         # 카테고리 추출: 각 li가 하나의 카테고리 경로 (다중 경로는 " || "로 구분)
         paths = []
         for li in soup.select("#books_contents section.detail_body ul li"):
             links = li.select("a[href^='/category/']")
             parts = [link.get_text(strip=True) for link in links if link.get_text(strip=True)]
             if parts:
-                paths.append(' > '.join(parts))
+                paths.append(" > ".join(parts))
         if paths:
-            info['category'] = ' || '.join(paths)
+            info["category"] = " || ".join(paths)
         # ISBN 추출
         isbn_code = self._extract_ridi_isbn(soup)
         if isbn_code:
-            info['isbn'] = isbn_code
+            info["isbn"] = isbn_code
         return info
 
+
 class NaverShoppingBookstore(AbstractBookstore):
-    BASE_URL = 'https://search.shopping.naver.com'
+    BASE_URL = "https://search.shopping.naver.com"
 
     def build_search_url(self, keyword: str) -> str:
         encoded = quote(keyword)
@@ -649,9 +636,9 @@ class NaverShoppingBookstore(AbstractBookstore):
         links: List[str] = []
         # 모든 <script> 태그에서 JSON 텍스트 검색
         raw = None
-        for s in soup.find_all('script'):
-            text = s.get_text() or ''
-            if text.strip().startswith('{') and 'SearchAll' in text:
+        for s in soup.find_all("script"):
+            text = s.get_text() or ""
+            if text.strip().startswith("{") and "SearchAll" in text:
                 raw = text
                 break
         if not raw:
@@ -666,16 +653,16 @@ class NaverShoppingBookstore(AbstractBookstore):
                 logger.error(f"네이버쇼핑 JSON 파싱 실패: {e}")
             return links
         # React Query state에서 SearchAll 아이템 추출
-        queries = data.get('props', {}).get('pageProps', {}).get('dehydratedState', {}).get('queries', [])
+        queries = data.get("props", {}).get("pageProps", {}).get("dehydratedState", {}).get("queries", [])
         seen = set()
         for q in queries:
-            key = q.get('queryKey')
-            if isinstance(key, list) and key and key[0] == 'SearchAll':
-                items = q.get('state', {}).get('data', {}).get('SearchAll', {}).get('bookSasResult', {}).get('itemList', [])
+            key = q.get("queryKey")
+            if isinstance(key, list) and key and key[0] == "SearchAll":
+                items = q.get("state", {}).get("data", {}).get("SearchAll", {}).get("bookSasResult", {}).get("itemList", [])
                 if not isinstance(items, list):
                     break
                 for item in items:
-                    item_id = item.get('id')
+                    item_id = item.get("id")
                     if item_id and item_id not in seen:
                         seen.add(item_id)
                         links.append(f"{self.BASE_URL}/book/catalog/{item_id}")
@@ -689,61 +676,59 @@ class NaverShoppingBookstore(AbstractBookstore):
         네이버쇼핑 상세 페이지에서 책 정보를 추출합니다.
         CSS 클래스에 해시 접미사가 붙으므로 부분 매칭(lambda)을 사용합니다.
         """
-        info: Dict[str, str] = {'title': '', 'author': '', 'category': ''}
+        info: Dict[str, str] = {"title": "", "author": "", "category": ""}
         try:
             # 제목: h2.bookTitle_book_name__*
-            title_elem = soup.find('h2', class_=re.compile(r'^bookTitle_book_name__'))
+            title_elem = soup.find("h2", class_=re.compile(r"^bookTitle_book_name__"))
             if not title_elem:
                 # 기존 호환: div.bookTitle_book_name__
-                title_elem = soup.find('div', class_=re.compile(r'^bookTitle_book_name__'))
+                title_elem = soup.find("div", class_=re.compile(r"^bookTitle_book_name__"))
             if title_elem:
-                info['title'] = title_elem.get_text(strip=True)
+                info["title"] = title_elem.get_text(strip=True)
 
             # 저자: "저자" 라벨이 있는 info_title 다음의 info_content
-            for info_title in soup.find_all('div', class_=re.compile(r'^bookTitle_info_title__')):
-                if info_title.get_text(strip=True) == '저자':
-                    info_content = info_title.find_next_sibling('div', class_=re.compile(r'^bookTitle_info_content__'))
+            for info_title in soup.find_all("div", class_=re.compile(r"^bookTitle_info_title__")):
+                if info_title.get_text(strip=True) == "저자":
+                    info_content = info_title.find_next_sibling("div", class_=re.compile(r"^bookTitle_info_content__"))
                     if info_content:
-                        info['author'] = info_content.get_text(strip=True)
+                        info["author"] = info_content.get_text(strip=True)
                     break
-            if not info['author']:
+            if not info["author"]:
                 # 기존 호환: 첫 번째 info_content
-                author_elem = soup.find('div', class_=re.compile(r'^bookTitle_info_content__'))
+                author_elem = soup.find("div", class_=re.compile(r"^bookTitle_info_content__"))
                 if author_elem:
-                    info['author'] = author_elem.get_text(strip=True)
+                    info["author"] = author_elem.get_text(strip=True)
 
             # 카테고리
-            category_elem = soup.find('div', class_=re.compile(r'^bookCatalogTop_breadcrumb__'))
+            category_elem = soup.find("div", class_=re.compile(r"^bookCatalogTop_breadcrumb__"))
             if category_elem:
                 text = category_elem.get_text()
-                parts = [p.strip() for p in text.split('>')]
-                info['category'] = ' > '.join(parts)
+                parts = [p.strip() for p in text.split(">")]
+                info["category"] = " > ".join(parts)
         except Exception as e:
             logger.error(f"네이버쇼핑 상세 정보 추출 중 오류: {e}")
         return info
 
+
 class MunpiaBookstore(AbstractBookstore):
-    BASE_URL = 'https://novel.munpia.com'
+    BASE_URL = "https://novel.munpia.com"
     AUTHOR_FIRST_SEARCH = True
 
     def build_search_url(self, keyword: str) -> str:
         """문피아 검색 URL을 구성합니다 (공백은 %20으로 인코딩)."""
-        encoded = quote(keyword, safe='')
+        encoded = quote(keyword, safe="")
         return f"{self.BASE_URL}/page/hd.platinum/view/search/keyword/{encoded}/order/search_result"
 
     def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
         """문피아 검색 결과 페이지에서 상세 페이지 링크를 추출합니다."""
         links: List[str] = []
         seen_urls = set()
-        selector = (
-            "div#SEARCH-BOX.section2 > div.ebook_lists > div.article_wrap >"
-            " div.article > dl.detail > dt > a"
-        )
+        selector = "div#SEARCH-BOX.section2 > div.ebook_lists > div.article_wrap > div.article > dl.detail > dt > a"
         for a_tag in soup.select(selector):
-            href = a_tag.get('href')
+            href = a_tag.get("href")
             if not href:
                 continue
-            full_url = urljoin(self.BASE_URL, href) if href.startswith('/') else href
+            full_url = urljoin(self.BASE_URL, href) if href.startswith("/") else href
             if full_url not in seen_urls:
                 seen_urls.add(full_url)
                 links.append(full_url)
@@ -753,32 +738,33 @@ class MunpiaBookstore(AbstractBookstore):
 
     def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
         """문피아 상세 페이지에서 책 정보를 추출합니다."""
-        book_info = {'title': '', 'author': '', 'category': ''}
+        book_info = {"title": "", "author": "", "category": ""}
         # 제목 추출: og:title 또는 <meta name="title">
-        meta_title = soup.find('meta', property='og:title') or soup.find('meta', attrs={'name': 'title'})
-        if meta_title and meta_title.get('content'):
-            book_info['title'] = meta_title['content'].strip()
+        meta_title = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "title"})
+        if meta_title and meta_title.get("content"):
+            book_info["title"] = meta_title["content"].strip()
         # 저자 추출: og:description에서 '저자명 - 설명' 형태
-        meta_desc = soup.find('meta', property='og:description') or soup.find('meta', attrs={'name': 'description'})
-        if meta_desc and meta_desc.get('content'):
-            content = meta_desc['content'].strip()
+        meta_desc = soup.find("meta", property="og:description") or soup.find("meta", attrs={"name": "description"})
+        if meta_desc and meta_desc.get("content"):
+            content = meta_desc["content"].strip()
             # '저자명 - 설명'에서 저자명만 추출
-            book_info['author'] = content.split(' - ')[0]
+            book_info["author"] = content.split(" - ")[0]
         else:
             # fallback: 작가 링크
             author_elem = soup.select_one('a[href^="/writer/"]')
             if author_elem:
-                book_info['author'] = author_elem.get_text(strip=True)
+                book_info["author"] = author_elem.get_text(strip=True)
         # 카테고리 추출: p.meta-path
-        meta_path_elem = soup.select_one('p.meta-path')
+        meta_path_elem = soup.select_one("p.meta-path")
         if meta_path_elem:
             path_text = meta_path_elem.get_text(strip=True)
-            book_info['category'] = ' > '.join([p.strip() for p in path_text.split('>')])
+            book_info["category"] = " > ".join([p.strip() for p in path_text.split(">")])
         return book_info
+
 
 # NaverSeriesBookstore 구현
 class NaverSeriesBookstore(AbstractBookstore):
-    BASE_URL = 'https://series.naver.com'
+    BASE_URL = "https://series.naver.com"
 
     def build_search_url(self, keyword: str) -> str:
         encoded = quote(keyword)
@@ -790,7 +776,7 @@ class NaverSeriesBookstore(AbstractBookstore):
         seen = set()
         # 검색 결과 리스트에서 링크 추출 (웹소설: nov.title, 만화: com.title)
         for a_tag in soup.select('ul.lst_list li a[class^="N=a:"]'):
-            href = a_tag.get('href')
+            href = a_tag.get("href")
             if href:
                 full = urljoin(self.BASE_URL, href)
                 if full not in seen:
@@ -801,47 +787,39 @@ class NaverSeriesBookstore(AbstractBookstore):
         return links
 
     def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
-        info: Dict[str, str] = {'title': '', 'author': '', 'category': ''}
+        info: Dict[str, str] = {"title": "", "author": "", "category": ""}
         # 제목 추출
         if soup.title and soup.title.string:
-            info['title'] = soup.title.string.strip()
+            info["title"] = soup.title.string.strip()
         # 저자 추출: 작가 정보 컨테이너 내 <strong> 태그 활용
-        author_container = soup.find('div', id='_otherProductByPerson')
+        author_container = soup.find("div", id="_otherProductByPerson")
         if author_container:
-            strongs = author_container.find_all('strong')
+            strongs = author_container.find_all("strong")
             if len(strongs) >= 2:
-                info['author'] = strongs[1].get_text(strip=True)
+                info["author"] = strongs[1].get_text(strip=True)
         # author가 비어있을 경우 meta name='description' 우선 Fallback, og:description 다음 사용
-        if not info['author']:
+        if not info["author"]:
             # 1) meta name='description'
-            meta_name_desc = soup.find('meta', attrs={'name': 'description'})
-            if meta_name_desc and meta_name_desc.get('content'):
-                desc = meta_name_desc['content']
-                m = re.search(r'작가[:：]\s*([^,]+)', desc)
+            meta_name_desc = soup.find("meta", attrs={"name": "description"})
+            if meta_name_desc and meta_name_desc.get("content"):
+                desc = meta_name_desc["content"]
+                m = re.search(r"작가[:：]\s*([^,]+)", desc)
                 if m:
-                    info['author'] = m.group(1).strip()
+                    info["author"] = m.group(1).strip()
             # 2) meta property='og:description'
-        if not info['author']:
-            meta_og = soup.find('meta', attrs={'property': 'og:description'})
-            if meta_og and meta_og.get('content'):
-                desc = meta_og['content']
-                m = re.search(r'작가[:：]\s*([^,」]+)', desc)
+        if not info["author"]:
+            meta_og = soup.find("meta", attrs={"property": "og:description"})
+            if meta_og and meta_og.get("content"):
+                desc = meta_og["content"]
+                m = re.search(r"작가[:：]\s*([^,」]+)", desc)
                 if m:
-                    info['author'] = m.group(1).strip()
+                    info["author"] = m.group(1).strip()
         # 카테고리 추출
-        category_elem = soup.select_one('div#content > ul.end_info > li.info_lst > ul > li span a')
+        category_elem = soup.select_one("div#content > ul.end_info > li.info_lst > ul > li span a")
         if category_elem:
-            info['category'] = category_elem.get_text(strip=True)
+            info["category"] = category_elem.get_text(strip=True)
         return info
 
-# 공개 API
-__all__ = [
-    'AbstractBookstore',
-    'Yes24Bookstore',
-    'AladinBookstore',
-    'RidibooksBookstore',
-    'NaverShoppingBookstore',
-    'MunpiaBookstore',
-    'NaverSeriesBookstore'
-]
 
+# 공개 API
+__all__ = ["AbstractBookstore", "Yes24Bookstore", "AladinBookstore", "RidibooksBookstore", "NaverShoppingBookstore", "MunpiaBookstore", "NaverSeriesBookstore"]
