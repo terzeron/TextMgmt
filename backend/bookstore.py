@@ -7,14 +7,14 @@ import re
 import requests
 from urllib.parse import quote, urljoin
 from typing import Tuple, Optional, List, Dict
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag as _Tag
 import os
 import tempfile
 import logging
 import json
 import http.client
 
-http.client._MAXHEADERS = 1000  # allow more response headers
+http.client._MAXHEADERS = 1000  # type: ignore[attr-defined]  # allow more response headers
 from abc import ABC, abstractmethod
 import uuid
 
@@ -227,7 +227,7 @@ class Yes24Bookstore(AbstractBookstore):
         links: List[str] = []
         seen = set()
         for a_tag in soup.select(selector):
-            href = a_tag["href"]
+            href = str(a_tag["href"])
             full = urljoin(self.BASE_URL, href)
             if full not in seen:
                 seen.add(full)
@@ -269,7 +269,7 @@ class Yes24Bookstore(AbstractBookstore):
             author_elem = soup.find("span", class_="gd_auth")
             if author_elem:
                 a_tag = author_elem.find("a")
-                if a_tag:
+                if isinstance(a_tag, _Tag):
                     book_info["author"] = a_tag.get_text(strip=True)
                 else:
                     book_info["author"] = author_elem.get_text(strip=True)
@@ -301,7 +301,7 @@ class Yes24Bookstore(AbstractBookstore):
         """
         try:
             # "관련분류" 텍스트를 포함하는 요소 찾기
-            related_category_elements = soup.find_all(string=lambda text: text and "관련분류" in text)
+            related_category_elements = soup.find_all(string=lambda text: isinstance(text, str) and "관련분류" in text)
 
             for elem in related_category_elements:
                 parent = elem.parent
@@ -387,7 +387,7 @@ class AladinBookstore(AbstractBookstore):
         links = []
         seen_urls = set()
         search_result_div = soup.find("div", id="Search3_Result")
-        if search_result_div:
+        if isinstance(search_result_div, _Tag):
             # 상세 페이지 링크는 /shop/wproduct.aspx?ItemId=... 형태
             for a_tag in search_result_div.find_all("a", href=re.compile(r"/shop/wproduct\.aspx\?ItemId=\d+")):
                 if len(links) >= self.MAX_RESULTS:
@@ -411,25 +411,25 @@ class AladinBookstore(AbstractBookstore):
 
         # 1. <title> 태그에서 제목, 저자 추출
         title_tag = soup.find("title")
-        if title_tag and title_tag.string:
-            parts = [p.strip() for p in title_tag.string.split("|")]
+        if title_tag and title_tag.string:  # type: ignore[union-attr]
+            parts = [p.strip() for p in title_tag.string.split("|")]  # type: ignore[union-attr]
             if len(parts) >= 3:
                 info["author"] = parts[-2]
                 info["title"] = " | ".join(parts[:-2])
 
         # 1.5 메타 태그에서 저자 추출 (name 또는 og:author)
         meta_author = soup.find("meta", attrs={"name": "author"}) or soup.find("meta", attrs={"property": "og:author"})
-        if meta_author and meta_author.get("content"):
-            info["author"] = meta_author["content"]
+        if meta_author and meta_author.get("content"):  # type: ignore[union-attr]
+            info["author"] = meta_author["content"]  # type: ignore[index]
 
         # 1.6 메타 태그에서 제목 추출 (og:title)
         meta_title = soup.find("meta", attrs={"property": "og:title"}) or soup.find("meta", attrs={"name": "title"})
-        if meta_title and meta_title.get("content"):
-            info["title"] = meta_title["content"]
+        if meta_title and meta_title.get("content"):  # type: ignore[union-attr]
+            info["title"] = meta_title["content"]  # type: ignore[index]
 
         # 2. ul id="ulCategory"에서 카테고리 추출
         category_ul = soup.find("ul", id="ulCategory")
-        if category_ul:
+        if isinstance(category_ul, _Tag):
             category_links = category_ul.find_all("a")
             if category_links:
                 category_parts = [link.get_text(strip=True) for link in category_links]
@@ -567,8 +567,8 @@ class RidibooksBookstore(AbstractBookstore):
         info = {"title": "", "author": "", "category": "", "isbn": ""}
         # 제목 추출: og:title 메타 태그 우선, 실패 시 <h1> 태그 사용
         meta = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "title"})
-        if meta and meta.get("content"):
-            info["title"] = meta["content"].strip()
+        if meta and meta.get("content"):  # type: ignore[union-attr]
+            info["title"] = str(meta["content"]).strip()  # type: ignore[index]
         else:
             h1 = soup.select_one("h1")
             if h1 and h1.get_text(strip=True):
@@ -598,13 +598,13 @@ class RidibooksBookstore(AbstractBookstore):
         # author가 비어있으면 메타 태그
         if not info["author"]:
             meta_author = soup.find("meta", attrs={"name": "author"}) or soup.find("meta", attrs={"property": "og:author"})
-            if meta_author and meta_author.get("content"):
-                info["author"] = meta_author["content"].strip()
+            if meta_author and meta_author.get("content"):  # type: ignore[union-attr]
+                info["author"] = str(meta_author["content"]).strip()  # type: ignore[index]
         # author가 비어있으면 meta description에서 키워드 추출
         if not info["author"]:
             meta_desc = soup.find("meta", attrs={"property": "og:description"}) or soup.find("meta", attrs={"name": "description"})
-            if meta_desc and meta_desc.get("content"):
-                desc = meta_desc["content"]
+            if meta_desc and meta_desc.get("content"):  # type: ignore[union-attr]
+                desc = str(meta_desc["content"])  # type: ignore[index]
                 m = re.search(r"저자[:：]\s*([^,]+)", desc)
                 if m:
                     info["author"] = m.group(1).strip()
@@ -728,7 +728,8 @@ class MunpiaBookstore(AbstractBookstore):
             href = a_tag.get("href")
             if not href:
                 continue
-            full_url = urljoin(self.BASE_URL, href) if href.startswith("/") else href
+            href_str = str(href)
+            full_url = urljoin(self.BASE_URL, href_str) if href_str.startswith("/") else href_str
             if full_url not in seen_urls:
                 seen_urls.add(full_url)
                 links.append(full_url)
@@ -741,12 +742,12 @@ class MunpiaBookstore(AbstractBookstore):
         book_info = {"title": "", "author": "", "category": ""}
         # 제목 추출: og:title 또는 <meta name="title">
         meta_title = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "title"})
-        if meta_title and meta_title.get("content"):
-            book_info["title"] = meta_title["content"].strip()
+        if meta_title and meta_title.get("content"):  # type: ignore[union-attr]
+            book_info["title"] = str(meta_title["content"]).strip()  # type: ignore[index]
         # 저자 추출: og:description에서 '저자명 - 설명' 형태
         meta_desc = soup.find("meta", property="og:description") or soup.find("meta", attrs={"name": "description"})
-        if meta_desc and meta_desc.get("content"):
-            content = meta_desc["content"].strip()
+        if meta_desc and meta_desc.get("content"):  # type: ignore[union-attr]
+            content = str(meta_desc["content"]).strip()  # type: ignore[index]
             # '저자명 - 설명'에서 저자명만 추출
             book_info["author"] = content.split(" - ")[0]
         else:
@@ -778,7 +779,7 @@ class NaverSeriesBookstore(AbstractBookstore):
         for a_tag in soup.select('ul.lst_list li a[class^="N=a:"]'):
             href = a_tag.get("href")
             if href:
-                full = urljoin(self.BASE_URL, href)
+                full = urljoin(self.BASE_URL, str(href))
                 if full not in seen:
                     seen.add(full)
                     links.append(full)
@@ -793,7 +794,7 @@ class NaverSeriesBookstore(AbstractBookstore):
             info["title"] = soup.title.string.strip()
         # 저자 추출: 작가 정보 컨테이너 내 <strong> 태그 활용
         author_container = soup.find("div", id="_otherProductByPerson")
-        if author_container:
+        if isinstance(author_container, _Tag):
             strongs = author_container.find_all("strong")
             if len(strongs) >= 2:
                 info["author"] = strongs[1].get_text(strip=True)
@@ -801,16 +802,16 @@ class NaverSeriesBookstore(AbstractBookstore):
         if not info["author"]:
             # 1) meta name='description'
             meta_name_desc = soup.find("meta", attrs={"name": "description"})
-            if meta_name_desc and meta_name_desc.get("content"):
-                desc = meta_name_desc["content"]
+            if meta_name_desc and meta_name_desc.get("content"):  # type: ignore[union-attr]
+                desc = str(meta_name_desc["content"])  # type: ignore[index]
                 m = re.search(r"작가[:：]\s*([^,]+)", desc)
                 if m:
                     info["author"] = m.group(1).strip()
             # 2) meta property='og:description'
         if not info["author"]:
             meta_og = soup.find("meta", attrs={"property": "og:description"})
-            if meta_og and meta_og.get("content"):
-                desc = meta_og["content"]
+            if meta_og and meta_og.get("content"):  # type: ignore[union-attr]
+                desc = str(meta_og["content"])  # type: ignore[index]
                 m = re.search(r"작가[:：]\s*([^,」]+)", desc)
                 if m:
                     info["author"] = m.group(1).strip()
