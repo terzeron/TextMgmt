@@ -158,6 +158,7 @@ export default function Navigation() {
       } else {
         // 만료된 토큰 제거
         localStorage.removeItem("tm_token");
+        localStorage.removeItem("tm_refresh_token");
         localStorage.removeItem("name");
         localStorage.removeItem("email");
         localStorage.removeItem("picture");
@@ -189,6 +190,9 @@ export default function Navigation() {
         setRole(data.role);
 
         localStorage.setItem("tm_token", data.token);
+        if (data.refresh_token) {
+          localStorage.setItem("tm_refresh_token", data.refresh_token);
+        }
         localStorage.setItem("name", data.name || "");
         localStorage.setItem("email", data.email || "");
         localStorage.setItem("picture", data.picture || "");
@@ -208,6 +212,7 @@ export default function Navigation() {
     setPicture("");
 
     localStorage.removeItem("tm_token");
+    localStorage.removeItem("tm_refresh_token");
     localStorage.removeItem("name");
     localStorage.removeItem("email");
     localStorage.removeItem("picture");

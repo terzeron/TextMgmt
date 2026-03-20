@@ -44,16 +44,49 @@ function getAuthHeaders(includeContentType = false) {
     return headers;
 }
 
+function clearAuthState() {
+    localStorage.removeItem('tm_token');
+    localStorage.removeItem('tm_refresh_token');
+    localStorage.removeItem('name');
+    localStorage.removeItem('email');
+    localStorage.removeItem('picture');
+}
+
+let refreshPromise = null;
+
+async function tryRefreshToken() {
+    const refreshToken = localStorage.getItem('tm_refresh_token');
+    if (!refreshToken) return false;
+
+    // 동시 다발 요청이 모두 refresh를 시도하지 않도록 단일 Promise 공유
+    if (refreshPromise) return refreshPromise;
+
+    refreshPromise = (async () => {
+        try {
+            const res = await fetch(getApiUrlPrefix() + '/auth/refresh', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refresh_token: refreshToken }),
+            });
+            if (!res.ok) return false;
+            const data = await res.json();
+            if (data.token) {
+                localStorage.setItem('tm_token', data.token);
+                return true;
+            }
+            return false;
+        } catch {
+            return false;
+        } finally {
+            refreshPromise = null;
+        }
+    })();
+
+    return refreshPromise;
+}
+
 export function handleFetchErrors(response) {
-    if (response.status === 401) {
-        localStorage.removeItem('tm_token');
-        localStorage.removeItem('name');
-        localStorage.removeItem('email');
-        localStorage.removeItem('picture');
-        window.location.reload();
-        throw Error('Authentication required');
-    }
-    if (!response.ok) {
+    if (!response.ok && response.status !== 401) {
         throw Error(response.statusText);
     }
     return response;
@@ -73,64 +106,68 @@ export const getRandomMediumColor = (key) => {
     return `hsl(${hue}, 50%, 55%)`;
 };
 
-const apiReq = (url, method, payload, type, resolve, reject, final) => {
-    try {
-        fetch(getApiUrlPrefix() + url, payload ? {
-            method: method,
-            headers: getAuthHeaders(true),
-            body: JSON.stringify(payload)
-        } : { method: method, headers: getAuthHeaders() })
-            .then(handleFetchErrors)
-            .then((response) => {
-                let promise;
-                if (type === 'JSON') {
-                    promise = response.json();
-                } else if (type === 'TEXT') {
-                    promise = response.text();
-                } else {
-                    promise = response.blob();
+function buildFetchOptions(method, payload) {
+    return payload
+        ? { method, headers: getAuthHeaders(true), body: JSON.stringify(payload) }
+        : { method, headers: getAuthHeaders() };
+}
+
+function processResponse(response, type) {
+    if (type === 'JSON') return response.json();
+    if (type === 'TEXT') return response.text();
+    return response.blob();
+}
+
+function processData(data, type, resolve, reject) {
+    if (type === 'JSON') {
+        if (data['status'] === 'success') {
+            if (typeof data['result'] === 'object') {
+                if (data['last_modified_time']) {
+                    data['result']['last_modified_time'] = DateTime.fromISO(data['last_modified_time']).setZone('local').toFormat('MM-dd HH:mm');
                 }
-                return promise;
-            })
-            .then((data) => {
-                if (type === 'JSON') {
-                    if (data['status'] === 'success') {
-                        if (typeof data['result'] === 'object') {
-                            if (data['last_modified_time']) {
-                                data['result']['last_modified_time'] = DateTime.fromISO(data['last_modified_time']).setZone('local').toFormat('MM-dd HH:mm');
-                            }
-                            if (data['last_responded_time']) {
-                                data['result']['last_responded_time'] = DateTime.fromISO(data['last_responded_time']).setZone('local').toFormat('MM-dd HH:mm');
-                            }
-                        }
-                        // warning 필드가 있으면 함께 전달
-                        if (data['warning']) {
-                            resolve({result: data['result'], warning: data['warning']});
-                        } else {
-                            resolve(data['result']);
-                        }
-                    } else {
-                        reject(data['error']);
-                    }
-                } else {
-                    resolve(data);
+                if (data['last_responded_time']) {
+                    data['result']['last_responded_time'] = DateTime.fromISO(data['last_responded_time']).setZone('local').toFormat('MM-dd HH:mm');
                 }
-            })
-            .catch((error) => {
-                if (reject) {
-                    reject(error);
-                }
-            })
-            .finally(() => {
-                if (final) {
-                    final();
-                }
-            });
-    } catch (error) {
-        if (reject) {
-            reject(error);
+            }
+            if (data['warning']) {
+                resolve({result: data['result'], warning: data['warning']});
+            } else {
+                resolve(data['result']);
+            }
+        } else {
+            reject(data['error']);
         }
+    } else {
+        resolve(data);
     }
+}
+
+const apiReq = (url, method, payload, type, resolve, reject, final) => {
+    const fullUrl = getApiUrlPrefix() + url;
+    fetch(fullUrl, buildFetchOptions(method, payload))
+        .then(handleFetchErrors)
+        .then(async (response) => {
+            if (response.status === 401) {
+                const refreshed = await tryRefreshToken();
+                if (refreshed) {
+                    // 새 토큰으로 재시도
+                    const retry = await fetch(fullUrl, buildFetchOptions(method, payload));
+                    if (!retry.ok) {
+                        clearAuthState();
+                        window.location.reload();
+                        throw Error('Authentication required');
+                    }
+                    return processResponse(retry, type);
+                }
+                clearAuthState();
+                window.location.reload();
+                throw Error('Authentication required');
+            }
+            return processResponse(response, type);
+        })
+        .then((data) => processData(data, type, resolve, reject))
+        .catch((error) => { if (reject) reject(error); })
+        .finally(() => { if (final) final(); });
 };
 
 export const jsonGetReq = (url, payload, resolve, reject, final) => apiReq(url, 'GET', payload, 'JSON', resolve, reject, final);
@@ -142,9 +179,27 @@ export const blobGetReq = (url, payload, resolve, reject, final) => apiReq(url, 
 
 // 원본 JSON 응답을 그대로 반환 (status 체크 없이, 내부 API용)
 export const rawJsonGetReq = (url, resolve, reject, final) => {
-    fetch(getApiUrlPrefix() + url, { headers: getAuthHeaders() })
+    const fullUrl = getApiUrlPrefix() + url;
+    fetch(fullUrl, { headers: getAuthHeaders() })
         .then(handleFetchErrors)
-        .then(response => response.json())
+        .then(async (response) => {
+            if (response.status === 401) {
+                const refreshed = await tryRefreshToken();
+                if (refreshed) {
+                    const retry = await fetch(fullUrl, { headers: getAuthHeaders() });
+                    if (!retry.ok) {
+                        clearAuthState();
+                        window.location.reload();
+                        throw Error('Authentication required');
+                    }
+                    return retry.json();
+                }
+                clearAuthState();
+                window.location.reload();
+                throw Error('Authentication required');
+            }
+            return response.json();
+        })
         .then(data => resolve && resolve(data))
         .catch(error => reject && reject(error))
         .finally(() => final && final());

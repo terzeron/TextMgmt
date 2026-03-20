@@ -13,7 +13,8 @@ if not JWT_SECRET:
     LOGGER.error("The environment variable TM_JWT_SECRET is not set.")
     sys.exit(-1)
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRATION_SECONDS = 7 * 24 * 3600  # 7일
+ACCESS_TOKEN_EXPIRATION_SECONDS = 2 * 3600  # 2시간
+REFRESH_TOKEN_EXPIRATION_SECONDS = 7 * 24 * 3600  # 7일
 
 TM_ADMIN_EMAIL = os.getenv("TM_ADMIN_EMAIL", "")
 _allowed_raw = os.getenv("TM_ALLOWED_EMAILS", "")
@@ -31,14 +32,39 @@ def determine_role(email: str) -> str | None:
 def create_jwt_token(email: str, role: str, name: str = "", picture: str = "") -> str:
     now = int(time.time())
     payload = {
+        "type": "access",
         "email": email,
         "role": role,
         "name": name,
         "picture": picture,
-        "exp": now + JWT_EXPIRATION_SECONDS,
+        "exp": now + ACCESS_TOKEN_EXPIRATION_SECONDS,
         "iat": now,
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def create_refresh_token(email: str, role: str) -> str:
+    now = int(time.time())
+    payload = {
+        "type": "refresh",
+        "email": email,
+        "role": role,
+        "exp": now + REFRESH_TOKEN_EXPIRATION_SECONDS,
+        "iat": now,
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def decode_refresh_token(token: str) -> dict:
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Refresh token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    return payload
 
 
 def _extract_payload(request: Request) -> dict:
@@ -49,11 +75,14 @@ def _extract_payload(request: Request) -> dict:
         )
     token = auth_header[7:]
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+    if payload.get("type") != "access":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    return payload
 
 
 async def require_auth(request: Request) -> dict:
