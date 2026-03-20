@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import logging
 
@@ -8,6 +9,9 @@ from fastapi import HTTPException, Request
 LOGGER = logging.getLogger(__name__)
 
 JWT_SECRET = os.getenv("TM_JWT_SECRET", "")
+if not JWT_SECRET:
+    LOGGER.error("The environment variable TM_JWT_SECRET is not set.")
+    sys.exit(-1)
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_SECONDS = 7 * 24 * 3600  # 7일
 
@@ -40,7 +44,9 @@ def create_jwt_token(email: str, role: str, name: str = "", picture: str = "") -
 def _extract_payload(request: Request) -> dict:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+        raise HTTPException(
+            status_code=401, detail="Missing or invalid Authorization header"
+        )
     token = auth_header[7:]
     try:
         return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
