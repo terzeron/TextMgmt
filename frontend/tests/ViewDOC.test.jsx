@@ -45,7 +45,10 @@ describe('ViewDOC', () => {
         });
         render(<ViewDOC bookId={1} fileType="doc" />);
         await waitFor(() => {
-            expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/preview/1');
+            expect(global.fetch).toHaveBeenCalledWith(
+                'http://localhost:8000/preview/1',
+                expect.objectContaining({ credentials: 'include' }),
+            );
         });
     });
 
@@ -91,7 +94,10 @@ describe('ViewDOC', () => {
         });
         render(<ViewDOC bookId={5} fileType="hwp" />);
         await waitFor(() => {
-            expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/preview/5');
+            expect(global.fetch).toHaveBeenCalledWith(
+                'http://localhost:8000/preview/5',
+                expect.objectContaining({ credentials: 'include' }),
+            );
         });
     });
 

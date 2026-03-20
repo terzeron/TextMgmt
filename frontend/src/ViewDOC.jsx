@@ -21,7 +21,7 @@ export default function ViewDOC({ bookId, fileType, lineCount, apiPrefix = '' })
         if (fileType === 'doc' || fileType === 'hwp') {
             // .doc/.hwp: 서버에서 HTML로 변환된 미리보기 사용
             const previewUri = getApiUrlPrefix() + apiPrefix + "/preview/" + bookId;
-            fetch(previewUri)
+            fetch(previewUri, { credentials: "include" })
                 .then(response => response.text())
                 .then(html => {
                     setContent(DOMPurify.sanitize(html));
@@ -35,7 +35,7 @@ export default function ViewDOC({ bookId, fileType, lineCount, apiPrefix = '' })
         } else {
             // .docx: mammoth 사용
             const uri = getApiUrlPrefix() + apiPrefix + "/download/" + bookId;
-            fetch(uri)
+            fetch(uri, { credentials: "include" })
                 .then(response => response.arrayBuffer())
                 .then(buffer => mammoth.convertToHtml({ arrayBuffer: buffer }))
                 .then(result => {

@@ -72,7 +72,7 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = '' }) {
         const controller = new AbortController();
         const url = `${getApiUrlPrefix()}${apiPrefix}/preview/${bookId}?chapters=${chapters}`;
 
-        fetch(url, { signal: controller.signal })
+        fetch(url, { signal: controller.signal, credentials: "include" })
             .then(async (res) => {
                 if (!res.ok) {
                     const errText = await res.text();

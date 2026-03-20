@@ -244,7 +244,7 @@ class TestPdfPagesEndpoint:
                 email="admin@test.com", role="admin", name="Test Admin"
             )
             self.client = TestClient(
-                main.app, headers={"Authorization": f"Bearer {token}"}
+                main.app, cookies={"tm_access_token": token}
             )
             yield
 

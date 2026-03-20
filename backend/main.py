@@ -5,7 +5,7 @@ import sys
 import os
 import logging.config
 from pathlib import Path
-from typing import Dict, Any, Union, List
+from typing import Dict, Any, Literal, Union, List
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +17,7 @@ from fastapi.exceptions import RequestValidationError
 ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
 JSON_MEDIA_TYPE = "application/json"
 from pydantic import BaseModel
-from backend.auth import require_auth, require_admin, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token
+from backend.auth import require_auth, require_admin, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
 from backend.book_manager import BookManager
 from backend.comics_manager import ComicsManager
 from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
@@ -101,6 +101,39 @@ app.json_encoder = custom_jsonable_encoder  # type: ignore[attr-defined]
 
 TM_GOOGLE_CLIENT_ID = os.getenv("TM_GOOGLE_CLIENT_ID")
 TM_GOOGLE_CLIENT_SECRET = os.getenv("TM_GOOGLE_CLIENT_SECRET")
+
+
+_SameSite = Literal["lax", "strict", "none"]
+
+
+def _get_cookie_settings() -> tuple[bool, _SameSite]:
+    secure = os.getenv("TM_COOKIE_SECURE", "false").lower() == "true"
+    samesite_raw = os.getenv("TM_COOKIE_SAMESITE", "lax").lower()
+    if samesite_raw == "strict":
+        samesite: _SameSite = "strict"
+    elif samesite_raw == "none":
+        samesite = "none"
+    else:
+        samesite = "lax"
+    # SameSite=None은 Secure=True가 필수 (브라우저 요구사항)
+    if samesite == "none" and not secure:
+        LOGGER.warning("SameSite=None requires Secure=True; falling back to SameSite=Lax")
+        samesite = "lax"
+    return secure, samesite
+
+
+def _set_auth_cookies(response: JSONResponse, access_token: str, refresh_token: str | None = None) -> None:
+    secure, samesite = _get_cookie_settings()
+    response.set_cookie(ACCESS_COOKIE_NAME, access_token, httponly=True, secure=secure, samesite=samesite, max_age=ACCESS_TOKEN_EXPIRATION_SECONDS, path="/")
+    if refresh_token is not None:
+        response.set_cookie(REFRESH_COOKIE_NAME, refresh_token, httponly=True, secure=secure, samesite=samesite, max_age=REFRESH_TOKEN_EXPIRATION_SECONDS, path="/")
+
+
+def _clear_auth_cookies(response: JSONResponse) -> None:
+    secure, samesite = _get_cookie_settings()
+    response.set_cookie(ACCESS_COOKIE_NAME, "", httponly=True, secure=secure, samesite=samesite, max_age=0, path="/")
+    response.set_cookie(REFRESH_COOKIE_NAME, "", httponly=True, secure=secure, samesite=samesite, max_age=0, path="/")
+
 
 book_manager = BookManager()
 print("book manager ready")
@@ -511,14 +544,16 @@ async def verify_google_token(request_body: dict):
 
     # JWT 토큰 발급
     token = create_jwt_token(email=email, role=role, name=name, picture=picture)
-    refresh_token = create_refresh_token(email=email, role=role)
+    refresh_token = create_refresh_token(email=email, role=role, name=name, picture=picture)
 
-    return {"token": token, "refresh_token": refresh_token, "email": email, "name": name, "picture": picture, "role": role}
+    response = JSONResponse({"status": "success", "email": email, "name": name, "picture": picture, "role": role})
+    _set_auth_cookies(response, token, refresh_token)
+    return response
 
 
 @app.post("/auth/refresh")
-async def refresh_access_token(request_body: dict):
-    refresh_token = request_body.get("refresh_token")
+async def refresh_access_token(request: Request):
+    refresh_token = request.cookies.get(REFRESH_COOKIE_NAME, "")
     if not refresh_token:
         raise HTTPException(status_code=400, detail="Refresh token is required")
 
@@ -532,7 +567,21 @@ async def refresh_access_token(request_body: dict):
     # 새 access token 발급 (refresh token은 유지)
     token = create_jwt_token(email=email, role=role, name=payload.get("name", ""), picture=payload.get("picture", ""))
 
-    return {"token": token}
+    response = JSONResponse({"status": "success"})
+    _set_auth_cookies(response, token)
+    return response
+
+
+@app.get("/auth/me")
+async def auth_me(payload: dict = Depends(require_auth)):
+    return {"status": "success", "result": {"email": payload.get("email", ""), "role": payload.get("role", ""), "name": payload.get("name", ""), "picture": payload.get("picture", "")}}
+
+
+@app.post("/auth/logout")
+async def logout():
+    response = JSONResponse({"status": "success"})
+    _clear_auth_cookies(response)
+    return response
 
 
 # === 카테고리 매핑 API ===

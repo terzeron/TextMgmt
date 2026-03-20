@@ -128,7 +128,7 @@ export default function EpubDiagnoseView({bookId, fileType, apiPrefix = ''}) {
         setFrontendData(null);
         setFrontendError(null);
         const url = `${getApiUrlPrefix()}${apiPrefix}/download/${bookId}`;
-        fetch(url, {signal: controller.signal})
+        fetch(url, {signal: controller.signal, credentials: "include"})
             .then((res) => {
                 if (!res.ok) throw new Error(`서버 응답 오류: ${res.status}`);
                 return res.arrayBuffer();

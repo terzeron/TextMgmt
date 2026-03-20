@@ -441,7 +441,7 @@ def _create_corrupted_epub(
 
 
 @pytest.fixture(scope="module")
-def backend_test_setup(es_client, es_index, admin_auth_header):
+def backend_test_setup(es_client, es_index, admin_auth_cookies):
     """BookManager + TestClient (ES 공유)."""
     from fastapi.testclient import TestClient
     from backend.main import app
@@ -451,7 +451,7 @@ def backend_test_setup(es_client, es_index, admin_auth_header):
     bm.es_manager.es = es_client
     bm.es_manager.refresh()
 
-    client = TestClient(app, headers=admin_auth_header)
+    client = TestClient(app, cookies=admin_auth_cookies)
     yield {"bm": bm, "client": client}
 
 

@@ -268,12 +268,12 @@ def es_index(es_client):
 
 
 @pytest.fixture(scope="session")
-def admin_auth_header():
-    """테스트용 admin JWT 토큰 헤더."""
+def admin_auth_cookies():
+    """테스트용 admin JWT 쿠키."""
     from backend.auth import create_jwt_token
 
     token = create_jwt_token(email="admin@test.com", role="admin", name="Test Admin")
-    return {"Authorization": f"Bearer {token}"}
+    return {"tm_access_token": token}
 
 
 @pytest.fixture(scope="function")

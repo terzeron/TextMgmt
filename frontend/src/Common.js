@@ -28,36 +28,21 @@ export function getApiUrlPrefix() {
     return api_url_prefix;
 }
 
-export function getAuthToken() {
-    return localStorage.getItem('tm_token');
-}
-
 function getAuthHeaders(includeContentType = false) {
     const headers = {};
     if (includeContentType) {
         headers['Content-Type'] = 'application/json';
     }
-    const token = getAuthToken();
-    if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-    }
     return headers;
 }
 
 function clearAuthState() {
-    localStorage.removeItem('tm_token');
-    localStorage.removeItem('tm_refresh_token');
-    localStorage.removeItem('name');
-    localStorage.removeItem('email');
-    localStorage.removeItem('picture');
+    // HttpOnly 쿠키는 JS에서 직접 제거 불가
 }
 
 let refreshPromise = null;
 
 async function tryRefreshToken() {
-    const refreshToken = localStorage.getItem('tm_refresh_token');
-    if (!refreshToken) return false;
-
     // 동시 다발 요청이 모두 refresh를 시도하지 않도록 단일 Promise 공유
     if (refreshPromise) return refreshPromise;
 
@@ -66,15 +51,10 @@ async function tryRefreshToken() {
             const res = await fetch(getApiUrlPrefix() + '/auth/refresh', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ refresh_token: refreshToken }),
+                credentials: 'include',
             });
             if (!res.ok) return false;
-            const data = await res.json();
-            if (data.token) {
-                localStorage.setItem('tm_token', data.token);
-                return true;
-            }
-            return false;
+            return true;
         } catch {
             return false;
         } finally {
@@ -108,8 +88,8 @@ export const getRandomMediumColor = (key) => {
 
 function buildFetchOptions(method, payload) {
     return payload
-        ? { method, headers: getAuthHeaders(true), body: JSON.stringify(payload) }
-        : { method, headers: getAuthHeaders() };
+        ? { method, headers: getAuthHeaders(true), body: JSON.stringify(payload), credentials: 'include' }
+        : { method, headers: getAuthHeaders(), credentials: 'include' };
 }
 
 function processResponse(response, type) {
@@ -180,13 +160,13 @@ export const blobGetReq = (url, payload, resolve, reject, final) => apiReq(url, 
 // 원본 JSON 응답을 그대로 반환 (status 체크 없이, 내부 API용)
 export const rawJsonGetReq = (url, resolve, reject, final) => {
     const fullUrl = getApiUrlPrefix() + url;
-    fetch(fullUrl, { headers: getAuthHeaders() })
+    fetch(fullUrl, { headers: getAuthHeaders(), credentials: 'include' })
         .then(handleFetchErrors)
         .then(async (response) => {
             if (response.status === 401) {
                 const refreshed = await tryRefreshToken();
                 if (refreshed) {
-                    const retry = await fetch(fullUrl, { headers: getAuthHeaders() });
+                    const retry = await fetch(fullUrl, { headers: getAuthHeaders(), credentials: 'include' });
                     if (!retry.ok) {
                         clearAuthState();
                         window.location.reload();

@@ -144,7 +144,7 @@ describe("ViewPDF", () => {
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://localhost:8000/pdf-pages/42?start=1&end=1",
-      expect.objectContaining({ headers: expect.any(Object) }),
+      expect.objectContaining({ credentials: "include" }),
     );
   });
 
@@ -154,13 +154,13 @@ describe("ViewPDF", () => {
     const { rerender } = render(<ViewPDF bookId={1} />);
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://localhost:8000/pdf-pages/1?start=1&end=1",
-      expect.objectContaining({ headers: expect.any(Object) }),
+      expect.objectContaining({ credentials: "include" }),
     );
 
     rerender(<ViewPDF bookId={99} />);
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://localhost:8000/pdf-pages/99?start=1&end=1",
-      expect.objectContaining({ headers: expect.any(Object) }),
+      expect.objectContaining({ credentials: "include" }),
     );
   });
 
@@ -415,11 +415,11 @@ describe("ViewPDF", () => {
     // 첫 페이지 + 나머지 (2~5) 요청
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://localhost:8000/pdf-pages/1?start=1&end=1",
-      expect.objectContaining({ headers: expect.any(Object) }),
+      expect.objectContaining({ credentials: "include" }),
     );
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://localhost:8000/pdf-pages/1?start=2&end=5",
-      expect.objectContaining({ headers: expect.any(Object) }),
+      expect.objectContaining({ credentials: "include" }),
     );
   });
 
@@ -447,11 +447,11 @@ describe("ViewPDF", () => {
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
         "http://localhost:8000/pdf-pages/1?start=1&end=1",
-        expect.objectContaining({ headers: expect.any(Object) }),
+        expect.objectContaining({ credentials: "include" }),
       );
       expect(globalThis.fetch).toHaveBeenCalledWith(
         "http://localhost:8000/pdf-pages/1?start=2&end=11",
-        expect.objectContaining({ headers: expect.any(Object) }),
+        expect.objectContaining({ credentials: "include" }),
       );
     });
   });

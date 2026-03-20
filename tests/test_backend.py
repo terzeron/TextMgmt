@@ -16,7 +16,7 @@ CATEGORY = "_epub"
 
 
 @pytest.fixture(scope="module")
-def backend_test_setup(es_client, es_index, admin_auth_header):
+def backend_test_setup(es_client, es_index, admin_auth_cookies):
     """Create BookManager and TestClient with test data loaded (공유된 ES 클라이언트 및 인덱스 사용)."""
     from fastapi.testclient import TestClient
     from backend.main import app
@@ -38,7 +38,7 @@ def backend_test_setup(es_client, es_index, admin_auth_header):
     # Refresh index to make data searchable
     bm.es_manager.refresh()
 
-    client = TestClient(app, headers=admin_auth_header)
+    client = TestClient(app, cookies=admin_auth_cookies)
 
     yield {"bm": bm, "client": client}
 
@@ -857,10 +857,9 @@ class TestAuthRefreshEndpoint:
             email=self.auth_mod.TM_ADMIN_EMAIL, role="admin"
         )
         client = self._get_unauthenticated_client(backend_test_setup)
-        response = client.post("/auth/refresh", json={"refresh_token": refresh_token})
+        response = client.post("/auth/refresh", cookies={"tm_refresh_token": refresh_token})
         assert response.status_code == 200
-        data = response.json()
-        assert "token" in data
+        assert "set-cookie" in response.headers
 
     def test_refresh_with_expired_token_returns_401(self, backend_test_setup):
         import time
@@ -877,7 +876,7 @@ class TestAuthRefreshEndpoint:
 
         token = jwt.encode(expired_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
         client = self._get_unauthenticated_client(backend_test_setup)
-        response = client.post("/auth/refresh", json={"refresh_token": token})
+        response = client.post("/auth/refresh", cookies={"tm_refresh_token": token})
         assert response.status_code == 401
 
     def test_refresh_with_access_token_returns_401(self, backend_test_setup):
@@ -887,12 +886,12 @@ class TestAuthRefreshEndpoint:
             email=self.auth_mod.TM_ADMIN_EMAIL, role="admin"
         )
         client = self._get_unauthenticated_client(backend_test_setup)
-        response = client.post("/auth/refresh", json={"refresh_token": access_token})
+        response = client.post("/auth/refresh", cookies={"tm_refresh_token": access_token})
         assert response.status_code == 401
 
     def test_refresh_without_token_returns_400(self, backend_test_setup):
         client = self._get_unauthenticated_client(backend_test_setup)
-        response = client.post("/auth/refresh", json={})
+        response = client.post("/auth/refresh")
         assert response.status_code == 400
 
     def test_refresh_with_unauthorized_email_returns_403(self, backend_test_setup):
@@ -900,7 +899,7 @@ class TestAuthRefreshEndpoint:
 
         refresh_token = create_refresh_token(email="hacker@evil.com", role="admin")
         client = self._get_unauthenticated_client(backend_test_setup)
-        response = client.post("/auth/refresh", json={"refresh_token": refresh_token})
+        response = client.post("/auth/refresh", cookies={"tm_refresh_token": refresh_token})
         assert response.status_code == 403
 
     def test_refreshed_token_works_for_api_calls(self, backend_test_setup):
@@ -910,15 +909,44 @@ class TestAuthRefreshEndpoint:
             email=self.auth_mod.TM_ADMIN_EMAIL, role="admin"
         )
         client = self._get_unauthenticated_client(backend_test_setup)
-        response = client.post("/auth/refresh", json={"refresh_token": refresh_token})
-        new_token = response.json()["token"]
+        response = client.post("/auth/refresh", cookies={"tm_refresh_token": refresh_token})
+        new_access_token = response.cookies.get("tm_access_token")
         # 새 토큰으로 인증 필요한 API 호출
         from fastapi.testclient import TestClient
         from backend.main import app
 
-        auth_client = TestClient(app, headers={"Authorization": f"Bearer {new_token}"})
+        auth_client = TestClient(app, cookies={"tm_access_token": new_access_token})
         cat_response = auth_client.get("/categories")
         assert cat_response.status_code == 200
+
+
+class TestAuthMeLogout:
+    def test_auth_me_returns_user_info(self, backend_test_setup):
+        from backend.auth import create_jwt_token
+        from fastapi.testclient import TestClient
+        from backend.main import app
+
+        token = create_jwt_token(email="admin@test.com", role="admin", name="Test", picture="pic")
+        client = TestClient(app, cookies={"tm_access_token": token})
+        response = client.get("/auth/me")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["result"]["role"] == "admin"
+        assert data["result"]["email"] == "admin@test.com"
+        assert data["result"]["name"] == "Test"
+        assert data["result"]["picture"] == "pic"
+
+    def test_logout_clears_cookies(self, backend_test_setup):
+        from backend.auth import create_jwt_token
+        from fastapi.testclient import TestClient
+        from backend.main import app
+
+        token = create_jwt_token(email="admin@test.com", role="admin")
+        client = TestClient(app, cookies={"tm_access_token": token, "tm_refresh_token": token})
+        response = client.post("/auth/logout")
+        assert response.status_code == 200
+        assert "set-cookie" in response.headers
 
 
 if __name__ == "__main__":
