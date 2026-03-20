@@ -8,7 +8,9 @@ from typing import Dict, Any
 from unittest.mock import patch
 import pytest
 
-logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
+logging.config.fileConfig(
+    Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False
+)
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
@@ -87,7 +89,6 @@ def es_manager_with_data(es_client, es_index):
 
 
 class TestESManager:
-
     def test_create_delete_do_exists_index(self, es_manager_with_data):
         esm = es_manager_with_data
         # Use a separate test index to avoid affecting other tests
@@ -139,7 +140,14 @@ class TestESManager:
         query = {
             "bool": {
                 "should": [
-                    {"match": {"title": {"query": keyword, "boost": 1.2 + math.log2(len(keyword.split(" ")))}}},
+                    {
+                        "match": {
+                            "title": {
+                                "query": keyword,
+                                "boost": 1.2 + math.log2(len(keyword.split(" "))),
+                            }
+                        }
+                    },
                     {"match": {"file_type": {"query": file_type, "boost": 1}}},
                 ]
             }
@@ -225,7 +233,9 @@ class TestESManager:
             result_list = esm.search_by_keyword("박지원", max_result_count=5)
             assert len(result_list) >= 1
             found_ids = [doc_id_ for doc_id_, _, _ in result_list]
-            assert doc_id in found_ids, f"doc {doc_id}이 저자 검색 결과에 없음: {found_ids}"
+            assert doc_id in found_ids, (
+                f"doc {doc_id}이 저자 검색 결과에 없음: {found_ids}"
+            )
 
             # 결과 구조 검증
             for _, doc, score in result_list:
@@ -261,12 +271,16 @@ class TestESManager:
             # 제목 일부 토큰 "열하"로 검색 (nori가 "열하일기" → "열하"+"일기" 분리 기대)
             result_list = esm.search_by_keyword("열하", max_result_count=10)
             found_ids = [did for did, _, _ in result_list]
-            assert doc_id in found_ids, f"제목 부분 토큰 '열하'로 검색 실패: {found_ids}"
+            assert doc_id in found_ids, (
+                f"제목 부분 토큰 '열하'로 검색 실패: {found_ids}"
+            )
 
             # 제목 일부 토큰 "일기"로 검색
             result_list = esm.search_by_keyword("일기", max_result_count=10)
             found_ids = [did for did, _, _ in result_list]
-            assert doc_id in found_ids, f"제목 부분 토큰 '일기'로 검색 실패: {found_ids}"
+            assert doc_id in found_ids, (
+                f"제목 부분 토큰 '일기'로 검색 실패: {found_ids}"
+            )
 
             # 저자 토큰 "박지원"으로 검색
             result_list = esm.search_by_keyword("박지원", max_result_count=10)
@@ -277,7 +291,9 @@ class TestESManager:
             # category 필드가 text(nori) 타입이므로 search_by_keyword로 부분 매칭 가능
             result_list = esm.search_by_keyword("한국고전", max_result_count=10)
             found_ids = [did for did, _, _ in result_list]
-            assert doc_id in found_ids, f"카테고리 부분 토큰 '한국고전'으로 검색 실패: {found_ids}"
+            assert doc_id in found_ids, (
+                f"카테고리 부분 토큰 '한국고전'으로 검색 실패: {found_ids}"
+            )
         finally:
             esm.delete(doc_id)
             esm.refresh()
@@ -341,23 +357,35 @@ class TestESManager:
     def test_search_paged_without_ref_score_first_is_100(self, es_manager_with_data):
         """ref_score 없이 호출하면 1등이 100점이다 (기존 동작)"""
         esm = es_manager_with_data
-        query = {"bool": {"should": [{"match": {"title": {"query": "테스트 문서", "boost": 1}}}]}}
+        query = {
+            "bool": {
+                "should": [{"match": {"title": {"query": "테스트 문서", "boost": 1}}}]
+            }
+        }
         results, total = esm._search_paged(query, size=10)
         if results:
             assert results[0][2] == 100.0
 
-    def test_search_paged_with_ref_score_normalizes_correctly(self, es_manager_with_data):
+    def test_search_paged_with_ref_score_normalizes_correctly(
+        self, es_manager_with_data
+    ):
         """ref_score를 지정하면 해당 값 기준으로 정규화된다"""
         esm = es_manager_with_data
-        query = {"bool": {"should": [{"match": {"title": {"query": "테스트 문서", "boost": 1}}}]}}
+        query = {
+            "bool": {
+                "should": [{"match": {"title": {"query": "테스트 문서", "boost": 1}}}]
+            }
+        }
 
         # ref_score 없이 → 1등이 100점
         results_default, _ = esm._search_paged(query, size=10)
         # ref_score를 1등 raw_score의 2배로 설정 → 모든 점수가 절반으로
         if results_default:
             # 1등의 원래 점수를 역산 (default에서 100점이므로 raw_score = max_score)
-            response = esm.es.search(index=esm.index_name, query=query, size=1, track_scores=True)
-            raw_max = response['hits']['max_score']
+            response = esm.es.search(
+                index=esm.index_name, query=query, size=1, track_scores=True
+            )
+            raw_max = response["hits"]["max_score"]
             ref_double = raw_max * 2
 
             results_ref, _ = esm._search_paged(query, size=10, ref_score=ref_double)
@@ -368,7 +396,11 @@ class TestESManager:
     def test_search_paged_with_ref_score_caps_at_100(self, es_manager_with_data):
         """ref_score보다 높은 raw_score가 있어도 100을 초과하지 않는다"""
         esm = es_manager_with_data
-        query = {"bool": {"should": [{"match": {"title": {"query": "테스트 문서", "boost": 1}}}]}}
+        query = {
+            "bool": {
+                "should": [{"match": {"title": {"query": "테스트 문서", "boost": 1}}}]
+            }
+        }
         # 아주 작은 ref_score를 지정
         results, _ = esm._search_paged(query, size=10, ref_score=0.001)
         for _, _, score in results:
@@ -376,16 +408,22 @@ class TestESManager:
 
     # ── search_by_keyword_paged exclude_categories ──
 
-    def test_keyword_paged_exclude_categories_filters_results(self, es_manager_with_data):
+    def test_keyword_paged_exclude_categories_filters_results(
+        self, es_manager_with_data
+    ):
         """exclude_categories로 특정 카테고리를 제외하면 해당 카테고리 결과가 없다"""
         esm = es_manager_with_data
         # "마법" 키워드는 category="test"(doc1,2)와 category="_txt"(doc3) 모두 매칭 가능
         results_all, total_all = esm.search_by_keyword_paged("마법", size=10)
-        results_filtered, total_filtered = esm.search_by_keyword_paged("마법", size=10, exclude_categories=["test"])
+        results_filtered, total_filtered = esm.search_by_keyword_paged(
+            "마법", size=10, exclude_categories=["test"]
+        )
 
         # 필터링된 결과에는 "test" 카테고리 문서가 없어야 함
         for _, doc, _ in results_filtered:
-            assert doc["category"] != "test", f"제외된 카테고리 'test' 문서가 포함됨: {doc['title']}"
+            assert doc["category"] != "test", (
+                f"제외된 카테고리 'test' 문서가 포함됨: {doc['title']}"
+            )
 
         # 필터링된 total이 전체보다 작거나 같아야 함
         assert total_filtered <= total_all
@@ -396,10 +434,16 @@ class TestESManager:
         # "test"로 시작하는 카테고리를 가진 임시 데이터 삽입
         extra_data = {
             200: {
-                "category": "test/sub", "title": "하위 카테고리 마법 문서",
-                "author": "테스트", "file_path": "/test/sub.txt", "file_type": "txt",
-                "file_size": 500, "line_count": 50, "page_count": 0,
-                "isbn": "", "summary": "하위 카테고리 테스트.",
+                "category": "test/sub",
+                "title": "하위 카테고리 마법 문서",
+                "author": "테스트",
+                "file_path": "/test/sub.txt",
+                "file_type": "txt",
+                "file_size": 500,
+                "line_count": 50,
+                "page_count": 0,
+                "isbn": "",
+                "summary": "하위 카테고리 테스트.",
                 "updated_time": "2024-01-05T00:00:00",
             },
         }
@@ -407,10 +451,13 @@ class TestESManager:
         esm.refresh()
 
         try:
-            results, _ = esm.search_by_keyword_paged("마법", size=10, exclude_categories=["test"])
+            results, _ = esm.search_by_keyword_paged(
+                "마법", size=10, exclude_categories=["test"]
+            )
             for _, doc, _ in results:
-                assert not doc["category"].startswith("test"), \
+                assert not doc["category"].startswith("test"), (
                     f"'test' prefix 카테고리 문서가 포함됨: {doc['category']}"
+                )
         finally:
             esm.delete(200)
             esm.refresh()
@@ -418,8 +465,12 @@ class TestESManager:
     def test_keyword_paged_no_exclude_returns_all(self, es_manager_with_data):
         """exclude_categories가 None이면 모든 결과를 반환한다"""
         esm = es_manager_with_data
-        results_none, total_none = esm.search_by_keyword_paged("테스트", size=10, exclude_categories=None)
-        results_empty, total_empty = esm.search_by_keyword_paged("테스트", size=10, exclude_categories=[])
+        results_none, total_none = esm.search_by_keyword_paged(
+            "테스트", size=10, exclude_categories=None
+        )
+        results_empty, total_empty = esm.search_by_keyword_paged(
+            "테스트", size=10, exclude_categories=[]
+        )
         assert total_none == total_empty
 
     # ── search_similar_docs_paged 유사도 정규화 ──
@@ -440,7 +491,9 @@ class TestESManager:
         )
         if results:
             for doc_id, doc, score in results:
-                assert score < 100, f"Doc {doc_id} ({doc['title']})의 점수 {score}이 100이면 안 됨"
+                assert score < 100, (
+                    f"Doc {doc_id} ({doc['title']})의 점수 {score}이 100이면 안 됨"
+                )
 
     def test_similar_docs_paged_scores_in_range(self, es_manager_with_data):
         """유사 검색 점수는 0~100 범위다"""
@@ -458,25 +511,37 @@ class TestESManager:
         for doc_id, _, score in results:
             assert 0 <= score <= 100, f"Doc {doc_id} 점수 {score}가 범위 밖"
 
-    def test_similar_docs_paged_same_author_different_title_below_100(self, es_manager_with_data):
+    def test_similar_docs_paged_same_author_different_title_below_100(
+        self, es_manager_with_data
+    ):
         """같은 작가의 다른 제목 문서는 100점 미만이다 (세네카 사례)"""
         esm = es_manager_with_data
         # 추가 테스트 데이터 삽입: 같은 작가, 다른 제목
         extra_data = {
             100: {
-                "category": "test", "title": "세네카의 말",
+                "category": "test",
+                "title": "세네카의 말",
                 "author": "루키우스 안나이우스 세네카",
-                "file_path": "/test/seneca1.epub", "file_type": "epub",
-                "file_size": 5000, "line_count": 0, "page_count": 100,
-                "isbn": "", "summary": "세네카의 명언과 철학을 담은 책.",
+                "file_path": "/test/seneca1.epub",
+                "file_type": "epub",
+                "file_size": 5000,
+                "line_count": 0,
+                "page_count": 100,
+                "isbn": "",
+                "summary": "세네카의 명언과 철학을 담은 책.",
                 "updated_time": "2024-01-10T00:00:00",
             },
             101: {
-                "category": "test", "title": "세네카의 행복론",
+                "category": "test",
+                "title": "세네카의 행복론",
                 "author": "루키우스 안나이우스 세네카",
-                "file_path": "/test/seneca2.epub", "file_type": "epub",
-                "file_size": 6000, "line_count": 0, "page_count": 120,
-                "isbn": "", "summary": "행복에 관한 세네카의 철학 에세이.",
+                "file_path": "/test/seneca2.epub",
+                "file_type": "epub",
+                "file_size": 6000,
+                "line_count": 0,
+                "page_count": 120,
+                "isbn": "",
+                "summary": "행복에 관한 세네카의 철학 에세이.",
                 "updated_time": "2024-01-11T00:00:00",
             },
         }
@@ -901,7 +966,7 @@ class TestESManager:
             previous_doc["file_path"],
             previous_doc["file_type"],
             previous_doc["file_size"],
-            new_summary
+            new_summary,
         )
 
         # Verify update
@@ -946,6 +1011,7 @@ class TestESManagerEnvVars:
         with patch.dict(os.environ, self.REQUIRED_ENVS, clear=False):
             with patch("backend.es_manager.Elasticsearch"):
                 from backend.es_manager import ESManager
+
                 esm = ESManager()
                 assert esm.index_name == "test_idx"
 
@@ -954,23 +1020,25 @@ class TestESManagerEnvVars:
         with patch.dict(os.environ, self.REQUIRED_ENVS, clear=False):
             with patch("backend.es_manager.Elasticsearch"):
                 from backend.es_manager import ESManager
+
                 esm = ESManager(index_name="custom_index")
                 assert esm.index_name == "custom_index"
 
     def test_old_tm_es_index_not_used(self):
-        """이전 환경 변수 TM_ES_INDEX만 설정하면 KeyError가 발생한다."""
+        """이전 환경 변수 TM_ES_INDEX만 설정하면 SystemExit이 발생한다."""
         env = {
             "TM_ES_INDEX": "old_name",
             "TM_ES_URL": "http://localhost:9200",
             "TM_ES_USER": "elastic",
             "TM_ES_PASSWORD": "",
         }
-        # TM_ES_BOOK_INDEX가 없으므로 KeyError
+        # TM_ES_BOOK_INDEX가 없으므로 sys.exit(-1)
         cleaned = {k: v for k, v in os.environ.items() if k != "TM_ES_BOOK_INDEX"}
         cleaned.update(env)
         with patch.dict(os.environ, cleaned, clear=True):
             from backend.es_manager import ESManager
-            with pytest.raises(KeyError):
+
+            with pytest.raises(SystemExit):
                 ESManager()
 
     def test_comics_manager_uses_tm_es_comics_index(self):
@@ -983,6 +1051,7 @@ class TestESManagerEnvVars:
         with patch.dict(os.environ, env, clear=False):
             with patch("backend.es_manager.Elasticsearch"):
                 from backend.comics_manager import ComicsManager
+
                 cm = ComicsManager()
                 assert cm.es_manager.index_name == "my_comics"
 
@@ -994,6 +1063,7 @@ class TestESManagerEnvVars:
         with patch.dict(os.environ, cleaned, clear=True):
             with patch("backend.es_manager.Elasticsearch"):
                 from backend.comics_manager import ComicsManager
+
                 with pytest.raises(KeyError):
                     ComicsManager()
 

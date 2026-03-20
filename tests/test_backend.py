@@ -834,5 +834,92 @@ class TestUpdateBookConflict:
                 pass
 
 
+class TestAuthRefreshEndpoint:
+    """POST /auth/refresh 엔드포인트 통합 테스트"""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, backend_test_setup):
+        import backend.auth as auth_mod
+
+        self.auth_mod = auth_mod
+        self.client = backend_test_setup["client"]
+
+    def _get_unauthenticated_client(self, backend_test_setup):
+        from fastapi.testclient import TestClient
+        from backend.main import app
+
+        return TestClient(app)
+
+    def test_refresh_returns_new_access_token(self, backend_test_setup):
+        from backend.auth import create_refresh_token
+
+        refresh_token = create_refresh_token(
+            email=self.auth_mod.TM_ADMIN_EMAIL, role="admin"
+        )
+        client = self._get_unauthenticated_client(backend_test_setup)
+        response = client.post("/auth/refresh", json={"refresh_token": refresh_token})
+        assert response.status_code == 200
+        data = response.json()
+        assert "token" in data
+
+    def test_refresh_with_expired_token_returns_401(self, backend_test_setup):
+        import time
+        import jwt
+
+        expired_payload = {
+            "type": "refresh",
+            "email": self.auth_mod.TM_ADMIN_EMAIL,
+            "role": "admin",
+            "exp": int(time.time()) - 100,
+            "iat": int(time.time()) - 200,
+        }
+        from backend.auth import JWT_SECRET, JWT_ALGORITHM
+
+        token = jwt.encode(expired_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+        client = self._get_unauthenticated_client(backend_test_setup)
+        response = client.post("/auth/refresh", json={"refresh_token": token})
+        assert response.status_code == 401
+
+    def test_refresh_with_access_token_returns_401(self, backend_test_setup):
+        from backend.auth import create_jwt_token
+
+        access_token = create_jwt_token(
+            email=self.auth_mod.TM_ADMIN_EMAIL, role="admin"
+        )
+        client = self._get_unauthenticated_client(backend_test_setup)
+        response = client.post("/auth/refresh", json={"refresh_token": access_token})
+        assert response.status_code == 401
+
+    def test_refresh_without_token_returns_400(self, backend_test_setup):
+        client = self._get_unauthenticated_client(backend_test_setup)
+        response = client.post("/auth/refresh", json={})
+        assert response.status_code == 400
+
+    def test_refresh_with_unauthorized_email_returns_403(self, backend_test_setup):
+        from backend.auth import create_refresh_token
+
+        refresh_token = create_refresh_token(email="hacker@evil.com", role="admin")
+        client = self._get_unauthenticated_client(backend_test_setup)
+        response = client.post("/auth/refresh", json={"refresh_token": refresh_token})
+        assert response.status_code == 403
+
+    def test_refreshed_token_works_for_api_calls(self, backend_test_setup):
+        from backend.auth import create_refresh_token
+
+        refresh_token = create_refresh_token(
+            email=self.auth_mod.TM_ADMIN_EMAIL, role="admin"
+        )
+        client = self._get_unauthenticated_client(backend_test_setup)
+        response = client.post("/auth/refresh", json={"refresh_token": refresh_token})
+        new_token = response.json()["token"]
+        # 새 토큰으로 인증 필요한 API 호출
+        from fastapi.testclient import TestClient
+        from backend.main import app
+
+        auth_client = TestClient(app, headers={"Authorization": f"Bearer {new_token}"})
+        cat_response = auth_client.get("/categories")
+        assert cat_response.status_code == 200
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
