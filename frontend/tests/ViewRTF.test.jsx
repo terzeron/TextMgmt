@@ -92,4 +92,46 @@ describe('ViewRTF', () => {
             expect(screen.getByText(/RTF 렌더링에 실패했습니다/)).toBeTruthy();
         });
     });
+
+    it('렌더링된 HTML을 sanitize한다', async () => {
+        const mockElement = document.createElement('div');
+        mockElement.innerHTML = '<img src=x onerror=alert(1)><script>evil()</script><p>ok</p>';
+        mockRender.mockResolvedValue([mockElement]);
+        mockTextGetReq.mockImplementation((url, payload, resolve) => {
+            resolve('rtf content');
+        });
+
+        render(<ViewRTF bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('ok')).toBeTruthy();
+        });
+        expect(document.querySelector('script')).toBeNull();
+        expect(document.querySelector('[onerror]')).toBeNull();
+    });
+
+    it('dangerous href/src와 이벤트 핸들러를 제거한다', async () => {
+        const mockElement = document.createElement('div');
+        mockElement.innerHTML = `
+            <svg onload="alert(1)"></svg>
+            <a href="javascript:alert(1)">bad</a>
+            <img src="data:image/svg+xml,<svg onload=alert(1) />">
+            <p>safe</p>
+        `;
+        mockRender.mockResolvedValue([mockElement]);
+        mockTextGetReq.mockImplementation((url, payload, resolve) => {
+            resolve('rtf content');
+        });
+
+        render(<ViewRTF bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('safe')).toBeTruthy();
+        });
+        expect(document.querySelector('[onload]')).toBeNull();
+        const link = document.querySelector('a');
+        expect(link?.getAttribute('href') || '').not.toMatch(/^javascript:/i);
+        const img = document.querySelector('img');
+        expect(img?.getAttribute('src') || '').not.toMatch(/^data:image\/svg\+xml/i);
+    });
 });
