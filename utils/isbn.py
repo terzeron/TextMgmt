@@ -229,21 +229,19 @@ def extract_from_djvu(file_path: Path) -> List[str]:
 
 def extract_from_hwp(file_path: Path) -> List[str]:
     """HWP에서 ISBN 추출: head + tail로 앞뒤만 추출"""
-    size = str(HEAD_TAIL_SIZE)
-
-    # head -c 8192
-    head_result = subprocess.run(
-        f"strings '{file_path}' | head -c {size}",
-        shell=True, capture_output=True, text=True, errors="ignore"
-    )
-    # tail -c 8192
-    tail_result = subprocess.run(
-        f"strings '{file_path}' | tail -c {size}",
-        shell=True, capture_output=True, text=True, errors="ignore"
-    )
-
-    content = head_result.stdout + tail_result.stdout
-    return search_in_content(content) if content else []
+    size = HEAD_TAIL_SIZE
+    try:
+        result = subprocess.run(
+            ["strings", str(file_path)],
+            capture_output=True, text=True, errors="ignore"
+        )
+        if result.returncode != 0:
+            return []
+        text = result.stdout
+        content = text if len(text) <= size * 2 else text[:size] + text[-size:]
+        return search_in_content(content) if content else []
+    except FileNotFoundError:
+        return []
 
 
 def extract(file_path: Path, content: Optional[str] = None) -> List[str]:

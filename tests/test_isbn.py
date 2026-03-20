@@ -23,16 +23,16 @@ class TestISBNExtraction(unittest.TestCase):
 
         epub_path = Path(self.temp_dir) / "test_isbn.epub"
 
-        with zipfile.ZipFile(epub_path, 'w') as zf:
-            container_xml = '''<?xml version="1.0"?>
+        with zipfile.ZipFile(epub_path, "w") as zf:
+            container_xml = """<?xml version="1.0"?>
             <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
                 <rootfiles>
                     <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
                 </rootfiles>
-            </container>'''
-            zf.writestr('META-INF/container.xml', container_xml)
+            </container>"""
+            zf.writestr("META-INF/container.xml", container_xml)
 
-            content_opf = '''<?xml version="1.0"?>
+            content_opf = """<?xml version="1.0"?>
             <package xmlns="http://www.idpf.org/2007/opf" version="2.0">
                 <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
                     <dc:title>Test Book</dc:title>
@@ -44,9 +44,9 @@ class TestISBNExtraction(unittest.TestCase):
                 <spine>
                     <itemref idref="chapter1"/>
                 </spine>
-            </package>'''
-            zf.writestr('OEBPS/content.opf', content_opf)
-            zf.writestr('OEBPS/chapter1.xhtml', '<html><body><p>Chapter 1</p></body></html>')
+            </package>"""
+            zf.writestr("OEBPS/content.opf", content_opf)
+            zf.writestr("OEBPS/chapter1.xhtml", "<html><body><p>Chapter 1</p></body></html>")
 
         result = extract_from_epub(epub_path)
         assert len(result) > 0
@@ -59,16 +59,16 @@ class TestISBNExtraction(unittest.TestCase):
 
         epub_path = Path(self.temp_dir) / "test_isbn_chapter.epub"
 
-        with zipfile.ZipFile(epub_path, 'w') as zf:
-            container_xml = '''<?xml version="1.0"?>
+        with zipfile.ZipFile(epub_path, "w") as zf:
+            container_xml = """<?xml version="1.0"?>
             <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
                 <rootfiles>
                     <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
                 </rootfiles>
-            </container>'''
-            zf.writestr('META-INF/container.xml', container_xml)
+            </container>"""
+            zf.writestr("META-INF/container.xml", container_xml)
 
-            content_opf = '''<?xml version="1.0"?>
+            content_opf = """<?xml version="1.0"?>
             <package xmlns="http://www.idpf.org/2007/opf" version="2.0">
                 <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
                     <dc:title>Test Book</dc:title>
@@ -79,9 +79,9 @@ class TestISBNExtraction(unittest.TestCase):
                 <spine>
                     <itemref idref="chapter1"/>
                 </spine>
-            </package>'''
-            zf.writestr('OEBPS/content.opf', content_opf)
-            zf.writestr('OEBPS/chapter1.xhtml', '<html><body><p>ISBN: 978-89-98765-43-9</p></body></html>')
+            </package>"""
+            zf.writestr("OEBPS/content.opf", content_opf)
+            zf.writestr("OEBPS/chapter1.xhtml", "<html><body><p>ISBN: 978-89-98765-43-9</p></body></html>")
 
         result = extract_from_epub(epub_path)
         assert len(result) > 0
@@ -121,6 +121,72 @@ class TestISBNExtraction(unittest.TestCase):
             hwp_path.write_bytes(content)
             result = extract_from_hwp(hwp_path)
             assert isinstance(result, list)
+
+    def test_extract_from_hwp_isbn_found(self):
+        """HWP에서 ISBN이 정상 추출되는지 mock으로 테스트"""
+        from unittest.mock import patch, MagicMock
+        from utils.isbn import extract_from_hwp
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "Some text ISBN 978-89-12345-67-9 more text"
+
+        with patch("utils.isbn.subprocess.run", return_value=mock_result) as mock_run:
+            hwp_path = Path(self.temp_dir) / "test.hwp"
+            hwp_path.write_bytes(b"dummy")
+            result = extract_from_hwp(hwp_path)
+            mock_run.assert_called_once_with(["strings", str(hwp_path)], capture_output=True, text=True, errors="ignore")
+            assert result == ["9788912345679"]
+
+    def test_extract_from_hwp_returncode_nonzero(self):
+        """strings 명령이 실패(returncode != 0)하면 빈 리스트 반환"""
+        from unittest.mock import patch, MagicMock
+        from utils.isbn import extract_from_hwp
+
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+
+        with patch("utils.isbn.subprocess.run", return_value=mock_result):
+            hwp_path = Path(self.temp_dir) / "test.hwp"
+            hwp_path.write_bytes(b"dummy")
+            result = extract_from_hwp(hwp_path)
+            assert result == []
+
+    def test_extract_from_hwp_strings_not_found(self):
+        """strings 명령이 없을 때 FileNotFoundError → 빈 리스트"""
+        from unittest.mock import patch
+        from utils.isbn import extract_from_hwp
+
+        with patch("utils.isbn.subprocess.run", side_effect=FileNotFoundError):
+            hwp_path = Path(self.temp_dir) / "test.hwp"
+            hwp_path.write_bytes(b"dummy")
+            result = extract_from_hwp(hwp_path)
+            assert result == []
+
+    def test_extract_from_hwp_large_output_slicing(self):
+        """대용량 strings 출력이 head/tail 슬라이싱되는지 테스트"""
+        from unittest.mock import patch, MagicMock
+        from utils.isbn import extract_from_hwp, HEAD_TAIL_SIZE
+
+        head_isbn = "ISBN 978-89-12345-67-9 "
+        tail_isbn = " ISBN 978-89-98765-43-9"
+        # head 영역에 ISBN, 중간에 패딩, tail 영역에 ISBN
+        head_part = head_isbn + "a" * HEAD_TAIL_SIZE
+        middle_part = "b" * HEAD_TAIL_SIZE
+        tail_part = "c" * HEAD_TAIL_SIZE + tail_isbn
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = head_part + middle_part + tail_part
+
+        with patch("utils.isbn.subprocess.run", return_value=mock_result):
+            hwp_path = Path(self.temp_dir) / "large.hwp"
+            hwp_path.write_bytes(b"dummy")
+            result = extract_from_hwp(hwp_path)
+            # head[:size]에 head_isbn, tail[-size:]에 tail_isbn이 포함되어야 함
+            assert "9788912345679" in result
+            assert "9788998765439" in result
 
 
 class TestISBNByteBasedReading(unittest.TestCase):
@@ -266,8 +332,8 @@ class TestEpubEdgeCases(unittest.TestCase):
 
         # No OPF
         epub_path = Path(self.temp_dir) / "no_opf.epub"
-        with zipfile.ZipFile(epub_path, 'w') as zf:
-            zf.writestr('META-INF/container.xml', '<?xml version="1.0"?><container/>')
+        with zipfile.ZipFile(epub_path, "w") as zf:
+            zf.writestr("META-INF/container.xml", '<?xml version="1.0"?><container/>')
         assert extract_from_epub(epub_path) == []
 
         # Corrupted file
