@@ -2,6 +2,7 @@ import unittest, sys, os
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from bs4 import BeautifulSoup
+import backend.bookstore as bookstore
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -239,3 +240,391 @@ def test_save_and_load_html_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     store._save_html_to_tmp(html, url)
     loaded = store._load_html_from_tmp(url)
     assert loaded == html
+
+
+class BaseOnlyBookstore(AbstractBookstore):
+    BASE_URL = "https://base.example.com"
+
+    def build_search_url(self, keyword: str) -> str:
+        return f"{self.BASE_URL}/search?q={keyword}"
+
+    def extract_search_links(self, soup: BeautifulSoup):
+        return []
+
+    def extract_book_info(self, soup: BeautifulSoup):
+        return {}
+
+
+def test_base_build_isbn_search_and_empty_search(monkeypatch: pytest.MonkeyPatch):
+    store = BaseOnlyBookstore(verbose=True)
+    assert store.build_isbn_search_url("123") == store.build_search_url("123")
+    results, keyword, method = store.search()
+    assert results == []
+    assert keyword == ""
+    assert method == "unknown"
+    assert store.search_by_isbn("123") == []
+
+
+def test_fetch_search_results_threaded_cache_miss(monkeypatch: pytest.MonkeyPatch):
+    store = DummyBookstore(verbose=True)
+    store.MAX_RESULTS = 2
+
+    class SearchResp:
+        def __init__(self, text: str):
+            self.text = text
+            self.encoding = "utf-8"
+
+    def fake_search_get(*args, **kwargs):
+        return SearchResp("<html></html>")
+
+    monkeypatch.setattr(store.session, "get", fake_search_get)
+    monkeypatch.setattr(store, "extract_search_links", lambda soup: ["https://example.com/detail/1", "https://example.com/detail/2"])
+    monkeypatch.setattr(store, "_load_html_from_tmp", lambda url: None)
+
+    saved = {"count": 0}
+
+    def fake_save(html: str, url: str):
+        saved["count"] += 1
+
+    monkeypatch.setattr(store, "_save_html_to_tmp", fake_save)
+
+    class DetailResp:
+        def __init__(self, text: str):
+            self.text = text
+            self.encoding = "utf-8"
+
+    class DetailSession:
+        def __init__(self):
+            self.headers = {}
+            self.cookies = {}
+
+        def get(self, url, timeout=10, verify=True):
+            if url.endswith("/1"):
+                return DetailResp("<html><h1>T</h1><span class='author'>A</span><p class='category'>A > B > C > D</p><p class='isbn'>I</p></html>")
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(bookstore.requests, "Session", DetailSession)
+
+    results = store._fetch_search_results("https://example.com/search?q=x")
+    assert results == [("T", "A", "A > B > C", "https://example.com/detail/1", "https://example.com/search?q=x", "I")]
+    assert saved["count"] == 1
+
+
+def test_save_and_load_html_cache_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    store = DummyBookstore(verbose=True)
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+
+    def bad_open(*args, **kwargs):
+        raise OSError("nope")
+
+    monkeypatch.setattr("builtins.open", bad_open)
+    store._save_html_to_tmp("<html></html>", "https://example.com/detail/1")
+
+    def bad_exists(*args, **kwargs):
+        raise OSError("nope")
+
+    monkeypatch.setattr("os.path.exists", bad_exists)
+    assert store._load_html_from_tmp("https://example.com/detail/1") is None
+
+
+def test_yes24_primary_links_and_info_extraction():
+    store = Yes24Bookstore(verbose=True)
+    html = """
+    <html>
+      <ul id="yesSchList">
+        <li><div class="itemUnit"><div class="item_info"><div class="info_row info_name">
+          <a class="gd_name" href="/product/goods/999">Book</a>
+        </div></div></div></li>
+      </ul>
+      <h2 class="gd_name">Yes Title</h2>
+      <span class="gd_auth"><a>Yes Author</a></span>
+      <div>관련분류 <a href="/product/category/display/1">A</a> <a href="/product/category/display/2">B</a></div>
+      <div>ISBN13 1234567890123</div>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    links = store.extract_search_links(soup)
+    assert links == ["https://www.yes24.com/product/goods/999"]
+    info = store.extract_book_info(soup)
+    assert info["title"] == "Yes Title"
+    assert info["author"] == "Yes Author"
+    assert info["category"] == "A > B"
+    assert info["isbn"] == "1234567890123"
+    assert "query=hello" in store.build_search_url("hello")
+    assert "query=999" in store.build_isbn_search_url("999")
+
+
+def test_yes24_category_and_isbn_exception_paths():
+    store = Yes24Bookstore(verbose=False)
+
+    class BadSoup:
+        def find_all(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
+    class BadText:
+        def get_text(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
+    assert store._extract_yes24_category(BadSoup()) == ""
+    assert store._extract_yes24_isbn(BadText()) == ""
+
+
+def test_aladin_extract_links_and_isbn_paths():
+    store = AladinBookstore(verbose=True)
+    html = """
+    <html>
+      <div id="Search3_Result">
+        <a href="/shop/wproduct.aspx?ItemId=1">A</a>
+        <a href="/shop/wproduct.aspx?ItemId=1">A</a>
+        <a href="/shop/wproduct.aspx?ItemId=2_CommentReview">R</a>
+        <a href="/shop/wproduct.aspx?ItemId=3">B</a>
+      </div>
+      <div id="Ere_prod_allwrap">
+        <div class="Ere_prod_mconts_R">
+          <div class="conts_info_list1">
+            <ul><li>ISBN 9781234567890</li></ul>
+          </div>
+        </div>
+      </div>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    links = store.extract_search_links(soup)
+    assert links == [
+        "https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=1",
+        "https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=3",
+    ]
+    assert store._extract_aladin_isbn(soup) == "9781234567890"
+
+
+def test_aladin_isbn_fallback_and_exception():
+    store = AladinBookstore(verbose=False)
+    html = """
+    <html>
+      <div id="Ere_prod_allwrap">
+        <div class="Ere_prod_middlewrap">
+          <div class="Ere_prod_mconts_R">
+            <ul><li>기타 ISBN 1234567890123</li></ul>
+          </div>
+        </div>
+      </div>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    assert store._extract_aladin_isbn(soup) == "1234567890123"
+
+    class BadSoup:
+        def select(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
+    assert store._extract_aladin_isbn(BadSoup()) == ""
+
+
+def test_ridibooks_search_empty_and_exception(monkeypatch: pytest.MonkeyPatch):
+    store = RidibooksBookstore(verbose=True)
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"books": []}
+
+    monkeypatch.setattr(store.session, "get", lambda *a, **k: Resp())
+    assert store.search_by_keyword("k") == []
+
+    def raise_get(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(store.session, "get", raise_get)
+    assert store.search_by_keyword("k") == []
+
+
+def test_ridibooks_search_success_and_extract():
+    store = RidibooksBookstore(verbose=True)
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "books": [
+                    {
+                        "b_id": "1",
+                        "title": "T1",
+                        "author": "A1",
+                        "parent_category_name": "P1",
+                        "category_name": "C1",
+                        "parent_category_name2": "P2",
+                        "category_name2": "C2",
+                    },
+                    {
+                        "b_id": "2",
+                        "title": "T2",
+                        "author": "A2",
+                        "parent_category_name": "",
+                        "category_name": "C3",
+                        "parent_category_name2": "",
+                        "category_name2": "C4",
+                    },
+                ]
+            }
+
+    store.session.get = lambda *a, **k: Resp()
+    results = store.search_by_keyword("keyword")
+    assert results == [
+        ("T1", "A1", "P1 > C1 || P2 > C2", "https://ridibooks.com/books/1", store.build_search_url("keyword"), ""),
+        ("T2", "A2", "C3 || C4", "https://ridibooks.com/books/2", store.build_search_url("keyword"), ""),
+    ]
+
+    html = """
+    <html>
+      <meta property="og:title" content="R Title" />
+      <div id="ISLANDS__Header"><ul><li><li>저자 홍길동</li></li></ul></div>
+      <section id="books_contents"><section class="detail_body"><ul>
+        <li><a href="/category/1">A</a><a href="/category/2">B</a></li>
+      </ul></section></section>
+      <div>ISBN</div><div>1234567890123</div>
+    </html>
+    """
+    info = store.extract_book_info(BeautifulSoup(html, "html.parser"))
+    assert info["title"] == "R Title"
+    assert info["author"] == "홍길동"
+    assert info["category"] == "A > B"
+    assert info["isbn"] == "1234567890123"
+
+
+def test_ridibooks_isbn_exception():
+    store = RidibooksBookstore(verbose=False)
+
+    class BadSoup:
+        def find_all(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
+    assert store._extract_ridi_isbn(BadSoup()) == ""
+
+
+def test_naver_shopping_links_and_extract():
+    store = NaverShoppingBookstore(verbose=True)
+    data = {
+        "props": {
+            "pageProps": {
+                "dehydratedState": {
+                    "queries": [
+                        {
+                            "queryKey": ["SearchAll"],
+                            "state": {"data": {"SearchAll": {"bookSasResult": {"itemList": [{"id": "1"}, {"id": "2"}]}}}},
+                        }
+                    ]
+                }
+            }
+        }
+    }
+    html = f"<html><script>{json.dumps(data)}</script></html>"
+    soup = BeautifulSoup(html, "html.parser")
+    links = store.extract_search_links(soup)
+    assert links == [
+        "https://search.shopping.naver.com/book/catalog/1",
+        "https://search.shopping.naver.com/book/catalog/2",
+    ]
+
+    detail_html = """
+    <html>
+      <h2 class="bookTitle_book_name__abc">N Title</h2>
+      <div class="bookTitle_info_title__x">저자</div>
+      <div class="bookTitle_info_content__y">N Author</div>
+      <div class="bookCatalogTop_breadcrumb__z">A > B</div>
+    </html>
+    """
+    info = store.extract_book_info(BeautifulSoup(detail_html, "html.parser"))
+    assert info["title"] == "N Title"
+    assert info["author"] == "N Author"
+    assert info["category"] == "A > B"
+
+
+def test_naver_shopping_items_not_list():
+    store = NaverShoppingBookstore(verbose=False)
+    data = {
+        "props": {
+            "pageProps": {
+                "dehydratedState": {
+                    "queries": [
+                        {
+                            "queryKey": ["SearchAll"],
+                            "state": {"data": {"SearchAll": {"bookSasResult": {"itemList": {}}}}},
+                        }
+                    ]
+                }
+            }
+        }
+    }
+    html = f"<html><script>{json.dumps(data)}</script></html>"
+    soup = BeautifulSoup(html, "html.parser")
+    assert store.extract_search_links(soup) == []
+
+
+def test_munpia_links_and_meta_desc():
+    store = MunpiaBookstore(verbose=True)
+    html = """
+    <html>
+      <div id="SEARCH-BOX" class="section2">
+        <div class="ebook_lists">
+          <div class="article_wrap">
+            <div class="article">
+              <dl class="detail"><dt><a href="/view/1">A</a></dt></dl>
+              <dl class="detail"><dt><a>Missing</a></dt></dl>
+              <dl class="detail"><dt><a href="https://novel.munpia.com/view/2">B</a></dt></dl>
+            </div>
+          </div>
+        </div>
+      </div>
+      <meta property="og:description" content="홍길동 - 설명" />
+      <p class="meta-path">A > B</p>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    links = store.extract_search_links(soup)
+    assert links == [
+        "https://novel.munpia.com/view/1",
+        "https://novel.munpia.com/view/2",
+    ]
+    info = store.extract_book_info(soup)
+    assert info["author"] == "홍길동"
+    assert info["category"] == "A > B"
+    assert store.build_search_url("a b").endswith("a%20b/order/search_result")
+
+
+def test_naver_series_links_and_authors():
+    store = NaverSeriesBookstore(verbose=True)
+    html = """
+    <html>
+      <title>Series Title</title>
+      <ul class="lst_list">
+        <li><a class="N=a:nov.title" href="/novel/1">A</a></li>
+        <li><a class="N=a:com.title" href="/comic/2">B</a></li>
+      </ul>
+      <div id="_otherProductByPerson"><strong>작가</strong><strong>홍길동</strong></div>
+      <div id="content"><ul class="end_info"><li class="info_lst"><ul><li><span><a>장르</a></span></li></ul></li></ul></div>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    links = store.extract_search_links(soup)
+    assert links == [
+        "https://series.naver.com/novel/1",
+        "https://series.naver.com/comic/2",
+    ]
+    info = store.extract_book_info(soup)
+    assert info["title"] == "Series Title"
+    assert info["author"] == "홍길동"
+    assert info["category"] == "장르"
+    assert store.build_search_url("hello").endswith("q=hello")
+
+
+def test_naver_series_meta_og_fallback():
+    store = NaverSeriesBookstore(verbose=False)
+    html = """
+    <html>
+      <meta property="og:description" content="작가: 김작가」" />
+    </html>
+    """
+    info = store.extract_book_info(BeautifulSoup(html, "html.parser"))
+    assert info["author"] == "김작가"
