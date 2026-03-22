@@ -149,6 +149,10 @@ class DummyBookstore(AbstractBookstore):
         return {"title": title, "author": author, "category": category, "isbn": isbn}
 
 
+class DummyNoIsbnBookstore(DummyBookstore):
+    SUPPORTS_ISBN_SEARCH = False
+
+
 def test_truncate_title_variants():
     store = DummyBookstore(verbose=False)
     assert store._truncate_title("A - B") == "A"
@@ -216,3 +220,22 @@ def test_fetch_search_results_request_error(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(store.session, "get", raise_get)
     assert store._fetch_search_results("https://example.com/search?q=x") == []
+
+
+def test_search_isbn_not_supported(monkeypatch: pytest.MonkeyPatch):
+    store = DummyNoIsbnBookstore(verbose=False)
+    monkeypatch.setattr(store, "search_by_keyword", lambda keyword: [("t", "a", "c", "u", "s", "i")])
+    results, keyword, method = store.search(isbn="123", title="title", author="author")
+    assert method == "title_author"
+    assert keyword == "author title"
+    assert results
+
+
+def test_save_and_load_html_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    store = DummyBookstore(verbose=False)
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    url = "https://example.com/detail/1"
+    html = "<html>ok</html>"
+    store._save_html_to_tmp(html, url)
+    loaded = store._load_html_from_tmp(url)
+    assert loaded == html

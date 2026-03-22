@@ -106,6 +106,9 @@ class DummyES:
     def delete_by_query(self, index: str, body: Dict[str, Any] | None = None, conflicts="abort", refresh=False, query: Dict[str, Any] | None = None):
         return {"deleted": 2, "failures": []}
 
+    def delete_by_query_raises(self, *args, **kwargs):
+        raise RuntimeError("fail")
+
     def update_by_query(self, index: str, query: Dict[str, Any], script: Dict[str, Any], conflicts="abort", refresh=False):
         return {"updated": 4, "failures": []}
 
@@ -225,3 +228,91 @@ def test_aggregate_grouped_delete_insert_update_counts():
     assert manager.rename_category("A", "B") == {"updated": 4, "failures": []}
     assert manager.delete_by_category("A", prefix=True) == {"deleted": 2, "failures": []}
     assert manager.delete(1) is True
+
+
+def test_search_by_keyword_paged_with_exclude_categories():
+    es = DummyES()
+    manager = make_manager(es)
+
+    called = {}
+
+    def fake_search_paged(query, size=10, offset=0, sort=None, ref_score=0.0):
+        called["query"] = query
+        return ([(1, {"a": 1}, 10.0)], 1)
+
+    manager._search_paged = fake_search_paged
+    results, total = manager.search_by_keyword_paged("kw", size=5, offset=1, exclude_categories=["A", "B"])
+    assert total == 1
+    assert results
+    must_not = called["query"]["bool"]["must_not"]
+    assert {"prefix": {"category": "A"}} in must_not
+    assert {"prefix": {"category": "B"}} in must_not
+
+
+def test_search_similar_docs_paged_without_exclude():
+    es = DummyES()
+    manager = make_manager(es)
+
+    def fake_search_paged(query, size=10, offset=0, sort=None, ref_score=0.0):
+        return ([(1, {"a": 1}, 10.0)], 2)
+
+    manager._search_paged = fake_search_paged
+    results, total = manager.search_similar_docs_paged(title="t", author="a", summary="s", file_size=10, exclude_id=None, size=10, offset=0)
+    assert total == 2
+    assert results
+
+
+def test_search_paged_with_zero_score():
+    es = DummyES()
+    manager = make_manager(es)
+
+    class DummyZeroScoreES(DummyES):
+        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None):
+            return {"hits": {"total": {"value": 1}, "max_score": 0, "hits": [{"_id": "1", "_source": {"a": 1}, "_score": 0}]}}
+
+    manager.es = DummyZeroScoreES()
+    results, total = manager._search_paged({"match": {"title": "a"}}, size=10, offset=0)
+    assert results == []
+    assert total == 1
+
+
+def test_get_existing_ids_and_paths_empty():
+    es = DummyES()
+    manager = make_manager(es)
+    assert manager.get_existing_ids([]) == set()
+    assert manager.get_existing_paths([]) == {}
+
+
+def test_delete_index_when_exists(monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(es)
+    monkeypatch.setattr(manager, "do_exist_index", lambda: True)
+    manager.delete_index()
+    assert es.indices.deleted is True
+
+
+def test_get_mappings_when_missing(monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(es)
+    monkeypatch.setattr(manager, "do_exist_index", lambda: False)
+    assert manager.get_mappings() == {}
+
+
+def test_update_success_and_delete_by_file_paths_empty():
+    es = DummyES()
+
+    class DummySuccessES(DummyES):
+        def update(self, index: str, id: str, body: Dict[str, Any], refresh=True):
+            return {"_shards": {"failed": 0}}
+
+    manager = make_manager(es)
+    manager.es = DummySuccessES()
+    assert manager.update(1, title="t") is True
+    assert manager.delete_by_file_paths([]) == 0
+
+
+def test_count_by_categories_single(monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(es)
+    monkeypatch.setattr(manager, "count_by_category", lambda category, prefix=False: 7)
+    assert manager.count_by_categories(["A"]) == {"A": 7}

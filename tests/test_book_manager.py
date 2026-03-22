@@ -399,6 +399,7 @@ class DummyES:
         self.similar = []
         self.similar_paged = ([], 0)
         self.deleted_by_category = {"deleted": 2, "failures": []}
+        self.keyword_paged = ([], 0)
 
     def search_by_id(self, book_id: int):
         return self.doc
@@ -442,6 +443,9 @@ class DummyES:
 
     def search_similar_docs_paged(self, *args, **kwargs):
         return self.similar_paged
+
+    def search_by_keyword_paged(self, *args, **kwargs):
+        return self.keyword_paged
 
 
 def make_manager(tmp_path: Path, es: DummyES | dict | None) -> BookManager:
@@ -626,6 +630,16 @@ def test_category_mismatches_cache_and_details(tmp_path: Path):
     assert details["fs_count"] >= 1
 
 
+def test_category_mismatch_details_root(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    root_file = tmp_path / "root.txt"
+    root_file.write_text("x")
+    es.category_docs = [(root_file.stat().st_ino, make_doc("root.txt"), 1.0)]
+    details = manager.get_category_mismatch_details("_root")
+    assert details["fs_count"] >= 1
+
+
 def asyncio_runner(coro):
     import asyncio
     return asyncio.run(coro)
@@ -773,6 +787,117 @@ def test_validate_pdf_success_and_open_error(tmp_path: Path, monkeypatch: pytest
     assert err and "Failed to open PDF" in err
 
 
+def test_validate_epub_not_found_and_missing_file(tmp_path: Path):
+    manager = make_manager(tmp_path, DummyES())
+    manager.es_manager.search_by_id = lambda _id: None
+    result, err = asyncio_runner(manager.validate_epub(1))
+    assert result is None
+    assert "Book not found" in err
+
+    doc = make_doc("missing.epub", "epub")
+    manager.es_manager.search_by_id = lambda _id: doc
+    result, err = asyncio_runner(manager.validate_epub(1))
+    assert result is None
+    assert "File not found" in err
+
+
+def test_validate_epub_not_installed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    epub = tmp_path / "a.epub"
+    epub.write_text("x")
+    doc = make_doc("a.epub", "epub")
+    manager = make_manager(tmp_path, doc)
+
+    async def raise_not_found(*args, **kwargs):
+        raise FileNotFoundError()
+
+    monkeypatch.setattr("backend.book_manager.asyncio.create_subprocess_exec", raise_not_found)
+    result, err = asyncio_runner(manager.validate_epub(1))
+    assert result is None
+    assert "not installed" in err
+
+
+def test_validate_epub_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    epub = tmp_path / "b.epub"
+    epub.write_text("x")
+    doc = make_doc("b.epub", "epub")
+    manager = make_manager(tmp_path, doc)
+
+    class DummyProc:
+        def __init__(self):
+            self.returncode = 1
+            self.killed = False
+
+        async def communicate(self):
+            return b"", b""
+
+        def kill(self):
+            self.killed = True
+
+        async def wait(self):
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return DummyProc()
+
+    def raise_timeout(coro, *args, **kwargs):
+        try:
+            coro.close()
+        except Exception:
+            pass
+        raise asyncio.TimeoutError()
+
+    import asyncio
+    monkeypatch.setattr("backend.book_manager.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("backend.book_manager.asyncio.wait_for", raise_timeout)
+    result, err = asyncio_runner(manager.validate_epub(1))
+    assert result is None
+    assert "timed out" in err
+
+
+def test_validate_epub_parse_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    epub = tmp_path / "c.epub"
+    epub.write_text("x")
+    doc = make_doc("c.epub", "epub")
+    manager = make_manager(tmp_path, doc)
+
+    class DummyProc:
+        def __init__(self):
+            self.returncode = 1
+
+        async def communicate(self):
+            return b"", b""
+
+        def kill(self):
+            return None
+
+        async def wait(self):
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        json_path = args[3]
+        Path(json_path).write_text("{bad", encoding="utf-8")
+        return DummyProc()
+
+    monkeypatch.setattr("backend.book_manager.asyncio.create_subprocess_exec", fake_exec)
+    result, err = asyncio_runner(manager.validate_epub(1))
+    assert result is None
+    assert "Failed to parse epubcheck output" in err
+
+
+def test_validate_pdf_wrong_type_and_missing_file(tmp_path: Path):
+    doc = make_doc("a.txt", "txt")
+    manager = make_manager(tmp_path, doc)
+    result, err = asyncio_runner(manager.validate_pdf(1))
+    assert result is None
+    assert "Not a PDF" in err
+
+    doc2 = make_doc("missing.pdf", "pdf")
+    manager2 = make_manager(tmp_path, doc2)
+    result, err = asyncio_runner(manager2.validate_pdf(1))
+    assert result is None
+    assert "File not found" in err
+
+
 # ---- merged from test_book_manager_preview_extra.py ----
 
 
@@ -879,6 +1004,29 @@ def test_search_similar_books_paged_and_add_book(tmp_path: Path):
 
     result, err = asyncio_runner(manager.add_book({1: make_doc("a.txt")}))
     assert result == 1 and err is None
+
+
+def test_search_by_keyword_paged(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.keyword_paged = ([(1, make_doc("a.txt"), 1.0)], 1)
+    books, total, err = asyncio_runner(manager.search_by_keyword_paged("k", size=10, offset=0))
+    assert total == 1
+    assert books and err is None
+
+    es.keyword_paged = ([], 0)
+    books, total, err = asyncio_runner(manager.search_by_keyword_paged("k", size=10, offset=0))
+    assert books == []
+    assert total == 0
+
+
+def test_delete_book_when_missing_doc(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: None
+    status, msg = asyncio_runner(manager.delete_book(1))
+    assert status == "Ok"
+    assert msg is None
 
 
 def test_rename_delete_category_errors(tmp_path: Path):
