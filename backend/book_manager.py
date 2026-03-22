@@ -18,9 +18,7 @@ from fastapi.responses import FileResponse, Response
 from backend.es_manager import ESManager
 from backend.book import Book
 
-logging.config.fileConfig(
-    Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False
-)
+logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
@@ -52,7 +50,7 @@ class BookManager:
     def _validate_preview_epub(cache_file: Path) -> Tuple[bool, Optional[str]]:
         """생성된 미리보기 EPUB의 구조적 유효성을 검증하고 경미한 문제는 자동 수정한다."""
         import zipfile
-        from lxml import etree
+        from lxml import etree  # type: ignore[attr-defined]
         from posixpath import normpath, join as pjoin, dirname
 
         opf_ns = "http://www.idpf.org/2007/opf"
@@ -102,10 +100,7 @@ class BookManager:
                 for ref in spine_refs:
                     idref = ref.get("idref", "")
                     if idref not in manifest:
-                        LOGGER.warning(
-                            "EPUB validate: spine idref '%s' not in manifest, removing",
-                            idref,
-                        )
+                        LOGGER.warning("EPUB validate: spine idref '%s' not in manifest, removing", idref)
                         spine_el.remove(ref)
                         needs_rewrite = True
 
@@ -115,11 +110,7 @@ class BookManager:
                     href = manifest.get(idref, "")
                     zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
                     if zp not in names:
-                        LOGGER.warning(
-                            "EPUB validate: spine item '%s' (href=%s) not in ZIP, removing",
-                            idref,
-                            href,
-                        )
+                        LOGGER.warning("EPUB validate: spine item '%s' (href=%s) not in ZIP, removing", idref, href)
                         spine_el.remove(ref)
                         # manifest XML 및 dict에서도 제거
                         for item in list(manifest_el.findall(f"{{{opf_ns}}}item")):
@@ -138,51 +129,29 @@ class BookManager:
                 toc_id = spine_el.get("toc", "")
                 if toc_id:
                     if toc_id not in manifest:
-                        LOGGER.warning(
-                            "EPUB validate: toc='%s' not in manifest, removing toc attribute",
-                            toc_id,
-                        )
+                        LOGGER.warning("EPUB validate: toc='%s' not in manifest, removing toc attribute", toc_id)
                         del spine_el.attrib["toc"]
                         needs_rewrite = True
                     else:
                         toc_href = manifest[toc_id]
-                        toc_zp = (
-                            normpath(pjoin(opf_dir, toc_href))
-                            if opf_dir
-                            else normpath(toc_href)
-                        )
+                        toc_zp = normpath(pjoin(opf_dir, toc_href)) if opf_dir else normpath(toc_href)
                         if toc_zp not in names:
-                            LOGGER.warning(
-                                "EPUB validate: toc NCX '%s' not in ZIP, removing toc attribute",
-                                toc_zp,
-                            )
+                            LOGGER.warning("EPUB validate: toc NCX '%s' not in ZIP, removing toc attribute", toc_zp)
                             del spine_el.attrib["toc"]
                             needs_rewrite = True
 
                 # 8) 필요 시 OPF 재작성
                 if needs_rewrite:
                     LOGGER.info("EPUB validate: rewriting OPF in %s", cache_file.name)
-                    modified_opf = (
-                        '<?xml version="1.0" encoding="UTF-8"?>\n'
-                        + etree.tostring(opf, encoding="unicode")
-                    )
+                    modified_opf = '<?xml version="1.0" encoding="UTF-8"?>\n' + etree.tostring(opf, encoding="unicode")
                     # ZIP 내 OPF만 교체 (다른 파일 보존)
                     tmp_path = cache_file.with_suffix(".tmp")
-                    with (
-                        zipfile.ZipFile(str(cache_file), "r") as zin_r,
-                        zipfile.ZipFile(
-                            str(tmp_path), "w", zipfile.ZIP_DEFLATED
-                        ) as zout,
-                    ):
+                    with zipfile.ZipFile(str(cache_file), "r") as zin_r, zipfile.ZipFile(str(tmp_path), "w", zipfile.ZIP_DEFLATED) as zout:
                         for name in zin_r.namelist():
                             if name == opf_path:
                                 zout.writestr(name, modified_opf)
                             elif name == "mimetype":
-                                zout.writestr(
-                                    name,
-                                    zin_r.read(name),
-                                    compress_type=zipfile.ZIP_STORED,
-                                )
+                                zout.writestr(name, zin_r.read(name), compress_type=zipfile.ZIP_STORED)
                             else:
                                 zout.writestr(name, zin_r.read(name))
                     tmp_path.replace(cache_file)
@@ -225,23 +194,21 @@ class BookManager:
     def _find_opf_path(zin) -> str:
         """ZIP 내 OPF 파일 경로를 찾는다. container.xml → regex 폴백 → 직접 탐색 순으로 시도."""
         import re
-        from lxml import etree
+        from lxml import etree  # type: ignore[attr-defined]
 
         cnt_ns = "urn:oasis:names:tc:opendocument:xmlns:container"
         # 1) container.xml에서 OPF 경로 추출
         try:
             container_xml = zin.read("META-INF/container.xml")
             try:
-                container = etree.fromstring(
-                    container_xml, etree.XMLParser(recover=True)
-                )
+                container = etree.fromstring(container_xml, etree.XMLParser(recover=True))
                 rootfile = container.find(f".//{{{cnt_ns}}}rootfile")
                 if rootfile is not None:
                     opf_path = rootfile.get("full-path", "")
                     if opf_path:
                         return opf_path
-            except Exception:
-                pass
+            except Exception as e:
+                LOGGER.debug("XML parsing failed, falling back to regex: %s", e)
             # XML 파싱 실패 시 regex 폴백
             m = re.search(rb'full-path=["\']([^"\']+)', container_xml)
             if m:
@@ -260,7 +227,7 @@ class BookManager:
     def _get_epub_total_chapters(file_path: Path) -> int:
         """EPUB 파일의 총 챕터 수(spine itemref 수)를 반환"""
         import zipfile
-        from lxml import etree
+        from lxml import etree  # type: ignore[attr-defined]
 
         try:
             with zipfile.ZipFile(str(file_path), "r") as zin:
@@ -268,9 +235,7 @@ class BookManager:
                 if not opf_path:
                     return 0
                 opf_ns = "http://www.idpf.org/2007/opf"
-                opf = etree.fromstring(
-                    zin.read(opf_path), etree.XMLParser(recover=True)
-                )
+                opf = etree.fromstring(zin.read(opf_path), etree.XMLParser(recover=True))
                 spine_el = opf.find(f".//{{{opf_ns}}}spine")
                 if spine_el is None:
                     return 0
@@ -284,19 +249,7 @@ class BookManager:
         """LibreOffice를 사용하여 파일을 변환하고 결과 텍스트를 반환"""
         lo_bin = BookManager._find_libreoffice()
         with tempfile.TemporaryDirectory() as tmpdir:
-            proc = subprocess.run(
-                [
-                    lo_bin,
-                    "--headless",
-                    "--convert-to",
-                    output_format,
-                    "--outdir",
-                    tmpdir,
-                    str(file_path),
-                ],
-                capture_output=True,
-                timeout=60,
-            )
+            proc = subprocess.run([lo_bin, "--headless", "--convert-to", output_format, "--outdir", tmpdir, str(file_path)], capture_output=True, timeout=60)
             ext = output_format.split(":")[0]
             out_file = Path(tmpdir) / (file_path.stem + "." + ext)
             if out_file.exists():
@@ -307,21 +260,12 @@ class BookManager:
                 return out_files[0].read_text(encoding="utf-8", errors="replace")
             # 변환 결과 없음 — 진단 로그
             all_files = list(Path(tmpdir).iterdir())
-            LOGGER.error(
-                "LibreOffice produced no output: file='%s', format='%s', "
-                "returncode=%d, stderr=%s, tmpdir_files=%s",
-                file_path,
-                output_format,
-                proc.returncode,
-                proc.stderr.decode("utf-8", errors="replace")[:500],
-                [f.name for f in all_files],
-            )
+            LOGGER.error("LibreOffice produced no output: file='%s', format='%s', returncode=%d, stderr=%s, tmpdir_files=%s", file_path, output_format, proc.returncode, proc.stderr.decode("utf-8", errors="replace")[:500], [f.name for f in all_files])
         return ""
 
     def __init__(self) -> None:
         if "TM_BOOK_DIR" not in os.environ:
-            LOGGER.error("The environment variable TM_BOOK_DIR is not set.")
-            sys.exit(-1)
+            raise RuntimeError("The environment variable TM_BOOK_DIR is not set.")
 
         self.path_prefix = Path(os.environ["TM_BOOK_DIR"])
         LOGGER.debug(self.path_prefix)
@@ -339,17 +283,10 @@ class BookManager:
         categories = self.es_manager.search_and_aggregate_by_category()
         return categories, None
 
-    async def get_books_in_category(
-        self, category: str
-    ) -> Tuple[List[Book], Optional[str]]:
-        doc_list = self.es_manager.search_by_category(
-            category, max_result_count=sys.maxsize
-        )
+    async def get_books_in_category(self, category: str) -> Tuple[List[Book], Optional[str]]:
+        doc_list = self.es_manager.search_by_category(category, max_result_count=sys.maxsize)
         if doc_list and len(doc_list) > 0:
-            return [
-                self.item_class(book_id=book_id, info=doc)
-                for book_id, doc, _score in doc_list
-            ], None
+            return [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in doc_list], None
         return [], f"No books found in '{category}'"
 
     async def get_book(self, book_id: int) -> Tuple[Optional[Book], Optional[str]]:
@@ -359,9 +296,7 @@ class BookManager:
             return self.item_class(book_id=book_id, info=doc), None
         return None, f"No book found by '{book_id}'"
 
-    async def validate_epub(
-        self, book_id: int
-    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    async def validate_epub(self, book_id: int) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         """epubcheck를 실행하여 EPUB 파일의 구조적 유효성을 검증한다."""
         import asyncio
         import json as json_mod
@@ -380,32 +315,24 @@ class BookManager:
         # 임시 파일에 JSON 출력 (stdout에 상태 메시지가 섞이는 문제 방지)
         fd, json_path = tempfile.mkstemp(suffix=".json")
         os.close(fd)
+        proc = None
         try:
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    "epubcheck",
-                    str(book.file_path),
-                    "--json",
-                    json_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
+                proc = await asyncio.create_subprocess_exec("epubcheck", str(book.file_path), "--json", json_path, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                 await asyncio.wait_for(proc.communicate(), timeout=60)
             except FileNotFoundError:
                 return None, "epubcheck is not installed"
             except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+                if proc is not None:
+                    proc.kill()
+                    await proc.wait()
                 return None, "epubcheck timed out (60s)"
 
             try:
                 with open(json_path, "r", encoding="utf-8") as f:
                     data = json_mod.load(f)
             except (json_mod.JSONDecodeError, OSError) as e:
-                return (
-                    None,
-                    f"Failed to parse epubcheck output (exit_code={proc.returncode}): {e}",
-                )
+                return (None, f"Failed to parse epubcheck output (exit_code={proc.returncode}): {e}")
         finally:
             try:
                 os.unlink(json_path)
@@ -417,56 +344,25 @@ class BookManager:
         for msg in data.get("messages", []):
             locations = msg.get("locations", [])
             loc = locations[0] if locations else {}
-            messages.append(
-                {
-                    "severity": msg.get("severity", ""),
-                    "id": msg.get("id", ""),
-                    "message": msg.get("message", ""),
-                    "location": {
-                        "path": loc.get("path", ""),
-                        "line": loc.get("line", -1),
-                        "column": loc.get("column", -1),
-                    }
-                    if loc
-                    else None,
-                }
-            )
+            messages.append({"severity": msg.get("severity", ""), "id": msg.get("id", ""), "message": msg.get("message", ""), "location": {"path": loc.get("path", ""), "line": loc.get("line", -1), "column": loc.get("column", -1)} if loc else None})
 
         # publication 메타데이터
         pub_raw = data.get("publication", {})
         publication = None
         if pub_raw:
-            publication = {
-                "title": pub_raw.get("title", ""),
-                "creator": pub_raw.get("creator", ""),
-                "date": pub_raw.get("date", ""),
-                "publisher": pub_raw.get("publisher", ""),
-            }
+            publication = {"title": pub_raw.get("title", ""), "creator": pub_raw.get("creator", ""), "date": pub_raw.get("date", ""), "publisher": pub_raw.get("publisher", "")}
 
         # 요약 카운트
         checker = data.get("checker", {})
 
         rel_path = str(book.file_path.relative_to(self.path_prefix))
-        result = {
-            "valid": proc.returncode == 0,
-            "file_path": rel_path,
-            "messages": messages,
-            "summary": {
-                "fatal": checker.get("nFatal", 0),
-                "error": checker.get("nError", 0),
-                "warning": checker.get("nWarning", 0),
-                "usage": checker.get("nUsage", 0),
-                "info": checker.get("nInfo", 0),
-            },
-        }
+        result = {"valid": proc.returncode == 0, "file_path": rel_path, "messages": messages, "summary": {"fatal": checker.get("nFatal", 0), "error": checker.get("nError", 0), "warning": checker.get("nWarning", 0), "usage": checker.get("nUsage", 0), "info": checker.get("nInfo", 0)}}
         if publication:
             result["publication"] = publication
 
         return result, None
 
-    async def validate_pdf(
-        self, book_id: int
-    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    async def validate_pdf(self, book_id: int) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         """pikepdf를 사용하여 PDF 파일의 구문 유효성을 검증하고 메타데이터를 추출한다."""
         import pikepdf
 
@@ -503,15 +399,7 @@ class BookManager:
             publication["pdf_version"] = pdf.pdf_version
 
             rel_path = str(book.file_path.relative_to(self.path_prefix))
-            result = {
-                "valid": len(issues) == 0,
-                "file_path": rel_path,
-                "messages": messages,
-                "summary": {
-                    "error": 0,
-                    "warning": len(issues),
-                },
-            }
+            result = {"valid": len(issues) == 0, "file_path": rel_path, "messages": messages, "summary": {"error": 0, "warning": len(issues)}}
             if publication:
                 result["publication"] = publication
 
@@ -531,11 +419,7 @@ class BookManager:
             if content:
                 encoding_metadata = chardet.detect(content.encode())
                 if encoding_metadata["confidence"] > 0.99:
-                    encoding = (
-                        encoding_metadata["encoding"]
-                        if encoding_metadata["encoding"]
-                        else "utf-8"
-                    )
+                    encoding = encoding_metadata["encoding"] if encoding_metadata["encoding"] else "utf-8"
         return encoding
 
     async def get_book_content(self, book_id: int) -> Union[str, FileResponse]:
@@ -546,44 +430,22 @@ class BookManager:
         book = self.item_class(book_id=book_id, info=doc)
         # book.file_path는 이미 path_prefix가 포함된 전체 경로
         if book.file_path.is_file():
-            media_type = BookManager.MEDIA_TYPES.get(
-                book.file_path.suffix, "application/octet-stream"
-            )
+            media_type = BookManager.MEDIA_TYPES.get(book.file_path.suffix, "application/octet-stream")
             # Content-Encoding: identity → GZipMiddleware 우회
             # Cache-Control: no-transform → 외부 프록시(Traefik 등)의 응답 변환(gzip 등) 방지
-            return FileResponse(
-                path=book.file_path,
-                media_type=media_type,
-                headers={
-                    "Content-Encoding": "identity",
-                    "Cache-Control": "no-transform",
-                },
-            )
+            return FileResponse(path=book.file_path, media_type=media_type, headers={"Content-Encoding": "identity", "Cache-Control": "no-transform"})
         return ""
 
-    async def get_book_preview(
-        self, book_id: int, pages: int = 5, chapters: int = 3
-    ) -> Union[Response, FileResponse]:
-        LOGGER.debug(
-            "# get_book_preview(book_id=%d, pages=%d, chapters=%d)",
-            book_id,
-            pages,
-            chapters,
-        )
+    async def get_book_preview(self, book_id: int, pages: int = 5, chapters: int = 3) -> Union[Response, FileResponse]:
+        LOGGER.debug("# get_book_preview(book_id=%d, pages=%d, chapters=%d)", book_id, pages, chapters)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
             LOGGER.warning("get_book_preview: book_id=%d not found in ES", book_id)
             return Response(status_code=404, content=f"Book not found: {book_id}")
         book = self.item_class(book_id=book_id, info=doc)
         if not book.file_path.is_file():
-            LOGGER.warning(
-                "get_book_preview: file not found: '%s' (book_id=%d)",
-                book.file_path,
-                book_id,
-            )
-            return Response(
-                status_code=404, content=f"File not found: {book.file_path}"
-            )
+            LOGGER.warning("get_book_preview: file not found: '%s' (book_id=%d)", book.file_path, book_id)
+            return Response(status_code=404, content=f"File not found: {book.file_path}")
 
         suffix = book.file_path.suffix.lower()
         cache_dir = self.path_prefix / ".preview_cache"
@@ -594,14 +456,7 @@ class BookManager:
             cache_file = cache_dir / f"{book_id}.pdf"
             if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
                 LOGGER.debug("Preview cache hit for book_id=%d (PDF)", book_id)
-                return FileResponse(
-                    path=cache_file,
-                    media_type="application/pdf",
-                    headers={
-                        "Content-Encoding": "identity",
-                        "Cache-Control": "no-transform",
-                    },
-                )
+                return FileResponse(path=cache_file, media_type="application/pdf", headers={"Content-Encoding": "identity", "Cache-Control": "no-transform"})
 
             try:
                 from pypdf import PdfReader, PdfWriter
@@ -616,23 +471,10 @@ class BookManager:
                 preview_bytes = buf.getvalue()
                 cache_file.write_bytes(preview_bytes)
                 BookManager._evict_old_cache(cache_dir)
-                LOGGER.debug(
-                    "Preview generated for book_id=%d (PDF, %d pages)",
-                    book_id,
-                    pages_to_extract,
-                )
-                return FileResponse(
-                    path=cache_file,
-                    media_type="application/pdf",
-                    headers={
-                        "Content-Encoding": "identity",
-                        "Cache-Control": "no-transform",
-                    },
-                )
+                LOGGER.debug("Preview generated for book_id=%d (PDF, %d pages)", book_id, pages_to_extract)
+                return FileResponse(path=cache_file, media_type="application/pdf", headers={"Content-Encoding": "identity", "Cache-Control": "no-transform"})
             except Exception as e:
-                LOGGER.error(
-                    "PDF preview generation failed for book_id=%d: %s", book_id, e
-                )
+                LOGGER.error("PDF preview generation failed for book_id=%d: %s", book_id, e)
                 return Response(status_code=500, content=f"PDF preview failed: {e}")
 
         elif suffix == ".epub":
@@ -646,26 +488,16 @@ class BookManager:
                 old_cache = cache_dir / old_name
                 if old_cache.exists():
                     old_cache.unlink()
-            extra_headers = {
-                "Content-Encoding": "identity",
-                "Cache-Control": "no-transform",
-                "X-Total-Chapters": str(total_chapters),
-            }
+            extra_headers = {"Content-Encoding": "identity", "Cache-Control": "no-transform", "X-Total-Chapters": str(total_chapters)}
             if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
-                LOGGER.debug(
-                    "Preview cache hit for book_id=%d (EPUB, ch%d)", book_id, chapters
-                )
-                return FileResponse(
-                    path=cache_file,
-                    media_type="application/epub+zip",
-                    headers=extra_headers,
-                )
+                LOGGER.debug("Preview cache hit for book_id=%d (EPUB, ch%d)", book_id, chapters)
+                return FileResponse(path=cache_file, media_type="application/epub+zip", headers=extra_headers)
 
             import zipfile
 
             try:
                 import re
-                from lxml import etree
+                from lxml import etree  # type: ignore[attr-defined]
                 from bs4 import BeautifulSoup
                 from posixpath import normpath, join as pjoin, dirname
 
@@ -673,13 +505,8 @@ class BookManager:
                     # OPF 경로 찾기 (container.xml → regex → 직접 탐색)
                     opf_path = BookManager._find_opf_path(zin)
                     if not opf_path:
-                        LOGGER.warning(
-                            "EPUB preview: OPF file not found for book_id=%d", book_id
-                        )
-                        return Response(
-                            status_code=422,
-                            content="EPUB structure error: OPF file not found",
-                        )
+                        LOGGER.warning("EPUB preview: OPF file not found for book_id=%d", book_id)
+                        return Response(status_code=422, content="EPUB structure error: OPF file not found")
                     opf_dir = dirname(opf_path)
 
                     # OPF 파싱 (recover=True: 선언되지 않은 네임스페이스 프리픽스 허용)
@@ -687,22 +514,13 @@ class BookManager:
                     try:
                         opf_bytes = zin.read(opf_path)
                     except KeyError:
-                        LOGGER.warning(
-                            "EPUB preview: OPF file missing in archive: %s (book_id=%d)",
-                            opf_path,
-                            book_id,
-                        )
-                        return Response(
-                            status_code=422,
-                            content=f"EPUB structure error: OPF file missing: {opf_path}",
-                        )
+                        LOGGER.warning("EPUB preview: OPF file missing in archive: %s (book_id=%d)", opf_path, book_id)
+                        return Response(status_code=422, content=f"EPUB structure error: OPF file missing: {opf_path}")
                     # opf: 프리픽스가 선언 없이 사용된 경우 추가
                     # (lxml recover가 보존하지만 재직렬화 시 xmlns:opf 누락 → 브라우저 파싱 실패)
                     opf_text = opf_bytes.decode("utf-8", errors="replace")
                     if "opf:" in opf_text and "xmlns:opf=" not in opf_text:
-                        opf_text = opf_text.replace(
-                            "<package ", f'<package xmlns:opf="{opf_ns}" ', 1
-                        )
+                        opf_text = opf_text.replace("<package ", f'<package xmlns:opf="{opf_ns}" ', 1)
                         opf_bytes = opf_text.encode("utf-8")
                     opf = etree.fromstring(opf_bytes, etree.XMLParser(recover=True))
 
@@ -712,29 +530,15 @@ class BookManager:
                     for item in opf.findall(f".//{{{opf_ns}}}item"):
                         item_id = item.get("id", "")
                         href = item.get("href", "")
-                        manifest[item_id] = {
-                            "href": href,
-                            "media-type": item.get("media-type", ""),
-                        }
-                        zip_path = (
-                            normpath(pjoin(opf_dir, href))
-                            if opf_dir
-                            else normpath(href)
-                        )
+                        manifest[item_id] = {"href": href, "media-type": item.get("media-type", "")}
+                        zip_path = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
                         href_to_id[zip_path] = item_id
 
                     # spine 순서
                     spine_el = opf.find(f".//{{{opf_ns}}}spine")
                     if spine_el is None:
-                        LOGGER.warning(
-                            "EPUB preview: spine not found for book_id=%d, trying manifest order",
-                            book_id,
-                        )
-                        chapter_idrefs = [
-                            mid
-                            for mid, info in manifest.items()
-                            if info.get("media-type") == "application/xhtml+xml"
-                        ][:chapters]
+                        LOGGER.warning("EPUB preview: spine not found for book_id=%d, trying manifest order", book_id)
+                        chapter_idrefs = [mid for mid, info in manifest.items() if info.get("media-type") == "application/xhtml+xml"][:chapters]
                         # 출력 OPF에 spine 요소 생성 (검증 통과를 위해)
                         spine_el = etree.SubElement(opf, f"{{{opf_ns}}}spine")
                         for idref in chapter_idrefs:
@@ -743,11 +547,7 @@ class BookManager:
                         spine_refs = list(spine_el.findall(f"{{{opf_ns}}}itemref"))
                     else:
                         spine_refs = list(spine_el.findall(f"{{{opf_ns}}}itemref"))
-                        chapter_idrefs = [
-                            ref.get("idref")
-                            for ref in spine_refs[:chapters]
-                            if ref.get("idref") in manifest
-                        ]
+                        chapter_idrefs = [ref.get("idref") for ref in spine_refs[:chapters] if ref.get("idref") in manifest]
 
                     # 포함할 zip 내 파일 경로
                     files_to_include = {opf_path}
@@ -760,11 +560,7 @@ class BookManager:
                     if toc_id and toc_id in manifest:
                         manifest_ids_to_keep.add(toc_id)
                         toc_href = manifest[toc_id]["href"]
-                        toc_zp = (
-                            normpath(pjoin(opf_dir, toc_href))
-                            if opf_dir
-                            else normpath(toc_href)
-                        )
+                        toc_zp = normpath(pjoin(opf_dir, toc_href)) if opf_dir else normpath(toc_href)
                         files_to_include.add(toc_zp)
 
                     # 챕터 파일의 zip 경로 계산
@@ -772,11 +568,7 @@ class BookManager:
                     for idref in chapter_idrefs:
                         if idref in manifest:
                             href = manifest[idref]["href"]
-                            zp = (
-                                normpath(pjoin(opf_dir, href))
-                                if opf_dir
-                                else normpath(href)
-                            )
+                            zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
                             files_to_include.add(zp)
                             chapter_zip_paths.append(zp)
 
@@ -786,9 +578,7 @@ class BookManager:
                         try:
                             content = zin.read(zp).decode("utf-8", errors="replace")
                         except KeyError:
-                            LOGGER.warning(
-                                "EPUB preview: chapter file missing in archive: %s", zp
-                            )
+                            LOGGER.warning("EPUB preview: chapter file missing in archive: %s", zp)
                             continue
                         item_dir = dirname(zp)
                         soup = BeautifulSoup(content, "html.parser")
@@ -808,12 +598,7 @@ class BookManager:
 
                     # 챕터에서 참조된 CSS만 포함 및 CSS 내 url() 참조 수집
                     css_url_pattern = re.compile(r'url\(["\']?([^"\')\s]+)["\']?\)')
-                    css_refs = [
-                        r
-                        for r in referenced
-                        if r in href_to_id
-                        and "css" in manifest[href_to_id[r]].get("media-type", "")
-                    ]
+                    css_refs = [r for r in referenced if r in href_to_id and "css" in manifest[href_to_id[r]].get("media-type", "")]
                     referenced -= set(css_refs)  # CSS는 별도 처리
                     for zp in css_refs:
                         item_id = href_to_id[zp]
@@ -826,46 +611,25 @@ class BookManager:
                                 if not m.startswith("data:"):
                                     referenced.add(normpath(pjoin(css_dir, m)))
                         except KeyError:
-                            LOGGER.warning(
-                                "EPUB preview: CSS file missing in archive: %s", zp
-                            )
+                            LOGGER.warning("EPUB preview: CSS file missing in archive: %s", zp)
 
                     # 참조된 이미지/폰트 추가 (대용량 폰트 제외)
                     FONT_SIZE_LIMIT = 500 * 1024  # 500KB
                     FONT_EXTENSIONS = {".ttf", ".otf", ".woff", ".woff2"}
-                    FONT_MEDIA_TYPES = {
-                        "font/ttf",
-                        "font/otf",
-                        "font/woff",
-                        "font/woff2",
-                        "application/font-ttf",
-                        "application/font-woff",
-                        "application/font-woff2",
-                        "application/x-font-ttf",
-                    }
+                    FONT_MEDIA_TYPES = {"font/ttf", "font/otf", "font/woff", "font/woff2", "application/font-ttf", "application/font-woff", "application/font-woff2", "application/x-font-ttf"}
                     for ref_path in referenced:
                         if ref_path in href_to_id:
                             item_id = href_to_id[ref_path]
                             info = manifest[item_id]
                             ext = os.path.splitext(ref_path)[1].lower()
-                            if (
-                                ext in FONT_EXTENSIONS
-                                or info.get("media-type", "") in FONT_MEDIA_TYPES
-                            ):
+                            if ext in FONT_EXTENSIONS or info.get("media-type", "") in FONT_MEDIA_TYPES:
                                 try:
                                     font_size = zin.getinfo(ref_path).file_size
                                     if font_size > FONT_SIZE_LIMIT:
-                                        LOGGER.debug(
-                                            "EPUB preview: skipping large font %s (%d bytes)",
-                                            ref_path,
-                                            font_size,
-                                        )
+                                        LOGGER.debug("EPUB preview: skipping large font %s (%d bytes)", ref_path, font_size)
                                         continue
                                 except KeyError:
-                                    LOGGER.warning(
-                                        "EPUB preview: font file missing in archive: %s",
-                                        ref_path,
-                                    )
+                                    LOGGER.warning("EPUB preview: font file missing in archive: %s", ref_path)
                                     continue
                             files_to_include.add(ref_path)
                             manifest_ids_to_keep.add(item_id)
@@ -888,19 +652,12 @@ class BookManager:
                     if guide_el is not None:
                         for ref in list(guide_el.findall(f"{{{opf_ns}}}reference")):
                             href = ref.get("href", "").split("#")[0]
-                            ref_zp = (
-                                normpath(pjoin(opf_dir, href))
-                                if opf_dir
-                                else normpath(href)
-                            )
+                            ref_zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
                             if ref_zp not in files_to_include:
                                 guide_el.remove(ref)
 
                     # 새 EPUB 작성
-                    modified_opf = (
-                        '<?xml version="1.0" encoding="UTF-8"?>\n'
-                        + etree.tostring(opf, encoding="unicode")
-                    )
+                    modified_opf = '<?xml version="1.0" encoding="UTF-8"?>\n' + etree.tostring(opf, encoding="unicode")
 
                     # @font-face 블록 제거용 패턴
                     font_face_pattern = re.compile(r"@font-face\s*\{[^}]*\}")
@@ -911,20 +668,10 @@ class BookManager:
                     ncx_zp = None
                     if toc_id and toc_id in manifest:
                         ncx_href = manifest[toc_id]["href"]
-                        ncx_zp = (
-                            normpath(pjoin(opf_dir, ncx_href))
-                            if opf_dir
-                            else normpath(ncx_href)
-                        )
+                        ncx_zp = normpath(pjoin(opf_dir, ncx_href)) if opf_dir else normpath(ncx_href)
 
-                    with zipfile.ZipFile(
-                        str(cache_file), "w", zipfile.ZIP_DEFLATED
-                    ) as zout:
-                        zout.writestr(
-                            "mimetype",
-                            "application/epub+zip",
-                            compress_type=zipfile.ZIP_STORED,
-                        )
+                    with zipfile.ZipFile(str(cache_file), "w", zipfile.ZIP_DEFLATED) as zout:
+                        zout.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
                         for zp in files_to_include:
                             if zp == opf_path:
                                 zout.writestr(zp, modified_opf)
@@ -935,97 +682,56 @@ class BookManager:
                                     ncx_tree = etree.fromstring(ncx_data)
                                     ncx_dir = dirname(zp)
                                     # 모든 깊이의 navPoint를 순회하며 누락 파일 참조 제거
-                                    for np in list(
-                                        ncx_tree.iter(f"{{{ncx_ns}}}navPoint")
-                                    ):
+                                    for np in list(ncx_tree.iter(f"{{{ncx_ns}}}navPoint")):
                                         content_el = np.find(f"{{{ncx_ns}}}content")
                                         if content_el is not None:
                                             src = content_el.get("src", "")
                                             src_file = src.split("#")[0]
                                             if not src_file:
                                                 continue  # fragment-only src는 유지
-                                            src_zp = (
-                                                normpath(pjoin(ncx_dir, src_file))
-                                                if ncx_dir
-                                                else normpath(src_file)
-                                            )
+                                            src_zp = normpath(pjoin(ncx_dir, src_file)) if ncx_dir else normpath(src_file)
                                             if src_zp not in files_to_include:
                                                 np.getparent().remove(np)
-                                    ncx_out = (
-                                        '<?xml version="1.0" encoding="UTF-8"?>\n'
-                                        + etree.tostring(ncx_tree, encoding="unicode")
-                                    )
+                                    ncx_out = '<?xml version="1.0" encoding="UTF-8"?>\n' + etree.tostring(ncx_tree, encoding="unicode")
                                     zout.writestr(zp, ncx_out)
                                 except Exception as e:
-                                    LOGGER.warning(
-                                        "EPUB preview: NCX filtering failed: %s", e
-                                    )
+                                    LOGGER.warning("EPUB preview: NCX filtering failed: %s", e)
                                     zout.writestr(zp, zin.read(zp))
                             else:
                                 try:
                                     data = zin.read(zp)
                                     # CSS에서 제외된 폰트의 @font-face 제거
                                     if zp.endswith(".css"):
-                                        css_text = data.decode(
-                                            "utf-8", errors="replace"
-                                        )
+                                        css_text = data.decode("utf-8", errors="replace")
                                         css_dir = dirname(zp)
 
-                                        def _strip_missing_font(m):
-                                            for url in css_url_pattern.findall(
-                                                m.group()
-                                            ):
-                                                if (
-                                                    normpath(pjoin(css_dir, url))
-                                                    not in files_to_include
-                                                ):
+                                        def _strip_missing_font(m, _css_dir=css_dir):
+                                            for url in css_url_pattern.findall(m.group()):
+                                                if normpath(pjoin(_css_dir, url)) not in files_to_include:
                                                     return ""
                                             return m.group()
 
-                                        css_text = font_face_pattern.sub(
-                                            _strip_missing_font, css_text
-                                        )
+                                        css_text = font_face_pattern.sub(_strip_missing_font, css_text)
                                         data = css_text.encode("utf-8")
                                     zout.writestr(zp, data)
                                 except KeyError:
-                                    LOGGER.warning(
-                                        "EPUB preview: missing file in archive: %s", zp
-                                    )
+                                    LOGGER.warning("EPUB preview: missing file in archive: %s", zp)
 
                 # 생성된 EPUB 유효성 검증
                 valid, err = BookManager._validate_preview_epub(cache_file)
                 if not valid:
                     cache_file.unlink(missing_ok=True)
-                    LOGGER.error(
-                        "EPUB preview validation failed for book_id=%d: %s",
-                        book_id,
-                        err,
-                    )
-                    return Response(
-                        status_code=422,
-                        content=f"EPUB preview validation failed: {err}",
-                    )
+                    LOGGER.error("EPUB preview validation failed for book_id=%d: %s", book_id, err)
+                    return Response(status_code=422, content=f"EPUB preview validation failed: {err}")
 
                 BookManager._evict_old_cache(cache_dir)
-                LOGGER.debug(
-                    "Preview generated for book_id=%d (EPUB, %d chapters)",
-                    book_id,
-                    len(chapter_idrefs),
-                )
-                return FileResponse(
-                    path=cache_file,
-                    media_type="application/epub+zip",
-                    headers=extra_headers,
-                )
+                LOGGER.debug("Preview generated for book_id=%d (EPUB, %d chapters)", book_id, len(chapter_idrefs))
+                return FileResponse(path=cache_file, media_type="application/epub+zip", headers=extra_headers)
             except zipfile.BadZipFile:
                 LOGGER.exception("EPUB preview: corrupted ZIP for book_id=%d", book_id)
-                return Response(
-                    status_code=422, content="EPUB file is corrupted or not a valid ZIP"
-                )
+                return Response(status_code=422, content="EPUB file is corrupted or not a valid ZIP")
             except Exception as e:
-                LOGGER.exception(
-                    "EPUB preview generation failed for book_id=%d", book_id
-                )
+                LOGGER.exception("EPUB preview generation failed for book_id=%d", book_id)
                 return Response(status_code=500, content=f"EPUB preview failed: {e}")
 
         elif suffix in (".doc", ".hwp"):
@@ -1035,130 +741,54 @@ class BookManager:
                 return FileResponse(path=cache_file, media_type="text/html")
 
             try:
-                html_content = BookManager._convert_with_libreoffice(
-                    book.file_path, "html"
-                )
+                html_content = BookManager._convert_with_libreoffice(book.file_path, "html")
                 if html_content:
                     cache_file.write_text(html_content, encoding="utf-8")
                     BookManager._evict_old_cache(cache_dir)
-                    LOGGER.debug(
-                        "Preview generated for book_id=%d (%s)", book_id, suffix
-                    )
+                    LOGGER.debug("Preview generated for book_id=%d (%s)", book_id, suffix)
                     return Response(content=html_content, media_type="text/html")
             except Exception as e:
-                LOGGER.error(
-                    "%s preview generation failed for book_id=%d: %s",
-                    suffix.upper(),
-                    book_id,
-                    e,
-                )
-                return Response(
-                    status_code=500, content=f"{suffix.upper()} preview failed: {e}"
-                )
+                LOGGER.error("%s preview generation failed for book_id=%d: %s", suffix.upper(), book_id, e)
+                return Response(status_code=500, content=f"{suffix.upper()} preview failed: {e}")
 
         # 지원하지 않는 형식
         return Response(status_code=400, content=f"Unsupported file type: {suffix}")
 
-    async def search_by_keyword(
-        self, keyword: str, max_result_count: int = -1
-    ) -> Tuple[List[Book], Optional[str]]:
+    async def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> Tuple[List[Book], Optional[str]]:
         LOGGER.debug("# search_by_keyword(keyword='%s')", keyword)
-        result_list = self.es_manager.search_by_keyword(
-            keyword, max_result_count=max_result_count
-        )
+        result_list = self.es_manager.search_by_keyword(keyword, max_result_count=max_result_count)
         if result_list and len(result_list) > 0:
-            return [
-                self.item_class(book_id=book_id, info=doc)
-                for book_id, doc, _score in result_list
-            ], None
+            return [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in result_list], None
         return [], "No books found"
 
-    async def search_by_keyword_paged(
-        self,
-        keyword: str,
-        size: int = 10,
-        offset: int = 0,
-        exclude_categories: List[str] = None,
-    ) -> Tuple[List[Book], int, Optional[str]]:
-        LOGGER.debug(
-            "# search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s)",
-            keyword,
-            size,
-            offset,
-            exclude_categories,
-        )
-        result_list, total = self.es_manager.search_by_keyword_paged(
-            keyword, size=size, offset=offset, exclude_categories=exclude_categories
-        )
+    async def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: Optional[List[str]] = None) -> Tuple[List[Book], int, Optional[str]]:
+        LOGGER.debug("# search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s)", keyword, size, offset, exclude_categories)
+        result_list, total = self.es_manager.search_by_keyword_paged(keyword, size=size, offset=offset, exclude_categories=exclude_categories)
         if result_list:
-            return (
-                [self.item_class(book_id=bid, info=doc) for bid, doc, _ in result_list],
-                total,
-                None,
-            )
+            return ([self.item_class(book_id=bid, info=doc) for bid, doc, _ in result_list], total, None)
         return [], total, None
 
-    async def search_similar_books(
-        self, book_id: int, max_result_count: int = -1
-    ) -> Tuple[List[Book], Optional[str]]:
+    async def search_similar_books(self, book_id: int, max_result_count: int = -1) -> Tuple[List[Book], Optional[str]]:
         LOGGER.debug("# search_similar_books(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
             return [], f"No book found with id '{book_id}'"
-        result_list = self.es_manager.search_similar_docs(
-            doc["category"],
-            doc["title"],
-            doc["author"],
-            doc["file_type"],
-            doc["file_size"],
-            doc["summary"][:3500],
-            exclude_id=book_id,
-            max_result_count=max_result_count,
-        )
+        result_list = self.es_manager.search_similar_docs(doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], exclude_id=book_id, max_result_count=max_result_count)
         if result_list and len(result_list) > 0:
-            return [
-                self.item_class(book_id=doc_id, info=similar_doc)
-                for doc_id, similar_doc, _score in result_list
-            ], None
+            return [self.item_class(book_id=doc_id, info=similar_doc) for doc_id, similar_doc, _score in result_list], None
         return [], "No similar books found"
 
-    async def search_similar_books_paged(
-        self, book_id: int, size: int = 10, offset: int = 0
-    ) -> Tuple[List[Book], int, Optional[str]]:
-        LOGGER.debug(
-            "# search_similar_books_paged(book_id=%d, size=%d, offset=%d)",
-            book_id,
-            size,
-            offset,
-        )
+    async def search_similar_books_paged(self, book_id: int, size: int = 10, offset: int = 0) -> Tuple[List[Book], int, Optional[str]]:
+        LOGGER.debug("# search_similar_books_paged(book_id=%d, size=%d, offset=%d)", book_id, size, offset)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
             return [], 0, f"No book found with id '{book_id}'"
-        result_list, total = self.es_manager.search_similar_docs_paged(
-            doc["category"],
-            doc["title"],
-            doc["author"],
-            doc["file_type"],
-            doc["file_size"],
-            doc["summary"][:3500],
-            exclude_id=book_id,
-            size=size,
-            offset=offset,
-        )
+        result_list, total = self.es_manager.search_similar_docs_paged(doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], exclude_id=book_id, size=size, offset=offset)
         if result_list:
-            return (
-                [
-                    self.item_class(book_id=did, info=sdoc, score=score)
-                    for did, sdoc, score in result_list
-                ],
-                total,
-                None,
-            )
+            return ([self.item_class(book_id=did, info=sdoc, score=score) for did, sdoc, score in result_list], total, None)
         return [], total, "No similar books found"
 
-    async def add_book(
-        self, data: Dict[int, Dict[str, Any]]
-    ) -> Tuple[Optional[int], Optional[str]]:
+    async def add_book(self, data: Dict[int, Dict[str, Any]]) -> Tuple[Optional[int], Optional[str]]:
         LOGGER.debug("# add_book(data='%r')", data)
         doc_id_list = self.es_manager.insert(data)
         if doc_id_list and len(doc_id_list) == 1:
@@ -1166,26 +796,14 @@ class BookManager:
             return doc_id_list[0], None
         return None, f"can't add book '{data}' to ElasticSearch"
 
-    async def update_book(
-        self,
-        book_id: int,
-        new_category: str,
-        new_title: str,
-        new_author: str,
-        new_path: Path,
-        new_type: str,
-        force: bool = False,
-    ) -> Tuple[str, Optional[str]]:
-        LOGGER.debug(
-            "# update_book(book_id=%d, new_category='%s', new_title='%s', new_author='%s', new_path='%r', new_file_type='%s', force=%s)",
-            book_id,
-            new_category,
-            new_title,
-            new_author,
-            new_path,
-            new_type,
-            force,
-        )
+    async def update_book(self, book_id: int, new_category: str, new_title: str, new_author: str, new_path: Path, new_type: str, force: bool = False) -> Tuple[str, Optional[str]]:
+        LOGGER.debug("# update_book(book_id=%d, new_category='%s', new_title='%s', new_author='%s', new_path='%r', new_file_type='%s', force=%s)", book_id, new_category, new_title, new_author, new_path, new_type, force)
+        # 경로 탈출 방지: path_prefix 외부 이동 금지
+        try:
+            if not new_path.resolve().is_relative_to(self.path_prefix.resolve()):
+                return ("Error", "잘못된 경로입니다")
+        except OSError:
+            return ("Error", "잘못된 경로입니다")
         # rename file
         doc = self.es_manager.search_by_id(book_id)
         if doc:
@@ -1196,23 +814,14 @@ class BookManager:
             # 대상 경로에 다른 파일이 이미 존재하는지 확인
             if new_full_path.exists():
                 try:
-                    is_same_file = file_path.exists() and file_path.samefile(
-                        new_full_path
-                    )
+                    is_same_file = file_path.exists() and file_path.samefile(new_full_path)
                 except OSError:
                     is_same_file = False
                 if not is_same_file:
                     if not force:
                         relative = new_full_path.relative_to(self.path_prefix)
-                        return (
-                            "Error",
-                            f"CONFLICT:대상 경로에 파일이 이미 존재합니다: {relative}",
-                        )
-                    LOGGER.warning(
-                        "update_book: force overwriting existing file '%s' (book_id=%d)",
-                        new_full_path,
-                        book_id,
-                    )
+                        return ("Error", f"CONFLICT:대상 경로에 파일이 이미 존재합니다: {relative}")
+                    LOGGER.warning("update_book: force overwriting existing file '%s' (book_id=%d)", new_full_path, book_id)
 
             try:
                 new_full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1223,44 +832,20 @@ class BookManager:
             # update book info in ElasticSearch
             new_relative_path = new_full_path.relative_to(self.path_prefix)
             try:
-                if self.es_manager.update(
-                    book_id,
-                    category=new_category,
-                    title=new_title,
-                    author=new_author,
-                    file_path=str(new_relative_path),
-                    file_type=new_type,
-                ):
+                if self.es_manager.update(book_id, category=new_category, title=new_title, author=new_author, file_path=str(new_relative_path), file_type=new_type):
                     return "Ok", None
                 # ES 업데이트 실패 시 파일을 원래 위치로 롤백
-                LOGGER.error(
-                    "update_book: ES update failed for book_id=%d, rolling back file move",
-                    book_id,
-                )
+                LOGGER.error("update_book: ES update failed for book_id=%d, rolling back file move", book_id)
                 new_full_path.rename(file_path)
             except Exception as e:
                 # ES 예외 발생 시에도 파일 롤백 시도
-                LOGGER.error(
-                    "update_book: ES update exception for book_id=%d: %s, rolling back file move",
-                    book_id,
-                    e,
-                )
+                LOGGER.error("update_book: ES update exception for book_id=%d: %s, rolling back file move", book_id, e)
                 try:
                     new_full_path.rename(file_path)
                 except IOError as rollback_err:
-                    LOGGER.error(
-                        "update_book: rollback failed for book_id=%d: %s",
-                        book_id,
-                        rollback_err,
-                    )
-                    return (
-                        "Error",
-                        f"ES 업데이트와 파일 롤백 모두 실패: ES={e}, rollback={rollback_err}",
-                    )
-        return (
-            "Error",
-            f"can't update book information of '{book_id}' in ElasticSearch, no such a book",
-        )
+                    LOGGER.error("update_book: rollback failed for book_id=%d: %s", book_id, rollback_err)
+                    return ("Error", f"ES 업데이트와 파일 롤백 모두 실패: ES={e}, rollback={rollback_err}")
+        return ("Error", f"can't update book information of '{book_id}' in ElasticSearch, no such a book")
 
     def get_category_mismatches(self) -> Dict[str, Any]:
         """파일시스템의 1레벨 디렉토리 기준으로 ES와 파일 경로 불일치를 검출"""
@@ -1308,9 +893,7 @@ class BookManager:
                     try:
                         with _os.scandir(l1.path) as l2_it:
                             for l2 in l2_it:
-                                if not l2.is_dir(
-                                    follow_symlinks=False
-                                ) or l2.name.startswith("."):
+                                if not l2.is_dir(follow_symlinks=False) or l2.name.startswith("."):
                                     continue
                                 scan_tasks.append((l2.path, f"{rel1}/{l2.name}"))
                     except (PermissionError, OSError):
@@ -1318,9 +901,7 @@ class BookManager:
 
             # 병렬 FS 스캔
             with ThreadPoolExecutor() as executor:
-                futures = {
-                    executor.submit(count_files, dp): cat for dp, cat in scan_tasks
-                }
+                futures = {executor.submit(count_files, dp): cat for dp, cat in scan_tasks}
                 for future in futures:
                     cat = futures[future]
                     count = future.result()
@@ -1330,12 +911,7 @@ class BookManager:
             pass
 
         # 3. 비교 (건수 기반 비교 — 상세 경로 비교는 detail API에서 lazy 수행)
-        all_keys = sorted(
-            set(
-                list(fs_cats.keys())
-                + [k for k in es_cats if k.count("/") <= 1 and not k.startswith(".")]
-            )
-        )
+        all_keys = sorted(set(list(fs_cats.keys()) + [k for k in es_cats if k.count("/") <= 1 and not k.startswith(".")]))
         mismatches = []
         es_only = []
         fs_only = []
@@ -1345,26 +921,13 @@ class BookManager:
             if es_count is not None and fs_count is not None:
                 diff = abs(es_count - fs_count)
                 if diff > 0:
-                    mismatches.append(
-                        {
-                            "category": key,
-                            "es_count": es_count,
-                            "fs_count": fs_count,
-                            "diff": diff,
-                        }
-                    )
+                    mismatches.append({"category": key, "es_count": es_count, "fs_count": fs_count, "diff": diff})
             elif es_count is not None:
                 es_only.append({"category": key, "es_count": es_count})
             elif fs_count is not None:
                 fs_only.append({"category": key, "fs_count": fs_count})
 
-        result = {
-            "mismatches": sorted(
-                mismatches, key=lambda x: abs(x["diff"]), reverse=True
-            ),
-            "es_only": es_only,
-            "fs_only": fs_only,
-        }
+        result = {"mismatches": sorted(mismatches, key=lambda x: abs(x["diff"]), reverse=True), "es_only": es_only, "fs_only": fs_only}
         self._mismatch_cache = result
         self._mismatch_cache_time = now
         return result
@@ -1374,9 +937,7 @@ class BookManager:
         import os as _os
 
         # 1. ES 문서 목록 (file_path 기준, 중복 감지 포함)
-        doc_list = self.es_manager.search_by_category(
-            category, max_result_count=sys.maxsize
-        )
+        doc_list = self.es_manager.search_by_category(category, max_result_count=sys.maxsize)
         es_files: Dict[str, Dict[str, Any]] = {}
         path_docs: Dict[str, List[Dict[str, Any]]] = {}
         for book_id, doc, _score in doc_list:
@@ -1407,24 +968,12 @@ class BookManager:
         es_only = []
         for path in sorted(es_paths - fs_files):
             info = es_files[path]
-            es_only.append(
-                {
-                    "book_id": info["book_id"],
-                    "title": info.get("title", ""),
-                    "file_type": info.get("file_type", ""),
-                    "file_path": path,
-                }
-            )
+            es_only.append({"book_id": info["book_id"], "title": info.get("title", ""), "file_type": info.get("file_type", ""), "file_path": path})
 
         fs_only = []
         for path in sorted(fs_files - es_paths):
             name = path.rsplit("/", 1)[-1] if "/" in path else path
-            fs_only.append(
-                {
-                    "file_name": name,
-                    "file_path": path,
-                }
-            )
+            fs_only.append({"file_name": name, "file_path": path})
 
         # 4. 중복 ES 문서 감지 (동일 file_path에 여러 book_id)
         duplicates = []
@@ -1443,33 +992,12 @@ class BookManager:
                     pass
             dup_docs = []
             for d in docs:
-                dup_docs.append(
-                    {
-                        "book_id": d["book_id"],
-                        "title": d.get("title", ""),
-                        "author": d.get("author", ""),
-                        "file_type": d.get("file_type", ""),
-                        "file_linked": d["book_id"] == linked_id,
-                    }
-                )
-            duplicates.append(
-                {
-                    "file_path": path,
-                    "file_exists": file_exists,
-                    "docs": dup_docs,
-                }
-            )
+                dup_docs.append({"book_id": d["book_id"], "title": d.get("title", ""), "author": d.get("author", ""), "file_type": d.get("file_type", ""), "file_linked": d["book_id"] == linked_id})
+            duplicates.append({"file_path": path, "file_exists": file_exists, "docs": dup_docs})
 
-        return {
-            "es_only": es_only,
-            "fs_only": fs_only,
-            "duplicates": duplicates,
-            "fs_count": len(fs_files),
-        }
+        return {"es_only": es_only, "fs_only": fs_only, "duplicates": duplicates, "fs_count": len(fs_files)}
 
-    async def index_single_file(
-        self, file_path: str
-    ) -> Tuple[Optional[int], Optional[str]]:
+    async def index_single_file(self, file_path: str) -> Tuple[Optional[int], Optional[str]]:
         """파일시스템의 파일을 읽어 ES에 적재"""
         from utils.loader import Loader
 
@@ -1496,15 +1024,9 @@ class BookManager:
         except IOError as e:
             return "Error", f"파일 삭제 실패: {e}"
 
-    async def reload_category(
-        self, category: str, content_type: str = "book"
-    ) -> Tuple[Dict[str, Any], Optional[str]]:
+    async def reload_category(self, category: str, content_type: str = "book") -> Tuple[Dict[str, Any], Optional[str]]:
         """카테고리 전체를 ES에 재적재 (loader.py --recursive --reload 호출)"""
-        LOGGER.info(
-            "reload_category 시작: category='%s', content_type='%s'",
-            category,
-            content_type,
-        )
+        LOGGER.info("reload_category 시작: category='%s', content_type='%s'", category, content_type)
 
         if not category:
             return {}, "카테고리 이름이 비어있습니다"
@@ -1520,26 +1042,13 @@ class BookManager:
 
         index_name = "comics" if content_type == "comic" else "book"
         loader_path = str(Path(__file__).parent.parent / "utils" / "loader.py")
-        LOGGER.info(
-            "reload_category: loader 실행 — index=%s, path=%s", index_name, abs_dir
-        )
+        LOGGER.info("reload_category: loader 실행 — index=%s, path=%s", index_name, abs_dir)
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                loader_path,
-                "--recursive",
-                "--reload",
-                index_name,
-                str(abs_dir),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            proc = await asyncio.create_subprocess_exec(sys.executable, loader_path, "--recursive", "--reload", index_name, str(abs_dir), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
         except asyncio.TimeoutError:
-            LOGGER.error(
-                "reload_category: 타임아웃 (10분 초과) — category='%s'", category
-            )
+            LOGGER.error("reload_category: 타임아웃 (10분 초과) — category='%s'", category)
             return {}, "재적재 시간이 초과되었습니다 (10분)"
         except Exception as e:
             LOGGER.error("reload_category: subprocess 실행 실패 — %s", e)
@@ -1549,11 +1058,7 @@ class BookManager:
         stderr_text = stderr.decode("utf-8", errors="replace").strip()
 
         if proc.returncode != 0:
-            LOGGER.error(
-                "reload_category: 실패 (exit %d) — stderr: %s",
-                proc.returncode,
-                stderr_text,
-            )
+            LOGGER.error("reload_category: 실패 (exit %d) — stderr: %s", proc.returncode, stderr_text)
             return {}, f"재적재 실패 (exit {proc.returncode}): {stderr_text}"
 
         if stderr_text:
@@ -1564,28 +1069,20 @@ class BookManager:
         if match:
             processed = int(match.group(1))
 
-        LOGGER.info(
-            "reload_category 완료: category='%s', processed=%d", category, processed
-        )
+        LOGGER.info("reload_category 완료: category='%s', processed=%d", category, processed)
         return {"category": category, "processed_count": processed}, None
 
     async def get_pdf_pages(self, book_id: int, start: int, end: int) -> Response:
         """PDF에서 start~end 페이지만 추출하여 Response로 반환 (1-based)"""
-        LOGGER.debug(
-            "# get_pdf_pages(book_id=%d, start=%d, end=%d)", book_id, start, end
-        )
+        LOGGER.debug("# get_pdf_pages(book_id=%d, start=%d, end=%d)", book_id, start, end)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
             return Response(status_code=404, content=f"Book not found: {book_id}")
         book = self.item_class(book_id=book_id, info=doc)
         if not book.file_path.is_file():
-            return Response(
-                status_code=404, content=f"File not found: {book.file_path}"
-            )
+            return Response(status_code=404, content=f"File not found: {book.file_path}")
         if book.file_path.suffix.lower() != ".pdf":
-            return Response(
-                status_code=400, content=f"Not a PDF file: {book.file_path}"
-            )
+            return Response(status_code=400, content=f"Not a PDF file: {book.file_path}")
 
         try:
             from pypdf import PdfReader, PdfWriter
@@ -1597,10 +1094,7 @@ class BookManager:
             start = max(1, start)
             end = min(end, total_pages)
             if start > total_pages:
-                return Response(
-                    status_code=400,
-                    content=f"Start page {start} exceeds total pages {total_pages}",
-                )
+                return Response(status_code=400, content=f"Start page {start} exceeds total pages {total_pages}")
 
             # 캐시 확인
             cache_dir = self.path_prefix / ".preview_cache"
@@ -1609,18 +1103,8 @@ class BookManager:
             original_mtime = book.file_path.stat().st_mtime
 
             if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
-                LOGGER.debug(
-                    "PDF pages cache hit for book_id=%d (p%d-%d)", book_id, start, end
-                )
-                return Response(
-                    content=cache_file.read_bytes(),
-                    media_type="application/pdf",
-                    headers={
-                        "Content-Encoding": "identity",
-                        "Cache-Control": "no-transform",
-                        "X-Total-Pages": str(total_pages),
-                    },
-                )
+                LOGGER.debug("PDF pages cache hit for book_id=%d (p%d-%d)", book_id, start, end)
+                return Response(content=cache_file.read_bytes(), media_type="application/pdf", headers={"Content-Encoding": "identity", "Cache-Control": "no-transform", "X-Total-Pages": str(total_pages)})
 
             # 페이지 추출
             writer = PdfWriter()
@@ -1634,39 +1118,19 @@ class BookManager:
             cache_file.write_bytes(pdf_bytes)
             BookManager._evict_old_cache(cache_dir)
 
-            LOGGER.debug(
-                "PDF pages extracted for book_id=%d (p%d-%d, total=%d)",
-                book_id,
-                start,
-                end,
-                total_pages,
-            )
-            return Response(
-                content=pdf_bytes,
-                media_type="application/pdf",
-                headers={
-                    "Content-Encoding": "identity",
-                    "Cache-Control": "no-transform",
-                    "X-Total-Pages": str(total_pages),
-                },
-            )
+            LOGGER.debug("PDF pages extracted for book_id=%d (p%d-%d, total=%d)", book_id, start, end, total_pages)
+            return Response(content=pdf_bytes, media_type="application/pdf", headers={"Content-Encoding": "identity", "Cache-Control": "no-transform", "X-Total-Pages": str(total_pages)})
         except Exception as e:
             LOGGER.error("PDF pages extraction failed for book_id=%d: %s", book_id, e)
-            return Response(
-                status_code=500, content=f"PDF pages extraction failed: {e}"
-            )
+            return Response(status_code=500, content=f"PDF pages extraction failed: {e}")
 
-    async def rename_category(
-        self, old_category: str, new_category: str
-    ) -> Tuple[Dict[str, Any], Optional[str]]:
+    async def rename_category(self, old_category: str, new_category: str) -> Tuple[Dict[str, Any], Optional[str]]:
         """카테고리 이름을 일괄 변경 (FS + ES, 실패 시 FS 롤백)
 
         Returns:
             (result_dict, error_message) 튜플
         """
-        LOGGER.debug(
-            "# rename_category(old='%s', new='%s')", old_category, new_category
-        )
+        LOGGER.debug("# rename_category(old='%s', new='%s')", old_category, new_category)
 
         # 입력 검증
         if not old_category or not new_category:
@@ -1692,10 +1156,7 @@ class BookManager:
 
         new_count = counts[new_category]
         if new_count > 0:
-            return (
-                {},
-                f"대상 카테고리 '{new_category}'에 이미 {new_count}개의 문서가 존재합니다",
-            )
+            return ({}, f"대상 카테고리 '{new_category}'에 이미 {new_count}개의 문서가 존재합니다")
 
         # 파일시스템 디렉토리 이름 변경
         old_dir = self.path_prefix / old_category
@@ -1725,10 +1186,7 @@ class BookManager:
                     LOGGER.info("rename_category: FS 롤백 성공")
                 except OSError as rollback_err:
                     LOGGER.error("rename_category: FS 롤백 실패: %s", rollback_err)
-                    return (
-                        {},
-                        f"ES 업데이트 실패: {e}. 경고: FS 롤백도 실패하여 수동 복구 필요 ('{new_dir}' → '{old_dir}')",
-                    )
+                    return ({}, f"ES 업데이트 실패: {e}. 경고: FS 롤백도 실패하여 수동 복구 필요 ('{new_dir}' → '{old_dir}')")
             return {}, f"ES 업데이트 실패: {e}"
 
         if es_result.get("failures"):
@@ -1739,22 +1197,12 @@ class BookManager:
                     LOGGER.info("rename_category: ES 부분 실패로 FS 롤백")
                 except OSError as rollback_err:
                     LOGGER.error("rename_category: FS 롤백 실패: %s", rollback_err)
-                    return (
-                        {},
-                        f"ES 부분 실패: {es_result['failures']}. 경고: FS 롤백도 실패하여 수동 복구 필요",
-                    )
+                    return ({}, f"ES 부분 실패: {es_result['failures']}. 경고: FS 롤백도 실패하여 수동 복구 필요")
             return {}, f"ES 업데이트 부분 실패: {es_result['failures']}"
 
-        return {
-            "old_category": old_category,
-            "new_category": new_category,
-            "updated_count": es_result["updated"],
-            "fs_renamed": fs_renamed,
-        }, None
+        return {"old_category": old_category, "new_category": new_category, "updated_count": es_result["updated"], "fs_renamed": fs_renamed}, None
 
-    async def delete_category(
-        self, category: str
-    ) -> Tuple[Dict[str, Any], Optional[str]]:
+    async def delete_category(self, category: str) -> Tuple[Dict[str, Any], Optional[str]]:
         """카테고리의 모든 문서를 일괄 삭제 (ES + FS)
 
         Returns:
@@ -1787,10 +1235,7 @@ class BookManager:
         if es_result.get("failures"):
             return {}, f"ES 삭제 부분 실패: {es_result['failures']}"
 
-        result: Dict[str, Any] = {
-            "category": category,
-            "deleted_count": es_result["deleted"],
-        }
+        result: Dict[str, Any] = {"category": category, "deleted_count": es_result["deleted"]}
 
         return result, None
 
@@ -1818,7 +1263,4 @@ class BookManager:
             if warning_message:
                 return "Warning", warning_message
             return "Ok", None
-        return (
-            "Error",
-            f"can't delete book information of '{book_id}' from ElasticSearch",
-        )
+        return ("Error", f"can't delete book information of '{book_id}' from ElasticSearch")

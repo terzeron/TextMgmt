@@ -16,7 +16,7 @@ def env_vars(monkeypatch):
 def _make_es_manager(env_vars):
     with patch.object(Elasticsearch, "__init__", return_value=None), \
          patch.object(Elasticsearch, "info", return_value={"cluster_name": "test"}):
-        from es_manager import ESManager
+        from backend.es_manager import ESManager
         return ESManager()
 
 

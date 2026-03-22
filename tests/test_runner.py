@@ -13,8 +13,10 @@ import cProfile
 import pstats
 import io
 import ast
+import warnings
 
 from graphlib import TopologicalSorter
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API.*", category=UserWarning)
 from modulegraph.modulegraph import ModuleGraph
 
 # Always resolve project root (directory containing 'tests' folder)
@@ -344,6 +346,81 @@ def get_test_methods(test_file: Path) -> list[str]:
     return test_methods
 
 
+def get_coverage_file() -> Path:
+    return PROJECT_ROOT / ".coverage"
+
+
+def prepare_coverage_data() -> None:
+    coverage_file = get_coverage_file()
+    if coverage_file.exists():
+        try:
+            coverage_file.unlink()
+        except OSError as e:
+            print(f"⚠️  Failed to clear coverage data: {e}")
+
+
+def get_coverage_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("COVERAGE_FILE", str(get_coverage_file()))
+    env.setdefault("PYTHONWARNINGS", "ignore")
+    return env
+
+
+def get_pytest_coverage_args() -> list[str]:
+    return [
+        "--cov=backend",
+        "--cov-append",
+        "--cov-report=term-missing",
+    ]
+
+
+def filter_pytest_output(raw_output: str) -> list[str]:
+    """Filter pytest output to remove session start info and coverage tables."""
+    filtered_output: list[str] = []
+    in_session_start = False
+    in_coverage = False
+    in_warnings = False
+
+    for line in raw_output.splitlines():
+        stripped = line.strip()
+        if "warnings summary" in line.lower():
+            in_warnings = True
+            continue
+        if in_warnings:
+            if stripped == "":
+                in_warnings = False
+            continue
+
+        if "test session starts" in line:
+            in_session_start = True
+            continue
+        if in_session_start and ("collected" in line or "platform" in line or "rootdir" in line or
+                               "configfile" in line or "plugins" in line or "cachedir" in line or
+                               "hypothesis profile" in line):
+            continue
+        if in_session_start and line.strip() == "":
+            in_session_start = False
+            continue
+
+        if "tests coverage" in line.lower() or "coverage:" in line:
+            in_coverage = True
+            continue
+        if in_coverage:
+            if line.startswith("TOTAL"):
+                in_coverage = False
+            continue
+
+        if stripped and all(ch in ".sxfFE" for ch in stripped):
+            continue
+        if stripped.startswith((".", "s", "x", "f", "F", "E")) and stripped.endswith("]") and "[" in stripped:
+            continue
+
+        if not in_session_start:
+            filtered_output.append(line)
+
+    return filtered_output
+
+
 def run_test_modules_sequentially(test_targets: list[Path]) -> tuple[bool, int, int, list[Path]]:
     """Run test modules sequentially and return (success, passed_count, failed_count, failed_files)"""
     passed_count = 0
@@ -357,29 +434,29 @@ def run_test_modules_sequentially(test_targets: list[Path]) -> tuple[bool, int, 
 
         # Measure execution time
         start_time = time.time()
-        result = subprocess.run([sys.executable, "-m", "pytest", "--tb=no", "--disable-warnings", str(absolute_path)],
-                              capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--tb=no",
+                "--disable-warnings",
+                "-q",
+                "-p",
+                "no:warnings",
+                *get_pytest_coverage_args(),
+                str(absolute_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=get_coverage_env(),
+        )
         end_time = time.time()
         execution_time = end_time - start_time
 
-        # Filter output to remove session start info and show only test results
-        filtered_output = []
-        in_session_start = False
-        for line in result.stdout.splitlines():
-            if "test session starts" in line:
-                in_session_start = True
-                continue
-            if in_session_start and ("collected" in line or "platform" in line or "rootdir" in line or
-                                   "configfile" in line or "plugins" in line or "cachedir" in line or
-                                   "hypothesis profile" in line):
-                continue
-            if in_session_start and line.strip() == "":
-                in_session_start = False
-                continue
-            if not in_session_start:
-                filtered_output.append(line)
-
         # Print filtered output
+        filtered_output = filter_pytest_output(result.stdout)
         if filtered_output:
             print("\n".join(filtered_output))
 
@@ -425,11 +502,29 @@ def run_specific_test_file(test_file: str) -> bool:
 
     # Measure execution time
     start_time = time.time()
-    result = subprocess.run([
-        sys.executable, "-m", "pytest", str(test_path), "-v"
-    ], check=False)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:warnings",
+            *get_pytest_coverage_args(),
+            str(test_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=get_coverage_env(),
+    )
     end_time = time.time()
     execution_time = end_time - start_time
+
+    # Print filtered output
+    filtered_output = filter_pytest_output(result.stdout)
+    if filtered_output:
+        print("\n".join(filtered_output))
 
     # Update performance cache with actual execution time
     test_file_name = test_path.name
@@ -495,28 +590,28 @@ def run_all_tests() -> tuple[bool, list[Path]]:
     for idx, t in enumerate(ordered_tests, 1):
         print(f"--- [{idx}/{len(ordered_tests)}] Running: {t.name} ---")
         start = time.time()
-        result = subprocess.run([sys.executable, "-m", "pytest", "--tb=no", "--disable-warnings", str(t)],
-                              capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--tb=no",
+                "--disable-warnings",
+                "-q",
+                "-p",
+                "no:warnings",
+                *get_pytest_coverage_args(),
+                str(t),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=get_coverage_env(),
+        )
         end = time.time()
 
-        # Filter output to remove session start info and show only test results
-        filtered_output = []
-        in_session_start = False
-        for line in result.stdout.splitlines():
-            if "test session starts" in line:
-                in_session_start = True
-                continue
-            if in_session_start and ("collected" in line or "platform" in line or "rootdir" in line or
-                                   "configfile" in line or "plugins" in line or "cachedir" in line or
-                                   "hypothesis profile" in line):
-                continue
-            if in_session_start and line.strip() == "":
-                in_session_start = False
-                continue
-            if not in_session_start:
-                filtered_output.append(line)
-
         # Print filtered output
+        filtered_output = filter_pytest_output(result.stdout)
         if filtered_output:
             print("\n".join(filtered_output))
 
@@ -680,7 +775,7 @@ def get_pytest_performance_data() -> dict[str, Any]:
 
     # Default estimated durations (fallback)
     estimated_durations = {
-        "test_backend.py": 25.0,
+        "test_main.py": 25.0,
         "test_problem_manager.py": 28.0,
         "test_access_log_manager.py": 28.0,
         "test_headless_browser.py": 14.0,
@@ -1650,6 +1745,10 @@ def main() -> bool:
     # Setup test environment first, before any imports that might depend on environment variables
     setup_test_environment()
 
+    # Prepare coverage data for this run (skip profiling-only mode)
+    if not args.profile:
+        prepare_coverage_data()
+
     # Always perform dependency analysis first and print the graph
     print("🔍 Analyzing dependencies...")
     deps, reverse_deps = analyze_all_dependencies()
@@ -1786,6 +1885,7 @@ def main() -> bool:
     if success:
         set_last_success_time()
         print_test_statistics(get_test_statistics())
+        maybe_run_coverage(success)
 
     # Print final dependency tree with actual test results (간결하게)
     if executed_tests:
@@ -1810,6 +1910,29 @@ def main() -> bool:
                                        modified_files=modified_files, affected_files=affected_files)
 
     return success
+
+
+def run_coverage_report() -> bool:
+    """Print cached coverage report without re-running tests."""
+    print("\n📈 Generating coverage report...")
+    coverage_file = get_coverage_file()
+    if not coverage_file.exists():
+        print("⚠️  Coverage data not found. Ensure tests were run with coverage enabled.")
+        return False
+
+    env = get_coverage_env()
+    result = subprocess.run(
+        [sys.executable, "-m", "coverage", "report", "-m"],
+        cwd=PROJECT_ROOT,
+        env=env,
+    )
+    return result.returncode == 0
+
+
+def maybe_run_coverage(success: bool) -> bool:
+    if not success:
+        return False
+    return run_coverage_report()
 
 
 def _is_dependency_cache_valid(cache_data: dict[str, Any]) -> bool:

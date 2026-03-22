@@ -10,6 +10,7 @@ import logging.config
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+import importlib
 
 import pytest
 from fastapi.testclient import TestClient
@@ -91,14 +92,19 @@ def book_manager_module(temp_dir, _default_doc):
     """ESManager를 mock한 BookManager (모듈 스코프)."""
     env = {**_ENV, "TM_BOOK_DIR": str(temp_dir), "TM_COMICS_DIR": str(temp_dir)}
     with patch.dict(os.environ, env):
-        with patch("backend.book_manager.ESManager") as MockES:
+        import backend.book as book_mod
+        import backend.book_manager as bm_mod
+        importlib.reload(book_mod)
+        importlib.reload(bm_mod)
+
+        with patch.object(bm_mod, "ESManager") as MockES:
             mock_es = MagicMock()
             MockES.return_value = mock_es
             mock_es.create_index.return_value = None
             mock_es.search_by_id.return_value = _default_doc
 
-            from backend.book_manager import BookManager
-            from backend.book import Book
+            BookManager = bm_mod.BookManager
+            Book = book_mod.Book
 
             bm = BookManager()
             # Book.path_prefix는 import 시점에 고정되므로 temp_dir로 패치
@@ -236,6 +242,10 @@ class TestPdfPagesEndpoint:
             main.book_manager.es_manager = mock_es
             main.book_manager.path_prefix = temp_dir
             Book.path_prefix = temp_dir
+            try:
+                main.book_manager.item_class.path_prefix = temp_dir
+            except Exception:
+                pass
             mock_es.search_by_id.return_value = _default_doc
 
             from backend.auth import create_jwt_token
@@ -244,7 +254,7 @@ class TestPdfPagesEndpoint:
                 email="admin@test.com", role="admin", name="Test Admin"
             )
             self.client = TestClient(
-                main.app, headers={"Authorization": f"Bearer {token}"}
+                main.app, cookies={"tm_access_token": token}
             )
             yield
 

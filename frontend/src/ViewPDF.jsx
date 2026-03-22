@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { flushSync } from "react-dom";
 import PropTypes from "prop-types";
-import { getApiUrlPrefix, getAuthToken } from "./Common";
+import { getApiUrlPrefix } from "./Common";
 import * as pdfjs from "pdfjs-dist";
 
 // unpkg CDN에서 워커 로드 (package.json의 pdfjs-dist 버전과 일치)
@@ -68,10 +68,7 @@ export default function ViewPDF({
           getApiUrlPrefix() +
           apiPrefix +
           `/pdf-pages/${bookId}?start=${start}&end=${end}`;
-        const headers = {};
-        const token = getAuthToken();
-        if (token) headers["Authorization"] = `Bearer ${token}`;
-        const response = await fetch(url, { headers });
+        const response = await fetch(url, { credentials: "include" });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const buffer = await response.arrayBuffer();
@@ -190,10 +187,7 @@ export default function ViewPDF({
         setDownloadProgress(10);
         const firstUrl =
           getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}?start=1&end=1`;
-        const firstHeaders = {};
-        const token = getAuthToken();
-        if (token) firstHeaders["Authorization"] = `Bearer ${token}`;
-        const firstResponse = await fetch(firstUrl, { headers: firstHeaders });
+        const firstResponse = await fetch(firstUrl, { credentials: "include" });
         if (!firstResponse.ok) throw new Error(`HTTP ${firstResponse.status}`);
 
         const serverTotalPages = parseInt(

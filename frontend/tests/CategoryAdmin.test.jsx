@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent, within } from '@testing-library/react';
 
 afterEach(cleanup);
 
@@ -747,9 +747,221 @@ describe('CategoryAdmin', () => {
         });
     });
 
-    // ── 계층 구조 카테고리 ──
+    // ── 비노출 설정 ──
 
-    it('슬래시가 포함된 계층 카테고리를 트리 구조로 표시한다', async () => {
+    it('비노출 체크박스 클릭 시 POST /hidden-categories API를 호출한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+        render(<CategoryAdmin />);
+        fireEvent.click(screen.getByText('카테고리 관리'));
+        await waitFor(() => { expect(screen.getByText('1_fiction')).toBeTruthy(); });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+        await waitFor(() => {
+            expect(screen.getByLabelText('사용자 비노출')).toBeTruthy();
+        });
+
+        mockJsonPostReq.mockImplementation((url, payload, resolve) => {
+            resolve(['1_fiction', '3_history']);
+        });
+
+        fireEvent.click(screen.getByLabelText('사용자 비노출'));
+        await waitFor(() => {
+            expect(mockJsonPostReq).toHaveBeenCalledWith(
+                '/hidden-categories/1_fiction?content_type=book',
+                { hidden: true },
+                expect.any(Function),
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+    });
+
+    // ── 카테고리 관리 (이름 변경 / 삭제 / 재적재) ──
+
+    it('이름 변경 버튼 클릭 시 모달이 뜨고 변경 API를 호출한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+        render(<CategoryAdmin />);
+        fireEvent.click(screen.getByText('카테고리 관리'));
+        await waitFor(() => { expect(screen.getByText('1_fiction')).toBeTruthy(); });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+        const renameBtn = screen.getByTitle('이름 변경');
+        fireEvent.click(renameBtn);
+
+        const modal = await screen.findByRole('dialog');
+        // getByLabelText 대신 직접 쿼리
+        const input = modal.querySelector('input[type="text"]:not([disabled])');
+        fireEvent.change(input, { target: { value: '1_fiction_new' } });
+
+        mockJsonPutReq.mockImplementation((url, payload, resolve) => {
+            resolve();
+        });
+
+        fireEvent.click(within(modal).getByRole('button', { name: '변경' }));
+        await waitFor(() => {
+            expect(mockJsonPutReq).toHaveBeenCalledWith(
+                '/categories/rename',
+                { old_category: '1_fiction', new_category: '1_fiction_new' },
+                expect.any(Function),
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+    });
+
+    it('삭제 버튼 클릭 시 모달이 뜨고 삭제 API를 호출한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+        render(<CategoryAdmin />);
+        fireEvent.click(screen.getByText('카테고리 관리'));
+        await waitFor(() => { expect(screen.getByText('1_fiction')).toBeTruthy(); });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+        const deleteBtn = screen.getByTitle('카테고리 삭제');
+        fireEvent.click(deleteBtn);
+
+        const modal = await screen.findByRole('dialog');
+        expect(within(modal).getByText('카테고리 삭제')).toBeTruthy();
+
+        mockJsonPostReq.mockImplementation((url, payload, resolve) => {
+            resolve({ deleted_count: 10 });
+        });
+
+        fireEvent.click(within(modal).getByRole('button', { name: '삭제' }));
+        await waitFor(() => {
+            expect(mockJsonPostReq).toHaveBeenCalledWith(
+                '/categories/delete',
+                { category: '1_fiction' },
+                expect.any(Function),
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+    });
+
+    it('ES 재적재 버튼 클릭 시 모달이 뜨고 재적재 API를 호출한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+        render(<CategoryAdmin />);
+        fireEvent.click(screen.getByText('카테고리 관리'));
+        await waitFor(() => { expect(screen.getByText('1_fiction')).toBeTruthy(); });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+        const reloadBtn = screen.getByTitle('ES 재적재');
+        fireEvent.click(reloadBtn);
+
+        const modal = await screen.findByRole('dialog');
+        expect(within(modal).getByText('ES 재적재')).toBeTruthy();
+
+        mockJsonPostReq.mockImplementation((url, payload, resolve) => {
+            resolve({ processed_count: 5 });
+        });
+
+        fireEvent.click(within(modal).getByRole('button', { name: '재적재' }));
+        await waitFor(() => {
+            expect(mockJsonPostReq).toHaveBeenCalledWith(
+                '/category-mismatches/reload',
+                { category: '1_fiction' },
+                expect.any(Function),
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+    });
+
+    // ── 키워드 매핑 ──
+
+    it('키워드 추가 시 POST API를 호출한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+        render(<CategoryAdmin />);
+        fireEvent.click(screen.getByText('카테고리 관리'));
+        await waitFor(() => { expect(screen.getByText('1_fiction')).toBeTruthy(); });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+        const input = screen.getByPlaceholderText('새 키워드 입력');
+        fireEvent.change(input, { target: { value: '새키워드' } });
+
+        mockJsonPostReq.mockImplementation((url, payload, resolve) => {
+            resolve();
+        });
+
+        fireEvent.click(screen.getByText('추가'));
+        await waitFor(() => {
+            expect(mockJsonPostReq).toHaveBeenCalledWith(
+                '/category-mappings/1_fiction/keywords?content_type=book',
+                { keyword: '새키워드' },
+                expect.any(Function),
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+    });
+
+    it('키워드 삭제 시 DELETE API를 호출한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+        render(<CategoryAdmin />);
+        fireEvent.click(screen.getByText('카테고리 관리'));
+        await waitFor(() => { expect(screen.getByText('1_fiction')).toBeTruthy(); });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+        await waitFor(() => {
+            expect(screen.getByText('소설')).toBeTruthy();
+        });
+
+        const deleteIcon = screen.getByText('소설').querySelector('svg[data-icon="trash"]');
+        fireEvent.click(deleteIcon);
+
+        mockJsonDeleteReq.mockImplementation((url, payload, resolve) => {
+            resolve();
+        });
+
+        await waitFor(() => {
+            expect(mockJsonDeleteReq).toHaveBeenCalledWith(
+                '/category-mappings/1_fiction/keywords/%EC%86%8C%EC%84%A4?content_type=book',
+                null,
+                expect.any(Function),
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+    });
+
+    // ── 중복(Duplicate) 불일치 처리 ──
+
+    it('중복 항목 선택 시 중복 문서 테이블을 표시한다', async () => {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+        render(<CategoryAdmin />);
+        fireEvent.click(screen.getByText('카테고리 관리'));
+        await waitFor(() => { expect(screen.getByRole('tree')).toBeTruthy(); });
+
+        mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+            if (url.startsWith('/category-mismatches/1_fiction')) {
+                resolve({
+                    duplicates: [{
+                        file_path: '1_fiction/dup.pdf',
+                        file_exists: true,
+                        docs: [
+                            { book_id: 1001, title: 'Dup 1', author: 'Author', file_linked: true },
+                            { book_id: 1002, title: 'Dup 2', author: 'Author', file_linked: false },
+                        ]
+                    }]
+                });
+            } else setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA)(url, _payload, resolve);
+        });
+
+        fireEvent.click(screen.getByText('1_fiction'));
+        await waitFor(() => {
+            expect(screen.getByText(/\[중복\] dup\.pdf/)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText(/\[중복\] dup\.pdf/));
+        await waitFor(() => {
+            expect(screen.getByText('Dup 1')).toBeTruthy();
+            expect(screen.getByText('Dup 2')).toBeTruthy();
+            expect(screen.getByText('연결됨')).toBeTruthy();
+            expect(screen.getByText('미연결')).toBeTruthy();
+        });
+    });
+
+    it('계층 구조 카테고리를 트리 구조로 표시한다', async () => {
         const categories = {
             'prefix/fiction': 10,
             'prefix/science': 8,

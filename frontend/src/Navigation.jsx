@@ -19,15 +19,6 @@ import { faSearch, faSpinner, faUser } from "@fortawesome/free-solid-svg-icons";
 import { rawJsonGetReq, getApiUrlPrefix } from "./Common.js";
 import { isViewerAllowedPath } from "./auth.js";
 
-function decodeJwtPayload(token) {
-  try {
-    const payload = token.split(".")[1];
-    return JSON.parse(atob(payload));
-  } catch {
-    return null;
-  }
-}
-
 export default function Navigation() {
   const clientId =
     window.__ENV__?.["VITE_GOOGLE_CLIENT_ID"] ||
@@ -144,25 +135,25 @@ export default function Navigation() {
       );
       return;
     }
-
-    // localStorage의 JWT 토큰으로 로그인 상태 복원
-    const storedToken = localStorage.getItem("tm_token");
-    if (storedToken) {
-      const payload = decodeJwtPayload(storedToken);
-      if (payload && payload.exp > Date.now() / 1000) {
-        setLogin(true);
-        setRole(payload.role);
-        setName(payload.name || "");
-        setEmail(payload.email || "");
-        setPicture(payload.picture || "");
-      } else {
-        // 만료된 토큰 제거
-        localStorage.removeItem("tm_token");
-        localStorage.removeItem("name");
-        localStorage.removeItem("email");
-        localStorage.removeItem("picture");
+    const loadSession = async () => {
+      try {
+        const res = await fetch(getApiUrlPrefix() + "/auth/me", {
+          credentials: "include",
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.status === "success" && data.result?.role) {
+          setLogin(true);
+          setRole(data.result.role);
+          setName(data.result.name || "");
+          setEmail(data.result.email || "");
+          setPicture(data.result.picture || "");
+        }
+      } catch {
+        // ignore
       }
-    }
+    };
+    loadSession();
   }, [clientId]);
 
   const onLoginSuccess = async (credentialResponse) => {
@@ -173,6 +164,7 @@ export default function Navigation() {
       const res = await fetch(getApiUrlPrefix() + "/auth/google", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ credential: credentialResponse.credential }),
       });
 
@@ -181,17 +173,12 @@ export default function Navigation() {
       const data = await res.json();
       console.log("Google auth verified:", data);
 
-      if (data.token && data.role) {
+      if (data.role) {
         setName(data.name || "Unknown");
         setEmail(data.email || "");
         setPicture(data.picture || "");
         setLogin(true);
         setRole(data.role);
-
-        localStorage.setItem("tm_token", data.token);
-        localStorage.setItem("name", data.name || "");
-        localStorage.setItem("email", data.email || "");
-        localStorage.setItem("picture", data.picture || "");
       }
     } catch (error) {
       console.error("Error verifying Google token:", error);
@@ -199,7 +186,7 @@ export default function Navigation() {
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
     console.log("Logging out...");
     setLogin(false);
     setRole(null);
@@ -207,10 +194,14 @@ export default function Navigation() {
     setEmail("");
     setPicture("");
 
-    localStorage.removeItem("tm_token");
-    localStorage.removeItem("name");
-    localStorage.removeItem("email");
-    localStorage.removeItem("picture");
+    try {
+      await fetch(getApiUrlPrefix() + "/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      // ignore
+    }
 
     googleLogout();
     console.log("Google Logout Completed");

@@ -7,12 +7,23 @@ import urllib.error
 import json
 import warnings
 import logging
+from pathlib import Path
 import pytest
 
 LOGGER = logging.getLogger(__name__)
 
 # XMLParsedAsHTMLWarning 경고 전역 억제
 warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
+
+# 기본 테스트 환경 변수 설정 (import 시점 SystemExit 방지)
+PROJECT_ROOT = Path(__file__).parent.parent
+os.environ.setdefault("TM_BOOK_DIR", str(PROJECT_ROOT / "tests/books"))
+os.environ.setdefault("TM_COMICS_DIR", str(PROJECT_ROOT / "tests/comics"))
+os.environ.setdefault("TM_FRONTEND_URL", "http://localhost:3000")
+os.environ.setdefault("TM_JWT_SECRET", "test_jwt_secret_for_testing_minimum_32bytes")
+os.environ.setdefault("TM_ADMIN_EMAIL", "admin@test.com")
+os.environ.setdefault("TM_ALLOWED_EMAILS", "viewer@test.com")
+os.environ.setdefault("TM_ES_COMICS_INDEX", "test_comics_index")
 
 # Disable Ryuk to avoid docker.sock mount issues with Colima
 os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
@@ -268,12 +279,12 @@ def es_index(es_client):
 
 
 @pytest.fixture(scope="session")
-def admin_auth_header():
-    """테스트용 admin JWT 토큰 헤더."""
+def admin_auth_cookies():
+    """테스트용 admin JWT 쿠키."""
     from backend.auth import create_jwt_token
 
     token = create_jwt_token(email="admin@test.com", role="admin", name="Test Admin")
-    return {"Authorization": f"Bearer {token}"}
+    return {"tm_access_token": token}
 
 
 @pytest.fixture(scope="function")

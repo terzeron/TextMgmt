@@ -21,7 +21,8 @@ dependencies = [
     "requests==2.32.4",
     "striprtf==0.0.29",
     "uvicorn==0.30.1",
-    "PyJWT>=2.8.0",
+    "pyjwt>=2.8.0",
+    "python-multipart>=0.0.22",
 ]
 
 [dependency-groups]
@@ -42,6 +43,7 @@ dev = [
     # type stubs
     "types-python-dateutil==2.9.0.20240316",
     "types-pytz==2024.1.0.20240417",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.black]
@@ -84,3 +86,10 @@ filterwarnings = [
 [tool.pylint."master"]
 ignore = [".github/*", "idea/*", ".mypy_cache/*", ".run/*", "frontend/*", "out/*"]
 disable = ["line-too-long", "missing-module-docstring", "missing-function-docstring", "missing-class-docstring", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-many-lines", "too-many-return-statements", "too-many-boolean-expressions", "too-many-nested-blocks", "too-many-ancestors", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-many-lines", "too-many-return-statements", "too-many-boolean-expressions", "too-many-nested-blocks", "too-many-ancestors", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-many-lines", "too-many-return-statements", "too-many-boolean-expressions", "too-many-nested-blocks", "too-many-ancestors", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-many-lines", "too-many-return-statements", "too-many-boolean-expressions", "too-many-nested-blocks", "too-many-ancestors", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-many-lines", "too-many-return-statements", "too-many-boolean-expressions", "too-many-nested-blocks", "too-many-ancestors", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-many-lines", "too-many-return-statements", "too-many-boolean-expressions", "too-many-nested-blocks", "too-many-ancestors", "too-many-arguments", "too-many-locals", "too-many-instance-attributes", "too-many-branches", "too-many-statements", "too-many-public-methods", "too-few-public-methods", "logging-fstring-interpolation", "invalid-name", "protected-access", "unexpected-keyword-arg"]
+
+[tool.ruff]
+line-length = 320
+
+[tool.ruff.format]
+quote-style = "double"
+skip-magic-trailing-comma = true

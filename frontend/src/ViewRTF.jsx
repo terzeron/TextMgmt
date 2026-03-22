@@ -2,6 +2,7 @@ import { useEffect, Suspense, useState, useRef } from "react";
 import PropTypes from "prop-types";
 import { RTFJS } from "rtf.js";
 import { textGetReq } from "./Common";
+import DOMPurify from "dompurify";
 
 export default function ViewRTF({ bookId, apiPrefix = '' }) {
     const parentRef = useRef(null);
@@ -40,10 +41,25 @@ export default function ViewRTF({ bookId, apiPrefix = '' }) {
                 doc.render()
                     .then((htmlElements) => {
                         if (parentRef.current) {
-                            parentRef.current.innerHTML = "";
+                            const tempContainer = document.createElement("div");
                             htmlElements.forEach((element) => {
-                                parentRef.current.appendChild(element);
+                                tempContainer.appendChild(element);
                             });
+                            const blockSvgDataUri = (node) => {
+                                if (node.tagName && node.tagName.toLowerCase() === "img") {
+                                    const src = node.getAttribute("src") || "";
+                                    if (/^data:image\/svg\+xml/i.test(src)) {
+                                        node.removeAttribute("src");
+                                    }
+                                }
+                            };
+                            DOMPurify.addHook("afterSanitizeAttributes", blockSvgDataUri);
+                            try {
+                                const safeHtml = DOMPurify.sanitize(tempContainer.innerHTML);
+                                parentRef.current.innerHTML = safeHtml;
+                            } finally {
+                                DOMPurify.removeHook("afterSanitizeAttributes");
+                            }
                         }
                         setErrorMessage(null); // ✅ 에러 초기화
                     })

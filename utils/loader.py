@@ -885,16 +885,19 @@ def main() -> int:
 
     if len(args) < 1:
         print_usage(sys.argv[0])
+        return 1
 
     index_name_arg = args[0]
     if index_name_arg not in INDEX_MAP:
         LOGGER.error(f"유효하지 않은 인덱스명: '{index_name_arg}' (book 또는 comics만 가능)")
         print_usage(sys.argv[0])
+        return 1
 
     file_args = args[1:]
 
     if not do_delete and len(file_args) < 1:
         print_usage(sys.argv[0])
+        return 1
 
     start_time: datetime = datetime.now()
 

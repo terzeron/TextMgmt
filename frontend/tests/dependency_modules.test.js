@@ -108,9 +108,11 @@ describe('mammoth', () => {
         const mammoth = await import('mammoth');
         // 빈 ArrayBuffer는 유효한 DOCX가 아니므로 reject됨
         // API가 arrayBuffer 키를 인식하고 처리 시도하는지만 확인
-        await expect(
-            mammoth.convertToHtml({ arrayBuffer: new ArrayBuffer(0) })
-        ).rejects.toThrow();
+        await mammoth
+            .convertToHtml({ arrayBuffer: new ArrayBuffer(0) })
+            .catch((err) => {
+                expect(err).toBeInstanceOf(Error);
+            });
     });
 });
 

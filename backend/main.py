@@ -5,23 +5,23 @@ import sys
 import os
 import logging.config
 from pathlib import Path
-from typing import Dict, Any, Union, List
+from typing import Dict, Any, Literal, Union, List, Callable, TypeVar, Optional
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse
 from fastapi.exceptions import RequestValidationError
+
 # 에러 및 미디어 타입 상수 정의
 ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
 JSON_MEDIA_TYPE = "application/json"
 from pydantic import BaseModel
-from backend.auth import require_auth, require_admin, determine_role, create_jwt_token
+from backend.auth import require_auth, require_admin, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
 from backend.book_manager import BookManager
 from backend.comics_manager import ComicsManager
 from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
 from backend.category_mapping import CategoryMapping
-from urllib.parse import quote_plus
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -32,9 +32,8 @@ if "TM_FRONTEND_URL" not in os.environ:
 
 app = FastAPI()
 LOGGER.info("app ready")
-origins = [os.getenv("TM_FRONTEND_URL")]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
-                   expose_headers=["Accept-Ranges", "Content-Range", "Content-Length", "Content-Encoding", "X-Total-Pages", "X-Total-Chapters"])
+origins = [url for url in [os.getenv("TM_FRONTEND_URL")] if url is not None]
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"], expose_headers=["Accept-Ranges", "Content-Range", "Content-Length", "Content-Encoding", "X-Total-Pages", "X-Total-Chapters"])
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
@@ -44,49 +43,46 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     LOGGER.error("Validation error: %s", exc.errors())
     LOGGER.error("Request body: %s", exc.body)
     from fastapi.responses import JSONResponse
-    return JSONResponse(
-        status_code=422,
-        content={"detail": "입력값이 올바르지 않습니다"},
-    )
+
+    return JSONResponse(status_code=422, content={"detail": "입력값이 올바르지 않습니다"})
 
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     LOGGER.error("[%d] %s %s - %s", exc.status_code, request.method, request.url.path, exc.detail)
     from fastapi.responses import JSONResponse
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail},
-    )
+
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     import traceback
+
     LOGGER.error("[500] %s %s", request.method, request.url.path)
     LOGGER.error("Exception: %s", str(exc))
     LOGGER.error("Traceback:\n%s", traceback.format_exc())
     from fastapi.responses import JSONResponse
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "서버 내부 오류가 발생했습니다"},
-    )
+
+    return JSONResponse(status_code=500, content={"detail": "서버 내부 오류가 발생했습니다"})
 
 
 # JSON 응답에서 한글이 유니코드 이스케이프로 인코딩되지 않도록 설정
 import json
 from fastapi.responses import JSONResponse
 
+
 class CustomJSONResponse(JSONResponse):
     def render(self, content) -> bytes:
-        return json.dumps(content, ensure_ascii=False, separators=(',', ':'), indent=2).encode('utf-8')
+        return json.dumps(content, ensure_ascii=False, separators=(",", ":"), indent=2).encode("utf-8")
+
 
 # FastAPI의 기본 JSON 인코더 설정
-import json
 from fastapi.encoders import jsonable_encoder
 
 # 원본 jsonable_encoder를 백업
 _original_jsonable_encoder = jsonable_encoder
+
 
 def custom_jsonable_encoder(obj, **kwargs):
     """한글이 유니코드 이스케이프로 인코딩되지 않도록 하는 커스텀 인코더"""
@@ -99,23 +95,96 @@ def custom_jsonable_encoder(obj, **kwargs):
     else:
         return _original_jsonable_encoder(obj, **kwargs)
 
+
 # FastAPI 앱에 커스텀 JSON 인코더 설정
-app.json_encoder = custom_jsonable_encoder
+app.json_encoder = custom_jsonable_encoder  # type: ignore[attr-defined]
 
 TM_GOOGLE_CLIENT_ID = os.getenv("TM_GOOGLE_CLIENT_ID")
 TM_GOOGLE_CLIENT_SECRET = os.getenv("TM_GOOGLE_CLIENT_SECRET")
 
-book_manager = BookManager()
-print("book manager ready")
 
-comics_manager = ComicsManager()
-print("comics manager ready")
+_SameSite = Literal["lax", "strict", "none"]
 
-bookstore = Yes24Bookstore(base_dir=".", verbose=True)
-print("bookstore ready")
 
-category_mapping = CategoryMapping()
-print("category mapping ready")
+def _get_cookie_settings() -> tuple[bool, _SameSite]:
+    secure = os.getenv("TM_COOKIE_SECURE", "false").lower() == "true"
+    samesite_raw = os.getenv("TM_COOKIE_SAMESITE", "lax").lower()
+    if samesite_raw == "strict":
+        samesite: _SameSite = "strict"
+    elif samesite_raw == "none":
+        samesite = "none"
+    else:
+        samesite = "lax"
+    # SameSite=None은 Secure=True가 필수 (브라우저 요구사항)
+    if samesite == "none" and not secure:
+        LOGGER.warning("SameSite=None requires Secure=True; falling back to SameSite=Lax")
+        samesite = "lax"
+    return secure, samesite
+
+
+def _set_auth_cookies(response: JSONResponse, access_token: str, refresh_token: str | None = None) -> None:
+    secure, samesite = _get_cookie_settings()
+    response.set_cookie(ACCESS_COOKIE_NAME, access_token, httponly=True, secure=secure, samesite=samesite, max_age=ACCESS_TOKEN_EXPIRATION_SECONDS, path="/")
+    if refresh_token is not None:
+        response.set_cookie(REFRESH_COOKIE_NAME, refresh_token, httponly=True, secure=secure, samesite=samesite, max_age=REFRESH_TOKEN_EXPIRATION_SECONDS, path="/")
+
+
+def _clear_auth_cookies(response: JSONResponse) -> None:
+    secure, samesite = _get_cookie_settings()
+    response.set_cookie(ACCESS_COOKIE_NAME, "", httponly=True, secure=secure, samesite=samesite, max_age=0, path="/")
+    response.set_cookie(REFRESH_COOKIE_NAME, "", httponly=True, secure=secure, samesite=samesite, max_age=0, path="/")
+
+
+T = TypeVar("T")
+
+
+class _LazyProxy:
+    """Initialize heavy dependencies lazily to avoid side effects at import time."""
+
+    def __init__(self, factory: Callable[[], T], name: str) -> None:
+        self._factory = factory
+        self._instance: Optional[T] = None
+        self._name = name
+
+    def _get_instance(self) -> T:
+        if self._instance is None:
+            self._instance = self._factory()
+            LOGGER.info("%s ready", self._name)
+        return self._instance
+
+    def __getattr__(self, item):
+        return getattr(self._get_instance(), item)
+
+    def __setattr__(self, key, value) -> None:
+        if key in {"_factory", "_instance", "_name"}:
+            object.__setattr__(self, key, value)
+            return
+        setattr(self._get_instance(), key, value)
+
+    def __repr__(self) -> str:
+        return repr(self._get_instance())
+
+
+def _create_book_manager() -> BookManager:
+    return BookManager()
+
+
+def _create_comics_manager() -> ComicsManager:
+    return ComicsManager()
+
+
+def _create_bookstore() -> Yes24Bookstore:
+    return Yes24Bookstore(base_dir=".", verbose=True)
+
+
+def _create_category_mapping() -> CategoryMapping:
+    return CategoryMapping()
+
+
+book_manager = _LazyProxy(_create_book_manager, "book manager")
+comics_manager = _LazyProxy(_create_comics_manager, "comics manager")
+bookstore = _LazyProxy(_create_bookstore, "bookstore")
+category_mapping = _LazyProxy(_create_category_mapping, "category mapping")
 
 
 class BookModel(BaseModel):
@@ -237,8 +306,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             # MySQL 카테고리 매핑 갱신
             mapping_updated = await asyncio.to_thread(category_mapping.rename_category, body.old_category, body.new_category, content_type=content_type)
             if not mapping_updated:
-                LOGGER.warning("rename_category: MySQL 매핑 갱신 실패 (old='%s', new='%s')",
-                               body.old_category, body.new_category)
+                LOGGER.warning("rename_category: MySQL 매핑 갱신 실패 (old='%s', new='%s')", body.old_category, body.new_category)
             result["mapping_updated"] = mapping_updated
             response_object["status"] = "success"
             response_object["result"] = result
@@ -439,17 +507,17 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
     검색 우선순위: ISBN > 제목+저자 > 제목 > 저자
     """
     store_class = None
-    if store_name.lower() == 'yes24':
+    if store_name.lower() == "yes24":
         store_class = Yes24Bookstore
-    elif store_name.lower() == 'aladin':
+    elif store_name.lower() == "aladin":
         store_class = AladinBookstore
-    elif store_name.lower() == 'ridi':
+    elif store_name.lower() == "ridi":
         store_class = RidibooksBookstore
-    elif store_name.lower() == 'naver':
+    elif store_name.lower() == "naver":
         store_class = NaverShoppingBookstore
-    elif store_name.lower() == 'naverseries':
+    elif store_name.lower() == "naverseries":
         store_class = NaverSeriesBookstore
-    elif store_name.lower() == 'munpia':
+    elif store_name.lower() == "munpia":
         store_class = MunpiaBookstore
     else:
         raise HTTPException(status_code=404, detail="Bookstore not found")
@@ -471,34 +539,15 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
     books_data = []
     for r in results[:5]:
         book_title, book_author, category, book_url, _, book_isbn = r
-        item = {
-            "title": book_title,
-            "author": book_author,
-            "category": category,
-            "book_url": book_url
-        }
+        item = {"title": book_title, "author": book_author, "category": category, "book_url": book_url}
         if book_isbn:
             item["isbn"] = book_isbn
         books_data.append(item)
 
     if not books_data:
-        return {
-            "status": "not_found",
-            "store": store_name,
-            "search_keyword": search_keyword,
-            "search_method": search_method,
-            "search_url": bookstore.build_search_url(search_keyword) if search_keyword else "",
-            "result": []
-        }
+        return {"status": "not_found", "store": store_name, "search_keyword": search_keyword, "search_method": search_method, "search_url": bookstore.build_search_url(search_keyword) if search_keyword else "", "result": []}
 
-    return {
-        "status": "success",
-        "store": store_name,
-        "search_keyword": search_keyword,
-        "search_method": search_method,
-        "search_url": bookstore.build_search_url(search_keyword) if search_keyword else "",
-        "result": books_data
-    }
+    return {"status": "success", "store": store_name, "search_keyword": search_keyword, "search_method": search_method, "search_url": bookstore.build_search_url(search_keyword) if search_keyword else "", "result": books_data}
 
 
 @app.post("/auth/google")
@@ -534,17 +583,48 @@ async def verify_google_token(request_body: dict):
 
     # JWT 토큰 발급
     token = create_jwt_token(email=email, role=role, name=name, picture=picture)
+    refresh_token = create_refresh_token(email=email, role=role, name=name, picture=picture)
 
-    return {
-        "token": token,
-        "email": email,
-        "name": name,
-        "picture": picture,
-        "role": role,
-    }
+    response = JSONResponse({"status": "success", "email": email, "name": name, "picture": picture, "role": role})
+    _set_auth_cookies(response, token, refresh_token)
+    return response
+
+
+@app.post("/auth/refresh")
+async def refresh_access_token(request: Request):
+    refresh_token = request.cookies.get(REFRESH_COOKIE_NAME, "")
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Refresh token is required")
+
+    payload = decode_refresh_token(refresh_token)
+
+    email = payload.get("email", "")
+    role = determine_role(email)
+    if role is None:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # 새 access token 발급 (refresh token은 유지)
+    token = create_jwt_token(email=email, role=role, name=payload.get("name", ""), picture=payload.get("picture", ""))
+
+    response = JSONResponse({"status": "success"})
+    _set_auth_cookies(response, token)
+    return response
+
+
+@app.get("/auth/me")
+async def auth_me(payload: dict = Depends(require_auth)):
+    return {"status": "success", "result": {"email": payload.get("email", ""), "role": payload.get("role", ""), "name": payload.get("name", ""), "picture": payload.get("picture", "")}}
+
+
+@app.post("/auth/logout")
+async def logout():
+    response = JSONResponse({"status": "success"})
+    _clear_auth_cookies(response)
+    return response
 
 
 # === 카테고리 매핑 API ===
+
 
 class CategoryKeywordsModel(BaseModel):
     keywords: List[str]
@@ -665,6 +745,7 @@ async def update_all_category_mappings(body: CategoryMappingsModel, content_type
 
 
 # === 비노출 카테고리 API ===
+
 
 class HiddenCategoryModel(BaseModel):
     hidden: bool
