@@ -3,8 +3,12 @@
 import logging.config
 import shutil
 from pathlib import Path
+from fastapi.responses import Response
 
 import pytest
+import types
+from fastapi.testclient import TestClient
+import backend.main as main
 
 logging.config.fileConfig(
     Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False
@@ -16,16 +20,25 @@ CATEGORY = "_epub"
 
 
 @pytest.fixture(scope="module")
-def backend_test_setup(es_client, es_index, admin_auth_cookies):
+def backend_test_setup(es_client, es_index, admin_auth_cookies, mysql_container):
     """Create BookManager and TestClient with test data loaded (공유된 ES 클라이언트 및 인덱스 사용)."""
     from fastapi.testclient import TestClient
-    from backend.main import app
+    from backend.main import app, book_manager as main_bm, comics_manager as main_cm
     from backend.book_manager import BookManager
     from utils.loader import Loader
+    import os
 
     # Create BookManager and use shared ES client
     bm = BookManager()
     bm.es_manager.es = es_client
+    # Update main app's managers to use the shared client and index as well
+    main_bm.es_manager.es = es_client
+    main_bm.es_manager.index_name = es_index
+    main_cm.es_manager.es = es_client
+    # comics_manager might use a different index, but for this test we might want to stick to what it has or sync if needed.
+    # Given TM_ES_COMICS_INDEX is also usually set in conftest, we should check it.
+    if "TM_ES_COMICS_INDEX" in os.environ:
+        main_cm.es_manager.index_name = os.environ["TM_ES_COMICS_INDEX"]
 
     # Load test data from actual files if available
     epub_path = bm.path_prefix / CATEGORY
@@ -109,6 +122,8 @@ class TestBackend:
         response = client.put(f"/books/{book.book_id}", json=doc)
         assert response
         assert response.status_code == 200
+
+
         assert response.json() == {"status": "success", "result": "Ok"}
 
     @pytest.mark.asyncio
@@ -951,3 +966,414 @@ class TestAuthMeLogout:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ---- merged from test_main_api_extra.py ----
+import types
+
+import pytest
+from fastapi.testclient import TestClient
+
+import backend.main as main
+
+
+@pytest.fixture()
+def client():
+    def _auth_override():
+        return {"email": "user@example.com", "role": "user"}
+
+    def _admin_override():
+        return {"email": "admin@example.com", "role": "admin"}
+
+    main.app.dependency_overrides[main.require_auth] = _auth_override
+    main.app.dependency_overrides[main.require_admin] = _admin_override
+    with TestClient(main.app) as c:
+        yield c
+    main.app.dependency_overrides.clear()
+
+
+def test_lazy_proxy_initializes_once():
+    calls = {"count": 0}
+
+    def factory():
+        calls["count"] += 1
+        obj = types.SimpleNamespace(value=1)
+        return obj
+
+    proxy = main._LazyProxy(factory, "dummy")
+    assert proxy.value == 1
+    proxy.value = 2
+    assert proxy.value == 2
+    assert calls["count"] == 1
+
+
+def test_custom_jsonable_encoder():
+    data = {"korean": "테스트", "list": ["값"], "nested": {"a": "나"}}
+    encoded = main.custom_jsonable_encoder(data)
+    assert encoded == data
+
+
+def test_wake_storage_success_and_failure(client, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(main.os, "listdir", lambda path: ["a", "b"])
+    resp = client.get("/wake")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "success", "count": 2}
+
+    def fail_listdir(path):
+        raise OSError("boom")
+
+    monkeypatch.setattr(main.os, "listdir", fail_listdir)
+    resp = client.get("/wake")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "failure"
+    assert "boom" in body["error"]
+
+
+def test_search_bookstore_api_errors(client):
+    resp = client.get("/search/bookstore/unknown")
+    assert resp.status_code == 404
+
+    resp = client.get("/search/bookstore/yes24")
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == main.ERR_MISSING_INPUT
+
+
+def test_search_bookstore_api_success(client, monkeypatch: pytest.MonkeyPatch):
+    class DummyStore:
+        def __init__(self):
+            self.called = False
+
+        def search(self, isbn: str = "", title: str = "", author: str = ""):
+            self.called = True
+            return [("T", "A", "C", "U", "S", "ISBN")], "kw", "title"
+
+        def build_search_url(self, keyword: str) -> str:
+            return f"https://example.com?q={keyword}"
+
+    monkeypatch.setattr(main, "Yes24Bookstore", DummyStore)
+    resp = client.get("/search/bookstore/yes24?title=Hello")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["search_keyword"] == "kw"
+    assert body["result"][0]["isbn"] == "ISBN"
+
+
+def test_category_mapping_endpoints(client, monkeypatch: pytest.MonkeyPatch):
+    class DummyMapping:
+        def get_all_mappings(self, content_type="book"):
+            return {"A": ["a"]}
+
+        def get_keywords(self, category, content_type="book"):
+            return ["k1", "k2"]
+
+        def set_keywords(self, category, keywords, content_type="book"):
+            return True
+
+        def add_keyword(self, category, keyword, content_type="book"):
+            return keyword != "dup"
+
+        def remove_keyword(self, category, keyword, content_type="book"):
+            return keyword == "ok"
+
+        def delete_category(self, category, content_type="book"):
+            return category == "ok"
+
+        def update_all_mappings(self, mappings, content_type="book"):
+            return True
+
+        def get_hidden_categories(self, content_type="book"):
+            return ["A"]
+
+        def set_hidden(self, category, hidden, content_type="book"):
+            return True
+
+    monkeypatch.setattr(main, "category_mapping", DummyMapping())
+
+    resp = client.get("/category-mappings")
+    assert resp.json()["result"] == {"A": ["a"]}
+
+    resp = client.get("/category-mappings/A")
+    assert resp.json()["result"] == ["k1", "k2"]
+
+    resp = client.put("/category-mappings/A", json={"keywords": ["x"]})
+    assert resp.json()["status"] == "success"
+
+    resp = client.post("/category-mappings/A/keywords", json={"keyword": ""})
+    assert resp.status_code == 400
+
+    resp = client.post("/category-mappings/A/keywords", json={"keyword": "dup"})
+    assert resp.json()["status"] == "duplicate"
+
+    resp = client.post("/category-mappings/A/keywords", json={"keyword": "new"})
+    assert resp.json()["status"] == "success"
+
+    resp = client.delete("/category-mappings/A/keywords/ok")
+    assert resp.json()["status"] == "success"
+
+    resp = client.delete("/category-mappings/A/keywords/miss")
+    assert resp.status_code == 404
+
+    resp = client.delete("/category-mappings/ok")
+    assert resp.json()["status"] == "success"
+
+    resp = client.delete("/category-mappings/miss")
+    assert resp.status_code == 404
+
+    resp = client.put("/category-mappings", json={"mappings": {"A": ["a"]}})
+    assert resp.json()["status"] == "success"
+
+    resp = client.get("/hidden-categories")
+    assert resp.json()["result"] == ["A"]
+
+    resp = client.post("/hidden-categories/A", json={"hidden": True})
+    assert resp.json()["status"] == "success"
+
+
+# ---- merged from test_main_routes_extra.py ----
+class DummyBook:
+    def __init__(self, data):
+        self._data = data
+
+    def dict(self):
+        return self._data
+
+    def __getattr__(self, item):
+        if item in self._data:
+            return self._data[item]
+        raise AttributeError(item)
+
+
+class DummyManager:
+    def __init__(self, tmp_path: Path):
+        self.path_prefix = tmp_path
+        self.es_manager = type("E", (), {"delete": lambda self, book_id: True})()
+
+    async def update_book(self, *args, **kwargs):
+        return "Ok", None
+
+    async def delete_book(self, book_id: int):
+        return "Warning", "warn"
+
+    async def get_book_content(self, book_id: int):
+        return "content"
+
+    async def get_book_preview(self, *args, **kwargs):
+        return Response(content="preview", media_type="text/plain")
+
+    async def get_pdf_pages(self, *args, **kwargs):
+        return Response(content="pdf", media_type="application/pdf")
+
+    async def get_book(self, book_id: int):
+        data = {
+            "book_id": book_id,
+            "category": "A",
+            "title": "T",
+            "author": "U",
+            "file_path": "a.txt",
+            "file_type": "txt",
+            "file_size": 1,
+            "line_count": 0,
+            "page_count": 0,
+            "isbn": "",
+            "updated_time": "2024-01-01T00:00:00.000000",
+            "score": 0.0,
+        }
+        return DummyBook(data), None
+
+    async def validate_epub(self, book_id: int):
+        return {"valid": True}, None
+
+    async def validate_pdf(self, book_id: int):
+        return {"valid": True}, None
+
+    async def get_books_in_category(self, category: str):
+        return [DummyBook({
+            "book_id": 1,
+            "category": category,
+            "title": "T",
+            "author": "U",
+            "file_path": "a.txt",
+            "file_type": "txt",
+            "file_size": 1,
+            "line_count": 0,
+            "page_count": 0,
+            "isbn": "",
+            "updated_time": "2024-01-01T00:00:00.000000",
+            "score": 0.0,
+        })], None
+
+    async def get_categories(self):
+        return {"A": 1}, None
+
+    async def search_similar_books_paged(self, book_id: int, size: int, offset: int):
+        return [], 0, "No similar books found"
+
+    async def search_similar_books_paged_ok(self, book_id: int, size: int, offset: int):
+        return ([DummyBook({
+            "book_id": 2,
+            "category": "A",
+            "title": "T2",
+            "author": "U",
+            "file_path": "b.txt",
+            "file_type": "txt",
+            "file_size": 1,
+            "line_count": 0,
+            "page_count": 0,
+            "isbn": "",
+            "updated_time": "2024-01-01T00:00:00.000000",
+            "score": 10.0,
+        })], 1, None)
+
+    async def search_by_keyword_paged(self, keyword: str, size: int, offset: int, exclude_categories=None):
+        return ([DummyBook({
+            "book_id": 3,
+            "category": "A",
+            "title": "T3",
+            "author": "U",
+            "file_path": "c.txt",
+            "file_type": "txt",
+            "file_size": 1,
+            "line_count": 0,
+            "page_count": 0,
+            "isbn": "",
+            "updated_time": "2024-01-01T00:00:00.000000",
+            "score": 9.0,
+        })], 1, None)
+
+    def get_category_mismatches(self):
+        return {"mismatches": []}
+
+    def get_category_mismatch_details(self, category: str):
+        return {"category": category}
+
+    async def index_single_file(self, file_path: str):
+        return 1, None
+
+    async def delete_file(self, file_path: str):
+        return "Ok", None
+
+    async def reload_category(self, category: str, content_type: str = "book"):
+        return {"category": category, "processed_count": 1}, None
+
+
+@pytest.fixture()
+def dummy_client(tmp_path: Path):
+    from fastapi.testclient import TestClient
+    from backend import main as main_mod
+
+    def _auth_override():
+        return {"email": "user@example.com", "role": "user"}
+
+    def _admin_override():
+        return {"email": "admin@example.com", "role": "admin"}
+
+    main_mod.app.dependency_overrides[main_mod.require_auth] = _auth_override
+    main_mod.app.dependency_overrides[main_mod.require_admin] = _admin_override
+
+    dummy = DummyManager(tmp_path)
+    orig_book_instance = getattr(main_mod.book_manager, "_instance", None)
+    orig_comics_instance = getattr(main_mod.comics_manager, "_instance", None)
+    main_mod.book_manager._instance = dummy  # type: ignore[attr-defined]
+    main_mod.comics_manager._instance = dummy  # type: ignore[attr-defined]
+
+    with TestClient(main_mod.app) as c:
+        yield c
+
+    main_mod.book_manager._instance = orig_book_instance  # type: ignore[attr-defined]
+    main_mod.comics_manager._instance = orig_comics_instance  # type: ignore[attr-defined]
+    main_mod.app.dependency_overrides.clear()
+
+
+def test_main_routes_basic(dummy_client):
+    payload = {
+        "book_id": 1,
+        "category": "A",
+        "title": "T",
+        "author": "U",
+        "file_path": "a.txt",
+        "file_type": "txt",
+        "file_size": 1,
+        "line_count": 0,
+        "page_count": 0,
+        "isbn": "",
+        "updated_time": "2024-01-01T00:00:00.000000",
+        "score": 0.0,
+    }
+    resp = dummy_client.put("/books/1", json=payload)
+    assert resp.json()["status"] == "success"
+
+    resp = dummy_client.delete("/books/1")
+    assert resp.json()["status"] == "success"
+    assert resp.json()["warning"]
+
+    resp = dummy_client.get("/download/1")
+    assert resp.status_code == 200
+
+    resp = dummy_client.get("/preview/1")
+    assert resp.status_code == 200
+
+    resp = dummy_client.get("/pdf-pages/1?start=1&end=1")
+    assert resp.status_code == 200
+
+    resp = dummy_client.get("/books/1")
+    assert resp.json()["status"] == "success"
+
+    resp = dummy_client.get("/categories/A")
+    assert resp.json()["status"] == "success"
+
+    resp = dummy_client.get("/categories")
+    assert resp.json()["status"] == "success"
+
+
+def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
+    from backend import main as main_mod
+
+    dummy = main_mod.book_manager
+    resp = dummy_client.get("/similar/1")
+    assert resp.json()["status"] == "success"
+    assert resp.json()["total"] == 1
+
+    monkeypatch.setattr(dummy, "search_similar_books_paged", dummy.search_similar_books_paged_ok)
+    resp = dummy_client.get("/similar/1")
+    assert resp.json()["total"] == 1
+
+    resp = dummy_client.get("/search/kw?exclude_categories=A,B")
+    assert resp.json()["status"] == "success"
+
+    async def get_epub(book_id: int):
+        data = (await DummyManager(Path(".")).get_book(book_id))[0]
+        data._data["file_type"] = "epub"
+        return data, None
+
+    monkeypatch.setattr(dummy, "get_book", get_epub)
+    resp = dummy_client.get("/validate/1")
+    assert resp.json()["status"] == "success"
+
+    async def get_pdf(book_id: int):
+        data = (await DummyManager(Path(".")).get_book(book_id))[0]
+        data._data["file_type"] = "pdf"
+        return data, None
+
+    monkeypatch.setattr(dummy, "get_book", get_pdf)
+    resp = dummy_client.get("/validate/1")
+    assert resp.json()["status"] == "success"
+
+    resp = dummy_client.get("/category-mismatches")
+    assert resp.json()["status"] == "success"
+
+    resp = dummy_client.post("/category-mismatches/index-file", json={"file_path": "a.txt"})
+    assert resp.json()["status"] == "success"
+
+    resp = dummy_client.post("/category-mismatches/delete-file", json={"file_path": "a.txt"})
+    assert resp.json()["status"] == "success"
+
+    resp = dummy_client.delete("/category-mismatches/es-doc/1")
+    assert resp.json()["status"] == "success"
+
+    resp = dummy_client.post("/category-mismatches/reload", json={"category": "A"})
+    assert resp.json()["status"] == "success"
+
+    resp = dummy_client.get("/category-mismatches/A")
+    assert resp.json()["status"] == "success"

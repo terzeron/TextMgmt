@@ -2,7 +2,7 @@
 """EPUB 미리보기(preview) 및 다운로드(download) 엔드포인트 통합 테스트.
 
 테스트용 미니 EPUB을 직접 생성하여 실제 EPUB 파일이 없는 환경에서도 동작한다.
-test_backend.py의 backend_test_setup / test_book fixture 패턴을 기반으로 한다.
+test_main.py의 backend_test_setup / test_book fixture 패턴을 기반으로 한다.
 """
 
 import io
@@ -444,11 +444,17 @@ def _create_corrupted_epub(
 def backend_test_setup(es_client, es_index, admin_auth_cookies):
     """BookManager + TestClient (ES 공유)."""
     from fastapi.testclient import TestClient
-    from backend.main import app
+    from backend.main import app, book_manager as main_bm, comics_manager as main_cm
     from backend.book_manager import BookManager
+    import os
 
     bm = BookManager()
     bm.es_manager.es = es_client
+    main_bm.es_manager.es = es_client
+    main_bm.es_manager.index_name = es_index
+    main_cm.es_manager.es = es_client
+    if "TM_ES_COMICS_INDEX" in os.environ:
+        main_cm.es_manager.index_name = os.environ["TM_ES_COMICS_INDEX"]
     bm.es_manager.refresh()
 
     client = TestClient(app, cookies=admin_auth_cookies)

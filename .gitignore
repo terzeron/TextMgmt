@@ -13,6 +13,7 @@ frontend/.env
 frontend/.env.local
 frontend/.env.development
 frontend/.env.production
+frontend/coverage
 
 node_modules/
 
@@ -27,3 +28,4 @@ __pycache__
 .last_test_run
 .vagrant
 Vagrantfile
+.coverage

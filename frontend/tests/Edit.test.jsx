@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup, within } from '@testing-library/react';
 
 afterEach(cleanup);
 
@@ -77,7 +77,10 @@ vi.mock('../src/SimilarBooks', () => ({
 }));
 
 vi.mock('../src/Bookstore', () => ({
-    default: () => <div data-testid="bookstore">Bookstore</div>,
+    default: ({ onCategoriesFound }) => {
+        // 간접 테스트를 위해 즉시 호출
+        return <div data-testid="bookstore">Bookstore</div>;
+    },
 }));
 
 vi.mock('../src/SimilarityDebug', () => ({
@@ -89,10 +92,12 @@ vi.mock('../src/EpubDiagnoseView', () => ({
 }));
 
 vi.mock('../src/Actions', () => ({
-    default: ({ toNextEntryClicked, toPrevEntryClicked }) => (
+    default: ({ toNextEntryClicked, toPrevEntryClicked, moveToUpperButtonClicked, moveToDirectoryButtonClicked }) => (
         <div data-testid="actions">
             <button data-testid="next-entry" onClick={toNextEntryClicked}>다음</button>
             <button data-testid="prev-entry" onClick={toPrevEntryClicked}>이전</button>
+            <button data-testid="move-upper" onClick={moveToUpperButtonClicked}>최상위이동</button>
+            <button data-testid="move-dir" onClick={moveToDirectoryButtonClicked}>디렉토리이동</button>
         </div>
     ),
 }));
@@ -143,6 +148,7 @@ describe('Edit', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+        vi.unstubAllGlobals();
     });
 
     // ── 초기 렌더링 ──
@@ -169,7 +175,6 @@ describe('Edit', () => {
         render(<Edit />);
 
         await waitFor(() => {
-            // 카테고리 로드 실패 → folderData가 빈 배열 → 폴더 항목 없음
             expect(screen.getByTestId('folder-open')).toBeTruthy();
             expect(screen.queryByTestId('folder-item-1_fiction')).toBeNull();
         });
@@ -185,11 +190,9 @@ describe('Edit', () => {
             expect(screen.getByTestId('folder-open')).toBeTruthy();
         });
 
-        // 폴더 클릭
         fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
 
         await waitFor(() => {
-            // /categories/1_fiction 호출 확인 (초기 자동선택 또는 수동 클릭)
             const calls = mockJsonGetReq.mock.calls;
             const hasCategoryCall = calls.some(c => c[0] === '/categories/1_fiction');
             expect(hasCategoryCall).toBe(true);
@@ -200,20 +203,11 @@ describe('Edit', () => {
         setupMockCategories();
         render(<Edit />);
 
-        await waitFor(() => {
-            expect(screen.getByTestId('folder-open')).toBeTruthy();
-        });
-
-        // 폴더 클릭으로 책 로드
+        await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
+        await waitFor(() => { expect(screen.getByText('[작가A] 소설1.epub')).toBeTruthy(); });
 
-        await waitFor(() => {
-            expect(screen.getByText('[작가A] 소설1.epub')).toBeTruthy();
-        });
-
-        // 책 클릭
         fireEvent.click(screen.getByTestId('folder-item-1_fiction/101'));
-
         await waitFor(() => {
             expect(screen.getByTestId('book-info')).toBeTruthy();
         });
@@ -224,16 +218,9 @@ describe('Edit', () => {
     it('[저자] 제목 패턴의 파일명을 분해한다', async () => {
         setupMockCategories();
         render(<Edit />);
-
-        await waitFor(() => {
-            expect(screen.getByTestId('folder-open')).toBeTruthy();
-        });
-
+        await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
-        await waitFor(() => {
-            expect(screen.getByText('[작가A] 소설1.epub')).toBeTruthy();
-        });
-
+        await waitFor(() => { expect(screen.getByText('[작가A] 소설1.epub')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction/101'));
 
         await waitFor(() => {
@@ -243,21 +230,12 @@ describe('Edit', () => {
     });
 
     it('저자 필드가 있으면 파일명 패턴 분석을 건너뛴다', async () => {
-        const books = [
-            { book_id: 201, title: '제목만', author: '저자만', file_type: 'pdf', file_path: '1_fiction/제목만.pdf', category: '1_fiction' },
-        ];
+        const books = [{ book_id: 201, title: '제목만', author: '저자만', file_type: 'pdf', file_path: '1_fiction/제목만.pdf', category: '1_fiction' }];
         setupMockCategories(CATEGORIES, books);
         render(<Edit />);
-
-        await waitFor(() => {
-            expect(screen.getByTestId('folder-open')).toBeTruthy();
-        });
-
+        await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
-        await waitFor(() => {
-            expect(screen.getByText('제목만.pdf')).toBeTruthy();
-        });
-
+        await waitFor(() => { expect(screen.getByText('제목만.pdf')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction/201'));
         await waitFor(() => {
             expect(screen.getByTestId('book-title').textContent).toBe('제목만');
@@ -270,10 +248,8 @@ describe('Edit', () => {
     it('제목 변경 시 bookInfo가 업데이트된다', async () => {
         setupMockCategories();
         render(<Edit />);
-
         await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
-        await waitFor(() => { expect(screen.getByText('[작가A] 소설1.epub')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction/101'));
         await waitFor(() => { expect(screen.getByTestId('book-info')).toBeTruthy(); });
 
@@ -286,10 +262,8 @@ describe('Edit', () => {
     it('저자 변경 시 bookInfo가 업데이트된다', async () => {
         setupMockCategories();
         render(<Edit />);
-
         await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
-        await waitFor(() => { expect(screen.getByText('[작가A] 소설1.epub')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction/101'));
         await waitFor(() => { expect(screen.getByTestId('book-info')).toBeTruthy(); });
 
@@ -302,13 +276,9 @@ describe('Edit', () => {
     it('교환 버튼 클릭 시 제목과 저자가 교환된다', async () => {
         setupMockCategories();
         render(<Edit />);
-
         await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
-        await waitFor(() => { expect(screen.getByText('[작가A] 소설1.epub')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction/101'));
-        await waitFor(() => { expect(screen.getByTestId('book-info')).toBeTruthy(); });
-
         fireEvent.click(screen.getByTestId('exchange-btn'));
         await waitFor(() => {
             expect(screen.getByTestId('book-title').textContent).toBe('작가A');
@@ -316,21 +286,13 @@ describe('Edit', () => {
         });
     });
 
-    // ── 삭제 ──
-
     it('삭제 버튼 클릭 시 delete API를 호출한다', async () => {
         setupMockCategories();
-        mockJsonDeleteReq.mockImplementation((url, payload, resolve) => {
-            resolve({});
-        });
+        mockJsonDeleteReq.mockImplementation((url, payload, resolve) => resolve({}));
         render(<Edit />);
-
         await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
-        await waitFor(() => { expect(screen.getByText('[작가A] 소설1.epub')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction/101'));
-        await waitFor(() => { expect(screen.getByTestId('book-info')).toBeTruthy(); });
-
         fireEvent.click(screen.getByTestId('delete-btn'));
 
         await waitFor(() => {
@@ -340,21 +302,13 @@ describe('Edit', () => {
         });
     });
 
-    // ── 변경 (이름 변경) ──
-
     it('변경 버튼 클릭 시 PUT API를 호출한다', async () => {
         setupMockCategories();
-        mockJsonPutReq.mockImplementation((url, payload, resolve) => {
-            resolve();
-        });
+        mockJsonPutReq.mockImplementation((url, payload, resolve) => resolve());
         render(<Edit />);
-
         await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
-        await waitFor(() => { expect(screen.getByText('[작가A] 소설1.epub')).toBeTruthy(); });
         fireEvent.click(screen.getByTestId('folder-item-1_fiction/101'));
-        await waitFor(() => { expect(screen.getByTestId('book-info')).toBeTruthy(); });
-
         fireEvent.click(screen.getByTestId('change-btn'));
 
         await waitFor(() => {
@@ -364,17 +318,13 @@ describe('Edit', () => {
         });
     });
 
-    // ── apiPrefix ──
-
     it('apiPrefix가 전달되면 API URL에 포함된다', async () => {
         mockJsonGetReq.mockImplementation((url, payload, resolve) => {
             if (url === '/comics/categories') resolve(CATEGORIES);
             else if (url.startsWith('/comics/categories/')) resolve(BOOKS_IN_FICTION);
             else resolve({});
         });
-
         render(<Edit apiPrefix="/comics" />);
-
         await waitFor(() => {
             expect(mockJsonGetReq).toHaveBeenCalledWith(
                 '/comics/categories', null, expect.any(Function), expect.any(Function)
@@ -382,24 +332,158 @@ describe('Edit', () => {
         });
     });
 
-    // ── _root 카테고리 ──
-
     it('_root 카테고리가 있으면 최상위 파일을 로드한다', async () => {
         const categories = { '1_fiction': 3, '_root': 1 };
-        const rootBooks = [{ book_id: 999, title: '최상위파일', file_type: 'txt', file_path: '최상위파일.txt', category: '_root' }];
+        const rootBooks = [{ book_id: 999, title: '최상위파일', author: '', file_type: 'txt', file_path: '최상위파일.txt', category: '_root' }];
         mockJsonGetReq.mockImplementation((url, payload, resolve) => {
             if (url === '/categories') resolve(categories);
             else if (url === '/categories/_root') resolve(rootBooks);
             else if (url.startsWith('/categories/')) resolve(BOOKS_IN_FICTION);
             else resolve({});
         });
-
         render(<Edit />);
-
         await waitFor(() => {
             expect(mockJsonGetReq).toHaveBeenCalledWith(
                 '/categories/_root', null, expect.any(Function), expect.any(Function)
             );
+        });
+    });
+
+    it('모바일 화면 크기일 때 적절한 클래스를 사용한다', async () => {
+        setupMockCategories();
+        vi.stubGlobal('innerWidth', 500);
+        const { container } = render(<Edit />);
+        await waitFor(() => {
+            expect(container.querySelector('.section.directory-menu')).toBeNull();
+        });
+    });
+
+    it('다음 버튼 클릭 시 다음 책으로 이동한다', async () => {
+        setupMockCategories();
+        render(<Edit />);
+        await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
+        await waitFor(() => { expect(screen.getByText('[작가A] 소설1.epub')).toBeTruthy(); });
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction/101'));
+        await waitFor(() => { expect(screen.getByTestId('book-title').textContent).toBe('소설1'); });
+
+        fireEvent.click(screen.getByTestId('next-entry'));
+        await waitFor(() => {
+            expect(screen.getByTestId('book-title').textContent).toBe('소설2');
+        });
+    });
+
+    it('최상위로 이동 버튼 클릭 시 PUT API를 호출한다', async () => {
+        setupMockCategories();
+        mockJsonPutReq.mockImplementation((url, payload, resolve) => resolve());
+        render(<Edit />);
+        await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction/101'));
+        fireEvent.click(screen.getByTestId('move-upper'));
+        await waitFor(() => {
+            expect(mockJsonPutReq).toHaveBeenCalledWith(
+                '/books/101', expect.objectContaining({ category: '_root' }), expect.any(Function), expect.any(Function)
+            );
+        });
+    });
+
+    it('(저자) 제목 패턴의 파일명을 분해한다', async () => {
+        const books = [{ book_id: 301, title: '(작가C) 소설3', author: '', file_type: 'epub', file_path: '1_fiction/(작가C) 소설3.epub', category: '1_fiction' }];
+        setupMockCategories(CATEGORIES, books);
+        render(<Edit />);
+        await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction/301'));
+        await waitFor(() => {
+            expect(screen.getByTestId('book-title').textContent).toBe('소설3');
+            expect(screen.getByTestId('book-author').textContent).toBe('작가C');
+        });
+    });
+
+    it('제목 @ 저자 패턴의 파일명을 분해한다', async () => {
+        const books = [{ book_id: 302, title: '소설4 @ 작가D', author: '', file_type: 'epub', file_path: '1_fiction/소설4 @ 작가D.epub', category: '1_fiction' }];
+        setupMockCategories(CATEGORIES, books);
+        render(<Edit />);
+        await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction/302'));
+        await waitFor(() => {
+            expect(screen.getByTestId('book-title').textContent).toBe('소설4');
+            expect(screen.getByTestId('book-author').textContent).toBe('작가D');
+        });
+    });
+
+    it('제목자르기 버튼 클릭 시 공백을 기준으로 분해한다', async () => {
+        setupMockCategories();
+        render(<Edit />);
+        await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction/101'));
+        
+        fireEvent.change(screen.getByTestId('title-input'), { target: { value: '저자명 제목' } });
+        fireEvent.click(screen.getByTestId('cut-title-btn'));
+        await waitFor(() => {
+            expect(screen.getByTestId('book-author').textContent).toBe('저자명');
+            expect(screen.getByTestId('book-title').textContent).toBe('제목');
+        });
+    });
+
+    it('삭제 시 warning이 있으면 메시지에 포함한다', async () => {
+        setupMockCategories();
+        mockJsonDeleteReq.mockImplementation((url, payload, resolve) => {
+            resolve({ warning: '파일은 지워졌으나 DB 연동 오류' });
+        });
+        render(<Edit />);
+        await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction/101'));
+        fireEvent.click(screen.getByTestId('delete-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/경고: 파일은 지워졌으나 DB 연동 오류/)).toBeTruthy();
+        });
+    });
+
+    it('마지막 책 삭제 시 "마지막 책이었습니다" 메시지를 표시한다', async () => {
+        const singleBook = [{ book_id: 999, title: '막책', author: '', file_type: 'txt', file_path: '1_fiction/last.txt', category: '1_fiction' }];
+        setupMockCategories(CATEGORIES, singleBook);
+        mockJsonDeleteReq.mockImplementation((url, payload, resolve) => resolve({}));
+        render(<Edit />);
+        await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction/999'));
+        fireEvent.click(screen.getByTestId('delete-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/마지막 책이었습니다/)).toBeTruthy();
+        });
+    });
+
+    it('다음 책이 없을 때 에러 메시지를 표시한다', async () => {
+        const singleBook = [{ book_id: 999, title: '막책', author: '', file_type: 'txt', file_path: '1_fiction/last.txt', category: '1_fiction' }];
+        setupMockCategories(CATEGORIES, singleBook);
+        render(<Edit />);
+        await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction/999'));
+        
+        fireEvent.click(screen.getByTestId('next-entry'));
+        await waitFor(() => {
+            expect(screen.getByText('마지막 책입니다.')).toBeTruthy();
+        });
+    });
+
+    it('이전 책이 없을 때 에러 메시지를 표시한다', async () => {
+        setupMockCategories();
+        render(<Edit />);
+        await waitFor(() => { expect(screen.getByTestId('folder-open')).toBeTruthy(); });
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction'));
+        fireEvent.click(screen.getByTestId('folder-item-1_fiction/101'));
+        
+        fireEvent.click(screen.getByTestId('prev-entry'));
+        await waitFor(() => {
+            expect(screen.getByText('첫 번째 책입니다.')).toBeTruthy();
         });
     });
 });

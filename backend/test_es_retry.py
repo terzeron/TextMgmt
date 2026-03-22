@@ -8,7 +8,7 @@ from elastic_transport import ConnectionError as ESConnectionError
 
 @pytest.fixture
 def env_vars(monkeypatch):
-    monkeypatch.setenv("TM_ES_INDEX", "test_index")
+    monkeypatch.setenv("TM_ES_BOOK_INDEX", "test_index")
     monkeypatch.setenv("TM_ES_URL", "http://localhost:9200")
     monkeypatch.setenv("TM_ES_USER", "elastic")
     monkeypatch.setenv("TM_ES_PASSWORD", "changeme")

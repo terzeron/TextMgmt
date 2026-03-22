@@ -165,7 +165,7 @@ class CategoryMapping:
             with conn.cursor() as cursor:
                 cursor.execute("DELETE FROM category_keywords WHERE category = %s AND keyword = %s AND content_type = %s", (category, keyword, content_type))
                 conn.commit()
-                deleted = cursor.rowcount > 0
+                deleted = int(cursor.rowcount or 0) > 0
 
         LOGGER.info("remove_keyword(%s, %s, %s): %s", category, keyword, content_type, "success" if deleted else "not found")
         return deleted
@@ -254,7 +254,7 @@ class CategoryMapping:
                 else:
                     cursor.execute("DELETE FROM category_keywords WHERE category = %s AND content_type = %s", (category, content_type))
                 conn.commit()
-                deleted = cursor.rowcount > 0
+                deleted = int(cursor.rowcount or 0) > 0
 
         LOGGER.info("delete_category(%s, %s, prefix=%s): %s", category, content_type, prefix, "success" if deleted else "not found")
         return deleted

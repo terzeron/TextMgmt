@@ -227,7 +227,7 @@ class ESManager:
         # 10,000개 이하면 scroll 없이 단순 검색 (scroll 컨텍스트 오버헤드 회피)
         if max_result_count <= 10000:
             response = self.es.search(index=self.index_name, query=query, sort=sort, size=size, track_scores=True)
-            max_score = response["hits"]["max_score"]
+            max_score = response["hits"].get("max_score")
             if max_score is None:
                 return []
             result = []
@@ -243,7 +243,7 @@ class ESManager:
         try:
             response = self.es.search(index=self.index_name, query=query, sort=sort, scroll="10m", track_scores=True, size=size)
             scroll_id = response.get("_scroll_id")
-            max_score = response["hits"]["max_score"]
+            max_score = response["hits"].get("max_score")
             if max_score is None:
                 return []
 
@@ -257,7 +257,7 @@ class ESManager:
             while len(response["hits"]["hits"]) > 0:
                 response = self.es.scroll(scroll_id=scroll_id, scroll="10m")
                 scroll_id = response["_scroll_id"]
-                max_score = response["hits"]["max_score"]
+                max_score = response["hits"].get("max_score")
                 if max_score is None:
                     return []
                 for hit in response["hits"]["hits"]:

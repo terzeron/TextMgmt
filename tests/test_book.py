@@ -62,6 +62,21 @@ class TestBook(unittest.TestCase):
             "score": 0.0,
         }
 
+    def test_json_and_str(self):
+        book_id = 4
+        info: Dict[str, Any] = {
+            "category": "category1",
+            "title": "title1",
+            "author": "author1",
+            "file_path": Book.path_prefix / "category1" / "book.txt",
+            "file_type": "txt",
+            "file_size": 10,
+            "updated_time": "2021-01-01T00:00:00.000000",
+        }
+        book = Book(book_id, info)
+        assert "\"title\": \"title1\"" in book.json()
+        assert "category: category1" in str(book)
+
 
 if __name__ == "__main__":
     unittest.main()

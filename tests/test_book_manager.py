@@ -2,12 +2,18 @@
 
 import logging.config
 import shutil
+import io
+import json
+import os
+import sys
+import time
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
 
 import pytest
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from backend.book import Book
 from backend.book_manager import BookManager
@@ -366,3 +372,539 @@ class TestBookManager:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ---- merged from test_book_manager_extra.py ----
+import io
+import time
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from backend.book_manager import BookManager
+from backend.book import Book
+
+
+class DummyES:
+    def __init__(self, doc: dict | None = None):
+        self.updated = True
+        self.delete_ok = True
+        self.inserted = []
+        self.aggregate = {"A": 1}
+        self.counts = {"A": 1, "B": 0}
+        self.category_docs = []
+        self.doc = doc
+        self.keyword = []
+        self.similar = []
+        self.similar_paged = ([], 0)
+        self.deleted_by_category = {"deleted": 2, "failures": []}
+
+    def search_by_id(self, book_id: int):
+        return self.doc
+
+    def update(self, *args, **kwargs):
+        return self.updated
+
+    def delete(self, book_id: int):
+        return self.delete_ok
+
+    def insert(self, data):
+        self.inserted.append(data)
+        return list(data.keys())
+
+    def refresh(self):
+        return None
+
+    def search_and_aggregate_by_category(self):
+        return self.aggregate
+
+    def search_by_category(self, category: str, max_result_count: int):
+        return self.category_docs
+
+    def count_by_categories(self, categories):
+        return {c: self.counts.get(c, 0) for c in categories}
+
+    def rename_category(self, old_category: str, new_category: str):
+        return {"updated": 3, "failures": []}
+
+    def count_by_category(self, category: str, prefix: bool = False):
+        return self.counts.get(category, 0)
+
+    def delete_by_category(self, category: str, prefix: bool = False):
+        return self.deleted_by_category
+
+    def search_by_keyword(self, keyword, max_result_count=-1):
+        return self.keyword
+
+    def search_similar_docs(self, *args, **kwargs):
+        return self.similar
+
+    def search_similar_docs_paged(self, *args, **kwargs):
+        return self.similar_paged
+
+
+def make_manager(tmp_path: Path, es: DummyES | dict | None) -> BookManager:
+    manager = BookManager.__new__(BookManager)
+    manager.path_prefix = tmp_path
+    if isinstance(es, DummyES):
+        manager.es_manager = es
+    else:
+        manager.es_manager = DummyES(es)
+    manager._mismatch_cache = None
+    manager._mismatch_cache_time = 0.0
+    manager.item_class = Book
+    Book.path_prefix = tmp_path
+    return manager
+
+
+def make_doc(rel_path: str, file_type: str = ".txt") -> dict:
+    return {
+        "category": "A",
+        "title": "T",
+        "author": "U",
+        "file_path": rel_path,
+        "file_type": file_type,
+        "file_size": 1,
+        "updated_time": "2024-01-01T00:00:00.000000",
+        "summary": "S",
+    }
+
+
+def test_determine_file_content_and_encoding(tmp_path: Path):
+    txt = tmp_path / "a.txt"
+    txt.write_text("hello", encoding="utf-8")
+    enc = BookManager.determine_file_content_and_encoding(txt)
+    assert enc in {"utf-8", "ascii"}
+
+    other = tmp_path / "a.pdf"
+    other.write_bytes(b"%PDF")
+    assert BookManager.determine_file_content_and_encoding(other) == "binary"
+
+
+def test_evict_old_cache(tmp_path: Path):
+    old_file = tmp_path / "old.txt"
+    new_file = tmp_path / "new.txt"
+    old_file.write_text("x")
+    new_file.write_text("y")
+    past = time.time() - (BookManager.CACHE_MAX_AGE_SECONDS + 10)
+    import os
+    os.utime(old_file, (past, past))
+    BookManager._evict_old_cache(tmp_path)
+    assert not old_file.exists()
+    assert new_file.exists()
+
+
+def test_find_opf_path_variants(tmp_path: Path):
+    zip_path = tmp_path / "book.epub"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("META-INF/container.xml", '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>')
+        zf.writestr("OEBPS/content.opf", "<package></package>")
+    with zipfile.ZipFile(zip_path, "r") as zin:
+        assert BookManager._find_opf_path(zin) == "OEBPS/content.opf"
+
+    zip_path2 = tmp_path / "book2.epub"
+    with zipfile.ZipFile(zip_path2, "w") as zf:
+        zf.writestr("META-INF/container.xml", b"full-path='OPS/test.opf'")
+        zf.writestr("OPS/test.opf", "<package></package>")
+    with zipfile.ZipFile(zip_path2, "r") as zin:
+        assert BookManager._find_opf_path(zin) == "OPS/test.opf"
+
+    zip_path3 = tmp_path / "book3.epub"
+    with zipfile.ZipFile(zip_path3, "w") as zf:
+        zf.writestr("content.opf", "<package></package>")
+    with zipfile.ZipFile(zip_path3, "r") as zin:
+        assert BookManager._find_opf_path(zin) == "content.opf"
+
+
+def test_update_book_conflict_and_success_and_rollback(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+
+    original = tmp_path / "A" / "old.txt"
+    original.parent.mkdir(parents=True)
+    original.write_text("x")
+    doc = make_doc("A/old.txt")
+    es.search_by_id = lambda _id: doc
+
+    conflict = tmp_path / "A" / "new.txt"
+    conflict.write_text("y")
+    status, msg = asyncio_runner(manager.update_book(1, "A", "T", "U", conflict, ".txt"))
+    assert status == "Error"
+    assert "CONFLICT" in msg
+
+    conflict.unlink()
+    es.updated = True
+    status, msg = asyncio_runner(manager.update_book(1, "A", "T", "U", conflict, ".txt"))
+    assert status == "Ok"
+    assert msg is None
+    assert conflict.exists()
+    assert not original.exists()
+
+    # rollback on ES update failure
+    doc2 = make_doc("A/old2.txt")
+    old2 = tmp_path / "A" / "old2.txt"
+    old2.write_text("z")
+    es.search_by_id = lambda _id: doc2
+    es.updated = False
+    new2 = tmp_path / "A" / "new2.txt"
+    status, msg = asyncio_runner(manager.update_book(2, "A", "T", "U", new2, ".txt"))
+    assert status == "Error"
+    assert old2.exists()
+
+
+def test_update_book_path_traversal(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    status, msg = asyncio_runner(manager.update_book(1, "A", "T", "U", Path("/tmp/out.txt"), ".txt"))
+    assert status == "Error"
+    assert "잘못된 경로" in msg
+
+
+def test_delete_book_warning_on_missing_file(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: make_doc("A/missing.txt")
+    status, msg = asyncio_runner(manager.delete_book(1))
+    assert status == "Warning"
+    assert "이미 삭제" in msg
+
+
+def test_delete_file_and_index_single_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+
+    status, msg = asyncio_runner(manager.delete_file("../bad.txt"))
+    assert status == "Error"
+
+    missing = tmp_path / "A" / "none.txt"
+    status, msg = asyncio_runner(manager.delete_file("A/none.txt"))
+    assert status == "Error"
+
+    ok = tmp_path / "A" / "ok.txt"
+    ok.parent.mkdir(parents=True)
+    ok.write_text("x")
+    status, msg = asyncio_runner(manager.delete_file("A/ok.txt"))
+    assert status == "Ok"
+    assert not ok.exists()
+
+    monkeypatch.setattr("utils.loader.Loader.read_file", lambda p: {})
+    status_id, msg = asyncio_runner(manager.index_single_file("../bad.txt"))
+    assert status_id is None
+    assert "잘못된 경로" in msg
+
+
+def test_category_mismatches_cache_and_details(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+
+    # FS structure
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "f1.txt").write_text("x")
+    (tmp_path / "A" / "sub").mkdir()
+    (tmp_path / "A" / "sub" / "f2.txt").write_text("y")
+
+    es.aggregate = {"A": 2, "B": 1}
+    result = manager.get_category_mismatches()
+    assert "mismatches" in result
+
+    manager._mismatch_cache = {"cached": True}
+    manager._mismatch_cache_time = time.monotonic()
+    es.aggregate = {"A": 0}
+    assert manager.get_category_mismatches() == {"cached": True}
+
+    # mismatch details with duplicates
+    inode = (tmp_path / "A" / "dup.txt")
+    inode.write_text("z")
+    inode_id = inode.stat().st_ino
+    es.category_docs = [
+        (inode_id, make_doc("A/dup.txt"), 1.0),
+        (999999, make_doc("A/dup.txt"), 1.0),
+    ]
+    details = manager.get_category_mismatch_details("A")
+    assert details["duplicates"]
+    assert details["fs_count"] >= 1
+
+
+def asyncio_runner(coro):
+    import asyncio
+    return asyncio.run(coro)
+
+
+# ---- merged from test_book_manager_epub_pdf_extra.py ----
+
+
+def test_validate_preview_epub_ok_and_fail(tmp_path: Path):
+    epub = tmp_path / "ok.epub"
+    with zipfile.ZipFile(epub, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+        zf.writestr("META-INF/container.xml", '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>')
+        zf.writestr("OEBPS/ch1.xhtml", "<html/>")
+        zf.writestr("OEBPS/content.opf", """<?xml version="1.0"?>
+        <package xmlns="http://www.idpf.org/2007/opf">
+          <manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+          <spine><itemref idref="c1"/></spine>
+        </package>""")
+    ok, err = BookManager._validate_preview_epub(epub)
+    assert ok is True
+    assert err is None
+
+    bad = tmp_path / "bad.epub"
+    with zipfile.ZipFile(bad, "w") as zf:
+        zf.writestr("META-INF/container.xml", "x")
+    ok, err = BookManager._validate_preview_epub(bad)
+    assert ok is False
+    assert "mimetype" in err
+
+
+def test_get_epub_total_chapters(tmp_path: Path):
+    epub = tmp_path / "c.epub"
+    with zipfile.ZipFile(epub, "w") as zf:
+        zf.writestr("META-INF/container.xml", '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>')
+        zf.writestr("content.opf", """<package xmlns="http://www.idpf.org/2007/opf">
+          <spine><itemref idref="c1"/><itemref idref="c2"/></spine>
+        </package>""")
+    assert BookManager._get_epub_total_chapters(epub) == 2
+
+
+def test_convert_with_libreoffice_success_and_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    fake_bin = tmp_path / "libreoffice"
+    fake_bin.write_text("")
+    monkeypatch.setattr(BookManager, "_find_libreoffice", lambda: str(fake_bin))
+
+    class DummyProc:
+        returncode = 0
+        stderr = b""
+
+    def fake_run(cmd, capture_output=True, timeout=60):
+        outdir = Path(cmd[cmd.index("--outdir") + 1])
+        outdir.mkdir(parents=True, exist_ok=True)
+        # write mismatched stem to trigger glob fallback
+        (outdir / "other.txt").write_text("ok", encoding="utf-8")
+        return DummyProc()
+
+    monkeypatch.setattr("backend.book_manager.subprocess.run", fake_run)
+    content = BookManager._convert_with_libreoffice(tmp_path / "x.doc", "txt")
+    assert content == "ok"
+
+    def fake_run_empty(cmd, capture_output=True, timeout=60):
+        return DummyProc()
+
+    monkeypatch.setattr("backend.book_manager.subprocess.run", fake_run_empty)
+    content = BookManager._convert_with_libreoffice(tmp_path / "x.doc", "txt")
+    assert content == ""
+
+
+def test_validate_epub_success_and_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    epub = tmp_path / "a.epub"
+    epub.write_text("x")
+    doc = make_doc("a.epub", "epub")
+    manager = make_manager(tmp_path, doc)
+
+    class DummyProc:
+        def __init__(self):
+            self.returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+        def kill(self):
+            return None
+
+        async def wait(self):
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        # write JSON to the provided path
+        json_path = args[3]
+        data = {
+            "messages": [],
+            "checker": {"nFatal": 0, "nError": 0, "nWarning": 0, "nUsage": 0, "nInfo": 0},
+        }
+        Path(json_path).write_text(json.dumps(data), encoding="utf-8")
+        return DummyProc()
+
+    monkeypatch.setattr("backend.book_manager.asyncio.create_subprocess_exec", fake_exec)
+    result, err = asyncio_runner(manager.validate_epub(1))
+    assert err is None
+    assert result["valid"] is True
+
+    # wrong type
+    manager = make_manager(tmp_path, make_doc("a.epub", "pdf"))
+    result, err = asyncio_runner(manager.validate_epub(1))
+    assert err and "Not an EPUB" in err
+
+
+def test_validate_pdf_success_and_open_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    pdf = tmp_path / "a.pdf"
+    pdf.write_bytes(b"%PDF")
+    doc = make_doc("a.pdf", "pdf")
+    manager = make_manager(tmp_path, doc)
+
+    class DummyPDF:
+        def __init__(self):
+            self.docinfo = {"/Title": "T", "/Author": "A"}
+            self.pages = [1, 2]
+            self.pdf_version = "1.4"
+
+        def check_pdf_syntax(self):
+            return []
+
+        def close(self):
+            return None
+
+    class DummyPike:
+        @staticmethod
+        def open(path):
+            return DummyPDF()
+
+    monkeypatch.setitem(sys.modules, "pikepdf", DummyPike())
+    result, err = asyncio_runner(manager.validate_pdf(1))
+    assert err is None
+    assert result["valid"] is True
+
+    class DummyPikeFail:
+        @staticmethod
+        def open(path):
+            raise RuntimeError("bad")
+
+    monkeypatch.setitem(sys.modules, "pikepdf", DummyPikeFail())
+    result, err = asyncio_runner(manager.validate_pdf(1))
+    assert err and "Failed to open PDF" in err
+
+
+# ---- merged from test_book_manager_preview_extra.py ----
+
+
+def build_epub(epub_path: Path):
+    with zipfile.ZipFile(epub_path, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+        zf.writestr(
+            "META-INF/container.xml",
+            '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>',
+        )
+        zf.writestr("OEBPS/ch1.xhtml", "<html><body>Hi</body></html>")
+        zf.writestr("OEBPS/toc.ncx", "<ncx/>")
+        zf.writestr(
+            "OEBPS/styles.css",
+            "@font-face{font-family:'X';src:url('fonts/missing.ttf'),url('fonts/f.ttf');}",
+        )
+        zf.writestr("OEBPS/fonts/f.ttf", b"fontdata")
+        zf.writestr(
+            "OEBPS/content.opf",
+            """<?xml version="1.0"?>
+            <package xmlns="http://www.idpf.org/2007/opf">
+              <manifest>
+                <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+                <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+                <item id="css" href="styles.css" media-type="text/css"/>
+                <item id="f1" href="fonts/f.ttf" media-type="font/ttf"/>
+              </manifest>
+              <spine toc="toc"><itemref idref="c1"/></spine>
+            </package>""",
+        )
+
+
+def test_get_book_preview_epub_success(tmp_path: Path):
+    epub = tmp_path / "book.epub"
+    build_epub(epub)
+    doc = make_doc("book.epub", "epub")
+    manager = make_manager(tmp_path, doc)
+    resp = asyncio_runner(manager.get_book_preview(1, chapters=1))
+    assert isinstance(resp, Response)
+    assert resp.status_code == 200
+
+
+def test_get_book_preview_epub_missing_opf(tmp_path: Path):
+    epub = tmp_path / "bad.epub"
+    with zipfile.ZipFile(epub, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+    doc = make_doc("bad.epub", "epub")
+    manager = make_manager(tmp_path, doc)
+    resp = asyncio_runner(manager.get_book_preview(1, chapters=1))
+    assert resp.status_code == 422
+
+
+def test_get_book_preview_doc_and_unsupported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    doc_file = tmp_path / "a.doc"
+    doc_file.write_text("x")
+    doc = make_doc("a.doc", "doc")
+    manager = make_manager(tmp_path, doc)
+    monkeypatch.setattr(BookManager, "_convert_with_libreoffice", lambda p, fmt: "<p>ok</p>")
+    resp = asyncio_runner(manager.get_book_preview(1))
+    assert resp.status_code == 200
+
+    other_file = tmp_path / "a.bin"
+    other_file.write_text("x")
+    doc2 = make_doc("a.bin", "bin")
+    manager2 = make_manager(tmp_path, doc2)
+    resp = asyncio_runner(manager2.get_book_preview(1))
+    assert resp.status_code == 400
+
+
+# ---- merged from test_book_manager_more.py ----
+def test_search_by_keyword_and_similar(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.keyword = [(1, make_doc("a.txt"), 1.0)]
+    books, err = asyncio_runner(manager.search_by_keyword("k"))
+    assert books and err is None
+
+    es.keyword = []
+    books, err = asyncio_runner(manager.search_by_keyword("k"))
+    assert books == [] and err
+
+    es.similar = [(2, make_doc("b.txt"), 1.0)]
+    es_doc = make_doc("a.txt")
+    es.search_by_id = lambda _id: es_doc
+    books, err = asyncio_runner(manager.search_similar_books(1))
+    assert books and err is None
+
+    es.similar = []
+    books, err = asyncio_runner(manager.search_similar_books(1))
+    assert books == [] and err
+
+
+def test_search_similar_books_paged_and_add_book(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.similar_paged = ([(2, make_doc("b.txt"), 10.0)], 1)
+    es.search_by_id = lambda _id: make_doc("a.txt")
+    books, total, err = asyncio_runner(manager.search_similar_books_paged(1, size=10, offset=0))
+    assert total == 1 and err is None
+
+    es.similar_paged = ([], 0)
+    books, total, err = asyncio_runner(manager.search_similar_books_paged(1, size=10, offset=0))
+    assert err
+
+    result, err = asyncio_runner(manager.add_book({1: make_doc("a.txt")}))
+    assert result == 1 and err is None
+
+
+def test_rename_delete_category_errors(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+
+    result, err = asyncio_runner(manager.rename_category("", "B"))
+    assert err
+
+    result, err = asyncio_runner(manager.rename_category("A", "A"))
+    assert err
+
+    result, err = asyncio_runner(manager.rename_category("A", "../B"))
+    assert err
+
+    result, err = asyncio_runner(manager.delete_category(""))
+    assert err
+
+    result, err = asyncio_runner(manager.delete_category("../A"))
+    assert err
+
+    es.counts["A"] = 0
+    result, err = asyncio_runner(manager.delete_category("A"))
+    assert err
+
+    es.counts["A"] = 1
+    es.deleted_by_category = {"deleted": 0, "failures": ["x"]}
+    result, err = asyncio_runner(manager.delete_category("A"))
+    assert err

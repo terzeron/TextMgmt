@@ -5,7 +5,7 @@ import sys
 import os
 import logging.config
 from pathlib import Path
-from typing import Dict, Any, Literal, Union, List
+from typing import Dict, Any, Literal, Union, List, Callable, TypeVar, Optional
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -135,17 +135,56 @@ def _clear_auth_cookies(response: JSONResponse) -> None:
     response.set_cookie(REFRESH_COOKIE_NAME, "", httponly=True, secure=secure, samesite=samesite, max_age=0, path="/")
 
 
-book_manager = BookManager()
-print("book manager ready")
+T = TypeVar("T")
 
-comics_manager = ComicsManager()
-print("comics manager ready")
 
-bookstore = Yes24Bookstore(base_dir=".", verbose=True)
-print("bookstore ready")
+class _LazyProxy:
+    """Initialize heavy dependencies lazily to avoid side effects at import time."""
 
-category_mapping = CategoryMapping()
-print("category mapping ready")
+    def __init__(self, factory: Callable[[], T], name: str) -> None:
+        self._factory = factory
+        self._instance: Optional[T] = None
+        self._name = name
+
+    def _get_instance(self) -> T:
+        if self._instance is None:
+            self._instance = self._factory()
+            LOGGER.info("%s ready", self._name)
+        return self._instance
+
+    def __getattr__(self, item):
+        return getattr(self._get_instance(), item)
+
+    def __setattr__(self, key, value) -> None:
+        if key in {"_factory", "_instance", "_name"}:
+            object.__setattr__(self, key, value)
+            return
+        setattr(self._get_instance(), key, value)
+
+    def __repr__(self) -> str:
+        return repr(self._get_instance())
+
+
+def _create_book_manager() -> BookManager:
+    return BookManager()
+
+
+def _create_comics_manager() -> ComicsManager:
+    return ComicsManager()
+
+
+def _create_bookstore() -> Yes24Bookstore:
+    return Yes24Bookstore(base_dir=".", verbose=True)
+
+
+def _create_category_mapping() -> CategoryMapping:
+    return CategoryMapping()
+
+
+book_manager = _LazyProxy(_create_book_manager, "book manager")
+comics_manager = _LazyProxy(_create_comics_manager, "comics manager")
+bookstore = _LazyProxy(_create_bookstore, "bookstore")
+category_mapping = _LazyProxy(_create_category_mapping, "category mapping")
 
 
 class BookModel(BaseModel):

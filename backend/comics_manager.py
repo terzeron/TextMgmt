@@ -18,8 +18,7 @@ class ComicsManager(BookManager):
 
     def __init__(self) -> None:
         if "TM_COMICS_DIR" not in os.environ:
-            LOGGER.error("The environment variable TM_COMICS_DIR is not set.")
-            sys.exit(-1)
+            raise RuntimeError("The environment variable TM_COMICS_DIR is not set.")
 
         self.path_prefix = Path(os.environ["TM_COMICS_DIR"])
         LOGGER.debug(self.path_prefix)

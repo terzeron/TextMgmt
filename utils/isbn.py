@@ -76,7 +76,9 @@ def validate_isbn(isbn: str) -> bool:
     return False
 
 
-def search_in_content(content: str) -> List[str]:
+def search_in_content(content) -> List[str]:
+    if isinstance(content, bytes):
+        content = content.decode('utf-8', errors='ignore')
     # 구분자를 사용하는 패턴과 구분자가 명확하게 없는 패턴
     # 구분자가 존재하면 그룹 숫자간 공백이 존재할 수 있음
     isbn_pattern = r'''
