@@ -8,6 +8,8 @@ import os
 import sys
 import time
 import zipfile
+import tempfile
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
@@ -1056,3 +1058,138 @@ def test_rename_delete_category_errors(tmp_path: Path):
     es.deleted_by_category = {"deleted": 0, "failures": ["x"]}
     result, err = asyncio_runner(manager.delete_category("A"))
     assert err
+
+
+def _make_epub(tmp_path: Path, files: dict[str, bytes]) -> Path:
+    epub_path = tmp_path / "case.epub"
+    with zipfile.ZipFile(epub_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, content in files.items():
+            zf.writestr(name, content)
+    return epub_path
+
+
+def test_validate_preview_epub_missing_opf_and_manifest(tmp_path: Path):
+    container = b"""<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/content.opf"/></rootfiles></container>"""
+    missing_opf = _make_epub(tmp_path, {"mimetype": b"application/epub+zip", "META-INF/container.xml": container})
+    ok, err = BookManager._validate_preview_epub(missing_opf)
+    assert ok is False
+    assert "OPF file missing in archive" in err
+
+    opf_no_manifest = b"""<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf"><spine><itemref idref="c1"/></spine></package>"""
+    no_manifest = _make_epub(
+        tmp_path,
+        {"mimetype": b"application/epub+zip", "META-INF/container.xml": container, "OPS/content.opf": opf_no_manifest},
+    )
+    ok, err = BookManager._validate_preview_epub(no_manifest)
+    assert ok is False
+    assert err == "manifest element missing"
+
+    opf_no_spine = b"""<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf"><manifest/></package>"""
+    no_spine = _make_epub(
+        tmp_path,
+        {"mimetype": b"application/epub+zip", "META-INF/container.xml": container, "OPS/content.opf": opf_no_spine},
+    )
+    ok, err = BookManager._validate_preview_epub(no_spine)
+    assert ok is False
+    assert err == "spine element missing"
+
+
+def test_validate_preview_epub_bad_zip(tmp_path: Path):
+    bad = tmp_path / "bad.epub"
+    bad.write_text("not a zip", encoding="utf-8")
+    ok, err = BookManager._validate_preview_epub(bad)
+    assert ok is False
+    assert err == "corrupted ZIP file"
+
+
+def test_find_opf_path_regex_and_direct(tmp_path: Path):
+    bad_container = b'<container full-path="OPS/content.opf">'
+    epub = _make_epub(
+        tmp_path,
+        {"mimetype": b"application/epub+zip", "META-INF/container.xml": bad_container, "OPS/content.opf": b"<package/>"},
+    )
+    with zipfile.ZipFile(epub, "r") as zin:
+        assert BookManager._find_opf_path(zin) == "OPS/content.opf"
+
+    epub2 = _make_epub(tmp_path, {"mimetype": b"application/epub+zip", "OPS/only.opf": b"<package/>"})
+    with zipfile.ZipFile(epub2, "r") as zin:
+        assert BookManager._find_opf_path(zin) == "OPS/only.opf"
+
+
+def test_find_libreoffice_mac_path(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(shutil, "which", lambda cmd: None)
+    mac_path = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+
+    def fake_exists(self: Path) -> bool:
+        return str(self) == mac_path
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    assert BookManager._find_libreoffice() == mac_path
+
+
+def test_convert_with_libreoffice_direct_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    sample = tmp_path / "sample.docx"
+    sample.write_text("doc", encoding="utf-8")
+    monkeypatch.setattr(BookManager, "_find_libreoffice", lambda: "lo")
+
+    class DummyProc:
+        returncode = 0
+        stderr = b""
+
+    class FakeTmp:
+        def __enter__(self):
+            return str(tmp_path)
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", lambda: FakeTmp())
+
+    def fake_run(*args, **kwargs):
+        (tmp_path / "sample.html").write_text("ok", encoding="utf-8")
+        return DummyProc()
+
+    monkeypatch.setattr("backend.book_manager.subprocess.run", fake_run)
+    assert BookManager._convert_with_libreoffice(sample, "html") == "ok"
+
+
+def test_convert_with_libreoffice_no_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    sample = tmp_path / "sample.docx"
+    sample.write_text("doc", encoding="utf-8")
+    monkeypatch.setattr(BookManager, "_find_libreoffice", lambda: "lo")
+
+    class DummyProc:
+        returncode = 1
+        stderr = b"err"
+
+    class FakeTmp:
+        def __enter__(self):
+            return str(tmp_path)
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", lambda: FakeTmp())
+
+    def fake_run(*args, **kwargs):
+        for path in tmp_path.glob("*.html"):
+            path.unlink()
+        return DummyProc()
+
+    monkeypatch.setattr("backend.book_manager.subprocess.run", fake_run)
+    assert BookManager._convert_with_libreoffice(sample, "html") == ""
+
+
+def test_book_manager_init_requires_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("TM_BOOK_DIR", raising=False)
+    with pytest.raises(RuntimeError):
+        BookManager()
+
+
+def test_get_books_in_category_empty(tmp_path: Path):
+    es = DummyES()
+    es.category_docs = []
+    manager = make_manager(tmp_path, es)
+    books, err = asyncio_runner(manager.get_books_in_category("missing"))
+    assert books == []
+    assert "No books found" in err

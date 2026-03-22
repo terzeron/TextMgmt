@@ -14,6 +14,8 @@ import pstats
 import io
 import ast
 import warnings
+import shutil
+import sqlite3
 
 from graphlib import TopologicalSorter
 warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API.*", category=UserWarning)
@@ -349,6 +351,11 @@ def get_test_methods(test_file: Path) -> list[str]:
 def get_coverage_file() -> Path:
     return PROJECT_ROOT / ".coverage"
 
+def get_coverage_backup_file() -> Path:
+    return PROJECT_ROOT / ".coverage.last"
+
+_COVERAGE_PREPARED = False
+
 
 def prepare_coverage_data() -> None:
     coverage_file = get_coverage_file()
@@ -357,6 +364,14 @@ def prepare_coverage_data() -> None:
             coverage_file.unlink()
         except OSError as e:
             print(f"⚠️  Failed to clear coverage data: {e}")
+
+
+def ensure_coverage_prepared() -> None:
+    global _COVERAGE_PREPARED
+    if _COVERAGE_PREPARED:
+        return
+    prepare_coverage_data()
+    _COVERAGE_PREPARED = True
 
 
 def get_coverage_env() -> dict[str, str]:
@@ -370,8 +385,20 @@ def get_pytest_coverage_args() -> list[str]:
     return [
         "--cov=backend",
         "--cov-append",
-        "--cov-report=term-missing",
+        "--cov-report=",
     ]
+
+
+def is_valid_coverage_db(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        conn = sqlite3.connect(path)
+        conn.execute("select name from sqlite_master limit 1")
+        conn.close()
+        return True
+    except sqlite3.Error:
+        return False
 
 
 def filter_pytest_output(raw_output: str) -> list[str]:
@@ -434,6 +461,7 @@ def run_test_modules_sequentially(test_targets: list[Path]) -> tuple[bool, int, 
 
         # Measure execution time
         start_time = time.time()
+        ensure_coverage_prepared()
         result = subprocess.run(
             [
                 sys.executable,
@@ -459,6 +487,8 @@ def run_test_modules_sequentially(test_targets: list[Path]) -> tuple[bool, int, 
         filtered_output = filter_pytest_output(result.stdout)
         if filtered_output:
             print("\n".join(filtered_output))
+        if result.returncode != 0 and result.stderr:
+            print(result.stderr.strip())
 
         # Update performance cache with actual execution time
         test_file_name = t.name
@@ -502,6 +532,7 @@ def run_specific_test_file(test_file: str) -> bool:
 
     # Measure execution time
     start_time = time.time()
+    ensure_coverage_prepared()
     result = subprocess.run(
         [
             sys.executable,
@@ -525,6 +556,8 @@ def run_specific_test_file(test_file: str) -> bool:
     filtered_output = filter_pytest_output(result.stdout)
     if filtered_output:
         print("\n".join(filtered_output))
+    if result.returncode != 0 and result.stderr:
+        print(result.stderr.strip())
 
     # Update performance cache with actual execution time
     test_file_name = test_path.name
@@ -590,6 +623,7 @@ def run_all_tests() -> tuple[bool, list[Path]]:
     for idx, t in enumerate(ordered_tests, 1):
         print(f"--- [{idx}/{len(ordered_tests)}] Running: {t.name} ---")
         start = time.time()
+        ensure_coverage_prepared()
         result = subprocess.run(
             [
                 sys.executable,
@@ -614,6 +648,8 @@ def run_all_tests() -> tuple[bool, list[Path]]:
         filtered_output = filter_pytest_output(result.stdout)
         if filtered_output:
             print("\n".join(filtered_output))
+        if result.returncode != 0 and result.stderr:
+            print(result.stderr.strip())
 
         update_test_performance_cache(t.name, end - start)
         if result.returncode != 0:
@@ -1745,9 +1781,7 @@ def main() -> bool:
     # Setup test environment first, before any imports that might depend on environment variables
     setup_test_environment()
 
-    # Prepare coverage data for this run (skip profiling-only mode)
-    if not args.profile:
-        prepare_coverage_data()
+    # Coverage data will be prepared lazily when tests actually run.
 
     # Always perform dependency analysis first and print the graph
     print("🔍 Analyzing dependencies...")
@@ -1916,16 +1950,59 @@ def run_coverage_report() -> bool:
     """Print cached coverage report without re-running tests."""
     print("\n📈 Generating coverage report...")
     coverage_file = get_coverage_file()
-    if not coverage_file.exists():
+    backup_file = get_coverage_backup_file()
+    if coverage_file.exists() and not is_valid_coverage_db(coverage_file):
+        try:
+            coverage_file.unlink()
+            print("⚠️  Coverage data was invalid. Removed corrupted .coverage file.")
+        except OSError as e:
+            print(f"⚠️  Failed to remove corrupted coverage data: {e}")
+    if backup_file.exists() and not is_valid_coverage_db(backup_file):
+        try:
+            backup_file.unlink()
+            print("⚠️  Coverage cache was invalid. Removed corrupted .coverage.last file.")
+        except OSError as e:
+            print(f"⚠️  Failed to remove corrupted coverage cache: {e}")
+
+    if not coverage_file.exists() and not backup_file.exists():
         print("⚠️  Coverage data not found. Ensure tests were run with coverage enabled.")
         return False
 
     env = get_coverage_env()
+    if not coverage_file.exists() and backup_file.exists():
+        env = env.copy()
+        env["COVERAGE_FILE"] = str(backup_file)
     result = subprocess.run(
-        [sys.executable, "-m", "coverage", "report", "-m"],
+        [sys.executable, "-m", "coverage", "report", "-m", "-i"],
         cwd=PROJECT_ROOT,
         env=env,
+        capture_output=True,
+        text=True,
     )
+    if result.stdout:
+        print(result.stdout.strip())
+    if result.stderr:
+        print(result.stderr.strip())
+    if "No data to report." in result.stdout and backup_file.exists():
+        env = env.copy()
+        env["COVERAGE_FILE"] = str(backup_file)
+        retry = subprocess.run(
+            [sys.executable, "-m", "coverage", "report", "-m", "-i"],
+            cwd=PROJECT_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        if retry.stdout:
+            print(retry.stdout.strip())
+        if retry.stderr:
+            print(retry.stderr.strip())
+        return retry.returncode == 0
+    if result.returncode == 0 and "No data to report." not in result.stdout and coverage_file.exists():
+        try:
+            shutil.copy2(coverage_file, backup_file)
+        except OSError as e:
+            print(f"⚠️  Failed to cache coverage data: {e}")
     return result.returncode == 0
 
 

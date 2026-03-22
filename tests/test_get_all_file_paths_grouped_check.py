@@ -1,28 +1,25 @@
-#!/usr/bin/env python
-
 from unittest.mock import patch, MagicMock
 import pytest
 from elasticsearch import Elasticsearch
 
 
-@pytest.fixture
-def env_vars(monkeypatch):
+def _set_es_env(monkeypatch):
     monkeypatch.setenv("TM_ES_BOOK_INDEX", "test_index")
     monkeypatch.setenv("TM_ES_URL", "http://localhost:9200")
     monkeypatch.setenv("TM_ES_USER", "elastic")
     monkeypatch.setenv("TM_ES_PASSWORD", "changeme")
 
 
-def _make_es_manager(env_vars):
+def _make_es_manager(monkeypatch):
+    _set_es_env(monkeypatch)
     with patch.object(Elasticsearch, "__init__", return_value=None), \
          patch.object(Elasticsearch, "info", return_value={"cluster_name": "test"}):
         from backend.es_manager import ESManager
         return ESManager()
 
 
-def test_basic_grouping(env_vars):
-    """카테고리별로 file_path가 올바르게 그룹핑되는지 확인"""
-    mgr = _make_es_manager(env_vars)
+def test_basic_grouping(monkeypatch):
+    mgr = _make_es_manager(monkeypatch)
 
     first_page = {"hits": {"hits": [
         {"_source": {"category": "소설", "file_path": "소설/book1.txt"}},
@@ -43,9 +40,8 @@ def test_basic_grouping(env_vars):
     }
 
 
-def test_empty_index(env_vars):
-    """빈 인덱스에서 빈 딕셔너리 반환"""
-    mgr = _make_es_manager(env_vars)
+def test_empty_index(monkeypatch):
+    mgr = _make_es_manager(monkeypatch)
 
     empty_page = {"hits": {"hits": []}, "_scroll_id": "scroll_1"}
 
@@ -56,9 +52,8 @@ def test_empty_index(env_vars):
     assert result == {}
 
 
-def test_multi_scroll_pages(env_vars):
-    """여러 scroll 페이지를 올바르게 병합하는지 확인"""
-    mgr = _make_es_manager(env_vars)
+def test_multi_scroll_pages(monkeypatch):
+    mgr = _make_es_manager(monkeypatch)
 
     page1 = {"hits": {"hits": [
         {"_source": {"category": "A", "file_path": "A/1.txt"}},
@@ -77,9 +72,8 @@ def test_multi_scroll_pages(env_vars):
     assert result == {"A": {"A/1.txt", "A/2.txt"}, "B": {"B/1.txt"}}
 
 
-def test_missing_category_skipped(env_vars):
-    """category가 빈 문자열인 문서는 건너뜀"""
-    mgr = _make_es_manager(env_vars)
+def test_missing_category_skipped(monkeypatch):
+    mgr = _make_es_manager(monkeypatch)
 
     page = {"hits": {"hits": [
         {"_source": {"category": "", "file_path": "orphan.txt"}},
@@ -96,9 +90,8 @@ def test_missing_category_skipped(env_vars):
     assert result == {"X": {"X/ok.txt"}}
 
 
-def test_clear_scroll_called_on_success(env_vars):
-    """정상 완료 후 clear_scroll이 호출되는지 확인"""
-    mgr = _make_es_manager(env_vars)
+def test_clear_scroll_called_on_success(monkeypatch):
+    mgr = _make_es_manager(monkeypatch)
 
     empty = {"hits": {"hits": []}, "_scroll_id": "s1"}
     mock_clear = MagicMock()
@@ -110,9 +103,8 @@ def test_clear_scroll_called_on_success(env_vars):
     mock_clear.assert_called_once_with(scroll_id="s1")
 
 
-def test_clear_scroll_called_on_error(env_vars):
-    """예외 발생 시에도 clear_scroll이 호출되는지 확인"""
-    mgr = _make_es_manager(env_vars)
+def test_clear_scroll_called_on_error(monkeypatch):
+    mgr = _make_es_manager(monkeypatch)
 
     page = {"hits": {"hits": [
         {"_source": {"category": "A", "file_path": "A/1.txt"}},

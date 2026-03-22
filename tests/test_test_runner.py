@@ -11,12 +11,16 @@ def test_run_coverage_report_invokes_coverage(monkeypatch, tmp_path):
 
         class Result:
             returncode = 0
+            stdout = "Name  Stmts   Miss  Cover\n"
+            stderr = ""
 
         return Result()
 
     monkeypatch.setattr(test_runner.subprocess, "run", fake_run)
     monkeypatch.setattr(test_runner, "get_coverage_file", lambda: tmp_path / ".coverage")
-    (tmp_path / ".coverage").write_text("data")
+    coverage_path = tmp_path / ".coverage"
+    import sqlite3
+    sqlite3.connect(coverage_path).close()
 
     ok = test_runner.run_coverage_report()
 
@@ -27,6 +31,8 @@ def test_run_coverage_report_invokes_coverage(monkeypatch, tmp_path):
     assert cmd[1:3] == ["-m", "coverage"]
     assert "report" in cmd
     assert kwargs.get("cwd") == test_runner.PROJECT_ROOT
+    assert kwargs.get("capture_output") is True
+    assert kwargs.get("text") is True
 
 
 def test_maybe_run_coverage_runs_when_success(monkeypatch):
