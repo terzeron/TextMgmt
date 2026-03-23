@@ -150,4 +150,171 @@ describe('Folder', () => {
         render(<Folder {...defaultProps} selectedItems={['1_fiction']} />);
         expect(screen.getByRole('tree')).toBeTruthy();
     });
+
+    // ── 다양한 fileType 아이콘 렌더링 (getIconFromFileType 브랜치 커버) ──
+
+    it('image 계열 fileType 항목을 렌더링한다', () => {
+        const data = [
+            {
+                id: 'images',
+                label: 'images',
+                fileType: 'folder',
+                children: [
+                    { id: 'images/1', label: 'photo.jpg', fileType: 'jpg', children: [] },
+                    { id: 'images/2', label: 'pic.png', fileType: 'png', children: [] },
+                ],
+            },
+        ];
+        render(
+            <Folder {...defaultProps} folderData={data} expandedItems={['images']} />
+        );
+        expect(screen.getByText('photo.jpg')).toBeTruthy();
+        expect(screen.getByText('pic.png')).toBeTruthy();
+    });
+
+    it('doc/docx fileType 항목을 렌더링한다', () => {
+        const data = [
+            {
+                id: 'docs',
+                label: 'docs',
+                fileType: 'folder',
+                children: [
+                    { id: 'docs/1', label: 'report.doc', fileType: 'doc', children: [] },
+                    { id: 'docs/2', label: 'resume.docx', fileType: 'docx', children: [] },
+                ],
+            },
+        ];
+        render(
+            <Folder {...defaultProps} folderData={data} expandedItems={['docs']} />
+        );
+        expect(screen.getByText('report.doc')).toBeTruthy();
+        expect(screen.getByText('resume.docx')).toBeTruthy();
+    });
+
+    it('rtf/html/txt fileType 항목을 렌더링한다', () => {
+        const data = [
+            {
+                id: 'texts',
+                label: 'texts',
+                fileType: 'folder',
+                children: [
+                    { id: 'texts/1', label: 'note.rtf', fileType: 'rtf', children: [] },
+                    { id: 'texts/2', label: 'page.html', fileType: 'html', children: [] },
+                    { id: 'texts/3', label: 'readme.txt', fileType: 'txt', children: [] },
+                ],
+            },
+        ];
+        render(
+            <Folder {...defaultProps} folderData={data} expandedItems={['texts']} />
+        );
+        expect(screen.getByText('note.rtf')).toBeTruthy();
+        expect(screen.getByText('page.html')).toBeTruthy();
+        expect(screen.getByText('readme.txt')).toBeTruthy();
+    });
+
+    it('video fileType 항목을 렌더링한다', () => {
+        const data = [
+            {
+                id: 'videos',
+                label: 'videos',
+                fileType: 'folder',
+                children: [
+                    { id: 'videos/1', label: 'clip.mp4', fileType: 'video', children: [] },
+                ],
+            },
+        ];
+        render(
+            <Folder {...defaultProps} folderData={data} expandedItems={['videos']} />
+        );
+        expect(screen.getByText('clip.mp4')).toBeTruthy();
+    });
+
+    it('pinned fileType 항목을 렌더링한다', () => {
+        const data = [
+            {
+                id: 'pinned_folder',
+                label: 'pinned_folder',
+                fileType: 'folder',
+                children: [
+                    { id: 'pinned_folder/1', label: 'starred', fileType: 'pinned', children: [] },
+                ],
+            },
+        ];
+        render(
+            <Folder {...defaultProps} folderData={data} expandedItems={['pinned_folder']} />
+        );
+        expect(screen.getByText('starred')).toBeTruthy();
+    });
+
+    it('trash fileType 항목을 렌더링한다', () => {
+        const data = [
+            {
+                id: 'trash_folder',
+                label: 'trash_folder',
+                fileType: 'folder',
+                children: [
+                    { id: 'trash_folder/1', label: 'deleted', fileType: 'trash', children: [] },
+                ],
+            },
+        ];
+        render(
+            <Folder {...defaultProps} folderData={data} expandedItems={['trash_folder']} />
+        );
+        expect(screen.getByText('deleted')).toBeTruthy();
+    });
+
+    it('여러 자식이 있는 폴더를 펼치면 모든 자식을 렌더링한다', () => {
+        const data = [
+            {
+                id: 'multi',
+                label: 'multi',
+                fileType: 'folder',
+                children: [
+                    { id: 'multi/1', label: 'a.doc', fileType: 'doc', children: [] },
+                    { id: 'multi/2', label: 'b.jpg', fileType: 'jpg', children: [] },
+                    { id: 'multi/3', label: 'c.video', fileType: 'video', children: [] },
+                ],
+            },
+        ];
+        render(
+            <Folder {...defaultProps} folderData={data} expandedItems={['multi']} />
+        );
+        expect(screen.getByText('a.doc')).toBeTruthy();
+        expect(screen.getByText('b.jpg')).toBeTruthy();
+        expect(screen.getByText('c.video')).toBeTruthy();
+    });
+
+    it('알 수 없는 fileType은 기본 아이콘으로 렌더링한다', () => {
+        const data = [
+            {
+                id: 'misc',
+                label: 'misc',
+                fileType: 'folder',
+                children: [
+                    { id: 'misc/1', label: 'data.xyz', fileType: 'xyz', children: [] },
+                ],
+            },
+        ];
+        render(
+            <Folder {...defaultProps} folderData={data} expandedItems={['misc']} />
+        );
+        expect(screen.getByText('data.xyz')).toBeTruthy();
+    });
+
+    it('folder fileType의 리프 항목(children 없음)을 렌더링한다', () => {
+        const data = [
+            {
+                id: 'parent',
+                label: 'parent',
+                fileType: 'folder',
+                children: [
+                    { id: 'parent/sub', label: 'subfolder', fileType: 'folder' },
+                ],
+            },
+        ];
+        render(
+            <Folder {...defaultProps} folderData={data} expandedItems={['parent']} />
+        );
+        expect(screen.getByText('subfolder')).toBeTruthy();
+    });
 });

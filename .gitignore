@@ -14,6 +14,7 @@ frontend/.env.local
 frontend/.env.development
 frontend/.env.production
 frontend/coverage
+frontend/coverage-report.json
 
 node_modules/
 
