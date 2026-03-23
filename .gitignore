@@ -28,4 +28,4 @@ __pycache__
 .last_test_run
 .vagrant
 Vagrantfile
-.coverage
+.coverage*
