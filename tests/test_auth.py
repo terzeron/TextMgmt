@@ -1,5 +1,5 @@
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import sys
 import time
 import importlib
@@ -479,8 +479,12 @@ def test_auth_refresh_and_logout(auth_client, monkeypatch):
     monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: {"email": "e@example.com", "name": "n", "picture": "p"})
     monkeypatch.setattr(main_mod, "determine_role", lambda email: "user")
     monkeypatch.setattr(main_mod, "create_jwt_token", lambda **kwargs: "jwt")
+    monkeypatch.setattr(main_mod, "create_refresh_token", lambda **kwargs: "rjwt")
     resp = auth_client.post("/auth/refresh", cookies={main_mod.REFRESH_COOKIE_NAME: "tok"})
     assert resp.status_code == 200
+    # sliding expiration: refresh token도 새로 발급되어야 함
+    assert main_mod.REFRESH_COOKIE_NAME in resp.cookies
+    assert resp.cookies[main_mod.REFRESH_COOKIE_NAME] == "rjwt"
 
     resp = auth_client.get("/auth/me")
     assert resp.status_code == 200

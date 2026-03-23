@@ -603,11 +603,14 @@ async def refresh_access_token(request: Request):
     if role is None:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # 새 access token 발급 (refresh token은 유지)
-    token = create_jwt_token(email=email, role=role, name=payload.get("name", ""), picture=payload.get("picture", ""))
+    # 새 access token + refresh token 발급 (sliding expiration)
+    name = payload.get("name", "")
+    picture = payload.get("picture", "")
+    token = create_jwt_token(email=email, role=role, name=name, picture=picture)
+    new_refresh_token = create_refresh_token(email=email, role=role, name=name, picture=picture)
 
     response = JSONResponse({"status": "success"})
-    _set_auth_cookies(response, token)
+    _set_auth_cookies(response, token, new_refresh_token)
     return response
 
 
