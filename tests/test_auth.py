@@ -11,14 +11,15 @@ from fastapi.exceptions import RequestValidationError
 
 import backend.main as main_mod
 
-os.environ.setdefault('TM_FRONTEND_URL', 'http://localhost:3000')
-os.environ.setdefault('TM_BOOK_DIR', '/tmp')
-os.environ.setdefault('TM_COMICS_DIR', '/tmp')
-os.environ.setdefault('TM_ES_URL', 'http://localhost:9200')
-os.environ.setdefault('TM_ES_BOOK_INDEX', 'test_books')
-os.environ.setdefault('TM_ES_COMICS_INDEX', 'test_comics')
-os.environ.setdefault('TM_ES_USER', 'test')
-os.environ.setdefault('TM_ES_PASSWORD', 'test')
+os.environ.setdefault("TM_FRONTEND_URL", "http://localhost:3000")
+os.environ.setdefault("TM_BOOK_DIR", "/tmp")
+os.environ.setdefault("TM_COMICS_DIR", "/tmp")
+os.environ.setdefault("TM_ES_URL", "http://localhost:9200")
+os.environ.setdefault("TM_ES_BOOK_INDEX", "test_books")
+os.environ.setdefault("TM_ES_COMICS_INDEX", "test_comics")
+os.environ.setdefault("TM_ES_USER", "test")
+os.environ.setdefault("TM_ES_PASSWORD", "test")
+
 
 @pytest.fixture(autouse=True)
 def setup_env(monkeypatch):
@@ -27,10 +28,12 @@ def setup_env(monkeypatch):
     monkeypatch.setenv("TM_ALLOWED_EMAILS", "viewer1@example.com,viewer2@example.com")
     # 모듈 재로드하여 환경변수 반영
     import backend.auth as auth_mod
+
     importlib.reload(auth_mod)
     yield auth_mod
     monkeypatch.undo()
     importlib.reload(auth_mod)
+
 
 class TestDetermineRole:
     def test_admin_email(self, setup_env):
@@ -45,6 +48,7 @@ class TestDetermineRole:
 
     def test_empty_email(self, setup_env):
         assert setup_env.determine_role("") is None
+
 
 class TestCreateJwtToken:
     def test_token_contains_claims(self, setup_env):
@@ -64,6 +68,7 @@ class TestCreateJwtToken:
         assert payload["exp"] > time.time()
         assert payload["exp"] <= time.time() + 2 * 3600 + 5
 
+
 class TestCreateRefreshToken:
     def test_refresh_token_contains_claims(self, setup_env):
         token = setup_env.create_refresh_token("admin@example.com", "admin", "Admin", "pic.jpg")
@@ -80,6 +85,7 @@ class TestCreateRefreshToken:
         assert payload["exp"] > time.time()
         assert payload["exp"] <= time.time() + 7 * 24 * 3600 + 5
 
+
 class TestDecodeRefreshToken:
     def test_valid_refresh_token(self, setup_env):
         token = setup_env.create_refresh_token("admin@example.com", "admin")
@@ -89,6 +95,7 @@ class TestDecodeRefreshToken:
 
     def test_expired_refresh_token(self, setup_env):
         from fastapi import HTTPException
+
         expired_payload = {"type": "refresh", "email": "admin@example.com", "role": "admin", "exp": int(time.time()) - 100, "iat": int(time.time()) - 200}
         token = jwt.encode(expired_payload, "testsecret123", algorithm="HS256")
         with pytest.raises(HTTPException) as exc_info:
@@ -98,6 +105,7 @@ class TestDecodeRefreshToken:
 
     def test_access_token_rejected(self, setup_env):
         from fastapi import HTTPException
+
         token = setup_env.create_jwt_token("admin@example.com", "admin")
         with pytest.raises(HTTPException) as exc_info:
             setup_env.decode_refresh_token(token)
@@ -106,9 +114,11 @@ class TestDecodeRefreshToken:
 
     def test_invalid_token(self, setup_env):
         from fastapi import HTTPException
+
         with pytest.raises(HTTPException) as exc_info:
             setup_env.decode_refresh_token("invalid.token.value")
         assert exc_info.value.status_code == 401
+
 
 class TestExtractPayload:
     def _make_request(self, token=None, cookie_token=None):
@@ -120,10 +130,12 @@ class TestExtractPayload:
                     self.headers["Authorization"] = f"Bearer {token}"
                 if cookie_token:
                     self.cookies["tm_access_token"] = cookie_token
+
         return FakeRequest(token, cookie_token)
 
     def test_missing_header(self, setup_env):
         from fastapi import HTTPException
+
         req = self._make_request(None)
         with pytest.raises(HTTPException) as exc_info:
             setup_env._extract_payload(req)
@@ -145,6 +157,7 @@ class TestExtractPayload:
 
     def test_expired_token(self, setup_env):
         from fastapi import HTTPException
+
         expired_payload = {"type": "access", "email": "admin@example.com", "role": "admin", "exp": int(time.time()) - 100, "iat": int(time.time()) - 200}
         token = jwt.encode(expired_payload, "testsecret123", algorithm="HS256")
         req = self._make_request(token)
@@ -155,6 +168,7 @@ class TestExtractPayload:
 
     def test_invalid_token(self, setup_env):
         from fastapi import HTTPException
+
         req = self._make_request("invalid.token.value")
         with pytest.raises(HTTPException) as exc_info:
             setup_env._extract_payload(req)
@@ -162,6 +176,7 @@ class TestExtractPayload:
 
     def test_refresh_token_rejected(self, setup_env):
         from fastapi import HTTPException
+
         token = setup_env.create_refresh_token("admin@example.com", "admin")
         req = self._make_request(token)
         with pytest.raises(HTTPException) as exc_info:
@@ -178,12 +193,15 @@ class TestExtractPayload:
 
     def test_empty_bearer_falls_back_to_cookie(self, setup_env):
         cookie_token = setup_env.create_jwt_token("viewer1@example.com", "viewer")
+
         class FakeRequest:
             def __init__(self):
                 self.headers = {"Authorization": "Bearer "}
                 self.cookies = {"tm_access_token": cookie_token}
+
         payload = setup_env._extract_payload(FakeRequest())
         assert payload["email"] == "viewer1@example.com"
+
 
 class TestRequireAuth:
     def _make_request(self, token=None, cookie_token=None):
@@ -193,6 +211,7 @@ class TestRequireAuth:
                 self.cookies = {}
                 if cookie_token:
                     self.cookies["tm_access_token"] = cookie_token
+
         return FakeRequest(token, cookie_token)
 
     @pytest.mark.asyncio
@@ -219,6 +238,7 @@ class TestRequireAuth:
     @pytest.mark.asyncio
     async def test_invalid_role_fails(self, setup_env):
         from fastapi import HTTPException
+
         token = setup_env.create_jwt_token("nobody@example.com", "unknown")
         req = self._make_request(token)
         with pytest.raises(HTTPException) as exc_info:
@@ -228,10 +248,12 @@ class TestRequireAuth:
     @pytest.mark.asyncio
     async def test_no_token_fails(self, setup_env):
         from fastapi import HTTPException
+
         req = self._make_request()
         with pytest.raises(HTTPException) as exc_info:
             await setup_env.require_auth(req)
         assert exc_info.value.status_code == 401
+
 
 class TestRequireAdmin:
     def _make_request(self, token=None, cookie_token=None):
@@ -241,6 +263,7 @@ class TestRequireAdmin:
                 self.cookies = {}
                 if cookie_token:
                     self.cookies["tm_access_token"] = cookie_token
+
         return FakeRequest(token, cookie_token)
 
     @pytest.mark.asyncio
@@ -260,6 +283,7 @@ class TestRequireAdmin:
     @pytest.mark.asyncio
     async def test_viewer_blocked(self, setup_env):
         from fastapi import HTTPException
+
         token = setup_env.create_jwt_token("viewer1@example.com", "viewer")
         req = self._make_request(token)
         with pytest.raises(HTTPException) as exc_info:
@@ -270,10 +294,12 @@ class TestRequireAdmin:
     @pytest.mark.asyncio
     async def test_no_token_fails(self, setup_env):
         from fastapi import HTTPException
+
         req = self._make_request()
         with pytest.raises(HTTPException) as exc_info:
             await setup_env.require_admin(req)
         assert exc_info.value.status_code == 401
+
 
 class TestCreateJwtTokenDefaults:
     def test_default_name_and_picture(self, setup_env):
@@ -282,20 +308,19 @@ class TestCreateJwtTokenDefaults:
         assert payload["name"] == ""
         assert payload["picture"] == ""
 
+
 class TestGetCookieSettings:
     """_get_cookie_settings의 SameSite/Secure 검증 테스트."""
 
     @pytest.fixture(autouse=True)
     def mock_managers(self):
-        with patch("backend.main.BookManager"), \
-             patch("backend.main.ComicsManager"), \
-             patch("backend.main.CategoryMapping"), \
-             patch("backend.main.Yes24Bookstore"):
+        with patch("backend.main.BookManager"), patch("backend.main.ComicsManager"), patch("backend.main.CategoryMapping"), patch("backend.main.Yes24Bookstore"):
             yield
 
     def test_default_values(self, monkeypatch):
         import backend.main as main_mod
         import importlib
+
         importlib.reload(main_mod)
         monkeypatch.delenv("TM_COOKIE_SECURE", raising=False)
         monkeypatch.delenv("TM_COOKIE_SAMESITE", raising=False)
@@ -306,6 +331,7 @@ class TestGetCookieSettings:
     def test_secure_true(self, monkeypatch):
         import backend.main as main_mod
         import importlib
+
         importlib.reload(main_mod)
         monkeypatch.setenv("TM_COOKIE_SECURE", "true")
         monkeypatch.delenv("TM_COOKIE_SAMESITE", raising=False)
@@ -316,6 +342,7 @@ class TestGetCookieSettings:
     def test_samesite_strict(self, monkeypatch):
         import backend.main as main_mod
         import importlib
+
         importlib.reload(main_mod)
         monkeypatch.delenv("TM_COOKIE_SECURE", raising=False)
         monkeypatch.setenv("TM_COOKIE_SAMESITE", "strict")
@@ -325,6 +352,7 @@ class TestGetCookieSettings:
     def test_invalid_samesite_falls_back_to_lax(self, monkeypatch):
         import backend.main as main_mod
         import importlib
+
         importlib.reload(main_mod)
         monkeypatch.delenv("TM_COOKIE_SECURE", raising=False)
         monkeypatch.setenv("TM_COOKIE_SAMESITE", "invalid_value")
@@ -334,6 +362,7 @@ class TestGetCookieSettings:
     def test_samesite_none_with_secure_true(self, monkeypatch):
         import backend.main as main_mod
         import importlib
+
         importlib.reload(main_mod)
         monkeypatch.setenv("TM_COOKIE_SECURE", "true")
         monkeypatch.setenv("TM_COOKIE_SAMESITE", "none")
@@ -344,6 +373,7 @@ class TestGetCookieSettings:
     def test_samesite_none_without_secure_falls_back_to_lax(self, monkeypatch):
         import backend.main as main_mod
         import importlib
+
         importlib.reload(main_mod)
         monkeypatch.setenv("TM_COOKIE_SECURE", "false")
         monkeypatch.setenv("TM_COOKIE_SAMESITE", "none")
@@ -516,4 +546,24 @@ def test_custom_jsonable_encoder_preserves_strings():
 
 def run_async(coro):
     import asyncio
+
     return asyncio.run(coro)
+
+
+# ---- merged from test_auth_env_guard.py ----
+
+
+def test_auth_requires_jwt_secret():
+    prev = os.environ.pop("TM_JWT_SECRET", None)
+    saved_mod = sys.modules.get("backend.auth")
+    try:
+        if "backend.auth" in sys.modules:
+            del sys.modules["backend.auth"]
+        with pytest.raises(SystemExit):
+            importlib.import_module("backend.auth")
+    finally:
+        if prev is not None:
+            os.environ["TM_JWT_SECRET"] = prev
+        # 모듈 복원 (autouse fixture teardown에서 reload 필요)
+        if saved_mod is not None:
+            sys.modules["backend.auth"] = saved_mod

@@ -8,6 +8,9 @@ import {
     handleFetchErrors,
     jsonGetReq,
     jsonPostReq,
+    jsonPutReq,
+    jsonDeleteReq,
+    rawJsonGetReq,
     externalJsonGetReq
 } from '../src/Common';
 
@@ -270,11 +273,200 @@ describe('Common Utilities', () => {
         });
 
         const resolve = vi.fn();
-        const { rawJsonGetReq } = await import('../src/Common');
         rawJsonGetReq('/test-raw', resolve);
 
         await vi.waitFor(() => {
             expect(resolve).toHaveBeenCalledWith(mockResult);
         });
+    });
+
+    it('jsonPutReq calls fetch with PUT method', async () => {
+        const mockResult = { status: 'success', result: 'put-data' };
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => mockResult
+        });
+
+        const resolve = vi.fn();
+        jsonPutReq('/test-put', { key: 'value' }, resolve);
+
+        await vi.waitFor(() => {
+            expect(resolve).toHaveBeenCalledWith('put-data');
+        });
+
+        expect(fetch).toHaveBeenCalledWith('/api/test-put', expect.objectContaining({
+            method: 'PUT',
+            body: JSON.stringify({ key: 'value' }),
+            headers: expect.objectContaining({ 'Content-Type': 'application/json' })
+        }));
+    });
+
+    it('jsonDeleteReq calls fetch with DELETE method', async () => {
+        const mockResult = { status: 'success', result: 'deleted' };
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => mockResult
+        });
+
+        const resolve = vi.fn();
+        jsonDeleteReq('/test-delete', { id: 1 }, resolve);
+
+        await vi.waitFor(() => {
+            expect(resolve).toHaveBeenCalledWith('deleted');
+        });
+
+        expect(fetch).toHaveBeenCalledWith('/api/test-delete', expect.objectContaining({
+            method: 'DELETE'
+        }));
+    });
+
+    it('apiReq calls final callback', async () => {
+        const mockResult = { status: 'success', result: 'data' };
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => mockResult
+        });
+
+        const resolve = vi.fn();
+        const final = vi.fn();
+        jsonGetReq('/test-final', null, resolve, null, final);
+
+        await vi.waitFor(() => {
+            expect(final).toHaveBeenCalled();
+        });
+    });
+
+    it('apiReq handles 401 with retry not ok (reload)', async () => {
+        // 1st fetch returns 401
+        fetch.mockResolvedValueOnce({ ok: false, status: 401 });
+        // refresh succeeds
+        fetch.mockResolvedValueOnce({ ok: true, status: 200 });
+        // retry fails (not ok)
+        fetch.mockResolvedValueOnce({ ok: false, status: 403, statusText: 'Forbidden' });
+
+        const reject = vi.fn();
+        jsonGetReq('/test-retry-fail', null, null, reject);
+
+        await vi.waitFor(() => {
+            expect(window.location.reload).toHaveBeenCalled();
+        });
+    });
+
+    it('tryRefreshToken handles network error (catch branch)', async () => {
+        // 1st fetch returns 401
+        fetch.mockResolvedValueOnce({ ok: false, status: 401 });
+        // refresh throws network error
+        fetch.mockRejectedValueOnce(new Error('Network error'));
+
+        const reject = vi.fn();
+        jsonGetReq('/test-refresh-error', null, null, reject);
+
+        await vi.waitFor(() => {
+            expect(window.location.reload).toHaveBeenCalled();
+        });
+    });
+
+    it('rawJsonGetReq handles 401 with successful refresh', async () => {
+        // 1st fetch returns 401
+        fetch.mockResolvedValueOnce({ ok: false, status: 401 });
+        // refresh succeeds
+        fetch.mockResolvedValueOnce({ ok: true, status: 200 });
+        // retry returns data
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => ({ refreshed: 'raw-data' })
+        });
+
+        const resolve = vi.fn();
+        rawJsonGetReq('/test-raw-401', resolve);
+
+        await vi.waitFor(() => {
+            expect(resolve).toHaveBeenCalledWith({ refreshed: 'raw-data' });
+        });
+    });
+
+    it('rawJsonGetReq handles 401 with retry not ok (reload)', async () => {
+        // 1st fetch returns 401
+        fetch.mockResolvedValueOnce({ ok: false, status: 401 });
+        // refresh succeeds
+        fetch.mockResolvedValueOnce({ ok: true, status: 200 });
+        // retry fails
+        fetch.mockResolvedValueOnce({ ok: false, status: 403, statusText: 'Forbidden' });
+
+        const reject = vi.fn();
+        rawJsonGetReq('/test-raw-retry-fail', null, reject);
+
+        await vi.waitFor(() => {
+            expect(window.location.reload).toHaveBeenCalled();
+        });
+    });
+
+    it('rawJsonGetReq handles 401 with refresh failure (reload)', async () => {
+        // 1st fetch returns 401
+        fetch.mockResolvedValueOnce({ ok: false, status: 401 });
+        // refresh fails
+        fetch.mockResolvedValueOnce({ ok: false, status: 401 });
+
+        const reject = vi.fn();
+        rawJsonGetReq('/test-raw-refresh-fail', null, reject);
+
+        await vi.waitFor(() => {
+            expect(window.location.reload).toHaveBeenCalled();
+        });
+    });
+
+    it('rawJsonGetReq calls final callback', async () => {
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => ({ data: 'test' })
+        });
+
+        const resolve = vi.fn();
+        const final = vi.fn();
+        rawJsonGetReq('/test-raw-final', resolve, null, final);
+
+        await vi.waitFor(() => {
+            expect(final).toHaveBeenCalled();
+        });
+    });
+
+    it('externalJsonGetReq calls reject on fetch error', async () => {
+        fetch.mockRejectedValueOnce(new Error('Network failure'));
+
+        const reject = vi.fn();
+        externalJsonGetReq('https://example.com/fail', null, reject);
+
+        await vi.waitFor(() => {
+            expect(reject).toHaveBeenCalled();
+        });
+    });
+
+    it('externalJsonGetReq calls final callback', async () => {
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => ({ data: 'ext' })
+        });
+
+        const resolve = vi.fn();
+        const final = vi.fn();
+        externalJsonGetReq('https://example.com/api', resolve, null, final);
+
+        await vi.waitFor(() => {
+            expect(final).toHaveBeenCalled();
+        });
+    });
+
+    it('getApiUrlPrefix logs when env var is not set', () => {
+        window.__ENV__ = {};
+        // import.meta.env may also be undefined in test
+        const result = getApiUrlPrefix();
+        // Should return undefined/falsy and log
+        expect(result).toBeFalsy();
     });
 });

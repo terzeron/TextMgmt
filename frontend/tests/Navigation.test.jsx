@@ -9,10 +9,15 @@ import * as Common from '../src/Common';
 // Mock @react-oauth/google
 vi.mock('@react-oauth/google', () => ({
     GoogleOAuthProvider: ({ children }) => <div data-testid="google-oauth-provider">{children}</div>,
-    GoogleLogin: ({ onSuccess }) => (
-        <button data-testid="google-login" onClick={() => onSuccess({ credential: 'test-token' })}>
-            Google Login Mock
-        </button>
+    GoogleLogin: ({ onSuccess, onError }) => (
+        <div>
+            <button data-testid="google-login" onClick={() => onSuccess({ credential: 'test-token' })}>
+                Google Login Mock
+            </button>
+            <button data-testid="google-login-error" onClick={() => onError && onError()}>
+                Google Login Error Mock
+            </button>
+        </div>
     ),
     googleLogout: vi.fn(),
 }));
@@ -196,6 +201,386 @@ describe('Navigation Component', () => {
                 expect.any(Function),
                 expect.any(Function)
             );
+        });
+    });
+
+    it('calls error callback when hidden-categories fetch fails', async () => {
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ status: 'success', result: { role: 'viewer', name: 'V' } })
+        });
+
+        Common.rawJsonGetReq.mockImplementation((url, _resolve, reject) => {
+            if (url.includes('hidden-categories')) {
+                reject(new Error('network error'));
+            }
+        });
+
+        render(
+            <MemoryRouter>
+                <Navigation />
+            </MemoryRouter>
+        );
+
+        await waitFor(() => {
+            expect(Common.rawJsonGetReq).toHaveBeenCalledWith(
+                expect.stringContaining('hidden-categories'),
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+    });
+
+    it('appends exclude_categories when viewer has hidden categories and searches', async () => {
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ status: 'success', result: { role: 'viewer', name: 'V' } })
+        });
+
+        Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+            if (url.includes('hidden-categories')) {
+                resolve({ status: 'success', result: ['cat1', 'cat2'] });
+            }
+            if (url.includes('search')) {
+                resolve({ status: 'success', result: [], total: 0 });
+            }
+        });
+
+        render(
+            <MemoryRouter initialEntries={['/book-view']}>
+                <Routes>
+                    <Route path="/book-view" element={<Navigation />} />
+                </Routes>
+            </MemoryRouter>
+        );
+
+        const input = await screen.findByPlaceholderText(/키워드/i);
+        fireEvent.change(input, { target: { value: 'test' } });
+        fireEvent.click(screen.getByRole('button', { name: /검색/i }));
+
+        await waitFor(() => {
+            const searchCall = Common.rawJsonGetReq.mock.calls.find(c => c[0].includes('search'));
+            expect(searchCall[0]).toContain('exclude_categories=');
+            expect(searchCall[0]).toContain('cat1');
+        });
+    });
+
+    it('handles search returning non-success status', async () => {
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ status: 'success', result: { role: 'admin' } })
+        });
+
+        Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+            if (url.includes('search')) {
+                resolve({ status: 'error' });
+            }
+        });
+
+        render(
+            <MemoryRouter initialEntries={['/book-view']}>
+                <Routes>
+                    <Route path="/book-view" element={<Navigation />} />
+                </Routes>
+            </MemoryRouter>
+        );
+
+        const input = await screen.findByPlaceholderText(/키워드/i);
+        fireEvent.change(input, { target: { value: 'test' } });
+        fireEvent.click(screen.getByRole('button', { name: /검색/i }));
+
+        await waitFor(() => {
+            expect(Common.rawJsonGetReq).toHaveBeenCalledWith(
+                expect.stringContaining('search/test'),
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+    });
+
+    it('handles search error callback', async () => {
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ status: 'success', result: { role: 'admin' } })
+        });
+
+        Common.rawJsonGetReq.mockImplementation((url, _resolve, reject) => {
+            if (url.includes('search')) {
+                reject(new Error('search failed'));
+            }
+        });
+
+        render(
+            <MemoryRouter initialEntries={['/book-view']}>
+                <Routes>
+                    <Route path="/book-view" element={<Navigation />} />
+                </Routes>
+            </MemoryRouter>
+        );
+
+        const input = await screen.findByPlaceholderText(/키워드/i);
+        fireEvent.change(input, { target: { value: 'test' } });
+        fireEvent.click(screen.getByRole('button', { name: /검색/i }));
+
+        await waitFor(() => {
+            expect(Common.rawJsonGetReq).toHaveBeenCalledWith(
+                expect.stringContaining('search/test'),
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+    });
+
+    it('handles form submit event for search', async () => {
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ status: 'success', result: { role: 'admin' } })
+        });
+
+        Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+            if (url.includes('search')) {
+                resolve({ status: 'success', result: [], total: 0 });
+            }
+        });
+
+        render(
+            <MemoryRouter initialEntries={['/book-view']}>
+                <Routes>
+                    <Route path="/book-view" element={<Navigation />} />
+                </Routes>
+            </MemoryRouter>
+        );
+
+        const input = await screen.findByPlaceholderText(/키워드/i);
+        fireEvent.change(input, { target: { value: 'formtest' } });
+        fireEvent.submit(input.closest('form'));
+
+        await waitFor(() => {
+            expect(Common.rawJsonGetReq).toHaveBeenCalledWith(
+                expect.stringContaining('search/formtest'),
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+    });
+
+    it('logs error and returns early when clientId is missing', async () => {
+        window.__ENV__ = {};
+
+        render(
+            <MemoryRouter>
+                <Navigation />
+            </MemoryRouter>
+        );
+
+        // Should not call /auth/me when clientId is missing
+        expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('alerts on Google login API error (non-ok response)', async () => {
+        fetch.mockResolvedValueOnce({ ok: false }); // session check
+        fetch.mockResolvedValueOnce({ ok: false, status: 500 }); // google auth fails
+
+        render(
+            <MemoryRouter>
+                <Navigation />
+            </MemoryRouter>
+        );
+
+        const loginButton = await screen.findByTestId('google-login');
+        fireEvent.click(loginButton);
+
+        await waitFor(() => {
+            expect(alert).toHaveBeenCalledWith('Google 로그인 처리 중 오류가 발생했습니다.');
+        });
+    });
+
+    it('alerts on Google login onError callback', async () => {
+        fetch.mockResolvedValueOnce({ ok: false }); // session check
+
+        render(
+            <MemoryRouter>
+                <Navigation />
+            </MemoryRouter>
+        );
+
+        const errorButton = await screen.findByTestId('google-login-error');
+        fireEvent.click(errorButton);
+
+        await waitFor(() => {
+            expect(alert).toHaveBeenCalledWith('Google 로그인 실패');
+        });
+    });
+
+    it('redirects viewer on non-allowed path', async () => {
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ status: 'success', result: { role: 'viewer', name: 'V' } })
+        });
+
+        Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+            if (url.includes('hidden-categories')) {
+                resolve({ status: 'success', result: [] });
+            }
+        });
+
+        render(
+            <MemoryRouter initialEntries={['/admin']}>
+                <Routes>
+                    <Route path="/admin" element={<Navigation />} />
+                    <Route path="/" element={<div>Home Redirect</div>} />
+                </Routes>
+            </MemoryRouter>
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Home Redirect')).toBeDefined();
+        });
+    });
+
+    it('does not set login when Google auth returns no role', async () => {
+        fetch.mockResolvedValueOnce({ ok: false }); // session check fails
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ name: 'NoRole User', email: 'norole@example.com' })
+        });
+
+        render(
+            <MemoryRouter>
+                <Navigation />
+            </MemoryRouter>
+        );
+
+        const loginButton = await screen.findByTestId('google-login');
+        fireEvent.click(loginButton);
+
+        // role is missing so login state won't be set, login button stays visible
+        await waitFor(() => {
+            expect(screen.getByTestId('google-login')).toBeDefined();
+        });
+    });
+
+    it('handles handleLoadMore success callback', async () => {
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ status: 'success', result: { role: 'admin' } })
+        });
+
+        let loadMoreFn;
+        Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+            if (url.includes('search')) {
+                resolve({ status: 'success', result: [{ id: 1, title: 'Book 1' }], total: 20 });
+            }
+        });
+
+        // Use Outlet context consumer to get handleLoadMore
+        const LoadMoreConsumer = () => {
+            const { useOutletContext } = require('react-router-dom');
+            const ctx = useOutletContext();
+            loadMoreFn = ctx.handleLoadMore;
+            return <div>Outlet Content</div>;
+        };
+
+        render(
+            <MemoryRouter initialEntries={['/book-view']}>
+                <Routes>
+                    <Route path="/book-view" element={<Navigation />}>
+                        <Route index element={<LoadMoreConsumer />} />
+                    </Route>
+                </Routes>
+            </MemoryRouter>
+        );
+
+        // Trigger a search first to set searchKeyword
+        const input = await screen.findByPlaceholderText(/키워드/i);
+        fireEvent.change(input, { target: { value: 'loadtest' } });
+        fireEvent.click(screen.getByRole('button', { name: /검색/i }));
+
+        await waitFor(() => {
+            expect(Common.rawJsonGetReq).toHaveBeenCalledWith(
+                expect.stringContaining('search/loadtest'),
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+
+        // Now mock for load more
+        Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+            if (url.includes('search')) {
+                resolve({ status: 'success', result: [{ id: 2, title: 'Book 2' }], total: 20 });
+            }
+        });
+
+        // Call handleLoadMore
+        await waitFor(() => {
+            expect(loadMoreFn).toBeDefined();
+        });
+        loadMoreFn();
+
+        await waitFor(() => {
+            // Should have been called with offset=1 (one existing result)
+            const calls = Common.rawJsonGetReq.mock.calls.filter(c => c[0].includes('search'));
+            expect(calls.length).toBeGreaterThanOrEqual(2);
+        });
+    });
+
+    it('handles handleLoadMore error callback', async () => {
+        fetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ status: 'success', result: { role: 'admin' } })
+        });
+
+        let loadMoreFn;
+        Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+            if (url.includes('search')) {
+                resolve({ status: 'success', result: [{ id: 1, title: 'Book 1' }], total: 20 });
+            }
+        });
+
+        const LoadMoreConsumer = () => {
+            const { useOutletContext } = require('react-router-dom');
+            const ctx = useOutletContext();
+            loadMoreFn = ctx.handleLoadMore;
+            return <div>Outlet Content</div>;
+        };
+
+        render(
+            <MemoryRouter initialEntries={['/book-view']}>
+                <Routes>
+                    <Route path="/book-view" element={<Navigation />}>
+                        <Route index element={<LoadMoreConsumer />} />
+                    </Route>
+                </Routes>
+            </MemoryRouter>
+        );
+
+        const input = await screen.findByPlaceholderText(/키워드/i);
+        fireEvent.change(input, { target: { value: 'errtest' } });
+        fireEvent.click(screen.getByRole('button', { name: /검색/i }));
+
+        await waitFor(() => {
+            expect(Common.rawJsonGetReq).toHaveBeenCalledWith(
+                expect.stringContaining('search/errtest'),
+                expect.any(Function),
+                expect.any(Function)
+            );
+        });
+
+        // Now mock for load more to fail
+        Common.rawJsonGetReq.mockImplementation((url, _resolve, reject) => {
+            if (url.includes('search')) {
+                reject(new Error('load more failed'));
+            }
+        });
+
+        await waitFor(() => {
+            expect(loadMoreFn).toBeDefined();
+        });
+        loadMoreFn();
+
+        await waitFor(() => {
+            const calls = Common.rawJsonGetReq.mock.calls.filter(c => c[0].includes('search'));
+            expect(calls.length).toBeGreaterThanOrEqual(2);
         });
     });
 

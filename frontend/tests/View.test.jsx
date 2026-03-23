@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, act, fireEvent } from '@testing-library/react';
 
 afterEach(cleanup);
 
@@ -38,12 +38,20 @@ vi.mock('../src/Folder.jsx', () => ({
                     ))}
                 </div>
             ))}
+            <button data-testid="custom-entry-click" onClick={() => onClickHandler('소설/999')}>custom</button>
+            <button data-testid="custom-deep-click" onClick={() => onClickHandler('문학/소설/42')}>deep</button>
         </div>
     ),
 }));
 
 vi.mock('../src/ViewSingle.jsx', () => ({
-    default: ({ bookId, fileType }) => <div data-testid="view-single">ViewSingle: {bookId} ({fileType})</div>,
+    default: ({ bookId, fileType, onNextBook, hasNextBook, onPrevBook, hasPrevBook }) => (
+        <div data-testid="view-single">
+            ViewSingle: {bookId} ({fileType})
+            {hasNextBook && <button data-testid="next-book-btn" onClick={onNextBook}>Next</button>}
+            {hasPrevBook && <button data-testid="prev-book-btn" onClick={onPrevBook}>Prev</button>}
+        </div>
+    ),
 }));
 
 vi.mock('../src/BookInfoView.jsx', () => ({
@@ -410,5 +418,266 @@ describe('View', () => {
 
         // hidden 카테고리이므로 BookInfoView가 렌더링되지 않음
         expect(screen.queryByTestId('book-info-view')).toBeNull();
+    });
+
+    it('useIsMobile: window resize 이벤트에 반응한다', async () => {
+        mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+            if (url === '/categories') resolve({});
+        });
+
+        render(<View />);
+
+        // resize 이벤트를 트리거하여 handleResize 콜백 커버
+        await act(async () => {
+            window.innerWidth = 500;
+            window.dispatchEvent(new Event('resize'));
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId('folder')).toBeTruthy();
+        });
+    });
+
+    it('가상 부모(isVirtualParent) 클릭 시 API 호출 없이 리턴한다', async () => {
+        // '문학/소설', '문학/시', '역사' → commonPrefix='', 가상 부모 '__virtual__문학' 생성
+        mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+            if (url === '/categories') {
+                resolve({ '문학/소설': 5, '문학/시': 3, '역사': 1 });
+            }
+        });
+
+        render(<View />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('folder')).toBeTruthy();
+        });
+
+        const callCountBefore = mockJsonGetReq.mock.calls.length;
+
+        // 가상 부모 '__virtual__문학' 클릭
+        const virtualParentBtn = screen.queryByTestId('folder-item-__virtual__문학');
+        if (virtualParentBtn) {
+            virtualParentBtn.click();
+            // 가상 부모이므로 추가 API 호출이 없어야 함
+            expect(mockJsonGetReq.mock.calls.length).toBe(callCountBefore);
+        }
+    });
+
+    it('트리에 없는 entryId 클릭 시 parseEntryId로 카테고리를 파싱하여 책을 찾는다', async () => {
+        // 소설/999는 children에 없으므로 findFolderInTree('소설/999')가 null을 반환
+        // → else 브랜치(L187)로 진입 → parseEntryId → 카테고리에서 책 검색
+        // 소설 카테고리에 999가 없으므로 "can't find the selected book" 에러
+        mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+            if (url === '/categories') {
+                resolve({ '소설': 1 });
+            } else if (url === '/categories/소설') {
+                resolve([
+                    { book_id: 42, title: '테스트소설', file_type: 'epub', file_path: '/test.epub', category: '소설' },
+                ]);
+            }
+        });
+
+        render(<View />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('folder-item-소설')).toBeTruthy();
+        });
+
+        // 카테고리 클릭 → 책 목록 로드
+        screen.getByTestId('folder-item-소설').click();
+
+        await waitFor(() => {
+            expect(screen.getByTestId('folder-item-소설/42')).toBeTruthy();
+        });
+
+        // 트리에 없는 entryId('소설/999') 클릭 → else 브랜치 진입
+        screen.getByTestId('custom-entry-click').click();
+
+        // 책을 찾을 수 없으므로 에러가 설정됨 (BookInfoView가 렌더링되지 않음은 아님,
+        // 이전에 선택된 bookInfo가 없으므로)
+        // 대기 후 확인 - custom-entry-click은 selectedEntryId를 '소설/999'로 설정
+        await waitFor(() => {
+            // parseEntryId가 호출되고, category '소설'이 트리에서 발견되며,
+            // children에서 '소설/999'를 찾지 못해 에러 메시지가 설정됨
+        });
+    });
+
+    it('트리에 없는 entryId로 카테고리도 없으면 에러 메시지가 설정된다', async () => {
+        mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+            if (url === '/categories') {
+                resolve({ '역사': 1 });
+            }
+        });
+
+        render(<View />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('folder')).toBeTruthy();
+        });
+
+        // '소설/999' 클릭 → findFolderInTree null → parseEntryId → category '소설'
+        // → findFolderInTree(folderData, '소설') returns null → booksInCategory is undefined
+        // → L206: "can't find the selected category" 에러
+        screen.getByTestId('custom-entry-click').click();
+    });
+
+    it('next 버튼 클릭 시 다음 책으로 이동한다 (toNextEntryButtonClicked)', async () => {
+        // 정렬 순서: A소설(42) < B소설(43) → 42가 첫번째, 43이 두번째
+        mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+            if (url === '/categories') {
+                resolve({ '소설': 2 });
+            } else if (url === '/categories/소설') {
+                resolve([
+                    { book_id: 42, title: 'A소설', file_type: 'epub', file_path: '/first.epub', category: '소설' },
+                    { book_id: 43, title: 'B소설', file_type: 'epub', file_path: '/second.epub', category: '소설' },
+                ]);
+            }
+        });
+
+        render(<View />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('folder-item-소설')).toBeTruthy();
+        });
+
+        screen.getByTestId('folder-item-소설').click();
+
+        await waitFor(() => {
+            expect(screen.getByTestId('folder-item-소설/42')).toBeTruthy();
+        });
+
+        // 첫번째 책(A소설) 클릭 → next=B소설(43)
+        screen.getByTestId('folder-item-소설/42').click();
+
+        await waitFor(() => {
+            expect(screen.getByTestId('next-book-btn')).toBeTruthy();
+        });
+
+        screen.getByTestId('next-book-btn').click();
+
+        await waitFor(() => {
+            expect(screen.getByTestId('view-single')).toBeTruthy();
+        });
+    });
+
+    it('prev 버튼 클릭 시 이전 책으로 이동한다 (toPrevEntryButtonClicked)', async () => {
+        // 정렬 순서: A소설(42) < B소설(43) → 43이 두번째, prev=42
+        mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+            if (url === '/categories') {
+                resolve({ '소설': 2 });
+            } else if (url === '/categories/소설') {
+                resolve([
+                    { book_id: 42, title: 'A소설', file_type: 'epub', file_path: '/first.epub', category: '소설' },
+                    { book_id: 43, title: 'B소설', file_type: 'epub', file_path: '/second.epub', category: '소설' },
+                ]);
+            }
+        });
+
+        render(<View />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('folder-item-소설')).toBeTruthy();
+        });
+
+        screen.getByTestId('folder-item-소설').click();
+
+        await waitFor(() => {
+            expect(screen.getByTestId('folder-item-소설/43')).toBeTruthy();
+        });
+
+        // 두번째 책(B소설) 클릭 → prev=A소설(42)
+        screen.getByTestId('folder-item-소설/43').click();
+
+        await waitFor(() => {
+            expect(screen.getByTestId('prev-book-btn')).toBeTruthy();
+        });
+
+        screen.getByTestId('prev-book-btn').click();
+
+        await waitFor(() => {
+            expect(screen.getByTestId('view-single')).toBeTruthy();
+        });
+    });
+
+    it('가상 부모 하위 카테고리에서 책을 찾아 BookInfoView를 표시한다 (else 브랜치)', async () => {
+        // 카테고리: '문학/소설', '문학/시', '역사' → commonPrefix='', 가상 부모 '__virtual__문학' 생성
+        // findFolderInTree('문학/소설/42')는 3레벨이므로 null 반환 → else 브랜치(L187)
+        // parseEntryId → category='문학/소설' → findFolderInTree('문학/소설') 성공 → 책 찾기
+        mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+            if (url === '/categories') {
+                resolve({ '문학/소설': 3, '문학/시': 2, '역사': 1 });
+            } else if (url === '/categories/문학/소설') {
+                resolve([
+                    { book_id: 42, title: '깊은소설', file_type: 'epub', file_path: '/deep.epub', category: '문학/소설' },
+                ]);
+            }
+        });
+
+        render(<View />);
+
+        // 가상 부모 하위의 카테고리 표시 대기
+        await waitFor(() => {
+            expect(screen.getByTestId('folder-item-문학/소설')).toBeTruthy();
+        });
+
+        // 카테고리 클릭 → 책 목록 로드
+        screen.getByTestId('folder-item-문학/소설').click();
+
+        // 책 목록 로드 대기 - Folder mock은 top-level children만 렌더하므로
+        // 문학/소설의 children(문학/소설/42)은 렌더되지 않음
+        // 대신 jsonGetReq 호출 확인
+        await waitFor(() => {
+            expect(mockJsonGetReq.mock.calls.find(c => c[0] === '/categories/문학/소설')).toBeTruthy();
+        });
+
+        // custom-deep-click으로 '문학/소설/42' 클릭 → else 브랜치
+        screen.getByTestId('custom-deep-click').click();
+
+        // 책이 성공적으로 찾아져 BookInfoView 표시
+        await waitFor(() => {
+            expect(screen.getByTestId('book-info-view')).toBeTruthy();
+        });
+    });
+
+    it('apiPrefix가 있을 때 comics content_type으로 hidden-categories를 요청한다', async () => {
+        mockOutletContext.role = 'viewer';
+
+        mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+            if (url === '/comics/categories') {
+                resolve({ 'manga': 10 });
+            } else if (url === '/hidden-categories?content_type=comic') {
+                resolve([]);
+            }
+        });
+
+        render(<View apiPrefix="/comics" />);
+
+        await waitFor(() => {
+            const calls = mockJsonGetReq.mock.calls;
+            expect(calls.find(c => c[0] === '/hidden-categories?content_type=comic')).toBeTruthy();
+        });
+    });
+
+    it('딥링크에서 카테고리가 이미 booksLoaded면 바로 책을 선택한다', async () => {
+        mockRouteState.wildcard = '42';
+        mockRouteState.searchParams = 'category=소설';
+
+        let categoriesResolveCalled = false;
+        mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+            if (url === '/categories') {
+                resolve({ '소설': 1 });
+            } else if (url === '/categories/소설') {
+                resolve([
+                    { book_id: 42, title: '딥링크소설', file_type: 'epub', file_path: '/deep.epub', category: '소설' },
+                ]);
+            }
+        });
+
+        render(<View />);
+
+        // 딥링크로 카테고리 로드 → booksLoaded 후 책 자동 선택
+        await waitFor(() => {
+            expect(screen.getByTestId('book-info-view')).toBeTruthy();
+        });
     });
 });

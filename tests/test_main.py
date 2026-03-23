@@ -10,9 +10,7 @@ import types
 from fastapi.testclient import TestClient
 import backend.main as main
 
-logging.config.fileConfig(
-    Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False
-)
+logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
@@ -56,9 +54,9 @@ def backend_test_setup(es_client, es_index, admin_auth_cookies, mysql_container)
     yield {"bm": bm, "client": client}
 
 
-@pytest.fixture
+@pytest.fixture(scope="class")
 def test_book(backend_test_setup):
-    """Create a temporary test book for each test."""
+    """Create a temporary test book shared across tests in a class (read-only use)."""
     import asyncio
     from backend.book import Book
     from utils.loader import Loader
@@ -71,9 +69,7 @@ def test_book(backend_test_setup):
         pytest.skip("No epub files available for testing")
 
     epub_file_path = epub_files[0]
-    temp_file_path = (
-        Book.path_prefix / epub_file_path.parent.name / ("temp_" + epub_file_path.name)
-    )
+    temp_file_path = Book.path_prefix / epub_file_path.parent.name / ("temp_" + epub_file_path.name)
     shutil.copy(epub_file_path, temp_file_path)
     data = Loader.read_file(temp_file_path)
 
@@ -88,9 +84,13 @@ def test_book(backend_test_setup):
 
         yield {"book": book, "bm": bm, "client": client}
 
-        # Cleanup: delete the test book
+        # Cleanup: delete the test book and temp file
         try:
             client.delete(f"/books/{book.book_id}")
+        except Exception:
+            pass
+        try:
+            temp_file_path.unlink(missing_ok=True)
         except Exception:
             pass
     finally:
@@ -99,32 +99,52 @@ def test_book(backend_test_setup):
 
 class TestBackend:
     @pytest.mark.asyncio
-    async def test_update_book(self, test_book):
-        book = test_book["book"]
-        client = test_book["client"]
+    async def test_update_book(self, backend_test_setup):
+        from backend.book import Book
+        from utils.loader import Loader
 
-        doc = {
-            "book_id": book.book_id,
-            "category": book.category,
-            "title": "renamed_" + book.title,
-            "author": "anonymous_" + book.author,
-            "file_path": book.category
-            + "/renamed_"
-            + book.title
-            + "."
-            + book.file_type,
-            "file_type": book.file_type,
-            "file_size": 100,
-            "summary": "summary1",
-            "updated_time": "2021-01-01T00:00:00.000000",
-        }
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
 
-        response = client.put(f"/books/{book.book_id}", json=doc)
-        assert response
-        assert response.status_code == 200
+        epub_files = list(Book.path_prefix.glob(f"{CATEGORY}/*.epub"))
+        if not epub_files:
+            pytest.skip("No epub files available for testing")
 
+        epub_file_path = epub_files[0]
+        temp_file_path = Book.path_prefix / epub_file_path.parent.name / ("update_temp_" + epub_file_path.name)
+        shutil.copy(epub_file_path, temp_file_path)
+        data = Loader.read_file(temp_file_path)
 
-        assert response.json() == {"status": "success", "result": "Ok"}
+        book_id, error = await bm.add_book(data)
+        assert book_id and not error
+
+        book, error = await bm.get_book(book_id)
+        assert book and not error
+
+        try:
+            doc = {
+                "book_id": book.book_id,
+                "category": book.category,
+                "title": "renamed_" + book.title,
+                "author": "anonymous_" + book.author,
+                "file_path": book.category + "/renamed_" + book.title + "." + book.file_type,
+                "file_type": book.file_type,
+                "file_size": 100,
+                "summary": "summary1",
+                "updated_time": "2021-01-01T00:00:00.000000",
+            }
+
+            response = client.put(f"/books/{book.book_id}", json=doc)
+            assert response
+            assert response.status_code == 200
+
+            assert response.json() == {"status": "success", "result": "Ok"}
+        finally:
+            try:
+                client.delete(f"/books/{book.book_id}")
+            except Exception:
+                pass
+            temp_file_path.unlink(missing_ok=True)
 
     @pytest.mark.asyncio
     async def test_delete_book(self, backend_test_setup):
@@ -139,11 +159,7 @@ class TestBackend:
             pytest.skip("No epub files available for testing")
 
         epub_file_path = epub_files[0]
-        temp_file_path = (
-            Book.path_prefix
-            / epub_file_path.parent.name
-            / ("to_be_deleted_" + epub_file_path.name)
-        )
+        temp_file_path = Book.path_prefix / epub_file_path.parent.name / ("to_be_deleted_" + epub_file_path.name)
         shutil.copy(epub_file_path, temp_file_path)
         data = Loader.read_file(temp_file_path)
 
@@ -153,10 +169,13 @@ class TestBackend:
         book, error = await bm.get_book(book_id)
         assert book and not error
 
-        response = client.delete(f"/books/{book.book_id}")
-        assert response
-        assert response.status_code == 200
-        assert response.json() == {"status": "success", "result": "Ok"}
+        try:
+            response = client.delete(f"/books/{book.book_id}")
+            assert response
+            assert response.status_code == 200
+            assert response.json() == {"status": "success", "result": "Ok"}
+        finally:
+            temp_file_path.unlink(missing_ok=True)
 
     @pytest.mark.asyncio
     async def test_get_file_content(self, test_book):
@@ -170,9 +189,7 @@ class TestBackend:
         assert response.status_code == 200
         assert response.content
         assert len(response.content) > 1024
-        media_type = BookManager.MEDIA_TYPES.get(
-            book.file_path.suffix, "application/octet-stream"
-        )
+        media_type = BookManager.MEDIA_TYPES.get(book.file_path.suffix, "application/octet-stream")
         assert response.headers["Content-Type"].split(";")[0] == media_type
 
     @pytest.mark.asyncio
@@ -275,14 +292,8 @@ class TestBackend:
         assert response.status_code == 200
         response_data = response.json()
         if response_data["status"] == "success" and response_data.get("result"):
-            excluded_ids = [
-                b["book_id"]
-                for b in response_data["result"]
-                if b["category"] == book.category
-            ]
-            assert len(excluded_ids) == 0, (
-                f"제외된 카테고리 '{book.category}'의 책이 포함됨"
-            )
+            excluded_ids = [b["book_id"] for b in response_data["result"] if b["category"] == book.category]
+            assert len(excluded_ids) == 0, f"제외된 카테고리 '{book.category}'의 책이 포함됨"
 
     @pytest.mark.asyncio
     async def test_search_by_keyword_without_exclude_categories(self, test_book):
@@ -356,13 +367,7 @@ class TestRenameCategory:
         doc_ids = await self._insert_docs(bm, old_cat, 1)
 
         try:
-            response = client.put(
-                "/categories/rename",
-                json={
-                    "old_category": old_cat,
-                    "new_category": new_cat,
-                },
-            )
+            response = client.put("/categories/rename", json={"old_category": old_cat, "new_category": new_cat})
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "success"
@@ -394,13 +399,7 @@ class TestRenameCategory:
         new_ids = await self._insert_docs(bm, new_cat, 1, start_id=600)
 
         try:
-            response = client.put(
-                "/categories/rename",
-                json={
-                    "old_category": old_cat,
-                    "new_category": new_cat,
-                },
-            )
+            response = client.put("/categories/rename", json={"old_category": old_cat, "new_category": new_cat})
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "failure"
@@ -415,13 +414,7 @@ class TestRenameCategory:
         """없는 카테고리 rename 시 에러"""
         client = backend_test_setup["client"]
 
-        response = client.put(
-            "/categories/rename",
-            json={
-                "old_category": "_nonexistent_cat_xyz",
-                "new_category": "_new_cat_xyz",
-            },
-        )
+        response = client.put("/categories/rename", json={"old_category": "_nonexistent_cat_xyz", "new_category": "_new_cat_xyz"})
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "failure"
@@ -500,12 +493,7 @@ class TestDeleteCategory:
         """없는 카테고리 삭제 시 에러"""
         client = backend_test_setup["client"]
 
-        response = client.post(
-            "/categories/delete",
-            json={
-                "category": "_nonexistent_del_xyz",
-            },
-        )
+        response = client.post("/categories/delete", json={"category": "_nonexistent_del_xyz"})
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "failure"
@@ -587,21 +575,7 @@ class TestUpdateBookConflict:
 
         rel = file_path.relative_to(bm.path_prefix)
         now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
-        data = {
-            file_path.stat().st_ino: {
-                "category": category,
-                "title": file_path.stem,
-                "author": "Test Author",
-                "file_path": str(rel),
-                "file_type": file_path.suffix.lstrip("."),
-                "file_size": file_path.stat().st_size,
-                "line_count": 0,
-                "page_count": 0,
-                "isbn": "",
-                "summary": "conflict test",
-                "updated_time": now,
-            }
-        }
+        data = {file_path.stat().st_ino: {"category": category, "title": file_path.stem, "author": "Test Author", "file_path": str(rel), "file_type": file_path.suffix.lstrip("."), "file_size": file_path.stat().st_size, "line_count": 0, "page_count": 0, "isbn": "", "summary": "conflict test", "updated_time": now}}
         book_id, error = await bm.add_book(data)
         assert book_id and not error, f"Failed to register: {error}"
         return book_id
@@ -620,16 +594,7 @@ class TestUpdateBookConflict:
         book_id = await self._register_book(bm, src_path)
 
         try:
-            doc = {
-                "book_id": book_id,
-                "category": CATEGORY,
-                "title": "conflict_dst",
-                "author": "Test Author",
-                "file_path": f"{CATEGORY}/conflict_dst.epub",
-                "file_type": "epub",
-                "file_size": 100,
-                "updated_time": "2021-01-01T00:00:00.000000",
-            }
+            doc = {"book_id": book_id, "category": CATEGORY, "title": "conflict_dst", "author": "Test Author", "file_path": f"{CATEGORY}/conflict_dst.epub", "file_type": "epub", "file_size": 100, "updated_time": "2021-01-01T00:00:00.000000"}
 
             response = client.put(f"/books/{book_id}", json=doc)
             assert response.status_code == 200
@@ -637,9 +602,7 @@ class TestUpdateBookConflict:
             assert data["status"] == "failure"
             assert "CONFLICT:" in data["error"]
             assert src_path.exists(), "Source file should not have been moved"
-            assert dst_path.read_bytes() == b"existing", (
-                "Destination should be unchanged"
-            )
+            assert dst_path.read_bytes() == b"existing", "Destination should be unchanged"
         finally:
             try:
                 client.delete(f"/books/{book_id}")
@@ -662,23 +625,12 @@ class TestUpdateBookConflict:
         book_id = await self._register_book(bm, src_path)
 
         try:
-            doc = {
-                "book_id": book_id,
-                "category": CATEGORY,
-                "title": "conflict_relpath_dst",
-                "author": "Test Author",
-                "file_path": f"{CATEGORY}/conflict_relpath_dst.epub",
-                "file_type": "epub",
-                "file_size": 100,
-                "updated_time": "2021-01-01T00:00:00.000000",
-            }
+            doc = {"book_id": book_id, "category": CATEGORY, "title": "conflict_relpath_dst", "author": "Test Author", "file_path": f"{CATEGORY}/conflict_relpath_dst.epub", "file_type": "epub", "file_size": 100, "updated_time": "2021-01-01T00:00:00.000000"}
 
             response = client.put(f"/books/{book_id}", json=doc)
             data = response.json()
             error_msg = data.get("error", "")
-            assert f"{CATEGORY}/conflict_relpath_dst.epub" in error_msg, (
-                f"CONFLICT error should contain relative path, got: {error_msg}"
-            )
+            assert f"{CATEGORY}/conflict_relpath_dst.epub" in error_msg, f"CONFLICT error should contain relative path, got: {error_msg}"
         finally:
             try:
                 client.delete(f"/books/{book_id}")
@@ -701,16 +653,7 @@ class TestUpdateBookConflict:
         book_id = await self._register_book(bm, src_path)
 
         try:
-            doc = {
-                "book_id": book_id,
-                "category": CATEGORY,
-                "title": "force_dst",
-                "author": "Test Author",
-                "file_path": f"{CATEGORY}/force_dst.epub",
-                "file_type": "epub",
-                "file_size": 100,
-                "updated_time": "2021-01-01T00:00:00.000000",
-            }
+            doc = {"book_id": book_id, "category": CATEGORY, "title": "force_dst", "author": "Test Author", "file_path": f"{CATEGORY}/force_dst.epub", "file_type": "epub", "file_size": 100, "updated_time": "2021-01-01T00:00:00.000000"}
 
             response = client.put(f"/books/{book_id}?force=true", json=doc)
             assert response.status_code == 200
@@ -741,23 +684,12 @@ class TestUpdateBookConflict:
         book_id = await self._register_book(bm, file_path)
 
         try:
-            doc = {
-                "book_id": book_id,
-                "category": CATEGORY,
-                "title": "samefile_test",
-                "author": "Changed Author Name",
-                "file_path": f"{CATEGORY}/samefile_test.epub",
-                "file_type": "epub",
-                "file_size": 100,
-                "updated_time": "2021-01-01T00:00:00.000000",
-            }
+            doc = {"book_id": book_id, "category": CATEGORY, "title": "samefile_test", "author": "Changed Author Name", "file_path": f"{CATEGORY}/samefile_test.epub", "file_type": "epub", "file_size": 100, "updated_time": "2021-01-01T00:00:00.000000"}
 
             response = client.put(f"/books/{book_id}", json=doc)
             assert response.status_code == 200
             data = response.json()
-            assert data["status"] == "success", (
-                f"Same file path should not cause conflict, got: {data}"
-            )
+            assert data["status"] == "success", f"Same file path should not cause conflict, got: {data}"
             assert file_path.exists(), "File should still exist"
         finally:
             try:
@@ -780,16 +712,7 @@ class TestUpdateBookConflict:
         book_id = await self._register_book(bm, src_path)
 
         try:
-            doc = {
-                "book_id": book_id,
-                "category": new_dir,
-                "title": "movedir_test",
-                "author": "Test Author",
-                "file_path": f"{new_dir}/movedir_test.epub",
-                "file_type": "epub",
-                "file_size": 100,
-                "updated_time": "2021-01-01T00:00:00.000000",
-            }
+            doc = {"book_id": book_id, "category": new_dir, "title": "movedir_test", "author": "Test Author", "file_path": f"{new_dir}/movedir_test.epub", "file_type": "epub", "file_size": 100, "updated_time": "2021-01-01T00:00:00.000000"}
 
             response = client.put(f"/books/{book_id}", json=doc)
             assert response.status_code == 200
@@ -823,25 +746,13 @@ class TestUpdateBookConflict:
         src_path.unlink()
 
         try:
-            doc = {
-                "book_id": book_id,
-                "category": CATEGORY,
-                "title": "missing_renamed",
-                "author": "Test Author",
-                "file_path": f"{CATEGORY}/missing_renamed.epub",
-                "file_type": "epub",
-                "file_size": 100,
-                "updated_time": "2021-01-01T00:00:00.000000",
-            }
+            doc = {"book_id": book_id, "category": CATEGORY, "title": "missing_renamed", "author": "Test Author", "file_path": f"{CATEGORY}/missing_renamed.epub", "file_type": "epub", "file_size": 100, "updated_time": "2021-01-01T00:00:00.000000"}
 
             response = client.put(f"/books/{book_id}", json=doc)
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "failure"
-            assert (
-                "can't move" in data.get("error", "").lower()
-                or "error" in data.get("error", "").lower()
-            )
+            assert "can't move" in data.get("error", "").lower() or "error" in data.get("error", "").lower()
         finally:
             try:
                 client.delete(f"/books/{book_id}")
@@ -868,9 +779,7 @@ class TestAuthRefreshEndpoint:
     def test_refresh_returns_new_access_token(self, backend_test_setup):
         from backend.auth import create_refresh_token
 
-        refresh_token = create_refresh_token(
-            email=self.auth_mod.TM_ADMIN_EMAIL, role="admin"
-        )
+        refresh_token = create_refresh_token(email=self.auth_mod.TM_ADMIN_EMAIL, role="admin")
         client = self._get_unauthenticated_client(backend_test_setup)
         response = client.post("/auth/refresh", cookies={"tm_refresh_token": refresh_token})
         assert response.status_code == 200
@@ -880,13 +789,7 @@ class TestAuthRefreshEndpoint:
         import time
         import jwt
 
-        expired_payload = {
-            "type": "refresh",
-            "email": self.auth_mod.TM_ADMIN_EMAIL,
-            "role": "admin",
-            "exp": int(time.time()) - 100,
-            "iat": int(time.time()) - 200,
-        }
+        expired_payload = {"type": "refresh", "email": self.auth_mod.TM_ADMIN_EMAIL, "role": "admin", "exp": int(time.time()) - 100, "iat": int(time.time()) - 200}
         from backend.auth import JWT_SECRET, JWT_ALGORITHM
 
         token = jwt.encode(expired_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
@@ -897,9 +800,7 @@ class TestAuthRefreshEndpoint:
     def test_refresh_with_access_token_returns_401(self, backend_test_setup):
         from backend.auth import create_jwt_token
 
-        access_token = create_jwt_token(
-            email=self.auth_mod.TM_ADMIN_EMAIL, role="admin"
-        )
+        access_token = create_jwt_token(email=self.auth_mod.TM_ADMIN_EMAIL, role="admin")
         client = self._get_unauthenticated_client(backend_test_setup)
         response = client.post("/auth/refresh", cookies={"tm_refresh_token": access_token})
         assert response.status_code == 401
@@ -920,9 +821,7 @@ class TestAuthRefreshEndpoint:
     def test_refreshed_token_works_for_api_calls(self, backend_test_setup):
         from backend.auth import create_refresh_token
 
-        refresh_token = create_refresh_token(
-            email=self.auth_mod.TM_ADMIN_EMAIL, role="admin"
-        )
+        refresh_token = create_refresh_token(email=self.auth_mod.TM_ADMIN_EMAIL, role="admin")
         client = self._get_unauthenticated_client(backend_test_setup)
         response = client.post("/auth/refresh", cookies={"tm_refresh_token": refresh_token})
         new_access_token = response.cookies.get("tm_access_token")
@@ -1166,20 +1065,7 @@ class DummyManager:
         return Response(content="pdf", media_type="application/pdf")
 
     async def get_book(self, book_id: int):
-        data = {
-            "book_id": book_id,
-            "category": "A",
-            "title": "T",
-            "author": "U",
-            "file_path": "a.txt",
-            "file_type": "txt",
-            "file_size": 1,
-            "line_count": 0,
-            "page_count": 0,
-            "isbn": "",
-            "updated_time": "2024-01-01T00:00:00.000000",
-            "score": 0.0,
-        }
+        data = {"book_id": book_id, "category": "A", "title": "T", "author": "U", "file_path": "a.txt", "file_type": "txt", "file_size": 1, "line_count": 0, "page_count": 0, "isbn": "", "updated_time": "2024-01-01T00:00:00.000000", "score": 0.0}
         return DummyBook(data), None
 
     async def validate_epub(self, book_id: int):
@@ -1189,20 +1075,7 @@ class DummyManager:
         return {"valid": True}, None
 
     async def get_books_in_category(self, category: str):
-        return [DummyBook({
-            "book_id": 1,
-            "category": category,
-            "title": "T",
-            "author": "U",
-            "file_path": "a.txt",
-            "file_type": "txt",
-            "file_size": 1,
-            "line_count": 0,
-            "page_count": 0,
-            "isbn": "",
-            "updated_time": "2024-01-01T00:00:00.000000",
-            "score": 0.0,
-        })], None
+        return [DummyBook({"book_id": 1, "category": category, "title": "T", "author": "U", "file_path": "a.txt", "file_type": "txt", "file_size": 1, "line_count": 0, "page_count": 0, "isbn": "", "updated_time": "2024-01-01T00:00:00.000000", "score": 0.0})], None
 
     async def get_categories(self):
         return {"A": 1}, None
@@ -1211,36 +1084,10 @@ class DummyManager:
         return [], 0, "No similar books found"
 
     async def search_similar_books_paged_ok(self, book_id: int, size: int, offset: int):
-        return ([DummyBook({
-            "book_id": 2,
-            "category": "A",
-            "title": "T2",
-            "author": "U",
-            "file_path": "b.txt",
-            "file_type": "txt",
-            "file_size": 1,
-            "line_count": 0,
-            "page_count": 0,
-            "isbn": "",
-            "updated_time": "2024-01-01T00:00:00.000000",
-            "score": 10.0,
-        })], 1, None)
+        return ([DummyBook({"book_id": 2, "category": "A", "title": "T2", "author": "U", "file_path": "b.txt", "file_type": "txt", "file_size": 1, "line_count": 0, "page_count": 0, "isbn": "", "updated_time": "2024-01-01T00:00:00.000000", "score": 10.0})], 1, None)
 
     async def search_by_keyword_paged(self, keyword: str, size: int, offset: int, exclude_categories=None):
-        return ([DummyBook({
-            "book_id": 3,
-            "category": "A",
-            "title": "T3",
-            "author": "U",
-            "file_path": "c.txt",
-            "file_type": "txt",
-            "file_size": 1,
-            "line_count": 0,
-            "page_count": 0,
-            "isbn": "",
-            "updated_time": "2024-01-01T00:00:00.000000",
-            "score": 9.0,
-        })], 1, None)
+        return ([DummyBook({"book_id": 3, "category": "A", "title": "T3", "author": "U", "file_path": "c.txt", "file_type": "txt", "file_size": 1, "line_count": 0, "page_count": 0, "isbn": "", "updated_time": "2024-01-01T00:00:00.000000", "score": 9.0})], 1, None)
 
     def get_category_mismatches(self):
         return {"mismatches": []}
@@ -1287,20 +1134,7 @@ def dummy_client(tmp_path: Path):
 
 
 def test_main_routes_basic(dummy_client):
-    payload = {
-        "book_id": 1,
-        "category": "A",
-        "title": "T",
-        "author": "U",
-        "file_path": "a.txt",
-        "file_type": "txt",
-        "file_size": 1,
-        "line_count": 0,
-        "page_count": 0,
-        "isbn": "",
-        "updated_time": "2024-01-01T00:00:00.000000",
-        "score": 0.0,
-    }
+    payload = {"book_id": 1, "category": "A", "title": "T", "author": "U", "file_path": "a.txt", "file_type": "txt", "file_size": 1, "line_count": 0, "page_count": 0, "isbn": "", "updated_time": "2024-01-01T00:00:00.000000", "score": 0.0}
     resp = dummy_client.put("/books/1", json=payload)
     assert resp.json()["status"] == "success"
 
@@ -1377,3 +1211,566 @@ def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
 
     resp = dummy_client.get("/category-mismatches/A")
     assert resp.json()["status"] == "success"
+
+
+def test_custom_jsonable_encoder_fallback():
+    assert main.custom_jsonable_encoder(1) == 1
+
+
+def test_lazy_proxy_repr():
+    proxy = main._LazyProxy(lambda: {"ok": True}, "dummy")
+    assert repr(proxy) == repr({"ok": True})
+
+
+def test_main_error_branches(dummy_client, monkeypatch):
+    from backend import main as main_mod
+
+    async def delete_book_error(book_id: int):
+        return ("Error", "boom")
+
+    async def get_book_error(book_id: int):
+        return (None, "not found")
+
+    async def get_books_in_category_error(category: str):
+        return ([], "nope")
+
+    async def get_categories_error():
+        return ({}, "fail")
+
+    async def search_similar_error(book_id: int, size: int, offset: int):
+        return ([], 0, "none")
+
+    async def search_keyword_error(keyword: str, size: int, offset: int, exclude_categories=None):
+        return ([], 0, "kw")
+
+    async def index_single_file_error(file_path: str):
+        return (None, "err")
+
+    async def delete_file_error(file_path: str):
+        return ("Error", "bad")
+
+    async def reload_category_error(category: str, content_type: str = "book"):
+        return (None, "fail")
+
+    def get_category_mismatches_error():
+        raise RuntimeError("boom")
+
+    def get_category_mismatch_details_error(category: str):
+        raise RuntimeError("boom2")
+
+    monkeypatch.setattr(main_mod.book_manager, "delete_book", delete_book_error)
+    monkeypatch.setattr(main_mod.book_manager, "get_book", get_book_error)
+    monkeypatch.setattr(main_mod.book_manager, "get_books_in_category", get_books_in_category_error)
+    monkeypatch.setattr(main_mod.book_manager, "get_categories", get_categories_error)
+    monkeypatch.setattr(main_mod.book_manager, "search_similar_books_paged", search_similar_error)
+    monkeypatch.setattr(main_mod.book_manager, "search_by_keyword_paged", search_keyword_error)
+    monkeypatch.setattr(main_mod.book_manager, "index_single_file", index_single_file_error)
+    monkeypatch.setattr(main_mod.book_manager, "delete_file", delete_file_error)
+    monkeypatch.setattr(main_mod.book_manager, "reload_category", reload_category_error)
+    monkeypatch.setattr(main_mod.book_manager, "get_category_mismatches", get_category_mismatches_error)
+    monkeypatch.setattr(main_mod.book_manager, "get_category_mismatch_details", get_category_mismatch_details_error)
+
+    resp = dummy_client.delete("/books/1")
+    assert resp.json()["error"] == "boom"
+
+    resp = dummy_client.get("/books/1")
+    assert resp.json()["error"] == "not found"
+
+    resp = dummy_client.get("/categories/A")
+    assert resp.json()["error"] == "nope"
+
+    resp = dummy_client.get("/categories")
+    assert resp.json()["error"] == "fail"
+
+    resp = dummy_client.get("/similar/1")
+    assert resp.json()["error"] == "none"
+
+    resp = dummy_client.get("/search/kw")
+    assert resp.json()["error"] == "kw"
+
+    resp = dummy_client.get("/category-mismatches")
+    assert resp.json()["error"] == "boom"
+
+    resp = dummy_client.post("/category-mismatches/index-file", json={})
+    assert resp.status_code == 400
+
+    resp = dummy_client.post("/category-mismatches/index-file", json={"file_path": "a.txt"})
+    assert resp.json()["error"] == "err"
+
+    resp = dummy_client.post("/category-mismatches/delete-file", json={})
+    assert resp.status_code == 400
+
+    resp = dummy_client.post("/category-mismatches/delete-file", json={"file_path": "a.txt"})
+    assert resp.json()["error"] == "bad"
+
+    monkeypatch.setattr(main_mod.book_manager.es_manager, "delete", lambda book_id: False)
+    resp = dummy_client.delete("/category-mismatches/es-doc/1")
+    assert "ES 문서 삭제 실패" in resp.json()["error"]
+
+    resp = dummy_client.post("/category-mismatches/reload", json={"category": "A"})
+    assert resp.json()["error"] == "fail"
+
+    resp = dummy_client.get("/category-mismatches/A")
+    assert resp.json()["error"] == "boom2"
+
+
+def test_wake_storage_error(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(main.os, "listdir", lambda path: (_ for _ in ()).throw(RuntimeError("fail")))
+    client = TestClient(main.app)
+    resp = client.get("/wake")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "failure"
+
+
+def test_search_bookstore_api_branches(dummy_client, monkeypatch):
+    from backend import main as main_mod
+
+    def fake_search(self, isbn: str = "", title: str = "", author: str = ""):
+        return ([], "", "unknown")
+
+    monkeypatch.setattr(main_mod.Yes24Bookstore, "search", fake_search)
+    monkeypatch.setattr(main_mod.AladinBookstore, "search", fake_search)
+    monkeypatch.setattr(main_mod.RidibooksBookstore, "search", fake_search)
+    monkeypatch.setattr(main_mod.NaverShoppingBookstore, "search", fake_search)
+    monkeypatch.setattr(main_mod.NaverSeriesBookstore, "search", fake_search)
+    monkeypatch.setattr(main_mod.MunpiaBookstore, "search", fake_search)
+
+    assert dummy_client.get("/search/bookstore/yes24?title=t").json()["status"] == "not_found"
+    assert dummy_client.get("/search/bookstore/aladin?title=t").json()["status"] == "not_found"
+    assert dummy_client.get("/search/bookstore/ridi?title=t").json()["status"] == "not_found"
+    assert dummy_client.get("/search/bookstore/naver?title=t").json()["status"] == "not_found"
+    assert dummy_client.get("/search/bookstore/naverseries?title=t").json()["status"] == "not_found"
+    assert dummy_client.get("/search/bookstore/munpia?title=t").json()["status"] == "not_found"
+
+    resp = dummy_client.get("/search/bookstore/unknown?title=t")
+    assert resp.status_code == 404
+
+
+def test_category_mapping_error_branches(dummy_client, monkeypatch):
+    from backend import main as main_mod
+
+    class DummyMapping:
+        def get_all_mappings(self, content_type: str = "book"):
+            raise RuntimeError("boom")
+
+        def get_keywords(self, category: str, content_type: str = "book"):
+            raise RuntimeError("boom2")
+
+        def set_keywords(self, category: str, keywords, content_type: str = "book"):
+            return False
+
+        def add_keyword(self, category: str, keyword: str, content_type: str = "book"):
+            raise RuntimeError("boom3")
+
+        def remove_keyword(self, category: str, keyword: str, content_type: str = "book"):
+            raise RuntimeError("boom4")
+
+        def delete_category(self, category: str, content_type: str = "book", prefix: bool = False):
+            raise RuntimeError("boom5")
+
+        def update_all_mappings(self, mappings, content_type: str = "book"):
+            raise RuntimeError("boom6")
+
+        def get_hidden_categories(self, content_type: str = "book"):
+            raise RuntimeError("boom7")
+
+        def set_hidden(self, category: str, hidden: bool, content_type: str = "book"):
+            raise RuntimeError("boom8")
+
+    monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyMapping())
+
+    resp = dummy_client.get("/category-mappings")
+    assert resp.status_code == 500
+
+    resp = dummy_client.get("/category-mappings/A")
+    assert resp.status_code == 500
+
+    resp = dummy_client.put("/category-mappings/A", json={"keywords": ["x"]})
+    assert resp.status_code == 500
+
+    resp = dummy_client.post("/category-mappings/A/keywords", json={"keyword": "x"})
+    assert resp.status_code == 500
+
+    resp = dummy_client.delete("/category-mappings/A/keywords/x")
+    assert resp.status_code == 500
+
+    resp = dummy_client.delete("/category-mappings/A")
+    assert resp.status_code == 500
+
+    resp = dummy_client.put("/category-mappings", json={"mappings": {"A": ["x"]}})
+    assert resp.status_code == 500
+
+    resp = dummy_client.get("/hidden-categories")
+    assert resp.status_code == 500
+
+    resp = dummy_client.post("/hidden-categories/A", json={"hidden": True})
+    assert resp.status_code == 500
+
+
+def test_cookie_settings_variants(monkeypatch: pytest.MonkeyPatch):
+    from backend import main as main_mod
+
+    monkeypatch.setenv("TM_COOKIE_SECURE", "false")
+    monkeypatch.setenv("TM_COOKIE_SAMESITE", "none")
+    secure, samesite = main_mod._get_cookie_settings()
+    assert secure is False
+    assert samesite == "lax"
+
+    monkeypatch.setenv("TM_COOKIE_SECURE", "true")
+    monkeypatch.setenv("TM_COOKIE_SAMESITE", "strict")
+    secure, samesite = main_mod._get_cookie_settings()
+    assert secure is True
+    assert samesite == "strict"
+
+
+def test_set_and_clear_auth_cookies(monkeypatch: pytest.MonkeyPatch):
+    from backend import main as main_mod
+    from fastapi.responses import JSONResponse
+
+    monkeypatch.setenv("TM_COOKIE_SECURE", "true")
+    monkeypatch.setenv("TM_COOKIE_SAMESITE", "lax")
+
+    resp = JSONResponse({"ok": True})
+    main_mod._set_auth_cookies(resp, "access", "refresh")
+    headers = resp.headers.get("set-cookie", "")
+    assert "tm_access_token" in headers
+
+    resp2 = JSONResponse({"ok": True})
+    main_mod._clear_auth_cookies(resp2)
+    headers2 = resp2.headers.get("set-cookie", "")
+    assert "Max-Age=0" in headers2
+
+
+def test_auth_google_branches(monkeypatch: pytest.MonkeyPatch):
+    from backend import main as main_mod
+    from fastapi.testclient import TestClient
+
+    class DummyResponse:
+        def __init__(self, data):
+            self._data = data
+
+        def json(self):
+            return self._data
+
+    class DummyClient:
+        def __init__(self, data):
+            self._data = data
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            return DummyResponse(self._data)
+
+    client = TestClient(main_mod.app)
+
+    resp = client.post("/auth/google", json={})
+    assert resp.status_code == 400
+
+    monkeypatch.setenv("TM_GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setattr(main_mod, "TM_GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setattr(main_mod, "httpx", type("H", (), {"AsyncClient": lambda: DummyClient({"error": "bad"})}))
+    resp = client.post("/auth/google", json={"credential": "x"})
+    assert resp.status_code == 401
+
+    monkeypatch.setattr(main_mod, "httpx", type("H", (), {"AsyncClient": lambda: DummyClient({"aud": "other", "email": "a"})}))
+    resp = client.post("/auth/google", json={"credential": "x"})
+    assert resp.status_code == 401
+
+    monkeypatch.setattr(main_mod, "httpx", type("H", (), {"AsyncClient": lambda: DummyClient({"aud": "cid", "email": "a", "name": "n", "picture": "p"})}))
+    monkeypatch.setattr(main_mod, "determine_role", lambda email: None)
+    resp = client.post("/auth/google", json={"credential": "x"})
+    assert resp.status_code == 403
+
+    monkeypatch.setattr(main_mod, "determine_role", lambda email: "admin")
+    monkeypatch.setattr(main_mod, "create_jwt_token", lambda **kwargs: "tok")
+    monkeypatch.setattr(main_mod, "create_refresh_token", lambda **kwargs: "rtok")
+    resp = client.post("/auth/google", json={"credential": "x"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "success"
+
+
+def test_auth_refresh_missing_cookie():
+    from backend import main as main_mod
+    from fastapi.testclient import TestClient
+
+    client = TestClient(main_mod.app)
+    resp = client.post("/auth/refresh")
+    assert resp.status_code == 400
+
+
+def test_auth_refresh_access_denied(monkeypatch: pytest.MonkeyPatch):
+    from backend import main as main_mod
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: {"email": "x"})
+    monkeypatch.setattr(main_mod, "determine_role", lambda email: None)
+
+    client = TestClient(main_mod.app)
+    resp = client.post("/auth/refresh", cookies={"tm_refresh_token": "r"})
+    assert resp.status_code == 403
+
+
+def test_auth_me(dummy_client):
+    from backend import main as main_mod
+
+    resp = dummy_client.get("/auth/me")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "success"
+
+
+# ---- coverage: uncovered lines ----
+
+
+def test_create_bookstore_factory():
+    """Line 177: _create_bookstore factory"""
+    from backend.main import _create_bookstore
+    from backend.bookstore import Yes24Bookstore
+
+    store = _create_bookstore()
+    assert isinstance(store, Yes24Bookstore)
+    assert store.verbose is True
+
+
+def test_rename_category_mysql_mapping_failure(dummy_client, monkeypatch):
+    """Line 309: rename_category MySQL mapping update failure"""
+    from backend import main as main_mod
+
+    async def rename_ok(old_category, new_category):
+        return {"old_category": old_category, "new_category": new_category, "updated_count": 1, "fs_renamed": False}, None
+
+    main_mod.book_manager._instance.rename_category = rename_ok
+
+    class DummyCatMap:
+        def rename_category(self, old, new, content_type="book"):
+            return False
+
+    monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyCatMap())
+
+    resp = dummy_client.put("/categories/rename", json={"old_category": "A", "new_category": "B"})
+    data = resp.json()
+    assert data["status"] == "success"
+    assert data["result"]["mapping_updated"] is False
+
+    del main_mod.book_manager._instance.rename_category
+
+
+def test_delete_category_hidden_subcategories(dummy_client, monkeypatch):
+    """Lines 330-331: delete_category cleans hidden subcategories"""
+    from backend import main as main_mod
+
+    async def delete_ok(category):
+        return {"category": category, "deleted_count": 1}, None
+
+    main_mod.book_manager._instance.delete_category = delete_ok
+
+    hidden_removed = []
+
+    class DummyCatMap:
+        def delete_category(self, cat, content_type="book", prefix=False):
+            return True
+
+        def set_hidden(self, cat, hidden, content_type="book"):
+            if not hidden:
+                hidden_removed.append(cat)
+            return True
+
+        def get_hidden_categories(self, content_type="book"):
+            return ["A/sub1", "A/sub2", "B/other"]
+
+    monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyCatMap())
+
+    resp = dummy_client.post("/categories/delete", json={"category": "A"})
+    data = resp.json()
+    assert data["status"] == "success"
+    assert "A/sub1" in hidden_removed
+    assert "A/sub2" in hidden_removed
+    assert "B/other" not in hidden_removed
+
+    del main_mod.book_manager._instance.delete_category
+
+
+def test_set_category_keywords_unexpected_exception(dummy_client, monkeypatch):
+    """Lines 673-675: set_category_keywords non-HTTPException error"""
+    from backend import main as main_mod
+
+    class DummyCatMap:
+        def set_keywords(self, category, keywords, content_type="book"):
+            raise TypeError("unexpected")
+
+    monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyCatMap())
+
+    resp = dummy_client.put("/category-mappings/A", json={"keywords": ["x"]})
+    assert resp.status_code == 500
+    assert "unexpected" in resp.json()["detail"]
+
+
+def test_update_all_category_mappings_failure(dummy_client, monkeypatch):
+    """Line 739: update_all_category_mappings returns False"""
+    from backend import main as main_mod
+
+    class DummyCatMap:
+        def update_all_mappings(self, mappings, content_type="book"):
+            return False
+
+    monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyCatMap())
+
+    resp = dummy_client.put("/category-mappings", json={"mappings": {"A": ["x"]}})
+    assert resp.status_code == 500
+    assert "Failed to update mappings" in resp.json()["detail"]
+
+
+def test_update_all_category_mappings_http_exception_reraise(dummy_client, monkeypatch):
+    """Line 741: update_all_category_mappings HTTPException re-raise"""
+    from backend import main as main_mod
+    from fastapi import HTTPException
+
+    class DummyCatMap:
+        def update_all_mappings(self, mappings, content_type="book"):
+            raise HTTPException(status_code=422, detail="validation error")
+
+    monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyCatMap())
+
+    resp = dummy_client.put("/category-mappings", json={"mappings": {"A": ["x"]}})
+    assert resp.status_code == 422
+
+
+def test_set_hidden_category_failure(dummy_client, monkeypatch):
+    """Line 775: set_hidden_category returns False"""
+    from backend import main as main_mod
+
+    class DummyCatMap:
+        def set_hidden(self, category, hidden, content_type="book"):
+            return False
+
+    monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyCatMap())
+
+    resp = dummy_client.post("/hidden-categories/A", json={"hidden": True})
+    assert resp.status_code == 500
+    assert "Failed to update hidden category" in resp.json()["detail"]
+
+
+def test_set_hidden_category_http_exception_reraise(dummy_client, monkeypatch):
+    """Line 777: set_hidden_category HTTPException re-raise"""
+    from backend import main as main_mod
+    from fastapi import HTTPException
+
+    class DummyCatMap:
+        def set_hidden(self, category, hidden, content_type="book"):
+            raise HTTPException(status_code=422, detail="test error")
+
+    monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyCatMap())
+
+    resp = dummy_client.post("/hidden-categories/A", json={"hidden": True})
+    assert resp.status_code == 422
+
+
+def test_delete_book_ok_path(dummy_client, monkeypatch):
+    """Lines 238-239: delete_book 'Ok' 경로"""
+    from backend import main as main_mod
+
+    async def delete_ok(book_id: int):
+        return "Ok", None
+
+    monkeypatch.setattr(main_mod.book_manager, "delete_book", delete_ok)
+    resp = dummy_client.delete("/books/1")
+    data = resp.json()
+    assert data["status"] == "success"
+    assert data["result"] == "Ok"
+
+
+def test_validate_book_not_found(dummy_client, monkeypatch):
+    """Lines 270-271: validate_book 책 없음 경로"""
+    from backend import main as main_mod
+
+    async def get_book_none(book_id: int):
+        return None, "not found"
+
+    monkeypatch.setattr(main_mod.book_manager, "get_book", get_book_none)
+    resp = dummy_client.get("/validate/999")
+    data = resp.json()
+    assert data["status"] == "failure"
+    assert "Book not found" in data["error"]
+
+
+def test_validate_book_unsupported_type(dummy_client, monkeypatch):
+    """Lines 278-279: validate_book 지원하지 않는 파일 타입"""
+    from backend import main as main_mod
+
+    async def get_book_txt(book_id: int):
+        data = {"book_id": book_id, "category": "A", "title": "T", "author": "U", "file_path": "a.txt", "file_type": "txt", "file_size": 1, "line_count": 0, "page_count": 0, "isbn": "", "updated_time": "2024-01-01T00:00:00.000000", "score": 0.0}
+        return DummyBook(data), None
+
+    monkeypatch.setattr(main_mod.book_manager, "get_book", get_book_txt)
+    resp = dummy_client.get("/validate/1")
+    data = resp.json()
+    assert data["status"] == "failure"
+    assert "not supported" in data["error"]
+
+
+def test_validate_book_error_result(dummy_client, monkeypatch):
+    """Line 285: validate_book 에러 경로"""
+    from backend import main as main_mod
+
+    async def get_book_epub(book_id: int):
+        data = {"book_id": book_id, "category": "A", "title": "T", "author": "U", "file_path": "a.epub", "file_type": "epub", "file_size": 1, "line_count": 0, "page_count": 0, "isbn": "", "updated_time": "2024-01-01T00:00:00.000000", "score": 0.0}
+        return DummyBook(data), None
+
+    async def validate_epub_fail(book_id: int):
+        return None, "validation failed"
+
+    monkeypatch.setattr(main_mod.book_manager, "get_book", get_book_epub)
+    monkeypatch.setattr(main_mod.book_manager, "validate_epub", validate_epub_fail)
+    resp = dummy_client.get("/validate/1")
+    data = resp.json()
+    assert data["status"] == "failure"
+    assert data["error"] == "validation failed"
+
+
+def test_delete_category_mapping_not_deleted(dummy_client, monkeypatch):
+    """Line 333: delete_category mapping_deleted=False 경로"""
+    from backend import main as main_mod
+
+    async def delete_ok(category):
+        return {"category": category, "deleted_count": 1}, None
+
+    main_mod.book_manager._instance.delete_category = delete_ok
+
+    class DummyCatMap:
+        def delete_category(self, cat, content_type="book", prefix=False):
+            return False
+
+        def set_hidden(self, cat, hidden, content_type="book"):
+            return True
+
+        def get_hidden_categories(self, content_type="book"):
+            return []
+
+    monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyCatMap())
+
+    resp = dummy_client.post("/categories/delete", json={"category": "A"})
+    data = resp.json()
+    assert data["status"] == "success"
+    assert data["result"]["mapping_deleted"] is False
+
+    del main_mod.book_manager._instance.delete_category
+
+
+# ---- merged from test_main_env_guard.py ----
+
+
+def test_main_requires_frontend_url():
+    import importlib, os, sys
+
+    prev = os.environ.pop("TM_FRONTEND_URL", None)
+    try:
+        if "backend.main" in sys.modules:
+            del sys.modules["backend.main"]
+        with pytest.raises(SystemExit):
+            importlib.import_module("backend.main")
+    finally:
+        if prev is not None:
+            os.environ["TM_FRONTEND_URL"] = prev
