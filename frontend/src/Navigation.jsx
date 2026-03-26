@@ -16,7 +16,7 @@ import {
 } from "react-bootstrap";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSearch, faSpinner, faUser } from "@fortawesome/free-solid-svg-icons";
-import { rawJsonGetReq, getApiUrlPrefix } from "./Common.js";
+import { rawJsonGetReq, getApiUrlPrefix, tryRefreshToken } from "./Common.js";
 import { isViewerAllowedPath } from "./auth.js";
 
 export default function Navigation() {
@@ -137,9 +137,16 @@ export default function Navigation() {
     }
     const loadSession = async () => {
       try {
-        const res = await fetch(getApiUrlPrefix() + "/auth/me", {
+        let res = await fetch(getApiUrlPrefix() + "/auth/me", {
           credentials: "include",
         });
+        if (res.status === 401) {
+          const refreshed = await tryRefreshToken();
+          if (!refreshed) return;
+          res = await fetch(getApiUrlPrefix() + "/auth/me", {
+            credentials: "include",
+          });
+        }
         if (!res.ok) return;
         const data = await res.json();
         if (data.status === "success" && data.result?.role) {
