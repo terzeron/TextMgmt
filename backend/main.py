@@ -3,6 +3,7 @@
 import asyncio
 import sys
 import os
+import time
 import logging.config
 from pathlib import Path
 from typing import Dict, Any, Literal, Union, List, Callable, TypeVar, Optional
@@ -585,7 +586,7 @@ async def verify_google_token(request_body: dict):
     token = create_jwt_token(email=email, role=role, name=name, picture=picture)
     refresh_token = create_refresh_token(email=email, role=role, name=name, picture=picture)
 
-    response = JSONResponse({"status": "success", "email": email, "name": name, "picture": picture, "role": role})
+    response = JSONResponse({"status": "success", "email": email, "name": name, "picture": picture, "role": role, "expires_in": ACCESS_TOKEN_EXPIRATION_SECONDS})
     _set_auth_cookies(response, token, refresh_token)
     return response
 
@@ -609,14 +610,15 @@ async def refresh_access_token(request: Request):
     token = create_jwt_token(email=email, role=role, name=name, picture=picture)
     new_refresh_token = create_refresh_token(email=email, role=role, name=name, picture=picture)
 
-    response = JSONResponse({"status": "success"})
+    response = JSONResponse({"status": "success", "expires_in": ACCESS_TOKEN_EXPIRATION_SECONDS})
     _set_auth_cookies(response, token, new_refresh_token)
     return response
 
 
 @app.get("/auth/me")
 async def auth_me(payload: dict = Depends(require_auth)):
-    return {"status": "success", "result": {"email": payload.get("email", ""), "role": payload.get("role", ""), "name": payload.get("name", ""), "picture": payload.get("picture", "")}}
+    remaining = max(0, payload.get("exp", 0) - int(time.time()))
+    return {"status": "success", "result": {"email": payload.get("email", ""), "role": payload.get("role", ""), "name": payload.get("name", ""), "picture": payload.get("picture", ""), "expires_in": remaining}}
 
 
 @app.post("/auth/logout")

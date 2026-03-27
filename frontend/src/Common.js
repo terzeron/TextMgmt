@@ -43,6 +43,26 @@ function clearAuthState() {
 }
 
 let refreshPromise = null;
+let _refreshTimerId = null;
+
+// 선제적 토큰 갱신: 만료 5분 전에 자동으로 refresh
+const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+
+function _scheduleProactiveRefresh(expiresInSec) {
+  if (_refreshTimerId) clearTimeout(_refreshTimerId);
+  const delayMs = Math.max(expiresInSec * 1000 - REFRESH_BUFFER_MS, 10_000);
+  _refreshTimerId = setTimeout(async () => {
+    _refreshTimerId = null;
+    await tryRefreshToken();
+  }, delayMs);
+}
+
+export function stopProactiveRefresh() {
+  if (_refreshTimerId) {
+    clearTimeout(_refreshTimerId);
+    _refreshTimerId = null;
+  }
+}
 
 export async function tryRefreshToken() {
   // 동시 다발 요청이 모두 refresh를 시도하지 않도록 단일 Promise 공유
@@ -56,6 +76,10 @@ export async function tryRefreshToken() {
         credentials: "include",
       });
       if (!res.ok) return false;
+      const data = await res.json();
+      if (data.expires_in) {
+        _scheduleProactiveRefresh(data.expires_in);
+      }
       return true;
     } catch {
       return false;
@@ -65,6 +89,11 @@ export async function tryRefreshToken() {
   })();
 
   return refreshPromise;
+}
+
+// 로그인 성공 후 호출하여 선제적 갱신 타이머 시작
+export function startProactiveRefresh(expiresInSec) {
+  _scheduleProactiveRefresh(expiresInSec);
 }
 
 export function handleFetchErrors(response) {
