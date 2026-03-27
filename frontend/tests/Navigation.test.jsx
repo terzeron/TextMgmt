@@ -44,6 +44,8 @@ vi.mock("../src/Common", async () => {
     rawJsonGetReq: vi.fn(),
     getApiUrlPrefix: vi.fn(() => "/api"),
     tryRefreshToken: vi.fn(),
+    startProactiveRefresh: vi.fn(),
+    stopProactiveRefresh: vi.fn(),
   };
 });
 
@@ -736,5 +738,204 @@ describe("Navigation Component", () => {
       expect(screen.getByTestId("google-login")).toBeDefined();
     });
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts proactive refresh after successful session load", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "success",
+        result: {
+          role: "admin",
+          name: "Test",
+          email: "test@example.com",
+          expires_in: 3600,
+        },
+      }),
+    });
+
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("책 편집")).toBeDefined();
+    });
+    expect(Common.startProactiveRefresh).toHaveBeenCalledWith(3600);
+  });
+
+  it("starts proactive refresh with default when expires_in is absent", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "success",
+        result: {
+          role: "admin",
+          name: "Test",
+          email: "test@example.com",
+        },
+      }),
+    });
+
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("책 편집")).toBeDefined();
+    });
+    // expires_in이 없으면 기본값 7200 사용
+    expect(Common.startProactiveRefresh).toHaveBeenCalledWith(7200);
+  });
+
+  it("refreshes token on visibility change to visible", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "success",
+        result: {
+          role: "admin",
+          name: "Test",
+          email: "test@example.com",
+          expires_in: 7200,
+        },
+      }),
+    });
+
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("책 편집")).toBeDefined();
+    });
+
+    Common.tryRefreshToken.mockClear();
+
+    // 탭이 다시 활성화되는 이벤트 시뮬레이션
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      writable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    expect(Common.tryRefreshToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh token when tab becomes hidden", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "success",
+        result: {
+          role: "admin",
+          name: "Test",
+          email: "test@example.com",
+          expires_in: 7200,
+        },
+      }),
+    });
+
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("책 편집")).toBeDefined();
+    });
+
+    Common.tryRefreshToken.mockClear();
+
+    // 탭이 숨겨지는 이벤트 — refresh 호출 안 됨
+    Object.defineProperty(document, "visibilityState", {
+      value: "hidden",
+      writable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    expect(Common.tryRefreshToken).not.toHaveBeenCalled();
+  });
+
+  it("cleans up visibility listener and timer on unmount", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "success",
+        result: {
+          role: "admin",
+          name: "Test",
+          email: "test@example.com",
+          expires_in: 7200,
+        },
+      }),
+    });
+
+    const { unmount } = render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("책 편집")).toBeDefined();
+    });
+
+    Common.stopProactiveRefresh.mockClear();
+    unmount();
+
+    expect(Common.stopProactiveRefresh).toHaveBeenCalled();
+  });
+
+  it("stops proactive refresh on logout", async () => {
+    // 로그인 상태로 시작
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "success",
+        result: {
+          role: "admin",
+          name: "Test",
+          email: "test@example.com",
+          expires_in: 7200,
+        },
+      }),
+    });
+
+    const { container } = render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("책 편집")).toBeDefined();
+    });
+
+    Common.stopProactiveRefresh.mockClear();
+
+    // 드롭다운 열기 후 로그아웃 클릭
+    fetch.mockResolvedValueOnce({ ok: true, status: 200 });
+    const userDropdown = container.querySelector(".dropdown-toggle");
+    fireEvent.click(userDropdown);
+    const logoutBtn = screen.getByText("로그아웃");
+    fireEvent.click(logoutBtn);
+
+    await waitFor(() => {
+      expect(Common.stopProactiveRefresh).toHaveBeenCalled();
+    });
   });
 });

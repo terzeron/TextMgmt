@@ -16,7 +16,13 @@ import {
 } from "react-bootstrap";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSearch, faSpinner, faUser } from "@fortawesome/free-solid-svg-icons";
-import { rawJsonGetReq, getApiUrlPrefix, tryRefreshToken } from "./Common.js";
+import {
+  rawJsonGetReq,
+  getApiUrlPrefix,
+  tryRefreshToken,
+  startProactiveRefresh,
+  stopProactiveRefresh,
+} from "./Common.js";
 import { isViewerAllowedPath } from "./auth.js";
 
 export default function Navigation() {
@@ -155,12 +161,27 @@ export default function Navigation() {
           setName(data.result.name || "");
           setEmail(data.result.email || "");
           setPicture(data.result.picture || "");
+          // 세션 복원 성공 시 선제적 갱신 타이머 시작
+          startProactiveRefresh(data.result.expires_in || 7200);
         }
       } catch {
         // ignore
       }
     };
     loadSession();
+
+    // 탭이 다시 활성화되면 토큰 상태 확인 후 필요 시 갱신
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        tryRefreshToken();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      stopProactiveRefresh();
+    };
   }, [clientId]);
 
   const onLoginSuccess = async (credentialResponse) => {
@@ -186,6 +207,7 @@ export default function Navigation() {
         setPicture(data.picture || "");
         setLogin(true);
         setRole(data.role);
+        if (data.expires_in) startProactiveRefresh(data.expires_in);
       }
     } catch (error) {
       console.error("Error verifying Google token:", error);
@@ -195,6 +217,7 @@ export default function Navigation() {
 
   const logout = async () => {
     console.log("Logging out...");
+    stopProactiveRefresh();
     setLogin(false);
     setRole(null);
     setName("");

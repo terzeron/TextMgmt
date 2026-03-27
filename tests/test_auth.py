@@ -420,7 +420,11 @@ def test_auth_google_success(auth_client, monkeypatch):
 
     resp = auth_client.post("/auth/google", json={"credential": "c"})
     assert resp.status_code == 200
-    assert resp.json()["status"] == "success"
+    data = resp.json()
+    assert data["status"] == "success"
+    # 선제적 갱신을 위한 expires_in 필드 포함 확인
+    assert "expires_in" in data
+    assert data["expires_in"] == main_mod.ACCESS_TOKEN_EXPIRATION_SECONDS
 
 
 def test_auth_google_errors(auth_client, monkeypatch):
@@ -485,12 +489,37 @@ def test_auth_refresh_and_logout(auth_client, monkeypatch):
     # sliding expiration: refresh token도 새로 발급되어야 함
     assert main_mod.REFRESH_COOKIE_NAME in resp.cookies
     assert resp.cookies[main_mod.REFRESH_COOKIE_NAME] == "rjwt"
+    # 선제적 갱신을 위한 expires_in 필드 포함 확인
+    refresh_data = resp.json()
+    assert "expires_in" in refresh_data
+    assert refresh_data["expires_in"] == main_mod.ACCESS_TOKEN_EXPIRATION_SECONDS
 
     resp = auth_client.get("/auth/me")
     assert resp.status_code == 200
+    # /auth/me도 expires_in(잔여 초) 반환
+    me_data = resp.json()
+    assert "expires_in" in me_data["result"]
+    assert isinstance(me_data["result"]["expires_in"], int)
 
     resp = auth_client.post("/auth/logout")
     assert resp.status_code == 200
+
+
+def test_auth_me_expires_in_with_real_token(monkeypatch):
+    """실제 JWT로 /auth/me 호출 시 expires_in이 남은 초를 정확히 반환하는지 검증."""
+    from backend.auth import create_jwt_token, ACCESS_TOKEN_EXPIRATION_SECONDS
+
+    monkeypatch.setattr(main_mod, "determine_role", lambda email: "admin")
+    token = create_jwt_token(email="admin@example.com", role="admin", name="A", picture="P")
+
+    # dependency override 없이 실제 토큰으로 호출
+    with TestClient(main_mod.app) as client:
+        resp = client.get("/auth/me", cookies={main_mod.ACCESS_COOKIE_NAME: token})
+        assert resp.status_code == 200
+        data = resp.json()
+        expires_in = data["result"]["expires_in"]
+        # 방금 생성한 토큰이므로 남은 시간은 만료 시간에 근접해야 함 (±5초 오차 허용)
+        assert ACCESS_TOKEN_EXPIRATION_SECONDS - 5 <= expires_in <= ACCESS_TOKEN_EXPIRATION_SECONDS
 
 
 def test_handlers_direct():
