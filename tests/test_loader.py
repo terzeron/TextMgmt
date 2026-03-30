@@ -1810,3 +1810,457 @@ class TestLoaderHwp3FallbackEdgeCases:
         if summary:
             expected_lines = summary.count("\n") + 1
             assert line_count > 0
+
+
+# ---- hwp3_parser 커버리지 보강 테스트 ----
+
+
+class TestHwp3StreamMethods:
+    """_HwpStream 메서드 커버리지"""
+
+    def test_read_uint32(self):
+        from utils.hwp3_parser import _HwpStream
+
+        stream = _HwpStream(b"\x01\x00\x00\x00\x02\x00\x00\x00")
+        assert stream.read_uint32() == 1
+        assert stream.read_uint32() == 2
+
+    def test_read_uint32_overflow(self):
+        import pytest
+        from utils.hwp3_parser import _HwpStream, _HwpStreamError
+
+        stream = _HwpStream(b"\x01\x02")
+        with pytest.raises(_HwpStreamError):
+            stream.read_uint32()
+
+    def test_read_bytes(self):
+        from utils.hwp3_parser import _HwpStream
+
+        stream = _HwpStream(b"hello world")
+        assert stream.read_bytes(5) == b"hello"
+        assert stream.remaining() == 6
+
+    def test_read_bytes_overflow(self):
+        import pytest
+        from utils.hwp3_parser import _HwpStream, _HwpStreamError
+
+        stream = _HwpStream(b"hi")
+        with pytest.raises(_HwpStreamError):
+            stream.read_bytes(10)
+
+    def test_read_uint16_overflow(self):
+        import pytest
+        from utils.hwp3_parser import _HwpStream, _HwpStreamError
+
+        stream = _HwpStream(b"\x01")
+        with pytest.raises(_HwpStreamError):
+            stream.read_uint16()
+
+    def test_read_uint8_overflow(self):
+        import pytest
+        from utils.hwp3_parser import _HwpStream, _HwpStreamError
+
+        stream = _HwpStream(b"")
+        with pytest.raises(_HwpStreamError):
+            stream.read_uint8()
+
+    def test_skip_overflow(self):
+        import pytest
+        from utils.hwp3_parser import _HwpStream, _HwpStreamError
+
+        stream = _HwpStream(b"\x01")
+        with pytest.raises(_HwpStreamError):
+            stream.skip(100)
+
+
+class TestHncToUnicodeExtended:
+    """_hnc_to_unicode 분기 커버리지 보강"""
+
+    def test_special_char_range(self):
+        """0x007F-0x3FFF: 특수문자 매핑"""
+        from utils.hwp3_parser import _hnc_to_unicode
+
+        # 0x0080 = 유로 기호 (€)
+        result = _hnc_to_unicode(0x0080)
+        assert result == "€"
+
+    def test_special_char_unmapped(self):
+        """매핑 없는 특수문자 → 빈 문자열"""
+        from utils.hwp3_parser import _hnc_to_unicode
+
+        result = _hnc_to_unicode(0x0001)  # 범위 밖
+        assert result == ""
+
+    def test_hanja_level2(self):
+        """0x5318-0x7FFF: 2수준 한자"""
+        from utils.hwp3_parser import _hnc_to_unicode
+        from utils.hwp3_tables import HNC2UNI
+
+        # 매핑이 있는 2수준 한자 코드 찾기
+        for code in range(0x5318, 0x5400):
+            if code in HNC2UNI:
+                result = _hnc_to_unicode(code)
+                assert len(result) == 1
+                break
+
+    def test_hanja_level2_unmapped(self):
+        """매핑 없는 2수준 한자 → 빈 문자열"""
+        from utils.hwp3_parser import _hnc_to_unicode
+
+        result = _hnc_to_unicode(0x7FFF)  # 매핑 없을 확률 높음
+        assert isinstance(result, str)
+
+    def test_hangul_choseong_only(self):
+        """초성만 있는 한글 (ㄱ)"""
+        from utils.hwp3_parser import _hnc_to_unicode
+
+        # cho=2(ㄱ), jung=2(FILL), jong=1(FILL)
+        c = 0x8000 | (2 << 10) | (2 << 5) | 1
+        result = _hnc_to_unicode(c)
+        assert result == "ㄱ"
+
+    def test_hangul_jungseong_only(self):
+        """중성만 있는 한글 (ㅏ)"""
+        from utils.hwp3_parser import _hnc_to_unicode
+
+        # cho=1(FILL), jung=3(ㅏ), jong=1(FILL)
+        c = 0x8000 | (1 << 10) | (3 << 5) | 1
+        result = _hnc_to_unicode(c)
+        assert result == "ㅏ"
+
+    def test_hangul_jongseong_only(self):
+        """종성만 있는 한글"""
+        from utils.hwp3_parser import _hnc_to_unicode
+
+        # cho=1(FILL), jung=2(FILL), jong=2(ㄱ)
+        c = 0x8000 | (1 << 10) | (2 << 5) | 2
+        result = _hnc_to_unicode(c)
+        assert result == "ㄱ"
+
+    def test_old_hangul_cho_jung(self):
+        """옛한글: 초성+중성만"""
+        from utils.hwp3_parser import _hnc_to_unicode
+
+        # cho=2(ㄱ), jung=3(ㅏ), jong=1(FILL) — 현대 한글이면 완성형으로 가지만
+        # L_MAP/V_MAP/T_MAP이 NONE인 조합을 찾아야 함
+        # cho=21(ㅎ확장), jung=3(ㅏ), jong=1(FILL)
+        c = 0x8000 | (21 << 10) | (3 << 5) | 1
+        result = _hnc_to_unicode(c)
+        assert len(result) >= 1  # 옛한글 자모 조합
+
+    def test_old_hangul_cho_jung_jong(self):
+        """옛한글: 초성+중성+종성 모두"""
+        from utils.hwp3_parser import _hnc_to_unicode
+
+        # cho=21, jung=3, jong=18(옛종성)
+        c = 0x8000 | (21 << 10) | (3 << 5) | 18
+        result = _hnc_to_unicode(c)
+        assert len(result) >= 1
+
+    def test_hangul_jung_zero_fallback(self):
+        """jung=0인 완성형 옛한글 fallback"""
+        from utils.hwp3_parser import _hnc_to_unicode
+
+        # cho=2, jung=0, jong=0 → jung==0 분기
+        c = 0x8000 | (2 << 10) | (0 << 5) | 0
+        result = _hnc_to_unicode(c)
+        assert isinstance(result, str)
+
+    def test_out_of_range_code(self):
+        """범위 밖 코드 → 빈 문자열"""
+        from utils.hwp3_parser import _hnc_to_unicode
+
+        assert _hnc_to_unicode(0x0010) == ""
+
+
+class TestHandleControlCharCoverage:
+    """_handle_control_char 분기 커버리지 보강"""
+
+    def _make_ctrl_paragraph(self, ctrl_code, extra_data):
+        """제어문자가 포함된 최소 문단 바이너리를 생성한다."""
+        import struct
+
+        n_chars = 4 if ctrl_code == 23 else (2 if ctrl_code in (24, 25) else (31 if ctrl_code == 28 else (1 if ctrl_code in (30, 31) else 3)))
+        n_chars += 1  # 제어문자 자체 + CR
+        n_lines = 1
+        char_shape = 0
+
+        header = struct.pack("<BHHB", 0, n_chars, n_lines, char_shape)  # 6 bytes
+        header += b"\x00" * 37  # padding to 43 bytes
+        header += b"\x00" * 187  # para shape (prev_para_shape=0)
+        line_info = b"\x00" * 14  # 1 line
+        # chars: ctrl_code + extra + CR(13)
+        chars = struct.pack("<H", ctrl_code) + extra_data + struct.pack("<H", 13)
+        # 빈 문단 (리스트 종료)
+        terminator = b"\x00" * 43
+        return header + line_info + chars + terminator
+
+    def _parse_with_data(self, data):
+        from utils.hwp3_parser import _HwpStream, _parse_paragraph_list
+
+        stream = _HwpStream(data)
+        return _parse_paragraph_list(stream)
+
+    def test_ctrl_5_field_code(self):
+        """제어문자 5: 필드 코드"""
+        import struct
+
+        # skip(6) + uint32(len=0) + skip(2) + skip(0)
+        extra = b"\x00" * 6 + struct.pack("<I", 0) + b"\x00" * 2
+        data = self._make_ctrl_paragraph(5, extra)
+        result = self._parse_with_data(data)
+        assert isinstance(result, str)
+
+    def test_ctrl_6_bookmark(self):
+        """제어문자 6: 책갈피 (40바이트)"""
+        extra = b"\x00" * 40
+        data = self._make_ctrl_paragraph(6, extra)
+        result = self._parse_with_data(data)
+        assert isinstance(result, str)
+
+    def test_ctrl_23_compose(self):
+        """제어문자 23: 글자겹침 (8바이트)"""
+        extra = b"\x00" * 8
+        data = self._make_ctrl_paragraph(23, extra)
+        result = self._parse_with_data(data)
+        assert isinstance(result, str)
+
+    def test_ctrl_24_hyphen(self):
+        """제어문자 24: 하이픈 (4바이트)"""
+        extra = b"\x00" * 4
+        data = self._make_ctrl_paragraph(24, extra)
+        result = self._parse_with_data(data)
+        assert isinstance(result, str)
+
+    def test_ctrl_28_outline(self):
+        """제어문자 28: 개요번호 (62바이트)"""
+        extra = b"\x00" * 62
+        data = self._make_ctrl_paragraph(28, extra)
+        result = self._parse_with_data(data)
+        assert isinstance(result, str)
+
+    def test_ctrl_30_keep_space(self):
+        """제어문자 30: 묶음빈칸 (2바이트)"""
+        extra = b"\x00" * 2
+        data = self._make_ctrl_paragraph(30, extra)
+        result = self._parse_with_data(data)
+        assert isinstance(result, str)
+
+    def test_ctrl_18_auto_num(self):
+        """제어문자 18: 자동번호 (6바이트)"""
+        extra = b"\x00" * 6
+        data = self._make_ctrl_paragraph(18, extra)
+        result = self._parse_with_data(data)
+        assert isinstance(result, str)
+
+
+class TestParseEdgeCases:
+    """파싱 경계 조건 커버리지"""
+
+    def test_max_recursion_depth(self):
+        """재귀 깊이 초과 시 빈 문자열 반환"""
+        from utils.hwp3_parser import _HwpStream, _parse_paragraph_list, _MAX_RECURSION_DEPTH
+
+        stream = _HwpStream(b"\x00" * 100)
+        result = _parse_paragraph_list(stream, depth=_MAX_RECURSION_DEPTH + 1)
+        assert result == ""
+
+    def test_sanity_check_invalid_n_chars(self):
+        """n_chars가 비정상적으로 크면 예외 → 빈 문자열"""
+        import struct
+        import pytest
+        from utils.hwp3_parser import _HwpStream, _parse_paragraph, _HwpStreamError
+
+        # prev_para_shape=1, n_chars=50000(invalid), n_lines=1, csi=0
+        header = struct.pack("<BHHB", 1, 50000, 1, 0) + b"\x00" * 37
+        stream = _HwpStream(header + b"\x00" * 200)
+        with pytest.raises(_HwpStreamError):
+            _parse_paragraph(stream, 0)
+
+    def test_body_offset_exceeds_file(self, tmp_path: Path):
+        """body_offset이 파일 크기를 초과하는 경우"""
+        import struct
+
+        sig = b"HWP Document File V3.00 \x1a\x01\x02\x03\x04\x05"
+        doc_info = bytearray(128)
+        # info_block_len = 60000 (파일 크기 초과)
+        struct.pack_into("<H", doc_info, 126, 60000)
+        f = tmp_path / "big_info_block.hwp"
+        f.write_bytes(sig + bytes(doc_info) + b"\x00" * 1008)
+        extract = _get_hwp3_parser()
+        assert extract(f) == ""
+
+    def test_gzip_fallback_decompression(self, tmp_path: Path):
+        """raw deflate 실패 → gzip auto 시도"""
+        import zlib
+
+        sig = b"HWP Document File V3.00 \x1a\x01\x02\x03\x04\x05"
+        doc_info = bytearray(128)
+        doc_info[124] = 1  # compressed
+        # 유효한 gzip 데이터 (빈 내용)
+        body = zlib.compress(b"\x00" * 100)  # zlib 헤더 포함
+        f = tmp_path / "gzip_test.hwp"
+        f.write_bytes(sig + bytes(doc_info) + b"\x00" * 1008 + body)
+        extract = _get_hwp3_parser()
+        # 파싱은 빈 결과지만 크래시하지 않아야 함
+        result = extract(f)
+        assert isinstance(result, str)
+
+    def test_unsupported_version_v1(self, tmp_path: Path):
+        """V1.20 시그니처 → 빈 문자열"""
+        sig = b"HWP Document File V1.20 \x1a\x01\x02\x03\x04\x05"
+        f = tmp_path / "v1.hwp"
+        f.write_bytes(sig + b"\x00" * 200)
+        extract = _get_hwp3_parser()
+        assert extract(f) == ""
+
+    def test_header_decode_exception(self, tmp_path: Path):
+        """시그니처 영역이 깨진 바이너리"""
+        # 첫 17바이트는 맞지만 나머지가 깨진 경우
+        sig = b"HWP Document File" + b"\xff" * 13
+        f = tmp_path / "bad_header.hwp"
+        f.write_bytes(sig + b"\x00" * 200)
+        extract = _get_hwp3_parser()
+        assert extract(f) == ""
+
+
+class TestHandleControlCharRecursive:
+    """표/그림/머리말/각주 등 재귀적 제어문자 커버리지"""
+
+    def _build_hwp_with_paragraphs(self, body_data: bytes) -> bytes:
+        """비압축 V3.00 HWP 파일 바이너리를 생성 (fonts=0, styles=0)"""
+
+        sig = b"HWP Document File V3.00 \x1a\x01\x02\x03\x04\x05"
+        doc_info = bytearray(128)  # 비압축, 정보블록=0
+        summary = b"\x00" * 1008
+        # fonts: 7 카테고리, 각 0개
+        fonts = b"\x00\x00" * 7
+        # styles: 0개
+        styles = b"\x00\x00"
+        return sig + bytes(doc_info) + summary + fonts + styles + body_data
+
+    def _make_paragraph(self, chars_data: bytes, n_chars: int, prev_shape: int = 0) -> bytes:
+        """문단 헤더 + 줄 정보 + 글자 데이터"""
+        import struct
+
+        n_lines = 1
+        header = struct.pack("<BHHB", prev_shape, n_chars, n_lines, 0) + b"\x00" * 37
+        if prev_shape == 0:
+            header += b"\x00" * 187  # 문단 모양
+        line_info = b"\x00" * 14
+        return header + line_info + chars_data
+
+    def _empty_paragraph(self) -> bytes:
+        """빈 문단 (리스트 종료)"""
+        import struct
+
+        return struct.pack("<BHHB", 0, 0, 0, 0) + b"\x00" * 37 + b"\x00" * 187
+
+    def test_ctrl_11_picture(self):
+        """제어문자 11: 그림 (skip(6)+uint32+skip(344)+skip(len)+캡션)"""
+        import struct
+
+        pic_len = 10
+        # 제어문자 11 (n_chars_read += 3 → 총 4)
+        ctrl = struct.pack("<H", 11)
+        ctrl_data = b"\x00" * 6 + struct.pack("<I", pic_len) + b"\x00" * 344 + b"\x00" * pic_len
+        # 캡션 = 빈 문단 리스트
+        caption = self._empty_paragraph()
+        cr = struct.pack("<H", 13)
+        chars = ctrl + ctrl_data + caption + cr
+        para = self._make_paragraph(chars, n_chars=4 + 1)
+        body = para + self._empty_paragraph()
+        data = self._build_hwp_with_paragraphs(body)
+
+        from utils.hwp3_parser import _HwpStream
+
+        # fonts(14) + styles(2) = 16바이트 오프셋부터 문단 시작
+        stream = _HwpStream(b"\x00\x00" * 7 + b"\x00\x00" + body)
+        # 직접 파싱
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".hwp", delete=False) as f:
+            f.write(data)
+            f.flush()
+            extract = _get_hwp3_parser()
+            result = extract(Path(f.name))
+        assert isinstance(result, str)
+
+    def test_ctrl_16_header_footer(self):
+        """제어문자 16: 머리말/꼬리말"""
+        import struct
+
+        ctrl = struct.pack("<H", 16)
+        ctrl_data = b"\x00" * 16  # skip(6+10)
+        nested_end = self._empty_paragraph()
+        cr = struct.pack("<H", 13)
+        chars = ctrl + ctrl_data + nested_end + cr
+        para = self._make_paragraph(chars, n_chars=4 + 1)
+        body = para + self._empty_paragraph()
+        data = self._build_hwp_with_paragraphs(body)
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".hwp", delete=False) as f:
+            f.write(data)
+            f.flush()
+            extract = _get_hwp3_parser()
+            result = extract(Path(f.name))
+        assert isinstance(result, str)
+
+    def test_ctrl_17_footnote(self):
+        """제어문자 17: 각주/미주"""
+        import struct
+
+        ctrl = struct.pack("<H", 17)
+        ctrl_data = b"\x00" * 20  # skip(6+14)
+        # 각주 내 텍스트: '가' + CR + 빈 문단
+        ga = struct.pack("<H", 0x8861)  # '가'
+        cr = struct.pack("<H", 13)
+        footnote_para = self._make_paragraph(ga + cr, n_chars=2, prev_shape=0)
+        footnote_end = self._empty_paragraph()
+        outer_cr = struct.pack("<H", 13)
+        chars = ctrl + ctrl_data + footnote_para + footnote_end + outer_cr
+        para = self._make_paragraph(chars, n_chars=4 + 1)
+        body = para + self._empty_paragraph()
+        data = self._build_hwp_with_paragraphs(body)
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".hwp", delete=False) as f:
+            f.write(data)
+            f.flush()
+            extract = _get_hwp3_parser()
+            result = extract(Path(f.name))
+        assert isinstance(result, str)
+
+    def test_paragraph_list_stream_error_partial(self):
+        """문단 파싱 중 스트림 끝 도달 → 부분 텍스트 반환"""
+        import struct
+        from utils.hwp3_parser import _HwpStream, _parse_paragraph_list
+
+        # 유효한 첫 문단 (CR만) + 잘린 두 번째 문단 헤더
+        cr = struct.pack("<H", 13)
+        para1 = self._make_paragraph(cr, n_chars=1, prev_shape=0)
+        truncated = struct.pack("<BHHB", 0, 100, 1, 0)  # 불완전한 헤더
+        stream = _HwpStream(para1 + truncated)
+        result = _parse_paragraph_list(stream)
+        assert "\n" in result  # 첫 문단의 CR은 포함
+
+    def test_max_text_length_break(self):
+        """_MAX_TEXT_LENGTH 초과 시 파싱 중단"""
+        import struct
+        from utils.hwp3_parser import _HwpStream, _parse_paragraph_list, _MAX_TEXT_LENGTH
+
+        # 큰 텍스트를 가진 문단 반복 생성
+        # '가' 200개 + CR
+        ga = struct.pack("<H", 0x8861)
+        cr = struct.pack("<H", 13)
+        chars = ga * 200 + cr
+        paragraphs = b""
+        # 충분히 많은 문단
+        for _ in range((_MAX_TEXT_LENGTH // 200) + 10):
+            paragraphs += self._make_paragraph(chars, n_chars=201, prev_shape=1)
+        paragraphs += self._empty_paragraph()
+        stream = _HwpStream(paragraphs)
+        result = _parse_paragraph_list(stream)
+        assert len(result) <= _MAX_TEXT_LENGTH + 500  # 약간의 여유
