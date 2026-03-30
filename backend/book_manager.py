@@ -736,7 +736,7 @@ class BookManager:
 
         elif suffix in (".doc", ".hwp"):
             cache_file = cache_dir / f"{book_id}.html"
-            if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
+            if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime and cache_file.stat().st_size > 0:
                 LOGGER.debug("Preview cache hit for book_id=%d (%s)", book_id, suffix)
                 return FileResponse(path=cache_file, media_type="text/html")
 
@@ -758,6 +758,8 @@ class BookManager:
                     BookManager._evict_old_cache(cache_dir)
                     LOGGER.debug("Preview generated for book_id=%d (%s)", book_id, suffix)
                     return Response(content=html_content, media_type="text/html")
+                # 변환 실패 시 빈 HTML 반환 (Unsupported 에러 대신)
+                return Response(content="<html><body><p>미리보기를 생성할 수 없습니다.</p></body></html>", media_type="text/html")
             except Exception as e:
                 LOGGER.error("%s preview generation failed for book_id=%d: %s", suffix.upper(), book_id, e)
                 return Response(status_code=500, content=f"{suffix.upper()} preview failed: {e}")
