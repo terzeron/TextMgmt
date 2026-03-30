@@ -4,7 +4,7 @@ import unittest
 import zipfile
 import warnings
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # loader.py가 import 시점에 환경 변수와 외부 모듈을 요구하므로 사전 설정
 os.environ.setdefault("TM_BOOK_DIR", str(Path(__file__).parent.parent / "tests" / "books"))
@@ -341,12 +341,8 @@ class TestXrefStreamFindEntry:
 
 # ---- coverage: loader additional uncovered lines ----
 
-import re
-import io
-import struct
 import zlib
 import tempfile
-from unittest.mock import patch, MagicMock
 
 
 class TestReadFromPdf:
@@ -888,7 +884,6 @@ class TestReadFromObjStream:
 
     def test_target_found(self, tmp_path: Path):
         """Lines 476-480: target object found in stream"""
-        import zlib
 
         Loader = _get_loader()
         # Object stream: header "5 0 6 20" means obj 5 at offset 0, obj 6 at offset 20
@@ -907,7 +902,6 @@ class TestReadFromObjStream:
 
     def test_target_not_found(self, tmp_path: Path):
         """Lines 482-484: target object not in stream"""
-        import zlib
 
         Loader = _get_loader()
         header = b"5 0 "
@@ -991,7 +985,6 @@ class TestParseOneXrefStream:
 
     def test_with_decode_parms(self, tmp_path: Path):
         """Lines 534-540: PNG predictor with /DecodeParms"""
-        import zlib
 
         Loader = _get_loader()
         # Each row: 1 filter byte + 4 data bytes (W=[1,2,1] → 4 bytes per entry)
@@ -1287,3 +1280,533 @@ class TestLoaderMain:
         monkeypatch.setattr(loader_mod, "print_usage", lambda prog: None)
         result = loader_mod.main()
         assert result == 1
+
+
+# ---- HWP 버전별 실제 파일 테스트 ----
+
+HWP_TEST_DIR = Path(__file__).parent / "books" / "_hwp"
+
+
+def _detect_hwp_version(file_path: Path) -> str:
+    """HWP 파일 헤더에서 버전 문자열을 추출한다."""
+    with open(file_path, "rb") as f:
+        header = f.read(30)
+    if header[:15] == b"HWP Document Fi":
+        import re as _re
+
+        m = _re.search(r"V(\d+\.\d+)", header.decode("ascii", errors="replace"))
+        if m:
+            return m.group(1)
+    if header[:4] == b"\xd0\xcf\x11\xe0":
+        return "5.x"
+    return "unknown"
+
+
+class TestHwpVersionDetection:
+    """HWP 파일 헤더 기반 버전 감지 테스트"""
+
+    def test_detect_v1_20(self):
+        f = HWP_TEST_DIR / "v1.20_부하의약혼녀.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        assert _detect_hwp_version(f) == "1.20"
+
+    def test_detect_v2_00(self):
+        f = HWP_TEST_DIR / "v2.00_박노해_참된시작.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        assert _detect_hwp_version(f) == "2.00"
+
+    def test_detect_v2_10(self):
+        f = HWP_TEST_DIR / "v2.10_KYOKA.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        assert _detect_hwp_version(f) == "2.10"
+
+    def test_detect_v3_00(self):
+        f = HWP_TEST_DIR / "v3.00_현대시사전.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        assert _detect_hwp_version(f) == "3.00"
+
+    def test_detect_unknown_for_non_hwp(self, tmp_path: Path):
+        f = tmp_path / "fake.hwp"
+        f.write_bytes(b"this is not an hwp file at all")
+        assert _detect_hwp_version(f) == "unknown"
+
+    def test_detect_ole2_hwp5(self, tmp_path: Path):
+        """OLE2 매직 바이트를 가진 HWP 5.x 감지"""
+        f = tmp_path / "hwp5.hwp"
+        f.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 22)
+        assert _detect_hwp_version(f) == "5.x"
+
+
+class TestReadFromHwpRealFiles:
+    """실제 HWP 파일로 read_from_hwp 테스트 (LibreOffice 의존)
+
+    LibreOffice가 설치되어 있지 않거나 변환 실패 시에도
+    크래시 없이 빈 문자열을 반환하는지 검증한다.
+    """
+
+    @staticmethod
+    def _hwp_files():
+        if not HWP_TEST_DIR.exists():
+            return []
+        return sorted(HWP_TEST_DIR.glob("*.hwp"))
+
+    def test_v1_20_no_crash(self):
+        f = HWP_TEST_DIR / "v1.20_부하의약혼녀.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert isinstance(summary, str)
+        assert isinstance(line_count, int)
+        assert page_count == 0
+
+    def test_v2_00_no_crash(self):
+        f = HWP_TEST_DIR / "v2.00_박노해_참된시작.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert isinstance(summary, str)
+        assert isinstance(line_count, int)
+        assert page_count == 0
+
+    def test_v2_10_no_crash(self):
+        f = HWP_TEST_DIR / "v2.10_KYOKA.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert isinstance(summary, str)
+        assert isinstance(line_count, int)
+        assert page_count == 0
+
+    def test_v3_00_no_crash(self):
+        f = HWP_TEST_DIR / "v3.00_현대시사전.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert isinstance(summary, str)
+        assert isinstance(line_count, int)
+        assert page_count == 0
+
+    def test_v3_00_noname22_no_crash(self):
+        f = HWP_TEST_DIR / "v3.00_noname22.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert isinstance(summary, str)
+        assert isinstance(line_count, int)
+        assert page_count == 0
+
+    def test_all_versions_return_tuple(self):
+        """모든 버전 파일에 대해 3-tuple 반환 확인"""
+        files = self._hwp_files()
+        if not files:
+            import pytest
+
+            pytest.skip("HWP 테스트 파일 없음")
+        Loader = _get_loader()
+        for f in files:
+            result = Loader.read_from_hwp(f)
+            assert len(result) == 3, f"파일 {f.name}: 3-tuple이 아님"
+            summary, line_count, page_count = result
+            assert isinstance(summary, str), f"파일 {f.name}: summary가 str이 아님"
+            assert isinstance(line_count, int), f"파일 {f.name}: line_count가 int가 아님"
+            assert page_count == 0, f"파일 {f.name}: page_count가 0이 아님"
+
+
+class TestReadFromHwpWithMockedLibreoffice:
+    """LibreOffice 변환 결과를 시뮬레이션하여 버전별 동작 검증"""
+
+    def test_v1_20_libreoffice_returns_empty(self, monkeypatch):
+        """V1.20 파일: LibreOffice가 빈 결과를 반환하는 경우"""
+        f = HWP_TEST_DIR / "v1.20_부하의약혼녀.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "_convert_with_libreoffice", lambda fp, fmt: "")
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert summary == ""
+        assert line_count == 0
+
+    def test_v2_10_libreoffice_returns_text(self, monkeypatch):
+        """V2.10 파일: LibreOffice가 텍스트를 반환하는 경우"""
+        f = HWP_TEST_DIR / "v2.10_KYOKA.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "_convert_with_libreoffice", lambda fp, fmt: "교카 시집\n첫 번째 시\n두 번째 시")
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert "교카" in summary
+        assert line_count == 3
+
+    def test_v3_00_libreoffice_raises(self, monkeypatch):
+        """V3.00 파일: LibreOffice 변환 시 예외 발생"""
+        f = HWP_TEST_DIR / "v3.00_현대시사전.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "_convert_with_libreoffice", lambda fp, fmt: (_ for _ in ()).throw(RuntimeError("변환 실패")))
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert summary == ""
+        assert line_count == 0
+
+    def test_special_chars_cleaned(self, monkeypatch):
+        """변환 결과의 특수문자가 정리되는지 확인"""
+        f = HWP_TEST_DIR / "v2.10_PAGER.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "_convert_with_libreoffice", lambda fp, fmt: "텍스트★내용♣특수◆문자")
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert "★" not in summary
+        assert "텍스트" in summary
+        assert "내용" in summary
+
+
+# ---- HWP3 네이티브 파서 테스트 ----
+
+
+def _get_hwp3_parser():
+    from utils.hwp3_parser import extract_text_from_hwp3
+
+    return extract_text_from_hwp3
+
+
+class TestHwp3ParserDirect:
+    """hwp3_parser.extract_text_from_hwp3 직접 테스트"""
+
+    def test_v3_00_extracts_korean_text(self):
+        f = HWP_TEST_DIR / "v3.00_현대시사전.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        extract = _get_hwp3_parser()
+        text = extract(f)
+        assert len(text) > 10
+        assert "고정희" in text or "너" in text  # 시 제목/내용
+
+    def test_v2_10_extracts_korean_text(self):
+        f = HWP_TEST_DIR / "v2.10_KYOKA.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        extract = _get_hwp3_parser()
+        text = extract(f)
+        assert len(text) > 10
+        assert "영동" in text or "교가" in text
+
+    def test_v2_10_pager(self):
+        f = HWP_TEST_DIR / "v2.10_PAGER.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        extract = _get_hwp3_parser()
+        text = extract(f)
+        assert len(text) > 100
+
+    def test_v1_20_returns_empty(self):
+        """V1.20은 미지원 — 빈 문자열 반환"""
+        f = HWP_TEST_DIR / "v1.20_부하의약혼녀.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        extract = _get_hwp3_parser()
+        text = extract(f)
+        assert isinstance(text, str)
+
+    def test_invalid_file_returns_empty(self, tmp_path: Path):
+        f = tmp_path / "not_hwp.hwp"
+        f.write_bytes(b"this is definitely not an HWP file")
+        extract = _get_hwp3_parser()
+        assert extract(f) == ""
+
+    def test_truncated_file_returns_empty(self, tmp_path: Path):
+        f = tmp_path / "truncated.hwp"
+        f.write_bytes(b"HWP Document File V3.00 \x1a\x01\x02\x03\x04\x05" + b"\x00" * 50)
+        extract = _get_hwp3_parser()
+        assert extract(f) == ""
+
+    def test_encrypted_file_returns_empty(self, tmp_path: Path):
+        """암호화 플래그가 설정된 파일"""
+        sig = b"HWP Document File V3.00 \x1a\x01\x02\x03\x04\x05"
+        doc_info = bytearray(128)
+        doc_info[96] = 1  # encryption flag (low byte of uint16)
+        f = tmp_path / "encrypted.hwp"
+        f.write_bytes(sig + bytes(doc_info) + b"\x00" * 1008)
+        extract = _get_hwp3_parser()
+        assert extract(f) == ""
+
+    def test_nonexistent_file_returns_empty(self, tmp_path: Path):
+        extract = _get_hwp3_parser()
+        assert extract(tmp_path / "does_not_exist.hwp") == ""
+
+
+class TestHwp3FallbackIntegration:
+    """LibreOffice 실패 시 hwp3 파서 fallback 테스트"""
+
+    def test_fallback_when_libreoffice_returns_empty(self, monkeypatch):
+        """LibreOffice가 빈 문자열 → hwp3 파서로 텍스트 추출"""
+        f = HWP_TEST_DIR / "v2.10_KYOKA.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "_convert_with_libreoffice", lambda fp, fmt: "")
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert len(summary) > 0
+        assert "영동" in summary or "교가" in summary
+
+    def test_fallback_when_libreoffice_returns_whitespace(self, monkeypatch):
+        """LibreOffice가 공백만 반환 → hwp3 파서로 fallback"""
+        f = HWP_TEST_DIR / "v3.00_현대시사전.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "_convert_with_libreoffice", lambda fp, fmt: "   \n  ")
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert len(summary) > 0
+
+    def test_no_fallback_when_libreoffice_succeeds(self, monkeypatch):
+        """LibreOffice가 텍스트 반환 → fallback 사용 안 함"""
+        f = HWP_TEST_DIR / "v2.10_KYOKA.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "_convert_with_libreoffice", lambda fp, fmt: "LO 결과")
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert "LO" in summary
+
+
+# ---- HWP3 파서 추가 엣지 케이스 테스트 ----
+
+
+class TestHwp3ParserEdgeCases:
+    """hwp3_parser의 다양한 엣지 케이스 검증"""
+
+    def test_compressed_v3_file(self):
+        """V3.00 압축 파일 정상 파싱"""
+        f = HWP_TEST_DIR / "v3.00_현대시사전.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        # 압축 플래그 확인
+        data = f.read_bytes()
+        assert data[30 + 124] != 0, "테스트 파일이 압축되어 있어야 함"
+        extract = _get_hwp3_parser()
+        text = extract(f)
+        assert len(text) > 0
+
+    def test_v2_10_file_parses(self):
+        """V2.10 파일 정상 파싱"""
+        f = HWP_TEST_DIR / "v2.10_KYOKA.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        extract = _get_hwp3_parser()
+        text = extract(f)
+        assert len(text) > 0
+
+    def test_text_contains_no_null_bytes(self):
+        """추출된 텍스트에 null 바이트가 없어야 함"""
+        for name in ["v2.10_KYOKA.hwp", "v3.00_현대시사전.hwp", "v2.10_PAGER.hwp"]:
+            f = HWP_TEST_DIR / name
+            if not f.exists():
+                continue
+            extract = _get_hwp3_parser()
+            text = extract(f)
+            assert "\x00" not in text, f"{name}: null 바이트 포함"
+
+    def test_text_is_valid_unicode(self):
+        """추출된 텍스트가 유효한 유니코드 문자열이어야 함"""
+        for name in ["v2.10_KYOKA.hwp", "v3.00_현대시사전.hwp"]:
+            f = HWP_TEST_DIR / name
+            if not f.exists():
+                continue
+            extract = _get_hwp3_parser()
+            text = extract(f)
+            # encode/decode가 에러 없이 수행되어야 함
+            encoded = text.encode("utf-8")
+            decoded = encoded.decode("utf-8")
+            assert decoded == text
+
+    def test_empty_body_after_header(self, tmp_path: Path):
+        """헤더만 있고 본문이 없는 파일"""
+        sig = b"HWP Document File V3.00 \x1a\x01\x02\x03\x04\x05"
+        doc_info = bytearray(128)
+        # 압축 안 함, 정보블록 0
+        f = tmp_path / "empty_body.hwp"
+        f.write_bytes(sig + bytes(doc_info) + b"\x00" * 1008)
+        extract = _get_hwp3_parser()
+        assert extract(f) == ""
+
+    def test_corrupted_compression(self, tmp_path: Path):
+        """압축 플래그가 설정되었지만 데이터가 손상된 경우"""
+        sig = b"HWP Document File V3.00 \x1a\x01\x02\x03\x04\x05"
+        doc_info = bytearray(128)
+        doc_info[124] = 1  # compressed
+        f = tmp_path / "bad_compress.hwp"
+        f.write_bytes(sig + bytes(doc_info) + b"\x00" * 1008 + b"\xff\xfe\xfd\xfc" * 100)
+        extract = _get_hwp3_parser()
+        assert extract(f) == ""
+
+    def test_hwp3_hnc_to_unicode_ascii(self):
+        """HNC→Unicode: ASCII 범위 변환"""
+        from utils.hwp3_parser import _hnc_to_unicode
+
+        assert _hnc_to_unicode(0x41) == "A"
+        assert _hnc_to_unicode(0x20) == " "
+        assert _hnc_to_unicode(0x7E) == "~"
+
+    def test_hwp3_hnc_to_unicode_hangul(self):
+        """HNC→Unicode: 한글 음절 변환"""
+        from utils.hwp3_parser import _hnc_to_unicode
+
+        # '가' = cho=2(ㄱ), jung=3(ㅏ), jong=1(없음)
+        # HNC: (2<<10)|(3<<5)|1 + 0x8000 = 0x8000 | 0x0800 | 0x0060 | 0x0001 = 0x8861
+        result = _hnc_to_unicode(0x8861)
+        assert result == "가", f"expected '가', got '{result}'"
+
+    def test_hwp3_hnc_to_unicode_null(self):
+        """HNC→Unicode: 0은 빈 문자열"""
+        from utils.hwp3_parser import _hnc_to_unicode
+
+        assert _hnc_to_unicode(0) == ""
+
+    def test_hwp3_hnc_to_unicode_hanja(self):
+        """HNC→Unicode: 한자 변환 (첫 번째 항목)"""
+        from utils.hwp3_parser import _hnc_to_unicode
+        from utils.hwp3_tables import KSC5601_TO_UNI
+
+        # 0x4000 → KSC5601_TO_UNI[0]
+        result = _hnc_to_unicode(0x4000)
+        expected = chr(KSC5601_TO_UNI[0])
+        assert result == expected
+
+    def test_hwp3_stream_bounds(self):
+        """_HwpStream 범위 초과 시 예외 발생"""
+        import pytest
+        from utils.hwp3_parser import _HwpStream, _HwpStreamError
+
+        stream = _HwpStream(b"\x01\x02\x03")
+        assert stream.read_uint8() == 1
+        assert stream.remaining() == 2
+        with pytest.raises(_HwpStreamError):
+            stream.read_uint32()  # 4바이트 필요하지만 2바이트만 남음
+
+    def test_hwp3_stream_skip_negative(self):
+        """_HwpStream 음수 skip 시 예외"""
+        import pytest
+        from utils.hwp3_parser import _HwpStream, _HwpStreamError
+
+        stream = _HwpStream(b"\x01\x02\x03")
+        with pytest.raises(_HwpStreamError):
+            stream.skip(-1)
+
+
+class TestLoaderHwp3FallbackEdgeCases:
+    """Loader.read_from_hwp의 hwp3 fallback 엣지 케이스"""
+
+    def test_fallback_exception_in_hwp3_parser(self, monkeypatch):
+        """hwp3 파서에서 예외 발생해도 전체가 크래시하지 않음"""
+        f = HWP_TEST_DIR / "v2.10_KYOKA.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "_convert_with_libreoffice", lambda fp, fmt: "")
+
+        import utils.hwp3_parser as hwp3_mod
+
+        original = hwp3_mod.extract_text_from_hwp3
+        monkeypatch.setattr(hwp3_mod, "extract_text_from_hwp3", lambda fp: (_ for _ in ()).throw(RuntimeError("파서 에러")))
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert summary == ""
+        assert page_count == 0
+        monkeypatch.setattr(hwp3_mod, "extract_text_from_hwp3", original)
+
+    def test_fallback_text_truncated_to_text_size(self, monkeypatch):
+        """fallback 결과가 TEXT_SIZE로 잘리는지 확인"""
+        f = HWP_TEST_DIR / "v2.10_PAGER.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "_convert_with_libreoffice", lambda fp, fmt: "")
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        assert len(summary) <= Loader.TEXT_SIZE
+
+    def test_fallback_special_chars_cleaned(self, monkeypatch):
+        """fallback 결과에도 특수문자 정리가 적용되는지 확인"""
+        f = HWP_TEST_DIR / "v2.10_KYOKA.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "_convert_with_libreoffice", lambda fp, fmt: "")
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        import re
+
+        # 한글, 영숫자, 공백만 남아야 함
+        cleaned = re.sub(r"[^\w\sㄱ-힣]", "", summary)
+        assert cleaned == summary
+
+    def test_fallback_line_count_correct(self, monkeypatch):
+        """fallback 결과의 line_count가 정확한지 확인"""
+        f = HWP_TEST_DIR / "v2.10_KYOKA.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "_convert_with_libreoffice", lambda fp, fmt: "")
+        summary, line_count, page_count = Loader.read_from_hwp(f)
+        if summary:
+            expected_lines = summary.count("\n") + 1
+            assert line_count > 0

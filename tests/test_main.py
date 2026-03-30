@@ -868,12 +868,8 @@ if __name__ == "__main__":
 
 
 # ---- merged from test_main_api_extra.py ----
-import types
 
 import pytest
-from fastapi.testclient import TestClient
-
-import backend.main as main
 
 
 @pytest.fixture()
@@ -1515,8 +1511,6 @@ def test_auth_refresh_access_denied(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_auth_me(dummy_client):
-    from backend import main as main_mod
-
     resp = dummy_client.get("/auth/me")
     assert resp.status_code == 200
     assert resp.json()["status"] == "success"
@@ -1763,7 +1757,9 @@ def test_delete_category_mapping_not_deleted(dummy_client, monkeypatch):
 
 
 def test_main_requires_frontend_url():
-    import importlib, os, sys
+    import importlib
+    import os
+    import sys
 
     prev = os.environ.pop("TM_FRONTEND_URL", None)
     try:

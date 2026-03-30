@@ -742,6 +742,17 @@ class BookManager:
 
             try:
                 html_content = BookManager._convert_with_libreoffice(book.file_path, "html")
+                if not html_content.strip() and suffix == ".hwp":
+                    # LibreOffice 변환 실패 — 네이티브 HWP3 파서로 fallback
+                    from utils.hwp3_parser import extract_text_from_hwp3
+
+                    plain_text = extract_text_from_hwp3(book.file_path)
+                    if plain_text:
+                        import html as html_mod
+
+                        escaped = html_mod.escape(plain_text)
+                        paragraphs = "\n".join(f"<p>{line}</p>" for line in escaped.split("\n") if line.strip())
+                        html_content = f'<html><body style="font-family:sans-serif;padding:1em;line-height:1.8">{paragraphs}</body></html>'
                 if html_content:
                     cache_file.write_text(html_content, encoding="utf-8")
                     BookManager._evict_old_cache(cache_dir)

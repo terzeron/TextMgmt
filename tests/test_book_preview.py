@@ -14,9 +14,7 @@ from pathlib import Path
 
 import pytest
 
-logging.config.fileConfig(
-    Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False
-)
+logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
@@ -34,25 +32,19 @@ CONTAINER_XML = """\
 </container>"""
 
 
-def _make_opf(
-    chapter_count: int, include_css: bool = False, include_svg_cover: bool = False
-) -> str:
+def _make_opf(chapter_count: int, include_css: bool = False, include_svg_cover: bool = False) -> str:
     """챕터 N개를 포함한 OPF XML을 생성."""
     items = []
     spine_refs = []
     for i in range(1, chapter_count + 1):
-        items.append(
-            f'    <item id="ch{i}" href="ch{i}.xhtml" media-type="application/xhtml+xml"/>'
-        )
+        items.append(f'    <item id="ch{i}" href="ch{i}.xhtml" media-type="application/xhtml+xml"/>')
         spine_refs.append(f'    <itemref idref="ch{i}"/>')
 
     if include_css:
         items.append('    <item id="style" href="style.css" media-type="text/css"/>')
 
     if include_svg_cover:
-        items.append(
-            '    <item id="cover-image" href="../media/cover.jpg" media-type="image/jpeg"/>'
-        )
+        items.append('    <item id="cover-image" href="../media/cover.jpg" media-type="image/jpeg"/>')
 
     return f"""\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -96,31 +88,19 @@ def _make_chapter_xhtml(index: int, link_css: bool = False) -> str:
 </html>"""
 
 
-def _create_test_epub(
-    path: Path,
-    chapter_count: int = 3,
-    include_css: bool = False,
-    include_svg_cover: bool = False,
-) -> None:
+def _create_test_epub(path: Path, chapter_count: int = 3, include_css: bool = False, include_svg_cover: bool = False) -> None:
     """테스트용 미니 EPUB을 생성."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-        )
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         zf.writestr("META-INF/container.xml", CONTAINER_XML)
-        zf.writestr(
-            "OEBPS/content.opf",
-            _make_opf(chapter_count, include_css, include_svg_cover),
-        )
+        zf.writestr("OEBPS/content.opf", _make_opf(chapter_count, include_css, include_svg_cover))
         zf.writestr("OEBPS/toc.ncx", "<ncx/>")
         for i in range(1, chapter_count + 1):
             if include_svg_cover and i == 1:
                 zf.writestr(f"OEBPS/ch{i}.xhtml", _make_cover_xhtml_with_svg())
             else:
-                zf.writestr(
-                    f"OEBPS/ch{i}.xhtml", _make_chapter_xhtml(i, link_css=include_css)
-                )
+                zf.writestr(f"OEBPS/ch{i}.xhtml", _make_chapter_xhtml(i, link_css=include_css))
         if include_css:
             zf.writestr("OEBPS/style.css", "body { margin: 1em; font-family: serif; }")
         if include_svg_cover:
@@ -158,9 +138,7 @@ def _create_epub_with_font(path: Path, font_size: int) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-        )
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         zf.writestr("META-INF/container.xml", CONTAINER_XML)
         zf.writestr("OEBPS/content.opf", opf)
         zf.writestr("OEBPS/toc.ncx", "<ncx/>")
@@ -191,9 +169,7 @@ def _create_epub_with_invalid_spine(path: Path) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-        )
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         zf.writestr("META-INF/container.xml", CONTAINER_XML)
         zf.writestr("OEBPS/content.opf", opf)
         zf.writestr("OEBPS/toc.ncx", "<ncx/>")
@@ -230,18 +206,13 @@ def _create_epub_with_unreferenced_css(path: Path) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-        )
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         zf.writestr("META-INF/container.xml", CONTAINER_XML)
         zf.writestr("OEBPS/content.opf", opf)
         zf.writestr("OEBPS/toc.ncx", "<ncx/>")
         zf.writestr("OEBPS/ch1.xhtml", chapter)
         zf.writestr("OEBPS/used.css", "body { margin: 1em; }")
-        zf.writestr(
-            "OEBPS/unused.css",
-            "@font-face { font-family: 'Big'; src: url('fonts/big.ttf'); }",
-        )
+        zf.writestr("OEBPS/unused.css", "@font-face { font-family: 'Big'; src: url('fonts/big.ttf'); }")
         zf.writestr("OEBPS/fonts/big.ttf", b"\x00" * (600 * 1024))
 
 
@@ -266,9 +237,7 @@ def _create_epub_with_unbound_prefix(path: Path) -> None:
 </package>"""
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-        )
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         zf.writestr("META-INF/container.xml", CONTAINER_XML)
         zf.writestr("OEBPS/content.opf", opf)
         zf.writestr("OEBPS/toc.ncx", "<ncx/>")
@@ -281,9 +250,7 @@ def _create_epub_without_container_xml(path: Path) -> None:
     opf = _make_opf(2)
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-        )
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         # container.xml 없음
         zf.writestr("OEBPS/content.opf", opf)
         zf.writestr("OEBPS/toc.ncx", "<ncx/>")
@@ -307,9 +274,7 @@ def _create_epub_without_spine(path: Path) -> None:
 </package>"""
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-        )
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         zf.writestr("META-INF/container.xml", CONTAINER_XML)
         zf.writestr("OEBPS/content.opf", opf)
         zf.writestr("OEBPS/toc.ncx", "<ncx/>")
@@ -330,9 +295,7 @@ def _create_epub_with_corrupted_container_xml(path: Path) -> None:
     opf = _make_opf(2)
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-        )
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         zf.writestr("META-INF/container.xml", bad_container)
         zf.writestr("OEBPS/content.opf", opf)
         zf.writestr("OEBPS/toc.ncx", "<ncx/>")
@@ -351,9 +314,7 @@ def _create_epub_with_missing_opf(path: Path) -> None:
 </container>"""
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-        )
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         zf.writestr("META-INF/container.xml", container)
         # OPF 파일 없음
 
@@ -362,9 +323,7 @@ def _create_epub_with_no_opf_at_all(path: Path) -> None:
     """container.xml도 없고 .opf 파일도 없는 EPUB."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-        )
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         zf.writestr("OEBPS/ch1.xhtml", _make_chapter_xhtml(1))
 
 
@@ -374,9 +333,7 @@ def _create_epub_with_binary_garbage_container(path: Path) -> None:
     opf = _make_opf(2)
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-        )
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         zf.writestr("META-INF/container.xml", garbage)
         zf.writestr("OEBPS/content.opf", opf)
         zf.writestr("OEBPS/toc.ncx", "<ncx/>")
@@ -384,9 +341,7 @@ def _create_epub_with_binary_garbage_container(path: Path) -> None:
         zf.writestr("OEBPS/ch2.xhtml", _make_chapter_xhtml(2))
 
 
-def _create_epub_with_ncx_extra_refs(
-    path: Path, chapter_count: int = 3, total_ncx_points: int = 10
-) -> None:
+def _create_epub_with_ncx_extra_refs(path: Path, chapter_count: int = 3, total_ncx_points: int = 10) -> None:
     """NCX에 실제 챕터보다 많은 navPoint가 포함된 EPUB 생성.
 
     chapter_count개의 챕터 파일만 포함하고, NCX에는 total_ncx_points개의 navPoint를 생성.
@@ -406,9 +361,7 @@ def _create_epub_with_ncx_extra_refs(
   </navMap>
 </ncx>'''
     with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-        )
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         zf.writestr("META-INF/container.xml", CONTAINER_XML)
         zf.writestr("OEBPS/content.opf", _make_opf(chapter_count))
         zf.writestr("OEBPS/toc.ncx", ncx)
@@ -416,18 +369,14 @@ def _create_epub_with_ncx_extra_refs(
             zf.writestr(f"OEBPS/ch{i}.xhtml", _make_chapter_xhtml(i))
 
 
-def _create_corrupted_epub(
-    path: Path, chapter_count: int = 3, missing_all: bool = False
-) -> None:
+def _create_corrupted_epub(path: Path, chapter_count: int = 3, missing_all: bool = False) -> None:
     """spine에 챕터가 등록되어 있지만 실제 ZIP에는 파일이 없는 손상 EPUB.
 
     missing_all=True이면 모든 챕터 파일을 제거한다.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-        )
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         zf.writestr("META-INF/container.xml", CONTAINER_XML)
         zf.writestr("OEBPS/content.opf", _make_opf(chapter_count))
         zf.writestr("OEBPS/toc.ncx", "<ncx/>")
@@ -467,21 +416,7 @@ def _build_epub_data(bm, epub_path: Path) -> dict:
     rel_path = epub_path.relative_to(bm.path_prefix)
     now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
 
-    return {
-        inode: {
-            "category": CATEGORY,
-            "title": epub_path.stem,
-            "author": "Test Author",
-            "file_path": str(rel_path),
-            "file_type": "epub",
-            "file_size": epub_path.stat().st_size,
-            "line_count": 0,
-            "page_count": 0,
-            "isbn": "",
-            "summary": "test epub",
-            "updated_time": now,
-        }
-    }
+    return {inode: {"category": CATEGORY, "title": epub_path.stem, "author": "Test Author", "file_path": str(rel_path), "file_type": "epub", "file_size": epub_path.stat().st_size, "line_count": 0, "page_count": 0, "isbn": "", "summary": "test epub", "updated_time": now}}
 
 
 def _register_epub_sync(bm, epub_path: Path) -> int:
@@ -573,10 +508,7 @@ def _get_manifest_items(zf: zipfile.ZipFile) -> dict:
     opf = ET.fromstring(zf.read(opf_path))
     result = {}
     for item in opf.findall(f".//{{{opf_ns}}}item"):
-        result[item.get("id", "")] = {
-            "href": item.get("href", ""),
-            "media-type": item.get("media-type", ""),
-        }
+        result[item.get("id", "")] = {"href": item.get("href", ""), "media-type": item.get("media-type", "")}
     return result
 
 
@@ -649,14 +581,8 @@ class TestBookPreview:
 
         # spine에 없고 toc도 아닌 manifest item이 없어야 함 (CSS 제외)
         for item_id, info in manifest.items():
-            if (
-                item_id not in spine
-                and item_id != "toc"
-                and "css" not in info["media-type"]
-            ):
-                pytest.fail(
-                    f"Unreferenced manifest item found: {item_id} ({info['href']})"
-                )
+            if item_id not in spine and item_id != "toc" and "css" not in info["media-type"]:
+                pytest.fail(f"Unreferenced manifest item found: {item_id} ({info['href']})")
         zf.close()
 
     @pytest.mark.asyncio
@@ -705,9 +631,7 @@ class TestBookPreview:
             cache_file.unlink(missing_ok=True)
 
             response = client.get(f"/preview/{book_id}?chapters=3")
-            assert response.status_code == 200, (
-                f"Missing chapter should not cause 500, got {response.status_code}"
-            )
+            assert response.status_code == 200, f"Missing chapter should not cause 500, got {response.status_code}"
         finally:
             _cleanup_book(client, bm, book_id, corrupted_path)
 
@@ -728,9 +652,7 @@ class TestBookPreview:
             cache_file.unlink(missing_ok=True)
 
             response = client.get(f"/preview/{book_id}?chapters=3")
-            assert response.status_code == 422, (
-                f"All chapters missing should return 422, got {response.status_code}"
-            )
+            assert response.status_code == 422, f"All chapters missing should return 422, got {response.status_code}"
             assert "no valid spine chapters" in response.text
         finally:
             _cleanup_book(client, bm, book_id, corrupted_path)
@@ -755,9 +677,7 @@ class TestBookPreview:
             assert response.status_code == 200
 
             zf = _parse_epub_zip(response.content)
-            assert "OEBPS/style.css" in zf.namelist(), (
-                "CSS file should be included in preview"
-            )
+            assert "OEBPS/style.css" in zf.namelist(), "CSS file should be included in preview"
             zf.close()
         finally:
             _cleanup_book(client, bm, book_id, css_path)
@@ -782,9 +702,7 @@ class TestBookPreview:
             assert response.status_code == 200
 
             zf = _parse_epub_zip(response.content)
-            assert "media/cover.jpg" in zf.namelist(), (
-                "SVG <image> referenced cover.jpg should be included in preview"
-            )
+            assert "media/cover.jpg" in zf.namelist(), "SVG <image> referenced cover.jpg should be included in preview"
             zf.close()
         finally:
             _cleanup_book(client, bm, book_id, svg_cover_path)
@@ -806,12 +724,8 @@ class TestBookPreview:
             assert response.status_code == 200
 
             zf = _parse_epub_zip(response.content)
-            assert "OEBPS/fonts/test.ttf" not in zf.namelist(), (
-                "Large font (>500KB) should be excluded from preview"
-            )
-            assert "OEBPS/style.css" in zf.namelist(), (
-                "CSS should still be included even when its referenced font is excluded"
-            )
+            assert "OEBPS/fonts/test.ttf" not in zf.namelist(), "Large font (>500KB) should be excluded from preview"
+            assert "OEBPS/style.css" in zf.namelist(), "CSS should still be included even when its referenced font is excluded"
             zf.close()
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
@@ -833,9 +747,7 @@ class TestBookPreview:
             assert response.status_code == 200
 
             zf = _parse_epub_zip(response.content)
-            assert "OEBPS/fonts/test.ttf" in zf.namelist(), (
-                "Small font (<=500KB) should be included in preview"
-            )
+            assert "OEBPS/fonts/test.ttf" in zf.namelist(), "Small font (<=500KB) should be included in preview"
             zf.close()
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
@@ -858,9 +770,7 @@ class TestBookPreview:
 
             zf = _parse_epub_zip(response.content)
             spine = _get_spine_idrefs(zf)
-            assert "coverpage" not in spine, (
-                "Invalid spine idref (not in manifest) should be filtered out"
-            )
+            assert "coverpage" not in spine, "Invalid spine idref (not in manifest) should be filtered out"
             assert "ch1" in spine
             assert "ch2" in spine
             zf.close()
@@ -886,12 +796,8 @@ class TestBookPreview:
             zf = _parse_epub_zip(response.content)
             names = zf.namelist()
             assert "OEBPS/used.css" in names, "Referenced CSS should be included"
-            assert "OEBPS/unused.css" not in names, (
-                "Unreferenced CSS should NOT be included"
-            )
-            assert "OEBPS/fonts/big.ttf" not in names, (
-                "Font referenced only by unreferenced CSS should NOT be included"
-            )
+            assert "OEBPS/unused.css" not in names, "Unreferenced CSS should NOT be included"
+            assert "OEBPS/fonts/big.ttf" not in names, "Font referenced only by unreferenced CSS should NOT be included"
             zf.close()
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
@@ -916,9 +822,7 @@ class TestBookPreview:
             for name in zf.namelist():
                 if name.endswith(".css"):
                     css = zf.read(name).decode("utf-8", errors="replace")
-                    assert "@font-face" not in css, (
-                        f"@font-face for excluded font should be stripped from {name}"
-                    )
+                    assert "@font-face" not in css, f"@font-face for excluded font should be stripped from {name}"
             zf.close()
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
@@ -946,9 +850,7 @@ class TestEpubErrorRecovery:
 
         try:
             response = client.get(f"/preview/{book_id}?chapters=2")
-            assert response.status_code == 200, (
-                f"Unbound prefix should not cause 500, got {response.status_code}: {response.text}"
-            )
+            assert response.status_code == 200, f"Unbound prefix should not cause 500, got {response.status_code}: {response.text}"
 
             zf = _parse_epub_zip(response.content)
             assert "mimetype" in zf.namelist()
@@ -992,9 +894,7 @@ class TestEpubErrorRecovery:
 
         try:
             response = client.get(f"/preview/{book_id}?chapters=2")
-            assert response.status_code == 200, (
-                f"Missing container.xml should not cause 500, got {response.status_code}: {response.text}"
-            )
+            assert response.status_code == 200, f"Missing container.xml should not cause 500, got {response.status_code}: {response.text}"
 
             zf = _parse_epub_zip(response.content)
             names = zf.namelist()
@@ -1039,9 +939,7 @@ class TestEpubErrorRecovery:
 
         try:
             response = client.get(f"/preview/{book_id}?chapters=2")
-            assert response.status_code == 200, (
-                f"Corrupted container.xml should not cause 500, got {response.status_code}: {response.text}"
-            )
+            assert response.status_code == 200, f"Corrupted container.xml should not cause 500, got {response.status_code}: {response.text}"
 
             zf = _parse_epub_zip(response.content)
             names = zf.namelist()
@@ -1067,9 +965,7 @@ class TestEpubErrorRecovery:
 
         try:
             response = client.get(f"/preview/{book_id}?chapters=2")
-            assert response.status_code == 200, (
-                f"Missing spine should not cause 500, got {response.status_code}: {response.text}"
-            )
+            assert response.status_code == 200, f"Missing spine should not cause 500, got {response.status_code}: {response.text}"
 
             zf = _parse_epub_zip(response.content)
             names = zf.namelist()
@@ -1077,9 +973,7 @@ class TestEpubErrorRecovery:
             assert any("ch1" in n for n in names), "ch1 should be in preview"
             assert any("ch2" in n for n in names), "ch2 should be in preview"
             # toc.ncx는 비문서 항목이므로 챕터로 선택되면 안 됨
-            assert not any("toc.ncx" in n for n in names), (
-                "toc.ncx (non-XHTML) should not be selected as chapter"
-            )
+            assert not any("toc.ncx" in n for n in names), "toc.ncx (non-XHTML) should not be selected as chapter"
             zf.close()
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
@@ -1116,9 +1010,7 @@ class TestEpubErrorRecovery:
 
         try:
             response = client.get(f"/preview/{book_id}?chapters=2")
-            assert response.status_code == 422, (
-                f"Missing OPF in archive should return 422, got {response.status_code}"
-            )
+            assert response.status_code == 422, f"Missing OPF in archive should return 422, got {response.status_code}"
             assert "OPF" in response.text
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
@@ -1139,9 +1031,7 @@ class TestEpubErrorRecovery:
 
         try:
             response = client.get(f"/preview/{book_id}?chapters=2")
-            assert response.status_code == 422, (
-                f"No OPF at all should return 422, got {response.status_code}"
-            )
+            assert response.status_code == 422, f"No OPF at all should return 422, got {response.status_code}"
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
 
@@ -1161,9 +1051,7 @@ class TestEpubErrorRecovery:
 
         try:
             response = client.get(f"/preview/{book_id}?chapters=2")
-            assert response.status_code == 200, (
-                f"Binary garbage container.xml should not cause 500, got {response.status_code}: {response.text}"
-            )
+            assert response.status_code == 200, f"Binary garbage container.xml should not cause 500, got {response.status_code}: {response.text}"
 
             zf = _parse_epub_zip(response.content)
             names = zf.namelist()
@@ -1222,9 +1110,7 @@ class TestEpubErrorRecovery:
 
         try:
             response = client.get(f"/preview/{book_id}?chapters=2")
-            assert response.status_code == 422, (
-                f"Bad ZIP should return 422, got {response.status_code}"
-            )
+            assert response.status_code == 422, f"Bad ZIP should return 422, got {response.status_code}"
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
 
@@ -1284,9 +1170,7 @@ class TestFindOpfPath:
             zf.writestr("OEBPS/pkg.opf", "<package/>")
         with zipfile.ZipFile(str(epub_path), "r") as zin:
             result = BookManager._find_opf_path(zin)
-            assert result == "OEBPS/pkg.opf", (
-                f"Regex fallback should find OPF, got '{result}'"
-            )
+            assert result == "OEBPS/pkg.opf", f"Regex fallback should find OPF, got '{result}'"
 
     def test_no_opf_returns_empty(self, tmp_path):
         """container.xml도 .opf 파일도 없으면 빈 문자열을 반환한다."""
@@ -1313,9 +1197,7 @@ class TestFindOpfPath:
             zf.writestr("OPS/book.opf", "<package/>")
         with zipfile.ZipFile(str(epub_path), "r") as zin:
             result = BookManager._find_opf_path(zin)
-            assert result == "OPS/book.opf", (
-                f"Should fallback to direct scan, got '{result}'"
-            )
+            assert result == "OPS/book.opf", f"Should fallback to direct scan, got '{result}'"
 
     def test_binary_garbage_container_regex_fallback(self, tmp_path):
         """container.xml이 완전한 바이너리 쓰레기여도 regex로 full-path를 추출한다."""
@@ -1328,9 +1210,7 @@ class TestFindOpfPath:
             zf.writestr("OPS/pkg.opf", "<package/>")
         with zipfile.ZipFile(str(epub_path), "r") as zin:
             result = BookManager._find_opf_path(zin)
-            assert result == "OPS/pkg.opf", (
-                f"Binary garbage regex fallback should find OPF, got '{result}'"
-            )
+            assert result == "OPS/pkg.opf", f"Binary garbage regex fallback should find OPF, got '{result}'"
 
 
 # ── tests: download 엔드포인트 ────────────────────────────
@@ -1609,9 +1489,7 @@ class TestValidatePreviewEpub:
         epub = tmp_path / "no_opf.epub"
         epub.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(str(epub), "w") as zf:
-            zf.writestr(
-                "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-            )
+            zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
             zf.writestr("OEBPS/ch1.xhtml", _make_chapter_xhtml(1))
 
         valid, err = BookManager._validate_preview_epub(epub)
@@ -1639,9 +1517,7 @@ class TestValidatePreviewEpub:
         epub = tmp_path / "no_ncx.epub"
         epub.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(str(epub), "w") as zf:
-            zf.writestr(
-                "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-            )
+            zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
             zf.writestr("META-INF/container.xml", CONTAINER_XML)
             zf.writestr("OEBPS/content.opf", _make_opf(2))
             # toc.ncx 파일 생략
@@ -1673,9 +1549,7 @@ class TestValidatePreviewEpub:
         with zipfile.ZipFile(str(epub), "r") as zf:
             opf = etree.fromstring(zf.read("OEBPS/content.opf"))
             spine_el = opf.find(f".//{{{opf_ns}}}spine")
-            idrefs = [
-                ref.get("idref") for ref in spine_el.findall(f"{{{opf_ns}}}itemref")
-            ]
+            idrefs = [ref.get("idref") for ref in spine_el.findall(f"{{{opf_ns}}}itemref")]
             assert "coverpage" not in idrefs, "invalid idref should be removed"
             assert "ch1" in idrefs
             assert "ch2" in idrefs
@@ -1697,9 +1571,7 @@ class TestValidatePreviewEpub:
         with zipfile.ZipFile(str(epub), "r") as zf:
             opf = etree.fromstring(zf.read("OEBPS/content.opf"))
             spine_el = opf.find(f".//{{{opf_ns}}}spine")
-            idrefs = [
-                ref.get("idref") for ref in spine_el.findall(f"{{{opf_ns}}}itemref")
-            ]
+            idrefs = [ref.get("idref") for ref in spine_el.findall(f"{{{opf_ns}}}itemref")]
             assert "ch1" not in idrefs, "missing ch1 should be removed from spine"
             assert "ch2" in idrefs
             assert "ch3" in idrefs
@@ -1748,9 +1620,7 @@ class TestValidatePreviewEpub:
 
         epub = tmp_path / "bad_toc_id.epub"
         with zipfile.ZipFile(str(epub), "w") as zf:
-            zf.writestr(
-                "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-            )
+            zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
             zf.writestr("META-INF/container.xml", CONTAINER_XML)
             zf.writestr("OEBPS/content.opf", opf_content)
             zf.writestr("OEBPS/ch1.xhtml", _make_chapter_xhtml(1))
@@ -1789,9 +1659,7 @@ class TestNcxFiltering:
 
         epub_dir = bm.path_prefix / CATEGORY
         epub_path = epub_dir / "[Test Author] NCX Extra Refs.epub"
-        _create_epub_with_ncx_extra_refs(
-            epub_path, chapter_count=5, total_ncx_points=10
-        )
+        _create_epub_with_ncx_extra_refs(epub_path, chapter_count=5, total_ncx_points=10)
 
         book_id = await _register_epub_async(bm, epub_path)
         try:
@@ -1810,18 +1678,14 @@ class TestNcxFiltering:
             nav_points = ncx_tree.findall(f".//{{{ncx_ns}}}navPoint")
 
             # 2챕터만 요청했으므로 ch1, ch2만 포함
-            assert len(nav_points) <= 2, (
-                f"NCX should have at most 2 navPoints, got {len(nav_points)}"
-            )
+            assert len(nav_points) <= 2, f"NCX should have at most 2 navPoints, got {len(nav_points)}"
 
             # 남아있는 navPoint의 src가 모두 ch1 또는 ch2를 참조
             for np in nav_points:
                 content = np.find(f"{{{ncx_ns}}}content")
                 src = content.get("src", "")
                 src_file = src.split("#")[0]
-                assert src_file in ("ch1.xhtml", "ch2.xhtml"), (
-                    f"NCX navPoint references unexpected file: {src_file}"
-                )
+                assert src_file in ("ch1.xhtml", "ch2.xhtml"), f"NCX navPoint references unexpected file: {src_file}"
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
 
@@ -1855,9 +1719,7 @@ class TestNcxFiltering:
 </ncx>'''
 
         with zipfile.ZipFile(str(epub_path), "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(
-                "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-            )
+            zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
             zf.writestr("META-INF/container.xml", CONTAINER_XML)
             zf.writestr("OEBPS/content.opf", _make_opf(2))
             zf.writestr("OEBPS/toc.ncx", ncx)
@@ -1879,9 +1741,7 @@ class TestNcxFiltering:
 
             assert "np-1" in nav_ids, "ch1 navPoint should be kept"
             assert "np-frag" in nav_ids, "fragment-only navPoint should be kept"
-            assert "np-missing" not in nav_ids, (
-                "missing file navPoint should be removed"
-            )
+            assert "np-missing" not in nav_ids, "missing file navPoint should be removed"
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
 
@@ -1917,9 +1777,7 @@ class TestNcxFiltering:
 </package>"""
 
         with zipfile.ZipFile(str(epub_path), "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(
-                "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-            )
+            zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
             zf.writestr("META-INF/container.xml", CONTAINER_XML)
             zf.writestr("OEBPS/content.opf", opf)
             zf.writestr("OEBPS/toc.ncx", "<ncx/>")
@@ -1942,12 +1800,8 @@ class TestNcxFiltering:
             # ch1.xhtml#start → ch1.xhtml은 포함되어 있으므로 유지
             # missing.xhtml#toc → missing.xhtml은 없으므로 제거
             hrefs = [r.get("href", "") for r in guide_refs]
-            assert any("ch1.xhtml" in h for h in hrefs), (
-                "guide reference to ch1.xhtml#start should be kept"
-            )
-            assert not any("missing.xhtml" in h for h in hrefs), (
-                "guide reference to missing.xhtml should be removed"
-            )
+            assert any("ch1.xhtml" in h for h in hrefs), "guide reference to ch1.xhtml#start should be kept"
+            assert not any("missing.xhtml" in h for h in hrefs), "guide reference to missing.xhtml should be removed"
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
 
@@ -1986,9 +1840,7 @@ class TestOpfNamespaceFix:
 </package>"""
 
         with zipfile.ZipFile(str(epub_path), "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(
-                "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
-            )
+            zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
             zf.writestr("META-INF/container.xml", CONTAINER_XML)
             zf.writestr("OEBPS/content.opf", opf)
             zf.writestr("OEBPS/toc.ncx", "<ncx/>")
@@ -2009,9 +1861,7 @@ class TestOpfNamespaceFix:
 
             # xmlns:opf 선언이 추가되었는지 확인
             assert "xmlns:opf=" in opf_data, "xmlns:opf declaration should be added"
-            assert 'opf:role="aut"' in opf_data, (
-                "opf:role attribute should be preserved"
-            )
+            assert 'opf:role="aut"' in opf_data, "opf:role attribute should be preserved"
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
 
@@ -2027,27 +1877,11 @@ class TestValidateEpub:
         """epubcheck --json 출력을 흉내내는 JSON 바이트를 반환."""
         import json
 
-        data = {
-            "messages": messages or [],
-            "checker": {
-                "nFatal": 0,
-                "nError": 0 if valid else 1,
-                "nWarning": 0,
-                "nUsage": 0,
-                "nInfo": 0,
-            },
-        }
+        data = {"messages": messages or [], "checker": {"nFatal": 0, "nError": 0 if valid else 1, "nWarning": 0, "nUsage": 0, "nInfo": 0}}
         if publication:
             data["publication"] = publication
         if not valid and not messages:
-            data["messages"] = [
-                {
-                    "severity": "ERROR",
-                    "id": "RSC-005",
-                    "message": "Test error message",
-                    "locations": [{"path": "OEBPS/ch1.xhtml", "line": 10, "column": 5}],
-                }
-            ]
+            data["messages"] = [{"severity": "ERROR", "id": "RSC-005", "message": "Test error message", "locations": [{"path": "OEBPS/ch1.xhtml", "line": 10, "column": 5}]}]
         return json.dumps(data).encode("utf-8")
 
     def _mock_epubcheck_exec(self, json_bytes, returncode=0):
@@ -2081,20 +1915,9 @@ class TestValidateEpub:
         book_id = await _register_epub_async(bm, epub_path)
 
         try:
-            json_bytes = self._make_epubcheck_json(
-                valid=True,
-                publication={
-                    "title": "Test Book",
-                    "creator": "Test Author",
-                    "date": "",
-                    "publisher": "",
-                },
-            )
+            json_bytes = self._make_epubcheck_json(valid=True, publication={"title": "Test Book", "creator": "Test Author", "date": "", "publisher": ""})
 
-            with patch(
-                "asyncio.create_subprocess_exec",
-                side_effect=self._mock_epubcheck_exec(json_bytes, returncode=0),
-            ):
+            with patch("asyncio.create_subprocess_exec", side_effect=self._mock_epubcheck_exec(json_bytes, returncode=0)):
                 response = client.get(f"/validate/{book_id}")
 
             assert response.status_code == 200
@@ -2122,10 +1945,7 @@ class TestValidateEpub:
         try:
             json_bytes = self._make_epubcheck_json(valid=False)
 
-            with patch(
-                "asyncio.create_subprocess_exec",
-                side_effect=self._mock_epubcheck_exec(json_bytes, returncode=1),
-            ):
+            with patch("asyncio.create_subprocess_exec", side_effect=self._mock_epubcheck_exec(json_bytes, returncode=1)):
                 response = client.get(f"/validate/{book_id}")
 
             assert response.status_code == 200
@@ -2155,21 +1975,7 @@ class TestValidateEpub:
         inode = txt_path.stat().st_ino
         rel_path = txt_path.relative_to(bm.path_prefix)
         now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
-        data = {
-            inode: {
-                "category": "_txt",
-                "title": "Plain Text",
-                "author": "Test Author",
-                "file_path": str(rel_path),
-                "file_type": "txt",
-                "file_size": txt_path.stat().st_size,
-                "line_count": 1,
-                "page_count": 0,
-                "isbn": "",
-                "summary": "test txt",
-                "updated_time": now,
-            }
-        }
+        data = {inode: {"category": "_txt", "title": "Plain Text", "author": "Test Author", "file_path": str(rel_path), "file_type": "txt", "file_size": txt_path.stat().st_size, "line_count": 1, "page_count": 0, "isbn": "", "summary": "test txt", "updated_time": now}}
         book_id, error = await bm.add_book(data)
 
         try:
@@ -2291,37 +2097,17 @@ class TestValidateEpubUnit:
 
         epub_path = tmp_path / "test.epub"
         epub_path.write_bytes(b"PK fake epub")
-        return SimpleNamespace(
-            book_id=1,
-            file_type=file_type,
-            file_path=epub_path,
-        )
+        return SimpleNamespace(book_id=1, file_type=file_type, file_path=epub_path)
 
     @staticmethod
     def _make_epubcheck_json(valid=True, messages=None, publication=None):
         import json
 
-        data = {
-            "messages": messages or [],
-            "checker": {
-                "nFatal": 0,
-                "nError": 0 if valid else 1,
-                "nWarning": 0,
-                "nUsage": 0,
-                "nInfo": 0,
-            },
-        }
+        data = {"messages": messages or [], "checker": {"nFatal": 0, "nError": 0 if valid else 1, "nWarning": 0, "nUsage": 0, "nInfo": 0}}
         if publication:
             data["publication"] = publication
         if not valid and not messages:
-            data["messages"] = [
-                {
-                    "severity": "ERROR",
-                    "id": "RSC-005",
-                    "message": "Test error",
-                    "locations": [{"path": "ch1.xhtml", "line": 10, "column": 5}],
-                }
-            ]
+            data["messages"] = [{"severity": "ERROR", "id": "RSC-005", "message": "Test error", "locations": [{"path": "ch1.xhtml", "line": 10, "column": 5}]}]
         return json.dumps(data)
 
     @staticmethod
@@ -2366,10 +2152,7 @@ class TestValidateEpubUnit:
         bm.get_book = AsyncMock(return_value=(book, None))
         bm.path_prefix = tmp_path
 
-        with patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=self._mock_exec_writing("NOT VALID JSON {{{}", returncode=0),
-        ):
+        with patch("asyncio.create_subprocess_exec", side_effect=self._mock_exec_writing("NOT VALID JSON {{{}", returncode=0)):
             result, error = await bm.validate_epub(1)
 
         assert result is None
@@ -2386,10 +2169,7 @@ class TestValidateEpubUnit:
         bm.get_book = AsyncMock(return_value=(book, None))
         bm.path_prefix = tmp_path
 
-        with patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=self._mock_exec_noop(returncode=0),
-        ):
+        with patch("asyncio.create_subprocess_exec", side_effect=self._mock_exec_noop(returncode=0)):
             result, error = await bm.validate_epub(1)
 
         assert result is None
@@ -2418,10 +2198,7 @@ class TestValidateEpubUnit:
 
         valid_json = self._make_epubcheck_json(valid=True)
         with patch("tempfile.mkstemp", side_effect=tracking_mkstemp):
-            with patch(
-                "asyncio.create_subprocess_exec",
-                side_effect=self._mock_exec_writing(valid_json, returncode=0),
-            ):
+            with patch("asyncio.create_subprocess_exec", side_effect=self._mock_exec_writing(valid_json, returncode=0)):
                 result, error = await bm.validate_epub(1)
 
         assert error is None
@@ -2450,17 +2227,12 @@ class TestValidateEpubUnit:
             return fd, path
 
         with patch("tempfile.mkstemp", side_effect=tracking_mkstemp):
-            with patch(
-                "asyncio.create_subprocess_exec",
-                side_effect=self._mock_exec_writing("BROKEN", returncode=0),
-            ):
+            with patch("asyncio.create_subprocess_exec", side_effect=self._mock_exec_writing("BROKEN", returncode=0)):
                 result, error = await bm.validate_epub(1)
 
         assert result is None
         assert len(created_paths) == 1
-        assert not os.path.exists(created_paths[0]), (
-            "Temp file should be cleaned up even on error"
-        )
+        assert not os.path.exists(created_paths[0]), "Temp file should be cleaned up even on error"
 
     @pytest.mark.asyncio
     async def test_no_publication_in_result(self, tmp_path):
@@ -2474,10 +2246,7 @@ class TestValidateEpubUnit:
         bm.path_prefix = tmp_path
 
         valid_json = self._make_epubcheck_json(valid=True)  # publication 없음
-        with patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=self._mock_exec_writing(valid_json, returncode=0),
-        ):
+        with patch("asyncio.create_subprocess_exec", side_effect=self._mock_exec_writing(valid_json, returncode=0)):
             result, error = await bm.validate_epub(1)
 
         assert error is None
@@ -2497,10 +2266,7 @@ class TestValidateEpubUnit:
 
         pub = {"title": "Test", "creator": "Author", "date": "2024", "publisher": "Pub"}
         valid_json = self._make_epubcheck_json(valid=True, publication=pub)
-        with patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=self._mock_exec_writing(valid_json, returncode=0),
-        ):
+        with patch("asyncio.create_subprocess_exec", side_effect=self._mock_exec_writing(valid_json, returncode=0)):
             result, error = await bm.validate_epub(1)
 
         assert error is None
@@ -2518,25 +2284,9 @@ class TestValidateEpubUnit:
         bm.get_book = AsyncMock(return_value=(book, None))
         bm.path_prefix = tmp_path
 
-        messages = [
-            {
-                "severity": "ERROR",
-                "id": "RSC-005",
-                "message": "err1",
-                "locations": [{"path": "ch1.xhtml", "line": 1, "column": 1}],
-            },
-            {
-                "severity": "WARNING",
-                "id": "HTM-003",
-                "message": "warn1",
-                "locations": [{"path": "ch2.xhtml", "line": 5, "column": 10}],
-            },
-        ]
+        messages = [{"severity": "ERROR", "id": "RSC-005", "message": "err1", "locations": [{"path": "ch1.xhtml", "line": 1, "column": 1}]}, {"severity": "WARNING", "id": "HTM-003", "message": "warn1", "locations": [{"path": "ch2.xhtml", "line": 5, "column": 10}]}]
         json_str = self._make_epubcheck_json(valid=False, messages=messages)
-        with patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=self._mock_exec_writing(json_str, returncode=1),
-        ):
+        with patch("asyncio.create_subprocess_exec", side_effect=self._mock_exec_writing(json_str, returncode=1)):
             result, error = await bm.validate_epub(1)
 
         assert error is None
@@ -2556,11 +2306,7 @@ class TestValidatePdfUnit:
 
         pdf_path = tmp_path / "test.pdf"
         pdf_path.write_bytes(b"%PDF-1.4 fake")
-        return SimpleNamespace(
-            book_id=1,
-            file_type=file_type,
-            file_path=pdf_path,
-        )
+        return SimpleNamespace(book_id=1, file_type=file_type, file_path=pdf_path)
 
     @staticmethod
     def _make_mock_pdf(issues=None, docinfo=None, page_count=10, pdf_version="1.7"):
@@ -2645,15 +2391,8 @@ class TestValidatePdfUnit:
         bm.get_book = AsyncMock(return_value=(book, None))
         bm.path_prefix = tmp_path
 
-        docinfo = {
-            "/Title": "Test PDF Title",
-            "/Author": "Test Author",
-            "/Producer": "Test Producer",
-            "/CreationDate": "D:20240101120000",
-        }
-        mock_pdf = self._make_mock_pdf(
-            docinfo=docinfo, page_count=42, pdf_version="1.5"
-        )
+        docinfo = {"/Title": "Test PDF Title", "/Author": "Test Author", "/Producer": "Test Producer", "/CreationDate": "D:20240101120000"}
+        mock_pdf = self._make_mock_pdf(docinfo=docinfo, page_count=42, pdf_version="1.5")
         with patch("pikepdf.open", return_value=mock_pdf):
             result, error = await bm.validate_pdf(1)
 
@@ -2689,11 +2428,7 @@ class TestValidatePdfUnit:
         from backend.book_manager import BookManager
 
         missing_path = tmp_path / "nonexistent.pdf"
-        book = SimpleNamespace(
-            book_id=1,
-            file_type="pdf",
-            file_path=missing_path,
-        )
+        book = SimpleNamespace(book_id=1, file_type="pdf", file_path=missing_path)
         bm = BookManager()
         bm.get_book = AsyncMock(return_value=(book, None))
         bm.path_prefix = tmp_path

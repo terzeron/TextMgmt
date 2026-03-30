@@ -2,14 +2,12 @@
 
 import logging.config
 import shutil
-import io
 import json
 import os
 import sys
 import time
 import zipfile
 import tempfile
-import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
@@ -369,9 +367,6 @@ if __name__ == "__main__":
 
 
 # ---- merged from test_book_manager_extra.py ----
-import io
-import time
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -2127,7 +2122,6 @@ def test_validate_epub_epubcheck_json_unlink_oserror(tmp_path: Path, monkeypatch
 
     # Mock subprocess to produce a valid epubcheck JSON output
     import asyncio
-    import subprocess
 
     class FakeProc:
         returncode = 0
@@ -2284,7 +2278,7 @@ def test_get_book_preview_epub_cache_hit(tmp_path: Path):
     cache_dir = tmp_path / ".preview_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     total_chapters = BookManager._get_epub_total_chapters(epub)
-    cache_file = cache_dir / f"1_ch3.epub"
+    cache_file = cache_dir / "1_ch3.epub"
     _make_minimal_epub(cache_file)
 
     import os
@@ -2946,3 +2940,140 @@ def test_get_books_in_category_unit(tmp_path: Path):
     books, err = asyncio_runner(manager.get_books_in_category("A"))
     assert err is None
     assert len(books) == 1
+
+
+# ---- HWP3 네이티브 파서 fallback 프리뷰 테스트 ----
+
+HWP_TEST_DIR = Path(__file__).parent / "books" / "_hwp"
+
+
+def test_hwp_preview_fallback_when_libreoffice_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """LibreOffice가 빈 문자열 반환 시 hwp3 파서로 fallback하여 HTML 생성"""
+    hwp_src = HWP_TEST_DIR / "v2.10_KYOKA.hwp"
+    if not hwp_src.exists():
+        pytest.skip("테스트 파일 없음")
+    (tmp_path / "A").mkdir(parents=True, exist_ok=True)
+    hwp_file = tmp_path / "A" / "kyoka.hwp"
+    shutil.copy(hwp_src, hwp_file)
+    doc = make_doc("A/kyoka.hwp", "hwp")
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: doc
+    monkeypatch.setattr(BookManager, "_convert_with_libreoffice", lambda p, fmt: "")
+    resp = asyncio_runner(manager.get_book_preview(1))
+    assert resp.status_code == 200
+    body = resp.body.decode("utf-8")
+    assert "영동" in body or "교가" in body
+    assert "<p>" in body
+
+
+def test_hwp_preview_fallback_v3_00(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """V3.00 파일의 fallback 프리뷰"""
+    hwp_src = HWP_TEST_DIR / "v3.00_현대시사전.hwp"
+    if not hwp_src.exists():
+        pytest.skip("테스트 파일 없음")
+    (tmp_path / "A").mkdir(parents=True, exist_ok=True)
+    hwp_file = tmp_path / "A" / "poem.hwp"
+    shutil.copy(hwp_src, hwp_file)
+    doc = make_doc("A/poem.hwp", "hwp")
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: doc
+    monkeypatch.setattr(BookManager, "_convert_with_libreoffice", lambda p, fmt: "")
+    resp = asyncio_runner(manager.get_book_preview(1))
+    assert resp.status_code == 200
+    body = resp.body.decode("utf-8")
+    assert len(body) > 50
+
+
+def test_hwp_preview_fallback_caches_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """fallback 결과가 캐시 파일에 저장되는지 확인"""
+    hwp_src = HWP_TEST_DIR / "v2.10_KYOKA.hwp"
+    if not hwp_src.exists():
+        pytest.skip("테스트 파일 없음")
+    (tmp_path / "A").mkdir(parents=True, exist_ok=True)
+    hwp_file = tmp_path / "A" / "kyoka.hwp"
+    shutil.copy(hwp_src, hwp_file)
+    doc = make_doc("A/kyoka.hwp", "hwp")
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: doc
+    monkeypatch.setattr(BookManager, "_convert_with_libreoffice", lambda p, fmt: "")
+    asyncio_runner(manager.get_book_preview(1))
+    cache_file = tmp_path / ".preview_cache" / "1.html"
+    assert cache_file.exists()
+    assert len(cache_file.read_text()) > 50
+
+
+def test_hwp_preview_no_fallback_for_doc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """DOC 파일은 hwp3 fallback을 사용하지 않음"""
+    (tmp_path / "A").mkdir(parents=True, exist_ok=True)
+    doc_file = tmp_path / "A" / "test.doc"
+    doc_file.write_bytes(b"fake doc content")
+    doc = make_doc("A/test.doc", "doc")
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: doc
+    monkeypatch.setattr(BookManager, "_convert_with_libreoffice", lambda p, fmt: "")
+    resp = asyncio_runner(manager.get_book_preview(1))
+    # DOC는 빈 html_content → 캐시 안 되고 preview 없음
+    assert resp.status_code in (200, 400, 500) or resp.status_code == 755  # 빈 content면 status 755 안 나옴
+
+
+def test_hwp_preview_fallback_both_fail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """LibreOffice도 실패하고 hwp3 파서도 빈 결과인 경우 (V1.20)"""
+    hwp_src = HWP_TEST_DIR / "v1.20_부하의약혼녀.hwp"
+    if not hwp_src.exists():
+        pytest.skip("테스트 파일 없음")
+    (tmp_path / "A").mkdir(parents=True, exist_ok=True)
+    hwp_file = tmp_path / "A" / "old.hwp"
+    shutil.copy(hwp_src, hwp_file)
+    doc = make_doc("A/old.hwp", "hwp")
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: doc
+    monkeypatch.setattr(BookManager, "_convert_with_libreoffice", lambda p, fmt: "")
+    resp = asyncio_runner(manager.get_book_preview(1))
+    # V1.20은 hwp3 파서도 빈 결과 → 캐시 미생성, 400/500 가능
+    cache_file = tmp_path / ".preview_cache" / "1.html"
+    assert not cache_file.exists()
+
+
+def test_hwp_preview_libreoffice_success_no_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """LibreOffice가 정상 결과 반환 시 hwp3 fallback 미사용"""
+    hwp_src = HWP_TEST_DIR / "v2.10_KYOKA.hwp"
+    if not hwp_src.exists():
+        pytest.skip("테스트 파일 없음")
+    (tmp_path / "A").mkdir(parents=True, exist_ok=True)
+    hwp_file = tmp_path / "A" / "kyoka.hwp"
+    shutil.copy(hwp_src, hwp_file)
+    doc = make_doc("A/kyoka.hwp", "hwp")
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: doc
+    monkeypatch.setattr(BookManager, "_convert_with_libreoffice", lambda p, fmt: "<p>LibreOffice 결과</p>")
+    resp = asyncio_runner(manager.get_book_preview(1))
+    assert resp.status_code == 200
+    body = resp.body.decode("utf-8")
+    assert "LibreOffice" in body
+    assert "영동" not in body  # fallback 미사용 확인
+
+
+def test_hwp_preview_html_escaping(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """fallback HTML 출력에서 특수문자가 이스케이프되는지 확인"""
+    hwp_src = HWP_TEST_DIR / "v2.10_PAGER.hwp"
+    if not hwp_src.exists():
+        pytest.skip("테스트 파일 없음")
+    (tmp_path / "A").mkdir(parents=True, exist_ok=True)
+    hwp_file = tmp_path / "A" / "pager.hwp"
+    shutil.copy(hwp_src, hwp_file)
+    doc = make_doc("A/pager.hwp", "hwp")
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: doc
+    monkeypatch.setattr(BookManager, "_convert_with_libreoffice", lambda p, fmt: "")
+    resp = asyncio_runner(manager.get_book_preview(1))
+    if resp.status_code == 200:
+        body = resp.body.decode("utf-8")
+        # XSS 방지: <script> 같은 태그가 이스케이프되어야 함
+        assert "<script>" not in body

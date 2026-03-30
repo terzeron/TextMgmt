@@ -499,6 +499,10 @@ def run_test_modules_sequentially(test_targets: list[Path]) -> tuple[bool, int, 
                 pass
             failed_count += 1
             failed_files.append(t)
+        elif result.returncode == 5:
+            # Exit code 5 = no tests collected (all deselected/skipped)
+            print(f"⏭️  {t.name} SKIPPED (no tests collected).")
+            passed_count += 1
         elif result.returncode != 0:
             print(f"❌ {t.name} FAILED.")
             failed_count += 1
@@ -919,7 +923,7 @@ def print_test_statistics(stats: dict[str, Any]) -> None:
     else:
         print("✅ 실패한 테스트: 없음")
 
-    print(f"\n🐌 수행 시간이 긴 테스트 파일 TOP 10:")
+    print("\n🐌 수행 시간이 긴 테스트 파일 TOP 10:")
     for i, (file_name, duration) in enumerate(perf_data["slowest_files"], 1):
         test_count = perf_data["file_test_counts"].get(file_name, 1)
         avg_time = perf_data["file_avg_times"].get(file_name, duration)
@@ -935,7 +939,7 @@ def print_test_statistics(stats: dict[str, Any]) -> None:
 
         print(f"   {i:2d}. {icon} {file_name:<35} {duration:>6.1f}초 ({test_count}개 테스트, 평균 {avg_time:.2f}초)")
 
-    print(f"\n🐌 평균 테스트 수행시간이 긴 파일 TOP 10:")
+    print("\n🐌 평균 테스트 수행시간이 긴 파일 TOP 10:")
     for i, (file_name, avg_time) in enumerate(perf_data["slowest_avg_times"], 1):
         test_count = perf_data["file_test_counts"].get(file_name, 1)
         total_time = perf_data["file_durations"].get(file_name, 0)
@@ -956,18 +960,18 @@ def print_test_statistics(stats: dict[str, Any]) -> None:
     slow_avg_files = [f for f, avg in perf_data["file_avg_times"].items() if avg >= 2]
 
     if slow_files:
-        print(f"\n💡 성능 개선 권장사항:")
+        print("\n💡 성능 개선 권장사항:")
         print(f"   • {len(slow_files)}개 파일이 10초 이상 소요됩니다")
-        print(f"   • Docker 컨테이너나 네트워크 호출이 있는 테스트 최적화 검토")
+        print("   • Docker 컨테이너나 네트워크 호출이 있는 테스트 최적화 검토")
 
     if slow_avg_files:
         print(f"   • {len(slow_avg_files)}개 파일의 평균 테스트 시간이 2초 이상입니다")
-        print(f"   • 개별 테스트 최적화 검토 필요")
+        print("   • 개별 테스트 최적화 검토 필요")
 
     fast_ratio = len([d for d in perf_data["file_durations"].values() if d < 1]) / len(perf_data["file_durations"]) * 100
     fast_avg_ratio = len([avg for avg in perf_data["file_avg_times"].values() if avg < 0.5]) / len(perf_data["file_avg_times"]) * 100
 
-    print(f"\n📊 성능 지표:")
+    print("\n📊 성능 지표:")
     print(f"   • 빠른 테스트 비율 (<1초): {fast_ratio:.1f}%")
     print(f"   • 빠른 평균 테스트 비율 (<0.5초): {fast_avg_ratio:.1f}%")
     print(f"   • 병렬 실행 시 예상 시간: {max(perf_data['file_durations'].values()):.1f}초")
@@ -990,7 +994,7 @@ def profile_slow_tests() -> None:
     for test_name in slow_tests:
         print(f"   • {test_name}")
 
-    print(f"\n🚀 프로파일링 시작...")
+    print("\n🚀 프로파일링 시작...")
 
     all_analyses = []
 
@@ -1009,7 +1013,7 @@ def profile_slow_tests() -> None:
             print(f"⚡ {test_name}: 너무 빨라서 샘플링되지 않음 ({analysis['execution_time']:.2f}초)")
 
     # Overall summary
-    print(f"\n📈 전체 프로파일링 요약:")
+    print("\n📈 전체 프로파일링 요약:")
     total_samples = sum(a["total_samples"] for a in all_analyses)
     total_time = sum(a["execution_time"] for a in all_analyses)
 
@@ -1140,35 +1144,35 @@ def print_profiling_analysis(analysis: dict[str, Any]) -> None:
     print(f"🔧 분석된 함수: {analysis['function_count']}개")
 
     # Top hotspots by cumulative time
-    print(f"\n🔥 성능 핫스팟 (누적 시간 기준 TOP 15):")
+    print("\n🔥 성능 핫스팟 (누적 시간 기준 TOP 15):")
     print(f"{'Rank':<4} {'File':<25} {'Function':<25} {'Calls':<8} {'Total(s)':<8} {'Cumul(s)':<8} {'Per Call(ms)':<12}")
     print("-" * 100)
     for i, func in enumerate(analysis["hotspots"], 1):
         print(f"{i:<4} {func['filename']:<25} {func['function']:<25} {func['calls']:<8} {func['total_time']:<8.3f} {func['cumulative_time']:<8.3f} {func['time_per_call'] * 1000:<12.2f}")
 
     # Most called functions
-    print(f"\n📞 가장 많이 호출된 함수 TOP 10:")
+    print("\n📞 가장 많이 호출된 함수 TOP 10:")
     print(f"{'Rank':<4} {'Calls':<10} {'File':<25} {'Function':<25} {'Total(s)':<8}")
     print("-" * 80)
     for i, func in enumerate(analysis["most_called"], 1):
         print(f"{i:<4} {func['calls']:<10} {func['filename']:<25} {func['function']:<25} {func['total_time']:<8.3f}")
 
     # Slowest functions per call
-    print(f"\n🐌 호출당 가장 느린 함수 TOP 10:")
+    print("\n🐌 호출당 가장 느린 함수 TOP 10:")
     print(f"{'Rank':<4} {'Per Call(ms)':<12} {'Calls':<8} {'File':<25} {'Function':<25}")
     print("-" * 80)
     for i, func in enumerate(analysis["slowest_per_call"], 1):
         print(f"{i:<4} {func['time_per_call'] * 1000:<12.2f} {func['calls']:<8} {func['filename']:<25} {func['function']:<25}")
 
     # File-level summary
-    print(f"\n📁 파일별 성능 요약:")
+    print("\n📁 파일별 성능 요약:")
     print(f"{'Rank':<4} {'File':<30} {'Functions':<9} {'Calls':<10} {'Total(s)':<8} {'Cumul(s)':<8}")
     print("-" * 80)
     for i, file_stat in enumerate(analysis["file_stats"], 1):
         print(f"{i:<4} {file_stat['filename']:<30} {file_stat['functions']:<9} {file_stat['calls']:<10} {file_stat['total_time']:<8.3f} {file_stat['cumulative_time']:<8.3f}")
 
     # Performance recommendations
-    print(f"\n💡 성능 개선 권장사항:")
+    print("\n💡 성능 개선 권장사항:")
     top_hotspot = analysis["hotspots"][0] if analysis["hotspots"] else None
     if top_hotspot:
         print(f"   • 최대 병목점: {top_hotspot['filename']}::{top_hotspot['function']}")
@@ -1354,7 +1358,6 @@ def analyze_all_dependencies() -> tuple[dict[Path, set[Path]], dict[Path, set[Pa
     # Try to load cached dependencies
     if cache_file.exists():
         try:
-            import json
             import pickle
 
             with open(cache_file, "rb") as f:
@@ -1798,7 +1801,7 @@ def main() -> bool:
             print(f"   경로: {test_path}")
             return False
 
-        print(f"\n🔬 DETAILED PROFILING MODE")
+        print("\n🔬 DETAILED PROFILING MODE")
         print("=" * 80)
         print(f"대상 모듈: {test_module}")
         print("Python cProfile을 사용한 정밀한 성능 분석을 수행합니다.")

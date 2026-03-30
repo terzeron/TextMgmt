@@ -68,10 +68,10 @@ class Loader:
             with file_path.open("r", encoding="utf-8") as infile:
                 # 한 번에 읽어서 처리
                 raw_content = infile.read()
-                line_count = raw_content.count('\n') + 1 if raw_content else 0
-                data = raw_content[:Loader.TEXT_SIZE]
+                line_count = raw_content.count("\n") + 1 if raw_content else 0
+                data = raw_content[: Loader.TEXT_SIZE]
                 data = data.replace("\ufeff", "")
-                data = re.sub(r'[^\w\sㄱ-힣]', ' ', data)
+                data = re.sub(r"[^\w\sㄱ-힣]", " ", data)
         except UnicodeDecodeError as e:
             LOGGER.error(f"can't read unicode text from file '{file_path}', {e}")
             data = ""
@@ -98,10 +98,7 @@ class Loader:
 
                 # 2. OPF 파일에서 chapter 파일 목록 찾기
                 opf_content = zf.read(root_file).decode("utf-8", errors="ignore")
-                matches = re.findall(
-                    r'<(?:opf:)?item\s[^>]*href="(?P<chapter_file>[^"]*\.x?html)"[^>]*media-type="application/xhtml\+xml"',
-                    opf_content
-                )
+                matches = re.findall(r'<(?:opf:)?item\s[^>]*href="(?P<chapter_file>[^"]*\.x?html)"[^>]*media-type="application/xhtml\+xml"', opf_content)
 
                 # 3. 각 chapter 파일 읽기
                 for chapter_file in matches:
@@ -121,8 +118,8 @@ class Loader:
             LOGGER.error(file_path)
             LOGGER.error(e)
 
-        line_count = total_text.count('\n') + 1 if total_text else 0
-        return result[:Loader.TEXT_SIZE], line_count
+        line_count = total_text.count("\n") + 1 if total_text else 0
+        return result[: Loader.TEXT_SIZE], line_count
 
     @staticmethod
     def read_from_epub(file_path: Path) -> Tuple[str, int, int]:
@@ -154,7 +151,7 @@ class Loader:
                 if len(result) < Loader.TEXT_SIZE:
                     result += text
 
-            line_count = total_text.count('\n') + 1 if total_text else 0
+            line_count = total_text.count("\n") + 1 if total_text else 0
 
             end_time = datetime.now()
             Stat.normal_epub_total_time += (end_time - start_time).total_seconds()
@@ -175,9 +172,9 @@ class Loader:
             end_time = datetime.now()
             Stat.zipped_epub_total_time += (end_time - start_time).total_seconds()
 
-        result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
+        result = re.sub(r"[^\w\sㄱ-힣]", " ", result)
 
-        return result[:Loader.TEXT_SIZE], line_count, 0
+        return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
     def read_from_pdf(file_path: Path) -> Tuple[str, int, int]:
@@ -199,12 +196,12 @@ class Loader:
             except Exception as e:
                 LOGGER.error(file_path)
                 LOGGER.error(e)
-        result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
+        result = re.sub(r"[^\w\sㄱ-힣]", " ", result)
 
         end_time = datetime.now()
         Stat.pdf_total_time += (end_time - start_time).total_seconds()
 
-        return result[:Loader.TEXT_SIZE], 0, page_count
+        return result[: Loader.TEXT_SIZE], 0, page_count
 
     @staticmethod
     def read_from_html(file_path: Path) -> Tuple[str, int, int]:
@@ -215,19 +212,19 @@ class Loader:
         line_count = 0
         with file_path.open("r") as infile:
             content = infile.read()
-            line_count = content.count('\n') + 1
+            line_count = content.count("\n") + 1
 
         # XMLParsedAsHTMLWarning 억제하고 lxml 파서 사용
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
             soup = BeautifulSoup(content, "lxml")
         result = soup.get_text()
-        result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
+        result = re.sub(r"[^\w\sㄱ-힣]", " ", result)
 
         end_time = datetime.now()
         Stat.html_total_time += (end_time - start_time).total_seconds()
 
-        return result[:Loader.TEXT_SIZE], line_count, 0
+        return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
     def read_from_docx(file_path: Path) -> Tuple[str, int, int]:
@@ -242,13 +239,13 @@ class Loader:
             total_text += text + "\n"
             if len(result) < Loader.TEXT_SIZE:
                 result += text
-        result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
-        line_count = total_text.count('\n') if total_text else 0
+        result = re.sub(r"[^\w\sㄱ-힣]", " ", result)
+        line_count = total_text.count("\n") if total_text else 0
 
         end_time = datetime.now()
         Stat.docx_total_time += (end_time - start_time).total_seconds()
 
-        return result[:Loader.TEXT_SIZE], line_count, 0
+        return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
     def read_from_rtf(file_path: Path) -> Tuple[str, int, int]:
@@ -260,18 +257,18 @@ class Loader:
         try:
             with file_path.open("rb") as infile:
                 raw_data = infile.read()
-                doc = raw_data.decode('utf-8')
+                doc = raw_data.decode("utf-8")
                 result = rtf_to_text(doc, errors="ignore")
-                line_count = result.count('\n') + 1 if result else 0
+                line_count = result.count("\n") + 1 if result else 0
         except Exception as e:
             LOGGER.error(file_path)
             LOGGER.error(e)
-        result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
+        result = re.sub(r"[^\w\sㄱ-힣]", " ", result)
 
         end_time = datetime.now()
         Stat.rtf_total_time += (end_time - start_time).total_seconds()
 
-        return result[:Loader.TEXT_SIZE], line_count, 0
+        return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
     def _find_libreoffice() -> str:
@@ -290,11 +287,7 @@ class Loader:
         """LibreOffice를 사용하여 파일을 변환하고 결과 텍스트를 반환"""
         lo_bin = Loader._find_libreoffice()
         with tempfile.TemporaryDirectory() as tmpdir:
-            proc = subprocess.run(
-                [lo_bin, "--headless", "--convert-to", output_format,
-                 "--outdir", tmpdir, str(file_path)],
-                capture_output=True, timeout=60
-            )
+            proc = subprocess.run([lo_bin, "--headless", "--convert-to", output_format, "--outdir", tmpdir, str(file_path)], capture_output=True, timeout=60)
             ext = output_format.split(":")[0]
             out_file = Path(tmpdir) / (file_path.stem + "." + ext)
             if out_file.exists():
@@ -305,13 +298,7 @@ class Loader:
                 return out_files[0].read_text(encoding="utf-8", errors="replace")
             # 변환 결과 없음 — 진단 로그
             all_files = list(Path(tmpdir).iterdir())
-            LOGGER.error(
-                "LibreOffice produced no output: file='%s', format='%s', "
-                "returncode=%d, stderr=%s, tmpdir_files=%s",
-                file_path, output_format, proc.returncode,
-                proc.stderr.decode("utf-8", errors="replace")[:500],
-                [f.name for f in all_files]
-            )
+            LOGGER.error("LibreOffice produced no output: file='%s', format='%s', returncode=%d, stderr=%s, tmpdir_files=%s", file_path, output_format, proc.returncode, proc.stderr.decode("utf-8", errors="replace")[:500], [f.name for f in all_files])
         return ""
 
     @staticmethod
@@ -322,14 +309,14 @@ class Loader:
         line_count = 0
         try:
             raw_text = Loader._convert_with_libreoffice(file_path, "txt:Text")
-            line_count = raw_text.count('\n') + 1 if raw_text else 0
-            result = raw_text[:Loader.TEXT_SIZE]
-            result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
+            line_count = raw_text.count("\n") + 1 if raw_text else 0
+            result = raw_text[: Loader.TEXT_SIZE]
+            result = re.sub(r"[^\w\sㄱ-힣]", " ", result)
         except Exception as e:
             LOGGER.error(f"can't read doc file '{file_path}': {e}")
         end_time = datetime.now()
         Stat.doc_total_time += (end_time - start_time).total_seconds()
-        return result[:Loader.TEXT_SIZE], line_count, 0
+        return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
     def read_from_hwp(file_path: Path) -> Tuple[str, int, int]:
@@ -339,14 +326,19 @@ class Loader:
         line_count = 0
         try:
             raw_text = Loader._convert_with_libreoffice(file_path, "txt:Text")
-            line_count = raw_text.count('\n') + 1 if raw_text else 0
-            result = raw_text[:Loader.TEXT_SIZE]
-            result = re.sub(r'[^\w\sㄱ-힣]', ' ', result)
+            if not raw_text.strip():
+                # LibreOffice 변환 실패 — 네이티브 HWP3 파서로 fallback
+                from utils.hwp3_parser import extract_text_from_hwp3
+
+                raw_text = extract_text_from_hwp3(file_path)
+            line_count = raw_text.count("\n") + 1 if raw_text else 0
+            result = raw_text[: Loader.TEXT_SIZE]
+            result = re.sub(r"[^\w\sㄱ-힣]", " ", result)
         except Exception as e:
             LOGGER.error(f"can't read hwp file '{file_path}': {e}")
         end_time = datetime.now()
         Stat.hwp_total_time += (end_time - start_time).total_seconds()
-        return result[:Loader.TEXT_SIZE], line_count, 0
+        return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
     def read_from_image(_file_path: Path) -> Tuple[str, int, int]:
@@ -357,11 +349,11 @@ class Loader:
     @staticmethod
     def _find_xref_offset(xref_data: bytes, obj_num: int) -> Optional[int]:
         """traditional xref 테이블에서 특정 object의 파일 내 offset을 찾는다."""
-        xref_text = xref_data.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
-        lines = xref_text.split(b'\n')
+        xref_text = xref_data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        lines = xref_text.split(b"\n")
 
         i = 0
-        while i < len(lines) and lines[i].strip() != b'xref':
+        while i < len(lines) and lines[i].strip() != b"xref":
             i += 1
         i += 1  # 'xref' 건너뛰기
 
@@ -370,7 +362,7 @@ class Loader:
             if not line:
                 i += 1
                 continue
-            if line.startswith(b'trailer'):
+            if line.startswith(b"trailer"):
                 break
             parts = line.split()
             if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
@@ -380,7 +372,7 @@ class Loader:
                     entry_idx = i + 1 + (obj_num - sub_start)
                     if entry_idx < len(lines):
                         entry_parts = lines[entry_idx].strip().split()
-                        if len(entry_parts) >= 3 and entry_parts[2] == b'n':
+                        if len(entry_parts) >= 3 and entry_parts[2] == b"n":
                             return int(entry_parts[0])
                     return None
                 i += 1 + sub_count
@@ -398,7 +390,7 @@ class Loader:
         for i in range(rows):
             offset = i * stride
             fb = data[offset]
-            row = bytearray(data[offset + 1:offset + 1 + columns])
+            row = bytearray(data[offset + 1 : offset + 1 + columns])
             if fb == 1:  # Sub
                 for j in range(1, columns):
                     row[j] = (row[j] + row[j - 1]) & 0xFF
@@ -426,10 +418,10 @@ class Loader:
                 if pos + entry_size > len(data):
                     return None
                 if start_obj + j == obj_num:
-                    entry = data[pos:pos + entry_size]
-                    type_val = int.from_bytes(entry[:w1], 'big') if w1 > 0 else 1
-                    field2 = int.from_bytes(entry[w1:w1 + w2], 'big') if w2 > 0 else 0
-                    field3 = int.from_bytes(entry[w1 + w2:w1 + w2 + w3], 'big') if w3 > 0 else 0
+                    entry = data[pos : pos + entry_size]
+                    type_val = int.from_bytes(entry[:w1], "big") if w1 > 0 else 1
+                    field2 = int.from_bytes(entry[w1 : w1 + w2], "big") if w2 > 0 else 0
+                    field3 = int.from_bytes(entry[w1 + w2 : w1 + w2 + w3], "big") if w3 > 0 else 0
                     return (type_val, field2, field3)
                 pos += entry_size
         return None
@@ -440,26 +432,26 @@ class Loader:
         f.seek(stream_offset)
         header = f.read(4096)
 
-        first_match = re.search(rb'/First\s+(\d+)', header)
-        length_match = re.search(rb'/Length\s+(\d+)', header)
+        first_match = re.search(rb"/First\s+(\d+)", header)
+        length_match = re.search(rb"/Length\s+(\d+)", header)
         if not first_match or not length_match:
             return None
-        if re.search(rb'/Length\s+\d+\s+\d+\s+R', header):
+        if re.search(rb"/Length\s+\d+\s+\d+\s+R", header):
             return None
 
         first_offset = int(first_match.group(1))
         stream_length = int(length_match.group(1))
 
-        stream_start = re.search(rb'stream\r?\n', header)
+        stream_start = re.search(rb"stream\r?\n", header)
         if not stream_start:
             return None
 
         f.seek(stream_offset + stream_start.end())
         raw = f.read(stream_length)
 
-        filter_match = re.search(rb'/Filter\s*/(\w+)', header)
+        filter_match = re.search(rb"/Filter\s*/(\w+)", header)
         if filter_match:
-            if filter_match.group(1) != b'FlateDecode':
+            if filter_match.group(1) != b"FlateDecode":
                 return None
             try:
                 raw = zlib.decompress(raw)
@@ -467,7 +459,7 @@ class Loader:
                 return None
 
         # 헤더 파싱: "obj_num offset obj_num offset ..."
-        header_text = raw[:first_offset].decode('ascii', errors='replace')
+        header_text = raw[:first_offset].decode("ascii", errors="replace")
         tokens = header_text.split()
 
         target_offset = None
@@ -490,28 +482,28 @@ class Loader:
         f.seek(xref_offset)
         stream_obj_data = f.read(4096)
 
-        w_match = re.search(rb'/W\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s*\]', stream_obj_data)
+        w_match = re.search(rb"/W\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s*\]", stream_obj_data)
         if not w_match:
             return None
         w = [int(w_match.group(i)) for i in (1, 2, 3)]
 
-        size_match = re.search(rb'/Size\s+(\d+)', stream_obj_data)
+        size_match = re.search(rb"/Size\s+(\d+)", stream_obj_data)
         if not size_match:
             return None
         xref_size = int(size_match.group(1))
 
-        index_match = re.search(rb'/Index\s*\[([^\]]+)\]', stream_obj_data)
+        index_match = re.search(rb"/Index\s*\[([^\]]+)\]", stream_obj_data)
         index_ranges = [int(x) for x in index_match.group(1).split()] if index_match else [0, xref_size]
 
         # /Length가 indirect reference이면 포기
-        if re.search(rb'/Length\s+\d+\s+\d+\s+R', stream_obj_data):
+        if re.search(rb"/Length\s+\d+\s+\d+\s+R", stream_obj_data):
             return None
-        length_match = re.search(rb'/Length\s+(\d+)', stream_obj_data)
+        length_match = re.search(rb"/Length\s+(\d+)", stream_obj_data)
         if not length_match:
             return None
         stream_length = int(length_match.group(1))
 
-        stream_start = re.search(rb'stream\r?\n', stream_obj_data)
+        stream_start = re.search(rb"stream\r?\n", stream_obj_data)
         if not stream_start:
             return None
 
@@ -519,9 +511,9 @@ class Loader:
         raw_stream = f.read(stream_length)
 
         # 필터 처리
-        filter_match = re.search(rb'/Filter\s*/(\w+)', stream_obj_data)
+        filter_match = re.search(rb"/Filter\s*/(\w+)", stream_obj_data)
         if filter_match:
-            if filter_match.group(1) != b'FlateDecode':
+            if filter_match.group(1) != b"FlateDecode":
                 return None
             try:
                 decompressed = zlib.decompress(raw_stream)
@@ -531,15 +523,15 @@ class Loader:
             decompressed = raw_stream
 
         # PNG predictor 처리
-        parms_match = re.search(rb'/DecodeParms\s*<<([^>]*)>>', stream_obj_data)
+        parms_match = re.search(rb"/DecodeParms\s*<<([^>]*)>>", stream_obj_data)
         if parms_match:
-            pred_match = re.search(rb'/Predictor\s+(\d+)', parms_match.group(1))
+            pred_match = re.search(rb"/Predictor\s+(\d+)", parms_match.group(1))
             if pred_match and int(pred_match.group(1)) >= 10:
-                cols_match = re.search(rb'/Columns\s+(\d+)', parms_match.group(1))
+                cols_match = re.search(rb"/Columns\s+(\d+)", parms_match.group(1))
                 columns = int(cols_match.group(1)) if cols_match else sum(w)
                 decompressed = Loader._apply_png_predictor(decompressed, columns)
 
-        prev_match = re.search(rb'/Prev\s+(\d+)', stream_obj_data)
+        prev_match = re.search(rb"/Prev\s+(\d+)", stream_obj_data)
         prev_offset = int(prev_match.group(1)) if prev_match else None
 
         return decompressed, w, index_ranges, prev_offset
@@ -554,7 +546,7 @@ class Loader:
         실패 시 None 반환 (pypdf fallback용).
         """
         try:
-            with file_path.open('rb') as f:
+            with file_path.open("rb") as f:
                 f.seek(0, 2)
                 file_size = f.tell()
 
@@ -563,7 +555,7 @@ class Loader:
                 f.seek(-tail_size, 2)
                 tail = f.read()
 
-                m = re.search(rb'startxref\s+(\d+)', tail)
+                m = re.search(rb"startxref\s+(\d+)", tail)
                 if not m:
                     return None
 
@@ -579,22 +571,22 @@ class Loader:
                     f.seek(xref_offset)
                     xref_header = f.read(256)
 
-                    if xref_header.lstrip().startswith(b'xref'):
+                    if xref_header.lstrip().startswith(b"xref"):
                         # === Traditional xref table ===
-                        header_match = re.search(rb'xref\s+\d+\s+(\d+)', xref_header)
+                        header_match = re.search(rb"xref\s+\d+\s+(\d+)", xref_header)
                         entry_count = int(header_match.group(1)) if header_match else 5000
                         xref_read_size = min(entry_count * 20 + 4096, file_size - xref_offset)
                         f.seek(xref_offset)
                         xref_data = f.read(xref_read_size)
 
                         if root_obj_num is None:
-                            root_match = re.search(rb'/Root\s+(\d+)\s+\d+\s+R', xref_data)
+                            root_match = re.search(rb"/Root\s+(\d+)\s+\d+\s+R", xref_data)
                             if root_match:
                                 root_obj_num = int(root_match.group(1))
 
-                        lookups.append(('traditional', lambda obj_num, xd=xref_data: Loader._find_xref_offset(xd, obj_num)))
+                        lookups.append(("traditional", lambda obj_num, xd=xref_data: Loader._find_xref_offset(xd, obj_num)))
 
-                        prev_match = re.search(rb'/Prev\s+(\d+)', xref_data)
+                        prev_match = re.search(rb"/Prev\s+(\d+)", xref_data)
                         xref_offset = int(prev_match.group(1)) if prev_match else None
                     else:
                         # === Xref stream ===
@@ -602,7 +594,7 @@ class Loader:
                         peek = f.read(512)
 
                         if root_obj_num is None:
-                            root_match = re.search(rb'/Root\s+(\d+)\s+\d+\s+R', peek)
+                            root_match = re.search(rb"/Root\s+(\d+)\s+\d+\s+R", peek)
                             if root_match:
                                 root_obj_num = int(root_match.group(1))
 
@@ -610,11 +602,7 @@ class Loader:
                         if parsed is None:
                             break
                         decompressed, w, index_ranges, prev_offset = parsed
-                        lookups.append((
-                            'stream',
-                            lambda obj_num, d=decompressed, ww=list(w), ir=list(index_ranges):
-                                Loader._xref_stream_find_entry(d, ww, ir, obj_num)
-                        ))
+                        lookups.append(("stream", lambda obj_num, d=decompressed, ww=list(w), ir=list(index_ranges): Loader._xref_stream_find_entry(d, ww, ir, obj_num)))
                         xref_offset = prev_offset
 
                 if root_obj_num is None:
@@ -623,7 +611,7 @@ class Loader:
                 def find_file_offset(obj_num: int) -> Optional[int]:
                     """type 1 (직접 저장) object의 파일 offset을 찾는다."""
                     for kind, lookup in lookups:
-                        if kind == 'traditional':
+                        if kind == "traditional":
                             offset = lookup(obj_num)
                             if offset is not None:
                                 return offset
@@ -642,7 +630,7 @@ class Loader:
                         return f.read(read_size)
                     # type 2 시도 (object stream에 압축 저장)
                     for kind, lookup in lookups:
-                        if kind != 'stream':
+                        if kind != "stream":
                             continue
                         entry = lookup(obj_num)
                         if entry is not None and entry[0] == 2:
@@ -655,7 +643,7 @@ class Loader:
                 root_data = read_object_data(root_obj_num, 1024)
                 if root_data is None:
                     return None
-                pages_match = re.search(rb'/Pages\s+(\d+)\s+\d+\s+R', root_data)
+                pages_match = re.search(rb"/Pages\s+(\d+)\s+\d+\s+R", root_data)
                 if not pages_match:
                     return None
                 pages_obj_num = int(pages_match.group(1))
@@ -664,7 +652,7 @@ class Loader:
                 pages_data = read_object_data(pages_obj_num)
                 if pages_data is None:
                     return None
-                count_match = re.search(rb'/Count\s+(\d+)', pages_data)
+                count_match = re.search(rb"/Count\s+(\d+)", pages_data)
                 if count_match:
                     return int(count_match.group(1))
         except Exception:
@@ -712,25 +700,12 @@ class Loader:
                             LOGGER.error(e)
                     Stat.pdf_count += 1
                 # 지원하지 않는 확장자는 기존 동작 유지 (빈 dict 반환)
-                supported_types = {"txt", "epub", "pdf", "docx", "doc", "hwp", "rtf", "html",
-                                   "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg", "cbz"}
+                supported_types = {"txt", "epub", "pdf", "docx", "doc", "hwp", "rtf", "html", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg", "cbz"}
                 if file_type not in supported_types:
                     return {}
 
                 return {
-                    inode_num: {
-                        "category": category,
-                        "title": title,
-                        "author": author,
-                        "file_path": str(file_path.relative_to(prefix)),
-                        "file_type": file_type,
-                        "file_size": int(file_size),
-                        "line_count": line_count,
-                        "page_count": page_count,
-                        "isbn": "",
-                        "summary": summary,
-                        "updated_time": datetime.now().isoformat()
-                    }
+                    inode_num: {"category": category, "title": title, "author": author, "file_path": str(file_path.relative_to(prefix)), "file_type": file_type, "file_size": int(file_size), "line_count": line_count, "page_count": page_count, "isbn": "", "summary": summary, "updated_time": datetime.now().isoformat()}
                 }
 
             # read content of each file
@@ -792,7 +767,7 @@ class Loader:
                     "page_count": page_count,
                     "isbn": isbn_list[0] if isbn_list else "",
                     "summary": summary,
-                    "updated_time": datetime.now().isoformat()
+                    "updated_time": datetime.now().isoformat(),
                 }
             }
 
@@ -808,20 +783,17 @@ class Loader:
         """
         if path.is_dir():
             if recursive:
-                file_path_list = [
-                    p for p in path.rglob("*")
-                    if p.is_file() and not any(part.startswith('.') for part in p.relative_to(path).parts)
-                ]
+                file_path_list = [p for p in path.rglob("*") if p.is_file() and not any(part.startswith(".") for part in p.relative_to(path).parts)]
             else:
                 file_path_list = []
                 # 1. 하위 디렉토리 각각에서 첫 번째 파일 1개씩
                 for subdir in path.iterdir():
-                    if subdir.is_dir() and not subdir.name.startswith('.'):
-                        first_file = next((p for p in subdir.iterdir() if p.is_file() and not p.name.startswith('.')), None)
+                    if subdir.is_dir() and not subdir.name.startswith("."):
+                        first_file = next((p for p in subdir.iterdir() if p.is_file() and not p.name.startswith(".")), None)
                         if first_file:
                             file_path_list.append(first_file)
                 # 2. 지정된 디렉토리에 바로 속한 파일들
-                file_path_list.extend(p for p in path.iterdir() if p.is_file() and not p.name.startswith('.'))
+                file_path_list.extend(p for p in path.iterdir() if p.is_file() and not p.name.startswith("."))
         else:
             file_path_list = [path]
         return file_path_list[:num_files]
@@ -878,10 +850,7 @@ def main() -> int:
         print_usage(sys.argv[0])
 
     # 인덱스명 파싱
-    INDEX_MAP = {
-        "book": os.environ["TM_ES_BOOK_INDEX"],
-        "comics": os.environ["TM_ES_COMICS_INDEX"],
-    }
+    INDEX_MAP = {"book": os.environ["TM_ES_BOOK_INDEX"], "comics": os.environ["TM_ES_COMICS_INDEX"]}
 
     if len(args) < 1:
         print_usage(sys.argv[0])
@@ -1020,15 +989,12 @@ def main() -> int:
             print(f"  [파일 강제 재적재] {target_path.name}")
             processed, _, _ = process_file_iter([target_path], skip_check=True, skip_text=skip_text)
             if processed > 0:
-                print(f"  파일 재적재 완료")
+                print("  파일 재적재 완료")
             else:
-                print(f"  파일 적재 실패 (지원하지 않는 형식일 수 있음)")
+                print("  파일 적재 실패 (지원하지 않는 형식일 수 있음)")
         elif do_recursive:
             # 전체 파일 등록 (generator 사용으로 메모리 효율화, hidden directory 제외)
-            file_iter = (
-                p for p in target_path.rglob("*")
-                if p.is_file() and not any(part.startswith('.') for part in p.relative_to(target_path).parts)
-            )
+            file_iter = (p for p in target_path.rglob("*") if p.is_file() and not any(part.startswith(".") for part in p.relative_to(target_path).parts))
             skip_check = do_reload
             processed, skipped_count, synced_count = process_file_iter(file_iter, skip_check=skip_check, skip_text=skip_text)
             print(f"  총 {processed}개 파일 처리됨")
@@ -1043,9 +1009,9 @@ def main() -> int:
             print("  [1단계] 하위 디렉토리별 샘플 파일 등록")
             sample_files: List[Tuple[str, Path]] = []  # (subdir_name, file_path)
             for subdir in target_path.iterdir():
-                if subdir.is_dir() and not subdir.name.startswith('.'):
+                if subdir.is_dir() and not subdir.name.startswith("."):
                     # 첫 번째 파일만 가져옴 (정렬 불필요, iterator 사용)
-                    first_file = next((p for p in subdir.iterdir() if p.is_file() and not p.name.startswith('.')), None)
+                    first_file = next((p for p in subdir.iterdir() if p.is_file() and not p.name.startswith(".")), None)
                     if first_file:
                         sample_files.append((subdir.name, first_file))
                     else:
@@ -1065,7 +1031,7 @@ def main() -> int:
 
             # 2단계: 지정된 디렉토리에 바로 속한 파일들
             print("  [2단계] 현재 디렉토리 파일 등록")
-            current_dir_files = [p for p in target_path.iterdir() if p.is_file() and not p.name.startswith('.')]
+            current_dir_files = [p for p in target_path.iterdir() if p.is_file() and not p.name.startswith(".")]
             print(f"    {len(current_dir_files)}개 파일 발견")
             _, skipped2, synced2 = process_file_iter(current_dir_files, skip_check=skip_check, skip_text=skip_text)
             if skipped2 > 0:
