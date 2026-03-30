@@ -73,6 +73,13 @@ class _HwpStream:
         return result
 
 
+def _safe_chr(code: int) -> str:
+    """surrogate 범위(U+D800-U+DFFF)를 필터하여 chr() 변환."""
+    if 0xD800 <= code <= 0xDFFF:
+        return ""
+    return chr(code)
+
+
 def _hnc_to_unicode(c: int) -> str:
     """HNC 2바이트 코드를 유니코드 문자열로 변환."""
     if c == 0:
@@ -83,15 +90,15 @@ def _hnc_to_unicode(c: int) -> str:
     # 특수문자/확장 (0x007F-0x3FFF)
     if 0x007F <= c <= 0x3FFF:
         uni = HNC2UNI.get(c)
-        return chr(uni) if uni else ""
+        return _safe_chr(uni) if uni else ""
     # 1수준 한자 (4888자)
     if 0x4000 <= c <= 0x5317:
         uni = KSC5601_TO_UNI[c - 0x4000]
-        return chr(uni) if uni else ""
+        return _safe_chr(uni) if uni else ""
     # 2수준 한자
     if 0x5318 <= c <= 0x7FFF:
         uni = HNC2UNI.get(c)
-        return chr(uni) if uni else ""
+        return _safe_chr(uni) if uni else ""
     # 한글 (0x8000-0xFFFF)
     if c >= 0x8000:
         cho = (c & 0x7C00) >> 10
@@ -105,23 +112,23 @@ def _hnc_to_unicode(c: int) -> str:
             return chr(0xAC00 + (l_idx * 21 + v_idx) * 28 + t_idx)
         # 초성만
         if HNC_L1[cho] != FILL and (HNC_V1[jung] == FILL or HNC_V1[jung] == NONE) and HNC_T1[jong] == FILL:
-            return chr(HNC_L1[cho])
+            return _safe_chr(HNC_L1[cho])
         # 중성만
         if HNC_L1[cho] == FILL and HNC_V1[jung] not in (FILL, NONE) and HNC_T1[jong] == FILL:
-            return chr(HNC_V1[jung])
+            return _safe_chr(HNC_V1[jung])
         # 종성만
         if HNC_L1[cho] == FILL and (HNC_V1[jung] == FILL or HNC_V1[jung] == NONE) and HNC_T1[jong] != FILL:
-            return chr(HNC_T1[jong])
+            return _safe_chr(HNC_T1[jong])
         # 옛한글 (초성+중성)
         if HNC_L1[cho] != FILL and HNC_V1[jung] not in (FILL, NONE) and HNC_T1[jong] == FILL:
-            return chr(HNC_L2[cho]) + chr(HNC_V2[jung])
+            return _safe_chr(HNC_L2[cho]) + _safe_chr(HNC_V2[jung])
         # 옛한글 (초성+중성+종성)
         if HNC_L1[cho] != FILL and HNC_V1[jung] not in (FILL, NONE) and HNC_T1[jong] != FILL:
-            return chr(HNC_L2[cho]) + chr(HNC_V2[jung]) + chr(HNC_T2[jong])
+            return _safe_chr(HNC_L2[cho]) + _safe_chr(HNC_V2[jung]) + _safe_chr(HNC_T2[jong])
         # 완성형 옛한글 fallback
         if jung == 0:
             uni = HNC2UNI.get(c)
-            return chr(uni) if uni else ""
+            return _safe_chr(uni) if uni else ""
     return ""
 
 
@@ -181,11 +188,11 @@ def _parse_paragraph(stream: _HwpStream, depth: int) -> str | None:
         if c < 32:
             _handle_control_char(c, stream, parts, depth)
             # 제어문자별 추가 n_chars_read 증가
-            if c in (5, 6, 9, 10, 11, 16, 17, 18, 19, 20, 21):
+            if c in (5, 6, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 19, 20, 21):
                 n_chars_read += 3
             elif c == 23:
                 n_chars_read += 4
-            elif c in (24, 25):
+            elif c in (24, 25, 26, 29):
                 n_chars_read += 2
             elif c == 28:
                 n_chars_read += 31
@@ -240,17 +247,27 @@ def _handle_control_char(c: int, stream: _HwpStream, parts: list, depth: int) ->
         text = _parse_paragraph_list(stream, depth + 1)
         if text:
             parts.append(text)
+    elif c == 7:  # 날짜 형식
+        stream.skip(6 + 78)
+    elif c == 8:  # 날짜 코드
+        stream.skip(6 + 90)
+    elif c == 14:  # 선
+        stream.skip(6 + 86)
+    elif c == 15:  # 숨은 설명
+        stream.skip(6 + 10)
+        _parse_paragraph_list(stream, depth + 1)
     elif c in (18, 19, 20, 21):
         stream.skip(6)
     elif c == 23:  # 글자 겹침
         stream.skip(8)
-    elif c in (24, 25):
+    elif c in (24, 25, 26, 29):  # 하이픈, 차례표시, 찾아보기표시, 상호참조
         stream.skip(4)
     elif c == 28:  # 개요 번호
         stream.skip(62)
     elif c in (30, 31):
         stream.skip(2)
-    # 0-4, 12, 14, 15 등: 추가 데이터 없거나 본문에서 거의 안 나타남
+    # 0-4, 12, 22, 27: 드물게 사용되거나 가변 길이
+    # 데이터를 정확히 skip할 수 없으므로 무시 (대부분 0x0000 패딩)
 
 
 def extract_text_from_hwp3(file_path: Path) -> str:
@@ -329,5 +346,24 @@ def extract_text_from_hwp3(file_path: Path) -> str:
     except _HwpStreamError:
         # 부분적으로 파싱된 데이터가 있을 수 있음
         text = ""
+
+    # surrogate 문자 제거 (UTF-8 인코딩 에러 방지)
+    text = "".join(ch for ch in text if not (0xD800 <= ord(ch) <= 0xDFFF))
+
+    # 쓰레기 문자 비율이 높으면 파싱 실패로 간주
+    if text:
+        readable = sum(
+            1
+            for ch in text[:500]
+            if ch.isspace()
+            or ch.isalnum()
+            or 0xAC00 <= ord(ch) <= 0xD7A3  # 한글 음절
+            or 0x3131 <= ord(ch) <= 0x318E  # 한글 자모
+            or 0x4E00 <= ord(ch) <= 0x9FFF  # CJK 한자
+            or 0x1100 <= ord(ch) <= 0x11FF
+        )  # 한글 자모 (옛한글)
+        ratio = readable / min(len(text), 500)
+        if ratio < 0.3:
+            return ""
 
     return text.strip()
