@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 import os
-import sys
 import time
 import urllib.request
 import urllib.error
@@ -131,7 +130,7 @@ class ElasticsearchContainer(DockerContainer):
         port = self.get_exposed_port(9200)
         return f"http://{host}:{port}"
 
-    def _wait_for_es_ready(self, timeout: int = 300) -> None:
+    def _wait_for_es_ready(self, timeout: int = 90) -> None:
         """Wait until ES is fully ready for requests."""
         start_time = time.time()
 
@@ -140,7 +139,7 @@ class ElasticsearchContainer(DockerContainer):
             try:
                 url = f"{self.get_url()}/_cluster/health"
                 req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=10) as response:
+                with urllib.request.urlopen(req, timeout=5) as response:
                     if response.status == 200:
                         data = json.loads(response.read().decode("utf-8"))
                         status = data.get("status")
@@ -150,12 +149,12 @@ class ElasticsearchContainer(DockerContainer):
                         print(f">>> Cluster status: {status}, waiting...")
             except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ConnectionRefusedError, OSError, json.JSONDecodeError) as e:
                 print(f">>> Waiting for ES: {type(e).__name__}")
-            time.sleep(0.5)
+            time.sleep(1)
         else:
             raise TimeoutError(f"ES cluster not ready after {timeout}s")
 
         # 2단계: 실제 요청이 503 없이 가능해질 때까지 추가 대기
-        for _ in range(120):
+        for _ in range(20):
             try:
                 url = f"{self.get_url()}/_cat/health"
                 with urllib.request.urlopen(url, timeout=5) as response:
@@ -169,11 +168,11 @@ class ElasticsearchContainer(DockerContainer):
                     print(f">>> ES check: HTTP {e.code}")
             except Exception:
                 pass
-            time.sleep(0.5)
+            time.sleep(1)
 
     def start(self):
         super().start()
-        self._wait_for_es_ready(timeout=300)
+        self._wait_for_es_ready(timeout=90)
         return self
 
 
@@ -214,15 +213,15 @@ def es_client(elasticsearch_container):
     from elasticsearch import Elasticsearch
 
     try:
-        client = Elasticsearch(hosts=[os.environ["TM_ES_URL"]], basic_auth=(os.environ.get("TM_ES_USER", ""), os.environ.get("TM_ES_PASSWORD", "")), request_timeout=120, retry_on_timeout=True, verify_certs=False, max_retries=10)
+        client = Elasticsearch(hosts=[os.environ["TM_ES_URL"]], basic_auth=(os.environ.get("TM_ES_USER", ""), os.environ.get("TM_ES_PASSWORD", "")), request_timeout=30, retry_on_timeout=True, verify_certs=False, max_retries=3)
     except Exception as e:
         pytest.skip(f"ES client creation failed: {e}")
 
-    # 클러스터가 완전히 준비될 때까지 대기
+    # 클러스터가 완전히 준비될 때까지 대기 (컨테이너에서 이미 확인됨, 짧게)
     ready = False
-    for attempt in range(60):
+    for attempt in range(10):
         try:
-            health = client.cluster.health(wait_for_status="yellow", timeout="2s")
+            health = client.cluster.health(wait_for_status="yellow", timeout="3s")
             if health["status"] in ("green", "yellow"):
                 LOGGER.info("ES client ready, cluster health: %s", health["status"])
                 ready = True
@@ -232,7 +231,7 @@ def es_client(elasticsearch_container):
         time.sleep(1)
 
     if not ready:
-        pytest.skip("ES cluster not ready after 60s")
+        pytest.skip("ES cluster not ready after retries")
 
     yield client
 
@@ -252,6 +251,15 @@ def es_index(es_client):
     except Exception as e:
         LOGGER.warning("Error deleting index: %s", e)
 
+    # nori 플러그인 확인
+    try:
+        plugins = es_client.cat.plugins(format="json")
+        nori_installed = any(p.get("component") == "analysis-nori" for p in plugins)
+        if not nori_installed:
+            pytest.skip("analysis-nori plugin not installed in ES container")
+    except Exception as e:
+        LOGGER.warning("Failed to check plugins: %s", e)
+
     # 인덱스 생성
     try:
         es_client.indices.create(index=index_name, settings=ES_INDEX_SETTINGS, mappings=ES_INDEX_MAPPINGS)
@@ -261,8 +269,16 @@ def es_index(es_client):
             raise
         LOGGER.info("Index already exists: %s", index_name)
 
-    # 인덱스 준비 대기
-    es_client.cluster.health(index=index_name, wait_for_status="yellow", timeout="30s")
+    # 인덱스 준비 대기 — shard 할당 실패 시 빠르게 skip
+    for attempt in range(3):
+        try:
+            es_client.cluster.health(index=index_name, wait_for_status="yellow", timeout="10s")
+            break
+        except Exception as e:
+            if attempt == 2:
+                pytest.skip(f"ES index shard allocation failed: {e}")
+            LOGGER.warning("Waiting for index ready (attempt %d): %s", attempt + 1, e)
+            time.sleep(2)
 
     yield index_name
 
