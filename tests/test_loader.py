@@ -2264,3 +2264,193 @@ class TestHandleControlCharRecursive:
         stream = _HwpStream(paragraphs)
         result = _parse_paragraph_list(stream)
         assert len(result) <= _MAX_TEXT_LENGTH + 500  # 약간의 여유
+
+
+# ---- hwp3_parser 추가 커버리지 ----
+
+
+class TestSafeChr:
+    """_safe_chr surrogate 필터"""
+
+    def test_surrogate_high(self):
+        from utils.hwp3_parser import _safe_chr
+
+        assert _safe_chr(0xD800) == ""
+        assert _safe_chr(0xD830) == ""
+
+    def test_surrogate_low(self):
+        from utils.hwp3_parser import _safe_chr
+
+        assert _safe_chr(0xDC00) == ""
+        assert _safe_chr(0xDFFF) == ""
+
+    def test_normal_char(self):
+        from utils.hwp3_parser import _safe_chr
+
+        assert _safe_chr(0xAC00) == "가"
+        assert _safe_chr(0x41) == "A"
+
+
+class TestControlCharTab:
+    """탭(ctrl 9) 제어문자 처리"""
+
+    def test_ctrl_9_tab_in_paragraph(self):
+        """탭 제어문자가 포함된 문단"""
+        import struct
+        from utils.hwp3_parser import _HwpStream, _parse_paragraph_list
+
+        # 탭(9) + 6바이트 데이터 → n_chars_read += 3+1=4
+        tab = struct.pack("<H", 9) + b"\x00" * 6
+        ga = struct.pack("<H", 0x8861)  # '가'
+        cr = struct.pack("<H", 13)
+        chars = ga + tab + ga + cr  # 가\t가\n, n_chars=1+4+1+1=7
+        # 문단 헤더
+        header = struct.pack("<BHHB", 0, 7, 1, 0) + b"\x00" * 37
+        header += b"\x00" * 187  # para shape
+        line_info = b"\x00" * 14
+        terminator = struct.pack("<BHHB", 0, 0, 0, 0) + b"\x00" * 37 + b"\x00" * 187
+        data = header + line_info + chars + terminator
+        stream = _HwpStream(data)
+        result = _parse_paragraph_list(stream)
+        assert "\t" in result
+        assert "가" in result
+
+
+class TestControlCharDateLine:
+    """날짜형식(7), 날짜코드(8), 선(14), 숨은설명(15) 제어문자 처리"""
+
+    def _build_ctrl_para(self, ctrl_code, skip_bytes, n_read_add, extra_nested=False):
+        import struct
+        from utils.hwp3_parser import _HwpStream, _parse_paragraph_list
+
+        n_chars = 1 + n_read_add + 1  # ctrl + n_read_add + CR
+        ctrl = struct.pack("<H", ctrl_code) + b"\x00" * skip_bytes
+        if extra_nested:
+            # 빈 문단 리스트 (종료)
+            ctrl += struct.pack("<BHHB", 0, 0, 0, 0) + b"\x00" * 37 + b"\x00" * 187
+        cr = struct.pack("<H", 13)
+        chars = ctrl + cr
+        header = struct.pack("<BHHB", 0, n_chars, 1, 0) + b"\x00" * 37 + b"\x00" * 187
+        line_info = b"\x00" * 14
+        terminator = struct.pack("<BHHB", 0, 0, 0, 0) + b"\x00" * 37 + b"\x00" * 187
+        data = header + line_info + chars + terminator
+        stream = _HwpStream(data)
+        return _parse_paragraph_list(stream)
+
+    def test_ctrl_7_date_format(self):
+        result = self._build_ctrl_para(7, 84, 3)
+        assert isinstance(result, str)
+
+    def test_ctrl_8_date_code(self):
+        result = self._build_ctrl_para(8, 96, 3)
+        assert isinstance(result, str)
+
+    def test_ctrl_14_line(self):
+        result = self._build_ctrl_para(14, 92, 3)
+        assert isinstance(result, str)
+
+    def test_ctrl_15_hidden_comment(self):
+        result = self._build_ctrl_para(15, 16, 3, extra_nested=True)
+        assert isinstance(result, str)
+
+
+class TestV200BruteForce:
+    """V2.00 brute-force 추출 테스트"""
+
+    def test_v200_extracts_text(self):
+        """V2.00 파일에서 텍스트가 추출되는지 확인"""
+        f = HWP_TEST_DIR / "v2.00_박노해_참된시작.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        extract = _get_hwp3_parser()
+        text = extract(f)
+        assert len(text) > 100
+
+    def test_v200_utf8_safe(self):
+        """V2.00 추출 결과가 UTF-8 안전한지 확인"""
+        f = HWP_TEST_DIR / "v2.00_박노해_참된시작.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        extract = _get_hwp3_parser()
+        text = extract(f)
+        text.encode("utf-8")  # should not raise
+
+    def test_bruteforce_garbage_ratio_filter(self):
+        """쓰레기 비율이 높으면 빈 문자열 반환"""
+        from utils.hwp3_parser import _extract_text_bruteforce
+        import struct
+
+        # 전부 비한글/비한자/비ASCII 범위의 HNC 코드
+        garbage = b""
+        for i in range(100):
+            garbage += struct.pack("<H", 0x3F00 + i)  # 특수문자 범위, 매핑 없음
+        result = _extract_text_bruteforce(garbage)
+        assert result == ""
+
+    def test_bruteforce_with_valid_text(self):
+        """유효한 텍스트가 포함된 데이터에서 추출"""
+        from utils.hwp3_parser import _extract_text_bruteforce
+        import struct
+
+        # '가나다라마바사아자차' (한글 10자)
+        data = b""
+        for c in [0x8861, 0x8CC2, 0x9161, 0x9562, 0xA1A1, 0xA562, 0xAD61, 0xB161, 0xB961, 0xBD62]:
+            data += struct.pack("<H", c)
+        data += struct.pack("<H", 13)  # CR
+        result = _extract_text_bruteforce(data)
+        assert len(result) > 0
+
+    def test_v200_font_skip_failure_fallback(self, tmp_path: Path):
+        """V2.00에서 글꼴 영역 skip 실패 시 전체 brute-force"""
+        import struct
+
+        sig = b"HWP Document File V2.00 \x1a\x01\x02\x03\x04\x05"
+        doc_info = bytearray(128)
+        # 비압축, 정보블록=0
+        summary = b"\x00" * 1008
+        # 글꼴 영역이 깨진 데이터 (첫 font count가 비정상)
+        broken_fonts = struct.pack("<H", 60000)  # n_fonts = 60000 → skip 실패
+        # 그 뒤에 유효한 텍스트
+        text_data = b""
+        for c in [0x8861, 0x8CC2, 0x9161, 0x9562, 0xA1A1, 0xA562, 0xAD61, 0xB161, 0xB961, 0xBD62]:
+            text_data += struct.pack("<H", c)
+        text_data += struct.pack("<H", 13)
+        body = broken_fonts + b"\x00" * 50 + text_data
+        f = tmp_path / "v200_broken.hwp"
+        f.write_bytes(sig + bytes(doc_info) + summary + body)
+        extract = _get_hwp3_parser()
+        text = extract(f)
+        assert isinstance(text, str)
+
+
+class TestBookManagerPreviewEmptyContent:
+    """book_manager HWP preview에서 빈 결과 시 안내 메시지 반환"""
+
+    def test_hwp_preview_empty_returns_message(self, tmp_path: Path, monkeypatch):
+        """LO+hwp3 모두 빈 결과 → '미리보기를 생성할 수 없습니다' 메시지"""
+        import shutil
+
+        hwp_src = HWP_TEST_DIR / "v1.20_부하의약혼녀.hwp"
+        if not hwp_src.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        (tmp_path / "A").mkdir(parents=True, exist_ok=True)
+        shutil.copy(hwp_src, tmp_path / "A" / "old.hwp")
+
+        from backend.book_manager import BookManager
+        from tests.test_book_manager import make_manager, make_doc, DummyES, asyncio_runner
+
+        doc = make_doc("A/old.hwp", "hwp")
+        es = DummyES()
+        manager = make_manager(tmp_path, es)
+        es.search_by_id = lambda _id: doc
+        monkeypatch.setattr(BookManager, "_convert_with_libreoffice", lambda p, fmt: "")
+        resp = asyncio_runner(manager.get_book_preview(1))
+        assert resp.status_code == 200
+        body = resp.body.decode("utf-8")
+        assert "미리보기를 생성할 수 없습니다" in body
