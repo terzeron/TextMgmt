@@ -30,3 +30,4 @@ __pycache__
 .vagrant
 Vagrantfile
 .coverage*
+.gitnexus
