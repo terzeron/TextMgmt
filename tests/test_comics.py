@@ -24,6 +24,24 @@ class TestComics(unittest.TestCase):
         assert "category" in c.json()
         assert "title" in str(c)
 
+    def test_init_uses_optional_defaults_and_score(self):
+        info = {
+            "category": "cat2",
+            "title": "title2",
+            "author": "author2",
+            "file_path": "cat2/file.pdf",
+            "file_type": "pdf",
+            "file_size": 20,
+            "updated_time": "2022-02-02T00:00:00.000000",
+        }
+        c = Comics(3, info, score=2.5)
+        assert c.line_count == 0
+        assert c.page_count == 0
+        assert c.isbn == ""
+        assert c.summary == ""
+        assert c.score == 2.5
+        assert c.dict()["file_path"] == "cat2/file.pdf"
+
 
 def test_comics_manager_missing_env(monkeypatch):
     """comics_manager.py line 21: RuntimeError when TM_COMICS_DIR is not set"""
@@ -33,6 +51,29 @@ def test_comics_manager_missing_env(monkeypatch):
 
     with pytest.raises(RuntimeError, match="TM_COMICS_DIR"):
         ComicsManager()
+
+
+def test_comics_manager_init(monkeypatch, tmp_path: Path):
+    from backend import comics_manager as comics_manager_mod
+
+    class DummyESManager:
+        def __init__(self, index_name):
+            self.index_name = index_name
+            self.created = False
+
+        def create_index(self):
+            self.created = True
+
+    monkeypatch.setenv("TM_COMICS_DIR", str(tmp_path))
+    monkeypatch.setenv("TM_ES_COMICS_INDEX", "test_comics")
+    monkeypatch.setattr(comics_manager_mod, "ESManager", DummyESManager)
+
+    manager = comics_manager_mod.ComicsManager()
+    assert manager.path_prefix == tmp_path
+    assert manager.es_manager.index_name == "test_comics"
+    assert manager.es_manager.created is True
+    assert manager._mismatch_cache is None
+    assert manager._mismatch_cache_time == 0.0
 
 
 # ---- merged from test_comics_env_guard.py ----

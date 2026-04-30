@@ -3,6 +3,7 @@ import os
 import unittest
 import zipfile
 import warnings
+import importlib
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -27,6 +28,50 @@ class TestLoaderInit(unittest.TestCase):
         assert Loader is not None
         assert hasattr(Loader, "read_file")
         assert hasattr(Loader, "read_files")
+
+    def test_loader_requires_book_dir(self):
+        import pytest
+
+        prev_book_dir = os.environ.pop("TM_BOOK_DIR", None)
+        prev_loader = sys.modules.pop("utils.loader", None)
+        prev_comics_dir = os.environ.get("TM_COMICS_DIR")
+        os.environ["TM_COMICS_DIR"] = "/tmp/comics"
+
+        try:
+            with pytest.raises(SystemExit):
+                importlib.import_module("utils.loader")
+        finally:
+            if prev_book_dir is not None:
+                os.environ["TM_BOOK_DIR"] = prev_book_dir
+            if prev_comics_dir is None:
+                os.environ.pop("TM_COMICS_DIR", None)
+            else:
+                os.environ["TM_COMICS_DIR"] = prev_comics_dir
+            sys.modules.pop("utils.loader", None)
+            if prev_loader is not None:
+                sys.modules["utils.loader"] = prev_loader
+
+    def test_loader_requires_comics_dir(self):
+        import pytest
+
+        prev_comics_dir = os.environ.pop("TM_COMICS_DIR", None)
+        prev_loader = sys.modules.pop("utils.loader", None)
+        prev_book_dir = os.environ.get("TM_BOOK_DIR")
+        os.environ["TM_BOOK_DIR"] = str(Path(__file__).parent.parent / "tests" / "books")
+
+        try:
+            with pytest.raises(SystemExit):
+                importlib.import_module("utils.loader")
+        finally:
+            if prev_comics_dir is not None:
+                os.environ["TM_COMICS_DIR"] = prev_comics_dir
+            if prev_book_dir is None:
+                os.environ.pop("TM_BOOK_DIR", None)
+            else:
+                os.environ["TM_BOOK_DIR"] = prev_book_dir
+            sys.modules.pop("utils.loader", None)
+            if prev_loader is not None:
+                sys.modules["utils.loader"] = prev_loader
 
 
 class TestReadFromText:
@@ -90,6 +135,19 @@ class TestReadFromEpub:
             zf.writestr("META-INF/container.xml", "<container></container>")
         summary, line_count = Loader.read_from_epub_with_extracting_zip(epub)
         assert summary == ""
+
+    def test_read_epub_chapter_exception_is_skipped(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        epub = tmp_path / "chapter-error.epub"
+        with zipfile.ZipFile(epub, "w") as zf:
+            zf.writestr("META-INF/container.xml", '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>')
+            zf.writestr("content.opf", '<package><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>')
+            zf.writestr("ch1.xhtml", "<html><body><p>ignored</p></body></html>")
+
+        monkeypatch.setattr("utils.loader.BeautifulSoup", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("boom")))
+        summary, line_count = Loader.read_from_epub_with_extracting_zip(epub)
+        assert summary == ""
+        assert line_count == 0
 
 
 class TestReadFromHtml:
@@ -316,6 +374,15 @@ class TestFindXrefOffset:
         xref = b"xref\n0 2\n0000000000 65535 f \n0000000100 00000 f \ntrailer\n"
         assert Loader._find_xref_offset(xref, 1) is None
 
+    def test_malformed_target_entry_returns_none(self):
+        Loader = _get_loader()
+        xref = b"xref\n0 2\n0000000000 65535 f \nnot-an-entry\ntrailer\n"
+        assert Loader._find_xref_offset(xref, 1) is None
+
+    def test_missing_xref_keyword_returns_none(self):
+        Loader = _get_loader()
+        assert Loader._find_xref_offset(b"no xref here", 1) is None
+
 
 class TestXrefStreamFindEntry:
     def test_basic_entry(self):
@@ -336,6 +403,11 @@ class TestXrefStreamFindEntry:
     def test_zero_entry_size(self):
         Loader = _get_loader()
         result = Loader._xref_stream_find_entry(b"", [0, 0, 0], [0, 1], 0)
+        assert result is None
+
+    def test_truncated_entry_returns_none(self):
+        Loader = _get_loader()
+        result = Loader._xref_stream_find_entry(bytes([1, 0, 10]), [1, 2, 1], [0, 1], 0)
         assert result is None
 
 
@@ -399,6 +471,33 @@ class TestReadFromDocx:
 
 
 class TestReadFromEpubFull:
+    def test_read_epub_ebooklib_success_path(self, monkeypatch):
+        Loader = _get_loader()
+        import ebooklib
+
+        class FakeDoc:
+            def get_body_content(self):
+                return "<html><body><p>본문 줄1</p><p>줄2</p></body></html>"
+
+        class FakeBook:
+            def get_metadata(self, namespace, key):
+                if (namespace, key) == ("DC", "title"):
+                    return [("테스트 제목", {})]
+                if (namespace, key) == ("DC", "creator"):
+                    return [("테스트 저자", {})]
+                return []
+
+            def get_items_of_type(self, item_type):
+                assert item_type == ebooklib.ITEM_DOCUMENT
+                return [FakeDoc()]
+
+        monkeypatch.setattr("utils.loader.epub.read_epub", lambda _path: FakeBook())
+        summary, line_count, page_count = Loader.read_from_epub(Path("dummy.epub"))
+        assert "테스트 제목" in summary
+        assert "테스트 저자" in summary
+        assert line_count >= 1
+        assert page_count == 0
+
     def test_read_epub_with_ebooklib(self, tmp_path: Path):
         """read_from_epub using ebooklib or fallback"""
         Loader = _get_loader()
@@ -422,6 +521,15 @@ class TestReadFromEpubFull:
         # No mimetype → ebooklib will fail, triggering zip fallback
         summary, line_count, page_count = Loader.read_from_epub(epub)
         assert isinstance(summary, str)
+
+    def test_read_epub_both_primary_and_fallback_fail(self, monkeypatch):
+        Loader = _get_loader()
+        monkeypatch.setattr("utils.loader.epub.read_epub", lambda _path: (_ for _ in ()).throw(RuntimeError("primary fail")))
+        monkeypatch.setattr(Loader, "read_from_epub_with_extracting_zip", staticmethod(lambda _path: (_ for _ in ()).throw(RuntimeError("fallback fail"))))
+        summary, line_count, page_count = Loader.read_from_epub(Path("broken.epub"))
+        assert summary == ""
+        assert line_count == 0
+        assert page_count == 0
 
 
 class TestReadFromDocHwp:
@@ -730,6 +838,95 @@ class TestFastPdfPageCount:
         f.write_text("not a pdf")
         assert Loader._fast_pdf_page_count(f) is None
 
+    def test_xref_stream_type1_lookup(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "stream.pdf"
+        data = bytearray(b" " * 256)
+        data[20:20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        data[100:100 + len(b"<< /Pages 2 0 R >>")] = b"<< /Pages 2 0 R >>"
+        data[140:140 + len(b"<< /Count 7 >>")] = b"<< /Count 7 >>"
+        trailer = b"startxref\n20\n%%EOF"
+        data[-len(trailer):] = trailer
+        pdf.write_bytes(bytes(data))
+
+        monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 1], None)))
+
+        def fake_find_entry(_data, _w, _index_ranges, obj_num):
+            if obj_num == 1:
+                return (1, 100, 0)
+            if obj_num == 2:
+                return (1, 140, 0)
+            return None
+
+        monkeypatch.setattr(Loader, "_xref_stream_find_entry", staticmethod(fake_find_entry))
+        assert Loader._fast_pdf_page_count(pdf) == 7
+
+    def test_xref_stream_type2_object_stream_lookup(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "objstream.pdf"
+        data = bytearray(b" " * 256)
+        data[20:20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        data[100:100 + len(b"<< /Pages 2 0 R >>")] = b"<< /Pages 2 0 R >>"
+        trailer = b"startxref\n20\n%%EOF"
+        data[-len(trailer):] = trailer
+        pdf.write_bytes(bytes(data))
+
+        monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 3], None)))
+
+        def fake_find_entry(_data, _w, _index_ranges, obj_num):
+            if obj_num == 1:
+                return (1, 100, 0)
+            if obj_num == 2:
+                return (2, 9, 0)
+            if obj_num == 9:
+                return (1, 180, 0)
+            return None
+
+        monkeypatch.setattr(Loader, "_xref_stream_find_entry", staticmethod(fake_find_entry))
+        monkeypatch.setattr(Loader, "_read_from_obj_stream", staticmethod(lambda *_args: b"<< /Type /Pages /Count 4 >>"))
+        assert Loader._fast_pdf_page_count(pdf) == 4
+
+    def test_xref_stream_without_root_returns_none(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "no-root.pdf"
+        pdf.write_bytes(b"0" * 64 + b"startxref\n20\n%%EOF")
+        monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 1], None)))
+        assert Loader._fast_pdf_page_count(pdf) is None
+
+    def test_xref_stream_missing_pages_reference_returns_none(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "missing-pages-ref.pdf"
+        data = bytearray(b" " * 256)
+        data[20:20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        data[100:100 + len(b"<< /Type /Catalog >>")] = b"<< /Type /Catalog >>"
+        trailer = b"startxref\n20\n%%EOF"
+        data[-len(trailer):] = trailer
+        pdf.write_bytes(bytes(data))
+
+        monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 1], None)))
+        monkeypatch.setattr(Loader, "_xref_stream_find_entry", staticmethod(lambda *_args: (1, 100, 0)))
+        assert Loader._fast_pdf_page_count(pdf) is None
+
+    def test_xref_stream_missing_pages_object_returns_none(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "missing-pages-object.pdf"
+        data = bytearray(b" " * 256)
+        data[20:20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        data[100:100 + len(b"<< /Pages 2 0 R >>")] = b"<< /Pages 2 0 R >>"
+        trailer = b"startxref\n20\n%%EOF"
+        data[-len(trailer):] = trailer
+        pdf.write_bytes(bytes(data))
+
+        monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 1], None)))
+
+        def fake_find_entry(_data, _w, _index_ranges, obj_num):
+            if obj_num == 1:
+                return (1, 100, 0)
+            return None
+
+        monkeypatch.setattr(Loader, "_xref_stream_find_entry", staticmethod(fake_find_entry))
+        assert Loader._fast_pdf_page_count(pdf) is None
+
 
 # ---- coverage: epub read edge cases ----
 
@@ -934,6 +1131,13 @@ class TestParseOneXrefStream:
         Loader = _get_loader()
         f = tmp_path / "fake.pdf"
         f.write_bytes(b"1 0 obj\n<< /W [1 2 1] /Length 20 >>\nstream\ndata")
+        with open(f, "rb") as fh:
+            assert Loader._parse_one_xref_stream(fh, 0) is None
+
+    def test_missing_length(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "fake.pdf"
+        f.write_bytes(b"1 0 obj\n<< /W [1 2 1] /Size 10 >>\nstream\ndata")
         with open(f, "rb") as fh:
             assert Loader._parse_one_xref_stream(fh, 0) is None
 

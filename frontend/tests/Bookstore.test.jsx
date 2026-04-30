@@ -439,6 +439,7 @@ describe('Bookstore 탭 렌더링 및 버튼 클릭', () => {
         expect(disabledBtn).toBeTruthy();
     });
 
+
     it('서점에서 보기 링크가 search_url이 있을 때 표시된다', async () => {
         rawJsonGetReq.mockImplementation((url, onSuccess) => {
             setTimeout(() => onSuccess({

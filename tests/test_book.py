@@ -40,6 +40,24 @@ class TestBook(unittest.TestCase):
         assert '"title": "title1"' in book.json()
         assert "category: category1" in str(book)
 
+    def test_init_uses_optional_defaults_and_score(self):
+        info: Dict[str, Any] = {
+            "category": "category2",
+            "title": "title2",
+            "author": "author2",
+            "file_path": "category2/book2.pdf",
+            "file_type": "pdf",
+            "file_size": 200,
+            "updated_time": "2022-02-02T00:00:00.000000",
+        }
+        book = Book(5, info, score=12.5)
+        assert book.line_count == 0
+        assert book.page_count == 0
+        assert book.isbn == ""
+        assert book.summary == ""
+        assert book.score == 12.5
+        assert book.dict()["file_path"] == "category2/book2.pdf"
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -908,6 +908,12 @@ def test_custom_jsonable_encoder():
     assert encoded == data
 
 
+def test_custom_json_response_render_preserves_unicode():
+    response = main.CustomJSONResponse({"message": "테스트"})
+    assert b"\\u" not in response.body
+    assert "테스트".encode("utf-8") in response.body
+
+
 def test_wake_storage_success_and_failure(client, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(main.os, "listdir", lambda path: ["a", "b"])
     resp = client.get("/wake")
@@ -1437,6 +1443,30 @@ def test_set_and_clear_auth_cookies(monkeypatch: pytest.MonkeyPatch):
     assert "Max-Age=0" in headers2
 
 
+def test_cookie_settings_defaults_to_lax_for_unknown_value(monkeypatch: pytest.MonkeyPatch):
+    from backend import main as main_mod
+
+    monkeypatch.setenv("TM_COOKIE_SECURE", "false")
+    monkeypatch.setenv("TM_COOKIE_SAMESITE", "unexpected")
+    secure, samesite = main_mod._get_cookie_settings()
+    assert secure is False
+    assert samesite == "lax"
+
+
+def test_set_auth_cookies_without_refresh_token(monkeypatch: pytest.MonkeyPatch):
+    from backend import main as main_mod
+    from fastapi.responses import JSONResponse
+
+    monkeypatch.setenv("TM_COOKIE_SECURE", "false")
+    monkeypatch.setenv("TM_COOKIE_SAMESITE", "lax")
+
+    resp = JSONResponse({"ok": True})
+    main_mod._set_auth_cookies(resp, "access-only")
+    headers = resp.headers.getlist("set-cookie")
+    assert len(headers) == 1
+    assert "tm_access_token=access-only" in headers[0]
+
+
 def test_auth_google_branches(monkeypatch: pytest.MonkeyPatch):
     from backend import main as main_mod
     from fastapi.testclient import TestClient
@@ -1527,6 +1557,56 @@ def test_create_bookstore_factory():
     store = _create_bookstore()
     assert isinstance(store, Yes24Bookstore)
     assert store.verbose is True
+
+
+def test_create_comics_manager_factory(monkeypatch):
+    from backend import main as main_mod
+
+    created = object()
+    monkeypatch.setattr(main_mod, "ComicsManager", lambda: created)
+    assert main_mod._create_comics_manager() is created
+
+
+def test_create_category_mapping_factory(monkeypatch):
+    from backend import main as main_mod
+
+    created = object()
+    monkeypatch.setattr(main_mod, "CategoryMapping", lambda: created)
+    assert main_mod._create_category_mapping() is created
+
+
+def test_update_book_error_path(dummy_client, monkeypatch):
+    from backend import main as main_mod
+
+    async def update_fail(*_args, **_kwargs):
+        return None, "update failed"
+
+    monkeypatch.setattr(main_mod.book_manager, "update_book", update_fail)
+    payload = {"book_id": 1, "category": "A", "title": "T", "author": "U", "file_path": "a.txt", "file_type": "txt", "file_size": 1, "line_count": 0, "page_count": 0, "isbn": "", "updated_time": "2024-01-01T00:00:00.000000", "score": 0.0}
+    resp = dummy_client.put("/books/1", json=payload)
+    assert resp.json() == {"status": "failure", "error": "update failed"}
+
+
+def test_rename_category_error_path(dummy_client, monkeypatch):
+    from backend import main as main_mod
+
+    async def rename_fail(old_category, new_category):
+        return None, f"cannot rename {old_category} -> {new_category}"
+
+    monkeypatch.setattr(main_mod.book_manager._instance, "rename_category", rename_fail, raising=False)
+    resp = dummy_client.put("/categories/rename", json={"old_category": "A", "new_category": "B"})
+    assert resp.json() == {"status": "failure", "error": "cannot rename A -> B"}
+
+
+def test_delete_category_error_path(dummy_client, monkeypatch):
+    from backend import main as main_mod
+
+    async def delete_fail(category):
+        return None, f"cannot delete {category}"
+
+    monkeypatch.setattr(main_mod.book_manager._instance, "delete_category", delete_fail, raising=False)
+    resp = dummy_client.post("/categories/delete", json={"category": "A"})
+    assert resp.json() == {"status": "failure", "error": "cannot delete A"}
 
 
 def test_rename_category_mysql_mapping_failure(dummy_client, monkeypatch):

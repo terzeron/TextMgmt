@@ -259,9 +259,69 @@ def test_search_similar_docs_paged_without_exclude():
         return ([(1, {"a": 1}, 10.0)], 2)
 
     manager._search_paged = fake_search_paged
-    results, total = manager.search_similar_docs_paged(title="t", author="a", summary="s", file_size=10, exclude_id=None, size=10, offset=0)
+    results, total = manager.search_similar_docs_paged(title="t", author="a", file_size=100, summary="s", size=3, offset=1)
     assert total == 2
-    assert results
+    assert results == [(1, {"a": 1}, 10.0)]
+
+
+def test_search_builders_delegate_to__search():
+    es = DummyES()
+    manager = make_manager(es)
+    captured = []
+
+    def fake_search(query, sort=None, max_result_count=-1):
+        captured.append((query, sort, max_result_count))
+        return [(1, {"ok": True}, 100.0)]
+
+    manager._search = fake_search
+    assert manager.search_by_title("hello", "epub", 123, 5)
+    assert manager.search_by_summary("summary", 7)
+    assert manager.search_by_category("cat", 9)
+    assert manager.search_by_keyword("kw", 11)
+    assert manager.search_similar_docs(title="t", author="a", file_size=100, summary="s", exclude_id=3, max_result_count=4)
+
+    assert captured[0][2] == 5
+    assert captured[2][1] == ["author.keyword", "title.keyword"]
+    assert {"term": {"_id": "3"}} in captured[4][0]["bool"]["must_not"]
+
+
+def test_search_paged_returns_empty_when_base_score_non_positive():
+    es = DummyES()
+    manager = make_manager(es)
+
+    def zero_score_search(**kwargs):
+        return {"hits": {"total": {"value": 3}, "max_score": 0, "hits": []}}
+
+    es.search = zero_score_search
+    assert manager._search_paged({"match_all": {}}, size=10, offset=0) == ([], 3)
+
+
+def test_count_by_categories_handles_msearch_error():
+    es = DummyES()
+    manager = make_manager(es)
+    es.msearch = lambda searches: {"responses": [{"error": "boom"}, {"hits": {"total": {"value": 2}}}]}
+    assert manager.count_by_categories(["A", "B"]) == {"A": 0, "B": 2}
+
+
+def test_delete_returns_false_when_not_deleted():
+    es = DummyES()
+    manager = make_manager(es)
+    es.delete = lambda index, id, refresh=True: {"result": "noop"}
+    assert manager.delete(1) is False
+
+
+def test_update_returns_true_when_no_failed_shards():
+    es = DummyES()
+    manager = make_manager(es)
+    es.update = lambda index, id, body, refresh=True: {"_shards": {"failed": 0}}
+    assert manager.update(1, title="ok") is True
+
+
+def test_get_mappings_when_index_missing():
+    es = DummyES()
+    manager = make_manager(es)
+    manager.do_exist_index = lambda: False
+    assert manager.get_mappings() == {}
 
 
 def test_search_max_score_none_returns_empty():

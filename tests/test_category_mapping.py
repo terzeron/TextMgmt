@@ -313,3 +313,46 @@ class TestCategoryMapping(unittest.TestCase):
 
         cm._get_connection = _conn
         assert cm.is_hidden("not_hidden_cat") is False
+
+    def test_get_all_mappings_empty_and_remove_keyword_not_found(self):
+        cursor = FakeCursor(rows=[], rowcount=0)
+        cm_mod, cm = build_cm(cursor)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        assert cm.get_all_mappings() == {}
+        assert cm.remove_keyword("cat", "kw") is False
+
+    def test_delete_category_not_found(self):
+        cursor = FakeCursor(rowcount=0)
+        cm_mod, cm = build_cm(cursor)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        assert cm.delete_category("missing") is False
+
+    def test_set_hidden_false_always_succeeds(self):
+        cursor = FakeCursor(rowcount=0)
+        cm_mod, cm = build_cm(cursor)
+        conn = FakeConn(cursor)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield conn
+
+        cm._get_connection = _conn
+        assert cm.set_hidden("cat", False) is True
+        assert conn.committed is True
+
+    def test_migrate_skips_when_content_type_already_exists(self):
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}, {"cnt": 1}])
+        cm_mod, cm = build_cm(cursor)
+        alter_queries = [sql for sql, _ in cursor.executed if "ALTER TABLE" in str(sql)]
+        assert cm is not None
+        assert alter_queries == []

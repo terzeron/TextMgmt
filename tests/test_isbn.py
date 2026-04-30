@@ -51,9 +51,16 @@ class TestISBN(unittest.TestCase):
         res = isbn.search_in_content("no isbn here")
         self.assertEqual(res, [])
 
-    def test_search_in_content_multiple(self):
-        res = isbn.search_in_content("first 9788994492032 and 978-89-94492-03-2")
-        self.assertIn("9788994492032", res)
+def test_search_in_content_multiple():
+    res = isbn.search_in_content("first 9788994492032 and 978-89-94492-03-2")
+    assert "9788994492032" in res
+
+
+def test_search_in_content_ocr_normalization():
+    content = "ISBN 97B-8O-94492-O3-2"
+    result = isbn.search_in_content(content)
+    assert "9788094492032" not in result
+    assert isinstance(result, list)
 
 
 def test_read_head_tail_from_file_small(tmp_path: Path):
@@ -139,6 +146,12 @@ def test_extract_txt_with_content(tmp_path: Path):
     f.write_text("ISBN 9788994492032")
     result = isbn.extract(f)
     assert "9788994492032" in result
+
+
+def test_extract_txt_without_isbn_returns_empty(tmp_path: Path):
+    f = tmp_path / "book.txt"
+    f.write_text("no isbn here")
+    assert isbn.extract(f) == []
 
 
 def test_extract_txt_with_content_arg(tmp_path: Path):
@@ -329,6 +342,30 @@ def test_extract_from_epub_empty_spine(tmp_path: Path):
         zf.writestr("content.opf", opf)
     result = isbn.extract_from_epub(epub)
     assert result == []
+
+
+def test_extract_from_epub_reads_head_and_tail_chapters(tmp_path: Path):
+    epub = tmp_path / "test.epub"
+    opf = """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf">
+  <manifest>
+    <item id="c1" href="head.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c2" href="middle.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c3" href="tail.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="c1"/>
+    <itemref idref="c2"/>
+    <itemref idref="c3"/>
+  </spine>
+</package>"""
+    with zipfile.ZipFile(epub, "w") as zf:
+        zf.writestr("OPS/content.opf", opf)
+        zf.writestr("OPS/head.xhtml", "<html><body>ISBN 9788994492032</body></html>")
+        zf.writestr("OPS/middle.xhtml", "<html><body>middle only</body></html>")
+        zf.writestr("OPS/tail.xhtml", "<html><body>tail text</body></html>")
+    result = isbn.extract_from_epub(epub)
+    assert "9788994492032" in result
 
 
 def test_extract_from_djvu_command_not_found(tmp_path: Path, monkeypatch):

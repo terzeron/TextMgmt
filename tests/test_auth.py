@@ -50,6 +50,18 @@ class TestDetermineRole:
         assert setup_env.determine_role("") is None
 
 
+def test_auth_requires_jwt_secret(monkeypatch):
+    monkeypatch.delenv("TM_JWT_SECRET", raising=False)
+    prev_mod = sys.modules.pop("backend.auth", None)
+    try:
+        with pytest.raises(SystemExit):
+            importlib.import_module("backend.auth")
+    finally:
+        sys.modules.pop("backend.auth", None)
+        if prev_mod is not None:
+            sys.modules["backend.auth"] = prev_mod
+
+
 class TestCreateJwtToken:
     def test_token_contains_claims(self, setup_env):
         token = setup_env.create_jwt_token("admin@example.com", "admin", "Admin", "pic.jpg")
