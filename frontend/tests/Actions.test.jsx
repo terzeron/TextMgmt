@@ -16,6 +16,7 @@ vi.mock('../src/categoryMappingCache', () => ({
 }));
 
 import Actions, { generateNgrams, ngramSimilarity, calculateSimilarity, filterSubstringKeywords, stripNoiseWords, getSimilarityDebugInfo } from '../src/Actions';
+import * as categoryMappingCache from '../src/categoryMappingCache';
 
 // ── generateNgrams ──
 
@@ -430,6 +431,35 @@ describe('카테고리 버튼 하이라이트', () => {
         // 자동 선택이므로 highlight 클래스 유지
         expect(btn.className).toContain('highlight');
         expect(btn.style.backgroundColor).not.toBe('rgb(255, 255, 255)');
+    });
+});
+
+describe('Actions 추가 분기', () => {
+    it('캐시가 초기화되지 않았으면 fetchCategoryMappings를 호출한다', async () => {
+        const fetchSpy = vi.spyOn(categoryMappingCache, 'fetchCategoryMappings')
+            .mockResolvedValue();
+        const initSpy = vi.spyOn(categoryMappingCache, 'isCacheInitialized')
+            .mockReturnValue(false);
+
+        render(<Actions {...defaultProps} />);
+
+        expect(fetchSpy).toHaveBeenCalled();
+
+        fetchSpy.mockRestore();
+        initSpy.mockRestore();
+    });
+
+    it('언더스코어가 있는 카테고리는 접두사 색상과 하위 라벨로 렌더링한다', () => {
+        render(
+            <Actions
+                {...defaultProps}
+                otherCategoryList={['10_history_modern']}
+            />
+        );
+
+        const button = screen.getByText('history');
+        expect(button).toBeTruthy();
+        expect(button.style.backgroundColor).toBe('rgb(204, 204, 204)');
     });
 });
 

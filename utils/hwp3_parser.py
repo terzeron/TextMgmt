@@ -270,8 +270,62 @@ def _handle_control_char(c: int, stream: _HwpStream, parts: list, depth: int) ->
     # 데이터를 정확히 skip할 수 없으므로 무시 (대부분 0x0000 패딩)
 
 
+def _extract_text_bruteforce(body_data: bytes) -> str:
+    """바이트 스트림에서 HNC 텍스트를 brute-force로 추출한다 (V2.00 fallback)."""
+    parts: list[str] = []
+    current_run: list[str] = []
+    i = 0
+
+    while i + 2 <= len(body_data):
+        c = struct.unpack_from("<H", body_data, i)[0]
+        i += 2
+
+        if c == 13:
+            current_run.append("\n")
+        elif c == 9:
+            current_run.append("\t")
+        elif c == 0x0020:
+            current_run.append(" ")
+        elif c == 0:
+            continue
+        elif 0x0021 <= c <= 0x007E:
+            current_run.append(chr(c))
+        elif c >= 0x0080:
+            ch = _hnc_to_unicode(c)
+            if ch:
+                current_run.append(ch)
+            else:
+                if current_run:
+                    parts.append("".join(current_run))
+                current_run = []
+        else:
+            if current_run:
+                parts.append("".join(current_run))
+            current_run = []
+
+    if current_run:
+        parts.append("".join(current_run))
+
+    # 품질 필터: 읽을 수 있는 문자 비율이 70% 이상이고 최소 8자인 run만 유지
+    clean: list[str] = []
+    for part in parts:
+        stripped = part.strip()
+        if len(stripped) < 8:
+            continue
+        readable = sum(1 for ch in stripped if ch.isspace() or ch.isalnum() or 0xAC00 <= ord(ch) <= 0xD7A3 or 0x4E00 <= ord(ch) <= 0x9FFF or 0x1100 <= ord(ch) <= 0x11FF)
+        if readable / len(stripped) >= 0.7:
+            # V2.00 레코드 구분자 패턴 제거
+            if stripped in ("豼豼d", "Āú塴豼豼", "āĀĀú塴豼豼", "*ú塴豼豼", "āĀú塴豼豼", "Ǵ塴豼豼Āāā"):
+                continue
+            if "豼豼" in stripped and len(stripped) < 20:
+                continue
+            clean.append(stripped)
+
+    return "\n".join(clean)
+
+
 def extract_text_from_hwp3(file_path: Path) -> str:
-    """HWP V2.10/V3.00 파일에서 텍스트를 추출한다.
+    """HWP V2.00/V2.10/V3.00 파일에서 텍스트를 추출한다.
 
     Args:
         file_path: HWP 파일 경로
@@ -344,8 +398,21 @@ def extract_text_from_hwp3(file_path: Path) -> str:
         # 문단 리스트 파싱
         text = _parse_paragraph_list(stream)
     except _HwpStreamError:
-        # 부분적으로 파싱된 데이터가 있을 수 있음
         text = ""
+
+    # V2.00: 구조적 파싱이 빈 결과이면 brute-force 텍스트 추출
+    # 글꼴/스타일 영역 이후부터 추출하여 메타데이터 쓰레기를 최소화
+    if not text.strip() and "V2.00" in header_str:
+        try:
+            skip_stream = _HwpStream(body_data)
+            for _ in range(7):
+                nf = skip_stream.read_uint16()
+                skip_stream.skip(nf * 40)
+            ns = skip_stream.read_uint16()
+            skip_stream.skip(ns * 238)
+            text = _extract_text_bruteforce(body_data[skip_stream._pos :])
+        except _HwpStreamError:
+            text = _extract_text_bruteforce(body_data)
 
     # surrogate 문자 제거 (UTF-8 인코딩 에러 방지)
     text = "".join(ch for ch in text if not (0xD800 <= ord(ch) <= 0xDFFF))

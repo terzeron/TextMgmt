@@ -149,6 +149,27 @@ describe('ViewTXT', () => {
         });
     });
 
+    it('빈 줄 기준 − 버튼으로 값을 다시 1로 낮춘다', async () => {
+        mockTextGetReq.mockImplementation((url, payload, resolve) => {
+            resolve('줄1\n\n줄2');
+        });
+        render(<ViewTXT bookId={1} />);
+        await waitFor(() => {
+            expect(screen.getByText('줄 합치기')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('줄 합치기'));
+        fireEvent.click(screen.getByText('+'));
+        await waitFor(() => {
+            expect(screen.getByText('2')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('−'));
+        await waitFor(() => {
+            expect(screen.getByText('1')).toBeTruthy();
+        });
+    });
+
     it('빈 줄 기준 − 버튼은 1 미만으로 내릴 수 없다', async () => {
         mockTextGetReq.mockImplementation((url, payload, resolve) => {
             resolve('줄1\n줄2');
@@ -179,5 +200,33 @@ describe('ViewTXT', () => {
                 expect.any(Function), expect.any(Function)
             );
         });
+    });
+
+    it('merged 모드에서 separator, dialogue, header 블록을 렌더링한다', async () => {
+        mockTextGetReq.mockImplementation((url, payload, resolve) => {
+            resolve('아무 내용');
+        });
+
+        const formatTextMock = vi.spyOn(await import('../src/textFormatter'), 'formatText')
+            .mockReturnValue([
+                { type: 'separator', text: '' },
+                { type: 'header', text: '제목 블록' },
+                { type: 'dialogue', text: '대사 블록' },
+            ]);
+
+        render(<ViewTXT bookId={1} />);
+        await waitFor(() => {
+            expect(screen.getByText('줄 합치기')).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText('줄 합치기'));
+
+        await waitFor(() => {
+            expect(document.querySelector('.txt-separator')).toBeTruthy();
+            expect(document.querySelector('.txt-header')?.textContent).toBe('제목 블록');
+            expect(document.querySelector('.txt-dialogue')?.textContent).toBe('대사 블록');
+        });
+
+        formatTextMock.mockRestore();
     });
 });

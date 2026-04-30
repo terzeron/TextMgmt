@@ -1,0 +1,502 @@
+"""Route-level mock tests for backend/main.py — no ES/MySQL required."""
+
+import time
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from fastapi.responses import Response
+from fastapi.testclient import TestClient
+
+import backend.main as main_module
+from backend.auth import require_auth, require_admin, create_refresh_token
+
+ADMIN_PAYLOAD = {"email": "admin@test.com", "role": "admin", "name": "Admin", "picture": "", "exp": int(time.time()) + 3600}
+
+BOOK_DICT = {"book_id": 1, "category": "_epub", "title": "Test Book", "author": "Test Author", "file_path": "_epub/test.epub", "file_type": "epub", "file_size": 1024, "line_count": 0, "page_count": 0, "isbn": "", "updated_time": "2024-01-01T00:00:00.000000", "score": 0.0}
+
+
+def _make_book(overrides=None):
+    b = MagicMock()
+    d = {**BOOK_DICT, **(overrides or {})}
+    b.dict.return_value = d
+    b.book_id = d["book_id"]
+    b.file_type = d["file_type"]
+    return b
+
+
+@pytest.fixture(autouse=True)
+def override_auth():
+    main_module.app.dependency_overrides[require_auth] = lambda: ADMIN_PAYLOAD
+    main_module.app.dependency_overrides[require_admin] = lambda: ADMIN_PAYLOAD
+    yield
+    main_module.app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client():
+    return TestClient(main_module.app)
+
+
+@pytest.fixture
+def mock_bm():
+    """Inject an AsyncMock into the book_manager _LazyProxy without triggering BookManager()."""
+    m = AsyncMock()
+    m.es_manager = MagicMock()
+    prev = main_module.book_manager._instance
+    object.__setattr__(main_module.book_manager, "_instance", m)
+    yield m
+    object.__setattr__(main_module.book_manager, "_instance", prev)
+
+
+@pytest.fixture
+def mock_cat():
+    """Inject a MagicMock into the category_mapping _LazyProxy (all methods are sync via to_thread)."""
+    m = MagicMock()
+    prev = main_module.category_mapping._instance
+    object.__setattr__(main_module.category_mapping, "_instance", m)
+    yield m
+    object.__setattr__(main_module.category_mapping, "_instance", prev)
+
+
+# ── /wake ────────────────────────────────────────────────────────────────────
+
+
+class TestWake:
+    def test_success(self, client):
+        with patch("os.listdir", return_value=["a", "b", "c"]):
+            r = client.get("/wake")
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "count": 3}
+
+    def test_failure(self, client):
+        with patch("os.listdir", side_effect=OSError("not mounted")):
+            r = client.get("/wake")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "failure"
+        assert "not mounted" in data["error"]
+
+
+# ── /validate/{book_id} ──────────────────────────────────────────────────────
+
+
+class TestValidateBook:
+    def test_epub_success(self, client, mock_bm):
+        mock_bm.get_book.return_value = (_make_book({"file_type": "epub"}), None)
+        mock_bm.validate_epub.return_value = ({"valid": True}, None)
+
+        r = client.get("/validate/1")
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": {"valid": True}}
+
+    def test_pdf_success(self, client, mock_bm):
+        mock_bm.get_book.return_value = (_make_book({"file_type": "pdf"}), None)
+        mock_bm.validate_pdf.return_value = ({"pages": 5}, None)
+
+        r = client.get("/validate/1")
+        assert r.status_code == 200
+        assert r.json()["status"] == "success"
+        assert r.json()["result"] == {"pages": 5}
+
+    def test_unsupported_type(self, client, mock_bm):
+        mock_bm.get_book.return_value = (_make_book({"file_type": "txt"}), None)
+
+        r = client.get("/validate/1")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "failure"
+        assert "txt" in data["error"]
+
+    def test_book_not_found(self, client, mock_bm):
+        mock_bm.get_book.return_value = (None, "Book not found: 99")
+
+        r = client.get("/validate/99")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "failure"
+        assert "99" in data["error"]
+
+    def test_epub_validation_error(self, client, mock_bm):
+        mock_bm.get_book.return_value = (_make_book({"file_type": "epub"}), None)
+        mock_bm.validate_epub.return_value = (None, "invalid epub structure")
+
+        r = client.get("/validate/1")
+        assert r.status_code == 200
+        assert r.json()["status"] == "failure"
+        assert "invalid epub structure" in r.json()["error"]
+
+
+# ── /preview/{book_id} ───────────────────────────────────────────────────────
+
+
+class TestPreview:
+    def test_returns_response(self, client, mock_bm):
+        mock_bm.get_book_preview.return_value = Response(content=b"<html/>", media_type="text/html")
+
+        r = client.get("/preview/1")
+        assert r.status_code == 200
+
+    def test_default_params(self, client, mock_bm):
+        mock_bm.get_book_preview.return_value = Response(content=b"preview")
+        client.get("/preview/1")
+        mock_bm.get_book_preview.assert_called_once_with(book_id=1, pages=5, chapters=3)
+
+    def test_custom_params(self, client, mock_bm):
+        mock_bm.get_book_preview.return_value = Response(content=b"preview")
+        client.get("/preview/1?pages=10&chapters=5")
+        mock_bm.get_book_preview.assert_called_once_with(book_id=1, pages=10, chapters=5)
+
+
+# ── /pdf-pages/{book_id} ─────────────────────────────────────────────────────
+
+
+class TestPdfPages:
+    def test_returns_response(self, client, mock_bm):
+        mock_bm.get_pdf_pages.return_value = Response(content=b"%PDF", media_type="application/pdf")
+
+        r = client.get("/pdf-pages/1?start=2&end=4")
+        assert r.status_code == 200
+
+    def test_default_params(self, client, mock_bm):
+        mock_bm.get_pdf_pages.return_value = Response(content=b"%PDF")
+        client.get("/pdf-pages/1")
+        mock_bm.get_pdf_pages.assert_called_once_with(book_id=1, start=1, end=1)
+
+
+# ── /category-mismatches admin endpoints ─────────────────────────────────────
+
+
+class TestCategoryMismatchAdmin:
+    def test_index_file_success(self, client, mock_bm):
+        mock_bm.index_single_file.return_value = (42, None)
+        r = client.post("/category-mismatches/index-file", json={"file_path": "_epub/test.epub"})
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": {"book_id": 42}}
+
+    def test_index_file_missing_path(self, client, mock_bm):
+        r = client.post("/category-mismatches/index-file", json={})
+        assert r.status_code == 400
+
+    def test_index_file_error(self, client, mock_bm):
+        mock_bm.index_single_file.return_value = (None, "file not found")
+        r = client.post("/category-mismatches/index-file", json={"file_path": "bad.epub"})
+        assert r.status_code == 200
+        assert r.json()["status"] == "failure"
+        assert "file not found" in r.json()["error"]
+
+    def test_delete_file_success(self, client, mock_bm):
+        mock_bm.delete_file.return_value = ("Ok", None)
+        r = client.post("/category-mismatches/delete-file", json={"file_path": "_epub/old.epub"})
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": "Ok"}
+
+    def test_delete_file_missing_path(self, client, mock_bm):
+        r = client.post("/category-mismatches/delete-file", json={})
+        assert r.status_code == 400
+
+    def test_delete_file_error(self, client, mock_bm):
+        mock_bm.delete_file.return_value = (None, "permission denied")
+        r = client.post("/category-mismatches/delete-file", json={"file_path": "bad.epub"})
+        assert r.status_code == 200
+        assert r.json()["status"] == "failure"
+
+    def test_delete_es_doc_success(self, client, mock_bm):
+        mock_bm.es_manager.delete.return_value = True
+        r = client.delete("/category-mismatches/es-doc/1")
+        assert r.status_code == 200
+        assert r.json()["status"] == "success"
+
+    def test_delete_es_doc_failure(self, client, mock_bm):
+        mock_bm.es_manager.delete.return_value = False
+        r = client.delete("/category-mismatches/es-doc/1")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "failure"
+        assert "1" in data["error"]
+
+    def test_reload_success(self, client, mock_bm):
+        mock_bm.reload_category.return_value = ({"reloaded": 3}, None)
+        r = client.post("/category-mismatches/reload", json={"category": "_epub"})
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": {"reloaded": 3}}
+
+    def test_reload_failure(self, client, mock_bm):
+        mock_bm.reload_category.return_value = (None, "reload failed")
+        r = client.post("/category-mismatches/reload", json={"category": "_epub"})
+        assert r.status_code == 200
+        assert r.json()["status"] == "failure"
+        assert "reload failed" in r.json()["error"]
+
+    def test_get_details_success(self, client, mock_bm):
+        details = {"es": ["a.epub"], "fs": ["b.epub"]}
+        # get_category_mismatch_details is called via asyncio.to_thread → must be synchronous
+        mock_bm.get_category_mismatch_details = MagicMock(return_value=details)
+        r = client.get("/category-mismatches/_epub")
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": details}
+
+    def test_get_details_exception(self, client, mock_bm):
+        mock_bm.get_category_mismatch_details = MagicMock(side_effect=RuntimeError("ES down"))
+        r = client.get("/category-mismatches/_epub")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "failure"
+        assert "ES down" in data["error"]
+
+
+# ── /search/bookstore/{store_name} ───────────────────────────────────────────
+
+
+class TestSearchBookstore:
+    def test_unknown_store(self, client):
+        r = client.get("/search/bookstore/unknown?title=test")
+        assert r.status_code == 404
+
+    def test_missing_all_params(self, client):
+        r = client.get("/search/bookstore/yes24")
+        assert r.status_code == 400
+
+    def test_yes24_with_results(self, client):
+        fake_store = MagicMock()
+        fake_store.search.return_value = ([("Book A", "Author A", "소설", "http://url", None, "9781234567890")], "Book A", "title")
+        fake_store.build_search_url.return_value = "http://search"
+        with patch("backend.main.Yes24Bookstore", return_value=fake_store):
+            r = client.get("/search/bookstore/yes24?title=Book+A")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "success"
+        assert data["result"][0]["title"] == "Book A"
+        assert data["result"][0]["isbn"] == "9781234567890"
+
+    def test_yes24_empty_results(self, client):
+        fake_store = MagicMock()
+        fake_store.search.return_value = ([], "NoTitle", "title")
+        fake_store.build_search_url.return_value = "http://search"
+        with patch("backend.main.Yes24Bookstore", return_value=fake_store):
+            r = client.get("/search/bookstore/yes24?title=NoTitle")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "not_found"
+        assert data["result"] == []
+
+    def test_result_without_isbn(self, client):
+        fake_store = MagicMock()
+        fake_store.search.return_value = ([("Book B", "Author B", "소설", "http://url2", None, "")], "Book B", "title")
+        fake_store.build_search_url.return_value = ""
+        with patch("backend.main.AladinBookstore", return_value=fake_store):
+            r = client.get("/search/bookstore/aladin?title=Book+B")
+        assert r.status_code == 200
+        assert "isbn" not in r.json()["result"][0]
+
+    @pytest.mark.parametrize("store,cls", [("ridi", "RidibooksBookstore"), ("naver", "NaverShoppingBookstore"), ("naverseries", "NaverSeriesBookstore"), ("munpia", "MunpiaBookstore")])
+    def test_other_stores(self, client, store, cls):
+        fake_store = MagicMock()
+        fake_store.search.return_value = ([], "q", "title")
+        fake_store.build_search_url.return_value = ""
+        with patch(f"backend.main.{cls}", return_value=fake_store):
+            r = client.get(f"/search/bookstore/{store}?title=q")
+        assert r.status_code == 200
+        assert r.json()["status"] == "not_found"
+
+
+# ── /auth/logout, /auth/me ───────────────────────────────────────────────────
+
+
+class TestAuthLogoutAndMe:
+    def test_logout(self, client):
+        r = client.post("/auth/logout")
+        assert r.status_code == 200
+        assert r.json() == {"status": "success"}
+
+    def test_auth_me_returns_payload(self, client):
+        r = client.get("/auth/me")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "success"
+        assert data["result"]["email"] == ADMIN_PAYLOAD["email"]
+        assert data["result"]["role"] == ADMIN_PAYLOAD["role"]
+        assert data["result"]["name"] == ADMIN_PAYLOAD["name"]
+        assert "expires_in" in data["result"]
+
+
+# ── /auth/refresh ────────────────────────────────────────────────────────────
+
+
+class TestAuthRefresh:
+    def test_missing_token_returns_400(self, client):
+        r = client.post("/auth/refresh")
+        assert r.status_code == 400
+
+    def test_invalid_token_returns_401(self, client):
+        r = client.post("/auth/refresh", cookies={"tm_refresh_token": "bad.token.here"})
+        assert r.status_code == 401
+
+    def test_success(self, client):
+        token = create_refresh_token(email="admin@test.com", role="admin", name="Admin")
+        with patch("backend.main.determine_role", return_value="admin"):
+            r = client.post("/auth/refresh", cookies={"tm_refresh_token": token})
+        assert r.status_code == 200
+        assert r.json()["status"] == "success"
+        assert "expires_in" in r.json()
+
+    def test_unauthorized_email_returns_403(self, client):
+        token = create_refresh_token(email="stranger@other.com", role="viewer", name="X")
+        r = client.post("/auth/refresh", cookies={"tm_refresh_token": token})
+        assert r.status_code == 403
+
+
+# ── /auth/google ─────────────────────────────────────────────────────────────
+
+
+def _fake_httpx_client(json_payload):
+    fake_resp = MagicMock()
+    fake_resp.json.return_value = json_payload
+    fake_client = AsyncMock()
+    fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+    fake_client.__aexit__ = AsyncMock(return_value=False)
+    fake_client.get.return_value = fake_resp
+    return fake_client
+
+
+class TestAuthGoogle:
+    def test_missing_credential_returns_400(self, client):
+        r = client.post("/auth/google", json={})
+        assert r.status_code == 400
+
+    def test_google_api_error_returns_401(self, client):
+        fake_client = _fake_httpx_client({"error": "invalid_token", "error_description": "bad"})
+        with patch("backend.main.httpx.AsyncClient", return_value=fake_client):
+            r = client.post("/auth/google", json={"credential": "bad_token"})
+        assert r.status_code == 401
+
+    def test_audience_mismatch_returns_401(self, client):
+        fake_client = _fake_httpx_client({"aud": "wrong_client_id", "email": "admin@test.com"})
+        with patch("backend.main.httpx.AsyncClient", return_value=fake_client), patch("backend.main.TM_GOOGLE_CLIENT_ID", "expected_client_id"):
+            r = client.post("/auth/google", json={"credential": "token"})
+        assert r.status_code == 401
+
+    def test_unauthorized_email_returns_403(self, client):
+        fake_client = _fake_httpx_client({"aud": "cid", "email": "stranger@other.com", "name": "X", "picture": ""})
+        with patch("backend.main.httpx.AsyncClient", return_value=fake_client), patch("backend.main.TM_GOOGLE_CLIENT_ID", "cid"):
+            r = client.post("/auth/google", json={"credential": "token"})
+        assert r.status_code == 403
+
+    def test_success(self, client):
+        fake_client = _fake_httpx_client({"aud": "cid", "email": "admin@test.com", "name": "Admin", "picture": "http://pic"})
+        with patch("backend.main.httpx.AsyncClient", return_value=fake_client), patch("backend.main.TM_GOOGLE_CLIENT_ID", "cid"), patch("backend.main.determine_role", return_value="admin"):
+            r = client.post("/auth/google", json={"credential": "token"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "success"
+        assert data["email"] == "admin@test.com"
+        assert data["role"] == "admin"
+        assert "expires_in" in data
+
+
+# ── /category-mappings ───────────────────────────────────────────────────────
+
+
+class TestCategoryMappings:
+    def test_get_all(self, client, mock_cat):
+        mock_cat.get_all_mappings.return_value = {"소설": ["fantasy", "romance"]}
+        r = client.get("/category-mappings")
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": {"소설": ["fantasy", "romance"]}}
+
+    def test_get_keywords(self, client, mock_cat):
+        mock_cat.get_keywords.return_value = ["fantasy"]
+        r = client.get("/category-mappings/소설")
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": ["fantasy"]}
+
+    def test_set_keywords_success(self, client, mock_cat):
+        mock_cat.set_keywords.return_value = True
+        mock_cat.get_keywords.return_value = ["drama"]
+        r = client.put("/category-mappings/소설", json={"keywords": ["drama"]})
+        assert r.status_code == 200
+        assert r.json()["status"] == "success"
+        assert r.json()["result"] == ["drama"]
+
+    def test_set_keywords_failure_returns_500(self, client, mock_cat):
+        mock_cat.set_keywords.return_value = False
+        r = client.put("/category-mappings/소설", json={"keywords": ["drama"]})
+        assert r.status_code == 500
+
+    def test_add_keyword_missing_returns_400(self, client, mock_cat):
+        r = client.post("/category-mappings/소설/keywords", json={})
+        assert r.status_code == 400
+
+    def test_add_keyword_success(self, client, mock_cat):
+        mock_cat.add_keyword.return_value = True
+        mock_cat.get_keywords.return_value = ["fantasy", "sci-fi"]
+        r = client.post("/category-mappings/소설/keywords", json={"keyword": "sci-fi"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "success"
+        assert "sci-fi" in data["result"]
+
+    def test_add_keyword_duplicate(self, client, mock_cat):
+        mock_cat.add_keyword.return_value = False
+        mock_cat.get_keywords.return_value = ["fantasy"]
+        r = client.post("/category-mappings/소설/keywords", json={"keyword": "fantasy"})
+        assert r.status_code == 200
+        assert r.json()["status"] == "duplicate"
+
+    def test_remove_keyword_success(self, client, mock_cat):
+        mock_cat.remove_keyword.return_value = True
+        mock_cat.get_keywords.return_value = []
+        r = client.delete("/category-mappings/소설/keywords/fantasy")
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": []}
+
+    def test_remove_keyword_not_found_returns_404(self, client, mock_cat):
+        mock_cat.remove_keyword.return_value = False
+        r = client.delete("/category-mappings/소설/keywords/nonexistent")
+        assert r.status_code == 404
+
+    def test_delete_category_mapping_success(self, client, mock_cat):
+        mock_cat.delete_category.return_value = True
+        r = client.delete("/category-mappings/소설")
+        assert r.status_code == 200
+        assert r.json() == {"status": "success"}
+
+    def test_delete_category_mapping_not_found_returns_404(self, client, mock_cat):
+        mock_cat.delete_category.return_value = False
+        r = client.delete("/category-mappings/없는카테고리")
+        assert r.status_code == 404
+
+    def test_update_all_success(self, client, mock_cat):
+        mock_cat.update_all_mappings.return_value = True
+        mock_cat.get_all_mappings.return_value = {"소설": ["a"]}
+        r = client.put("/category-mappings", json={"mappings": {"소설": ["a"]}})
+        assert r.status_code == 200
+        assert r.json()["status"] == "success"
+
+    def test_update_all_failure_returns_500(self, client, mock_cat):
+        mock_cat.update_all_mappings.return_value = False
+        r = client.put("/category-mappings", json={"mappings": {"소설": ["a"]}})
+        assert r.status_code == 500
+
+
+# ── /hidden-categories ───────────────────────────────────────────────────────
+
+
+class TestHiddenCategories:
+    def test_get(self, client, mock_cat):
+        mock_cat.get_hidden_categories.return_value = ["_draft", "_archive"]
+        r = client.get("/hidden-categories")
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": ["_draft", "_archive"]}
+
+    def test_set_hidden_success(self, client, mock_cat):
+        mock_cat.set_hidden.return_value = True
+        mock_cat.get_hidden_categories.return_value = ["_draft"]
+        r = client.post("/hidden-categories/_draft", json={"hidden": True})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "success"
+        assert "_draft" in data["result"]
+
+    def test_set_hidden_failure_returns_500(self, client, mock_cat):
+        mock_cat.set_hidden.return_value = False
+        r = client.post("/hidden-categories/_draft", json={"hidden": True})
+        assert r.status_code == 500

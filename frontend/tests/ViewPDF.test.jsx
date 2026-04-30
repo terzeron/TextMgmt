@@ -492,6 +492,108 @@ describe("ViewPDF", () => {
     });
   });
 
+  it("맞춤 버튼을 끄면 확대/축소 컨트롤을 사용할 수 있다", async () => {
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => createMockPdf(1));
+
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
+    });
+
+    const fitButton = screen.getByRole("button", { name: /맞춤/ });
+    const zoomUpButton = screen.getByRole("button", { name: "+" });
+    const zoomDownButton = screen.getByRole("button", { name: "−" });
+
+    expect(zoomUpButton.disabled).toBe(true);
+    expect(zoomDownButton.disabled).toBe(true);
+
+    zoomUpButton.click();
+    expect(screen.getByText("-")).toBeTruthy();
+
+    fitButton.click();
+    await waitFor(() => {
+      expect(zoomUpButton.disabled).toBe(false);
+      expect(screen.getByText("100%")).toBeTruthy();
+    });
+
+    zoomUpButton.click();
+    await waitFor(() => {
+      expect(screen.getByText("110%")).toBeTruthy();
+    });
+
+    zoomDownButton.click();
+    await waitFor(() => {
+      expect(screen.getByText("100%")).toBeTruthy();
+    });
+  });
+
+  it("첫 청크 로드 후 취소되면 pdfDoc을 destroy한다", async () => {
+    let resolveFetch;
+    globalThis.fetch = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+
+    const firstPdf = createMockPdf(1);
+    setupGetDocument(firstPdf);
+
+    const { unmount } = render(<ViewPDF bookId={1} />);
+
+    resolveFetch({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "X-Total-Pages": "1" }),
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
+    });
+
+    await waitFor(() => {
+      expect(mockGetDocument).toHaveBeenCalled();
+    });
+
+    unmount();
+
+    await waitFor(() => {
+      expect(firstPdf.destroy).toHaveBeenCalled();
+    });
+  });
+
+  it("첫 페이지 pdfDoc 생성 직후 rerender되면 이전 pdfDoc을 destroy한다", async () => {
+    let fetchCount = 0;
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "X-Total-Pages": "1" }),
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
+      }),
+    );
+
+    const firstPdf = createMockPdf(1);
+    const secondPdf = createMockPdf(1);
+    mockGetDocument.mockImplementation(() => {
+      fetchCount += 1;
+      return {
+        promise: Promise.resolve(fetchCount === 1 ? firstPdf : secondPdf),
+      };
+    });
+
+    const { rerender } = render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
+    });
+
+    rerender(<ViewPDF bookId={2} />);
+
+    await waitFor(() => {
+      expect(firstPdf.destroy).toHaveBeenCalled();
+    });
+  });
+
   // ── 개별 페이지 렌더링 실패 ──
 
   it("개별 페이지 렌더링 실패 시 전체 에러 상태가 되지 않는다", async () => {

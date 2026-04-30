@@ -3,6 +3,7 @@ import os
 import unittest
 import zipfile
 import warnings
+import importlib
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -27,6 +28,50 @@ class TestLoaderInit(unittest.TestCase):
         assert Loader is not None
         assert hasattr(Loader, "read_file")
         assert hasattr(Loader, "read_files")
+
+    def test_loader_requires_book_dir(self):
+        import pytest
+
+        prev_book_dir = os.environ.pop("TM_BOOK_DIR", None)
+        prev_loader = sys.modules.pop("utils.loader", None)
+        prev_comics_dir = os.environ.get("TM_COMICS_DIR")
+        os.environ["TM_COMICS_DIR"] = "/tmp/comics"
+
+        try:
+            with pytest.raises(SystemExit):
+                importlib.import_module("utils.loader")
+        finally:
+            if prev_book_dir is not None:
+                os.environ["TM_BOOK_DIR"] = prev_book_dir
+            if prev_comics_dir is None:
+                os.environ.pop("TM_COMICS_DIR", None)
+            else:
+                os.environ["TM_COMICS_DIR"] = prev_comics_dir
+            sys.modules.pop("utils.loader", None)
+            if prev_loader is not None:
+                sys.modules["utils.loader"] = prev_loader
+
+    def test_loader_requires_comics_dir(self):
+        import pytest
+
+        prev_comics_dir = os.environ.pop("TM_COMICS_DIR", None)
+        prev_loader = sys.modules.pop("utils.loader", None)
+        prev_book_dir = os.environ.get("TM_BOOK_DIR")
+        os.environ["TM_BOOK_DIR"] = str(Path(__file__).parent.parent / "tests" / "books")
+
+        try:
+            with pytest.raises(SystemExit):
+                importlib.import_module("utils.loader")
+        finally:
+            if prev_comics_dir is not None:
+                os.environ["TM_COMICS_DIR"] = prev_comics_dir
+            if prev_book_dir is None:
+                os.environ.pop("TM_BOOK_DIR", None)
+            else:
+                os.environ["TM_BOOK_DIR"] = prev_book_dir
+            sys.modules.pop("utils.loader", None)
+            if prev_loader is not None:
+                sys.modules["utils.loader"] = prev_loader
 
 
 class TestReadFromText:
@@ -90,6 +135,19 @@ class TestReadFromEpub:
             zf.writestr("META-INF/container.xml", "<container></container>")
         summary, line_count = Loader.read_from_epub_with_extracting_zip(epub)
         assert summary == ""
+
+    def test_read_epub_chapter_exception_is_skipped(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        epub = tmp_path / "chapter-error.epub"
+        with zipfile.ZipFile(epub, "w") as zf:
+            zf.writestr("META-INF/container.xml", '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>')
+            zf.writestr("content.opf", '<package><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>')
+            zf.writestr("ch1.xhtml", "<html><body><p>ignored</p></body></html>")
+
+        monkeypatch.setattr("utils.loader.BeautifulSoup", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("boom")))
+        summary, line_count = Loader.read_from_epub_with_extracting_zip(epub)
+        assert summary == ""
+        assert line_count == 0
 
 
 class TestReadFromHtml:
@@ -316,6 +374,15 @@ class TestFindXrefOffset:
         xref = b"xref\n0 2\n0000000000 65535 f \n0000000100 00000 f \ntrailer\n"
         assert Loader._find_xref_offset(xref, 1) is None
 
+    def test_malformed_target_entry_returns_none(self):
+        Loader = _get_loader()
+        xref = b"xref\n0 2\n0000000000 65535 f \nnot-an-entry\ntrailer\n"
+        assert Loader._find_xref_offset(xref, 1) is None
+
+    def test_missing_xref_keyword_returns_none(self):
+        Loader = _get_loader()
+        assert Loader._find_xref_offset(b"no xref here", 1) is None
+
 
 class TestXrefStreamFindEntry:
     def test_basic_entry(self):
@@ -336,6 +403,11 @@ class TestXrefStreamFindEntry:
     def test_zero_entry_size(self):
         Loader = _get_loader()
         result = Loader._xref_stream_find_entry(b"", [0, 0, 0], [0, 1], 0)
+        assert result is None
+
+    def test_truncated_entry_returns_none(self):
+        Loader = _get_loader()
+        result = Loader._xref_stream_find_entry(bytes([1, 0, 10]), [1, 2, 1], [0, 1], 0)
         assert result is None
 
 
@@ -399,6 +471,33 @@ class TestReadFromDocx:
 
 
 class TestReadFromEpubFull:
+    def test_read_epub_ebooklib_success_path(self, monkeypatch):
+        Loader = _get_loader()
+        import ebooklib
+
+        class FakeDoc:
+            def get_body_content(self):
+                return "<html><body><p>본문 줄1</p><p>줄2</p></body></html>"
+
+        class FakeBook:
+            def get_metadata(self, namespace, key):
+                if (namespace, key) == ("DC", "title"):
+                    return [("테스트 제목", {})]
+                if (namespace, key) == ("DC", "creator"):
+                    return [("테스트 저자", {})]
+                return []
+
+            def get_items_of_type(self, item_type):
+                assert item_type == ebooklib.ITEM_DOCUMENT
+                return [FakeDoc()]
+
+        monkeypatch.setattr("utils.loader.epub.read_epub", lambda _path: FakeBook())
+        summary, line_count, page_count = Loader.read_from_epub(Path("dummy.epub"))
+        assert "테스트 제목" in summary
+        assert "테스트 저자" in summary
+        assert line_count >= 1
+        assert page_count == 0
+
     def test_read_epub_with_ebooklib(self, tmp_path: Path):
         """read_from_epub using ebooklib or fallback"""
         Loader = _get_loader()
@@ -422,6 +521,15 @@ class TestReadFromEpubFull:
         # No mimetype → ebooklib will fail, triggering zip fallback
         summary, line_count, page_count = Loader.read_from_epub(epub)
         assert isinstance(summary, str)
+
+    def test_read_epub_both_primary_and_fallback_fail(self, monkeypatch):
+        Loader = _get_loader()
+        monkeypatch.setattr("utils.loader.epub.read_epub", lambda _path: (_ for _ in ()).throw(RuntimeError("primary fail")))
+        monkeypatch.setattr(Loader, "read_from_epub_with_extracting_zip", staticmethod(lambda _path: (_ for _ in ()).throw(RuntimeError("fallback fail"))))
+        summary, line_count, page_count = Loader.read_from_epub(Path("broken.epub"))
+        assert summary == ""
+        assert line_count == 0
+        assert page_count == 0
 
 
 class TestReadFromDocHwp:
@@ -730,6 +838,95 @@ class TestFastPdfPageCount:
         f.write_text("not a pdf")
         assert Loader._fast_pdf_page_count(f) is None
 
+    def test_xref_stream_type1_lookup(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "stream.pdf"
+        data = bytearray(b" " * 256)
+        data[20:20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        data[100:100 + len(b"<< /Pages 2 0 R >>")] = b"<< /Pages 2 0 R >>"
+        data[140:140 + len(b"<< /Count 7 >>")] = b"<< /Count 7 >>"
+        trailer = b"startxref\n20\n%%EOF"
+        data[-len(trailer):] = trailer
+        pdf.write_bytes(bytes(data))
+
+        monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 1], None)))
+
+        def fake_find_entry(_data, _w, _index_ranges, obj_num):
+            if obj_num == 1:
+                return (1, 100, 0)
+            if obj_num == 2:
+                return (1, 140, 0)
+            return None
+
+        monkeypatch.setattr(Loader, "_xref_stream_find_entry", staticmethod(fake_find_entry))
+        assert Loader._fast_pdf_page_count(pdf) == 7
+
+    def test_xref_stream_type2_object_stream_lookup(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "objstream.pdf"
+        data = bytearray(b" " * 256)
+        data[20:20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        data[100:100 + len(b"<< /Pages 2 0 R >>")] = b"<< /Pages 2 0 R >>"
+        trailer = b"startxref\n20\n%%EOF"
+        data[-len(trailer):] = trailer
+        pdf.write_bytes(bytes(data))
+
+        monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 3], None)))
+
+        def fake_find_entry(_data, _w, _index_ranges, obj_num):
+            if obj_num == 1:
+                return (1, 100, 0)
+            if obj_num == 2:
+                return (2, 9, 0)
+            if obj_num == 9:
+                return (1, 180, 0)
+            return None
+
+        monkeypatch.setattr(Loader, "_xref_stream_find_entry", staticmethod(fake_find_entry))
+        monkeypatch.setattr(Loader, "_read_from_obj_stream", staticmethod(lambda *_args: b"<< /Type /Pages /Count 4 >>"))
+        assert Loader._fast_pdf_page_count(pdf) == 4
+
+    def test_xref_stream_without_root_returns_none(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "no-root.pdf"
+        pdf.write_bytes(b"0" * 64 + b"startxref\n20\n%%EOF")
+        monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 1], None)))
+        assert Loader._fast_pdf_page_count(pdf) is None
+
+    def test_xref_stream_missing_pages_reference_returns_none(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "missing-pages-ref.pdf"
+        data = bytearray(b" " * 256)
+        data[20:20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        data[100:100 + len(b"<< /Type /Catalog >>")] = b"<< /Type /Catalog >>"
+        trailer = b"startxref\n20\n%%EOF"
+        data[-len(trailer):] = trailer
+        pdf.write_bytes(bytes(data))
+
+        monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 1], None)))
+        monkeypatch.setattr(Loader, "_xref_stream_find_entry", staticmethod(lambda *_args: (1, 100, 0)))
+        assert Loader._fast_pdf_page_count(pdf) is None
+
+    def test_xref_stream_missing_pages_object_returns_none(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "missing-pages-object.pdf"
+        data = bytearray(b" " * 256)
+        data[20:20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        data[100:100 + len(b"<< /Pages 2 0 R >>")] = b"<< /Pages 2 0 R >>"
+        trailer = b"startxref\n20\n%%EOF"
+        data[-len(trailer):] = trailer
+        pdf.write_bytes(bytes(data))
+
+        monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 1], None)))
+
+        def fake_find_entry(_data, _w, _index_ranges, obj_num):
+            if obj_num == 1:
+                return (1, 100, 0)
+            return None
+
+        monkeypatch.setattr(Loader, "_xref_stream_find_entry", staticmethod(fake_find_entry))
+        assert Loader._fast_pdf_page_count(pdf) is None
+
 
 # ---- coverage: epub read edge cases ----
 
@@ -934,6 +1131,13 @@ class TestParseOneXrefStream:
         Loader = _get_loader()
         f = tmp_path / "fake.pdf"
         f.write_bytes(b"1 0 obj\n<< /W [1 2 1] /Length 20 >>\nstream\ndata")
+        with open(f, "rb") as fh:
+            assert Loader._parse_one_xref_stream(fh, 0) is None
+
+    def test_missing_length(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "fake.pdf"
+        f.write_bytes(b"1 0 obj\n<< /W [1 2 1] /Size 10 >>\nstream\ndata")
         with open(f, "rb") as fh:
             assert Loader._parse_one_xref_stream(fh, 0) is None
 
@@ -2264,3 +2468,193 @@ class TestHandleControlCharRecursive:
         stream = _HwpStream(paragraphs)
         result = _parse_paragraph_list(stream)
         assert len(result) <= _MAX_TEXT_LENGTH + 500  # 약간의 여유
+
+
+# ---- hwp3_parser 추가 커버리지 ----
+
+
+class TestSafeChr:
+    """_safe_chr surrogate 필터"""
+
+    def test_surrogate_high(self):
+        from utils.hwp3_parser import _safe_chr
+
+        assert _safe_chr(0xD800) == ""
+        assert _safe_chr(0xD830) == ""
+
+    def test_surrogate_low(self):
+        from utils.hwp3_parser import _safe_chr
+
+        assert _safe_chr(0xDC00) == ""
+        assert _safe_chr(0xDFFF) == ""
+
+    def test_normal_char(self):
+        from utils.hwp3_parser import _safe_chr
+
+        assert _safe_chr(0xAC00) == "가"
+        assert _safe_chr(0x41) == "A"
+
+
+class TestControlCharTab:
+    """탭(ctrl 9) 제어문자 처리"""
+
+    def test_ctrl_9_tab_in_paragraph(self):
+        """탭 제어문자가 포함된 문단"""
+        import struct
+        from utils.hwp3_parser import _HwpStream, _parse_paragraph_list
+
+        # 탭(9) + 6바이트 데이터 → n_chars_read += 3+1=4
+        tab = struct.pack("<H", 9) + b"\x00" * 6
+        ga = struct.pack("<H", 0x8861)  # '가'
+        cr = struct.pack("<H", 13)
+        chars = ga + tab + ga + cr  # 가\t가\n, n_chars=1+4+1+1=7
+        # 문단 헤더
+        header = struct.pack("<BHHB", 0, 7, 1, 0) + b"\x00" * 37
+        header += b"\x00" * 187  # para shape
+        line_info = b"\x00" * 14
+        terminator = struct.pack("<BHHB", 0, 0, 0, 0) + b"\x00" * 37 + b"\x00" * 187
+        data = header + line_info + chars + terminator
+        stream = _HwpStream(data)
+        result = _parse_paragraph_list(stream)
+        assert "\t" in result
+        assert "가" in result
+
+
+class TestControlCharDateLine:
+    """날짜형식(7), 날짜코드(8), 선(14), 숨은설명(15) 제어문자 처리"""
+
+    def _build_ctrl_para(self, ctrl_code, skip_bytes, n_read_add, extra_nested=False):
+        import struct
+        from utils.hwp3_parser import _HwpStream, _parse_paragraph_list
+
+        n_chars = 1 + n_read_add + 1  # ctrl + n_read_add + CR
+        ctrl = struct.pack("<H", ctrl_code) + b"\x00" * skip_bytes
+        if extra_nested:
+            # 빈 문단 리스트 (종료)
+            ctrl += struct.pack("<BHHB", 0, 0, 0, 0) + b"\x00" * 37 + b"\x00" * 187
+        cr = struct.pack("<H", 13)
+        chars = ctrl + cr
+        header = struct.pack("<BHHB", 0, n_chars, 1, 0) + b"\x00" * 37 + b"\x00" * 187
+        line_info = b"\x00" * 14
+        terminator = struct.pack("<BHHB", 0, 0, 0, 0) + b"\x00" * 37 + b"\x00" * 187
+        data = header + line_info + chars + terminator
+        stream = _HwpStream(data)
+        return _parse_paragraph_list(stream)
+
+    def test_ctrl_7_date_format(self):
+        result = self._build_ctrl_para(7, 84, 3)
+        assert isinstance(result, str)
+
+    def test_ctrl_8_date_code(self):
+        result = self._build_ctrl_para(8, 96, 3)
+        assert isinstance(result, str)
+
+    def test_ctrl_14_line(self):
+        result = self._build_ctrl_para(14, 92, 3)
+        assert isinstance(result, str)
+
+    def test_ctrl_15_hidden_comment(self):
+        result = self._build_ctrl_para(15, 16, 3, extra_nested=True)
+        assert isinstance(result, str)
+
+
+class TestV200BruteForce:
+    """V2.00 brute-force 추출 테스트"""
+
+    def test_v200_extracts_text(self):
+        """V2.00 파일에서 텍스트가 추출되는지 확인"""
+        f = HWP_TEST_DIR / "v2.00_박노해_참된시작.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        extract = _get_hwp3_parser()
+        text = extract(f)
+        assert len(text) > 100
+
+    def test_v200_utf8_safe(self):
+        """V2.00 추출 결과가 UTF-8 안전한지 확인"""
+        f = HWP_TEST_DIR / "v2.00_박노해_참된시작.hwp"
+        if not f.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        extract = _get_hwp3_parser()
+        text = extract(f)
+        text.encode("utf-8")  # should not raise
+
+    def test_bruteforce_garbage_ratio_filter(self):
+        """쓰레기 비율이 높으면 빈 문자열 반환"""
+        from utils.hwp3_parser import _extract_text_bruteforce
+        import struct
+
+        # 전부 비한글/비한자/비ASCII 범위의 HNC 코드
+        garbage = b""
+        for i in range(100):
+            garbage += struct.pack("<H", 0x3F00 + i)  # 특수문자 범위, 매핑 없음
+        result = _extract_text_bruteforce(garbage)
+        assert result == ""
+
+    def test_bruteforce_with_valid_text(self):
+        """유효한 텍스트가 포함된 데이터에서 추출"""
+        from utils.hwp3_parser import _extract_text_bruteforce
+        import struct
+
+        # '가나다라마바사아자차' (한글 10자)
+        data = b""
+        for c in [0x8861, 0x8CC2, 0x9161, 0x9562, 0xA1A1, 0xA562, 0xAD61, 0xB161, 0xB961, 0xBD62]:
+            data += struct.pack("<H", c)
+        data += struct.pack("<H", 13)  # CR
+        result = _extract_text_bruteforce(data)
+        assert len(result) > 0
+
+    def test_v200_font_skip_failure_fallback(self, tmp_path: Path):
+        """V2.00에서 글꼴 영역 skip 실패 시 전체 brute-force"""
+        import struct
+
+        sig = b"HWP Document File V2.00 \x1a\x01\x02\x03\x04\x05"
+        doc_info = bytearray(128)
+        # 비압축, 정보블록=0
+        summary = b"\x00" * 1008
+        # 글꼴 영역이 깨진 데이터 (첫 font count가 비정상)
+        broken_fonts = struct.pack("<H", 60000)  # n_fonts = 60000 → skip 실패
+        # 그 뒤에 유효한 텍스트
+        text_data = b""
+        for c in [0x8861, 0x8CC2, 0x9161, 0x9562, 0xA1A1, 0xA562, 0xAD61, 0xB161, 0xB961, 0xBD62]:
+            text_data += struct.pack("<H", c)
+        text_data += struct.pack("<H", 13)
+        body = broken_fonts + b"\x00" * 50 + text_data
+        f = tmp_path / "v200_broken.hwp"
+        f.write_bytes(sig + bytes(doc_info) + summary + body)
+        extract = _get_hwp3_parser()
+        text = extract(f)
+        assert isinstance(text, str)
+
+
+class TestBookManagerPreviewEmptyContent:
+    """book_manager HWP preview에서 빈 결과 시 안내 메시지 반환"""
+
+    def test_hwp_preview_empty_returns_message(self, tmp_path: Path, monkeypatch):
+        """LO+hwp3 모두 빈 결과 → '미리보기를 생성할 수 없습니다' 메시지"""
+        import shutil
+
+        hwp_src = HWP_TEST_DIR / "v1.20_부하의약혼녀.hwp"
+        if not hwp_src.exists():
+            import pytest
+
+            pytest.skip("테스트 파일 없음")
+        (tmp_path / "A").mkdir(parents=True, exist_ok=True)
+        shutil.copy(hwp_src, tmp_path / "A" / "old.hwp")
+
+        from backend.book_manager import BookManager
+        from tests.test_book_manager import make_manager, make_doc, DummyES, asyncio_runner
+
+        doc = make_doc("A/old.hwp", "hwp")
+        es = DummyES()
+        manager = make_manager(tmp_path, es)
+        es.search_by_id = lambda _id: doc
+        monkeypatch.setattr(BookManager, "_convert_with_libreoffice", lambda p, fmt: "")
+        resp = asyncio_runner(manager.get_book_preview(1))
+        assert resp.status_code == 200
+        body = resp.body.decode("utf-8")
+        assert "미리보기를 생성할 수 없습니다" in body
