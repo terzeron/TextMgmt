@@ -23,20 +23,26 @@ def backend_test_setup(es_client, es_index, admin_auth_cookies, mysql_container)
     from fastapi.testclient import TestClient
     from backend.main import app, book_manager as main_bm, comics_manager as main_cm
     from backend.book_manager import BookManager
+    from backend.comics_manager import ComicsManager
     from utils.loader import Loader
     import os
 
     # Create BookManager and use shared ES client
     bm = BookManager()
     bm.es_manager.es = es_client
-    # Update main app's managers to use the shared client and index as well
-    main_bm.es_manager.es = es_client
-    main_bm.es_manager.index_name = es_index
-    main_cm.es_manager.es = es_client
+    bm.es_manager.index_name = es_index
+
+    cm = ComicsManager()
+    cm.es_manager.es = es_client
     # comics_manager might use a different index, but for this test we might want to stick to what it has or sync if needed.
     # Given TM_ES_COMICS_INDEX is also usually set in conftest, we should check it.
     if "TM_ES_COMICS_INDEX" in os.environ:
-        main_cm.es_manager.index_name = os.environ["TM_ES_COMICS_INDEX"]
+        cm.es_manager.index_name = os.environ["TM_ES_COMICS_INDEX"]
+
+    original_bm_instance = getattr(main_bm, "_instance", None)
+    original_cm_instance = getattr(main_cm, "_instance", None)
+    main_bm._instance = bm
+    main_cm._instance = cm
 
     # Load test data from actual files if available
     epub_path = bm.path_prefix / CATEGORY
@@ -51,7 +57,11 @@ def backend_test_setup(es_client, es_index, admin_auth_cookies, mysql_container)
 
     client = TestClient(app, cookies=admin_auth_cookies)
 
-    yield {"bm": bm, "client": client}
+    try:
+        yield {"bm": bm, "client": client}
+    finally:
+        main_bm._instance = original_bm_instance
+        main_cm._instance = original_cm_instance
 
 
 @pytest.fixture(scope="class")
@@ -777,9 +787,9 @@ class TestAuthRefreshEndpoint:
         return TestClient(app)
 
     def test_refresh_returns_new_access_token(self, backend_test_setup):
-        from backend.auth import create_refresh_token
+        from backend.main import _issue_auth_tokens
 
-        refresh_token = create_refresh_token(email=self.auth_mod.TM_ADMIN_EMAIL, role="admin")
+        _, refresh_token = _issue_auth_tokens(email=self.auth_mod.TM_ADMIN_EMAIL, role="admin")
         client = self._get_unauthenticated_client(backend_test_setup)
         response = client.post("/auth/refresh", cookies={"tm_refresh_token": refresh_token})
         assert response.status_code == 200
@@ -811,17 +821,17 @@ class TestAuthRefreshEndpoint:
         assert response.status_code == 400
 
     def test_refresh_with_unauthorized_email_returns_403(self, backend_test_setup):
-        from backend.auth import create_refresh_token
+        from backend.main import _issue_auth_tokens
 
-        refresh_token = create_refresh_token(email="hacker@evil.com", role="admin")
+        _, refresh_token = _issue_auth_tokens(email="hacker@evil.com", role="admin")
         client = self._get_unauthenticated_client(backend_test_setup)
         response = client.post("/auth/refresh", cookies={"tm_refresh_token": refresh_token})
         assert response.status_code == 403
 
     def test_refreshed_token_works_for_api_calls(self, backend_test_setup):
-        from backend.auth import create_refresh_token
+        from backend.main import _issue_auth_tokens
 
-        refresh_token = create_refresh_token(email=self.auth_mod.TM_ADMIN_EMAIL, role="admin")
+        _, refresh_token = _issue_auth_tokens(email=self.auth_mod.TM_ADMIN_EMAIL, role="admin")
         client = self._get_unauthenticated_client(backend_test_setup)
         response = client.post("/auth/refresh", cookies={"tm_refresh_token": refresh_token})
         new_access_token = response.cookies.get("tm_access_token")
@@ -915,20 +925,25 @@ def test_custom_json_response_render_preserves_unicode():
 
 
 def test_wake_storage_success_and_failure(client, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TM_FRONTEND_URL", "http://testserver")
     monkeypatch.setattr(main.os, "listdir", lambda path: ["a", "b"])
     resp = client.get("/wake")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "success", "count": 2}
+    assert resp.json() == {"status": "success"}
 
     def fail_listdir(path):
         raise OSError("boom")
 
     monkeypatch.setattr(main.os, "listdir", fail_listdir)
     resp = client.get("/wake")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "failure"
-    assert "boom" in body["error"]
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "failure"}
+
+
+def test_wake_storage_rejects_non_frontend_host(client, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TM_FRONTEND_URL", "https://tm.terzeron.com")
+    resp = client.get("/wake")
+    assert resp.status_code == 404
 
 
 def test_search_bookstore_api_errors(client):
@@ -1163,6 +1178,30 @@ def test_main_routes_basic(dummy_client):
     assert resp.json()["status"] == "success"
 
 
+def test_viewer_hidden_category_access_control_routes(dummy_client, monkeypatch):
+    from backend import main as main_mod
+
+    main_mod.app.dependency_overrides[main_mod.require_auth] = lambda: {"email": "viewer@example.com", "role": "viewer"}
+
+    class DummyCatMap:
+        def get_hidden_categories(self, content_type="book"):
+            return ["A"]
+
+    monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyCatMap())
+
+    resp = dummy_client.get("/books/1")
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "접근 권한이 없는 카테고리입니다."
+
+    resp = dummy_client.get("/categories")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "success", "result": {}}
+
+    resp = dummy_client.get("/hidden-categories")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "success", "result": []}
+
+
 def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
     from backend import main as main_mod
 
@@ -1291,7 +1330,7 @@ def test_main_error_branches(dummy_client, monkeypatch):
     assert resp.json()["error"] == "kw"
 
     resp = dummy_client.get("/category-mismatches")
-    assert resp.json()["error"] == "boom"
+    assert resp.json()["error"] == main_mod.GENERIC_MISMATCH_ERROR
 
     resp = dummy_client.post("/category-mismatches/index-file", json={})
     assert resp.status_code == 400
@@ -1313,15 +1352,16 @@ def test_main_error_branches(dummy_client, monkeypatch):
     assert resp.json()["error"] == "fail"
 
     resp = dummy_client.get("/category-mismatches/A")
-    assert resp.json()["error"] == "boom2"
+    assert resp.json()["error"] == main_mod.GENERIC_MISMATCH_ERROR
 
 
 def test_wake_storage_error(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TM_FRONTEND_URL", "http://testserver")
     monkeypatch.setattr(main.os, "listdir", lambda path: (_ for _ in ()).throw(RuntimeError("fail")))
     client = TestClient(main.app)
     resp = client.get("/wake")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "failure"
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "failure"}
 
 
 def test_search_bookstore_api_branches(dummy_client, monkeypatch):
@@ -1383,35 +1423,45 @@ def test_category_mapping_error_branches(dummy_client, monkeypatch):
 
     resp = dummy_client.get("/category-mappings")
     assert resp.status_code == 500
+    assert resp.json()["detail"] == main_mod.GENERIC_MAPPING_ERROR_DETAIL
 
     resp = dummy_client.get("/category-mappings/A")
     assert resp.status_code == 500
+    assert resp.json()["detail"] == main_mod.GENERIC_MAPPING_ERROR_DETAIL
 
     resp = dummy_client.put("/category-mappings/A", json={"keywords": ["x"]})
     assert resp.status_code == 500
+    assert resp.json()["detail"] == "Failed to set keywords"
 
     resp = dummy_client.post("/category-mappings/A/keywords", json={"keyword": "x"})
     assert resp.status_code == 500
+    assert resp.json()["detail"] == main_mod.GENERIC_MAPPING_ERROR_DETAIL
 
     resp = dummy_client.delete("/category-mappings/A/keywords/x")
     assert resp.status_code == 500
+    assert resp.json()["detail"] == main_mod.GENERIC_MAPPING_ERROR_DETAIL
 
     resp = dummy_client.delete("/category-mappings/A")
     assert resp.status_code == 500
+    assert resp.json()["detail"] == main_mod.GENERIC_MAPPING_ERROR_DETAIL
 
     resp = dummy_client.put("/category-mappings", json={"mappings": {"A": ["x"]}})
     assert resp.status_code == 500
+    assert resp.json()["detail"] == main_mod.GENERIC_MAPPING_ERROR_DETAIL
 
     resp = dummy_client.get("/hidden-categories")
     assert resp.status_code == 500
+    assert resp.json()["detail"] == main_mod.GENERIC_HIDDEN_CATEGORY_ERROR_DETAIL
 
     resp = dummy_client.post("/hidden-categories/A", json={"hidden": True})
     assert resp.status_code == 500
+    assert resp.json()["detail"] == main_mod.GENERIC_HIDDEN_CATEGORY_ERROR_DETAIL
 
 
 def test_cookie_settings_variants(monkeypatch: pytest.MonkeyPatch):
     from backend import main as main_mod
 
+    monkeypatch.setenv("TM_FRONTEND_URL", "http://localhost:3000")
     monkeypatch.setenv("TM_COOKIE_SECURE", "false")
     monkeypatch.setenv("TM_COOKIE_SAMESITE", "none")
     secure, samesite = main_mod._get_cookie_settings()
@@ -1446,6 +1496,7 @@ def test_set_and_clear_auth_cookies(monkeypatch: pytest.MonkeyPatch):
 def test_cookie_settings_defaults_to_lax_for_unknown_value(monkeypatch: pytest.MonkeyPatch):
     from backend import main as main_mod
 
+    monkeypatch.setenv("TM_FRONTEND_URL", "http://localhost:3000")
     monkeypatch.setenv("TM_COOKIE_SECURE", "false")
     monkeypatch.setenv("TM_COOKIE_SAMESITE", "unexpected")
     secure, samesite = main_mod._get_cookie_settings()
@@ -1471,26 +1522,6 @@ def test_auth_google_branches(monkeypatch: pytest.MonkeyPatch):
     from backend import main as main_mod
     from fastapi.testclient import TestClient
 
-    class DummyResponse:
-        def __init__(self, data):
-            self._data = data
-
-        def json(self):
-            return self._data
-
-    class DummyClient:
-        def __init__(self, data):
-            self._data = data
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url):
-            return DummyResponse(self._data)
-
     client = TestClient(main_mod.app)
 
     resp = client.post("/auth/google", json={})
@@ -1498,22 +1529,25 @@ def test_auth_google_branches(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setenv("TM_GOOGLE_CLIENT_ID", "cid")
     monkeypatch.setattr(main_mod, "TM_GOOGLE_CLIENT_ID", "cid")
-    monkeypatch.setattr(main_mod, "httpx", type("H", (), {"AsyncClient": lambda: DummyClient({"error": "bad"})}))
+    monkeypatch.setattr(main_mod.google_id_token, "verify_oauth2_token", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad token")))
     resp = client.post("/auth/google", json={"credential": "x"})
     assert resp.status_code == 401
 
-    monkeypatch.setattr(main_mod, "httpx", type("H", (), {"AsyncClient": lambda: DummyClient({"aud": "other", "email": "a"})}))
+    monkeypatch.setattr(main_mod.google_id_token, "verify_oauth2_token", lambda *args, **kwargs: {"aud": "cid", "iss": "https://evil.example.com", "email": "a", "email_verified": True})
     resp = client.post("/auth/google", json={"credential": "x"})
     assert resp.status_code == 401
 
-    monkeypatch.setattr(main_mod, "httpx", type("H", (), {"AsyncClient": lambda: DummyClient({"aud": "cid", "email": "a", "name": "n", "picture": "p"})}))
+    monkeypatch.setattr(main_mod.google_id_token, "verify_oauth2_token", lambda *args, **kwargs: {"aud": "cid", "iss": "https://accounts.google.com", "email": "a", "email_verified": False, "name": "n", "picture": "p"})
+    resp = client.post("/auth/google", json={"credential": "x"})
+    assert resp.status_code == 401
+
+    monkeypatch.setattr(main_mod.google_id_token, "verify_oauth2_token", lambda *args, **kwargs: {"aud": "cid", "iss": "https://accounts.google.com", "email": "a", "email_verified": True, "name": "n", "picture": "p"})
     monkeypatch.setattr(main_mod, "determine_role", lambda email: None)
     resp = client.post("/auth/google", json={"credential": "x"})
     assert resp.status_code == 403
 
     monkeypatch.setattr(main_mod, "determine_role", lambda email: "admin")
-    monkeypatch.setattr(main_mod, "create_jwt_token", lambda **kwargs: "tok")
-    monkeypatch.setattr(main_mod, "create_refresh_token", lambda **kwargs: "rtok")
+    monkeypatch.setattr(main_mod, "_issue_auth_tokens", lambda **kwargs: ("tok", "rtok"))
     resp = client.post("/auth/google", json={"credential": "x"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "success"
@@ -1532,7 +1566,7 @@ def test_auth_refresh_access_denied(monkeypatch: pytest.MonkeyPatch):
     from backend import main as main_mod
     from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: {"email": "x"})
+    monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: {"email": "x", "role": "viewer", "fid": "family", "jti": "token"})
     monkeypatch.setattr(main_mod, "determine_role", lambda email: None)
 
     client = TestClient(main_mod.app)
@@ -1679,7 +1713,7 @@ def test_set_category_keywords_unexpected_exception(dummy_client, monkeypatch):
 
     resp = dummy_client.put("/category-mappings/A", json={"keywords": ["x"]})
     assert resp.status_code == 500
-    assert "unexpected" in resp.json()["detail"]
+    assert resp.json()["detail"] == main_mod.GENERIC_MAPPING_ERROR_DETAIL
 
 
 def test_update_all_category_mappings_failure(dummy_client, monkeypatch):

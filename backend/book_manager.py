@@ -5,6 +5,7 @@ import re
 import sys
 import os
 import io
+import posixpath
 
 import logging.config
 import shutil
@@ -13,8 +14,10 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Tuple, Dict, List, Union, Optional, Any
+from urllib.parse import quote, urlparse
 import chardet
 from fastapi.responses import FileResponse, Response
+from bs4 import BeautifulSoup
 from backend.es_manager import ESManager
 from backend.book import Book
 
@@ -45,6 +48,76 @@ class BookManager:
     }
 
     CACHE_MAX_AGE_SECONDS = 86400  # 1일
+    HTML_VIEWER_RESOURCE_EXTENSIONS = {".css", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".tiff", ".ico", ".avif", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".ogg", ".wav", ".mp4", ".webm"}
+    HTML_VIEWER_CSP = "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' blob:;"
+
+    @classmethod
+    def _html_security_headers(cls) -> Dict[str, str]:
+        return {"Content-Security-Policy": cls.HTML_VIEWER_CSP, "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Permissions-Policy": "camera=(), microphone=(), geolocation=()", "Cache-Control": "no-transform"}
+
+    @classmethod
+    def _build_html_resource_url(cls, resource_base_url: str, raw_path: str) -> Optional[str]:
+        if not raw_path:
+            return None
+        trimmed = raw_path.strip()
+        if not trimmed:
+            return None
+        if trimmed.startswith("#"):
+            return trimmed
+
+        parsed = urlparse(trimmed)
+        scheme = parsed.scheme.lower()
+        if scheme in {"data", "blob"}:
+            return trimmed
+        if scheme or trimmed.startswith("//"):
+            return None
+        return f"{resource_base_url}?path={quote(trimmed, safe='')}"
+
+    @classmethod
+    def _sanitize_html_for_viewer(cls, html_content: str, resource_base_url: str) -> str:
+        soup = BeautifulSoup(html_content, "html.parser")
+
+        for tag in soup.find_all(["script", "iframe", "frame", "object", "embed", "form", "base"]):
+            tag.decompose()
+
+        for meta in soup.find_all("meta"):
+            if meta.get("http-equiv"):
+                meta.decompose()
+
+        for tag in soup.find_all(True):
+            for attr in list(tag.attrs.keys()):
+                lowered = attr.lower()
+                if lowered.startswith("on") or lowered in {"srcdoc", "integrity", "crossorigin", "nonce", "formaction"}:
+                    del tag.attrs[attr]
+
+            if tag.name == "link":
+                rel_values = [str(rel).lower() for rel in tag.get("rel", [])]
+                if "stylesheet" not in rel_values:
+                    tag.decompose()
+                    continue
+
+            if tag.name == "a":
+                href = tag.get("href")
+                if href:
+                    safe_href = cls._build_html_resource_url(resource_base_url, href)
+                    if safe_href is None or not safe_href.startswith("#"):
+                        tag.attrs.pop("href", None)
+                    else:
+                        tag["href"] = safe_href
+                tag["rel"] = ["nofollow", "noopener", "noreferrer"]
+                continue
+
+            for attr_name in ("src", "href", "poster", "xlink:href"):
+                attr_value = tag.get(attr_name)
+                if not attr_value:
+                    continue
+                safe_url = cls._build_html_resource_url(resource_base_url, attr_value)
+                if safe_url is None:
+                    tag.attrs.pop(attr_name, None)
+                else:
+                    tag[attr_name] = safe_url
+
+        return str(soup)
 
     @staticmethod
     def _validate_preview_epub(cache_file: Path) -> Tuple[bool, Optional[str]]:
@@ -433,11 +506,14 @@ class BookManager:
             media_type = BookManager.MEDIA_TYPES.get(book.file_path.suffix, "application/octet-stream")
             # Content-Encoding: identity → GZipMiddleware 우회
             # Cache-Control: no-transform → 외부 프록시(Traefik 등)의 응답 변환(gzip 등) 방지
-            return FileResponse(path=book.file_path, media_type=media_type, headers={"Content-Encoding": "identity", "Cache-Control": "no-transform"})
+            headers = {"Content-Encoding": "identity", "Cache-Control": "no-transform"}
+            if book.file_path.suffix.lower() == ".html":
+                return FileResponse(path=book.file_path, media_type=media_type, filename=book.file_path.name, content_disposition_type="attachment", headers=headers)
+            return FileResponse(path=book.file_path, media_type=media_type, headers=headers)
         return ""
 
-    async def get_book_preview(self, book_id: int, pages: int = 5, chapters: int = 3) -> Union[Response, FileResponse]:
-        LOGGER.debug("# get_book_preview(book_id=%d, pages=%d, chapters=%d)", book_id, pages, chapters)
+    async def get_book_preview(self, book_id: int, pages: int = 5, chapters: int = 3, resource_base_url: str = "") -> Union[Response, FileResponse]:
+        LOGGER.debug("# get_book_preview(book_id=%d, pages=%d, chapters=%d, resource_base_url='%s')", book_id, pages, chapters, resource_base_url)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
             LOGGER.warning("get_book_preview: book_id=%d not found in ES", book_id)
@@ -475,7 +551,7 @@ class BookManager:
                 return FileResponse(path=cache_file, media_type="application/pdf", headers={"Content-Encoding": "identity", "Cache-Control": "no-transform"})
             except Exception as e:
                 LOGGER.error("PDF preview generation failed for book_id=%d: %s", book_id, e)
-                return Response(status_code=500, content=f"PDF preview failed: {e}")
+                return Response(status_code=500, content="PDF preview failed")
 
         elif suffix == ".epub":
             total_chapters = BookManager._get_epub_total_chapters(book.file_path)
@@ -730,15 +806,24 @@ class BookManager:
             except zipfile.BadZipFile:
                 LOGGER.exception("EPUB preview: corrupted ZIP for book_id=%d", book_id)
                 return Response(status_code=422, content="EPUB file is corrupted or not a valid ZIP")
-            except Exception as e:
+            except Exception:
                 LOGGER.exception("EPUB preview generation failed for book_id=%d", book_id)
-                return Response(status_code=500, content=f"EPUB preview failed: {e}")
+                return Response(status_code=500, content="EPUB preview failed")
+
+        elif suffix == ".html":
+            try:
+                html_content = book.file_path.read_text(encoding="utf-8", errors="replace")
+                sanitized = BookManager._sanitize_html_for_viewer(html_content, resource_base_url or f"/html-resource/{book_id}")
+                return Response(content=sanitized, media_type="text/html", headers=BookManager._html_security_headers())
+            except Exception as e:
+                LOGGER.error("HTML preview generation failed for book_id=%d: %s", book_id, e)
+                return Response(status_code=500, content="HTML preview failed")
 
         elif suffix in (".doc", ".hwp"):
             cache_file = cache_dir / f"{book_id}.html"
             if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime and cache_file.stat().st_size > 0:
                 LOGGER.debug("Preview cache hit for book_id=%d (%s)", book_id, suffix)
-                return FileResponse(path=cache_file, media_type="text/html")
+                return FileResponse(path=cache_file, media_type="text/html", headers=BookManager._html_security_headers())
 
             try:
                 html_content = BookManager._convert_with_libreoffice(book.file_path, "html")
@@ -757,15 +842,43 @@ class BookManager:
                     cache_file.write_text(html_content, encoding="utf-8")
                     BookManager._evict_old_cache(cache_dir)
                     LOGGER.debug("Preview generated for book_id=%d (%s)", book_id, suffix)
-                    return Response(content=html_content, media_type="text/html")
+                    return Response(content=html_content, media_type="text/html", headers=BookManager._html_security_headers())
                 # 변환 실패 시 빈 HTML 반환 (Unsupported 에러 대신)
-                return Response(content="<html><body><p>미리보기를 생성할 수 없습니다.</p></body></html>", media_type="text/html")
+                return Response(content="<html><body><p>미리보기를 생성할 수 없습니다.</p></body></html>", media_type="text/html", headers=BookManager._html_security_headers())
             except Exception as e:
                 LOGGER.error("%s preview generation failed for book_id=%d: %s", suffix.upper(), book_id, e)
-                return Response(status_code=500, content=f"{suffix.upper()} preview failed: {e}")
+                return Response(status_code=500, content=f"{suffix.upper()} preview failed")
 
         # 지원하지 않는 형식
         return Response(status_code=400, content=f"Unsupported file type: {suffix}")
+
+    async def get_html_resource(self, book_id: int, resource_path: str) -> Union[Response, FileResponse]:
+        LOGGER.debug("# get_html_resource(book_id=%d, resource_path='%s')", book_id, resource_path)
+        doc = self.es_manager.search_by_id(book_id)
+        if not doc:
+            return Response(status_code=404, content=f"Book not found: {book_id}")
+        book = self.item_class(book_id=book_id, info=doc)
+        if book.file_path.suffix.lower() != ".html":
+            return Response(status_code=400, content="HTML resource preview is only supported for HTML files")
+
+        normalized = posixpath.normpath(resource_path or "")
+        if normalized in {"", ".", ".."} or normalized.startswith("../"):
+            return Response(status_code=400, content="Invalid resource path")
+
+        html_dir = book.file_path.parent.resolve()
+        target_path = (html_dir / normalized).resolve()
+        try:
+            if not target_path.is_relative_to(html_dir):
+                return Response(status_code=400, content="Invalid resource path")
+        except OSError:
+            return Response(status_code=400, content="Invalid resource path")
+        if not target_path.is_file():
+            return Response(status_code=404, content=f"Resource not found: {resource_path}")
+        if target_path.suffix.lower() not in BookManager.HTML_VIEWER_RESOURCE_EXTENSIONS:
+            return Response(status_code=400, content="Unsupported resource type")
+
+        media_type = BookManager.MEDIA_TYPES.get(target_path.suffix.lower(), "application/octet-stream")
+        return FileResponse(path=target_path, media_type=media_type, headers=BookManager._html_security_headers())
 
     async def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> Tuple[List[Book], Optional[str]]:
         LOGGER.debug("# search_by_keyword(keyword='%s')", keyword)
@@ -847,17 +960,21 @@ class BookManager:
             try:
                 if self.es_manager.update(book_id, category=new_category, title=new_title, author=new_author, file_path=str(new_relative_path), file_type=new_type):
                     return "Ok", None
-                # ES 업데이트 실패 시 파일을 원래 위치로 롤백
                 LOGGER.error("update_book: ES update failed for book_id=%d, rolling back file move", book_id)
-                new_full_path.rename(file_path)
+                try:
+                    new_full_path.rename(file_path)
+                except OSError as rollback_err:
+                    LOGGER.error("update_book: rollback failed for book_id=%d: %s", book_id, rollback_err)
+                    return ("Error", f"ES 업데이트 실패, 파일 롤백도 실패: {rollback_err}")
+                return ("Error", f"ES 업데이트 실패, 파일 롤백 완료: book_id={book_id}")
             except Exception as e:
-                # ES 예외 발생 시에도 파일 롤백 시도
                 LOGGER.error("update_book: ES update exception for book_id=%d: %s, rolling back file move", book_id, e)
                 try:
                     new_full_path.rename(file_path)
-                except IOError as rollback_err:
+                except OSError as rollback_err:
                     LOGGER.error("update_book: rollback failed for book_id=%d: %s", book_id, rollback_err)
                     return ("Error", f"ES 업데이트와 파일 롤백 모두 실패: ES={e}, rollback={rollback_err}")
+                return ("Error", f"ES 업데이트 예외, 파일 롤백 완료: {e}")
         return ("Error", f"can't update book information of '{book_id}' in ElasticSearch, no such a book")
 
     def get_category_mismatches(self) -> Dict[str, Any]:
@@ -1135,7 +1252,7 @@ class BookManager:
             return Response(content=pdf_bytes, media_type="application/pdf", headers={"Content-Encoding": "identity", "Cache-Control": "no-transform", "X-Total-Pages": str(total_pages)})
         except Exception as e:
             LOGGER.error("PDF pages extraction failed for book_id=%d: %s", book_id, e)
-            return Response(status_code=500, content=f"PDF pages extraction failed: {e}")
+            return Response(status_code=500, content="PDF pages extraction failed")
 
     async def rename_category(self, old_category: str, new_category: str) -> Tuple[Dict[str, Any], Optional[str]]:
         """카테고리 이름을 일괄 변경 (FS + ES, 실패 시 FS 롤백)

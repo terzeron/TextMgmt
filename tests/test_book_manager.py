@@ -27,6 +27,15 @@ CATEGORY1 = "_epub"
 CATEGORY2 = "_txt"
 
 
+@pytest.fixture(autouse=True)
+def restore_book_path_prefix():
+    original = Book.path_prefix
+    try:
+        yield
+    finally:
+        Book.path_prefix = original
+
+
 def inspect_book_info(book: Book) -> None:
     """Verify book object has correct types."""
     assert isinstance(book, Book)
@@ -536,6 +545,82 @@ def test_update_book_conflict_and_success_and_rollback(tmp_path: Path):
     status, msg = asyncio_runner(manager.update_book(2, "A", "T", "U", new2, ".txt"))
     assert status == "Error"
     assert old2.exists()
+
+
+def test_update_book_es_false_rollback_succeeds(tmp_path: Path):
+    """ES update returns False → file is rolled back and a meaningful error is returned."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+
+    src = tmp_path / "A" / "src.txt"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("content")
+    es.search_by_id = lambda _id: make_doc("A/src.txt")
+    es.updated = False
+
+    dst = tmp_path / "A" / "dst.txt"
+    status, msg = asyncio_runner(manager.update_book(1, "A", "T", "U", dst, ".txt"))
+
+    assert status == "Error"
+    assert msg is not None
+    assert "ES 업데이트 실패" in msg
+    assert src.exists(), "rollback should have restored the source file"
+    assert not dst.exists(), "destination should not exist after rollback"
+
+
+def test_update_book_es_false_rollback_fails(tmp_path: Path):
+    """ES update returns False and rollback rename also fails → combined error message."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+
+    src = tmp_path / "A" / "src2.txt"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("content")
+    es.search_by_id = lambda _id: make_doc("A/src2.txt")
+    es.updated = False
+
+    dst = tmp_path / "A" / "dst2.txt"
+
+    original_rename = dst.__class__.rename
+
+    def fail_rename(self, target):
+        if self == dst:
+            raise OSError("simulated rollback failure")
+        return original_rename(self, target)
+
+    import unittest.mock as mock
+
+    with mock.patch.object(type(dst), "rename", fail_rename):
+        status, msg = asyncio_runner(manager.update_book(1, "A", "T", "U", dst, ".txt"))
+
+    assert status == "Error"
+    assert msg is not None
+    assert "롤백" in msg
+
+
+def test_update_book_es_exception_rollback_succeeds(tmp_path: Path):
+    """ES update raises exception → file is rolled back and a meaningful error is returned."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+
+    src = tmp_path / "A" / "src3.txt"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("content")
+    es.search_by_id = lambda _id: make_doc("A/src3.txt")
+
+    def raise_on_update(*args, **kwargs):
+        raise RuntimeError("ES connection error")
+
+    es.update = raise_on_update
+
+    dst = tmp_path / "A" / "dst3.txt"
+    status, msg = asyncio_runner(manager.update_book(1, "A", "T", "U", dst, ".txt"))
+
+    assert status == "Error"
+    assert msg is not None
+    assert "ES 업데이트 예외" in msg
+    assert src.exists(), "rollback should have restored the source file"
+    assert not dst.exists()
 
 
 def test_update_book_path_traversal(tmp_path: Path):
@@ -1513,6 +1598,7 @@ def test_get_book_preview_pdf_exception(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setitem(sys.modules, "pypdf", type("P", (), {"PdfReader": BadReader, "PdfWriter": object})())
     resp = asyncio_runner(manager.get_book_preview(1))
     assert resp.status_code == 500
+    assert resp.body.decode("utf-8") == "PDF preview failed"
 
 
 def test_update_book_os_error_on_resolve(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1740,6 +1826,7 @@ def test_get_pdf_pages_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setitem(sys.modules, "pypdf", type("P", (), {"PdfReader": BadReader, "PdfWriter": object})())
     resp = asyncio_runner(manager.get_pdf_pages(1, start=1, end=1))
     assert resp.status_code == 500
+    assert resp.body.decode("utf-8") == "PDF pages extraction failed"
 
 
 def test_rename_category_path_traversal(tmp_path: Path):
@@ -2648,6 +2735,7 @@ def test_get_book_preview_epub_general_exception(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(BookManager, "_find_opf_path", staticmethod(lambda zin: (_ for _ in ()).throw(RuntimeError("boom"))))
     result = asyncio_runner(manager.get_book_preview(1))
     assert result.status_code == 500
+    assert result.body.decode("utf-8") == "EPUB preview failed"
 
 
 def test_get_book_preview_doc_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -2662,6 +2750,7 @@ def test_get_book_preview_doc_exception(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(BookManager, "_convert_with_libreoffice", staticmethod(lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom"))))
     result = asyncio_runner(manager.get_book_preview(1))
     assert result.status_code == 500
+    assert result.body.decode("utf-8") == ".DOC preview failed"
 
 
 # ---- coverage: reload_category edge cases ----
@@ -3077,3 +3166,89 @@ def test_hwp_preview_html_escaping(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         body = resp.body.decode("utf-8")
         # XSS 방지: <script> 같은 태그가 이스케이프되어야 함
         assert "<script>" not in body
+
+
+def test_get_book_preview_html_sanitizes_active_content_and_rewrites_resources(tmp_path: Path):
+    (tmp_path / "A").mkdir(parents=True, exist_ok=True)
+    html_file = tmp_path / "A" / "test.html"
+    html_file.write_text(
+        """
+        <html>
+          <head>
+            <meta http-equiv="refresh" content="0;url=https://evil.example.com" />
+            <script>alert(1)</script>
+            <link rel="stylesheet" href="style.css" />
+            <link rel="preload" href="evil.js" />
+          </head>
+          <body onload="steal()">
+            <iframe src="https://evil.example.com/embed"></iframe>
+            <img src="cover.png" onclick="hack()" />
+            <a href="chapter2.html">next</a>
+            <a href="#section1">toc</a>
+          </body>
+        </html>
+        """,
+        encoding="utf-8",
+    )
+    (tmp_path / "A" / "style.css").write_text("body { color: red; }", encoding="utf-8")
+    (tmp_path / "A" / "cover.png").write_bytes(b"png")
+    doc = make_doc("A/test.html", "html")
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: doc
+
+    resp = asyncio_runner(manager.get_book_preview(1, resource_base_url="/html-resource/1"))
+    body = resp.body.decode("utf-8")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-security-policy"].startswith("sandbox;")
+    assert "<script" not in body
+    assert "<iframe" not in body
+    assert "onload=" not in body
+    assert "onclick=" not in body
+    assert "http-equiv" not in body
+    assert 'href="/html-resource/1?path=style.css"' in body
+    assert 'src="/html-resource/1?path=cover.png"' in body
+    assert 'href="#section1"' in body
+    assert 'href="chapter2.html"' not in body
+
+
+def test_get_html_resource_allows_local_whitelisted_files_only(tmp_path: Path):
+    (tmp_path / "A").mkdir(parents=True, exist_ok=True)
+    html_file = tmp_path / "A" / "test.html"
+    html_file.write_text("<html></html>", encoding="utf-8")
+    css_file = tmp_path / "A" / "style.css"
+    css_file.write_text("body{}", encoding="utf-8")
+    doc = make_doc("A/test.html", "html")
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: doc
+
+    resp = asyncio_runner(manager.get_html_resource(1, "style.css"))
+    assert isinstance(resp, FileResponse)
+    assert resp.status_code == 200
+    assert resp.headers["content-security-policy"].startswith("sandbox;")
+    assert resp.headers["x-content-type-options"] == "nosniff"
+
+    bad = asyncio_runner(manager.get_html_resource(1, "../secret.txt"))
+    assert bad.status_code == 400
+
+    unsupported = tmp_path / "A" / "script.js"
+    unsupported.write_text("alert(1)", encoding="utf-8")
+    resp2 = asyncio_runner(manager.get_html_resource(1, "script.js"))
+    assert resp2.status_code == 400
+
+
+def test_get_book_content_html_forces_attachment(tmp_path: Path):
+    (tmp_path / "A").mkdir(parents=True, exist_ok=True)
+    html_file = tmp_path / "A" / "test.html"
+    html_file.write_text("<html><body>safe</body></html>", encoding="utf-8")
+    doc = make_doc("A/test.html", "html")
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: doc
+
+    resp = asyncio_runner(manager.get_book_content(1))
+    assert isinstance(resp, FileResponse)
+    content_disposition = resp.headers["content-disposition"]
+    assert content_disposition.startswith("attachment;")

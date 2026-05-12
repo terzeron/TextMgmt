@@ -13,6 +13,13 @@ spec:
   rules:
     - matches:
         - path:
+            type: Exact
+            value: /wake
+      backendRefs:
+        - name: tm-backend
+          port: 8020
+    - matches:
+        - path:
             type: PathPrefix
             value: /
       backendRefs:

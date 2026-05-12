@@ -23,7 +23,13 @@ describe('ViewHTML', () => {
     it('iframe에 올바른 src를 설정한다', () => {
         render(<ViewHTML bookId={42} />);
         const iframe = screen.getByTitle('html viewer');
-        expect(iframe.getAttribute('src')).toBe('http://localhost:8000/download/42');
+        expect(iframe.getAttribute('src')).toBe('http://localhost:8000/preview/42');
+    });
+
+    it('iframe sandbox에서 same-origin/script 권한을 제거한다', () => {
+        render(<ViewHTML bookId={42} />);
+        const iframe = screen.getByTitle('html viewer');
+        expect(iframe.getAttribute('sandbox')).toBe('');
     });
 
     it('iframe 로드 완료 시 로딩 상태를 숨긴다', () => {
