@@ -16,17 +16,34 @@ LOGGER = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
 
 # 기본 테스트 환경 변수 설정 (import 시점 SystemExit 방지)
+# Book.path_prefix는 import 시점에 평가되므로 반드시 import 전에 설정해야 한다
 PROJECT_ROOT = Path(__file__).parent.parent
-os.environ.setdefault("TM_BOOK_DIR", str(PROJECT_ROOT / "tests/books"))
-os.environ.setdefault("TM_COMICS_DIR", str(PROJECT_ROOT / "tests/comics"))
-os.environ.setdefault("TM_FRONTEND_URL", "http://localhost:3000")
-os.environ.setdefault("TM_JWT_SECRET", "test_jwt_secret_for_testing_minimum_32bytes")
-os.environ.setdefault("TM_ADMIN_EMAIL", "admin@test.com")
-os.environ.setdefault("TM_ALLOWED_EMAILS", "viewer@test.com")
+os.environ["TM_BOOK_DIR"] = str(PROJECT_ROOT / "tests/books")
+os.environ["TM_COMICS_DIR"] = str(PROJECT_ROOT / "tests/comics")
+os.environ["TM_FRONTEND_URL"] = "http://localhost:3000"
+os.environ["TM_JWT_SECRET"] = "test_jwt_secret_for_testing_minimum_32bytes"
+os.environ["TM_ADMIN_EMAIL"] = "admin@test.com"
+os.environ["TM_ALLOWED_EMAILS"] = "viewer@test.com"
 os.environ.setdefault("TM_ES_COMICS_INDEX", "test_comics_index")
 
 # Disable Ryuk to avoid docker.sock mount issues with Colima
 os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
+
+# env var 설정 후 import해야 Book.path_prefix가 올바른 경로로 초기화된다
+from backend.book import Book
+from backend.comics import Comics
+
+
+@pytest.fixture(autouse=True)
+def restore_model_path_prefixes():
+    original_book_prefix = Book.path_prefix
+    original_comics_prefix = Comics.path_prefix
+    try:
+        yield
+    finally:
+        Book.path_prefix = original_book_prefix
+        Comics.path_prefix = original_comics_prefix
+
 
 from testcontainers.core.container import DockerContainer
 from testcontainers.mysql import MySqlContainer
@@ -194,13 +211,13 @@ def elasticsearch_container():
             os.environ["TM_ES_USER"] = "elastic"
             os.environ["TM_ES_PASSWORD"] = ""
             # Set environment variables for backend/main.py
-            os.environ.setdefault("TM_FRONTEND_URL", "http://localhost:3000")
-            os.environ.setdefault("VITE_FACEBOOK_APP_ID", "test_app_id")
-            os.environ.setdefault("VITE_FACEBOOK_APP_SECRET", "test_app_secret")
+            os.environ["TM_FRONTEND_URL"] = "http://localhost:3000"
+            os.environ["VITE_FACEBOOK_APP_ID"] = "test_app_id"
+            os.environ["VITE_FACEBOOK_APP_SECRET"] = "test_app_secret"
             # JWT 인증 테스트용 환경변수
-            os.environ.setdefault("TM_JWT_SECRET", "test_jwt_secret_for_testing_minimum_32bytes")
-            os.environ.setdefault("TM_ADMIN_EMAIL", "admin@test.com")
-            os.environ.setdefault("TM_ALLOWED_EMAILS", "viewer@test.com")
+            os.environ["TM_JWT_SECRET"] = "test_jwt_secret_for_testing_minimum_32bytes"
+            os.environ["TM_ADMIN_EMAIL"] = "admin@test.com"
+            os.environ["TM_ALLOWED_EMAILS"] = "viewer@test.com"
             yield es
         print(">>> Elasticsearch container stopped")
     except Exception as e:

@@ -49,6 +49,14 @@ class TestDetermineRole:
     def test_empty_email(self, setup_env):
         assert setup_env.determine_role("") is None
 
+    def test_reads_current_env_without_reload(self, setup_env, monkeypatch):
+        monkeypatch.setenv("TM_ADMIN_EMAIL", "new-admin@example.com")
+        monkeypatch.setenv("TM_ALLOWED_EMAILS", "new-viewer@example.com")
+
+        assert setup_env.determine_role("new-admin@example.com") == "admin"
+        assert setup_env.determine_role("new-viewer@example.com") == "viewer"
+        assert setup_env.determine_role("admin@example.com") is None
+
 
 def test_auth_requires_jwt_secret(monkeypatch):
     monkeypatch.delenv("TM_JWT_SECRET", raising=False)
@@ -90,6 +98,8 @@ class TestCreateRefreshToken:
         assert payload["type"] == "refresh"
         assert payload["name"] == "Admin"
         assert payload["picture"] == "pic.jpg"
+        assert payload["fid"]
+        assert payload["jti"]
 
     def test_refresh_token_expiration(self, setup_env):
         token = setup_env.create_refresh_token("admin@example.com", "admin")
@@ -130,6 +140,39 @@ class TestDecodeRefreshToken:
         with pytest.raises(HTTPException) as exc_info:
             setup_env.decode_refresh_token("invalid.token.value")
         assert exc_info.value.status_code == 401
+
+    def test_refresh_token_without_rotation_claims_is_rejected(self, setup_env):
+        from fastapi import HTTPException
+
+        payload = {"type": "refresh", "email": "admin@example.com", "role": "admin", "exp": int(time.time()) + 100, "iat": int(time.time())}
+        token = jwt.encode(payload, "testsecret123", algorithm="HS256")
+        with pytest.raises(HTTPException) as exc_info:
+            setup_env.decode_refresh_token(token)
+        assert exc_info.value.status_code == 401
+        assert "claims" in exc_info.value.detail.lower()
+
+    def test_refresh_token_missing_fid_only_is_rejected(self, setup_env):
+        """fid만 없는 경우도 claims 에러로 거부된다."""
+        from fastapi import HTTPException
+
+        payload = {"type": "refresh", "email": "admin@example.com", "role": "admin", "jti": "some-jti", "exp": int(time.time()) + 100, "iat": int(time.time())}
+        token = jwt.encode(payload, "testsecret123", algorithm="HS256")
+        with pytest.raises(HTTPException) as exc_info:
+            setup_env.decode_refresh_token(token)
+        assert exc_info.value.status_code == 401
+        assert "claims" in exc_info.value.detail.lower()
+        assert "log in again" in exc_info.value.detail.lower()
+
+    def test_refresh_token_missing_jti_only_is_rejected(self, setup_env):
+        """jti만 없는 경우도 claims 에러로 거부된다."""
+        from fastapi import HTTPException
+
+        payload = {"type": "refresh", "email": "admin@example.com", "role": "admin", "fid": "some-fid", "exp": int(time.time()) + 100, "iat": int(time.time())}
+        token = jwt.encode(payload, "testsecret123", algorithm="HS256")
+        with pytest.raises(HTTPException) as exc_info:
+            setup_env.decode_refresh_token(token)
+        assert exc_info.value.status_code == 401
+        assert "claims" in exc_info.value.detail.lower()
 
 
 class TestExtractPayload:
@@ -258,6 +301,30 @@ class TestRequireAuth:
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
+    async def test_revoked_viewer_fails(self, setup_env, monkeypatch):
+        from fastapi import HTTPException
+
+        token = setup_env.create_jwt_token("viewer1@example.com", "viewer")
+        req = self._make_request(token)
+        monkeypatch.setattr(setup_env, "determine_role", lambda email: None)
+        with pytest.raises(HTTPException) as exc_info:
+            await setup_env.require_auth(req)
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Access denied"
+
+    @pytest.mark.asyncio
+    async def test_role_mismatch_fails(self, setup_env, monkeypatch):
+        from fastapi import HTTPException
+
+        token = setup_env.create_jwt_token("viewer1@example.com", "viewer")
+        req = self._make_request(token)
+        monkeypatch.setattr(setup_env, "determine_role", lambda email: "admin")
+        with pytest.raises(HTTPException) as exc_info:
+            await setup_env.require_auth(req)
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Access denied"
+
+    @pytest.mark.asyncio
     async def test_no_token_fails(self, setup_env):
         from fastapi import HTTPException
 
@@ -304,6 +371,30 @@ class TestRequireAdmin:
         assert "admin" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
+    async def test_admin_revoked_fails(self, setup_env, monkeypatch):
+        from fastapi import HTTPException
+
+        token = setup_env.create_jwt_token("admin@example.com", "admin")
+        req = self._make_request(token)
+        monkeypatch.setattr(setup_env, "determine_role", lambda email: None)
+        with pytest.raises(HTTPException) as exc_info:
+            await setup_env.require_admin(req)
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Access denied"
+
+    @pytest.mark.asyncio
+    async def test_admin_demoted_to_viewer_fails(self, setup_env, monkeypatch):
+        from fastapi import HTTPException
+
+        token = setup_env.create_jwt_token("admin@example.com", "admin")
+        req = self._make_request(token)
+        monkeypatch.setattr(setup_env, "determine_role", lambda email: "viewer")
+        with pytest.raises(HTTPException) as exc_info:
+            await setup_env.require_admin(req)
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Access denied"
+
+    @pytest.mark.asyncio
     async def test_no_token_fails(self, setup_env):
         from fastapi import HTTPException
 
@@ -334,6 +425,7 @@ class TestGetCookieSettings:
         import importlib
 
         importlib.reload(main_mod)
+        monkeypatch.setenv("TM_FRONTEND_URL", "http://localhost:3000")
         monkeypatch.delenv("TM_COOKIE_SECURE", raising=False)
         monkeypatch.delenv("TM_COOKIE_SAMESITE", raising=False)
         secure, samesite = main_mod._get_cookie_settings()
@@ -345,6 +437,7 @@ class TestGetCookieSettings:
         import importlib
 
         importlib.reload(main_mod)
+        monkeypatch.setenv("TM_FRONTEND_URL", "https://app.example.com")
         monkeypatch.setenv("TM_COOKIE_SECURE", "true")
         monkeypatch.delenv("TM_COOKIE_SAMESITE", raising=False)
         secure, samesite = main_mod._get_cookie_settings()
@@ -356,6 +449,7 @@ class TestGetCookieSettings:
         import importlib
 
         importlib.reload(main_mod)
+        monkeypatch.setenv("TM_FRONTEND_URL", "http://localhost:3000")
         monkeypatch.delenv("TM_COOKIE_SECURE", raising=False)
         monkeypatch.setenv("TM_COOKIE_SAMESITE", "strict")
         secure, samesite = main_mod._get_cookie_settings()
@@ -366,6 +460,7 @@ class TestGetCookieSettings:
         import importlib
 
         importlib.reload(main_mod)
+        monkeypatch.setenv("TM_FRONTEND_URL", "http://localhost:3000")
         monkeypatch.delenv("TM_COOKIE_SECURE", raising=False)
         monkeypatch.setenv("TM_COOKIE_SAMESITE", "invalid_value")
         secure, samesite = main_mod._get_cookie_settings()
@@ -376,6 +471,7 @@ class TestGetCookieSettings:
         import importlib
 
         importlib.reload(main_mod)
+        monkeypatch.setenv("TM_FRONTEND_URL", "http://localhost:3000")
         monkeypatch.setenv("TM_COOKIE_SECURE", "true")
         monkeypatch.setenv("TM_COOKIE_SAMESITE", "none")
         secure, samesite = main_mod._get_cookie_settings()
@@ -387,10 +483,22 @@ class TestGetCookieSettings:
         import importlib
 
         importlib.reload(main_mod)
+        monkeypatch.setenv("TM_FRONTEND_URL", "http://localhost:3000")
         monkeypatch.setenv("TM_COOKIE_SECURE", "false")
         monkeypatch.setenv("TM_COOKIE_SAMESITE", "none")
         secure, samesite = main_mod._get_cookie_settings()
         assert secure is False
+        assert samesite == "lax"
+
+    def test_non_local_origin_forces_secure_even_when_disabled(self, monkeypatch):
+        import backend.main as main_mod
+        import importlib
+
+        importlib.reload(main_mod)
+        monkeypatch.setenv("TM_FRONTEND_URL", "https://app.example.com")
+        monkeypatch.setenv("TM_COOKIE_SECURE", "false")
+        secure, samesite = main_mod._get_cookie_settings()
+        assert secure is True
         assert samesite == "lax"
 
 
@@ -410,25 +518,10 @@ def auth_client():
 
 
 def test_auth_google_success(auth_client, monkeypatch):
-    class DummyResp:
-        def json(self):
-            return {"aud": "cid", "email": "e@example.com", "name": "N", "picture": "P"}
-
-    class DummyClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url):
-            return DummyResp()
-
     monkeypatch.setattr(main_mod, "TM_GOOGLE_CLIENT_ID", "cid")
-    monkeypatch.setattr(main_mod.httpx, "AsyncClient", DummyClient)
+    monkeypatch.setattr(main_mod.google_id_token, "verify_oauth2_token", lambda credential, request, audience: {"aud": audience, "iss": "https://accounts.google.com", "email": "e@example.com", "email_verified": True, "name": "N", "picture": "P"})
     monkeypatch.setattr(main_mod, "determine_role", lambda email: "user")
-    monkeypatch.setattr(main_mod, "create_jwt_token", lambda **kwargs: "jwt")
-    monkeypatch.setattr(main_mod, "create_refresh_token", lambda **kwargs: "rjwt")
+    monkeypatch.setattr(main_mod, "_issue_auth_tokens", lambda **kwargs: ("jwt", "rjwt"))
 
     resp = auth_client.post("/auth/google", json={"credential": "c"})
     assert resp.status_code == 200
@@ -443,46 +536,24 @@ def test_auth_google_errors(auth_client, monkeypatch):
     resp = auth_client.post("/auth/google", json={})
     assert resp.status_code == 400
 
-    class DummyRespErr:
-        def json(self):
-            return {"error": "bad", "error_description": "nope"}
-
-    class DummyClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url):
-            return DummyRespErr()
-
     monkeypatch.setattr(main_mod, "TM_GOOGLE_CLIENT_ID", "cid")
-    monkeypatch.setattr(main_mod.httpx, "AsyncClient", DummyClient)
+
+    def raise_invalid(*args, **kwargs):
+        raise ValueError("nope")
+
+    monkeypatch.setattr(main_mod.google_id_token, "verify_oauth2_token", raise_invalid)
     resp = auth_client.post("/auth/google", json={"credential": "c"})
     assert resp.status_code == 401
 
-    class DummyRespAud:
-        def json(self):
-            return {"aud": "other", "email": "e@example.com"}
-
-    class DummyClient2(DummyClient):
-        async def get(self, url):
-            return DummyRespAud()
-
-    monkeypatch.setattr(main_mod.httpx, "AsyncClient", DummyClient2)
+    monkeypatch.setattr(main_mod.google_id_token, "verify_oauth2_token", lambda *args, **kwargs: {"aud": "cid", "iss": "https://evil.example.com", "email": "e@example.com", "email_verified": True})
     resp = auth_client.post("/auth/google", json={"credential": "c"})
     assert resp.status_code == 401
 
-    class DummyRespRole:
-        def json(self):
-            return {"aud": "cid", "email": "e@example.com"}
+    monkeypatch.setattr(main_mod.google_id_token, "verify_oauth2_token", lambda *args, **kwargs: {"aud": "cid", "iss": "https://accounts.google.com", "email": "e@example.com", "email_verified": False})
+    resp = auth_client.post("/auth/google", json={"credential": "c"})
+    assert resp.status_code == 401
 
-    class DummyClient3(DummyClient):
-        async def get(self, url):
-            return DummyRespRole()
-
-    monkeypatch.setattr(main_mod.httpx, "AsyncClient", DummyClient3)
+    monkeypatch.setattr(main_mod.google_id_token, "verify_oauth2_token", lambda *args, **kwargs: {"aud": "cid", "iss": "https://accounts.google.com", "email": "e@example.com", "email_verified": True})
     monkeypatch.setattr(main_mod, "determine_role", lambda email: None)
     resp = auth_client.post("/auth/google", json={"credential": "c"})
     assert resp.status_code == 403
@@ -492,10 +563,13 @@ def test_auth_refresh_and_logout(auth_client, monkeypatch):
     resp = auth_client.post("/auth/refresh")
     assert resp.status_code == 400
 
-    monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: {"email": "e@example.com", "name": "n", "picture": "p"})
+    monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: {"email": "e@example.com", "role": "user", "name": "n", "picture": "p", "fid": "family1", "jti": "old-token"})
     monkeypatch.setattr(main_mod, "determine_role", lambda email: "user")
     monkeypatch.setattr(main_mod, "create_jwt_token", lambda **kwargs: "jwt")
     monkeypatch.setattr(main_mod, "create_refresh_token", lambda **kwargs: "rjwt")
+    monkeypatch.setattr(main_mod.refresh_token_store, "rotate", lambda **kwargs: "ok")
+    revoke_calls = []
+    monkeypatch.setattr(main_mod.refresh_token_store, "revoke_family", lambda family_id, reason="manual": revoke_calls.append((family_id, reason)))
     resp = auth_client.post("/auth/refresh", cookies={main_mod.REFRESH_COOKIE_NAME: "tok"})
     assert resp.status_code == 200
     # sliding expiration: refresh token도 새로 발급되어야 함
@@ -515,6 +589,41 @@ def test_auth_refresh_and_logout(auth_client, monkeypatch):
 
     resp = auth_client.post("/auth/logout")
     assert resp.status_code == 200
+    assert revoke_calls == [("family1", "logout")]
+
+    resp = auth_client.post("/auth/logout", cookies={main_mod.REFRESH_COOKIE_NAME: "tok"})
+    assert resp.status_code == 200
+    assert revoke_calls == [("family1", "logout"), ("family1", "logout")]
+
+
+def test_auth_refresh_rejected_token_state_clears_cookies(auth_client, monkeypatch):
+    monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: {"email": "e@example.com", "role": "user", "name": "n", "picture": "p", "fid": "family1", "jti": "old-token"})
+    monkeypatch.setattr(main_mod, "determine_role", lambda email: "user")
+    monkeypatch.setattr(main_mod.refresh_token_store, "rotate", lambda **kwargs: "reused")
+
+    resp = auth_client.post("/auth/refresh", cookies={main_mod.REFRESH_COOKIE_NAME: "tok"})
+
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Invalid refresh token state"
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert f"{main_mod.ACCESS_COOKIE_NAME}=" in set_cookie
+    assert f"{main_mod.REFRESH_COOKIE_NAME}=" in set_cookie
+    assert "Max-Age=0" in set_cookie
+
+
+def test_logout_ignores_invalid_refresh_token(auth_client, monkeypatch):
+    monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: (_ for _ in ()).throw(main_mod.HTTPException(status_code=401, detail="bad token")))
+    revoke_calls = []
+    monkeypatch.setattr(main_mod.refresh_token_store, "revoke_family", lambda family_id, reason="manual": revoke_calls.append((family_id, reason)))
+
+    resp = auth_client.post("/auth/logout", cookies={main_mod.REFRESH_COOKIE_NAME: "bad"})
+
+    assert resp.status_code == 200
+    assert revoke_calls == []
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert f"{main_mod.ACCESS_COOKIE_NAME}=" in set_cookie
+    assert f"{main_mod.REFRESH_COOKIE_NAME}=" in set_cookie
+    assert "Max-Age=0" in set_cookie
 
 
 def test_auth_me_expires_in_with_real_token(monkeypatch):
@@ -534,13 +643,15 @@ def test_auth_me_expires_in_with_real_token(monkeypatch):
         assert ACCESS_TOKEN_EXPIRATION_SECONDS - 5 <= expires_in <= ACCESS_TOKEN_EXPIRATION_SECONDS
 
 
-def test_handlers_direct():
+def test_handlers_direct(caplog):
     scope = {"type": "http", "method": "GET", "path": "/x", "headers": []}
     req = Request(scope)
 
-    exc = RequestValidationError([{"loc": ("body",), "msg": "bad", "type": "value_error"}])
+    secret = "super-secret-token"
+    exc = RequestValidationError([{"loc": ("body",), "msg": "bad", "type": "value_error"}], body={"credential": secret})
     resp = run_async(main_mod.validation_exception_handler(req, exc))
     assert resp.status_code == 422
+    assert secret not in caplog.text
 
     http_exc = main_mod.HTTPException(status_code=404, detail="no")
     resp = run_async(main_mod.http_exception_handler(req, http_exc))
@@ -551,6 +662,7 @@ def test_handlers_direct():
 
 
 def test_cookie_settings_defaults(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TM_FRONTEND_URL", "http://localhost:3000")
     monkeypatch.delenv("TM_COOKIE_SECURE", raising=False)
     monkeypatch.delenv("TM_COOKIE_SAMESITE", raising=False)
     secure, samesite = main_mod._get_cookie_settings()
@@ -559,6 +671,7 @@ def test_cookie_settings_defaults(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_cookie_settings_none_requires_secure(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TM_FRONTEND_URL", "http://localhost:3000")
     monkeypatch.setenv("TM_COOKIE_SECURE", "false")
     monkeypatch.setenv("TM_COOKIE_SAMESITE", "none")
     secure, samesite = main_mod._get_cookie_settings()

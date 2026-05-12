@@ -1,7 +1,40 @@
+# TextMgmt — Project Rules
+
+## Language
+
+- 한국어 입력에는 한국어로 응답한다.
+- 기술 용어는 English 유지.
+
+## Tech Stack
+
+- **Backend**: Python 3.13+ / FastAPI, uv for package management
+- **Frontend**: React (npm), Vite
+- **Testing**: pytest (backend), jest (frontend)
+- **Infra**: Kubernetes (`k8s/`), Docker
+- **Search**: Elasticsearch (`backend/es_manager.py`)
+- **Auth**: JWT (access + refresh token), Google OAuth2
+
+## Project Rules
+
+- Python 패키지 추가/제거는 `uv add` / `uv remove`를 사용한다. `pip` 직접 사용 금지.
+- 백엔드 변경 후 `pytest tests/` 통과를 확인한다.
+- 프론트엔드 변경 후 `cd frontend && npm test` 통과를 확인한다.
+- auth 관련 코드(`backend/auth.py`, `backend/refresh_token_store.py`) 수정 시 `tests/test_auth.py`를 반드시 실행한다.
+- k8s YAML 수정 시 `kubectl apply --dry-run=client`로 유효성을 검증한다.
+- FastAPI 엔드포인트 추가 시 `require_auth` 또는 `require_admin` 의존성을 명시적으로 붙인다.
+
+## Commit Format
+
+- 제목: Conventional Commits (`feat:`, `fix:`, `chore:` 등)
+- 본문: `-` bullet, 명령형, 72자 이내
+
+---
+
 <!-- gitnexus:start -->
+
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **TextMgmt** (4955 symbols, 7038 relationships, 81 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **TextMgmt** (5398 symbols, 8025 relationships, 84 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -22,22 +55,22 @@ This project is indexed by GitNexus as **TextMgmt** (4955 symbols, 7038 relation
 
 ## Resources
 
-| Resource | Use for |
-|----------|---------|
-| `gitnexus://repo/TextMgmt/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/TextMgmt/clusters` | All functional areas |
-| `gitnexus://repo/TextMgmt/processes` | All execution flows |
-| `gitnexus://repo/TextMgmt/process/{name}` | Step-by-step execution trace |
+| Resource                                  | Use for                                  |
+| ----------------------------------------- | ---------------------------------------- |
+| `gitnexus://repo/TextMgmt/context`        | Codebase overview, check index freshness |
+| `gitnexus://repo/TextMgmt/clusters`       | All functional areas                     |
+| `gitnexus://repo/TextMgmt/processes`      | All execution flows                      |
+| `gitnexus://repo/TextMgmt/process/{name}` | Step-by-step execution trace             |
 
 ## CLI
 
-| Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+| Task                                         | Read this skill file                                        |
+| -------------------------------------------- | ----------------------------------------------------------- |
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md`       |
+| Blast radius / "What breaks if I change X?"  | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?"             | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md`       |
+| Rename / extract / split / refactor          | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md`     |
+| Tools, resources, schema reference           | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md`           |
+| Index, status, clean, wiki CLI commands      | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md`             |
 
 <!-- gitnexus:end -->

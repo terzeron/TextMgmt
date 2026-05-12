@@ -1,5 +1,6 @@
 """Route-level mock tests for backend/main.py — no ES/MySQL required."""
 
+import importlib
 import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,9 +8,10 @@ from fastapi.responses import Response
 from fastapi.testclient import TestClient
 
 import backend.main as main_module
-from backend.auth import require_auth, require_admin, create_refresh_token
+from backend.auth import create_refresh_token
 
 ADMIN_PAYLOAD = {"email": "admin@test.com", "role": "admin", "name": "Admin", "picture": "", "exp": int(time.time()) + 3600}
+VIEWER_PAYLOAD = {"email": "viewer@test.com", "role": "viewer", "name": "Viewer", "picture": "", "exp": int(time.time()) + 3600}
 
 BOOK_DICT = {"book_id": 1, "category": "_epub", "title": "Test Book", "author": "Test Author", "file_path": "_epub/test.epub", "file_type": "epub", "file_size": 1024, "line_count": 0, "page_count": 0, "isbn": "", "updated_time": "2024-01-01T00:00:00.000000", "score": 0.0}
 
@@ -23,10 +25,16 @@ def _make_book(overrides=None):
     return b
 
 
+def _get_main_module():
+    return importlib.import_module("backend.main")
+
+
 @pytest.fixture(autouse=True)
 def override_auth():
-    main_module.app.dependency_overrides[require_auth] = lambda: ADMIN_PAYLOAD
-    main_module.app.dependency_overrides[require_admin] = lambda: ADMIN_PAYLOAD
+    global main_module
+    main_module = _get_main_module()
+    main_module.app.dependency_overrides[main_module.require_auth] = lambda: ADMIN_PAYLOAD
+    main_module.app.dependency_overrides[main_module.require_admin] = lambda: ADMIN_PAYLOAD
     yield
     main_module.app.dependency_overrides.clear()
 
@@ -61,19 +69,25 @@ def mock_cat():
 
 
 class TestWake:
-    def test_success(self, client):
+    def test_success(self, client, monkeypatch):
+        monkeypatch.setenv("TM_FRONTEND_URL", "http://testserver")
         with patch("os.listdir", return_value=["a", "b", "c"]):
             r = client.get("/wake")
         assert r.status_code == 200
-        assert r.json() == {"status": "success", "count": 3}
+        assert r.json() == {"status": "success"}
 
-    def test_failure(self, client):
+    def test_failure(self, client, monkeypatch):
+        monkeypatch.setenv("TM_FRONTEND_URL", "http://testserver")
         with patch("os.listdir", side_effect=OSError("not mounted")):
             r = client.get("/wake")
-        assert r.status_code == 200
+        assert r.status_code == 503
         data = r.json()
-        assert data["status"] == "failure"
-        assert "not mounted" in data["error"]
+        assert data == {"status": "failure"}
+
+    def test_non_frontend_host_is_hidden(self, client, monkeypatch):
+        monkeypatch.setenv("TM_FRONTEND_URL", "https://tm.terzeron.com")
+        r = client.get("/wake")
+        assert r.status_code == 404
 
 
 # ── /validate/{book_id} ──────────────────────────────────────────────────────
@@ -138,12 +152,61 @@ class TestPreview:
     def test_default_params(self, client, mock_bm):
         mock_bm.get_book_preview.return_value = Response(content=b"preview")
         client.get("/preview/1")
-        mock_bm.get_book_preview.assert_called_once_with(book_id=1, pages=5, chapters=3)
+        mock_bm.get_book_preview.assert_called_once_with(book_id=1, pages=5, chapters=3, resource_base_url="/html-resource/1")
 
     def test_custom_params(self, client, mock_bm):
         mock_bm.get_book_preview.return_value = Response(content=b"preview")
         client.get("/preview/1?pages=10&chapters=5")
-        mock_bm.get_book_preview.assert_called_once_with(book_id=1, pages=10, chapters=5)
+        mock_bm.get_book_preview.assert_called_once_with(book_id=1, pages=10, chapters=5, resource_base_url="/html-resource/1")
+
+    def test_html_resource_proxy(self, client, mock_bm):
+        mock_bm.get_html_resource.return_value = Response(content=b"body{}", media_type="text/css")
+        r = client.get("/html-resource/1?path=style.css")
+        assert r.status_code == 200
+        mock_bm.get_html_resource.assert_called_once_with(book_id=1, resource_path="style.css")
+
+
+class TestViewerHiddenAccess:
+    def test_viewer_hidden_book_download_forbidden(self, client, mock_bm, mock_cat):
+        main_module.app.dependency_overrides[main_module.require_auth] = lambda: VIEWER_PAYLOAD
+        mock_cat.get_hidden_categories.return_value = ["secret"]
+        mock_bm.get_book.return_value = (_make_book({"category": "secret"}), None)
+
+        r = client.get("/download/1")
+
+        assert r.status_code == 403
+        assert r.json()["detail"] == "접근 권한이 없는 카테고리입니다."
+        mock_bm.get_book_content.assert_not_called()
+
+    def test_viewer_hidden_category_listing_forbidden(self, client, mock_bm, mock_cat):
+        main_module.app.dependency_overrides[main_module.require_auth] = lambda: VIEWER_PAYLOAD
+        mock_cat.get_hidden_categories.return_value = ["secret"]
+
+        r = client.get("/categories/secret/sub")
+
+        assert r.status_code == 403
+        assert r.json()["detail"] == "접근 권한이 없는 카테고리입니다."
+        mock_bm.get_books_in_category.assert_not_called()
+
+    def test_viewer_categories_filter_hidden_entries(self, client, mock_bm, mock_cat):
+        main_module.app.dependency_overrides[main_module.require_auth] = lambda: VIEWER_PAYLOAD
+        mock_cat.get_hidden_categories.return_value = ["secret"]
+        mock_bm.get_categories.return_value = ({"public": 1, "secret": 2, "secret/sub": 3}, None)
+
+        r = client.get("/categories")
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": {"public": 1}}
+
+    def test_viewer_search_merges_hidden_categories(self, client, mock_bm, mock_cat):
+        main_module.app.dependency_overrides[main_module.require_auth] = lambda: VIEWER_PAYLOAD
+        mock_cat.get_hidden_categories.return_value = ["secret", "secret/sub"]
+        mock_bm.search_by_keyword_paged.return_value = ([], 0, None)
+
+        r = client.get("/search/test?exclude_categories=public,secret")
+
+        assert r.status_code == 200
+        mock_bm.search_by_keyword_paged.assert_called_once_with("test", size=10, offset=0, exclude_categories=["public", "secret", "secret/sub"])
 
 
 # ── /pdf-pages/{book_id} ─────────────────────────────────────────────────────
@@ -240,7 +303,7 @@ class TestCategoryMismatchAdmin:
         assert r.status_code == 200
         data = r.json()
         assert data["status"] == "failure"
-        assert "ES down" in data["error"]
+        assert data["error"] == main_module.GENERIC_MISMATCH_ERROR
 
 
 # ── /search/bookstore/{store_name} ───────────────────────────────────────────
@@ -332,7 +395,7 @@ class TestAuthRefresh:
 
     def test_success(self, client):
         token = create_refresh_token(email="admin@test.com", role="admin", name="Admin")
-        with patch("backend.main.determine_role", return_value="admin"):
+        with patch("backend.main.determine_role", return_value="admin"), patch("backend.main.refresh_token_store.rotate", return_value="ok"):
             r = client.post("/auth/refresh", cookies={"tm_refresh_token": token})
         assert r.status_code == 200
         assert r.json()["status"] == "success"
@@ -343,18 +406,36 @@ class TestAuthRefresh:
         r = client.post("/auth/refresh", cookies={"tm_refresh_token": token})
         assert r.status_code == 403
 
+    def test_rotation_rejection_clears_cookies(self, client):
+        token = create_refresh_token(email="admin@test.com", role="admin", name="Admin")
+        with patch("backend.main.determine_role", return_value="admin"), patch("backend.main.refresh_token_store.rotate", return_value="reused"):
+            r = client.post("/auth/refresh", cookies={"tm_refresh_token": token})
+        assert r.status_code == 401
+        assert r.json()["detail"] == "Invalid refresh token state"
+        cookies = r.headers.get_list("set-cookie")
+        assert any("tm_access_token=" in cookie and "Max-Age=0" in cookie for cookie in cookies)
+        assert any("tm_refresh_token=" in cookie and "Max-Age=0" in cookie for cookie in cookies)
+
+    def test_db_error_in_rotate_returns_503(self, client):
+        """refresh_token_store.rotate()가 DB 예외를 던지면 503을 반환한다."""
+        token = create_refresh_token(email="admin@test.com", role="admin", name="Admin")
+        with patch("backend.main.determine_role", return_value="admin"), patch("backend.main.refresh_token_store.rotate", side_effect=Exception("DB connection lost")):
+            r = client.post("/auth/refresh", cookies={"tm_refresh_token": token})
+        assert r.status_code == 503
+
+    def test_legacy_refresh_token_without_claims_returns_401(self, client):
+        """fid/jti 없는 구형 refresh token은 401과 함께 재로그인 안내 메시지를 반환한다."""
+        import jwt as pyjwt
+
+        legacy_payload = {"type": "refresh", "email": "admin@test.com", "role": "admin", "exp": int(time.time()) + 3600, "iat": int(time.time())}
+        secret = __import__("os").environ.get("TM_JWT_SECRET", "test_jwt_secret_for_testing_minimum_32bytes")
+        legacy_token = pyjwt.encode(legacy_payload, secret, algorithm="HS256")
+        r = client.post("/auth/refresh", cookies={"tm_refresh_token": legacy_token})
+        assert r.status_code == 401
+        assert "log in again" in r.json().get("detail", "").lower()
+
 
 # ── /auth/google ─────────────────────────────────────────────────────────────
-
-
-def _fake_httpx_client(json_payload):
-    fake_resp = MagicMock()
-    fake_resp.json.return_value = json_payload
-    fake_client = AsyncMock()
-    fake_client.__aenter__ = AsyncMock(return_value=fake_client)
-    fake_client.__aexit__ = AsyncMock(return_value=False)
-    fake_client.get.return_value = fake_resp
-    return fake_client
 
 
 class TestAuthGoogle:
@@ -363,26 +444,36 @@ class TestAuthGoogle:
         assert r.status_code == 400
 
     def test_google_api_error_returns_401(self, client):
-        fake_client = _fake_httpx_client({"error": "invalid_token", "error_description": "bad"})
-        with patch("backend.main.httpx.AsyncClient", return_value=fake_client):
+        with patch("backend.main.google_id_token.verify_oauth2_token", side_effect=ValueError("bad")):
             r = client.post("/auth/google", json={"credential": "bad_token"})
         assert r.status_code == 401
 
-    def test_audience_mismatch_returns_401(self, client):
-        fake_client = _fake_httpx_client({"aud": "wrong_client_id", "email": "admin@test.com"})
-        with patch("backend.main.httpx.AsyncClient", return_value=fake_client), patch("backend.main.TM_GOOGLE_CLIENT_ID", "expected_client_id"):
+    def test_missing_google_client_id_returns_500(self, client):
+        with patch("backend.main.TM_GOOGLE_CLIENT_ID", None):
+            r = client.post("/auth/google", json={"credential": "token"})
+        assert r.status_code == 500
+
+    def test_issuer_mismatch_returns_401(self, client):
+        payload = {"aud": "expected_client_id", "iss": "https://evil.example.com", "email": "admin@test.com", "email_verified": True}
+        with patch("backend.main.google_id_token.verify_oauth2_token", return_value=payload), patch("backend.main.TM_GOOGLE_CLIENT_ID", "expected_client_id"):
+            r = client.post("/auth/google", json={"credential": "token"})
+        assert r.status_code == 401
+
+    def test_unverified_email_returns_401(self, client):
+        payload = {"aud": "cid", "iss": "https://accounts.google.com", "email": "admin@test.com", "email_verified": False}
+        with patch("backend.main.google_id_token.verify_oauth2_token", return_value=payload), patch("backend.main.TM_GOOGLE_CLIENT_ID", "cid"):
             r = client.post("/auth/google", json={"credential": "token"})
         assert r.status_code == 401
 
     def test_unauthorized_email_returns_403(self, client):
-        fake_client = _fake_httpx_client({"aud": "cid", "email": "stranger@other.com", "name": "X", "picture": ""})
-        with patch("backend.main.httpx.AsyncClient", return_value=fake_client), patch("backend.main.TM_GOOGLE_CLIENT_ID", "cid"):
+        payload = {"aud": "cid", "iss": "https://accounts.google.com", "email": "stranger@other.com", "email_verified": True, "name": "X", "picture": ""}
+        with patch("backend.main.google_id_token.verify_oauth2_token", return_value=payload), patch("backend.main.TM_GOOGLE_CLIENT_ID", "cid"):
             r = client.post("/auth/google", json={"credential": "token"})
         assert r.status_code == 403
 
     def test_success(self, client):
-        fake_client = _fake_httpx_client({"aud": "cid", "email": "admin@test.com", "name": "Admin", "picture": "http://pic"})
-        with patch("backend.main.httpx.AsyncClient", return_value=fake_client), patch("backend.main.TM_GOOGLE_CLIENT_ID", "cid"), patch("backend.main.determine_role", return_value="admin"):
+        payload = {"aud": "cid", "iss": "https://accounts.google.com", "email": "admin@test.com", "email_verified": True, "name": "Admin", "picture": "http://pic"}
+        with patch("backend.main.google_id_token.verify_oauth2_token", return_value=payload), patch("backend.main.TM_GOOGLE_CLIENT_ID", "cid"), patch("backend.main.determine_role", return_value="admin"):
             r = client.post("/auth/google", json={"credential": "token"})
         assert r.status_code == 200
         data = r.json()
@@ -390,6 +481,15 @@ class TestAuthGoogle:
         assert data["email"] == "admin@test.com"
         assert data["role"] == "admin"
         assert "expires_in" in data
+
+
+class TestAuthLogout:
+    def test_logout_revokes_refresh_family_when_cookie_is_present(self, client):
+        token = create_refresh_token(email="admin@test.com", role="admin", name="Admin")
+        with patch("backend.main.refresh_token_store.revoke_family") as revoke_family:
+            r = client.post("/auth/logout", cookies={"tm_refresh_token": token})
+        assert r.status_code == 200
+        revoke_family.assert_called_once()
 
 
 # ── /category-mappings ───────────────────────────────────────────────────────
@@ -486,6 +586,16 @@ class TestHiddenCategories:
         r = client.get("/hidden-categories")
         assert r.status_code == 200
         assert r.json() == {"status": "success", "result": ["_draft", "_archive"]}
+
+    def test_get_viewer_hides_hidden_category_names(self, client, mock_cat):
+        main_module.app.dependency_overrides[main_module.require_auth] = lambda: VIEWER_PAYLOAD
+        mock_cat.get_hidden_categories.return_value = ["_draft", "_archive"]
+
+        r = client.get("/hidden-categories")
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": []}
+        mock_cat.get_hidden_categories.assert_not_called()
 
     def test_set_hidden_success(self, client, mock_cat):
         mock_cat.set_hidden.return_value = True

@@ -1,13 +1,12 @@
 import { useEffect } from "react";
 import { useOutletContext } from "react-router-dom";
-import { getApiUrlPrefix } from "./Common.js";
 
 export default function Home() {
     const { role } = useOutletContext();
 
     useEffect(() => {
         if (role) {
-            fetch(getApiUrlPrefix() + '/wake').catch(() => {});
+            fetch('/wake').catch(() => {});
         }
     }, [role]);
 

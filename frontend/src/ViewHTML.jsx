@@ -17,7 +17,7 @@ export default function ViewHTML({ bookId, apiPrefix = '' }) {
             return;
         }
 
-        const iframeUrl = getApiUrlPrefix() + apiPrefix + "/download/" + bookId;
+        const iframeUrl = getApiUrlPrefix() + apiPrefix + "/preview/" + bookId;
         console.log(iframeUrl);
         setUrl(iframeUrl);
         setIsLoading(true);
@@ -45,7 +45,7 @@ export default function ViewHTML({ bookId, apiPrefix = '' }) {
                 title="html viewer"
                 src={url}
                 ref={ref}
-                sandbox="allow-same-origin"
+                sandbox=""
                 onLoad={() => setIsLoading(false)}
                 style={{
                     display: isLoading || errorMessage ? "none" : "block",
