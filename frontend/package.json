@@ -30,7 +30,7 @@
     "dompurify": "^3.4.2",
     "luxon": "^3.4.4",
     "mammoth": "^1.11.0",
-    "pdfjs-dist": "^4.10.38",
+    "pdfjs-dist": "^5.7.284",
     "react": "^18.2.0",
     "react-bootstrap": "^2.10.2",
     "react-dom": "^18.2.0",
