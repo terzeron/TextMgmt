@@ -5,9 +5,11 @@ updates:
     schedule:
       interval: "weekly"
     target-branch: "develop"
+    rebase-strategy: "auto"
 
   - package-ecosystem: "npm"
     directory: "/frontend"
     schedule:
       interval: "weekly"
     target-branch: "develop"
+    rebase-strategy: "auto"
