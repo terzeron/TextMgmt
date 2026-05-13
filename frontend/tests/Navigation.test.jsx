@@ -899,6 +899,49 @@ describe("Navigation Component", () => {
     expect(Common.stopProactiveRefresh).toHaveBeenCalled();
   });
 
+  it("renders GoogleLogin in a centered wrapper when logged out", async () => {
+    fetch.mockResolvedValueOnce({ ok: false }); // session check fails → not logged in
+
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    const loginButton = await screen.findByTestId("google-login");
+    // GoogleLogin mock root div → centering wrapper
+    const wrapper = loginButton.parentElement.parentElement;
+    expect(wrapper.style.display).toBe("flex");
+    expect(wrapper.style.justifyContent).toBe("center");
+    expect(wrapper.style.alignItems).toBe("center");
+    expect(wrapper.style.minHeight).toBe("calc(100vh - 56px)");
+  });
+
+  it("centering wrapper is absent after successful Google login", async () => {
+    fetch.mockResolvedValueOnce({ ok: false }); // session check fails
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        role: "admin",
+        name: "Admin User",
+        email: "admin@example.com",
+      }),
+    }); // google auth succeeds
+
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    const loginButton = await screen.findByTestId("google-login");
+    fireEvent.click(loginButton);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("google-login")).toBeNull();
+    });
+  });
+
   it("stops proactive refresh on logout", async () => {
     // 로그인 상태로 시작
     fetch.mockResolvedValueOnce({

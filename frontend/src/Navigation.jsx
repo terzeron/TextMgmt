@@ -240,10 +240,19 @@ export default function Navigation() {
   const renderContent = () => {
     if (!login) {
       return (
-        <GoogleLogin
-          onSuccess={onLoginSuccess}
-          onError={() => alert("Google 로그인 실패")}
-        />
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            minHeight: "calc(100vh - 56px)",
+          }}
+        >
+          <GoogleLogin
+            onSuccess={onLoginSuccess}
+            onError={() => alert("Google 로그인 실패")}
+          />
+        </div>
       );
     }
 
