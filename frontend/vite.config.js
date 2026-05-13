@@ -16,6 +16,7 @@ export default defineConfig({
   },
   plugins: [basicSsl(), react()],
   build: {
+    sourcemap: true,
     rollupOptions: {
       output: {
         manualChunks: (id) => {
