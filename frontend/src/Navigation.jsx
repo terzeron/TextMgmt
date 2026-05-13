@@ -30,6 +30,7 @@ export default function Navigation() {
     window.__ENV__?.["VITE_GOOGLE_CLIENT_ID"] ||
     import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
+  const [sessionLoading, setSessionLoading] = useState(true);
   const [login, setLogin] = useState(false);
   const [role, setRole] = useState(null); // 'admin' | 'viewer' | null
   const [name, setName] = useState("");
@@ -139,6 +140,7 @@ export default function Navigation() {
       console.error(
         "The environment variable VITE_GOOGLE_CLIENT_ID is not set.",
       );
+      setSessionLoading(false);
       return;
     }
     const loadSession = async () => {
@@ -166,6 +168,8 @@ export default function Navigation() {
         }
       } catch {
         // ignore
+      } finally {
+        setSessionLoading(false);
       }
     };
     loadSession();
@@ -238,6 +242,10 @@ export default function Navigation() {
   };
 
   const renderContent = () => {
+    if (sessionLoading) {
+      return null;
+    }
+
     if (!login) {
       return (
         <div

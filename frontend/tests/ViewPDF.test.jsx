@@ -38,6 +38,7 @@ vi.mock("../src/Common", () => ({
 }));
 
 import ViewPDF from "../src/ViewPDF";
+import * as pdfjs from "pdfjs-dist";
 
 function createMockPdf(numPages = 2) {
   return {
@@ -716,5 +717,10 @@ describe("ViewPDF", () => {
     // 수동 줌 모드에서 width는 px 단위, height는 auto
     expect(canvas.style.width).toContain("px");
     expect(canvas.style.height).toBe("auto");
+  });
+
+  // Regression: pdfjs worker URL must match installed pdfjs-dist version
+  it("sets workerSrc to match installed pdfjs-dist version", () => {
+    expect(pdfjs.GlobalWorkerOptions.workerSrc).toContain("5.7.284");
   });
 });

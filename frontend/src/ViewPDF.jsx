@@ -6,7 +6,7 @@ import * as pdfjs from "pdfjs-dist";
 
 // unpkg CDN에서 워커 로드 (package.json의 pdfjs-dist 버전과 일치)
 pdfjs.GlobalWorkerOptions.workerSrc =
-  "https://unpkg.com/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
+  "https://unpkg.com/pdfjs-dist@5.7.284/build/pdf.worker.min.mjs";
 
 const CHUNK_SIZE = 10;
 

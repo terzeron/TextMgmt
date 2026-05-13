@@ -981,4 +981,81 @@ describe("Navigation Component", () => {
       expect(Common.stopProactiveRefresh).toHaveBeenCalled();
     });
   });
+
+  // Regression: sessionLoading guard prevents UI flash after login
+  it("renders nothing while session check is pending", async () => {
+    let resolveSessionFetch;
+    fetch.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSessionFetch = resolve;
+      }),
+    );
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+    // While fetch is in-flight, nothing should render
+    expect(screen.queryByTestId("google-login")).toBeNull();
+    expect(screen.queryByText("책")).toBeNull();
+    // Resolve with a failed session
+    resolveSessionFetch({ ok: false, status: 401 });
+    await waitFor(() => {
+      expect(screen.getByTestId("google-login")).toBeDefined();
+    });
+  });
+
+  it("shows login button after session check throws network error", async () => {
+    fetch.mockRejectedValueOnce(new Error("network error"));
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+    // While fetch is in-flight, nothing should render
+    expect(screen.queryByTestId("google-login")).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByTestId("google-login")).toBeDefined();
+    });
+  });
+
+  it("shows login button when clientId is missing without stalling", async () => {
+    window.__ENV__ = {};
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("google-login")).toBeDefined();
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("shows menu directly after session restore without flashing login screen", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "success",
+        result: {
+          role: "admin",
+          name: "Test User",
+          email: "test@example.com",
+          picture: "",
+        },
+      }),
+    });
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+    // Login button must never appear — session should restore directly to menu
+    expect(screen.queryByTestId("google-login")).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByText("책 편집")).toBeDefined();
+    });
+    expect(screen.queryByTestId("google-login")).toBeNull();
+  });
 });
