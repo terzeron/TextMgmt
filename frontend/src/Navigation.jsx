@@ -259,6 +259,11 @@ export default function Navigation() {
           <GoogleLogin
             onSuccess={onLoginSuccess}
             onError={() => alert("Google 로그인 실패")}
+            theme="filled_blue"
+            size="large"
+            shape="pill"
+            text="signin_with"
+            locale="ko"
           />
         </div>
       );
