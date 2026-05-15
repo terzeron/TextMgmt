@@ -9,16 +9,16 @@ rm -rf */{nohup.out*,run.log*,.mypy_cache,__pycache__,.idea,.git}
 
 build_backend() {
     echo "=== Building backend ==="
-    docker build -f backend/Dockerfile --build-arg TM_BACKEND_PORT="$TM_BACKEND_PORT" -t terzeron/tm_backend . && \
+    docker build -q -f backend/Dockerfile --build-arg TM_BACKEND_PORT="$TM_BACKEND_PORT" -t terzeron/tm_backend . > /dev/null && \
     docker tag terzeron/tm_backend:latest registry.terzeron.com/terzeron/tm_backend:latest && \
-    docker push registry.terzeron.com/terzeron/tm_backend:latest
+    docker push -q registry.terzeron.com/terzeron/tm_backend:latest
 }
 
 build_frontend() {
     echo "=== Building frontend ==="
-    docker build -f frontend/Dockerfile -t terzeron/tm_frontend . && \
+    docker build -q -f frontend/Dockerfile -t terzeron/tm_frontend . > /dev/null && \
     docker tag terzeron/tm_frontend:latest registry.terzeron.com/terzeron/tm_frontend:latest && \
-    docker push registry.terzeron.com/terzeron/tm_frontend:latest
+    docker push -q registry.terzeron.com/terzeron/tm_frontend:latest
 }
 
 rollout_backend() {
