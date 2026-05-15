@@ -725,3 +725,24 @@ def test_auth_requires_jwt_secret():
         # 모듈 복원 (autouse fixture teardown에서 reload 필요)
         if saved_mod is not None:
             sys.modules["backend.auth"] = saved_mod
+
+
+@pytest.mark.asyncio
+async def test_require_auth_non_standard_role_raises_403(setup_env, monkeypatch):
+    """determine_role 이 "admin"/"viewer" 이외 역할을 반환할 때 require_auth 가 403 을 올린다 (line 101)."""
+    from fastapi import HTTPException
+
+    auth_mod = setup_env
+    # determine_role 이 허용되지 않은 역할("superuser")을 반환하도록 패치
+    monkeypatch.setattr(auth_mod, "determine_role", lambda email: "superuser")
+
+    token = auth_mod.create_jwt_token("admin@example.com", "superuser")
+
+    class FakeRequest:
+        headers = {"Authorization": f"Bearer {token}"}
+        cookies = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_mod.require_auth(FakeRequest())
+    assert exc_info.value.status_code == 403
+    assert "permissions" in exc_info.value.detail.lower()

@@ -28,6 +28,7 @@ PROJECT_ROOT = SCRIPT_PATH.parent.parent if SCRIPT_PATH.parent.name == "tests" e
 PYTHON_DIRS = [PROJECT_ROOT / d for d in ["bin", "utils", "backend", "tests"]]
 TEST_DIR = PROJECT_ROOT / "tests"
 TMP_DIR = PROJECT_ROOT / "tmp"
+COVERAGE_SHARDS_DIR = PROJECT_ROOT / ".coverage_out"
 XML_DIR = TMP_DIR / "xml"
 WORK_DIR = TMP_DIR / "work"
 LOGS_DIR = WORK_DIR / "logs"
@@ -369,18 +370,40 @@ def get_coverage_backup_file() -> Path:
     return PROJECT_ROOT / ".coverage.last"
 
 
+def get_coverage_shards_dir() -> Path:
+    return COVERAGE_SHARDS_DIR
+
+
+def get_coverage_shard_file(test_path: Path) -> Path:
+    rel = test_path.resolve().relative_to(PROJECT_ROOT.resolve())
+    slug = rel.as_posix().replace("/", "__")
+    return get_coverage_shards_dir() / f".coverage.{slug}"
+
+
 _COVERAGE_PREPARED = False
 
 
 def prepare_coverage_data() -> None:
     """Validate existing coverage data; remove only if corrupted."""
-    coverage_file = get_coverage_file()
-    if coverage_file.exists() and not is_valid_coverage_db(coverage_file):
-        try:
-            coverage_file.unlink()
-            print("⚠️  Removed corrupted .coverage file.")
-        except OSError as e:
-            print(f"⚠️  Failed to clear coverage data: {e}")
+    for coverage_file in (get_coverage_file(), get_coverage_backup_file()):
+        if coverage_file.exists() and not is_valid_coverage_db(coverage_file):
+            try:
+                coverage_file.unlink()
+                print(f"⚠️  Removed corrupted {coverage_file.name} file.")
+            except OSError as e:
+                print(f"⚠️  Failed to clear coverage data: {e}")
+
+    shards_dir = get_coverage_shards_dir()
+    if not shards_dir.exists():
+        return
+
+    for shard in shards_dir.iterdir():
+        if shard.is_file() and not is_valid_coverage_db(shard):
+            try:
+                shard.unlink()
+                print(f"⚠️  Removed corrupted {shard.name}.")
+            except OSError as e:
+                print(f"⚠️  Failed to clear shard data: {e}")
 
 
 def ensure_coverage_prepared() -> None:
@@ -391,15 +414,39 @@ def ensure_coverage_prepared() -> None:
     _COVERAGE_PREPARED = True
 
 
-def get_coverage_env() -> dict[str, str]:
+def get_coverage_env(coverage_file: Optional[Path] = None) -> dict[str, str]:
     env = os.environ.copy()
-    env.setdefault("COVERAGE_FILE", str(get_coverage_file()))
+    env["COVERAGE_FILE"] = str(coverage_file or get_coverage_file())
     env.setdefault("PYTHONWARNINGS", "ignore")
     return env
 
 
 def get_pytest_coverage_args() -> list[str]:
-    return ["--cov=backend", "--cov=utils", "--cov-append", "--cov-report="]
+    return ["--cov=backend", "--cov=utils", "--cov-report="]
+
+
+def ensure_coverage_shards_dir() -> None:
+    get_coverage_shards_dir().mkdir(parents=True, exist_ok=True)
+
+
+def reset_coverage_shard(test_path: Path) -> Path:
+    ensure_coverage_shards_dir()
+    shard_file = get_coverage_shard_file(test_path)
+    if shard_file.exists():
+        shard_file.unlink()
+    coverage_file = get_coverage_file()
+    if coverage_file.exists():
+        coverage_file.unlink()
+    return shard_file
+
+
+def reset_all_coverage_data() -> None:
+    coverage_file = get_coverage_file()
+    if coverage_file.exists():
+        coverage_file.unlink()
+    shards_dir = get_coverage_shards_dir()
+    if shards_dir.exists():
+        shutil.rmtree(shards_dir)
 
 
 def is_valid_coverage_db(path: Path) -> bool:
@@ -469,11 +516,12 @@ def run_test_modules_sequentially(test_targets: list[Path]) -> tuple[bool, int, 
         print(f"--- [{idx}/{len(test_targets)}] Running: {t} ---")
         # Use absolute path to avoid issues with working directory changes
         absolute_path = t.resolve()
+        shard_file = reset_coverage_shard(absolute_path)
 
         # Measure execution time
         start_time = time.time()
         ensure_coverage_prepared()
-        result = subprocess.run([sys.executable, "-m", "pytest", "--tb=no", "--disable-warnings", "-q", "-p", "no:warnings", *get_pytest_coverage_args(), str(absolute_path)], capture_output=True, text=True, check=False, env=get_coverage_env())
+        result = subprocess.run([sys.executable, "-m", "pytest", "--tb=no", "--disable-warnings", "-q", "-p", "no:warnings", *get_pytest_coverage_args(), str(absolute_path)], capture_output=True, text=True, check=False, env=get_coverage_env(shard_file))
         end_time = time.time()
         execution_time = end_time - start_time
 
@@ -532,7 +580,8 @@ def run_specific_test_file(test_file: str) -> bool:
     # Measure execution time
     start_time = time.time()
     ensure_coverage_prepared()
-    result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:warnings", *get_pytest_coverage_args(), str(test_path)], capture_output=True, text=True, check=False, env=get_coverage_env())
+    shard_file = reset_coverage_shard(test_path.resolve())
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:warnings", *get_pytest_coverage_args(), str(test_path)], capture_output=True, text=True, check=False, env=get_coverage_env(shard_file))
     end_time = time.time()
     execution_time = end_time - start_time
 
@@ -607,6 +656,7 @@ def run_all_tests() -> tuple[bool, list[Path]]:
         print("No tests to run")
         return True, []
 
+    reset_all_coverage_data()
     total_start = time.time()
     failed_files = []
 
@@ -614,7 +664,8 @@ def run_all_tests() -> tuple[bool, list[Path]]:
         print(f"--- [{idx}/{len(ordered_tests)}] Running: {t.name} ---")
         start = time.time()
         ensure_coverage_prepared()
-        result = subprocess.run([sys.executable, "-m", "pytest", "--tb=no", "--disable-warnings", "-q", "-p", "no:warnings", *get_pytest_coverage_args(), str(t)], capture_output=True, text=True, check=False, env=get_coverage_env())
+        shard_file = reset_coverage_shard(t.resolve())
+        result = subprocess.run([sys.executable, "-m", "pytest", "--tb=no", "--disable-warnings", "-q", "-p", "no:warnings", *get_pytest_coverage_args(), str(t)], capture_output=True, text=True, check=False, env=get_coverage_env(shard_file))
         end = time.time()
 
         # Print filtered output
@@ -1892,10 +1943,11 @@ def main() -> bool:
 
 
 def run_coverage_report() -> bool:
-    """Print coverage report from accumulated .coverage data."""
+    """Print coverage report from accumulated coverage shards."""
     print("\n📈 Generating coverage report...")
     coverage_file = get_coverage_file()
     backup_file = get_coverage_backup_file()
+    shards_dir = get_coverage_shards_dir()
 
     # Validate files
     for f in (coverage_file, backup_file):
@@ -1906,14 +1958,31 @@ def run_coverage_report() -> bool:
             except OSError:
                 pass
 
-    if not coverage_file.exists() and not backup_file.exists():
-        print("⚠️  Coverage data not found. Run all tests first (--all) to build coverage.")
+    shard_files = []
+    if shards_dir.exists():
+        shard_files = [p for p in shards_dir.iterdir() if p.is_file() and is_valid_coverage_db(p)]
+
+    if shard_files:
+        if coverage_file.exists():
+            coverage_file.unlink()
+        combine = subprocess.run([sys.executable, "-m", "coverage", "combine", "--keep", str(shards_dir)], cwd=PROJECT_ROOT, capture_output=True, text=True)
+        if combine.returncode != 0:
+            if combine.stdout:
+                print(combine.stdout.strip())
+            if combine.stderr:
+                print(combine.stderr.strip())
+            return False
+    elif coverage_file.exists():
+        print("ℹ️  Using existing combined coverage data.")
+    elif backup_file.exists():
+        print("ℹ️  Using cached backup coverage data.")
+    else:
+        print("⚠️  Coverage data not found. Run tests first to build coverage.")
         return False
 
     env = get_coverage_env()
     if not coverage_file.exists() and backup_file.exists():
-        env = env.copy()
-        env["COVERAGE_FILE"] = str(backup_file)
+        env = get_coverage_env(backup_file)
 
     result = subprocess.run([sys.executable, "-m", "coverage", "report", "-m", "-i"], cwd=PROJECT_ROOT, env=env, capture_output=True, text=True)
     if result.stdout:
@@ -1922,8 +1991,7 @@ def run_coverage_report() -> bool:
         print(result.stderr.strip())
 
     if "No data to report." in result.stdout and backup_file.exists():
-        env = env.copy()
-        env["COVERAGE_FILE"] = str(backup_file)
+        env = get_coverage_env(backup_file)
         retry = subprocess.run([sys.executable, "-m", "coverage", "report", "-m", "-i"], cwd=PROJECT_ROOT, env=env, capture_output=True, text=True)
         if retry.stdout:
             print(retry.stdout.strip())

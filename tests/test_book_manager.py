@@ -3252,3 +3252,123 @@ def test_get_book_content_html_forces_attachment(tmp_path: Path):
     assert isinstance(resp, FileResponse)
     content_disposition = resp.headers["content-disposition"]
     assert content_disposition.startswith("attachment;")
+
+
+# ── _build_html_resource_url 엣지 케이스 (lines 61, 64, 71, 73) ──────────────
+
+
+class TestBuildHtmlResourceUrl:
+    def test_empty_string_returns_none(self):
+        assert BookManager._build_html_resource_url("/base", "") is None
+
+    def test_whitespace_only_returns_none(self):
+        assert BookManager._build_html_resource_url("/base", "   ") is None
+
+    def test_data_uri_returned_as_is(self):
+        uri = "data:image/png;base64,abc123"
+        assert BookManager._build_html_resource_url("/base", uri) == uri
+
+    def test_blob_uri_returned_as_is(self):
+        uri = "blob:http://example.com/uuid"
+        assert BookManager._build_html_resource_url("/base", uri) == uri
+
+    def test_external_http_url_returns_none(self):
+        assert BookManager._build_html_resource_url("/base", "http://external.com/img.png") is None
+
+    def test_protocol_relative_url_returns_none(self):
+        assert BookManager._build_html_resource_url("/base", "//cdn.example.com/img.png") is None
+
+
+# ── _sanitize_html_for_viewer: external src 속성 제거 (line 116) ─────────────
+
+
+def test_sanitize_html_external_src_attribute_removed():
+    """외부 URL src 는 _build_html_resource_url 이 None 을 반환하므로 속성이 제거된다."""
+    from bs4 import BeautifulSoup
+
+    html = '<html><body><img src="http://external.com/img.png"></body></html>'
+    result = BookManager._sanitize_html_for_viewer(html, "/base")
+    soup = BeautifulSoup(result, "html.parser")
+    img = soup.find("img")
+    assert img is None or "src" not in img.attrs
+
+
+# ── get_book_preview: HTML read_text 예외 → 500 (lines 818-820) ─────────────
+
+
+def test_get_book_preview_html_read_exception(tmp_path: Path):
+    """HTML 파일 read_text 가 예외를 올리면 500 응답을 반환한다."""
+    from unittest.mock import patch
+
+    html_file = tmp_path / "A" / "book.html"
+    html_file.parent.mkdir(parents=True)
+    html_file.write_text("<html/>", encoding="utf-8")
+
+    doc = make_doc("A/book.html", "html")
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: doc
+
+    with patch("pathlib.Path.read_text", side_effect=PermissionError("denied")):
+        resp = asyncio_runner(manager.get_book_preview(1))
+
+    assert resp.status_code == 500
+
+
+# ── get_html_resource 오류 경로 (lines 859, 862, 872-874, 876) ───────────────
+
+
+class TestGetHtmlResource:
+    def test_book_not_found_returns_404(self, tmp_path: Path):
+        """ES 에 책이 없으면 404 (line 859)."""
+        manager = make_manager(tmp_path, DummyES(doc=None))
+        resp = asyncio_runner(manager.get_html_resource(99, "image.jpg"))
+        assert resp.status_code == 404
+
+    def test_non_html_file_returns_400(self, tmp_path: Path):
+        """HTML 이 아닌 파일(.epub)은 400 (line 862)."""
+        doc = make_doc("A/book.epub", "epub")
+        manager = make_manager(tmp_path, DummyES(doc=doc))
+        resp = asyncio_runner(manager.get_html_resource(1, "image.jpg"))
+        assert resp.status_code == 400
+
+    def test_path_traversal_via_symlink_returns_400(self, tmp_path: Path):
+        """html_dir 밖을 가리키는 심볼릭 링크는 400 (line 872)."""
+        html_file = tmp_path / "A" / "book.html"
+        html_file.parent.mkdir(parents=True)
+        html_file.write_text("<html/>")
+
+        # html_dir 밖 파일을 가리키는 심볼릭 링크 생성
+        outside = tmp_path / "secret.jpg"
+        outside.touch()
+        symlink = html_file.parent / "evil.jpg"
+        symlink.symlink_to(outside)
+
+        doc = make_doc("A/book.html", "html")
+        manager = make_manager(tmp_path, DummyES(doc=doc))
+        resp = asyncio_runner(manager.get_html_resource(1, "evil.jpg"))
+        assert resp.status_code == 400
+
+    def test_resource_file_not_found_returns_404(self, tmp_path: Path):
+        """html_dir 내 존재하지 않는 리소스는 404 (line 876)."""
+        html_file = tmp_path / "A" / "book.html"
+        html_file.parent.mkdir(parents=True)
+        html_file.write_text("<html/>")
+
+        doc = make_doc("A/book.html", "html")
+        manager = make_manager(tmp_path, DummyES(doc=doc))
+        resp = asyncio_runner(manager.get_html_resource(1, "nonexistent.jpg"))
+        assert resp.status_code == 404
+
+
+# ── update_book: 책이 없을 때 Error 반환 (line 978) ─────────────────────────
+
+
+def test_update_book_no_such_book_returns_error(tmp_path: Path):
+    """ES 에서 책을 찾지 못하면 ('Error', '…no such a book') 을 반환한다."""
+    manager = make_manager(tmp_path, DummyES(doc=None))
+    new_path = tmp_path / "A" / "new.txt"
+
+    status, msg = asyncio_runner(manager.update_book(999, "A", "Title", "Author", new_path, "txt"))
+    assert status == "Error"
+    assert "no such a book" in (msg or "")

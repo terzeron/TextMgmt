@@ -1,4 +1,6 @@
-import unittest, os, sys
+import unittest
+import os
+import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from typing import Any, Dict, List
@@ -752,7 +754,6 @@ def test_delete_returns_false():
 
 # ---- merged from test_es_retry_check.py ----
 import pytest
-from unittest.mock import patch
 from elasticsearch import Elasticsearch
 from elastic_transport import ConnectionError as ESConnectionError
 
@@ -811,7 +812,7 @@ def test_init_all_retries_fail(mock_es_init, mock_info, mock_sleep, monkeypatch)
 
 
 # ---- merged from test_get_all_file_paths_grouped_check.py ----
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import pytest
 from elasticsearch import Elasticsearch
 
@@ -1055,3 +1056,22 @@ def test_update_with_author():
     manager = make_manager(es)
     result = manager.update(1, category="A", title="T", author="Author", file_path="a.txt", file_type="txt")
     assert result is True
+
+
+def test_search_scroll_early_return_at_max_result_count():
+    """scroll 경로에서 max_result_count 에 도달하면 즉시 반환한다 (es_manager.py:255)."""
+    from unittest.mock import MagicMock
+
+    es = MagicMock()
+    manager = make_manager(es)
+
+    # max_result_count > 10000 이어야 scroll 경로에 진입
+    max_rc = 10001
+    hits = [{"_id": str(i), "_source": {"a": i}, "_score": 1.0} for i in range(max_rc)]
+    es.search.return_value = {"_scroll_id": "scroll1", "hits": {"max_score": 1.0, "hits": hits}}
+    es.clear_scroll.return_value = {"succeeded": True}
+
+    result = manager.search_by_title("test", max_result_count=max_rc)
+    assert len(result) == max_rc
+    # finally 블록에서 clear_scroll 호출 확인
+    es.clear_scroll.assert_called_once_with(scroll_id="scroll1")

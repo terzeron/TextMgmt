@@ -842,11 +842,11 @@ class TestFastPdfPageCount:
         Loader = _get_loader()
         pdf = tmp_path / "stream.pdf"
         data = bytearray(b" " * 256)
-        data[20:20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
-        data[100:100 + len(b"<< /Pages 2 0 R >>")] = b"<< /Pages 2 0 R >>"
-        data[140:140 + len(b"<< /Count 7 >>")] = b"<< /Count 7 >>"
+        data[20 : 20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        data[100 : 100 + len(b"<< /Pages 2 0 R >>")] = b"<< /Pages 2 0 R >>"
+        data[140 : 140 + len(b"<< /Count 7 >>")] = b"<< /Count 7 >>"
         trailer = b"startxref\n20\n%%EOF"
-        data[-len(trailer):] = trailer
+        data[-len(trailer) :] = trailer
         pdf.write_bytes(bytes(data))
 
         monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 1], None)))
@@ -865,10 +865,10 @@ class TestFastPdfPageCount:
         Loader = _get_loader()
         pdf = tmp_path / "objstream.pdf"
         data = bytearray(b" " * 256)
-        data[20:20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
-        data[100:100 + len(b"<< /Pages 2 0 R >>")] = b"<< /Pages 2 0 R >>"
+        data[20 : 20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        data[100 : 100 + len(b"<< /Pages 2 0 R >>")] = b"<< /Pages 2 0 R >>"
         trailer = b"startxref\n20\n%%EOF"
-        data[-len(trailer):] = trailer
+        data[-len(trailer) :] = trailer
         pdf.write_bytes(bytes(data))
 
         monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 3], None)))
@@ -897,10 +897,10 @@ class TestFastPdfPageCount:
         Loader = _get_loader()
         pdf = tmp_path / "missing-pages-ref.pdf"
         data = bytearray(b" " * 256)
-        data[20:20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
-        data[100:100 + len(b"<< /Type /Catalog >>")] = b"<< /Type /Catalog >>"
+        data[20 : 20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        data[100 : 100 + len(b"<< /Type /Catalog >>")] = b"<< /Type /Catalog >>"
         trailer = b"startxref\n20\n%%EOF"
-        data[-len(trailer):] = trailer
+        data[-len(trailer) :] = trailer
         pdf.write_bytes(bytes(data))
 
         monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 1], None)))
@@ -911,10 +911,10 @@ class TestFastPdfPageCount:
         Loader = _get_loader()
         pdf = tmp_path / "missing-pages-object.pdf"
         data = bytearray(b" " * 256)
-        data[20:20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
-        data[100:100 + len(b"<< /Pages 2 0 R >>")] = b"<< /Pages 2 0 R >>"
+        data[20 : 20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        data[100 : 100 + len(b"<< /Pages 2 0 R >>")] = b"<< /Pages 2 0 R >>"
         trailer = b"startxref\n20\n%%EOF"
-        data[-len(trailer):] = trailer
+        data[-len(trailer) :] = trailer
         pdf.write_bytes(bytes(data))
 
         monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_args: (b"decoded", [1, 2, 1], [0, 1], None)))
@@ -2658,3 +2658,93 @@ class TestBookManagerPreviewEmptyContent:
         assert resp.status_code == 200
         body = resp.body.decode("utf-8")
         assert "미리보기를 생성할 수 없습니다" in body
+
+
+# ── _find_xref_offset 미커버 분기 (loader.py:366, 377-379, 381) ─────────────
+
+
+class TestFindXrefOffsetBranches:
+    """기존 TestFindXrefOffset 이 놓친 분기를 명시적으로 검증한다."""
+
+    def test_trailer_break_and_end_return_none(self):
+        """obj 가 범위 밖 → i += 1+sub_count → trailer break → return None (lines 366, 378-379, 381)."""
+        Loader = _get_loader()
+        # obj_num=5 는 [0,3) 범위 밖 → skip subsection → trailer → None
+        xref = b"xref\n0 3\n0000000000 65535 f \n0000000100 00000 n \n0000000200 00000 n \ntrailer\n<< /Size 3 >>"
+        result = Loader._find_xref_offset(xref, 5)
+        assert result is None
+
+    def test_entry_idx_out_of_range_returns_none(self):
+        """entry_idx >= len(lines) 이면 return None (line 377)."""
+        Loader = _get_loader()
+        # sub_count=2 이지만 entry 가 1개만 존재 → obj_num=1 의 entry_idx 가 범위 밖
+        xref = b"xref\n0 2\n0000000009 00000 n \n"
+        result = Loader._find_xref_offset(xref, 1)
+        assert result is None
+
+    def test_non_matching_line_increments_i(self):
+        """digits 2개가 아닌 줄은 i += 1 로 건너뛴다 (line 380-381)."""
+        Loader = _get_loader()
+        # "junk" 줄은 2-digit 패턴 불일치 → i += 1; 그 다음 "0 1" 을 처리 → obj 0 발견
+        xref = b"xref\njunk\n0 1\n0000000009 00000 n \ntrailer\n"
+        result = Loader._find_xref_offset(xref, 0)
+        assert result == 9
+
+    def test_multiple_subsections_skips_first(self):
+        """첫 subsection 에 obj 없음 → i += 1+sub_count (lines 378-379); 두 번째에서 발견."""
+        Loader = _get_loader()
+        xref = b"xref\n0 1\n0000000009 00000 n \n5 1\n0000000100 00000 n \ntrailer\n"
+        # obj_num=5 는 첫 subsection [0,1) 에 없음 → skip → 두 번째 [5,6) 에서 발견
+        assert Loader._find_xref_offset(xref, 5) == 100
+        # obj_num=0 는 첫 subsection 에서 발견
+        assert Loader._find_xref_offset(xref, 0) == 9
+
+
+# ── comics PDF 경로: _fast_pdf_page_count → None → pypdf fallback (lines 726-732)
+
+
+class TestReadFileComicsPdf:
+    def test_comics_pdf_fast_count_none_falls_back_to_pypdf(self, tmp_path: Path, monkeypatch):
+        """_fast_pdf_page_count 가 None 을 반환하면 pypdf.PdfReader 로 페이지 수를 구한다 (lines 726-729)."""
+        Loader = _get_loader()
+        import pypdf
+
+        # comics_path_prefix 를 tmp_path 로 설정
+        monkeypatch.setattr(Loader, "comics_path_prefix", tmp_path)
+        monkeypatch.setattr(Loader, "path_prefix", tmp_path)
+
+        pdf_file = tmp_path / "book.pdf"
+        writer = pypdf.PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        with open(pdf_file, "wb") as f:
+            writer.write(f)
+
+        # _fast_pdf_page_count 가 None 을 반환하도록 강제
+        monkeypatch.setattr(Loader, "_fast_pdf_page_count", staticmethod(lambda path: None))
+
+        data = Loader.read_file(pdf_file)
+        # inode 키로 결과가 반환되며 page_count 가 1
+        assert len(data) == 1
+        item = next(iter(data.values()))
+        assert item["page_count"] == 1
+
+    def test_comics_pdf_fast_count_none_pypdf_exception(self, tmp_path: Path, monkeypatch):
+        """pypdf.PdfReader 도 실패하면 page_count=0 으로 처리한다 (lines 726-732)."""
+        from unittest.mock import patch
+
+        Loader = _get_loader()
+
+        monkeypatch.setattr(Loader, "comics_path_prefix", tmp_path)
+        monkeypatch.setattr(Loader, "path_prefix", tmp_path)
+
+        pdf_file = tmp_path / "broken.pdf"
+        pdf_file.write_bytes(b"%PDF-broken")
+
+        monkeypatch.setattr(Loader, "_fast_pdf_page_count", staticmethod(lambda path: None))
+
+        with patch("pypdf.PdfReader", side_effect=Exception("corrupt")):
+            data = Loader.read_file(pdf_file)
+
+        assert len(data) == 1
+        item = next(iter(data.values()))
+        assert item["page_count"] == 0

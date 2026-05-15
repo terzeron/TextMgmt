@@ -610,3 +610,64 @@ class TestHiddenCategories:
         mock_cat.set_hidden.return_value = False
         r = client.post("/hidden-categories/_draft", json={"hidden": True})
         assert r.status_code == 500
+
+
+# ── utility function unit tests ──────────────────────────────────────────────
+
+
+class TestSummarizeRequestBody:
+    """_summarize_request_body 유틸리티 함수 (main.py:138-143)."""
+
+    def test_list_body(self):
+        result = main_module._summarize_request_body([1, 2, 3])
+        assert result == {"type": "list", "length": 3}
+
+    def test_none_body(self):
+        result = main_module._summarize_request_body(None)
+        assert result == {"type": "none"}
+
+    def test_str_body(self):
+        result = main_module._summarize_request_body("hello")
+        assert result == {"type": "str", "length": 5}
+
+
+def test_is_local_frontend_origin_remote_returns_false():
+    """원격 호스트는 False (main.py:148)."""
+    assert main_module._is_local_frontend_origin("https://remote.example.com") is False
+
+
+def test_is_request_from_frontend_host_no_env_returns_false(monkeypatch):
+    """TM_FRONTEND_URL 미설정 시 False (main.py:157)."""
+    from starlette.requests import Request
+
+    monkeypatch.delenv("TM_FRONTEND_URL", raising=False)
+    scope = {"type": "http", "method": "GET", "path": "/", "query_string": b"", "headers": [], "server": ("testserver", 80)}
+    request = Request(scope)
+    assert main_module._is_request_from_frontend_host(request) is False
+
+
+def test_category_matches_hidden_empty_category_returns_false():
+    """카테고리가 빈 문자열이면 False (main.py:252)."""
+    assert main_module._category_matches_hidden("", ["cat1", "cat2"]) is False
+
+
+def test_search_similar_books_filters_hidden_categories_for_viewer(client, mock_bm, mock_cat):
+    """viewer 권한에서 hidden 카테고리 책이 유사도 결과에서 제외된다 (main.py:479-480)."""
+    main_module.app.dependency_overrides[main_module.require_auth] = lambda: VIEWER_PAYLOAD
+
+    source_book = _make_book({"book_id": 1, "category": "visible_cat"})
+    source_book.category = "visible_cat"
+    hidden_similar = _make_book({"book_id": 2, "category": "hidden_cat"})
+    hidden_similar.category = "hidden_cat"
+    visible_similar = _make_book({"book_id": 3, "category": "visible_cat"})
+    visible_similar.category = "visible_cat"
+
+    mock_bm.get_book.return_value = (source_book, None)
+    mock_bm.search_similar_books_paged.return_value = ([hidden_similar, visible_similar], 2, None)
+    mock_cat.get_hidden_categories.return_value = ["hidden_cat"]
+
+    r = client.get("/similar/1")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "success"
+    assert data["total"] == 1  # hidden_similar 제외, visible_similar 만 남음
