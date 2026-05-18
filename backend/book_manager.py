@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Tuple, Dict, List, Union, Optional, Any
+from typing import Any
 from urllib.parse import quote, urlparse
 import chardet
 from fastapi.responses import FileResponse, Response
@@ -52,11 +52,11 @@ class BookManager:
     HTML_VIEWER_CSP = "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' blob:;"
 
     @classmethod
-    def _html_security_headers(cls) -> Dict[str, str]:
+    def _html_security_headers(cls) -> dict[str, str]:
         return {"Content-Security-Policy": cls.HTML_VIEWER_CSP, "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Permissions-Policy": "camera=(), microphone=(), geolocation=()", "Cache-Control": "no-transform"}
 
     @classmethod
-    def _build_html_resource_url(cls, resource_base_url: str, raw_path: str) -> Optional[str]:
+    def _build_html_resource_url(cls, resource_base_url: str, raw_path: str) -> str | None:
         if not raw_path:
             return None
         trimmed = raw_path.strip()
@@ -120,7 +120,7 @@ class BookManager:
         return str(soup)
 
     @staticmethod
-    def _validate_preview_epub(cache_file: Path) -> Tuple[bool, Optional[str]]:
+    def _validate_preview_epub(cache_file: Path) -> tuple[bool, str | None]:
         """생성된 미리보기 EPUB의 구조적 유효성을 검증하고 경미한 문제는 자동 수정한다."""
         import zipfile
         from lxml import etree  # type: ignore[attr-defined]
@@ -163,7 +163,7 @@ class BookManager:
                     return False, "spine element missing"
 
                 # manifest 맵 구축
-                manifest: Dict[str, str] = {}  # id → href
+                manifest: dict[str, str] = {}  # id → href
                 for item in manifest_el.findall(f"{{{opf_ns}}}item"):
                     manifest[item.get("id", "")] = item.get("href", "")
 
@@ -344,32 +344,32 @@ class BookManager:
         LOGGER.debug(self.path_prefix)
         self.es_manager = ESManager()
         self.es_manager.create_index()
-        self._mismatch_cache: Optional[Dict[str, Any]] = None
+        self._mismatch_cache: dict[str, Any] | None = None
         self._mismatch_cache_time: float = 0.0
 
     def __del__(self) -> None:
         if hasattr(self, "es_manager"):
             del self.es_manager
 
-    async def get_categories(self) -> Tuple[Dict[str, int], Optional[str]]:
+    async def get_categories(self) -> tuple[dict[str, int], str | None]:
         LOGGER.debug("# get_categories()")
         categories = self.es_manager.search_and_aggregate_by_category()
         return categories, None
 
-    async def get_books_in_category(self, category: str) -> Tuple[List[Book], Optional[str]]:
+    async def get_books_in_category(self, category: str) -> tuple[list[Book], str | None]:
         doc_list = self.es_manager.search_by_category(category, max_result_count=sys.maxsize)
         if doc_list and len(doc_list) > 0:
             return [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in doc_list], None
         return [], f"No books found in '{category}'"
 
-    async def get_book(self, book_id: int) -> Tuple[Optional[Book], Optional[str]]:
+    async def get_book(self, book_id: int) -> tuple[Book | None, str | None]:
         LOGGER.debug("# get_book(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
         if doc:
             return self.item_class(book_id=book_id, info=doc), None
         return None, f"No book found by '{book_id}'"
 
-    async def validate_epub(self, book_id: int) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    async def validate_epub(self, book_id: int) -> tuple[dict[str, Any] | None, str | None]:
         """epubcheck를 실행하여 EPUB 파일의 구조적 유효성을 검증한다."""
         import asyncio
         import json as json_mod
@@ -435,7 +435,7 @@ class BookManager:
 
         return result, None
 
-    async def validate_pdf(self, book_id: int) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    async def validate_pdf(self, book_id: int) -> tuple[dict[str, Any] | None, str | None]:
         """pikepdf를 사용하여 PDF 파일의 구문 유효성을 검증하고 메타데이터를 추출한다."""
         import pikepdf
 
@@ -495,7 +495,7 @@ class BookManager:
                     encoding = encoding_metadata["encoding"] if encoding_metadata["encoding"] else "utf-8"
         return encoding
 
-    async def get_book_content(self, book_id: int) -> Union[str, FileResponse]:
+    async def get_book_content(self, book_id: int) -> str | FileResponse:
         LOGGER.debug("# get_book_content(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
@@ -512,7 +512,7 @@ class BookManager:
             return FileResponse(path=book.file_path, media_type=media_type, headers=headers)
         return ""
 
-    async def get_book_preview(self, book_id: int, pages: int = 5, chapters: int = 3, resource_base_url: str = "") -> Union[Response, FileResponse]:
+    async def get_book_preview(self, book_id: int, pages: int = 5, chapters: int = 3, resource_base_url: str = "") -> Response | FileResponse:
         LOGGER.debug("# get_book_preview(book_id=%d, pages=%d, chapters=%d, resource_base_url='%s')", book_id, pages, chapters, resource_base_url)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
@@ -601,8 +601,8 @@ class BookManager:
                     opf = etree.fromstring(opf_bytes, etree.XMLParser(recover=True))
 
                     # manifest: id → href, media-type
-                    manifest: Dict[str, Dict[str, str]] = {}
-                    href_to_id: Dict[str, str] = {}
+                    manifest: dict[str, dict[str, str]] = {}
+                    href_to_id: dict[str, str] = {}
                     for item in opf.findall(f".//{{{opf_ns}}}item"):
                         item_id = item.get("id", "")
                         href = item.get("href", "")
@@ -852,7 +852,7 @@ class BookManager:
         # 지원하지 않는 형식
         return Response(status_code=400, content=f"Unsupported file type: {suffix}")
 
-    async def get_html_resource(self, book_id: int, resource_path: str) -> Union[Response, FileResponse]:
+    async def get_html_resource(self, book_id: int, resource_path: str) -> Response | FileResponse:
         LOGGER.debug("# get_html_resource(book_id=%d, resource_path='%s')", book_id, resource_path)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
@@ -880,21 +880,21 @@ class BookManager:
         media_type = BookManager.MEDIA_TYPES.get(target_path.suffix.lower(), "application/octet-stream")
         return FileResponse(path=target_path, media_type=media_type, headers=BookManager._html_security_headers())
 
-    async def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> Tuple[List[Book], Optional[str]]:
+    async def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> tuple[list[Book], str | None]:
         LOGGER.debug("# search_by_keyword(keyword='%s')", keyword)
         result_list = self.es_manager.search_by_keyword(keyword, max_result_count=max_result_count)
         if result_list and len(result_list) > 0:
             return [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in result_list], None
         return [], "No books found"
 
-    async def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: Optional[List[str]] = None) -> Tuple[List[Book], int, Optional[str]]:
+    async def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: list[str] | None = None) -> tuple[list[Book], int, str | None]:
         LOGGER.debug("# search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s)", keyword, size, offset, exclude_categories)
         result_list, total = self.es_manager.search_by_keyword_paged(keyword, size=size, offset=offset, exclude_categories=exclude_categories)
         if result_list:
             return ([self.item_class(book_id=bid, info=doc) for bid, doc, _ in result_list], total, None)
         return [], total, None
 
-    async def search_similar_books(self, book_id: int, max_result_count: int = -1) -> Tuple[List[Book], Optional[str]]:
+    async def search_similar_books(self, book_id: int, max_result_count: int = -1) -> tuple[list[Book], str | None]:
         LOGGER.debug("# search_similar_books(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
@@ -904,7 +904,7 @@ class BookManager:
             return [self.item_class(book_id=doc_id, info=similar_doc) for doc_id, similar_doc, _score in result_list], None
         return [], "No similar books found"
 
-    async def search_similar_books_paged(self, book_id: int, size: int = 10, offset: int = 0) -> Tuple[List[Book], int, Optional[str]]:
+    async def search_similar_books_paged(self, book_id: int, size: int = 10, offset: int = 0) -> tuple[list[Book], int, str | None]:
         LOGGER.debug("# search_similar_books_paged(book_id=%d, size=%d, offset=%d)", book_id, size, offset)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
@@ -914,7 +914,7 @@ class BookManager:
             return ([self.item_class(book_id=did, info=sdoc, score=score) for did, sdoc, score in result_list], total, None)
         return [], total, "No similar books found"
 
-    async def add_book(self, data: Dict[int, Dict[str, Any]]) -> Tuple[Optional[int], Optional[str]]:
+    async def add_book(self, data: dict[int, dict[str, Any]]) -> tuple[int | None, str | None]:
         LOGGER.debug("# add_book(data='%r')", data)
         doc_id_list = self.es_manager.insert(data)
         if doc_id_list and len(doc_id_list) == 1:
@@ -922,7 +922,7 @@ class BookManager:
             return doc_id_list[0], None
         return None, f"can't add book '{data}' to ElasticSearch"
 
-    async def update_book(self, book_id: int, new_category: str, new_title: str, new_author: str, new_path: Path, new_type: str, force: bool = False) -> Tuple[str, Optional[str]]:
+    async def update_book(self, book_id: int, new_category: str, new_title: str, new_author: str, new_path: Path, new_type: str, force: bool = False) -> tuple[str, str | None]:
         LOGGER.debug("# update_book(book_id=%d, new_category='%s', new_title='%s', new_author='%s', new_path='%r', new_file_type='%s', force=%s)", book_id, new_category, new_title, new_author, new_path, new_type, force)
         # 경로 탈출 방지: path_prefix 외부 이동 금지
         try:
@@ -977,7 +977,7 @@ class BookManager:
                 return ("Error", f"ES 업데이트 예외, 파일 롤백 완료: {e}")
         return ("Error", f"can't update book information of '{book_id}' in ElasticSearch, no such a book")
 
-    def get_category_mismatches(self) -> Dict[str, Any]:
+    def get_category_mismatches(self) -> dict[str, Any]:
         """파일시스템의 1레벨 디렉토리 기준으로 ES와 파일 경로 불일치를 검출"""
         import time as _time
         import os as _os
@@ -993,7 +993,7 @@ class BookManager:
 
         # 2. 파일시스템: 1레벨 디렉토리 + 그 하위 2레벨 스캔 (파일 수만 카운트)
         base_str = str(self.path_prefix)
-        fs_cats: Dict[str, int] = {}
+        fs_cats: dict[str, int] = {}
 
         def count_files(dir_path: str) -> int:
             count = 0
@@ -1013,7 +1013,7 @@ class BookManager:
                 fs_cats["_root"] = root_count
 
             # L1/L2 디렉토리 목록 수집
-            scan_tasks: List[Tuple[str, str]] = []  # (dir_path, category)
+            scan_tasks: list[tuple[str, str]] = []  # (dir_path, category)
             with _os.scandir(base_str) as l1_it:
                 for l1 in l1_it:
                     if not l1.is_dir(follow_symlinks=False) or l1.name.startswith("."):
@@ -1062,14 +1062,14 @@ class BookManager:
         self._mismatch_cache_time = now
         return result
 
-    def get_category_mismatch_details(self, category: str) -> Dict[str, Any]:
+    def get_category_mismatch_details(self, category: str) -> dict[str, Any]:
         """특정 카테고리의 ES 문서와 파일시스템 파일을 비교하여 불일치 항목을 반환"""
         import os as _os
 
         # 1. ES 문서 목록 (file_path 기준, 중복 감지 포함)
         doc_list = self.es_manager.search_by_category(category, max_result_count=sys.maxsize)
-        es_files: Dict[str, Dict[str, Any]] = {}
-        path_docs: Dict[str, List[Dict[str, Any]]] = {}
+        es_files: dict[str, dict[str, Any]] = {}
+        path_docs: dict[str, list[dict[str, Any]]] = {}
         for book_id, doc, _score in doc_list:
             rel_path = doc.get("file_path", "")
             path_docs.setdefault(rel_path, []).append({"book_id": book_id, **doc})
@@ -1127,7 +1127,7 @@ class BookManager:
 
         return {"es_only": es_only, "fs_only": fs_only, "duplicates": duplicates, "fs_count": len(fs_files)}
 
-    async def index_single_file(self, file_path: str) -> Tuple[Optional[int], Optional[str]]:
+    async def index_single_file(self, file_path: str) -> tuple[int | None, str | None]:
         """파일시스템의 파일을 읽어 ES에 적재"""
         from utils.loader import Loader
 
@@ -1141,7 +1141,7 @@ class BookManager:
             return None, f"지원하지 않는 파일 형식입니다: {file_path}"
         return await self.add_book(data)
 
-    async def delete_file(self, file_path: str) -> Tuple[str, Optional[str]]:
+    async def delete_file(self, file_path: str) -> tuple[str, str | None]:
         """파일시스템에서 파일을 삭제"""
         abs_path = (self.path_prefix / file_path).resolve()
         if not abs_path.is_relative_to(self.path_prefix.resolve()):
@@ -1154,7 +1154,7 @@ class BookManager:
         except IOError as e:
             return "Error", f"파일 삭제 실패: {e}"
 
-    async def reload_category(self, category: str, content_type: str = "book") -> Tuple[Dict[str, Any], Optional[str]]:
+    async def reload_category(self, category: str, content_type: str = "book") -> tuple[dict[str, Any], str | None]:
         """카테고리 전체를 ES에 재적재 (loader.py --recursive --reload 호출)"""
         LOGGER.info("reload_category 시작: category='%s', content_type='%s'", category, content_type)
 
@@ -1254,7 +1254,7 @@ class BookManager:
             LOGGER.error("PDF pages extraction failed for book_id=%d: %s", book_id, e)
             return Response(status_code=500, content="PDF pages extraction failed")
 
-    async def rename_category(self, old_category: str, new_category: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    async def rename_category(self, old_category: str, new_category: str) -> tuple[dict[str, Any], str | None]:
         """카테고리 이름을 일괄 변경 (FS + ES, 실패 시 FS 롤백)
 
         Returns:
@@ -1332,7 +1332,7 @@ class BookManager:
 
         return {"old_category": old_category, "new_category": new_category, "updated_count": es_result["updated"], "fs_renamed": fs_renamed}, None
 
-    async def delete_category(self, category: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    async def delete_category(self, category: str) -> tuple[dict[str, Any], str | None]:
         """카테고리의 모든 문서를 일괄 삭제 (ES + FS)
 
         Returns:
@@ -1365,11 +1365,11 @@ class BookManager:
         if es_result.get("failures"):
             return {}, f"ES 삭제 부분 실패: {es_result['failures']}"
 
-        result: Dict[str, Any] = {"category": category, "deleted_count": es_result["deleted"]}
+        result: dict[str, Any] = {"category": category, "deleted_count": es_result["deleted"]}
 
         return result, None
 
-    async def delete_book(self, book_id: int) -> Tuple[str, Optional[str]]:
+    async def delete_book(self, book_id: int) -> tuple[str, str | None]:
         LOGGER.debug("# delete_book(book_id=%d)", book_id)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:

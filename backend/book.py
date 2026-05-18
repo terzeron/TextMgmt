@@ -6,7 +6,7 @@ import json
 import logging.config
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ if "TM_BOOK_DIR" not in os.environ:
 class Book:
     path_prefix = Path(os.environ["TM_BOOK_DIR"])
 
-    def __init__(self, book_id: int, info: Dict[str, Any], score: float = 0.0, **kwargs) -> None:
+    def __init__(self, book_id: int, info: dict[str, Any], score: float = 0.0, **kwargs) -> None:
         self.book_id: int = book_id
         self.category: str = info["category"]
         self.title: str = info["title"]
@@ -34,7 +34,7 @@ class Book:
         self.updated_time: datetime = datetime.strptime(info["updated_time"], "%Y-%m-%dT%H:%M:%S.%f")
         self.score: float = score
 
-    def dict(self) -> Dict[str, Any]:
+    def dict(self) -> dict[str, Any]:
         return {
             "book_id": self.book_id,
             "category": self.category,

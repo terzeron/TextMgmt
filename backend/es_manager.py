@@ -5,7 +5,7 @@ import os
 import math
 import logging.config
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple, Union, Set, cast
+from typing import Any, cast
 from itertools import islice
 import time
 from elasticsearch import Elasticsearch
@@ -56,7 +56,7 @@ class ESManager:
         LOGGER.debug("do_exist_index()")
         return bool(self.es.indices.exists(index=self.index_name))
 
-    def get_existing_ids(self, doc_ids: List[int]) -> Set[int]:
+    def get_existing_ids(self, doc_ids: list[int]) -> set[int]:
         """주어진 ID 목록 중 ES에 존재하는 ID들을 반환"""
         if not doc_ids:
             return set()
@@ -65,20 +65,20 @@ class ESManager:
         response = self.es.mget(docs=docs, source=False)
         return {int(doc["_id"]) for doc in response["docs"] if doc.get("found", False)}
 
-    def get_existing_paths(self, doc_ids: List[int]) -> Dict[int, str]:
+    def get_existing_paths(self, doc_ids: list[int]) -> dict[int, str]:
         """주어진 ID 목록의 기존 file_path를 조회. 반환: {inode: file_path}"""
         if not doc_ids:
             return {}
         LOGGER.debug("get_existing_paths(%d ids)", len(doc_ids))
         docs = [{"_index": self.index_name, "_id": str(doc_id)} for doc_id in doc_ids]
         response = self.es.mget(docs=docs, source=["file_path"])
-        result: Dict[int, str] = {}
+        result: dict[int, str] = {}
         for doc in response["docs"]:
             if doc.get("found", False):
                 result[int(doc["_id"])] = doc["_source"]["file_path"]
         return result
 
-    def bulk_update_paths(self, updates: Dict[int, Dict[str, str]], max_retries: int = 3) -> int:
+    def bulk_update_paths(self, updates: dict[int, dict[str, str]], max_retries: int = 3) -> int:
         """inode → {"file_path": ..., "category": ...} 맵을 받아 bulk partial update 수행.
         반환: 업데이트된 문서 수"""
         if not updates:
@@ -92,7 +92,7 @@ class ESManager:
             chunk = list(islice(iter_items, chunk_size))
             if not chunk:
                 break
-            es_data: List[Dict[str, Any]] = []
+            es_data: list[dict[str, Any]] = []
             for inode, fields in chunk:
                 es_data.append({"update": {"_index": self.index_name, "_id": str(inode)}})
                 es_data.append({"doc": fields})
@@ -215,7 +215,7 @@ class ESManager:
         else:
             return {}
 
-    def _search(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+    def _search(self, query: dict[str, Any], sort: list[str] | str | None = None, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
 
@@ -275,7 +275,7 @@ class ESManager:
                 except Exception as e:
                     LOGGER.debug("Failed to clear scroll: %s", e)
 
-    def _search_paged(self, query: Dict[str, Any], sort: Union[List[str], str, None] = None, size: int = 10, offset: int = 0, ref_score: float = 0.0) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
+    def _search_paged(self, query: dict[str, Any], sort: list[str] | str | None = None, size: int = 10, offset: int = 0, ref_score: float = 0.0) -> tuple[list[tuple[int, dict[str, Any], float]], int]:
         """(results, total_count) 튜플을 반환하는 페이지네이션 검색
         ref_score: 정규화 기준 점수. 0이면 결과 내 max_score를 사용."""
         size = min(size, 10000)
@@ -291,21 +291,21 @@ class ESManager:
             result.append((int(hit["_id"]), hit["_source"], normalized_score))
         return result, total
 
-    def search_by_title(self, title: str, file_type: str = "", file_size: int = 0, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_title(self, title: str, file_type: str = "", file_size: int = 0, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_title(max_result_count=%d, title='%s', file_type='%s', file_size=%d)", max_result_count, title, file_type, file_size)
         query = {"bool": {"should": [{"match": {"title": {"query": title, "boost": 1.2 + math.log2(len(title.split(" ")))}}}, {"match": {"file_type": {"query": file_type, "boost": 1}}}, {"match": {"file_size": {"query": file_size, "boost": 1}}}]}}
         return self._search(query, max_result_count=max_result_count)
 
-    def search_by_summary(self, summary: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_summary(self, summary: str, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_summary(max_result_count=%d, summary='%s')", max_result_count, summary)
         query = {"match": {"summary": summary}}
         return self._search(query, max_result_count=max_result_count)
 
-    def search_by_category(self, category: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_category(self, category: str, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_category(category='%s')", category)
@@ -314,23 +314,23 @@ class ESManager:
 
         return self._search(query, sort=sort, max_result_count=max_result_count)
 
-    def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_keyword(keyword='%s', max_result_count=%d)", keyword, max_result_count)
         query = {"bool": {"should": [{"match": {"title": {"query": keyword, "boost": 10}}}, {"match": {"author": {"query": keyword, "boost": 5}}}, {"match": {"category.nori": {"query": keyword, "boost": 3}}}, {"match": {"summary": {"query": keyword, "boost": 1}}}], "minimum_should_match": 1}}
         return self._search(query, max_result_count=max_result_count)
 
-    def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: Optional[List[str]] = None) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
+    def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: list[str] | None = None) -> tuple[list[tuple[int, dict[str, Any], float]], int]:
         LOGGER.debug("search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s)", keyword, size, offset, exclude_categories)
-        query: Dict[str, Any] = {
+        query: dict[str, Any] = {
             "bool": {"must": [{"bool": {"should": [{"match": {"title": {"query": keyword, "boost": 10}}}, {"match": {"author": {"query": keyword, "boost": 5}}}, {"match": {"category.nori": {"query": keyword, "boost": 3}}}, {"match": {"summary": {"query": keyword, "boost": 1}}}], "minimum_should_match": 1}}]}
         }
         if exclude_categories:
             query["bool"]["must_not"] = [{"prefix": {"category": cat}} for cat in exclude_categories]
         return self._search_paged(query, size=size, offset=offset)
 
-    def search_similar_docs(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = -1, exclude_id: Optional[int] = None) -> List[Tuple[int, Dict[str, Any], float]]:
+    def search_similar_docs(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = -1, exclude_id: int | None = None) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_similar_docs(category='%s', title='%s', author='%s', type='%s', size=%d, summary='%s', max_result_count=%d)", category, title, author, file_type, file_size, summary, max_result_count)
@@ -339,7 +339,7 @@ class ESManager:
             query["bool"]["must_not"] = [{"term": {"_id": str(exclude_id)}}]
         return self._search(query, max_result_count=max_result_count)
 
-    def search_similar_docs_paged(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", exclude_id: Optional[int] = None, size: int = 10, offset: int = 0) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
+    def search_similar_docs_paged(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", exclude_id: int | None = None, size: int = 10, offset: int = 0) -> tuple[list[tuple[int, dict[str, Any], float]], int]:
         LOGGER.debug("search_similar_docs_paged(category='%s', title='%s', author='%s', type='%s', size=%d, offset=%d)", category, title, author, file_type, size, offset)
         should_clauses = [{"match": {"title": {"query": title, "boost": 20}}}, {"match": {"author": {"query": author, "boost": 15}}}, {"match": {"summary": {"query": summary, "boost": 3}}}, {"range": {"file_size": {"gte": file_size * 0.9, "lte": file_size * 1.1, "boost": 1}}}]
 
@@ -351,7 +351,7 @@ class ESManager:
         query = {"bool": {"should": should_clauses, "minimum_should_match": 1}}
         return self._search_paged(query, size=size, offset=offset)
 
-    def _search_paged_with_self_score(self, should_clauses: list, exclude_id: int, size: int = 10, offset: int = 0) -> Tuple[List[Tuple[int, Dict[str, Any], float]], int]:
+    def _search_paged_with_self_score(self, should_clauses: list, exclude_id: int, size: int = 10, offset: int = 0) -> tuple[list[tuple[int, dict[str, Any], float]], int]:
         """msearch로 self-score 쿼리와 본 검색을 한 번의 왕복으로 실행"""
         LOGGER.debug("_search_paged_with_self_score(exclude_id=%s, size=%d, offset=%d)", exclude_id, size, offset)
         size = min(size, 10000)
@@ -361,7 +361,7 @@ class ESManager:
         # 본 검색 쿼리: 원본 제외
         search_query = {"bool": {"should": should_clauses, "minimum_should_match": 1, "must_not": [{"term": {"_id": str(exclude_id)}}]}}
 
-        searches: List[Dict[str, Any]] = [{"index": self.index_name}, {"size": 1, "query": self_score_query}, {"index": self.index_name}, {"size": size, "from": offset, "query": search_query, "track_scores": True, "track_total_hits": True}]
+        searches: list[dict[str, Any]] = [{"index": self.index_name}, {"size": 1, "query": self_score_query}, {"index": self.index_name}, {"size": size, "from": offset, "query": search_query, "track_scores": True, "track_total_hits": True}]
         response = self.es.msearch(searches=searches)
         responses = response["responses"]
 
@@ -400,7 +400,7 @@ class ESManager:
             return hits[0]["_score"]
         return 0.0
 
-    def search_by_id(self, doc_id: int) -> Dict[str, Any]:
+    def search_by_id(self, doc_id: int) -> dict[str, Any]:
         LOGGER.debug("search_by_id(doc_id=%d)", doc_id)
         from elasticsearch import NotFoundError
 
@@ -410,7 +410,7 @@ class ESManager:
         except NotFoundError:
             return {}
 
-    def search_and_aggregate_by_category(self) -> Dict[str, int]:
+    def search_and_aggregate_by_category(self) -> dict[str, int]:
         LOGGER.debug("search_and_aggregate_by_category()")
         field_name = "category"
         size = 10000
@@ -418,10 +418,10 @@ class ESManager:
         result = self.es.search(index=self.index_name, body=body)
         return {bucket["key"]: bucket["doc_count"] for bucket in result["aggregations"]["unique_values"]["buckets"]}
 
-    def get_all_file_paths_grouped(self) -> Dict[str, Set[str]]:
+    def get_all_file_paths_grouped(self) -> dict[str, set[str]]:
         """scroll로 전체 인덱스를 순회하여 카테고리별 file_path 집합을 반환"""
         LOGGER.debug("get_all_file_paths_grouped()")
-        result: Dict[str, Set[str]] = {}
+        result: dict[str, set[str]] = {}
         scroll_id = None
         try:
             response = self.es.search(index=self.index_name, body={"query": {"match_all": {}}, "_source": ["category", "file_path"]}, scroll="10m", size=10000)
@@ -447,17 +447,17 @@ class ESManager:
                     LOGGER.debug("Failed to clear scroll: %s", e)
         return result
 
-    def delete_by_file_paths(self, file_paths: List[str], exclude_ids: Optional[List[int]] = None) -> int:
+    def delete_by_file_paths(self, file_paths: list[str], exclude_ids: list[int] | None = None) -> int:
         """주어진 file_path 목록에 해당하는 기존 문서를 삭제 (중복 방지용).
         exclude_ids가 지정되면 해당 ID는 삭제하지 않음.
         반환: 삭제된 문서 수"""
         if not file_paths:
             return 0
-        must_clauses: List[Dict[str, Any]] = [{"terms": {"file_path.keyword": file_paths}}]
-        must_not_clauses: List[Dict[str, Any]] = []
+        must_clauses: list[dict[str, Any]] = [{"terms": {"file_path.keyword": file_paths}}]
+        must_not_clauses: list[dict[str, Any]] = []
         if exclude_ids:
             must_not_clauses.append({"ids": {"values": [str(i) for i in exclude_ids]}})
-        query: Dict[str, Any] = {"bool": {"must": must_clauses}}
+        query: dict[str, Any] = {"bool": {"must": must_clauses}}
         if must_not_clauses:
             query["bool"]["must_not"] = must_not_clauses
         try:
@@ -470,13 +470,13 @@ class ESManager:
             LOGGER.error("delete_by_file_paths error: %s", e)
             return 0
 
-    def insert(self, data: Dict[int, Dict[str, Any]], num_docs: int = sys.maxsize, max_retries: int = 3) -> List[int]:
+    def insert(self, data: dict[int, dict[str, Any]], num_docs: int = sys.maxsize, max_retries: int = 3) -> list[int]:
         LOGGER.debug("insert() %d items", len(data))
-        es_data: List[Dict[str, Any]] = []
+        es_data: list[dict[str, Any]] = []
         data_count = 0
         chunk_size = 100
         iter_items = iter(data.items())
-        doc_id_list: List[int] = []
+        doc_id_list: list[int] = []
         while True:
             chunk = list(islice(iter_items, chunk_size))
             if not chunk:
@@ -514,7 +514,7 @@ class ESManager:
 
     def update(self, doc_id: int, category: str = "", title: str = "", author: str = "", file_path: str = "", file_type: str = "", file_size: int = 0, summary: str = "") -> bool:
         LOGGER.debug("update(doc_id=%d, title='%s', author='%s', file_path='%r', file_type='%s', file_size=%d, summary='%s', category='%s')", doc_id, title, author, file_path, file_type, file_size, summary, category)
-        doc: Dict[str, Any] = {}
+        doc: dict[str, Any] = {}
         if category:
             doc.update({"category": category})
         if title:
@@ -552,17 +552,17 @@ class ESManager:
         result = self.es.count(index=self.index_name, query=query)
         return result["count"]
 
-    def count_by_categories(self, categories: List[str]) -> Dict[str, int]:
+    def count_by_categories(self, categories: list[str]) -> dict[str, int]:
         """여러 카테고리의 문서 수를 msearch로 한 번에 조회"""
         if len(categories) == 1:
             return {categories[0]: self.count_by_category(categories[0])}
         LOGGER.debug("count_by_categories(categories=%s)", categories)
-        searches: List[Dict[str, Any]] = []
+        searches: list[dict[str, Any]] = []
         for cat in categories:
             searches.append({"index": self.index_name})
             searches.append({"size": 0, "track_total_hits": True, "query": {"term": {"category": cat}}})
         response = self.es.msearch(searches=searches)
-        result: Dict[str, int] = {}
+        result: dict[str, int] = {}
         for cat, resp in zip(categories, response["responses"]):
             if "error" in resp:
                 LOGGER.error("msearch error for category '%s': %s", cat, resp["error"])
@@ -571,7 +571,7 @@ class ESManager:
                 result[cat] = resp["hits"]["total"]["value"]
         return result
 
-    def rename_category(self, old_category: str, new_category: str) -> Dict[str, Any]:
+    def rename_category(self, old_category: str, new_category: str) -> dict[str, Any]:
         """ES에서 특정 카테고리의 모든 문서를 새 카테고리로 변경
 
         category 필드와 file_path의 카테고리 prefix를 갱신한다.
@@ -595,7 +595,7 @@ class ESManager:
         result = self.es.update_by_query(index=self.index_name, query={"term": {"category": old_category}}, script=script, conflicts="abort", refresh=True)
         return {"updated": result.get("updated", 0), "failures": result.get("failures", [])}
 
-    def delete_by_category(self, category: str, prefix: bool = False) -> Dict[str, Any]:
+    def delete_by_category(self, category: str, prefix: bool = False) -> dict[str, Any]:
         """특정 카테고리의 모든 문서를 삭제
 
         Args:

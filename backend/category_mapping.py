@@ -3,7 +3,6 @@
 import os
 import logging.config
 from pathlib import Path
-from typing import Dict, List, Optional
 from contextlib import contextmanager
 
 import pymysql
@@ -16,7 +15,7 @@ LOGGER = logging.getLogger(__name__)
 class CategoryMapping:
     """카테고리별 키워드 매핑을 관리하는 클래스 (MySQL 기반)"""
 
-    def __init__(self, host: Optional[str] = None, port: Optional[int] = None, database: Optional[str] = None, user: Optional[str] = None, password: Optional[str] = None) -> None:
+    def __init__(self, host: str | None = None, port: int | None = None, database: str | None = None, user: str | None = None, password: str | None = None) -> None:
         """
         Args:
             host: MySQL 호스트. None이면 환경변수 사용
@@ -79,7 +78,7 @@ class CategoryMapping:
                         LOGGER.debug("Index category not found, skipping: %s", e)
                     cursor.execute(f"ALTER TABLE {table} ADD UNIQUE KEY unique_category_content_type (category, content_type)")
 
-    def get_all_mappings(self, content_type: str = "book") -> Dict[str, List[str]]:
+    def get_all_mappings(self, content_type: str = "book") -> dict[str, list[str]]:
         """모든 카테고리-키워드 매핑 조회
 
         Args:
@@ -93,7 +92,7 @@ class CategoryMapping:
                 cursor.execute("SELECT category, keyword FROM category_keywords WHERE content_type = %s ORDER BY category, keyword", (content_type,))
                 rows = cursor.fetchall()
 
-        mappings: Dict[str, List[str]] = {}
+        mappings: dict[str, list[str]] = {}
         for row in rows:
             category = row["category"]
             keyword = row["keyword"]
@@ -104,7 +103,7 @@ class CategoryMapping:
         LOGGER.debug("get_all_mappings(%s): %d categories", content_type, len(mappings))
         return mappings
 
-    def get_keywords(self, category: str, content_type: str = "book") -> List[str]:
+    def get_keywords(self, category: str, content_type: str = "book") -> list[str]:
         """특정 카테고리의 키워드 목록 조회
 
         Args:
@@ -170,7 +169,7 @@ class CategoryMapping:
         LOGGER.info("remove_keyword(%s, %s, %s): %s", category, keyword, content_type, "success" if deleted else "not found")
         return deleted
 
-    def set_keywords(self, category: str, keywords: List[str], content_type: str = "book") -> bool:
+    def set_keywords(self, category: str, keywords: list[str], content_type: str = "book") -> bool:
         """카테고리의 키워드 목록을 일괄 설정 (기존 키워드 대체)
 
         Args:
@@ -202,7 +201,7 @@ class CategoryMapping:
                     LOGGER.error("set_keywords(%s, %s) failed: %s", category, content_type, e)
                     return False
 
-    def update_all_mappings(self, mappings: Dict[str, List[str]], content_type: str = "book") -> bool:
+    def update_all_mappings(self, mappings: dict[str, list[str]], content_type: str = "book") -> bool:
         """전체 매핑을 일괄 업데이트
 
         Args:
@@ -259,7 +258,7 @@ class CategoryMapping:
         LOGGER.info("delete_category(%s, %s, prefix=%s): %s", category, content_type, prefix, "success" if deleted else "not found")
         return deleted
 
-    def get_categories_with_keywords(self, content_type: str = "book") -> List[str]:
+    def get_categories_with_keywords(self, content_type: str = "book") -> list[str]:
         """키워드가 등록된 카테고리 목록 조회
 
         Args:
@@ -277,7 +276,7 @@ class CategoryMapping:
         LOGGER.debug("get_categories_with_keywords(%s): %d categories", content_type, len(categories))
         return categories
 
-    def search_by_keyword(self, keyword: str, content_type: str = "book") -> List[str]:
+    def search_by_keyword(self, keyword: str, content_type: str = "book") -> list[str]:
         """키워드로 카테고리 검색 (부분 일치)
 
         Args:
@@ -296,7 +295,7 @@ class CategoryMapping:
         LOGGER.debug("search_by_keyword(%s, %s): %d categories", keyword, content_type, len(categories))
         return categories
 
-    def get_hidden_categories(self, content_type: str = "book") -> List[str]:
+    def get_hidden_categories(self, content_type: str = "book") -> list[str]:
         """비노출 카테고리 목록 조회
 
         Args:

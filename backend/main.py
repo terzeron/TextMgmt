@@ -7,7 +7,7 @@ import time
 import logging.config
 import uuid
 from pathlib import Path
-from typing import Dict, Any, Literal, Union, List, Callable, TypeVar, Optional
+from typing import Any, Literal, Callable, TypeVar
 from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -132,7 +132,7 @@ def _get_cookie_settings() -> tuple[bool, _SameSite]:
     return secure, samesite
 
 
-def _summarize_request_body(body: Any) -> Dict[str, Any]:
+def _summarize_request_body(body: Any) -> dict[str, Any]:
     if isinstance(body, dict):
         return {"type": "dict", "keys": sorted(str(key) for key in body.keys())[:20], "key_count": len(body)}
     if isinstance(body, list):
@@ -192,7 +192,7 @@ class _LazyProxy:
 
     def __init__(self, factory: Callable[[], T], name: str) -> None:
         self._factory = factory
-        self._instance: Optional[T] = None
+        self._instance: T | None = None
         self._name = name
 
     def _get_instance(self) -> T:
@@ -247,13 +247,13 @@ def _issue_auth_tokens(email: str, role: str, name: str = "", picture: str = "",
     return access_token, refresh_token
 
 
-def _category_matches_hidden(category: str, hidden_categories: List[str]) -> bool:
+def _category_matches_hidden(category: str, hidden_categories: list[str]) -> bool:
     if not category:
         return False
     return any(category == hidden_cat or category.startswith(hidden_cat + "/") for hidden_cat in hidden_categories)
 
 
-async def _get_viewer_hidden_categories(payload: dict, content_type: str) -> List[str]:
+async def _get_viewer_hidden_categories(payload: dict, content_type: str) -> list[str]:
     if payload.get("role") != "viewer":
         return []
     return await asyncio.to_thread(category_mapping.get_hidden_categories, content_type=content_type)
@@ -309,9 +309,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     router = APIRouter()
 
     @router.put("/books/{book_id}", dependencies=admin_dep)
-    async def update_book(book_id: int, book_item: BookModel, force: bool = False) -> Dict[str, Any]:
+    async def update_book(book_id: int, book_item: BookModel, force: bool = False) -> dict[str, Any]:
         LOGGER.debug("# update_book(book_id=%d, book=%r, force=%s)", book_id, book_item, force)
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         result, error = await manager.update_book(book_id, new_category=book_item.category, new_title=book_item.title, new_author=book_item.author, new_path=manager.path_prefix / book_item.file_path, new_type=book_item.file_type, force=force)
         if error is None:
             response_object["status"] = "success"
@@ -321,9 +321,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.delete("/books/{book_id}", dependencies=admin_dep)
-    async def delete_book(book_id: int) -> Dict[str, Any]:
+    async def delete_book(book_id: int) -> dict[str, Any]:
         LOGGER.debug("# delete_book(book_id=%d)", book_id)
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         result, message = await manager.delete_book(book_id)
         if result == "Ok":
             response_object["status"] = "success"
@@ -337,7 +337,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.get("/download/{book_id}", response_model=None)
-    async def get_book_content(book_id: int, payload: dict = Depends(require_auth)) -> Union[str, FileResponse]:
+    async def get_book_content(book_id: int, payload: dict = Depends(require_auth)) -> str | FileResponse:
         LOGGER.debug("# get_book(book_id=%d)", book_id)
         await _ensure_viewer_book_allowed(manager, book_id, payload, content_type)
         return await manager.get_book_content(book_id=book_id)
@@ -350,7 +350,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return await manager.get_book_preview(book_id=book_id, pages=pages, chapters=chapters, resource_base_url=f"{api_prefix}/html-resource/{book_id}")
 
     @router.get("/html-resource/{book_id}", response_model=None)
-    async def get_html_resource(book_id: int, path: str, payload: dict = Depends(require_auth)) -> Union[Response, FileResponse]:
+    async def get_html_resource(book_id: int, path: str, payload: dict = Depends(require_auth)) -> Response | FileResponse:
         LOGGER.debug("# get_html_resource(book_id=%d, path='%s')", book_id, path)
         await _ensure_viewer_book_allowed(manager, book_id, payload, content_type)
         return await manager.get_html_resource(book_id=book_id, resource_path=path)
@@ -362,9 +362,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return await manager.get_pdf_pages(book_id=book_id, start=start, end=end)
 
     @router.get("/validate/{book_id}")
-    async def validate_book(book_id: int, payload: dict = Depends(require_auth)) -> Dict[str, Any]:
+    async def validate_book(book_id: int, payload: dict = Depends(require_auth)) -> dict[str, Any]:
         LOGGER.debug("# validate_book(book_id=%d)", book_id)
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
 
         book, err = await manager.get_book(book_id)
         if not book:
@@ -388,9 +388,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.get("/books/{book_id}")
-    async def get_book(book_id: int, payload: dict = Depends(require_auth)) -> Dict[str, Any]:
+    async def get_book(book_id: int, payload: dict = Depends(require_auth)) -> dict[str, Any]:
         LOGGER.debug("# get_book(book_id=%d)", book_id)
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         book, error = await _get_book_and_ensure_viewer_access(manager, book_id, payload, content_type)
         if book and error is None:
             response_object["status"] = "success"
@@ -400,9 +400,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.put("/categories/rename", dependencies=admin_dep)
-    async def rename_category(body: CategoryRenameModel) -> Dict[str, Any]:
+    async def rename_category(body: CategoryRenameModel) -> dict[str, Any]:
         LOGGER.debug("# rename_category(old='%s', new='%s')", body.old_category, body.new_category)
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         result, error = await manager.rename_category(body.old_category, body.new_category)
         if error is None:
             # MySQL 카테고리 매핑 갱신
@@ -417,9 +417,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.post("/categories/delete", dependencies=admin_dep)
-    async def delete_category(body: CategoryDeleteModel) -> Dict[str, Any]:
+    async def delete_category(body: CategoryDeleteModel) -> dict[str, Any]:
         LOGGER.debug("# delete_category(category='%s')", body.category)
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         result, error = await manager.delete_category(body.category)
         if error is None:
             # MySQL 카테고리 매핑 삭제 (하위 카테고리 포함, 이벤트 루프 블로킹 방지)
@@ -441,9 +441,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.get("/categories/{category:path}")
-    async def get_books_in_category(category: str, payload: dict = Depends(require_auth)) -> Dict[str, Any]:
+    async def get_books_in_category(category: str, payload: dict = Depends(require_auth)) -> dict[str, Any]:
         LOGGER.debug("# get_books_in_category(category='%s')", category)
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         await _ensure_viewer_category_allowed(payload, category, content_type)
         result, error = await manager.get_books_in_category(category)
         if error is None:
@@ -454,9 +454,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.get("/categories")
-    async def get_categories(payload: dict = Depends(require_auth)) -> Dict[str, Any]:
+    async def get_categories(payload: dict = Depends(require_auth)) -> dict[str, Any]:
         LOGGER.debug("# get_categories()")
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         result, error = await manager.get_categories()
         if error is None:
             hidden_categories = await _get_viewer_hidden_categories(payload, content_type)
@@ -469,9 +469,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.get("/similar/{book_id}")
-    async def search_similar_books(book_id: int, offset: int = 0, limit: int = 10, payload: dict = Depends(require_auth)) -> Dict[str, Any]:
+    async def search_similar_books(book_id: int, offset: int = 0, limit: int = 10, payload: dict = Depends(require_auth)) -> dict[str, Any]:
         LOGGER.debug("# search_similar_books(book_id=%d, offset=%d, limit=%d)", book_id, offset, limit)
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         await _ensure_viewer_book_allowed(manager, book_id, payload, content_type)
         similar_list, total, error = await manager.search_similar_books_paged(book_id, size=limit, offset=offset)
         hidden_categories = await _get_viewer_hidden_categories(payload, content_type)
@@ -493,9 +493,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.get("/search/{keyword}")
-    async def search_by_keyword(keyword: str, offset: int = 0, limit: int = 10, exclude_categories: str = "", payload: dict = Depends(require_auth)) -> Dict[str, Any]:
+    async def search_by_keyword(keyword: str, offset: int = 0, limit: int = 10, exclude_categories: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:
         LOGGER.debug("# search(keyword=%s, offset=%d, limit=%d, exclude_categories=%s)", keyword, offset, limit, exclude_categories)
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         excluded = [c.strip() for c in exclude_categories.split(",") if c.strip()] if exclude_categories else None
         hidden_categories = await _get_viewer_hidden_categories(payload, content_type)
         if hidden_categories:
@@ -510,10 +510,10 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.get("/category-mismatches", dependencies=admin_dep)
-    async def get_category_mismatches() -> Dict[str, Any]:
+    async def get_category_mismatches() -> dict[str, Any]:
         """ES 카테고리별 문서 수와 파일시스템 파일 수의 불일치 검출"""
         LOGGER.debug("# get_category_mismatches()")
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         try:
             result = await asyncio.to_thread(manager.get_category_mismatches)
             response_object["status"] = "success"
@@ -524,13 +524,13 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.post("/category-mismatches/index-file", dependencies=admin_dep)
-    async def index_single_file(body: Dict[str, str]) -> Dict[str, Any]:
+    async def index_single_file(body: dict[str, str]) -> dict[str, Any]:
         """파일시스템의 파일을 ES에 적재"""
         LOGGER.debug("# index_single_file(body=%r)", body)
         file_path = body.get("file_path", "")
         if not file_path:
             raise HTTPException(status_code=400, detail="file_path is required")
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         book_id, error = await manager.index_single_file(file_path)
         if book_id is not None and error is None:
             response_object["status"] = "success"
@@ -540,13 +540,13 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.post("/category-mismatches/delete-file", dependencies=admin_dep)
-    async def delete_file(body: Dict[str, str]) -> Dict[str, Any]:
+    async def delete_file(body: dict[str, str]) -> dict[str, Any]:
         """파일시스템에서 파일 삭제"""
         LOGGER.debug("# delete_file(body=%r)", body)
         file_path = body.get("file_path", "")
         if not file_path:
             raise HTTPException(status_code=400, detail="file_path is required")
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         result, error = await manager.delete_file(file_path)
         if result == "Ok":
             response_object["status"] = "success"
@@ -556,10 +556,10 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.delete("/category-mismatches/es-doc/{book_id}", dependencies=admin_dep)
-    async def delete_es_doc_only(book_id: int) -> Dict[str, Any]:
+    async def delete_es_doc_only(book_id: int) -> dict[str, Any]:
         """ES 문서만 삭제 (파일은 유지) — 중복 문서 정리용"""
         LOGGER.debug("# delete_es_doc_only(book_id=%d)", book_id)
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         if manager.es_manager.delete(book_id):
             response_object["status"] = "success"
         else:
@@ -567,10 +567,10 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.post("/category-mismatches/reload", dependencies=admin_dep)
-    async def reload_category(body: CategoryDeleteModel) -> Dict[str, Any]:
+    async def reload_category(body: CategoryDeleteModel) -> dict[str, Any]:
         """카테고리 전체를 ES에 재적재"""
         LOGGER.info("reload_category 요청: category='%s', content_type='%s'", body.category, content_type)
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         result, error = await manager.reload_category(body.category, content_type=content_type)
         if error is None:
             response_object["status"] = "success"
@@ -582,10 +582,10 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.get("/category-mismatches/{category:path}", dependencies=admin_dep)
-    async def get_category_mismatch_details(category: str) -> Dict[str, Any]:
+    async def get_category_mismatch_details(category: str) -> dict[str, Any]:
         """특정 카테고리의 책 수준 불일치 상세 조회"""
         LOGGER.debug("# get_category_mismatch_details(category='%s')", category)
-        response_object: Dict[str, Any] = {"status": "failure"}
+        response_object: dict[str, Any] = {"status": "failure"}
         try:
             result = await asyncio.to_thread(manager.get_category_mismatch_details, category)
             response_object["status"] = "success"
@@ -766,15 +766,15 @@ async def logout(request: Request):
 
 
 class CategoryKeywordsModel(BaseModel):
-    keywords: List[str]
+    keywords: list[str]
 
 
 class CategoryMappingsModel(BaseModel):
-    mappings: Dict[str, List[str]]
+    mappings: dict[str, list[str]]
 
 
 @app.get("/category-mappings", dependencies=[Depends(require_auth)])
-async def get_all_category_mappings(content_type: str = "book") -> Dict[str, Any]:
+async def get_all_category_mappings(content_type: str = "book") -> dict[str, Any]:
     """모든 카테고리-키워드 매핑 조회"""
     LOGGER.debug("# get_all_category_mappings(content_type=%s)", content_type)
     try:
@@ -786,7 +786,7 @@ async def get_all_category_mappings(content_type: str = "book") -> Dict[str, Any
 
 
 @app.get("/category-mappings/{category}", dependencies=[Depends(require_auth)])
-async def get_category_keywords(category: str, content_type: str = "book") -> Dict[str, Any]:
+async def get_category_keywords(category: str, content_type: str = "book") -> dict[str, Any]:
     """특정 카테고리의 키워드 목록 조회"""
     LOGGER.debug("# get_category_keywords(category='%s', content_type=%s)", category, content_type)
     try:
@@ -798,7 +798,7 @@ async def get_category_keywords(category: str, content_type: str = "book") -> Di
 
 
 @app.put("/category-mappings/{category}", dependencies=[Depends(require_admin)])
-async def set_category_keywords(category: str, body: CategoryKeywordsModel, content_type: str = "book") -> Dict[str, Any]:
+async def set_category_keywords(category: str, body: CategoryKeywordsModel, content_type: str = "book") -> dict[str, Any]:
     """카테고리의 키워드 목록 설정 (기존 대체)"""
     LOGGER.debug("# set_category_keywords(category='%s', keywords=%s, content_type=%s)", category, body.keywords, content_type)
     try:
@@ -815,7 +815,7 @@ async def set_category_keywords(category: str, body: CategoryKeywordsModel, cont
 
 
 @app.post("/category-mappings/{category}/keywords", dependencies=[Depends(require_admin)])
-async def add_category_keyword(category: str, body: Dict[str, str], content_type: str = "book") -> Dict[str, Any]:
+async def add_category_keyword(category: str, body: dict[str, str], content_type: str = "book") -> dict[str, Any]:
     """카테고리에 키워드 추가"""
     keyword = body.get("keyword", "")
     LOGGER.debug("# add_category_keyword(category='%s', keyword='%s', content_type=%s)", category, keyword, content_type)
@@ -833,7 +833,7 @@ async def add_category_keyword(category: str, body: Dict[str, str], content_type
 
 
 @app.delete("/category-mappings/{category}/keywords/{keyword}", dependencies=[Depends(require_admin)])
-async def remove_category_keyword(category: str, keyword: str, content_type: str = "book") -> Dict[str, Any]:
+async def remove_category_keyword(category: str, keyword: str, content_type: str = "book") -> dict[str, Any]:
     """카테고리에서 키워드 삭제"""
     LOGGER.debug("# remove_category_keyword(category='%s', keyword='%s', content_type=%s)", category, keyword, content_type)
     try:
@@ -850,7 +850,7 @@ async def remove_category_keyword(category: str, keyword: str, content_type: str
 
 
 @app.delete("/category-mappings/{category}", dependencies=[Depends(require_admin)])
-async def delete_category_mapping(category: str, content_type: str = "book") -> Dict[str, Any]:
+async def delete_category_mapping(category: str, content_type: str = "book") -> dict[str, Any]:
     """카테고리의 모든 키워드 삭제"""
     LOGGER.debug("# delete_category_mapping(category='%s', content_type=%s)", category, content_type)
     try:
@@ -867,7 +867,7 @@ async def delete_category_mapping(category: str, content_type: str = "book") -> 
 
 
 @app.put("/category-mappings", dependencies=[Depends(require_admin)])
-async def update_all_category_mappings(body: CategoryMappingsModel, content_type: str = "book") -> Dict[str, Any]:
+async def update_all_category_mappings(body: CategoryMappingsModel, content_type: str = "book") -> dict[str, Any]:
     """전체 매핑 일괄 업데이트"""
     LOGGER.debug("# update_all_category_mappings(content_type=%s)", content_type)
     try:
@@ -891,7 +891,7 @@ class HiddenCategoryModel(BaseModel):
 
 
 @app.get("/hidden-categories")
-async def get_hidden_categories(payload: dict = Depends(require_auth), content_type: str = "book") -> Dict[str, Any]:
+async def get_hidden_categories(payload: dict = Depends(require_auth), content_type: str = "book") -> dict[str, Any]:
     """비노출 카테고리 목록 조회"""
     LOGGER.debug("# get_hidden_categories(content_type=%s)", content_type)
     try:
@@ -905,7 +905,7 @@ async def get_hidden_categories(payload: dict = Depends(require_auth), content_t
 
 
 @app.post("/hidden-categories/{category:path}", dependencies=[Depends(require_admin)])
-async def set_hidden_category(category: str, body: HiddenCategoryModel, content_type: str = "book") -> Dict[str, Any]:
+async def set_hidden_category(category: str, body: HiddenCategoryModel, content_type: str = "book") -> dict[str, Any]:
     """카테고리 비노출 설정/해제"""
     LOGGER.debug("# set_hidden_category(category='%s', hidden=%s, content_type=%s)", category, body.hidden, content_type)
     try:
