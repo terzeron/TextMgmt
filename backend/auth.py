@@ -28,12 +28,12 @@ def _get_admin_email() -> str:
     return os.getenv("TM_ADMIN_EMAIL", "")
 
 
-def _get_allowed_emails() -> list[str]:
+def _get_allowed_emails() -> List[str]:
     allowed_raw = os.getenv("TM_ALLOWED_EMAILS", "")
     return [email.strip() for email in allowed_raw.split(",") if email.strip()]
 
 
-def determine_role(email: str) -> str | None:
+def determine_role(email: str) -> Optional[str]:
     if email == _get_admin_email():
         return "admin"
     if email in _get_allowed_emails():
