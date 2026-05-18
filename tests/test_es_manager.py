@@ -3,7 +3,7 @@ import os
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 from elastic_transport import ConnectionError
@@ -37,14 +37,14 @@ class DummyIndices:
         self.exists_called = True
         return self.mapping.get("exists", False)
 
-    def create(self, index: str, body: Dict[str, Any]):
+    def create(self, index: str, body: dict[str, Any]):
         self.created = True
         return {"acknowledged": True}
 
     def get_mapping(self, index: str):
         return self.mapping
 
-    def put_mapping(self, index: str, properties: Dict[str, Any]):
+    def put_mapping(self, index: str, properties: dict[str, Any]):
         self.put_mapping_called = True
         return {"acknowledged": True}
 
@@ -67,7 +67,7 @@ class DummyES:
     def info(self):
         return {"ok": True}
 
-    def mget(self, docs: List[Dict[str, Any]], source=False):
+    def mget(self, docs: list[dict[str, Any]], source=False):
         return {"docs": [{"_id": "1", "found": True, "_source": {"file_path": "/a"}}, {"_id": "2", "found": False}]}
 
     def bulk(self, body, timeout="60s", refresh=False):
@@ -98,25 +98,25 @@ class DummyES:
         self.cleared_scroll = True
         return {"succeeded": True}
 
-    def msearch(self, searches: List[Dict[str, Any]]):
+    def msearch(self, searches: list[dict[str, Any]]):
         return {"responses": [{"hits": {"hits": [{"_score": 10.0}]}}, {"hits": {"total": {"value": 1}, "hits": [{"_id": "2", "_source": {"a": 2}, "_score": 5.0}]}}]}
 
     def get(self, index: str, id: str):
         raise NotFoundError("not found", meta=None, body=None)
 
-    def count(self, index: str, query: Dict[str, Any]):
+    def count(self, index: str, query: dict[str, Any]):
         return {"count": 3}
 
-    def delete_by_query(self, index: str, body: Dict[str, Any] | None = None, conflicts="abort", refresh=False, query: Dict[str, Any] | None = None):
+    def delete_by_query(self, index: str, body: dict[str, Any] | None = None, conflicts="abort", refresh=False, query: dict[str, Any] | None = None):
         return {"deleted": 2, "failures": []}
 
     def delete_by_query_raises(self, *args, **kwargs):
         raise RuntimeError("fail")
 
-    def update_by_query(self, index: str, query: Dict[str, Any], script: Dict[str, Any], conflicts="abort", refresh=False):
+    def update_by_query(self, index: str, query: dict[str, Any], script: dict[str, Any], conflicts="abort", refresh=False):
         return {"updated": 4, "failures": []}
 
-    def update(self, index: str, id: str, body: Dict[str, Any], refresh=True):
+    def update(self, index: str, id: str, body: dict[str, Any], refresh=True):
         return {"_shards": {"failed": 1}}
 
     def delete(self, index: str, id: str, refresh=True):
@@ -161,7 +161,7 @@ def test_create_index_paths(monkeypatch: pytest.MonkeyPatch):
     assert manager.create_index()["acknowledged"] is True
     assert called["ensure"] == 1
 
-    def raise_exists(index: str, body: Dict[str, Any]):
+    def raise_exists(index: str, body: dict[str, Any]):
         raise BadRequestError("resource_already_exists_exception", meta=SimpleNamespace(status=400), body=None)
 
     monkeypatch.setattr(manager, "do_exist_index", lambda: False)
@@ -348,7 +348,7 @@ def test_search_paged_base_score_zero():
 
 def test_search_paged_with_self_score_errors():
     class ESBad(DummyES):
-        def msearch(self, searches: List[Dict[str, Any]]):
+        def msearch(self, searches: list[dict[str, Any]]):
             return {"responses": [{"error": {"reason": "bad"}}, {"error": {"reason": "bad2"}}]}
 
     manager = make_manager(ESBad())
@@ -357,7 +357,7 @@ def test_search_paged_with_self_score_errors():
     assert total == 0
 
     class ESBaseZero(DummyES):
-        def msearch(self, searches: List[Dict[str, Any]]):
+        def msearch(self, searches: list[dict[str, Any]]):
             return {"responses": [{"hits": {"hits": []}}, {"hits": {"total": {"value": 2}, "hits": [{"_id": "1", "_source": {"a": 1}, "_score": 5.0}]}}]}
 
     manager = make_manager(ESBaseZero())
@@ -368,7 +368,7 @@ def test_search_paged_with_self_score_errors():
 
 def test_count_by_categories_error_response():
     class ESError(DummyES):
-        def msearch(self, searches: List[Dict[str, Any]]):
+        def msearch(self, searches: list[dict[str, Any]]):
             return {"responses": [{"error": {"reason": "bad"}}, {"hits": {"total": {"value": 5}}}]}
 
     manager = make_manager(ESError())
@@ -394,7 +394,7 @@ def test_ensure_category_nori_subfield_exception():
 
 def test_delete_by_file_paths_with_exclude_ids():
     class ESDelete(DummyES):
-        def delete_by_query(self, index: str, body: Dict[str, Any] | None = None, conflicts="abort", refresh=False, query: Dict[str, Any] | None = None):
+        def delete_by_query(self, index: str, body: dict[str, Any] | None = None, conflicts="abort", refresh=False, query: dict[str, Any] | None = None):
             self.last_body = body
             return {"deleted": 3}
 
@@ -480,7 +480,7 @@ def test_update_success_and_delete_by_file_paths_empty():
     es = DummyES()
 
     class DummySuccessES(DummyES):
-        def update(self, index: str, id: str, body: Dict[str, Any], refresh=True):
+        def update(self, index: str, id: str, body: dict[str, Any], refresh=True):
             return {"_shards": {"failed": 0}}
 
     manager = make_manager(es)
@@ -532,7 +532,7 @@ def test_create_index_non_exists_bad_request():
     es = DummyES()
     manager = make_manager(es)
 
-    def raise_other(index: str, body: Dict[str, Any]):
+    def raise_other(index: str, body: dict[str, Any]):
         raise BadRequestError("some_other_error", meta=SimpleNamespace(status=400), body=None)
 
     manager.do_exist_index = lambda: False
@@ -709,7 +709,7 @@ def test_update_with_file_size_and_summary():
             super().__init__()
             self.last_body = None
 
-        def update(self, index: str, id: str, body: Dict[str, Any], refresh=True):
+        def update(self, index: str, id: str, body: dict[str, Any], refresh=True):
             self.last_body = body
             return {"_shards": {"failed": 0}}
 
@@ -730,7 +730,7 @@ def test_delete_by_category_no_prefix():
             super().__init__()
             self.last_query = None
 
-        def delete_by_query(self, index: str, body: Dict[str, Any] | None = None, conflicts="abort", refresh=False, query: Dict[str, Any] | None = None):
+        def delete_by_query(self, index: str, body: dict[str, Any] | None = None, conflicts="abort", refresh=False, query: dict[str, Any] | None = None):
             self.last_query = query
             return {"deleted": 1, "failures": []}
 

@@ -3,13 +3,12 @@ import sqlite3
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
 
 
 class RefreshTokenStore:
     """Persist refresh token state to support rotation and revocation."""
 
-    def __init__(self, db_path: Optional[str] = None) -> None:
+    def __init__(self, db_path: str | None = None) -> None:
         default_path = Path(tempfile.gettempdir()) / "tm_refresh_tokens.sqlite3"
         self.db_path = Path(db_path or os.getenv("TM_REFRESH_TOKEN_DB", str(default_path)))
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

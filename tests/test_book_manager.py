@@ -10,7 +10,6 @@ import zipfile
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
 
 import pytest
 from fastapi.responses import FileResponse, Response
@@ -78,7 +77,7 @@ def book_manager_with_data(es_client, es_index):
     yield bm
 
 
-async def get_one_random_book(bm: BookManager) -> Optional[Book]:
+async def get_one_random_book(bm: BookManager) -> Book | None:
     """Helper to get one random book from the test data."""
     for category in [CATEGORY1, CATEGORY2, "_txt", "test"]:
         book_list, error = await bm.get_books_in_category(category)
@@ -87,7 +86,7 @@ async def get_one_random_book(bm: BookManager) -> Optional[Book]:
     return None
 
 
-async def get_two_random_books(bm: BookManager) -> Optional[Tuple[Book, Book]]:
+async def get_two_random_books(bm: BookManager) -> tuple[Book, Book] | None:
     """Helper to get two random books from different categories."""
     book1 = None
     book2 = None

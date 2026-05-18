@@ -7,7 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 from collections import defaultdict
 import cProfile
 import pstats
@@ -97,7 +97,7 @@ def set_last_success_time() -> None:
     LAST_SUCCESS_FILE.write_text(str(time.time()))
 
 
-def get_modified_files(since: float, exclude_paths: Optional[set[str]] = None) -> list[Path]:
+def get_modified_files(since: float, exclude_paths: set[str] | None = None) -> list[Path]:
     """Get modified Python files with better filtering"""
     if exclude_paths is None:
         exclude_paths = {
@@ -414,7 +414,7 @@ def ensure_coverage_prepared() -> None:
     _COVERAGE_PREPARED = True
 
 
-def get_coverage_env(coverage_file: Optional[Path] = None) -> dict[str, str]:
+def get_coverage_env(coverage_file: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env["COVERAGE_FILE"] = str(coverage_file or get_coverage_file())
     env.setdefault("PYTHONWARNINGS", "ignore")
@@ -1244,14 +1244,14 @@ def print_profiling_analysis(analysis: dict[str, Any]) -> None:
 
 def get_status_emoji(
     path: Path,
-    executed_tests: Optional[set[Path]] = None,
-    target_tests: Optional[set[Path]] = None,
-    failed_tests: Optional[set[Path]] = None,
-    passed_tests: Optional[set[Path]] = None,
-    deps: Optional[dict[Path, set[Path]]] = None,
-    reverse_deps: Optional[dict[Path, set[Path]]] = None,
-    modified_files: Optional[set[Path]] = None,
-    affected_files: Optional[set[Path]] = None,
+    executed_tests: set[Path] | None = None,
+    target_tests: set[Path] | None = None,
+    failed_tests: set[Path] | None = None,
+    passed_tests: set[Path] | None = None,
+    deps: dict[Path, set[Path]] | None = None,
+    reverse_deps: dict[Path, set[Path]] | None = None,
+    modified_files: set[Path] | None = None,
+    affected_files: set[Path] | None = None,
     all_mode: bool = False,
 ) -> str:
     """Unified function to get status emoji for a file (일반 모듈도 테스트 상태 반영)"""
@@ -1485,15 +1485,15 @@ def get_affected_files(modified_files: list[Path], deps: dict[Path, set[Path]], 
 
 def print_simple_dependency_tree(
     deps: dict[Path, set[Path]],
-    focus_files: Optional[set[Path]] = None,
+    focus_files: set[Path] | None = None,
     max_depth: int = 2,
-    executed_tests: Optional[set[Path]] = None,
-    target_tests: Optional[set[Path]] = None,
-    failed_tests: Optional[set[Path]] = None,
-    passed_tests: Optional[set[Path]] = None,
-    reverse_deps: Optional[dict[Path, set[Path]]] = None,
-    modified_files: Optional[set[Path]] = None,
-    affected_files: Optional[set[Path]] = None,
+    executed_tests: set[Path] | None = None,
+    target_tests: set[Path] | None = None,
+    failed_tests: set[Path] | None = None,
+    passed_tests: set[Path] | None = None,
+    reverse_deps: dict[Path, set[Path]] | None = None,
+    modified_files: set[Path] | None = None,
+    affected_files: set[Path] | None = None,
 ) -> None:
     """Print dependency tree with test modules as root and general modules as children (multi-level, branch lines)"""
     print("\n" + "=" * 80)
@@ -1556,9 +1556,9 @@ def _print_branch_tree_node(
     passed_tests: set[Path],
     prefix: str = "",
     is_last: bool = True,
-    reverse_deps: Optional[dict[Path, set[Path]]] = None,
-    modified_files: Optional[set[Path]] = None,
-    affected_files: Optional[set[Path]] = None,
+    reverse_deps: dict[Path, set[Path]] | None = None,
+    modified_files: set[Path] | None = None,
+    affected_files: set[Path] | None = None,
 ) -> None:
     """Print a tree node with branches (─, └─, ├─, │ 등) - 일반 모듈도 테스트 상태 반영"""
     node = node.resolve()
@@ -1723,13 +1723,13 @@ def get_test_targets_with_dependencies(modified_files: list[Path]) -> list[Path]
 def print_global_dependency_tree(
     deps: dict[Path, set[Path]],
     max_depth: int = 10,
-    executed_tests: Optional[set[Path]] = None,
-    target_tests: Optional[set[Path]] = None,
-    failed_tests: Optional[set[Path]] = None,
-    passed_tests: Optional[set[Path]] = None,
-    reverse_deps: Optional[dict[Path, set[Path]]] = None,
-    modified_files: Optional[set[Path]] = None,
-    affected_files: Optional[set[Path]] = None,
+    executed_tests: set[Path] | None = None,
+    target_tests: set[Path] | None = None,
+    failed_tests: set[Path] | None = None,
+    passed_tests: set[Path] | None = None,
+    reverse_deps: dict[Path, set[Path]] | None = None,
+    modified_files: set[Path] | None = None,
+    affected_files: set[Path] | None = None,
     all_mode: bool = False,
 ):
     """테스트 파일을 루트로 하여 전체 import chain을 트리로 출력"""
@@ -1748,13 +1748,13 @@ def _print_global_branch_tree_node(
     current_depth: int,
     visited: set[Path],
     prefix: str,
-    executed_tests: Optional[set[Path]] = None,
-    target_tests: Optional[set[Path]] = None,
-    failed_tests: Optional[set[Path]] = None,
-    passed_tests: Optional[set[Path]] = None,
-    reverse_deps: Optional[dict[Path, set[Path]]] = None,
-    modified_files: Optional[set[Path]] = None,
-    affected_files: Optional[set[Path]] = None,
+    executed_tests: set[Path] | None = None,
+    target_tests: set[Path] | None = None,
+    failed_tests: set[Path] | None = None,
+    passed_tests: set[Path] | None = None,
+    reverse_deps: dict[Path, set[Path]] | None = None,
+    modified_files: set[Path] | None = None,
+    affected_files: set[Path] | None = None,
     all_mode: bool = False,
 ):
     if current_depth > max_depth:

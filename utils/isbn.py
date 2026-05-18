@@ -4,7 +4,6 @@ import re
 import subprocess
 import zipfile
 from pathlib import Path
-from typing import List, Optional
 
 import pypdf
 from bs4 import BeautifulSoup
@@ -76,7 +75,7 @@ def validate_isbn(isbn: str) -> bool:
     return False
 
 
-def search_in_content(content) -> List[str]:
+def search_in_content(content) -> list[str]:
     if isinstance(content, bytes):
         content = content.decode('utf-8', errors='ignore')
     # 구분자를 사용하는 패턴과 구분자가 명확하게 없는 패턴
@@ -114,7 +113,7 @@ def search_in_content(content) -> List[str]:
                         )
                         \b'''
 
-    result_list: List[str] = []
+    result_list: list[str] = []
     for match in re.finditer(isbn_pattern, content, re.VERBOSE):
         result = match.group(1)
         result = re.sub(r"(l|\bI\b)", "1", result)
@@ -137,7 +136,7 @@ def search_in_content(content) -> List[str]:
     return result_list
 
 
-def extract_from_epub(file_path: Path) -> List[str]:
+def extract_from_epub(file_path: Path) -> list[str]:
     """EPUB에서 ISBN 추출: OPF 메타데이터 먼저 확인 후 앞뒤 챕터 검색"""
     try:
         with zipfile.ZipFile(file_path, "r") as zf:
@@ -192,7 +191,7 @@ def extract_from_epub(file_path: Path) -> List[str]:
         return []
 
 
-def extract_from_djvu(file_path: Path) -> List[str]:
+def extract_from_djvu(file_path: Path) -> list[str]:
     """DJVU에서 ISBN 추출: 앞 5페이지 + 뒤 5페이지만 추출"""
     try:
         # 총 페이지 수 확인
@@ -229,7 +228,7 @@ def extract_from_djvu(file_path: Path) -> List[str]:
         return []
 
 
-def extract_from_hwp(file_path: Path) -> List[str]:
+def extract_from_hwp(file_path: Path) -> list[str]:
     """HWP에서 ISBN 추출: head + tail로 앞뒤만 추출"""
     size = HEAD_TAIL_SIZE
     try:
@@ -246,7 +245,7 @@ def extract_from_hwp(file_path: Path) -> List[str]:
         return []
 
 
-def extract(file_path: Path, content: Optional[str] = None) -> List[str]:
+def extract(file_path: Path, content: str | None = None) -> list[str]:
     """파일에서 ISBN을 추출하여 리스트로 반환
 
     Args:

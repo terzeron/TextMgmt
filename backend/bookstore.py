@@ -6,7 +6,6 @@ Bookstore 클래스 - 온라인 서점에서 도서 정보를 검색하는 기�
 import re
 import requests
 from urllib.parse import quote, urljoin
-from typing import Tuple, Optional, List, Dict
 from bs4 import BeautifulSoup, Tag as _Tag
 import os
 import tempfile
@@ -48,20 +47,20 @@ class AbstractBookstore(ABC):
         return self.build_search_url(isbn)
 
     @abstractmethod
-    def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
+    def extract_search_links(self, soup: BeautifulSoup) -> list[str]:
         """검색 결과 링크 추출"""
         pass
 
     @abstractmethod
-    def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
+    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
         """상세 페이지에서 책 정보 추출"""
         pass
 
-    def search_by_keyword(self, keyword: str) -> List[Tuple[str, str, str, str, str, str]]:
+    def search_by_keyword(self, keyword: str) -> list[tuple[str, str, str, str, str, str]]:
         url = self.build_search_url(keyword)
         return self._fetch_search_results(url)
 
-    def search_by_isbn(self, isbn: str) -> List[Tuple[str, str, str, str, str, str]]:
+    def search_by_isbn(self, isbn: str) -> list[tuple[str, str, str, str, str, str]]:
         """ISBN으로 검색"""
         if not self.SUPPORTS_ISBN_SEARCH:
             if self.verbose:
@@ -78,7 +77,7 @@ class AbstractBookstore(ABC):
                 title = title.split(sep, 1)[0].strip()
         return title
 
-    def search(self, isbn: str = "", title: str = "", author: str = "") -> Tuple[List[Tuple[str, str, str, str, str, str]], str, str]:
+    def search(self, isbn: str = "", title: str = "", author: str = "") -> tuple[list[tuple[str, str, str, str, str, str]], str, str]:
         """
         ISBN, 제목, 저자를 선택적으로 사용하여 검색
         우선순위: ISBN > 제목+저자 > 제목
@@ -119,7 +118,7 @@ class AbstractBookstore(ABC):
             return [], isbn, "isbn"
         return [], "", "unknown"
 
-    def _fetch_search_results(self, url: str) -> List[Tuple[str, str, str, str, str, str]]:
+    def _fetch_search_results(self, url: str) -> list[tuple[str, str, str, str, str, str]]:
         """검색 URL에서 결과를 가져오는 공통 로직"""
         from concurrent.futures import ThreadPoolExecutor
 
@@ -135,7 +134,7 @@ class AbstractBookstore(ABC):
         detail_urls = links[: self.MAX_RESULTS]
 
         # 상세 페이지 HTML을 병렬로 fetch (캐시 미스인 경우만)
-        def fetch_detail(detail_url: str) -> Optional[str]:
+        def fetch_detail(detail_url: str) -> str | None:
             html = self._load_html_from_tmp(detail_url)
             if html is not None:
                 return html
@@ -154,12 +153,12 @@ class AbstractBookstore(ABC):
                 return None
 
         # 병렬 fetch 실행 (순서 보존)
-        html_list: List[Optional[str]] = []
+        html_list: list[str | None] = []
         if detail_urls:
             with ThreadPoolExecutor(max_workers=min(len(detail_urls), 8)) as executor:
                 html_list = list(executor.map(fetch_detail, detail_urls))
 
-        results: List[Tuple[str, str, str, str, str, str]] = []
+        results: list[tuple[str, str, str, str, str, str]] = []
         for detail_url, html in zip(detail_urls, html_list):
             if not html or not html.strip():
                 if self.verbose:
@@ -190,7 +189,7 @@ class AbstractBookstore(ABC):
         except Exception as e:
             logger.error(f"Failed to save HTML to tmp: {e}")
 
-    def _load_html_from_tmp(self, url: str) -> Optional[str]:
+    def _load_html_from_tmp(self, url: str) -> str | None:
         """
         주어진 URL에 해당하는 임시 저장된 HTML을 로드합니다. 존재하지 않으면 None을 반환합니다.
         """
@@ -220,11 +219,11 @@ class Yes24Bookstore(AbstractBookstore):
         """Yes24 ISBN 검색 URL"""
         return f"{self.BASE_URL}/Product/Search?domain=ALL&query={isbn}"
 
-    def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
+    def extract_search_links(self, soup: BeautifulSoup) -> list[str]:
         """yes24 검색 결과 페이지에서 상세 페이지 링크를 CSS selector로 추출합니다."""
         # 1) 계층적 선택자 우선 사용
         selector = 'ul#yesSchList > li > div.itemUnit > div.item_info > div.info_row.info_name a.gd_name[href^="/product/goods/"]'
-        links: List[str] = []
+        links: list[str] = []
         seen = set()
         for a_tag in soup.select(selector):
             href = str(a_tag["href"])
@@ -247,7 +246,7 @@ class Yes24Bookstore(AbstractBookstore):
             logger.info(f"yes24에서 {len(links)}개의 상세 페이지 링크를 찾았습니다")
         return links
 
-    def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
+    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
         """
         yes24 상세 페이지에서 책 정보 추출
 
@@ -368,7 +367,7 @@ class AladinBookstore(AbstractBookstore):
         """제목 끝의 권수 번호를 제거 (예: '마왕의 딸 3' → '마왕의 딸')"""
         return re.sub(r"\s+\d+\s*$", "", title)
 
-    def search(self, isbn: str = "", title: str = "", author: str = "") -> Tuple[List[Tuple[str, str, str, str, str, str]], str, str]:
+    def search(self, isbn: str = "", title: str = "", author: str = "") -> tuple[list[tuple[str, str, str, str, str, str]], str, str]:
         if title:
             title = self._strip_trailing_number(title)
         return super().search(isbn=isbn, title=title, author=author)
@@ -382,7 +381,7 @@ class AladinBookstore(AbstractBookstore):
         """알라딘 ISBN 검색 URL"""
         return f"{self.BASE_URL}/search/wsearchresult.aspx?SearchTarget=All&SearchWord={isbn}"
 
-    def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
+    def extract_search_links(self, soup: BeautifulSoup) -> list[str]:
         """알라딘 검색 결과에서 상세 페이지 링크를 추출합니다."""
         links = []
         seen_urls = set()
@@ -405,7 +404,7 @@ class AladinBookstore(AbstractBookstore):
             logger.info(f"알라딘에서 {len(links)}개의 상세 페이지 링크를 찾았습니다.")
         return links
 
-    def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
+    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
         """알라딘 상세 페이지에서 책 정보를 추출합니다."""
         info = {"title": "", "author": "", "category": "", "isbn": ""}
 
@@ -500,7 +499,7 @@ class RidibooksBookstore(AbstractBookstore):
         encoded = quote(keyword)
         return f"{self.BASE_URL}/search?q={encoded}&adult_exclude=n"
 
-    def search_by_keyword(self, keyword: str) -> List[Tuple[str, str, str, str, str, str]]:
+    def search_by_keyword(self, keyword: str) -> list[tuple[str, str, str, str, str, str]]:
         """RIDI 검색 API 직접 호출"""
         search_url = self.build_search_url(keyword)
 
@@ -524,7 +523,7 @@ class RidibooksBookstore(AbstractBookstore):
                     logger.info("RIDI 검색 결과가 없습니다")
                 return []
 
-            results: List[Tuple[str, str, str, str, str, str]] = []
+            results: list[tuple[str, str, str, str, str, str]] = []
             for book in books[: self.MAX_RESULTS]:
                 book_id = book.get("b_id", "")
                 title = book.get("title", "")
@@ -559,11 +558,11 @@ class RidibooksBookstore(AbstractBookstore):
                 logger.error(f"RIDI 검색 실패: {e}")
             return []
 
-    def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
+    def extract_search_links(self, soup: BeautifulSoup) -> list[str]:
         """RIDI는 search_by_keyword를 오버라이드하므로 이 메서드는 사용되지 않음"""
         return []
 
-    def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
+    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
         info = {"title": "", "author": "", "category": "", "isbn": ""}
         # 제목 추출: og:title 메타 태그 우선, 실패 시 <h1> 태그 사용
         meta = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "title"})
@@ -631,9 +630,9 @@ class NaverShoppingBookstore(AbstractBookstore):
         encoded = quote(keyword)
         return f"{self.BASE_URL}/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&query={encoded}&sort=REL"
 
-    def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
+    def extract_search_links(self, soup: BeautifulSoup) -> list[str]:
         """네이버쇼핑 검색 결과에서 상세 페이지 링크 리스트를 반환합니다."""
-        links: List[str] = []
+        links: list[str] = []
         # 모든 <script> 태그에서 JSON 텍스트 검색
         raw = None
         for s in soup.find_all("script"):
@@ -671,12 +670,12 @@ class NaverShoppingBookstore(AbstractBookstore):
             logger.info(f"네이버쇼핑에서 {len(links)}개의 상세 페이지 링크를 찾았습니다")
         return links
 
-    def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
+    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
         """
         네이버쇼핑 상세 페이지에서 책 정보를 추출합니다.
         CSS 클래스에 해시 접미사가 붙으므로 부분 매칭(lambda)을 사용합니다.
         """
-        info: Dict[str, str] = {"title": "", "author": "", "category": ""}
+        info: dict[str, str] = {"title": "", "author": "", "category": ""}
         try:
             # 제목: h2.bookTitle_book_name__*
             title_elem = soup.find("h2", class_=re.compile(r"^bookTitle_book_name__"))
@@ -719,9 +718,9 @@ class MunpiaBookstore(AbstractBookstore):
         encoded = quote(keyword, safe="")
         return f"{self.BASE_URL}/page/hd.platinum/view/search/keyword/{encoded}/order/search_result"
 
-    def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
+    def extract_search_links(self, soup: BeautifulSoup) -> list[str]:
         """문피아 검색 결과 페이지에서 상세 페이지 링크를 추출합니다."""
-        links: List[str] = []
+        links: list[str] = []
         seen_urls = set()
         selector = "div#SEARCH-BOX.section2 > div.ebook_lists > div.article_wrap > div.article > dl.detail > dt > a"
         for a_tag in soup.select(selector):
@@ -737,7 +736,7 @@ class MunpiaBookstore(AbstractBookstore):
             logger.info(f"문피아에서 {len(links)}개의 상세 페이지 링크를 찾았습니다")
         return links
 
-    def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
+    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
         """문피아 상세 페이지에서 책 정보를 추출합니다."""
         book_info = {"title": "", "author": "", "category": ""}
         # 제목 추출: og:title 또는 <meta name="title">
@@ -772,8 +771,8 @@ class NaverSeriesBookstore(AbstractBookstore):
         # fs 파라미터 제거하여 웹소설+만화 모두 검색
         return f"{self.BASE_URL}/search/search.series?t=all&q={encoded}"
 
-    def extract_search_links(self, soup: BeautifulSoup) -> List[str]:
-        links: List[str] = []
+    def extract_search_links(self, soup: BeautifulSoup) -> list[str]:
+        links: list[str] = []
         seen = set()
         # 검색 결과 리스트에서 링크 추출 (웹소설: nov.title, 만화: com.title)
         for a_tag in soup.select('ul.lst_list li a[class^="N=a:"]'):
@@ -787,8 +786,8 @@ class NaverSeriesBookstore(AbstractBookstore):
             logger.info(f"NaverSeries에서 {len(links)}개의 상세 페이지 링크를 찾았습니다")
         return links
 
-    def extract_book_info(self, soup: BeautifulSoup) -> Dict[str, str]:
-        info: Dict[str, str] = {"title": "", "author": "", "category": ""}
+    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
+        info: dict[str, str] = {"title": "", "author": "", "category": ""}
         # 제목 추출
         if soup.title and soup.title.string:
             info["title"] = soup.title.string.strip()

@@ -15,7 +15,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from itertools import islice
-from typing import Dict, Any, List, Set, Tuple, Optional, Iterable
+from typing import Any, Iterable
 
 import ebooklib
 from ebooklib import epub
@@ -56,7 +56,7 @@ class Loader:
         return Loader.path_prefix
 
     @staticmethod
-    def read_from_text(file_path: Path) -> Tuple[str, int, int, str]:
+    def read_from_text(file_path: Path) -> tuple[str, int, int, str]:
         """TXT 파일 읽기. 반환: (summary, line_count, page_count, raw_content)"""
         Stat.text_count += 1
         start_time = datetime.now()
@@ -82,7 +82,7 @@ class Loader:
         return data, line_count, 0, raw_content
 
     @staticmethod
-    def read_from_epub_with_extracting_zip(file_path: Path) -> Tuple[str, int]:
+    def read_from_epub_with_extracting_zip(file_path: Path) -> tuple[str, int]:
         """메모리에서 직접 zip 내용을 읽어 처리 (임시 디렉토리 사용 안 함)"""
         result = ""
         total_text = ""
@@ -122,7 +122,7 @@ class Loader:
         return result[: Loader.TEXT_SIZE], line_count
 
     @staticmethod
-    def read_from_epub(file_path: Path) -> Tuple[str, int, int]:
+    def read_from_epub(file_path: Path) -> tuple[str, int, int]:
         Stat.normal_epub_count += 1
         start_time = datetime.now()
 
@@ -177,7 +177,7 @@ class Loader:
         return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
-    def read_from_pdf(file_path: Path) -> Tuple[str, int, int]:
+    def read_from_pdf(file_path: Path) -> tuple[str, int, int]:
         Stat.pdf_count += 1
         start_time = datetime.now()
 
@@ -204,7 +204,7 @@ class Loader:
         return result[: Loader.TEXT_SIZE], 0, page_count
 
     @staticmethod
-    def read_from_html(file_path: Path) -> Tuple[str, int, int]:
+    def read_from_html(file_path: Path) -> tuple[str, int, int]:
         Stat.html_count += 1
         start_time = datetime.now()
 
@@ -227,7 +227,7 @@ class Loader:
         return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
-    def read_from_docx(file_path: Path) -> Tuple[str, int, int]:
+    def read_from_docx(file_path: Path) -> tuple[str, int, int]:
         Stat.docx_count += 1
         start_time = datetime.now()
 
@@ -248,7 +248,7 @@ class Loader:
         return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
-    def read_from_rtf(file_path: Path) -> Tuple[str, int, int]:
+    def read_from_rtf(file_path: Path) -> tuple[str, int, int]:
         Stat.rtf_count += 1
         start_time = datetime.now()
 
@@ -302,7 +302,7 @@ class Loader:
         return ""
 
     @staticmethod
-    def read_from_doc(file_path: Path) -> Tuple[str, int, int]:
+    def read_from_doc(file_path: Path) -> tuple[str, int, int]:
         Stat.doc_count += 1
         start_time = datetime.now()
         result = ""
@@ -319,7 +319,7 @@ class Loader:
         return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
-    def read_from_hwp(file_path: Path) -> Tuple[str, int, int]:
+    def read_from_hwp(file_path: Path) -> tuple[str, int, int]:
         Stat.hwp_count += 1
         start_time = datetime.now()
         result = ""
@@ -341,13 +341,13 @@ class Loader:
         return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
-    def read_from_image(_file_path: Path) -> Tuple[str, int, int]:
+    def read_from_image(_file_path: Path) -> tuple[str, int, int]:
         Stat.image_count += 1
         # 이미지는 line_count, page_count 해당 없음
         return "", 0, 0
 
     @staticmethod
-    def _find_xref_offset(xref_data: bytes, obj_num: int) -> Optional[int]:
+    def _find_xref_offset(xref_data: bytes, obj_num: int) -> int | None:
         """traditional xref 테이블에서 특정 object의 파일 내 offset을 찾는다."""
         xref_text = xref_data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
         lines = xref_text.split(b"\n")
@@ -402,7 +402,7 @@ class Loader:
         return bytes(result)
 
     @staticmethod
-    def _xref_stream_find_entry(data: bytes, w: List[int], index_ranges: List[int], obj_num: int) -> Optional[Tuple[int, int, int]]:
+    def _xref_stream_find_entry(data: bytes, w: list[int], index_ranges: list[int], obj_num: int) -> tuple[int, int, int] | None:
         """xref stream에서 특정 object의 entry를 찾는다.
         반환: (type, field2, field3) 또는 None.
         type 0: free, type 1: (1, file_offset, gen), type 2: (2, obj_stream_num, index)"""
@@ -427,7 +427,7 @@ class Loader:
         return None
 
     @staticmethod
-    def _read_from_obj_stream(f, stream_offset: int, target_obj_num: int) -> Optional[bytes]:
+    def _read_from_obj_stream(f, stream_offset: int, target_obj_num: int) -> bytes | None:
         """Object stream에서 특정 object의 딕셔너리 데이터를 읽는다."""
         f.seek(stream_offset)
         header = f.read(4096)
@@ -476,7 +476,7 @@ class Loader:
         return raw[target_offset:next_offset]
 
     @staticmethod
-    def _parse_one_xref_stream(f, xref_offset: int) -> Optional[tuple]:
+    def _parse_one_xref_stream(f, xref_offset: int) -> tuple | None:
         """단일 xref stream을 파싱하여 (decompressed, w, index_ranges, prev_offset)를 반환.
         실패 시 None."""
         f.seek(xref_offset)
@@ -537,7 +537,7 @@ class Loader:
         return decompressed, w, index_ranges, prev_offset
 
     @staticmethod
-    def _fast_pdf_page_count(file_path: Path) -> Optional[int]:
+    def _fast_pdf_page_count(file_path: Path) -> int | None:
         """PDF xref/trailer에서 페이지 수만 경량 추출 (전체 파싱 없이).
 
         trailer → /Root → /Pages → /Count 경로를 따라 필요한 객체만 읽는다.
@@ -562,8 +562,8 @@ class Loader:
                 # 2. xref 체인을 따라가며 lookup 함수들 수집
                 # lookups: [('traditional', fn) | ('stream', fn)] newest→oldest
                 root_obj_num = None
-                lookups: List[Tuple[str, Any]] = []
-                xref_offset: Optional[int] = int(m.group(1))
+                lookups: list[tuple[str, Any]] = []
+                xref_offset: int | None = int(m.group(1))
                 max_depth = 10
 
                 while xref_offset is not None and max_depth > 0:
@@ -608,7 +608,7 @@ class Loader:
                 if root_obj_num is None:
                     return None
 
-                def find_file_offset(obj_num: int) -> Optional[int]:
+                def find_file_offset(obj_num: int) -> int | None:
                     """type 1 (직접 저장) object의 파일 offset을 찾는다."""
                     for kind, lookup in lookups:
                         if kind == "traditional":
@@ -621,7 +621,7 @@ class Loader:
                                 return entry[1]
                     return None
 
-                def read_object_data(obj_num: int, read_size: int = 4096) -> Optional[bytes]:
+                def read_object_data(obj_num: int, read_size: int = 4096) -> bytes | None:
                     """object 데이터를 읽는다 (type 1: 직접, type 2: object stream)."""
                     # type 1 시도
                     offset = find_file_offset(obj_num)
@@ -660,7 +660,7 @@ class Loader:
         return None
 
     @staticmethod
-    def read_file(file_path: Path, stat_result: Optional[os.stat_result] = None, skip_text: bool = False) -> Dict[int, Dict[str, Any]]:
+    def read_file(file_path: Path, stat_result: os.stat_result | None = None, skip_text: bool = False) -> dict[int, dict[str, Any]]:
         if file_path.is_file():
             sys.stdout.flush()
             # read metadata of each file (stat 결과 재사용)
@@ -774,7 +774,7 @@ class Loader:
         return {}
 
     @staticmethod
-    def get_file_list(path: Path, num_files: int = sys.maxsize, recursive: bool = False) -> List[Path]:
+    def get_file_list(path: Path, num_files: int = sys.maxsize, recursive: bool = False) -> list[Path]:
         """파일 목록을 반환 (파싱 없이)
 
         recursive=False인 경우:
@@ -804,9 +804,9 @@ class Loader:
         return file_path.stat()
 
     @staticmethod
-    def read_files(path: Path, num_files: int = sys.maxsize, recursive: bool = False) -> Dict[int, Dict[str, Any]]:
+    def read_files(path: Path, num_files: int = sys.maxsize, recursive: bool = False) -> dict[int, dict[str, Any]]:
         """파일들을 읽어서 데이터 딕셔너리로 반환 (테스트 및 하위 호환성용)"""
-        data: Dict[int, Dict[str, Any]] = {}
+        data: dict[int, dict[str, Any]] = {}
         file_list = Loader.get_file_list(path, num_files, recursive)
 
         for child_path in file_list:
@@ -835,7 +835,7 @@ def main() -> int:
     do_delete = False
     do_reload = False
     do_recursive = False
-    args: List[str] = []
+    args: list[str] = []
     try:
         opts, args = getopt.getopt(sys.argv[1:], "", ["delete", "reload", "recursive"])
         for opt, _ in opts:
@@ -895,7 +895,7 @@ def main() -> int:
             return -1
         return 0
 
-    def process_file_iter(file_iter: Iterable[Path], skip_check: bool = False, skip_text: bool = False) -> Tuple[int, int, int]:
+    def process_file_iter(file_iter: Iterable[Path], skip_check: bool = False, skip_text: bool = False) -> tuple[int, int, int]:
         """파일 iterator를 배치 처리하여 ES에 저장. 반환: (처리 수, 건너뜀 수, 경로동기화 수)"""
         skipped_count = 0
         processed_count = 0
@@ -909,7 +909,7 @@ def main() -> int:
                 break
 
             # stat 수집 (한 번만 호출하여 inode와 함께 저장)
-            file_stat_map: Dict[int, Tuple[Path, os.stat_result]] = {}
+            file_stat_map: dict[int, tuple[Path, os.stat_result]] = {}
             for file_path in batch_files:
                 try:
                     st = Loader.get_stat(file_path)
@@ -920,14 +920,14 @@ def main() -> int:
             if skip_check:
                 # --reload 모드: 존재 여부 무시, 전부 파싱
                 new_inodes = set(file_stat_map.keys())
-                path_changed_inodes: Set[int] = set()
-                existing_paths: Dict[int, str] = {}
+                path_changed_inodes: set[int] = set()
+                existing_paths: dict[int, str] = {}
             else:
                 # 기존 경로 조회 (inode → file_path)
                 existing_paths = es_manager.get_existing_paths(list(file_stat_map.keys()))
 
                 # 경로 변경 감지: ES에 있고 file_path가 다른 경우 → 재적재 대상
-                path_changed_inodes: Set[int] = set()
+                path_changed_inodes: set[int] = set()
                 for inode, es_file_path in existing_paths.items():
                     if inode not in file_stat_map:
                         continue
@@ -944,7 +944,7 @@ def main() -> int:
                 synced_count += len(path_changed_inodes)
 
             # 파일 파싱 (stat 결과 재사용)
-            batch_data: Dict[int, Dict[str, Any]] = {}
+            batch_data: dict[int, dict[str, Any]] = {}
             for inode in new_inodes:
                 file_path, st = file_stat_map[inode]
                 print(f"* {file_path}")
@@ -1007,7 +1007,7 @@ def main() -> int:
 
             # 1단계: 하위 디렉토리 각각에서 첫 번째 파일 1개씩 (모아서 한꺼번에 저장)
             print("  [1단계] 하위 디렉토리별 샘플 파일 등록")
-            sample_files: List[Tuple[str, Path]] = []  # (subdir_name, file_path)
+            sample_files: list[tuple[str, Path]] = []  # (subdir_name, file_path)
             for subdir in target_path.iterdir():
                 if subdir.is_dir() and not subdir.name.startswith("."):
                     # 첫 번째 파일만 가져옴 (정렬 불필요, iterator 사용)

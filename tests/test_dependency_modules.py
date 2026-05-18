@@ -35,6 +35,7 @@ class TestBeautifulSoup4(unittest.TestCase):
 
     def _assert_common(self, soup):
         from bs4 import BeautifulSoup
+
         self.assertIsInstance(soup, BeautifulSoup)
 
         # find() - 단일 요소
@@ -72,12 +73,14 @@ class TestBeautifulSoup4(unittest.TestCase):
     def test_html_parser(self):
         """html.parser 백엔드로 파싱 (bookstore.py, main.py 패턴)"""
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(self.HTML, "html.parser")
         self._assert_common(soup)
 
     def test_lxml_parser(self):
         """lxml 백엔드로 파싱 (loader.py EPUB 패턴)"""
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(self.HTML, "lxml")
         self._assert_common(soup)
 
@@ -85,6 +88,7 @@ class TestBeautifulSoup4(unittest.TestCase):
         """정규식 href 매칭 (bookstore.py 패턴)"""
         import re
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(self.HTML, "html.parser")
         links = soup.find_all("a", href=re.compile(r"/cat/"))
         self.assertEqual(len(links), 2)
@@ -92,6 +96,7 @@ class TestBeautifulSoup4(unittest.TestCase):
     def test_find_all_string_lambda(self):
         """문자열 lambda 검색 (bookstore.py 패턴)"""
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(self.HTML, "html.parser")
         matches = soup.find_all(string=lambda t: t and "Title" in t)
         self.assertGreaterEqual(len(matches), 1)
@@ -106,6 +111,7 @@ class TestChardet(unittest.TestCase):
 
     def test_detect_utf8(self):
         import chardet
+
         result = chardet.detect("안녕하세요 hello".encode("utf-8"))
         self.assertIn("encoding", result)
         self.assertIn("confidence", result)
@@ -114,6 +120,7 @@ class TestChardet(unittest.TestCase):
 
     def test_detect_euc_kr(self):
         import chardet
+
         result = chardet.detect("대한민국".encode("euc-kr"))
         self.assertIsNotNone(result["encoding"])
         self.assertGreater(result["confidence"], 0)
@@ -121,6 +128,7 @@ class TestChardet(unittest.TestCase):
     def test_detect_returns_encoding_key(self):
         """encoding 키가 None이 아닌 문자열 반환"""
         import chardet
+
         result = chardet.detect(b"plain ascii text")
         self.assertIsInstance(result["encoding"], str)
 
@@ -155,7 +163,6 @@ class TestEbooklib(unittest.TestCase):
 
     def test_read_epub_metadata(self):
         """epub.read_epub(), get_metadata() API"""
-        import ebooklib
         from ebooklib import epub
 
         with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as f:
@@ -196,6 +203,7 @@ class TestEbooklib(unittest.TestCase):
     def test_epub_exception_exists(self):
         """EpubException 클래스 존재 확인"""
         from ebooklib import epub
+
         self.assertTrue(hasattr(epub, "EpubException"))
 
 
@@ -208,12 +216,14 @@ class TestElasticTransport(unittest.TestCase):
 
     def test_exception_classes_importable(self):
         from elastic_transport import SerializationError, ConnectionError, ConnectionTimeout
+
         self.assertTrue(issubclass(SerializationError, Exception))
         self.assertTrue(issubclass(ConnectionError, Exception))
         self.assertTrue(issubclass(ConnectionTimeout, Exception))
 
     def test_exceptions_are_catchable(self):
         from elastic_transport import SerializationError, ConnectionError, ConnectionTimeout
+
         for exc_cls in (SerializationError, ConnectionError, ConnectionTimeout):
             with self.assertRaises(exc_cls):
                 raise exc_cls("test")
@@ -228,15 +238,18 @@ class TestElasticsearch(unittest.TestCase):
 
     def test_client_class_importable(self):
         from elasticsearch import Elasticsearch
+
         self.assertTrue(callable(Elasticsearch))
 
     def test_bad_request_error_importable(self):
         from elasticsearch import BadRequestError
+
         self.assertTrue(issubclass(BadRequestError, Exception))
 
     def test_client_has_required_methods(self):
         """응용 코드에서 사용하는 메서드가 존재하는지 확인"""
         from elasticsearch import Elasticsearch
+
         # __init__ 없이 속성 검사하면 descriptor가 동작하지 않으므로
         # 클래스 레벨에서 확인
         for method_name in ("search", "bulk", "update", "delete", "mget", "scroll", "clear_scroll"):
@@ -245,17 +258,20 @@ class TestElasticsearch(unittest.TestCase):
     def test_indices_namespace_exists(self):
         """IndicesClient 클래스 import 가능 확인"""
         from elasticsearch._sync.client.indices import IndicesClient
+
         for method_name in ("exists", "create", "delete", "get_mapping", "refresh"):
             self.assertTrue(hasattr(IndicesClient, method_name), f"Missing indices.{method_name}")
 
     def test_cluster_namespace_exists(self):
         """ClusterClient 클래스 import 가능 확인"""
         from elasticsearch._sync.client.cluster import ClusterClient
+
         self.assertTrue(hasattr(ClusterClient, "health"))
 
     def test_delete_by_query_exists(self):
         """delete_by_query 메서드 존재 확인 (conftest.py 패턴)"""
         from elasticsearch import Elasticsearch
+
         self.assertTrue(hasattr(Elasticsearch, "delete_by_query"))
 
 
@@ -267,18 +283,21 @@ class TestFastAPI(unittest.TestCase):
     """FastAPI 프레임워크 주요 API 테스트"""
 
     def test_core_imports(self):
-        from fastapi import FastAPI, HTTPException, Request
+        from fastapi import FastAPI
+
         app = FastAPI()
         self.assertIsNotNone(app)
 
     def test_middleware_imports(self):
         from fastapi.middleware.cors import CORSMiddleware
         from fastapi.middleware.gzip import GZipMiddleware
+
         self.assertTrue(callable(CORSMiddleware))
         self.assertTrue(callable(GZipMiddleware))
 
     def test_response_classes(self):
         from fastapi.responses import FileResponse, Response, JSONResponse
+
         self.assertTrue(callable(FileResponse))
         self.assertTrue(callable(Response))
         self.assertTrue(callable(JSONResponse))
@@ -286,17 +305,20 @@ class TestFastAPI(unittest.TestCase):
     def test_exception_classes(self):
         from fastapi.exceptions import RequestValidationError
         from fastapi import HTTPException
+
         self.assertTrue(issubclass(HTTPException, Exception))
         self.assertTrue(issubclass(RequestValidationError, Exception))
 
     def test_encoders(self):
         from fastapi.encoders import jsonable_encoder
+
         result = jsonable_encoder({"key": "value", "num": 42})
         self.assertEqual(result["key"], "value")
 
     def test_route_decorator(self):
         """@app.get / @app.put / @app.delete / @app.post 데코레이터 동작"""
         from fastapi import FastAPI
+
         app = FastAPI()
 
         @app.get("/test")
@@ -321,6 +343,7 @@ class TestFastAPI(unittest.TestCase):
         """CORSMiddleware 등록"""
         from fastapi import FastAPI
         from fastapi.middleware.cors import CORSMiddleware
+
         app = FastAPI()
         app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"])
 
@@ -328,6 +351,7 @@ class TestFastAPI(unittest.TestCase):
         """exception_handler 데코레이터"""
         from fastapi import FastAPI
         from fastapi.exceptions import RequestValidationError
+
         app = FastAPI()
 
         @app.exception_handler(RequestValidationError)
@@ -358,7 +382,6 @@ class TestPydantic(unittest.TestCase):
     def test_base_model_definition(self):
         """BaseModel 서브클래스 정의 및 인스턴스 생성"""
         from pydantic import BaseModel
-        from typing import List, Dict
 
         class BookModel(BaseModel):
             book_id: int
@@ -374,33 +397,27 @@ class TestPydantic(unittest.TestCase):
             updated_time: str
             score: float = 0.0
 
-        book = BookModel(
-            book_id=1, category="fiction", title="Test", author="Author",
-            file_path="/tmp/test.txt", file_type="txt", file_size=100,
-            updated_time="2024-01-01",
-        )
+        book = BookModel(book_id=1, category="fiction", title="Test", author="Author", file_path="/tmp/test.txt", file_type="txt", file_size=100, updated_time="2024-01-01")
         self.assertEqual(book.book_id, 1)
         self.assertEqual(book.line_count, 0)
         self.assertEqual(book.isbn, "")
 
     def test_model_with_list_field(self):
-        """List 필드 모델 (CategoryKeywordsModel 패턴)"""
+        """list 필드 모델 (CategoryKeywordsModel 패턴)"""
         from pydantic import BaseModel
-        from typing import List
 
         class CategoryKeywordsModel(BaseModel):
-            keywords: List[str]
+            keywords: list[str]
 
         m = CategoryKeywordsModel(keywords=["a", "b"])
         self.assertEqual(m.keywords, ["a", "b"])
 
     def test_model_with_dict_field(self):
-        """Dict 필드 모델 (CategoryMappingsModel 패턴)"""
+        """dict 필드 모델 (CategoryMappingsModel 패턴)"""
         from pydantic import BaseModel
-        from typing import Dict, List
 
         class CategoryMappingsModel(BaseModel):
-            mappings: Dict[str, List[str]]
+            mappings: dict[str, list[str]]
 
         m = CategoryMappingsModel(mappings={"cat": ["kw1", "kw2"]})
         self.assertEqual(m.mappings["cat"], ["kw1", "kw2"])
@@ -438,12 +455,14 @@ class TestHttpx(unittest.TestCase):
 
     def test_async_client_importable(self):
         import httpx
+
         self.assertTrue(hasattr(httpx, "AsyncClient"))
         self.assertTrue(callable(httpx.AsyncClient))
 
     def test_async_client_is_context_manager(self):
         """async with 사용 가능 여부"""
         import httpx
+
         client = httpx.AsyncClient()
         self.assertTrue(hasattr(client, "__aenter__"))
         self.assertTrue(hasattr(client, "__aexit__"))
@@ -453,6 +472,7 @@ class TestHttpx(unittest.TestCase):
     def test_response_has_json_method(self):
         """Response 객체에 json() 메서드 존재"""
         import httpx
+
         self.assertTrue(hasattr(httpx.Response, "json"))
 
 
@@ -484,12 +504,14 @@ class TestLxml(unittest.TestCase):
     def test_fromstring_with_xml_parser(self):
         """fromstring + XMLParser(recover=True) 패턴"""
         from lxml import etree
+
         tree = etree.fromstring(self.OPF_XML, etree.XMLParser(recover=True))
         self.assertIsNotNone(tree)
 
     def test_namespace_find(self):
         """namespace 포함 find() (book_manager.py 패턴)"""
         from lxml import etree
+
         opf = etree.fromstring(self.OPF_XML, etree.XMLParser(recover=True))
         manifest = opf.find(f"{{{self.NS}}}manifest")
         self.assertIsNotNone(manifest)
@@ -499,6 +521,7 @@ class TestLxml(unittest.TestCase):
     def test_findall_and_get_attribute(self):
         """findall() + get() 속성 접근"""
         from lxml import etree
+
         opf = etree.fromstring(self.OPF_XML, etree.XMLParser(recover=True))
         manifest = opf.find(f"{{{self.NS}}}manifest")
         items = manifest.findall(f"{{{self.NS}}}item")
@@ -509,6 +532,7 @@ class TestLxml(unittest.TestCase):
     def test_subelement_and_set_attribute(self):
         """SubElement 생성 및 속성 설정 (EPUB preview 생성 패턴)"""
         from lxml import etree
+
         opf = etree.fromstring(self.OPF_XML, etree.XMLParser(recover=True))
         spine = opf.find(f"{{{self.NS}}}spine")
 
@@ -525,6 +549,7 @@ class TestLxml(unittest.TestCase):
     def test_tostring_unicode(self):
         """tostring(encoding='unicode') 직렬화"""
         from lxml import etree
+
         opf = etree.fromstring(self.OPF_XML, etree.XMLParser(recover=True))
         result = etree.tostring(opf, encoding="unicode")
         self.assertIsInstance(result, str)
@@ -533,6 +558,7 @@ class TestLxml(unittest.TestCase):
     def test_remove_element(self):
         """요소 제거 (spine 항목 제거 패턴)"""
         from lxml import etree
+
         opf = etree.fromstring(self.OPF_XML, etree.XMLParser(recover=True))
         spine = opf.find(f"{{{self.NS}}}spine")
         refs = spine.findall(f"{{{self.NS}}}itemref")
@@ -543,6 +569,7 @@ class TestLxml(unittest.TestCase):
     def test_delete_attribute(self):
         """속성 삭제 (spine toc 속성 제거 패턴)"""
         from lxml import etree
+
         opf = etree.fromstring(self.OPF_XML, etree.XMLParser(recover=True))
         spine = opf.find(f"{{{self.NS}}}spine")
         self.assertEqual(spine.get("toc"), "ncx")
@@ -552,6 +579,7 @@ class TestLxml(unittest.TestCase):
     def test_iter_deep_traversal(self):
         """iter()로 깊은 탐색 (NCX navPoint 순회 패턴)"""
         from lxml import etree
+
         opf = etree.fromstring(self.OPF_XML, etree.XMLParser(recover=True))
         items = list(opf.iter(f"{{{self.NS}}}item"))
         self.assertEqual(len(items), 2)
@@ -559,6 +587,7 @@ class TestLxml(unittest.TestCase):
     def test_getparent(self):
         """getparent() 호출 (NCX navPoint 제거 패턴)"""
         from lxml import etree
+
         opf = etree.fromstring(self.OPF_XML, etree.XMLParser(recover=True))
         spine = opf.find(f"{{{self.NS}}}spine")
         ref = spine.findall(f"{{{self.NS}}}itemref")[0]
@@ -576,20 +605,24 @@ class TestPyMySQL(unittest.TestCase):
 
     def test_connect_function_exists(self):
         import pymysql
+
         self.assertTrue(callable(pymysql.connect))
 
     def test_dict_cursor_importable(self):
         from pymysql.cursors import DictCursor
+
         self.assertTrue(callable(DictCursor))
 
     def test_integrity_error_importable(self):
         import pymysql
+
         self.assertTrue(issubclass(pymysql.IntegrityError, Exception))
 
     def test_connect_signature(self):
         """connect()에 사용하는 파라미터가 수용되는지 확인"""
         import inspect
         import pymysql
+
         sig = inspect.signature(pymysql.connect)
         params = set(sig.parameters.keys())
         for required in ("host", "port", "database", "user", "password", "charset", "cursorclass"):
@@ -605,6 +638,7 @@ class TestRequests(unittest.TestCase):
 
     def test_session_class(self):
         import requests
+
         session = requests.Session()
         self.assertTrue(hasattr(session, "get"))
         self.assertTrue(hasattr(session, "post"))
@@ -612,6 +646,7 @@ class TestRequests(unittest.TestCase):
 
     def test_session_headers_update(self):
         import requests
+
         session = requests.Session()
         session.headers.update({"User-Agent": "test/1.0"})
         self.assertEqual(session.headers["User-Agent"], "test/1.0")
@@ -619,23 +654,27 @@ class TestRequests(unittest.TestCase):
     def test_response_attributes(self):
         """Response 객체가 사용하는 속성을 가지는지 확인"""
         import requests
+
         resp = requests.models.Response()
         for attr in ("status_code", "text", "encoding", "json"):
             self.assertTrue(hasattr(resp, attr), f"Response missing: {attr}")
 
     def test_raise_for_status_method(self):
         import requests
+
         resp = requests.models.Response()
         resp.status_code = 200
         resp.raise_for_status()  # 200이면 예외 없음
 
     def test_exception_classes(self):
         import requests.exceptions
+
         self.assertTrue(issubclass(requests.exceptions.Timeout, Exception))
         self.assertTrue(issubclass(requests.exceptions.ConnectionError, Exception))
 
     def test_get_function_exists(self):
         import requests
+
         self.assertTrue(callable(requests.get))
         self.assertTrue(callable(requests.post))
 
@@ -649,6 +688,7 @@ class TestPyPDF(unittest.TestCase):
 
     def _create_pdf_bytes(self, page_count=3):
         from pypdf import PdfWriter
+
         writer = PdfWriter()
         for _ in range(page_count):
             writer.add_blank_page(width=612, height=792)
@@ -660,6 +700,7 @@ class TestPyPDF(unittest.TestCase):
     def test_pdf_writer_create(self):
         """PdfWriter로 빈 페이지 생성 후 write()"""
         from pypdf import PdfWriter
+
         writer = PdfWriter()
         writer.add_blank_page(width=612, height=792)
         buf = io.BytesIO()
@@ -669,6 +710,7 @@ class TestPyPDF(unittest.TestCase):
     def test_pdf_reader_pages(self):
         """PdfReader.pages 접근 및 페이지 수"""
         from pypdf import PdfReader
+
         buf = self._create_pdf_bytes(5)
         reader = PdfReader(buf)
         self.assertEqual(len(reader.pages), 5)
@@ -676,6 +718,7 @@ class TestPyPDF(unittest.TestCase):
     def test_extract_text(self):
         """page.extract_text() 호출 가능"""
         from pypdf import PdfReader
+
         buf = self._create_pdf_bytes(1)
         reader = PdfReader(buf)
         text = reader.pages[0].extract_text()
@@ -684,6 +727,7 @@ class TestPyPDF(unittest.TestCase):
     def test_add_page_from_reader(self):
         """Reader에서 Writer로 페이지 복사 (preview 생성 패턴)"""
         from pypdf import PdfReader, PdfWriter
+
         buf = self._create_pdf_bytes(3)
         reader = PdfReader(buf)
         writer = PdfWriter()
@@ -704,6 +748,7 @@ class TestPikePDF(unittest.TestCase):
 
     def _create_pdf_file(self):
         from pypdf import PdfWriter
+
         f = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
         writer = PdfWriter()
         writer.add_blank_page(width=612, height=792)
@@ -715,6 +760,7 @@ class TestPikePDF(unittest.TestCase):
     def test_open_and_close(self):
         """pikepdf.open() / pdf.close()"""
         import pikepdf
+
         pdf_path = self._create_pdf_file()
         try:
             pdf = pikepdf.open(pdf_path)
@@ -726,6 +772,7 @@ class TestPikePDF(unittest.TestCase):
     def test_page_count(self):
         """len(pdf.pages) 페이지 수 확인"""
         import pikepdf
+
         pdf_path = self._create_pdf_file()
         try:
             pdf = pikepdf.open(pdf_path)
@@ -737,6 +784,7 @@ class TestPikePDF(unittest.TestCase):
     def test_pdf_version(self):
         """pdf.pdf_version 속성"""
         import pikepdf
+
         pdf_path = self._create_pdf_file()
         try:
             pdf = pikepdf.open(pdf_path)
@@ -748,6 +796,7 @@ class TestPikePDF(unittest.TestCase):
     def test_docinfo(self):
         """pdf.docinfo 메타데이터 접근"""
         import pikepdf
+
         pdf_path = self._create_pdf_file()
         try:
             pdf = pikepdf.open(pdf_path)
@@ -762,6 +811,7 @@ class TestPikePDF(unittest.TestCase):
     def test_check_pdf_syntax(self):
         """pdf.check() 구문 검사 (이전 check_pdf_syntax -> check)"""
         import pikepdf
+
         pdf_path = self._create_pdf_file()
         try:
             pdf = pikepdf.open(pdf_path)
@@ -804,6 +854,7 @@ class TestPythonDocx(unittest.TestCase):
     def test_paragraph_text_attribute(self):
         """paragraph.text 속성 존재"""
         from docx import Document
+
         doc = Document()
         p = doc.add_paragraph("test")
         self.assertEqual(p.text, "test")
@@ -818,6 +869,7 @@ class TestStripRTF(unittest.TestCase):
 
     def test_rtf_to_text_basic(self):
         from striprtf.striprtf import rtf_to_text
+
         rtf_content = r"{\rtf1\ansi Hello World}"
         result = rtf_to_text(rtf_content)
         self.assertIn("Hello", result)
@@ -825,6 +877,7 @@ class TestStripRTF(unittest.TestCase):
     def test_rtf_to_text_with_errors_ignore(self):
         """errors='ignore' 파라미터 (loader.py 패턴)"""
         from striprtf.striprtf import rtf_to_text
+
         rtf_content = r"{\rtf1\ansi Test content}"
         result = rtf_to_text(rtf_content, errors="ignore")
         self.assertIsInstance(result, str)
@@ -839,6 +892,7 @@ class TestUvicorn(unittest.TestCase):
 
     def test_importable(self):
         import uvicorn
+
         self.assertTrue(hasattr(uvicorn, "run"))
 
 
