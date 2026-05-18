@@ -3,12 +3,13 @@ import sqlite3
 import tempfile
 import time
 from pathlib import Path
+from typing import Optional
 
 
 class RefreshTokenStore:
     """Persist refresh token state to support rotation and revocation."""
 
-    def __init__(self, db_path: str | None = None) -> None:
+    def __init__(self, db_path: Optional[str] = None) -> None:
         default_path = Path(tempfile.gettempdir()) / "tm_refresh_tokens.sqlite3"
         self.db_path = Path(db_path or os.getenv("TM_REFRESH_TOKEN_DB", str(default_path)))
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -44,15 +45,7 @@ class RefreshTokenStore:
                 """
             )
 
-    def store_issued(
-        self,
-        *,
-        token_id: str,
-        family_id: str,
-        email: str,
-        issued_at: int,
-        expires_at: int,
-    ) -> None:
+    def store_issued(self, *, token_id: str, family_id: str, email: str, issued_at: int, expires_at: int) -> None:
         with self._connect() as conn:
             conn.execute(
                 """
@@ -63,16 +56,7 @@ class RefreshTokenStore:
                 (token_id, family_id, email, issued_at, expires_at),
             )
 
-    def rotate(
-        self,
-        *,
-        current_token_id: str,
-        new_token_id: str,
-        family_id: str,
-        email: str,
-        issued_at: int,
-        expires_at: int,
-    ) -> str:
+    def rotate(self, *, current_token_id: str, new_token_id: str, family_id: str, email: str, issued_at: int, expires_at: int) -> str:
         now = int(time.time())
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -129,14 +113,7 @@ class RefreshTokenStore:
             self._revoke_family(conn, family_id=family_id, reason=reason, revoked_at=now)
             conn.execute("COMMIT")
 
-    def _revoke_family(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        family_id: str,
-        reason: str,
-        revoked_at: int,
-    ) -> None:
+    def _revoke_family(self, conn: sqlite3.Connection, *, family_id: str, reason: str, revoked_at: int) -> None:
         conn.execute(
             """
             UPDATE refresh_tokens
