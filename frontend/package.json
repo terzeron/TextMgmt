@@ -57,7 +57,7 @@
     "jsdom": "^29.1.1",
     "prop-types": "^15.8.1",
     "vite": "^8.0.0",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.7"
   },
   "overrides": {
     "@xmldom/xmldom": "0.8.13",
