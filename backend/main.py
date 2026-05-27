@@ -3,6 +3,7 @@
 import asyncio
 import sys
 import os
+import json
 import time
 import logging.config
 import uuid
@@ -12,14 +13,12 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
-# 에러 및 미디어 타입 상수 정의
-ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
-JSON_MEDIA_TYPE = "application/json"
 from pydantic import BaseModel
 from backend.auth import require_auth, require_admin, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
 from backend.book_manager import BookManager
@@ -27,6 +26,10 @@ from backend.comics_manager import ComicsManager
 from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
 from backend.category_mapping import CategoryMapping
 from backend.refresh_token_store import RefreshTokenStore
+
+# 에러 및 미디어 타입 상수 정의
+ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
+JSON_MEDIA_TYPE = "application/json"
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -73,8 +76,6 @@ async def general_exception_handler(request: Request, exc: Exception):
 
 
 # JSON 응답에서 한글이 유니코드 이스케이프로 인코딩되지 않도록 설정
-import json
-from fastapi.responses import JSONResponse
 
 
 class CustomJSONResponse(JSONResponse):
@@ -83,7 +84,6 @@ class CustomJSONResponse(JSONResponse):
 
 
 # FastAPI의 기본 JSON 인코더 설정
-from fastapi.encoders import jsonable_encoder
 
 # 원본 jsonable_encoder를 백업
 _original_jsonable_encoder = jsonable_encoder
@@ -91,14 +91,15 @@ _original_jsonable_encoder = jsonable_encoder
 
 def custom_jsonable_encoder(obj, **kwargs):
     """한글이 유니코드 이스케이프로 인코딩되지 않도록 하는 커스텀 인코더"""
-    if isinstance(obj, dict):
-        return {k: custom_jsonable_encoder(v, **kwargs) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [custom_jsonable_encoder(item, **kwargs) for item in obj]
-    elif isinstance(obj, str):
-        return obj
-    else:
-        return _original_jsonable_encoder(obj, **kwargs)
+    match obj:
+        case dict():
+            return {k: custom_jsonable_encoder(v, **kwargs) for k, v in obj.items()}
+        case list():
+            return [custom_jsonable_encoder(item, **kwargs) for item in obj]
+        case str():
+            return obj
+        case _:
+            return _original_jsonable_encoder(obj, **kwargs)
 
 
 # FastAPI 앱에 커스텀 JSON 인코더 설정
@@ -119,12 +120,14 @@ _SameSite = Literal["lax", "strict", "none"]
 def _get_cookie_settings() -> tuple[bool, _SameSite]:
     secure = _resolve_cookie_secure()
     samesite_raw = os.getenv("TM_COOKIE_SAMESITE", "lax").lower()
-    if samesite_raw == "strict":
-        samesite: _SameSite = "strict"
-    elif samesite_raw == "none":
-        samesite = "none"
-    else:
-        samesite = "lax"
+    samesite: _SameSite
+    match samesite_raw:
+        case "strict":
+            samesite = "strict"
+        case "none":
+            samesite = "none"
+        case _:
+            samesite = "lax"
     # SameSite=None은 Secure=True가 필수 (브라우저 요구사항)
     if samesite == "none" and not secure:
         LOGGER.warning("SameSite=None requires Secure=True; falling back to SameSite=Lax")
@@ -133,14 +136,16 @@ def _get_cookie_settings() -> tuple[bool, _SameSite]:
 
 
 def _summarize_request_body(body: Any) -> dict[str, Any]:
-    if isinstance(body, dict):
-        return {"type": "dict", "keys": sorted(str(key) for key in body.keys())[:20], "key_count": len(body)}
-    if isinstance(body, list):
-        return {"type": "list", "length": len(body)}
-    if body is None:
-        return {"type": "none"}
-    body_text = str(body)
-    return {"type": type(body).__name__.lower(), "length": len(body_text)}
+    match body:
+        case dict():
+            return {"type": "dict", "keys": sorted(str(key) for key in body.keys())[:20], "key_count": len(body)}
+        case list():
+            return {"type": "list", "length": len(body)}
+        case None:
+            return {"type": "none"}
+        case _:
+            body_text = str(body)
+            return {"type": type(body).__name__.lower(), "length": len(body_text)}
 
 
 def _is_local_frontend_origin(frontend_url: str | None) -> bool:
@@ -304,7 +309,6 @@ class CategoryDeleteModel(BaseModel):
 
 def create_item_router(manager, content_type: str = "book") -> APIRouter:
     """공통 CRUD 엔드포인트를 생성하는 라우터 팩토리"""
-    auth_dep = [Depends(require_auth)]
     admin_dep = [Depends(require_admin)]
     router = APIRouter()
 
@@ -325,15 +329,16 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         LOGGER.debug("# delete_book(book_id=%d)", book_id)
         response_object: dict[str, Any] = {"status": "failure"}
         result, message = await manager.delete_book(book_id)
-        if result == "Ok":
-            response_object["status"] = "success"
-            response_object["result"] = result
-        elif result == "Warning":
-            response_object["status"] = "success"
-            response_object["result"] = result
-            response_object["warning"] = message
-        else:
-            response_object["error"] = message
+        match result:
+            case "Ok":
+                response_object["status"] = "success"
+                response_object["result"] = result
+            case "Warning":
+                response_object["status"] = "success"
+                response_object["result"] = result
+                response_object["warning"] = message
+            case _:
+                response_object["error"] = message
         return response_object
 
     @router.get("/download/{book_id}", response_model=None)
@@ -372,13 +377,14 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             return response_object
         await _ensure_viewer_category_allowed(payload, book.category, content_type)
 
-        if book.file_type == "epub":
-            result, error = await manager.validate_epub(book_id)
-        elif book.file_type == "pdf":
-            result, error = await manager.validate_pdf(book_id)
-        else:
-            response_object["error"] = f"Validation not supported for type: {book.file_type}"
-            return response_object
+        match book.file_type:
+            case "epub":
+                result, error = await manager.validate_epub(book_id)
+            case "pdf":
+                result, error = await manager.validate_pdf(book_id)
+            case _:
+                response_object["error"] = f"Validation not supported for type: {book.file_type}"
+                return response_object
 
         if result is not None and error is None:
             response_object["status"] = "success"

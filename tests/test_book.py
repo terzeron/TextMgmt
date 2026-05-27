@@ -67,7 +67,9 @@ if __name__ == "__main__":
 
 
 def test_book_requires_book_dir():
-    import importlib, os, sys
+    import importlib
+    import os
+    import sys
 
     prev = os.environ.pop("TM_BOOK_DIR", None)
     try:
