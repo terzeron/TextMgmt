@@ -1,6 +1,7 @@
 import unittest
 import sys
 import zipfile
+import subprocess
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -50,6 +51,7 @@ class TestISBN(unittest.TestCase):
     def test_search_in_content_no_match(self):
         res = isbn.search_in_content("no isbn here")
         self.assertEqual(res, [])
+
 
 def test_search_in_content_multiple():
     res = isbn.search_in_content("first 9788994492032 and 978-89-94492-03-2")
@@ -185,7 +187,6 @@ def test_extract_from_hwp_no_command(tmp_path: Path):
 
 # ---- coverage: isbn additional uncovered lines ----
 
-import subprocess
 
 
 def test_validate_isbn10_non_digit_in_body():

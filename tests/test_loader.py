@@ -2,6 +2,8 @@ import sys
 import os
 import unittest
 import zipfile
+import zlib
+import tempfile
 import warnings
 import importlib
 from pathlib import Path
@@ -413,9 +415,6 @@ class TestXrefStreamFindEntry:
 
 # ---- coverage: loader additional uncovered lines ----
 
-import zlib
-import tempfile
-
 
 class TestReadFromPdf:
     def test_read_valid_pdf(self, tmp_path: Path):
@@ -783,7 +782,7 @@ class TestGetStat:
 
 class TestPrintUsage:
     def test_print_usage(self):
-        Loader = _get_loader()
+        _get_loader()
         from utils.loader import print_usage
         import pytest
 
@@ -1010,7 +1009,7 @@ class TestReadFromHwpEdgeCases:
 # ---- coverage: _find_xref_offset edge cases ----
 
 
-class TestFindXrefOffset:
+class TestFindXrefOffsetExtra:
     def test_leading_lines_before_xref(self):
         """Line 365: lines before 'xref' keyword"""
         Loader = _get_loader()
@@ -1380,7 +1379,7 @@ class TestLoaderMain:
 
     def test_main_single_file(self, monkeypatch, tmp_path):
         """Lines 1019-1025: single file force reload"""
-        Loader = self._setup_env(monkeypatch, tmp_path)
+        self._setup_env(monkeypatch, tmp_path)
         cat_dir = tmp_path / "cat"
         cat_dir.mkdir()
         test_file = cat_dir / "[author] title.txt"
@@ -1399,7 +1398,7 @@ class TestLoaderMain:
 
     def test_main_recursive(self, monkeypatch, tmp_path):
         """Lines 1026-1038: recursive directory processing"""
-        Loader = self._setup_env(monkeypatch, tmp_path)
+        self._setup_env(monkeypatch, tmp_path)
         sub = tmp_path / "sub"
         sub.mkdir()
         (sub / "[auth] book.txt").write_text("content")
@@ -1418,7 +1417,7 @@ class TestLoaderMain:
 
     def test_main_directory_non_recursive(self, monkeypatch, tmp_path):
         """Lines 1039-1074: directory without --recursive (2-stage)"""
-        Loader = self._setup_env(monkeypatch, tmp_path)
+        self._setup_env(monkeypatch, tmp_path)
         sub1 = tmp_path / "sub1"
         sub1.mkdir()
         (sub1 / "[auth] book1.txt").write_text("content1")
@@ -1441,7 +1440,7 @@ class TestLoaderMain:
 
     def test_main_recursive_reload(self, monkeypatch, tmp_path):
         """Lines 1032-1033: --recursive --reload (skip_check=True)"""
-        Loader = self._setup_env(monkeypatch, tmp_path)
+        self._setup_env(monkeypatch, tmp_path)
         (tmp_path / "[auth] book.txt").write_text("content")
         monkeypatch.setattr("sys.argv", ["loader", "--recursive", "--reload", "book", str(tmp_path)])
         from utils.loader import main
@@ -2012,7 +2011,6 @@ class TestLoaderHwp3FallbackEdgeCases:
         monkeypatch.setattr(Loader, "_convert_with_libreoffice", lambda fp, fmt: "")
         summary, line_count, page_count = Loader.read_from_hwp(f)
         if summary:
-            expected_lines = summary.count("\n") + 1
             assert line_count > 0
 
 
@@ -2379,7 +2377,7 @@ class TestHandleControlCharRecursive:
         from utils.hwp3_parser import _HwpStream
 
         # fonts(14) + styles(2) = 16바이트 오프셋부터 문단 시작
-        stream = _HwpStream(b"\x00\x00" * 7 + b"\x00\x00" + body)
+        _HwpStream(b"\x00\x00" * 7 + b"\x00\x00" + body)
         # 직접 파싱
         from pathlib import Path
         import tempfile

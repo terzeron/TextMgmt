@@ -711,7 +711,7 @@ def run_async(coro):
 # ---- merged from test_auth_env_guard.py ----
 
 
-def test_auth_requires_jwt_secret():
+def test_auth_requires_jwt_secret_os_environ():
     prev = os.environ.pop("TM_JWT_SECRET", None)
     saved_mod = sys.modules.get("backend.auth")
     try:

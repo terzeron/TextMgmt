@@ -1,4 +1,3 @@
-import sys
 from pathlib import Path
 
 from tests import test_runner

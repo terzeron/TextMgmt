@@ -7,7 +7,8 @@ from typing import Any
 
 import pytest
 from elastic_transport import ConnectionError
-from elasticsearch import BadRequestError, NotFoundError
+from elastic_transport import ConnectionError as ESConnectionError
+from elasticsearch import BadRequestError, Elasticsearch, NotFoundError
 from types import SimpleNamespace
 
 os.environ.setdefault("TM_ES_URL", "http://localhost:9200")
@@ -753,9 +754,6 @@ def test_delete_returns_false():
 
 
 # ---- merged from test_es_retry_check.py ----
-import pytest
-from elasticsearch import Elasticsearch
-from elastic_transport import ConnectionError as ESConnectionError
 
 
 def _set_es_env(monkeypatch):
@@ -812,9 +810,6 @@ def test_init_all_retries_fail(mock_es_init, mock_info, mock_sleep, monkeypatch)
 
 
 # ---- merged from test_get_all_file_paths_grouped_check.py ----
-from unittest.mock import patch
-import pytest
-from elasticsearch import Elasticsearch
 
 
 def _set_es_env(monkeypatch):

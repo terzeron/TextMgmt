@@ -879,8 +879,6 @@ if __name__ == "__main__":
 
 # ---- merged from test_main_api_extra.py ----
 
-import pytest
-
 
 @pytest.fixture()
 def client():
