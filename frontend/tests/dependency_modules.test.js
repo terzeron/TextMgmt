@@ -448,17 +448,6 @@ describe("@mui/x-tree-view", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 19. @react-buddy/ide-toolbox
-//     사용처: dev/previews.jsx, main.jsx - 개발 도구
-// ---------------------------------------------------------------------------
-describe("@react-buddy/ide-toolbox", () => {
-  it("DevSupport가 export된다", async () => {
-    const { DevSupport } = await import("@react-buddy/ide-toolbox");
-    expect(DevSupport).toBeDefined();
-  });
-});
-
-// ---------------------------------------------------------------------------
 // 20. bootstrap (CSS)
 //     사용처: SearchResult.jsx - CSS import
 // ---------------------------------------------------------------------------

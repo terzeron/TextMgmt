@@ -12,13 +12,27 @@ import tempfile
 import logging
 import json
 import http.client
+from abc import ABC, abstractmethod
+from typing import TypedDict
+import uuid
 
 http.client._MAXHEADERS = 1000  # type: ignore[attr-defined]  # allow more response headers
-from abc import ABC, abstractmethod
-import uuid
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class BookInfo(TypedDict):
+    """서점 상세 페이지에서 추출한 책 정보.
+
+    모든 키는 항상 존재하며, 추출하지 못한 값은 빈 문자열로 둔다.
+    (isbn은 일부 서점만 채우고 나머지는 "")
+    """
+
+    title: str
+    author: str
+    category: str
+    isbn: str
 
 
 # 추상 베이스 클래스
@@ -52,7 +66,7 @@ class AbstractBookstore(ABC):
         pass
 
     @abstractmethod
-    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
         """상세 페이지에서 책 정보 추출"""
         pass
 
@@ -246,7 +260,7 @@ class Yes24Bookstore(AbstractBookstore):
             logger.info(f"yes24에서 {len(links)}개의 상세 페이지 링크를 찾았습니다")
         return links
 
-    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
         """
         yes24 상세 페이지에서 책 정보 추출
 
@@ -256,7 +270,7 @@ class Yes24Bookstore(AbstractBookstore):
         Returns:
             책 정보 딕셔너리
         """
-        book_info = {"title": "", "author": "", "category": "", "isbn": ""}
+        book_info: BookInfo = {"title": "", "author": "", "category": "", "isbn": ""}
 
         try:
             # 책 제목 추출
@@ -404,9 +418,9 @@ class AladinBookstore(AbstractBookstore):
             logger.info(f"알라딘에서 {len(links)}개의 상세 페이지 링크를 찾았습니다.")
         return links
 
-    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
         """알라딘 상세 페이지에서 책 정보를 추출합니다."""
-        info = {"title": "", "author": "", "category": "", "isbn": ""}
+        info: BookInfo = {"title": "", "author": "", "category": "", "isbn": ""}
 
         # 1. <title> 태그에서 제목, 저자 추출
         title_tag = soup.find("title")
@@ -562,8 +576,8 @@ class RidibooksBookstore(AbstractBookstore):
         """RIDI는 search_by_keyword를 오버라이드하므로 이 메서드는 사용되지 않음"""
         return []
 
-    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
-        info = {"title": "", "author": "", "category": "", "isbn": ""}
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
+        info: BookInfo = {"title": "", "author": "", "category": "", "isbn": ""}
         # 제목 추출: og:title 메타 태그 우선, 실패 시 <h1> 태그 사용
         meta = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "title"})
         if meta and meta.get("content"):  # type: ignore[union-attr]
@@ -670,12 +684,12 @@ class NaverShoppingBookstore(AbstractBookstore):
             logger.info(f"네이버쇼핑에서 {len(links)}개의 상세 페이지 링크를 찾았습니다")
         return links
 
-    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
         """
         네이버쇼핑 상세 페이지에서 책 정보를 추출합니다.
         CSS 클래스에 해시 접미사가 붙으므로 부분 매칭(lambda)을 사용합니다.
         """
-        info: dict[str, str] = {"title": "", "author": "", "category": ""}
+        info: BookInfo = {"title": "", "author": "", "category": "", "isbn": ""}
         try:
             # 제목: h2.bookTitle_book_name__*
             title_elem = soup.find("h2", class_=re.compile(r"^bookTitle_book_name__"))
@@ -736,9 +750,9 @@ class MunpiaBookstore(AbstractBookstore):
             logger.info(f"문피아에서 {len(links)}개의 상세 페이지 링크를 찾았습니다")
         return links
 
-    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
         """문피아 상세 페이지에서 책 정보를 추출합니다."""
-        book_info = {"title": "", "author": "", "category": ""}
+        book_info: BookInfo = {"title": "", "author": "", "category": "", "isbn": ""}
         # 제목 추출: og:title 또는 <meta name="title">
         meta_title = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "title"})
         if meta_title and meta_title.get("content"):  # type: ignore[union-attr]
@@ -786,8 +800,8 @@ class NaverSeriesBookstore(AbstractBookstore):
             logger.info(f"NaverSeries에서 {len(links)}개의 상세 페이지 링크를 찾았습니다")
         return links
 
-    def extract_book_info(self, soup: BeautifulSoup) -> dict[str, str]:
-        info: dict[str, str] = {"title": "", "author": "", "category": ""}
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
+        info: BookInfo = {"title": "", "author": "", "category": "", "isbn": ""}
         # 제목 추출
         if soup.title and soup.title.string:
             info["title"] = soup.title.string.strip()

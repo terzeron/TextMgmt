@@ -582,39 +582,6 @@ describe("@mui/x-tree-view", () => {
 });
 
 // ===========================================================================
-// 21. @react-buddy/ide-toolbox — main.jsx, dev/previews.jsx, dev/palette.jsx
-//     DevSupport, Previews, Category, Component, Variant, Palette
-// ===========================================================================
-describe("@react-buddy/ide-toolbox", () => {
-  it("src 에서 import 하는 모든 export 가 존재한다", async () => {
-    const m = await import("@react-buddy/ide-toolbox");
-    for (const k of [
-      "DevSupport",
-      "Previews",
-      "Category",
-      "Component",
-      "Variant",
-      "Palette",
-    ]) {
-      expect(m[k], `missing export: ${k}`).toBeDefined();
-    }
-  });
-});
-
-// ===========================================================================
-// 22. @react-buddy/palette-mui — dev/palette.jsx
-//     `import MUIPalette from "@react-buddy/palette-mui"`
-// ===========================================================================
-describe("@react-buddy/palette-mui", () => {
-  // 해당 패키지는 MUI 전체 component 목록을 ESM 으로 import 하므로
-  // coverage instrumentation 환경(전체 스위트 동시 실행)에서 초기 import 가 느리다.
-  it("default export 가 존재한다", async () => {
-    const MUIPalette = (await import("@react-buddy/palette-mui")).default;
-    expect(MUIPalette).toBeDefined();
-  }, 30000);
-});
-
-// ===========================================================================
 // 23. prop-types — 다수 컴포넌트
 //     PropTypes.{string,number,bool,func,object,array,node,elementType,shape,oneOfType}
 //     PropTypes.<type>.isRequired

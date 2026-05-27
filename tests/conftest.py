@@ -30,8 +30,8 @@ os.environ.setdefault("TM_ES_COMICS_INDEX", "test_comics_index")
 os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
 
 # env var 설정 후 import해야 Book.path_prefix가 올바른 경로로 초기화된다
-from backend.book import Book
-from backend.comics import Comics
+from backend.book import Book  # noqa: E402
+from backend.comics import Comics  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -45,8 +45,8 @@ def restore_model_path_prefixes():
         Comics.path_prefix = original_comics_prefix
 
 
-from testcontainers.core.container import DockerContainer
-from testcontainers.mysql import MySqlContainer
+from testcontainers.core.container import DockerContainer  # noqa: E402
+from testcontainers.mysql import MySqlContainer  # noqa: E402
 
 
 # ========== MySQL 컨테이너 fixture ==========

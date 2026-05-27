@@ -1,12 +1,14 @@
-import unittest, sys, os
+import unittest
+import sys
+import json
+import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 from bs4 import BeautifulSoup
 import backend.bookstore as bookstore
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
+from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore, BookInfo
 
 
 class TestBookstore(unittest.TestCase):
@@ -24,12 +26,6 @@ class TestBookstore(unittest.TestCase):
 
 
 # ---- merged from test_bookstore_extra_branches.py ----
-import json
-
-import pytest
-from bs4 import BeautifulSoup
-
-from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
 
 
 def test_yes24_fallback_links_and_no_category_isbn():
@@ -129,7 +125,7 @@ class DummyBookstore(AbstractBookstore):
     def extract_search_links(self, soup: BeautifulSoup):
         return ["https://example.com/detail/1", "https://example.com/detail/2"]
 
-    def extract_book_info(self, soup: BeautifulSoup):
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
         title = soup.find("h1").text if soup.find("h1") else ""
         author = soup.find("span", class_="author").text if soup.find("span", class_="author") else ""
         category = soup.find("p", class_="category").text if soup.find("p", class_="category") else ""
@@ -235,8 +231,8 @@ class BaseOnlyBookstore(AbstractBookstore):
     def extract_search_links(self, soup: BeautifulSoup):
         return []
 
-    def extract_book_info(self, soup: BeautifulSoup):
-        return {}
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
+        return {"title": "", "author": "", "category": "", "isbn": ""}
 
 
 def test_base_build_isbn_search_and_empty_search(monkeypatch: pytest.MonkeyPatch):
@@ -813,12 +809,6 @@ def test_naver_shopping_extract_book_info_exception():
     assert isinstance(info, dict)
 
 
-import types
-
-
-from backend.bookstore import AbstractBookstore
-
-
 class DummyBookstoreUnit(AbstractBookstore):
     BASE_URL = "http://example.com"
 
@@ -828,7 +818,7 @@ class DummyBookstoreUnit(AbstractBookstore):
     def extract_search_links(self, soup):
         return [f"{self.BASE_URL}/detail/1", f"{self.BASE_URL}/detail/2"]
 
-    def extract_book_info(self, soup):
+    def extract_book_info(self, soup) -> BookInfo:
         return {"title": "T", "author": "A", "category": "A > B > C > D", "isbn": "I"}
 
 
@@ -929,9 +919,6 @@ def test_save_and_load_html_from_tmp():
 
 
 # ---- merged from test_bookstore_parsing.py ----
-import tempfile
-
-from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, MunpiaBookstore, NaverSeriesBookstore
 
 
 class DummyBookstoreParsing(AbstractBookstore):
@@ -949,7 +936,7 @@ class DummyBookstoreParsing(AbstractBookstore):
     def extract_search_links(self, soup: BeautifulSoup) -> list[str]:
         return [a["href"] for a in soup.find_all("a", href=True)]
 
-    def extract_book_info(self, soup: BeautifulSoup):
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
         title = soup.find("h1")
         author = soup.find("span", class_="author")
         category = soup.find("div", class_="cat")
@@ -1018,7 +1005,7 @@ def test_fetch_search_results_uses_cached_html_parsing(tmp_path: Path, monkeypat
     assert results == [("Book", "Auth", "A > B > C", "https://example.com/detail/1", "https://example.com/search?q=x", "123")]
 
 
-def test_save_and_load_html_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_save_and_load_html_cache_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     store = DummyBookstoreParsing()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
     url = "https://example.com/detail/1"

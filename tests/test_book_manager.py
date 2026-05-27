@@ -375,12 +375,6 @@ if __name__ == "__main__":
 
 
 # ---- merged from test_book_manager_extra.py ----
-from pathlib import Path
-
-import pytest
-
-from backend.book_manager import BookManager
-from backend.book import Book
 
 
 class DummyES:
@@ -646,7 +640,6 @@ def test_delete_file_and_index_single_file(tmp_path: Path, monkeypatch: pytest.M
     status, msg = asyncio_runner(manager.delete_file("../bad.txt"))
     assert status == "Error"
 
-    missing = tmp_path / "A" / "none.txt"
     status, msg = asyncio_runner(manager.delete_file("A/none.txt"))
     assert status == "Error"
 
@@ -1315,7 +1308,7 @@ def test_get_book_preview_epub_old_cache_cleanup(tmp_path: Path):
     old_cache.write_bytes(b"old")
     old_html = cache_dir / "1.html"
     old_html.write_text("old")
-    resp = asyncio_runner(manager.get_book_preview(1, chapters=1))
+    asyncio_runner(manager.get_book_preview(1, chapters=1))
     assert not old_cache.exists()
     assert not old_html.exists()
 
@@ -2125,8 +2118,6 @@ def test_validate_epub_general_exception(tmp_path: Path, monkeypatch: pytest.Mon
 
     import zipfile
 
-    orig = zipfile.ZipFile.__init__
-
     def bad_init(self, *a, **kw):
         raise PermissionError("nope")
 
@@ -2147,8 +2138,6 @@ def test_evict_old_cache_file_exception(tmp_path: Path, monkeypatch: pytest.Monk
     old_file.write_text("x")
     past = time.time() - (BookManager.CACHE_MAX_AGE_SECONDS + 10)
     os.utime(old_file, (past, past))
-
-    orig_unlink = Path.unlink
 
     def bad_unlink(self, **kw):
         raise PermissionError("nope")
@@ -2217,7 +2206,6 @@ def test_validate_epub_epubcheck_json_unlink_oserror(tmp_path: Path, monkeypatch
 
     epubcheck_json = '{"messages": [], "publication": {"title": "T"}, "checker": {"nFatal": 0, "nError": 0, "nWarning": 0, "nUsage": 0, "nInfo": 0}}'
 
-    orig_unlink = os.unlink
     unlink_calls = []
 
     async def fake_subprocess(*args, **kwargs):
@@ -2363,7 +2351,7 @@ def test_get_book_preview_epub_cache_hit(tmp_path: Path):
     # Create cache file with newer mtime
     cache_dir = tmp_path / ".preview_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    total_chapters = BookManager._get_epub_total_chapters(epub)
+    BookManager._get_epub_total_chapters(epub)
     cache_file = cache_dir / "1_ch3.epub"
     _make_minimal_epub(cache_file)
 
@@ -2933,8 +2921,6 @@ def test_update_book_ioerror_on_rename(tmp_path: Path, monkeypatch: pytest.Monke
     es.doc = make_doc("A/src.txt")
     es.search_by_id = lambda _id: es.doc
 
-    orig_rename = Path.rename
-
     def fail_rename(self, target):
         raise IOError("disk error")
 
@@ -3121,7 +3107,7 @@ def test_hwp_preview_fallback_both_fail(tmp_path: Path, monkeypatch: pytest.Monk
     manager = make_manager(tmp_path, es)
     es.search_by_id = lambda _id: doc
     monkeypatch.setattr(BookManager, "_convert_with_libreoffice", lambda p, fmt: "")
-    resp = asyncio_runner(manager.get_book_preview(1))
+    asyncio_runner(manager.get_book_preview(1))
     # V1.20은 hwp3 파서도 빈 결과 → 캐시 미생성, 400/500 가능
     cache_file = tmp_path / ".preview_cache" / "1.html"
     assert not cache_file.exists()

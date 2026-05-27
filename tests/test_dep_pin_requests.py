@@ -67,8 +67,6 @@ class TestSessionConstructionAndHeaders(unittest.TestCase):
     def test_session_get_signature_accepts_timeout_verify_params(self):
         import requests
 
-        sig = inspect.signature(requests.Session.get)
-        params = set(sig.parameters)
         # 위치 인자 url + **kwargs 형태가 일반적이므로 kwargs 통과 여부로 검증
         # 대신 Session.request의 시그니처를 확인
         req_sig = inspect.signature(requests.Session.request)
