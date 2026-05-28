@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, lazy, Suspense } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import PropTypes from "prop-types";
-import { jsonGetReq, getApiUrlPrefix } from "./Common";
+import { jsonGetReq } from "./Common";
 
 import "./ViewSingle.css";
 import "bootstrap/dist/css/bootstrap.min.css";
@@ -24,7 +24,7 @@ export default function ViewSingle(props) {
   const paramCategory = searchParams.get("category") || "";
   const standalone = Boolean(entryId && paramFileType);
   const [bookId, setBookId] = useState(0);
-  const [filePath, setFilePath] = useState("");
+  const [_filePath, setFilePath] = useState("");
   const [fileType, setFileType] = useState("");
   const [lineCount, setLineCount] = useState(0);
   const [pageCount, setPageCount] = useState(0);

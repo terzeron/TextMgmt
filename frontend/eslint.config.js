@@ -47,6 +47,15 @@ export default [
       "react-hooks/exhaustive-deps":
         reactHooksRecommendedRules["react-hooks/exhaustive-deps"],
       "react/jsx-no-target-blank": "off",
+      "no-unused-vars": [
+        "error",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+          destructuredArrayIgnorePattern: "^_",
+        },
+      ],
       "react-refresh/only-export-components": [
         "warn",
         { allowConstantExport: true },

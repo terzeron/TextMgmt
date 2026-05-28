@@ -18,7 +18,6 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faPlus,
   faTrash,
-  faEyeSlash,
   faChevronDown,
   faChevronRight,
   faEdit,
@@ -41,14 +40,11 @@ import { animated, useSpring } from "@react-spring/web";
 import Collapse from "@mui/material/Collapse";
 import Typography from "@mui/material/Typography";
 import Box from "@mui/material/Box";
-import FolderRounded from "@mui/icons-material/esm/FolderRounded";
+import FolderRounded from "@mui/icons-material/FolderRounded";
 import clsx from "clsx";
 
 import { jsonGetReq, jsonPostReq, jsonPutReq, jsonDeleteReq } from "./Common";
-import {
-  fetchCategoryMappings,
-  updateCachedMappings,
-} from "./categoryMappingCache";
+import { updateCachedMappings } from "./categoryMappingCache";
 import {
   findCommonPrefix,
   buildFolderHierarchy,
@@ -154,7 +150,6 @@ function DotIcon() {
   );
 }
 
-// eslint-disable-next-line react/prop-types
 function AdminLabel({
   icon: Icon,
   iconColor,
@@ -207,6 +202,14 @@ function AdminLabel({
     </TreeItem2Label>
   );
 }
+
+AdminLabel.propTypes = {
+  icon: PropTypes.elementType,
+  iconColor: PropTypes.string,
+  expandable: PropTypes.bool,
+  count: PropTypes.number,
+  children: PropTypes.node,
+};
 
 const isExpandable = (reactChildren) => {
   if (Array.isArray(reactChildren)) {

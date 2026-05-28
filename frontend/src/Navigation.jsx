@@ -127,6 +127,7 @@ export default function Navigation() {
         setSearchLoading(false);
       },
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- buildSearchUrl은 안정적 helper로 deps에 포함 시 매 렌더마다 재실행 유발 (의도된 누락)
   }, [
     searchKeyword,
     searchResults.length,
