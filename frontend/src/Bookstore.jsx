@@ -1,22 +1,27 @@
-import {useEffect, useState} from "react";
-import PropTypes from 'prop-types';
+/* eslint-disable react-refresh/only-export-components --
+   서점 카테고리 파싱 유틸이 컴포넌트와 co-located. HMR 힌트일 뿐 런타임 영향 없음. */
+import { useEffect, useState } from "react";
+import PropTypes from "prop-types";
 
-import './Edit.css';
-import 'bootstrap/dist/css/bootstrap.min.css';
+import "./Edit.css";
+import "bootstrap/dist/css/bootstrap.min.css";
 
-import { Button, Tabs, Tab, Spinner, Card, ButtonGroup } from 'react-bootstrap';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faSpinner } from '@fortawesome/free-solid-svg-icons';
-import {rawJsonGetReq} from './Common';
+import { Button, Tabs, Tab, Spinner, Card, ButtonGroup } from "react-bootstrap";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faSpinner } from "@fortawesome/free-solid-svg-icons";
+import { rawJsonGetReq } from "./Common";
 
 // 카테고리에서 최하위 + 바로 상위 두 단계를 추출 (공백으로 연결)
 // 예: "소설/시/희곡 > SF > 한국SF" → "SF 한국SF"
 // 예: "소설/시/희곡 > 중국소설" → "소설/시/희곡 중국소설"
 // 예: "한국SF" → "한국SF"
 export const getTwoLevelCategory = (category) => {
-  if (!category) return '';
-  const parts = category.split('>').map(s => s.trim()).filter(Boolean);
-  if (parts.length <= 1) return parts[0] || '';
+  if (!category) return "";
+  const parts = category
+    .split(">")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return parts[0] || "";
   return `${parts[parts.length - 2]} ${parts[parts.length - 1]}`;
 };
 
@@ -24,12 +29,15 @@ export const getTwoLevelCategory = (category) => {
 // 예: "소설 > 한국소설 || 소설 > 추리/미스터리/스릴러" → ["소설 한국소설", "소설 추리/미스터리/스릴러"]
 export const extractMultiPathCategories = (category) => {
   if (!category) return [];
-  return category.split('||').map(p => getTwoLevelCategory(p.trim())).filter(Boolean);
+  return category
+    .split("||")
+    .map((p) => getTwoLevelCategory(p.trim()))
+    .filter(Boolean);
 };
 
 // 검색 결과에서 카테고리를 수집하여 categories 객체에 추가
 const collectStoreCategories = (storeData, storeKey, categories) => {
-  if (storeData?.status === 'success' && storeData?.result?.length > 0) {
+  if (storeData?.status === "success" && storeData?.result?.length > 0) {
     storeData.result.forEach((item, idx) => {
       const cats = extractMultiPathCategories(item.category);
       cats.forEach((cat, pathIdx) => {
@@ -40,33 +48,33 @@ const collectStoreCategories = (storeData, storeKey, categories) => {
 };
 
 // 카테고리 유사도 판정에 참여하는 서점 목록
-const CATEGORY_STORES = ['yes24', 'aladin', 'naver'];
+const CATEGORY_STORES = ["yes24", "aladin", "naver"];
 
 // 자동 검색 대상 서점 목록 (카테고리 판정 서점 + 추가 자동 검색 서점)
-const AUTO_SEARCH_STORES = ['yes24', 'aladin', 'naver', 'ridi'];
+const AUTO_SEARCH_STORES = ["yes24", "aladin", "naver", "ridi"];
 
 // 서점 탭 정의 (supportsIsbn: ISBN 검색 지원 여부)
 const STORES = [
-  { key: 'yes24', label: 'Yes24', supportsIsbn: true },
-  { key: 'aladin', label: '알라딘', supportsIsbn: true },
-  { key: 'naver', label: '네이버쇼핑', supportsIsbn: false },
-  { key: 'ridi', label: 'RIDI', supportsIsbn: false },
-  { key: 'munpia', label: '문피아', supportsIsbn: false },
-  { key: 'naverseries', label: '시리즈', supportsIsbn: false }
+  { key: "yes24", label: "Yes24", supportsIsbn: true },
+  { key: "aladin", label: "알라딘", supportsIsbn: true },
+  { key: "naver", label: "네이버쇼핑", supportsIsbn: false },
+  { key: "ridi", label: "RIDI", supportsIsbn: false },
+  { key: "munpia", label: "문피아", supportsIsbn: false },
+  { key: "naverseries", label: "시리즈", supportsIsbn: false },
 ];
 
 export default function Bookstore(props) {
-  const [title, setTitle] = useState('');
-  const [author, setAuthor] = useState('');
-  const [isbn, setIsbn] = useState('');
+  const [title, setTitle] = useState("");
+  const [author, setAuthor] = useState("");
+  const [isbn, setIsbn] = useState("");
   const [activeKey, setActiveKey] = useState(STORES[0].key);
   const [data, setData] = useState({});
 
   // bookInfo 변경 시 로컬 필드만 동기화 (검색은 트리거하지 않음)
   useEffect(() => {
-    setTitle(props.bookInfo.title || '');
-    setAuthor(props.bookInfo.author || '');
-    setIsbn(props.bookInfo.isbn || '');
+    setTitle(props.bookInfo.title || "");
+    setAuthor(props.bookInfo.author || "");
+    setIsbn(props.bookInfo.isbn || "");
   }, [props.bookInfo]);
 
   // 책 정보 로딩 또는 이름 변경 시에만 자동 검색 실행
@@ -82,31 +90,49 @@ export default function Bookstore(props) {
 
     // 자동 검색: ISBN → 저자+제목 → 제목 순으로 시도
     const autoSearch = async (store) => {
-      const currentIsbn = props.bookInfo.isbn || '';
-      const currentTitle = props.bookInfo.title || '';
-      const currentAuthor = props.bookInfo.author || '';
+      const currentIsbn = props.bookInfo.isbn || "";
+      const currentTitle = props.bookInfo.title || "";
+      const currentAuthor = props.bookInfo.author || "";
 
       if (!currentIsbn && !currentTitle && !currentAuthor) return null;
 
       // 1. ISBN 검색 시도 (ISBN이 있는 경우)
       if (currentIsbn) {
-        const result = await fetchWithMethodInternal(store, 'isbn', currentIsbn, currentTitle, currentAuthor);
-        if (result?.status === 'success' && result?.result?.length > 0) {
+        const result = await fetchWithMethodInternal(
+          store,
+          "isbn",
+          currentIsbn,
+          currentTitle,
+          currentAuthor,
+        );
+        if (result?.status === "success" && result?.result?.length > 0) {
           return result;
         }
       }
 
       // 2. 저자+제목 검색 시도
       if (currentTitle || currentAuthor) {
-        const result = await fetchWithMethodInternal(store, 'title_author', currentIsbn, currentTitle, currentAuthor);
-        if (result?.status === 'success' && result?.result?.length > 0) {
+        const result = await fetchWithMethodInternal(
+          store,
+          "title_author",
+          currentIsbn,
+          currentTitle,
+          currentAuthor,
+        );
+        if (result?.status === "success" && result?.result?.length > 0) {
           return result;
         }
       }
 
       // 3. 제목만으로 검색 시도 (저자+제목으로 결과가 없는 경우)
       if (currentTitle) {
-        return await fetchWithMethodInternal(store, 'title_only', currentIsbn, currentTitle, currentAuthor);
+        return await fetchWithMethodInternal(
+          store,
+          "title_only",
+          currentIsbn,
+          currentTitle,
+          currentAuthor,
+        );
       }
 
       return null;
@@ -115,7 +141,10 @@ export default function Bookstore(props) {
     const runAutoSearch = async () => {
       // 서점 검색을 병렬 실행 (서점 간 의존성 없음)
       const entries = await Promise.all(
-        AUTO_SEARCH_STORES.map(async (storeKey) => [storeKey, await autoSearch(storeKey)])
+        AUTO_SEARCH_STORES.map(async (storeKey) => [
+          storeKey,
+          await autoSearch(storeKey),
+        ]),
       );
       const results = Object.fromEntries(entries);
 
@@ -130,34 +159,44 @@ export default function Bookstore(props) {
     };
 
     runAutoSearch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- searchTrigger 변경만 트리거로 사용 (다른 props는 의도적으로 deps에서 제외)
   }, [props.searchTrigger]);
 
   // 내부 검색 함수 (자동 검색용, 결과 반환)
-  const fetchWithMethodInternal = (store, method, isbnVal, titleVal, authorVal) => {
+  const fetchWithMethodInternal = (
+    store,
+    method,
+    isbnVal,
+    titleVal,
+    authorVal,
+  ) => {
     return new Promise((resolve) => {
-      setData(prev => ({ ...prev, [store]: { loading: true } }));
+      setData((prev) => ({ ...prev, [store]: { loading: true } }));
 
       const params = new URLSearchParams();
 
       switch (method) {
-        case 'isbn':
-          if (isbnVal) params.append('isbn', isbnVal);
+        case "isbn":
+          if (isbnVal) params.append("isbn", isbnVal);
           break;
-        case 'title_author':
-          if (titleVal) params.append('title', titleVal);
-          if (authorVal) params.append('author', authorVal);
+        case "title_author":
+          if (titleVal) params.append("title", titleVal);
+          if (authorVal) params.append("author", authorVal);
           break;
-        case 'title_only':
-          if (titleVal) params.append('title', titleVal);
+        case "title_only":
+          if (titleVal) params.append("title", titleVal);
           break;
         default:
-          if (isbnVal) params.append('isbn', isbnVal);
-          if (titleVal) params.append('title', titleVal);
-          if (authorVal) params.append('author', authorVal);
+          if (isbnVal) params.append("isbn", isbnVal);
+          if (titleVal) params.append("title", titleVal);
+          if (authorVal) params.append("author", authorVal);
       }
 
-      if (params.toString() === '') {
-        setData(prev => ({ ...prev, [store]: { error: true, message: '검색어가 없습니다.' } }));
+      if (params.toString() === "") {
+        setData((prev) => ({
+          ...prev,
+          [store]: { error: true, message: "검색어가 없습니다." },
+        }));
         resolve(null);
         return;
       }
@@ -165,30 +204,33 @@ export default function Bookstore(props) {
       rawJsonGetReq(
         `/search/bookstore/${store}?${params.toString()}`,
         (json) => {
-          setData(prev => ({ ...prev, [store]: json }));
+          setData((prev) => ({ ...prev, [store]: json }));
 
           resolve(json);
         },
         (error) => {
           console.error(error);
-          setData(prev => ({ ...prev, [store]: { error: true, message: '검색 중 오류가 발생했습니다.' } }));
+          setData((prev) => ({
+            ...prev,
+            [store]: { error: true, message: "검색 중 오류가 발생했습니다." },
+          }));
           resolve(null);
-        }
+        },
       );
     });
   };
 
   // 특정 검색 방법으로 검색 수행 (버튼 클릭용)
   const fetchWithMethod = (store, method) => {
-    const storeInfo = STORES.find(s => s.key === store);
+    const storeInfo = STORES.find((s) => s.key === store);
 
     // 검색어 결정
-    let searchTerms = '';
+    let searchTerms = "";
     switch (method) {
-      case 'isbn':
+      case "isbn":
         searchTerms = isbn;
         break;
-      case 'title_author':
+      case "title_author":
         searchTerms = `${title}_${author}`;
         break;
       default:
@@ -200,37 +242,46 @@ export default function Bookstore(props) {
 
     // 이미 해당 검색 결과가 있으면 재사용
     if (data[cacheKey] && !data[cacheKey].loading && !data[cacheKey].error) {
-      setData(prev => ({ ...prev, [store]: data[cacheKey] }));
+      setData((prev) => ({ ...prev, [store]: data[cacheKey] }));
       return;
     }
 
     // ISBN 미지원 서점에서 ISBN 검색 시도 시 에러 표시
-    if (method === 'isbn' && !storeInfo?.supportsIsbn) {
-      setData(prev => ({ ...prev, [store]: { error: true, message: '이 서점은 ISBN 검색을 지원하지 않습니다.' } }));
+    if (method === "isbn" && !storeInfo?.supportsIsbn) {
+      setData((prev) => ({
+        ...prev,
+        [store]: {
+          error: true,
+          message: "이 서점은 ISBN 검색을 지원하지 않습니다.",
+        },
+      }));
       return;
     }
 
     // 새 검색 시작 시 기존 결과 초기화
-    setData(prev => ({ ...prev, [store]: { loading: true } }));
+    setData((prev) => ({ ...prev, [store]: { loading: true } }));
 
     const params = new URLSearchParams();
 
     switch (method) {
-      case 'isbn':
-        if (isbn) params.append('isbn', isbn);
+      case "isbn":
+        if (isbn) params.append("isbn", isbn);
         break;
-      case 'title_author':
-        if (title) params.append('title', title);
-        if (author) params.append('author', author);
+      case "title_author":
+        if (title) params.append("title", title);
+        if (author) params.append("author", author);
         break;
       default:
-        if (isbn) params.append('isbn', isbn);
-        if (title) params.append('title', title);
-        if (author) params.append('author', author);
+        if (isbn) params.append("isbn", isbn);
+        if (title) params.append("title", title);
+        if (author) params.append("author", author);
     }
 
-    if (params.toString() === '') {
-      setData(prev => ({ ...prev, [store]: { error: true, message: '검색어가 없습니다.' } }));
+    if (params.toString() === "") {
+      setData((prev) => ({
+        ...prev,
+        [store]: { error: true, message: "검색어가 없습니다." },
+      }));
       return;
     }
 
@@ -238,7 +289,7 @@ export default function Bookstore(props) {
       `/search/bookstore/${store}?${params.toString()}`,
       (json) => {
         // 결과를 store와 cacheKey 둘 다에 저장
-        setData(prev => {
+        setData((prev) => {
           const newData = { ...prev, [store]: json, [cacheKey]: json };
 
           // 카테고리 유사도 판정 서점의 검색 결과를 부모에게 전달
@@ -256,15 +307,18 @@ export default function Bookstore(props) {
       },
       (error) => {
         console.error(error);
-        setData(prev => ({ ...prev, [store]: { error: true, message: '검색 중 오류가 발생했습니다.' } }));
-      }
+        setData((prev) => ({
+          ...prev,
+          [store]: { error: true, message: "검색 중 오류가 발생했습니다." },
+        }));
+      },
     );
   };
 
   // 탭 내용 렌더링 함수
   const renderTabContent = (storeKey) => {
     const result = data[storeKey];
-    const storeInfo = STORES.find(s => s.key === storeKey);
+    const storeInfo = STORES.find((s) => s.key === storeKey);
 
     return (
       <div>
@@ -272,44 +326,71 @@ export default function Bookstore(props) {
         <div className="p-2 border-bottom">
           <ButtonGroup>
             <Button
-              variant={isbn && storeInfo?.supportsIsbn ? "outline-primary" : "outline-secondary"}
+              variant={
+                isbn && storeInfo?.supportsIsbn
+                  ? "outline-primary"
+                  : "outline-secondary"
+              }
               size="sm"
-              onClick={() => fetchWithMethod(storeKey, 'isbn')}
+              onClick={() => fetchWithMethod(storeKey, "isbn")}
               disabled={result?.loading || !isbn || !storeInfo?.supportsIsbn}
-              title={!isbn ? "ISBN 정보 없음" : (!storeInfo?.supportsIsbn ? "이 서점은 ISBN 검색 미지원" : "")}
+              title={
+                !isbn
+                  ? "ISBN 정보 없음"
+                  : !storeInfo?.supportsIsbn
+                    ? "이 서점은 ISBN 검색 미지원"
+                    : ""
+              }
             >
               ISBN
-              {result?.loading && <FontAwesomeIcon icon={faSpinner} spin className="ms-1"/>}
+              {result?.loading && (
+                <FontAwesomeIcon icon={faSpinner} spin className="ms-1" />
+              )}
             </Button>
             <Button
-              variant={(title || author) ? "outline-primary" : "outline-secondary"}
+              variant={
+                title || author ? "outline-primary" : "outline-secondary"
+              }
               size="sm"
-              onClick={() => fetchWithMethod(storeKey, 'title_author')}
+              onClick={() => fetchWithMethod(storeKey, "title_author")}
               disabled={result?.loading || (!title && !author)}
             >
               저자+제목
-              {result?.loading && <FontAwesomeIcon icon={faSpinner} spin className="ms-1"/>}
+              {result?.loading && (
+                <FontAwesomeIcon icon={faSpinner} spin className="ms-1" />
+              )}
             </Button>
           </ButtonGroup>
           {result?.search_url && (
-            <a href={result.search_url} target="_blank" rel="noreferrer" className="ms-2">
-              <Button variant="outline-secondary" size="sm">서점에서 보기</Button>
+            <a
+              href={result.search_url}
+              target="_blank"
+              rel="noreferrer"
+              className="ms-2"
+            >
+              <Button variant="outline-secondary" size="sm">
+                서점에서 보기
+              </Button>
             </a>
           )}
         </div>
 
         {/* 검색 결과 */}
         {result?.loading && (
-          <div className="text-center p-2"><Spinner animation="border" size="sm" /></div>
+          <div className="text-center p-2">
+            <Spinner animation="border" size="sm" />
+          </div>
         )}
 
         {result?.error && (
-          <div className="text-danger p-2">{result.message || '검색 중 오류가 발생했습니다.'}</div>
+          <div className="text-danger p-2">
+            {result.message || "검색 중 오류가 발생했습니다."}
+          </div>
         )}
 
         {result && !result.loading && !result.error && (
           <>
-            {result.status === 'success' && result.result.length > 0 ? (
+            {result.status === "success" && result.result.length > 0 ? (
               result.result.map((item, idx) => (
                 <div key={item.book_url || idx} className="p-1 border-bottom">
                   <div>
@@ -335,23 +416,22 @@ export default function Bookstore(props) {
 
   return (
     <Card>
-        <Card.Header>
-            서점 검색
-        </Card.Header>
+      <Card.Header>서점 검색</Card.Header>
 
-        <Card.Body className="p-0">
-            <Tabs
-              activeKey={activeKey}
-              onSelect={(k) => setActiveKey(k)}
-              variant="tabs"
-              className="m-0">
-            {STORES.map((store) => (
-                <Tab eventKey={store.key} title={store.label} key={store.key}>
-                  {renderTabContent(store.key)}
-                </Tab>
-            ))}
-            </Tabs>
-        </Card.Body>
+      <Card.Body className="p-0">
+        <Tabs
+          activeKey={activeKey}
+          onSelect={(k) => setActiveKey(k)}
+          variant="tabs"
+          className="m-0"
+        >
+          {STORES.map((store) => (
+            <Tab eventKey={store.key} title={store.label} key={store.key}>
+              {renderTabContent(store.key)}
+            </Tab>
+          ))}
+        </Tabs>
+      </Card.Body>
     </Card>
   );
 }
@@ -360,8 +440,8 @@ Bookstore.propTypes = {
   bookInfo: PropTypes.shape({
     author: PropTypes.string,
     title: PropTypes.string,
-    isbn: PropTypes.string
+    isbn: PropTypes.string,
   }).isRequired,
   searchTrigger: PropTypes.number,
-  onCategoriesFound: PropTypes.func
+  onCategoriesFound: PropTypes.func,
 };

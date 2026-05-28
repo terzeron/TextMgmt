@@ -4,78 +4,82 @@ import DOMPurify from "dompurify";
 import { getApiUrlPrefix } from "./Common";
 import mammoth from "mammoth";
 
-export default function ViewDOC({ bookId, fileType, lineCount, apiPrefix = '' }) {
-    const [content, setContent] = useState("");
-    const [isLoading, setIsLoading] = useState(true);
-    const [errorMessage, setErrorMessage] = useState(null);
+export default function ViewDOC({
+  bookId,
+  fileType,
+  lineCount,
+  apiPrefix = "",
+}) {
+  const [content, setContent] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState(null);
 
-    useEffect(() => {
-        console.log(`ViewDOC: useEffect()`, bookId, fileType);
+  useEffect(() => {
+    console.log(`ViewDOC: useEffect()`, bookId, fileType);
 
-        if (!bookId) {
-            setErrorMessage("❌ 유효한 bookId가 제공되지 않았습니다.");
-            setIsLoading(false);
-            return;
-        }
+    if (!bookId) {
+      setErrorMessage("❌ 유효한 bookId가 제공되지 않았습니다.");
+      setIsLoading(false);
+      return;
+    }
 
-        if (fileType === 'doc' || fileType === 'hwp') {
-            // .doc/.hwp: 서버에서 HTML로 변환된 미리보기 사용
-            const previewUri = getApiUrlPrefix() + apiPrefix + "/preview/" + bookId;
-            fetch(previewUri, { credentials: "include" })
-                .then(response => response.text())
-                .then(html => {
-                    setContent(DOMPurify.sanitize(html));
-                    setIsLoading(false);
-                })
-                .catch(error => {
-                    console.error("Error loading DOC file:", error);
-                    setErrorMessage("❌ 문서를 불러오는 중 오류가 발생했습니다.");
-                    setIsLoading(false);
-                });
-        } else {
-            // .docx: mammoth 사용
-            const uri = getApiUrlPrefix() + apiPrefix + "/download/" + bookId;
-            fetch(uri, { credentials: "include" })
-                .then(response => response.arrayBuffer())
-                .then(buffer => mammoth.convertToHtml({ arrayBuffer: buffer }))
-                .then(result => {
-                    const paragraphs = result.value.split("</p>").slice(0, lineCount).join("</p>") + "</p>";
-                    setContent(DOMPurify.sanitize(paragraphs));
-                    setIsLoading(false);
-                })
-                .catch(error => {
-                    console.error("Error loading DOCX file:", error);
-                    setErrorMessage("❌ 문서를 불러오는 중 오류가 발생했습니다.");
-                    setIsLoading(false);
-                });
-        }
-    }, [bookId, fileType, lineCount]);
+    if (fileType === "doc" || fileType === "hwp") {
+      // .doc/.hwp: 서버에서 HTML로 변환된 미리보기 사용
+      const previewUri = getApiUrlPrefix() + apiPrefix + "/preview/" + bookId;
+      fetch(previewUri, { credentials: "include" })
+        .then((response) => response.text())
+        .then((html) => {
+          setContent(DOMPurify.sanitize(html));
+          setIsLoading(false);
+        })
+        .catch((error) => {
+          console.error("Error loading DOC file:", error);
+          setErrorMessage("❌ 문서를 불러오는 중 오류가 발생했습니다.");
+          setIsLoading(false);
+        });
+    } else {
+      // .docx: mammoth 사용
+      const uri = getApiUrlPrefix() + apiPrefix + "/download/" + bookId;
+      fetch(uri, { credentials: "include" })
+        .then((response) => response.arrayBuffer())
+        .then((buffer) => mammoth.convertToHtml({ arrayBuffer: buffer }))
+        .then((result) => {
+          const paragraphs =
+            result.value.split("</p>").slice(0, lineCount).join("</p>") +
+            "</p>";
+          setContent(DOMPurify.sanitize(paragraphs));
+          setIsLoading(false);
+        })
+        .catch((error) => {
+          console.error("Error loading DOCX file:", error);
+          setErrorMessage("❌ 문서를 불러오는 중 오류가 발생했습니다.");
+          setIsLoading(false);
+        });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix는 mount 시 고정이라 의도적으로 deps에서 제외
+  }, [bookId, fileType, lineCount]);
 
-    return (
-        <div className="doc-container">
-            {isLoading && (
-                <div className="loading-container">
-                    <div className="spinner"></div>
-                    <span className="blinking">로딩 중...</span>
-                </div>
-            )}
-            {errorMessage && (
-                <div className="error-message">
-                    {errorMessage}
-                </div>
-            )}
-            <div
-                className="doc-content"
-                dangerouslySetInnerHTML={{ __html: content }}
-                style={{ display: isLoading || errorMessage ? "none" : "block" }}
-            />
+  return (
+    <div className="doc-container">
+      {isLoading && (
+        <div className="loading-container">
+          <div className="spinner"></div>
+          <span className="blinking">로딩 중...</span>
         </div>
-    );
+      )}
+      {errorMessage && <div className="error-message">{errorMessage}</div>}
+      <div
+        className="doc-content"
+        dangerouslySetInnerHTML={{ __html: content }}
+        style={{ display: isLoading || errorMessage ? "none" : "block" }}
+      />
+    </div>
+  );
 }
 
 ViewDOC.propTypes = {
-    bookId: PropTypes.number.isRequired,
-    fileType: PropTypes.string,
-    lineCount: PropTypes.number,
-    apiPrefix: PropTypes.string,
+  bookId: PropTypes.number.isRequired,
+  fileType: PropTypes.string,
+  lineCount: PropTypes.number,
+  apiPrefix: PropTypes.string,
 };

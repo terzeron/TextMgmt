@@ -97,6 +97,7 @@ export default function ViewPDF({
         fetchingRef.current.delete(key);
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix/renderPage는 chunk fetch에 영향 없는 안정 참조라 의도적으로 제외
     [bookId],
   );
 
@@ -329,6 +330,7 @@ export default function ViewPDF({
       fetchingRef.current.clear();
       pendingPagesRef.current.clear();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix는 mount 시 고정이라 의도적으로 deps에서 제외
   }, [bookId, pageCount, preview, renderPage, fetchChunk]);
 
   // 캔버스 ref 설정 함수

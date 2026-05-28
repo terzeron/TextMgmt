@@ -11,13 +11,13 @@ import { Card } from "react-bootstrap";
 import Box from "@mui/material/Box";
 import Collapse from "@mui/material/Collapse";
 import Typography from "@mui/material/Typography";
-import ArticleIcon from "@mui/icons-material/esm/Article";
-import DeleteIcon from "@mui/icons-material/esm/Delete";
-import FolderOpenIcon from "@mui/icons-material/esm/FolderOpen";
-import FolderRounded from "@mui/icons-material/esm/FolderRounded";
-import ImageIcon from "@mui/icons-material/esm/Image";
-import PictureAsPdfIcon from "@mui/icons-material/esm/PictureAsPdf";
-import VideoCameraBackIcon from "@mui/icons-material/esm/VideoCameraBack";
+import ArticleIcon from "@mui/icons-material/Article";
+import DeleteIcon from "@mui/icons-material/Delete";
+import FolderOpenIcon from "@mui/icons-material/FolderOpen";
+import FolderRounded from "@mui/icons-material/FolderRounded";
+import ImageIcon from "@mui/icons-material/Image";
+import PictureAsPdfIcon from "@mui/icons-material/PictureAsPdf";
+import VideoCameraBackIcon from "@mui/icons-material/VideoCameraBack";
 import { RichTreeView } from "@mui/x-tree-view/RichTreeView";
 import { treeItemClasses } from "@mui/x-tree-view/TreeItem";
 import { unstable_useTreeItem2 as useTreeItem2 } from "@mui/x-tree-view/useTreeItem2";
@@ -145,7 +145,7 @@ MemoizedIcon.propTypes = {
   color: PropTypes.string,
 };
 
-// eslint-disable-next-line react/prop-types
+ 
 function CustomLabel({
   icon: Icon,
   iconColor,

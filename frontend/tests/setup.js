@@ -3,7 +3,7 @@ import { beforeAll, afterAll, vi } from "vitest";
 // pdfjs-dist v5가 모듈 로드 시 DOMMatrix를 참조하는데 jsdom에 없음
 if (typeof globalThis.DOMMatrix === "undefined") {
   globalThis.DOMMatrix = class DOMMatrix {
-    constructor(init) {
+    constructor(_init) {
       this.a = 1;
       this.b = 0;
       this.c = 0;
@@ -32,13 +32,13 @@ if (typeof globalThis.DOMMatrix === "undefined") {
     multiply() {
       return new DOMMatrix();
     }
-    translate(tx = 0, ty = 0) {
+    translate(_tx = 0, _ty = 0) {
       return new DOMMatrix();
     }
-    scale(sx = 1, sy = sx) {
+    scale(sx = 1, _sy = sx) {
       return new DOMMatrix();
     }
-    rotate(angle = 0) {
+    rotate(_angle = 0) {
       return new DOMMatrix();
     }
     inverse() {
@@ -56,13 +56,13 @@ if (typeof globalThis.DOMMatrix === "undefined") {
     toString() {
       return "matrix(1, 0, 0, 1, 0, 0)";
     }
-    static fromMatrix(m) {
+    static fromMatrix(_m) {
       return new DOMMatrix();
     }
-    static fromFloat32Array(a) {
+    static fromFloat32Array(_a) {
       return new DOMMatrix();
     }
-    static fromFloat64Array(a) {
+    static fromFloat64Array(_a) {
       return new DOMMatrix();
     }
   };

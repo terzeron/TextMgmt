@@ -511,7 +511,7 @@ describe("@mui/material", () => {
 
 // ===========================================================================
 // 19. @mui/icons-material — Folder.jsx, CategoryAdmin.jsx
-//     `import X from "@mui/icons-material/esm/X"` (ESM 직접 경로)
+//     `import X from "@mui/icons-material/X"` (v7: /esm/ deep import 제거됨)
 // ===========================================================================
 describe("@mui/icons-material", () => {
   const used = [
@@ -524,13 +524,10 @@ describe("@mui/icons-material", () => {
     "VideoCameraBack",
   ];
 
-  it("`/esm/<Name>` 경로로 default import 가 가능하다", async () => {
+  it("`<Name>` 경로로 default import 가 가능하다", async () => {
     for (const name of used) {
-      const mod = await import(`@mui/icons-material/esm/${name}`);
-      expect(
-        mod.default,
-        `missing default export at esm/${name}`,
-      ).toBeDefined();
+      const mod = await import(`@mui/icons-material/${name}`);
+      expect(mod.default, `missing default export at ${name}`).toBeDefined();
     }
   }, 30000);
 });

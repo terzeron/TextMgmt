@@ -8,8 +8,8 @@ import {
   cleanup,
 } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+/* eslint-disable react/prop-types -- 테스트 mock 컴포넌트는 throwaway라 PropTypes 검증 불필요 */
 import Navigation from "../src/Navigation";
-import React from "react";
 import * as Common from "../src/Common";
 
 // Mock @react-oauth/google

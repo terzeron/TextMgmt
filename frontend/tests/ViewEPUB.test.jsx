@@ -15,7 +15,13 @@ afterEach(cleanup);
 let autoLoad = true;
 let capturedGetRendition = null;
 const mockReactReader = vi.fn(
-  ({ url, locationChanged, getRendition, title, epubOptions }) => {
+  ({
+    url,
+    locationChanged,
+    getRendition,
+    title,
+    epubOptions: _epubOptions,
+  }) => {
     if (getRendition && url) {
       capturedGetRendition = getRendition;
     }
@@ -42,7 +48,7 @@ vi.mock("../src/ViewEPUB.css", () => ({}));
 
 // fetch mock: ArrayBuffer 반환
 const mockArrayBuffer = new ArrayBuffer(8);
-const mockArrayBuffer2 = new ArrayBuffer(16);
+const _mockArrayBuffer2 = new ArrayBuffer(16);
 
 function createFetchResponse(buf = mockArrayBuffer) {
   return {
@@ -1529,7 +1535,7 @@ describe("ViewEPUB", () => {
 
     const rendition = createMockRendition();
     let callCount = 0;
-    const origDisplayFn = rendition.display;
+    const _origDisplayFn = rendition.display;
     rendition.display = vi.fn((target) => {
       callCount++;
       if (callCount === 1 && target) {

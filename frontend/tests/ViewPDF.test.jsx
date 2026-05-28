@@ -88,7 +88,7 @@ function createMockFetch(totalPages, options = {}) {
 
 // pdfjs.getDocument mock 헬퍼: {data: ArrayBuffer}를 받아 pdfDoc 반환
 function setupGetDocument(mockPdfFactory) {
-  mockGetDocument.mockImplementation(({ data }) => {
+  mockGetDocument.mockImplementation(({ data: _data }) => {
     const pdfDoc =
       typeof mockPdfFactory === "function" ? mockPdfFactory() : mockPdfFactory;
     return { promise: Promise.resolve(pdfDoc) };
@@ -347,7 +347,7 @@ describe("ViewPDF", () => {
     // 첫 번째 bookId → fetch 영원히 pending
     // 두 번째 bookId → fetch 성공
     let callNum = 0;
-    globalThis.fetch = vi.fn((url) => {
+    globalThis.fetch = vi.fn((_url) => {
       callNum++;
       if (callNum === 1) {
         // 첫 번째 요청: 영원히 pending (이후 cancelled)
@@ -602,7 +602,7 @@ describe("ViewPDF", () => {
     let pageCallCount = 0;
     const mockPdf = {
       numPages: 1,
-      getPage: vi.fn((localPageNum) => {
+      getPage: vi.fn((_localPageNum) => {
         pageCallCount++;
         // 두 번째 호출(2페이지 청크의 첫 페이지)에서 실패
         if (pageCallCount === 2) {
