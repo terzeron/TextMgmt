@@ -31,6 +31,7 @@ spec:
         - name: tm-backend
           image: registry.terzeron.com/terzeron/tm_backend:latest
           securityContext:
+            runAsNonRoot: true
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
@@ -98,6 +99,8 @@ spec:
               mountPath: /books
             - name: comics-pvc
               mountPath: /comics
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: books-pvc
           persistentVolumeClaim:
@@ -105,6 +108,8 @@ spec:
         - name: comics-pvc
           persistentVolumeClaim:
             claimName: comics-pvc
+        - name: tmp
+          emptyDir: {}
 
 ---
 apiVersion: apps/v1
