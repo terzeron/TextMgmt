@@ -54,3 +54,15 @@ def test_main_fails_when_delete_fails(monkeypatch):
 
     assert update_mod.main() == -1
     assert es.deleted == [3384]
+
+
+def test_module_executed_as_main(monkeypatch):
+    """if __name__ == '__main__' 가드 실행 (update.py:29)."""
+    import runpy
+    import pytest
+    import backend.es_manager
+
+    monkeypatch.setattr(backend.es_manager, "ESManager", DummyESManager)
+    with pytest.raises(SystemExit) as exc_info:
+        runpy.run_module("utils.update", run_name="__main__")
+    assert exc_info.value.code == 0

@@ -16,10 +16,14 @@ eck-elasticsearch:
         spec:
           initContainers:
             - name: install-plugins
-              command: ["sh","-c","bin/elasticsearch-plugin list | grep -q '^analysis-nori$' || bin/elasticsearch-plugin install --batch analysis-nori"]
+              command:
+                [
+                  "sh",
+                  "-c",
+                  "bin/elasticsearch-plugin list | grep -q '^analysis-nori$' || bin/elasticsearch-plugin install --batch analysis-nori",
+                ]
           containers:
             - name: elasticsearch
               resources:
-                requests: { cpu: "200m", memory: "2Gi" }
-                limits:   { cpu: "1",   memory: "2Gi" }
-
+                requests: { cpu: "500m", memory: "4Gi" }
+                limits: { cpu: "2", memory: "4Gi" }
