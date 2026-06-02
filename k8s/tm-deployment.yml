@@ -125,8 +125,13 @@ spec:
       containers:
         - name: tm-frontend
           image: registry.terzeron.com/terzeron/tm_frontend:latest
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
-            - containerPort: 80
+            - containerPort: 8080
 
 ---
 apiVersion: v1
@@ -155,5 +160,5 @@ spec:
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 80
+      targetPort: 8080
   type: NodePort
