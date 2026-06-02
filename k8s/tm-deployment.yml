@@ -17,6 +17,10 @@ spec:
       initContainers:
         - name: wait-for-es
           image: busybox:1.37
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command:
             [
               "sh",
@@ -26,6 +30,10 @@ spec:
       containers:
         - name: tm-backend
           image: registry.terzeron.com/terzeron/tm_backend:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 8020
           env:
@@ -117,8 +125,13 @@ spec:
       containers:
         - name: tm-frontend
           image: registry.terzeron.com/terzeron/tm_frontend:latest
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
-            - containerPort: 80
+            - containerPort: 8080
 
 ---
 apiVersion: v1
@@ -147,5 +160,5 @@ spec:
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 80
+      targetPort: 8080
   type: NodePort
