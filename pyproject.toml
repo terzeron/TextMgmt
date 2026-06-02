@@ -32,8 +32,8 @@ dev = [
     # 직접 import
     "konlpy==0.6.0",
     "modulegraph==0.19.6",
-    "pytest==7.0.1",
-    "pytest-asyncio==0.23.6",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.0",
     "testcontainers>=4.14.1",
     # pytest 플러그인
     "pytest-json-report==1.5.0",
