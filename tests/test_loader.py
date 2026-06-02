@@ -2746,3 +2746,218 @@ class TestReadFileComicsPdf:
         assert len(data) == 1
         item = next(iter(data.values()))
         assert item["page_count"] == 0
+
+
+# ---- coverage: _fast_pdf_page_count 미커버 분기 ----
+
+
+class TestFastPdfPageCountBranches:
+    def test_xref_stream_parse_none_breaks_and_returns_none(self, tmp_path: Path, monkeypatch):
+        """parse None → break(603), 이후 lookup 없어 root_data None → return None(645)."""
+        Loader = _get_loader()
+        pdf = tmp_path / "parse-none.pdf"
+        data = bytearray(b" " * 256)
+        data[20 : 20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        trailer = b"startxref\n20\n%%EOF"
+        data[-len(trailer) :] = trailer
+        pdf.write_bytes(bytes(data))
+
+        monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_a: None))
+        assert Loader._fast_pdf_page_count(pdf) is None
+
+    def test_xref_stream_parse_raises_is_swallowed(self, tmp_path: Path, monkeypatch):
+        """parse 중 예외 발생 → except로 흡수 후 None(658-660)."""
+        Loader = _get_loader()
+        pdf = tmp_path / "parse-raise.pdf"
+        data = bytearray(b" " * 256)
+        data[20 : 20 + len(b"<< /Type /XRef /Root 1 0 R >>")] = b"<< /Type /XRef /Root 1 0 R >>"
+        trailer = b"startxref\n20\n%%EOF"
+        data[-len(trailer) :] = trailer
+        pdf.write_bytes(bytes(data))
+
+        def _boom(*_a):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(_boom))
+        assert Loader._fast_pdf_page_count(pdf) is None
+
+    def test_mixed_traditional_and_stream_lookups_type2(self, tmp_path: Path, monkeypatch):
+        """traditional + stream lookup 혼재 시 type-2 조회 루프에서 비-stream은 continue(634)."""
+        Loader = _get_loader()
+        pdf = tmp_path / "mixed.pdf"
+        data = bytearray(b" " * 400)
+        # offset 20: traditional xref (root=1, prev=200)
+        xref_block = b"xref\n0 1\n/Root 1 0 R\n/Prev 200\n"
+        data[20 : 20 + len(xref_block)] = xref_block
+        # offset 200: xref stream (non-xref header)
+        data[200 : 200 + len(b"<< /Type /XRef >>")] = b"<< /Type /XRef >>"
+        # offset 100: root object → /Pages 2 0 R
+        data[100 : 100 + len(b"<< /Pages 2 0 R >>")] = b"<< /Pages 2 0 R >>"
+        trailer = b"startxref\n20\n%%EOF"
+        data[-len(trailer) :] = trailer
+        pdf.write_bytes(bytes(data))
+
+        # traditional lookup: obj 1만 offset 100, 나머지는 None
+        monkeypatch.setattr(Loader, "_find_xref_offset", staticmethod(lambda _xd, obj: 100 if obj == 1 else None))
+        # 단일 stream xref (prev 없음)
+        monkeypatch.setattr(Loader, "_parse_one_xref_stream", staticmethod(lambda *_a: (b"d", [1, 2, 1], [0, 3], None)))
+
+        def fake_find_entry(_d, _w, _ir, obj_num):
+            if obj_num == 2:
+                return (2, 9, 0)  # type 2 → object stream(컨테이너 obj 9)
+            if obj_num == 9:
+                return (1, 300, 0)  # type 1 → 파일 offset 300
+            return None
+
+        monkeypatch.setattr(Loader, "_xref_stream_find_entry", staticmethod(fake_find_entry))
+        monkeypatch.setattr(Loader, "_read_from_obj_stream", staticmethod(lambda *_a: b"<< /Count 4 >>"))
+        assert Loader._fast_pdf_page_count(pdf) == 4
+
+
+# ---- coverage: main() 미커버 분기 ----
+
+
+def _setup_loader_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("TM_ES_BOOK_INDEX", "test_books")
+    monkeypatch.setenv("TM_ES_COMICS_INDEX", "test_comics")
+    Loader = _get_loader()
+    monkeypatch.setattr(Loader, "path_prefix", tmp_path)
+    monkeypatch.setattr(Loader, "comics_path_prefix", tmp_path / "comics")
+    return Loader
+
+
+class TestLoaderMainBranches:
+    def test_ping_raises_exits(self, monkeypatch, tmp_path):
+        """es.ping()가 예외 → except에서 sys.exit(-1) (881-882)."""
+        import pytest
+
+        _setup_loader_env(monkeypatch, tmp_path)
+        monkeypatch.setattr("sys.argv", ["loader", "book", str(tmp_path)])
+        from utils.loader import main
+
+        mock_es = MagicMock()
+        mock_es.es.ping.side_effect = RuntimeError("connection refused")
+        monkeypatch.setattr("utils.loader.ESManager", lambda index_name: mock_es)
+
+        with pytest.raises(SystemExit):
+            main()
+
+    def test_single_file_stat_oserror(self, monkeypatch, tmp_path):
+        """get_stat가 OSError → continue(917-918), 적재 실패 메시지(994)."""
+        Loader = _setup_loader_env(monkeypatch, tmp_path)
+        f = tmp_path / "[author] title.txt"
+        f.write_text("hello")
+        monkeypatch.setattr("sys.argv", ["loader", "book", str(f)])
+
+        def _raise(_p):
+            raise OSError("stat failed")
+
+        monkeypatch.setattr(Loader, "get_stat", staticmethod(_raise))
+        from utils.loader import main
+
+        mock_es = MagicMock()
+        mock_es.es.ping.return_value = True
+        monkeypatch.setattr("utils.loader.ESManager", lambda index_name: mock_es)
+
+        result = main()
+        assert result == 0
+
+    def test_recursive_path_change_and_dedup(self, monkeypatch, tmp_path, capsys):
+        """경로 변경 감지(932-939), 중복 제거(961), 동기화 메시지(1004)."""
+        _setup_loader_env(monkeypatch, tmp_path)
+        f = tmp_path / "[author] book.txt"
+        f.write_text("content")
+        monkeypatch.setattr("sys.argv", ["loader", "--recursive", "book", str(tmp_path)])
+        from utils.loader import main
+
+        mock_es = MagicMock()
+        mock_es.es.ping.return_value = True
+        # 모든 inode를 '경로 변경됨'으로 표시 + batch에 없는 유령 inode(933 continue 경로)
+        mock_es.get_existing_paths.side_effect = lambda inodes: {**{ino: "OLD/old.txt" for ino in inodes}, -1: "phantom/ghost.txt"}
+        mock_es.delete_by_file_paths.return_value = 1  # cleaned>0 → 961
+        mock_es.insert.return_value = []
+        monkeypatch.setattr("utils.loader.ESManager", lambda index_name: mock_es)
+
+        result = main()
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "경로 변경 감지" in out
+        assert "경로 동기화" in out
+
+    def test_recursive_skipped(self, monkeypatch, tmp_path, capsys):
+        """변경 없는 기존 파일은 skip → 건너뜀 메시지(1002)."""
+        _setup_loader_env(monkeypatch, tmp_path)
+        f = tmp_path / "[author] book.txt"
+        f.write_text("content")
+        ino = f.stat().st_ino
+        rel = str(f.relative_to(tmp_path))
+        monkeypatch.setattr("sys.argv", ["loader", "--recursive", "book", str(tmp_path)])
+        from utils.loader import main
+
+        mock_es = MagicMock()
+        mock_es.es.ping.return_value = True
+        mock_es.get_existing_paths.return_value = {ino: rel}  # 동일 경로 → skip
+        monkeypatch.setattr("utils.loader.ESManager", lambda index_name: mock_es)
+
+        result = main()
+        assert result == 0
+        assert "중복 파일 건너뜀" in capsys.readouterr().out
+
+    def test_directory_two_stage_empty_subdir_and_sync(self, monkeypatch, tmp_path, capsys):
+        """비재귀 2단계: 빈 하위디렉토리(1018), 샘플 동기화(1030), 2단계 skip(1038)/sync(1040)."""
+        _setup_loader_env(monkeypatch, tmp_path)
+        s1 = tmp_path / "s1"
+        s1.mkdir()
+        f_s1 = s1 / "[author] sample.txt"
+        f_s1.write_text("sample")
+        (tmp_path / "s2").mkdir()  # 빈 하위 디렉토리 → 1018
+        f_r1 = tmp_path / "[author] root1.txt"
+        f_r1.write_text("root1")
+        f_r2 = tmp_path / "[author] root2.txt"
+        f_r2.write_text("root2")
+
+        ino_r1 = f_r1.stat().st_ino
+        rel_r1 = str(f_r1.relative_to(tmp_path))
+
+        monkeypatch.setattr("sys.argv", ["loader", "book", str(tmp_path)])
+        from utils.loader import main
+
+        def get_existing(inodes):
+            res = {}
+            for ino in inodes:
+                if ino == ino_r1:
+                    res[ino] = rel_r1  # 변경 없음 → skip(1038)
+                else:
+                    res[ino] = "OLD/changed.txt"  # 변경됨 → sync(1030/1040)
+            return res
+
+        mock_es = MagicMock()
+        mock_es.es.ping.return_value = True
+        mock_es.get_existing_paths.side_effect = get_existing
+        mock_es.delete_by_file_paths.return_value = 0
+        mock_es.insert.return_value = []
+        monkeypatch.setattr("utils.loader.ESManager", lambda index_name: mock_es)
+
+        result = main()
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "(파일 없음)" in out
+        assert "경로 동기화" in out
+        assert "중복 파일 건너뜀" in out
+
+
+def test_loader_module_executed_as_main(monkeypatch):
+    """if __name__ == '__main__' 가드 실행 (loader.py:1055).
+
+    인자 없이 실행 → main()이 print_usage()로 SystemExit(0).
+    ES 접속 없이 인자 검증 단계에서 종료된다.
+    """
+    import runpy
+    import pytest
+
+    monkeypatch.setenv("TM_ES_BOOK_INDEX", "test_books")
+    monkeypatch.setenv("TM_ES_COMICS_INDEX", "test_comics")
+    monkeypatch.setattr(sys, "argv", ["loader.py"])
+    with pytest.raises(SystemExit) as exc_info:
+        runpy.run_module("utils.loader", run_name="__main__")
+    assert exc_info.value.code == 0

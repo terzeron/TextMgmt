@@ -677,6 +677,66 @@ class TestHncToUnicodeHangulSpecial:
         result = _hnc_to_unicode(c)
         assert isinstance(result, str) and len(result) >= 1
 
+
+# ─── V2.00 레코드 구분자(8자) 필터링 / 헤더 디코드 실패 ──────────────────────
+
+
+def _reverse_hnc_map():
+    """unicode 문자 → HNC code 역매핑 (0x80~0xFFFF 범위)."""
+    rev: dict[str, int] = {}
+    for c in range(0x80, 0x10000):
+        ch = _hnc_to_unicode(c)
+        if ch and ch not in rev:
+            rev[ch] = c
+    return rev
+
+
+class TestExtractBruteforceSeparator:
+    # NOTE: hwp3_parser.py:318-319 (정확히 일치하는 구분자 set 검사)은 도달 불가능한
+    # dead code다. set 의 모든 패턴이 7자 이하인데, 그 앞 라인 313(len<8 continue)이
+    # 먼저 걸러내므로 318의 검사에는 길이 8 이상인 문자열만 도달한다.
+    # 따라서 set 일치(319 continue)는 실행될 수 없고, 실제 필터링은 313 또는
+    # 320(부분일치 "豼豼" 검사)에서 일어난다. 아래 테스트는 그 실제 동작을 검증한다.
+    def test_short_separator_filtered_by_length(self):
+        """7자 구분자 'Ǵ塴豼豼Āāā'는 길이 필터(313)에서 제거된다."""
+        separator = "Ǵ塴豼豼Āāā"
+        assert len(separator) == 7  # < 8 → 라인 313에서 continue
+        rev = _reverse_hnc_map()
+        codes = [rev[ch] for ch in separator]
+        body = struct.pack("<" + "H" * len(codes), *codes)
+        assert _extract_text_bruteforce(body) == ""
+
+
+class TestExtractTextHeaderDecodeFailure:
+    def test_header_decode_exception_returns_empty(self):
+        """헤더 디코드 중 예외 발생 시 빈 문자열 반환 (hwp3_parser.py:349-350)."""
+
+        class _RaisingHeader(bytes):
+            def decode(self, *args, **kwargs):
+                raise ValueError("decode boom")
+
+        class _FakeData:
+            """시그니처는 통과시키되 data[:30].decode()에서만 예외를 던지는 가짜 바이트열."""
+
+            def __init__(self, raw: bytes):
+                self._raw = raw
+
+            def __len__(self):
+                return len(self._raw)
+
+            def __getitem__(self, key):
+                value = self._raw[key]
+                if key == slice(None, 30, None):
+                    return _RaisingHeader(value)
+                return value
+
+        class _FakePath:
+            def read_bytes(self):
+                # "HWP Document File" 시그니처(17B) + 패딩으로 30B 이상 확보
+                return _FakeData(b"HWP Document File" + b"\x00" * 64)
+
+        assert extract_text_from_hwp3(_FakePath()) == ""  # type: ignore[arg-type]
+
     def test_old_hangul_fallback_jung0(self):
         # 완성형 옛한글 fallback: jung==0 이면서 앞 조건 미충족
         # cho=2(L_MAP=0,L1=0x3131), jung=0(V_MAP=NONE,V1=NONE), jong=0(T_MAP=NONE,T1=0x316d)

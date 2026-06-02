@@ -636,6 +636,19 @@ def test_is_local_frontend_origin_remote_returns_false():
     assert main_module._is_local_frontend_origin("https://remote.example.com") is False
 
 
+def test_is_local_frontend_origin_localhost_returns_true():
+    """localhost 계열은 True (main.py:154-156)."""
+    assert main_module._is_local_frontend_origin("http://localhost:5173") is True
+    assert main_module._is_local_frontend_origin("http://127.0.0.1:8080") is True
+    assert main_module._is_local_frontend_origin("http://[::1]:3000") is True
+
+
+def test_is_local_frontend_origin_empty_returns_false():
+    """빈 값/None 은 False (main.py:152-153)."""
+    assert main_module._is_local_frontend_origin(None) is False
+    assert main_module._is_local_frontend_origin("") is False
+
+
 def test_is_request_from_frontend_host_no_env_returns_false(monkeypatch):
     """TM_FRONTEND_URL 미설정 시 False (main.py:157)."""
     from starlette.requests import Request

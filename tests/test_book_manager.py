@@ -3345,6 +3345,23 @@ class TestGetHtmlResource:
         resp = asyncio_runner(manager.get_html_resource(1, "nonexistent.jpg"))
         assert resp.status_code == 404
 
+    def test_is_relative_to_oserror_returns_400(self, tmp_path: Path, monkeypatch):
+        """is_relative_to 가 OSError 를 던지면 400 (lines 873-874)."""
+        html_file = tmp_path / "A" / "book.html"
+        html_file.parent.mkdir(parents=True)
+        html_file.write_text("<html/>")
+        (html_file.parent / "image.jpg").touch()
+
+        def _raise(self, other):
+            raise OSError("path too long")
+
+        monkeypatch.setattr(Path, "is_relative_to", _raise)
+
+        doc = make_doc("A/book.html", "html")
+        manager = make_manager(tmp_path, DummyES(doc=doc))
+        resp = asyncio_runner(manager.get_html_resource(1, "image.jpg"))
+        assert resp.status_code == 400
+
 
 # ── update_book: 책이 없을 때 Error 반환 (line 978) ─────────────────────────
 

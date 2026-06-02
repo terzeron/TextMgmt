@@ -76,3 +76,16 @@ def test_main_with_only_title_uses_default_ext_and_size(monkeypatch):
     assert search_mod.main() == 0
     assert es.title_calls == [("hello", "", 0)]
     assert es.similar_calls == []
+
+
+def test_module_executed_as_main(monkeypatch):
+    """if __name__ == '__main__' 가드 실행 (search.py:54).
+
+    인자 없이 실행 → main()이 print_usage()로 SystemExit(0).
+    """
+    import runpy
+
+    monkeypatch.setattr(sys, "argv", ["search.py"])
+    with pytest.raises(SystemExit) as exc_info:
+        runpy.run_module("utils.search", run_name="__main__")
+    assert exc_info.value.code == 0
