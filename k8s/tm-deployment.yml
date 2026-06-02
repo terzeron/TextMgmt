@@ -17,6 +17,10 @@ spec:
       initContainers:
         - name: wait-for-es
           image: busybox:1.37
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command:
             [
               "sh",
@@ -26,6 +30,10 @@ spec:
       containers:
         - name: tm-backend
           image: registry.terzeron.com/terzeron/tm_backend:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 8020
           env:
