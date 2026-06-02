@@ -10,7 +10,11 @@ COPY frontend/ .
 RUN npm run build
 
 
-FROM nginxinc/nginx-unprivileged:1.25
+FROM nginxinc/nginx-unprivileged:1.28
+
+USER root
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+USER 101
 
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY frontend/default.conf /etc/nginx/conf.d

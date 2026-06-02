@@ -2,6 +2,7 @@ FROM python:3.13-slim
 
 # root
 RUN apt-get update && \
+    apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
     build-essential \
     libpoppler-dev libpoppler-cpp-dev libheif-dev libcairo2-dev \
