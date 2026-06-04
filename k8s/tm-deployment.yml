@@ -25,13 +25,16 @@ spec:
             [
               "sh",
               "-c",
-              'until wget --spider http://elasticsearch-es-http:9200 2>&1 | grep -q "HTTP/"; do echo "waiting for elasticsearch..."; sleep 5; done',
+              'until nc -z elasticsearch-es-http 9200; do echo "waiting for elasticsearch..."; sleep 5; done',
             ]
       containers:
         - name: tm-backend
           image: registry.terzeron.com/terzeron/tm_backend:latest
           securityContext:
             runAsNonRoot: true
+            # 이미지의 USER가 비숫자(terzeron)라 runAsNonRoot 검증을 위해 UID 명시 (Dockerfile USER_ID=1000)
+            runAsUser: 1000
+            runAsGroup: 1000
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
@@ -47,7 +50,7 @@ spec:
             - name: TM_BACKEND_PORT
               value: "8020"
             - name: TM_ES_URL
-              value: http://elasticsearch-es-http:9200
+              value: https://elasticsearch-es-http:9200
             - name: TM_ES_USER
               valueFrom: { secretKeyRef: { name: tm-es-cred, key: username } }
             - name: TM_ES_PASSWORD
