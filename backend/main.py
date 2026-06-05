@@ -217,6 +217,9 @@ class _LazyProxy:
             return
         setattr(self._get_instance(), key, value)
 
+    def __delattr__(self, item) -> None:
+        delattr(self._get_instance(), item)
+
     def __repr__(self) -> str:
         return repr(self._get_instance())
 
@@ -241,7 +244,7 @@ book_manager = _LazyProxy(_create_book_manager, "book manager")
 comics_manager = _LazyProxy(_create_comics_manager, "comics manager")
 bookstore = _LazyProxy(_create_bookstore, "bookstore")
 category_mapping = _LazyProxy(_create_category_mapping, "category mapping")
-refresh_token_store = create_refresh_token_store()
+refresh_token_store = _LazyProxy(create_refresh_token_store, "refresh token store")
 
 
 def _issue_auth_tokens(email: str, role: str, name: str = "", picture: str = "", family_id: str | None = None) -> tuple[str, str]:
