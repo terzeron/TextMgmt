@@ -3,10 +3,7 @@ eck-elasticsearch:
   enabled: true
   fullnameOverride: elasticsearch
   version: 9.1.0
-  http:
-    tls:
-      selfSignedCertificate:
-        disabled: true
+  # http.tls 기본값(자체서명 인증서로 TLS 활성) 사용. 전송 구간 평문 전송 방지.
   nodeSets:
     - name: default
       count: 1

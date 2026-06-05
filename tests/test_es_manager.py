@@ -1070,3 +1070,45 @@ def test_search_scroll_early_return_at_max_result_count():
     assert len(result) == max_rc
     # finally 블록에서 clear_scroll 호출 확인
     es.clear_scroll.assert_called_once_with(scroll_id="scroll1")
+
+
+# --- C4: ES 연결 TLS 처리 ---
+
+
+def test_https_url_enables_tls_without_cert_verification(monkeypatch):
+    """https URL 이면 verify_certs=False 로 TLS 암호화 연결을 구성해야 한다."""
+    monkeypatch.setenv("TM_ES_URL", "https://elasticsearch-es-http:9200")
+    captured: dict = {}
+
+    class FakeES:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def info(self):
+            return {}
+
+    monkeypatch.setattr("backend.es_manager.Elasticsearch", FakeES)
+    ESManager()
+
+    assert captured["hosts"] == ["https://elasticsearch-es-http:9200"]
+    assert captured.get("verify_certs") is False
+    assert captured.get("ssl_show_warn") is False
+
+
+def test_http_url_does_not_set_ssl_kwargs(monkeypatch):
+    """http URL 이면 ssl 관련 kwargs 를 넣지 않는다 (기존 동작 유지)."""
+    monkeypatch.setenv("TM_ES_URL", "http://localhost:9200")
+    captured: dict = {}
+
+    class FakeES:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def info(self):
+            return {}
+
+    monkeypatch.setattr("backend.es_manager.Elasticsearch", FakeES)
+    ESManager()
+
+    assert "verify_certs" not in captured
+    assert "ssl_show_warn" not in captured

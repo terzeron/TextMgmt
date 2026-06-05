@@ -62,19 +62,21 @@ ELASTIC_PASSWORD=$(kubectl get secret elasticsearch-es-elastic-user -n "$NS" -o 
 echo "  ES API 응답 대기 중..."
 es_curl "elastic:$ELASTIC_PASSWORD" "$TM_ES_URL/_cluster/health?pretty"
 
-# 역할 생성
+# 역할 생성 (최소 권한: superuser 대신 book/comics 인덱스 한정)
+#   - cluster: monitor (es.info() 연결 확인용. manage_index_templates는 앱 미사용이라 제거)
+#   - indices: manage(인덱스 생성/삭제/put_mapping/refresh) + read + write 만 부여
 echo "  tm_role 생성 중..."
 es_curl "elastic:$ELASTIC_PASSWORD" \
   -X PUT "$TM_ES_URL/_security/role/tm_role" \
   -H 'Content-Type: application/json' \
-  -d '{ "cluster": ["monitor", "manage_index_templates"], "indices": [{"names": ["tm", "tm-*"], "privileges": ["all"]}] }'
+  -d "{\"cluster\":[\"monitor\"],\"indices\":[{\"names\":[\"${TM_ES_BOOK_INDEX:-book}\",\"${TM_ES_COMICS_INDEX:-comics}\"],\"privileges\":[\"manage\",\"read\",\"write\"]}]}"
 
 # appuser 생성/업데이트
 echo "  appuser 생성 중..."
 es_curl "elastic:$ELASTIC_PASSWORD" \
   -X PUT "$TM_ES_URL/_security/user/appuser" \
   -H 'Content-Type: application/json' \
-  -d "{\"password\":\"$TM_ES_PASSWORD\",\"roles\":[\"superuser\"]}"
+  -d "{\"password\":\"$TM_ES_PASSWORD\",\"roles\":[\"tm_role\"]}"
 
 # appuser로 접속 테스트
 echo ""

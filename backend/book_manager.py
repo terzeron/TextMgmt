@@ -25,6 +25,17 @@ logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 
+# 카테고리 단위 ES 조회 상한. ES max_result_window(기본 10000)와 일치시켜
+# scroll 미사용 경로를 유지하고 요청당 메모리 사용을 제한한다 (CWE-770).
+MAX_CATEGORY_RESULT_COUNT = 10000
+
+
+def _safe_xml_parser(recover: bool = False) -> Any:
+    """XXE 방지용 lxml 파서: 외부 엔티티/DTD/네트워크 접근을 모두 비활성화한다 (CWE-611)."""
+    from lxml import etree  # type: ignore[attr-defined]
+
+    return etree.XMLParser(recover=recover, resolve_entities=False, no_network=True, load_dtd=False)
+
 
 class BookManager:
     ROOT_DIRECTORY = "$$rootdir$$"
@@ -148,7 +159,7 @@ class BookManager:
                 except KeyError:
                     return False, f"OPF file missing in archive: {opf_path}"
                 try:
-                    opf = etree.fromstring(opf_bytes, etree.XMLParser(recover=True))
+                    opf = etree.fromstring(opf_bytes, _safe_xml_parser(recover=True))
                 except Exception as e:
                     return False, f"OPF parse error: {e}"
 
@@ -274,7 +285,7 @@ class BookManager:
         try:
             container_xml = zin.read("META-INF/container.xml")
             try:
-                container = etree.fromstring(container_xml, etree.XMLParser(recover=True))
+                container = etree.fromstring(container_xml, _safe_xml_parser(recover=True))
                 rootfile = container.find(f".//{{{cnt_ns}}}rootfile")
                 if rootfile is not None:
                     opf_path = rootfile.get("full-path", "")
@@ -308,7 +319,7 @@ class BookManager:
                 if not opf_path:
                     return 0
                 opf_ns = "http://www.idpf.org/2007/opf"
-                opf = etree.fromstring(zin.read(opf_path), etree.XMLParser(recover=True))
+                opf = etree.fromstring(zin.read(opf_path), _safe_xml_parser(recover=True))
                 spine_el = opf.find(f".//{{{opf_ns}}}spine")
                 if spine_el is None:
                     return 0
@@ -357,7 +368,9 @@ class BookManager:
         return categories, None
 
     async def get_books_in_category(self, category: str) -> tuple[list[Book], str | None]:
-        doc_list = self.es_manager.search_by_category(category, max_result_count=sys.maxsize)
+        doc_list = self.es_manager.search_by_category(category, max_result_count=MAX_CATEGORY_RESULT_COUNT)
+        if len(doc_list) >= MAX_CATEGORY_RESULT_COUNT:
+            LOGGER.warning("get_books_in_category: category '%s' 결과가 상한(%d)에 도달하여 잘렸습니다.", category, MAX_CATEGORY_RESULT_COUNT)
         if doc_list and len(doc_list) > 0:
             return [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in doc_list], None
         return [], f"No books found in '{category}'"
@@ -598,7 +611,7 @@ class BookManager:
                     if "opf:" in opf_text and "xmlns:opf=" not in opf_text:
                         opf_text = opf_text.replace("<package ", f'<package xmlns:opf="{opf_ns}" ', 1)
                         opf_bytes = opf_text.encode("utf-8")
-                    opf = etree.fromstring(opf_bytes, etree.XMLParser(recover=True))
+                    opf = etree.fromstring(opf_bytes, _safe_xml_parser(recover=True))
 
                     # manifest: id → href, media-type
                     manifest: dict[str, dict[str, str]] = {}
@@ -755,7 +768,7 @@ class BookManager:
                                 # NCX 파일: 미리보기에 없는 파일 참조 navPoint 제거 (중첩 포함)
                                 try:
                                     ncx_data = zin.read(zp)
-                                    ncx_tree = etree.fromstring(ncx_data)
+                                    ncx_tree = etree.fromstring(ncx_data, _safe_xml_parser())
                                     ncx_dir = dirname(zp)
                                     # 모든 깊이의 navPoint를 순회하며 누락 파일 참조 제거
                                     for np in list(ncx_tree.iter(f"{{{ncx_ns}}}navPoint")):
@@ -1067,7 +1080,9 @@ class BookManager:
         import os as _os
 
         # 1. ES 문서 목록 (file_path 기준, 중복 감지 포함)
-        doc_list = self.es_manager.search_by_category(category, max_result_count=sys.maxsize)
+        doc_list = self.es_manager.search_by_category(category, max_result_count=MAX_CATEGORY_RESULT_COUNT)
+        if len(doc_list) >= MAX_CATEGORY_RESULT_COUNT:
+            LOGGER.warning("get_category_mismatch_details: category '%s' 결과가 상한(%d)에 도달하여 잘렸습니다.", category, MAX_CATEGORY_RESULT_COUNT)
         es_files: dict[str, dict[str, Any]] = {}
         path_docs: dict[str, list[dict[str, Any]]] = {}
         for book_id, doc, _score in doc_list:

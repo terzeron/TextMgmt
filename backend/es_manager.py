@@ -31,7 +31,12 @@ class ESManager:
         user = os.environ["TM_ES_USER"]
         password = os.environ["TM_ES_PASSWORD"]
 
-        self.es = Elasticsearch(hosts=[url], basic_auth=(user, password), request_timeout=10, retry_on_timeout=True)
+        es_kwargs: dict[str, Any] = {"hosts": [url], "basic_auth": (user, password), "request_timeout": 10, "retry_on_timeout": True}
+        if url.lower().startswith("https"):
+            # ECK 자체서명 인증서: 전송 구간은 TLS로 암호화하되 인증서 검증은 생략한다.
+            es_kwargs["verify_certs"] = False
+            es_kwargs["ssl_show_warn"] = False
+        self.es = Elasticsearch(**es_kwargs)
 
         max_retries = 5
         for attempt in range(max_retries):

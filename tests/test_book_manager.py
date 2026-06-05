@@ -3374,3 +3374,49 @@ def test_update_book_no_such_book_returns_error(tmp_path: Path):
     status, msg = asyncio_runner(manager.update_book(999, "A", "Title", "Author", new_path, "txt"))
     assert status == "Error"
     assert "no such a book" in (msg or "")
+
+
+# --- M1: lxml XXE 방지 (CWE-611) ---
+
+
+def test_safe_xml_parser_blocks_external_entity(tmp_path: Path):
+    """_safe_xml_parser 는 외부 엔티티(file://)를 해석하지 않아야 한다."""
+    from lxml import etree
+
+    from backend.book_manager import _safe_xml_parser
+
+    secret = tmp_path / "canary.txt"
+    secret.write_text("XXE_CANARY_VALUE")
+    payload = ('<?xml version="1.0"?><!DOCTYPE r [<!ENTITY xxe SYSTEM "file://%s">]><r>&xxe;</r>' % secret).encode()
+
+    # recover=True (book_manager의 4개 호출부 모드): 엔티티 미해석 → 파일 내용 미노출
+    tree = etree.fromstring(payload, _safe_xml_parser(recover=True))
+    assert "XXE_CANARY_VALUE" not in etree.tostring(tree, encoding="unicode")
+
+    # 정상 XML 은 그대로 파싱되어야 한다 (기능 회귀 방지)
+    ok = etree.fromstring(b"<r><a>hi</a></r>", _safe_xml_parser())
+    assert ok.find("a").text == "hi"
+
+
+# --- M2: 카테고리 조회 결과 상한 (CWE-770) ---
+
+
+def test_get_books_in_category_uses_bounded_result_count(tmp_path: Path):
+    """get_books_in_category 는 sys.maxsize 가 아니라 MAX_CATEGORY_RESULT_COUNT 로 조회해야 한다."""
+    from backend.book_manager import MAX_CATEGORY_RESULT_COUNT
+
+    es = DummyES()
+    captured: dict[str, int] = {}
+
+    def capture(category: str, max_result_count: int):
+        captured["max_result_count"] = max_result_count
+        return []
+
+    es.search_by_category = capture  # type: ignore[method-assign]
+    manager = make_manager(tmp_path, es)
+
+    asyncio_runner(manager.get_books_in_category("A"))
+
+    assert captured["max_result_count"] == MAX_CATEGORY_RESULT_COUNT
+    assert captured["max_result_count"] != sys.maxsize
+    assert MAX_CATEGORY_RESULT_COUNT <= 10000  # ES max_result_window 이내 → scroll 미사용 경로 유지
