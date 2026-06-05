@@ -25,7 +25,7 @@ from backend.book_manager import BookManager
 from backend.comics_manager import ComicsManager
 from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
 from backend.category_mapping import CategoryMapping
-from backend.refresh_token_store import RefreshTokenStore
+from backend.refresh_token_store import create_refresh_token_store
 
 # 에러 및 미디어 타입 상수 정의
 ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
@@ -241,7 +241,7 @@ book_manager = _LazyProxy(_create_book_manager, "book manager")
 comics_manager = _LazyProxy(_create_comics_manager, "comics manager")
 bookstore = _LazyProxy(_create_bookstore, "bookstore")
 category_mapping = _LazyProxy(_create_category_mapping, "category mapping")
-refresh_token_store = RefreshTokenStore()
+refresh_token_store = create_refresh_token_store()
 
 
 def _issue_auth_tokens(email: str, role: str, name: str = "", picture: str = "", family_id: str | None = None) -> tuple[str, str]:
