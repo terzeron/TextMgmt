@@ -97,6 +97,9 @@ spec:
                 secretKeyRef:
                   name: tm-mysql-cred
                   key: mysql-password
+            # refresh token 저장소를 MySQL로 (replica/worker 간 공유, /tmp SQLite lock 회피)
+            - name: TM_REFRESH_TOKEN_BACKEND
+              value: mysql
           volumeMounts:
             - name: books-pvc
               mountPath: /books

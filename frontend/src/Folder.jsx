@@ -20,15 +20,15 @@ import PictureAsPdfIcon from "@mui/icons-material/PictureAsPdf";
 import VideoCameraBackIcon from "@mui/icons-material/VideoCameraBack";
 import { RichTreeView } from "@mui/x-tree-view/RichTreeView";
 import { treeItemClasses } from "@mui/x-tree-view/TreeItem";
-import { unstable_useTreeItem2 as useTreeItem2 } from "@mui/x-tree-view/useTreeItem2";
+import { useTreeItem } from "@mui/x-tree-view/useTreeItem";
 import {
-  TreeItem2Content,
-  TreeItem2IconContainer,
-  TreeItem2Label,
-  TreeItem2Root,
-} from "@mui/x-tree-view/TreeItem2";
-import { TreeItem2Icon } from "@mui/x-tree-view/TreeItem2Icon";
-import { TreeItem2Provider } from "@mui/x-tree-view/TreeItem2Provider";
+  TreeItemContent,
+  TreeItemIconContainer,
+  TreeItemLabel,
+  TreeItemRoot,
+} from "@mui/x-tree-view/TreeItem";
+import { TreeItemIcon } from "@mui/x-tree-view/TreeItemIcon";
+import { TreeItemProvider } from "@mui/x-tree-view/TreeItemProvider";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faChevronDown,
@@ -53,7 +53,7 @@ function DotIcon() {
   );
 }
 
-const StyledTreeItemRoot = styled(TreeItem2Root)(({ theme }) => ({
+const StyledTreeItemRoot = styled(TreeItemRoot)(({ theme }) => ({
   color:
     theme.palette.mode === "light"
       ? theme.palette.grey[800]
@@ -64,7 +64,7 @@ const StyledTreeItemRoot = styled(TreeItem2Root)(({ theme }) => ({
   },
 }));
 
-const CustomTreeItemContent = styled(TreeItem2Content)(({ theme }) => ({
+const CustomTreeItemContent = styled(TreeItemContent)(({ theme }) => ({
   flexDirection: "row-reverse",
   borderRadius: theme.spacing(0.7),
   marginBottom: theme.spacing(0.1),
@@ -155,7 +155,7 @@ function CustomLabel({
   ...other
 }) {
   return (
-    <TreeItem2Label
+    <TreeItemLabel
       {...other}
       sx={{
         display: "flex",
@@ -189,7 +189,7 @@ function CustomLabel({
         </Typography>
       )}
       {expandable && <DotIcon />}
-    </TreeItem2Label>
+    </TreeItemLabel>
   );
 }
 
@@ -250,6 +250,7 @@ export const CustomTreeItem = React.forwardRef(
     const { id, itemId, label, disabled, children, ...other } = props;
 
     const {
+      getContextProviderProps,
       getRootProps,
       getContentProps,
       getIconContainerProps,
@@ -257,7 +258,7 @@ export const CustomTreeItem = React.forwardRef(
       getGroupTransitionProps,
       status,
       publicAPI,
-    } = useTreeItem2({ id, itemId, children, label, disabled, rootRef: ref });
+    } = useTreeItem({ id, itemId, children, label, disabled, rootRef: ref });
 
     const item = useMemo(() => publicAPI.getItem(itemId), [publicAPI, itemId]);
     const expandable = isExpandable(children);
@@ -269,7 +270,7 @@ export const CustomTreeItem = React.forwardRef(
     }, [expandable, item?.fileType]);
 
     return (
-      <TreeItem2Provider itemId={itemId}>
+      <TreeItemProvider {...getContextProviderProps()}>
         <StyledTreeItemRoot {...getRootProps(other)}>
           <CustomTreeItemContent
             {...getContentProps({
@@ -281,9 +282,9 @@ export const CustomTreeItem = React.forwardRef(
               }),
             })}
           >
-            <TreeItem2IconContainer {...getIconContainerProps()}>
-              <TreeItem2Icon status={status} />
-            </TreeItem2IconContainer>
+            <TreeItemIconContainer {...getIconContainerProps()}>
+              <TreeItemIcon status={status} />
+            </TreeItemIconContainer>
 
             <CustomLabel
               {...getLabelProps({
@@ -296,7 +297,7 @@ export const CustomTreeItem = React.forwardRef(
           </CustomTreeItemContent>
           {children && <TransitionComponent {...getGroupTransitionProps()} />}
         </StyledTreeItemRoot>
-      </TreeItem2Provider>
+      </TreeItemProvider>
     );
   },
 );

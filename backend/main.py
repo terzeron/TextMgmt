@@ -25,7 +25,7 @@ from backend.book_manager import BookManager
 from backend.comics_manager import ComicsManager
 from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
 from backend.category_mapping import CategoryMapping
-from backend.refresh_token_store import RefreshTokenStore
+from backend.refresh_token_store import create_refresh_token_store
 
 # 에러 및 미디어 타입 상수 정의
 ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
@@ -41,7 +41,9 @@ if "TM_FRONTEND_URL" not in os.environ:
 app = FastAPI()
 LOGGER.info("app ready")
 origins = [url for url in [os.getenv("TM_FRONTEND_URL")] if url is not None]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"], expose_headers=["Accept-Ranges", "Content-Range", "Content-Length", "Content-Encoding", "X-Total-Pages", "X-Total-Chapters"])
+# 최소 허용 CORS (CWE-942): 실제 사용하는 메서드/헤더만 명시. preflight(OPTIONS)는 Starlette가 자동 처리.
+# 인증은 HttpOnly 쿠키(credentials include) 기반이라 Authorization 헤더는 미사용 → allow_headers에서 제외.
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Content-Type"], expose_headers=["Accept-Ranges", "Content-Range", "Content-Length", "Content-Encoding", "X-Total-Pages", "X-Total-Chapters"])
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
@@ -215,6 +217,9 @@ class _LazyProxy:
             return
         setattr(self._get_instance(), key, value)
 
+    def __delattr__(self, item) -> None:
+        delattr(self._get_instance(), item)
+
     def __repr__(self) -> str:
         return repr(self._get_instance())
 
@@ -239,7 +244,7 @@ book_manager = _LazyProxy(_create_book_manager, "book manager")
 comics_manager = _LazyProxy(_create_comics_manager, "comics manager")
 bookstore = _LazyProxy(_create_bookstore, "bookstore")
 category_mapping = _LazyProxy(_create_category_mapping, "category mapping")
-refresh_token_store = RefreshTokenStore()
+refresh_token_store = _LazyProxy(create_refresh_token_store, "refresh token store")
 
 
 def _issue_auth_tokens(email: str, role: str, name: str = "", picture: str = "", family_id: str | None = None) -> tuple[str, str]:

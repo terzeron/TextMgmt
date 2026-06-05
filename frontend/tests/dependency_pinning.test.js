@@ -534,8 +534,8 @@ describe("@mui/icons-material", () => {
 
 // ===========================================================================
 // 20. @mui/x-tree-view — Folder.jsx, CategoryAdmin.jsx
-//     RichTreeView, TreeItem (treeItemClasses), TreeItem2{Content,IconContainer,Label,Root},
-//     TreeItem2Icon, TreeItem2Provider, unstable_useTreeItem2
+//     RichTreeView, TreeItem (treeItemClasses), TreeItem{Content,IconContainer,Label,Root},
+//     TreeItemIcon, TreeItemProvider, useTreeItem
 // ===========================================================================
 describe("@mui/x-tree-view", () => {
   it("RichTreeView 가 export 된다", async () => {
@@ -551,30 +551,29 @@ describe("@mui/x-tree-view", () => {
     expect(treeItemClasses.iconContainer).toBeDefined();
   });
 
-  it("TreeItem2 서브 컴포넌트가 모두 export 된다", async () => {
-    const m = await import("@mui/x-tree-view/TreeItem2");
+  it("TreeItem 서브 컴포넌트가 모두 export 된다", async () => {
+    const m = await import("@mui/x-tree-view/TreeItem");
     for (const k of [
-      "TreeItem2Content",
-      "TreeItem2IconContainer",
-      "TreeItem2Label",
-      "TreeItem2Root",
+      "TreeItemContent",
+      "TreeItemIconContainer",
+      "TreeItemLabel",
+      "TreeItemRoot",
     ]) {
       expect(m[k], `missing export: ${k}`).toBeDefined();
     }
   });
 
-  it("TreeItem2Icon / TreeItem2Provider 가 export 된다", async () => {
-    const { TreeItem2Icon } = await import("@mui/x-tree-view/TreeItem2Icon");
-    const { TreeItem2Provider } =
-      await import("@mui/x-tree-view/TreeItem2Provider");
-    expect(TreeItem2Icon).toBeDefined();
-    expect(TreeItem2Provider).toBeDefined();
+  it("TreeItemIcon / TreeItemProvider 가 export 된다", async () => {
+    const { TreeItemIcon } = await import("@mui/x-tree-view/TreeItemIcon");
+    const { TreeItemProvider } =
+      await import("@mui/x-tree-view/TreeItemProvider");
+    expect(TreeItemIcon).toBeDefined();
+    expect(TreeItemProvider).toBeDefined();
   });
 
-  it("useTreeItem2/useTreeItem2 의 unstable_useTreeItem2 가 함수다", async () => {
-    const { unstable_useTreeItem2 } =
-      await import("@mui/x-tree-view/useTreeItem2");
-    expect(typeof unstable_useTreeItem2).toBe("function");
+  it("useTreeItem 의 useTreeItem 가 함수다", async () => {
+    const { useTreeItem } = await import("@mui/x-tree-view/useTreeItem");
+    expect(typeof useTreeItem).toBe("function");
   });
 });
 

@@ -21,6 +21,7 @@ backend 사용처:
 - request.cookies, request.headers, request.url
 """
 
+import os
 import unittest
 
 
@@ -282,6 +283,48 @@ class TestRouteFunctionalEndToEnd(unittest.TestCase):
         resp.delete_cookie(key="access_token", path="/")
         cookie_headers = [h for h in resp.raw_headers if h[0].lower() == b"set-cookie"]
         self.assertGreaterEqual(len(cookie_headers), 1)
+
+
+class TestCorsPolicy(unittest.TestCase):
+    """main.py CORS 최소권한(CWE-942) 회귀 테스트.
+
+    allow_methods/allow_headers 가 wildcard("*")가 아니라 실제 사용분만 허용하는지 검증한다.
+    wildcard 설정이면 disallowed 메서드/헤더 preflight도 통과하므로 아래 단언이 깨진다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from fastapi.testclient import TestClient
+        import backend.main as main_mod
+
+        cls.client = TestClient(main_mod.app)
+        cls.origin = os.environ["TM_FRONTEND_URL"]
+
+    def _preflight(self, method, request_headers=None):
+        headers = {"Origin": self.origin, "Access-Control-Request-Method": method}
+        if request_headers:
+            headers["Access-Control-Request-Headers"] = request_headers
+        return self.client.options("/", headers=headers)
+
+    def test_allowed_method_preflight_succeeds(self):
+        resp = self._preflight("PUT", "content-type")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.headers.get("access-control-allow-origin"), self.origin)
+        self.assertEqual(resp.headers.get("access-control-allow-credentials"), "true")
+        allow_methods = resp.headers.get("access-control-allow-methods", "")
+        self.assertIn("PUT", allow_methods)
+
+    def test_allow_methods_not_wildcard(self):
+        # wildcard였다면 PATCH 등 모든 메서드가 노출/허용된다.
+        allow_methods = self._preflight("PUT", "content-type").headers.get("access-control-allow-methods", "")
+        self.assertNotIn("*", allow_methods)
+        self.assertNotIn("PATCH", allow_methods)
+        self.assertEqual(self._preflight("PATCH").status_code, 400)
+
+    def test_allow_headers_not_wildcard(self):
+        # Content-Type(safelisted)은 허용되지만 임의 커스텀 헤더는 거부되어야 한다.
+        self.assertEqual(self._preflight("POST", "content-type").status_code, 200)
+        self.assertEqual(self._preflight("POST", "x-evil-header").status_code, 400)
 
 
 if __name__ == "__main__":
