@@ -430,20 +430,20 @@ describe("@mui/x-tree-view", () => {
     expect(typeof treeItemClasses).toBe("object");
   });
 
-  it("TreeItem2 컴포넌트가 export된다", async () => {
-    const mod = await import("@mui/x-tree-view/TreeItem2");
-    expect(mod.TreeItem2Content).toBeDefined();
-    expect(mod.TreeItem2IconContainer).toBeDefined();
-    expect(mod.TreeItem2Label).toBeDefined();
-    expect(mod.TreeItem2Root).toBeDefined();
+  it("TreeItem 컴포넌트가 export된다", async () => {
+    const mod = await import("@mui/x-tree-view/TreeItem");
+    expect(mod.TreeItemContent).toBeDefined();
+    expect(mod.TreeItemIconContainer).toBeDefined();
+    expect(mod.TreeItemLabel).toBeDefined();
+    expect(mod.TreeItemRoot).toBeDefined();
   });
 
-  it("TreeItem2Icon, TreeItem2Provider가 export된다", async () => {
-    const { TreeItem2Icon } = await import("@mui/x-tree-view/TreeItem2Icon");
-    const { TreeItem2Provider } =
-      await import("@mui/x-tree-view/TreeItem2Provider");
-    expect(TreeItem2Icon).toBeDefined();
-    expect(TreeItem2Provider).toBeDefined();
+  it("TreeItemIcon, TreeItemProvider가 export된다", async () => {
+    const { TreeItemIcon } = await import("@mui/x-tree-view/TreeItemIcon");
+    const { TreeItemProvider } =
+      await import("@mui/x-tree-view/TreeItemProvider");
+    expect(TreeItemIcon).toBeDefined();
+    expect(TreeItemProvider).toBeDefined();
   });
 });
 

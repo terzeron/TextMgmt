@@ -41,7 +41,9 @@ if "TM_FRONTEND_URL" not in os.environ:
 app = FastAPI()
 LOGGER.info("app ready")
 origins = [url for url in [os.getenv("TM_FRONTEND_URL")] if url is not None]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"], expose_headers=["Accept-Ranges", "Content-Range", "Content-Length", "Content-Encoding", "X-Total-Pages", "X-Total-Chapters"])
+# 최소 허용 CORS (CWE-942): 실제 사용하는 메서드/헤더만 명시. preflight(OPTIONS)는 Starlette가 자동 처리.
+# 인증은 HttpOnly 쿠키(credentials include) 기반이라 Authorization 헤더는 미사용 → allow_headers에서 제외.
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Content-Type"], expose_headers=["Accept-Ranges", "Content-Range", "Content-Length", "Content-Encoding", "X-Total-Pages", "X-Total-Chapters"])
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
