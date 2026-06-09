@@ -189,7 +189,6 @@ class TestCategoryMapping(unittest.TestCase):
 
         cm._get_connection = _conn_hidden
         assert cm.get_hidden_categories() == ["c1"]
-        assert cm.is_hidden("c1/sub") is True
 
     def test_categories_search_and_rename(self):
         cursor = FakeCursor(rows=[{"category": "a"}, {"category": "b"}])
@@ -200,7 +199,6 @@ class TestCategoryMapping(unittest.TestCase):
             yield FakeConn(cursor)
 
         cm._get_connection = _conn
-        assert cm.get_categories_with_keywords() == ["a", "b"]
         assert cm.search_by_keyword("key") == ["a", "b"]
 
         cursor_rename = FakeCursor()
@@ -302,17 +300,6 @@ class TestCategoryMapping(unittest.TestCase):
         assert cm.update_all_mappings({"c1": ["k1"]}) is False
         assert conn_fail.rolled_back is True
 
-    def test_is_hidden_returns_false(self):
-        """Line 387: is_hidden returns False when category is not hidden"""
-        cursor = FakeCursor(rows=[{"category": "other_cat"}])
-        cm_mod, cm = build_cm(cursor)
-
-        @contextlib.contextmanager
-        def _conn():
-            yield FakeConn(cursor)
-
-        cm._get_connection = _conn
-        assert cm.is_hidden("not_hidden_cat") is False
 
     def test_get_all_mappings_empty_and_remove_keyword_not_found(self):
         cursor = FakeCursor(rows=[], rowcount=0)

@@ -61,14 +61,6 @@ class ESManager:
         LOGGER.debug("do_exist_index()")
         return bool(self.es.indices.exists(index=self.index_name))
 
-    def get_existing_ids(self, doc_ids: list[int]) -> set[int]:
-        """주어진 ID 목록 중 ES에 존재하는 ID들을 반환"""
-        if not doc_ids:
-            return set()
-        LOGGER.debug("get_existing_ids(%d ids)", len(doc_ids))
-        docs = [{"_index": self.index_name, "_id": str(doc_id)} for doc_id in doc_ids]
-        response = self.es.mget(docs=docs, source=False)
-        return {int(doc["_id"]) for doc in response["docs"] if doc.get("found", False)}
 
     def get_existing_paths(self, doc_ids: list[int]) -> dict[int, str]:
         """주어진 ID 목록의 기존 file_path를 조회. 반환: {inode: file_path}"""
@@ -83,40 +75,6 @@ class ESManager:
                 result[int(doc["_id"])] = doc["_source"]["file_path"]
         return result
 
-    def bulk_update_paths(self, updates: dict[int, dict[str, str]], max_retries: int = 3) -> int:
-        """inode → {"file_path": ..., "category": ...} 맵을 받아 bulk partial update 수행.
-        반환: 업데이트된 문서 수"""
-        if not updates:
-            return 0
-        LOGGER.debug("bulk_update_paths(%d items)", len(updates))
-        updated_count = 0
-        iter_items = iter(updates.items())
-        chunk_size = 100
-
-        while True:
-            chunk = list(islice(iter_items, chunk_size))
-            if not chunk:
-                break
-            es_data: list[dict[str, Any]] = []
-            for inode, fields in chunk:
-                es_data.append({"update": {"_index": self.index_name, "_id": str(inode)}})
-                es_data.append({"doc": fields})
-
-            for attempt in range(max_retries):
-                try:
-                    self.es.bulk(body=es_data, timeout="60s", refresh=False)
-                    break
-                except (SerializationError, ConnectionError, ConnectionTimeout) as e:
-                    if attempt < max_retries - 1:
-                        wait_time = 2**attempt
-                        LOGGER.warning(f"ES bulk_update_paths 실패 (시도 {attempt + 1}/{max_retries}): {e}. {wait_time}초 후 재시도...")
-                        time.sleep(wait_time)
-                    else:
-                        LOGGER.error(f"ES bulk_update_paths 최종 실패: {e}")
-                        raise
-
-            updated_count += len(chunk)
-        return updated_count
 
     def create_index(self) -> dict[str, Any]:
         LOGGER.debug("create_index()")
@@ -213,12 +171,6 @@ class ESManager:
         if self.do_exist_index():
             self.es.indices.delete(index=self.index_name)
 
-    def get_mappings(self) -> dict[str, Any]:
-        LOGGER.debug("get_mappings()")
-        if self.do_exist_index():
-            return self.es.indices.get_mapping(index=self.index_name)[self.index_name]["mappings"]
-        else:
-            return {}
 
     def _search(self, query: dict[str, Any], sort: list[str] | str | None = None, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
@@ -303,12 +255,6 @@ class ESManager:
         query = {"bool": {"should": [{"match": {"title": {"query": title, "boost": 1.2 + math.log2(len(title.split(" ")))}}}, {"match": {"file_type": {"query": file_type, "boost": 1}}}, {"match": {"file_size": {"query": file_size, "boost": 1}}}]}}
         return self._search(query, max_result_count=max_result_count)
 
-    def search_by_summary(self, summary: str, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
-        if max_result_count < 0:
-            max_result_count = self.DEFAULT_MAX_RESULT_COUNT
-        LOGGER.debug("search_by_summary(max_result_count=%d, summary='%s')", max_result_count, summary)
-        query = {"match": {"summary": summary}}
-        return self._search(query, max_result_count=max_result_count)
 
     def search_by_category(self, category: str, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
@@ -394,16 +340,6 @@ class ESManager:
             result.append((int(hit["_id"]), hit["_source"], normalized_score))
         return result, total
 
-    def _get_self_score(self, should_clauses: list, doc_id: int) -> float:
-        """원본 문서가 동일 쿼리에서 받는 점수를 반환 (정규화 기준값)"""
-        if doc_id is None:
-            return 0.0
-        query = {"bool": {"should": should_clauses, "filter": [{"term": {"_id": str(doc_id)}}]}}
-        response = self.es.search(index=self.index_name, query=query, size=1)
-        hits = response["hits"]["hits"]
-        if hits:
-            return hits[0]["_score"]
-        return 0.0
 
     def search_by_id(self, doc_id: int) -> dict[str, Any]:
         LOGGER.debug("search_by_id(doc_id=%d)", doc_id)
@@ -423,34 +359,6 @@ class ESManager:
         result = self.es.search(index=self.index_name, body=body)
         return {bucket["key"]: bucket["doc_count"] for bucket in result["aggregations"]["unique_values"]["buckets"]}
 
-    def get_all_file_paths_grouped(self) -> dict[str, set[str]]:
-        """scroll로 전체 인덱스를 순회하여 카테고리별 file_path 집합을 반환"""
-        LOGGER.debug("get_all_file_paths_grouped()")
-        result: dict[str, set[str]] = {}
-        scroll_id = None
-        try:
-            response = self.es.search(index=self.index_name, body={"query": {"match_all": {}}, "_source": ["category", "file_path"]}, scroll="10m", size=10000)
-            scroll_id = response.get("_scroll_id")
-
-            while True:
-                hits = response["hits"]["hits"]
-                if not hits:
-                    break
-                for hit in hits:
-                    src = hit["_source"]
-                    cat = src.get("category", "")
-                    fp = src.get("file_path", "")
-                    if cat:
-                        result.setdefault(cat, set()).add(fp)
-                response = self.es.scroll(scroll_id=scroll_id, scroll="10m")
-                scroll_id = response["_scroll_id"]
-        finally:
-            if scroll_id:
-                try:
-                    self.es.clear_scroll(scroll_id=scroll_id)
-                except Exception as e:
-                    LOGGER.debug("Failed to clear scroll: %s", e)
-        return result
 
     def delete_by_file_paths(self, file_paths: list[str], exclude_ids: list[int] | None = None) -> int:
         """주어진 file_path 목록에 해당하는 기존 문서를 삭제 (중복 방지용).

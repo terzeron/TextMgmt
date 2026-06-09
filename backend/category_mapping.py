@@ -258,23 +258,6 @@ class CategoryMapping:
         LOGGER.info("delete_category(%s, %s, prefix=%s): %s", category, content_type, prefix, "success" if deleted else "not found")
         return deleted
 
-    def get_categories_with_keywords(self, content_type: str = "book") -> list[str]:
-        """키워드가 등록된 카테고리 목록 조회
-
-        Args:
-            content_type: 콘텐츠 유형
-
-        Returns:
-            카테고리 목록
-        """
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT DISTINCT category FROM category_keywords WHERE content_type = %s ORDER BY category", (content_type,))
-                rows = cursor.fetchall()
-
-        categories = [row["category"] for row in rows]
-        LOGGER.debug("get_categories_with_keywords(%s): %d categories", content_type, len(categories))
-        return categories
 
     def search_by_keyword(self, keyword: str, content_type: str = "book") -> list[str]:
         """키워드로 카테고리 검색 (부분 일치)
@@ -367,20 +350,3 @@ class CategoryMapping:
                     LOGGER.error("rename_category(%s -> %s, %s) failed: %s", old_category, new_category, content_type, e)
                     return False
 
-    def is_hidden(self, category: str, content_type: str = "book") -> bool:
-        """카테고리의 비노출 여부 확인 (prefix 매칭 포함)
-
-        부모 카테고리가 비노출이면 자식 카테고리도 비노출로 판단합니다.
-
-        Args:
-            category: 카테고리명
-            content_type: 콘텐츠 유형
-
-        Returns:
-            비노출 여부
-        """
-        hidden_categories = self.get_hidden_categories(content_type=content_type)
-        for hidden_cat in hidden_categories:
-            if category == hidden_cat or category.startswith(hidden_cat + "/"):
-                return True
-        return False

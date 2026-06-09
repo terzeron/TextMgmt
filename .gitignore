@@ -31,3 +31,5 @@ __pycache__
 Vagrantfile
 .coverage*
 .gitnexus
+.codegraph
+.serena
