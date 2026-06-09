@@ -15,7 +15,6 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
-import chardet
 from fastapi.responses import FileResponse, Response
 from bs4 import BeautifulSoup
 from backend.es_manager import ESManager
@@ -390,7 +389,7 @@ class BookManager:
         import os
 
         LOGGER.debug("# validate_epub(book_id=%d)", book_id)
-        book, error = await self.get_book(book_id)
+        book, _ = await self.get_book(book_id)
         if not book:
             return None, f"Book not found: {book_id}"
         if book.file_type != "epub":
@@ -453,7 +452,7 @@ class BookManager:
         import pikepdf
 
         LOGGER.debug("# validate_pdf(book_id=%d)", book_id)
-        book, error = await self.get_book(book_id)
+        book, _ = await self.get_book(book_id)
         if not book:
             return None, f"Book not found: {book_id}"
         if book.file_type != "pdf":
@@ -492,21 +491,6 @@ class BookManager:
             return result, None
         finally:
             pdf.close()
-
-    @staticmethod
-    def determine_file_content_and_encoding(file_path: Path) -> str:
-        LOGGER.debug("# determine_file_content_and_encoding(file_path='%s')", file_path)
-        if file_path.suffix != ".txt":
-            return "binary"
-
-        encoding = "utf-8"
-        with file_path.open("r") as infile:
-            content = infile.read(1024 * 100)
-            if content:
-                encoding_metadata = chardet.detect(content.encode())
-                if encoding_metadata["confidence"] > 0.99:
-                    encoding = encoding_metadata["encoding"] if encoding_metadata["encoding"] else "utf-8"
-        return encoding
 
     async def get_book_content(self, book_id: int) -> str | FileResponse:
         LOGGER.debug("# get_book_content(book_id=%d)", book_id)

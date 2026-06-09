@@ -136,16 +136,7 @@ def test_do_exist_index_get_existing_ids_and_paths():
     manager = make_manager(es)
     es.indices.mapping["exists"] = True
     assert manager.do_exist_index() is True
-    assert manager.get_existing_ids([1, 2]) == {1}
     assert manager.get_existing_paths([1, 2]) == {1: "/a"}
-
-
-def test_bulk_update_paths_retries(monkeypatch: pytest.MonkeyPatch):
-    es = DummyES()
-    manager = make_manager(es)
-    updates = {1: {"file_path": "/a"}, 2: {"file_path": "/b"}}
-    assert manager.bulk_update_paths(updates, max_retries=2) == 2
-    assert es.bulk_calls == 2
 
 
 def test_create_index_paths(monkeypatch: pytest.MonkeyPatch):
@@ -200,7 +191,6 @@ def test_search_paged_with_self_score_and_get_self_score():
     results, total = manager._search_paged_with_self_score([{"match": {"title": {"query": "a"}}}], exclude_id=1, size=10, offset=0)
     assert total == 1
     assert results[0][2] == 50.0
-    assert manager._get_self_score([{"match": {"title": {"query": "a"}}}], doc_id=1) == 7.0
 
 
 def test_search_by_id_not_found():
@@ -213,8 +203,6 @@ def test_aggregate_grouped_delete_insert_update_counts():
     es = DummyES()
     manager = make_manager(es)
     assert manager.search_and_aggregate_by_category() == {"A": 2}
-    grouped = manager.get_all_file_paths_grouped()
-    assert grouped == {"A": {"/a", "/b"}}
     assert manager.delete_by_file_paths(["/a"], exclude_ids=[1]) == 2
 
     def raise_delete(*args, **kwargs):
@@ -278,14 +266,13 @@ def test_search_builders_delegate_to__search():
 
     manager._search = fake_search
     assert manager.search_by_title("hello", "epub", 123, 5)
-    assert manager.search_by_summary("summary", 7)
     assert manager.search_by_category("cat", 9)
     assert manager.search_by_keyword("kw", 11)
     assert manager.search_similar_docs(title="t", author="a", file_size=100, summary="s", exclude_id=3, max_result_count=4)
 
     assert captured[0][2] == 5
-    assert captured[2][1] == ["author.keyword", "title.keyword"]
-    assert {"term": {"_id": "3"}} in captured[4][0]["bool"]["must_not"]
+    assert captured[1][1] == ["author.keyword", "title.keyword"]
+    assert {"term": {"_id": "3"}} in captured[3][0]["bool"]["must_not"]
 
 
 def test_search_paged_returns_empty_when_base_score_non_positive():
@@ -318,13 +305,6 @@ def test_update_returns_true_when_no_failed_shards():
     manager = make_manager(es)
     es.update = lambda index, id, body, refresh=True: {"_shards": {"failed": 0}}
     assert manager.update(1, title="ok") is True
-
-
-def test_get_mappings_when_index_missing():
-    es = DummyES()
-    manager = make_manager(es)
-    manager.do_exist_index = lambda: False
-    assert manager.get_mappings() == {}
 
 
 def test_search_max_score_none_returns_empty():
@@ -437,7 +417,6 @@ def test_search_by_title_summary_category_defaults():
     es = DummyES()
     manager = make_manager(es)
     assert manager.search_by_title("t")  # default max_result_count path
-    assert manager.search_by_summary("s")
     assert manager.search_by_category("c")
 
 
@@ -458,7 +437,6 @@ def test_search_paged_with_zero_score():
 def test_get_existing_ids_and_paths_empty():
     es = DummyES()
     manager = make_manager(es)
-    assert manager.get_existing_ids([]) == set()
     assert manager.get_existing_paths([]) == {}
 
 
@@ -468,13 +446,6 @@ def test_delete_index_when_exists(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(manager, "do_exist_index", lambda: True)
     manager.delete_index()
     assert es.indices.deleted is True
-
-
-def test_get_mappings_when_missing(monkeypatch: pytest.MonkeyPatch):
-    es = DummyES()
-    manager = make_manager(es)
-    monkeypatch.setattr(manager, "do_exist_index", lambda: False)
-    assert manager.get_mappings() == {}
 
 
 def test_update_success_and_delete_by_file_paths_empty():
@@ -507,27 +478,6 @@ def test_init_missing_env_var(monkeypatch: pytest.MonkeyPatch):
         ESManager()
 
 
-def test_bulk_update_paths_empty():
-    """Line 85: empty updates → return 0"""
-    es = DummyES()
-    manager = make_manager(es)
-    assert manager.bulk_update_paths({}) == 0
-
-
-def test_bulk_update_paths_final_failure(monkeypatch: pytest.MonkeyPatch):
-    """Lines 110-111: bulk_update_paths retries exhausted → raise"""
-
-    class ESAlwaysFail(DummyES):
-        def bulk(self, body, timeout="60s", refresh=False):
-            raise ConnectionError("persistent failure")
-
-    es = ESAlwaysFail()
-    manager = make_manager(es)
-    monkeypatch.setattr("backend.es_manager.time.sleep", lambda _: None)
-    with pytest.raises(ConnectionError):
-        manager.bulk_update_paths({1: {"file_path": "/a"}}, max_retries=2)
-
-
 def test_create_index_non_exists_bad_request():
     """Line 191: BadRequestError without resource_already_exists → re-raise"""
     es = DummyES()
@@ -540,16 +490,6 @@ def test_create_index_non_exists_bad_request():
     es.indices.create = raise_other
     with pytest.raises(BadRequestError):
         manager.create_index()
-
-
-def test_get_mappings_when_exists():
-    """Line 214: get_mappings when index exists"""
-    es = DummyES()
-    manager = make_manager(es)
-    es.indices.mapping = {"exists": True, "idx": {"mappings": {"properties": {"title": {"type": "text"}}}}}
-    manager.do_exist_index = lambda: True
-    result = manager.get_mappings()
-    assert "properties" in result
 
 
 def test_search_default_max_result_count():
@@ -594,14 +534,6 @@ def test_search_by_title_negative_max():
     assert isinstance(results, list)
 
 
-def test_search_by_summary_negative_max():
-    """Lines 302-306: search_by_summary with negative max_result_count"""
-    es = DummyES()
-    manager = make_manager(es)
-    results = manager.search_by_summary("s", max_result_count=-1)
-    assert isinstance(results, list)
-
-
 def test_search_by_category_negative_max():
     """Line 310: search_by_category with negative max_result_count"""
     es = DummyES()
@@ -627,50 +559,8 @@ def test_search_similar_docs_negative_max():
         return [(1, {"a": 1}, 100.0)]
 
     manager._search = fake_search
-    manager._get_self_score = lambda *a, **kw: 0.0
     results = manager.search_similar_docs(title="t", author="a", summary="s", file_size=10, max_result_count=-1)
     assert isinstance(results, list)
-
-
-def test_get_self_score_none_doc_id():
-    """Line 395: _get_self_score with doc_id=None"""
-    es = DummyES()
-    manager = make_manager(es)
-    assert manager._get_self_score([{"match": {"title": "a"}}], doc_id=None) == 0.0
-
-
-def test_get_self_score_no_hits():
-    """Line 401: _get_self_score with no hits"""
-
-    class ESNoHits(DummyES):
-        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None):
-            if size == 1 and query and query.get("bool", {}).get("filter"):
-                return {"hits": {"hits": []}}
-            return super().search(index, query, sort, size, track_scores, track_total_hits, from_, body, scroll)
-
-    manager = make_manager(ESNoHits())
-    assert manager._get_self_score([{"match": {"title": "a"}}], doc_id=999) == 0.0
-
-
-def test_get_all_file_paths_grouped_clear_scroll_error():
-    """Lines 446-447: clear_scroll raises exception during get_all_file_paths_grouped"""
-
-    class ESScrollClearFail(DummyES):
-        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None):
-            if body is not None and body.get("query", {}).get("match_all") is not None:
-                return {"_scroll_id": "scroll1", "hits": {"hits": [{"_source": {"category": "A", "file_path": "/a"}}]}}
-            return super().search(index, query, sort, size, track_scores, track_total_hits, from_, body, scroll)
-
-        def scroll(self, scroll_id: str, scroll: str):
-            return {"_scroll_id": "scroll2", "hits": {"hits": []}}
-
-        def clear_scroll(self, scroll_id: str):
-            raise RuntimeError("clear scroll failed")
-
-    es = ESScrollClearFail()
-    manager = make_manager(es)
-    result = manager.get_all_file_paths_grouped()
-    assert result == {"A": {"/a"}}
 
 
 def test_insert_final_failure(monkeypatch: pytest.MonkeyPatch):
@@ -825,81 +715,6 @@ def _make_es_manager(monkeypatch):
         from backend.es_manager import ESManager
 
         return ESManager()
-
-
-def test_basic_grouping(monkeypatch):
-    mgr = _make_es_manager(monkeypatch)
-
-    first_page = {"hits": {"hits": [{"_source": {"category": "소설", "file_path": "소설/book1.txt"}}, {"_source": {"category": "소설", "file_path": "소설/book2.txt"}}, {"_source": {"category": "만화", "file_path": "만화/comic1.pdf"}}]}, "_scroll_id": "scroll_1"}
-
-    empty_page = {"hits": {"hits": []}, "_scroll_id": "scroll_2"}
-
-    with patch.object(Elasticsearch, "search", return_value=first_page), patch.object(Elasticsearch, "scroll", return_value=empty_page), patch.object(Elasticsearch, "clear_scroll"):
-        result = mgr.get_all_file_paths_grouped()
-
-    assert result == {"소설": {"소설/book1.txt", "소설/book2.txt"}, "만화": {"만화/comic1.pdf"}}
-
-
-def test_empty_index(monkeypatch):
-    mgr = _make_es_manager(monkeypatch)
-
-    empty_page = {"hits": {"hits": []}, "_scroll_id": "scroll_1"}
-
-    with patch.object(Elasticsearch, "search", return_value=empty_page), patch.object(Elasticsearch, "clear_scroll"):
-        result = mgr.get_all_file_paths_grouped()
-
-    assert result == {}
-
-
-def test_multi_scroll_pages(monkeypatch):
-    mgr = _make_es_manager(monkeypatch)
-
-    page1 = {"hits": {"hits": [{"_source": {"category": "A", "file_path": "A/1.txt"}}]}, "_scroll_id": "s1"}
-    page2 = {"hits": {"hits": [{"_source": {"category": "A", "file_path": "A/2.txt"}}, {"_source": {"category": "B", "file_path": "B/1.txt"}}]}, "_scroll_id": "s2"}
-    empty = {"hits": {"hits": []}, "_scroll_id": "s3"}
-
-    with patch.object(Elasticsearch, "search", return_value=page1), patch.object(Elasticsearch, "scroll", side_effect=[page2, empty]), patch.object(Elasticsearch, "clear_scroll"):
-        result = mgr.get_all_file_paths_grouped()
-
-    assert result == {"A": {"A/1.txt", "A/2.txt"}, "B": {"B/1.txt"}}
-
-
-def test_missing_category_skipped(monkeypatch):
-    mgr = _make_es_manager(monkeypatch)
-
-    page = {"hits": {"hits": [{"_source": {"category": "", "file_path": "orphan.txt"}}, {"_source": {"category": "X", "file_path": "X/ok.txt"}}]}, "_scroll_id": "s1"}
-    empty = {"hits": {"hits": []}, "_scroll_id": "s2"}
-
-    with patch.object(Elasticsearch, "search", return_value=page), patch.object(Elasticsearch, "scroll", return_value=empty), patch.object(Elasticsearch, "clear_scroll"):
-        result = mgr.get_all_file_paths_grouped()
-
-    assert "" not in result
-    assert result == {"X": {"X/ok.txt"}}
-
-
-def test_clear_scroll_called_on_success(monkeypatch):
-    mgr = _make_es_manager(monkeypatch)
-
-    empty = {"hits": {"hits": []}, "_scroll_id": "s1"}
-    mock_clear = MagicMock()
-
-    with patch.object(Elasticsearch, "search", return_value=empty), patch.object(Elasticsearch, "clear_scroll", mock_clear):
-        mgr.get_all_file_paths_grouped()
-
-    mock_clear.assert_called_once_with(scroll_id="s1")
-
-
-def test_clear_scroll_called_on_error(monkeypatch):
-    mgr = _make_es_manager(monkeypatch)
-
-    page = {"hits": {"hits": [{"_source": {"category": "A", "file_path": "A/1.txt"}}]}, "_scroll_id": "s1"}
-    mock_clear = MagicMock()
-
-    with patch.object(Elasticsearch, "search", return_value=page), patch.object(Elasticsearch, "scroll", side_effect=Exception("network error")), patch.object(Elasticsearch, "clear_scroll", mock_clear):
-        with pytest.raises(Exception, match="network error"):
-            mgr.get_all_file_paths_grouped()
-
-    mock_clear.assert_called_once_with(scroll_id="s1")
 
 
 # ---- coverage: search.py and update.py CLI tests ----

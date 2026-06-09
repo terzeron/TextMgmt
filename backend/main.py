@@ -376,7 +376,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         LOGGER.debug("# validate_book(book_id=%d)", book_id)
         response_object: dict[str, Any] = {"status": "failure"}
 
-        book, err = await manager.get_book(book_id)
+        book, _ = await manager.get_book(book_id)
         if not book:
             response_object["error"] = f"Book not found: {book_id}"
             return response_object

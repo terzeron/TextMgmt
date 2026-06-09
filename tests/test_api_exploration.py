@@ -2,7 +2,13 @@ import requests
 import sys
 import types
 from collections import Counter
-from konlpy.tag import Okt
+
+try:
+    # konlpy는 라이브 탐색 실행(run_api_exploration_test) 시에만 필요한 선택적 의존성.
+    # 테스트는 Okt를 monkeypatch로 대체하므로 미설치 환경에서도 동작한다.
+    from konlpy.tag import Okt
+except ImportError:
+    Okt = None
 
 
 BASE_URL = "http://127.0.0.1:8000"
@@ -11,6 +17,9 @@ BASE_URL = "http://127.0.0.1:8000"
 def get_top_frequent_words(text, top_n=100):
     if not text:
         return []
+
+    if Okt is None:
+        raise RuntimeError("konlpy가 설치되어 있지 않습니다. 라이브 탐색 실행에는 konlpy가 필요합니다.")
 
     okt = Okt()
     nouns = okt.nouns(text)
@@ -94,13 +103,10 @@ def run_api_exploration_test():
 
     print("\n[4단계] 유사한 책 제목과 요약에서 키워드를 추출하여 검색 수행 중...")
 
-    combined_text = " ".join(
-        f"{book.get('title', '')} {book.get('summary', '')}".strip()
-        for book in similar_books
-    )
+    combined_text = " ".join(f"{book.get('title', '')} {book.get('summary', '')}".strip() for book in similar_books)
     print(f"  - 수집된 전체 텍스트의 길이: {len(combined_text)} 자")
     if len(combined_text) < 200:
-        print(f"  - 수집된 텍스트 (일부): \"{combined_text[:200]}...\"")
+        print(f'  - 수집된 텍스트 (일부): "{combined_text[:200]}..."')
 
     top_keywords = get_top_frequent_words(combined_text, 10)
 
@@ -110,7 +116,7 @@ def run_api_exploration_test():
 
     print("  - 유사 책 제목과 요약에서 찾은 명사 (빈도순):")
     for i, (word, count) in enumerate(top_keywords):
-        print(f"    {i+1:2d}. {word} ({count}회)")
+        print(f"    {i + 1:2d}. {word} ({count}회)")
 
     keyword = top_keywords[0][0]
     print(f"\n  - 검색에 사용할 키워드: '{keyword}'")

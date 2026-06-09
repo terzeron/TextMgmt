@@ -141,18 +141,6 @@ class TestBookManager:
         assert book.category == randomly_chosen_book.category
         assert book.title == randomly_chosen_book.title
 
-    def test_determine_file_content_and_encoding(self, book_manager_with_data, tmp_path):
-        bm = book_manager_with_data
-        # txt 파일: 인코딩 감지 경로 테스트
-        txt_file = tmp_path / "test.txt"
-        txt_file.write_text("Hello, world! 안녕하세요", encoding="utf-8")
-        encoding = bm.determine_file_content_and_encoding(txt_file)
-        assert isinstance(encoding, str)
-
-        # 비-txt 파일: "binary" 반환 경로 테스트
-        epub_file = tmp_path / "test.epub"
-        epub_file.write_bytes(b"PK\x03\x04")
-        assert bm.determine_file_content_and_encoding(epub_file) == "binary"
 
     @pytest.mark.asyncio
     async def test_get_book_content(self, book_manager_with_data):
@@ -455,17 +443,6 @@ def make_manager(tmp_path: Path, es: DummyES | dict | None) -> BookManager:
 
 def make_doc(rel_path: str, file_type: str = ".txt") -> dict:
     return {"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"}
-
-
-def test_determine_file_content_and_encoding(tmp_path: Path):
-    txt = tmp_path / "a.txt"
-    txt.write_text("hello", encoding="utf-8")
-    enc = BookManager.determine_file_content_and_encoding(txt)
-    assert enc in {"utf-8", "ascii"}
-
-    other = tmp_path / "a.pdf"
-    other.write_bytes(b"%PDF")
-    assert BookManager.determine_file_content_and_encoding(other) == "binary"
 
 
 def test_evict_old_cache(tmp_path: Path):
