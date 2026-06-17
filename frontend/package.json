@@ -34,7 +34,7 @@
     "pdfjs-dist": "^6.0.227",
     "react": "^19.2.7",
     "react-bootstrap": "^2.10.2",
-    "react-dom": "^19.2.0",
+    "react-dom": "^19.2.7",
     "react-reader": "^2.0.15",
     "react-router-dom": "^7.17.0",
     "rtf.js": "^3.0.9",
