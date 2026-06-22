@@ -12,6 +12,7 @@ import { jsonGetReq } from "./Common";
 import Folder from "./Folder.jsx";
 import ViewSingle from "./ViewSingle.jsx";
 import BookInfoView from "./BookInfoView.jsx";
+import BookLoadError from "./BookLoadError.jsx";
 import SearchResult from "./SearchResult";
 import {
   findCommonPrefix,
@@ -74,6 +75,7 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
   const [folderData, setFolderData] = useState([]);
   const [hiddenCategories, setHiddenCategories] = useState(new Set());
   const [bookInfo, setBookInfo] = useState({});
+  const [bookLoadError, setBookLoadError] = useState("");
   const [viewUrl, setViewUrl] = useState("");
   const [downloadUrl, setDownloadUrl] = useState("");
 
@@ -166,6 +168,7 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
       setNextEntryId("");
       setFolderData([]);
       setBookInfo({});
+      setBookLoadError("");
       setViewUrl("");
       setDownloadUrl("");
     };
@@ -173,6 +176,8 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
 
   const entryClicked = useCallback(
     (selectedEntryId) => {
+      // 새 항목 선택 시 이전 책 로드 실패 사유 초기화
+      setBookLoadError("");
       // 2단계 트리에서 검색
       const selectedFolderData = findFolderInTree(folderData, selectedEntryId);
       if (selectedFolderData && selectedFolderData.fileType === "folder") {
@@ -277,10 +282,12 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
             setNextEntryId(determineNextEntryId(folderData, selectedEntryId));
             setPrevEntryId(determinePrevEntryId(folderData, selectedEntryId));
           } else {
-            setErrorMessage(`can't find the selected book`);
+            setBookLoadError(
+              `선택한 책을 찾을 수 없습니다. (book_id=${bookId})`,
+            );
           }
         } else {
-          setErrorMessage(`can't find the selected category`);
+          setBookLoadError(`선택한 카테고리를 찾을 수 없습니다. (${category})`);
         }
       }
     },
@@ -315,11 +322,12 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
               const bookCat = book["category"] || "";
               for (const hidden of hiddenCategories) {
                 if (bookCat === hidden || bookCat.startsWith(hidden + "/")) {
-                  setErrorMessage("접근 권한이 없는 카테고리입니다.");
+                  setBookLoadError("접근 권한이 없는 카테고리입니다.");
                   return;
                 }
               }
             }
+            setBookLoadError("");
             setBookInfo(book);
             setViewUrl(
               "/viewer/" +
@@ -337,7 +345,7 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
             );
           },
           (error) => {
-            setErrorMessage(`책 정보를 불러올 수 없습니다. ${error}`);
+            setBookLoadError(`${error}`);
           },
         );
         return;
@@ -424,6 +432,19 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
               loading={searchLoading}
               basePath={basePath}
             />
+          )}
+          {!hasSearched && !bookInfo["book_id"] && bookLoadError && (
+            <Row id="top_panel">
+              <Col lg="12" className="ps-0 pe-0 me-0 ">
+                <BookLoadError
+                  bookId={routeBookId}
+                  category={routeCategory}
+                  error={bookLoadError}
+                  role={role}
+                  apiPrefix={apiPrefix}
+                />
+              </Col>
+            </Row>
           )}
           {bookInfo["book_id"] && (
             <>
