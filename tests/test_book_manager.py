@@ -141,7 +141,6 @@ class TestBookManager:
         assert book.category == randomly_chosen_book.category
         assert book.title == randomly_chosen_book.title
 
-
     @pytest.mark.asyncio
     async def test_get_book_content(self, book_manager_with_data):
         bm = book_manager_with_data
@@ -3397,3 +3396,38 @@ def test_get_books_in_category_uses_bounded_result_count(tmp_path: Path):
     assert captured["max_result_count"] == MAX_CATEGORY_RESULT_COUNT
     assert captured["max_result_count"] != sys.maxsize
     assert MAX_CATEGORY_RESULT_COUNT <= 10000  # ES max_result_window 이내 → scroll 미사용 경로 유지
+
+
+def test_get_books_in_category_warns_on_truncation(tmp_path: Path, monkeypatch, caplog):
+    """결과가 MAX_CATEGORY_RESULT_COUNT 에 도달하면 잘림 경고를 남긴다 (book_manager.py:372)."""
+    import backend.book_manager as bm_mod
+
+    monkeypatch.setattr(bm_mod, "MAX_CATEGORY_RESULT_COUNT", 1)
+    es = DummyES()
+    es.category_docs = [(1, make_doc("A/x.txt"), 1.0)]
+    manager = make_manager(tmp_path, es)
+
+    with caplog.at_level(logging.WARNING):
+        books, err = asyncio_runner(manager.get_books_in_category("A"))
+
+    assert err is None
+    assert len(books) == 1
+    assert any("상한" in r.getMessage() and "get_books_in_category" in r.getMessage() for r in caplog.records)
+
+
+def test_get_category_mismatch_details_warns_on_truncation(tmp_path: Path, monkeypatch, caplog):
+    """결과가 MAX_CATEGORY_RESULT_COUNT 에 도달하면 잘림 경고를 남긴다 (book_manager.py:1069)."""
+    import backend.book_manager as bm_mod
+
+    monkeypatch.setattr(bm_mod, "MAX_CATEGORY_RESULT_COUNT", 1)
+    es = DummyES()
+    f = tmp_path / "A" / "x.txt"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("z")
+    es.category_docs = [(f.stat().st_ino, make_doc("A/x.txt"), 1.0)]
+    manager = make_manager(tmp_path, es)
+
+    with caplog.at_level(logging.WARNING):
+        manager.get_category_mismatch_details("A")
+
+    assert any("상한" in r.getMessage() and "get_category_mismatch_details" in r.getMessage() for r in caplog.records)

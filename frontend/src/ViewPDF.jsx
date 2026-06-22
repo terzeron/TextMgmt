@@ -8,6 +8,12 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
+// JPEG2000(OpenJPEG)/JBIG2 등 이미지 디코딩용 wasm 위치.
+// pdfjs 6.x 는 getDocument({ wasmUrl }) 로 wasm 디렉터리를 알려줘야 하며,
+// 미지정 시 "null" + 파일명으로 로드에 실패해 이미지 기반 페이지가 렌더되지 않는다.
+// vite pdf-wasm 플러그인이 설치된 pdfjs-dist 의 wasm 을 /pdf-wasm/ 로 서빙·번들한다.
+const PDF_WASM_URL = `${window.location.origin}${import.meta.env.BASE_URL}pdf-wasm/`;
+
 const CHUNK_SIZE = 10;
 
 export default function ViewPDF({
@@ -74,9 +80,12 @@ export default function ViewPDF({
         const buffer = await response.arrayBuffer();
         if (cancelledRef.current) return;
 
-        const pdfDoc = await pdfjs.getDocument({ data: buffer }).promise;
+        const pdfDoc = await pdfjs.getDocument({
+          data: buffer,
+          wasmUrl: PDF_WASM_URL,
+        }).promise;
         if (cancelledRef.current) {
-          pdfDoc.destroy();
+          pdfDoc.loadingTask.destroy();
           return;
         }
 
@@ -200,10 +209,12 @@ export default function ViewPDF({
 
         setDownloadProgress(30);
 
-        const firstPdfDoc = await pdfjs.getDocument({ data: firstBuffer })
-          .promise;
+        const firstPdfDoc = await pdfjs.getDocument({
+          data: firstBuffer,
+          wasmUrl: PDF_WASM_URL,
+        }).promise;
         if (cancelledRef.current) {
-          firstPdfDoc.destroy();
+          firstPdfDoc.loadingTask.destroy();
           return;
         }
 
@@ -322,9 +333,9 @@ export default function ViewPDF({
         observerRef.current.disconnect();
         observerRef.current = null;
       }
-      // 모든 청크 pdfDoc 정리
+      // 모든 청크 pdfDoc 정리 (pdfjs 6.x: PDFDocumentProxy 대신 loadingTask로 정리)
       for (const pdfDoc of chunkDocsRef.current.values()) {
-        pdfDoc.destroy();
+        pdfDoc.loadingTask.destroy();
       }
       chunkDocsRef.current.clear();
       fetchingRef.current.clear();

@@ -44,7 +44,7 @@ class ESManager:
                 self.es.info()
                 LOGGER.info("Elasticsearch 연결 성공")
                 break
-            except (ConnectionError, ConnectionTimeout) as e:
+            except (ConnectionError, ConnectionTimeout, SerializationError) as e:
                 if attempt < max_retries - 1:
                     wait = min(2 ** (attempt + 1), 10)
                     LOGGER.warning("ES 연결 실패 (시도 %d/%d): %s. %d초 후 재시도...", attempt + 1, max_retries, e, wait)
@@ -61,7 +61,6 @@ class ESManager:
         LOGGER.debug("do_exist_index()")
         return bool(self.es.indices.exists(index=self.index_name))
 
-
     def get_existing_paths(self, doc_ids: list[int]) -> dict[int, str]:
         """주어진 ID 목록의 기존 file_path를 조회. 반환: {inode: file_path}"""
         if not doc_ids:
@@ -74,7 +73,6 @@ class ESManager:
             if doc.get("found", False):
                 result[int(doc["_id"])] = doc["_source"]["file_path"]
         return result
-
 
     def create_index(self) -> dict[str, Any]:
         LOGGER.debug("create_index()")
@@ -171,7 +169,6 @@ class ESManager:
         if self.do_exist_index():
             self.es.indices.delete(index=self.index_name)
 
-
     def _search(self, query: dict[str, Any], sort: list[str] | str | None = None, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
@@ -254,7 +251,6 @@ class ESManager:
         LOGGER.debug("search_by_title(max_result_count=%d, title='%s', file_type='%s', file_size=%d)", max_result_count, title, file_type, file_size)
         query = {"bool": {"should": [{"match": {"title": {"query": title, "boost": 1.2 + math.log2(len(title.split(" ")))}}}, {"match": {"file_type": {"query": file_type, "boost": 1}}}, {"match": {"file_size": {"query": file_size, "boost": 1}}}]}}
         return self._search(query, max_result_count=max_result_count)
-
 
     def search_by_category(self, category: str, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
@@ -340,7 +336,6 @@ class ESManager:
             result.append((int(hit["_id"]), hit["_source"], normalized_score))
         return result, total
 
-
     def search_by_id(self, doc_id: int) -> dict[str, Any]:
         LOGGER.debug("search_by_id(doc_id=%d)", doc_id)
         from elasticsearch import NotFoundError
@@ -358,7 +353,6 @@ class ESManager:
         body = {"size": 1, "aggs": {"unique_values": {"terms": {"field": field_name, "size": size}}}}
         result = self.es.search(index=self.index_name, body=body)
         return {bucket["key"]: bucket["doc_count"] for bucket in result["aggregations"]["unique_values"]["buckets"]}
-
 
     def delete_by_file_paths(self, file_paths: list[str], exclude_ids: list[int] | None = None) -> int:
         """주어진 file_path 목록에 해당하는 기존 문서를 삭제 (중복 방지용).
