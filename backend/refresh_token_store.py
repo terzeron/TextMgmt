@@ -6,6 +6,25 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+# 멀티탭/멀티기기 환경에서 여러 요청이 같은 refresh token 으로 거의 동시에 회전을
+# 시도하면, 먼저 처리된 요청이 토큰을 회전(replaced_by 설정)시킨 직후 나머지 요청이
+# 이미 회전된 토큰을 제출하게 된다. 이를 재사용 공격으로 오판해 패밀리를 폐기하면
+# 세션이 통째로 풀린다. 회전 직후 이 grace window 안의 재제출은 정상 동시 요청으로
+# 보고 패밀리를 폐기하지 않으며, window 를 벗어난 재제출만 진짜 재사용으로 차단한다.
+DEFAULT_ROTATION_GRACE_SECONDS = 30
+
+
+def _rotation_grace_seconds() -> int:
+    try:
+        return int(os.getenv("TM_REFRESH_ROTATION_GRACE_SECONDS", str(DEFAULT_ROTATION_GRACE_SECONDS)))
+    except ValueError:
+        return DEFAULT_ROTATION_GRACE_SECONDS
+
+
+def _is_within_rotation_grace(revoke_reason: Any, revoked_at: Any, now: int) -> bool:
+    """방금 정상 회전(reason='rotated')되었고 grace window 안이면 True."""
+    return revoke_reason == "rotated" and revoked_at is not None and (now - int(revoked_at)) <= _rotation_grace_seconds()
+
 
 class RefreshTokenStore:
     """Persist refresh token state to support rotation and revocation."""
@@ -63,7 +82,7 @@ class RefreshTokenStore:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
-                SELECT family_id, email, expires_at, replaced_by, revoked_at
+                SELECT family_id, email, expires_at, replaced_by, revoked_at, revoke_reason
                 FROM refresh_tokens
                 WHERE jti = ?
                 """,
@@ -80,6 +99,18 @@ class RefreshTokenStore:
                 conn.execute("ROLLBACK")
                 return "expired"
             if row["replaced_by"] is not None:
+                if _is_within_rotation_grace(row["revoke_reason"], row["revoked_at"], now):
+                    # grace window 내 동시 요청: 패밀리를 살린 채 후속 토큰만 재발급
+                    conn.execute(
+                        """
+                        INSERT INTO refresh_tokens
+                            (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason)
+                        VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL)
+                        """,
+                        (new_token_id, family_id, email, issued_at, expires_at),
+                    )
+                    conn.execute("COMMIT")
+                    return "ok"
                 self._revoke_family(conn, family_id=family_id, reason="reuse-detected", revoked_at=now)
                 conn.execute("COMMIT")
                 return "reused"
@@ -199,7 +230,7 @@ class MySQLRefreshTokenStore:
             try:
                 conn.begin()
                 with conn.cursor() as cur:
-                    cur.execute("SELECT family_id, email, expires_at, replaced_by, revoked_at FROM refresh_tokens WHERE jti = %s FOR UPDATE", (current_token_id,))
+                    cur.execute("SELECT family_id, email, expires_at, replaced_by, revoked_at, revoke_reason FROM refresh_tokens WHERE jti = %s FOR UPDATE", (current_token_id,))
                     row = cur.fetchone()
 
                     if row is None:
@@ -212,6 +243,18 @@ class MySQLRefreshTokenStore:
                         conn.rollback()
                         return "expired"
                     if row["replaced_by"] is not None:
+                        if _is_within_rotation_grace(row["revoke_reason"], row["revoked_at"], now):
+                            # grace window 내 동시 요청: 패밀리를 살린 채 후속 토큰만 재발급
+                            cur.execute(
+                                """
+                                INSERT INTO refresh_tokens
+                                    (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason)
+                                VALUES (%s, %s, %s, %s, %s, NULL, NULL, NULL)
+                                """,
+                                (new_token_id, family_id, email, issued_at, expires_at),
+                            )
+                            conn.commit()
+                            return "ok"
                         self._revoke_family(cur, family_id=family_id, reason="reuse-detected", revoked_at=now)
                         conn.commit()
                         return "reused"

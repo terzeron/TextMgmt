@@ -14,14 +14,35 @@ def test_rotate_success(tmp_path):
     assert result == "ok"
 
 
-def test_reuse_detection_revokes_family(tmp_path):
+def test_concurrent_reuse_within_grace_reissues_without_revoking_family(tmp_path):
+    """방금 회전된 토큰이 grace window 내에 다시 제출되면(멀티탭 동시 refresh) 재사용
+    공격이 아닌 정상 동시 요청으로 보고, 패밀리를 폐기하지 않고 후속 토큰을 재발급한다."""
     store = RefreshTokenStore(str(tmp_path / "refresh_tokens.sqlite3"))
     now = int(time.time())
     store.store_issued(token_id="token-1", family_id="family-1", email="admin@example.com", issued_at=now, expires_at=now + 1000)
     assert store.rotate(current_token_id="token-1", new_token_id="token-2", family_id="family-1", email="admin@example.com", issued_at=now + 1, expires_at=now + 1001) == "ok"
 
-    assert store.rotate(current_token_id="token-1", new_token_id="token-3", family_id="family-1", email="admin@example.com", issued_at=now + 2, expires_at=now + 1002) == "reused"
-    assert store.rotate(current_token_id="token-2", new_token_id="token-4", family_id="family-1", email="admin@example.com", issued_at=now + 3, expires_at=now + 1003) == "revoked"
+    # token-1 을 grace window 내에 한 번 더 제출 -> 폐기 대신 재발급("ok")
+    assert store.rotate(current_token_id="token-1", new_token_id="token-3", family_id="family-1", email="admin@example.com", issued_at=now + 2, expires_at=now + 1002) == "ok"
+
+    # 패밀리가 살아 있으므로 두 후속 토큰 모두 계속 사용 가능
+    assert store.rotate(current_token_id="token-2", new_token_id="token-4", family_id="family-1", email="admin@example.com", issued_at=now + 3, expires_at=now + 1003) == "ok"
+    assert store.rotate(current_token_id="token-3", new_token_id="token-5", family_id="family-1", email="admin@example.com", issued_at=now + 4, expires_at=now + 1004) == "ok"
+
+
+def test_reuse_detection_revokes_family_after_grace(tmp_path):
+    """grace window 를 벗어난 뒤 회전 완료된 토큰이 재제출되면 실제 재사용 공격으로
+    간주하고 패밀리 전체를 폐기한다."""
+    store = RefreshTokenStore(str(tmp_path / "refresh_tokens.sqlite3"))
+    now = int(time.time())
+    store.store_issued(token_id="token-1", family_id="family-1", email="admin@example.com", issued_at=now - 1000, expires_at=now + 1000)
+    # 회전이 grace window 보다 한참 전에 발생(revoked_at = now-500)
+    assert store.rotate(current_token_id="token-1", new_token_id="token-2", family_id="family-1", email="admin@example.com", issued_at=now - 500, expires_at=now + 1001) == "ok"
+
+    # 회전된 지 오래된 token-1 을 재제출 -> 진짜 재사용 -> 패밀리 폐기
+    assert store.rotate(current_token_id="token-1", new_token_id="token-3", family_id="family-1", email="admin@example.com", issued_at=now, expires_at=now + 1002) == "reused"
+    # 패밀리가 폐기되어 정상 후속 토큰 token-2 도 차단됨
+    assert store.rotate(current_token_id="token-2", new_token_id="token-4", family_id="family-1", email="admin@example.com", issued_at=now + 1, expires_at=now + 1003) == "revoked"
 
 
 def test_revoke_family_blocks_rotation(tmp_path):
@@ -164,7 +185,8 @@ def test_mysql_rotate_ok_inserts_new_and_revokes_old(monkeypatch):
 def test_mysql_rotate_detects_reuse_and_revokes_family(monkeypatch):
     from backend.refresh_token_store import MySQLRefreshTokenStore
 
-    conns = _install_fresh_conns(monkeypatch, {"family_id": "F", "email": "e", "expires_at": int(time.time()) + 1000, "replaced_by": "already-used", "revoked_at": None})
+    # grace window 밖에서 회전된 토큰(revoked_at 이 오래 전, reason='rotated') 재사용
+    conns = _install_fresh_conns(monkeypatch, {"family_id": "F", "email": "e", "expires_at": int(time.time()) + 1000, "replaced_by": "already-used", "revoked_at": int(time.time()) - 1000, "revoke_reason": "rotated"})
     store = MySQLRefreshTokenStore()
 
     result = store.rotate(current_token_id="old", new_token_id="new", family_id="F", email="e", issued_at=1, expires_at=2)
@@ -175,6 +197,23 @@ def test_mysql_rotate_detects_reuse_and_revokes_family(monkeypatch):
     assert "INSERT" not in _verbs(rot)
     assert "UPDATE" in _verbs(rot)
     assert rot.committed
+
+
+def test_mysql_rotate_within_grace_reissues_without_revoking_family(monkeypatch):
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    # 방금(grace window 내) 회전된 토큰 재제출 -> 폐기 없이 후속 토큰 재발급
+    conns = _install_fresh_conns(monkeypatch, {"family_id": "F", "email": "e", "expires_at": int(time.time()) + 1000, "replaced_by": "successor", "revoked_at": int(time.time()), "revoke_reason": "rotated"})
+    store = MySQLRefreshTokenStore()
+
+    result = store.rotate(current_token_id="old", new_token_id="new", family_id="F", email="e", issued_at=1, expires_at=2)
+
+    rot = conns[-1]
+    assert result == "ok"
+    # 신규 토큰 INSERT 만 수행하고 family revoke(UPDATE) 는 하지 않음
+    assert "INSERT" in _verbs(rot)
+    assert "UPDATE" not in _verbs(rot)
+    assert rot.committed and not rot.rolled_back
 
 
 def test_mysql_rotate_missing_rolls_back(monkeypatch):
