@@ -187,6 +187,22 @@ describe("ViewPDF", () => {
     });
   });
 
+  it("getDocument 에 wasmUrl 을 전달한다 (JPEG2000/JBIG2 이미지 디코딩용)", async () => {
+    // wasmUrl 누락 시 OpenJPEG 가 초기화되지 못해 이미지 기반 PDF 페이지가 렌더되지 않는다.
+    globalThis.fetch = createMockFetch(1);
+    setupGetDocument(() => createMockPdf(1));
+
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(mockGetDocument).toHaveBeenCalledWith(
+        expect.objectContaining({
+          wasmUrl: expect.stringContaining("/pdf-wasm/"),
+        }),
+      );
+    });
+  });
+
   it("각 페이지마다 canvas 요소를 생성한다", async () => {
     globalThis.fetch = createMockFetch(2);
     setupGetDocument(() => createMockPdf(1));

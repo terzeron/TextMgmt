@@ -10,6 +10,10 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
+// JPEG2000(OpenJPEG)/JBIG2 등 이미지 디코딩용 wasm 위치 (vite pdf-wasm 플러그인이 서빙·번들).
+// pdfjs 6.x 는 getDocument({ wasmUrl }) 로 wasm 디렉터리를 알려줘야 한다.
+const PDF_WASM_URL = `${window.location.origin}${import.meta.env.BASE_URL}pdf-wasm/`;
+
 // ─── 1. PDF 파싱 검사 ───
 
 async function checkPdfParsing(buffer) {
@@ -17,7 +21,8 @@ async function checkPdfParsing(buffer) {
   let pdfDoc = null;
 
   try {
-    pdfDoc = await pdfjs.getDocument({ data: buffer }).promise;
+    pdfDoc = await pdfjs.getDocument({ data: buffer, wasmUrl: PDF_WASM_URL })
+      .promise;
     results.push({ type: "ok", text: "pdf.js 파싱: 정상" });
   } catch (e) {
     const msg = e.message || String(e);

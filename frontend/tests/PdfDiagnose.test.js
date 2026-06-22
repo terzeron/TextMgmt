@@ -60,6 +60,12 @@ describe("diagnosePdf", () => {
     expect(result.summary.fatal).toBe(0);
     expect(result.summary.errors).toBe(0);
     expect(mockDestroy).toHaveBeenCalled();
+    // wasmUrl 누락 시 이미지 기반 PDF 디코딩 실패 → getDocument 호출에 포함되어야 한다
+    expect(mockGetDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wasmUrl: expect.stringContaining("/pdf-wasm/"),
+      }),
+    );
   });
 
   it("파싱 실패 시 FATAL 에러를 반환한다", async () => {
