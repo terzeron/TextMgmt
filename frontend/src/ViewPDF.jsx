@@ -3,10 +3,10 @@ import { flushSync } from "react-dom";
 import PropTypes from "prop-types";
 import { getApiUrlPrefix } from "./Common";
 import * as pdfjs from "pdfjs-dist";
+// 워커를 설치된 pdfjs-dist에서 직접 번들 → API 버전과 항상 일치 (버전 drift 방지)
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
-// unpkg CDN에서 워커 로드 (package.json의 pdfjs-dist 버전과 일치)
-pdfjs.GlobalWorkerOptions.workerSrc =
-  "https://unpkg.com/pdfjs-dist@5.7.284/build/pdf.worker.min.mjs";
+pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 const CHUNK_SIZE = 10;
 

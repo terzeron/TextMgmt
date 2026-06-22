@@ -719,8 +719,11 @@ describe("ViewPDF", () => {
     expect(canvas.style.height).toBe("auto");
   });
 
-  // Regression: pdfjs worker URL must match installed pdfjs-dist version
-  it("sets workerSrc to match installed pdfjs-dist version", () => {
-    expect(pdfjs.GlobalWorkerOptions.workerSrc).toContain("5.7.284");
+  // Regression: 워커는 반드시 설치된 pdfjs-dist에서 번들되어야 한다
+  // (CDN 고정 버전을 쓰면 API/Worker 버전이 drift되어 렌더링이 깨진다)
+  it("loads workerSrc from the installed pdfjs-dist build", () => {
+    expect(pdfjs.GlobalWorkerOptions.workerSrc).toContain(
+      "pdfjs-dist/build/pdf.worker",
+    );
   });
 });

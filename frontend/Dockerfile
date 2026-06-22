@@ -4,7 +4,7 @@ FROM node:22.16.0 AS build
 WORKDIR /app
 
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm install -g npm@10.9.2 && npm install && npx browserslist@latest --update-db
+RUN npm install -g npm@10.9.2 && npm ci && npx browserslist@latest --update-db
 
 COPY frontend/ .
 RUN npm run build
