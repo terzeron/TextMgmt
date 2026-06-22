@@ -1,0 +1,55 @@
+# ES가 TLS(HTTPS)로 전환되어(es-values.yml), Traefik gateway가 백엔드
+# elasticsearch-es-http:9200 으로 HTTPS로 연결하도록 BackendTLSPolicy를 적용한다.
+# 이게 없으면 Traefik이 평문 HTTP로 연결 → 백엔드 실패 → 500 Internal Server Error.
+#
+# CA는 ECK가 생성한 자체서명 CA(secret elasticsearch-es-http-certs-public의 ca.crt)를
+# ConfigMap으로 복사한 것. ECK CA 회전(약 1년 주기, 현재 cert notAfter=2026-09-23) 시 재동기화 필요:
+#   kubectl get secret elasticsearch-es-http-certs-public -n textmanager \
+#     -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/ca.crt
+#   kubectl create configmap elasticsearch-es-ca -n textmanager \
+#     --from-file=ca.crt=/tmp/ca.crt --dry-run=client -o yaml | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-es-ca
+  namespace: textmanager
+data:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIDVTCCAj2gAwIBAgIQd5CLHKI/AUWF1eARxAFv2TANBgkqhkiG9w0BAQsFADA1
+    MRYwFAYDVQQLEw1lbGFzdGljc2VhcmNoMRswGQYDVQQDExJlbGFzdGljc2VhcmNo
+    LWh0dHAwHhcNMjUwOTIzMDAzMTMwWhcNMjYwOTIzMDA0MTMwWjA1MRYwFAYDVQQL
+    Ew1lbGFzdGljc2VhcmNoMRswGQYDVQQDExJlbGFzdGljc2VhcmNoLWh0dHAwggEi
+    MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC8DXegM650P3AELPi0TxxzvT8Q
+    /YBP03Rf8CswuNpVd+wv7/ERMi5UU/mgXhWl4B60Ayit44rUFkSjrwix6al6ZrIn
+    Vy8Zd9oovP5Ndxe1tvZnNqafCmlnk9YzZQGn+n5igpu+6Lt4fJfXgJeDLZS4L78Y
+    9OI6OE3Z0LG3Ot4BUXFmp9Ak9e2e3iWblshxWk4G6ncRYBRYuUxyi/7Z8jRdcyI4
+    PoEZAmmxgB5le0e+a+tTsD3gtHiILzA44qppbLBZ9By0tn2+ZgO6+jiquiEL+7+E
+    WQ7dVuseLsgfDLRmTuIuCFqZ5MjKZWpkTxdTKWOSPTwxRwBs/0YW1vcCWMeTAgMB
+    AAGjYTBfMA4GA1UdDwEB/wQEAwIChDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYB
+    BQUHAwIwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUTlrWhQIgBs2Rbs/32ZSe
+    g7CGfbswDQYJKoZIhvcNAQELBQADggEBAGTOqtZPN+NF5Vm3aX5h2w4/zBeSHjzk
+    ixW8roxI8hCi7BB5974xqK9600BVD7moZgClZ+cV1tQWcTblUzzmQ+EvdUhS/BkK
+    N8tkuIyzVPnmC0a3oAvCnLuxFCvt/W7OEM6sa67daaogSyKxDn88LS6itFAzJ0jv
+    IKTeLUR3Q/8WaEXkhba8kEfM1xeomLcG3ueAJtl20BVxVwsq+2AzXsrynYKdQw7C
+    40Zr9D35lP/2dZGgBUiFi6jFvGn5X34Edw9eVOh7pW50UUMBCARoAMcCRk57Odpx
+    YJCf9uNTnx+so2cUqEV5btJBVdJef9MFHqhMtGXIKQkReNTBIIOMf6E=
+    -----END CERTIFICATE-----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: es-backend-tls
+  namespace: textmanager
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: elasticsearch-es-http
+  validation:
+    caCertificateRefs:
+      - group: ""
+        kind: ConfigMap
+        name: elasticsearch-es-ca
+    # cert SAN 중 하나와 일치해야 함 (SAN: elasticsearch-es-http.textmanager.svc 등)
+    hostname: elasticsearch-es-http.textmanager.svc
