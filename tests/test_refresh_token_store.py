@@ -1,6 +1,8 @@
 import sqlite3
 import time
 
+import pytest
+
 from backend.refresh_token_store import RefreshTokenStore
 
 
@@ -139,6 +141,30 @@ def _verbs(conn):
     return [v for v, _ in conn.executed]
 
 
+class _BoomCursor(_FakeCursor):
+    """execute 시 예외를 던지는 커서 대역 (rollback/raise 경로 검증용)."""
+
+    def execute(self, sql, params=None):
+        raise RuntimeError("db down")
+
+
+class _BoomConn(_FakeConn):
+    def cursor(self):
+        return _BoomCursor(self)
+
+
+def _install_init_then_boom(monkeypatch):
+    """_init_db 는 정상 연결로 통과시키고, 이후 연산은 예외를 던지는 연결을 반환한다."""
+    init_conn = _FakeConn(None)
+    monkeypatch.setattr("pymysql.connect", lambda **kw: init_conn)
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    store = MySQLRefreshTokenStore()  # _init_db 는 정상 연결 사용
+    boom = _BoomConn(None)
+    monkeypatch.setattr("pymysql.connect", lambda **kw: boom)
+    return store, boom
+
+
 def test_factory_defaults_to_sqlite(monkeypatch, tmp_path):
     from backend.refresh_token_store import RefreshTokenStore, create_refresh_token_store
 
@@ -227,3 +253,105 @@ def test_mysql_rotate_missing_rolls_back(monkeypatch):
     rot = conns[-1]
     assert result == "missing"
     assert rot.rolled_back and not rot.committed
+
+
+def test_rotation_grace_seconds_invalid_env_falls_back(monkeypatch):
+    """TM_REFRESH_ROTATION_GRACE_SECONDS 가 정수가 아니면 기본값으로 폴백한다 (line 20-21)."""
+    from backend.refresh_token_store import DEFAULT_ROTATION_GRACE_SECONDS, _rotation_grace_seconds
+
+    monkeypatch.setenv("TM_REFRESH_ROTATION_GRACE_SECONDS", "not-an-int")
+    assert _rotation_grace_seconds() == DEFAULT_ROTATION_GRACE_SECONDS
+
+
+def test_mysql_store_issued_inserts_and_commits(monkeypatch):
+    """MySQLRefreshTokenStore.store_issued 는 INSERT 후 commit 한다 (line 211-225)."""
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    conns = _install_fresh_conns(monkeypatch, None)
+    store = MySQLRefreshTokenStore()
+
+    store.store_issued(token_id="t", family_id="F", email="e", issued_at=1, expires_at=2)
+
+    issued = conns[-1]  # store_issued 가 연 연결
+    assert "INSERT" in _verbs(issued)
+    assert issued.committed
+
+
+def test_mysql_rotate_mismatch_rolls_back(monkeypatch):
+    """family/email 불일치 시 rollback 하고 mismatch 를 반환한다 (line 240-241)."""
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    conns = _install_fresh_conns(monkeypatch, {"family_id": "OTHER", "email": "e", "expires_at": int(time.time()) + 1000, "replaced_by": None, "revoked_at": None})
+    store = MySQLRefreshTokenStore()
+
+    result = store.rotate(current_token_id="old", new_token_id="new", family_id="F", email="e", issued_at=1, expires_at=2)
+
+    rot = conns[-1]
+    assert result == "mismatch"
+    assert rot.rolled_back and not rot.committed
+    assert "INSERT" not in _verbs(rot)
+
+
+def test_mysql_rotate_expired_rolls_back(monkeypatch):
+    """만료된 토큰은 rollback 하고 expired 를 반환한다 (line 243-244)."""
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    conns = _install_fresh_conns(monkeypatch, {"family_id": "F", "email": "e", "expires_at": int(time.time()) - 1, "replaced_by": None, "revoked_at": None})
+    store = MySQLRefreshTokenStore()
+
+    result = store.rotate(current_token_id="old", new_token_id="new", family_id="F", email="e", issued_at=1, expires_at=2)
+
+    rot = conns[-1]
+    assert result == "expired"
+    assert rot.rolled_back and not rot.committed
+    assert "INSERT" not in _verbs(rot)
+
+
+def test_mysql_rotate_revoked_token_revokes_family(monkeypatch):
+    """이미 폐기된(revoked_at 설정, replaced_by 없음) 토큰 재제출 시 family 를 폐기하고 revoked 를 반환한다 (line 262-264)."""
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    conns = _install_fresh_conns(monkeypatch, {"family_id": "F", "email": "e", "expires_at": int(time.time()) + 1000, "replaced_by": None, "revoked_at": int(time.time()) - 10, "revoke_reason": "manual"})
+    store = MySQLRefreshTokenStore()
+
+    result = store.rotate(current_token_id="old", new_token_id="new", family_id="F", email="e", issued_at=1, expires_at=2)
+
+    rot = conns[-1]
+    assert result == "revoked"
+    assert "INSERT" not in _verbs(rot)
+    assert "UPDATE" in _verbs(rot)
+    assert rot.committed
+
+
+def test_mysql_rotate_exception_rolls_back_and_raises(monkeypatch):
+    """rotate 중 예외가 나면 rollback 후 예외를 재전파한다 (line 277-279)."""
+    store, boom = _install_init_then_boom(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="db down"):
+        store.rotate(current_token_id="old", new_token_id="new", family_id="F", email="e", issued_at=1, expires_at=2)
+
+    assert boom.rolled_back and not boom.committed
+
+
+def test_mysql_revoke_family_commits(monkeypatch):
+    """MySQLRefreshTokenStore.revoke_family 는 UPDATE 후 commit 한다 (line 282-291)."""
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    conns = _install_fresh_conns(monkeypatch, None)
+    store = MySQLRefreshTokenStore()
+
+    store.revoke_family("F", reason="logout")
+
+    rev = conns[-1]
+    assert "UPDATE" in _verbs(rev)
+    assert rev.committed and not rev.rolled_back
+
+
+def test_mysql_revoke_family_exception_rolls_back_and_raises(monkeypatch):
+    """revoke_family 중 예외가 나면 rollback 후 예외를 재전파한다 (line 289-291)."""
+    store, boom = _install_init_then_boom(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="db down"):
+        store.revoke_family("F", reason="logout")
+
+    assert boom.rolled_back and not boom.committed

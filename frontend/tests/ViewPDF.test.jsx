@@ -40,6 +40,8 @@ vi.mock("../src/Common", () => ({
 import ViewPDF from "../src/ViewPDF";
 import * as pdfjs from "pdfjs-dist";
 
+// 실제 pdfjs-dist 6.x에서 PDFDocumentProxy에는 destroy()가 없고
+// loadingTask.destroy()로 정리한다. mock도 동일하게 구성한다.
 function createMockPdf(numPages = 2) {
   return {
     numPages,
@@ -49,8 +51,15 @@ function createMockPdf(numPages = 2) {
         render: () => ({ promise: Promise.resolve() }),
       }),
     ),
-    destroy: vi.fn(),
   };
+}
+
+// getDocument()가 반환하는 loadingTask를 생성하고 pdfDoc.loadingTask에 연결한다.
+function makeLoadingTask(pdfDoc) {
+  if (!pdfDoc.loadingTask) {
+    pdfDoc.loadingTask = { promise: Promise.resolve(pdfDoc), destroy: vi.fn() };
+  }
+  return pdfDoc.loadingTask;
 }
 
 // fetch mock 헬퍼: /pdf-pages/ 요청에 대해 X-Total-Pages 헤더 포함 응답
@@ -91,7 +100,7 @@ function setupGetDocument(mockPdfFactory) {
   mockGetDocument.mockImplementation(({ data: _data }) => {
     const pdfDoc =
       typeof mockPdfFactory === "function" ? mockPdfFactory() : mockPdfFactory;
-    return { promise: Promise.resolve(pdfDoc) };
+    return makeLoadingTask(pdfDoc);
   });
 }
 
@@ -203,7 +212,6 @@ describe("ViewPDF", () => {
           render: () => ({ promise: new Promise(() => {}) }),
         }),
       ),
-      destroy: vi.fn(),
     };
     setupGetDocument(mockPdf);
 
@@ -316,7 +324,7 @@ describe("ViewPDF", () => {
 
     unmount();
 
-    expect(mockPdf.destroy).toHaveBeenCalled();
+    expect(mockPdf.loadingTask.destroy).toHaveBeenCalled();
   });
 
   it("bookId 변경 시 이전 청크를 모두 destroy한다", async () => {
@@ -327,7 +335,7 @@ describe("ViewPDF", () => {
     mockGetDocument.mockImplementation(() => {
       callCount++;
       const pdf = callCount === 1 ? mockPdf1 : mockPdf2;
-      return { promise: Promise.resolve(pdf) };
+      return makeLoadingTask(pdf);
     });
 
     const { rerender } = render(<ViewPDF bookId={1} />);
@@ -339,7 +347,7 @@ describe("ViewPDF", () => {
     rerender(<ViewPDF bookId={2} />);
 
     await waitFor(() => {
-      expect(mockPdf1.destroy).toHaveBeenCalled();
+      expect(mockPdf1.loadingTask.destroy).toHaveBeenCalled();
     });
   });
 
@@ -558,7 +566,7 @@ describe("ViewPDF", () => {
     unmount();
 
     await waitFor(() => {
-      expect(firstPdf.destroy).toHaveBeenCalled();
+      expect(firstPdf.loadingTask.destroy).toHaveBeenCalled();
     });
   });
 
@@ -577,9 +585,7 @@ describe("ViewPDF", () => {
     const secondPdf = createMockPdf(1);
     mockGetDocument.mockImplementation(() => {
       fetchCount += 1;
-      return {
-        promise: Promise.resolve(fetchCount === 1 ? firstPdf : secondPdf),
-      };
+      return makeLoadingTask(fetchCount === 1 ? firstPdf : secondPdf);
     });
 
     const { rerender } = render(<ViewPDF bookId={1} />);
@@ -591,7 +597,79 @@ describe("ViewPDF", () => {
     rerender(<ViewPDF bookId={2} />);
 
     await waitFor(() => {
-      expect(firstPdf.destroy).toHaveBeenCalled();
+      expect(firstPdf.loadingTask.destroy).toHaveBeenCalled();
+    });
+  });
+
+  it("첫 페이지 doc 로드 도중 취소되면 loadingTask.destroy로 정리한다", async () => {
+    // getDocument().promise가 unmount(취소) 이후에 resolve되는 타이밍을 재현 →
+    // loadPdf의 cancelled 분기에서 firstPdfDoc.loadingTask.destroy() 호출 (ViewPDF.jsx:206-207)
+    globalThis.fetch = createMockFetch(1);
+    const firstPdf = createMockPdf(1);
+    firstPdf.loadingTask = { destroy: vi.fn() };
+
+    let resolveDoc;
+    mockGetDocument.mockReturnValue({
+      promise: new Promise((resolve) => {
+        resolveDoc = resolve;
+      }),
+    });
+
+    const { unmount } = render(<ViewPDF bookId={1} />);
+
+    // loadPdf가 getDocument().promise await 지점까지 진행되기를 대기
+    await waitFor(() => {
+      expect(mockGetDocument).toHaveBeenCalled();
+    });
+
+    // 아직 doc이 resolve되기 전에 unmount → cancelledRef.current = true
+    unmount();
+
+    // 이제 doc resolve → cancelled 분기 진입
+    resolveDoc(firstPdf);
+
+    await waitFor(() => {
+      expect(firstPdf.loadingTask.destroy).toHaveBeenCalled();
+    });
+  });
+
+  it("청크 doc 로드 도중 취소되면 loadingTask.destroy로 정리한다", async () => {
+    // 첫 페이지는 정상 로드되어 청크 페칭이 트리거되고, 청크 getDocument().promise가
+    // unmount 이후 resolve되는 타이밍 → fetchChunk의 cancelled 분기 (ViewPDF.jsx:79-80)
+    globalThis.fetch = createMockFetch(11);
+    const firstPdf = createMockPdf(1);
+    firstPdf.loadingTask = {
+      promise: Promise.resolve(firstPdf),
+      destroy: vi.fn(),
+    };
+    const chunkPdf = createMockPdf(10);
+    chunkPdf.loadingTask = { destroy: vi.fn() };
+
+    let resolveChunk;
+    let callCount = 0;
+    mockGetDocument.mockImplementation(() => {
+      callCount += 1;
+      if (callCount === 1) return firstPdf.loadingTask;
+      return {
+        promise: new Promise((resolve) => {
+          resolveChunk = resolve;
+        }),
+      };
+    });
+
+    const { unmount } = render(<ViewPDF bookId={1} preview={false} />);
+
+    // 첫 페이지 로드 후 청크 getDocument(2번째 호출)까지 진행되기를 대기
+    await waitFor(() => {
+      expect(mockGetDocument).toHaveBeenCalledTimes(2);
+    });
+
+    unmount();
+
+    resolveChunk(chunkPdf);
+
+    await waitFor(() => {
+      expect(chunkPdf.loadingTask.destroy).toHaveBeenCalled();
     });
   });
 
@@ -613,7 +691,6 @@ describe("ViewPDF", () => {
           render: () => ({ promise: Promise.resolve() }),
         });
       }),
-      destroy: vi.fn(),
     };
     setupGetDocument(mockPdf);
 

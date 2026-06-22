@@ -22,11 +22,12 @@ vi.mock("pdfjs-dist", () => ({
 
 import { diagnosePdf } from "../src/PdfDiagnose";
 
+// pdfjs-dist 6.x: PDFDocumentProxy에는 destroy()가 없고 loadingTask.destroy()로 정리한다.
 const createMockPdfDoc = (overrides = {}) => ({
   numPages: overrides.numPages ?? 3,
   getMetadata: overrides.getMetadata ?? mockGetMetadata,
   getPage: overrides.getPage ?? mockGetPage,
-  destroy: mockDestroy,
+  loadingTask: { destroy: mockDestroy },
 });
 
 describe("diagnosePdf", () => {
@@ -224,6 +225,55 @@ describe("diagnosePdf", () => {
       pageSection.results.some(
         (r) =>
           r.text.includes("페이지 로드 실패") || r.text.includes("page error"),
+      ),
+    ).toBe(true);
+  });
+
+  it("첫 페이지 크기 확인 실패 시 에러를 반환한다", async () => {
+    // checkPageStructure에서 getPage(1)(크기 확인)이 실패하는 경로 (PdfDiagnose.js:117)
+    const pdfDoc = createMockPdfDoc({
+      numPages: 2,
+      getPage: vi.fn((pageNum) => {
+        if (pageNum === 1) {
+          return Promise.reject(new Error("first page error"));
+        }
+        return Promise.resolve({
+          view: [0, 0, 595, 842],
+          getTextContent: () => Promise.resolve({ items: [{ str: "text" }] }),
+        });
+      }),
+    });
+    mockGetDocument.mockReturnValue({ promise: Promise.resolve(pdfDoc) });
+    mockGetMetadata.mockResolvedValue({ info: { Title: "test" } });
+
+    const result = await diagnosePdf(new ArrayBuffer(8));
+
+    const pageSection = result.sections.find((s) => s.name === "페이지 구조");
+    expect(
+      pageSection.results.some((r) => r.text.includes("첫 페이지 로드 실패")),
+    ).toBe(true);
+  });
+
+  it("텍스트 추출 중 예외 발생 시 에러를 반환한다", async () => {
+    // checkTextExtraction에서 getTextContent()가 throw하는 경로 (PdfDiagnose.js:186)
+    const pdfDoc = createMockPdfDoc({
+      numPages: 1,
+      getPage: vi.fn(() =>
+        Promise.resolve({
+          view: [0, 0, 595, 842],
+          getTextContent: () => Promise.reject(new Error("text extract error")),
+        }),
+      ),
+    });
+    mockGetDocument.mockReturnValue({ promise: Promise.resolve(pdfDoc) });
+    mockGetMetadata.mockResolvedValue({ info: { Title: "test" } });
+
+    const result = await diagnosePdf(new ArrayBuffer(8));
+
+    const textSection = result.sections.find((s) => s.name === "텍스트 추출");
+    expect(
+      textSection.results.some(
+        (r) => r.type === "error" && r.text.includes("텍스트 추출 실패"),
       ),
     ).toBe(true);
   });

@@ -236,7 +236,8 @@ export async function diagnosePdf(arrayBuffer) {
     countResults(textResults);
     sections.push({ name: "텍스트 추출", results: textResults });
   } finally {
-    pdfDoc.destroy();
+    // pdfjs 6.x: PDFDocumentProxy 대신 loadingTask로 정리
+    pdfDoc.loadingTask.destroy();
   }
 
   return { sections, summary: { fatal, errors, warnings } };

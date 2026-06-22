@@ -76,7 +76,7 @@ export default function ViewPDF({
 
         const pdfDoc = await pdfjs.getDocument({ data: buffer }).promise;
         if (cancelledRef.current) {
-          pdfDoc.destroy();
+          pdfDoc.loadingTask.destroy();
           return;
         }
 
@@ -203,7 +203,7 @@ export default function ViewPDF({
         const firstPdfDoc = await pdfjs.getDocument({ data: firstBuffer })
           .promise;
         if (cancelledRef.current) {
-          firstPdfDoc.destroy();
+          firstPdfDoc.loadingTask.destroy();
           return;
         }
 
@@ -322,9 +322,9 @@ export default function ViewPDF({
         observerRef.current.disconnect();
         observerRef.current = null;
       }
-      // 모든 청크 pdfDoc 정리
+      // 모든 청크 pdfDoc 정리 (pdfjs 6.x: PDFDocumentProxy 대신 loadingTask로 정리)
       for (const pdfDoc of chunkDocsRef.current.values()) {
-        pdfDoc.destroy();
+        pdfDoc.loadingTask.destroy();
       }
       chunkDocsRef.current.clear();
       fetchingRef.current.clear();
