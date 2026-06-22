@@ -97,6 +97,14 @@ vi.mock("../src/BookInfoView.jsx", () => ({
   ),
 }));
 
+vi.mock("../src/BookLoadError.jsx", () => ({
+  default: ({ bookId, error, role }) => (
+    <div data-testid="book-load-error">
+      LoadError: {bookId} / {error} / {role}
+    </div>
+  ),
+}));
+
 vi.mock("../src/SearchResult", () => ({
   default: ({ results }) => (
     <div data-testid="search-result">{results?.length || 0} results</div>
@@ -448,6 +456,40 @@ describe("View", () => {
 
     // bookInfo가 설정되지 않아 ViewSingle이 렌더링되지 않음
     expect(screen.queryByTestId("view-single")).toBeNull();
+
+    // 책 로드 실패 사유 패널이 표시된다
+    await waitFor(() => {
+      const panel = screen.getByTestId("book-load-error");
+      expect(panel).toBeTruthy();
+      expect(panel.textContent).toContain("책을 찾을 수 없음");
+      expect(panel.textContent).toContain("99");
+    });
+  });
+
+  it("딥링크로 책을 정상 로드하면 사유 패널을 표시하지 않는다", async () => {
+    mockRouteState.wildcard = "99";
+    mockRouteState.searchParams = "category=깊은/3레벨/카테고리";
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ 소설: 1 });
+      } else if (url === "/books/99") {
+        resolve({
+          book_id: 99,
+          title: "정상책",
+          file_type: "pdf",
+          file_path: "/ok.pdf",
+          category: "깊은/3레벨/카테고리",
+        });
+      }
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info-view")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("book-load-error")).toBeNull();
   });
 
   it("딥링크 _root 카테고리인 경우 /{bookId}로 entryClicked를 호출한다", async () => {
