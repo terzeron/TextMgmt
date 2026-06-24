@@ -819,4 +819,443 @@ describe("ViewPDF", () => {
       "pdfjs-dist/build/pdf.worker",
     );
   });
+
+  // 스케줄러: 화면 밖으로 나간(아직 렌더 미완) 페이지는 RenderTask.cancel()로 취소된다.
+  // (기본 MockIntersectionObserver는 isIntersecting:true만 보내 이 분기가 커버되지 않음)
+  it("화면 밖으로 나간 미완 렌더 페이지를 취소한다 (cancelRender)", async () => {
+    const cancelSpy = vi.fn();
+    const getPageSpy = vi.fn(() =>
+      Promise.resolve({
+        getViewport: () => ({ width: 800, height: 600 }),
+        // 렌더는 영원히 pending → 페이지가 active 상태로 유지되어 취소 대상이 된다
+        render: () => ({ promise: new Promise(() => {}), cancel: cancelSpy }),
+      }),
+    );
+    setupGetDocument(() => {
+      const pdf = { numPages: 1, getPage: getPageSpy };
+      pdf.loadingTask = { promise: Promise.resolve(pdf), destroy: vi.fn() };
+      return pdf;
+    });
+    globalThis.fetch = createMockFetch(3);
+
+    // 관찰자 인스턴스를 캡처(observe 시 isIntersecting:true 자동 발사)
+    const observers = [];
+    const RealIO = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        observers.push(this);
+      }
+      observe(el) {
+        this.cb([{ isIntersecting: true, target: el }], this);
+      }
+      unobserve() {}
+      disconnect() {}
+    };
+
+    try {
+      render(<ViewPDF bookId={1} />);
+
+      // 전체보기 → canvas 3개 생성
+      await waitFor(() => {
+        expect(document.querySelectorAll("canvas.pdf-page").length).toBe(3);
+      });
+      // 페이지 1·2가 getPage까지 도달 → 페이지 2가 active(pending render)
+      await waitFor(() => {
+        expect(getPageSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const canvas2 = document.querySelectorAll("canvas.pdf-page")[1];
+      expect(canvas2.dataset.page).toBe("2");
+
+      // 페이지 2가 근접 영역을 벗어남 → cancelRender 분기 (ViewPDF.jsx:367,372)
+      const obs = observers[observers.length - 1];
+      obs.cb([{ isIntersecting: false, target: canvas2 }], obs);
+
+      await waitFor(() => {
+        expect(cancelSpy).toHaveBeenCalled();
+      });
+    } finally {
+      globalThis.IntersectionObserver = RealIO;
+    }
+  });
+
+  // ── 줌 경계값 (zoomUp/zoomDown clamp) ──
+
+  it("최대 줌(500%)에서 + 를 더 눌러도 500%를 유지하고 + 버튼이 비활성화된다", async () => {
+    globalThis.fetch = createMockFetch(1);
+    setupGetDocument(() => createMockPdf(1));
+
+    // preview=true → fitMode=false (수동 줌 모드)
+    render(<ViewPDF bookId={1} preview={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
+    });
+
+    const zoomUpButton = screen.getByRole("button", { name: "+" });
+    // index 7(100%) → 16(500%): 9번 클릭
+    for (let i = 0; i < 9; i++) {
+      zoomUpButton.click();
+    }
+    await waitFor(() => {
+      expect(screen.getByText("500%")).toBeTruthy();
+    });
+    // 상한이므로 + 버튼 비활성화
+    expect(zoomUpButton.disabled).toBe(true);
+
+    // 추가 클릭해도 (clamp) 500% 유지
+    zoomUpButton.click();
+    expect(screen.getByText("500%")).toBeTruthy();
+  });
+
+  it("최소 줌(25%)에서 − 를 더 눌러도 25%를 유지하고 − 버튼이 비활성화된다", async () => {
+    globalThis.fetch = createMockFetch(1);
+    setupGetDocument(() => createMockPdf(1));
+
+    render(<ViewPDF bookId={1} preview={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
+    });
+
+    const zoomDownButton = screen.getByRole("button", { name: "−" });
+    // index 7(100%) → 0(25%): 7번 클릭
+    for (let i = 0; i < 7; i++) {
+      zoomDownButton.click();
+    }
+    await waitFor(() => {
+      expect(screen.getByText("25%")).toBeTruthy();
+    });
+    // 하한이므로 − 버튼 비활성화
+    expect(zoomDownButton.disabled).toBe(true);
+
+    // 추가 클릭해도 (clamp) 25% 유지
+    zoomDownButton.click();
+    expect(screen.getByText("25%")).toBeTruthy();
+  });
+
+  // ── devicePixelRatio fallback (|| 1) ──
+
+  it("devicePixelRatio가 0이면 fallback 1을 사용해 정상 렌더링한다", async () => {
+    const originalDpr = Object.getOwnPropertyDescriptor(
+      window,
+      "devicePixelRatio",
+    );
+    // 0 → falsy → `window.devicePixelRatio || 1` 의 fallback 분기 (ViewPDF.jsx:138,315)
+    Object.defineProperty(window, "devicePixelRatio", {
+      configurable: true,
+      value: 0,
+    });
+
+    try {
+      globalThis.fetch = createMockFetch(2);
+      setupGetDocument(() => createMockPdf(1));
+
+      render(<ViewPDF bookId={1} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
+      });
+      // fallback이 적용되어 에러 없이 canvas가 생성됨
+      expect(document.querySelectorAll("canvas").length).toBe(2);
+    } finally {
+      if (originalDpr) {
+        Object.defineProperty(window, "devicePixelRatio", originalDpr);
+      } else {
+        delete window.devicePixelRatio;
+      }
+    }
+  });
+
+  // ── enqueueRender 가드 (이미 렌더됨 / 이미 active) ──
+
+  it("이미 렌더 완료된 페이지를 다시 관찰해도 재렌더하지 않는다 (enqueueRender 가드)", async () => {
+    // 페이지 1은 첫 청크에서 즉시 렌더 완료된다. 같은 canvas를 다시 intersecting으로
+    // 보내도 renderedPagesRef 가드(ViewPDF.jsx:235)에 의해 무시되어야 한다.
+    const getPageSpy = vi.fn(() =>
+      Promise.resolve({
+        getViewport: () => ({ width: 800, height: 600 }),
+        render: () => ({ promise: Promise.resolve() }),
+      }),
+    );
+    setupGetDocument(() => {
+      const pdf = { numPages: 1, getPage: getPageSpy };
+      pdf.loadingTask = { promise: Promise.resolve(pdf), destroy: vi.fn() };
+      return pdf;
+    });
+    globalThis.fetch = createMockFetch(3);
+
+    const observers = [];
+    const RealIO = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        observers.push(this);
+      }
+      observe(el) {
+        this.cb([{ isIntersecting: true, target: el }], this);
+      }
+      unobserve() {}
+      disconnect() {}
+    };
+
+    try {
+      render(<ViewPDF bookId={1} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("총 3쪽 표시")).toBeTruthy();
+      });
+      // 페이지 2가 한 번은 렌더되도록 대기
+      await waitFor(() => {
+        expect(getPageSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const callsAfterRender = getPageSpy.mock.calls.length;
+
+      // 이미 렌더된 페이지 2를 다시 intersecting → enqueueRender 가드로 무시
+      const canvas2 = document.querySelectorAll("canvas.pdf-page")[1];
+      const obs = observers[observers.length - 1];
+      obs.cb([{ isIntersecting: true, target: canvas2 }], obs);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // getPage가 추가로 호출되지 않음 (재렌더 안 함)
+      expect(getPageSpy.mock.calls.length).toBe(callsAfterRender);
+    } finally {
+      globalThis.IntersectionObserver = RealIO;
+    }
+  });
+
+  it("렌더 진행 중(active)인 페이지를 다시 관찰해도 큐에 중복 투입하지 않는다 (enqueueRender 가드)", async () => {
+    // 렌더가 영원히 pending → 페이지가 active 슬롯을 점유한 상태 유지.
+    // 같은 페이지를 다시 intersecting으로 보내면 activeRenderTasksRef 가드
+    // (ViewPDF.jsx:236)에 의해 getPage가 재호출되지 않아야 한다.
+    const getPageSpy = vi.fn(() =>
+      Promise.resolve({
+        getViewport: () => ({ width: 800, height: 600 }),
+        render: () => ({ promise: new Promise(() => {}), cancel: vi.fn() }),
+      }),
+    );
+    setupGetDocument(() => {
+      const pdf = { numPages: 1, getPage: getPageSpy };
+      pdf.loadingTask = { promise: Promise.resolve(pdf), destroy: vi.fn() };
+      return pdf;
+    });
+    globalThis.fetch = createMockFetch(2);
+
+    const observers = [];
+    const RealIO = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        observers.push(this);
+      }
+      observe(el) {
+        this.cb([{ isIntersecting: true, target: el }], this);
+      }
+      unobserve() {}
+      disconnect() {}
+    };
+
+    try {
+      render(<ViewPDF bookId={1} />);
+
+      await waitFor(() => {
+        expect(document.querySelectorAll("canvas.pdf-page").length).toBe(2);
+      });
+      // 페이지 1(첫 청크)이 active 상태(pending render)가 될 때까지 대기
+      await waitFor(() => {
+        expect(getPageSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const callsWhileActive = getPageSpy.mock.calls.length;
+
+      // active 상태인 페이지 1을 다시 intersecting → 가드로 무시
+      const canvas1 = document.querySelectorAll("canvas.pdf-page")[0];
+      // 페이지 1에는 observer가 붙지 않으므로(2부터 관찰) 가장 최근 observer로 직접 발사
+      const obs = observers[observers.length - 1];
+      obs.cb([{ isIntersecting: true, target: canvas1 }], obs);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // 가드로 인해 getPage 추가 호출 없음
+      expect(getPageSpy.mock.calls.length).toBe(callsWhileActive);
+    } finally {
+      globalThis.IntersectionObserver = RealIO;
+    }
+  });
+
+  // ── 첫 페이지 버퍼 로드 도중 취소 (cancelledRef 분기) ──
+
+  it("첫 페이지 arrayBuffer 로드 도중 취소되면 getDocument를 호출하지 않는다", async () => {
+    // firstResponse.arrayBuffer()가 unmount 이후 resolve되는 타이밍 →
+    // ViewPDF.jsx:286 cancelledRef 분기에서 early return (getDocument 미호출)
+    let resolveBuffer;
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "X-Total-Pages": "1" }),
+        arrayBuffer: () =>
+          new Promise((resolve) => {
+            resolveBuffer = resolve;
+          }),
+      }),
+    );
+    setupGetDocument(() => createMockPdf(1));
+
+    const { unmount } = render(<ViewPDF bookId={1} />);
+
+    // fetch는 호출됐지만 arrayBuffer는 아직 pending
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalled();
+    });
+    expect(resolveBuffer).toBeDefined();
+
+    // arrayBuffer resolve 전에 unmount → cancelledRef.current = true
+    unmount();
+
+    // 이제 buffer resolve → cancelled 분기 진입, getDocument 호출 안 됨
+    resolveBuffer(new ArrayBuffer(10));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockGetDocument).not.toHaveBeenCalled();
+  });
+
+  it("청크 arrayBuffer 로드 도중 취소되면 청크 getDocument를 호출하지 않는다", async () => {
+    // 첫 페이지는 정상 로드되어 청크 페칭이 트리거되고, 청크 응답의 arrayBuffer()가
+    // unmount 이후 resolve되는 타이밍 → fetchChunk의 cancelledRef 분기 (ViewPDF.jsx:86)
+    let resolveChunkBuffer;
+    let fetchCall = 0;
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes("start=1&end=1")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers({ "X-Total-Pages": "11" }),
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
+        });
+      }
+      fetchCall += 1;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        arrayBuffer: () =>
+          new Promise((resolve) => {
+            resolveChunkBuffer = resolve;
+          }),
+      });
+    });
+    setupGetDocument(() => createMockPdf(1));
+
+    const { unmount } = render(<ViewPDF bookId={1} preview={false} />);
+
+    // 청크 fetch의 arrayBuffer가 pending 상태가 될 때까지 대기
+    await waitFor(() => {
+      expect(resolveChunkBuffer).toBeDefined();
+    });
+
+    const docCallsBefore = mockGetDocument.mock.calls.length;
+
+    // 청크 buffer resolve 전에 unmount
+    unmount();
+
+    // 이제 buffer resolve → fetchChunk cancelled 분기에서 early return
+    resolveChunkBuffer(new ArrayBuffer(10));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // 청크용 getDocument 추가 호출 없음 (첫 페이지 1건만)
+    expect(mockGetDocument.mock.calls.length).toBe(docCallsBefore);
+    expect(fetchCall).toBeGreaterThanOrEqual(1);
+  });
+
+  it("첫 페이지 getPage 도중 취소되면 totalPages를 설정하지 않는다 (cancelledRef 분기)", async () => {
+    // firstPdfDoc.getPage(1)이 unmount 이후 resolve되는 타이밍 →
+    // ViewPDF.jsx:321 cancelledRef 분기에서 flushSync(setTotalPages) 전에 early return
+    globalThis.fetch = createMockFetch(2);
+
+    let resolveGetPage;
+    const firstPdf = {
+      numPages: 1,
+      getPage: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveGetPage = resolve;
+          }),
+      ),
+    };
+    firstPdf.loadingTask = {
+      promise: Promise.resolve(firstPdf),
+      destroy: vi.fn(),
+    };
+    setupGetDocument(firstPdf);
+
+    const { unmount } = render(<ViewPDF bookId={1} />);
+
+    // loadPdf가 getPage await 지점까지 진행되기를 대기
+    await waitFor(() => {
+      expect(firstPdf.getPage).toHaveBeenCalled();
+    });
+
+    // getPage resolve 전에 unmount → cancelledRef.current = true
+    unmount();
+
+    resolveGetPage({
+      getViewport: () => ({ width: 800, height: 600 }),
+      render: () => ({ promise: Promise.resolve() }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // 취소되어 canvas(페이지 placeholder)가 생성되지 않음
+    expect(document.querySelectorAll("canvas").length).toBe(0);
+    // totalPages 미설정 → "총 N쪽 표시" 없음
+    expect(screen.queryByText(/쪽 표시/)).toBeNull();
+  });
+
+  it("로드 중 취소된 뒤 에러가 발생해도 에러 메시지를 표시하지 않는다 (catch cancelledRef 분기)", async () => {
+    // firstResponse.arrayBuffer()가 reject되지만 그 전에 unmount되어 cancelledRef=true →
+    // catch 블록의 ViewPDF.jsx:389 분기에서 setError 없이 early return
+    let rejectBuffer;
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "X-Total-Pages": "1" }),
+        arrayBuffer: () =>
+          new Promise((_resolve, reject) => {
+            rejectBuffer = reject;
+          }),
+      }),
+    );
+    setupGetDocument(() => createMockPdf(1));
+
+    const { unmount } = render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalled();
+    });
+    expect(rejectBuffer).toBeDefined();
+
+    // 에러 발생 전에 unmount → cancelledRef.current = true
+    unmount();
+
+    // 이제 buffer reject → catch 진입하지만 cancelled라 setError 안 함
+    rejectBuffer(new Error("boom"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // unmount된 컴포넌트라 DOM에 에러 메시지가 없음
+    expect(screen.queryByText(/PDF 렌더링 실패/)).toBeNull();
+  });
 });

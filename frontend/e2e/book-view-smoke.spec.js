@@ -10,7 +10,7 @@
  *   - 프로덕션 빌드(dist/)가 필요하다. webServer 설정이 자동으로 빌드 후 preview 서버를 시작한다.
  *   - API 호출은 page.route()로 전부 모킹한다 (실 백엔드 불필요).
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./coverage-fixture.js";
 
 const MOCK_CATEGORIES = {
   fiction: 4,

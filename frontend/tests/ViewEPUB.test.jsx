@@ -1786,4 +1786,86 @@ describe("ViewEPUB", () => {
 
     expect(screen.getByText("45 / 100")).toBeTruthy();
   });
+
+  // ── 저장 위치 복원 catch 경로 (handleLocationChanged) ──
+
+  it("첫 렌더 후 저장된 위치 복원이 reject되면 console.warn 후 localStorage에서 위치를 삭제한다", async () => {
+    localStorageMock._getStore()["epub_location_42"] = "epubcfi(/saved)";
+    autoLoad = false;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    render(<ViewEPUB bookId={42} />);
+
+    await waitFor(() => {
+      expect(capturedGetRendition).not.toBeNull();
+    });
+
+    // 원본 display가 저장 위치와 폴백(undefined) 모두 reject하도록 구성하면
+    // getRendition이 래핑한 display가 최종적으로 reject되어
+    // handleLocationChanged의 .catch (소스 133-134)가 실행된다.
+    const rendition = createMockRendition();
+    rendition.display = vi.fn(() => Promise.reject(new Error("restore fail")));
+
+    await act(async () => {
+      capturedGetRendition(rendition);
+    });
+
+    localStorageMock.removeItem.mockClear();
+
+    const lastCall =
+      mockReactReader.mock.calls[mockReactReader.mock.calls.length - 1];
+    await act(async () => {
+      lastCall[0].locationChanged("epubcfi(/1)");
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[epub.js] 저장된 위치 복원 실패, 현재 위치 유지",
+    );
+    expect(localStorageMock.removeItem).toHaveBeenCalledWith(
+      "epub_location_42",
+    );
+
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  // ── spine.get() 폴백 오버라이드 ──
+
+  it("spine.get()이 누락 항목에 falsy를 반환하면 첫 챕터로 폴백한다", async () => {
+    autoLoad = true;
+    render(<ViewEPUB bookId={42} />);
+
+    await waitFor(() => {
+      expect(capturedGetRendition).not.toBeNull();
+    });
+
+    const rendition = createMockRendition();
+    const firstChapter = { href: "chapter1.xhtml" };
+    // 원본 spine.get: 유효 target은 그대로, 누락(falsy) target은 null,
+    // undefined로 호출되면 첫 챕터를 돌려준다.
+    rendition.book.spine.get = vi.fn((target) => {
+      if (target === undefined) return firstChapter;
+      return target || null;
+    });
+
+    await act(async () => {
+      capturedGetRendition(rendition);
+    });
+
+    // getRendition이 spine.get을 오버라이드(소스 187-191)했다.
+    const overridden = rendition.book.spine.get;
+
+    // 누락된 항목 접근: 원본이 null을 반환 → 첫 챕터로 폴백 (소스 189-190)
+    const fallback = overridden(null);
+    expect(fallback).toBe(firstChapter);
+
+    // 유효한 항목은 그대로 반환 (소스 188만 실행)
+    const valid = overridden("chapter5.xhtml");
+    expect(valid).toBe("chapter5.xhtml");
+  });
 });

@@ -15,6 +15,9 @@ frontend/.env.development
 frontend/.env.production
 frontend/coverage
 frontend/coverage-report.json
+frontend/coverage-reports
+frontend/test-results
+frontend/playwright-report
 
 node_modules/
 

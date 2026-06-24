@@ -1058,4 +1058,403 @@ describe("Navigation Component", () => {
     });
     expect(screen.queryByTestId("google-login")).toBeNull();
   });
+
+  // --- 추가 브랜치 커버리지 테스트 ---
+
+  it("comics 컨텍스트에서 hidden-categories를 comic content_type으로 로드한다", async () => {
+    // viewer로 세션 복원 (comics 경로)
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        status: "success",
+        result: { role: "viewer", name: "V" },
+      }),
+    });
+
+    Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("hidden-categories")) {
+        resolve({ status: "success", result: [] });
+      }
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/comics-view"]}>
+        <Routes>
+          <Route path="/comics-view" element={<Navigation />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // isComicsContext === true → content_type=comic 브랜치 (line 55)
+    await waitFor(() => {
+      expect(Common.rawJsonGetReq).toHaveBeenCalledWith(
+        expect.stringContaining("content_type=comic"),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
+  it("comics 컨텍스트에서 검색 시 /comics search prefix를 사용한다", async () => {
+    // admin이면 hidden-categories 호출 없음, comics prefix만 확인 (line 50)
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: "success", result: { role: "admin" } }),
+    });
+
+    Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("search")) {
+        resolve({ status: "success", result: [], total: 0 });
+      }
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/comics-view"]}>
+        <Routes>
+          <Route path="/comics-view" element={<Navigation />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const input = await screen.findByPlaceholderText(/키워드/i);
+    fireEvent.change(input, { target: { value: "comic" } });
+    fireEvent.click(screen.getByRole("button", { name: /검색/i }));
+
+    await waitFor(() => {
+      const searchCall = Common.rawJsonGetReq.mock.calls.find((c) =>
+        c[0].includes("search"),
+      );
+      // searchPrefix === "/comics" (line 50)
+      expect(searchCall[0]).toContain("/comics/search/");
+    });
+  });
+
+  it("hidden-categories 성공 응답에 result가 없으면 빈 배열로 설정한다", async () => {
+    // line 61: setHiddenCategories(data.result || []) 의 || [] 브랜치
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        status: "success",
+        result: { role: "viewer", name: "V" },
+      }),
+    });
+
+    Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("hidden-categories")) {
+        // status는 success지만 result 필드가 없음
+        resolve({ status: "success" });
+      }
+      if (url.includes("search")) {
+        resolve({ status: "success", result: [], total: 0 });
+      }
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/book-view"]}>
+        <Routes>
+          <Route path="/book-view" element={<Navigation />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const input = await screen.findByPlaceholderText(/키워드/i);
+    fireEvent.change(input, { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: /검색/i }));
+
+    // hiddenCategories가 빈 배열이므로 exclude_categories가 붙지 않음
+    await waitFor(() => {
+      const searchCall = Common.rawJsonGetReq.mock.calls.find((c) =>
+        c[0].includes("search"),
+      );
+      expect(searchCall[0]).not.toContain("exclude_categories");
+    });
+  });
+
+  it("검색 성공 응답에 result/total이 없으면 기본값을 사용한다", async () => {
+    // line 94-95: data.result || [], data.total || 0 의 폴백 브랜치
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: "success", result: { role: "admin" } }),
+    });
+
+    Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("search")) {
+        // success지만 result/total 필드 누락
+        resolve({ status: "success" });
+      }
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/book-view"]}>
+        <Routes>
+          <Route path="/book-view" element={<Navigation />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const input = await screen.findByPlaceholderText(/키워드/i);
+    fireEvent.change(input, { target: { value: "nores" } });
+    fireEvent.click(screen.getByRole("button", { name: /검색/i }));
+
+    await waitFor(() => {
+      expect(Common.rawJsonGetReq).toHaveBeenCalledWith(
+        expect.stringContaining("search/nores"),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
+  it("handleSearch는 키워드가 비어 있으면 검색을 실행하지 않는다", async () => {
+    // line 83: if (searchKeyword) false 브랜치
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: "success", result: { role: "admin" } }),
+    });
+
+    Common.rawJsonGetReq.mockImplementation(() => {});
+
+    render(
+      <MemoryRouter initialEntries={["/book-view"]}>
+        <Routes>
+          <Route path="/book-view" element={<Navigation />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // 키워드 입력 없이 바로 검색 버튼 클릭
+    const searchButton = await screen.findByRole("button", { name: /검색/i });
+    fireEvent.click(searchButton);
+
+    // search 요청이 한 번도 발생하지 않아야 함
+    const searchCalls = Common.rawJsonGetReq.mock.calls.filter((c) =>
+      c[0].includes("search"),
+    );
+    expect(searchCalls.length).toBe(0);
+  });
+
+  it("handleLoadMore는 keyword가 없으면 즉시 반환한다", async () => {
+    // line 113: !searchKeyword 브랜치 (early return)
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: "success", result: { role: "admin" } }),
+    });
+
+    Common.rawJsonGetReq.mockImplementation(() => {});
+
+    let loadMoreFn;
+    const LoadMoreConsumer = () => {
+      const { useOutletContext } = require("react-router-dom");
+      const ctx = useOutletContext();
+      loadMoreFn = ctx.handleLoadMore;
+      return <div>Outlet Content</div>;
+    };
+
+    render(
+      <MemoryRouter initialEntries={["/book-view"]}>
+        <Routes>
+          <Route path="/book-view" element={<Navigation />}>
+            <Route index element={<LoadMoreConsumer />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(loadMoreFn).toBeDefined();
+    });
+
+    // 검색 키워드 없이 loadMore 호출 → 즉시 반환, search 요청 없음
+    loadMoreFn();
+    const searchCalls = Common.rawJsonGetReq.mock.calls.filter((c) =>
+      c[0].includes("search"),
+    );
+    expect(searchCalls.length).toBe(0);
+  });
+
+  it("handleLoadMore 성공 응답에 result가 없으면 append를 건너뛴다", async () => {
+    // line 119: data.status === "success" && data.result 에서 result falsy 브랜치
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: "success", result: { role: "admin" } }),
+    });
+
+    let loadMoreFn;
+    Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("search")) {
+        resolve({
+          status: "success",
+          result: [{ id: 1, title: "Book 1" }],
+          total: 20,
+        });
+      }
+    });
+
+    const LoadMoreConsumer = () => {
+      const { useOutletContext } = require("react-router-dom");
+      const ctx = useOutletContext();
+      loadMoreFn = ctx.handleLoadMore;
+      return <div>Outlet Content</div>;
+    };
+
+    render(
+      <MemoryRouter initialEntries={["/book-view"]}>
+        <Routes>
+          <Route path="/book-view" element={<Navigation />}>
+            <Route index element={<LoadMoreConsumer />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const input = await screen.findByPlaceholderText(/키워드/i);
+    fireEvent.change(input, { target: { value: "noappend" } });
+    fireEvent.click(screen.getByRole("button", { name: /검색/i }));
+
+    await waitFor(() => {
+      expect(Common.rawJsonGetReq).toHaveBeenCalledWith(
+        expect.stringContaining("search/noappend"),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+
+    // loadMore가 success이지만 result 없음 → append 안 함
+    Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("search")) {
+        resolve({ status: "success" });
+      }
+    });
+
+    await waitFor(() => {
+      expect(loadMoreFn).toBeDefined();
+    });
+    loadMoreFn();
+
+    await waitFor(() => {
+      const calls = Common.rawJsonGetReq.mock.calls.filter((c) =>
+        c[0].includes("search"),
+      );
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it("Google 로그인 성공 시 name/email이 없으면 기본값을 사용한다", async () => {
+    // line 210-211: data.name || "Unknown", data.email || "" 폴백 브랜치
+    fetch.mockResolvedValueOnce({ ok: false }); // session check fails
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ role: "admin" }), // name/email/picture/expires_in 없음
+    });
+
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    const loginButton = await screen.findByTestId("google-login");
+    fireEvent.click(loginButton);
+
+    // role이 있으므로 로그인 상태가 되어 메뉴가 보여야 함
+    await waitFor(() => {
+      expect(screen.getByText("책 편집")).toBeDefined();
+    });
+    // expires_in이 없으므로 startProactiveRefresh 호출 안 됨 (line 215 false 브랜치)
+    expect(Common.startProactiveRefresh).not.toHaveBeenCalled();
+  });
+
+  it("Google 로그인 성공 시 expires_in이 있으면 선제 갱신을 시작한다", async () => {
+    // line 215: if (data.expires_in) true 브랜치
+    fetch.mockResolvedValueOnce({ ok: false }); // session check fails
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        role: "admin",
+        name: "Admin",
+        email: "admin@example.com",
+        picture: "http://example.com/p.png",
+        expires_in: 1800,
+      }),
+    });
+
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    const loginButton = await screen.findByTestId("google-login");
+    fireEvent.click(loginButton);
+
+    await waitFor(() => {
+      expect(Common.startProactiveRefresh).toHaveBeenCalledWith(1800);
+    });
+  });
+
+  it("picture가 있으면 아바타 이미지를 렌더링한다", async () => {
+    // line 357: picture ? <img> : <FontAwesomeIcon> 의 true 브랜치
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "success",
+        result: {
+          role: "admin",
+          name: "Test",
+          email: "pic@example.com",
+          picture: "http://example.com/avatar.png",
+        },
+      }),
+    });
+
+    const { container } = render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("책 편집")).toBeDefined();
+    });
+
+    const avatar = container.querySelector("img.rounded-circle");
+    expect(avatar).not.toBeNull();
+    expect(avatar.getAttribute("src")).toBe("http://example.com/avatar.png");
+    expect(avatar.getAttribute("alt")).toBe("pic@example.com");
+  });
+
+  it("viewer는 허용 경로(book-view)에서 Outlet을 렌더링한다", async () => {
+    // line 279: role === "viewer" && !isViewerAllowedPath 에서 isViewerAllowedPath true 브랜치
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        status: "success",
+        result: { role: "viewer", name: "V" },
+      }),
+    });
+
+    Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("hidden-categories")) {
+        resolve({ status: "success", result: [] });
+      }
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/book-view"]}>
+        <Routes>
+          <Route path="/book-view" element={<Navigation />}>
+            <Route index element={<div>Viewer Outlet</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // 허용 경로이므로 redirect 없이 Outlet 렌더링
+    await waitFor(() => {
+      expect(screen.getByText("Viewer Outlet")).toBeDefined();
+    });
+    // admin 전용 메뉴는 보이지 않아야 함
+    expect(screen.queryByText("책 편집")).toBeNull();
+  });
 });

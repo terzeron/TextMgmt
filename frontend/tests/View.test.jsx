@@ -62,6 +62,12 @@ vi.mock("../src/Folder.jsx", () => ({
       >
         deep
       </button>
+      <button
+        data-testid="custom-unparsable-click"
+        onClick={() => onClickHandler("소설/abc")}
+      >
+        unparsable
+      </button>
     </div>
   ),
 }));
@@ -856,6 +862,319 @@ describe("View", () => {
     render(<View />);
 
     // 딥링크로 카테고리 로드 → booksLoaded 후 책 자동 선택
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info-view")).toBeTruthy();
+    });
+  });
+
+  it("query category 없이 레거시 경로(category/bookId)로 자동 선택한다 (parseEntryId 폴백)", async () => {
+    // qCategory 없음 → routeWildcard에서 parseEntryId로 category/bookId 추출
+    mockRouteState.wildcard = "소설/42";
+    mockRouteState.searchParams = "";
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ 소설: 1 });
+      } else if (url === "/categories/소설") {
+        resolve([
+          {
+            book_id: 42,
+            title: "레거시소설",
+            file_type: "epub",
+            file_path: "/legacy.epub",
+            category: "소설",
+          },
+        ]);
+      }
+    });
+
+    render(<View />);
+
+    // 레거시 경로에서 routeCategory='소설', routeBookId='42' 추출되어 자동 선택
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info-view")).toBeTruthy();
+    });
+  });
+
+  it("query category가 있지만 wildcard가 숫자가 아니면 routeBookId가 undefined여서 자동 선택하지 않는다", async () => {
+    // qCategory 존재 + routeWildcard 비숫자 → routeBookId undefined → 자동 선택 분기 미진입
+    mockRouteState.wildcard = "notanumber";
+    mockRouteState.searchParams = "category=소설";
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ 소설: 1 });
+      }
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder")).toBeTruthy();
+    });
+
+    // routeBookId가 undefined이므로 /categories/소설 자동 로드가 일어나지 않음
+    expect(
+      mockJsonGetReq.mock.calls.find((c) => c[0] === "/categories/소설"),
+    ).toBeFalsy();
+    expect(screen.queryByTestId("book-info-view")).toBeNull();
+  });
+
+  it("apiPrefix가 있을 때 폴더 내 책 클릭 시 viewUrl에 api 파라미터가 포함된다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") {
+        resolve({ manga: 1 });
+      } else if (url === "/comics/categories/manga") {
+        resolve([
+          {
+            book_id: 7,
+            title: "코믹",
+            file_type: "cbz",
+            file_path: "/comic.cbz",
+            category: "manga",
+          },
+        ]);
+      }
+    });
+
+    render(<View apiPrefix="/comics" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-manga")).toBeTruthy();
+    });
+
+    screen.getByTestId("folder-item-manga").click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-manga/7")).toBeTruthy();
+    });
+
+    screen.getByTestId("folder-item-manga/7").click();
+
+    // apiPrefix가 truthy이므로 entryClicked의 viewUrl/downloadUrl 분기가 실행됨
+    await waitFor(() => {
+      expect(screen.getByTestId("view-single")).toBeTruthy();
+    });
+  });
+
+  it("apiPrefix가 있을 때 _root 파일 클릭 시 viewUrl에 api 파라미터가 포함된다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") {
+        resolve({ manga: 1, _root: 1 });
+      } else if (url === "/comics/categories/_root") {
+        resolve([
+          {
+            book_id: 300,
+            title: "루트코믹",
+            file_type: "cbz",
+            file_path: "/root.cbz",
+            category: "_root",
+          },
+        ]);
+      }
+    });
+
+    render(<View apiPrefix="/comics" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-/300")).toBeTruthy();
+    });
+
+    screen.getByTestId("folder-item-/300").click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-single")).toBeTruthy();
+    });
+  });
+
+  it("category가 없는 _root 책 클릭 시 viewUrl이 _root 기본값으로 설정된다", async () => {
+    // book에 category 키가 없음 → book["category"] || "_root" 의 폴백 arm 실행
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ _root: 1 });
+      } else if (url === "/categories/_root") {
+        resolve([
+          {
+            book_id: 400,
+            title: "카테고리없는루트",
+            file_type: "pdf",
+            file_path: "/nocat.pdf",
+          },
+        ]);
+      }
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-/400")).toBeTruthy();
+    });
+
+    screen.getByTestId("folder-item-/400").click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info-view")).toBeTruthy();
+    });
+  });
+
+  it("파싱 불가능한 entryId(소설/abc) 클릭 시 조용히 리턴한다 (parseEntryId null)", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ 소설: 1 });
+      }
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder")).toBeTruthy();
+    });
+
+    // findFolderInTree null + parseEntryId null → 조기 리턴, 에러/책정보 미설정
+    screen.getByTestId("custom-unparsable-click").click();
+
+    expect(screen.queryByTestId("book-info-view")).toBeNull();
+    expect(screen.queryByTestId("book-load-error")).toBeNull();
+  });
+
+  it("부모 카테고리에 하위 폴더가 있을 때 책 로드 후 하위 폴더 children을 보존한다", async () => {
+    // '문학' 부모 + '문학/소설' 자식 → 실제 부모 폴더(isVirtualParent false)
+    // '문학' 클릭 시 책 로드 → existingSubfolders 필터(L210-211)에서 '문학/소설'(folder) 보존
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ 문학: 2, "문학/소설": 3 });
+      } else if (url === "/categories/문학") {
+        resolve([
+          {
+            book_id: 11,
+            title: "부모책",
+            file_type: "epub",
+            file_path: "/parent.epub",
+            category: "문학",
+          },
+        ]);
+      }
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-문학")).toBeTruthy();
+    });
+
+    // 부모 카테고리 클릭 → 책 로드, 기존 하위 폴더(문학/소설) 보존
+    screen.getByTestId("folder-item-문학").click();
+
+    await waitFor(() => {
+      expect(
+        mockJsonGetReq.mock.calls.find((c) => c[0] === "/categories/문학"),
+      ).toBeTruthy();
+    });
+
+    // 책 로드 후에도 하위 폴더 '문학/소설'이 여전히 존재
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-문학/소설")).toBeTruthy();
+    });
+    // 책도 추가됨
+    expect(screen.getByTestId("folder-item-문학/11")).toBeTruthy();
+  });
+
+  it("이미 booksLoaded된 카테고리를 다시 클릭하면 중복 API 호출을 하지 않는다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ 소설: 1 });
+      } else if (url === "/categories/소설") {
+        resolve([
+          {
+            book_id: 42,
+            title: "테스트소설",
+            file_type: "epub",
+            file_path: "/test.epub",
+            category: "소설",
+          },
+        ]);
+      }
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-소설")).toBeTruthy();
+    });
+
+    screen.getByTestId("folder-item-소설").click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-소설/42")).toBeTruthy();
+    });
+
+    const countAfterFirst = mockJsonGetReq.mock.calls.filter(
+      (c) => c[0] === "/categories/소설",
+    ).length;
+
+    // booksLoaded=true 상태에서 재클릭 → 중복 로드 방지 분기
+    screen.getByTestId("folder-item-소설").click();
+
+    const countAfterSecond = mockJsonGetReq.mock.calls.filter(
+      (c) => c[0] === "/categories/소설",
+    ).length;
+    expect(countAfterSecond).toBe(countAfterFirst);
+  });
+
+  it("viewer 딥링크 직접 조회에서 hidden 카테고리가 아니면 정상 로드한다", async () => {
+    // role=viewer, hiddenCategories 존재하지만 book category가 hidden 접두사가 아님
+    // → hidden 차단 루프를 통과하여 정상 로드 (L321 분기의 통과 arm)
+    mockOutletContext.role = "viewer";
+    mockRouteState.wildcard = "60";
+    mockRouteState.searchParams = "category=공개/하위";
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ 소설: 10 });
+      } else if (url === "/hidden-categories?content_type=book") {
+        resolve(["비공개"]);
+      } else if (url === "/books/60") {
+        resolve({
+          book_id: 60,
+          title: "공개책",
+          file_type: "pdf",
+          file_path: "/public.pdf",
+          category: "공개/하위",
+        });
+      }
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info-view")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("book-load-error")).toBeNull();
+  });
+
+  it("viewer 딥링크 직접 조회 시 book category가 비어 있으면 hidden 검사를 통과한다", async () => {
+    // book["category"] 없음 → bookCat="" → hidden 매칭 안 됨 → 정상 로드 (L323 폴백 arm)
+    mockOutletContext.role = "viewer";
+    mockRouteState.wildcard = "61";
+    mockRouteState.searchParams = "category=어떤/경로";
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ 소설: 10 });
+      } else if (url === "/hidden-categories?content_type=book") {
+        resolve(["비공개"]);
+      } else if (url === "/books/61") {
+        resolve({
+          book_id: 61,
+          title: "카테고리없는책",
+          file_type: "pdf",
+          file_path: "/nocat2.pdf",
+        });
+      }
+    });
+
+    render(<View />);
+
     await waitFor(() => {
       expect(screen.getByTestId("book-info-view")).toBeTruthy();
     });
