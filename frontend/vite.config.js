@@ -56,7 +56,9 @@ export default defineConfig({
   },
   plugins: [basicSsl(), react(), pdfWasmPlugin()],
   build: {
-    sourcemap: true,
+    // E2E 커버리지 수집 시에는 inline 소스맵으로 빌드해, Playwright가 모은 V8
+    // 커버리지를 MCR이 원본 src로 역매핑할 때 외부 .map을 원격 fetch할 필요가 없게 한다.
+    sourcemap: process.env.E2E_COVERAGE === "1" ? "inline" : true,
     rollupOptions: {
       output: {
         manualChunks: (id) => {
@@ -71,8 +73,11 @@ export default defineConfig({
     setupFiles: ["tests/setup.js"],
     reporters: ["./tests/reporter.js"],
     coverage: {
-      provider: "v8",
-      reporter: ["text"],
+      // MCR custom provider로 단위 테스트 커버리지를 V8로 수집한다.
+      // MCR 옵션(name/outputDir/reports 등)은 mcr.config.js에서 읽는다.
+      // raw 산출물은 e2e 커버리지와 병합(merge-coverage.mjs)하는 데 쓰인다.
+      provider: "custom",
+      customProviderModule: "vitest-monocart-coverage",
       include: ["src/**/*.{js,jsx}"],
     },
   },

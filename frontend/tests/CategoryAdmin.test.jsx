@@ -2341,4 +2341,68 @@ describe("CategoryAdmin", () => {
     });
     expect(screen.queryByPlaceholderText("새 키워드 입력")).toBeNull();
   });
+
+  // ── 자식이 있는 실제 부모 폴더의 enrichItem 재귀 (line 388) ──
+
+  it("자식이 있는 부모 카테고리를 트리에 부모-자식 구조로 표시한다", async () => {
+    // parent "a"가 자기 자신으로도 존재하고 "a/x" 자식도 가지므로
+    // 가상 부모가 아닌 실제 부모 노드가 되고, enrichItem이 children으로 재귀한다.
+    const categories = { a: 5, "a/x": 3, b: 2 };
+    const mismatchData = { mismatches: [], es_only: [], fs_only: [] };
+    setupMockResponses(categories, mismatchData);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByRole("tree")).toBeTruthy();
+    });
+    // 부모 "a"와 형제 "b"가 표시된다
+    expect(screen.getByText("a")).toBeTruthy();
+    expect(screen.getByText("b")).toBeTruthy();
+    // 부모 "a" 클릭 시 확장되어 자식 "x"가 노출된다 (enrichItem 재귀 결과)
+    fireEvent.click(screen.getByText("a"));
+    await waitFor(() => {
+      expect(screen.getByText("x")).toBeTruthy();
+    });
+  });
+
+  // ── 자식이 있는 부모 폴더 비노출 토글 시 children 재귀 갱신 (line 692) ──
+
+  it("자식이 있는 부모 카테고리 비노출 토글 시 자식 노드도 재귀적으로 갱신된다", async () => {
+    const categories = { a: 5, "a/x": 3 };
+    const mismatchData = { mismatches: [], es_only: [], fs_only: [] };
+    setupMockResponses(categories, mismatchData, { hiddenResult: [] });
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("a")).toBeTruthy();
+    });
+
+    // 실제 부모 "a" 선택
+    fireEvent.click(screen.getByText("a"));
+    await waitFor(() => {
+      expect(screen.getByLabelText("사용자 비노출")).toBeTruthy();
+    });
+
+    // 토글 → handleToggleHidden이 setFolderData에서 updateHidden을 children에 재귀 적용
+    mockJsonPostReq.mockImplementation((url, payload, resolve) => {
+      resolve(["a"]);
+    });
+
+    fireEvent.click(screen.getByLabelText("사용자 비노출"));
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/hidden-categories/a?content_type=book",
+        { hidden: true },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+    // 갱신 후에도 부모/자식 노드가 유지된다 (재귀 갱신이 정상 동작)
+    // "a"는 트리와 우측 패널 헤더에 동시에 존재하므로 getAllByText 사용
+    await waitFor(() => {
+      expect(screen.getAllByText("a").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText("x")).toBeTruthy();
+    });
+  });
 });

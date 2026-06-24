@@ -15,6 +15,8 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 const PDF_WASM_URL = `${window.location.origin}${import.meta.env.BASE_URL}pdf-wasm/`;
 
 const CHUNK_SIZE = 10;
+// 동시에 실행할 최대 렌더 개수. 워커 과부하를 막아 보이는 페이지에 자원을 집중시킨다.
+const MAX_CONCURRENT_RENDERS = 3;
 
 export default function ViewPDF({
   bookId,
@@ -44,10 +46,13 @@ export default function ViewPDF({
   const renderedPagesRef = useRef(new Set());
   const observerRef = useRef(null);
 
+  // 렌더 스케줄러 상태
+  const renderQueueRef = useRef(new Set()); // 렌더 대기 중인 페이지 (아직 미실행)
+  const activeRenderTasksRef = useRef(new Map()); // 실행 중인 페이지 → pdfjs RenderTask (슬롯 점유 = 동시성 카운트)
+
   // 청크 단위 로딩을 위한 ref
   const chunkDocsRef = useRef(new Map()); // key: "start-end", value: pdfDocument
   const fetchingRef = useRef(new Set()); // 현재 페칭 중인 범위 추적
-  const pendingPagesRef = useRef(new Set()); // 청크 로드 대기 중인 페이지
   const cancelledRef = useRef(false);
   const totalPagesRef = useRef(0);
 
@@ -91,13 +96,8 @@ export default function ViewPDF({
 
         chunkDocsRef.current.set(key, pdfDoc);
 
-        // 이 청크에 해당하는 대기 중인 페이지 렌더링
-        for (let i = start; i <= end; i++) {
-          if (pendingPagesRef.current.has(i)) {
-            pendingPagesRef.current.delete(i);
-            renderPage(i);
-          }
-        }
+        // 청크 로드 완료 → 큐에 대기 중이던 페이지들을 다시 펌프 (렌더 가능해짐)
+        pumpQueue();
       } catch (err) {
         if (!cancelledRef.current) {
           console.error(`청크 ${key} 페칭 실패:`, err);
@@ -106,7 +106,7 @@ export default function ViewPDF({
         fetchingRef.current.delete(key);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix/renderPage는 chunk fetch에 영향 없는 안정 참조라 의도적으로 제외
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix/pumpQueue는 chunk fetch에 영향 없는 안정 참조라 의도적으로 제외
     [bookId],
   );
 
@@ -118,24 +118,19 @@ export default function ViewPDF({
     return 2 + Math.floor((globalPageNum - 2) / CHUNK_SIZE) * CHUNK_SIZE;
   }, []);
 
-  // 페이지 렌더링 함수 (청크 기반)
-  const renderPage = useCallback(
+  // 실제 렌더 실행. 스케줄러가 "청크 로드된" 페이지에 대해서만 호출한다. 취소 가능.
+  const executeRender = useCallback(
     async (globalPageNum) => {
       if (renderedPagesRef.current.has(globalPageNum)) return;
 
       const chunkInfo = findChunkForPage(globalPageNum);
       if (!chunkInfo) {
-        // 청크가 아직 로드되지 않음 → 대기 목록에 추가하고 청크 페칭 트리거
-        pendingPagesRef.current.add(globalPageNum);
-        const chunkStart = getChunkStart(globalPageNum);
-        const chunkEnd = Math.min(
-          chunkStart === 1 ? 1 : chunkStart + CHUNK_SIZE - 1,
-          totalPagesRef.current,
-        );
-        fetchChunk(chunkStart, chunkEnd);
+        // 방어적 처리: 정상 흐름에선 발생하지 않지만, 청크가 아직 없으면 큐로 되돌린다
+        renderQueueRef.current.add(globalPageNum);
         return;
       }
 
+      // 렌더 시작 표시 (중복 실행 방지)
       renderedPagesRef.current.add(globalPageNum);
 
       try {
@@ -153,10 +148,13 @@ export default function ViewPDF({
         canvas.width = renderViewport.width;
         canvas.height = renderViewport.height;
 
-        await page.render({
+        const task = page.render({
           canvasContext: context,
           viewport: renderViewport,
-        }).promise;
+        });
+        // 취소 가능하도록 슬롯 마커를 실제 RenderTask로 교체
+        activeRenderTasksRef.current.set(globalPageNum, task);
+        await task.promise;
 
         setLoadedPages((prev) => prev + 1);
 
@@ -164,12 +162,91 @@ export default function ViewPDF({
           setIsFirstPageReady(true);
         }
       } catch (err) {
+        // 취소된 렌더는 재진입 시 다시 그릴 수 있도록 완료 표시를 해제한다
         renderedPagesRef.current.delete(globalPageNum);
-        console.error(`페이지 ${globalPageNum} 렌더링 실패:`, err);
+        if (err?.name !== "RenderingCancelledException") {
+          console.error(`페이지 ${globalPageNum} 렌더링 실패:`, err);
+        }
       }
     },
-    [findChunkForPage, getChunkStart, fetchChunk],
+    [findChunkForPage],
   );
+
+  // 큐에서 청크가 로드되어 즉시 렌더 가능한 페이지 중 뷰포트에 가장 가까운 것을 고른다
+  const pickRenderablePage = useCallback(() => {
+    const container = containerRef.current;
+    const center = container
+      ? container.scrollTop + container.clientHeight / 2
+      : 0;
+    let best = null;
+    let bestDist = Infinity;
+    for (const pageNum of renderQueueRef.current) {
+      if (!findChunkForPage(pageNum)) continue; // 청크 미로드 → 아직 렌더 불가
+      const canvas = canvasRefs.current[pageNum];
+      const top = canvas ? canvas.offsetTop : 0;
+      const height = canvas ? canvas.offsetHeight : 0;
+      const dist = Math.abs(top + height / 2 - center);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = pageNum;
+      }
+    }
+    return best;
+  }, [findChunkForPage]);
+
+  // 스케줄러 펌프: (1) 큐의 미로드 페이지에 대한 청크 페칭을 트리거하고,
+  // (2) 동시성 한도 내에서 렌더 가능한 페이지를 우선순위 순으로 실행한다.
+  // 페이지는 실제로 렌더 실행될 때까지 큐에 남으므로, 청크 로드 후 재호출되면
+  // 누락 없이 재시도된다 (one-shot drain이 없어 race가 발생하지 않는다).
+  const pumpQueue = useCallback(() => {
+    // 큐에 있는 미로드 페이지들의 청크 페칭 트리거 (fetchChunk가 중복 제거)
+    for (const pageNum of renderQueueRef.current) {
+      if (findChunkForPage(pageNum)) continue;
+      const chunkStart = getChunkStart(pageNum);
+      const chunkEnd = Math.min(
+        chunkStart === 1 ? 1 : chunkStart + CHUNK_SIZE - 1,
+        totalPagesRef.current,
+      );
+      fetchChunk(chunkStart, chunkEnd);
+    }
+    // 렌더 가능한 페이지부터 실행
+    while (activeRenderTasksRef.current.size < MAX_CONCURRENT_RENDERS) {
+      const pageNum = pickRenderablePage();
+      if (pageNum == null) break;
+      renderQueueRef.current.delete(pageNum);
+      // 슬롯 예약: RenderTask 생성 전까지 null 마커로 동시성 카운트를 확보
+      activeRenderTasksRef.current.set(pageNum, null);
+      executeRender(pageNum).finally(() => {
+        activeRenderTasksRef.current.delete(pageNum);
+        if (!cancelledRef.current) pumpQueue();
+      });
+    }
+  }, [
+    pickRenderablePage,
+    findChunkForPage,
+    getChunkStart,
+    fetchChunk,
+    executeRender,
+  ]);
+
+  // 페이지를 렌더 큐에 넣는다 (이미 렌더됐거나 실행 중이면 무시)
+  const enqueueRender = useCallback(
+    (pageNum) => {
+      if (renderedPagesRef.current.has(pageNum)) return;
+      if (activeRenderTasksRef.current.has(pageNum)) return;
+      renderQueueRef.current.add(pageNum);
+      pumpQueue();
+    },
+    [pumpQueue],
+  );
+
+  // 화면 밖으로 나간 페이지의 렌더를 취소/대기 해제 (보이는 페이지에 자원 양보)
+  const cancelRender = useCallback((pageNum) => {
+    renderQueueRef.current.delete(pageNum);
+    const task = activeRenderTasksRef.current.get(pageNum);
+    // null 마커(예약 상태)는 취소 대상이 아님
+    if (task && typeof task.cancel === "function") task.cancel();
+  }, []);
 
   useEffect(() => {
     if (!bookId) {
@@ -187,9 +264,10 @@ export default function ViewPDF({
       setIsFirstPageReady(false);
       canvasRefs.current = {};
       renderedPagesRef.current = new Set();
+      renderQueueRef.current = new Set();
+      activeRenderTasksRef.current = new Map();
       chunkDocsRef.current = new Map();
       fetchingRef.current = new Set();
-      pendingPagesRef.current = new Set();
       totalPagesRef.current = 0;
 
       try {
@@ -256,9 +334,9 @@ export default function ViewPDF({
           }
         }
 
-        // 첫 페이지 렌더링
+        // 첫 페이지 렌더링 (스케줄러 큐에 최우선 투입)
         if (cancelledRef.current) return;
-        await renderPage(1);
+        enqueueRender(1);
         setDownloadProgress(50);
 
         if (cancelledRef.current || pagesToRender <= 1) return;
@@ -275,36 +353,27 @@ export default function ViewPDF({
 
         setDownloadProgress(100);
 
-        // IntersectionObserver로 스크롤 기반 청크 페칭 + 렌더링
+        // IntersectionObserver: 근접 영역(near-zone) 진입 시 큐에 투입, 이탈 시 취소.
+        // 아래쪽 margin을 크게 둬 순방향 스크롤에서 다음 페이지들을 미리 준비한다.
+        // (선렌더 루프 제거: rootMargin 자체가 prefetch 역할을 하고, 그 페이지들은
+        //  여전히 intersecting 상태라 즉시 취소되지 않는다.)
         const observer = new IntersectionObserver(
           (entries) => {
             for (const entry of entries) {
+              const pageNum = parseInt(entry.target.dataset.page);
+              if (!pageNum) continue;
               if (entry.isIntersecting) {
-                const pageNum = parseInt(entry.target.dataset.page);
-                if (!pageNum) continue;
-
-                // 현재 페이지 렌더링
-                if (!renderedPagesRef.current.has(pageNum)) {
-                  renderPage(pageNum);
-                }
-
-                // 선렌더링: 현재 페이지 이후 CHUNK_SIZE 페이지
-                const prerenderEnd = Math.min(
-                  pageNum + CHUNK_SIZE,
-                  pagesToRender,
-                );
-                for (let i = pageNum + 1; i <= prerenderEnd; i++) {
-                  if (!renderedPagesRef.current.has(i)) {
-                    renderPage(i);
-                  }
-                }
-
-                const c = canvasRefs.current[pageNum];
-                if (c) observer.unobserve(c);
+                enqueueRender(pageNum);
+              } else if (
+                renderQueueRef.current.has(pageNum) ||
+                activeRenderTasksRef.current.has(pageNum)
+              ) {
+                // 근접 영역을 벗어난 미완 렌더는 취소해 보이는 페이지에 자원 양보
+                cancelRender(pageNum);
               }
             }
           },
-          { rootMargin: "500px 0px" },
+          { rootMargin: "300px 0px 1200px 0px" },
         );
 
         observerRef.current = observer;
@@ -333,16 +402,21 @@ export default function ViewPDF({
         observerRef.current.disconnect();
         observerRef.current = null;
       }
+      // 진행 중인 렌더 취소 + 큐 비우기
+      for (const task of activeRenderTasksRef.current.values()) {
+        if (task && typeof task.cancel === "function") task.cancel();
+      }
+      activeRenderTasksRef.current.clear();
+      renderQueueRef.current.clear();
       // 모든 청크 pdfDoc 정리 (pdfjs 6.x: PDFDocumentProxy 대신 loadingTask로 정리)
       for (const pdfDoc of chunkDocsRef.current.values()) {
         pdfDoc.loadingTask.destroy();
       }
       chunkDocsRef.current.clear();
       fetchingRef.current.clear();
-      pendingPagesRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix는 mount 시 고정이라 의도적으로 deps에서 제외
-  }, [bookId, pageCount, preview, renderPage, fetchChunk]);
+  }, [bookId, pageCount, preview, enqueueRender, cancelRender, fetchChunk]);
 
   // 캔버스 ref 설정 함수
   const setCanvasRef = useCallback(

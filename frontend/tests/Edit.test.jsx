@@ -55,15 +55,25 @@ vi.mock("../src/Folder", () => ({
         </div>
       ))}
       {folderData.flatMap((f) =>
-        (f.children || []).map((c) => (
+        (f.children || []).flatMap((c) => [
           <div
             key={c.id}
             data-testid={`folder-item-${c.id}`}
             onClick={() => onClickHandler(c.id)}
           >
             {c.label}
-          </div>
-        )),
+          </div>,
+          // 3단계 손자 항목 렌더링 (중첩 카테고리 내 책)
+          ...(c.children || []).map((g) => (
+            <div
+              key={g.id}
+              data-testid={`folder-item-${g.id}`}
+              onClick={() => onClickHandler(g.id)}
+            >
+              {g.label}
+            </div>
+          )),
+        ]),
       )}
       {!isOpen && <button onClick={() => onToggle(true)}>펼치기</button>}
     </div>
@@ -131,7 +141,23 @@ vi.mock("../src/ViewSingle", () => ({
 }));
 
 vi.mock("../src/SimilarBooks", () => ({
-  default: () => <div data-testid="similar-books">SimilarBooks</div>,
+  default: ({ onSelect }) => (
+    <div data-testid="similar-books">
+      SimilarBooks
+      <button
+        data-testid="similar-select-missing"
+        onClick={() => onSelect("1_fiction/777")}
+      >
+        없는책선택
+      </button>
+      <button
+        data-testid="similar-select-missing-cat"
+        onClick={() => onSelect("nope_cat/777")}
+      >
+        없는카테고리선택
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("../src/Bookstore", () => ({
@@ -1316,5 +1342,940 @@ describe("Edit", () => {
     // 정리
     useParams.mockReturnValue({ "*": "" });
     useSearchParams.mockReturnValue([new URLSearchParams()]);
+  });
+
+  // ── 중첩 카테고리 내 책 선택: else book-entry 성공 경로 (lines 351-409) ──
+
+  it("중첩 카테고리(3단계) 내 책 클릭 시 책 정보를 표시한다", async () => {
+    // 1_fiction (부모) / 1_fiction/sub (자식 폴더) 구조
+    const nestedCategories = { "1_fiction": 3, "1_fiction/sub": 2 };
+    const subBooks = [
+      {
+        book_id: 601,
+        title: "[작가I] 중첩책1",
+        author: "",
+        file_type: "epub",
+        file_path: "1_fiction/sub/[작가I] 중첩책1.epub",
+        category: "1_fiction/sub",
+      },
+      {
+        book_id: 602,
+        title: "[작가J] 중첩책2",
+        author: "",
+        file_type: "epub",
+        file_path: "1_fiction/sub/[작가J] 중첩책2.epub",
+        category: "1_fiction/sub",
+      },
+    ];
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(nestedCategories);
+      else if (url === "/categories/1_fiction/sub") resolve(subBooks);
+      else if (url.startsWith("/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+
+    // 자식 폴더(1_fiction/sub) 클릭 → 책 로드
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/sub"));
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-1_fiction/sub/601")).toBeTruthy();
+    });
+
+    // 손자 책 항목 클릭 → findFolderInTree(entryId)는 null, parseEntryId 성공
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/sub/601"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("중첩책1");
+      expect(screen.getByTestId("book-author").textContent).toBe("작가I");
+    });
+  });
+
+  // ── 중첩 카테고리 내 다음/이전 책 이동 (else 경로의 next/prev) ──
+
+  it("중첩 카테고리 내 다음 책으로 이동한다", async () => {
+    const nestedCategories = { "1_fiction": 3, "1_fiction/sub": 2 };
+    const subBooks = [
+      {
+        book_id: 601,
+        title: "[작가I] 중첩책1",
+        author: "",
+        file_type: "epub",
+        file_path: "1_fiction/sub/[작가I] 중첩책1.epub",
+        category: "1_fiction/sub",
+      },
+      {
+        book_id: 602,
+        title: "[작가J] 중첩책2",
+        author: "",
+        file_type: "epub",
+        file_path: "1_fiction/sub/[작가J] 중첩책2.epub",
+        category: "1_fiction/sub",
+      },
+    ];
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(nestedCategories);
+      else if (url === "/categories/1_fiction/sub") resolve(subBooks);
+      else if (url.startsWith("/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/sub"));
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-1_fiction/sub/601")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/sub/601"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("중첩책1");
+    });
+
+    fireEvent.click(screen.getByTestId("next-entry"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("중첩책2");
+    });
+  });
+
+  // ── 가상 부모 폴더 클릭 시 API 호출 안 함 (line 278) ──
+
+  it("가상 부모 폴더 클릭 시 책 로드 API를 호출하지 않는다", async () => {
+    // 부모 카테고리는 없고 자식만 있어 가상 부모 생성
+    // (commonPrefix 축약을 피하기 위해 형제 카테고리 other를 둔다)
+    const virtualCategories = { "vparent/childA": 2, other: 1 };
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(virtualCategories);
+      else if (url.startsWith("/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+
+    // 가상 부모 항목 클릭
+    fireEvent.click(screen.getByTestId("folder-item-__virtual__vparent"));
+
+    // 가상 부모는 /categories/__virtual__... 호출을 하지 않는다
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    const virtualCalls = mockJsonGetReq.mock.calls.filter((c) =>
+      c[0].includes("__virtual__"),
+    );
+    expect(virtualCalls.length).toBe(0);
+  });
+
+  // ── else book-entry 경로에서 책을 찾지 못하면 에러 (line 411) ──
+  // SimilarBooks.onSelect(=entryClicked)로 로딩된 카테고리의 존재하지 않는
+  // bookId를 선택하면 children.find(...)?.book 가 undefined → 411.
+
+  it("로딩된 카테고리에서 존재하지 않는 책 ID 선택 시 에러 메시지를 표시한다", async () => {
+    setupMockCategories();
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info")).toBeTruthy();
+    });
+
+    // 같은 카테고리, 존재하지 않는 bookId 선택
+    fireEvent.click(screen.getByTestId("similar-select-missing"));
+    await waitFor(() => {
+      expect(screen.getByText(/선택한 책을 찾을 수 없습니다/)).toBeTruthy();
+    });
+  });
+
+  // ── else book-entry 경로에서 카테고리를 찾지 못하면 에러 (line 414) ──
+
+  it("트리에 없는 카테고리의 책을 선택하면 카테고리 에러 메시지를 표시한다", async () => {
+    setupMockCategories();
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info")).toBeTruthy();
+    });
+
+    // 트리에 없는 카테고리의 책 선택 → booksInCategory undefined → 414
+    fireEvent.click(screen.getByTestId("similar-select-missing-cat"));
+    await waitFor(() => {
+      expect(
+        screen.getByText(/선택한 카테고리를 찾을 수 없습니다/),
+      ).toBeTruthy();
+    });
+  });
+
+  // ── _root 라우트 초기화 (lines 452-454) ──
+
+  it("_root 라우트 파라미터로 최상위 파일을 자동 선택한다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "999" });
+    useSearchParams.mockReturnValue([new URLSearchParams("category=_root")]);
+
+    const categories = { "1_fiction": 3, _root: 1 };
+    const rootBooks = [
+      {
+        book_id: 999,
+        title: "최상위파일",
+        author: "저자R",
+        file_type: "txt",
+        file_path: "최상위파일.txt",
+        category: "_root",
+      },
+    ];
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(categories);
+      else if (url === "/categories/_root") resolve(rootBooks);
+      else if (url.startsWith("/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("최상위파일");
+      expect(screen.getByTestId("book-author").textContent).toBe("저자R");
+    });
+
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([new URLSearchParams()]);
+  });
+
+  // ── 라우트 초기화: 카테고리 미로딩 → 로딩 트리거 후 재선택 (lines 498-503) ──
+
+  it("라우트 카테고리가 아직 로드되지 않았으면 로딩 후 책을 선택한다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "101" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("category=1_fiction"),
+    ]);
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES);
+      else if (url.startsWith("/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+
+    render(<Edit />);
+    // 카테고리 책 로드 후 1_fiction/101이 선택되어 책 정보 표시
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("소설1");
+    });
+    // 카테고리 로딩 API가 호출되었는지 확인
+    const calls = mockJsonGetReq.mock.calls;
+    expect(calls.some((c) => c[0] === "/categories/1_fiction")).toBe(true);
+
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([new URLSearchParams()]);
+  });
+
+  // ── 최상위 파일 삭제: root file remove (lines 633-635) ──
+
+  it("최상위 파일 삭제 시 폴더 데이터에서 제거한다", async () => {
+    const categories = { "1_fiction": 3, _root: 1 };
+    const rootBooks = [
+      {
+        book_id: 999,
+        title: "최상위파일",
+        author: "",
+        file_type: "txt",
+        file_path: "최상위파일.txt",
+        category: "_root",
+      },
+    ];
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(categories);
+      else if (url === "/categories/_root") resolve(rootBooks);
+      else if (url.startsWith("/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    mockJsonDeleteReq.mockImplementation((url, payload, resolve) =>
+      resolve({}),
+    );
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-/999")).toBeTruthy();
+    });
+
+    // 최상위 파일 선택
+    fireEvent.click(screen.getByTestId("folder-item-/999"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("delete-btn"));
+    await waitFor(() => {
+      expect(mockJsonDeleteReq).toHaveBeenCalledWith(
+        "/books/999",
+        null,
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+    // 폴더 트리에서 제거됨
+    await waitFor(() => {
+      expect(screen.queryByTestId("folder-item-/999")).toBeNull();
+    });
+  });
+
+  // ── 책을 최상위로 이동: root file append splice (line 681) + remove(633-635) ──
+
+  it("책을 최상위로 이동하면 기존 최상위 파일 앞에 삽입한다", async () => {
+    // _root에 이미 파일이 있어 folderEndIndex !== -1 → splice 경로(line 681)
+    const categories = { "1_fiction": 3, _root: 1 };
+    const rootBooks = [
+      {
+        book_id: 999,
+        title: "기존최상위",
+        author: "",
+        file_type: "txt",
+        file_path: "기존최상위.txt",
+        category: "_root",
+      },
+    ];
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(categories);
+      else if (url === "/categories/_root") resolve(rootBooks);
+      else if (url.startsWith("/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    mockJsonPutReq.mockImplementation((url, payload, resolve) => resolve());
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("[작가A] 소설1.epub")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("소설1");
+    });
+
+    fireEvent.click(screen.getByTestId("move-upper"));
+    await waitFor(() => {
+      expect(mockJsonPutReq).toHaveBeenCalledWith(
+        "/books/101",
+        expect.objectContaining({ category: "_root" }),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
+  // ── 덮어쓰기 확인 경로: 동일 이름 존재 시 confirm (lines 737, 739, 746) ──
+
+  // 두 책 모두 epub: 확장자 정합을 맞춰 checkEntryExistence가 동작하도록 함
+  const TWO_EPUB_BOOKS = [
+    {
+      book_id: 101,
+      title: "[작가A] 소설1",
+      author: "",
+      file_type: "epub",
+      file_path: "1_fiction/[작가A] 소설1.epub",
+      category: "1_fiction",
+    },
+    {
+      book_id: 102,
+      title: "[작가B] 소설2",
+      author: "",
+      file_type: "epub",
+      file_path: "1_fiction/[작가B] 소설2.epub",
+      category: "1_fiction",
+    },
+  ];
+
+  it("이름 변경 대상이 이미 존재하면 confirm 후 덮어쓰기로 진행한다", async () => {
+    setupMockCategories(CATEGORIES, TWO_EPUB_BOOKS);
+    mockJsonPutReq.mockImplementation((url, payload, resolve) => resolve());
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("[작가B] 소설2.epub")).toBeTruthy();
+    });
+    // 101 선택 후 파일명을 102의 이름(이미 존재)으로 변경
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("소설1");
+    });
+
+    fireEvent.change(screen.getByTestId("filename-input"), {
+      target: { value: "[작가B] 소설2.epub" },
+    });
+    fireEvent.click(screen.getByTestId("change-btn"));
+
+    await waitFor(() => {
+      // confirm이 호출되고 force=true로 PUT
+      expect(confirmSpy).toHaveBeenCalled();
+      const forceCall = mockJsonPutReq.mock.calls.find((c) =>
+        c[0].includes("?force=true"),
+      );
+      expect(forceCall).toBeTruthy();
+    });
+  });
+
+  // ── 덮어쓰기 확인 거부 시 진행하지 않음 (line 744) ──
+
+  it("덮어쓰기 confirm을 거부하면 PUT을 호출하지 않는다", async () => {
+    setupMockCategories(CATEGORIES, TWO_EPUB_BOOKS);
+    mockJsonPutReq.mockImplementation((url, payload, resolve) => resolve());
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("[작가B] 소설2.epub")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("소설1");
+    });
+
+    fireEvent.change(screen.getByTestId("filename-input"), {
+      target: { value: "[작가B] 소설2.epub" },
+    });
+    fireEvent.click(screen.getByTestId("change-btn"));
+
+    // confirm 거부 → PUT 호출 없음
+    await waitFor(() => {
+      expect(window.confirm).toHaveBeenCalled();
+    });
+    expect(mockJsonPutReq).not.toHaveBeenCalled();
+  });
+
+  // ── 이동 후 prev 폴백 (lines 806-807): next 없고 prev 있는 경우 ──
+
+  it("마지막 책을 다른 디렉토리로 이동하면 이전 책으로 이동한다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES);
+      else if (url.startsWith("/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    mockJsonPutReq.mockImplementation((url, payload, resolve) => resolve());
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("[작가B] 소설2.pdf")).toBeTruthy();
+    });
+    // 마지막 책(102) 선택 → next 없음, prev=101
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/102"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("소설2");
+    });
+
+    fireEvent.click(screen.getByTestId("select-dir"));
+    fireEvent.click(screen.getByTestId("move-dir"));
+    // 이동 후 이전 책(소설1)으로 자동 이동
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("소설1");
+    });
+  });
+
+  // ── 이동 후 마지막 책 메시지 (line 809): next/prev 모두 없음 ──
+
+  it("유일한 책을 다른 디렉토리로 이동하면 마지막 책 메시지를 표시한다", async () => {
+    const singleBook = [
+      {
+        book_id: 999,
+        title: "유일책",
+        author: "",
+        file_type: "txt",
+        file_path: "1_fiction/유일책.txt",
+        category: "1_fiction",
+      },
+    ];
+    setupMockCategories(CATEGORIES, singleBook);
+    mockJsonPutReq.mockImplementation((url, payload, resolve) => resolve());
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/999"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("유일책");
+    });
+
+    fireEvent.click(screen.getByTestId("select-dir"));
+    fireEvent.click(screen.getByTestId("move-dir"));
+    await waitFor(() => {
+      expect(screen.getByText(/마지막 책이었습니다/)).toBeTruthy();
+    });
+  });
+
+  // ── 삭제 후 prev 폴백 (lines 954, 957): next 없고 prev 있음 ──
+
+  it("마지막 책 삭제 후 이전 책으로 이동한다", async () => {
+    setupMockCategories();
+    mockJsonDeleteReq.mockImplementation((url, payload, resolve) =>
+      resolve({}),
+    );
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("[작가B] 소설2.pdf")).toBeTruthy();
+    });
+    // 마지막 책(102) 선택 → next 없음, prev=101
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/102"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("소설2");
+    });
+
+    fireEvent.click(screen.getByTestId("delete-btn"));
+    // 삭제 후 이전 책(소설1)으로 자동 이동
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("소설1");
+    });
+  });
+
+  // ── 레거시 라우트 /edit/category/bookId (query 없음) (lines 72, 77) ──
+
+  it("query 없는 레거시 라우트(category/bookId)로 책을 선택한다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "1_fiction/101" });
+    useSearchParams.mockReturnValue([new URLSearchParams()]);
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES);
+      else if (url.startsWith("/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("소설1");
+    });
+
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([new URLSearchParams()]);
+  });
+
+  // ── query category + 비숫자 wildcard → routeBookId undefined (line 76) ──
+
+  it("category query가 있고 wildcard가 숫자가 아니면 책을 자동 선택하지 않는다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "notanumber" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("category=1_fiction"),
+    ]);
+
+    setupMockCategories();
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    // routeBookId가 undefined라 라우트 기반 선택이 일어나지 않고
+    // 첫 파일 자동 선택도 routeCategory가 있어 건너뛴다 → 책 정보 없음
+    expect(screen.queryByTestId("book-info")).toBeNull();
+
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([new URLSearchParams()]);
+  });
+
+  // ── apiPrefix + 최상위 파일 선택: viewUrl에 api 파라미터 포함 (line 329) ──
+
+  it("apiPrefix가 있을 때 최상위 파일 선택 시 viewUrl에 api 파라미터를 포함한다", async () => {
+    const categories = { "1_fiction": 3, _root: 1 };
+    const rootBooks = [
+      {
+        book_id: 999,
+        title: "최상위파일",
+        author: "저자R",
+        file_type: "txt",
+        file_path: "최상위파일.txt",
+        category: "_root",
+      },
+    ];
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") resolve(categories);
+      else if (url === "/comics/categories/_root") resolve(rootBooks);
+      else if (url.startsWith("/comics/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    render(<Edit apiPrefix="/comics" />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-/999")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-/999"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("최상위파일");
+    });
+  });
+
+  // ── 최상위 파일이 category 필드가 없으면 _root로 대체 (line 339) ──
+
+  it("최상위 파일에 category가 없으면 URL에 _root를 사용한다", async () => {
+    const categories = { "1_fiction": 3, _root: 1 };
+    const rootBooks = [
+      {
+        book_id: 888,
+        title: "카테고리없음",
+        author: "",
+        file_type: "txt",
+        file_path: "카테고리없음.txt",
+        // category 필드 의도적 누락 → book["category"] || "_root"의 우측 사용
+      },
+    ];
+    const replaceSpy = vi.spyOn(window.history, "replaceState");
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(categories);
+      else if (url === "/categories/_root") resolve(rootBooks);
+      else if (url.startsWith("/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-/888")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-/888"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("카테고리없음");
+    });
+    expect(
+      replaceSpy.mock.calls.some((c) =>
+        String(c[2]).includes("category=_root"),
+      ),
+    ).toBe(true);
+  });
+
+  // ── apiPrefix + 폴더 내 책 선택: viewUrl에 api 파라미터 포함 (line 377) ──
+
+  it("apiPrefix가 있을 때 폴더 내 책 선택 시 동작한다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") resolve(CATEGORIES);
+      else if (url.startsWith("/comics/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    render(<Edit apiPrefix="/comics" />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("[작가A] 소설1.epub")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("소설1");
+    });
+  });
+
+  // ── apiPrefix + URL 직접 조회 (line 478) ──
+
+  it("apiPrefix가 있을 때 트리에 없는 카테고리는 API에서 직접 조회한다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "777" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("category=unknown_category"),
+    ]);
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") resolve(CATEGORIES);
+      else if (url.startsWith("/comics/categories/")) resolve(BOOKS_IN_FICTION);
+      else if (url === "/comics/books/777") {
+        resolve({
+          book_id: 777,
+          title: "직접조회책",
+          author: "저자X",
+          file_type: "pdf",
+          file_path: "unknown_category/직접조회책.pdf",
+          category: "unknown_category",
+        });
+      } else resolve({});
+    });
+
+    render(<Edit apiPrefix="/comics" />);
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("직접조회책");
+    });
+
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([new URLSearchParams()]);
+  });
+
+  // ── URL 직접 조회 시 book.category가 없으면 routeCategory 사용 (line 465) ──
+
+  it("직접 조회한 책에 category가 없으면 라우트 카테고리를 사용한다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "777" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("category=unknown_category"),
+    ]);
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES);
+      else if (url.startsWith("/categories/")) resolve(BOOKS_IN_FICTION);
+      else if (url === "/books/777") {
+        resolve({
+          book_id: 777,
+          title: "직접조회책2",
+          author: "저자Y",
+          file_type: "pdf",
+          file_path: "unknown_category/직접조회책2.pdf",
+          // category 누락 → realCategory = routeCategory
+        });
+      } else resolve({});
+    });
+
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("직접조회책2");
+    });
+
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([new URLSearchParams()]);
+  });
+
+  // ── 이미 로드된 폴더를 다시 클릭하면 재로딩하지 않는다 (line 283 else) ──
+
+  it("이미 로드된 폴더를 다시 클릭하면 책 목록을 재요청하지 않는다", async () => {
+    setupMockCategories();
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("[작가A] 소설1.epub")).toBeTruthy();
+    });
+    const before = mockJsonGetReq.mock.calls.filter(
+      (c) => c[0] === "/categories/1_fiction",
+    ).length;
+
+    // 같은 폴더 재클릭 → booksLoaded=true라 재요청 없음
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("[작가A] 소설1.epub")).toBeTruthy();
+    });
+    const after = mockJsonGetReq.mock.calls.filter(
+      (c) => c[0] === "/categories/1_fiction",
+    ).length;
+    expect(after).toBe(before);
+  });
+
+  // ── 제목자르기: 공백 없는 제목이면 변경하지 않는다 (line 574 else) ──
+
+  it("제목에 공백이 없으면 제목자르기는 아무 변화가 없다", async () => {
+    setupMockCategories();
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("소설1");
+    });
+
+    fireEvent.click(screen.getByTestId("cut-title-btn"));
+    // 공백이 없으므로 제목/저자 그대로
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("소설1");
+      expect(screen.getByTestId("book-author").textContent).toBe("작가A");
+    });
+  });
+
+  // ── 저자자르기: 공백 없는 저자면 변경하지 않는다 (line 583 else) ──
+
+  it("저자에 공백이 없으면 저자자르기는 아무 변화가 없다", async () => {
+    setupMockCategories();
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-author").textContent).toBe("작가A");
+    });
+
+    fireEvent.click(screen.getByTestId("cut-author-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-author").textContent).toBe("작가A");
+      expect(screen.getByTestId("book-title").textContent).toBe("소설1");
+    });
+  });
+
+  // ── 삭제 confirm을 거부하면 delete API를 호출하지 않는다 (line 911) ──
+
+  it("삭제 confirm을 거부하면 delete API를 호출하지 않는다", async () => {
+    setupMockCategories();
+    mockJsonDeleteReq.mockImplementation((url, payload, resolve) =>
+      resolve({}),
+    );
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("delete-btn"));
+    await waitFor(() => {
+      expect(window.confirm).toHaveBeenCalled();
+    });
+    expect(mockJsonDeleteReq).not.toHaveBeenCalled();
+  });
+
+  // ── 최상위 파일 이름 변경: source dir가 _root → "최상위" 메시지 (line 770) ──
+
+  it("최상위 파일 이름 변경 시 최상위 디렉토리 메시지를 표시한다", async () => {
+    const categories = { "1_fiction": 3, _root: 1 };
+    const rootBooks = [
+      {
+        book_id: 999,
+        title: "최상위파일",
+        author: "",
+        file_type: "txt",
+        file_path: "최상위파일.txt",
+        category: "_root",
+      },
+    ];
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(categories);
+      else if (url === "/categories/_root") resolve(rootBooks);
+      else if (url.startsWith("/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    mockJsonPutReq.mockImplementation((url, payload, resolve) => resolve());
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-/999")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-/999"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("최상위파일");
+    });
+
+    fireEvent.change(screen.getByTestId("title-input"), {
+      target: { value: "새최상위" },
+    });
+    fireEvent.click(screen.getByTestId("change-btn"));
+    await waitFor(() => {
+      expect(
+        screen.getByText(/"최상위"의 파일 이름을.*변경했습니다/),
+      ).toBeTruthy();
+    });
+  });
+
+  // ── 확장자 없는 파일명으로 변경 (lines 661, 724의 endsWith false 분기) ──
+
+  it("확장자가 없는 파일명으로 변경해도 처리된다", async () => {
+    setupMockCategories();
+    mockJsonPutReq.mockImplementation((url, payload, resolve) => resolve());
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info")).toBeTruthy();
+    });
+
+    // 확장자(.epub)가 없는 파일명 → endsWith(extensionSuffix) === false
+    fireEvent.change(screen.getByTestId("filename-input"), {
+      target: { value: "확장자없는이름" },
+    });
+    fireEvent.click(screen.getByTestId("change-btn"));
+    await waitFor(() => {
+      expect(mockJsonPutReq).toHaveBeenCalled();
+      const payload = mockJsonPutReq.mock.calls[0][1];
+      // titleOnly + extensionSuffix → "확장자없는이름.epub"
+      expect(payload.file_path).toBe("1_fiction/확장자없는이름.epub");
+    });
+  });
+
+  // ── 검색 결과가 있으면 SearchResult를 렌더링한다 (line 1041) ──
+
+  it("hasSearched가 true이면 검색 결과 컴포넌트를 렌더링한다", async () => {
+    const { useOutletContext } = await import("react-router-dom");
+    useOutletContext.mockReturnValue({
+      ...mockOutletContext,
+      hasSearched: true,
+      searchResults: [{ book_id: 1, title: "결과", file_type: "epub" }],
+      searchTotal: 1,
+    });
+    setupMockCategories();
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("search-result")).toBeTruthy();
+    });
+    useOutletContext.mockReturnValue(mockOutletContext);
+  });
+
+  // ── 처리 중 가드: in-flight PUT 동안 버튼 클릭은 무시된다 ──
+  // (lines 266, 714, 906, 973, 984의 isProcessingRef early-return 및
+  //  1100/1112의 isProcessing spinner 아이콘 분기)
+
+  it("처리 중에는 다른 버튼 클릭과 폴더 클릭이 무시된다", async () => {
+    setupMockCategories();
+    // PUT의 resolve를 보류하여 isProcessing=true 상태를 유지
+    let pendingResolve = null;
+    mockJsonPutReq.mockImplementation((url, payload, resolve) => {
+      pendingResolve = resolve;
+    });
+    mockJsonDeleteReq.mockImplementation((url, payload, resolve) =>
+      resolve({}),
+    );
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info")).toBeTruthy();
+    });
+
+    // 변경 시작 → isProcessingRef.current = true (resolve 보류)
+    fireEvent.click(screen.getByTestId("change-btn"));
+    await waitFor(() => {
+      expect(mockJsonPutReq).toHaveBeenCalledTimes(1);
+    });
+
+    // 처리 중: 두 번째 change 클릭은 updateFile 진입 시 early-return (line 714)
+    fireEvent.click(screen.getByTestId("change-btn"));
+    // 삭제(line 906), 다음(973), 이전(984)도 early-return
+    fireEvent.click(screen.getByTestId("delete-btn"));
+    fireEvent.click(screen.getByTestId("next-entry"));
+    fireEvent.click(screen.getByTestId("prev-entry"));
+    // 폴더 재클릭도 entryClicked early-return (line 266)
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/102"));
+
+    // PUT은 여전히 1회, delete는 호출되지 않음
+    expect(mockJsonPutReq).toHaveBeenCalledTimes(1);
+    expect(mockJsonDeleteReq).not.toHaveBeenCalled();
+
+    // 보류된 PUT을 완료하여 가드 해제
+    pendingResolve && pendingResolve();
+    await waitFor(() => {
+      expect(screen.getByText(/변경했습니다/)).toBeTruthy();
+    });
   });
 });

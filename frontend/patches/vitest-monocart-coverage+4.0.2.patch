@@ -1,0 +1,13 @@
+diff --git a/node_modules/vitest-monocart-coverage/lib/provider.js b/node_modules/vitest-monocart-coverage/lib/provider.js
+index 33f249d..fd08faa 100644
+--- a/node_modules/vitest-monocart-coverage/lib/provider.js
++++ b/node_modules/vitest-monocart-coverage/lib/provider.js
+@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
+ import CoverageReport from 'monocart-coverage-reports';
+ import { createInstrumenter } from 'istanbul-lib-instrument';
+ import TestExclude from 'test-exclude';
+-import { BaseCoverageProvider } from 'vitest/coverage';
++import { BaseCoverageProvider } from 'vitest/node';
+ 
+ const COVERAGE_STORE_KEY = '__VITEST_COVERAGE__';
+ const FILE_PROTOCOL = 'file://';
