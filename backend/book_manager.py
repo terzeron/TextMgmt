@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -58,6 +59,8 @@ class BookManager:
     }
 
     CACHE_MAX_AGE_SECONDS = 86400  # 1일
+    PDF_READER_CACHE_MAX = 8  # book_id 기준 PdfReader LRU 캐시 최대 개수
+    _pdf_reader_cache: "OrderedDict[int, tuple[float, Any, int]]" = OrderedDict()
     HTML_VIEWER_RESOURCE_EXTENSIONS = {".css", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".tiff", ".ico", ".avif", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".ogg", ".wav", ".mp4", ".webm"}
     HTML_VIEWER_CSP = "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' blob:;"
 
@@ -260,6 +263,31 @@ class BookManager:
                     LOGGER.warning("Failed to evict cache file %s: %s", f.name, e)
         except Exception as e:
             LOGGER.warning("Cache eviction failed: %s", e)
+
+    @staticmethod
+    def _get_cached_pdf_reader(book_id: int, file_path: Path) -> tuple[Any, int]:
+        """book_id별 PdfReader와 총 페이지 수를 mtime 기준으로 캐시해서 반환한다.
+
+        같은 PDF에 대한 청크 요청마다(그리고 disk-cache-hit 시에도) 전체 파일을
+        재파싱하던 비용을 제거한다. 파일이 변경되면(mtime 불일치) 캐시를 무효화하고
+        다시 읽는다. LRU로 PDF_READER_CACHE_MAX 개수만 유지한다.
+        """
+        from pypdf import PdfReader
+
+        mtime = file_path.stat().st_mtime
+        cache = BookManager._pdf_reader_cache
+        cached = cache.get(book_id)
+        if cached and cached[0] == mtime:
+            cache.move_to_end(book_id)
+            return cached[1], cached[2]
+
+        reader = PdfReader(str(file_path))
+        total_pages = len(reader.pages)
+        cache[book_id] = (mtime, reader, total_pages)
+        cache.move_to_end(book_id)
+        while len(cache) > BookManager.PDF_READER_CACHE_MAX:
+            cache.popitem(last=False)
+        return reader, total_pages
 
     @staticmethod
     def _find_libreoffice() -> str:
@@ -1214,10 +1242,9 @@ class BookManager:
             return Response(status_code=400, content=f"Not a PDF file: {book.file_path}")
 
         try:
-            from pypdf import PdfReader, PdfWriter
+            from pypdf import PdfWriter
 
-            reader = PdfReader(str(book.file_path))
-            total_pages = len(reader.pages)
+            reader, total_pages = BookManager._get_cached_pdf_reader(book_id, book.file_path)
 
             # 범위 검증
             start = max(1, start)
