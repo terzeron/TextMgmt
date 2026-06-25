@@ -41,7 +41,7 @@
     "react-bootstrap": "^2.10.2",
     "react-dom": "^19.2.7",
     "react-reader": "^2.0.15",
-    "react-router-dom": "^7.17.0",
+    "react-router-dom": "^7.18.0",
     "rtf.js": "^3.0.9",
     "sprintf-js": "^1.1.3"
   },
