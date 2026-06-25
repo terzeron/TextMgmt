@@ -30,6 +30,11 @@ spec:
       containers:
         - name: mysql
           image: mysql:8.0
+          # mysql:8.0 entrypoint는 root로 시작해 chown 후 gosu로 mysql 유저로 강등하므로
+          # runAsNonRoot / drop:[ALL] / readOnlyRootFilesystem는 기동을 깨뜨린다.
+          # no_new_privs(권한 상승 차단)만 추가로 안전하게 적용한다.
+          securityContext:
+            allowPrivilegeEscalation: false
           ports:
             - containerPort: 3306
           env:
