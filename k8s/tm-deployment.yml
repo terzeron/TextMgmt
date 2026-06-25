@@ -36,6 +36,7 @@ spec:
             runAsUser: 1000
             runAsGroup: 1000
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           ports:
@@ -100,6 +101,10 @@ spec:
             # refresh token 저장소를 MySQL로 (replica/worker 간 공유, /tmp SQLite lock 회피)
             - name: TM_REFRESH_TOKEN_BACKEND
               value: mysql
+            # rootfs 읽기전용이라 $HOME(/home/terzeron)이 RO. LibreOffice 프로필·fontconfig·
+            # java 등 $HOME/XDG 기반 캐시·설정 쓰기를 writable emptyDir(/tmp)로 redirect.
+            - name: HOME
+              value: /tmp
           volumeMounts:
             - name: books-pvc
               mountPath: /books
@@ -139,10 +144,22 @@ spec:
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           ports:
             - containerPort: 8080
+          # nginx-unprivileged: pid/temp 경로가 RO rootfs라 writable emptyDir 필요
+          volumeMounts:
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-tmp
+              mountPath: /tmp
+      volumes:
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-tmp
+          emptyDir: {}
 
 ---
 apiVersion: v1
