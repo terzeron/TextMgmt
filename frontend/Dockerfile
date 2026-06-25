@@ -18,6 +18,7 @@ USER 101
 
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY frontend/default.conf /etc/nginx/conf.d
+COPY frontend/security-headers.conf /etc/nginx/security-headers.conf
 
 EXPOSE 8080
 
