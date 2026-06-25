@@ -63,7 +63,7 @@
     "monocart-coverage-reports": "^2.12.12",
     "patch-package": "^8.0.1",
     "prop-types": "^15.8.1",
-    "vite": "^8.0.16",
+    "vite": "^8.1.0",
     "vitest": "^4.1.7",
     "vitest-monocart-coverage": "^4.0.2"
   },
