@@ -70,6 +70,9 @@
   "overrides": {
     "@xmldom/xmldom": "0.8.13",
     "lodash": "4.18.1",
-    "yaml": "1.10.3"
+    "yaml": "1.10.3",
+    "eslint-plugin-react": {
+      "eslint": "$eslint"
+    }
   }
 }
