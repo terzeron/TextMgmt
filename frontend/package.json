@@ -21,7 +21,7 @@
   "dependencies": {
     "@emotion/react": "^11.11.4",
     "@emotion/styled": "^11.11.5",
-    "@fortawesome/free-brands-svg-icons": "^7.2.0",
+    "@fortawesome/free-brands-svg-icons": "^7.3.0",
     "@fortawesome/free-regular-svg-icons": "^7.2.0",
     "@fortawesome/free-solid-svg-icons": "^7.2.0",
     "@fortawesome/react-fontawesome": "^3.3.1",
@@ -36,7 +36,7 @@
     "dompurify": "^3.4.11",
     "luxon": "^3.4.4",
     "mammoth": "^1.11.0",
-    "pdfjs-dist": "^6.0.227",
+    "pdfjs-dist": "^6.1.200",
     "react": "^19.2.7",
     "react-bootstrap": "^2.10.2",
     "react-dom": "^19.2.7",
@@ -47,14 +47,14 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
-    "@playwright/test": "^1.60.0",
+    "@playwright/test": "^1.61.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-basic-ssl": "^2.3.0",
-    "@vitejs/plugin-react": "^6.0.2",
+    "@vitejs/plugin-react": "^6.0.3",
     "@vitest/coverage-v8": "^4.1.9",
-    "eslint": "^9.39.4",
+    "eslint": "^10.6.0",
     "eslint-plugin-react": "^7.34.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
@@ -70,6 +70,9 @@
   "overrides": {
     "@xmldom/xmldom": "0.8.13",
     "lodash": "4.18.1",
-    "yaml": "1.10.3"
+    "yaml": "1.10.3",
+    "eslint-plugin-react": {
+      "eslint": "$eslint"
+    }
   }
 }
