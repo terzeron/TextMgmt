@@ -927,3 +927,78 @@ def test_http_url_does_not_set_ssl_kwargs(monkeypatch):
 
     assert "verify_certs" not in captured
     assert "ssl_show_warn" not in captured
+
+
+def test_path_prefix_query_variants():
+    for empty in ("", ".", "/"):
+        assert ESManager._path_prefix_query(empty) == {"match_all": {}}
+    q = ESManager._path_prefix_query("foo/bar/")
+    assert q["bool"]["should"] == [
+        {"term": {"file_path.keyword": "foo/bar"}},
+        {"prefix": {"file_path.keyword": "foo/bar/"}},
+    ]
+
+
+def test_get_doc_ids_by_path_prefix_scrolls_and_clears():
+    class ScrollES:
+        def __init__(self):
+            self.cleared = False
+            self.page = 0
+
+        def search(self, index, query=None, scroll=None, size=None, source=None):
+            return {"_scroll_id": "s1", "hits": {"hits": [{"_id": "1"}, {"_id": "2"}]}}
+
+        def scroll(self, scroll_id, scroll):
+            self.page += 1
+            if self.page == 1:
+                return {"_scroll_id": "s2", "hits": {"hits": [{"_id": "3"}]}}
+            return {"_scroll_id": "s3", "hits": {"hits": []}}
+
+        def clear_scroll(self, scroll_id):
+            self.cleared = True
+
+    es = ScrollES()
+    manager = make_manager(es)
+    assert manager.get_doc_ids_by_path_prefix("foo") == {1, 2, 3}
+    assert es.cleared is True
+
+
+def test_get_doc_ids_by_path_prefix_error_returns_empty():
+    class BoomES:
+        def search(self, index, query=None, scroll=None, size=None, source=None):
+            raise RuntimeError("boom")
+
+    manager = make_manager(BoomES())
+    assert manager.get_doc_ids_by_path_prefix("foo") == set()
+
+
+def test_delete_by_ids_empty_and_chunked():
+    class CountES:
+        def __init__(self):
+            self.calls = 0
+
+        def delete_by_query(self, index, body=None, conflicts="abort", refresh=False, query=None):
+            self.calls += 1
+            return {"deleted": len(body["query"]["ids"]["values"])}
+
+    es = CountES()
+    manager = make_manager(es)
+    assert manager.delete_by_ids([]) == 0
+    assert es.calls == 0
+    assert manager.delete_by_ids([1, 2, 3, 4, 5], chunk_size=2) == 5
+    assert es.calls == 3
+
+
+def test_delete_by_ids_error_returns_partial():
+    class HalfES:
+        def __init__(self):
+            self.calls = 0
+
+        def delete_by_query(self, index, body=None, conflicts="abort", refresh=False, query=None):
+            self.calls += 1
+            if self.calls == 1:
+                return {"deleted": 2}
+            raise RuntimeError("boom")
+
+    manager = make_manager(HalfES())
+    assert manager.delete_by_ids([1, 2, 3, 4], chunk_size=2) == 2

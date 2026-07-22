@@ -826,6 +826,7 @@ def print_usage(program_name: str):
     print("\t\t--recursive: scan subdirectories recursively")
     print()
     print("\t\tNote: When a file (not directory) is specified, it will be force-reloaded automatically.")
+    print("\t\tNote: --recursive --reload also deletes ES records under the path whose files no longer exist (orphans).")
     sys.exit(0)
 
 
@@ -895,7 +896,7 @@ def main() -> int:
             return -1
         return 0
 
-    def process_file_iter(file_iter: Iterable[Path], skip_check: bool = False, skip_text: bool = False) -> tuple[int, int, int]:
+    def process_file_iter(file_iter: Iterable[Path], skip_check: bool = False, skip_text: bool = False, seen_inodes: set[int] | None = None) -> tuple[int, int, int]:
         """파일 iterator를 배치 처리하여 ES에 저장. 반환: (처리 수, 건너뜀 수, 경로동기화 수)"""
         skipped_count = 0
         processed_count = 0
@@ -916,6 +917,10 @@ def main() -> int:
                     file_stat_map[st.st_ino] = (file_path, st)
                 except OSError:
                     continue
+
+            # 디스크에 존재하는(=live) inode 수집: orphan 판정 기준 (파싱 성공 여부 무관)
+            if seen_inodes is not None:
+                seen_inodes.update(file_stat_map.keys())
 
             if skip_check:
                 # --reload 모드: 존재 여부 무시, 전부 파싱
@@ -996,12 +1001,27 @@ def main() -> int:
             # 전체 파일 등록 (generator 사용으로 메모리 효율화, hidden directory 제외)
             file_iter = (p for p in target_path.rglob("*") if p.is_file() and not any(part.startswith(".") for part in p.relative_to(target_path).parts))
             skip_check = do_reload
-            processed, skipped_count, synced_count = process_file_iter(file_iter, skip_check=skip_check, skip_text=skip_text)
+            # --reload 시 이번 실행에서 본 live inode를 수집하여 orphan 삭제에 사용
+            seen_inodes: set[int] | None = set() if do_reload else None
+            processed, skipped_count, synced_count = process_file_iter(file_iter, skip_check=skip_check, skip_text=skip_text, seen_inodes=seen_inodes)
             print(f"  총 {processed}개 파일 처리됨")
             if skipped_count > 0:
                 print(f"  총 {skipped_count}개 중복 파일 건너뜀")
             if synced_count > 0:
                 print(f"  총 {synced_count}개 경로 동기화")
+
+            # --reload: 대상 경로 하위에서 디스크에 더 이상 없는 orphan 레코드 삭제
+            if seen_inodes is not None:
+                prefix = Loader.get_path_prefix(target_path)
+                rel = str(target_path.relative_to(prefix))
+                es_manager.refresh()  # 방금 insert한 문서가 scroll에 반영되도록
+                existing_ids = es_manager.get_doc_ids_by_path_prefix(rel)
+                orphan_ids = list(existing_ids - seen_inodes)
+                if orphan_ids:
+                    deleted = es_manager.delete_by_ids(orphan_ids)
+                    print(f"  [orphan 삭제: {deleted}개] (디스크에서 사라진 예전 레코드, 경로: {rel})")
+                else:
+                    print("  orphan 없음 (삭제할 예전 레코드 없음)")
         else:
             skip_check = do_reload
 
