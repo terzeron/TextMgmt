@@ -2961,3 +2961,67 @@ def test_loader_module_executed_as_main(monkeypatch):
     with pytest.raises(SystemExit) as exc_info:
         runpy.run_module("utils.loader", run_name="__main__")
     assert exc_info.value.code == 0
+
+
+def test_main_recursive_reload_deletes_orphans(tmp_path, monkeypatch):
+    """--recursive --reload: 대상 경로 하위 orphan(디스크에 없는) 레코드를 삭제한다."""
+    import utils.loader as loader_mod
+
+    # 대상 디렉토리를 book prefix 로 지정하고 파일 1개 생성
+    monkeypatch.setattr(loader_mod.Loader, "path_prefix", tmp_path)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "a.txt").write_text("hello world\n", encoding="utf-8")
+
+    monkeypatch.setenv("TM_ES_BOOK_INDEX", "book_idx")
+    monkeypatch.setenv("TM_ES_COMICS_INDEX", "comics_idx")
+
+    captured = {}
+
+    class FakeESManager:
+        def __init__(self, index_name=None):
+            self.index_name = index_name
+            self.inserted = set()
+            self.deleted_ids = None
+            self.refreshed = 0
+
+            class Conn:
+                def ping(self_inner):
+                    return True
+
+            self.es = Conn()
+            captured["m"] = self
+
+        def create_index(self):
+            return {}
+
+        def get_existing_paths(self, ids):
+            return {}
+
+        def delete_by_file_paths(self, paths, exclude_ids=None):
+            return 0
+
+        def insert(self, data, *args, **kwargs):
+            self.inserted.update(data.keys())
+            return list(data.keys())
+
+        def refresh(self):
+            self.refreshed += 1
+
+        def get_doc_ids_by_path_prefix(self, rel):
+            # 실제 적재된 inode + 디스크에 없는 orphan 하나
+            return set(self.inserted) | {999999}
+
+        def delete_by_ids(self, ids, chunk_size=10000):
+            self.deleted_ids = sorted(ids)
+            return len(ids)
+
+    monkeypatch.setattr(loader_mod, "ESManager", FakeESManager)
+    monkeypatch.setattr(sys, "argv", ["loader", "--recursive", "--reload", "book", str(tmp_path)])
+
+    rc = loader_mod.main()
+
+    m = captured["m"]
+    assert rc == 0
+    assert m.inserted, "파일이 적재되어야 한다"
+    assert m.deleted_ids == [999999], "orphan 만 삭제되어야 한다 (live inode 는 보존)"
+    assert 999999 not in m.inserted

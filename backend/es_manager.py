@@ -360,7 +360,7 @@ class ESManager:
         반환: 삭제된 문서 수"""
         if not file_paths:
             return 0
-        must_clauses: list[dict[str, Any]] = [{"terms": {"file_path.keyword": file_paths}}]
+        must_clauses: list[dict[str, Any]] = [{"terms": {"file_path": file_paths}}]
         must_not_clauses: list[dict[str, Any]] = []
         if exclude_ids:
             must_not_clauses.append({"ids": {"values": [str(i) for i in exclude_ids]}})
@@ -376,6 +376,59 @@ class ESManager:
         except Exception as e:
             LOGGER.error("delete_by_file_paths error: %s", e)
             return 0
+
+    @staticmethod
+    def _path_prefix_query(path_prefix: str) -> dict[str, Any]:
+        """경로 prefix 하위(자기 자신 포함) 문서를 매칭하는 쿼리.
+        path_prefix가 ""/"."/"/"이면 전체(match_all)."""
+        p = (path_prefix or "").strip("/")
+        if p in ("", "."):
+            return {"match_all": {}}
+        return {"bool": {"should": [{"term": {"file_path": p}}, {"prefix": {"file_path": p + "/"}}], "minimum_should_match": 1}}
+
+    def get_doc_ids_by_path_prefix(self, path_prefix: str) -> set[int]:
+        """경로 prefix 하위 문서의 _id(inode) 집합을 반환 (scroll 사용, _source 미포함)."""
+        query = self._path_prefix_query(path_prefix)
+        ids: set[int] = set()
+        scroll_id = None
+        try:
+            response = self.es.search(index=self.index_name, query=query, scroll="10m", size=5000, source=False)
+            scroll_id = response.get("_scroll_id")
+            hits = response["hits"]["hits"]
+            while hits:
+                for hit in hits:
+                    ids.add(int(hit["_id"]))
+                response = self.es.scroll(scroll_id=scroll_id, scroll="10m")
+                scroll_id = response.get("_scroll_id")
+                hits = response["hits"]["hits"]
+            return ids
+        except Exception as e:
+            LOGGER.error("get_doc_ids_by_path_prefix error: %s", e)
+            return ids
+        finally:
+            if scroll_id:
+                try:
+                    self.es.clear_scroll(scroll_id=scroll_id)
+                except Exception:
+                    pass
+
+    def delete_by_ids(self, ids: list[int], chunk_size: int = 10000) -> int:
+        """주어진 _id(inode) 목록의 문서를 삭제. 반환: 삭제된 문서 수."""
+        if not ids:
+            return 0
+        deleted = 0
+        try:
+            for i in range(0, len(ids), chunk_size):
+                chunk = ids[i : i + chunk_size]
+                query = {"ids": {"values": [str(x) for x in chunk]}}
+                result = self.es.delete_by_query(index=self.index_name, body={"query": query}, conflicts="proceed", refresh=False)
+                deleted += result.get("deleted", 0)
+            if deleted > 0:
+                LOGGER.info("delete_by_ids: %d docs deleted for %d ids", deleted, len(ids))
+            return deleted
+        except Exception as e:
+            LOGGER.error("delete_by_ids error: %s", e)
+            return deleted
 
     def insert(self, data: dict[int, dict[str, Any]], num_docs: int = sys.maxsize, max_retries: int = 3) -> list[int]:
         LOGGER.debug("insert() %d items", len(data))
