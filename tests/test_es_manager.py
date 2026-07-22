@@ -933,10 +933,7 @@ def test_path_prefix_query_variants():
     for empty in ("", ".", "/"):
         assert ESManager._path_prefix_query(empty) == {"match_all": {}}
     q = ESManager._path_prefix_query("foo/bar/")
-    assert q["bool"]["should"] == [
-        {"term": {"file_path.keyword": "foo/bar"}},
-        {"prefix": {"file_path.keyword": "foo/bar/"}},
-    ]
+    assert q["bool"]["should"] == [{"term": {"file_path": "foo/bar"}}, {"prefix": {"file_path": "foo/bar/"}}]
 
 
 def test_get_doc_ids_by_path_prefix_scrolls_and_clears():

@@ -360,7 +360,7 @@ class ESManager:
         반환: 삭제된 문서 수"""
         if not file_paths:
             return 0
-        must_clauses: list[dict[str, Any]] = [{"terms": {"file_path.keyword": file_paths}}]
+        must_clauses: list[dict[str, Any]] = [{"terms": {"file_path": file_paths}}]
         must_not_clauses: list[dict[str, Any]] = []
         if exclude_ids:
             must_not_clauses.append({"ids": {"values": [str(i) for i in exclude_ids]}})
@@ -384,7 +384,7 @@ class ESManager:
         p = (path_prefix or "").strip("/")
         if p in ("", "."):
             return {"match_all": {}}
-        return {"bool": {"should": [{"term": {"file_path.keyword": p}}, {"prefix": {"file_path.keyword": p + "/"}}], "minimum_should_match": 1}}
+        return {"bool": {"should": [{"term": {"file_path": p}}, {"prefix": {"file_path": p + "/"}}], "minimum_should_match": 1}}
 
     def get_doc_ids_by_path_prefix(self, path_prefix: str) -> set[int]:
         """경로 prefix 하위 문서의 _id(inode) 집합을 반환 (scroll 사용, _source 미포함)."""
