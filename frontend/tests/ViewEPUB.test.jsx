@@ -179,10 +179,10 @@ describe("ViewEPUB", () => {
 
   // ── 초기 로딩 ──
 
-  it("preview=true이면 chapters=3로 첫 요청한다", async () => {
+  it("preview=true이면 chapters=10로 첫 요청한다", async () => {
     render(<ViewEPUB bookId={42} preview={true} />);
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      "http://localhost:8000/preview/42?chapters=3",
+      "http://localhost:8000/preview/42?chapters=10",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     await waitFor(() => {
@@ -221,7 +221,7 @@ describe("ViewEPUB", () => {
     });
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      "http://localhost:8000/preview/42?chapters=3",
+      "http://localhost:8000/preview/42?chapters=10",
       expect.any(Object),
     );
   });
@@ -290,7 +290,7 @@ describe("ViewEPUB", () => {
   it("preview 전환 시 새로 fetch한다", async () => {
     const { rerender } = render(<ViewEPUB bookId={1} preview={true} />);
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      "http://localhost:8000/preview/1?chapters=3",
+      "http://localhost:8000/preview/1?chapters=10",
       expect.any(Object),
     );
 

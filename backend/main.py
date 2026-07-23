@@ -353,7 +353,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return await manager.get_book_content(book_id=book_id)
 
     @router.get("/preview/{book_id}", response_model=None)
-    async def get_book_preview(book_id: int, pages: int = 5, chapters: int = 3, payload: dict = Depends(require_auth)):
+    async def get_book_preview(book_id: int, pages: int = 5, chapters: int = 10, payload: dict = Depends(require_auth)):
         LOGGER.debug("# get_book_preview(book_id=%d, pages=%d, chapters=%d)", book_id, pages, chapters)
         api_prefix = "/comics" if content_type == "comic" else ""
         await _ensure_viewer_book_allowed(manager, book_id, payload, content_type)

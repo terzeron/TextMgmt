@@ -108,6 +108,45 @@ def _create_test_epub(path: Path, chapter_count: int = 3, include_css: bool = Fa
             zf.writestr("media/cover.jpg", b"\xff\xd8\xff\xe0\x00\x10JFIF\xff\xd9")
 
 
+def _create_epub_with_nonlinear_front(path: Path, chapter_count: int = 6) -> None:
+    """앞쪽에 비선형(linear="no") 항목(nav·표지)을 둔 EPUB.
+
+    build_epub.py 산출물처럼 스파인 첫머리가 nav·표지(linear="no")이고 그 뒤에
+    linear 본문이 이어진다. 미리보기가 비선형 항목을 세면 넘길 페이지가 거의
+    남지 않으므로, 미리보기는 linear 본문만 골라야 한다.
+    """
+    items = ['    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>', '    <item id="coverpage" href="cover.xhtml" media-type="application/xhtml+xml"/>']
+    spine = ['    <itemref idref="nav" linear="no"/>', '    <itemref idref="coverpage" linear="no"/>']
+    for i in range(1, chapter_count + 1):
+        items.append(f'    <item id="ch{i}" href="ch{i}.xhtml" media-type="application/xhtml+xml"/>')
+        spine.append(f'    <itemref idref="ch{i}"/>')
+    opf = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Nonlinear Front Book</dc:title>
+    <dc:creator>Test Author</dc:creator>
+  </metadata>
+  <manifest>
+    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+{chr(10).join(items)}
+  </manifest>
+  <spine toc="toc">
+{chr(10).join(spine)}
+  </spine>
+</package>"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        zf.writestr("META-INF/container.xml", CONTAINER_XML)
+        zf.writestr("OEBPS/content.opf", opf)
+        zf.writestr("OEBPS/toc.ncx", "<ncx/>")
+        zf.writestr("OEBPS/nav.xhtml", _make_chapter_xhtml(0))
+        zf.writestr("OEBPS/cover.xhtml", _make_chapter_xhtml(0))
+        for i in range(1, chapter_count + 1):
+            zf.writestr(f"OEBPS/ch{i}.xhtml", _make_chapter_xhtml(i))
+
+
 def _create_epub_with_font(path: Path, font_size: int) -> None:
     """CSS url()로 폰트를 참조하는 EPUB. font_size로 폰트 크기를 제어."""
     opf = """\
@@ -561,6 +600,35 @@ class TestBookPreview:
         idrefs = _get_spine_idrefs(zf)
         assert len(idrefs) <= 1
         zf.close()
+
+    @pytest.mark.asyncio
+    async def test_preview_skips_nonlinear_front_matter(self, backend_test_setup):
+        """미리보기는 비선형(표지·목차) 항목을 세지 않고 linear 본문만 앞 N개 선택한다.
+
+        회귀: 스파인 첫머리가 nav·표지(linear="no")면 예전엔 그것들이 미리보기
+        정원을 차지해 넘길 페이지가 거의 남지 않았다. 이제 linear 항목만 골라야 한다.
+        """
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_path = bm.path_prefix / CATEGORY / "[Test Author] Nonlinear Front.epub"
+        _create_epub_with_nonlinear_front(epub_path, chapter_count=6)
+        book_id = await _register_epub_async(bm, epub_path)
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=3")
+            assert response.status_code == 200
+
+            zf = _parse_epub_zip(response.content)
+            idrefs = _get_spine_idrefs(zf)
+            zf.close()
+
+            # 비선형 항목(nav·표지)은 미리보기 스파인에 없어야 한다.
+            assert "nav" not in idrefs
+            assert "coverpage" not in idrefs
+            # linear 본문 3개(ch1~ch3)만 선택된다.
+            assert idrefs == ["ch1", "ch2", "ch3"]
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
 
     @pytest.mark.asyncio
     async def test_preview_strips_unreferenced_manifest_items(self, test_book):
