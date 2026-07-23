@@ -4,7 +4,7 @@ import { getApiUrlPrefix } from "./Common";
 import { ReactReader } from "react-reader";
 import "./ViewEPUB.css";
 
-const CHAPTERS_PREVIEW = 3;
+const CHAPTERS_PREVIEW = 10;
 
 const FONT_SIZE_MIN = 80;
 const FONT_SIZE_MAX = 160;
@@ -129,25 +129,6 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
         if (savedLocationRef.current && renditionRef.current) {
           const loc = savedLocationRef.current;
           savedLocationRef.current = null;
-          // 저장된 위치가 linear="no"(표지/목차 등) 섹션을 가리키면 복원하지 않는다.
-          // 그런 섹션에서는 next()가 진행되지 않아 첫 페이지에 갇힌다. 특히 구
-          // EPUB에서 저장된 CFI가 새 EPUB에서 비선형 섹션(nav 등)으로 매핑되는
-          // 경우를 막는다. (spine.get은 CFI/href/index를 모두 해석한다.)
-          let section = null;
-          try {
-            section = renditionRef.current.book.spine.get(loc);
-          } catch (_) {
-            /* ignore */
-          }
-          const isLinear =
-            section && section.linear !== false && section.linear !== "no";
-          if (!isLinear) {
-            console.warn(
-              "[epub.js] 저장된 위치가 비선형 섹션 → 복원 취소, 처음부터 시작",
-            );
-            if (bookId) localStorage.removeItem(`epub_location_${bookId}`);
-            return;
-          }
           renditionRef.current.display(loc).catch(() => {
             console.warn("[epub.js] 저장된 위치 복원 실패, 현재 위치 유지");
             if (bookId) localStorage.removeItem(`epub_location_${bookId}`);

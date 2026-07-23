@@ -537,7 +537,7 @@ class BookManager:
             return FileResponse(path=book.file_path, media_type=media_type, headers=headers)
         return ""
 
-    async def get_book_preview(self, book_id: int, pages: int = 5, chapters: int = 3, resource_base_url: str = "") -> Response | FileResponse:
+    async def get_book_preview(self, book_id: int, pages: int = 5, chapters: int = 10, resource_base_url: str = "") -> Response | FileResponse:
         LOGGER.debug("# get_book_preview(book_id=%d, pages=%d, chapters=%d, resource_base_url='%s')", book_id, pages, chapters, resource_base_url)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
@@ -648,7 +648,15 @@ class BookManager:
                         spine_refs = list(spine_el.findall(f"{{{opf_ns}}}itemref"))
                     else:
                         spine_refs = list(spine_el.findall(f"{{{opf_ns}}}itemref"))
-                        chapter_idrefs = [ref.get("idref") for ref in spine_refs[:chapters] if ref.get("idref") in manifest]
+                        # 미리보기(0 < chapters < 전체)는 넘길 수 없는 비선형(linear="no")
+                        # 항목(표지·목차 등)을 세지 않고 linear 항목만 앞 N개 선택한다.
+                        # 그렇지 않으면 표지/목차가 미리보기 정원을 차지해 넘길 페이지가
+                        # 거의 남지 않는다. 전체보기(chapters=전체)는 모든 항목을 유지한다.
+                        if 0 < chapters < len(spine_refs):
+                            selected = [ref for ref in spine_refs if (ref.get("linear") or "yes") != "no"][:chapters]
+                        else:
+                            selected = spine_refs[:chapters]
+                        chapter_idrefs = [ref.get("idref") for ref in selected if ref.get("idref") in manifest]
 
                     # 포함할 zip 내 파일 경로
                     files_to_include = {opf_path}

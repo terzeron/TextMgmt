@@ -152,7 +152,7 @@ class TestPreview:
     def test_default_params(self, client, mock_bm):
         mock_bm.get_book_preview.return_value = Response(content=b"preview")
         client.get("/preview/1")
-        mock_bm.get_book_preview.assert_called_once_with(book_id=1, pages=5, chapters=3, resource_base_url="/html-resource/1")
+        mock_bm.get_book_preview.assert_called_once_with(book_id=1, pages=5, chapters=10, resource_base_url="/html-resource/1")
 
     def test_custom_params(self, client, mock_bm):
         mock_bm.get_book_preview.return_value = Response(content=b"preview")
