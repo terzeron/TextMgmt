@@ -37,7 +37,7 @@
     "luxon": "^3.4.4",
     "mammoth": "^1.11.0",
     "pdfjs-dist": "^6.1.200",
-    "react": "^19.2.7",
+    "react": "^19.2.8",
     "react-bootstrap": "^2.10.2",
     "react-dom": "^19.2.8",
     "react-reader": "^2.0.15",
