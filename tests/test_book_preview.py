@@ -2565,5 +2565,88 @@ class TestValidatePdfUnit:
         mock_pdf.close.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_epub_unquoted_href_and_full_view(tmp_path):
+    """URL 인코딩된 href 항목 및 전체보기(chapters=0) 시 EPUB 구조가 완전 보존되는지 검증."""
+    from unittest.mock import MagicMock
+    from backend.book_manager import BookManager
+
+    from backend.book import Book
+    epub_file = Book.path_prefix / "encoded_book.epub"
+    epub_file.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(epub_file, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+        zf.writestr(
+            "OEBPS/content.opf",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Encoded Book</dc:title>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch%201.xhtml" media-type="application/xhtml+xml"/>
+    <item id="cover" href="cover%20page.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+  <guide>
+    <reference type="cover" title="Cover Page" href="cover%20page.xhtml"/>
+  </guide>
+</package>""",
+        )
+        zf.writestr(
+            "OEBPS/ch 1.xhtml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Ch1</title></head>
+<body><img src="img%201.jpg"/></body>
+</html>""",
+        )
+        zf.writestr(
+            "OEBPS/cover page.xhtml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Cover</title></head>
+<body><h1>Cover</h1></body>
+</html>""",
+        )
+        zf.writestr("OEBPS/img 1.jpg", b"fake_image_data")
+
+    bm = BookManager()
+    bm.path_prefix = tmp_path
+    mock_book = MagicMock()
+    mock_book.file_path = epub_file
+
+    bm.es_manager = MagicMock()
+    bm.es_manager.search_by_id = MagicMock(return_value={
+        "category": "test",
+        "title": "Test Book",
+        "author": "Author",
+        "file_path": "encoded_book.epub",
+        "file_type": "epub",
+        "file_size": 1000,
+        "updated_time": "2026-01-01T00:00:00.000000",
+    })
+
+    try:
+        resp = await bm.get_book_preview(book_id=1, chapters=0)
+        assert resp.status_code == 200
+
+        cache_file = tmp_path / ".preview_cache" / "1_ch1.epub"
+        assert cache_file.exists()
+
+        with zipfile.ZipFile(cache_file, "r") as zout:
+            names = zout.namelist()
+            assert "OEBPS/cover page.xhtml" in names
+            assert "OEBPS/img 1.jpg" in names
+            opf_data = zout.read("OEBPS/content.opf").decode("utf-8")
+            assert 'id="cover"' in opf_data
+    finally:
+        if epub_file.exists():
+            epub_file.unlink()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+

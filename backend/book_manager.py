@@ -15,7 +15,7 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, unquote
 from fastapi.responses import FileResponse, Response
 from bs4 import BeautifulSoup
 from backend.es_manager import ESManager
@@ -144,6 +144,13 @@ class BookManager:
         try:
             with zipfile.ZipFile(str(cache_file), "r") as zin:
                 names = set(zin.namelist())
+                unquoted_names = {unquote(n) for n in names}
+
+                def _in_names(path: str) -> bool:
+                    if not path:
+                        return False
+                    clean = unquote(path).split("#")[0].split("?")[0]
+                    return path in names or clean in names or clean in unquoted_names
 
                 # 1) mimetype 검증
                 if "mimetype" not in names:
@@ -193,9 +200,9 @@ class BookManager:
                 # 5) manifest 항목의 파일이 ZIP에 존재하는지 검증 (spine 항목만)
                 for ref in list(spine_el.findall(f"{{{opf_ns}}}itemref")):
                     idref = ref.get("idref", "")
-                    href = manifest.get(idref, "")
+                    href = unquote(manifest.get(idref, "")).split("#")[0].split("?")[0]
                     zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
-                    if zp not in names:
+                    if not _in_names(zp):
                         LOGGER.warning("EPUB validate: spine item '%s' (href=%s) not in ZIP, removing", idref, href)
                         spine_el.remove(ref)
                         # manifest XML 및 dict에서도 제거
@@ -219,9 +226,9 @@ class BookManager:
                         del spine_el.attrib["toc"]
                         needs_rewrite = True
                     else:
-                        toc_href = manifest[toc_id]
+                        toc_href = unquote(manifest[toc_id]).split("#")[0].split("?")[0]
                         toc_zp = normpath(pjoin(opf_dir, toc_href)) if opf_dir else normpath(toc_href)
-                        if toc_zp not in names:
+                        if not _in_names(toc_zp):
                             LOGGER.warning("EPUB validate: toc NCX '%s' not in ZIP, removing toc attribute", toc_zp)
                             del spine_el.attrib["toc"]
                             needs_rewrite = True
@@ -580,6 +587,7 @@ class BookManager:
 
         elif suffix == ".epub":
             total_chapters = BookManager._get_epub_total_chapters(book.file_path)
+            req_chapters = chapters
             # chapters<=0: 전체 챕터 포함 (대용량 폰트만 제거)
             if chapters <= 0:
                 chapters = total_chapters
@@ -632,15 +640,18 @@ class BookManager:
                         item_id = item.get("id", "")
                         href = item.get("href", "")
                         manifest[item_id] = {"href": href, "media-type": item.get("media-type", "")}
-                        zip_path = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+                        unquoted_href = unquote(href).split("#")[0].split("?")[0]
+                        zip_path = normpath(pjoin(opf_dir, unquoted_href)) if opf_dir else normpath(unquoted_href)
                         href_to_id[zip_path] = item_id
+                        raw_zip_path = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+                        if raw_zip_path not in href_to_id:
+                            href_to_id[raw_zip_path] = item_id
 
                     # spine 순서
                     spine_el = opf.find(f".//{{{opf_ns}}}spine")
                     if spine_el is None:
                         LOGGER.warning("EPUB preview: spine not found for book_id=%d, trying manifest order", book_id)
                         chapter_idrefs = [mid for mid, info in manifest.items() if info.get("media-type") == "application/xhtml+xml"][:chapters]
-                        # 출력 OPF에 spine 요소 생성 (검증 통과를 위해)
                         spine_el = etree.SubElement(opf, f"{{{opf_ns}}}spine")
                         for idref in chapter_idrefs:
                             itemref = etree.SubElement(spine_el, f"{{{opf_ns}}}itemref")
@@ -648,100 +659,109 @@ class BookManager:
                         spine_refs = list(spine_el.findall(f"{{{opf_ns}}}itemref"))
                     else:
                         spine_refs = list(spine_el.findall(f"{{{opf_ns}}}itemref"))
-                        # 미리보기(0 < chapters < 전체)는 넘길 수 없는 비선형(linear="no")
-                        # 항목(표지·목차 등)을 세지 않고 linear 항목만 앞 N개 선택한다.
-                        # 그렇지 않으면 표지/목차가 미리보기 정원을 차지해 넘길 페이지가
-                        # 거의 남지 않는다. 전체보기(chapters=전체)는 모든 항목을 유지한다.
                         if 0 < chapters < len(spine_refs):
                             selected = [ref for ref in spine_refs if (ref.get("linear") or "yes") != "no"][:chapters]
                         else:
                             selected = spine_refs[:chapters]
                         chapter_idrefs = [ref.get("idref") for ref in selected if ref.get("idref") in manifest]
 
-                    # 포함할 zip 내 파일 경로
-                    files_to_include = {opf_path}
-                    if "META-INF/container.xml" in zin.namelist():
-                        files_to_include.add("META-INF/container.xml")
-                    manifest_ids_to_keep = set(chapter_idrefs)
-
-                    # spine toc 속성이 참조하는 NCX 파일 포함
+                    is_full_view = (req_chapters <= 0)
                     toc_id = spine_el.get("toc", "") if spine_el is not None else ""
-                    if toc_id and toc_id in manifest:
-                        manifest_ids_to_keep.add(toc_id)
-                        toc_href = manifest[toc_id]["href"]
-                        toc_zp = normpath(pjoin(opf_dir, toc_href)) if opf_dir else normpath(toc_href)
-                        files_to_include.add(toc_zp)
 
-                    # 챕터 파일의 zip 경로 계산
-                    chapter_zip_paths = []
-                    for idref in chapter_idrefs:
-                        if idref in manifest:
-                            href = manifest[idref]["href"]
-                            zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+                    if is_full_view:
+                        # 전체보기: ZIP 파일 및 manifest 항목 전체 기본 포함 (EPUB 구조 완전 보존)
+                        files_to_include = set(zin.namelist())
+                        manifest_ids_to_keep = set(manifest.keys())
+                    else:
+                        # 미리보기(부분 챕터): 선택된 챕터 및 연관 리소스만 포함
+                        files_to_include = {opf_path}
+                        if "META-INF/container.xml" in zin.namelist():
+                            files_to_include.add("META-INF/container.xml")
+                        manifest_ids_to_keep = set(chapter_idrefs)
+
+                        if toc_id and toc_id in manifest:
+                            manifest_ids_to_keep.add(toc_id)
+                            toc_href = unquote(manifest[toc_id]["href"]).split("#")[0].split("?")[0]
+                            toc_zp = normpath(pjoin(opf_dir, toc_href)) if opf_dir else normpath(toc_href)
+                            files_to_include.add(toc_zp)
+
+                        chapter_zip_paths = []
+                        for idref in chapter_idrefs:
+                            if idref in manifest:
+                                href = unquote(manifest[idref]["href"]).split("#")[0].split("?")[0]
+                                zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+                                files_to_include.add(zp)
+                                chapter_zip_paths.append(zp)
+
+                        # 챕터 HTML에서 참조 리소스 수집
+                        referenced: set[str] = set()
+                        for zp in chapter_zip_paths:
+                            try:
+                                content = zin.read(zp).decode("utf-8", errors="replace")
+                            except KeyError:
+                                LOGGER.warning("EPUB preview: chapter file missing in archive: %s", zp)
+                                continue
+                            item_dir = dirname(zp)
+                            soup = BeautifulSoup(content, "html.parser")
+                            for elem in soup.find_all(["img", "image", "link", "script", "source", "embed", "object", "video", "a"]):
+                                url_val = (
+                                    elem.get("src")
+                                    or elem.get("href")
+                                    or elem.get("xlink:href")
+                                    or elem.get("data")
+                                    or elem.get("poster")
+                                    or ""
+                                )
+                                if url_val and not url_val.startswith("data:"):
+                                    clean_url = unquote(url_val).split("#")[0].split("?")[0]
+                                    if clean_url:
+                                        referenced.add(normpath(pjoin(item_dir, clean_url)))
+
+                        # CSS 수집 및 CSS 내 url() 참조 수집
+                        css_url_pattern = re.compile(r'url\(["\']?([^"\')\s]+)["\']?\)')
+                        css_refs = [r for r in referenced if r in href_to_id and "css" in manifest[href_to_id[r]].get("media-type", "")]
+                        referenced -= set(css_refs)
+                        for zp in css_refs:
+                            item_id = href_to_id[zp]
                             files_to_include.add(zp)
-                            chapter_zip_paths.append(zp)
+                            manifest_ids_to_keep.add(item_id)
+                            try:
+                                css_content = zin.read(zp).decode("utf-8", errors="replace")
+                                css_dir = dirname(zp)
+                                for m in css_url_pattern.findall(css_content):
+                                    if not m.startswith("data:"):
+                                        clean_m = unquote(m).split("#")[0].split("?")[0]
+                                        if clean_m:
+                                            referenced.add(normpath(pjoin(css_dir, clean_m)))
+                            except KeyError:
+                                LOGGER.warning("EPUB preview: CSS file missing in archive: %s", zp)
 
-                    # 챕터 HTML에서 참조 리소스 수집
-                    referenced = set()
-                    for zp in chapter_zip_paths:
-                        try:
-                            content = zin.read(zp).decode("utf-8", errors="replace")
-                        except KeyError:
-                            LOGGER.warning("EPUB preview: chapter file missing in archive: %s", zp)
-                            continue
-                        item_dir = dirname(zp)
-                        soup = BeautifulSoup(content, "html.parser")
-                        for img in soup.find_all("img"):
-                            src = img.get("src", "")
-                            if src and not src.startswith("data:"):
-                                referenced.add(normpath(pjoin(item_dir, src)))
-                        # SVG <image> 태그 (커버 등에서 사용)
-                        for image in soup.find_all("image"):
-                            href = image.get("xlink:href") or image.get("href", "")
-                            if href and not href.startswith("data:"):
-                                referenced.add(normpath(pjoin(item_dir, href)))
-                        for link in soup.find_all("link"):
-                            href_attr = link.get("href", "")
-                            if href_attr:
-                                referenced.add(normpath(pjoin(item_dir, href_attr)))
+                        for ref_path in referenced:
+                            if ref_path in href_to_id:
+                                item_id = href_to_id[ref_path]
+                                files_to_include.add(ref_path)
+                                manifest_ids_to_keep.add(item_id)
 
-                    # 챕터에서 참조된 CSS만 포함 및 CSS 내 url() 참조 수집
-                    css_url_pattern = re.compile(r'url\(["\']?([^"\')\s]+)["\']?\)')
-                    css_refs = [r for r in referenced if r in href_to_id and "css" in manifest[href_to_id[r]].get("media-type", "")]
-                    referenced -= set(css_refs)  # CSS는 별도 처리
-                    for zp in css_refs:
-                        item_id = href_to_id[zp]
-                        files_to_include.add(zp)
-                        manifest_ids_to_keep.add(item_id)
-                        try:
-                            css_content = zin.read(zp).decode("utf-8", errors="replace")
-                            css_dir = dirname(zp)
-                            for m in css_url_pattern.findall(css_content):
-                                if not m.startswith("data:"):
-                                    referenced.add(normpath(pjoin(css_dir, m)))
-                        except KeyError:
-                            LOGGER.warning("EPUB preview: CSS file missing in archive: %s", zp)
-
-                    # 참조된 이미지/폰트 추가 (대용량 폰트 제외)
+                    # 대용량 폰트 제거 (전체보기/미리보기 공통)
                     FONT_SIZE_LIMIT = 500 * 1024  # 500KB
                     FONT_EXTENSIONS = {".ttf", ".otf", ".woff", ".woff2"}
                     FONT_MEDIA_TYPES = {"font/ttf", "font/otf", "font/woff", "font/woff2", "application/font-ttf", "application/font-woff", "application/font-woff2", "application/x-font-ttf"}
-                    for ref_path in referenced:
-                        if ref_path in href_to_id:
-                            item_id = href_to_id[ref_path]
-                            info = manifest[item_id]
-                            ext = os.path.splitext(ref_path)[1].lower()
-                            if ext in FONT_EXTENSIONS or info.get("media-type", "") in FONT_MEDIA_TYPES:
-                                try:
-                                    font_size = zin.getinfo(ref_path).file_size
-                                    if font_size > FONT_SIZE_LIMIT:
-                                        LOGGER.debug("EPUB preview: skipping large font %s (%d bytes)", ref_path, font_size)
-                                        continue
-                                except KeyError:
-                                    LOGGER.warning("EPUB preview: font file missing in archive: %s", ref_path)
-                                    continue
-                            files_to_include.add(ref_path)
-                            manifest_ids_to_keep.add(item_id)
+
+                    excluded_fonts: set[str] = set()
+                    for item_id, info in manifest.items():
+                        href = unquote(info.get("href", "")).split("#")[0].split("?")[0]
+                        ref_path = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+                        ext = os.path.splitext(ref_path)[1].lower()
+                        if ext in FONT_EXTENSIONS or info.get("media-type", "") in FONT_MEDIA_TYPES:
+                            try:
+                                font_size = zin.getinfo(ref_path).file_size
+                                if font_size > FONT_SIZE_LIMIT:
+                                    LOGGER.debug("EPUB preview: skipping large font %s (%d bytes)", ref_path, font_size)
+                                    excluded_fonts.add(ref_path)
+                                    files_to_include.discard(ref_path)
+                                    manifest_ids_to_keep.discard(item_id)
+                            except KeyError:
+                                pass
 
                     # OPF 수정: manifest에서 불필요한 항목 제거
                     manifest_el = opf.find(f".//{{{opf_ns}}}manifest")
@@ -750,33 +770,30 @@ class BookManager:
                             if item.get("id") not in manifest_ids_to_keep:
                                 manifest_el.remove(item)
 
-                    # spine에서 불필요한 항목 제거
-                    if spine_el is not None:
-                        for ref in list(spine_refs):
-                            if ref.get("idref") not in chapter_idrefs:
-                                spine_el.remove(ref)
+                    # 미리보기(부분 챕터) 모드일 때만 spine, guide, NCX 수정
+                    if not is_full_view:
+                        if spine_el is not None:
+                            for ref in list(spine_refs):
+                                if ref.get("idref") not in chapter_idrefs:
+                                    spine_el.remove(ref)
 
-                    # guide에서 존재하지 않는 파일 참조 제거
-                    guide_el = opf.find(f".//{{{opf_ns}}}guide")
-                    if guide_el is not None:
-                        for ref in list(guide_el.findall(f"{{{opf_ns}}}reference")):
-                            href = ref.get("href", "").split("#")[0]
-                            ref_zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
-                            if ref_zp not in files_to_include:
-                                guide_el.remove(ref)
+                        guide_el = opf.find(f".//{{{opf_ns}}}guide")
+                        if guide_el is not None:
+                            for ref in list(guide_el.findall(f"{{{opf_ns}}}reference")):
+                                href = unquote(ref.get("href", "")).split("#")[0].split("?")[0]
+                                ref_zp = normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+                                if ref_zp not in files_to_include:
+                                    guide_el.remove(ref)
 
-                    # 새 EPUB 작성
+                    # 새 OPF 작성
                     modified_opf = '<?xml version="1.0" encoding="UTF-8"?>\n' + etree.tostring(opf, encoding="unicode")
-
-                    # @font-face 블록 제거용 패턴
                     font_face_pattern = re.compile(r"@font-face\s*\{[^}]*\}")
+                    css_url_pattern = re.compile(r'url\(["\']?([^"\')\s]+)["\']?\)')
 
-                    # NCX에서 미리보기에 포함되지 않은 파일 참조 제거
-                    # (epub.js가 존재하지 않는 파일 참조로 인해 초기화 중단될 수 있음)
                     ncx_ns = "http://www.daisy.org/z3986/2005/ncx/"
                     ncx_zp = None
                     if toc_id and toc_id in manifest:
-                        ncx_href = manifest[toc_id]["href"]
+                        ncx_href = unquote(manifest[toc_id]["href"]).split("#")[0].split("?")[0]
                         ncx_zp = normpath(pjoin(opf_dir, ncx_href)) if opf_dir else normpath(ncx_href)
 
                     with zipfile.ZipFile(str(cache_file), "w", zipfile.ZIP_DEFLATED) as zout:
@@ -784,21 +801,19 @@ class BookManager:
                         for zp in files_to_include:
                             if zp == opf_path:
                                 zout.writestr(zp, modified_opf)
-                            elif zp == ncx_zp:
-                                # NCX 파일: 미리보기에 없는 파일 참조 navPoint 제거 (중첩 포함)
+                            elif zp == ncx_zp and not is_full_view:
+                                # NCX 파일: 미리보기에 없는 파일 참조 navPoint 제거
                                 try:
                                     ncx_data = zin.read(zp)
                                     ncx_tree = etree.fromstring(ncx_data, _safe_xml_parser())
                                     ncx_dir = dirname(zp)
-                                    # 모든 깊이의 navPoint를 순회하며 누락 파일 참조 제거
                                     for np in list(ncx_tree.iter(f"{{{ncx_ns}}}navPoint")):
                                         content_el = np.find(f"{{{ncx_ns}}}content")
                                         if content_el is not None:
-                                            src = content_el.get("src", "")
-                                            src_file = src.split("#")[0]
-                                            if not src_file:
-                                                continue  # fragment-only src는 유지
-                                            src_zp = normpath(pjoin(ncx_dir, src_file)) if ncx_dir else normpath(src_file)
+                                            src = unquote(content_el.get("src", "")).split("#")[0].split("?")[0]
+                                            if not src:
+                                                continue
+                                            src_zp = normpath(pjoin(ncx_dir, src)) if ncx_dir else normpath(src)
                                             if src_zp not in files_to_include:
                                                 np.getparent().remove(np)
                                     ncx_out = '<?xml version="1.0" encoding="UTF-8"?>\n' + etree.tostring(ncx_tree, encoding="unicode")
@@ -809,14 +824,14 @@ class BookManager:
                             else:
                                 try:
                                     data = zin.read(zp)
-                                    # CSS에서 제외된 폰트의 @font-face 제거
-                                    if zp.endswith(".css"):
+                                    if zp.endswith(".css") and excluded_fonts:
                                         css_text = data.decode("utf-8", errors="replace")
                                         css_dir = dirname(zp)
 
                                         def _strip_missing_font(m, _css_dir=css_dir):
                                             for url in css_url_pattern.findall(m.group()):
-                                                if normpath(pjoin(_css_dir, url)) not in files_to_include:
+                                                clean_u = unquote(url).split("#")[0].split("?")[0]
+                                                if normpath(pjoin(_css_dir, clean_u)) not in files_to_include:
                                                     return ""
                                             return m.group()
 
