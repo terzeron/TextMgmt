@@ -3,7 +3,7 @@ FROM node:22.23.2 AS build
 
 WORKDIR /app
 
-COPY frontend/package.json frontend/package-lock.json ./
+COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
 RUN npm install -g npm@10.9.2 && npm ci && npx browserslist@latest --update-db
 
 COPY frontend/ .
