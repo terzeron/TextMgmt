@@ -1259,7 +1259,14 @@ class BookManager:
         if not doc:
             return Response(status_code=404, content=f"Book not found: {book_id}")
         book = self.item_class(book_id=book_id, info=doc)
-        if not book.file_path.is_file():
+        # stat() 자체가 실패할 수 있다(예: 스토리지 마운트가 끊겨 EIO).
+        # 여기서 잡지 않으면 CORS 헤더 없는 500이 나가 브라우저에는 "Failed to fetch"로만 보인다.
+        try:
+            exists = book.file_path.is_file()
+        except OSError as e:
+            LOGGER.error("PDF file access failed for book_id=%d (%s): %s", book_id, book.file_path, e)
+            return Response(status_code=503, content=f"Storage access error ({e.strerror}): {book.file_path}")
+        if not exists:
             return Response(status_code=404, content=f"File not found: {book.file_path}")
         if book.file_path.suffix.lower() != ".pdf":
             return Response(status_code=400, content=f"Not a PDF file: {book.file_path}")
@@ -1299,9 +1306,12 @@ class BookManager:
 
             LOGGER.debug("PDF pages extracted for book_id=%d (p%d-%d, total=%d)", book_id, start, end, total_pages)
             return Response(content=pdf_bytes, media_type="application/pdf", headers={"Content-Encoding": "identity", "Cache-Control": "no-transform", "X-Total-Pages": str(total_pages)})
+        except OSError as e:
+            LOGGER.error("PDF pages extraction failed for book_id=%d (%s): %s", book_id, book.file_path, e)
+            return Response(status_code=503, content=f"Storage access error ({e.strerror}): {book.file_path}")
         except Exception as e:
             LOGGER.error("PDF pages extraction failed for book_id=%d: %s", book_id, e)
-            return Response(status_code=500, content="PDF pages extraction failed")
+            return Response(status_code=500, content=f"PDF pages extraction failed ({type(e).__name__}): {e}")
 
     async def rename_category(self, old_category: str, new_category: str) -> tuple[dict[str, Any], str | None]:
         """카테고리 이름을 일괄 변경 (FS + ES, 실패 시 FS 롤백)

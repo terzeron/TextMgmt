@@ -4,6 +4,7 @@
 Docker/ES 컨테이너 없이 mock 기반으로 실행 가능.
 """
 
+import errno
 import io
 import os
 import logging.config
@@ -214,6 +215,32 @@ class TestGetPdfPages:
 
         response = await bm.get_pdf_pages(book_id=1, start=1, end=1)
         assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_missing_file_returns_404(self, book_manager_module):
+        bm, mock_es = book_manager_module
+        mock_es.search_by_id.return_value = _make_doc("test_category/gone.pdf", 1234)
+
+        response = await bm.get_pdf_pages(book_id=1, start=1, end=1)
+        assert response.status_code == 404
+        assert b"File not found" in response.body
+
+    @pytest.mark.asyncio
+    async def test_storage_io_error_returns_503_with_reason(self, book_manager_module):
+        """스토리지 마운트가 끊겨 stat()이 EIO를 내면 사유를 담은 503을 반환해야 한다.
+
+        예전에는 이 OSError가 그대로 escape해 CORSMiddleware를 우회한 500이 나갔고,
+        브라우저에는 "Failed to fetch"로만 보여 원인을 알 수 없었다.
+        """
+        bm, _ = book_manager_module
+        eio = OSError(errno.EIO, os.strerror(errno.EIO))
+
+        with patch.object(Path, "is_file", side_effect=eio):
+            response = await bm.get_pdf_pages(book_id=1, start=1, end=1)
+
+        assert response.status_code == 503
+        assert b"Storage access error" in response.body
+        assert os.strerror(errno.EIO).encode() in response.body
 
 
 class TestPdfPagesEndpoint:
