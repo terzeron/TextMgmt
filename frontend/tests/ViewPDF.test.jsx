@@ -291,6 +291,26 @@ describe("ViewPDF", () => {
     });
   });
 
+  it("서버가 보낸 실패 사유를 에러 메시지에 함께 표시한다", async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 503,
+        headers: new Headers(),
+        text: () =>
+          Promise.resolve(
+            "Storage access error (Input/output error): /books/a.pdf",
+          ),
+      }),
+    );
+
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/HTTP 503 - Storage access error/)).toBeTruthy();
+    });
+  });
+
   it("fetch 네트워크 에러 시 에러 메시지를 표시한다", async () => {
     globalThis.fetch = vi.fn(() => Promise.reject(new Error("Network error")));
 

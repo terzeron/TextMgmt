@@ -14,6 +14,20 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 // vite pdf-wasm 플러그인이 설치된 pdfjs-dist 의 wasm 을 /pdf-wasm/ 로 서빙·번들한다.
 const PDF_WASM_URL = `${window.location.origin}${import.meta.env.BASE_URL}pdf-wasm/`;
 
+// 서버는 실패 사유를 본문에 담아 보낸다(파일 없음, 스토리지 접근 오류 등).
+// 상태 코드만 노출하면 원인을 알 수 없으므로 본문을 함께 보여준다.
+async function describeHttpError(response) {
+  let detail = "";
+  try {
+    detail = (await response.text()).trim();
+  } catch {
+    // 본문을 읽지 못하면 상태 코드만으로 보고한다.
+  }
+  return detail
+    ? `HTTP ${response.status} - ${detail.slice(0, 200)}`
+    : `HTTP ${response.status}`;
+}
+
 const CHUNK_SIZE = 10;
 // 동시에 실행할 최대 렌더 개수. 워커 과부하를 막아 보이는 페이지에 자원을 집중시킨다.
 const MAX_CONCURRENT_RENDERS = 3;
@@ -80,7 +94,7 @@ export default function ViewPDF({
           apiPrefix +
           `/pdf-pages/${bookId}?start=${start}&end=${end}`;
         const response = await fetch(url, { credentials: "include" });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.ok) throw new Error(await describeHttpError(response));
 
         const buffer = await response.arrayBuffer();
         if (cancelledRef.current) return;
@@ -276,7 +290,8 @@ export default function ViewPDF({
         const firstUrl =
           getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}?start=1&end=1`;
         const firstResponse = await fetch(firstUrl, { credentials: "include" });
-        if (!firstResponse.ok) throw new Error(`HTTP ${firstResponse.status}`);
+        if (!firstResponse.ok)
+          throw new Error(await describeHttpError(firstResponse));
 
         const serverTotalPages = parseInt(
           firstResponse.headers.get("X-Total-Pages") || "0",

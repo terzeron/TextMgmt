@@ -1794,7 +1794,8 @@ def test_get_pdf_pages_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setitem(sys.modules, "pypdf", type("P", (), {"PdfReader": BadReader, "PdfWriter": object})())
     resp = asyncio_runner(manager.get_pdf_pages(1, start=1, end=1))
     assert resp.status_code == 500
-    assert resp.body.decode("utf-8") == "PDF pages extraction failed"
+    # 원인 파악이 가능하도록 예외 타입과 메시지를 본문에 포함한다
+    assert resp.body.decode("utf-8") == "PDF pages extraction failed (RuntimeError): boom"
 
 
 def test_rename_category_path_traversal(tmp_path: Path):
