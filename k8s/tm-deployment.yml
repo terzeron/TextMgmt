@@ -41,6 +41,19 @@ spec:
               drop: ["ALL"]
           ports:
             - containerPort: 8020
+          # resources 미지정 시 QoS BestEffort(oom_score_adj 1000) = 메모리 고갈 시 최우선 학살
+          # 대상이었다 (2026-08-04 OOM storm). requests를 주어 Burstable(adj ~963)로 올린다.
+          # 4Gi limit 근거: 10일 관측 peak 3185MiB. 512Mi 같은 값을 걸면 즉시 OOM kill 된다.
+          # 주의: fresh start 169MiB → 4일 후 2194MiB로 증가하는 패턴(leak 의심)이 있어
+          #       limit이 관측 peak을 감싸도록 크게 잡았다. leak 자체는 별도 조사 필요.
+          # cpu 2 근거: 10일 관측 peak 917m + 여유 2배.
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "250m"
+            limits:
+              memory: "4Gi"
+              cpu: "2"
           env:
             - name: TM_BOOK_DIR
               value: /books
@@ -149,6 +162,16 @@ spec:
               drop: ["ALL"]
           ports:
             - containerPort: 8080
+          # 정적 파일 서빙 nginx. 10일 관측 peak 23MiB / cpu <26m.
+          # requests == limits로 QoS Guaranteed(oom_score_adj -997) — 비용이 작고
+          # BestEffort(adj 1000) 학살 목록에서 빠지는 효과가 크다.
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "200m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
           # nginx-unprivileged: pid/temp 경로가 RO rootfs라 writable emptyDir 필요
           volumeMounts:
             - name: nginx-cache
