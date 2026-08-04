@@ -17,9 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter, PdfReader
 
-logging.config.fileConfig(
-    Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False
-)
+logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
 
 _ENV = {
@@ -46,23 +44,9 @@ def create_test_pdf(num_pages: int, output_path: Path) -> None:
         writer.write(f)
 
 
-def _make_doc(
-    relative_path: str, file_size: int, page_count: int = 5, file_type: str = "pdf"
-) -> dict:
+def _make_doc(relative_path: str, file_size: int, page_count: int = 5, file_type: str = "pdf") -> dict:
     """ES 문서 dict 생성 헬퍼."""
-    return {
-        "category": "test_category",
-        "title": "Test Book",
-        "author": "Author",
-        "file_path": relative_path,
-        "file_type": file_type,
-        "file_size": file_size,
-        "line_count": 0,
-        "page_count": page_count,
-        "isbn": "",
-        "summary": "test",
-        "updated_time": "2024-01-01T00:00:00.000000",
-    }
+    return {"category": "test_category", "title": "Test Book", "author": "Author", "file_path": relative_path, "file_type": file_type, "file_size": file_size, "line_count": 0, "page_count": page_count, "isbn": "", "summary": "test", "updated_time": "2024-01-01T00:00:00.000000"}
 
 
 @pytest.fixture(scope="module")
@@ -95,6 +79,7 @@ def book_manager_module(temp_dir, _default_doc):
     with patch.dict(os.environ, env):
         import backend.book as book_mod
         import backend.book_manager as bm_mod
+
         importlib.reload(book_mod)
         importlib.reload(bm_mod)
 
@@ -207,11 +192,7 @@ class TestGetPdfPages:
         txt_path = temp_dir / "test_category" / "test.txt"
         txt_path.write_text("hello")
 
-        mock_es.search_by_id.return_value = _make_doc(
-            "test_category/test.txt",
-            txt_path.stat().st_size,
-            file_type="txt",
-        )
+        mock_es.search_by_id.return_value = _make_doc("test_category/test.txt", txt_path.stat().st_size, file_type="txt")
 
         response = await bm.get_pdf_pages(book_id=1, start=1, end=1)
         assert response.status_code == 400
@@ -250,10 +231,7 @@ class TestPdfPagesEndpoint:
     def setup_client(self, book_manager_module, temp_dir, _default_doc):
         _, mock_es = book_manager_module
 
-        with (
-            patch("backend.comics_manager.ESManager") as MockComicsES,
-            patch("backend.category_mapping.CategoryMapping._init_db"),
-        ):
+        with patch("backend.comics_manager.ESManager") as MockComicsES, patch("backend.category_mapping.CategoryMapping._init_db"):
             mock_comics_es = MagicMock()
             MockComicsES.return_value = mock_comics_es
             mock_comics_es.create_index.return_value = None
@@ -277,12 +255,8 @@ class TestPdfPagesEndpoint:
 
             from backend.auth import create_jwt_token
 
-            token = create_jwt_token(
-                email="admin@test.com", role="admin", name="Test Admin"
-            )
-            self.client = TestClient(
-                main.app, cookies={"tm_access_token": token}
-            )
+            token = create_jwt_token(email="admin@test.com", role="admin", name="Test Admin")
+            self.client = TestClient(main.app, cookies={"tm_access_token": token})
             yield
 
             main.book_manager.es_manager = orig_es
@@ -308,3 +282,116 @@ class TestPdfPagesEndpoint:
     def test_get_pdf_pages_start_exceeds_total(self):
         response = self.client.get("/pdf-pages/1?start=100&end=200")
         assert response.status_code == 400
+
+
+class TestPdfReaderCacheBudget:
+    """_pdf_reader_cache 가 개수가 아니라 바이트로 제한되는지 검증.
+
+    cached PdfReader 1개는 PDF 파일 크기와 거의 1:1로 RSS를 차지한다
+    (pod 실측: 134MiB 파일 → RSS +134.2MiB). 개수만 제한하면 /comics 의 1.5GiB 급
+    PDF 8개가 한 worker 에서 12GiB 를 점유해 노드 메모리를 고갈시킨다.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self, book_manager_module):
+        bm, _ = book_manager_module
+        manager_cls = type(bm)
+        manager_cls._pdf_reader_cache.clear()
+        manager_cls._page_count_cache.clear()
+        yield
+        manager_cls._pdf_reader_cache.clear()
+        manager_cls._page_count_cache.clear()
+
+    def test_large_pdf_reader_not_cached(self, book_manager_module, temp_dir, monkeypatch):
+        """파일당 상한을 넘는 PDF 는 reader 를 캐시하지 않는다 (페이지 수만 캐시)."""
+        bm, _ = book_manager_module
+        manager_cls = type(bm)
+        pdf = temp_dir / "test_category" / "budget_large.pdf"
+        create_test_pdf(3, pdf)
+        stat_result = pdf.stat()
+        monkeypatch.setattr(manager_cls, "PDF_READER_CACHE_MAX_FILE_BYTES", stat_result.st_size - 1)
+
+        reader, total_pages = manager_cls._get_cached_pdf_reader(pdf)
+
+        assert total_pages == 3
+        assert reader is not None  # reader 자체는 정상 반환되어야 한다
+        assert str(pdf) not in manager_cls._pdf_reader_cache  # 그러나 보관하지 않는다
+        # 페이지 수는 int 하나라 비용이 없으므로 항상 캐시한다
+        assert (str(pdf), stat_result.st_mtime) in manager_cls._page_count_cache
+
+    def test_small_pdf_reader_is_cached_and_reused(self, book_manager_module, temp_dir, monkeypatch):
+        bm, _ = book_manager_module
+        manager_cls = type(bm)
+        pdf = temp_dir / "test_category" / "budget_small.pdf"
+        create_test_pdf(2, pdf)
+        monkeypatch.setattr(manager_cls, "PDF_READER_CACHE_MAX_FILE_BYTES", pdf.stat().st_size + 1)
+
+        reader1, _ = manager_cls._get_cached_pdf_reader(pdf)
+        assert str(pdf) in manager_cls._pdf_reader_cache
+        reader2, _ = manager_cls._get_cached_pdf_reader(pdf)
+        assert reader1 is reader2  # 같은 객체를 재사용 (재파싱 없음)
+
+    def test_byte_budget_evicts_lru(self, book_manager_module, temp_dir, monkeypatch):
+        """전체 예산을 넘으면 개수와 무관하게 LRU 로 축출한다."""
+        bm, _ = book_manager_module
+        manager_cls = type(bm)
+        pdfs = []
+        for i in range(3):
+            p = temp_dir / "test_category" / f"budget_{i}.pdf"
+            create_test_pdf(2, p)
+            pdfs.append(p)
+
+        one_size = pdfs[0].stat().st_size
+        monkeypatch.setattr(manager_cls, "PDF_READER_CACHE_MAX_FILE_BYTES", one_size + 1)
+        monkeypatch.setattr(manager_cls, "PDF_READER_CACHE_MAX_BYTES", one_size * 2 + 1)
+        monkeypatch.setattr(manager_cls, "PDF_READER_CACHE_MAX", 100)  # 개수는 넉넉히
+
+        for p in pdfs:
+            manager_cls._get_cached_pdf_reader(p)
+
+        assert len(manager_cls._pdf_reader_cache) == 2
+        assert str(pdfs[0]) not in manager_cls._pdf_reader_cache  # 가장 오래된 것이 축출
+        assert str(pdfs[2]) in manager_cls._pdf_reader_cache
+        total = sum(entry[3] for entry in manager_cls._pdf_reader_cache.values())
+        assert total <= manager_cls.PDF_READER_CACHE_MAX_BYTES
+
+    def test_mtime_change_invalidates_reader_cache(self, book_manager_module, temp_dir, monkeypatch):
+        bm, _ = book_manager_module
+        manager_cls = type(bm)
+        pdf = temp_dir / "test_category" / "budget_mtime.pdf"
+        create_test_pdf(2, pdf)
+        monkeypatch.setattr(manager_cls, "PDF_READER_CACHE_MAX_FILE_BYTES", 10 * 1024 * 1024)
+
+        reader1, pages1 = manager_cls._get_cached_pdf_reader(pdf)
+        assert pages1 == 2
+
+        create_test_pdf(4, pdf)  # 내용 교체
+        os.utime(pdf, (pdf.stat().st_atime + 10, pdf.stat().st_mtime + 10))
+
+        reader2, pages2 = manager_cls._get_cached_pdf_reader(pdf)
+        assert reader2 is not reader1
+        assert pages2 == 4
+        assert len(manager_cls._pdf_reader_cache) == 1  # 낡은 항목이 남지 않는다
+
+    @pytest.mark.asyncio
+    async def test_disk_cache_hit_does_not_open_pdf(self, book_manager_module):
+        """디스크 .preview_cache 히트 시 PdfReader 를 만들지 않아야 한다.
+
+        예전에는 reader 를 디스크 캐시 확인보다 먼저 만들었기 때문에, 캐시 히트여도
+        GB급 PDF 를 통째로 파싱했다 (관측된 최장 응답 125초).
+        """
+        bm, _ = book_manager_module
+        manager_cls = type(bm)
+
+        first = await bm.get_pdf_pages(book_id=1, start=1, end=2)
+        assert first.status_code == 200
+
+        # reader 캐시만 비운다. 페이지 수 캐시와 디스크 캐시는 남은 상태.
+        manager_cls._pdf_reader_cache.clear()
+
+        with patch("pypdf.PdfReader", side_effect=AssertionError("must not parse the PDF")) as mock_reader:
+            second = await bm.get_pdf_pages(book_id=1, start=1, end=2)
+
+        assert second.status_code == 200
+        assert second.headers.get("X-Total-Pages") == "5"
+        assert not mock_reader.called

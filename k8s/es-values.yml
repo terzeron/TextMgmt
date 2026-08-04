@@ -1,4 +1,13 @@
 ---
+eck-kibana:
+  enabled: true
+  # version 을 반드시 ES 와 같게 고정한다.
+  # chart 기본값은 eck-kibana.version 미지정 → eck-stack 의 appVersion 이 적용되는데,
+  # eck-elasticsearch.version 만 9.1.0 으로 고정해두면 kibana 가 더 높은 버전(9.4.0)이 되고
+  # ECK 는 Kibana > Elasticsearch 조합을 거부한다. 그 결과 kibana 가 ES 에 붙지 못해
+  # "socket hang up" 으로 만성 CrashLoop 에 빠졌다 (2025-09~2026-08, 497회 재시작).
+  version: 9.1.0
+
 eck-elasticsearch:
   enabled: true
   fullnameOverride: elasticsearch
@@ -21,6 +30,12 @@ eck-elasticsearch:
                 ]
           containers:
             - name: elasticsearch
+              # QoS Guaranteed(oom_score_adj -997) 조건: 모든 컨테이너에서 cpu·memory 둘 다
+              # requests == limits. memory만 맞춰도 cpu가 어긋나면 Burstable(adj 853)로 떨어져
+              # 호스트 메모리 고갈 시 초기 희생양이 된다 (2026-08-04 OOM storm).
+              # memory 5Gi 근거: 10일 관측 peak 3771MiB(4Gi limit의 94%) + 여유 33%.
+              #   ECK heap = limit의 50% → 2.5Gi.
+              # cpu 2 근거: 10일 관측 peak 443m + 여유 4.5배.
               resources:
-                requests: { cpu: "500m", memory: "4Gi" }
-                limits: { cpu: "2", memory: "4Gi" }
+                requests: { cpu: "2", memory: "5Gi" }
+                limits: { cpu: "2", memory: "5Gi" }

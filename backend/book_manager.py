@@ -59,8 +59,22 @@ class BookManager:
     }
 
     CACHE_MAX_AGE_SECONDS = 86400  # 1일
-    PDF_READER_CACHE_MAX = 8  # book_id 기준 PdfReader LRU 캐시 최대 개수
-    _pdf_reader_cache: "OrderedDict[int, tuple[float, Any, int]]" = OrderedDict()
+    # PdfReader 캐시는 "개수"가 아니라 "바이트"로 제한한다.
+    # cached PdfReader 1개는 PDF 파일 크기와 거의 1:1로 RSS를 차지한다
+    # (pod 실측: 134MiB 파일 → RSS +134.2MiB, 89MiB → +89.3MiB, 122MiB → +121.6MiB).
+    # 개수만 제한하면 /comics 의 1.5GiB 급 PDF 8개가 한 worker 에서 12GiB 를 점유하고,
+    # replica 2개면 노드 RAM(27GiB) 전체를 위험하게 만든다.
+    PDF_READER_CACHE_MAX_BYTES = 512 * 1024 * 1024  # reader 캐시 전체 예산
+    PDF_READER_CACHE_MAX_FILE_BYTES = 200 * 1024 * 1024  # 이 크기 초과 파일은 캐시하지 않음
+    PDF_READER_CACHE_MAX = 32  # 작은 PDF 가 무한히 쌓이지 않게 하는 2차 개수 상한
+    # key: str(file_path) -> (mtime, reader, total_pages, size)
+    # book_id 가 아니라 경로로 키를 잡는다. 캐시는 BookManager 클래스 속성이라
+    # ComicsManager 와 공유되는데, 두 ES 인덱스의 id 공간이 겹치면 book_id 키로는
+    # 다른 파일의 reader 를 돌려줄 수 있다.
+    _pdf_reader_cache: "OrderedDict[str, tuple[float, Any, int, int]]" = OrderedDict()
+    # key: (str(file_path), mtime) -> total_pages. int 하나라 비용이 사실상 0이므로 항상 캐시한다.
+    PAGE_COUNT_CACHE_MAX = 4096
+    _page_count_cache: "OrderedDict[tuple[str, float], int]" = OrderedDict()
     HTML_VIEWER_RESOURCE_EXTENSIONS = {".css", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".tiff", ".ico", ".avif", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".ogg", ".wav", ".mp4", ".webm"}
     HTML_VIEWER_CSP = "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' blob:;"
 
@@ -272,28 +286,74 @@ class BookManager:
             LOGGER.warning("Cache eviction failed: %s", e)
 
     @staticmethod
-    def _get_cached_pdf_reader(book_id: int, file_path: Path) -> tuple[Any, int]:
-        """book_id별 PdfReader와 총 페이지 수를 mtime 기준으로 캐시해서 반환한다.
+    def _evict_pdf_readers() -> None:
+        """reader 캐시를 바이트 예산과 개수 상한 안으로 줄인다 (LRU)."""
+        cache = BookManager._pdf_reader_cache
+        total = sum(entry[3] for entry in cache.values())
+        while cache and (total > BookManager.PDF_READER_CACHE_MAX_BYTES or len(cache) > BookManager.PDF_READER_CACHE_MAX):
+            _, evicted = cache.popitem(last=False)
+            total -= evicted[3]
 
-        같은 PDF에 대한 청크 요청마다(그리고 disk-cache-hit 시에도) 전체 파일을
-        재파싱하던 비용을 제거한다. 파일이 변경되면(mtime 불일치) 캐시를 무효화하고
-        다시 읽는다. LRU로 PDF_READER_CACHE_MAX 개수만 유지한다.
+    @staticmethod
+    def _get_cached_page_count(file_path: Path) -> tuple[int, Any]:
+        """(총 페이지 수, 방금 만든 reader 또는 None) 을 반환한다.
+
+        페이지 수는 (경로, mtime) 기준으로 캐시하며 int 하나라 비용이 없다. 디스크
+        .preview_cache 히트 시에는 페이지 추출이 필요 없으므로 이 값만 있으면 되고,
+        GB급 PDF 를 위해 PdfReader 를 만들 필요가 없다.
+        캐시 미스일 때는 reader 를 만들어야 하므로, 호출자가 그대로 재사용할 수 있도록
+        함께 돌려준다 (큰 파일은 reader 캐시에 들어가지 않으므로 버리면 두 번 파싱된다).
+        """
+        mtime = file_path.stat().st_mtime
+        key = (str(file_path), mtime)
+        cache = BookManager._page_count_cache
+        hit = cache.get(key)
+        if hit is not None:
+            cache.move_to_end(key)
+            return hit, None
+        reader, total_pages = BookManager._get_cached_pdf_reader(file_path)
+        return total_pages, reader
+
+    @staticmethod
+    def _get_cached_pdf_reader(file_path: Path) -> tuple[Any, int]:
+        """PdfReader와 총 페이지 수를 반환한다. 파일이 변경되면(mtime 불일치) 캐시를 무효화한다.
+
+        페이지 수는 항상 캐시하지만(_page_count_cache), reader 객체는 바이트 예산 안에서만
+        보관한다. 상세 근거는 PDF_READER_CACHE_MAX_BYTES 주석 참고.
+        PDF_READER_CACHE_MAX_FILE_BYTES 를 넘는 파일은 캐시하지 않고 매번 새로 읽는다 —
+        같은 범위의 반복 요청은 디스크 .preview_cache 가 처리하므로 재파싱이 반복되지 않는다.
         """
         from pypdf import PdfReader
 
-        mtime = file_path.stat().st_mtime
+        stat_result = file_path.stat()
+        mtime = stat_result.st_mtime
+        size = stat_result.st_size
+        key = str(file_path)
+
         cache = BookManager._pdf_reader_cache
-        cached = cache.get(book_id)
+        cached = cache.get(key)
         if cached and cached[0] == mtime:
-            cache.move_to_end(book_id)
+            cache.move_to_end(key)
             return cached[1], cached[2]
 
-        reader = PdfReader(str(file_path))
+        reader = PdfReader(key)
         total_pages = len(reader.pages)
-        cache[book_id] = (mtime, reader, total_pages)
-        cache.move_to_end(book_id)
-        while len(cache) > BookManager.PDF_READER_CACHE_MAX:
-            cache.popitem(last=False)
+
+        page_cache = BookManager._page_count_cache
+        page_key = (key, mtime)
+        page_cache[page_key] = total_pages
+        page_cache.move_to_end(page_key)
+        while len(page_cache) > BookManager.PAGE_COUNT_CACHE_MAX:
+            page_cache.popitem(last=False)
+
+        if cached:  # mtime 이 바뀐 낡은 항목 제거
+            del cache[key]
+        if size <= BookManager.PDF_READER_CACHE_MAX_FILE_BYTES:
+            cache[key] = (mtime, reader, total_pages, size)
+            cache.move_to_end(key)
+            BookManager._evict_pdf_readers()
+        else:
+            LOGGER.debug("PDF too large to cache reader (%.0f MiB): %s", size / 1048576, key)
         return reader, total_pages
 
     @staticmethod
@@ -665,7 +725,7 @@ class BookManager:
                             selected = spine_refs[:chapters]
                         chapter_idrefs = [ref.get("idref") for ref in selected if ref.get("idref") in manifest]
 
-                    is_full_view = (req_chapters <= 0)
+                    is_full_view = req_chapters <= 0
                     toc_id = spine_el.get("toc", "") if spine_el is not None else ""
 
                     if is_full_view:
@@ -704,14 +764,7 @@ class BookManager:
                             item_dir = dirname(zp)
                             soup = BeautifulSoup(content, "html.parser")
                             for elem in soup.find_all(["img", "image", "link", "script", "source", "embed", "object", "video", "a"]):
-                                url_val = (
-                                    elem.get("src")
-                                    or elem.get("href")
-                                    or elem.get("xlink:href")
-                                    or elem.get("data")
-                                    or elem.get("poster")
-                                    or ""
-                                )
+                                url_val = elem.get("src") or elem.get("href") or elem.get("xlink:href") or elem.get("data") or elem.get("poster") or ""
                                 if url_val and not url_val.startswith("data:"):
                                     clean_url = unquote(url_val).split("#")[0].split("?")[0]
                                     if clean_url:
@@ -1274,7 +1327,9 @@ class BookManager:
         try:
             from pypdf import PdfWriter
 
-            reader, total_pages = BookManager._get_cached_pdf_reader(book_id, book.file_path)
+            # 페이지 수만 먼저 구한다. 디스크 캐시 히트면 페이지 추출이 필요 없으므로
+            # 여기서 PdfReader 를 만들면 GB급 PDF 를 헛되게 파싱하게 된다.
+            total_pages, reader = BookManager._get_cached_page_count(book.file_path)
 
             # 범위 검증
             start = max(1, start)
@@ -1291,6 +1346,10 @@ class BookManager:
             if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
                 LOGGER.debug("PDF pages cache hit for book_id=%d (p%d-%d)", book_id, start, end)
                 return Response(content=cache_file.read_bytes(), media_type="application/pdf", headers={"Content-Encoding": "identity", "Cache-Control": "no-transform", "X-Total-Pages": str(total_pages)})
+
+            # 디스크 캐시 미스. 페이지 수를 캐시에서 얻어 reader 가 없으면 이때 만든다.
+            if reader is None:
+                reader, _ = BookManager._get_cached_pdf_reader(book.file_path)
 
             # 페이지 추출
             writer = PdfWriter()

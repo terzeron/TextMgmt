@@ -60,12 +60,16 @@ spec:
               mountPath: /var/lib/mysql
             - name: mysql-initdb
               mountPath: /docker-entrypoint-initdb.d
+          # QoS Guaranteed(oom_score_adj -997)를 위해 requests == limits.
+          # 이전 256Mi/512Mi는 Burstable(adj 991)이라 호스트 메모리 고갈 시 초기 희생양이었고,
+          # 10일 관측 peak 401MiB가 512Mi limit의 78%까지 차서 컨테이너 OOM 위험도 있었다.
+          # 1Gi 근거: peak 401MiB + 여유 2.5배 / cpu 500m 근거: peak 120m + 여유 4배.
           resources:
             requests:
-              memory: "256Mi"
-              cpu: "250m"
+              memory: "1Gi"
+              cpu: "500m"
             limits:
-              memory: "512Mi"
+              memory: "1Gi"
               cpu: "500m"
       volumes:
         - name: mysql-storage
