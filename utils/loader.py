@@ -43,6 +43,56 @@ if "TM_COMICS_DIR" not in os.environ:
     sys.exit(-1)
 
 
+class ProblemCollector(logging.Handler):
+    """read_file 실행 중 발생한 WARNING 이상 로그를 모아두는 컨텍스트 매니저.
+
+    콘솔 핸들러를 잠시 떼어 두어, 수집한 메시지를 파일 경로 아래에 묶어서 출력할 수 있게 한다.
+    파일 로그(run.log)는 그대로 유지된다.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.messages: list[str] = []
+        self._detached: list[logging.Handler] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+    def __enter__(self) -> "ProblemCollector":
+        self.messages.clear()
+        root = logging.getLogger()
+        # stdout 핸들러만 분리 (FileHandler 계열도 StreamHandler 하위지만 파일 로그는 유지)
+        self._detached = [h for h in root.handlers if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)]
+        for handler in self._detached:
+            root.removeHandler(handler)
+        root.addHandler(self)
+        return self
+
+    def __exit__(self, *_exc_info: Any) -> None:
+        root = logging.getLogger()
+        root.removeHandler(self)
+        for handler in self._detached:
+            root.addHandler(handler)
+        self._detached = []
+
+
+def report_problems(file_path: Path, messages: list[str], indexed: bool) -> bool:
+    """문제가 있을 때만 '* 파일경로'와 그 아래에 사유를 출력. 문제 여부를 반환."""
+    # read_from_epub/pdf/rtf 등은 경로와 예외를 각각 로깅하므로 경로 중복 줄은 제거
+    problems = [msg for msg in messages if msg != str(file_path)]
+    if not indexed:
+        if file_path.is_file():
+            problems.append(f"적재 제외: 지원하지 않는 파일 형식 '{file_path.suffix}'")
+        else:
+            problems.append("적재 제외: 파일이 사라짐")
+    if not problems:
+        return False
+    print(f"* {file_path}")
+    for msg in problems:
+        print(f"    {msg}")
+    return True
+
+
 class Loader:
     TEXT_SIZE = 4096
     path_prefix = Path(os.environ["TM_BOOK_DIR"])
@@ -808,10 +858,12 @@ class Loader:
         """파일들을 읽어서 데이터 딕셔너리로 반환 (테스트 및 하위 호환성용)"""
         data: dict[int, dict[str, Any]] = {}
         file_list = Loader.get_file_list(path, num_files, recursive)
+        problem_collector = ProblemCollector()
 
         for child_path in file_list:
-            print(f"* {child_path}")
-            data_item = Loader.read_file(child_path)
+            with problem_collector as collector:
+                data_item = Loader.read_file(child_path)
+            report_problems(child_path, collector.messages, bool(data_item))
             if data_item:
                 data.update(data_item)
 
@@ -902,6 +954,7 @@ def main() -> int:
         processed_count = 0
         synced_count = 0
         file_iterator = iter(file_iter)
+        problem_collector = ProblemCollector()
 
         while True:
             # generator에서 배치 단위로 가져오기
@@ -948,12 +1001,13 @@ def main() -> int:
                 skipped_count += len(existing_paths) - len(path_changed_inodes)
                 synced_count += len(path_changed_inodes)
 
-            # 파일 파싱 (stat 결과 재사용)
+            # 파일 파싱 (stat 결과 재사용). 문제가 있는 파일만 경로와 사유를 출력
             batch_data: dict[int, dict[str, Any]] = {}
             for inode in new_inodes:
                 file_path, st = file_stat_map[inode]
-                print(f"* {file_path}")
-                data_item = Loader.read_file(file_path, stat_result=st, skip_text=skip_text)
+                with problem_collector as collector:
+                    data_item = Loader.read_file(file_path, stat_result=st, skip_text=skip_text)
+                report_problems(file_path, collector.messages, bool(data_item))
                 if data_item:
                     batch_data.update(data_item)
 
