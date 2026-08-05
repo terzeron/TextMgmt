@@ -18,7 +18,7 @@ const PDF_WASM_URL = `${window.location.origin}${import.meta.env.BASE_URL}pdf-wa
 
 async function checkPdfParsing(buffer) {
   const results = [];
-  let pdfDoc = null;
+  let pdfDoc;
 
   try {
     pdfDoc = await pdfjs.getDocument({ data: buffer, wasmUrl: PDF_WASM_URL })

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, act } from "@testing-library/react";
 
 afterEach(cleanup);
 
@@ -1277,5 +1277,137 @@ describe("ViewPDF", () => {
 
     // unmount된 컴포넌트라 DOM에 에러 메시지가 없음
     expect(screen.queryByText(/PDF 렌더링 실패/)).toBeNull();
+  });
+
+  // ── 렌더 취소 예외 / 관찰자 이탈 분기 ──
+
+  it("RenderingCancelledException 은 콘솔 에러로 보고하지 않는다", async () => {
+    const cancelErr = Object.assign(new Error("cancelled"), {
+      name: "RenderingCancelledException",
+    });
+    setupGetDocument(() => {
+      const pdf = {
+        numPages: 1,
+        getPage: vi.fn(() =>
+          Promise.resolve({
+            getViewport: () => ({ width: 800, height: 600 }),
+            render: () => ({
+              promise: Promise.reject(cancelErr),
+              cancel: vi.fn(),
+            }),
+          }),
+        ),
+      };
+      pdf.loadingTask = { promise: Promise.resolve(pdf), destroy: vi.fn() };
+      return pdf;
+    });
+    globalThis.fetch = createMockFetch(1);
+
+    render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(document.querySelectorAll("canvas.pdf-page").length).toBe(1);
+    });
+    // 취소 예외는 삼켜지므로 사용자에게 렌더 실패가 노출되지 않는다
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/PDF 렌더링 실패/)).toBeNull();
+  });
+
+  it("이미 렌더된 페이지가 화면 밖으로 나가도 취소하지 않는다", async () => {
+    const cancelSpy = vi.fn();
+    setupGetDocument(() => {
+      const pdf = {
+        numPages: 1,
+        getPage: vi.fn(() =>
+          Promise.resolve({
+            getViewport: () => ({ width: 800, height: 600 }),
+            // 즉시 완료 → active 목록에서 빠진다
+            render: () => ({ promise: Promise.resolve(), cancel: cancelSpy }),
+          }),
+        ),
+      };
+      pdf.loadingTask = { promise: Promise.resolve(pdf), destroy: vi.fn() };
+      return pdf;
+    });
+    globalThis.fetch = createMockFetch(3);
+
+    const observers = [];
+    const RealIO = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        observers.push(this);
+      }
+      observe(el) {
+        this.cb([{ isIntersecting: true, target: el }], this);
+      }
+      unobserve() {}
+      disconnect() {}
+    };
+
+    try {
+      render(<ViewPDF bookId={1} />);
+
+      await waitFor(() => {
+        expect(document.querySelectorAll("canvas.pdf-page").length).toBe(3);
+      });
+      await waitFor(() => {
+        expect(cancelSpy).not.toHaveBeenCalled();
+      });
+
+      const canvas2 = document.querySelectorAll("canvas.pdf-page")[1];
+      const obs = observers[observers.length - 1];
+      // 렌더가 이미 끝난 페이지 → 큐/active 어디에도 없어 취소 대상이 아니다
+      await act(async () => {
+        obs.cb([{ isIntersecting: false, target: canvas2 }], obs);
+      });
+
+      expect(cancelSpy).not.toHaveBeenCalled();
+    } finally {
+      globalThis.IntersectionObserver = RealIO;
+    }
+  });
+
+  it("data-page 가 없는 요소의 관찰 이벤트는 무시한다", async () => {
+    setupGetDocument(() => {
+      const pdf = createMockPdf(2);
+      makeLoadingTask(pdf);
+      return pdf;
+    });
+    globalThis.fetch = createMockFetch(2);
+
+    const observers = [];
+    const RealIO = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        observers.push(this);
+      }
+      observe(el) {
+        this.cb([{ isIntersecting: true, target: el }], this);
+      }
+      unobserve() {}
+      disconnect() {}
+    };
+
+    try {
+      render(<ViewPDF bookId={1} />);
+      await waitFor(() => {
+        expect(document.querySelectorAll("canvas.pdf-page").length).toBe(2);
+      });
+
+      const obs = observers[observers.length - 1];
+      const stray = document.createElement("div");
+      await act(async () => {
+        obs.cb([{ isIntersecting: true, target: stray }], obs);
+      });
+
+      // 예외 없이 무시된다
+      expect(document.querySelectorAll("canvas.pdf-page").length).toBe(2);
+    } finally {
+      globalThis.IntersectionObserver = RealIO;
+    }
   });
 });

@@ -29,8 +29,14 @@ vi.mock("../src/Common", () => ({
 }));
 
 vi.mock("../src/Folder.jsx", () => ({
-  default: ({ folderData, onClickHandler }) => (
-    <div data-testid="folder">
+  default: ({ folderData, onClickHandler, onToggle, isOpen }) => (
+    <div data-testid="folder" data-open={String(isOpen)}>
+      <button
+        data-testid="folder-toggle"
+        onClick={() => onToggle && onToggle(!isOpen)}
+      >
+        toggle
+      </button>
       {folderData.map((item) => (
         <div key={item.id}>
           <button
@@ -80,8 +86,9 @@ vi.mock("../src/ViewSingle.jsx", () => ({
     hasNextBook,
     onPrevBook,
     hasPrevBook,
+    viewUrl,
   }) => (
-    <div data-testid="view-single">
+    <div data-testid="view-single" data-view-url={viewUrl}>
       ViewSingle: {bookId} ({fileType})
       {hasNextBook && (
         <button data-testid="next-book-btn" onClick={onNextBook}>
@@ -1177,6 +1184,158 @@ describe("View", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("book-info-view")).toBeTruthy();
+    });
+  });
+
+  // ── 추가 분기 ──
+
+  it("최상위 파일이 여러 개면 제목순으로 정렬한다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ _root: 3 });
+      } else if (url === "/categories/_root") {
+        resolve([
+          { book_id: 3, title: "다랑", file_type: "pdf", file_path: "/c.pdf", category: "_root" },
+          { book_id: 1, title: "가람", file_type: "pdf", file_path: "/a.pdf", category: "_root" },
+          { book_id: 2, title: "나람", file_type: "pdf", file_path: "/b.pdf", category: "_root" },
+        ]);
+      }
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-/1")).toBeTruthy();
+    });
+    const labels = ["/1", "/2", "/3"].map(
+      (id) => screen.getByTestId(`folder-item-${id}`).textContent,
+    );
+    expect(labels).toEqual(["가람.pdf", "나람.pdf", "다랑.pdf"]);
+  });
+
+  it("viewer 의 비노출 목록이 null 이면 빈 집합으로 처리한다", async () => {
+    mockOutletContext.role = "viewer";
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ 소설: 10 });
+      } else if (url.startsWith("/hidden-categories")) {
+        resolve(null);
+      }
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-소설")).toBeTruthy();
+    });
+  });
+
+  it("apiPrefix 가 있으면 viewUrl 에 api 파라미터를 포함한다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") {
+        resolve({ 만화: 1 });
+      } else if (url === "/comics/categories/만화") {
+        resolve([
+          {
+            book_id: 7,
+            title: "만화책",
+            file_type: "pdf",
+            file_path: "만화/7.pdf",
+            category: "만화",
+          },
+        ]);
+      }
+    });
+
+    render(<View apiPrefix="/comics" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-만화")).toBeTruthy();
+    });
+    screen.getByTestId("folder-item-만화").click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-만화/7")).toBeTruthy();
+    });
+    screen.getByTestId("folder-item-만화/7").click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-single")).toBeTruthy();
+    });
+    expect(screen.getByTestId("view-single").dataset.viewUrl).toContain("api=");
+  });
+
+  it("딥링크에 apiPrefix 가 있으면 viewUrl 에 api 파라미터를 포함한다", async () => {
+    mockRouteState.wildcard = "9";
+    mockRouteState.searchParams = "category=만화";
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") {
+        resolve({ 만화: 1 });
+      } else if (url === "/comics/categories/만화") {
+        resolve([
+          {
+            book_id: 9,
+            title: "딥링크만화",
+            file_type: "pdf",
+            file_path: "만화/9.pdf",
+            category: "만화",
+          },
+        ]);
+      }
+    });
+
+    render(<View apiPrefix="/comics" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info-view")).toBeTruthy();
+    });
+    expect(screen.getByTestId("view-single").dataset.viewUrl).toContain("api=");
+  });
+
+  it("폴더를 접으면 접힌 Folder 를 렌더링한다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve({ 소설: 10 });
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder")).toBeTruthy();
+    });
+    expect(screen.getByTestId("folder").dataset.open).toBe("true");
+
+    await act(async () => {
+      screen.getByTestId("folder-toggle").click();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder").dataset.open).toBe("false");
+    });
+  });
+
+  it("모바일 폭에서는 열 너비를 12로 렌더링한다", async () => {
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      writable: true,
+      configurable: true,
+      value: 500,
+    });
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve({ 소설: 10 });
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder")).toBeTruthy();
+    });
+    expect(document.querySelector(".col-md-12")).toBeTruthy();
+
+    Object.defineProperty(window, "innerWidth", {
+      writable: true,
+      configurable: true,
+      value: originalWidth,
     });
   });
 });

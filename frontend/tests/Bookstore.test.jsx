@@ -758,3 +758,158 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
     });
   });
 });
+
+describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("구분자만 있는 카테고리는 빈 문자열을 반환한다", () => {
+    // ">" → split → ["", ""] → filter(Boolean) → [] → parts[0]가 undefined
+    expect(getTwoLevelCategory(">")).toBe("");
+    expect(getTwoLevelCategory(" > > ")).toBe("");
+  });
+
+  it("onCategoriesFound 없이도 자동 검색이 동작한다", async () => {
+    rawJsonGetReq.mockImplementation((url, onSuccess) => {
+      setTimeout(
+        () =>
+          onSuccess({
+            status: "success",
+            result: [{ title: "T", category: "소설 > 한국소설", book_url: "u" }],
+          }),
+        0,
+      );
+    });
+
+    await act(async () => {
+      render(
+        <Bookstore
+          bookInfo={{ title: "제목", author: "저자", isbn: "" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+
+    await waitFor(() => {
+      expect(rawJsonGetReq).toHaveBeenCalled();
+    });
+  });
+
+  it("저자 없이 제목만 있으면 author 파라미터 없이 자동 검색한다", async () => {
+    rawJsonGetReq.mockImplementation((url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "not_found", result: [] }), 0);
+    });
+
+    await act(async () => {
+      render(
+        <Bookstore
+          bookInfo={{ title: "제목만", author: "", isbn: "" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+
+    await waitFor(() => {
+      expect(rawJsonGetReq).toHaveBeenCalled();
+    });
+    const urls = rawJsonGetReq.mock.calls.map((c) => c[0]);
+    expect(urls.some((u) => u.includes("title="))).toBe(true);
+    expect(urls.every((u) => !u.includes("author="))).toBe(true);
+  });
+
+  it("제목 없이 저자만 있으면 author 파라미터만으로 버튼 검색한다", async () => {
+    rawJsonGetReq.mockImplementation((url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+    });
+
+    await act(async () => {
+      render(<Bookstore bookInfo={{ title: "", author: "저자만", isbn: "" }} />);
+    });
+
+    const buttons = screen.getAllByRole("button", { name: "저자+제목" });
+    await act(async () => {
+      fireEvent.click(buttons[0]);
+    });
+
+    await waitFor(() => {
+      expect(rawJsonGetReq).toHaveBeenCalled();
+    });
+    const lastUrl = rawJsonGetReq.mock.calls.at(-1)[0];
+    expect(lastUrl).toContain("author=");
+    expect(lastUrl).not.toContain("title=");
+  });
+
+  it("저자 없이 제목만 있으면 title 파라미터만으로 버튼 검색한다", async () => {
+    rawJsonGetReq.mockImplementation((url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+    });
+
+    await act(async () => {
+      render(<Bookstore bookInfo={{ title: "제목만", author: "", isbn: "" }} />);
+    });
+
+    const buttons = screen.getAllByRole("button", { name: "저자+제목" });
+    await act(async () => {
+      fireEvent.click(buttons[0]);
+    });
+
+    await waitFor(() => {
+      expect(rawJsonGetReq).toHaveBeenCalled();
+    });
+    const lastUrl = rawJsonGetReq.mock.calls.at(-1)[0];
+    expect(lastUrl).toContain("title=");
+    expect(lastUrl).not.toContain("author=");
+  });
+
+  it("message 없는 에러 응답에는 기본 에러 문구를 표시한다", async () => {
+    rawJsonGetReq.mockImplementation((url, onSuccess) => {
+      setTimeout(() => onSuccess({ error: true }), 0);
+    });
+
+    await act(async () => {
+      render(<Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />);
+    });
+
+    const buttons = screen.getAllByRole("button", { name: "저자+제목" });
+    await act(async () => {
+      fireEvent.click(buttons[0]);
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText("검색 중 오류가 발생했습니다.").length,
+      ).toBeGreaterThan(0);
+    });
+  });
+
+  it("book_url 이 없는 결과 항목도 인덱스를 key 로 렌더링한다", async () => {
+    rawJsonGetReq.mockImplementation((url, onSuccess) => {
+      setTimeout(
+        () =>
+          onSuccess({
+            status: "success",
+            result: [
+              { title: "URL없는책1", author: "A" },
+              { title: "URL없는책2", author: "B" },
+            ],
+          }),
+        0,
+      );
+    });
+
+    await act(async () => {
+      render(<Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />);
+    });
+
+    const buttons = screen.getAllByRole("button", { name: "저자+제목" });
+    await act(async () => {
+      fireEvent.click(buttons[0]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("URL없는책1").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("URL없는책2").length).toBeGreaterThan(0);
+    });
+  });
+});
