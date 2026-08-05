@@ -895,3 +895,133 @@ describe("EpubDiagnoseView", () => {
     });
   });
 });
+
+// ─── 취소/에러/로딩 경로 ───
+
+describe("EpubDiagnoseView 취소 및 에러 경로", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("bookId 가 없으면 카드를 열어도 진단을 실행하지 않는다", async () => {
+    setupMocks();
+    render(<EpubDiagnoseView fileType="epub" />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/파일 정합성 진단/));
+    });
+
+    expect(jsonGetReq).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("요청이 진행 중이면 스피너를 표시한다", async () => {
+    // resolve/reject 를 호출하지 않아 로딩 상태가 유지된다
+    jsonGetReq.mockImplementation(() => {});
+    globalThis.fetch = vi.fn(() => new Promise(() => {}));
+
+    render(<EpubDiagnoseView bookId={1} fileType="epub" />);
+    await act(async () => {
+      fireEvent.click(screen.getByText(/파일 정합성 진단/));
+    });
+
+    await waitFor(() => {
+      expect(document.querySelectorAll(".spinner-border").length).toBe(2);
+    });
+  });
+
+  it("다운로드 응답이 실패면 서버 응답 오류 메시지를 표시한다", async () => {
+    setupMocks();
+    globalThis.fetch = vi.fn(() => Promise.resolve({ ok: false, status: 502 }));
+
+    render(<EpubDiagnoseView bookId={1} fileType="epub" />);
+    await act(async () => {
+      fireEvent.click(screen.getByText(/파일 정합성 진단/));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("서버 응답 오류: 502")).toBeTruthy();
+    });
+  });
+
+  it("AbortError 는 에러 메시지로 표시하지 않는다", async () => {
+    setupMocks();
+    const abortErr = new Error("aborted");
+    abortErr.name = "AbortError";
+    globalThis.fetch = vi.fn(() => Promise.reject(abortErr));
+
+    render(<EpubDiagnoseView bookId={1} fileType="epub" />);
+    await act(async () => {
+      fireEvent.click(screen.getByText(/파일 정합성 진단/));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Frontend 진단/)).toBeTruthy();
+    });
+    expect(screen.queryByText("aborted")).toBeNull();
+  });
+
+  it("언마운트 후 도착한 backend 응답은 무시한다", async () => {
+    let backendResolve;
+    let backendReject;
+    jsonGetReq.mockImplementation((url, payload, resolve, reject) => {
+      backendResolve = resolve;
+      backendReject = reject;
+    });
+    globalThis.fetch = vi.fn(() => new Promise(() => {}));
+
+    const { unmount } = render(<EpubDiagnoseView bookId={1} fileType="epub" />);
+    await act(async () => {
+      fireEvent.click(screen.getByText(/파일 정합성 진단/));
+    });
+
+    unmount(); // abortRef.current.abort() 실행
+    // 이제 도착한 콜백은 signal.aborted 로 조기 반환된다 (경고 없이 통과해야 함)
+    await act(async () => {
+      backendResolve({ valid: true, messages: [] });
+      backendReject("late error");
+    });
+  });
+
+  it("언마운트 후 도착한 frontend 결과는 무시한다", async () => {
+    setupMocks();
+    let releaseBuffer;
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        arrayBuffer: () => new Promise((res) => (releaseBuffer = res)),
+      }),
+    );
+
+    const { unmount } = render(<EpubDiagnoseView bookId={1} fileType="epub" />);
+    await act(async () => {
+      fireEvent.click(screen.getByText(/파일 정합성 진단/));
+    });
+
+    unmount();
+    await act(async () => {
+      releaseBuffer(new ArrayBuffer(8));
+    });
+  });
+
+  it("severity/message 가 없는 backend 메시지도 INFO 로 묶어 표시한다", async () => {
+    setupMocks({
+      backendData: {
+        valid: false,
+        file_path: "books/x.epub",
+        messages: [{ id: "NO-SEV" }],
+        summary: { fatal: 0, error: 0, warning: 0, usage: 0, info: 1 },
+      },
+    });
+
+    render(<EpubDiagnoseView bookId={1} fileType="epub" />);
+    await act(async () => {
+      fireEvent.click(screen.getByText(/파일 정합성 진단/));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("INFO")).toBeTruthy();
+    });
+    expect(screen.getByText(/1건 — 참고 정보/)).toBeTruthy();
+  });
+});

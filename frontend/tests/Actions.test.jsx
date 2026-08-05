@@ -524,3 +524,112 @@ describe('calculateSimilarity 추가 케이스', () => {
         expect(score).toBeGreaterThan(0);
     });
 });
+
+// ── 추가 분기 ──
+
+describe('ngramSimilarity 경계', () => {
+    it('두 문자열이 모두 n보다 짧으면 0을 반환한다', () => {
+        // 양쪽 ngram 집합이 비어 unionSize === 0
+        expect(ngramSimilarity('a', 'b', 2)).toBe(0);
+    });
+});
+
+describe('getSimilarityDebugInfo - 숫자 prefix / 빈 서점 카테고리', () => {
+    it('숫자 prefix 가 있는 디렉토리명은 prefix 를 제거하고 비교한다', () => {
+        const info = getSimilarityDebugInfo(
+            { yes24: '소설' },
+            ['4_소설', '5_역사'],
+        );
+        expect(info).not.toBeNull();
+        const names = info.categoryDetails.map((d) => d.category);
+        expect(names).toContain('4_소설');
+    });
+
+    it('빈 서점 카테고리는 건너뛴다', () => {
+        const info = getSimilarityDebugInfo(
+            { yes24: '', aladin: '소설' },
+            ['소설', '역사'],
+        );
+        expect(Object.keys(info.bookstoreKeywords)).toEqual(['aladin']);
+    });
+
+    it('categoryList 가 비어 있으면 null 을 반환한다', () => {
+        expect(getSimilarityDebugInfo({ yes24: '소설' }, [])).toBeNull();
+    });
+});
+
+describe('Actions 카테고리 하이라이트', () => {
+    it('유사도 2~5위 카테고리에 highlight-secondary 클래스를 적용한다', () => {
+        render(
+            <Actions
+                {...defaultProps}
+                otherCategoryList={['소설', '역사', '과학']}
+                suggestedCategories={{ yes24: '소설 역사 과학' }}
+            />,
+        );
+        const secondary = document.querySelectorAll('.highlight-secondary');
+        expect(secondary.length).toBeGreaterThan(0);
+        expect(document.querySelectorAll('.highlight').length).toBeGreaterThan(0);
+    });
+
+    it('빈 서점 카테고리가 섞여 있어도 나머지로 하이라이트를 계산한다', () => {
+        render(
+            <Actions
+                {...defaultProps}
+                otherCategoryList={['소설', '역사']}
+                suggestedCategories={{ yes24: '', aladin: '소설' }}
+            />,
+        );
+        expect(document.querySelectorAll('.highlight').length).toBeGreaterThan(0);
+    });
+
+    it('구분자만 있는 서점 카테고리는 하이라이트를 만들지 않는다', () => {
+        render(
+            <Actions
+                {...defaultProps}
+                otherCategoryList={['소설', '역사']}
+                suggestedCategories={{ yes24: '///' }}
+            />,
+        );
+        expect(document.querySelectorAll('.highlight').length).toBe(0);
+    });
+
+    it('_root 만 있는 목록은 하이라이트 대상이 없다', () => {
+        render(
+            <Actions
+                {...defaultProps}
+                otherCategoryList={['_root']}
+                suggestedCategories={{ yes24: '소설' }}
+            />,
+        );
+        expect(document.querySelectorAll('.highlight').length).toBe(0);
+    });
+
+    it('숫자 prefix 디렉토리도 하이라이트 대상이 된다', () => {
+        render(
+            <Actions
+                {...defaultProps}
+                otherCategoryList={['4_소설', '5_역사']}
+                suggestedCategories={{ yes24: '소설' }}
+            />,
+        );
+        expect(document.querySelectorAll('.highlight').length).toBeGreaterThan(0);
+    });
+});
+
+describe('Actions 버튼 비활성화 조건', () => {
+    it('선택된 항목과 카테고리가 모두 없으면 "로 옮기기" 가 비활성화된다', () => {
+        render(
+            <Actions
+                {...defaultProps}
+                selectedEntryId=""
+                selectedCategory=""
+                isProcessing={false}
+            />,
+        );
+        const btn = screen.getByText((content, element) =>
+            element.tagName === 'BUTTON' && element.textContent.includes('로 옮기기')
+        );
+        expect(btn.disabled).toBe(true);
+    });
+});

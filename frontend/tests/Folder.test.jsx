@@ -6,6 +6,8 @@ afterEach(cleanup);
 
 vi.mock('../src/Folder.css', () => ({}));
 
+import { ThemeProvider, createTheme } from '@mui/material/styles';
+
 import Folder from '../src/Folder';
 
 const FOLDER_DATA = [
@@ -316,5 +318,37 @@ describe('Folder', () => {
             <Folder {...defaultProps} folderData={data} expandedItems={['parent']} />
         );
         expect(screen.getByText('subfolder')).toBeTruthy();
+    });
+});
+
+describe('Folder - 다크 테마 및 파일 타입 아이콘', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('다크 테마에서도 트리를 렌더링한다', () => {
+        render(
+            <ThemeProvider theme={createTheme({ palette: { mode: 'dark' } })}>
+                <Folder {...defaultProps} expandedItems={['1_fiction']} />
+            </ThemeProvider>
+        );
+        expect(screen.getByText('1_fiction')).toBeTruthy();
+        expect(screen.getByText('소설A.epub')).toBeTruthy();
+    });
+
+    it('fileType="image" 항목도 아이콘과 함께 렌더링한다', () => {
+        const data = [
+            {
+                id: 'gallery',
+                label: 'gallery',
+                fileType: 'folder',
+                count: 1,
+                children: [
+                    { id: 'gallery/1', label: '표지.image', fileType: 'image', children: [] },
+                ],
+            },
+        ];
+        render(<Folder {...defaultProps} folderData={data} expandedItems={['gallery']} />);
+        expect(screen.getByText('표지.image')).toBeTruthy();
     });
 });

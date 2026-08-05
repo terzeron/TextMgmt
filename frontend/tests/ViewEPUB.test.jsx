@@ -1869,3 +1869,161 @@ describe("ViewEPUB", () => {
     expect(valid).toBe("chapter5.xhtml");
   });
 });
+
+// ── rendition 이 아직 없거나 비정형 에러인 경우 ──
+
+describe("ViewEPUB 방어 분기", () => {
+  beforeEach(() => {
+    mockReactReader.mockClear();
+    capturedGetRendition = null;
+    autoLoad = true;
+  });
+
+  it("rendition 이 준비되기 전 글자 크기를 바꿔도 예외가 없다", async () => {
+    render(<ViewEPUB bookId={42} />);
+    await waitFor(() => {
+      expect(screen.getByLabelText("글자 크기 늘리기")).toBeTruthy();
+    });
+
+    // getRendition 을 호출하지 않았으므로 renditionRef.current 는 null 이다
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("글자 크기 늘리기"));
+    });
+    expect(localStorage.setItem).toHaveBeenCalledWith(
+      "epub_fontSize",
+      expect.any(String),
+    );
+  });
+
+  it("rendition 이 준비되기 전 글꼴을 바꿔도 예외가 없다", async () => {
+    render(<ViewEPUB bookId={42} />);
+    const select = await screen.findByLabelText("글꼴 선택");
+
+    await act(async () => {
+      fireEvent.change(select, { target: { value: "serif" } });
+    });
+    expect(localStorage.setItem).toHaveBeenCalledWith(
+      "epub_fontFamily",
+      "serif",
+    );
+  });
+
+  it("book.ready 가 message 없는 값으로 reject 되면 String() 으로 표시한다", async () => {
+    autoLoad = false;
+    render(<ViewEPUB bookId={42} />);
+    await waitFor(() => {
+      expect(capturedGetRendition).not.toBeNull();
+    });
+
+    const rendition = createMockRendition({ readyReject: { code: 7 } });
+    await act(async () => {
+      capturedGetRendition(rendition);
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/EPUB 파싱 오류: \[object Object\]/)).toBeTruthy();
+    });
+  });
+
+  it("메타데이터에 title 이 없으면 제목을 설정하지 않는다", async () => {
+    render(<ViewEPUB bookId={42} />);
+    await waitFor(() => {
+      expect(capturedGetRendition).not.toBeNull();
+    });
+
+    const rendition = createMockRendition();
+    rendition.book.loaded.metadata = Promise.resolve({});
+    await act(async () => {
+      capturedGetRendition(rendition);
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    expect(screen.queryByTestId("book-title")).toBeNull();
+  });
+
+  it("display 가 함수가 아니면 래핑을 건너뛴다", async () => {
+    render(<ViewEPUB bookId={42} />);
+    await waitFor(() => {
+      expect(capturedGetRendition).not.toBeNull();
+    });
+
+    const rendition = createMockRendition();
+    rendition.display = undefined;
+    await act(async () => {
+      capturedGetRendition(rendition);
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    expect(rendition.display).toBeUndefined();
+  });
+
+  it("display() 가 message 없는 값으로 reject 되면 String() 으로 표시한다", async () => {
+    autoLoad = false;
+    render(<ViewEPUB bookId={42} />);
+    await waitFor(() => {
+      expect(capturedGetRendition).not.toBeNull();
+    });
+
+    const rendition = createMockRendition();
+    rendition.display = vi.fn(() => Promise.reject({ code: 9 }));
+    await act(async () => {
+      capturedGetRendition(rendition);
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    // target 없이 호출 → 폴백 없이 바로 에러 메시지
+    await act(async () => {
+      await rendition.display().catch(() => {});
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/EPUB 표시 실패: \[object Object\]/)).toBeTruthy();
+    });
+  });
+
+  it("저장된 위치 이동 실패 후 첫 페이지 이동도 실패하면 에러를 표시한다", async () => {
+    autoLoad = false;
+    render(<ViewEPUB bookId={42} />);
+    await waitFor(() => {
+      expect(capturedGetRendition).not.toBeNull();
+    });
+
+    const rendition = createMockRendition();
+    rendition.display = vi.fn(() => Promise.reject({ reason: "fail" }));
+    await act(async () => {
+      capturedGetRendition(rendition);
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    // target 을 주면 저장 위치 삭제 후 첫 페이지 폴백을 시도한다
+    await act(async () => {
+      await rendition.display("epubcfi(/6/2)").catch(() => {});
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/EPUB 표시 실패: \[object Object\]/)).toBeTruthy();
+    });
+    expect(localStorage.removeItem).toHaveBeenCalledWith("epub_location_42");
+  });
+
+  it("이전 rendition 의 locations 결과는 무시한다", async () => {
+    render(<ViewEPUB bookId={42} />);
+    await waitFor(() => {
+      expect(capturedGetRendition).not.toBeNull();
+    });
+
+    const first = createMockRendition();
+    const second = createMockRendition();
+    await act(async () => {
+      capturedGetRendition(first);
+      capturedGetRendition(second);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    // 교체된 첫 rendition 의 locations 생성 결과는 반영되지 않는다
+    expect(second.book.locations.generate).toHaveBeenCalled();
+  });
+});

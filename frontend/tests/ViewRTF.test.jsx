@@ -135,3 +135,27 @@ describe('ViewRTF', () => {
         expect(img?.getAttribute('src') || '').not.toMatch(/^data:image\/svg\+xml/i);
     });
 });
+
+describe('ViewRTF - src 없는 img', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('src 속성이 없는 img 는 그대로 통과시킨다', async () => {
+        const mockElement = document.createElement('div');
+        mockElement.innerHTML = '<img alt="설명만 있는 이미지"><p>본문</p>';
+        mockRender.mockResolvedValue([mockElement]);
+        mockTextGetReq.mockImplementation((url, payload, resolve) => {
+            resolve('rtf content');
+        });
+
+        render(<ViewRTF bookId={1} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('본문')).toBeTruthy();
+        });
+        const img = document.querySelector('img');
+        expect(img).toBeTruthy();
+        expect(img.getAttribute('src')).toBeNull();
+    });
+});

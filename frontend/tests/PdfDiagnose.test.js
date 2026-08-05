@@ -284,3 +284,51 @@ describe("diagnosePdf", () => {
     ).toBe(true);
   });
 });
+
+describe("diagnosePdf - 비정형 응답 처리", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("message 없는 값으로 reject 되면 String() 으로 변환해 보고한다", async () => {
+    mockGetDocument.mockReturnValue({ promise: Promise.reject({ code: 42 }) });
+
+    const result = await diagnosePdf(new ArrayBuffer(8));
+
+    expect(result.sections[0].results[0].severity).toBe("FATAL");
+    expect(result.sections[0].results[0].text).toContain("[object Object]");
+  });
+
+  it("메타데이터에 info 가 없으면 빈 객체로 처리한다", async () => {
+    const pdfDoc = createMockPdfDoc();
+    mockGetDocument.mockReturnValue({ promise: Promise.resolve(pdfDoc) });
+    mockGetMetadata.mockResolvedValue({});
+    mockGetPage.mockResolvedValue({
+      view: [0, 0, 595, 842],
+      getTextContent: () => Promise.resolve({ items: [{ str: "본문" }] }),
+    });
+
+    const result = await diagnosePdf(new ArrayBuffer(8));
+
+    const metaSection = result.sections.find((s) => s.name === "메타데이터");
+    expect(metaSection).toBeDefined();
+    expect(result.summary.fatal).toBe(0);
+  });
+
+  it("str 이 없는 텍스트 아이템은 빈 문자열로 계산한다", async () => {
+    const pdfDoc = createMockPdfDoc();
+    mockGetDocument.mockReturnValue({ promise: Promise.resolve(pdfDoc) });
+    mockGetMetadata.mockResolvedValue({ info: { Title: "T" } });
+    mockGetPage.mockResolvedValue({
+      view: [0, 0, 595, 842],
+      getTextContent: () => Promise.resolve({ items: [{}, {}] }),
+    });
+
+    const result = await diagnosePdf(new ArrayBuffer(8));
+
+    const textSection = result.sections.find((s) => s.name === "텍스트 추출");
+    expect(textSection).toBeDefined();
+    // 추출 가능한 텍스트가 0자이므로 ok 가 아니다
+    expect(textSection.results.every((r) => r.type !== "ok")).toBe(true);
+  });
+});

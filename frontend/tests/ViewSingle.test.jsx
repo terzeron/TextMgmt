@@ -199,6 +199,63 @@ describe("ViewSingle", () => {
     expect(window.location.href).toContain("102");
   });
 
+
+  // ── standalone 네비게이션 경계 ──
+
+  const BOOKS = [
+    { book_id: 100, title: "Book 0", file_type: "epub", file_path: "1_fiction/0.epub" },
+    { book_id: 101, title: "Book 1", file_type: "epub", file_path: "1_fiction/a.epub" },
+    { book_id: 102, title: "Book 2", file_type: "epub", file_path: "1_fiction/b.epub" },
+  ];
+
+  it("첫 번째 책에서는 이전 책 버튼이 비활성화된다", async () => {
+    mockUseParams.mockReturnValue({ entryId: "100", fileType: "epub" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("path=1_fiction/0.epub&category=1_fiction"),
+    ]);
+    Common.jsonGetReq.mockImplementation((url, payload, resolve) => resolve(BOOKS));
+
+    render(<ViewSingle />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/다음 책으로/)).toBeTruthy();
+    });
+    expect(screen.getByText(/이전 책으로/).closest("button").disabled).toBe(true);
+  });
+
+  it("마지막 책에서는 다음 책 버튼이 비활성화된다", async () => {
+    mockUseParams.mockReturnValue({ entryId: "102", fileType: "epub" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("path=1_fiction/b.epub&category=1_fiction"),
+    ]);
+    Common.jsonGetReq.mockImplementation((url, payload, resolve) => resolve(BOOKS));
+
+    render(<ViewSingle />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/이전 책으로/)).toBeTruthy();
+    });
+    expect(screen.getByText(/다음 책으로/).closest("button").disabled).toBe(true);
+  });
+
+  it("api 파라미터가 있으면 이전 책 이동 URL 에 api 를 포함한다", async () => {
+    mockUseParams.mockReturnValue({ entryId: "101", fileType: "epub" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("path=1_fiction/a.epub&category=1_fiction&api=/comics"),
+    ]);
+    Common.jsonGetReq.mockImplementation((url, payload, resolve) => resolve(BOOKS));
+
+    render(<ViewSingle />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/이전 책으로/)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText(/이전 책으로/));
+    expect(window.location.href).toContain("100");
+    expect(window.location.href).toContain("api=");
+  });
+
   // ── 기타 버튼 및 엣지 케이스 ──
 
   it("viewUrl과 downloadUrl 버튼을 올바르게 렌더링한다", async () => {

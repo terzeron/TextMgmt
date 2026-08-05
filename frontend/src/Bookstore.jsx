@@ -224,8 +224,8 @@ export default function Bookstore(props) {
   const fetchWithMethod = (store, method) => {
     const storeInfo = STORES.find((s) => s.key === store);
 
-    // 검색어 결정
-    let searchTerms = "";
+    // 검색어 결정 (default 절이 모든 경우를 덮으므로 초기값 불필요)
+    let searchTerms;
     switch (method) {
       case "isbn":
         searchTerms = isbn;

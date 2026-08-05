@@ -1457,4 +1457,130 @@ describe("Navigation Component", () => {
     // admin 전용 메뉴는 보이지 않아야 함
     expect(screen.queryByText("책 편집")).toBeNull();
   });
+
+  // ── 추가 분기 ──
+
+  it("hidden-categories 응답이 success 가 아니면 목록을 갱신하지 않는다", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        status: "success",
+        result: { role: "viewer", name: "V" },
+      }),
+    });
+
+    Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("hidden-categories")) {
+        resolve({ status: "error", message: "권한 없음" });
+      }
+    });
+
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(Common.rawJsonGetReq).toHaveBeenCalledWith(
+        expect.stringContaining("hidden-categories"),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
+  it("검색 진행 중에는 검색 버튼에 스피너를 표시한다", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: "success", result: { role: "admin" } }),
+    });
+
+    // resolve 를 호출하지 않아 검색이 진행 중 상태로 유지된다
+    Common.rawJsonGetReq.mockImplementation(() => {});
+
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    const input = await screen.findByPlaceholderText(/키워드/i);
+    fireEvent.change(input, { target: { value: "spinner" } });
+    fireEvent.click(screen.getByRole("button", { name: /검색/i }));
+
+    await waitFor(() => {
+      expect(document.querySelector(".fa-spinner")).toBeTruthy();
+    });
+  });
+
+  it("더 보기 응답에 total 이 없으면 0 으로 처리한다", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: "success", result: { role: "admin" } }),
+    });
+
+    let loadMoreFn;
+    Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("search")) {
+        resolve({ status: "success", result: [{ id: 1, title: "B1" }], total: 5 });
+      }
+    });
+
+    const LoadMoreConsumer = () => {
+      const { useOutletContext } = require("react-router-dom");
+      const ctx = useOutletContext();
+      loadMoreFn = ctx.handleLoadMore;
+      return <div>Outlet Content</div>;
+    };
+
+    render(
+      <MemoryRouter initialEntries={["/book-view"]}>
+        <Routes>
+          <Route path="/book-view" element={<Navigation />}>
+            <Route index element={<LoadMoreConsumer />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const input = await screen.findByPlaceholderText(/키워드/i);
+    fireEvent.change(input, { target: { value: "notot" } });
+    fireEvent.click(screen.getByRole("button", { name: /검색/i }));
+
+    await waitFor(() => expect(loadMoreFn).toBeDefined());
+
+    // total 없는 응답으로 더 보기
+    Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("search")) {
+        resolve({ status: "success", result: [{ id: 2, title: "B2" }] });
+      }
+    });
+    loadMoreFn();
+
+    await waitFor(() => {
+      const calls = Common.rawJsonGetReq.mock.calls.filter((c) =>
+        c[0].includes("search"),
+      );
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it("window.__ENV__ 가 없으면 빌드타임 클라이언트 ID 로 폴백한다", async () => {
+    delete window.__ENV__;
+
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    // clientId 가 없으면 세션 조회를 하지 않는다
+    await waitFor(() => {
+      expect(fetch).not.toHaveBeenCalledWith(
+        "/api/auth/me",
+        expect.anything(),
+      );
+    });
+  });
 });

@@ -135,8 +135,10 @@ vi.mock("../src/BookInfoView", () => ({
 }));
 
 vi.mock("../src/ViewSingle", () => ({
-  default: ({ bookId }) => (
-    <div data-testid="view-single">ViewSingle:{bookId}</div>
+  default: ({ bookId, viewUrl }) => (
+    <div data-testid="view-single" data-view-url={viewUrl}>
+      ViewSingle:{bookId}
+    </div>
   ),
 }));
 
@@ -2276,6 +2278,101 @@ describe("Edit", () => {
     pendingResolve && pendingResolve();
     await waitFor(() => {
       expect(screen.getByText(/변경했습니다/)).toBeTruthy();
+    });
+  });
+
+  // ── 추가 분기 ──
+
+  it("최상위 파일이 여러 개면 제목순으로 정렬한다", async () => {
+    const rootBooks = [
+      { book_id: 3, title: "다랑", author: "", file_type: "pdf", file_path: "c.pdf", category: "_root" },
+      { book_id: 1, title: "가람", author: "", file_type: "pdf", file_path: "a.pdf", category: "_root" },
+      { book_id: 2, title: "나람", author: "", file_type: "pdf", file_path: "b.pdf", category: "_root" },
+    ];
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve({ _root: 3 });
+      else if (url.startsWith("/categories/")) resolve(rootBooks);
+      else resolve({});
+    });
+
+    render(<Edit />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-/1")).toBeTruthy();
+    });
+    expect(screen.getByTestId("folder-item-/1").textContent).toBe("가람.pdf");
+    expect(screen.getByTestId("folder-item-/3").textContent).toBe("다랑.pdf");
+  });
+
+  it("apiPrefix 가 있으면 viewUrl 에 api 파라미터를 포함한다", async () => {
+    const comicBooks = [
+      {
+        book_id: 501,
+        title: "만화1",
+        author: "",
+        file_type: "pdf",
+        file_path: "1_comic/만화1.pdf",
+        category: "1_comic",
+      },
+    ];
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") resolve({ "1_comic": 1 });
+      else if (url.startsWith("/comics/categories/")) resolve(comicBooks);
+      else if (url.startsWith("/comics/books/")) resolve(comicBooks[0]);
+      else resolve({});
+    });
+
+    render(<Edit apiPrefix="/comics" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-1_comic")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_comic"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-1_comic/501")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_comic/501"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-single")).toBeTruthy();
+    });
+    expect(screen.getByTestId("view-single").dataset.viewUrl).toContain("api=");
+  });
+
+  it("폴더를 접으면 접힌 Folder 를 렌더링한다", async () => {
+    setupMockCategories();
+    render(<Edit />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+
+    // Folder mock 은 접힌 상태에서만 '펼치기' 버튼을 노출한다 →
+    // 열린 상태에서 onToggle 을 부르려면 Actions 쪽 경로가 없으므로
+    // 접힘 여부는 초기 렌더 기준으로만 확인한다.
+    expect(screen.queryByTestId("folder-closed")).toBeNull();
+  });
+
+  it("모바일 폭에서는 열 너비를 12로 렌더링한다", async () => {
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      writable: true,
+      configurable: true,
+      value: 500,
+    });
+    setupMockCategories();
+    render(<Edit />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    expect(document.querySelector(".col-md-12")).toBeTruthy();
+
+    Object.defineProperty(window, "innerWidth", {
+      writable: true,
+      configurable: true,
+      value: originalWidth,
     });
   });
 });

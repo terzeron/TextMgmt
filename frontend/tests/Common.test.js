@@ -659,4 +659,40 @@ describe("Common Utilities", () => {
       expect(fetch).toHaveBeenCalledTimes(1);
     });
   });
+
+  it("getApiUrlPrefix falls back when window.__ENV__ is undefined", () => {
+    delete window.__ENV__;
+    expect(getApiUrlPrefix()).toBeFalsy();
+  });
+
+  it("getRandomLightColor handles negative crc32 remainder", () => {
+    // 'k0_saltstring' 의 CRC-32 는 음수라 index 부호 반전 경로를 탄다
+    expect(getRandomLightColor("k0")).toMatch(/^hsl\(\d+, 55%, 90%\)$/);
+  });
+
+  it("getRandomMediumColor handles negative crc32 remainder", () => {
+    expect(getRandomMediumColor("k0")).toMatch(/^hsl\(\d+, 50%, 55%\)$/);
+  });
+
+  it("apiReq swallows errors when no reject callback is given", async () => {
+    fetch.mockRejectedValueOnce(new Error("network down"));
+
+    const final = vi.fn();
+    jsonGetReq("/boom", null, vi.fn(), null, final);
+
+    await vi.waitFor(() => {
+      expect(final).toHaveBeenCalled();
+    });
+  });
+
+  it("apiReq skips final callback when none is given", async () => {
+    fetch.mockRejectedValueOnce(new Error("network down"));
+
+    const reject = vi.fn();
+    jsonGetReq("/boom", null, vi.fn(), reject, null);
+
+    await vi.waitFor(() => {
+      expect(reject).toHaveBeenCalled();
+    });
+  });
 });

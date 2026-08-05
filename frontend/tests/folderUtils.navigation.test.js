@@ -366,3 +366,34 @@ describe('updateFolderChildren', () => {
         expect(result[0].children).toHaveLength(1);
     });
 });
+
+// ── buildFolderHierarchy 추가 경로 ──
+
+describe('buildFolderHierarchy - 그룹 재사용/prefix 제거', () => {
+    it('자식이 먼저 등장한 부모는 그룹을 새로 만들지 않고 재사용한다', () => {
+        // '소설/SF' 가 먼저 '소설' 그룹을 만들고, 이후 '소설' 자체가 같은 그룹에 붙는다
+        const result = buildFolderHierarchy(['소설/SF', '소설'], '', {
+            '소설': 2,
+            '소설/SF': 3,
+        });
+        const parent = result.find(i => i.label === '소설');
+        expect(parent).toBeDefined();
+        expect(parent.id).toBe('소설');
+        expect(parent.children.map(c => c.id)).toContain('소설/SF');
+    });
+
+    it('commonPrefix 가 있으면 자식 라벨에서도 prefix 를 제거한다', () => {
+        const result = buildFolderHierarchy(
+            ['books/소설/SF', 'books/소설/추리'],
+            'books/',
+            { 'books/소설/SF': 1, 'books/소설/추리': 2 },
+        );
+        const parent = result.find(i => i.label === '소설');
+        expect(parent).toBeDefined();
+        expect(parent.children.map(c => c.label).sort()).toEqual(['SF', '추리']);
+        expect(parent.children.map(c => c.id).sort()).toEqual([
+            'books/소설/SF',
+            'books/소설/추리',
+        ]);
+    });
+});

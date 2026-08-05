@@ -348,3 +348,74 @@ describe('formatText 통합 테스트', () => {
         expect(formatText([])).toEqual([]);
     });
 });
+
+describe('visualWidth - 전각 문자 범위', () => {
+    it('CJK 호환 한자(U+F900~U+FAFF)는 폭 2', () => {
+        expect(visualWidth('豈﫿')).toBe(4);
+    });
+
+    it('CJK 호환 형태(U+FE30~U+FE4F)는 폭 2', () => {
+        expect(visualWidth('︰﹏')).toBe(4);
+    });
+
+    it('전각 형태(U+FF01~U+FF60)는 폭 2', () => {
+        expect(visualWidth('！｠')).toBe(4);
+    });
+
+    it('전각 기호(U+FFE0~U+FFE6)는 폭 2', () => {
+        expect(visualWidth('￠￦')).toBe(4);
+    });
+
+    it('CJK 확장 B(U+20000~U+2FA1F)는 폭 2', () => {
+        expect(visualWidth('\u{20000}\u{2FA1F}')).toBe(4);
+    });
+
+    it('각 범위의 경계 바깥 문자는 폭 1', () => {
+        // 0xFB00(0xFAFF 직후), 0xFE50(0xFE4F 직후), 0xFF61(0xFF60 직후),
+        // 0xFFE7(0xFFE6 직후) 는 모두 전각 범위 밖이다.
+        expect(visualWidth('ﬀ﹐｡￧')).toBe(4);
+    });
+});
+
+describe('unwrapForceBreaks - 병합 중단 조건', () => {
+    // 시각 폭 60짜리 긴 줄 10개로 wrapWidth=60 을 확정시킨다.
+    // threshold = 52, upperBound = 68, wrapWidth - 4 = 56
+    const wide = 'a'.repeat(60);
+    const establish = Array(10).fill(wide);
+
+    it('현재 줄이 threshold 미만이면 다음 줄과 합치지 않는다', () => {
+        const lines = [...establish, '', 'short', 'tail'];
+        const result = unwrapForceBreaks(lines);
+        // 'short'(폭 5)는 threshold 52 미만이므로 'tail'과 병합되지 않는다
+        expect(result).toContain('short');
+        expect(result).toContain('tail');
+    });
+
+    it('문장종결 부호로 끝나면서 wrapWidth-4 미만이면 합치지 않는다', () => {
+        const terminated = 'b'.repeat(52) + '.'; // 폭 53: threshold 이상, 56 미만
+        const lines = [...establish, '', terminated, 'continuation'];
+        const result = unwrapForceBreaks(lines);
+        expect(result).toContain(terminated);
+        expect(result).toContain('continuation');
+    });
+
+    it('종결 부호로 끝나도 wrapWidth-4 이상이면 계속 합친다', () => {
+        const terminated = 'b'.repeat(58) + '.'; // 폭 59: 56 이상 → 병합 계속
+        const lines = [...establish, '', terminated, 'continuation'];
+        const result = unwrapForceBreaks(lines);
+        expect(result).toContain(`${terminated} continuation`);
+    });
+});
+
+describe('buildParagraphs - 대시 구분선 판정', () => {
+    it('공백 섞인 대시 5자 이상이고 대시가 3개 이상이면 구분선', () => {
+        const blocks = buildParagraphs(['본문', '', '-  --', '', '다음']);
+        expect(blocks.some(b => b.type === 'separator' && b.text === '-  --')).toBe(true);
+    });
+
+    it('공백 섞인 대시 5자 이상이라도 대시가 3개 미만이면 구분선이 아니다', () => {
+        const blocks = buildParagraphs(['본문', '', '-   -', '', '다음']);
+        expect(blocks.some(b => b.type === 'separator')).toBe(false);
+        expect(blocks.some(b => b.text === '-   -')).toBe(true);
+    });
+});

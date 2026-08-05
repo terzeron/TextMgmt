@@ -7,6 +7,7 @@ import {
   cleanup,
   fireEvent,
   within,
+  act,
 } from "@testing-library/react";
 
 afterEach(cleanup);
@@ -32,6 +33,8 @@ vi.mock("../src/categoryMappingCache", () => ({
   fetchCategoryMappings: vi.fn(() => Promise.resolve({})),
   updateCachedMappings: vi.fn(),
 }));
+
+import { ThemeProvider, createTheme } from "@mui/material/styles";
 
 import CategoryAdmin from "../src/CategoryAdmin";
 
@@ -2403,6 +2406,625 @@ describe("CategoryAdmin", () => {
     await waitFor(() => {
       expect(screen.getAllByText("a").length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText("x")).toBeTruthy();
+    });
+  });
+});
+
+// ── 다크 테마 / 폴백 경로 ──
+
+describe("CategoryAdmin 다크 테마 및 폴백 경로", () => {
+  beforeEach(() => {
+    mockJsonGetReq.mockReset();
+    mockJsonDeleteReq.mockReset();
+    mockJsonPostReq.mockReset();
+    mockJsonPutReq.mockReset();
+  });
+
+  const renderDark = (ui) =>
+    render(
+      <ThemeProvider theme={createTheme({ palette: { mode: "dark" } })}>
+        {ui}
+      </ThemeProvider>,
+    );
+
+  it("다크 테마에서도 트리를 렌더링한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    renderDark(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+    // 비노출 카테고리(3_history)와 일반 카테고리가 모두 렌더링된다
+    expect(screen.getByText("3_history")).toBeTruthy();
+  });
+
+  it("불일치 응답에 mismatches/es_only/fs_only 가 없어도 트리를 만든다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, {});
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+  });
+
+  it("매핑/비노출 응답이 null 이어도 기본값으로 처리한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, {
+      mappingsResult: null,
+      hiddenResult: null,
+    });
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+    // 매핑이 없으므로 키워드 칩이 없다
+    fireEvent.click(screen.getByText("1_fiction"));
+    expect(screen.queryByText("소설")).toBeNull();
+  });
+
+  it("ES 문서 수가 없는 카테고리는 0건으로 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("4_fs_only_cat")).toBeTruthy();
+    });
+    // 4_fs_only_cat 은 /categories 응답에 없으므로 ?? 0 폴백을 탄다
+    fireEvent.click(screen.getByText("4_fs_only_cat"));
+    await waitFor(() => {
+      expect(screen.getByText("ES 0건")).toBeTruthy();
+    });
+  });
+
+  it("Enter 이외의 키는 키워드 추가/이름 변경을 트리거하지 않는다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    const input = screen.getByPlaceholderText("새 키워드 입력");
+    fireEvent.change(input, { target: { value: "무시될키워드" } });
+    fireEvent.keyDown(input, { key: "a" });
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTitle("이름 변경"));
+    const modal = await screen.findByRole("dialog");
+    const renameInput = modal.querySelector(
+      'input[type="text"]:not([disabled])',
+    );
+    fireEvent.keyDown(renameInput, { key: "Escape" });
+    expect(mockJsonPutReq).not.toHaveBeenCalled();
+  });
+
+  it("빈 키워드로 Enter 를 눌러도 API 를 호출하지 않는다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    const input = screen.getByPlaceholderText("새 키워드 입력");
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+  });
+
+  it("빈 이름으로 Enter 를 눌러도 이름 변경 API 를 호출하지 않는다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    fireEvent.click(screen.getByTitle("이름 변경"));
+    const modal = await screen.findByRole("dialog");
+    const input = modal.querySelector('input[type="text"]:not([disabled])');
+    fireEvent.change(input, { target: { value: "  " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(mockJsonPutReq).not.toHaveBeenCalled();
+  });
+
+  it("매핑이 없던 카테고리에 키워드를 추가하면 배열을 새로 만든다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("3_history")).toBeTruthy();
+    });
+
+    // 3_history 는 MAPPINGS_RESPONSE 에 없다
+    fireEvent.click(screen.getByText("3_history"));
+    const input = screen.getByPlaceholderText("새 키워드 입력");
+    fireEvent.change(input, { target: { value: "역사" } });
+
+    mockJsonPostReq.mockImplementation((url, payload, resolve, _r, done) => {
+      resolve();
+      if (done) done();
+    });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(screen.getByText("역사")).toBeTruthy();
+    });
+  });
+
+  it("비노출 토글 응답이 null 이어도 빈 집합으로 처리한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    mockJsonPostReq.mockImplementation((url, payload, resolve, _r, done) => {
+      resolve(null);
+      if (done) done();
+    });
+    fireEvent.click(screen.getByLabelText("사용자 비노출"));
+
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalled();
+    });
+  });
+});
+
+// ── 에러 객체가 비어 있을 때의 기본 메시지 + 메시지 자동 소멸 ──
+
+describe("CategoryAdmin 기본 에러 메시지 폴백", () => {
+  beforeEach(() => {
+    mockJsonGetReq.mockReset();
+    mockJsonDeleteReq.mockReset();
+    mockJsonPostReq.mockReset();
+    mockJsonPutReq.mockReset();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  // 패널을 펼치고 1_fiction 을 선택한 상태까지 진행하는 헬퍼
+  const openAndSelect = async (category = "1_fiction") => {
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText(category)).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText(category));
+  };
+
+  it("불일치 상세 조회 에러가 비어 있으면 기본 메시지를 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByRole("tree")).toBeTruthy();
+    });
+
+    mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches")
+        resolve(MISMATCH_RESPONSE_WITH_DATA);
+      else if (url.startsWith("/category-mismatches/")) reject(null);
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("불일치 상세 조회에 실패했습니다.")).toBeTruthy();
+    });
+
+    // 5초 뒤 메시지가 자동으로 사라진다
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("불일치 상세 조회에 실패했습니다.")).toBeNull();
+    });
+  });
+
+  it("키워드 추가 에러가 비어 있으면 기본 메시지를 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    await openAndSelect();
+
+    mockJsonPostReq.mockImplementation((url, payload, _res, reject, done) => {
+      reject(undefined);
+      if (done) done();
+    });
+
+    const input = screen.getByPlaceholderText("새 키워드 입력");
+    fireEvent.change(input, { target: { value: "새키워드" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("이미 등록된 키워드이거나 추가에 실패했습니다."),
+      ).toBeTruthy();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByText("이미 등록된 키워드이거나 추가에 실패했습니다."),
+      ).toBeNull();
+    });
+  });
+
+  it("키워드 삭제 에러가 비어 있으면 기본 메시지를 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    await openAndSelect();
+
+    mockJsonDeleteReq.mockImplementation((url, payload, _res, reject, done) => {
+      reject(null);
+      if (done) done();
+    });
+
+    // 1_fiction 의 키워드 칩("소설")에 달린 삭제 버튼 클릭
+    const chip = screen.getByText("소설").closest(".badge, .chip, span");
+    const removeBtn =
+      chip?.querySelector("button, svg") ||
+      within(chip.parentElement).getAllByRole("button")[0];
+    fireEvent.click(removeBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText("삭제에 실패했습니다.")).toBeTruthy();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+  });
+
+  it("비노출 토글 에러가 비어 있으면 기본 메시지를 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    await openAndSelect();
+
+    mockJsonPostReq.mockImplementation((url, payload, _res, reject, done) => {
+      reject(null);
+      if (done) done();
+    });
+    fireEvent.click(screen.getByLabelText("사용자 비노출"));
+
+    await waitFor(() => {
+      expect(screen.getByText("비노출 설정 변경에 실패했습니다.")).toBeTruthy();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+  });
+
+  it("이름 변경 에러가 비어 있으면 기본 메시지를 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    await openAndSelect();
+
+    fireEvent.click(screen.getByTitle("이름 변경"));
+    const modal = await screen.findByRole("dialog");
+    const input = modal.querySelector('input[type="text"]:not([disabled])');
+    fireEvent.change(input, { target: { value: "새이름" } });
+
+    mockJsonPutReq.mockImplementation((url, payload, _res, reject, done) => {
+      reject(null);
+      if (done) done();
+    });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(screen.getByText("이름 변경에 실패했습니다.")).toBeTruthy();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+  });
+
+  it("카테고리 삭제 에러가 비어 있으면 기본 메시지를 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    await openAndSelect();
+
+    fireEvent.click(screen.getByTitle("카테고리 삭제"));
+    const modal = await screen.findByRole("dialog");
+
+    mockJsonPostReq.mockImplementation((url, payload, _res, reject, done) => {
+      reject(null);
+      if (done) done();
+    });
+    fireEvent.click(within(modal).getByRole("button", { name: "삭제" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("삭제에 실패했습니다.")).toBeTruthy();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+  });
+
+  it("ES 재적재 에러가 비어 있으면 기본 메시지를 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    await openAndSelect();
+
+    fireEvent.click(screen.getByTitle("ES 재적재"));
+    const modal = await screen.findByRole("dialog");
+
+    mockJsonPostReq.mockImplementation((url, payload, _res, reject, done) => {
+      reject(null);
+      if (done) done();
+    });
+    fireEvent.click(within(modal).getByRole("button", { name: "재적재" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("ES 재적재에 실패했습니다.")).toBeTruthy();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+  });
+});
+
+// ── placeholder / 성공 메시지 자동 소멸 / 만화 조회 링크 ──
+
+describe("CategoryAdmin 잔여 분기", () => {
+  beforeEach(() => {
+    mockJsonGetReq.mockReset();
+    mockJsonDeleteReq.mockReset();
+    mockJsonPostReq.mockReset();
+    mockJsonPutReq.mockReset();
+  });
+
+  it("placeholder(로딩 중...) 노드 클릭은 무시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByRole("tree")).toBeTruthy();
+    });
+
+    // 카테고리를 펼쳐야 placeholder child 가 렌더된다
+    fireEvent.click(screen.getByText("1_fiction"));
+    const placeholder = await screen.findByText("로딩 중...");
+    fireEvent.click(placeholder);
+
+    // placeholder 는 선택 대상이 아니므로 1_fiction 선택이 유지된다
+    expect(screen.getByPlaceholderText("새 키워드 입력")).toBeTruthy();
+  });
+
+  it("만화 카테고리의 중복 문서 조회는 comics-view 로 연결된다", async () => {
+    const openSpy = vi.fn();
+    const originalOpen = window.open;
+    window.open = openSpy;
+
+    try {
+      setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA, {
+        apiPrefix: "/comics",
+      });
+      render(<CategoryAdmin contentType="comic" />);
+      fireEvent.click(screen.getByText("카테고리 관리"));
+      await waitFor(() => {
+        expect(screen.getByRole("tree")).toBeTruthy();
+      });
+
+      mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+        if (url.startsWith("/comics/category-mismatches/1_fiction")) {
+          resolve({
+            duplicates: [
+              {
+                file_path: "1_fiction/dup.pdf",
+                file_exists: true,
+                docs: [
+                  { book_id: 2001, title: "만화중복", author: "A", file_linked: false },
+                ],
+              },
+            ],
+          });
+        } else if (url === "/comics/categories") {
+          resolve(CATEGORIES_RESPONSE);
+        } else if (url === "/comics/category-mismatches") {
+          resolve(MISMATCH_RESPONSE_WITH_DATA);
+        } else if (url.startsWith("/category-mappings")) {
+          resolve(MAPPINGS_RESPONSE);
+        } else if (url.startsWith("/hidden-categories")) {
+          resolve(HIDDEN_RESPONSE);
+        }
+      });
+
+      fireEvent.click(screen.getByText("1_fiction"));
+      await waitFor(() => {
+        expect(screen.getByText(/\[중복\] dup\.pdf/)).toBeTruthy();
+      });
+      fireEvent.click(screen.getByText(/\[중복\] dup\.pdf/));
+      await waitFor(() => {
+        expect(screen.getByText("만화중복")).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "조회" }));
+      expect(openSpy).toHaveBeenCalledWith(
+        expect.stringContaining("/comics-view/2001"),
+        "_blank",
+        "noopener",
+      );
+    } finally {
+      window.open = originalOpen;
+    }
+  });
+
+  it("중복 ES 문서 삭제 에러가 비어 있으면 기본 메시지를 표시한다", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByRole("tree")).toBeTruthy();
+    });
+
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url.startsWith("/category-mismatches/1_fiction")) {
+        resolve({
+          duplicates: [
+            {
+              file_path: "1_fiction/dup.pdf",
+              file_exists: true,
+              docs: [
+                { book_id: 3001, title: "미연결중복", author: "A", file_linked: false },
+              ],
+            },
+          ],
+        });
+      } else {
+        setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA)(
+          url,
+          _payload,
+          resolve,
+        );
+      }
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText(/\[중복\] dup\.pdf/)).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText(/\[중복\] dup\.pdf/));
+    await waitFor(() => {
+      expect(screen.getByText("미연결중복")).toBeTruthy();
+    });
+
+    mockJsonDeleteReq.mockImplementation((url, payload, _res, reject) => {
+      reject(null);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("삭제 실패")).toBeTruthy();
+    });
+  });
+});
+
+describe("CategoryAdmin 성공 메시지 자동 소멸", () => {
+  beforeEach(() => {
+    mockJsonGetReq.mockReset();
+    mockJsonDeleteReq.mockReset();
+    mockJsonPostReq.mockReset();
+    mockJsonPutReq.mockReset();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  const openAndSelect = async () => {
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("1_fiction"));
+  };
+
+  it("이름 변경 성공 메시지는 5초 뒤 사라진다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    await openAndSelect();
+
+    fireEvent.click(screen.getByTitle("이름 변경"));
+    const modal = await screen.findByRole("dialog");
+    const input = modal.querySelector('input[type="text"]:not([disabled])');
+    fireEvent.change(input, { target: { value: "1_fiction_new" } });
+
+    mockJsonPutReq.mockImplementation((url, payload, resolve, _r, done) => {
+      resolve();
+      if (done) done();
+    });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(mockJsonPutReq).toHaveBeenCalled();
+    });
+    // 성공 핸들러가 등록한 5초 타이머가 정상적으로 실행된다
+    // (loadData() 가 메시지를 즉시 비우므로 화면에는 남지 않는다)
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.queryByText(/변경했습니다/)).toBeNull();
+  });
+
+  it("현재 이름과 동일하다는 안내는 3초 뒤 사라진다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    await openAndSelect();
+
+    fireEvent.click(screen.getByTitle("이름 변경"));
+    const modal = await screen.findByRole("dialog");
+    const input = modal.querySelector('input[type="text"]:not([disabled])');
+    fireEvent.change(input, { target: { value: "1_fiction" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(screen.getByText("현재 이름과 동일합니다.")).toBeTruthy();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("현재 이름과 동일합니다.")).toBeNull();
+    });
+  });
+
+  it("카테고리 삭제 성공 메시지는 5초 뒤 사라진다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    await openAndSelect();
+
+    fireEvent.click(screen.getByTitle("카테고리 삭제"));
+    const modal = await screen.findByRole("dialog");
+
+    mockJsonPostReq.mockImplementation((url, payload, resolve, _r, done) => {
+      resolve({ deleted_count: 3 });
+      if (done) done();
+    });
+    fireEvent.click(within(modal).getByRole("button", { name: "삭제" }));
+
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/categories/delete",
+        { category: "1_fiction" },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.queryByText(/삭제되었습니다/)).toBeNull();
+  });
+
+  it("ES 재적재 성공 메시지는 5초 뒤 사라진다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    await openAndSelect();
+
+    fireEvent.click(screen.getByTitle("ES 재적재"));
+    const modal = await screen.findByRole("dialog");
+
+    mockJsonPostReq.mockImplementation((url, payload, resolve, _r, done) => {
+      resolve({ processed_count: 7 });
+      if (done) done();
+    });
+    fireEvent.click(within(modal).getByRole("button", { name: "재적재" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/7건 처리/)).toBeTruthy();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/7건 처리/)).toBeNull();
     });
   });
 });

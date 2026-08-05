@@ -947,3 +947,187 @@ describe("diagnoseEpub", () => {
     });
   });
 });
+
+// ─── 경로 정규화 / 3건 초과 요약 / 누락 속성 ───
+
+describe("diagnoseEpub 추가 경로", () => {
+  const ROOT_CONTAINER_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+  <rootfiles>
+    <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`;
+
+  async function buildRootOpfEpub(opf, extra) {
+    const zip = new JSZip();
+    zip.file("mimetype", "application/epub+zip");
+    zip.file("META-INF/container.xml", ROOT_CONTAINER_XML);
+    zip.file("content.opf", opf);
+    if (extra) await extra(zip);
+    return zip.generateAsync({ type: "arraybuffer" });
+  }
+
+  it("OPF 가 ZIP 루트에 있으면 dirname 없이 경로를 해석한다", async () => {
+    const opf = makeOpf({
+      items: [{ id: "c1", href: "ch1.xhtml" }],
+      spineRefs: ["c1"],
+    });
+    const buf = await buildRootOpfEpub(opf, (zip) => {
+      zip.file("ch1.xhtml", VALID_XHTML);
+    });
+
+    const result = await diagnoseEpub(buf);
+    const spine = result.sections.find((s) => s.name === "Spine 파일");
+    expect(spine.results.some((r) => r.type === "ok")).toBe(true);
+  });
+
+  it("href 에 './' 가 섞여 있어도 정규화해서 찾는다", async () => {
+    const opf = makeOpf({
+      items: [{ id: "c1", href: "./text//ch1.xhtml" }],
+      spineRefs: ["c1"],
+    });
+    const buf = await buildEpub((zip) => {
+      zip.file("OEBPS/content.opf", opf);
+      zip.file("OEBPS/text/ch1.xhtml", VALID_XHTML);
+    });
+
+    const result = await diagnoseEpub(buf);
+    const spine = result.sections.find((s) => s.name === "Spine 파일");
+    expect(spine.results.some((r) => r.type === "ok")).toBe(true);
+  });
+
+  it("package 요소가 없으면 버전을 '?' 로 보고한다", async () => {
+    const opf = `<?xml version="1.0" encoding="UTF-8"?>
+<notpackage xmlns="http://www.idpf.org/2007/opf">
+  <manifest/>
+  <spine/>
+</notpackage>`;
+    const buf = await buildEpub((zip) => {
+      zip.file("OEBPS/content.opf", opf);
+    });
+
+    const result = await diagnoseEpub(buf);
+    const opfSection = result.sections.find((s) => s.name === "OPF 파싱");
+    expect(opfSection.results.some((r) => r.text.includes("?"))).toBe(true);
+  });
+
+  it("spine 요소가 없으면 NCX 미참조로 보고한다", async () => {
+    const opf = `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier>id</dc:identifier><dc:title>T</dc:title><dc:language>ko</dc:language>
+  </metadata>
+  <manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+</package>`;
+    const buf = await buildEpub((zip) => {
+      zip.file("OEBPS/content.opf", opf);
+      zip.file("OEBPS/ch1.xhtml", VALID_XHTML);
+    });
+
+    const result = await diagnoseEpub(buf);
+    const ncx = result.sections.find((s) => s.name === "NCX");
+    expect(ncx.results.some((r) => r.text.includes("toc 속성 없음"))).toBe(true);
+  });
+
+  it("content 없는/ src 없는/ 프래그먼트만 있는 navPoint 는 건너뛴다", async () => {
+    const ncx = `<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="test"/></head>
+  <docTitle><text>Test</text></docTitle>
+  <navMap>
+    <navPoint id="a"><navLabel><text>no content</text></navLabel></navPoint>
+    <navPoint id="b"><navLabel><text>no src</text></navLabel><content/></navPoint>
+    <navPoint id="c"><navLabel><text>frag only</text></navLabel><content src="#top"/></navPoint>
+  </navMap>
+</ncx>`;
+    const opf = makeOpf({
+      items: [
+        { id: "c1", href: "ch1.xhtml" },
+        { id: "ncx", href: "toc.ncx", mediaType: "application/x-dtbncx+xml" },
+      ],
+      spineRefs: ["c1"],
+      tocId: "ncx",
+    });
+    const buf = await buildEpub((zip) => {
+      zip.file("OEBPS/content.opf", opf);
+      zip.file("OEBPS/ch1.xhtml", VALID_XHTML);
+      zip.file("OEBPS/toc.ncx", ncx);
+    });
+
+    const result = await diagnoseEpub(buf);
+    const ncxSection = result.sections.find((s) => s.name === "NCX");
+    // 건너뛴 navPoint 는 누락으로 집계되지 않는다
+    expect(ncxSection.results.some((r) => r.type === "ok")).toBe(true);
+  });
+
+  it("NCX 누락 참조가 3건을 넘으면 '... 외 N건' 으로 요약한다", async () => {
+    const ncx = makeNcx([
+      { label: "1", src: "missing1.xhtml" },
+      { label: "2", src: "missing2.xhtml" },
+      { label: "3", src: "missing3.xhtml" },
+      { label: "4", src: "missing4.xhtml" },
+      { label: "5", src: "missing5.xhtml" },
+    ]);
+    const opf = makeOpf({
+      items: [
+        { id: "c1", href: "ch1.xhtml" },
+        { id: "ncx", href: "toc.ncx", mediaType: "application/x-dtbncx+xml" },
+      ],
+      spineRefs: ["c1"],
+      tocId: "ncx",
+    });
+    const buf = await buildEpub((zip) => {
+      zip.file("OEBPS/content.opf", opf);
+      zip.file("OEBPS/ch1.xhtml", VALID_XHTML);
+      zip.file("OEBPS/toc.ncx", ncx);
+    });
+
+    const result = await diagnoseEpub(buf);
+    const ncxSection = result.sections.find((s) => s.name === "NCX");
+    expect(ncxSection.results.some((r) => r.text === "... 외 2건")).toBe(true);
+  });
+
+  it("guide 누락 참조가 3건을 넘으면 '... 외 N건' 으로 요약한다", async () => {
+    const opf = `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier>id</dc:identifier><dc:title>T</dc:title><dc:language>ko</dc:language>
+  </metadata>
+  <manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="c1"/></spine>
+  <guide>
+    <reference type="cover" href="g1.xhtml"/>
+    <reference type="toc" href="g2.xhtml"/>
+    <reference type="text" href="g3.xhtml"/>
+    <reference type="other" href="g4.xhtml"/>
+    <reference type="other2" href="g5.xhtml"/>
+  </guide>
+</package>`;
+    const buf = await buildEpub((zip) => {
+      zip.file("OEBPS/content.opf", opf);
+      zip.file("OEBPS/ch1.xhtml", VALID_XHTML);
+    });
+
+    const result = await diagnoseEpub(buf);
+    const guide = result.sections.find((s) => s.name === "Guide");
+    expect(guide.results.some((r) => r.text === "... 외 2건")).toBe(true);
+  });
+
+  it("XHTML 파싱 실패가 3건을 넘으면 '... 외 N건' 으로 요약한다", async () => {
+    const ids = ["c1", "c2", "c3", "c4", "c5"];
+    const opf = makeOpf({
+      items: ids.map((id) => ({ id, href: `${id}.xhtml` })),
+      spineRefs: ids,
+    });
+    const buf = await buildEpub((zip) => {
+      zip.file("OEBPS/content.opf", opf);
+      for (const id of ids) zip.file(`OEBPS/${id}.xhtml`, INVALID_XHTML);
+    });
+
+    const result = await diagnoseEpub(buf);
+    const content = result.sections.find(
+      (s) => s.name === "콘텐츠 문서 (XHTML)",
+    );
+    expect(content.results.some((r) => r.text === "... 외 2건")).toBe(true);
+  });
+});
