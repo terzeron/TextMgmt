@@ -60,7 +60,10 @@ multi_line_output = 3
 include_trailing_comma = true
 
 [tool.mypy]
-python_version = "3.9"
+# requires-python = ">=3.13.7" 과 일치시킨다. 3.9 로 두면 코드가 실제로 쓰는
+# `X | Y` union(3.10+)과 `type` statement(3.12+)를 전부 syntax error 로 잡아
+# 진짜 타입 오류가 그 소음에 묻힌다.
+python_version = "3.13"
 warn_incomplete_stub = true
 warn_redundant_casts = true
 warn_unused_ignores = false

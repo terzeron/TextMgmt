@@ -1,17 +1,16 @@
 ---
-eck-kibana:
-  enabled: true
-  # version 을 반드시 ES 와 같게 고정한다.
-  # chart 기본값은 eck-kibana.version 미지정 → eck-stack 의 appVersion 이 적용되는데,
-  # eck-elasticsearch.version 만 9.1.0 으로 고정해두면 kibana 가 더 높은 버전(9.4.0)이 되고
-  # ECK 는 Kibana > Elasticsearch 조합을 거부한다. 그 결과 kibana 가 ES 에 붙지 못해
-  # "socket hang up" 으로 만성 CrashLoop 에 빠졌다 (2025-09~2026-08, 497회 재시작).
-  version: 9.1.0
-
+# ===== Elastic stack 버전은 이 한 곳에서만 고친다 =====
+# ES 와 Kibana 버전은 반드시 같아야 한다. chart 기본값은 eck-kibana.version 미지정 →
+# eck-stack 의 appVersion 이 적용되는데, eck-elasticsearch.version 만 고정해두면
+# kibana 가 더 높은 버전(9.4.0)이 되고 ECK 는 Kibana > Elasticsearch 조합을 거부한다.
+# 그 결과 kibana 가 ES 에 붙지 못해 "socket hang up" 으로 만성 CrashLoop 에 빠졌다
+# (2025-09~2026-08, 497회 재시작).
+# 따라서 anchor 로 한 값을 공유해 두 쪽이 구조적으로 어긋날 수 없게 한다.
+# 업그레이드 시 아래 &stack_version 값 하나만 바꾸면 된다.
 eck-elasticsearch:
   enabled: true
   fullnameOverride: elasticsearch
-  version: 9.1.0
+  version: &stack_version 9.1.0
   # http.tls 기본값(자체서명 인증서로 TLS 활성) 사용. 전송 구간 평문 전송 방지.
   nodeSets:
     - name: default
@@ -39,3 +38,7 @@ eck-elasticsearch:
               resources:
                 requests: { cpu: "2", memory: "5Gi" }
                 limits: { cpu: "2", memory: "5Gi" }
+
+eck-kibana:
+  enabled: true
+  version: *stack_version # eck-elasticsearch.version 과 동일 (위 anchor 참고)
