@@ -23,6 +23,7 @@ import pypdf
 from docx import Document
 from striprtf.striprtf import rtf_to_text
 from bs4 import BeautifulSoup
+import chardet
 
 from backend.es_manager import ESManager
 from utils.stat import Stat
@@ -31,8 +32,17 @@ from utils.isbn import extract as extract_isbn
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger()
 
-# ebooklib 내부에서 XHTML을 HTML 파서로 읽을 때 발생하는 경고 억제
+# pypdf 및 ebooklib 내부 경고/복구 소음 로그 억제
+logging.getLogger("pypdf").setLevel(logging.ERROR)
+logging.getLogger("pypdf._reader").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
+warnings.filterwarnings("ignore", message=".*Ascii85.*")
+warnings.filterwarnings("ignore", message=".*startxref.*")
+with warnings.catch_warnings():
+    try:
+        warnings.filterwarnings("ignore", category=pypdf.errors.PdfReadWarning)
+    except Exception:
+        pass
 
 if "TM_BOOK_DIR" not in os.environ:
     LOGGER.error("The environment variable TM_BOOK_DIR is not set.")
@@ -107,24 +117,66 @@ class Loader:
 
     @staticmethod
     def read_from_text(file_path: Path) -> tuple[str, int, int, str]:
-        """TXT 파일 읽기. 반환: (summary, line_count, page_count, raw_content)"""
+        """TXT 파일 읽기. 반환: (summary, line_count, page_count, raw_content)
+        utf-8 -> cp949 -> euc-kr -> utf-16 -> utf-16-le -> utf-16-be -> utf-8-sig 순서로 인코딩 fallback 시도.
+        chardet 감지를 활용하고 모든 인코딩 엄격 디코딩 실패 시 errors="replace" 옵션으로 재시도.
+        """
         Stat.text_count += 1
         start_time = datetime.now()
 
         line_count = 0
         data = ""
         raw_content = ""
+        encodings = ["utf-8", "cp949", "euc-kr", "utf-16", "utf-16-le", "utf-16-be", "utf-8-sig"]
+        replace_encodings = ["utf-8", "cp949", "euc-kr", "utf-16", "utf-16-le", "utf-16-be", "utf-8-sig"]
+        last_exception = None
+
         try:
-            with file_path.open("r", encoding="utf-8") as infile:
-                # 한 번에 읽어서 처리
-                raw_content = infile.read()
-                line_count = raw_content.count("\n") + 1 if raw_content else 0
-                data = raw_content[: Loader.TEXT_SIZE]
-                data = data.replace("\ufeff", "")
-                data = re.sub(r"[^\w\sㄱ-힣]", " ", data)
-        except UnicodeDecodeError as e:
-            LOGGER.error(f"can't read unicode text from file '{file_path}', {e}")
-            data = ""
+            raw_bytes = file_path.read_bytes()
+            detected = chardet.detect(raw_bytes)
+            detected_enc = detected.get("encoding") if detected else None
+            confidence = detected.get("confidence", 0) if detected else 0
+            if detected_enc and confidence >= 0.7 and detected_enc.lower() not in ["ascii", "iso-8859-1"]:
+                encodings = [detected_enc] + [e for e in encodings if e.lower() != detected_enc.lower()]
+                replace_encodings = [detected_enc] + [e for e in replace_encodings if e.lower() != detected_enc.lower()]
+        except Exception:
+            pass
+
+        for enc in encodings:
+            try:
+                with file_path.open("r", encoding=enc) as infile:
+                    content = infile.read()
+                    if enc in ["cp949", "euc-kr", "utf-16-le", "utf-16-be"] and content:
+                        if not re.search(r"[가-힣a-zA-Z0-9]", content) and not content.isspace():
+                            continue
+                    raw_content = content
+                    break
+            except (UnicodeDecodeError, UnicodeError) as e:
+                last_exception = e
+        else:
+            for enc in replace_encodings:
+                try:
+                    with file_path.open("r", encoding=enc, errors="replace") as infile:
+                        content = infile.read()
+                        if enc in ["cp949", "euc-kr"] and content:
+                            if not re.search(r"[가-힣a-zA-Z0-9]", content) and not content.isspace():
+                                continue
+                        raw_content = content
+                        if raw_content:
+                            break
+                except Exception:
+                    pass
+            else:
+                if last_exception:
+                    LOGGER.error(f"can't read unicode text from file '{file_path}', {last_exception}")
+                raw_content = ""
+
+        if raw_content:
+            line_count = raw_content.count("\n") + 1
+            data = raw_content[: Loader.TEXT_SIZE]
+            data = data.replace("\ufeff", "")
+            data = re.sub(r"[^a-zA-Z0-9\sㄱ-힣]", " ", data)
+            data = re.sub(r"\s+", " ", data).strip()
 
         end_time = datetime.now()
         Stat.text_total_time += (end_time - start_time).total_seconds()
@@ -206,18 +258,21 @@ class Loader:
             end_time = datetime.now()
             Stat.normal_epub_total_time += (end_time - start_time).total_seconds()
         except Exception as e:
-            LOGGER.error(file_path)
-            LOGGER.error(e)
-
             Stat.normal_epub_count -= 1
             Stat.zipped_epub_count += 1
             start_time = datetime.now()
 
+            fallback_failed = False
             try:
                 result, line_count = Loader.read_from_epub_with_extracting_zip(file_path)
             except Exception as e2:
+                fallback_failed = True
                 LOGGER.error(file_path)
                 LOGGER.error(e2)
+
+            if fallback_failed:
+                LOGGER.error(file_path)
+                LOGGER.error(e)
 
             end_time = datetime.now()
             Stat.zipped_epub_total_time += (end_time - start_time).total_seconds()
@@ -233,19 +288,85 @@ class Loader:
 
         result = ""
         page_count = 0
-        with file_path.open("rb") as infile:
-            try:
+
+        # 1. pypdf 시도
+        try:
+            with file_path.open("rb") as infile:
                 reader = pypdf.PdfReader(infile)
                 page_count = len(reader.pages)
                 for page in reader.pages:
-                    text = page.extract_text()
+                    text = page.extract_text() or ""
                     if len(result) < Loader.TEXT_SIZE:
                         result += text
                     else:
                         break
-            except Exception as e:
-                LOGGER.error(file_path)
-                LOGGER.error(e)
+        except Exception:
+            result = ""
+
+        # 2. pypdfium2 시도 (pypdf 실패 또는 텍스트 미추출 시)
+        if not result.strip():
+            try:
+                import pypdfium2
+                pdf = pypdfium2.PdfDocument(file_path)
+                if page_count == 0:
+                    page_count = len(pdf)
+                pdf_text = []
+                for page in pdf:
+                    textpage = page.get_textpage()
+                    text = textpage.get_text_range() or ""
+                    pdf_text.append(text)
+                    if len("".join(pdf_text)) >= Loader.TEXT_SIZE:
+                        break
+                result = "".join(pdf_text)
+            except Exception:
+                pass
+
+        # 3. pdfplumber 시도
+        if not result.strip():
+            try:
+                import pdfplumber
+                with pdfplumber.open(file_path) as pdf:
+                    if page_count == 0:
+                        page_count = len(pdf.pages)
+                    for page in pdf.pages:
+                        text = page.extract_text() or ""
+                        if len(result) < Loader.TEXT_SIZE:
+                            result += text
+                        else:
+                            break
+            except Exception:
+                pass
+
+        # 4. fitz (PyMuPDF) 시도
+        if not result.strip():
+            try:
+                import fitz
+                doc = fitz.open(file_path)
+                if page_count == 0:
+                    page_count = len(doc)
+                for page in doc:
+                    text = page.get_text() or ""
+                    if len(result) < Loader.TEXT_SIZE:
+                        result += text
+                    else:
+                        break
+            except Exception:
+                pass
+
+        # 5. pdftotext CLI 시도
+        if not result.strip():
+            try:
+                pdftotext_path = shutil.which("pdftotext")
+                if pdftotext_path:
+                    proc = subprocess.run([pdftotext_path, str(file_path), "-"], capture_output=True, text=True, timeout=10)
+                    if proc.returncode == 0:
+                        result = proc.stdout
+            except Exception:
+                pass
+
+        if not result.strip() and page_count == 0:
+            LOGGER.error(file_path)
+
         result = re.sub(r"[^\w\sㄱ-힣]", " ", result)
 
         end_time = datetime.now()

@@ -102,12 +102,69 @@ class TestReadFromText:
         summary, line_count, page_count, raw = Loader.read_from_text(f)
         assert "\ufeff" not in summary
 
+    def test_read_cp949_text(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "cp949.txt"
+        f.write_bytes("안녕하세요 한글 테스트입니다".encode("cp949"))
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert "안녕하세요" in raw
+        assert line_count == 1
+
+    def test_read_euc_kr_text(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "euckr.txt"
+        f.write_bytes("완성형 한글 테스트".encode("euc-kr"))
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert "한글" in raw
+        assert line_count == 1
+
+    def test_read_utf16_text(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "utf16.txt"
+        f.write_bytes("유니코드 16 비트 테스트\n두번째 줄".encode("utf-16"))
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert "유니코드" in raw
+        assert line_count == 2
+
     def test_read_binary_as_text(self, tmp_path: Path):
         Loader = _get_loader()
         f = tmp_path / "binary.txt"
         f.write_bytes(b"\x80\x81\x82\x83")
         summary, line_count, page_count, raw = Loader.read_from_text(f)
         assert summary == ""
+
+    def test_read_corrupted_utf16_text(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "corrupted_utf16.txt"
+        valid_bytes = "안녕하세요 검맥 홍파 테스트".encode("utf-16")
+        corrupted_bytes = valid_bytes[:20] + b"\xff\xff" + valid_bytes[20:]
+        f.write_bytes(corrupted_bytes)
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert "안녕하세요" in raw or "테스트" in raw
+
+    def test_read_utf16_le_text(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "utf16le.txt"
+        f.write_bytes("한글 UTF16LE 테스트".encode("utf-16-le"))
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert len(raw) > 0
+        assert line_count == 1
+
+    def test_read_utf16_be_text(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "utf16be.txt"
+        f.write_bytes("한글 UTF16BE 테스트".encode("utf-16-be"))
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert len(raw) > 0
+        assert line_count == 1
+
+    def test_read_utf8_sig_text(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "utf8sig.txt"
+        f.write_bytes("UTF-8 BOM 포함 한글 테스트".encode("utf-8-sig"))
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert "한글" in raw
+        assert line_count == 1
 
 
 class TestReadFromEpub:
@@ -436,6 +493,94 @@ class TestReadFromPdf:
         pdf.write_bytes(b"%PDF-1.0\nbroken content")
         summary, line_count, page_count = Loader.read_from_pdf(pdf)
         assert page_count == 0
+
+    def test_read_pdf_pypdfium2_fallback(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "pypdfium2_test.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        import pypdf
+        monkeypatch.setattr(pypdf, "PdfReader", lambda *a, **k: (_ for _ in ()).throw(Exception("pypdf fail")))
+
+        class MockTextPage:
+            def get_text_range(self):
+                return "pypdfium2 추출 텍스트"
+
+        class MockPage:
+            def get_textpage(self):
+                return MockTextPage()
+
+        class MockPdfDocument:
+            def __init__(self, path):
+                pass
+            def __len__(self):
+                return 1
+            def __getitem__(self, idx):
+                return MockPage()
+            def __iter__(self):
+                return iter([MockPage()])
+
+        import pypdfium2
+        monkeypatch.setattr(pypdfium2, "PdfDocument", MockPdfDocument)
+
+        summary, line_count, page_count = Loader.read_from_pdf(pdf)
+        assert "pypdfium2" in summary
+        assert page_count == 1
+
+    def test_read_pdf_pdfplumber_fallback(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "pdfplumber_test.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        import pypdf
+        monkeypatch.setattr(pypdf, "PdfReader", lambda *a, **k: (_ for _ in ()).throw(Exception("pypdf fail")))
+
+        import pypdfium2
+        monkeypatch.setattr(pypdfium2, "PdfDocument", lambda *a, **k: (_ for _ in ()).throw(Exception("pypdfium2 fail")))
+
+        class MockPlumberPage:
+            def extract_text(self):
+                return "pdfplumber 추출 텍스트"
+
+        class MockPlumberPdf:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            @property
+            def pages(self):
+                return [MockPlumberPage()]
+
+        import pdfplumber
+        monkeypatch.setattr(pdfplumber, "open", lambda *a, **k: MockPlumberPdf())
+
+        summary, line_count, page_count = Loader.read_from_pdf(pdf)
+        assert "pdfplumber" in summary
+        assert page_count == 1
+
+    def test_read_pdf_pdftotext_cli_fallback(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "pdftotext_cli_test.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        import pypdf
+        monkeypatch.setattr(pypdf, "PdfReader", lambda *a, **k: (_ for _ in ()).throw(Exception("fail")))
+
+        import pypdfium2
+        monkeypatch.setattr(pypdfium2, "PdfDocument", lambda *a, **k: (_ for _ in ()).throw(Exception("fail")))
+
+        import pdfplumber
+        monkeypatch.setattr(pdfplumber, "open", lambda *a, **k: (_ for _ in ()).throw(Exception("fail")))
+
+        class MockCompletedProcess:
+            returncode = 0
+            stdout = "pdftotext CLI 추출 텍스트"
+
+        import subprocess
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: MockCompletedProcess())
+
+        summary, line_count, page_count = Loader.read_from_pdf(pdf)
+        assert "pdftotext" in summary
 
 
 class TestReadFromRtf:
