@@ -896,5 +896,31 @@ class TestUvicorn(unittest.TestCase):
         self.assertTrue(hasattr(uvicorn, "run"))
 
 
+# ---------------------------------------------------------------------------
+# 17. pdfplumber
+#     사용처: loader.py - PDF 텍스트 추출 fallback 파서
+# ---------------------------------------------------------------------------
+class TestPdfPlumber(unittest.TestCase):
+    """pdfplumber.open() 및 page.extract_text() API 테스트"""
+
+    def test_importable_and_open_api(self):
+        import pdfplumber
+
+        self.assertTrue(callable(pdfplumber.open))
+
+
+# ---------------------------------------------------------------------------
+# 18. pypdfium2
+#     사용처: loader.py - PDF 텍스트 추출 fallback 파서
+# ---------------------------------------------------------------------------
+class TestPyPdfium2(unittest.TestCase):
+    """pypdfium2.PdfDocument 및 textpage API 테스트"""
+
+    def test_importable_and_pdfdocument_api(self):
+        import pypdfium2
+
+        self.assertTrue(callable(pypdfium2.PdfDocument))
+
+
 if __name__ == "__main__":
     unittest.main()

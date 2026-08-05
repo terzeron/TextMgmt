@@ -132,7 +132,14 @@ class TestAppRouting(unittest.TestCase):
             return []
 
         app.include_router(router, prefix="/comics")
-        paths = [getattr(r, "path", "") for r in app.routes]
+        paths = []
+        for r in app.routes:
+            if hasattr(r, "path") and r.path is not None:
+                paths.append(r.path)
+            elif hasattr(r, "original_router"):
+                prefix = getattr(getattr(r, "include_context", None), "prefix", "")
+                for sub in r.original_router.routes:
+                    paths.append(prefix + getattr(sub, "path", ""))
         self.assertIn("/comics/list", paths)
 
 
