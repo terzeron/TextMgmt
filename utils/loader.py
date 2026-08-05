@@ -107,24 +107,36 @@ class Loader:
 
     @staticmethod
     def read_from_text(file_path: Path) -> tuple[str, int, int, str]:
-        """TXT 파일 읽기. 반환: (summary, line_count, page_count, raw_content)"""
+        """TXT 파일 읽기. 반환: (summary, line_count, page_count, raw_content)
+        utf-8 -> cp949 -> euc-kr -> utf-16 순서로 인코딩 fallback 시도.
+        모든 인코딩 실패 시에만 에러를 남김.
+        """
         Stat.text_count += 1
         start_time = datetime.now()
 
         line_count = 0
         data = ""
         raw_content = ""
-        try:
-            with file_path.open("r", encoding="utf-8") as infile:
-                # 한 번에 읽어서 처리
-                raw_content = infile.read()
-                line_count = raw_content.count("\n") + 1 if raw_content else 0
-                data = raw_content[: Loader.TEXT_SIZE]
-                data = data.replace("\ufeff", "")
-                data = re.sub(r"[^\w\sㄱ-힣]", " ", data)
-        except UnicodeDecodeError as e:
-            LOGGER.error(f"can't read unicode text from file '{file_path}', {e}")
-            data = ""
+        encodings = ["utf-8", "cp949", "euc-kr", "utf-16"]
+        last_exception = None
+
+        for enc in encodings:
+            try:
+                with file_path.open("r", encoding=enc) as infile:
+                    raw_content = infile.read()
+                    break
+            except (UnicodeDecodeError, UnicodeError) as e:
+                last_exception = e
+        else:
+            if last_exception:
+                LOGGER.error(f"can't read unicode text from file '{file_path}', {last_exception}")
+            raw_content = ""
+
+        if raw_content:
+            line_count = raw_content.count("\n") + 1
+            data = raw_content[: Loader.TEXT_SIZE]
+            data = data.replace("\ufeff", "")
+            data = re.sub(r"[^\w\sㄱ-힣]", " ", data)
 
         end_time = datetime.now()
         Stat.text_total_time += (end_time - start_time).total_seconds()
@@ -206,18 +218,21 @@ class Loader:
             end_time = datetime.now()
             Stat.normal_epub_total_time += (end_time - start_time).total_seconds()
         except Exception as e:
-            LOGGER.error(file_path)
-            LOGGER.error(e)
-
             Stat.normal_epub_count -= 1
             Stat.zipped_epub_count += 1
             start_time = datetime.now()
 
+            fallback_failed = False
             try:
                 result, line_count = Loader.read_from_epub_with_extracting_zip(file_path)
             except Exception as e2:
+                fallback_failed = True
                 LOGGER.error(file_path)
                 LOGGER.error(e2)
+
+            if fallback_failed:
+                LOGGER.error(file_path)
+                LOGGER.error(e)
 
             end_time = datetime.now()
             Stat.zipped_epub_total_time += (end_time - start_time).total_seconds()

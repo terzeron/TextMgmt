@@ -102,6 +102,30 @@ class TestReadFromText:
         summary, line_count, page_count, raw = Loader.read_from_text(f)
         assert "\ufeff" not in summary
 
+    def test_read_cp949_text(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "cp949.txt"
+        f.write_bytes("안녕하세요 한글 테스트입니다".encode("cp949"))
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert "안녕하세요" in raw
+        assert line_count == 1
+
+    def test_read_euc_kr_text(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "euckr.txt"
+        f.write_bytes("완성형 한글 테스트".encode("euc-kr"))
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert "한글" in raw
+        assert line_count == 1
+
+    def test_read_utf16_text(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "utf16.txt"
+        f.write_bytes("유니코드 16 비트 테스트\n두번째 줄".encode("utf-16"))
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert "유니코드" in raw
+        assert line_count == 2
+
     def test_read_binary_as_text(self, tmp_path: Path):
         Loader = _get_loader()
         f = tmp_path / "binary.txt"
