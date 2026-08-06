@@ -113,6 +113,9 @@ class Loader:
     TEXT_SIZE = 4096
     # 이 개수 이상의 mojibake 구간이 나오면 추출 실패로 보고 다음 파서로 넘긴다.
     PDF_MOJIBAKE_RUN_LIMIT = 3
+    # TEXT_SIZE를 채우는 데 실측 최대 27페이지가 필요했고 첫 텍스트는 최대 4페이지에서
+    # 나왔다. 여유를 둔 상한. 스캔본이 끝까지 스캔되는 것을 막는 역할도 한다.
+    PDF_PAGE_LIMIT = 40
     path_prefix = Path(os.environ["TM_BOOK_DIR"])
     comics_path_prefix = Path(os.environ["TM_COMICS_DIR"])
 
@@ -290,16 +293,18 @@ class Loader:
         return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
-    def _is_usable_pdf_text(text: str) -> bool:
+    def _is_usable_pdf_text(text: str, mojibake_runs: int | None = None) -> bool:
         """추출 결과를 그대로 써도 되는지 판정. 비어 있거나 mojibake면 False.
 
         EUC-KR 바이트를 latin-1로 잘못 해석한 텍스트는 비어 있지 않으므로,
         빈 문자열 검사만으로는 fallback이 발동하지 않고 깨진 텍스트가 그대로 적재된다.
+        mojibake_runs를 넘기면 같은 텍스트를 두 번 스캔하지 않는다.
         """
         if not text[: Loader.TEXT_SIZE].strip():
             return False
         # 라틴 문자권 도서의 악센트 문자가 우연히 한글로 복원되는 경우가 있어 여유를 둔다.
-        return Loader._count_mojibake_runs(text) < Loader.PDF_MOJIBAKE_RUN_LIMIT
+        runs = Loader._count_mojibake_runs(text) if mojibake_runs is None else mojibake_runs
+        return runs < Loader.PDF_MOJIBAKE_RUN_LIMIT
 
     @staticmethod
     def _count_mojibake_runs(text: str) -> int:
@@ -324,12 +329,16 @@ class Loader:
 
         pdf = pypdfium2.PdfDocument(file_path)
         try:
+            page_count = len(pdf)
             texts: list[str] = []
-            for page in pdf:
-                texts.append(page.get_textpage().get_text_range() or "")
-                if sum(len(t) for t in texts) >= Loader.TEXT_SIZE:
+            total = 0
+            for i in range(min(page_count, Loader.PDF_PAGE_LIMIT)):
+                text = pdf[i].get_textpage().get_text_range() or ""
+                texts.append(text)
+                total += len(text)
+                if total >= Loader.TEXT_SIZE:
                     break
-            return "".join(texts), len(pdf)
+            return "".join(texts), page_count
         finally:
             pdf.close()
 
@@ -338,12 +347,18 @@ class Loader:
         import pdfplumber
 
         with pdfplumber.open(file_path) as pdf:
+            page_count = len(pdf.pages)
             texts: list[str] = []
-            for page in pdf.pages:
-                texts.append(page.extract_text() or "")
-                if sum(len(t) for t in texts) >= Loader.TEXT_SIZE:
+            total = 0
+            for page in pdf.pages[: Loader.PDF_PAGE_LIMIT]:
+                text = page.extract_text() or ""
+                texts.append(text)
+                total += len(text)
+                # 페이지 객체가 캐시한 문자/도형 정보를 즉시 버려 메모리 누적을 막는다.
+                page.close()
+                if total >= Loader.TEXT_SIZE:
                     break
-            return "".join(texts), len(pdf.pages)
+            return "".join(texts), page_count
 
     @staticmethod
     def _pdf_text_by_pdftotext(file_path: Path) -> tuple[str, int]:
@@ -351,7 +366,8 @@ class Loader:
         if not pdftotext_path:
             return "", 0
         # -enc UTF-8로 출력을 고정하고, locale에 의존하지 않도록 직접 디코딩한다.
-        proc = subprocess.run([pdftotext_path, "-enc", "UTF-8", str(file_path), "-"], capture_output=True, timeout=10)
+        cmd = [pdftotext_path, "-enc", "UTF-8", "-l", str(Loader.PDF_PAGE_LIMIT), str(file_path), "-"]
+        proc = subprocess.run(cmd, capture_output=True, timeout=10)
         if proc.returncode != 0:
             return "", 0
         return proc.stdout.decode("utf-8", "replace"), 0
@@ -366,22 +382,30 @@ class Loader:
         # 어느 파서도 온전한 텍스트를 못 주면 그중 손상이 가장 적은 결과를 쓴다.
         best_damage: int | None = None
 
-        # pypdfium2가 가장 빠르고 대부분의 파일을 처리한다. 폰트 CMap이 깨진 파일은
-        # pdfplumber(pdfminer)가 가장 잘 복구하므로 손상이 확인되면 그쪽으로 넘긴다.
-        for extract in (Loader._pdf_text_by_pypdfium2, Loader._pdf_text_by_pdfplumber, Loader._pdf_text_by_pdftotext):
+        # 빠른 파서부터 시작해, 손상이 확인되면 느리지만 복구력이 좋은 파서로 넘긴다.
+        # 실측 중앙 소요: pypdfium2 0.030s < pdftotext 0.023s << pdfplumber 0.233s.
+        # 부분 손상 복구력은 반대 순서(pdfplumber 14/17 > pdftotext 6/17)라 최종 단계에 둔다.
+        stages = (Loader._pdf_text_by_pypdfium2, Loader._pdf_text_by_pdftotext, Loader._pdf_text_by_pdfplumber)
+        for stage_no, extract in enumerate(stages):
             try:
                 text, pages = extract(file_path)
             except Exception:
                 continue
             if page_count == 0:
                 page_count = pages
-            if Loader._is_usable_pdf_text(text):
+            if not text.strip():
+                # 1단계가 문서를 열었는데도 텍스트가 없으면 텍스트 레이어가 없는 스캔본이다.
+                # 이 경우 다른 파서도 결과가 없음을 확인했으므로(표본 28건 전수) 더 시도하지 않는다.
+                # 스캔본은 전체 PDF의 43.8%(9,261건, 1,545,537페이지)라 이 분기가 비용을 크게 줄인다.
+                if stage_no == 0 and page_count > 0:
+                    break
+                continue
+            damage = Loader._count_mojibake_runs(text)
+            if Loader._is_usable_pdf_text(text, damage):
                 result = text
                 break
-            if text.strip():
-                damage = Loader._count_mojibake_runs(text)
-                if best_damage is None or damage < best_damage:
-                    best_damage, result = damage, text
+            if best_damage is None or damage < best_damage:
+                best_damage, result = damage, text
 
         if not result.strip() and page_count == 0:
             LOGGER.error(file_path)
