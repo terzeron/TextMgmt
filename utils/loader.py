@@ -35,6 +35,8 @@ LOGGER = logging.getLogger()
 # pypdf 및 ebooklib 내부 경고/복구 소음 로그 억제
 logging.getLogger("pypdf").setLevel(logging.ERROR)
 logging.getLogger("pypdf._reader").setLevel(logging.ERROR)
+# pypdf._cmap은 미지원 CMap(예: /KSCms-UHC-H, /KSC-EUC-H)을 ERROR 레벨로 페이지마다 찍으므로 별도 차단
+logging.getLogger("pypdf._cmap").setLevel(logging.CRITICAL)
 warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
 warnings.filterwarnings("ignore", message=".*Ascii85.*")
 warnings.filterwarnings("ignore", message=".*startxref.*")
@@ -51,6 +53,10 @@ if "TM_BOOK_DIR" not in os.environ:
 if "TM_COMICS_DIR" not in os.environ:
     LOGGER.error("The environment variable TM_COMICS_DIR is not set.")
     sys.exit(-1)
+
+HANGUL_RE = re.compile(r"[가-힣]")
+# latin-1 상위 영역이 2글자 이상 연속된 구간 = 바이트를 latin-1로 잘못 읽은 흔적
+PDF_LATIN1_RUN_RE = re.compile(r"[\u0080-\u00ff]{2,}")
 
 
 class ProblemCollector(logging.Handler):
@@ -105,6 +111,8 @@ def report_problems(file_path: Path, messages: list[str], indexed: bool) -> bool
 
 class Loader:
     TEXT_SIZE = 4096
+    # 이 개수 이상의 mojibake 구간이 나오면 추출 실패로 보고 다음 파서로 넘긴다.
+    PDF_MOJIBAKE_RUN_LIMIT = 3
     path_prefix = Path(os.environ["TM_BOOK_DIR"])
     comics_path_prefix = Path(os.environ["TM_COMICS_DIR"])
 
@@ -282,87 +290,98 @@ class Loader:
         return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
+    def _is_usable_pdf_text(text: str) -> bool:
+        """추출 결과를 그대로 써도 되는지 판정. 비어 있거나 mojibake면 False.
+
+        EUC-KR 바이트를 latin-1로 잘못 해석한 텍스트는 비어 있지 않으므로,
+        빈 문자열 검사만으로는 fallback이 발동하지 않고 깨진 텍스트가 그대로 적재된다.
+        """
+        if not text[: Loader.TEXT_SIZE].strip():
+            return False
+        # 라틴 문자권 도서의 악센트 문자가 우연히 한글로 복원되는 경우가 있어 여유를 둔다.
+        return Loader._count_mojibake_runs(text) < Loader.PDF_MOJIBAKE_RUN_LIMIT
+
+    @staticmethod
+    def _count_mojibake_runs(text: str) -> int:
+        """EUC-KR 바이트를 latin-1로 잘못 읽은 구간의 개수.
+
+        전체 대비 비율로 판정하면 4096자 중 155자(3.8%)처럼 부분 손상을 놓치므로
+        구간 개수로 센다. 각 구간은 실제 재해석으로 확정한다.
+        """
+        runs = 0
+        for run in PDF_LATIN1_RUN_RE.findall(text[: Loader.TEXT_SIZE]):
+            try:
+                decoded = run.encode("latin-1").decode("euc-kr", "ignore")
+            except Exception:
+                continue
+            if decoded and len(HANGUL_RE.findall(decoded)) / len(decoded) >= 0.5:
+                runs += 1
+        return runs
+
+    @staticmethod
+    def _pdf_text_by_pypdfium2(file_path: Path) -> tuple[str, int]:
+        import pypdfium2
+
+        pdf = pypdfium2.PdfDocument(file_path)
+        try:
+            texts: list[str] = []
+            for page in pdf:
+                texts.append(page.get_textpage().get_text_range() or "")
+                if sum(len(t) for t in texts) >= Loader.TEXT_SIZE:
+                    break
+            return "".join(texts), len(pdf)
+        finally:
+            pdf.close()
+
+    @staticmethod
+    def _pdf_text_by_pdfplumber(file_path: Path) -> tuple[str, int]:
+        import pdfplumber
+
+        with pdfplumber.open(file_path) as pdf:
+            texts: list[str] = []
+            for page in pdf.pages:
+                texts.append(page.extract_text() or "")
+                if sum(len(t) for t in texts) >= Loader.TEXT_SIZE:
+                    break
+            return "".join(texts), len(pdf.pages)
+
+    @staticmethod
+    def _pdf_text_by_pdftotext(file_path: Path) -> tuple[str, int]:
+        pdftotext_path = shutil.which("pdftotext")
+        if not pdftotext_path:
+            return "", 0
+        # -enc UTF-8로 출력을 고정하고, locale에 의존하지 않도록 직접 디코딩한다.
+        proc = subprocess.run([pdftotext_path, "-enc", "UTF-8", str(file_path), "-"], capture_output=True, timeout=10)
+        if proc.returncode != 0:
+            return "", 0
+        return proc.stdout.decode("utf-8", "replace"), 0
+
+    @staticmethod
     def read_from_pdf(file_path: Path) -> tuple[str, int, int]:
         Stat.pdf_count += 1
         start_time = datetime.now()
 
         result = ""
         page_count = 0
+        # 어느 파서도 온전한 텍스트를 못 주면 그중 손상이 가장 적은 결과를 쓴다.
+        best_damage: int | None = None
 
-        # 1. pypdf 시도
-        try:
-            with file_path.open("rb") as infile:
-                reader = pypdf.PdfReader(infile)
-                page_count = len(reader.pages)
-                for page in reader.pages:
-                    text = page.extract_text() or ""
-                    if len(result) < Loader.TEXT_SIZE:
-                        result += text
-                    else:
-                        break
-        except Exception:
-            result = ""
-
-        # 2. pypdfium2 시도 (pypdf 실패 또는 텍스트 미추출 시)
-        if not result.strip():
+        # pypdfium2가 가장 빠르고 대부분의 파일을 처리한다. 폰트 CMap이 깨진 파일은
+        # pdfplumber(pdfminer)가 가장 잘 복구하므로 손상이 확인되면 그쪽으로 넘긴다.
+        for extract in (Loader._pdf_text_by_pypdfium2, Loader._pdf_text_by_pdfplumber, Loader._pdf_text_by_pdftotext):
             try:
-                import pypdfium2
-                pdf = pypdfium2.PdfDocument(file_path)
-                if page_count == 0:
-                    page_count = len(pdf)
-                pdf_text = []
-                for page in pdf:
-                    textpage = page.get_textpage()
-                    text = textpage.get_text_range() or ""
-                    pdf_text.append(text)
-                    if len("".join(pdf_text)) >= Loader.TEXT_SIZE:
-                        break
-                result = "".join(pdf_text)
+                text, pages = extract(file_path)
             except Exception:
-                pass
-
-        # 3. pdfplumber 시도
-        if not result.strip():
-            try:
-                import pdfplumber
-                with pdfplumber.open(file_path) as pdf:
-                    if page_count == 0:
-                        page_count = len(pdf.pages)
-                    for page in pdf.pages:
-                        text = page.extract_text() or ""
-                        if len(result) < Loader.TEXT_SIZE:
-                            result += text
-                        else:
-                            break
-            except Exception:
-                pass
-
-        # 4. fitz (PyMuPDF) 시도
-        if not result.strip():
-            try:
-                import fitz
-                doc = fitz.open(file_path)
-                if page_count == 0:
-                    page_count = len(doc)
-                for page in doc:
-                    text = page.get_text() or ""
-                    if len(result) < Loader.TEXT_SIZE:
-                        result += text
-                    else:
-                        break
-            except Exception:
-                pass
-
-        # 5. pdftotext CLI 시도
-        if not result.strip():
-            try:
-                pdftotext_path = shutil.which("pdftotext")
-                if pdftotext_path:
-                    proc = subprocess.run([pdftotext_path, str(file_path), "-"], capture_output=True, text=True, timeout=10)
-                    if proc.returncode == 0:
-                        result = proc.stdout
-            except Exception:
-                pass
+                continue
+            if page_count == 0:
+                page_count = pages
+            if Loader._is_usable_pdf_text(text):
+                result = text
+                break
+            if text.strip():
+                damage = Loader._count_mojibake_runs(text)
+                if best_damage is None or damage < best_damage:
+                    best_damage, result = damage, text
 
         if not result.strip() and page_count == 0:
             LOGGER.error(file_path)

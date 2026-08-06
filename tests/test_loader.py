@@ -494,13 +494,10 @@ class TestReadFromPdf:
         summary, line_count, page_count = Loader.read_from_pdf(pdf)
         assert page_count == 0
 
-    def test_read_pdf_pypdfium2_fallback(self, tmp_path: Path, monkeypatch):
+    def test_read_pdf_pypdfium2_primary(self, tmp_path: Path, monkeypatch):
         Loader = _get_loader()
         pdf = tmp_path / "pypdfium2_test.pdf"
         pdf.write_bytes(b"%PDF-1.4 mock pdf content")
-
-        import pypdf
-        monkeypatch.setattr(pypdf, "PdfReader", lambda *a, **k: (_ for _ in ()).throw(Exception("pypdf fail")))
 
         class MockTextPage:
             def get_text_range(self):
@@ -513,14 +510,21 @@ class TestReadFromPdf:
         class MockPdfDocument:
             def __init__(self, path):
                 pass
+
             def __len__(self):
                 return 1
+
             def __getitem__(self, idx):
                 return MockPage()
+
             def __iter__(self):
                 return iter([MockPage()])
 
+            def close(self):
+                pass
+
         import pypdfium2
+
         monkeypatch.setattr(pypdfium2, "PdfDocument", MockPdfDocument)
 
         summary, line_count, page_count = Loader.read_from_pdf(pdf)
@@ -532,11 +536,14 @@ class TestReadFromPdf:
         pdf = tmp_path / "pdfplumber_test.pdf"
         pdf.write_bytes(b"%PDF-1.4 mock pdf content")
 
-        import pypdf
-        monkeypatch.setattr(pypdf, "PdfReader", lambda *a, **k: (_ for _ in ()).throw(Exception("pypdf fail")))
-
         import pypdfium2
+
         monkeypatch.setattr(pypdfium2, "PdfDocument", lambda *a, **k: (_ for _ in ()).throw(Exception("pypdfium2 fail")))
+
+        # pdftotext CLI 단계를 건너뛰게 해서 pdfplumber까지 내려오게 한다.
+        import shutil
+
+        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
 
         class MockPlumberPage:
             def extract_text(self):
@@ -545,13 +552,16 @@ class TestReadFromPdf:
         class MockPlumberPdf:
             def __enter__(self):
                 return self
+
             def __exit__(self, *args):
                 pass
+
             @property
             def pages(self):
                 return [MockPlumberPage()]
 
         import pdfplumber
+
         monkeypatch.setattr(pdfplumber, "open", lambda *a, **k: MockPlumberPdf())
 
         summary, line_count, page_count = Loader.read_from_pdf(pdf)
@@ -563,24 +573,124 @@ class TestReadFromPdf:
         pdf = tmp_path / "pdftotext_cli_test.pdf"
         pdf.write_bytes(b"%PDF-1.4 mock pdf content")
 
-        import pypdf
-        monkeypatch.setattr(pypdf, "PdfReader", lambda *a, **k: (_ for _ in ()).throw(Exception("fail")))
-
         import pypdfium2
+
         monkeypatch.setattr(pypdfium2, "PdfDocument", lambda *a, **k: (_ for _ in ()).throw(Exception("fail")))
 
         import pdfplumber
+
         monkeypatch.setattr(pdfplumber, "open", lambda *a, **k: (_ for _ in ()).throw(Exception("fail")))
 
         class MockCompletedProcess:
             returncode = 0
-            stdout = "pdftotext CLI 추출 텍스트"
+            stdout = "pdftotext CLI 추출 텍스트".encode("utf-8")
 
         import subprocess
+
         monkeypatch.setattr(subprocess, "run", lambda *a, **k: MockCompletedProcess())
 
         summary, line_count, page_count = Loader.read_from_pdf(pdf)
         assert "pdftotext" in summary
+
+    def test_read_pdf_mojibake_falls_through(self, tmp_path: Path, monkeypatch):
+        """EUC-KR을 latin-1로 잘못 해석한 텍스트는 비어 있지 않아도 fallback을 타야 한다."""
+        Loader = _get_loader()
+        pdf = tmp_path / "mojibake.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        mojibake = "맥(麥) 김남천 조은커뮤니티".encode("euc-kr").decode("latin-1") * 8
+
+        class MockTextPage:
+            def get_text_range(self):
+                return mojibake
+
+        class MockPage:
+            def get_textpage(self):
+                return MockTextPage()
+
+        class MockPdfDocument:
+            def __init__(self, path):
+                pass
+
+            def __len__(self):
+                return 1
+
+            def __iter__(self):
+                return iter([MockPage()])
+
+            def close(self):
+                pass
+
+        import pypdfium2
+
+        monkeypatch.setattr(pypdfium2, "PdfDocument", MockPdfDocument)
+
+        class MockCompletedProcess:
+            returncode = 0
+            stdout = "정상 추출된 한글 본문".encode("utf-8")
+
+        import subprocess
+
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: MockCompletedProcess())
+
+        summary, line_count, page_count = Loader.read_from_pdf(pdf)
+        assert "정상 추출된 한글 본문" in summary
+        assert page_count == 1
+
+
+class TestPdfMojibakeDetection:
+    """_is_usable_pdf_text / _count_mojibake_runs 판정 — 부분 손상과 오탐 경계."""
+
+    def test_clean_korean_is_usable(self):
+        Loader = _get_loader()
+        assert Loader._is_usable_pdf_text("맥(麥) 김남천 조은커뮤니티 소설 본문입니다")
+
+    def test_empty_is_not_usable(self):
+        Loader = _get_loader()
+        assert not Loader._is_usable_pdf_text("   \n\t  ")
+
+    def test_full_mojibake_is_not_usable(self):
+        Loader = _get_loader()
+        broken = "맥(麥) 김남천 조은커뮤니티".encode("euc-kr").decode("latin-1")
+        assert not Loader._is_usable_pdf_text(broken)
+
+    def test_partial_mojibake_is_not_usable(self):
+        """정상 한글이 대부분이어도 손상 구간이 섞이면 재추출 대상이다.
+
+        비율 기준(10%)으로 판정하면 4096자 중 155자 손상을 놓친다.
+        """
+        Loader = _get_loader()
+        # 실제 부분 손상은 정상 텍스트 사이에 손상 구간이 흩어져 나타난다.
+        broken = [w.encode("euc-kr").decode("latin-1") for w in ("즐기는", "들어서", "필요한", "함께")]
+        partial = "정상 한글 본문이 길게 이어집니다 " * 10 + "".join(f" {w} 정상 한글 본문이 이어집니다 " * 3 for w in broken)
+        assert Loader._count_mojibake_runs(partial) >= Loader.PDF_MOJIBAKE_RUN_LIMIT
+        assert not Loader._is_usable_pdf_text(partial)
+
+    def test_latin_accents_are_usable(self):
+        """포르투갈어 등 라틴 악센트 문자를 손상으로 오판하지 않아야 한다."""
+        Loader = _get_loader()
+        text = "Songbook Lô Borges Música de Minas Transcrições Cláudio Faria Belo Horizonte"
+        assert Loader._is_usable_pdf_text(text)
+
+    def test_falls_back_to_least_damaged(self, tmp_path: Path, monkeypatch):
+        """모든 파서가 손상 결과를 주면 손상이 가장 적은 것을 남긴다."""
+        Loader = _get_loader()
+        pdf = tmp_path / "all_damaged.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        def scatter(words):
+            return "".join(f" {w.encode('euc-kr').decode('latin-1')} 정상 본문 " for w in words)
+
+        heavy = scatter(("즐기는", "들어서", "필요한", "함께", "그리고", "사람은"))
+        light = scatter(("즐기는", "들어서", "필요한")) + " LIGHT_DAMAGE_MARKER"
+
+        monkeypatch.setattr(Loader, "_pdf_text_by_pypdfium2", staticmethod(lambda p: (heavy, 7)))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdfplumber", staticmethod(lambda p: (light, 7)))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdftotext", staticmethod(lambda p: ("", 0)))
+
+        summary, line_count, page_count = Loader.read_from_pdf(pdf)
+        assert "LIGHT_DAMAGE_MARKER" in summary
+        assert page_count == 7
 
 
 class TestReadFromRtf:
