@@ -494,13 +494,10 @@ class TestReadFromPdf:
         summary, line_count, page_count = Loader.read_from_pdf(pdf)
         assert page_count == 0
 
-    def test_read_pdf_pypdfium2_fallback(self, tmp_path: Path, monkeypatch):
+    def test_read_pdf_pypdfium2_primary(self, tmp_path: Path, monkeypatch):
         Loader = _get_loader()
         pdf = tmp_path / "pypdfium2_test.pdf"
         pdf.write_bytes(b"%PDF-1.4 mock pdf content")
-
-        import pypdf
-        monkeypatch.setattr(pypdf, "PdfReader", lambda *a, **k: (_ for _ in ()).throw(Exception("pypdf fail")))
 
         class MockTextPage:
             def get_text_range(self):
@@ -513,14 +510,21 @@ class TestReadFromPdf:
         class MockPdfDocument:
             def __init__(self, path):
                 pass
+
             def __len__(self):
                 return 1
+
             def __getitem__(self, idx):
                 return MockPage()
+
             def __iter__(self):
                 return iter([MockPage()])
 
+            def close(self):
+                pass
+
         import pypdfium2
+
         monkeypatch.setattr(pypdfium2, "PdfDocument", MockPdfDocument)
 
         summary, line_count, page_count = Loader.read_from_pdf(pdf)
@@ -532,26 +536,35 @@ class TestReadFromPdf:
         pdf = tmp_path / "pdfplumber_test.pdf"
         pdf.write_bytes(b"%PDF-1.4 mock pdf content")
 
-        import pypdf
-        monkeypatch.setattr(pypdf, "PdfReader", lambda *a, **k: (_ for _ in ()).throw(Exception("pypdf fail")))
-
         import pypdfium2
+
         monkeypatch.setattr(pypdfium2, "PdfDocument", lambda *a, **k: (_ for _ in ()).throw(Exception("pypdfium2 fail")))
+
+        # pdftotext CLI 단계를 건너뛰게 해서 pdfplumber까지 내려오게 한다.
+        import shutil
+
+        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
 
         class MockPlumberPage:
             def extract_text(self):
                 return "pdfplumber 추출 텍스트"
 
+            def close(self):
+                pass
+
         class MockPlumberPdf:
             def __enter__(self):
                 return self
+
             def __exit__(self, *args):
                 pass
+
             @property
             def pages(self):
                 return [MockPlumberPage()]
 
         import pdfplumber
+
         monkeypatch.setattr(pdfplumber, "open", lambda *a, **k: MockPlumberPdf())
 
         summary, line_count, page_count = Loader.read_from_pdf(pdf)
@@ -563,24 +576,260 @@ class TestReadFromPdf:
         pdf = tmp_path / "pdftotext_cli_test.pdf"
         pdf.write_bytes(b"%PDF-1.4 mock pdf content")
 
-        import pypdf
-        monkeypatch.setattr(pypdf, "PdfReader", lambda *a, **k: (_ for _ in ()).throw(Exception("fail")))
-
         import pypdfium2
+
         monkeypatch.setattr(pypdfium2, "PdfDocument", lambda *a, **k: (_ for _ in ()).throw(Exception("fail")))
 
         import pdfplumber
+
         monkeypatch.setattr(pdfplumber, "open", lambda *a, **k: (_ for _ in ()).throw(Exception("fail")))
 
         class MockCompletedProcess:
             returncode = 0
-            stdout = "pdftotext CLI 추출 텍스트"
+            stdout = "pdftotext CLI 추출 텍스트".encode("utf-8")
 
         import subprocess
+
         monkeypatch.setattr(subprocess, "run", lambda *a, **k: MockCompletedProcess())
 
         summary, line_count, page_count = Loader.read_from_pdf(pdf)
         assert "pdftotext" in summary
+
+    def test_read_pdf_mojibake_falls_through(self, tmp_path: Path, monkeypatch):
+        """EUC-KR을 latin-1로 잘못 해석한 텍스트는 비어 있지 않아도 fallback을 타야 한다."""
+        Loader = _get_loader()
+        pdf = tmp_path / "mojibake.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        mojibake = "맥(麥) 김남천 조은커뮤니티".encode("euc-kr").decode("latin-1") * 8
+
+        class MockTextPage:
+            def get_text_range(self):
+                return mojibake
+
+        class MockPage:
+            def get_textpage(self):
+                return MockTextPage()
+
+        class MockPdfDocument:
+            def __init__(self, path):
+                pass
+
+            def __len__(self):
+                return 1
+
+            def __getitem__(self, idx):
+                return MockPage()
+
+            def __iter__(self):
+                return iter([MockPage()])
+
+            def close(self):
+                pass
+
+        import pypdfium2
+
+        monkeypatch.setattr(pypdfium2, "PdfDocument", MockPdfDocument)
+
+        class MockCompletedProcess:
+            returncode = 0
+            stdout = "정상 추출된 한글 본문".encode("utf-8")
+
+        import subprocess
+
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: MockCompletedProcess())
+
+        summary, line_count, page_count = Loader.read_from_pdf(pdf)
+        assert "정상 추출된 한글 본문" in summary
+        assert page_count == 1
+
+
+class TestPdfExtractionCost:
+    """추출 비용 최적화 동작 — 스캔본 조기 종료와 페이지 상한."""
+
+    @staticmethod
+    def _mock_pypdfium2(monkeypatch, page_texts: list[str], visited: list[int]):
+        class MockTextPage:
+            def __init__(self, idx):
+                self.idx = idx
+
+            def get_text_range(self):
+                visited.append(self.idx)
+                return page_texts[self.idx]
+
+        class MockPage:
+            def __init__(self, idx):
+                self.idx = idx
+
+            def get_textpage(self):
+                return MockTextPage(self.idx)
+
+        class MockPdfDocument:
+            def __init__(self, path):
+                pass
+
+            def __len__(self):
+                return len(page_texts)
+
+            def __getitem__(self, idx):
+                return MockPage(idx)
+
+            def close(self):
+                pass
+
+        import pypdfium2
+
+        monkeypatch.setattr(pypdfium2, "PdfDocument", MockPdfDocument)
+
+    def test_scanned_pdf_skips_remaining_parsers(self, tmp_path: Path, monkeypatch):
+        """텍스트 레이어가 없으면 pdftotext/pdfplumber를 아예 호출하지 않아야 한다."""
+        Loader = _get_loader()
+        pdf = tmp_path / "scanned.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        visited: list[int] = []
+        self._mock_pypdfium2(monkeypatch, [""] * 500, visited)
+
+        called: list[str] = []
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdftotext", staticmethod(lambda p: called.append("pdftotext") or ("", 0)))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdfplumber", staticmethod(lambda p: called.append("pdfplumber") or ("", 0)))
+
+        summary, line_count, page_count = Loader.read_from_pdf(pdf)
+        assert called == [], f"스캔본인데 후속 파서가 호출됨: {called}"
+        assert page_count == 500
+        assert not summary.strip()
+
+    def test_scanned_pdf_stops_at_page_limit(self, tmp_path: Path, monkeypatch):
+        """스캔본이라도 PDF_PAGE_LIMIT 페이지까지만 훑어야 한다."""
+        Loader = _get_loader()
+        pdf = tmp_path / "big_scanned.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        visited: list[int] = []
+        self._mock_pypdfium2(monkeypatch, [""] * 5000, visited)
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdftotext", staticmethod(lambda p: ("", 0)))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdfplumber", staticmethod(lambda p: ("", 0)))
+
+        Loader.read_from_pdf(pdf)
+        assert len(visited) == Loader.PDF_PAGE_LIMIT, f"{len(visited)}페이지를 읽음"
+
+    def test_stops_reading_once_text_size_reached(self, tmp_path: Path, monkeypatch):
+        """TEXT_SIZE를 채우면 남은 페이지를 읽지 않아야 한다."""
+        Loader = _get_loader()
+        pdf = tmp_path / "long.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        visited: list[int] = []
+        self._mock_pypdfium2(monkeypatch, ["가나다라마" * 300] * 100, visited)
+
+        summary, line_count, page_count = Loader.read_from_pdf(pdf)
+        assert len(visited) <= 4, f"{len(visited)}페이지를 읽음"
+        assert len(summary) == Loader.TEXT_SIZE
+        assert page_count == 100
+
+    def test_pdftotext_is_page_limited(self, tmp_path: Path, monkeypatch):
+        """pdftotext에 -l 옵션이 붙어 전체 문서를 뽑지 않아야 한다."""
+        Loader = _get_loader()
+        pdf = tmp_path / "cli.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        captured: list[list[str]] = []
+
+        class MockCompletedProcess:
+            returncode = 0
+            stdout = "본문".encode("utf-8")
+
+        import subprocess
+
+        def fake_run(cmd, **kwargs):
+            captured.append(cmd)
+            return MockCompletedProcess()
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        Loader._pdf_text_by_pdftotext(pdf)
+        assert captured, "pdftotext가 호출되지 않음"
+        cmd = captured[0]
+        assert "-l" in cmd and cmd[cmd.index("-l") + 1] == str(Loader.PDF_PAGE_LIMIT)
+
+    def test_fast_parsers_run_before_slow_one(self, tmp_path: Path, monkeypatch):
+        """손상 시 fallback 순서는 빠른 것(pdftotext) → 느린 것(pdfplumber)이다."""
+        Loader = _get_loader()
+        pdf = tmp_path / "damaged.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        broken = "".join(f" {w.encode('euc-kr').decode('latin-1')} 정상 본문 " for w in ("즐기는", "들어서", "필요한", "함께"))
+        order: list[str] = []
+        self._mock_pypdfium2(monkeypatch, [broken], [])
+
+        def fake_pdftotext(p):
+            order.append("pdftotext")
+            return broken, 0
+
+        def fake_pdfplumber(p):
+            order.append("pdfplumber")
+            return "정상 한글 본문입니다", 1
+
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdftotext", staticmethod(fake_pdftotext))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdfplumber", staticmethod(fake_pdfplumber))
+
+        summary, line_count, page_count = Loader.read_from_pdf(pdf)
+        assert order == ["pdftotext", "pdfplumber"]
+        assert "정상 한글 본문입니다" in summary
+
+
+class TestPdfMojibakeDetection:
+    """_is_usable_pdf_text / _count_mojibake_runs 판정 — 부분 손상과 오탐 경계."""
+
+    def test_clean_korean_is_usable(self):
+        Loader = _get_loader()
+        assert Loader._is_usable_pdf_text("맥(麥) 김남천 조은커뮤니티 소설 본문입니다")
+
+    def test_empty_is_not_usable(self):
+        Loader = _get_loader()
+        assert not Loader._is_usable_pdf_text("   \n\t  ")
+
+    def test_full_mojibake_is_not_usable(self):
+        Loader = _get_loader()
+        broken = "맥(麥) 김남천 조은커뮤니티".encode("euc-kr").decode("latin-1")
+        assert not Loader._is_usable_pdf_text(broken)
+
+    def test_partial_mojibake_is_not_usable(self):
+        """정상 한글이 대부분이어도 손상 구간이 섞이면 재추출 대상이다.
+
+        비율 기준(10%)으로 판정하면 4096자 중 155자 손상을 놓친다.
+        """
+        Loader = _get_loader()
+        # 실제 부분 손상은 정상 텍스트 사이에 손상 구간이 흩어져 나타난다.
+        broken = [w.encode("euc-kr").decode("latin-1") for w in ("즐기는", "들어서", "필요한", "함께")]
+        partial = "정상 한글 본문이 길게 이어집니다 " * 10 + "".join(f" {w} 정상 한글 본문이 이어집니다 " * 3 for w in broken)
+        assert Loader._count_mojibake_runs(partial) >= Loader.PDF_MOJIBAKE_RUN_LIMIT
+        assert not Loader._is_usable_pdf_text(partial)
+
+    def test_latin_accents_are_usable(self):
+        """포르투갈어 등 라틴 악센트 문자를 손상으로 오판하지 않아야 한다."""
+        Loader = _get_loader()
+        text = "Songbook Lô Borges Música de Minas Transcrições Cláudio Faria Belo Horizonte"
+        assert Loader._is_usable_pdf_text(text)
+
+    def test_falls_back_to_least_damaged(self, tmp_path: Path, monkeypatch):
+        """모든 파서가 손상 결과를 주면 손상이 가장 적은 것을 남긴다."""
+        Loader = _get_loader()
+        pdf = tmp_path / "all_damaged.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        def scatter(words):
+            return "".join(f" {w.encode('euc-kr').decode('latin-1')} 정상 본문 " for w in words)
+
+        heavy = scatter(("즐기는", "들어서", "필요한", "함께", "그리고", "사람은"))
+        light = scatter(("즐기는", "들어서", "필요한")) + " LIGHT_DAMAGE_MARKER"
+
+        monkeypatch.setattr(Loader, "_pdf_text_by_pypdfium2", staticmethod(lambda p: (heavy, 7)))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdfplumber", staticmethod(lambda p: (light, 7)))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdftotext", staticmethod(lambda p: ("", 0)))
+
+        summary, line_count, page_count = Loader.read_from_pdf(pdf)
+        assert "LIGHT_DAMAGE_MARKER" in summary
+        assert page_count == 7
 
 
 class TestReadFromRtf:
