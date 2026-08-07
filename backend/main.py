@@ -452,10 +452,21 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.get("/categories/{category:path}")
-    async def get_books_in_category(category: str, payload: dict = Depends(require_auth)) -> dict[str, Any]:
-        LOGGER.debug("# get_books_in_category(category='%s')", category)
+    async def get_books_in_category(category: str, limit: int = 0, cursor: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:
+        LOGGER.debug("# get_books_in_category(category='%s', limit=%d, cursor='%s')", category, limit, cursor)
         response_object: dict[str, Any] = {"status": "failure"}
         await _ensure_viewer_category_allowed(payload, category, content_type)
+        if limit > 0:
+            # 커서 기반 페이지 조회: 10000건 상한 없이 카테고리 전체에 도달한다.
+            paged, total, next_cursor, error = await manager.get_books_in_category_paged(category, size=limit, cursor=cursor)
+            if error is None:
+                response_object["status"] = "success"
+                response_object["result"] = [BookModel(**book.dict()) for book in paged]
+                response_object["total"] = total
+                response_object["next_cursor"] = next_cursor
+            else:
+                response_object["error"] = error
+            return response_object
         result, error = await manager.get_books_in_category(category)
         if error is None:
             response_object["status"] = "success"

@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
 import asyncio
+import base64
+import json
 import re
 import sys
 import os
@@ -28,6 +30,24 @@ logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 # 카테고리 단위 ES 조회 상한. ES max_result_window(기본 10000)와 일치시켜
 # scroll 미사용 경로를 유지하고 요청당 메모리 사용을 제한한다 (CWE-770).
 MAX_CATEGORY_RESULT_COUNT = 10000
+
+# 커서 기반 카테고리 조회의 요청당 최대 페이지 크기 (CWE-770).
+# search_after라도 한 페이지 size는 ES max_result_window를 넘을 수 없다.
+MAX_CATEGORY_PAGE_SIZE = MAX_CATEGORY_RESULT_COUNT
+
+
+def encode_category_cursor(sort_values: list[Any]) -> str:
+    """ES sort 값을 클라이언트에 노출할 불투명 커서 문자열로 인코딩한다."""
+    return base64.urlsafe_b64encode(json.dumps(sort_values).encode("utf-8")).decode("ascii")
+
+
+def decode_category_cursor(cursor: str) -> list[Any] | None:
+    """커서 문자열을 ES sort 값으로 복원한다. 형식이 잘못되면 None."""
+    try:
+        decoded = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8"))
+    except Exception:
+        return None
+    return decoded if isinstance(decoded, list) else None
 
 
 def _safe_xml_parser(recover: bool = False) -> Any:
@@ -468,6 +488,23 @@ class BookManager:
         if doc_list and len(doc_list) > 0:
             return [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in doc_list], None
         return [], f"No books found in '{category}'"
+
+    async def get_books_in_category_paged(self, category: str, size: int = 500, cursor: str = "") -> tuple[list[Book], int, str | None, str | None]:
+        """카테고리 내 책을 커서 기반으로 한 페이지 조회한다.
+
+        get_books_in_category()는 10000건에서 잘리므로, 그보다 큰 카테고리의
+        책은 목록으로 도달할 수 없다. 이 경로는 상한 없이 전체를 순회한다.
+        반환: (books, total, next_cursor, error)
+        """
+        LOGGER.debug("# get_books_in_category_paged(category='%s', size=%d, cursor='%s')", category, size, cursor)
+        size = max(1, min(size, MAX_CATEGORY_PAGE_SIZE))
+        search_after = decode_category_cursor(cursor) if cursor else None
+        if cursor and search_after is None:
+            return [], 0, None, "invalid cursor"
+        doc_list, total, next_search_after = self.es_manager.search_by_category_paged(category, size=size, search_after=search_after)
+        books = [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in doc_list]
+        next_cursor = encode_category_cursor(next_search_after) if next_search_after else None
+        return books, total, next_cursor, None
 
     async def get_book(self, book_id: int) -> tuple[Book | None, str | None]:
         LOGGER.debug("# get_book(book_id=%d)", book_id)

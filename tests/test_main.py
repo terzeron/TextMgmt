@@ -227,6 +227,34 @@ class TestBackend:
         assert book.book_id in [b["book_id"] for b in books]
 
     @pytest.mark.asyncio
+    async def test_get_books_in_category_paged(self, test_book):
+        """limit을 주면 커서 페이지 응답(total, next_cursor)을 돌려준다."""
+        book = test_book["book"]
+        client = test_book["client"]
+
+        response = client.get(f"/categories/{book.category}?limit=1")
+        assert response.status_code == 200
+        response_data = response.json()
+        assert response_data["status"] == "success"
+        assert len(response_data["result"]) <= 1
+        assert response_data["total"] >= 1
+        assert "next_cursor" in response_data
+
+        # limit 없이 호출하면 기존(비페이지) 응답 형태를 유지한다
+        legacy = client.get(f"/categories/{book.category}").json()
+        assert legacy["status"] == "success"
+        assert "next_cursor" not in legacy
+
+    @pytest.mark.asyncio
+    async def test_get_books_in_category_paged_invalid_cursor(self, test_book):
+        book = test_book["book"]
+        client = test_book["client"]
+
+        response = client.get(f"/categories/{book.category}?limit=1&cursor=not-a-cursor")
+        assert response.status_code == 200
+        assert response.json() == {"status": "failure", "error": "invalid cursor"}
+
+    @pytest.mark.asyncio
     async def test_get_categories(self, test_book):
         book = test_book["book"]
         client = test_book["client"]

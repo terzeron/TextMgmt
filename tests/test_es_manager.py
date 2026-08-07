@@ -999,3 +999,73 @@ def test_delete_by_ids_error_returns_partial():
 
     manager = make_manager(HalfES())
     assert manager.delete_by_ids([1, 2, 3, 4], chunk_size=2) == 2
+
+
+def test_search_by_category_paged_returns_cursor_and_total():
+    """마지막 페이지가 아니면 다음 커서를, 마지막이면 None을 준다."""
+    es = DummyES()
+    manager = make_manager(es)
+    captured = {}
+
+    def fake_search(**kwargs):
+        captured.update(kwargs)
+        return {
+            "hits": {
+                "total": {"value": 32355},
+                "hits": [
+                    {"_id": "1", "_source": {"title": "가"}, "sort": ["가", "/1.epub"]},
+                    {"_id": "2", "_source": {"title": "나"}, "sort": ["나", "/2.epub"]},
+                ],
+            }
+        }
+
+    es.search = fake_search
+    # size와 hit 수가 같으므로 다음 페이지가 있다고 본다
+    result, total, next_after = manager.search_by_category_paged("A", size=2)
+    assert [doc_id for doc_id, _src, _score in result] == [1, 2]
+    assert total == 32355
+    assert next_after == ["나", "/2.epub"]
+    assert captured["query"] == {"term": {"category": "A"}}
+    assert captured["sort"] == ESManager.CATEGORY_SORT
+    assert captured["track_total_hits"] is True
+    assert "search_after" not in captured
+
+    # hit 수가 size보다 적으면 마지막 페이지
+    _result, _total, next_after = manager.search_by_category_paged("A", size=10)
+    assert next_after is None
+
+
+def test_search_by_category_paged_passes_search_after_and_handles_error():
+    es = DummyES()
+    manager = make_manager(es)
+    captured = {}
+
+    def fake_search(**kwargs):
+        captured.update(kwargs)
+        return {"hits": {"total": {"value": 0}, "hits": []}}
+
+    es.search = fake_search
+    manager.search_by_category_paged("A", size=5, search_after=["가", "/1.epub"])
+    assert captured["search_after"] == ["가", "/1.epub"]
+
+    def boom(**_kwargs):
+        raise RuntimeError("es down")
+
+    es.search = boom
+    assert manager.search_by_category_paged("A", size=5) == ([], 0, None)
+
+
+def test_category_cursor_roundtrip_and_rejects_garbage():
+    """커서는 불투명 문자열로 왕복되어야 하고, 깨진 값은 None으로 거부한다."""
+    from backend.book_manager import decode_category_cursor, encode_category_cursor
+
+    sort_values = ["철도 네트워크 제국 01 - 레일 헤드", "0_telegram/철도.epub"]
+    assert decode_category_cursor(encode_category_cursor(sort_values)) == sort_values
+    assert decode_category_cursor("not-a-cursor") is None
+    assert decode_category_cursor("") is None
+    # 리스트가 아닌 JSON은 sort 값이 될 수 없다
+    import base64
+    import json
+
+    not_a_list = base64.urlsafe_b64encode(json.dumps({"a": 1}).encode()).decode()
+    assert decode_category_cursor(not_a_list) is None

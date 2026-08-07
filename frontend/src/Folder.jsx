@@ -34,7 +34,7 @@ import {
   faChevronDown,
   faChevronRight,
 } from "@fortawesome/free-solid-svg-icons";
-import { findFolderInTree } from "./folderUtils";
+import { findFolderInTree, MORE_ENTRY_FILE_TYPE } from "./folderUtils";
 
 function DotIcon() {
   return (
@@ -145,7 +145,6 @@ MemoizedIcon.propTypes = {
   color: PropTypes.string,
 };
 
- 
 function CustomLabel({
   icon: Icon,
   iconColor,
@@ -354,6 +353,12 @@ export default function Folder(props) {
               selectedItems={props.selectedItems}
               onSelectedItemsChange={(event, selectedId) => {
                 const found = findFolderInTree(props.folderData, selectedId);
+                // '더 보기'는 폴더도 책도 아닌 합성 노드다. 다음 페이지만
+                // 요청하고 트리 펼침 상태와 디렉토리 패널은 그대로 둔다.
+                if (found && found.fileType === MORE_ENTRY_FILE_TYPE) {
+                  props.onClickHandler(selectedId);
+                  return;
+                }
                 const isFolder = found && found.fileType === "folder";
                 props.onExpandedItemsChange((prevExpandedItems) => {
                   if (prevExpandedItems.includes(selectedId)) {

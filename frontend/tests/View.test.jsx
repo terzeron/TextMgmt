@@ -6,11 +6,13 @@ afterEach(cleanup);
 
 const {
   mockJsonGetReq,
+  mockRawJsonGetReq,
   mockGetApiUrlPrefix,
   mockOutletContext,
   mockRouteState,
 } = vi.hoisted(() => ({
   mockJsonGetReq: vi.fn(),
+  mockRawJsonGetReq: vi.fn(),
   mockGetApiUrlPrefix: vi.fn(() => "http://localhost:8000"),
   mockOutletContext: {
     searchResults: [],
@@ -25,8 +27,31 @@ const {
 
 vi.mock("../src/Common", () => ({
   jsonGetReq: mockJsonGetReq,
+  rawJsonGetReq: mockRawJsonGetReq,
   getApiUrlPrefix: mockGetApiUrlPrefix,
 }));
+
+// 카테고리 목록은 커서 페이지네이션 때문에 rawJsonGetReq(원본 응답)를 쓴다.
+// 페이징을 직접 검증하지 않는 테스트는 기존 jsonGetReq 모킹을 그대로 쓸 수 있도록,
+// 쿼리스트링을 떼고 위임한 뒤 한 페이지짜리 응답으로 감싸 준다.
+function delegateRawToJsonGetReq() {
+  mockRawJsonGetReq.mockImplementation((url, resolve, reject, final) => {
+    mockJsonGetReq(
+      url.split("?")[0],
+      null,
+      (result) =>
+        resolve &&
+        resolve({
+          status: "success",
+          result: result || [],
+          total: (result || []).length,
+          next_cursor: null,
+        }),
+      reject,
+      final,
+    );
+  });
+}
 
 vi.mock("../src/Folder.jsx", () => ({
   default: ({ folderData, onClickHandler, onToggle, isOpen }) => (
@@ -151,6 +176,7 @@ describe("View", () => {
     mockOutletContext.searchLoading = false;
     mockRouteState.wildcard = "";
     mockRouteState.searchParams = "";
+    delegateRawToJsonGetReq();
   });
 
   it("카테고리 목록을 로드하여 Folder에 전달한다", async () => {
@@ -387,6 +413,116 @@ describe("View", () => {
     });
   });
 
+  it("카테고리 목록은 limit을 붙여 커서 페이지로 요청한다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve({ 소설: 3 });
+    });
+    mockRawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.startsWith("/categories/소설")) {
+        resolve({
+          status: "success",
+          result: [
+            {
+              book_id: 1,
+              title: "가",
+              file_type: "epub",
+              file_path: "/1.epub",
+              category: "소설",
+            },
+          ],
+          total: 1,
+          next_cursor: null,
+        });
+      }
+    });
+
+    render(<View />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-소설")).toBeTruthy();
+    });
+    screen.getByTestId("folder-item-소설").click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-소설/1")).toBeTruthy();
+    });
+    const url = mockRawJsonGetReq.mock.calls.find((c) =>
+      c[0].startsWith("/categories/소설"),
+    )[0];
+    expect(url).toContain("limit=5000");
+    // 마지막 페이지이므로 '더 보기'는 없다
+    expect(screen.queryByTestId("folder-item-소설/__more__")).toBeNull();
+  });
+
+  it("다음 페이지가 있으면 '더 보기'가 나타나고, 누르면 커서로 이어 불러온다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve({ 소설: 2 });
+    });
+    mockRawJsonGetReq.mockImplementation((url, resolve) => {
+      if (!url.startsWith("/categories/소설")) return;
+      if (url.includes("cursor=")) {
+        resolve({
+          status: "success",
+          result: [
+            {
+              book_id: 2,
+              title: "나",
+              file_type: "epub",
+              file_path: "/2.epub",
+              category: "소설",
+            },
+          ],
+          total: 2,
+          next_cursor: null,
+        });
+      } else {
+        resolve({
+          status: "success",
+          result: [
+            {
+              book_id: 1,
+              title: "가",
+              file_type: "epub",
+              file_path: "/1.epub",
+              category: "소설",
+            },
+          ],
+          total: 2,
+          next_cursor: "CURSOR1",
+        });
+      }
+    });
+
+    render(<View />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-소설")).toBeTruthy();
+    });
+    screen.getByTestId("folder-item-소설").click();
+
+    // 1페이지 후 '더 보기'가 진행 상황과 함께 표시된다
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-소설/__more__")).toBeTruthy();
+    });
+    expect(
+      screen.getByTestId("folder-item-소설/__more__").textContent,
+    ).toContain("1/2");
+
+    screen.getByTestId("folder-item-소설/__more__").click();
+
+    // 2페이지가 이어붙고 '더 보기'는 사라진다
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-소설/2")).toBeTruthy();
+    });
+    expect(screen.getByTestId("folder-item-소설/1")).toBeTruthy();
+    expect(screen.queryByTestId("folder-item-소설/__more__")).toBeNull();
+
+    const cursorCall = mockRawJsonGetReq.mock.calls.find((c) =>
+      c[0].includes("cursor="),
+    );
+    expect(cursorCall[0]).toContain("cursor=CURSOR1");
+    // '더 보기'는 책이 아니므로 책 조회로 오인되지 않는다
+    expect(screen.queryByTestId("book-load-error")).toBeNull();
+  });
+
   it("딥링크로 bookId와 category가 주어지면 자동으로 책을 선택한다", async () => {
     mockRouteState.wildcard = "42";
     mockRouteState.searchParams = "category=소설";
@@ -445,6 +581,81 @@ describe("View", () => {
     await waitFor(() => {
       expect(screen.getByTestId("book-info-view")).toBeTruthy();
     });
+  });
+
+  it("딥링크 대상이 카테고리 목록에 없으면(10000건 상한으로 잘림) /books/{id}로 직접 조회한다", async () => {
+    mockRouteState.wildcard = "200901238";
+    mockRouteState.searchParams = "category=0_telegram";
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ "0_telegram": 32355 });
+      } else if (url === "/categories/0_telegram") {
+        // 상한에 걸려 잘린 목록 - 대상 책이 포함되지 않는다
+        resolve([
+          {
+            book_id: 200913025,
+            title: "상어의 도시",
+            file_type: "epub",
+            file_path: "0_telegram/상어의 도시.epub",
+            category: "0_telegram",
+          },
+        ]);
+      } else if (url === "/books/200901238") {
+        resolve({
+          book_id: 200901238,
+          title: "철도 네트워크 제국 01 - 레일 헤드",
+          file_type: "epub",
+          file_path: "0_telegram/철도 네트워크 제국 01 - 레일 헤드.epub",
+          category: "0_telegram",
+        });
+      }
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(
+        mockJsonGetReq.mock.calls.find((c) => c[0] === "/books/200901238"),
+      ).toBeTruthy();
+    });
+
+    // 목록에 없어도 책 정보가 표시되고, 실패 패널은 뜨지 않는다
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info-view")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("book-load-error")).toBeNull();
+  });
+
+  it("딥링크 대상이 카테고리 목록에 있으면 목록에서 선택하고 /books/{id}를 호출하지 않는다", async () => {
+    mockRouteState.wildcard = "42";
+    mockRouteState.searchParams = "category=소설";
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ 소설: 1 });
+      } else if (url === "/categories/소설") {
+        resolve([
+          {
+            book_id: 42,
+            title: "목록에있는책",
+            file_type: "epub",
+            file_path: "/in-list.epub",
+            category: "소설",
+          },
+        ]);
+      }
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info-view")).toBeTruthy();
+    });
+    // 목록으로 해결되므로 단건 조회는 불필요하다
+    expect(
+      mockJsonGetReq.mock.calls.find((c) => c[0] === "/books/42"),
+    ).toBeFalsy();
   });
 
   it("딥링크 직접 조회 실패 시 /books/{id} reject 콜백이 호출된다", async () => {
@@ -1195,9 +1406,27 @@ describe("View", () => {
         resolve({ _root: 3 });
       } else if (url === "/categories/_root") {
         resolve([
-          { book_id: 3, title: "다랑", file_type: "pdf", file_path: "/c.pdf", category: "_root" },
-          { book_id: 1, title: "가람", file_type: "pdf", file_path: "/a.pdf", category: "_root" },
-          { book_id: 2, title: "나람", file_type: "pdf", file_path: "/b.pdf", category: "_root" },
+          {
+            book_id: 3,
+            title: "다랑",
+            file_type: "pdf",
+            file_path: "/c.pdf",
+            category: "_root",
+          },
+          {
+            book_id: 1,
+            title: "가람",
+            file_type: "pdf",
+            file_path: "/a.pdf",
+            category: "_root",
+          },
+          {
+            book_id: 2,
+            title: "나람",
+            file_type: "pdf",
+            file_path: "/b.pdf",
+            category: "_root",
+          },
         ]);
       }
     });
