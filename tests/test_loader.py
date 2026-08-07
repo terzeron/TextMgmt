@@ -133,6 +133,86 @@ class TestReadFromText:
         summary, line_count, page_count, raw = Loader.read_from_text(f)
         assert summary == ""
 
+    def test_read_text_when_chardet_raises(self, tmp_path: Path, monkeypatch):
+        """chardet가 실패해도 기본 인코딩 순서로 읽어낸다."""
+        Loader = _get_loader()
+        f = tmp_path / "novel.txt"
+        f.write_bytes("한글 본문입니다 가나다라\n".encode("cp949"))
+
+        import chardet
+
+        def boom(_b):
+            raise RuntimeError("chardet 실패")
+
+        monkeypatch.setattr(chardet, "detect", boom)
+
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert "한글 본문입니다" in raw
+
+    def test_read_text_falls_back_to_replace(self, tmp_path: Path):
+        """모든 엄격 디코딩이 실패하면 errors='replace'로라도 읽어 적재를 이어간다.
+
+        이 경로는 원문 글자를 잃으므로(U+FFFD → 이후 공백 치환) 재인코딩 대상이
+        되지 못한 파일에서만 쓰인다.
+        """
+        Loader = _get_loader()
+        f = tmp_path / "broken.txt"
+        raw_bytes = bytes([0x80, 0x81, 0xFE, 0xFF, 0x00, 0x9C, 0x90]) * 40 + b"abc\n"
+        f.write_bytes(raw_bytes)
+
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert isinstance(summary, str)
+        assert isinstance(raw, str)
+        # 파일은 읽기 전용 경로이므로 원본이 그대로여야 한다
+        assert f.read_bytes() == raw_bytes
+
+    def test_read_text_replace_skips_candidate_without_letters(self, tmp_path: Path):
+        """replace 디코딩 결과에 한글·영숫자가 전혀 없으면 그 후보를 건너뛴다.
+
+        치환문자만 잔뜩 남은 결과를 본문으로 채택하면 검색 품질이 더 나빠진다.
+        """
+        Loader = _get_loader()
+        f = tmp_path / "nonletters.txt"
+        raw_bytes = bytes([0x80, 0x81, 0x82, 0x83]) * 60
+        f.write_bytes(raw_bytes)
+
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert isinstance(summary, str) and isinstance(raw, str)
+        assert f.read_bytes() == raw_bytes
+
+    def test_read_text_replace_skips_korean_candidate_without_letters(self, tmp_path: Path, monkeypatch):
+        """replace 단계에서 cp949/euc-kr 결과에 글자가 없으면 그 후보를 건너뛴다.
+
+        chardet가 한국어 인코딩을 먼저 제안했을 때만 도달하는 분기라 그 상황을 만든다.
+        """
+        Loader = _get_loader()
+        f = tmp_path / "nonletters2.txt"
+        raw_bytes = bytes([0x80, 0x81, 0x82, 0x83]) * 60
+        f.write_bytes(raw_bytes)
+
+        import chardet
+
+        monkeypatch.setattr(chardet, "detect", lambda b: {"encoding": "EUC-KR", "confidence": 0.99})
+
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        assert isinstance(summary, str) and isinstance(raw, str)
+        assert f.read_bytes() == raw_bytes
+
+    def test_read_text_rejects_utf16_cjk_garbage(self, tmp_path: Path):
+        """단일바이트 파일이 utf-16으로 디코딩돼 CJK 뭉치가 되면 채택하지 않는다.
+
+        utf-16-le/be만 검사하고 plain utf-16을 빠뜨리면 검사 없이 통과한다.
+        """
+        Loader = _get_loader()
+        f = tmp_path / "notutf16.txt"
+        raw_bytes = bytes([0x80, 0x81, 0x82, 0x83]) * 60
+        f.write_bytes(raw_bytes)
+
+        summary, line_count, page_count, raw = Loader.read_from_text(f)
+        # utf-16 계열로 읽힌 CJK 뭉치(膀莂..., 肁芃...)가 그대로 들어오면 안 된다
+        assert "膀莂" not in raw and "肁芃" not in raw, raw[:40]
+        assert f.read_bytes() == raw_bytes
+
     def test_read_corrupted_utf16_text(self, tmp_path: Path):
         Loader = _get_loader()
         f = tmp_path / "corrupted_utf16.txt"
@@ -642,6 +722,501 @@ class TestReadFromPdf:
         summary, line_count, page_count = Loader.read_from_pdf(pdf)
         assert "정상 추출된 한글 본문" in summary
         assert page_count == 1
+
+
+class TestReencodeTextFileToUtf8:
+    """txt 파일 UTF-8 재인코딩 — 검증 통과 시에만 파일을 바꾼다."""
+
+    def test_cp949_file_is_reencoded(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "cp949.txt"
+        original = "한글 소설 본문입니다.\n둘째 줄\n"
+        f.write_bytes(original.encode("cp949"))
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert changed, reason
+        assert f.read_bytes().decode("utf-8") == original
+
+    def test_euckr_file_is_reencoded(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "euckr.txt"
+        original = "동양고전 한문 번역 본문\n"
+        f.write_bytes(original.encode("euc-kr"))
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert changed, reason
+        assert f.read_bytes().decode("utf-8") == original
+
+    def test_inode_is_preserved(self, tmp_path: Path):
+        """ES 문서 _id가 inode이므로 재인코딩이 inode를 바꾸면 문서가 갈린다."""
+        Loader = _get_loader()
+        f = tmp_path / "inode.txt"
+        f.write_bytes("한글 본문\n".encode("cp949"))
+        before = f.stat().st_ino
+
+        changed, _ = Loader.reencode_text_file_to_utf8(f)
+        assert changed
+        assert f.stat().st_ino == before
+
+    def test_already_utf8_is_untouched(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "utf8.txt"
+        raw = "한글 본문입니다\n".encode("utf-8")
+        f.write_bytes(raw)
+        mtime = f.stat().st_mtime_ns
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert not changed
+        assert reason == "이미 UTF-8"
+        assert f.read_bytes() == raw
+        assert f.stat().st_mtime_ns == mtime
+
+    def test_undecodable_file_is_untouched(self, tmp_path: Path):
+        """어떤 인코딩으로도 무손실 디코딩이 안 되면 파일을 건드리지 않는다."""
+        Loader = _get_loader()
+        f = tmp_path / "broken.txt"
+        raw = bytes([0x80, 0x81, 0xFE, 0xFF, 0x00, 0x9C, 0x90]) * 40
+        f.write_bytes(raw)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert not changed, reason
+        assert f.read_bytes() == raw
+
+    def test_punctuation_only_file_is_untouched(self, tmp_path: Path):
+        """실제 글자가 전혀 없으면 인코딩 선택이 옳다고 볼 수 없어 건드리지 않는다."""
+        Loader = _get_loader()
+        f = tmp_path / "nontext.txt"
+        raw = ("。、※★○【】" * 20).encode("cp949")
+        f.write_bytes(raw)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert not changed, reason
+        assert f.read_bytes() == raw
+
+    def test_hanja_only_file_is_reencoded(self, tmp_path: Path):
+        """한문 고전처럼 한글이 없어도 한자 본문이면 재인코딩 대상이다."""
+        Loader = _get_loader()
+        f = tmp_path / "hanja.txt"
+        original = "君子曰 學不可以已 靑取之於藍而靑於藍\n" * 10
+        f.write_bytes(original.encode("cp949"))
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert changed, reason
+        assert f.read_bytes().decode("utf-8") == original
+
+    def test_windows1252_misdetection_is_rejected(self, tmp_path: Path, monkeypatch):
+        """chardet가 단일바이트 인코딩을 제안해도 채택하지 않는다.
+
+        단일바이트 인코딩은 어떤 바이트열이든 디코딩되고 바이트 왕복도 무조건 통과하므로,
+        후보로 허용하면 한글 파일에 mojibake(ÇÑ±Û ¼Ò¼³...)를 영구 기록하게 된다.
+        """
+        Loader = _get_loader()
+        f = tmp_path / "korean.txt"
+        original = "한글 소설 본문 chapter 12 입니다\n" * 20
+        f.write_bytes(original.encode("cp949"))
+
+        import chardet
+
+        monkeypatch.setattr(chardet, "detect", lambda b: {"encoding": "Windows-1252", "confidence": 0.99})
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert changed, reason
+        # cp949로 올바르게 복원되어야 하고, mojibake가 저장되면 안 된다
+        saved = f.read_bytes().decode("utf-8")
+        assert saved == original
+        assert "ÇÑ" not in saved
+
+    def test_empty_file_is_skipped(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "empty.txt"
+        f.write_bytes(b"")
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert not changed
+        assert reason == "빈 파일"
+        assert f.read_bytes() == b""
+
+    def test_unreadable_path_is_reported(self, tmp_path: Path):
+        """읽을 수 없는 경로는 예외를 밖으로 내보내지 않고 사유로 돌려준다."""
+        Loader = _get_loader()
+        d = tmp_path / "adir"
+        d.mkdir()
+
+        changed, reason = Loader.reencode_text_file_to_utf8(d)
+        assert not changed
+        assert reason.startswith("읽기 실패")
+
+    def test_works_when_chardet_raises(self, tmp_path: Path, monkeypatch):
+        """chardet가 실패해도 기본 후보 순서로 정상 변환한다."""
+        Loader = _get_loader()
+        f = tmp_path / "novel.txt"
+        raw = "한글 본문입니다\n둘째 줄\n".encode("cp949")
+        f.write_bytes(raw)
+
+        import chardet
+
+        def boom(_b):
+            raise RuntimeError("chardet 실패")
+
+        monkeypatch.setattr(chardet, "detect", boom)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert changed, reason
+        assert f.read_bytes().decode("utf-8") == raw.decode("cp949")
+
+    def test_utf16_with_bom_is_converted(self, tmp_path: Path):
+        """BOM이 있으면 NUL 비율과 무관하게 UTF-16 후보를 유지한다."""
+        Loader = _get_loader()
+        f = tmp_path / "bom.txt"
+        original = "한글 본문입니다 가나다라마바사\n" * 20
+        raw = original.encode("utf-16")
+        assert raw[:2] in (b"\xff\xfe", b"\xfe\xff")
+        f.write_bytes(raw)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert changed, reason
+        assert f.read_bytes().decode("utf-8") == original
+
+    def test_replacement_char_in_source_is_rejected(self, tmp_path: Path):
+        """디코딩 결과에 U+FFFD가 있으면 그 후보를 쓰지 않는다.
+
+        U+FFFD가 들어간 채로 저장하면 원문 글자를 영구히 잃는다.
+        """
+        Loader = _get_loader()
+        f = tmp_path / "fffd.txt"
+        raw = ("한글 본문�입니다\n" * 30).encode("utf-16-le")
+        f.write_bytes(raw)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        if changed:
+            assert "�" not in f.read_bytes().decode("utf-8"), reason
+        else:
+            assert f.read_bytes() == raw
+
+    def test_long_text_without_newline_is_rejected(self, tmp_path: Path):
+        """줄바꿈이 하나도 없는 긴 텍스트는 인코딩 오선택 신호이므로 변환하지 않는다."""
+        Loader = _get_loader()
+        f = tmp_path / "noline.txt"
+        raw = ("가나다라마바사아자차카타파하" * 40).encode("cp949")
+        text = raw.decode("cp949")
+        assert len(text) >= 200 and "\n" not in text and "\r" not in text
+        f.write_bytes(raw)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert not changed, reason
+        assert f.read_bytes() == raw
+
+    def test_high_latin1_ratio_is_rejected(self, tmp_path: Path):
+        """악센트 비율이 지나치게 높으면 단일바이트 오독으로 보고 변환하지 않는다.
+
+        상위바이트가 고립돼 cp1252 후보로 넘어가더라도, 정상 서양어 문서라면
+        악센트 비율이 이렇게 높을 수 없다. 실측 cp1252 영문 파일은 0.003 수준이다.
+        """
+        Loader = _get_loader()
+        f = tmp_path / "accents.txt"
+        raw = ("a \xe0 b \xe9 c \xee d \xf4 e \xf9\r\n" * 40).encode("cp1252")
+        f.write_bytes(raw)
+        sample = raw.decode("cp1252")
+        assert sum(1 for c in sample if "\u0080" <= c <= "\u00ff") / len(sample) > 0.1
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert not changed, reason
+        assert f.read_bytes() == raw
+
+    def test_adjacent_accents_stay_lossless(self, tmp_path: Path):
+        """알려진 한계: 악센트가 연속이면 한글 2바이트 시퀀스와 구분되지 않는다.
+
+        실제 서양어 문서의 악센트는 고립돼 나타나므로(실측 인접쌍 0.000~0.0024)
+        현실적 위험은 낮다. 어느 쪽으로 판정되든 무손실 왕복은 지켜져야 한다.
+        """
+        Loader = _get_loader()
+        f = tmp_path / "adjacent.txt"
+        raw = ("ab \xe0\xe9\xee\xf4\xf9\xe0\xe9\xee\xf4\xf9\r\n" * 40).encode("cp1252")
+        f.write_bytes(raw)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        if changed:
+            enc = reason.split(" ")[0]
+            assert f.read_bytes().decode("utf-8").encode(enc) == raw, "무손실 왕복이 깨짐"
+        else:
+            assert f.read_bytes() == raw
+
+    def test_file_untouched_when_backup_content_mismatches(self, tmp_path: Path, monkeypatch):
+        """백업이 잘려 쓰이면 검증에서 걸러내고 원본을 건드리지 않는다."""
+        Loader = _get_loader()
+        f = tmp_path / "novel.txt"
+        raw = "한글 본문입니다\n둘째 줄\n".encode("cp949")
+        f.write_bytes(raw)
+        backup = tmp_path / "backup"
+        monkeypatch.setattr(Loader, "reencode_backup_dir", backup)
+
+        real_write = Path.write_bytes
+
+        def truncating_write(self, data):
+            if backup in self.parents:
+                return real_write(self, data[:5])
+            return real_write(self, data)
+
+        monkeypatch.setattr(Path, "write_bytes", truncating_write)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert not changed
+        assert "백업 검증 실패" in reason, reason
+        assert f.read_bytes() == raw
+
+    def test_original_preserved_when_write_fails(self, tmp_path: Path):
+        """덮어쓰기가 실패하면 원본이 남고 임시 파일도 남기지 않는다."""
+        Loader = _get_loader()
+        f = tmp_path / "readonly.txt"
+        raw = "한글 본문입니다\n둘째 줄\n".encode("cp949")
+        f.write_bytes(raw)
+        f.chmod(0o444)
+        try:
+            changed, reason = Loader.reencode_text_file_to_utf8(f)
+            assert not changed
+            assert "쓰기 실패" in reason, reason
+            assert f.read_bytes() == raw
+            assert list(tmp_path.iterdir()) == [f], "임시 파일이 남음"
+        finally:
+            f.chmod(0o644)
+
+    def test_post_write_mismatch_is_detected(self, tmp_path: Path, monkeypatch):
+        """저장 후 다시 읽어 확인하는 단계가 실제로 불일치를 잡아낸다."""
+        Loader = _get_loader()
+        f = tmp_path / "novel.txt"
+        raw = "한글 본문입니다\n둘째 줄\n".encode("cp949")
+        f.write_bytes(raw)
+
+        real_read = Path.read_bytes
+        calls = {"n": 0}
+
+        def flaky_read(self):
+            data = real_read(self)
+            if self == f:
+                calls["n"] += 1
+                if calls["n"] >= 2:
+                    # 저장 후 재읽기에서만 내용을 바꾼다. 유효한 UTF-8이라 디코딩은
+                    # 성공하고 길이만 달라지므로 '저장 후 불일치' 분기를 탄다.
+                    return data + "추가".encode("utf-8")
+            return data
+
+        monkeypatch.setattr(Path, "read_bytes", flaky_read)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert not changed
+        assert "저장 후 불일치" in reason, reason
+
+    def test_backup_is_written_before_overwrite(self, tmp_path: Path, monkeypatch):
+        """백업 디렉터리를 지정하면 원본이 상대 경로 구조로 보존된다."""
+        Loader = _get_loader()
+        book = tmp_path / "book"
+        (book / "3_판타지").mkdir(parents=True)
+        f = book / "3_판타지" / "novel.txt"
+        raw = "한글 본문입니다\n둘째 줄\n".encode("cp949")
+        f.write_bytes(raw)
+        backup = tmp_path / "backup"
+
+        monkeypatch.setattr(Loader, "path_prefix", book)
+        monkeypatch.setattr(Loader, "reencode_backup_dir", backup)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert changed, reason
+        saved_backup = backup / "3_판타지" / "novel.txt"
+        assert saved_backup.is_file(), "백업이 생성되지 않음"
+        assert saved_backup.read_bytes() == raw, "백업 내용이 원본과 다름"
+        assert f.read_bytes().decode("utf-8") == raw.decode("cp949")
+
+    def test_file_untouched_when_backup_fails(self, tmp_path: Path, monkeypatch):
+        """백업을 쓸 수 없으면 파일을 변환하지 않는다."""
+        Loader = _get_loader()
+        f = tmp_path / "novel.txt"
+        raw = "한글 본문입니다\n".encode("cp949")
+        f.write_bytes(raw)
+        # 파일을 백업 디렉터리로 지정 → mkdir 실패
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a dir")
+
+        monkeypatch.setattr(Loader, "reencode_backup_dir", blocker)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert not changed
+        assert "백업" in reason, reason
+        assert f.read_bytes() == raw
+
+    def test_dry_run_writes_no_backup(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        f = tmp_path / "novel.txt"
+        raw = "한글 본문입니다\n".encode("cp949")
+        f.write_bytes(raw)
+        backup = tmp_path / "backup"
+        monkeypatch.setattr(Loader, "reencode_backup_dir", backup)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f, dry_run=True)
+        assert changed and "dry-run" in reason
+        assert not backup.exists(), "dry-run인데 백업이 생성됨"
+        assert f.read_bytes() == raw
+
+    def test_western_text_uses_cp1252_not_cp949(self, tmp_path: Path):
+        """고립된 상위바이트는 서양어 단일바이트 인코딩이다.
+
+        실제로 발생한 케이스: cp1252 영문 파일의 0x97(em-dash)이 cp949에서 뒤따르는
+        ASCII까지 2바이트 시퀀스로 삼켜 영문자를 파괴했다
+        ('Don Sabas—a man' → 'Don Sabas뾞 man', 'a' 소실).
+        """
+        Loader = _get_loader()
+        f = tmp_path / "ohenry.txt"
+        body = "characteristic of Don Sabas\x97a man at once merry, learned\r\n"
+        raw = (body * 40).encode("latin-1")
+        f.write_bytes(raw)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert changed, reason
+        assert reason.startswith("cp1252"), f"cp1252가 아닌 {reason}"
+        saved = f.read_bytes().decode("utf-8")
+        assert "Don Sabas—a man at once" in saved
+        assert "뾞" not in saved
+
+    def test_korean_with_few_high_bytes_still_uses_cp949(self, tmp_path: Path):
+        """영문 위주 한글 파일(상위바이트가 적어도 인접쌍)은 cp949/euc-kr을 유지한다."""
+        Loader = _get_loader()
+        f = tmp_path / "mixed.txt"
+        body = "Taegu University Press chapter one and two\r\n"
+        raw = (body * 40).encode("cp949") + "머 리 말\r\n지금 한 세기가\r\n".encode("cp949")
+        f.write_bytes(raw)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert changed, reason
+        assert reason.split(" ")[0] in ("cp949", "euc-kr"), f"한글 인코딩이 아닌 {reason}"
+        saved = f.read_bytes().decode("utf-8")
+        assert "머 리 말" in saved and "지금 한 세기가" in saved
+
+    def test_korean_decodable_only_by_cp1252_is_untouched(self, tmp_path: Path):
+        """상위바이트가 인접쌍이면 cp1252로만 디코딩되더라도 변환하지 않는다.
+
+        실제 케이스: 상위바이트 비율 0.78인 한글 파일이 cp949/euc-kr 왕복은 실패하고
+        cp1252로는 디코딩됐다. 가드가 없으면 mojibake로 변환된다.
+        """
+        Loader = _get_loader()
+        f = tmp_path / "korean_broken.txt"
+        # 한글 cp949 바이트 사이에 cp949로는 무효인 상위바이트 쌍을 섞는다
+        raw = "가나다라마바사아자차\r\n".encode("cp949") * 20 + b"\xff\xfe" * 10
+        f.write_bytes(raw)
+        hi = [i for i, b in enumerate(raw) if b >= 0x80]
+        seen = set(hi)
+        paired = sum(1 for i in hi if (i - 1) in seen or (i + 1) in seen) / len(hi)
+        assert paired >= Loader.TEXT_HIGH_BYTE_PAIRED_MIN
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert not changed, f"한글 파일이 변환됨: {reason}"
+        assert f.read_bytes() == raw
+
+    def test_single_byte_text_is_not_read_as_utf16(self, tmp_path: Path, monkeypatch):
+        """단일바이트 텍스트를 UTF-16으로 오독해 CJK 글자 뭉치로 바꾸면 안 된다.
+
+        실제로 발생한 케이스: Windows-1252 영문 파일(0x97 em-dash)이 utf-8/cp949/euc-kr
+        디코딩에 모두 실패하고, 길이가 짝수라 utf-16-be로 디코딩되며 왕복까지 통과했다.
+        NUL 바이트가 0%이므로 UTF-16일 수 없고, 줄바꿈도 하나도 남지 않는다.
+        """
+        Loader = _get_loader()
+        f = tmp_path / "cp1252.txt"
+        body = "J. R. R. Tolkien \x97 The Lord Of The Rings. (4/4)\r\n"
+        raw = (body * 60).encode("latin-1")
+        assert len(raw) % 2 == 0
+        f.write_bytes(raw)
+
+        import chardet
+
+        monkeypatch.setattr(chardet, "detect", lambda b: {"encoding": "UTF-16BE", "confidence": 0.99})
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        # UTF-16으로 오독하면 안 되고, 서양어 단일바이트로 올바르게 읽혀야 한다
+        assert "utf-16" not in reason, f"UTF-16으로 오독됨: {reason}"
+        assert changed and reason.startswith("cp1252"), reason
+        assert f.read_bytes().decode("utf-8") == raw.decode("cp1252")
+
+    def test_utf16_not_attempted_without_nul_bytes(self, tmp_path: Path):
+        """NUL 바이트가 거의 없으면 UTF-16 후보를 시도하지 않는다.
+
+        cp949 등 다른 후보로 변환되는 것은 정상이며, UTF-16으로 오독되지만 않으면 된다.
+        """
+        Loader = _get_loader()
+        f = tmp_path / "notutf16.txt"
+        raw = ("abcd efgh 1234\r\n" * 50).encode("latin-1") + "가나".encode("cp949")
+        f.write_bytes(raw)
+        assert raw.count(0) == 0
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert "utf-16" not in reason, f"UTF-16으로 오독됨: {reason}"
+        if changed:
+            assert f.read_bytes().decode("utf-8") == raw.decode("cp949")
+
+    def test_utf16_wrong_endianness_is_not_written(self, tmp_path: Path):
+        """BOM 없는 UTF-16은 LE/BE 양쪽이 왕복을 통과하므로 타당성 검사로 걸러야 한다."""
+        Loader = _get_loader()
+        f = tmp_path / "utf16le.txt"
+        original = "한글 소설 본문입니다 가나다라마바사\n" * 20
+        f.write_bytes(original.encode("utf-16-le"))
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert changed, reason
+        assert f.read_bytes().decode("utf-8") == original
+
+    def test_dry_run_does_not_write(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "dry.txt"
+        raw = "한글 본문입니다\n".encode("cp949")
+        f.write_bytes(raw)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f, dry_run=True)
+        assert changed
+        assert "dry-run" in reason
+        assert f.read_bytes() == raw
+
+    def test_no_temp_file_left_behind(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "tmpcheck.txt"
+        f.write_bytes("한글 본문\n".encode("cp949"))
+
+        Loader.reencode_text_file_to_utf8(f)
+        assert list(tmp_path.iterdir()) == [f]
+
+    def test_char_count_and_content_match_after_write(self, tmp_path: Path):
+        """저장 후 실제로 다시 읽어 글자수와 내용이 원본 디코딩 결과와 일치한다."""
+        Loader = _get_loader()
+        f = tmp_path / "count.txt"
+        original = "".join(f"{i}행 한글 본문 내용입니다 가나다라마바사\n" for i in range(500))
+        f.write_bytes(original.encode("cp949"))
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert changed, reason
+        saved = f.read_bytes().decode("utf-8")
+        assert len(saved) == len(original)
+        assert saved == original
+
+    def test_shrinking_content_is_fully_truncated(self, tmp_path: Path):
+        """UTF-8이 원본보다 짧아지는 경우(잔여 바이트가 남지 않아야 함)."""
+        Loader = _get_loader()
+        f = tmp_path / "shrink.txt"
+        # UTF-16은 ASCII 위주 텍스트에서 UTF-8보다 크므로 재인코딩 시 파일이 줄어든다.
+        original = "ABCDEFG hello world 12345\n" * 200
+        f.write_bytes(original.encode("utf-16"))
+        assert f.stat().st_size > len(original.encode("utf-8"))
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert changed, reason
+        assert f.read_bytes().decode("utf-8") == original
+        assert f.stat().st_size == len(original.encode("utf-8"))
+
+    def test_reencode_disabled_by_default_in_read_file(self, tmp_path: Path, monkeypatch):
+        """--reencode 없이는 read_file이 파일을 건드리지 않는다."""
+        Loader = _get_loader()
+        assert Loader.reencode_txt_mode is False
+        called: list[Path] = []
+        monkeypatch.setattr(Loader, "reencode_text_file_to_utf8", staticmethod(lambda p, dry_run=False: called.append(p) or (False, "x")))
+        f = tmp_path / "plain.txt"
+        f.write_bytes("한글 본문\n".encode("cp949"))
+        Loader.read_from_text(f)
+        assert called == []
 
 
 class TestPdfExtractionCost:

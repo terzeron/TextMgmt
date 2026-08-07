@@ -57,6 +57,8 @@ if "TM_COMICS_DIR" not in os.environ:
 HANGUL_RE = re.compile(r"[가-힣]")
 # latin-1 상위 영역이 2글자 이상 연속된 구간 = 바이트를 latin-1로 잘못 읽은 흔적
 PDF_LATIN1_RUN_RE = re.compile(r"[\u0080-\u00ff]{2,}")
+# 상위바이트(0x80~0xFF) 연속 구간. 파이썬 루프 대신 C 속도로 인접 여부를 센다.
+HIGH_BYTE_RUN_RE = re.compile(rb"[\x80-\xff]+")
 
 
 class ProblemCollector(logging.Handler):
@@ -116,6 +118,23 @@ class Loader:
     # TEXT_SIZE를 채우는 데 실측 최대 27페이지가 필요했고 첫 텍스트는 최대 4페이지에서
     # 나왔다. 여유를 둔 상한. 스캔본이 끝까지 스캔되는 것을 막는 역할도 한다.
     PDF_PAGE_LIMIT = 40
+    # txt 디코딩 시도 순서. read_from_text와 reencode_text_file_to_utf8이 공유한다.
+    TEXT_ENCODINGS = ["utf-8", "cp949", "euc-kr", "utf-16", "utf-16-le", "utf-16-be", "utf-8-sig"]
+    # 서양어 단일바이트 인코딩(cp1252) 판정 기준.
+    # cp949/euc-kr의 한글은 항상 상위바이트 2개가 연속이고, 서양어 악센트/구두점은
+    # ASCII 사이에 고립된 단일 상위바이트로 나타난다. 실측 인접쌍 비율:
+    # cp1252 영문 0.0000~0.0024 vs 한글(cp949/euc-kr/미상) 1.0000.
+    TEXT_SINGLE_BYTE_ENCODING = "cp1252"
+    TEXT_HIGH_BYTE_PAIRED_MIN = 0.5
+    # chardet에 넘길 최대 바이트 수. 실측 1.4MB 전체는 2.08초, 64KB는 186ms, 8KB는 16ms.
+    # 한국어 인코딩 판별에는 8KB로 충분하고, 어차피 후보 순서만 정한다.
+    TEXT_DETECT_PREFIX = 8 * 1024
+    # --reencode / --reencode-dry-run 으로 설정된다. 기본은 파일을 건드리지 않는다.
+    reencode_txt_mode = False
+    reencode_txt_dry_run = False
+    # --reencode-backup-dir 로 설정. 지정하면 덮어쓰기 전에 원본을 이 아래에 복사하고,
+    # 복사·검증이 실패하면 그 파일은 변환하지 않는다.
+    reencode_backup_dir: Path | None = None
     path_prefix = Path(os.environ["TM_BOOK_DIR"])
     comics_path_prefix = Path(os.environ["TM_COMICS_DIR"])
 
@@ -125,6 +144,151 @@ class Loader:
         if file_path.is_relative_to(Loader.comics_path_prefix):
             return Loader.comics_path_prefix
         return Loader.path_prefix
+
+    @staticmethod
+    def reencode_text_file_to_utf8(file_path: Path, dry_run: bool = False) -> tuple[bool, str]:
+        """txt 파일 자체를 UTF-8로 재인코딩해 저장. 반환: (변경 여부, 사유).
+
+        검증을 모두 통과하지 못하면 파일에 손대지 않는다.
+          1. 바이트 왕복: 디코딩한 문자열을 원본 인코딩으로 되돌려 인코딩했을 때
+             원본 바이트와 완전히 일치해야 한다(무손실·가역 확정).
+          2. 타당성: 왕복만으로는 인코딩 선택이 옳은지 알 수 없다. BOM 없는 UTF-16은
+             LE/BE 양쪽이 모두 왕복을 통과하므로, 한글/영숫자가 실제로 나오는지 본다.
+          3. 글자수: 재인코딩 결과를 다시 읽어 원본 디코딩 결과와 글자수·내용이 일치해야 한다.
+
+        ES 문서 _id가 inode이므로 임시 파일 교체(os.replace)를 쓰지 않고 같은 inode에
+        덮어쓴다. 중간에 죽어도 복구할 수 있도록 검증된 내용을 먼저 임시 파일에 써 둔다.
+        """
+        try:
+            raw = file_path.read_bytes()
+        except OSError as e:
+            return False, f"읽기 실패: {e}"
+
+        if not raw:
+            return False, "빈 파일"
+        try:
+            raw.decode("utf-8")
+            return False, "이미 UTF-8"
+        except UnicodeDecodeError:
+            pass
+
+        # chardet 라벨은 TEXT_ENCODINGS에 있는 것만 받아들인다. windows-1252 같은
+        # 단일바이트 인코딩은 어떤 바이트열이든 디코딩되고 왕복도 무조건 통과하므로,
+        # 후보로 허용하면 한글 파일에 mojibake를 영구 기록하게 된다.
+        order = list(Loader.TEXT_ENCODINGS)
+        try:
+            # 전체를 넘기면 1.4MB당 2초가 걸린다(실측). chardet은 후보 순서만 정하고
+            # 모든 후보는 전체 파일 왕복·타당성 검증을 통과해야 하므로 prefix로 충분하다.
+            detected = chardet.detect(raw[: Loader.TEXT_DETECT_PREFIX])
+            enc = (detected.get("encoding") or "") if detected else ""
+            conf = (detected.get("confidence") or 0) if detected else 0
+            allowed = {e.lower(): e for e in Loader.TEXT_ENCODINGS}
+            if enc and conf >= 0.7 and enc.lower() in allowed:
+                pick = allowed[enc.lower()]
+                order = [pick] + [e for e in order if e != pick]
+        except Exception:
+            pass
+
+        # UTF-16 후보는 근거가 있을 때만 시도한다. 길이가 짝수인 바이트열은 utf-16-be/le로
+        # 거의 항상 디코딩되고 왕복까지 통과하므로, 근거 없이 허용하면 단일바이트 텍스트가
+        # CJK 글자 뭉치로 바뀐다. 실제 UTF-16 텍스트는 BOM이 있거나 NUL 바이트가 많다.
+        # 실측: BOM 없는 한글 UTF-16LE는 NUL 비율 0.15, 단일바이트 텍스트는 0.0000.
+        has_bom = raw[:2] in (b"\xff\xfe", b"\xfe\xff")
+        nul_ratio = raw.count(0) / len(raw)
+        if not has_bom and nul_ratio < 0.02:
+            order = [e for e in order if not e.startswith("utf-16")]
+
+        # 상위바이트가 고립되어 나타나면 서양어 단일바이트 인코딩이다. 이때 cp949/euc-kr을
+        # 남겨두면 상위바이트가 뒤따르는 ASCII까지 2바이트 시퀀스로 삼켜 영문자를 파괴한다
+        # (예: 'Don Sabas—a man' → 'Don Sabas뾞 man', 'a' 소실). 그래서 대체가 아니라 교체한다.
+        runs = HIGH_BYTE_RUN_RE.findall(raw)
+        high_total = sum(len(r) for r in runs)
+        if high_total:
+            # 상위바이트가 길이 2 이상 구간에 속하면 '인접'이다(파이썬 루프와 동일한 정의).
+            paired = sum(len(r) for r in runs if len(r) >= 2) / high_total
+            if paired < Loader.TEXT_HIGH_BYTE_PAIRED_MIN:
+                order = [e for e in order if e not in ("cp949", "euc-kr")] + [Loader.TEXT_SINGLE_BYTE_ENCODING]
+
+        for source_enc in order:
+            try:
+                text = raw.decode(source_enc)
+            except (UnicodeDecodeError, UnicodeError, LookupError):
+                continue
+            if "\ufffd" in text:
+                continue
+            # 1. 바이트 왕복 — 무손실·가역 확정
+            try:
+                if text.encode(source_enc) != raw:
+                    continue
+            except (UnicodeEncodeError, LookupError):
+                continue
+            # 2. 타당성 — 왕복은 무손실만 증명하고 인코딩 선택이 옳은지는 증명하지 못한다.
+            #    (BOM 없는 UTF-16은 LE/BE 양쪽이 모두 왕복을 통과한다.)
+            #    실제 글자가 있어야 하고, mojibake로 읽힌 결과여서는 안 된다.
+            if not re.search(r"[\uac00-\ud7a3a-zA-Z0-9\u3400-\u9fff]", text):
+                continue
+            if Loader._count_mojibake_runs(text) >= Loader.PDF_MOJIBAKE_RUN_LIMIT:
+                continue
+            # 텍스트 파일에는 줄바꿈이 있다. 엔디언을 잘못 고른 UTF-16은 \n(0x000A)과
+            # \r(0x000D)이 U+0A00/U+0D00으로 바뀌어 줄바꿈이 하나도 남지 않는다.
+            if len(text) >= 200 and "\n" not in text and "\r" not in text:
+                continue
+            sample = text[: Loader.TEXT_SIZE]
+            if sample and sum(1 for c in sample if "\u0080" <= c <= "\u00ff") / len(sample) > 0.1:
+                continue
+            break
+        else:
+            return False, "무손실 디코딩 가능한 인코딩을 찾지 못함"
+
+        utf8_bytes = text.encode("utf-8")
+        # 3. 글자수·내용 검증 — 새 바이트를 다시 읽었을 때 원본 디코딩 결과와 같아야 한다
+        roundtrip = utf8_bytes.decode("utf-8")
+        if len(roundtrip) != len(text):
+            return False, f"글자수 불일치: {len(text)} → {len(roundtrip)}"
+        if roundtrip != text:
+            return False, "재인코딩 내용 불일치"
+
+        if dry_run:
+            return True, f"{source_enc} → utf-8 ({len(text)}자, {len(raw)}B → {len(utf8_bytes)}B) [dry-run]"
+
+        # 원본 백업. 실패하면 되돌릴 수단이 없으므로 변환을 포기한다.
+        if Loader.reencode_backup_dir is not None:
+            try:
+                prefix = Loader.get_path_prefix(file_path)
+                rel = file_path.relative_to(prefix)
+            except ValueError:
+                rel = Path(file_path.name)
+            backup_path = Loader.reencode_backup_dir / rel
+            try:
+                backup_path.parent.mkdir(parents=True, exist_ok=True)
+                backup_path.write_bytes(raw)
+                if backup_path.read_bytes() != raw:
+                    return False, f"백업 검증 실패: {backup_path}"
+            except OSError as e:
+                return False, f"백업 실패: {e}"
+
+        # 검증된 내용을 먼저 임시 파일에 보존한 뒤, 같은 inode에 덮어쓴다.
+        tmp_path = file_path.with_name(file_path.name + ".utf8.tmp")
+        try:
+            tmp_path.write_bytes(utf8_bytes)
+            with file_path.open("r+b") as outfile:
+                outfile.write(utf8_bytes)
+                outfile.truncate()
+                outfile.flush()
+                os.fsync(outfile.fileno())
+        except OSError as e:
+            return False, f"쓰기 실패: {e}"
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        # 저장된 파일을 실제로 다시 읽어 확인한다(중간 신호가 아니라 산출물로 확인).
+        try:
+            saved = file_path.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            return False, f"저장 후 재읽기 실패: {e}"
+        if len(saved) != len(text) or saved != text:
+            return False, f"저장 후 불일치: {len(text)}자 → {len(saved)}자"
+        return True, f"{source_enc} → utf-8 ({len(text)}자, {len(raw)}B → {len(utf8_bytes)}B)"
 
     @staticmethod
     def read_from_text(file_path: Path) -> tuple[str, int, int, str]:
@@ -138,8 +302,8 @@ class Loader:
         line_count = 0
         data = ""
         raw_content = ""
-        encodings = ["utf-8", "cp949", "euc-kr", "utf-16", "utf-16-le", "utf-16-be", "utf-8-sig"]
-        replace_encodings = ["utf-8", "cp949", "euc-kr", "utf-16", "utf-16-le", "utf-16-be", "utf-8-sig"]
+        encodings = list(Loader.TEXT_ENCODINGS)
+        replace_encodings = list(Loader.TEXT_ENCODINGS)
         last_exception = None
 
         try:
@@ -157,7 +321,9 @@ class Loader:
             try:
                 with file_path.open("r", encoding=enc) as infile:
                     content = infile.read()
-                    if enc in ["cp949", "euc-kr", "utf-16-le", "utf-16-be"] and content:
+                    # utf-16도 포함해야 한다. BOM 없는 단일바이트 파일이 utf-16으로
+                    # 디코딩되면 CJK 글자 뭉치가 되는데, 빠뜨리면 검사 없이 채택된다.
+                    if enc in ["cp949", "euc-kr", "utf-16", "utf-16-le", "utf-16-be"] and content:
                         if not re.search(r"[가-힣a-zA-Z0-9]", content) and not content.isspace():
                             continue
                     raw_content = content
@@ -169,7 +335,7 @@ class Loader:
                 try:
                     with file_path.open("r", encoding=enc, errors="replace") as infile:
                         content = infile.read()
-                        if enc in ["cp949", "euc-kr"] and content:
+                        if enc in ["cp949", "euc-kr", "utf-16", "utf-16-le", "utf-16-be"] and content:
                             if not re.search(r"[가-힣a-zA-Z0-9]", content) and not content.isspace():
                                 continue
                         raw_content = content
@@ -929,6 +1095,15 @@ class Loader:
             isbn_list = []
             raw_content = ""  # TXT 파일용 원본 content
             if file_type == "txt":
+                # --reencode 지정 시, 적재 전에 파일 자체를 UTF-8로 바꿔 둔다.
+                # 검증을 통과하지 못하면 파일에 손대지 않으므로 적재 동작에는 영향이 없다.
+                if Loader.reencode_txt_mode:
+                    changed, reason = Loader.reencode_text_file_to_utf8(file_path, dry_run=Loader.reencode_txt_dry_run)
+                    if changed:
+                        Stat.text_reencoded_count += 1
+                        LOGGER.warning(f"UTF-8 재인코딩: {reason}")
+                    elif reason not in ("이미 UTF-8", "빈 파일"):
+                        LOGGER.warning(f"UTF-8 재인코딩 건너뜀: {reason}")
                 summary, line_count, page_count, raw_content = Loader.read_from_text(file_path)
             elif file_type == "epub":
                 summary, line_count, page_count = Loader.read_from_epub(file_path)
@@ -1035,11 +1210,17 @@ class Loader:
 
 
 def print_usage(program_name: str):
-    print(f"Usage:\t{program_name}\t[ --delete ] [ --reload ] [ --recursive ] <index_name> [file or directory path ...]")
+    print(f"Usage:\t{program_name}\t[ --delete ] [ --reload ] [ --recursive ] [ --reencode | --reencode-dry-run ] <index_name> [file or directory path ...]")
     print("\t\tindex_name: book | comics")
     print("\t\t--delete: delete index and exit (no file path required)")
     print("\t\t--reload: force reload even if file already exists in ES")
     print("\t\t--recursive: scan subdirectories recursively")
+    print("\t\t--reencode: rewrite non-UTF-8 txt files as UTF-8 in place (verified; skipped if any check fails)")
+    print("\t\t--reencode-dry-run: report what --reencode would change without writing")
+    print("\t\t--reencode-backup-dir=DIR: copy each original under DIR before overwriting")
+    print("\t\t        (a file is left untouched if its backup cannot be written and verified)")
+    print("\t\t  Note: needs --reload (or an explicit file path). Files already in ES are otherwise skipped")
+    print("\t\t        without being parsed, so re-encoding would never run for them.")
     print()
     print("\t\tNote: When a file (not directory) is specified, it will be force-reloaded automatically.")
     print("\t\tNote: --recursive --reload also deletes ES records under the path whose files no longer exist (orphans).")
@@ -1054,14 +1235,21 @@ def main() -> int:
     do_recursive = False
     args: list[str] = []
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "", ["delete", "reload", "recursive"])
-        for opt, _ in opts:
+        opts, args = getopt.getopt(sys.argv[1:], "", ["delete", "reload", "recursive", "reencode", "reencode-dry-run", "reencode-backup-dir="])
+        for opt, optarg in opts:
             if opt == "--delete":
                 do_delete = True
             elif opt == "--reload":
                 do_reload = True
             elif opt == "--recursive":
                 do_recursive = True
+            elif opt == "--reencode":
+                Loader.reencode_txt_mode = True
+            elif opt == "--reencode-dry-run":
+                Loader.reencode_txt_mode = True
+                Loader.reencode_txt_dry_run = True
+            elif opt == "--reencode-backup-dir":
+                Loader.reencode_backup_dir = Path(optarg)
     except getopt.GetoptError as e:
         LOGGER.error(e)
         print_usage(sys.argv[0])
