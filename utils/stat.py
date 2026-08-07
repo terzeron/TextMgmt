@@ -4,6 +4,7 @@
 class Stat:
     text_count = 0
     text_total_time = 0.0
+    text_reencoded_count = 0
     normal_epub_count = 0
     normal_epub_total_time = 0.0
     zipped_epub_count = 0
@@ -33,6 +34,8 @@ class Stat:
     def print(cls) -> None:
         print("[Stat]")
         print("text:    %07d / %03.4f" % (cls.text_count, cls._divide(cls.text_total_time, cls.text_count)))
+        if cls.text_reencoded_count:
+            print("  └ UTF-8 재인코딩: %d건" % cls.text_reencoded_count)
         print("epub:    %07d / %03.4f" % (cls.normal_epub_count, cls._divide(cls.normal_epub_total_time, cls.normal_epub_count)))
         print("epub(z): %07d / %03.4f" % (cls.zipped_epub_count, cls._divide(cls.zipped_epub_total_time, cls.zipped_epub_count)))
         print("pdf:     %07d / %03.4f" % (cls.pdf_count, cls._divide(cls.pdf_total_time, cls.pdf_count)))
