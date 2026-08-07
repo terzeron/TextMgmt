@@ -3,28 +3,43 @@
  */
 
 /**
+ * 카테고리의 다음 페이지를 불러오기 위한 합성 트리 노드 식별자.
+ * 실제 책이 아니므로 이전/다음 이동 대상에서 제외한다.
+ */
+export const MORE_ENTRY_FILE_TYPE = "more";
+export const MORE_ENTRY_SUFFIX = "/__more__";
+
+/** 트리 children 중 실제 책 항목만 남긴다 (하위 폴더와 '더 보기' 노드 제외). */
+function onlyBookEntries(children) {
+  return children.filter(
+    (item) =>
+      item.fileType !== "folder" && item.fileType !== MORE_ENTRY_FILE_TYPE,
+  );
+}
+
+/**
  * 카테고리 문자열 배열에서 공통 prefix를 찾는다.
  * @param {string[]} strings - 카테고리 문자열 배열
  * @returns {string} 공통 prefix (슬래시 포함)
  */
 export function findCommonPrefix(strings) {
-    if (!strings || strings.length === 0) return '';
-    if (strings.length === 1) {
-        const parts = strings[0].split('/');
-        return parts.length > 1 ? parts.slice(0, -1).join('/') + '/' : '';
+  if (!strings || strings.length === 0) return "";
+  if (strings.length === 1) {
+    const parts = strings[0].split("/");
+    return parts.length > 1 ? parts.slice(0, -1).join("/") + "/" : "";
+  }
+  const parts = strings.map((s) => s.split("/"));
+  const minLen = Math.min(...parts.map((p) => p.length));
+  let commonParts = [];
+  for (let i = 0; i < minLen - 1; i++) {
+    const part = parts[0][i];
+    if (parts.every((p) => p[i] === part)) {
+      commonParts.push(part);
+    } else {
+      break;
     }
-    const parts = strings.map(s => s.split('/'));
-    const minLen = Math.min(...parts.map(p => p.length));
-    let commonParts = [];
-    for (let i = 0; i < minLen - 1; i++) {
-        const part = parts[0][i];
-        if (parts.every(p => p[i] === part)) {
-            commonParts.push(part);
-        } else {
-            break;
-        }
-    }
-    return commonParts.length > 0 ? commonParts.join('/') + '/' : '';
+  }
+  return commonParts.length > 0 ? commonParts.join("/") + "/" : "";
 }
 
 /**
@@ -36,87 +51,93 @@ export function findCommonPrefix(strings) {
  * @param {Object} [categoryCounts] - 카테고리별 항목 수 (예: {"_epub": 5, "_pdf": 3})
  * @returns {Array} 트리 구조 배열
  */
-export function buildFolderHierarchy(categories, commonPrefix, categoryCounts = {}) {
-    const groups = new Map(); // parentName -> { categoryIds: [], hasParentCategory: false }
+export function buildFolderHierarchy(
+  categories,
+  commonPrefix,
+  categoryCounts = {},
+) {
+  const groups = new Map(); // parentName -> { categoryIds: [], hasParentCategory: false }
 
-    for (const category of categories) {
-        const stripped = commonPrefix ? category.replace(commonPrefix, '') : category;
-        const slashIndex = stripped.indexOf('/');
+  for (const category of categories) {
+    const stripped = commonPrefix
+      ? category.replace(commonPrefix, "")
+      : category;
+    const slashIndex = stripped.indexOf("/");
 
-        if (slashIndex === -1) {
-            // 슬래시 없음 → 1 depth 항목
-            const parentName = stripped;
-            if (!groups.has(parentName)) {
-                groups.set(parentName, { categoryIds: [], hasParentCategory: false });
-            }
-            groups.get(parentName).hasParentCategory = true;
-            groups.get(parentName).parentCategoryId = category;
-        } else {
-            // 슬래시 있음 → 2 depth 항목 (부모/자식)
-            const parentName = stripped.substring(0, slashIndex);
-            if (!groups.has(parentName)) {
-                groups.set(parentName, { categoryIds: [], hasParentCategory: false });
-            }
-            groups.get(parentName).categoryIds.push(category);
-        }
+    if (slashIndex === -1) {
+      // 슬래시 없음 → 1 depth 항목
+      const parentName = stripped;
+      if (!groups.has(parentName)) {
+        groups.set(parentName, { categoryIds: [], hasParentCategory: false });
+      }
+      groups.get(parentName).hasParentCategory = true;
+      groups.get(parentName).parentCategoryId = category;
+    } else {
+      // 슬래시 있음 → 2 depth 항목 (부모/자식)
+      const parentName = stripped.substring(0, slashIndex);
+      if (!groups.has(parentName)) {
+        groups.set(parentName, { categoryIds: [], hasParentCategory: false });
+      }
+      groups.get(parentName).categoryIds.push(category);
     }
+  }
 
-    const result = [];
+  const result = [];
 
-    for (const [parentName, group] of groups) {
-        if (group.categoryIds.length === 0) {
-            // 자식 없음 → 일반 1 depth 폴더
-            result.push({
-                id: group.parentCategoryId,
-                label: parentName,
-                fileType: 'folder',
-                booksLoaded: false,
-                count: categoryCounts[group.parentCategoryId] || 0,
-            });
-        } else {
-            // 자식이 있는 경우
-            const children = group.categoryIds.map(catId => {
-                const stripped = commonPrefix ? catId.replace(commonPrefix, '') : catId;
-                const childName = stripped.substring(stripped.indexOf('/') + 1);
-                return {
-                    id: catId,
-                    label: childName,
-                    fileType: 'folder',
-                    booksLoaded: false,
-                    count: categoryCounts[catId] || 0,
-                };
-            });
+  for (const [parentName, group] of groups) {
+    if (group.categoryIds.length === 0) {
+      // 자식 없음 → 일반 1 depth 폴더
+      result.push({
+        id: group.parentCategoryId,
+        label: parentName,
+        fileType: "folder",
+        booksLoaded: false,
+        count: categoryCounts[group.parentCategoryId] || 0,
+      });
+    } else {
+      // 자식이 있는 경우
+      const children = group.categoryIds.map((catId) => {
+        const stripped = commonPrefix ? catId.replace(commonPrefix, "") : catId;
+        const childName = stripped.substring(stripped.indexOf("/") + 1);
+        return {
+          id: catId,
+          label: childName,
+          fileType: "folder",
+          booksLoaded: false,
+          count: categoryCounts[catId] || 0,
+        };
+      });
 
-            const childrenTotal = children.reduce((sum, c) => sum + c.count, 0);
+      const childrenTotal = children.reduce((sum, c) => sum + c.count, 0);
 
-            if (group.hasParentCategory) {
-                // 부모 카테고리도 존재 → 실제 부모 폴더
-                const ownCount = categoryCounts[group.parentCategoryId] || 0;
-                result.push({
-                    id: group.parentCategoryId,
-                    label: parentName,
-                    fileType: 'folder',
-                    isVirtualParent: false,
-                    booksLoaded: false,
-                    count: ownCount + childrenTotal,
-                    children: children,
-                });
-            } else {
-                // 부모 카테고리 없음 → 가상 부모 폴더
-                result.push({
-                    id: '__virtual__' + parentName,
-                    label: parentName,
-                    fileType: 'folder',
-                    isVirtualParent: true,
-                    booksLoaded: false,
-                    count: childrenTotal,
-                    children: children,
-                });
-            }
-        }
+      if (group.hasParentCategory) {
+        // 부모 카테고리도 존재 → 실제 부모 폴더
+        const ownCount = categoryCounts[group.parentCategoryId] || 0;
+        result.push({
+          id: group.parentCategoryId,
+          label: parentName,
+          fileType: "folder",
+          isVirtualParent: false,
+          booksLoaded: false,
+          count: ownCount + childrenTotal,
+          children: children,
+        });
+      } else {
+        // 부모 카테고리 없음 → 가상 부모 폴더
+        result.push({
+          id: "__virtual__" + parentName,
+          label: parentName,
+          fileType: "folder",
+          isVirtualParent: true,
+          booksLoaded: false,
+          count: childrenTotal,
+          children: children,
+        });
+      }
     }
+  }
 
-    return result;
+  return result;
 }
 
 /**
@@ -128,25 +149,25 @@ export function buildFolderHierarchy(categories, commonPrefix, categoryCounts = 
  * @returns {{ category: string, bookId: string } | null}
  */
 export function parseEntryId(entryId) {
-    if (!entryId) return null;
+  if (!entryId) return null;
 
-    // root file 처리 (id가 '/'로 시작)
-    if (entryId.startsWith('/')) {
-        return { category: '_root', bookId: entryId.substring(1) };
-    }
+  // root file 처리 (id가 '/'로 시작)
+  if (entryId.startsWith("/")) {
+    return { category: "_root", bookId: entryId.substring(1) };
+  }
 
-    const lastSlashIndex = entryId.lastIndexOf('/');
-    if (lastSlashIndex === -1) return null;
+  const lastSlashIndex = entryId.lastIndexOf("/");
+  if (lastSlashIndex === -1) return null;
 
-    const possibleBookId = entryId.substring(lastSlashIndex + 1);
-    const possibleCategory = entryId.substring(0, lastSlashIndex);
+  const possibleBookId = entryId.substring(lastSlashIndex + 1);
+  const possibleCategory = entryId.substring(0, lastSlashIndex);
 
-    // bookId가 숫자인지 확인
-    if (/^\d+$/.test(possibleBookId)) {
-        return { category: possibleCategory, bookId: possibleBookId };
-    }
+  // bookId가 숫자인지 확인
+  if (/^\d+$/.test(possibleBookId)) {
+    return { category: possibleCategory, bookId: possibleBookId };
+  }
 
-    return null;
+  return null;
 }
 
 /**
@@ -158,15 +179,15 @@ export function parseEntryId(entryId) {
  * @returns {object|null} 찾은 폴더 객체 또는 null
  */
 export function findFolderInTree(folderData, categoryId) {
-    for (const item of folderData) {
-        if (item.id === categoryId) return item;
-        if (item.children) {
-            for (const child of item.children) {
-                if (child.id === categoryId) return child;
-            }
-        }
+  for (const item of folderData) {
+    if (item.id === categoryId) return item;
+    if (item.children) {
+      for (const child of item.children) {
+        if (child.id === categoryId) return child;
+      }
     }
-    return null;
+  }
+  return null;
 }
 
 /**
@@ -178,20 +199,20 @@ export function findFolderInTree(folderData, categoryId) {
  * @returns {Array} 새 folderData
  */
 export function updateFolderInTree(folderData, categoryId, updater) {
-    return folderData.map(item => {
-        if (item.id === categoryId) {
-            return updater(item);
-        }
-        if (item.children) {
-            const childIndex = item.children.findIndex(c => c.id === categoryId);
-            if (childIndex !== -1) {
-                const newChildren = [...item.children];
-                newChildren[childIndex] = updater(newChildren[childIndex]);
-                return { ...item, children: newChildren };
-            }
-        }
-        return item;
-    });
+  return folderData.map((item) => {
+    if (item.id === categoryId) {
+      return updater(item);
+    }
+    if (item.children) {
+      const childIndex = item.children.findIndex((c) => c.id === categoryId);
+      if (childIndex !== -1) {
+        const newChildren = [...item.children];
+        newChildren[childIndex] = updater(newChildren[childIndex]);
+        return { ...item, children: newChildren };
+      }
+    }
+    return item;
+  });
 }
 
 /**
@@ -203,10 +224,10 @@ export function updateFolderInTree(folderData, categoryId, updater) {
  * @returns {Array} 새 folderData
  */
 export function updateFolderChildren(folderData, categoryId, updater) {
-    return updateFolderInTree(folderData, categoryId, (item) => ({
-        ...item,
-        children: updater(item.children || []),
-    }));
+  return updateFolderInTree(folderData, categoryId, (item) => ({
+    ...item,
+    children: updater(item.children || []),
+  }));
 }
 
 /**
@@ -218,31 +239,33 @@ export function updateFolderChildren(folderData, categoryId, updater) {
  * @returns {string|null} 다음 항목 ID 또는 null
  */
 export function determineNextEntryId(folderData, selectedEntryId) {
-    // root file 처리 (id가 '/'로 시작하는 경우, 예: '/917518')
-    if (selectedEntryId.startsWith('/')) {
-        const rootFiles = folderData.filter(item => item.fileType !== 'folder');
-        const index = rootFiles.findIndex(item => item.id === selectedEntryId);
-        if (index >= 0 && index < rootFiles.length - 1) {
-            return rootFiles[index + 1].id;
-        }
-        return null;
-    }
-
-    // 폴더 내 파일 처리 - parseEntryId로 카테고리/bookId 분리
-    const parsed = parseEntryId(selectedEntryId);
-    if (parsed && parsed.bookId) {
-        const folder = findFolderInTree(folderData, parsed.category);
-        const children = folder?.children;
-        if (children) {
-            // children 중 책만 필터 (하위 폴더 제외)
-            const bookChildren = children.filter(item => item.fileType !== 'folder');
-            const index = bookChildren.findIndex(item => item.id === selectedEntryId);
-            if (0 <= index && index < (bookChildren.length - 1)) {
-                return bookChildren[index + 1].id;
-            }
-        }
+  // root file 처리 (id가 '/'로 시작하는 경우, 예: '/917518')
+  if (selectedEntryId.startsWith("/")) {
+    const rootFiles = folderData.filter((item) => item.fileType !== "folder");
+    const index = rootFiles.findIndex((item) => item.id === selectedEntryId);
+    if (index >= 0 && index < rootFiles.length - 1) {
+      return rootFiles[index + 1].id;
     }
     return null;
+  }
+
+  // 폴더 내 파일 처리 - parseEntryId로 카테고리/bookId 분리
+  const parsed = parseEntryId(selectedEntryId);
+  if (parsed && parsed.bookId) {
+    const folder = findFolderInTree(folderData, parsed.category);
+    const children = folder?.children;
+    if (children) {
+      // children 중 책만 필터 (하위 폴더 제외)
+      const bookChildren = onlyBookEntries(children);
+      const index = bookChildren.findIndex(
+        (item) => item.id === selectedEntryId,
+      );
+      if (0 <= index && index < bookChildren.length - 1) {
+        return bookChildren[index + 1].id;
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -254,28 +277,30 @@ export function determineNextEntryId(folderData, selectedEntryId) {
  * @returns {string|null} 이전 항목 ID 또는 null
  */
 export function determinePrevEntryId(folderData, selectedEntryId) {
-    // root file 처리
-    if (selectedEntryId.startsWith('/')) {
-        const rootFiles = folderData.filter(item => item.fileType !== 'folder');
-        const index = rootFiles.findIndex(item => item.id === selectedEntryId);
-        if (index > 0) {
-            return rootFiles[index - 1].id;
-        }
-        return null;
-    }
-
-    // 폴더 내 파일 처리
-    const parsed = parseEntryId(selectedEntryId);
-    if (parsed && parsed.bookId) {
-        const folder = findFolderInTree(folderData, parsed.category);
-        const children = folder?.children;
-        if (children) {
-            const bookChildren = children.filter(item => item.fileType !== 'folder');
-            const index = bookChildren.findIndex(item => item.id === selectedEntryId);
-            if (index > 0) {
-                return bookChildren[index - 1].id;
-            }
-        }
+  // root file 처리
+  if (selectedEntryId.startsWith("/")) {
+    const rootFiles = folderData.filter((item) => item.fileType !== "folder");
+    const index = rootFiles.findIndex((item) => item.id === selectedEntryId);
+    if (index > 0) {
+      return rootFiles[index - 1].id;
     }
     return null;
+  }
+
+  // 폴더 내 파일 처리
+  const parsed = parseEntryId(selectedEntryId);
+  if (parsed && parsed.bookId) {
+    const folder = findFolderInTree(folderData, parsed.category);
+    const children = folder?.children;
+    if (children) {
+      const bookChildren = onlyBookEntries(children);
+      const index = bookChildren.findIndex(
+        (item) => item.id === selectedEntryId,
+      );
+      if (index > 0) {
+        return bookChildren[index - 1].id;
+      }
+    }
+  }
+  return null;
 }

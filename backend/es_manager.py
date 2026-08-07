@@ -261,6 +261,34 @@ class ESManager:
 
         return self._search(query, sort=sort, max_result_count=max_result_count)
 
+    # 카테고리 목록의 전순서 정렬. 화면 표시 순서(제목)와 일치시켜야 페이지를
+    # 이어붙여도 순서가 어긋나지 않는다. file_path는 유일하므로 tie-breaker로
+    # 쓰여 search_after 커서가 항상 한 문서를 가리키도록 보장한다.
+    CATEGORY_SORT: list[dict[str, str]] = [{"title.keyword": "asc"}, {"file_path": "asc"}]
+
+    def search_by_category_paged(self, category: str, size: int = 500, search_after: list[Any] | None = None) -> tuple[list[tuple[int, dict[str, Any], float]], int, list[Any] | None]:
+        """카테고리 내 문서를 search_after 커서로 한 페이지 조회한다.
+
+        from/size 페이징은 max_result_window(기본 10000) 때문에 깊은 페이지에서
+        실패하지만, search_after는 깊이 제한이 없어 카테고리 전체를 순회할 수 있다.
+        반환: (문서 목록, 전체 건수, 다음 커서 | None)
+        """
+        LOGGER.debug("search_by_category_paged(category='%s', size=%d, search_after=%s)", category, size, search_after)
+        kwargs: dict[str, Any] = {"index": self.index_name, "query": {"term": {"category": category}}, "sort": self.CATEGORY_SORT, "size": size, "track_total_hits": True}
+        if search_after:
+            kwargs["search_after"] = search_after
+        try:
+            response = self.es.search(**kwargs)
+        except Exception as e:
+            LOGGER.error("search_by_category_paged error: %s", e)
+            return [], 0, None
+        hits = response["hits"]["hits"]
+        total = response["hits"]["total"]["value"]
+        result = [(int(hit["_id"]), hit["_source"], 0.0) for hit in hits]
+        # 마지막 페이지(요청 크기 미만)면 다음 커서를 주지 않는다.
+        next_search_after = hits[-1]["sort"] if len(hits) == size else None
+        return result, total, next_search_after
+
     def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
