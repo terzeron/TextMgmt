@@ -8,8 +8,13 @@ from pathlib import Path
 import pypdf
 from bs4 import BeautifulSoup
 
+from utils.parser_timeout import ParserTimeout, time_limit
+
 # 앞뒤로 읽을 바이트 크기 (8KB)
 HEAD_TAIL_SIZE = 8 * 1024
+# PDF ISBN 추출 상한(초). loader가 본문 추출을 포기한 손상 PDF도 여기서 다시 파싱되므로
+# 상한이 없으면 read_file 전체가 그대로 멈춘다.
+PDF_ISBN_TIMEOUT = 30
 
 
 def read_head_tail_from_file(file_path: Path, size: int = HEAD_TAIL_SIZE) -> str:
@@ -44,7 +49,7 @@ def validate_isbn10(isbn: str) -> bool:
     if isbn in ("1111111111", "1100101101"):
         return False
 
-    if len(isbn) != 10 or not all(c.isdigit() or c == 'X' for c in isbn):
+    if len(isbn) != 10 or not all(c.isdigit() or c == "X" for c in isbn):
         return False
 
     total = 0
@@ -53,7 +58,7 @@ def validate_isbn10(isbn: str) -> bool:
             return False
         total += int(isbn[i]) * (10 - i)
 
-    check_digit = 10 if isbn[-1] == 'X' else int(isbn[-1])
+    check_digit = 10 if isbn[-1] == "X" else int(isbn[-1])
     total += check_digit
     return total % 11 == 0
 
@@ -77,10 +82,10 @@ def validate_isbn(isbn: str) -> bool:
 
 def search_in_content(content) -> list[str]:
     if isinstance(content, bytes):
-        content = content.decode('utf-8', errors='ignore')
+        content = content.decode("utf-8", errors="ignore")
     # 구분자를 사용하는 패턴과 구분자가 명확하게 없는 패턴
     # 구분자가 존재하면 그룹 숫자간 공백이 존재할 수 있음
-    isbn_pattern = r'''
+    isbn_pattern = r"""
                         (?:[:_]?|\b)
                         (
                             (?:
@@ -111,7 +116,7 @@ def search_in_content(content) -> list[str]:
                             [\-\s─–－‐]{0,3}
                             [\dIOBlsⅩX]
                         )
-                        \b'''
+                        \b"""
 
     result_list: list[str] = []
     for match in re.finditer(isbn_pattern, content, re.VERBOSE):
@@ -122,15 +127,15 @@ def search_in_content(content) -> list[str]:
         result = re.sub(r"Ⅹ", "X", result)
         result = re.sub(r"[^\dX]+", " ", result)
         result = re.sub(r"(^ |[^\dX ])", "", result)
-        m = re.search(r'(?P<isbn>97[89] ?(\d ?){10})\b(?:\d+)?', result)
+        m = re.search(r"(?P<isbn>97[89] ?(\d ?){10})\b(?:\d+)?", result)
         if m:
-            isbn = re.sub(r'[^\dX]', '', m.group("isbn"))
+            isbn = re.sub(r"[^\dX]", "", m.group("isbn"))
             if validate_isbn(isbn):
                 result_list.append(isbn)
         else:
-            m = re.search(r'^(?P<isbn>(8 ?9 ?(\d ?){7}|[01] ?(\d ?){8})[\dX])\b(?:\d)?', result)
+            m = re.search(r"^(?P<isbn>(8 ?9 ?(\d ?){7}|[01] ?(\d ?){8})[\dX])\b(?:\d)?", result)
             if m:
-                isbn = re.sub(r'[^\dX]', '', m.group("isbn"))
+                isbn = re.sub(r"[^\dX]", "", m.group("isbn"))
                 if validate_isbn(isbn):
                     result_list.append(isbn)
     return result_list
@@ -195,10 +200,7 @@ def extract_from_djvu(file_path: Path) -> list[str]:
     """DJVU에서 ISBN 추출: 앞 5페이지 + 뒤 5페이지만 추출"""
     try:
         # 총 페이지 수 확인
-        result = subprocess.run(
-            ["djvused", str(file_path), "-e", "n"],
-            capture_output=True, text=True, errors="ignore"
-        )
+        result = subprocess.run(["djvused", str(file_path), "-e", "n"], capture_output=True, text=True, errors="ignore")
         if result.returncode != 0:
             return []
 
@@ -215,10 +217,7 @@ def extract_from_djvu(file_path: Path) -> list[str]:
 
         content = ""
         for pages in [head_pages, tail_pages]:
-            result = subprocess.run(
-                ["djvutxt", f"--page={pages}", str(file_path)],
-                capture_output=True, text=True, errors="ignore"
-            )
+            result = subprocess.run(["djvutxt", f"--page={pages}", str(file_path)], capture_output=True, text=True, errors="ignore")
             if result.returncode == 0:
                 content += result.stdout
 
@@ -232,10 +231,7 @@ def extract_from_hwp(file_path: Path) -> list[str]:
     """HWP에서 ISBN 추출: head + tail로 앞뒤만 추출"""
     size = HEAD_TAIL_SIZE
     try:
-        result = subprocess.run(
-            ["strings", str(file_path)],
-            capture_output=True, text=True, errors="ignore"
-        )
+        result = subprocess.run(["strings", str(file_path)], capture_output=True, text=True, errors="ignore")
         if result.returncode != 0:
             return []
         text = result.stdout
@@ -265,7 +261,9 @@ def extract(file_path: Path, content: str | None = None) -> list[str]:
     elif ext == ".pdf":
         content = ""
         try:
-            with file_path.open("rb") as f:
+            # 손상 PDF는 pypdf 안에서 무한히 돌 수 있어 벽시계 상한이 필요하다.
+            # ParserTimeout은 BaseException이라 아래 `except Exception`에 잡히지 않는다.
+            with time_limit(PDF_ISBN_TIMEOUT, "isbn/pypdf"), file_path.open("rb") as f:
                 reader = pypdf.PdfReader(f)
                 total_pages = len(reader.pages)
                 # 앞 5페이지 추출
@@ -278,6 +276,9 @@ def extract(file_path: Path, content: str | None = None) -> list[str]:
                     text = reader.pages[i].extract_text()
                     if text:
                         content += text
+        except ParserTimeout:
+            # 여기까지 온 파일은 본문 추출도 실패했을 가능성이 높다. ISBN만 포기한다.
+            return []
         except Exception:
             pass
         if content:

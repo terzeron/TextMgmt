@@ -1407,6 +1407,428 @@ class TestPdfMojibakeDetection:
         assert page_count == 7
 
 
+class TestPdfParserTimeout:
+    """손상 PDF가 파서 안에서 무한히 도는 것을 막는 벽시계 상한.
+
+    실제 사고: 손상 PDF 1건이 pdfminer 안에서 13시간 동안 100% CPU를 점유했다.
+    읽기 syscall은 완전히 멈춘 채 메모리에서만 돌기 때문에 페이지 루프 검사로는
+    빠져나올 수 없어 SIGALRM으로 덮는다.
+    """
+
+    @staticmethod
+    def _spin(_path):
+        """SIGALRM으로만 벗어날 수 있는 순수 파이썬 무한 루프."""
+        while True:
+            pass
+
+    def test_time_limit_interrupts_infinite_loop(self):
+        import pytest
+
+        from utils.parser_timeout import ParserTimeout, time_limit
+
+        with pytest.raises(ParserTimeout):
+            with time_limit(0.3, "테스트"):
+                while True:
+                    pass
+
+    def test_time_limit_restores_previous_handler_and_disarms(self):
+        """블록을 벗어나면 이전 핸들러와 타이머를 원상복구해야 한다."""
+        import signal
+
+        from utils.parser_timeout import time_limit
+
+        before = signal.getsignal(signal.SIGALRM)
+        with time_limit(30, "테스트"):
+            pass
+        assert signal.getsignal(signal.SIGALRM) is before
+        # 타이머가 해제되어 남은 시간이 0이어야 한다 (뒤늦게 터지면 무관한 코드가 죽는다)
+        assert signal.getitimer(signal.ITIMER_REAL)[0] == 0
+
+    def test_time_limit_is_noop_in_worker_thread(self):
+        """워커 스레드에서는 signal을 설치할 수 없으므로 그대로 실행해야 한다."""
+        import threading
+
+        from utils.parser_timeout import time_limit
+
+        outcome: list[str] = []
+
+        def run():
+            try:
+                with time_limit(0.1, "테스트"):
+                    outcome.append("ran")
+            except Exception as e:  # ValueError: signal only works in main thread
+                outcome.append(f"raised:{type(e).__name__}")
+
+        t = threading.Thread(target=run)
+        t.start()
+        t.join(timeout=10)
+        assert outcome == ["ran"], outcome
+
+    def test_hung_stage_falls_through_to_next_parser(self, tmp_path: Path, monkeypatch):
+        """한 파서가 멈춰도 타임아웃 후 다음 파서로 넘어가 결과를 얻어야 한다."""
+        Loader = _get_loader()
+        pdf = tmp_path / "hang.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        monkeypatch.setattr(Loader, "PDF_STAGE_TIMEOUT", 1)
+        monkeypatch.setattr(Loader, "_pdf_text_by_pypdfium2", staticmethod(self._spin))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdftotext", staticmethod(lambda p: ("정상적으로 추출된 본문입니다", 5)))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdfplumber", staticmethod(lambda p: ("", 0)))
+
+        summary, _line_count, page_count = Loader.read_from_pdf(pdf)
+        assert "정상적으로" in summary
+        assert page_count == 5
+
+    def test_timeout_is_reported_as_error(self, tmp_path: Path, monkeypatch, caplog):
+        """타임아웃은 조용히 넘어가지 않고 에러로 표시되어야 한다."""
+        import logging
+
+        Loader = _get_loader()
+        pdf = tmp_path / "hang_all.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        monkeypatch.setattr(Loader, "PDF_STAGE_TIMEOUT", 1)
+        for name in ("_pdf_text_by_pypdfium2", "_pdf_text_by_pdftotext", "_pdf_text_by_pdfplumber"):
+            monkeypatch.setattr(Loader, name, staticmethod(self._spin))
+
+        with caplog.at_level(logging.ERROR):
+            summary, _line_count, _page_count = Loader.read_from_pdf(pdf)
+
+        assert not summary.strip()
+        messages = "\n".join(r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR)
+        assert "타임아웃" in messages, messages
+        # 세 단계 모두 타임아웃했음이 드러나야 한다
+        assert "모든 파서가 타임아웃" in messages, messages
+
+    def test_pdfplumber_leaves_no_open_handle_on_timeout(self, tmp_path: Path, monkeypatch):
+        """타임아웃이 열기 도중에 터져도 fd가 GC까지 남으면 안 된다."""
+        import glob
+        import os
+
+        import pytest
+
+        Loader = _get_loader()
+        pdf = tmp_path / "leak.pdf"
+        pdf.write_bytes(b"%PDF-1.4 not really a pdf")
+
+        def open_pdf_fds() -> list[str]:
+            found = []
+            for p in glob.glob("/proc/self/fd/*"):
+                try:
+                    target = os.readlink(p)
+                except OSError:
+                    continue
+                if target.endswith("leak.pdf"):
+                    found.append(target)
+            return found
+
+        assert open_pdf_fds() == []
+
+        import pdfplumber
+
+        def hang_on_open(_fp, **_kwargs):
+            while True:
+                pass
+
+        monkeypatch.setattr(pdfplumber, "open", hang_on_open)
+
+        from utils.parser_timeout import ParserTimeout, time_limit
+
+        with pytest.raises(ParserTimeout):
+            with time_limit(0.5, "테스트"):
+                Loader._pdf_text_by_pdfplumber(pdf)
+
+        assert open_pdf_fds() == [], "타임아웃 후 파일 핸들이 남아 있음"
+
+    def test_pypdfium2_leaves_no_open_handle_when_load_fails(self, tmp_path: Path):
+        """문서 로드 실패 시 pdfium이 쥔 fd가 남으면 안 된다.
+
+        경로를 넘기면 로드 실패한 fd가 닫히지 않고 GC로도 회수되지 않아,
+        손상 PDF를 만날 때마다 fd가 1개씩 영구 누적됐다(실측).
+        """
+        import gc
+        import glob
+        import os
+
+        Loader = _get_loader()
+        pdf = tmp_path / "broken_pypdfium.pdf"
+        # 헤더는 PDF지만 본문이 없어 pdfium이 문서 로드에 실패한다
+        pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+        def open_pdf_fds() -> list[str]:
+            found = []
+            for p in glob.glob("/proc/self/fd/*"):
+                try:
+                    target = os.readlink(p)
+                except OSError:
+                    continue
+                if target.endswith("broken_pypdfium.pdf"):
+                    found.append(target)
+            return found
+
+        assert open_pdf_fds() == []
+
+        try:
+            Loader._pdf_text_by_pypdfium2(pdf)
+        except Exception:
+            pass
+
+        # GC에 기대지 않고 즉시 닫혀 있어야 한다
+        assert open_pdf_fds() == [], "문서 로드 실패 후 fd가 남아 있음"
+        gc.collect()
+        assert open_pdf_fds() == []
+
+
+class TestFileTypeDetection:
+    """확장자가 아닌 매직바이트로 실제 포맷을 판별한다.
+
+    실측: 21,150건 중 EPUB 5건이 .pdf 확장자를 달고 있어 PDF 파서로 가 전부 실패했다.
+    """
+
+    @staticmethod
+    def _write_epub(path: Path, body: str = "테스트 내용입니다") -> None:
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr("META-INF/container.xml", '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>')
+            zf.writestr("content.opf", '<package><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>')
+            zf.writestr("ch1.xhtml", f"<html><body><p>{body}</p></body></html>")
+
+    def test_detects_pdf_by_magic_bytes(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "mislabeled.txt"
+        f.write_bytes(b"%PDF-1.6\r%\xe2\xe3\xcf\xd3\r\n")
+        assert Loader.detect_file_type(f, "txt") == "pdf"
+
+    def test_detects_epub_inside_pdf_extension(self, tmp_path: Path):
+        """실제 사고 케이스: EPUB이 .pdf 확장자를 달고 있음."""
+        Loader = _get_loader()
+        f = tmp_path / "actually_epub.pdf"
+        self._write_epub(f)
+        assert Loader.detect_file_type(f, "pdf") == "epub"
+
+    def test_zip_based_extension_is_not_inspected_deeper(self, tmp_path: Path, monkeypatch):
+        """정상 epub/cbz/docx는 내용물을 열지 않아야 한다 (비용 0 유지)."""
+        Loader = _get_loader()
+        f = tmp_path / "normal.epub"
+        self._write_epub(f)
+
+        called: list[str] = []
+        monkeypatch.setattr(Loader, "_zip_container_type", staticmethod(lambda p: called.append("inspect") or "epub"))
+        assert Loader.detect_file_type(f, "epub") == "epub"
+        assert called == [], "zip 기반 확장자인데 내용물을 열어봄"
+
+    def test_returns_none_for_unknown_magic(self, tmp_path: Path):
+        Loader = _get_loader()
+        f = tmp_path / "plain.txt"
+        f.write_text("그냥 텍스트 파일입니다", encoding="utf-8")
+        assert Loader.detect_file_type(f, "txt") is None
+
+    def test_missing_file_returns_none(self, tmp_path: Path):
+        Loader = _get_loader()
+        assert Loader.detect_file_type(tmp_path / "없는파일.pdf", "pdf") is None
+
+    def test_detects_cbz_and_docx_containers(self, tmp_path: Path):
+        Loader = _get_loader()
+        cbz = tmp_path / "comic.pdf"
+        with zipfile.ZipFile(cbz, "w") as zf:
+            zf.writestr("001.jpg", b"\xff\xd8\xff\xe0fake")
+            zf.writestr("002.png", b"\x89PNGfake")
+        assert Loader.detect_file_type(cbz, "pdf") == "cbz"
+
+        docx = tmp_path / "doc.pdf"
+        with zipfile.ZipFile(docx, "w") as zf:
+            zf.writestr("word/document.xml", "<w:document/>")
+        assert Loader.detect_file_type(docx, "pdf") == "docx"
+
+    def test_read_file_uses_detected_type(self, tmp_path: Path, monkeypatch):
+        """.pdf 확장자의 EPUB이 EPUB 파서로 가고, ES에도 epub으로 기록되어야 한다."""
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "path_prefix", tmp_path)
+        f = tmp_path / "[조지 오웰] 1984년.pdf"
+        self._write_epub(f, body="빅 브라더가 당신을 보고 있다")
+
+        data = Loader.read_file(f)
+        assert data, "적재되지 않음"
+        record = next(iter(data.values()))
+        assert record["file_type"] == "epub", record["file_type"]
+        assert "빅 브라더" in record["summary"]
+
+    def test_normal_pdf_is_unaffected(self, tmp_path: Path, monkeypatch):
+        """정상 PDF는 감지 로직이 끼어들어도 그대로 pdf로 처리되어야 한다."""
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "path_prefix", tmp_path)
+        f = tmp_path / "normal.pdf"
+        f.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        monkeypatch.setattr(Loader, "_pdf_text_by_pypdfium2", staticmethod(lambda p: ("정상 본문입니다", 10)))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdftotext", staticmethod(lambda p: ("", 0)))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdfplumber", staticmethod(lambda p: ("", 0)))
+
+        data = Loader.read_file(f)
+        record = next(iter(data.values()))
+        assert record["file_type"] == "pdf"
+        assert "정상" in record["summary"]
+
+
+class TestPdfStructureRepair:
+    """xref/page tree가 깨진 PDF를 pikepdf로 재구성한 뒤 다시 추출하는 폴백.
+
+    실측: 9MB 손상본이 기존 3단계 파서로는 빈 문서였는데, 복구 후 470쪽/4096자를 얻었다.
+    반대로 객체 자체가 소실된 파일은 복구되지 않고 에러로 보고되어야 한다.
+    """
+
+    @staticmethod
+    def _all_stages_fail(monkeypatch, Loader):
+        """3단계 파서가 모두 문서를 열지 못한 상태(구조 손상)를 만든다."""
+        for name in ("_pdf_text_by_pypdfium2", "_pdf_text_by_pdftotext", "_pdf_text_by_pdfplumber"):
+            monkeypatch.setattr(Loader, name, staticmethod(lambda p: ("", 0)))
+
+    def test_repair_recovers_text_when_all_parsers_fail(self, tmp_path: Path, monkeypatch):
+        Loader = _get_loader()
+        pdf = tmp_path / "broken_xref.pdf"
+        pdf.write_bytes(b"%PDF-1.6 mock")
+
+        self._all_stages_fail(monkeypatch, Loader)
+        monkeypatch.setattr(Loader, "_pdf_text_by_pikepdf_repair", staticmethod(lambda p: ("복구된 본문입니다. 충분히 긴 한국어 텍스트.", 470)))
+
+        summary, _line_count, page_count = Loader.read_from_pdf(pdf)
+        assert "복구된" in summary
+        assert page_count == 470
+
+    def test_repair_is_skipped_when_text_already_extracted(self, tmp_path: Path, monkeypatch):
+        """mojibake는 구조 손상이 아니므로 복구 비용을 쓰면 안 된다."""
+        Loader = _get_loader()
+        pdf = tmp_path / "mojibake.pdf"
+        pdf.write_bytes(b"%PDF-1.6 mock")
+
+        damaged = "".join(f" {w.encode('euc-kr').decode('latin-1')} 본문 " for w in ("즐기는", "들어서", "필요한", "함께"))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pypdfium2", staticmethod(lambda p: (damaged, 12)))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdftotext", staticmethod(lambda p: ("", 0)))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdfplumber", staticmethod(lambda p: ("", 0)))
+
+        called: list[str] = []
+        monkeypatch.setattr(Loader, "_pdf_text_by_pikepdf_repair", staticmethod(lambda p: called.append("repair") or ("", 0)))
+
+        Loader.read_from_pdf(pdf)
+        assert called == [], "텍스트가 이미 나왔는데 복구를 시도함"
+
+    def test_repair_is_skipped_for_scanned_pdf(self, tmp_path: Path, monkeypatch):
+        """스캔본(문서는 열리는데 텍스트 레이어 없음)은 복구 대상이 아니다."""
+        Loader = _get_loader()
+        pdf = tmp_path / "scanned.pdf"
+        pdf.write_bytes(b"%PDF-1.6 mock")
+
+        monkeypatch.setattr(Loader, "_pdf_text_by_pypdfium2", staticmethod(lambda p: ("", 300)))
+        called: list[str] = []
+        monkeypatch.setattr(Loader, "_pdf_text_by_pikepdf_repair", staticmethod(lambda p: called.append("repair") or ("", 0)))
+
+        _summary, _line_count, page_count = Loader.read_from_pdf(pdf)
+        assert called == [], "스캔본에 복구를 시도함"
+        assert page_count == 300
+
+    def test_unrecoverable_file_is_reported_as_error(self, tmp_path: Path, monkeypatch, caplog):
+        """객체가 소실된 파일은 복구 실패가 에러로 드러나야 한다."""
+        import logging
+
+        Loader = _get_loader()
+        pdf = tmp_path / "unrecoverable.pdf"
+        pdf.write_bytes(b"%PDF-1.6 mock")
+
+        self._all_stages_fail(monkeypatch, Loader)
+
+        def boom(_p):
+            raise RuntimeError("unable to find /Root dictionary")
+
+        monkeypatch.setattr(Loader, "_pdf_text_by_pikepdf_repair", staticmethod(boom))
+
+        with caplog.at_level(logging.ERROR):
+            summary, _line_count, _page_count = Loader.read_from_pdf(pdf)
+
+        assert not summary.strip()
+        messages = "\n".join(r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR)
+        assert "구조 복구 실패" in messages, messages
+
+    def test_repair_timeout_is_reported(self, tmp_path: Path, monkeypatch, caplog):
+        """복구 단계도 무한히 돌면 안 된다."""
+        import logging
+
+        Loader = _get_loader()
+        pdf = tmp_path / "hang_repair.pdf"
+        pdf.write_bytes(b"%PDF-1.6 mock")
+
+        self._all_stages_fail(monkeypatch, Loader)
+        monkeypatch.setattr(Loader, "PDF_STAGE_TIMEOUT", 1)
+
+        def spin(_p):
+            while True:
+                pass
+
+        monkeypatch.setattr(Loader, "_pdf_text_by_pikepdf_repair", staticmethod(spin))
+
+        with caplog.at_level(logging.ERROR):
+            Loader.read_from_pdf(pdf)
+
+        messages = "\n".join(r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR)
+        assert "구조 복구 타임아웃" in messages, messages
+
+    def test_repair_reads_through_owned_handle(self, tmp_path: Path):
+        """복구 경로도 fd를 남기면 안 된다 (손상 파일이라 실패해도 마찬가지)."""
+        import glob
+        import os
+
+        Loader = _get_loader()
+        pdf = tmp_path / "repair_fd.pdf"
+        pdf.write_bytes(b"%PDF-1.6\n%%EOF\n")
+
+        def open_pdf_fds() -> list[str]:
+            found = []
+            for p in glob.glob("/proc/self/fd/*"):
+                try:
+                    target = os.readlink(p)
+                except OSError:
+                    continue
+                if target.endswith("repair_fd.pdf"):
+                    found.append(target)
+            return found
+
+        assert open_pdf_fds() == []
+        try:
+            Loader._pdf_text_by_pikepdf_repair(pdf)
+        except Exception:
+            pass
+        assert open_pdf_fds() == [], "복구 시도 후 fd가 남아 있음"
+
+
+class TestIsbnPdfTimeout:
+    def test_isbn_pdf_extraction_has_time_limit(self, tmp_path: Path, monkeypatch):
+        """ISBN 추출도 손상 PDF에서 무한히 돌면 안 된다.
+
+        read_from_pdf가 포기한 파일도 read_file 안에서 pypdf로 다시 파싱되므로,
+        여기에 상한이 없으면 파일 1건이 read_file 전체를 멈춰 세운다(실측).
+        """
+        import time
+
+        import pypdf
+
+        from utils import isbn as isbn_mod
+
+        pdf = tmp_path / "hang_isbn.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock")
+
+        def hang(*_args, **_kwargs):
+            while True:
+                pass
+
+        monkeypatch.setattr(isbn_mod, "PDF_ISBN_TIMEOUT", 1)
+        monkeypatch.setattr(pypdf, "PdfReader", hang)
+
+        t0 = time.time()
+        result = isbn_mod.extract(pdf)
+        elapsed = time.time() - t0
+
+        assert result == []
+        assert elapsed < 15, f"상한이 걸리지 않음: {elapsed:.1f}s"
+
+
 class TestReadFromRtf:
     def test_read_valid_rtf(self, tmp_path: Path):
         Loader = _get_loader()
