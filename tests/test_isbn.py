@@ -411,7 +411,83 @@ def test_extract_pdf_with_isbn_text(tmp_path: Path, monkeypatch):
             self.pages = [FakePage()]
 
     import pypdf
+    import pypdfium2
 
+    monkeypatch.setattr(pypdfium2, "PdfDocument", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("pdfium fail")))
     monkeypatch.setattr(pypdf, "PdfReader", FakeReader)
     result = isbn.extract(pdf)
+    assert "9788994492032" in result
+
+
+def test_extract_pdf_uses_pdfium_before_pypdf(tmp_path: Path, monkeypatch):
+    """PDF ISBN 추출은 느린 pypdf 재파싱 전에 pypdfium2를 먼저 사용한다."""
+    pdf = tmp_path / "book.pdf"
+    pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+    class MockTextPage:
+        def __init__(self, idx):
+            self.idx = idx
+
+        def get_text_range(self):
+            return "ISBN 9788994492032" if self.idx == 5 else ""
+
+        def close(self):
+            pass
+
+    class MockPage:
+        def __init__(self, idx):
+            self.idx = idx
+
+        def get_textpage(self):
+            return MockTextPage(self.idx)
+
+        def close(self):
+            pass
+
+    class MockPdfDocument:
+        def __init__(self, _fp):
+            pass
+
+        def __len__(self):
+            return 6
+
+        def __getitem__(self, idx):
+            return MockPage(idx)
+
+        def close(self):
+            pass
+
+    import pypdf
+    import pypdfium2
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", MockPdfDocument)
+    monkeypatch.setattr(pypdf, "PdfReader", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("pypdf fallback should not run")))
+
+    result = isbn.extract(pdf)
+
+    assert "9788994492032" in result
+
+
+def test_extract_pdf_falls_back_to_pypdf_when_pdfium_fails(tmp_path: Path, monkeypatch):
+    """pypdfium2가 PDF를 열지 못하면 기존 pypdf fallback은 유지한다."""
+    pdf = tmp_path / "book.pdf"
+    pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+    import pypdf
+    import pypdfium2
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("pdfium fail")))
+
+    class FakePage:
+        def extract_text(self):
+            return "ISBN 9788994492032"
+
+    class FakeReader:
+        def __init__(self, _f):
+            self.pages = [FakePage()]
+
+    monkeypatch.setattr(pypdf, "PdfReader", FakeReader)
+
+    result = isbn.extract(pdf)
+
     assert "9788994492032" in result

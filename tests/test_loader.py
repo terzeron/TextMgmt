@@ -651,29 +651,26 @@ class TestReadFromPdf:
         assert "pdfplumber" in summary
         assert page_count == 1
 
-    def test_read_pdf_pdftotext_cli_fallback(self, tmp_path: Path, monkeypatch):
+    def test_read_pdf_pdftotext_cli_helper(self, tmp_path: Path, monkeypatch):
         Loader = _get_loader()
         pdf = tmp_path / "pdftotext_cli_test.pdf"
         pdf.write_bytes(b"%PDF-1.4 mock pdf content")
-
-        import pypdfium2
-
-        monkeypatch.setattr(pypdfium2, "PdfDocument", lambda *a, **k: (_ for _ in ()).throw(Exception("fail")))
-
-        import pdfplumber
-
-        monkeypatch.setattr(pdfplumber, "open", lambda *a, **k: (_ for _ in ()).throw(Exception("fail")))
 
         class MockCompletedProcess:
             returncode = 0
             stdout = "pdftotext CLI 추출 텍스트".encode("utf-8")
 
+        import shutil
         import subprocess
 
+        monkeypatch.setattr(Loader, "_pdftotext_path_checked", False)
+        monkeypatch.setattr(Loader, "_pdftotext_path", None)
+        monkeypatch.setattr(shutil, "which", lambda *a, **k: "/usr/bin/pdftotext")
         monkeypatch.setattr(subprocess, "run", lambda *a, **k: MockCompletedProcess())
 
-        summary, line_count, page_count = Loader.read_from_pdf(pdf)
-        assert "pdftotext" in summary
+        text, page_count = Loader._pdf_text_by_pdftotext(pdf)
+        assert "pdftotext" in text
+        assert page_count == 0
 
     def test_read_pdf_mojibake_falls_through(self, tmp_path: Path, monkeypatch):
         """EUC-KR을 latin-1로 잘못 해석한 텍스트는 비어 있지 않아도 fallback을 타야 한다."""
@@ -711,13 +708,27 @@ class TestReadFromPdf:
 
         monkeypatch.setattr(pypdfium2, "PdfDocument", MockPdfDocument)
 
-        class MockCompletedProcess:
-            returncode = 0
-            stdout = "정상 추출된 한글 본문".encode("utf-8")
+        class MockPlumberPage:
+            def extract_text(self):
+                return "정상 추출된 한글 본문"
 
-        import subprocess
+            def close(self):
+                pass
 
-        monkeypatch.setattr(subprocess, "run", lambda *a, **k: MockCompletedProcess())
+        class MockPlumberPdf:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            @property
+            def pages(self):
+                return [MockPlumberPage()]
+
+        import pdfplumber
+
+        monkeypatch.setattr(pdfplumber, "open", lambda *a, **k: MockPlumberPdf())
 
         summary, line_count, page_count = Loader.read_from_pdf(pdf)
         assert "정상 추출된 한글 본문" in summary
@@ -1326,8 +1337,38 @@ class TestPdfExtractionCost:
         cmd = captured[0]
         assert "-l" in cmd and cmd[cmd.index("-l") + 1] == str(Loader.PDF_PAGE_LIMIT)
 
-    def test_fast_parsers_run_before_slow_one(self, tmp_path: Path, monkeypatch):
-        """손상 시 fallback 순서는 빠른 것(pdftotext) → 느린 것(pdfplumber)이다."""
+    def test_pdftotext_path_is_cached(self, tmp_path: Path, monkeypatch):
+        """pdftotext binary 탐색은 파일마다 반복하지 않아야 한다."""
+        Loader = _get_loader()
+        pdf = tmp_path / "cli-cache.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+
+        monkeypatch.setattr(Loader, "_pdftotext_path_checked", False)
+        monkeypatch.setattr(Loader, "_pdftotext_path", None)
+
+        calls: list[str] = []
+
+        def fake_which(name):
+            calls.append(name)
+            return "/usr/bin/pdftotext"
+
+        class MockCompletedProcess:
+            returncode = 0
+            stdout = "본문".encode("utf-8")
+
+        import shutil
+        import subprocess
+
+        monkeypatch.setattr(shutil, "which", fake_which)
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: MockCompletedProcess())
+
+        Loader._pdf_text_by_pdftotext(pdf)
+        Loader._pdf_text_by_pdftotext(pdf)
+
+        assert calls == ["pdftotext"]
+
+    def test_damaged_text_falls_back_directly_to_pdfplumber(self, tmp_path: Path, monkeypatch):
+        """손상 시 기본 fallback은 pdftotext process를 건너뛰고 pdfplumber로 간다."""
         Loader = _get_loader()
         pdf = tmp_path / "damaged.pdf"
         pdf.write_bytes(b"%PDF-1.4 mock pdf content")
@@ -1348,8 +1389,27 @@ class TestPdfExtractionCost:
         monkeypatch.setattr(Loader, "_pdf_text_by_pdfplumber", staticmethod(fake_pdfplumber))
 
         summary, line_count, page_count = Loader.read_from_pdf(pdf)
-        assert order == ["pdftotext", "pdfplumber"]
+        assert order == ["pdfplumber"]
         assert "정상 한글 본문입니다" in summary
+
+    def test_pdf_stage_metrics_are_recorded(self, tmp_path: Path, monkeypatch):
+        """PDF parser stage별 소요 시간이 Stat에 기록되어야 한다."""
+        Loader = _get_loader()
+        from utils.stat import Stat
+
+        pdf = tmp_path / "metric.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock pdf content")
+        self._mock_pypdfium2(monkeypatch, ["정상 본문입니다"], [])
+
+        Stat.pdf_stage_count.clear()
+        Stat.pdf_stage_total_time.clear()
+        Stat.pdf_stage_outcome_count.clear()
+
+        Loader.read_from_pdf(pdf)
+
+        assert Stat.pdf_stage_count["_pdf_text_by_pypdfium2"] == 1
+        assert Stat.pdf_stage_total_time["_pdf_text_by_pypdfium2"] >= 0
+        assert Stat.pdf_stage_outcome_count[("_pdf_text_by_pypdfium2", "ok")] == 1
 
 
 class TestPdfMojibakeDetection:
@@ -1472,8 +1532,7 @@ class TestPdfParserTimeout:
 
         monkeypatch.setattr(Loader, "PDF_STAGE_TIMEOUT", 1)
         monkeypatch.setattr(Loader, "_pdf_text_by_pypdfium2", staticmethod(self._spin))
-        monkeypatch.setattr(Loader, "_pdf_text_by_pdftotext", staticmethod(lambda p: ("정상적으로 추출된 본문입니다", 5)))
-        monkeypatch.setattr(Loader, "_pdf_text_by_pdfplumber", staticmethod(lambda p: ("", 0)))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pdfplumber", staticmethod(lambda p: ("정상적으로 추출된 본문입니다", 5)))
 
         summary, _line_count, page_count = Loader.read_from_pdf(pdf)
         assert "정상적으로" in summary
@@ -1678,8 +1737,8 @@ class TestPdfStructureRepair:
 
     @staticmethod
     def _all_stages_fail(monkeypatch, Loader):
-        """3단계 파서가 모두 문서를 열지 못한 상태(구조 손상)를 만든다."""
-        for name in ("_pdf_text_by_pypdfium2", "_pdf_text_by_pdftotext", "_pdf_text_by_pdfplumber"):
+        """기본 파서가 모두 문서를 열지 못한 상태(구조 손상)를 만든다."""
+        for name in ("_pdf_text_by_pypdfium2", "_pdf_text_by_pdfplumber"):
             monkeypatch.setattr(Loader, name, staticmethod(lambda p: ("", 0)))
 
     def test_repair_recovers_text_when_all_parsers_fail(self, tmp_path: Path, monkeypatch):

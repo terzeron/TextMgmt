@@ -2,6 +2,7 @@
 
 import re
 import subprocess
+import time
 import zipfile
 from pathlib import Path
 
@@ -9,9 +10,12 @@ import pypdf
 from bs4 import BeautifulSoup
 
 from utils.parser_timeout import ParserTimeout, time_limit
+from utils.stat import Stat
 
 # 앞뒤로 읽을 바이트 크기 (8KB)
 HEAD_TAIL_SIZE = 8 * 1024
+# PDF ISBN은 앞/뒤 페이지에 있는 경우가 대부분이라 전체 문서를 열람하지 않는다.
+PDF_ISBN_PAGE_WINDOW = 5
 # PDF ISBN 추출 상한(초). loader가 본문 추출을 포기한 손상 PDF도 여기서 다시 파싱되므로
 # 상한이 없으면 read_file 전체가 그대로 멈춘다.
 PDF_ISBN_TIMEOUT = 30
@@ -241,6 +245,59 @@ def extract_from_hwp(file_path: Path) -> list[str]:
         return []
 
 
+def _head_tail_page_indices(total_pages: int, window: int = PDF_ISBN_PAGE_WINDOW) -> list[int]:
+    indices: list[int] = []
+    seen: set[int] = set()
+    for idx in list(range(min(window, total_pages))) + list(range(max(0, total_pages - window), total_pages)):
+        if idx not in seen:
+            seen.add(idx)
+            indices.append(idx)
+    return indices
+
+
+def _close_pdfium_handle(obj) -> None:
+    close = getattr(obj, "close", None)
+    if close:
+        close()
+
+
+def extract_pdf_text_by_pdfium(file_path: Path) -> tuple[str, int]:
+    """pypdfium2로 앞/뒤 PDF_ISBN_PAGE_WINDOW 페이지만 읽어 ISBN 검색용 텍스트를 만든다."""
+    import pypdfium2
+
+    pdf = None
+    try:
+        with file_path.open("rb") as fp:
+            pdf = pypdfium2.PdfDocument(fp)
+            total_pages = len(pdf)
+            texts: list[str] = []
+            for page_idx in _head_tail_page_indices(total_pages):
+                page = None
+                textpage = None
+                try:
+                    page = pdf[page_idx]
+                    textpage = page.get_textpage()
+                    texts.append(textpage.get_text_range() or "")
+                finally:
+                    _close_pdfium_handle(textpage)
+                    _close_pdfium_handle(page)
+            return "".join(texts), total_pages
+    finally:
+        _close_pdfium_handle(pdf)
+
+
+def extract_pdf_text_by_pypdf(file_path: Path) -> str:
+    content = ""
+    with file_path.open("rb") as f:
+        reader = pypdf.PdfReader(f)
+        total_pages = len(reader.pages)
+        for i in _head_tail_page_indices(total_pages):
+            text = reader.pages[i].extract_text()
+            if text:
+                content += text
+    return content
+
+
 def extract(file_path: Path, content: str | None = None) -> list[str]:
     """파일에서 ISBN을 추출하여 리스트로 반환
 
@@ -259,23 +316,46 @@ def extract(file_path: Path, content: str | None = None) -> list[str]:
     elif ext == ".epub":
         return extract_from_epub(file_path)
     elif ext == ".pdf":
-        content = ""
+        if content:
+            result = search_in_content(content)
+            if result:
+                return result
+
+        pdfium_content = ""
+        pdfium_pages = 0
         try:
+            start = time.perf_counter()
+            try:
+                with time_limit(PDF_ISBN_TIMEOUT, "isbn/pdfium"):
+                    pdfium_content, pdfium_pages = extract_pdf_text_by_pdfium(file_path)
+                Stat.record_pdf_stage("isbn_pdfium", time.perf_counter() - start, "ok" if pdfium_content else "empty")
+            except ParserTimeout:
+                Stat.record_pdf_stage("isbn_pdfium", time.perf_counter() - start, "timeout")
+                return []
+            except Exception:
+                Stat.record_pdf_stage("isbn_pdfium", time.perf_counter() - start, "error")
+
+            if pdfium_content:
+                result = search_in_content(pdfium_content)
+                if result:
+                    return result
+                return []
+            if pdfium_pages > 0:
+                return []
+
+            # pdfium이 문서 구조를 아예 못 열었을 때만 기존 pypdf fallback을 유지한다.
             # 손상 PDF는 pypdf 안에서 무한히 돌 수 있어 벽시계 상한이 필요하다.
             # ParserTimeout은 BaseException이라 아래 `except Exception`에 잡히지 않는다.
-            with time_limit(PDF_ISBN_TIMEOUT, "isbn/pypdf"), file_path.open("rb") as f:
-                reader = pypdf.PdfReader(f)
-                total_pages = len(reader.pages)
-                # 앞 5페이지 추출
-                for i in range(min(5, total_pages)):
-                    text = reader.pages[i].extract_text()
-                    if text:
-                        content += text
-                # 뒤 5페이지 추출
-                for i in range(max(0, total_pages - 5), total_pages):
-                    text = reader.pages[i].extract_text()
-                    if text:
-                        content += text
+            start = time.perf_counter()
+            try:
+                with time_limit(PDF_ISBN_TIMEOUT, "isbn/pypdf"):
+                    content = extract_pdf_text_by_pypdf(file_path)
+                Stat.record_pdf_stage("isbn_pypdf", time.perf_counter() - start, "ok" if content else "empty")
+            except ParserTimeout:
+                Stat.record_pdf_stage("isbn_pypdf", time.perf_counter() - start, "timeout")
+                return []
+            except Exception:
+                Stat.record_pdf_stage("isbn_pypdf", time.perf_counter() - start, "error")
         except ParserTimeout:
             # 여기까지 온 파일은 본문 추출도 실패했을 가능성이 높다. ISBN만 포기한다.
             return []

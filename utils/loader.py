@@ -131,6 +131,8 @@ class Loader:
     # PDF_PAGE_LIMIT 덕에 작업량도 40페이지로 묶여 있어 30초면 정상 파일에는 충분하다.
     # 손상 PDF 1건이 무한히 도는 것을 막는 것이 목적이다(실측 87.7s~무한).
     PDF_STAGE_TIMEOUT = 30
+    _pdftotext_path_checked = False
+    _pdftotext_path: str | None = None
     # txt 디코딩 시도 순서. read_from_text와 reencode_text_file_to_utf8이 공유한다.
     TEXT_ENCODINGS = ["utf-8", "cp949", "euc-kr", "utf-16", "utf-16-le", "utf-16-be", "utf-8-sig"]
     # 서양어 단일바이트 인코딩(cp1252) 판정 기준.
@@ -562,7 +564,19 @@ class Loader:
             texts: list[str] = []
             total = 0
             for i in range(min(page_count, Loader.PDF_PAGE_LIMIT)):
-                text = pdf[i].get_textpage().get_text_range() or ""
+                page = None
+                textpage = None
+                try:
+                    page = pdf[i]
+                    textpage = page.get_textpage()
+                    text = textpage.get_text_range() or ""
+                finally:
+                    close_textpage = getattr(textpage, "close", None)
+                    if close_textpage:
+                        close_textpage()
+                    close_page = getattr(page, "close", None)
+                    if close_page:
+                        close_page()
                 texts.append(text)
                 total += len(text)
                 if total >= Loader.TEXT_SIZE:
@@ -618,7 +632,10 @@ class Loader:
 
     @staticmethod
     def _pdf_text_by_pdftotext(file_path: Path) -> tuple[str, int]:
-        pdftotext_path = shutil.which("pdftotext")
+        if not Loader._pdftotext_path_checked:
+            Loader._pdftotext_path = shutil.which("pdftotext")
+            Loader._pdftotext_path_checked = True
+        pdftotext_path = Loader._pdftotext_path
         if not pdftotext_path:
             return "", 0
         # -enc UTF-8로 출력을 고정하고, locale에 의존하지 않도록 직접 디코딩한다.
@@ -638,17 +655,37 @@ class Loader:
         # 어느 파서도 온전한 텍스트를 못 주면 그중 손상이 가장 적은 결과를 쓴다.
         best_damage: int | None = None
 
-        # 빠른 파서부터 시작해, 손상이 확인되면 느리지만 복구력이 좋은 파서로 넘긴다.
-        # 실측 중앙 소요: pypdfium2 0.030s < pdftotext 0.023s << pdfplumber 0.233s.
-        # 부분 손상 복구력은 반대 순서(pdfplumber 14/17 > pdftotext 6/17)라 최종 단계에 둔다.
-        stages = (Loader._pdf_text_by_pypdfium2, Loader._pdf_text_by_pdftotext, Loader._pdf_text_by_pdfplumber)
+        # 기본 경로는 in-process 파서만 쓴다. pdftotext는 빠르지만 외부 process spawn이고,
+        # 실측 부분 손상 복구력은 pdfplumber가 더 높아 기본 fallback에서는 제외한다.
+        stages = (Loader._pdf_text_by_pypdfium2, Loader._pdf_text_by_pdfplumber)
         timed_out_stages: list[str] = []
         for stage_no, extract in enumerate(stages):
             stage_name = getattr(extract, "__name__", str(extract))
+            stage_start = datetime.now()
+            stage_outcome = "error"
             try:
                 with time_limit(Loader.PDF_STAGE_TIMEOUT, stage_name):
                     text, pages = extract(file_path)
+                if page_count == 0:
+                    page_count = pages
+                if not text.strip():
+                    stage_outcome = "empty"
+                    # 1단계가 문서를 열었는데도 텍스트가 없으면 텍스트 레이어가 없는 스캔본이다.
+                    # 이 경우 다른 파서도 결과가 없음을 확인했으므로(표본 28건 전수) 더 시도하지 않는다.
+                    # 스캔본은 전체 PDF의 43.8%(9,261건, 1,545,537페이지)라 이 분기가 비용을 크게 줄인다.
+                    if stage_no == 0 and page_count > 0:
+                        break
+                    continue
+                damage = Loader._count_mojibake_runs(text)
+                if Loader._is_usable_pdf_text(text, damage):
+                    stage_outcome = "ok"
+                    result = text
+                    break
+                stage_outcome = "damaged"
+                if best_damage is None or damage < best_damage:
+                    best_damage, result = damage, text
             except ParserTimeout:
+                stage_outcome = "timeout"
                 # 타임아웃은 조용히 넘기지 않고 파일별 문제로 보고한다.
                 # (path는 report_problems가 헤더로 출력하므로 메시지에 넣지 않는다)
                 timed_out_stages.append(stage_name)
@@ -656,22 +693,10 @@ class Loader:
                 LOGGER.error("PDF 파서 타임아웃(%d초 초과): %s", Loader.PDF_STAGE_TIMEOUT, stage_name)
                 continue
             except Exception:
+                stage_outcome = "error"
                 continue
-            if page_count == 0:
-                page_count = pages
-            if not text.strip():
-                # 1단계가 문서를 열었는데도 텍스트가 없으면 텍스트 레이어가 없는 스캔본이다.
-                # 이 경우 다른 파서도 결과가 없음을 확인했으므로(표본 28건 전수) 더 시도하지 않는다.
-                # 스캔본은 전체 PDF의 43.8%(9,261건, 1,545,537페이지)라 이 분기가 비용을 크게 줄인다.
-                if stage_no == 0 and page_count > 0:
-                    break
-                continue
-            damage = Loader._count_mojibake_runs(text)
-            if Loader._is_usable_pdf_text(text, damage):
-                result = text
-                break
-            if best_damage is None or damage < best_damage:
-                best_damage, result = damage, text
+            finally:
+                Stat.record_pdf_stage(stage_name, (datetime.now() - stage_start).total_seconds(), stage_outcome)
 
         # 어느 파서도 문서를 열지 못했다면(page_count == 0) 파서 선택 문제가 아니라
         # xref/page tree 구조 손상이다. pikepdf로 재구성한 뒤 한 번 더 시도한다.
@@ -679,20 +704,31 @@ class Loader:
         # 실측 손상률은 표본 300건 중 1건(0.3%)이라 이 분기가 도는 일 자체가 드물다.
         if not result.strip() and page_count == 0:
             repair_stage = "_pdf_text_by_pikepdf_repair"
+            repair_start = datetime.now()
+            repair_outcome = "error"
             try:
                 with time_limit(Loader.PDF_STAGE_TIMEOUT, repair_stage):
                     text, pages = Loader._pdf_text_by_pikepdf_repair(file_path)
                 page_count = pages
                 if Loader._is_usable_pdf_text(text):
+                    repair_outcome = "ok"
                     result = text
                     LOGGER.warning("PDF 구조 복구 후 적재 (%d쪽)", pages)
+                elif text.strip():
+                    repair_outcome = "damaged"
+                else:
+                    repair_outcome = "empty"
             except ParserTimeout:
+                repair_outcome = "timeout"
                 timed_out_stages.append(repair_stage)
                 LOGGER.error(file_path)
                 LOGGER.error("PDF 구조 복구 타임아웃(%d초 초과)", Loader.PDF_STAGE_TIMEOUT)
             except Exception as e:
+                repair_outcome = "error"
                 LOGGER.error(file_path)
                 LOGGER.error("PDF 구조 복구 실패(객체 소실 추정): %s", str(e)[:120])
+            finally:
+                Stat.record_pdf_stage(repair_stage, (datetime.now() - repair_start).total_seconds(), repair_outcome)
 
         if not result.strip() and timed_out_stages:
             LOGGER.error(file_path)
@@ -1281,7 +1317,8 @@ class Loader:
 
             # ISBN 추출 (TXT는 이미 읽은 content 재사용)
             if file_type in ("txt", "epub", "pdf", "djvu", "hwp"):
-                isbn_list = extract_isbn(file_path, content=raw_content if file_type == "txt" else None)
+                isbn_content = raw_content if file_type == "txt" else summary if file_type == "pdf" else None
+                isbn_list = extract_isbn(file_path, content=isbn_content)
 
             return {
                 inode_num: {
