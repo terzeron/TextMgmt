@@ -10,14 +10,24 @@ backend 사용처:
     if docinfo.get("/Title"): str(docinfo["/Title"])
     publication["page_count"] = len(pdf.pages)
 
+utils 사용처:
+- utils/loader.py: _pdf_text_by_pikepdf_repair() — 손상 PDF 구조 복구
+    import pikepdf
+    with file_path.open("rb") as fp, pikepdf.open(fp) as pdf:
+        pdf.save(buffer)          # BytesIO로 저장 (디스크 미경유)
+
 박제 API:
 - pikepdf.open(path) -> pdf
+- pikepdf.open(file_obj) -> pdf   # 파일 객체도 받는다(fd 소유권을 호출자가 쥐기 위함)
+- pdf : context manager (with 구문)
+- pdf.save(BytesIO) -> None       # 열기 시 자동 복구된 구조를 그대로 직렬화
 - pdf.check_pdf_syntax() -> 반복 가능(list) — 메시지 문자열들
 - pdf.docinfo : .get("/Title")/[...] 접근, str() 변환 가능
 - pdf.pages : len() 가능
 - pdf.close()
 """
 
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -74,6 +84,29 @@ class TestPikePDFDependencyPinning(unittest.TestCase):
             messages = [msg for msg in issues]
             self.assertIsInstance(messages, list)
             pdf.close()
+        finally:
+            pdf_path.unlink(missing_ok=True)
+
+    def test_open_file_object_and_save_to_buffer(self):
+        """loader.py: pikepdf.open(file_obj) -> with 구문 -> pdf.save(BytesIO)
+
+        경로가 아닌 파일 객체를 받아야 하고, 복구본을 디스크가 아닌 메모리로
+        직렬화할 수 있어야 한다.
+        """
+        import pikepdf
+
+        pdf_path = self._make_pdf_file(3)
+        try:
+            buffer = io.BytesIO()
+            with pdf_path.open("rb") as fp, pikepdf.open(fp) as pdf:
+                self.assertEqual(len(pdf.pages), 3)
+                pdf.save(buffer)
+            self.assertGreater(buffer.tell(), 0, "save()가 아무것도 쓰지 않음")
+
+            # 저장된 바이트가 다시 열리는 온전한 PDF여야 한다
+            buffer.seek(0)
+            with pikepdf.open(buffer) as reopened:
+                self.assertEqual(len(reopened.pages), 3)
         finally:
             pdf_path.unlink(missing_ok=True)
 

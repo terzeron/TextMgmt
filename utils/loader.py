@@ -2,6 +2,7 @@
 
 
 import sys
+import io
 import os
 import re
 import getopt
@@ -28,6 +29,7 @@ import chardet
 from backend.es_manager import ESManager
 from utils.stat import Stat
 from utils.isbn import extract as extract_isbn
+from utils.parser_timeout import ParserTimeout, time_limit
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger()
@@ -37,6 +39,10 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)
 logging.getLogger("pypdf._reader").setLevel(logging.ERROR)
 # pypdf._cmap은 미지원 CMap(예: /KSCms-UHC-H, /KSC-EUC-H)을 ERROR 레벨로 페이지마다 찍으므로 별도 차단
 logging.getLogger("pypdf._cmap").setLevel(logging.CRITICAL)
+# pdfplumber의 백엔드인 pdfminer는 손상 PDF에서 DEBUG 로그를 초당 10만 건 이상 쏟아낸다.
+# logging.conf의 root logger가 DEBUG라 그대로 두면 레코드 생성만으로 CPU를 통째로 태운다.
+# (실측: 손상 PDF 1건이 13시간 동안 100% CPU를 점유하며 /dev/null로 982GB를 씀)
+logging.getLogger("pdfminer").setLevel(logging.WARNING)
 warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
 warnings.filterwarnings("ignore", message=".*Ascii85.*")
 warnings.filterwarnings("ignore", message=".*startxref.*")
@@ -118,6 +124,15 @@ class Loader:
     # TEXT_SIZE를 채우는 데 실측 최대 27페이지가 필요했고 첫 텍스트는 최대 4페이지에서
     # 나왔다. 여유를 둔 상한. 스캔본이 끝까지 스캔되는 것을 막는 역할도 한다.
     PDF_PAGE_LIMIT = 40
+    # ZIP 컨테이너를 쓰는 포맷. 확장자가 이미 이 계열이면 매직바이트 검사에서
+    # 내용물까지 열어보지 않는다(정상 파일의 비용을 0으로 두기 위함).
+    ZIP_BASED_TYPES = frozenset({"epub", "cbz", "docx"})
+    # 파서 단계 하나의 벽시계 상한. 실측 중앙 소요는 pdfplumber가 0.233s로 가장 느리고,
+    # PDF_PAGE_LIMIT 덕에 작업량도 40페이지로 묶여 있어 30초면 정상 파일에는 충분하다.
+    # 손상 PDF 1건이 무한히 도는 것을 막는 것이 목적이다(실측 87.7s~무한).
+    PDF_STAGE_TIMEOUT = 30
+    _pdftotext_path_checked = False
+    _pdftotext_path: str | None = None
     # txt 디코딩 시도 순서. read_from_text와 reencode_text_file_to_utf8이 공유한다.
     TEXT_ENCODINGS = ["utf-8", "cp949", "euc-kr", "utf-16", "utf-16-le", "utf-16-be", "utf-8-sig"]
     # 서양어 단일바이트 인코딩(cp1252) 판정 기준.
@@ -490,29 +505,118 @@ class Loader:
         return runs
 
     @staticmethod
-    def _pdf_text_by_pypdfium2(file_path: Path) -> tuple[str, int]:
+    def _zip_container_type(file_path: Path) -> str | None:
+        """ZIP 컨테이너의 실제 종류를 내용물로 판별한다."""
+        try:
+            with zipfile.ZipFile(file_path) as zf:
+                names = zf.namelist()
+                if any(n.endswith(".opf") for n in names) or "META-INF/container.xml" in names:
+                    return "epub"
+                if any(n.startswith("word/") for n in names):
+                    return "docx"
+                image_suffixes = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
+                entries = [n for n in names if not n.endswith("/")]
+                if entries and all(n.lower().endswith(image_suffixes) for n in entries):
+                    return "cbz"
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
+    def detect_file_type(file_path: Path, declared: str) -> str | None:
+        """매직바이트로 실제 포맷을 판별한다. 판별 불가면 None.
+
+        확장자를 믿을 수 없는 파일이 실제로 존재한다(실측: 21,150건 중 EPUB 5건이
+        .pdf 확장자를 달고 있어 PDF 파서로 가 전부 실패했다).
+
+        비용을 아끼려고, 확장자와 매직바이트가 이미 같은 계열이면 더 파고들지 않는다.
+        정상 파일에서는 앞 4바이트만 읽고 끝난다.
+        """
+        try:
+            with file_path.open("rb") as f:
+                head = f.read(4)
+        except OSError:
+            return None
+
+        if head == b"%PDF":
+            return "pdf"
+        if head == b"PK\x03\x04":
+            # 이미 zip 기반 포맷으로 선언되어 있으면 내용물까지 열어보지 않는다
+            if declared in Loader.ZIP_BASED_TYPES:
+                return declared
+            return Loader._zip_container_type(file_path)
+        return None
+
+    @staticmethod
+    def _pdfium_text(source: Any) -> tuple[str, int]:
+        """pypdfium2로 PDF_PAGE_LIMIT까지 훑어 TEXT_SIZE만큼 텍스트를 모은다.
+
+        source는 파일 객체나 BytesIO. 경로를 넘기면 pdfium이 fd를 쥐는데 문서 로드
+        실패 시 그 fd가 닫히지 않고 GC로도 회수되지 않으므로(실측: 손상 PDF마다
+        fd 1개씩 영구 누적), 호출자가 핸들을 소유해서 넘긴다.
+        """
         import pypdfium2
 
-        pdf = pypdfium2.PdfDocument(file_path)
+        pdf = None
         try:
+            pdf = pypdfium2.PdfDocument(source)
             page_count = len(pdf)
             texts: list[str] = []
             total = 0
             for i in range(min(page_count, Loader.PDF_PAGE_LIMIT)):
-                text = pdf[i].get_textpage().get_text_range() or ""
+                page = None
+                textpage = None
+                try:
+                    page = pdf[i]
+                    textpage = page.get_textpage()
+                    text = textpage.get_text_range() or ""
+                finally:
+                    close_textpage = getattr(textpage, "close", None)
+                    if close_textpage:
+                        close_textpage()
+                    close_page = getattr(page, "close", None)
+                    if close_page:
+                        close_page()
                 texts.append(text)
                 total += len(text)
                 if total >= Loader.TEXT_SIZE:
                     break
             return "".join(texts), page_count
         finally:
-            pdf.close()
+            if pdf is not None:
+                pdf.close()
+
+    @staticmethod
+    def _pdf_text_by_pypdfium2(file_path: Path) -> tuple[str, int]:
+        with file_path.open("rb") as fp:
+            return Loader._pdfium_text(fp)
+
+    @staticmethod
+    def _pdf_text_by_pikepdf_repair(file_path: Path) -> tuple[str, int]:
+        """xref/page tree가 깨진 PDF를 pikepdf(=qpdf 바인딩)로 재구성한 뒤 다시 추출한다.
+
+        구조가 깨졌을 뿐 객체는 살아 있는 파일이 실제로 존재한다(실측: 9MB 손상본이
+        4.0초 만에 470쪽으로 복구됨). 반대로 객체 자체가 소실된 파일은 여기서도
+        복구되지 않고 빠르게 실패한다(실측: 63MB 손상본 5.6초, RSS 29MB).
+
+        복구본은 디스크에 쓰지 않고 메모리에만 둔다. pikepdf 기본 설정은 압축을
+        유지하므로 복구본이 원본보다 크게 부풀지 않는다(9MB -> 8.6MB).
+        """
+        import pikepdf
+
+        buffer = io.BytesIO()
+        with file_path.open("rb") as fp, pikepdf.open(fp) as pdf:
+            pdf.save(buffer)
+        buffer.seek(0)
+        return Loader._pdfium_text(buffer)
 
     @staticmethod
     def _pdf_text_by_pdfplumber(file_path: Path) -> tuple[str, int]:
         import pdfplumber
 
-        with pdfplumber.open(file_path) as pdf:
+        # 파일 핸들을 직접 소유해서, pdfplumber.open()이 열기 도중 실패하거나
+        # 타임아웃이 끼어들어도 fd가 GC까지 남지 않게 한다.
+        with file_path.open("rb") as fp, pdfplumber.open(fp) as pdf:
             page_count = len(pdf.pages)
             texts: list[str] = []
             total = 0
@@ -528,7 +632,10 @@ class Loader:
 
     @staticmethod
     def _pdf_text_by_pdftotext(file_path: Path) -> tuple[str, int]:
-        pdftotext_path = shutil.which("pdftotext")
+        if not Loader._pdftotext_path_checked:
+            Loader._pdftotext_path = shutil.which("pdftotext")
+            Loader._pdftotext_path_checked = True
+        pdftotext_path = Loader._pdftotext_path
         if not pdftotext_path:
             return "", 0
         # -enc UTF-8로 출력을 고정하고, locale에 의존하지 않도록 직접 디코딩한다.
@@ -548,32 +655,85 @@ class Loader:
         # 어느 파서도 온전한 텍스트를 못 주면 그중 손상이 가장 적은 결과를 쓴다.
         best_damage: int | None = None
 
-        # 빠른 파서부터 시작해, 손상이 확인되면 느리지만 복구력이 좋은 파서로 넘긴다.
-        # 실측 중앙 소요: pypdfium2 0.030s < pdftotext 0.023s << pdfplumber 0.233s.
-        # 부분 손상 복구력은 반대 순서(pdfplumber 14/17 > pdftotext 6/17)라 최종 단계에 둔다.
-        stages = (Loader._pdf_text_by_pypdfium2, Loader._pdf_text_by_pdftotext, Loader._pdf_text_by_pdfplumber)
+        # 기본 경로는 in-process 파서만 쓴다. pdftotext는 빠르지만 외부 process spawn이고,
+        # 실측 부분 손상 복구력은 pdfplumber가 더 높아 기본 fallback에서는 제외한다.
+        stages = (Loader._pdf_text_by_pypdfium2, Loader._pdf_text_by_pdfplumber)
+        timed_out_stages: list[str] = []
         for stage_no, extract in enumerate(stages):
+            stage_name = getattr(extract, "__name__", str(extract))
+            stage_start = datetime.now()
+            stage_outcome = "error"
             try:
-                text, pages = extract(file_path)
-            except Exception:
-                continue
-            if page_count == 0:
-                page_count = pages
-            if not text.strip():
-                # 1단계가 문서를 열었는데도 텍스트가 없으면 텍스트 레이어가 없는 스캔본이다.
-                # 이 경우 다른 파서도 결과가 없음을 확인했으므로(표본 28건 전수) 더 시도하지 않는다.
-                # 스캔본은 전체 PDF의 43.8%(9,261건, 1,545,537페이지)라 이 분기가 비용을 크게 줄인다.
-                if stage_no == 0 and page_count > 0:
+                with time_limit(Loader.PDF_STAGE_TIMEOUT, stage_name):
+                    text, pages = extract(file_path)
+                if page_count == 0:
+                    page_count = pages
+                if not text.strip():
+                    stage_outcome = "empty"
+                    # 1단계가 문서를 열었는데도 텍스트가 없으면 텍스트 레이어가 없는 스캔본이다.
+                    # 이 경우 다른 파서도 결과가 없음을 확인했으므로(표본 28건 전수) 더 시도하지 않는다.
+                    # 스캔본은 전체 PDF의 43.8%(9,261건, 1,545,537페이지)라 이 분기가 비용을 크게 줄인다.
+                    if stage_no == 0 and page_count > 0:
+                        break
+                    continue
+                damage = Loader._count_mojibake_runs(text)
+                if Loader._is_usable_pdf_text(text, damage):
+                    stage_outcome = "ok"
+                    result = text
                     break
+                stage_outcome = "damaged"
+                if best_damage is None or damage < best_damage:
+                    best_damage, result = damage, text
+            except ParserTimeout:
+                stage_outcome = "timeout"
+                # 타임아웃은 조용히 넘기지 않고 파일별 문제로 보고한다.
+                # (path는 report_problems가 헤더로 출력하므로 메시지에 넣지 않는다)
+                timed_out_stages.append(stage_name)
+                LOGGER.error(file_path)
+                LOGGER.error("PDF 파서 타임아웃(%d초 초과): %s", Loader.PDF_STAGE_TIMEOUT, stage_name)
                 continue
-            damage = Loader._count_mojibake_runs(text)
-            if Loader._is_usable_pdf_text(text, damage):
-                result = text
-                break
-            if best_damage is None or damage < best_damage:
-                best_damage, result = damage, text
+            except Exception:
+                stage_outcome = "error"
+                continue
+            finally:
+                Stat.record_pdf_stage(stage_name, (datetime.now() - stage_start).total_seconds(), stage_outcome)
 
+        # 어느 파서도 문서를 열지 못했다면(page_count == 0) 파서 선택 문제가 아니라
+        # xref/page tree 구조 손상이다. pikepdf로 재구성한 뒤 한 번 더 시도한다.
+        # 텍스트가 조금이라도 나온 경우(mojibake 등)는 구조 문제가 아니므로 건너뛴다.
+        # 실측 손상률은 표본 300건 중 1건(0.3%)이라 이 분기가 도는 일 자체가 드물다.
         if not result.strip() and page_count == 0:
+            repair_stage = "_pdf_text_by_pikepdf_repair"
+            repair_start = datetime.now()
+            repair_outcome = "error"
+            try:
+                with time_limit(Loader.PDF_STAGE_TIMEOUT, repair_stage):
+                    text, pages = Loader._pdf_text_by_pikepdf_repair(file_path)
+                page_count = pages
+                if Loader._is_usable_pdf_text(text):
+                    repair_outcome = "ok"
+                    result = text
+                    LOGGER.warning("PDF 구조 복구 후 적재 (%d쪽)", pages)
+                elif text.strip():
+                    repair_outcome = "damaged"
+                else:
+                    repair_outcome = "empty"
+            except ParserTimeout:
+                repair_outcome = "timeout"
+                timed_out_stages.append(repair_stage)
+                LOGGER.error(file_path)
+                LOGGER.error("PDF 구조 복구 타임아웃(%d초 초과)", Loader.PDF_STAGE_TIMEOUT)
+            except Exception as e:
+                repair_outcome = "error"
+                LOGGER.error(file_path)
+                LOGGER.error("PDF 구조 복구 실패(객체 소실 추정): %s", str(e)[:120])
+            finally:
+                Stat.record_pdf_stage(repair_stage, (datetime.now() - repair_start).total_seconds(), repair_outcome)
+
+        if not result.strip() and timed_out_stages:
+            LOGGER.error(file_path)
+            LOGGER.error("PDF 텍스트 추출 실패: 모든 파서가 타임아웃 또는 오류 (타임아웃: %s)", ", ".join(timed_out_stages))
+        elif not result.strip() and page_count == 0:
             LOGGER.error(file_path)
 
         result = re.sub(r"[^\w\sㄱ-힣]", " ", result)
@@ -1059,7 +1219,14 @@ class Loader:
                 author = ""
                 title = file_path.stem
 
-            file_type = file_path.suffix[1:]
+            file_type = file_path.suffix[1:].lower()
+
+            # 확장자가 실제 포맷과 다르면 실제 포맷 기준으로 파서를 고른다.
+            # 확장자만 믿으면 EPUB이 .pdf를 달고 있을 때 PDF 파서로 가 반드시 실패한다.
+            detected_type = Loader.detect_file_type(file_path, file_type)
+            if detected_type and detected_type != file_type:
+                LOGGER.warning("확장자와 실제 포맷 불일치: .%s 이지만 %s로 처리", file_type, detected_type)
+                file_type = detected_type
 
             # skip_text: 텍스트 추출 건너뛰기 (만화 등 이미지 기반 파일)
             if skip_text:
@@ -1073,8 +1240,12 @@ class Loader:
                     if page_count is None:
                         page_count = 0
                         try:
-                            with file_path.open("rb") as f:
+                            # 손상 PDF는 pypdf 안에서도 무한히 돌 수 있어 상한을 건다.
+                            with time_limit(Loader.PDF_STAGE_TIMEOUT, "pypdf/page_count"), file_path.open("rb") as f:
                                 page_count = len(pypdf.PdfReader(f).pages)
+                        except ParserTimeout:
+                            LOGGER.error(file_path)
+                            LOGGER.error("PDF 페이지 수 추출 타임아웃(%d초 초과): pypdf", Loader.PDF_STAGE_TIMEOUT)
                         except Exception as e:
                             LOGGER.error(file_path)
                             LOGGER.error(e)
@@ -1114,8 +1285,12 @@ class Loader:
                     if page_count is None:
                         page_count = 0
                         try:
-                            with file_path.open("rb") as f:
+                            # 손상 PDF는 pypdf 안에서도 무한히 돌 수 있어 상한을 건다.
+                            with time_limit(Loader.PDF_STAGE_TIMEOUT, "pypdf/page_count"), file_path.open("rb") as f:
                                 page_count = len(pypdf.PdfReader(f).pages)
+                        except ParserTimeout:
+                            LOGGER.error(file_path)
+                            LOGGER.error("PDF 페이지 수 추출 타임아웃(%d초 초과): pypdf", Loader.PDF_STAGE_TIMEOUT)
                         except Exception as e:
                             LOGGER.error(file_path)
                             LOGGER.error(e)
@@ -1142,7 +1317,8 @@ class Loader:
 
             # ISBN 추출 (TXT는 이미 읽은 content 재사용)
             if file_type in ("txt", "epub", "pdf", "djvu", "hwp"):
-                isbn_list = extract_isbn(file_path, content=raw_content if file_type == "txt" else None)
+                isbn_content = raw_content if file_type == "txt" else summary if file_type == "pdf" else None
+                isbn_list = extract_isbn(file_path, content=isbn_content)
 
             return {
                 inode_num: {
