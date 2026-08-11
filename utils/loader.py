@@ -10,9 +10,11 @@ import logging.config
 import shutil
 import subprocess
 import tempfile
+import threading
 import warnings
 import zlib
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from itertools import islice
@@ -74,30 +76,45 @@ class ProblemCollector(logging.Handler):
     파일 로그(run.log)는 그대로 유지된다.
     """
 
+    _lock = threading.RLock()
+    _active_count = 0
+    _detached_handlers: list[logging.Handler] = []
+
     def __init__(self) -> None:
         super().__init__(level=logging.WARNING)
         self.messages: list[str] = []
-        self._detached: list[logging.Handler] = []
+        self._thread_id: int | None = None
 
     def emit(self, record: logging.LogRecord) -> None:
-        self.messages.append(record.getMessage())
+        if record.thread == self._thread_id:
+            self.messages.append(record.getMessage())
 
     def __enter__(self) -> "ProblemCollector":
         self.messages.clear()
-        root = logging.getLogger()
-        # stdout 핸들러만 분리 (FileHandler 계열도 StreamHandler 하위지만 파일 로그는 유지)
-        self._detached = [h for h in root.handlers if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)]
-        for handler in self._detached:
-            root.removeHandler(handler)
-        root.addHandler(self)
+        self._thread_id = threading.get_ident()
+        with ProblemCollector._lock:
+            root = logging.getLogger()
+            if ProblemCollector._active_count == 0:
+                # stdout 핸들러만 분리 (FileHandler 계열도 StreamHandler 하위지만 파일 로그는 유지)
+                ProblemCollector._detached_handlers = [
+                    h for h in root.handlers if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+                ]
+                for handler in ProblemCollector._detached_handlers:
+                    root.removeHandler(handler)
+            root.addHandler(self)
+            ProblemCollector._active_count += 1
         return self
 
     def __exit__(self, *_exc_info: Any) -> None:
-        root = logging.getLogger()
-        root.removeHandler(self)
-        for handler in self._detached:
-            root.addHandler(handler)
-        self._detached = []
+        with ProblemCollector._lock:
+            root = logging.getLogger()
+            root.removeHandler(self)
+            ProblemCollector._active_count -= 1
+            if ProblemCollector._active_count == 0:
+                for handler in ProblemCollector._detached_handlers:
+                    root.addHandler(handler)
+                ProblemCollector._detached_handlers = []
+            self._thread_id = None
 
 
 def report_problems(file_path: Path, messages: list[str], indexed: bool) -> bool:
@@ -311,7 +328,7 @@ class Loader:
         utf-8 -> cp949 -> euc-kr -> utf-16 -> utf-16-le -> utf-16-be -> utf-8-sig 순서로 인코딩 fallback 시도.
         chardet 감지를 활용하고 모든 인코딩 엄격 디코딩 실패 시 errors="replace" 옵션으로 재시도.
         """
-        Stat.text_count += 1
+        Stat.add("text_count", 1)
         start_time = datetime.now()
 
         line_count = 0
@@ -371,7 +388,7 @@ class Loader:
             data = re.sub(r"\s+", " ", data).strip()
 
         end_time = datetime.now()
-        Stat.text_total_time += (end_time - start_time).total_seconds()
+        Stat.add("text_total_time", (end_time - start_time).total_seconds())
 
         return data, line_count, 0, raw_content
 
@@ -417,7 +434,7 @@ class Loader:
 
     @staticmethod
     def read_from_epub(file_path: Path) -> tuple[str, int, int]:
-        Stat.normal_epub_count += 1
+        Stat.add("normal_epub_count", 1)
         start_time = datetime.now()
 
         result = ""
@@ -448,10 +465,10 @@ class Loader:
             line_count = total_text.count("\n") + 1 if total_text else 0
 
             end_time = datetime.now()
-            Stat.normal_epub_total_time += (end_time - start_time).total_seconds()
+            Stat.add("normal_epub_total_time", (end_time - start_time).total_seconds())
         except Exception as e:
-            Stat.normal_epub_count -= 1
-            Stat.zipped_epub_count += 1
+            Stat.add("normal_epub_count", -1)
+            Stat.add("zipped_epub_count", 1)
             start_time = datetime.now()
 
             fallback_failed = False
@@ -467,7 +484,7 @@ class Loader:
                 LOGGER.error(e)
 
             end_time = datetime.now()
-            Stat.zipped_epub_total_time += (end_time - start_time).total_seconds()
+            Stat.add("zipped_epub_total_time", (end_time - start_time).total_seconds())
 
         result = re.sub(r"[^\w\sㄱ-힣]", " ", result)
 
@@ -647,7 +664,7 @@ class Loader:
 
     @staticmethod
     def read_from_pdf(file_path: Path) -> tuple[str, int, int]:
-        Stat.pdf_count += 1
+        Stat.add("pdf_count", 1)
         start_time = datetime.now()
 
         result = ""
@@ -739,13 +756,13 @@ class Loader:
         result = re.sub(r"[^\w\sㄱ-힣]", " ", result)
 
         end_time = datetime.now()
-        Stat.pdf_total_time += (end_time - start_time).total_seconds()
+        Stat.add("pdf_total_time", (end_time - start_time).total_seconds())
 
         return result[: Loader.TEXT_SIZE], 0, page_count
 
     @staticmethod
     def read_from_html(file_path: Path) -> tuple[str, int, int]:
-        Stat.html_count += 1
+        Stat.add("html_count", 1)
         start_time = datetime.now()
 
         content = ""
@@ -762,13 +779,13 @@ class Loader:
         result = re.sub(r"[^\w\sㄱ-힣]", " ", result)
 
         end_time = datetime.now()
-        Stat.html_total_time += (end_time - start_time).total_seconds()
+        Stat.add("html_total_time", (end_time - start_time).total_seconds())
 
         return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
     def read_from_docx(file_path: Path) -> tuple[str, int, int]:
-        Stat.docx_count += 1
+        Stat.add("docx_count", 1)
         start_time = datetime.now()
 
         result = ""
@@ -783,13 +800,13 @@ class Loader:
         line_count = total_text.count("\n") if total_text else 0
 
         end_time = datetime.now()
-        Stat.docx_total_time += (end_time - start_time).total_seconds()
+        Stat.add("docx_total_time", (end_time - start_time).total_seconds())
 
         return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
     def read_from_rtf(file_path: Path) -> tuple[str, int, int]:
-        Stat.rtf_count += 1
+        Stat.add("rtf_count", 1)
         start_time = datetime.now()
 
         result = ""
@@ -806,7 +823,7 @@ class Loader:
         result = re.sub(r"[^\w\sㄱ-힣]", " ", result)
 
         end_time = datetime.now()
-        Stat.rtf_total_time += (end_time - start_time).total_seconds()
+        Stat.add("rtf_total_time", (end_time - start_time).total_seconds())
 
         return result[: Loader.TEXT_SIZE], line_count, 0
 
@@ -843,7 +860,7 @@ class Loader:
 
     @staticmethod
     def read_from_doc(file_path: Path) -> tuple[str, int, int]:
-        Stat.doc_count += 1
+        Stat.add("doc_count", 1)
         start_time = datetime.now()
         result = ""
         line_count = 0
@@ -855,12 +872,12 @@ class Loader:
         except Exception as e:
             LOGGER.error(f"can't read doc file '{file_path}': {e}")
         end_time = datetime.now()
-        Stat.doc_total_time += (end_time - start_time).total_seconds()
+        Stat.add("doc_total_time", (end_time - start_time).total_seconds())
         return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
     def read_from_hwp(file_path: Path) -> tuple[str, int, int]:
-        Stat.hwp_count += 1
+        Stat.add("hwp_count", 1)
         start_time = datetime.now()
         result = ""
         line_count = 0
@@ -877,12 +894,12 @@ class Loader:
         except Exception as e:
             LOGGER.error(f"can't read hwp file '{file_path}': {e}")
         end_time = datetime.now()
-        Stat.hwp_total_time += (end_time - start_time).total_seconds()
+        Stat.add("hwp_total_time", (end_time - start_time).total_seconds())
         return result[: Loader.TEXT_SIZE], line_count, 0
 
     @staticmethod
     def read_from_image(_file_path: Path) -> tuple[str, int, int]:
-        Stat.image_count += 1
+        Stat.add("image_count", 1)
         # 이미지는 line_count, page_count 해당 없음
         return "", 0, 0
 
@@ -1249,7 +1266,7 @@ class Loader:
                         except Exception as e:
                             LOGGER.error(file_path)
                             LOGGER.error(e)
-                    Stat.pdf_count += 1
+                    Stat.add("pdf_count", 1)
                 # 지원하지 않는 확장자는 기존 동작 유지 (빈 dict 반환)
                 supported_types = {"txt", "epub", "pdf", "docx", "doc", "hwp", "rtf", "html", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg", "cbz"}
                 if file_type not in supported_types:
@@ -1271,7 +1288,7 @@ class Loader:
                 if Loader.reencode_txt_mode:
                     changed, reason = Loader.reencode_text_file_to_utf8(file_path, dry_run=Loader.reencode_txt_dry_run)
                     if changed:
-                        Stat.text_reencoded_count += 1
+                        Stat.add("text_reencoded_count", 1)
                         LOGGER.warning(f"UTF-8 재인코딩: {reason}")
                     elif reason not in ("이미 UTF-8", "빈 파일"):
                         LOGGER.warning(f"UTF-8 재인코딩 건너뜀: {reason}")
@@ -1295,7 +1312,7 @@ class Loader:
                             LOGGER.error(file_path)
                             LOGGER.error(e)
                     summary, line_count = "", 0
-                    Stat.pdf_count += 1
+                    Stat.add("pdf_count", 1)
                 else:
                     summary, line_count, page_count = Loader.read_from_pdf(file_path)
             elif file_type == "docx":
@@ -1405,6 +1422,7 @@ def print_usage(program_name: str):
 
 def main() -> int:
     BATCH_SIZE = 100
+    WORKER_COUNT = 2
 
     do_delete = False
     do_reload = False
@@ -1476,13 +1494,29 @@ def main() -> int:
             return -1
         return 0
 
-    def process_file_iter(file_iter: Iterable[Path], skip_check: bool = False, skip_text: bool = False, seen_inodes: set[int] | None = None) -> tuple[int, int, int]:
+    def process_file_iter(
+        file_iter: Iterable[Path],
+        skip_check: bool = False,
+        skip_text: bool = False,
+        seen_inodes: set[int] | None = None,
+    ) -> tuple[int, int, int]:
         """파일 iterator를 배치 처리하여 ES에 저장. 반환: (처리 수, 건너뜀 수, 경로동기화 수)"""
         skipped_count = 0
         processed_count = 0
         synced_count = 0
         file_iterator = iter(file_iter)
-        problem_collector = ProblemCollector()
+
+        def can_parse_in_worker(file_path: Path) -> bool:
+            declared_type = file_path.suffix[1:].lower()
+            if declared_type == "pdf":
+                return False
+            return Loader.detect_file_type(file_path, declared_type) != "pdf"
+
+        def parse_file(inode: int) -> tuple[Path, list[str], dict[int, dict[str, Any]]]:
+            file_path, st = file_stat_map[inode]
+            with ProblemCollector() as collector:
+                data_item = Loader.read_file(file_path, stat_result=st, skip_text=skip_text)
+            return file_path, list(collector.messages), data_item
 
         while True:
             # generator에서 배치 단위로 가져오기
@@ -1531,11 +1565,31 @@ def main() -> int:
 
             # 파일 파싱 (stat 결과 재사용). 문제가 있는 파일만 경로와 사유를 출력
             batch_data: dict[int, dict[str, Any]] = {}
-            for inode in new_inodes:
-                file_path, st = file_stat_map[inode]
-                with problem_collector as collector:
-                    data_item = Loader.read_file(file_path, stat_result=st, skip_text=skip_text)
-                report_problems(file_path, collector.messages, bool(data_item))
+            new_inode_list = list(new_inodes)
+            worker_inodes = [
+                inode for inode in new_inode_list if can_parse_in_worker(file_stat_map[inode][0])
+            ]
+            worker_inode_set = set(worker_inodes)
+            main_thread_inodes = [inode for inode in new_inode_list if inode not in worker_inode_set]
+            parse_results: dict[
+                int,
+                tuple[Path, list[str], dict[int, dict[str, Any]]],
+            ] = {}
+
+            if worker_inodes:
+                with ThreadPoolExecutor(max_workers=WORKER_COUNT) as executor:
+                    futures = {inode: executor.submit(parse_file, inode) for inode in worker_inodes}
+                    for inode in main_thread_inodes:
+                        parse_results[inode] = parse_file(inode)
+                    for inode, future in futures.items():
+                        parse_results[inode] = future.result()
+            else:
+                for inode in main_thread_inodes:
+                    parse_results[inode] = parse_file(inode)
+
+            for inode in new_inode_list:
+                file_path, messages, data_item = parse_results[inode]
+                report_problems(file_path, messages, bool(data_item))
                 if data_item:
                     batch_data.update(data_item)
 
@@ -1548,7 +1602,7 @@ def main() -> int:
                     print(f"  [중복 제거: {cleaned}개 기존 문서 삭제]")
                 es_manager.insert(batch_data)
                 processed_count += len(batch_data)
-                Stat.index_count += len(batch_data)
+                Stat.add("index_count", len(batch_data))
                 if skip_check:
                     print(f"  [배치 저장: {len(batch_data)}개]")
                 else:
@@ -1607,32 +1661,35 @@ def main() -> int:
         else:
             skip_check = do_reload
 
-            # 1단계: 하위 디렉토리 각각에서 첫 번째 파일 1개씩 (모아서 한꺼번에 저장)
-            print("  [1단계] 하위 디렉토리별 샘플 파일 등록")
-            sample_files: list[tuple[str, Path]] = []  # (subdir_name, file_path)
-            for subdir in target_path.iterdir():
-                if subdir.is_dir() and not subdir.name.startswith("."):
-                    # 첫 번째 파일만 가져옴 (정렬 불필요, iterator 사용)
-                    first_file = next((p for p in subdir.iterdir() if p.is_file() and not p.name.startswith(".")), None)
-                    if first_file:
-                        sample_files.append((subdir.name, first_file))
-                    else:
-                        print(f"    {subdir.name}/ -> (파일 없음)")
+            if len(file_args) == 1:
+                # 1단계: 하위 디렉토리 각각에서 첫 번째 파일 1개씩 (모아서 한꺼번에 저장)
+                print("  [1단계] 하위 디렉토리별 샘플 파일 등록")
+                sample_files: list[tuple[str, Path]] = []  # (subdir_name, file_path)
+                for subdir in target_path.iterdir():
+                    if subdir.is_dir() and not subdir.name.startswith("."):
+                        # 첫 번째 파일만 가져옴 (정렬 불필요, iterator 사용)
+                        first_file = next((p for p in subdir.iterdir() if p.is_file() and not p.name.startswith(".")), None)
+                        if first_file:
+                            sample_files.append((subdir.name, first_file))
+                        else:
+                            print(f"    {subdir.name}/ -> (파일 없음)")
 
-            if sample_files:
-                print(f"    {len(sample_files)}개 디렉토리에서 샘플 파일 선정 완료")
-                for subdir_name, sample_file in sample_files:
-                    print(f"      {subdir_name}/ -> {sample_file.name}")
+                if sample_files:
+                    print(f"    {len(sample_files)}개 디렉토리에서 샘플 파일 선정 완료")
+                    for subdir_name, sample_file in sample_files:
+                        print(f"      {subdir_name}/ -> {sample_file.name}")
 
-                # 모아서 한꺼번에 ES에 저장
-                sample_file_paths = [f for _, f in sample_files]
-                processed, skipped1, synced1 = process_file_iter(sample_file_paths, skip_check=skip_check, skip_text=skip_text)
-                print(f"    {processed}개 카테고리 샘플 저장, {skipped1}개 중복 건너뜀")
-                if synced1 > 0:
-                    print(f"    {synced1}개 경로 동기화")
+                    # 모아서 한꺼번에 ES에 저장
+                    sample_file_paths = [f for _, f in sample_files]
+                    processed, skipped1, synced1 = process_file_iter(sample_file_paths, skip_check=skip_check, skip_text=skip_text)
+                    print(f"    {processed}개 카테고리 샘플 저장, {skipped1}개 중복 건너뜀")
+                    if synced1 > 0:
+                        print(f"    {synced1}개 경로 동기화")
 
-            # 2단계: 지정된 디렉토리에 바로 속한 파일들
-            print("  [2단계] 현재 디렉토리 파일 등록")
+                print("  [2단계] 현재 디렉토리 파일 등록")
+            else:
+                print("  [지정 디렉토리 파일 등록]")
+
             current_dir_files = [p for p in target_path.iterdir() if p.is_file() and not p.name.startswith(".")]
             print(f"    {len(current_dir_files)}개 파일 발견")
             _, skipped2, synced2 = process_file_iter(current_dir_files, skip_check=skip_check, skip_text=skip_text)
@@ -1647,7 +1704,7 @@ def main() -> int:
     es_manager.refresh()
 
     end_time = datetime.now()
-    Stat.index_total_time = (end_time - start_time).total_seconds()
+    Stat.set_value("index_total_time", (end_time - start_time).total_seconds())
     Stat.print()
 
     return 0

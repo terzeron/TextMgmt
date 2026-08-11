@@ -4395,6 +4395,145 @@ class TestLoaderMainBranches:
         assert "경로 동기화" in out
         assert "중복 파일 건너뜀" in out
 
+    def test_multiple_non_recursive_directories_skip_sample_indexing(self, monkeypatch, tmp_path, capsys):
+        """복수 디렉토리 인자는 샘플 파일 없이 각 대상의 직접 파일만 적재한다."""
+        _setup_loader_env(monkeypatch, tmp_path)
+        d1 = tmp_path / "d1"
+        d2 = tmp_path / "d2"
+        d1.mkdir()
+        d2.mkdir()
+        (d1 / "nested").mkdir()
+        (d2 / "nested").mkdir()
+        (d1 / "[author] direct1.txt").write_text("direct1", encoding="utf-8")
+        (d2 / "[author] direct2.txt").write_text("direct2", encoding="utf-8")
+        (d1 / "nested" / "[author] nested1.txt").write_text("nested1", encoding="utf-8")
+        (d2 / "nested" / "[author] nested2.txt").write_text("nested2", encoding="utf-8")
+
+        monkeypatch.setattr("sys.argv", ["loader", "book", str(d1), str(d2)])
+        from utils.loader import main
+
+        inserted_paths: list[str] = []
+
+        def insert(data):
+            inserted_paths.extend(v["file_path"] for v in data.values())
+            return []
+
+        mock_es = MagicMock()
+        mock_es.es.ping.return_value = True
+        mock_es.get_existing_paths.return_value = {}
+        mock_es.delete_by_file_paths.return_value = 0
+        mock_es.insert.side_effect = insert
+        monkeypatch.setattr("utils.loader.ESManager", lambda index_name: mock_es)
+
+        result = main()
+        out = capsys.readouterr().out
+
+        assert result == 0
+        assert set(inserted_paths) == {
+            "d1/[author] direct1.txt",
+            "d2/[author] direct2.txt",
+        }
+        assert "하위 디렉토리별 샘플 파일 등록" not in out
+
+    def test_main_parses_batch_with_two_worker_threads(self, monkeypatch, tmp_path, capsys):
+        """한 배치의 일반 파일 파싱은 worker thread 2개에서 동시에 실행한다."""
+        import logging
+        import threading
+
+        Loader = _setup_loader_env(monkeypatch, tmp_path)
+        f1 = tmp_path / "[author] one.txt"
+        f2 = tmp_path / "[author] two.txt"
+        f1.write_text("one", encoding="utf-8")
+        f2.write_text("two", encoding="utf-8")
+        monkeypatch.setattr("sys.argv", ["loader", "--reload", "book", str(tmp_path)])
+
+        barrier = threading.Barrier(2, timeout=3)
+        thread_ids: set[int] = set()
+
+        def read_file(file_path, stat_result=None, skip_text=False):
+            thread_ids.add(threading.get_ident())
+            logging.getLogger().warning("problem:%s", file_path.name)
+            barrier.wait()
+            st = stat_result if stat_result is not None else file_path.stat()
+            return {
+                st.st_ino: {
+                    "category": "_root",
+                    "title": file_path.stem,
+                    "author": "",
+                    "file_path": str(file_path.relative_to(tmp_path)),
+                    "file_type": "txt",
+                    "file_size": st.st_size,
+                    "line_count": 1,
+                    "page_count": 0,
+                    "isbn": "",
+                    "summary": file_path.stem,
+                    "updated_time": "2026-08-11T00:00:00",
+                }
+            }
+
+        mock_es = MagicMock()
+        mock_es.es.ping.return_value = True
+        mock_es.delete_by_file_paths.return_value = 0
+        mock_es.insert.return_value = []
+        monkeypatch.setattr(Loader, "read_file", staticmethod(read_file))
+        monkeypatch.setattr("utils.loader.ESManager", lambda index_name: mock_es)
+
+        from utils.loader import main
+
+        result = main()
+        out = capsys.readouterr().out
+
+        assert result == 0
+        assert len(thread_ids) == 2
+        assert "problem:[author] one.txt" in out
+        assert "problem:[author] two.txt" in out
+
+    def test_main_keeps_pdf_parsing_on_main_thread(self, monkeypatch, tmp_path):
+        """PDF 파싱은 signal timeout 보호를 위해 main thread에서 유지한다."""
+        import threading
+
+        Loader = _setup_loader_env(monkeypatch, tmp_path)
+        pdf = tmp_path / "[author] doc.pdf"
+        txt = tmp_path / "[author] note.txt"
+        pdf.write_bytes(b"%PDF-1.4\n")
+        txt.write_text("note", encoding="utf-8")
+        monkeypatch.setattr("sys.argv", ["loader", "--reload", "book", str(tmp_path)])
+
+        main_thread_id = threading.get_ident()
+        pdf_thread_ids: list[int] = []
+
+        def read_file(file_path, stat_result=None, skip_text=False):
+            st = stat_result if stat_result is not None else file_path.stat()
+            if file_path.suffix == ".pdf":
+                pdf_thread_ids.append(threading.get_ident())
+            return {
+                st.st_ino: {
+                    "category": "_root",
+                    "title": file_path.stem,
+                    "author": "",
+                    "file_path": str(file_path.relative_to(tmp_path)),
+                    "file_type": file_path.suffix[1:],
+                    "file_size": st.st_size,
+                    "line_count": 1,
+                    "page_count": 0,
+                    "isbn": "",
+                    "summary": file_path.stem,
+                    "updated_time": "2026-08-11T00:00:00",
+                }
+            }
+
+        mock_es = MagicMock()
+        mock_es.es.ping.return_value = True
+        mock_es.delete_by_file_paths.return_value = 0
+        mock_es.insert.return_value = []
+        monkeypatch.setattr(Loader, "read_file", staticmethod(read_file))
+        monkeypatch.setattr("utils.loader.ESManager", lambda index_name: mock_es)
+
+        from utils.loader import main
+
+        assert main() == 0
+        assert pdf_thread_ids == [main_thread_id]
+
 
 def test_loader_module_executed_as_main(monkeypatch):
     """if __name__ == '__main__' 가드 실행 (loader.py:1055).

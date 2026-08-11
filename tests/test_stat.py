@@ -51,3 +51,21 @@ def test_counters_are_class_level():
     assert Stat.text_count == 0
     Stat.text_count += 1
     assert Stat.text_count == 1
+
+
+def test_add_is_thread_safe():
+    import threading
+
+    Stat.text_count = 0
+
+    def bump():
+        for _ in range(1000):
+            Stat.add("text_count", 1)
+
+    threads = [threading.Thread(target=bump) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert Stat.text_count == 2000
