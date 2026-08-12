@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import os
 import sys
 import time
@@ -22,6 +24,24 @@ REFRESH_COOKIE_NAME = "tm_refresh_token"
 TM_ADMIN_EMAIL = os.getenv("TM_ADMIN_EMAIL", "")
 _allowed_raw = os.getenv("TM_ALLOWED_EMAILS", "")
 TM_ALLOWED_EMAILS = [e.strip() for e in _allowed_raw.split(",") if e.strip()]
+
+
+OBSERVATION_HASH_LENGTH = 16
+
+
+def observation_hash(value: str) -> str:
+    """관측 로그용 단방향 해시.
+
+    refresh 회전 실패를 "같은 브라우저의 동시 요청"과 "다른 환경에서 복사된 상태"로
+    분류하기 위한 진단 신호를 만든다. 원문(이메일, family_id, jti, user-agent, IP)을
+    로그에 남기지 않으면서 같은 값끼리 상관관계만 볼 수 있게 한다.
+
+    주의: 진단 전용이며 인가 판단에 절대 사용하지 않는다.
+    """
+    if not value:
+        return ""
+    digest = hmac.new(JWT_SECRET.encode(), ("tm-observation|" + value).encode(), hashlib.sha256).hexdigest()
+    return digest[:OBSERVATION_HASH_LENGTH]
 
 
 def _get_admin_email() -> str:

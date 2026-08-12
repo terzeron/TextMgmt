@@ -111,6 +111,12 @@ class _FakeCursor:
     def fetchone(self):
         return self._conn.select_row
 
+    def fetchall(self):
+        # 세션 집계(list_sessions)는 여러 row 를 읽는다. select_row 가 없으면 빈 결과.
+        if self._conn.select_row is None:
+            return []
+        return [self._conn.select_row]
+
 
 class _FakeConn:
     """rotate 상태머신 검증용 pymysql 연결 대역."""
@@ -355,3 +361,286 @@ def test_mysql_revoke_family_exception_rolls_back_and_raises(monkeypatch):
         store.revoke_family("F", reason="logout")
 
     assert boom.rolled_back and not boom.committed
+
+
+# ========== Phase 0: 관측 전용 읽기 조회 ==========
+
+
+def test_get_token_observation_reports_rotation_state(tmp_path):
+    """회전 전에는 replaced_by_present=False, 회전 후에는 True 를 보고한다."""
+    store = RefreshTokenStore(str(tmp_path / "refresh_tokens.sqlite3"))
+    now = int(time.time())
+    store.store_issued(token_id="token-1", family_id="family-1", email="admin@example.com", issued_at=now, expires_at=now + 1000)
+
+    before = store.get_token_observation("token-1")
+    assert before == {"replaced_by_present": False, "revoked_at": None, "revoke_reason": None}
+
+    assert store.rotate(current_token_id="token-1", new_token_id="token-2", family_id="family-1", email="admin@example.com", issued_at=now + 1, expires_at=now + 1001) == "ok"
+
+    after = store.get_token_observation("token-1")
+    assert after is not None
+    assert after["replaced_by_present"] is True
+    assert after["revoke_reason"] == "rotated"
+
+
+def test_get_token_observation_returns_none_for_unknown_token(tmp_path):
+    store = RefreshTokenStore(str(tmp_path / "refresh_tokens.sqlite3"))
+    assert store.get_token_observation("no-such-token") is None
+
+
+def test_get_token_observation_does_not_mutate_state(tmp_path):
+    """관측 조회는 읽기 전용이므로 이후 회전 결과에 영향을 주지 않는다."""
+    store = RefreshTokenStore(str(tmp_path / "refresh_tokens.sqlite3"))
+    now = int(time.time())
+    store.store_issued(token_id="token-1", family_id="family-1", email="admin@example.com", issued_at=now, expires_at=now + 1000)
+
+    store.get_token_observation("token-1")
+    store.get_token_observation("token-1")
+
+    assert store.rotate(current_token_id="token-1", new_token_id="token-2", family_id="family-1", email="admin@example.com", issued_at=now + 1, expires_at=now + 1001) == "ok"
+
+
+def test_mysql_get_token_observation_reads_row(monkeypatch):
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    conns = _install_fresh_conns(monkeypatch, {"replaced_by": "successor", "revoked_at": 123, "revoke_reason": "rotated"})
+    store = MySQLRefreshTokenStore()
+
+    result = store.get_token_observation("old")
+
+    assert result == {"replaced_by_present": True, "revoked_at": 123, "revoke_reason": "rotated"}
+    # 읽기 전용이므로 커밋/롤백이 없어야 한다
+    obs = conns[-1]
+    assert _verbs(obs) == ["SELECT"]
+    assert not obs.committed and not obs.rolled_back
+
+
+def test_mysql_get_token_observation_returns_none_for_unknown_token(monkeypatch):
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    _install_fresh_conns(monkeypatch, None)
+    store = MySQLRefreshTokenStore()
+
+    assert store.get_token_observation("missing") is None
+
+
+# ========== Admin 세션 관리: 집계/폐기 ==========
+
+
+def _session_fixture(tmp_path):
+    """활성/폐기/만료 family 를 각각 하나씩 만든 store 를 돌려준다."""
+    store = RefreshTokenStore(str(tmp_path / "sessions.sqlite3"))
+    now = int(time.time())
+    # 활성 family: 두 번 회전해 토큰 row 3개
+    store.store_issued(token_id="a1", family_id="a" * 32, email="admin@example.com", issued_at=now - 100, expires_at=now + 1000)
+    store.rotate(current_token_id="a1", new_token_id="a2", family_id="a" * 32, email="admin@example.com", issued_at=now - 50, expires_at=now + 1500)
+    store.rotate(current_token_id="a2", new_token_id="a3", family_id="a" * 32, email="admin@example.com", issued_at=now - 10, expires_at=now + 2000)
+    # 로그아웃으로 폐기된 family
+    store.store_issued(token_id="b1", family_id="b" * 32, email="viewer@example.com", issued_at=now - 200, expires_at=now + 1000)
+    store.revoke_family("b" * 32, reason="logout")
+    # 자연 만료된 family
+    store.store_issued(token_id="c1", family_id="c" * 32, email="viewer@example.com", issued_at=now - 9999, expires_at=now - 10)
+    return store, now
+
+
+def test_list_sessions_groups_by_family_and_derives_status(tmp_path):
+    store, now = _session_fixture(tmp_path)
+
+    page = store.list_sessions(status="all")
+
+    by_email_status = {(i["email"], i["status"]) for i in page["items"]}
+    assert by_email_status == {("admin@example.com", "active"), ("viewer@example.com", "revoked"), ("viewer@example.com", "expired")}
+    assert page["summary"] == {"active": 1, "expired": 1, "revoked": 1, "total": 3}
+
+    active = next(i for i in page["items"] if i["status"] == "active")
+    # 회전 이력이 모두 한 family 로 묶이고, 살아 있는 토큰은 최신 하나뿐이다
+    assert active["token_count"] == 3
+    assert active["valid_token_count"] == 1
+    assert active["created_at"] == now - 100
+    assert active["last_seen_at"] == now - 10
+    assert active["expires_at"] == now + 2000
+    assert active["revoked_at"] is None
+    assert active["revoke_reason"] is None
+
+
+def test_list_sessions_reports_revoke_reason_only_for_revoked(tmp_path):
+    store, _ = _session_fixture(tmp_path)
+
+    items = {i["status"]: i for i in store.list_sessions(status="all")["items"]}
+
+    assert items["revoked"]["revoke_reason"] == "logout"
+    assert items["revoked"]["revoked_at"] is not None
+    # 자연 만료는 폐기 사유가 없다
+    assert items["expired"]["revoke_reason"] is None
+
+
+def test_list_sessions_active_filter_and_default(tmp_path):
+    store, _ = _session_fixture(tmp_path)
+
+    default_page = store.list_sessions()
+    assert [i["status"] for i in default_page["items"]] == ["active"]
+    # 요약은 필터와 무관하게 전체를 센다
+    assert default_page["summary"]["total"] == 3
+    assert default_page["pagination"]["totalItems"] == 1
+
+
+def test_list_sessions_does_not_expose_token_internals(tmp_path):
+    store, _ = _session_fixture(tmp_path)
+
+    item = store.list_sessions(status="all")["items"][0]
+
+    assert "jti" not in item
+    assert "replaced_by" not in item
+    assert set(item.keys()) == {"session_id", "session_label", "email", "status", "created_at", "last_seen_at", "expires_at", "revoked_at", "revoke_reason", "token_count", "valid_token_count", "is_current"}
+    # 라벨은 family_id 앞부분만 보여준다
+    assert item["session_label"].endswith("...")
+    assert len(item["session_label"]) == 11
+
+
+def test_list_sessions_marks_current_session(tmp_path):
+    store, _ = _session_fixture(tmp_path)
+
+    page = store.list_sessions(status="all", current_family_id="b" * 32)
+
+    current = [i for i in page["items"] if i["is_current"]]
+    assert len(current) == 1
+    assert current[0]["session_id"] == "b" * 32
+
+
+def test_list_sessions_paginates_newest_activity_first(tmp_path):
+    store, _ = _session_fixture(tmp_path)
+
+    first = store.list_sessions(status="all", page=1, page_size=2)
+    second = store.list_sessions(status="all", page=2, page_size=2)
+
+    assert first["pagination"] == {"page": 1, "pageSize": 2, "totalItems": 3, "totalPages": 2}
+    assert len(first["items"]) == 2
+    assert len(second["items"]) == 1
+    # last_seen_at 내림차순
+    seen = [i["last_seen_at"] for i in first["items"] + second["items"]]
+    assert seen == sorted(seen, reverse=True)
+    # 페이지 간 중복 없음
+    assert not ({i["session_id"] for i in first["items"]} & {i["session_id"] for i in second["items"]})
+
+
+def test_list_sessions_page_beyond_end_is_empty(tmp_path):
+    store, _ = _session_fixture(tmp_path)
+    assert store.list_sessions(status="all", page=99, page_size=50)["items"] == []
+
+
+def test_list_sessions_filters_by_email(tmp_path):
+    store, _ = _session_fixture(tmp_path)
+
+    page = store.list_sessions(status="all", email="viewer@example.com")
+
+    assert {i["email"] for i in page["items"]} == {"viewer@example.com"}
+    assert page["summary"]["total"] == 2
+
+
+def test_list_sessions_empty_store(tmp_path):
+    store = RefreshTokenStore(str(tmp_path / "empty.sqlite3"))
+
+    page = store.list_sessions(status="all")
+
+    assert page["items"] == []
+    assert page["summary"] == {"active": 0, "expired": 0, "revoked": 0, "total": 0}
+    assert page["pagination"]["totalPages"] == 1
+
+
+def test_revoke_session_revokes_whole_family(tmp_path):
+    store, _ = _session_fixture(tmp_path)
+
+    result = store.revoke_session(family_id="a" * 32)
+
+    assert result["found"] is True
+    assert result["revoked"] is True
+    assert result["session"]["status"] == "revoked"
+    assert result["session"]["revoke_reason"] == "admin-revoked"
+    # 폐기 후에는 회전이 막힌다
+    now = int(time.time())
+    assert store.rotate(current_token_id="a3", new_token_id="a4", family_id="a" * 32, email="admin@example.com", issued_at=now, expires_at=now + 1000) == "revoked"
+
+
+def test_revoke_session_is_idempotent_for_inactive_family(tmp_path):
+    store, _ = _session_fixture(tmp_path)
+    store.revoke_session(family_id="a" * 32)
+
+    again = store.revoke_session(family_id="a" * 32)
+
+    # 이미 활성 토큰이 없으므로 revoked=False 지만 성공이고 현재 상태를 돌려준다
+    assert again["found"] is True
+    assert again["revoked"] is False
+    assert again["session"]["status"] == "revoked"
+
+
+def test_revoke_session_keeps_existing_terminal_reason(tmp_path):
+    store, _ = _session_fixture(tmp_path)
+
+    result = store.revoke_session(family_id="b" * 32)
+
+    assert result["found"] is True
+    assert result["revoked"] is False
+    # logout 으로 이미 폐기된 family 의 사유를 admin-revoked 로 덮어쓰지 않는다
+    assert result["session"]["revoke_reason"] == "logout"
+
+
+def test_revoke_session_unknown_family(tmp_path):
+    store, _ = _session_fixture(tmp_path)
+
+    result = store.revoke_session(family_id="d" * 32)
+
+    assert result == {"found": False, "revoked": False, "session": None}
+
+
+def test_revoke_session_does_not_touch_other_families(tmp_path):
+    store, _ = _session_fixture(tmp_path)
+
+    store.revoke_session(family_id="a" * 32)
+
+    others = {i["session_id"]: i for i in store.list_sessions(status="all")["items"]}
+    assert others["b" * 32]["revoke_reason"] == "logout"
+    assert others["c" * 32]["status"] == "expired"
+
+
+def test_mysql_list_sessions_uses_same_derivation(monkeypatch):
+    """MySQL store 도 SQLite 와 동일한 집계 결과 형태를 돌려준다."""
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    now = int(time.time())
+    row = {"family_id": "a" * 32, "email": "admin@example.com", "created_at": now - 100, "last_seen_at": now - 10, "max_expires_at": now + 2000, "token_count": 3, "valid_token_count": 1, "active_expires_at": now + 2000, "terminal_reason": None, "revoked_at": None}
+    _install_fresh_conns(monkeypatch, row)
+    store = MySQLRefreshTokenStore()
+
+    page = store.list_sessions(status="all", current_family_id="a" * 32)
+
+    assert page["summary"] == {"active": 1, "expired": 0, "revoked": 0, "total": 1}
+    item = page["items"][0]
+    assert item["status"] == "active"
+    assert item["is_current"] is True
+    assert item["token_count"] == 3
+    assert item["session_label"] == "aaaaaaaa..."
+
+
+def test_mysql_revoke_session_revokes_and_reports_status(monkeypatch):
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    now = int(time.time())
+    row = {"family_id": "a" * 32, "email": "admin@example.com", "created_at": now - 100, "last_seen_at": now - 10, "max_expires_at": now + 2000, "token_count": 3, "valid_token_count": 1, "active_expires_at": now + 2000, "terminal_reason": None, "revoked_at": None}
+    conns = _install_fresh_conns(monkeypatch, row)
+    store = MySQLRefreshTokenStore()
+
+    result = store.revoke_session(family_id="a" * 32)
+
+    assert result["found"] is True
+    assert result["revoked"] is True
+    # family revoke UPDATE 가 커밋된 연결이 있어야 한다
+    assert any("UPDATE" in _verbs(c) and c.committed for c in conns)
+
+
+def test_mysql_revoke_session_unknown_family(monkeypatch):
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    _install_fresh_conns(monkeypatch, None)
+    store = MySQLRefreshTokenStore()
+
+    assert store.revoke_session(family_id="d" * 32) == {"found": False, "revoked": False, "session": None}

@@ -44,6 +44,7 @@ vi.mock("../src/Common", async () => {
     rawJsonGetReq: vi.fn(),
     getApiUrlPrefix: vi.fn(() => "/api"),
     tryRefreshToken: vi.fn(),
+    refreshOnVisible: vi.fn(),
     startProactiveRefresh: vi.fn(),
     stopProactiveRefresh: vi.fn(),
   };
@@ -819,7 +820,7 @@ describe("Navigation Component", () => {
       expect(screen.getByText("책 편집")).toBeDefined();
     });
 
-    Common.tryRefreshToken.mockClear();
+    Common.refreshOnVisible.mockClear();
 
     // 탭이 다시 활성화되는 이벤트 시뮬레이션
     Object.defineProperty(document, "visibilityState", {
@@ -828,7 +829,9 @@ describe("Navigation Component", () => {
     });
     document.dispatchEvent(new Event("visibilitychange"));
 
-    expect(Common.tryRefreshToken).toHaveBeenCalledTimes(1);
+    // 여러 탭이 동시에 활성화될 때의 refresh 폭주를 막기 위해 디바운스된 진입점을 쓴다
+    expect(Common.refreshOnVisible).toHaveBeenCalledTimes(1);
+    expect(Common.tryRefreshToken).not.toHaveBeenCalled();
   });
 
   it("does not refresh token when tab becomes hidden", async () => {
@@ -857,6 +860,7 @@ describe("Navigation Component", () => {
     });
 
     Common.tryRefreshToken.mockClear();
+    Common.refreshOnVisible.mockClear();
 
     // 탭이 숨겨지는 이벤트 — refresh 호출 안 됨
     Object.defineProperty(document, "visibilityState", {
@@ -865,6 +869,7 @@ describe("Navigation Component", () => {
     });
     document.dispatchEvent(new Event("visibilitychange"));
 
+    expect(Common.refreshOnVisible).not.toHaveBeenCalled();
     expect(Common.tryRefreshToken).not.toHaveBeenCalled();
   });
 
@@ -1523,7 +1528,11 @@ describe("Navigation Component", () => {
     let loadMoreFn;
     Common.rawJsonGetReq.mockImplementation((url, resolve) => {
       if (url.includes("search")) {
-        resolve({ status: "success", result: [{ id: 1, title: "B1" }], total: 5 });
+        resolve({
+          status: "success",
+          result: [{ id: 1, title: "B1" }],
+          total: 5,
+        });
       }
     });
 
@@ -1577,10 +1586,7 @@ describe("Navigation Component", () => {
 
     // clientId 가 없으면 세션 조회를 하지 않는다
     await waitFor(() => {
-      expect(fetch).not.toHaveBeenCalledWith(
-        "/api/auth/me",
-        expect.anything(),
-      );
+      expect(fetch).not.toHaveBeenCalledWith("/api/auth/me", expect.anything());
     });
   });
 });

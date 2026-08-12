@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Literal, Callable, TypeVar
 from urllib.parse import urlparse
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -20,7 +20,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
 from pydantic import BaseModel
-from backend.auth import require_auth, require_admin, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
+from backend.auth import require_auth, require_admin, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, observation_hash, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
 from backend.book_manager import BookManager
 from backend.comics_manager import ComicsManager
 from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
@@ -245,6 +245,46 @@ comics_manager = _LazyProxy(_create_comics_manager, "comics manager")
 bookstore = _LazyProxy(_create_bookstore, "bookstore")
 category_mapping = _LazyProxy(_create_category_mapping, "category mapping")
 refresh_token_store = _LazyProxy(create_refresh_token_store, "refresh token store")
+
+
+def _request_ip_prefix(request: Request) -> str:
+    """관측용 IP 프리픽스. IPv4 는 /24, IPv6 는 /48 까지만 남긴다.
+
+    Traefik 뒤에 있으므로 X-Forwarded-For 의 첫 항목을 우선 사용한다. 스푸핑 가능한
+    값이지만 진단 전용이고 인가 판단에 쓰지 않으므로 허용한다.
+    """
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "")
+    if not client_ip:
+        return ""
+    if ":" in client_ip:
+        return ":".join(client_ip.split(":")[:3])
+    return ".".join(client_ip.split(".")[:3])
+
+
+def _log_refresh_rotation_rejected(request: Request, *, status: str, email: str, family_id: str, token_id: str) -> None:
+    """refresh 회전 거부 사건을 마스킹된 필드로만 기록한다.
+
+    `reuse-detected` 가 같은 브라우저의 멀티탭 동시성에서 오는지, 다른 환경에서 복사된
+    상태에서 오는지 구분하기 위한 관측 로그다. UA/IP 해시는 진단 신호일 뿐이며 인가
+    판단에 사용하지 않는다. 원문 토큰·쿠키·user-agent·전체 IP·전체 이메일은 남기지 않는다.
+    """
+    try:
+        observation = refresh_token_store.get_token_observation(token_id)
+    except Exception as e:
+        # 관측 실패가 refresh 응답을 막지 않아야 한다.
+        LOGGER.debug("refresh rotation observation lookup failed: %s", e)
+        observation = None
+    LOGGER.warning(
+        "Refresh token rotation rejected event=refresh-rotation-rejected status=%s email_hash=%s family_hash=%s jti_hash=%s replaced_by_present=%s request_user_agent_hash=%s request_ip_prefix_hash=%s",
+        status,
+        observation_hash(email),
+        observation_hash(family_id),
+        observation_hash(token_id),
+        "true" if observation and observation["replaced_by_present"] else "false",
+        observation_hash(request.headers.get("User-Agent", "")),
+        observation_hash(_request_ip_prefix(request)),
+    )
 
 
 def _issue_auth_tokens(email: str, role: str, name: str = "", picture: str = "", family_id: str | None = None) -> tuple[str, str]:
@@ -751,7 +791,7 @@ async def refresh_access_token(request: Request):
         LOGGER.error("refresh_token_store.rotate() failed for %s: %s", email, e)
         raise HTTPException(status_code=503, detail="서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.")
     if rotation_status != "ok":
-        LOGGER.warning("Refresh token rotation rejected for %s: %s", email, rotation_status)
+        _log_refresh_rotation_rejected(request, status=rotation_status, email=email, family_id=family_id, token_id=current_token_id)
         response = JSONResponse(status_code=401, content={"detail": "Invalid refresh token state"})
         _clear_auth_cookies(response)
         return response
@@ -781,6 +821,68 @@ async def logout(request: Request):
             LOGGER.debug("Ignoring invalid refresh token during logout")
     response = JSONResponse({"status": "success"})
     _clear_auth_cookies(response)
+    return response
+
+
+# === 로그인 세션 관리 API (admin 전용) ===
+
+# family_id 는 uuid4().hex 이므로 32자 소문자 hex 다.
+FAMILY_ID_LENGTH = 32
+FAMILY_ID_CHARS = frozenset("0123456789abcdef")
+SESSION_STATUS_FILTERS = ("active", "all")
+MAX_SESSION_PAGE_SIZE = 100
+
+
+def _is_family_id(value: str) -> bool:
+    return len(value) == FAMILY_ID_LENGTH and all(c in FAMILY_ID_CHARS for c in value)
+
+
+def _current_refresh_family_id(request: Request) -> str | None:
+    """요청자의 refresh 쿠키에서 family_id 를 얻는다. 없거나 유효하지 않으면 None."""
+    refresh_token = request.cookies.get(REFRESH_COOKIE_NAME, "")
+    if not refresh_token:
+        return None
+    try:
+        return decode_refresh_token(refresh_token).get("fid")
+    except HTTPException:
+        return None
+
+
+@app.get("/auth/sessions", dependencies=[Depends(require_admin)])
+async def list_login_sessions(request: Request, page: int = Query(1, ge=1), pageSize: int = Query(50, ge=1, le=MAX_SESSION_PAGE_SIZE), status: str = "active", email: str | None = None):
+    """서버 측 refresh 세션(family) 목록을 조회한다. jti·토큰 값은 노출하지 않는다."""
+    if status not in SESSION_STATUS_FILTERS:
+        raise HTTPException(status_code=400, detail=f"status must be one of: {', '.join(SESSION_STATUS_FILTERS)}")
+    try:
+        result = refresh_token_store.list_sessions(status=status, page=page, page_size=pageSize, email=email, current_family_id=_current_refresh_family_id(request))
+    except Exception as e:
+        LOGGER.error("refresh_token_store.list_sessions() failed: %s", e)
+        raise HTTPException(status_code=503, detail="서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.")
+    return {"status": "success", "result": result}
+
+
+@app.delete("/auth/sessions/{session_id}")
+async def revoke_login_session(session_id: str, request: Request, admin: dict = Depends(require_admin)):
+    """세션(family) 하나를 폐기한다. 되돌릴 수 없으므로 단일 family 로만 범위를 제한한다."""
+    if not _is_family_id(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session id")
+    try:
+        outcome = refresh_token_store.revoke_session(family_id=session_id)
+    except Exception as e:
+        LOGGER.error("refresh_token_store.revoke_session() failed: %s", e)
+        raise HTTPException(status_code=503, detail="서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.")
+    if not outcome["found"]:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    revoked_current = _current_refresh_family_id(request) == session_id
+    # 관리자 행위 감사 로그. 대상 세션은 해시로만 남긴다.
+    LOGGER.warning("Admin %s revoked login session session_hash=%s revoked_current=%s", admin.get("email", ""), observation_hash(session_id), revoked_current)
+
+    session = outcome["session"] or {}
+    response = JSONResponse({"status": "success", "result": {"session_id": session_id, "revoked": outcome["revoked"], "revoked_current": revoked_current, "status": session.get("status", "revoked"), "revoke_reason": session.get("revoke_reason")}})
+    if revoked_current:
+        # 본인 세션을 폐기했으면 쿠키도 정리해 프런트가 미인증 흐름으로 넘어가게 한다.
+        _clear_auth_cookies(response)
     return response
 
 

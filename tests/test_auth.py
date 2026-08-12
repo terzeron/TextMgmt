@@ -1,5 +1,6 @@
 import os
 from unittest.mock import patch
+import logging
 import sys
 import time
 import importlib
@@ -746,3 +747,356 @@ async def test_require_auth_non_standard_role_raises_403(setup_env, monkeypatch)
         await auth_mod.require_auth(FakeRequest())
     assert exc_info.value.status_code == 403
     assert "permissions" in exc_info.value.detail.lower()
+
+
+# ========== Phase 0: refresh 회전 실패 관측 로깅 ==========
+
+
+class TestRefreshRotationObservation:
+    """refresh 회전 거부 사건을 마스킹된 필드로만 남기는지 검증한다.
+
+    관측 목적은 `reuse-detected` 가 같은 브라우저의 멀티탭 동시성에서 오는지, 다른
+    환경에서 복사된 상태에서 오는지 구분하는 것이다.
+    """
+
+    RAW_EMAIL = "observed-user@example.com"
+    RAW_UA = "Mozilla/5.0 (X11; Linux x86_64) ObservedBrowser/123.45"
+    RAW_IP = "203.0.113.77"
+
+    def _reject_refresh(self, auth_client, monkeypatch, caplog, status="reused"):
+        monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: {"email": self.RAW_EMAIL, "role": "user", "name": "n", "picture": "p", "fid": "observed-family", "jti": "observed-jti"})
+        monkeypatch.setattr(main_mod, "determine_role", lambda email: "user")
+        monkeypatch.setattr(main_mod.refresh_token_store, "rotate", lambda **kwargs: status)
+        monkeypatch.setattr(main_mod.refresh_token_store, "get_token_observation", lambda token_id: {"replaced_by_present": True, "revoked_at": 1, "revoke_reason": "rotated"})
+        with caplog.at_level(logging.WARNING):
+            resp = auth_client.post("/auth/refresh", cookies={main_mod.REFRESH_COOKIE_NAME: "raw-refresh-cookie-value"}, headers={"User-Agent": self.RAW_UA, "X-Forwarded-For": f"{self.RAW_IP}, 10.0.0.1"})
+        return resp, caplog.text
+
+    def test_emits_structured_masked_event(self, auth_client, monkeypatch, caplog):
+        resp, text = self._reject_refresh(auth_client, monkeypatch, caplog)
+
+        assert resp.status_code == 401
+        assert "event=refresh-rotation-rejected" in text
+        assert "status=reused" in text
+        assert "replaced_by_present=true" in text
+        # 모든 식별자는 HMAC 해시로만 남는다
+        for field, raw in (("email_hash", self.RAW_EMAIL), ("family_hash", "observed-family"), ("jti_hash", "observed-jti"), ("request_user_agent_hash", self.RAW_UA), ("request_ip_prefix_hash", "203.0.113")):
+            assert f"{field}={main_mod.observation_hash(raw)}" in text
+
+    def test_never_logs_raw_identifiers(self, auth_client, monkeypatch, caplog):
+        """원문 토큰·쿠키·전체 이메일·전체 IP·raw user-agent 는 로그에 남지 않는다."""
+        _, text = self._reject_refresh(auth_client, monkeypatch, caplog)
+
+        assert self.RAW_EMAIL not in text
+        assert self.RAW_UA not in text
+        assert self.RAW_IP not in text  # /24 프리픽스도 해시로만 기록
+        assert "raw-refresh-cookie-value" not in text
+        assert "observed-family" not in text
+        assert "observed-jti" not in text
+
+    def test_observation_lookup_failure_does_not_break_response(self, auth_client, monkeypatch, caplog):
+        """관측 조회가 실패해도 refresh 응답 경로는 그대로 401 을 반환한다."""
+
+        def _boom(token_id):
+            raise RuntimeError("store down")
+
+        monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: {"email": self.RAW_EMAIL, "role": "user", "name": "n", "picture": "p", "fid": "F", "jti": "J"})
+        monkeypatch.setattr(main_mod, "determine_role", lambda email: "user")
+        monkeypatch.setattr(main_mod.refresh_token_store, "rotate", lambda **kwargs: "reused")
+        monkeypatch.setattr(main_mod.refresh_token_store, "get_token_observation", _boom)
+
+        with caplog.at_level(logging.WARNING):
+            resp = auth_client.post("/auth/refresh", cookies={main_mod.REFRESH_COOKIE_NAME: "tok"})
+
+        assert resp.status_code == 401
+        assert "event=refresh-rotation-rejected" in caplog.text
+        assert "replaced_by_present=false" in caplog.text
+
+    def test_successful_refresh_emits_no_observation_event(self, auth_client, monkeypatch, caplog):
+        monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: {"email": self.RAW_EMAIL, "role": "user", "name": "n", "picture": "p", "fid": "F", "jti": "J"})
+        monkeypatch.setattr(main_mod, "determine_role", lambda email: "user")
+        monkeypatch.setattr(main_mod, "create_jwt_token", lambda **kwargs: "jwt")
+        monkeypatch.setattr(main_mod, "create_refresh_token", lambda **kwargs: "rjwt")
+        monkeypatch.setattr(main_mod.refresh_token_store, "rotate", lambda **kwargs: "ok")
+
+        with caplog.at_level(logging.WARNING):
+            resp = auth_client.post("/auth/refresh", cookies={main_mod.REFRESH_COOKIE_NAME: "tok"})
+
+        assert resp.status_code == 200
+        assert "event=refresh-rotation-rejected" not in caplog.text
+
+
+class TestRequestIpPrefix:
+    """관측용 IP 프리픽스는 IPv4 /24, IPv6 /48 까지만 남긴다."""
+
+    def _request(self, headers, client_host: str | None = "192.0.2.9"):
+        scope_headers = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+        scope = {"type": "http", "headers": scope_headers, "client": (client_host, 1234) if client_host else None}
+        return Request(scope)
+
+    def test_uses_forwarded_for_first_hop_ipv4(self):
+        req = self._request({"X-Forwarded-For": "198.51.100.23, 10.1.2.3"})
+        assert main_mod._request_ip_prefix(req) == "198.51.100"
+
+    def test_truncates_ipv6_to_48_bits(self):
+        req = self._request({"X-Forwarded-For": "2001:db8:abcd:1234::1"})
+        assert main_mod._request_ip_prefix(req) == "2001:db8:abcd"
+
+    def test_falls_back_to_client_host(self):
+        req = self._request({})
+        assert main_mod._request_ip_prefix(req) == "192.0.2"
+
+    def test_returns_empty_when_no_client_info(self):
+        req = self._request({}, client_host=None)
+        assert main_mod._request_ip_prefix(req) == ""
+
+
+# ========== Admin 로그인 세션 관리 API ==========
+
+FAMILY_A = "a" * 32
+FAMILY_B = "b" * 32
+
+
+def _session_item(family_id=FAMILY_A, **overrides):
+    item = {
+        "session_id": family_id,
+        "session_label": f"{family_id[:8]}...",
+        "email": "admin@example.com",
+        "status": "active",
+        "created_at": 1786500000,
+        "last_seen_at": 1786501200,
+        "expires_at": 1787106000,
+        "revoked_at": None,
+        "revoke_reason": None,
+        "token_count": 6,
+        "valid_token_count": 1,
+        "is_current": False,
+    }
+    item.update(overrides)
+    return item
+
+
+def _session_page(items):
+    return {
+        "items": items,
+        "pagination": {"page": 1, "pageSize": 50, "totalItems": len(items), "totalPages": 1},
+        "summary": {"active": len(items), "expired": 0, "revoked": 0, "total": len(items)},
+    }
+
+
+class TestListLoginSessions:
+    def test_returns_session_page(self, auth_client, monkeypatch):
+        captured = {}
+
+        def _list_sessions(**kwargs):
+            captured.update(kwargs)
+            return _session_page([_session_item(is_current=True)])
+
+        monkeypatch.setattr(main_mod.refresh_token_store, "list_sessions", _list_sessions)
+
+        resp = auth_client.get("/auth/sessions")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "success"
+        assert body["result"]["items"][0]["is_current"] is True
+        assert body["result"]["summary"]["total"] == 1
+        # 기본값: 활성만, 1페이지 50건
+        assert captured["status"] == "active"
+        assert captured["page"] == 1
+        assert captured["page_size"] == 50
+
+    def test_passes_query_params_through(self, auth_client, monkeypatch):
+        captured = {}
+
+        def _list_sessions(**kwargs):
+            captured.update(kwargs)
+            return _session_page([])
+
+        monkeypatch.setattr(main_mod.refresh_token_store, "list_sessions", _list_sessions)
+
+        resp = auth_client.get("/auth/sessions", params={"page": 2, "pageSize": 10, "status": "all", "email": "viewer@example.com"})
+
+        assert resp.status_code == 200
+        assert captured["page"] == 2
+        assert captured["page_size"] == 10
+        assert captured["status"] == "all"
+        assert captured["email"] == "viewer@example.com"
+
+    def test_marks_requester_session_as_current(self, auth_client, monkeypatch):
+        captured = {}
+
+        def _list_sessions(**kwargs):
+            captured.update(kwargs)
+            return _session_page([])
+
+        monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: {"fid": FAMILY_A, "jti": "j"})
+        monkeypatch.setattr(main_mod.refresh_token_store, "list_sessions", _list_sessions)
+
+        auth_client.get("/auth/sessions", cookies={main_mod.REFRESH_COOKIE_NAME: "tok"})
+
+        assert captured["current_family_id"] == FAMILY_A
+
+    def test_invalid_refresh_cookie_is_ignored(self, auth_client, monkeypatch):
+        captured = {}
+
+        def _boom(token):
+            raise main_mod.HTTPException(status_code=401, detail="Invalid refresh token")
+
+        monkeypatch.setattr(main_mod, "decode_refresh_token", _boom)
+        monkeypatch.setattr(main_mod.refresh_token_store, "list_sessions", lambda **kwargs: captured.update(kwargs) or _session_page([]))
+
+        resp = auth_client.get("/auth/sessions", cookies={main_mod.REFRESH_COOKIE_NAME: "garbage"})
+
+        # 잘못된 refresh 쿠키가 관리자 목록 조회를 막지 않는다
+        assert resp.status_code == 200
+        assert captured["current_family_id"] is None
+
+    def test_rejects_unknown_status_filter(self, auth_client, monkeypatch):
+        monkeypatch.setattr(main_mod.refresh_token_store, "list_sessions", lambda **kwargs: _session_page([]))
+
+        resp = auth_client.get("/auth/sessions", params={"status": "bogus"})
+
+        assert resp.status_code == 400
+        assert "status" in resp.json()["detail"]
+
+    def test_rejects_out_of_range_pagination(self, auth_client, monkeypatch):
+        monkeypatch.setattr(main_mod.refresh_token_store, "list_sessions", lambda **kwargs: _session_page([]))
+
+        assert auth_client.get("/auth/sessions", params={"page": 0}).status_code == 422
+        assert auth_client.get("/auth/sessions", params={"pageSize": 0}).status_code == 422
+        # pageSize 상한 100
+        assert auth_client.get("/auth/sessions", params={"pageSize": 101}).status_code == 422
+        assert auth_client.get("/auth/sessions", params={"pageSize": 100}).status_code == 200
+
+    def test_store_failure_returns_503(self, auth_client, monkeypatch):
+        def _boom(**kwargs):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(main_mod.refresh_token_store, "list_sessions", _boom)
+
+        resp = auth_client.get("/auth/sessions")
+
+        assert resp.status_code == 503
+
+    def test_response_excludes_token_internals(self, auth_client, monkeypatch):
+        monkeypatch.setattr(main_mod.refresh_token_store, "list_sessions", lambda **kwargs: _session_page([_session_item()]))
+
+        body = resp_text = auth_client.get("/auth/sessions").text
+
+        assert "jti" not in body
+        assert "replaced_by" not in resp_text
+        assert main_mod.REFRESH_COOKIE_NAME not in body
+        assert main_mod.ACCESS_COOKIE_NAME not in body
+
+
+class TestRevokeLoginSession:
+    def test_revokes_one_family(self, auth_client, monkeypatch):
+        captured = {}
+
+        def _revoke_session(**kwargs):
+            captured.update(kwargs)
+            return {"found": True, "revoked": True, "session": _session_item(status="revoked", revoke_reason="admin-revoked")}
+
+        monkeypatch.setattr(main_mod.refresh_token_store, "revoke_session", _revoke_session)
+
+        resp = auth_client.delete(f"/auth/sessions/{FAMILY_A}")
+
+        assert resp.status_code == 200
+        result = resp.json()["result"]
+        assert captured["family_id"] == FAMILY_A
+        assert result["revoked"] is True
+        assert result["revoked_current"] is False
+        assert result["status"] == "revoked"
+        assert result["revoke_reason"] == "admin-revoked"
+        # 본인 세션이 아니면 쿠키를 지우지 않는다
+        assert "Max-Age=0" not in resp.headers.get("set-cookie", "")
+
+    def test_revoking_current_session_clears_cookies(self, auth_client, monkeypatch):
+        monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: {"fid": FAMILY_A, "jti": "j"})
+        monkeypatch.setattr(main_mod.refresh_token_store, "revoke_session", lambda **kwargs: {"found": True, "revoked": True, "session": _session_item(status="revoked", revoke_reason="admin-revoked")})
+
+        resp = auth_client.delete(f"/auth/sessions/{FAMILY_A}", cookies={main_mod.REFRESH_COOKIE_NAME: "tok"})
+
+        assert resp.status_code == 200
+        assert resp.json()["result"]["revoked_current"] is True
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert f"{main_mod.ACCESS_COOKIE_NAME}=" in set_cookie
+        assert f"{main_mod.REFRESH_COOKIE_NAME}=" in set_cookie
+        assert "Max-Age=0" in set_cookie
+
+    def test_already_inactive_family_still_succeeds(self, auth_client, monkeypatch):
+        monkeypatch.setattr(main_mod.refresh_token_store, "revoke_session", lambda **kwargs: {"found": True, "revoked": False, "session": _session_item(status="revoked", revoke_reason="logout")})
+
+        resp = auth_client.delete(f"/auth/sessions/{FAMILY_B}")
+
+        assert resp.status_code == 200
+        result = resp.json()["result"]
+        assert result["revoked"] is False
+        assert result["status"] == "revoked"
+        assert result["revoke_reason"] == "logout"
+
+    def test_unknown_family_returns_404(self, auth_client, monkeypatch):
+        monkeypatch.setattr(main_mod.refresh_token_store, "revoke_session", lambda **kwargs: {"found": False, "revoked": False, "session": None})
+
+        resp = auth_client.delete(f"/auth/sessions/{FAMILY_B}")
+
+        assert resp.status_code == 404
+
+    def test_malformed_session_id_returns_400(self, auth_client, monkeypatch):
+        called = []
+        monkeypatch.setattr(main_mod.refresh_token_store, "revoke_session", lambda **kwargs: called.append(kwargs) or {"found": True, "revoked": True, "session": _session_item()})
+
+        for bad in ("short", "A" * 32, "z" * 32, "a" * 31, "a" * 33):
+            resp = auth_client.delete(f"/auth/sessions/{bad}")
+            assert resp.status_code == 400, bad
+        # 형식 검증 실패 시 store 를 건드리지 않는다
+        assert called == []
+
+    def test_store_failure_returns_503(self, auth_client, monkeypatch):
+        def _boom(**kwargs):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(main_mod.refresh_token_store, "revoke_session", _boom)
+
+        assert auth_client.delete(f"/auth/sessions/{FAMILY_A}").status_code == 503
+
+    def test_audit_log_masks_target_session(self, auth_client, monkeypatch, caplog):
+        monkeypatch.setattr(main_mod.refresh_token_store, "revoke_session", lambda **kwargs: {"found": True, "revoked": True, "session": _session_item(status="revoked")})
+
+        with caplog.at_level(logging.WARNING):
+            auth_client.delete(f"/auth/sessions/{FAMILY_A}")
+
+        assert f"session_hash={main_mod.observation_hash(FAMILY_A)}" in caplog.text
+        # 대상 family_id 원문은 남기지 않는다
+        assert FAMILY_A not in caplog.text
+
+
+class TestLoginSessionAuthorization:
+    """세션 관리 엔드포인트는 admin 전용이다."""
+
+    @pytest.fixture()
+    def viewer_client(self):
+        main_mod.app.dependency_overrides[main_mod.require_auth] = lambda: {"email": "viewer@example.com", "role": "viewer"}
+        with TestClient(main_mod.app) as c:
+            yield c
+        main_mod.app.dependency_overrides.clear()
+
+    def test_viewer_is_forbidden(self, viewer_client):
+        # require_admin 은 override 하지 않았으므로 실제 의존성이 동작한다
+        assert viewer_client.get("/auth/sessions").status_code in (401, 403)
+        assert viewer_client.delete(f"/auth/sessions/{FAMILY_A}").status_code in (401, 403)
+
+    def test_unauthenticated_is_rejected(self):
+        main_mod.app.dependency_overrides.clear()
+        with TestClient(main_mod.app) as c:
+            assert c.get("/auth/sessions").status_code == 401
+            assert c.delete(f"/auth/sessions/{FAMILY_A}").status_code == 401
+
+    def test_endpoints_declare_admin_dependency(self):
+        """엔드포인트가 require_admin 의존성을 명시적으로 갖는지 확인한다."""
+        routes = {(r.path, tuple(sorted(r.methods))): r for r in main_mod.app.routes if getattr(r, "path", "").startswith("/auth/sessions")}
+        assert routes, "세션 관리 라우트를 찾지 못했습니다"
+        for (path, methods), route in routes.items():
+            dependency_calls = [d.call for d in route.dependant.dependencies]
+            assert main_mod.require_admin in dependency_calls, f"{methods} {path} 에 require_admin 이 없습니다"
