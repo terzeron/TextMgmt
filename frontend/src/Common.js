@@ -441,4 +441,25 @@ export const externalJsonGetReq = (url, resolve, reject, final) => {
     .finally(() => final && final());
 };
 
+// 열람 뷰어 진입을 서버에 1건 기록한다.
+//
+// 경로가 유형별로 비대칭인 이유: 책 라우터는 루트에, 만화 라우터는 /comics prefix 에
+// 붙어 있어 각각 /books/view-history/{id} 와 /comics/view-history/{id} 가 된다.
+// 호출자가 이 차이를 몰라도 되게 여기서 흡수한다.
+//
+// fire-and-forget: 이력 기록이 실패해도 열람을 막지 않는다.
+export function recordBookView(apiPrefix, bookId) {
+  if (!bookId) return Promise.resolve(false);
+  const path = apiPrefix
+    ? `${apiPrefix}/view-history/${bookId}`
+    : `/books/view-history/${bookId}`;
+  return fetch(getApiUrlPrefix() + path, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    credentials: "include",
+  })
+    .then((res) => res.ok)
+    .catch(() => false);
+}
+
 export const ROOT_DIRECTORY = "$$rootdir$$";

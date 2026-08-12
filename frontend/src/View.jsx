@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, Suspense } from "react";
 import { useParams, useSearchParams, useOutletContext } from "react-router-dom";
 import PropTypes from "prop-types";
 
-import { getApiUrlPrefix } from "./Common";
+import { getApiUrlPrefix, recordBookView } from "./Common";
 
 import "./View.css";
 import "bootstrap/dist/css/bootstrap.min.css";
@@ -53,6 +53,14 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
   const [bookLoadError, setBookLoadError] = useState("");
   const [viewUrl, setViewUrl] = useState("");
   const [downloadUrl, setDownloadUrl] = useState("");
+
+  // 열람 이력 기록. setBookInfo 호출 지점이 여러 곳이라 각 지점에 심으면 누락·중복이
+  // 생기므로, 선택된 책이 바뀌는 것만 한 곳에서 감지한다.
+  const viewedBookId = bookInfo?.book_id;
+  useEffect(() => {
+    if (!viewedBookId) return;
+    recordBookView(apiPrefix, viewedBookId);
+  }, [apiPrefix, viewedBookId]);
 
   const { folderData, loadCategoryPage, loadBookById } = useCategoryTree({
     apiPrefix,

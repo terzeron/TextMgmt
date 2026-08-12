@@ -26,6 +26,7 @@ from backend.comics_manager import ComicsManager
 from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
 from backend.category_mapping import CategoryMapping
 from backend.refresh_token_store import create_refresh_token_store
+from backend.view_history_store import MAX_RECENT_VIEWS, create_view_history_store
 
 # 에러 및 미디어 타입 상수 정의
 ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
@@ -245,6 +246,7 @@ comics_manager = _LazyProxy(_create_comics_manager, "comics manager")
 bookstore = _LazyProxy(_create_bookstore, "bookstore")
 category_mapping = _LazyProxy(_create_category_mapping, "category mapping")
 refresh_token_store = _LazyProxy(create_refresh_token_store, "refresh token store")
+view_history_store = _LazyProxy(create_view_history_store, "view history store")
 
 
 def _request_ip_prefix(request: Request) -> str:
@@ -449,6 +451,30 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         else:
             response_object["error"] = error
         return response_object
+
+    # 책 라우터는 루트, 만화 라우터는 /comics prefix 에 붙으므로 경로 템플릿을 유형별로
+    # 맞춘다: POST /books/view-history/{id} 와 POST /comics/view-history/{id}.
+    view_history_path = "/books/view-history/{book_id}" if content_type == "book" else "/view-history/{book_id}"
+
+    @router.post(view_history_path)
+    async def record_book_view(book_id: int, payload: dict = Depends(require_auth)) -> dict[str, Any]:
+        """열람 뷰어 진입을 1건 기록한다.
+
+        제목·카테고리는 클라이언트를 믿지 않고 서버가 자기 레코드에서 스냅샷을 뜬다.
+        접근 검사를 먼저 하므로 viewer 가 볼 수 없는 책을 기록하거나 이 엔드포인트를
+        존재 확인 수단으로 쓰는 것도 막힌다.
+        """
+        LOGGER.debug("# record_book_view(book_id=%d)", book_id)
+        book, error = await _get_book_and_ensure_viewer_access(manager, book_id, payload, content_type)
+        if book is None or error is not None:
+            raise HTTPException(status_code=404, detail=error or "Book not found")
+        try:
+            view_history_store.record_view(email=payload.get("email", ""), content_type=content_type, book_id=book_id, title=book.title, category=book.category or "")
+        except Exception as e:
+            # 이력 기록 실패가 열람을 막아서는 안 된다. 실패는 로그로 드러내고 응답에도 표시한다.
+            LOGGER.warning("조회 이력 기록 실패 (content_type=%s, book_id=%d): %s", content_type, book_id, e)
+            return {"status": "success", "result": {"recorded": False}}
+        return {"status": "success", "result": {"recorded": True}}
 
     @router.put("/categories/rename", dependencies=admin_dep)
     async def rename_category(body: CategoryRenameModel) -> dict[str, Any]:
@@ -884,6 +910,20 @@ async def revoke_login_session(session_id: str, request: Request, admin: dict = 
         # 본인 세션을 폐기했으면 쿠키도 정리해 프런트가 미인증 흐름으로 넘어가게 한다.
         _clear_auth_cookies(response)
     return response
+
+
+# === 사용자별 조회 이력 API (admin 전용) ===
+
+
+@app.get("/view-history", dependencies=[Depends(require_admin)])
+async def list_view_history(limit: int = Query(MAX_RECENT_VIEWS, ge=1, le=MAX_RECENT_VIEWS)):
+    """사용자별 최근 조회 목록(책/만화 각각)을 돌려준다."""
+    try:
+        result = view_history_store.list_recent_views(limit=limit)
+    except Exception as e:
+        LOGGER.error("view_history_store.list_recent_views() failed: %s", e)
+        raise HTTPException(status_code=503, detail="서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.")
+    return {"status": "success", "result": result}
 
 
 # === 카테고리 매핑 API ===

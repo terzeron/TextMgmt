@@ -18,8 +18,6 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faPlus,
   faTrash,
-  faChevronDown,
-  faChevronRight,
   faEdit,
   faRotate,
 } from "@fortawesome/free-solid-svg-icons";
@@ -291,14 +289,12 @@ function buildMismatchCounts(mismatchData) {
 
 export default function CategoryAdmin({
   contentType = "book",
-  title = "카테고리 관리",
   initialShowOnlyAbnormal = true,
 }) {
   // 공통 상태
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
-  const [isOpen, setIsOpen] = useState(false);
   const [showOnlyAbnormal, setShowOnlyAbnormal] = useState(
     initialShowOnlyAbnormal,
   );
@@ -971,416 +967,385 @@ export default function CategoryAdmin({
 
   // ── 렌더링 ──
 
-  if (!isOpen) {
-    return (
-      <Card>
-        <Card.Header
-          onClick={() => setIsOpen(true)}
-          style={{ cursor: "pointer", userSelect: "none" }}
-          className="py-2"
-        >
-          <FontAwesomeIcon icon={faChevronRight} className="me-2" />
-          {title}
-        </Card.Header>
-      </Card>
-    );
-  }
-
   return (
-    <Card>
-      <Card.Header
-        onClick={() => setIsOpen(false)}
-        style={{ cursor: "pointer", userSelect: "none" }}
-        className="py-2"
-      >
-        <FontAwesomeIcon icon={faChevronDown} className="me-2" />
-        {title}
-      </Card.Header>
-      <Card.Body>
-        {message && (
-          <div
-            className={`alert ${message.includes("실패") || message.includes("오류") ? "alert-danger" : "alert-info"} py-1 mb-2`}
-          >
-            {message}
-          </div>
-        )}
-        {loading ? (
-          <div className="text-center p-4">
-            <Spinner animation="border" />
-            <p className="mt-2">로딩 중...</p>
-          </div>
-        ) : folderData.length === 0 ? (
-          <div className="text-muted p-3">카테고리 없음</div>
-        ) : (
-          <Row className="g-0">
-            <Col md={4}>
+    <>
+      {message && (
+        <div
+          className={`alert ${message.includes("실패") || message.includes("오류") ? "alert-danger" : "alert-info"} py-1 mb-2`}
+        >
+          {message}
+        </div>
+      )}
+      {loading ? (
+        <div className="text-center p-4">
+          <Spinner animation="border" />
+          <p className="mt-2">로딩 중...</p>
+        </div>
+      ) : folderData.length === 0 ? (
+        <div className="text-muted p-3">카테고리 없음</div>
+      ) : (
+        <Row className="g-0">
+          <Col md={4}>
+            <Card>
+              <Card.Header className="py-1 d-flex justify-content-between align-items-center gap-2">
+                <span>디렉토리 목록</span>
+                <Form.Check
+                  type="switch"
+                  id={`show-only-abnormal-${contentType}`}
+                  label="이상 항목만 보기"
+                  checked={showOnlyAbnormal}
+                  onChange={(event) =>
+                    setShowOnlyAbnormal(event.target.checked)
+                  }
+                  className="m-0"
+                />
+              </Card.Header>
+              <div id="dir_list">
+                <RichTreeView
+                  key={displayedTreeMeta.key}
+                  items={displayedFolderData}
+                  aria-label="category admin"
+                  sx={treeViewStyles}
+                  slots={{ item: AdminTreeItem }}
+                  expandedItems={displayedExpandedItems}
+                  onSelectedItemsChange={handleTreeItemClick}
+                />
+              </div>
+            </Card>
+          </Col>
+          <Col md={8}>
+            {/* 카테고리 선택 시 */}
+            {selectedCategory && !selectedMismatch && (
               <Card>
-                <Card.Header className="py-1 d-flex justify-content-between align-items-center gap-2">
-                  <span>디렉토리 목록</span>
-                  <Form.Check
-                    type="switch"
-                    id={`show-only-abnormal-${contentType}`}
-                    label="이상 항목만 보기"
-                    checked={showOnlyAbnormal}
-                    onChange={(event) =>
-                      setShowOnlyAbnormal(event.target.checked)
-                    }
-                    className="m-0"
-                  />
-                </Card.Header>
-                <div id="dir_list">
-                  <RichTreeView
-                    key={displayedTreeMeta.key}
-                    items={displayedFolderData}
-                    aria-label="category admin"
-                    sx={treeViewStyles}
-                    slots={{ item: AdminTreeItem }}
-                    expandedItems={displayedExpandedItems}
-                    onSelectedItemsChange={handleTreeItemClick}
-                  />
-                </div>
-              </Card>
-            </Col>
-            <Col md={8}>
-              {/* 카테고리 선택 시 */}
-              {selectedCategory && !selectedMismatch && (
-                <Card>
-                  <Card.Header className="py-1 d-flex justify-content-between align-items-center">
-                    <span>
-                      <strong>{selectedCategory}</strong>
-                      {saving && (
-                        <Spinner
-                          animation="border"
-                          size="sm"
-                          className="ms-2"
-                        />
-                      )}
-                    </span>
-                    <span className="d-flex gap-1">
-                      <Badge bg="secondary">
-                        ES {esDocCounts[selectedCategory] ?? 0}건
+                <Card.Header className="py-1 d-flex justify-content-between align-items-center">
+                  <span>
+                    <strong>{selectedCategory}</strong>
+                    {saving && (
+                      <Spinner animation="border" size="sm" className="ms-2" />
+                    )}
+                  </span>
+                  <span className="d-flex gap-1">
+                    <Badge bg="secondary">
+                      ES {esDocCounts[selectedCategory] ?? 0}건
+                    </Badge>
+                    {fsFileCounts[selectedCategory] != null && (
+                      <Badge bg="info">
+                        파일 {fsFileCounts[selectedCategory]}건
                       </Badge>
-                      {fsFileCounts[selectedCategory] != null && (
-                        <Badge bg="info">
-                          파일 {fsFileCounts[selectedCategory]}건
-                        </Badge>
-                      )}
-                    </span>
-                  </Card.Header>
-                  <Card.Body>
-                    <Form.Check
-                      type="checkbox"
-                      id={`hidden-${contentType}-${selectedCategory}`}
-                      label="사용자 비노출"
-                      checked={hiddenCategories.has(selectedCategory)}
-                      onChange={() =>
-                        handleToggleHidden(
-                          selectedCategory,
-                          hiddenCategories.has(selectedCategory),
-                        )
-                      }
+                    )}
+                  </span>
+                </Card.Header>
+                <Card.Body>
+                  <Form.Check
+                    type="checkbox"
+                    id={`hidden-${contentType}-${selectedCategory}`}
+                    label="사용자 비노출"
+                    checked={hiddenCategories.has(selectedCategory)}
+                    onChange={() =>
+                      handleToggleHidden(
+                        selectedCategory,
+                        hiddenCategories.has(selectedCategory),
+                      )
+                    }
+                    disabled={saving}
+                    className="mb-2"
+                  />
+                  <div className="d-flex flex-wrap gap-1 mb-2">
+                    <Button
+                      variant="outline-secondary"
+                      size="sm"
                       disabled={saving}
-                      className="mb-2"
-                    />
-                    <div className="d-flex flex-wrap gap-1 mb-2">
-                      <Button
-                        variant="outline-secondary"
-                        size="sm"
-                        disabled={saving}
-                        onClick={() => {
-                          setNewCategoryName(selectedCategory);
-                          setShowRenameModal(true);
-                        }}
-                        title="이름 변경"
-                      >
-                        이름 변경 <FontAwesomeIcon icon={faEdit} />
-                      </Button>
-                      <Button
-                        variant="outline-danger"
-                        size="sm"
-                        disabled={saving}
-                        onClick={() => setShowDeleteModal(true)}
-                        title="카테고리 삭제"
-                      >
-                        삭제 <FontAwesomeIcon icon={faTrash} />
-                      </Button>
-                      <Button
-                        variant="outline-success"
-                        size="sm"
-                        disabled={saving}
-                        onClick={() => setShowReloadModal(true)}
-                        title="ES 재적재"
-                      >
-                        {reloading ? (
-                          <Spinner animation="border" size="sm" />
-                        ) : (
-                          <>
-                            ES 재적재 <FontAwesomeIcon icon={faRotate} />
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                    {!isSubcategory && (
-                      <>
-                        <InputGroup className="mb-2">
-                          <Form.Control
-                            ref={keywordInputRef}
-                            type="text"
-                            placeholder="새 키워드 입력"
-                            value={newKeyword}
-                            onChange={(e) => setNewKeyword(e.target.value)}
-                            onKeyDown={handleKeyDown}
-                            disabled={saving}
-                          />
-                          <Button
-                            variant="outline-primary"
-                            onClick={handleAddKeyword}
-                            disabled={saving || !newKeyword.trim()}
+                      onClick={() => {
+                        setNewCategoryName(selectedCategory);
+                        setShowRenameModal(true);
+                      }}
+                      title="이름 변경"
+                    >
+                      이름 변경 <FontAwesomeIcon icon={faEdit} />
+                    </Button>
+                    <Button
+                      variant="outline-danger"
+                      size="sm"
+                      disabled={saving}
+                      onClick={() => setShowDeleteModal(true)}
+                      title="카테고리 삭제"
+                    >
+                      삭제 <FontAwesomeIcon icon={faTrash} />
+                    </Button>
+                    <Button
+                      variant="outline-success"
+                      size="sm"
+                      disabled={saving}
+                      onClick={() => setShowReloadModal(true)}
+                      title="ES 재적재"
+                    >
+                      {reloading ? (
+                        <Spinner animation="border" size="sm" />
+                      ) : (
+                        <>
+                          ES 재적재 <FontAwesomeIcon icon={faRotate} />
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  {!isSubcategory && (
+                    <>
+                      <InputGroup className="mb-2">
+                        <Form.Control
+                          ref={keywordInputRef}
+                          type="text"
+                          placeholder="새 키워드 입력"
+                          value={newKeyword}
+                          onChange={(e) => setNewKeyword(e.target.value)}
+                          onKeyDown={handleKeyDown}
+                          disabled={saving}
+                        />
+                        <Button
+                          variant="outline-primary"
+                          onClick={handleAddKeyword}
+                          disabled={saving || !newKeyword.trim()}
+                        >
+                          <FontAwesomeIcon icon={faPlus} /> 추가
+                        </Button>
+                      </InputGroup>
+                      <div className="d-flex flex-wrap gap-1">
+                        {currentKeywords.map((keyword) => (
+                          <Badge
+                            key={keyword}
+                            bg="info"
+                            className="d-flex align-items-center gap-1"
+                            style={{
+                              fontSize: "0.85rem",
+                              padding: "0.4rem 0.6rem",
+                            }}
                           >
-                            <FontAwesomeIcon icon={faPlus} /> 추가
-                          </Button>
-                        </InputGroup>
-                        <div className="d-flex flex-wrap gap-1">
-                          {currentKeywords.map((keyword) => (
-                            <Badge
-                              key={keyword}
-                              bg="info"
-                              className="d-flex align-items-center gap-1"
+                            {keyword}
+                            <FontAwesomeIcon
+                              icon={faTrash}
                               style={{
-                                fontSize: "0.85rem",
-                                padding: "0.4rem 0.6rem",
+                                cursor: saving ? "not-allowed" : "pointer",
+                                marginLeft: "4px",
                               }}
-                            >
-                              {keyword}
-                              <FontAwesomeIcon
-                                icon={faTrash}
-                                style={{
-                                  cursor: saving ? "not-allowed" : "pointer",
-                                  marginLeft: "4px",
-                                }}
-                                onClick={() =>
-                                  !saving && handleRemoveKeyword(keyword)
-                                }
-                              />
-                            </Badge>
-                          ))}
-                          {currentKeywords.length === 0 && (
-                            <span className="text-muted">
-                              등록된 키워드가 없습니다.
-                            </span>
-                          )}
-                        </div>
+                              onClick={() =>
+                                !saving && handleRemoveKeyword(keyword)
+                              }
+                            />
+                          </Badge>
+                        ))}
+                        {currentKeywords.length === 0 && (
+                          <span className="text-muted">
+                            등록된 키워드가 없습니다.
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </Card.Body>
+              </Card>
+            )}
+
+            {/* 불일치 항목 선택 시 */}
+            {selectedMismatch && (
+              <Card>
+                <Card.Header className="py-1">
+                  <strong>{selectedMismatch.label}</strong>
+                </Card.Header>
+                <Card.Body>
+                  <div
+                    className="text-muted mb-2"
+                    style={{ fontSize: "0.85rem" }}
+                  >
+                    {selectedMismatch.mismatchType === "es_only"
+                      ? `${contentLabel} 정보만 존재하고 파일시스템에는 존재하지 않습니다.`
+                      : selectedMismatch.mismatchType === "duplicate"
+                        ? "동일한 파일 경로로 ES에 중복 문서가 존재합니다. 파일 삭제 후 재적재 시 발생할 수 있습니다."
+                        : `${contentLabel} 정보는 없고 파일시스템에만 존재합니다.`}
+                  </div>
+                  {selectedMismatch.mismatchType === "duplicate" &&
+                    selectedMismatch.dupDocs && (
+                      <>
+                        <table
+                          className="table table-sm table-bordered mb-2"
+                          style={{ fontSize: "0.8rem" }}
+                        >
+                          <thead>
+                            <tr>
+                              <th>ID</th>
+                              <th>제목</th>
+                              <th>저자</th>
+                              <th>파일 연결</th>
+                              <th>액션</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {selectedMismatch.dupDocs.map((doc) => (
+                              <tr key={doc.book_id}>
+                                <td>{doc.book_id}</td>
+                                <td>{doc.title}</td>
+                                <td>{doc.author}</td>
+                                <td className="text-center">
+                                  {selectedMismatch.fileExists ? (
+                                    <Badge
+                                      bg={
+                                        doc.file_linked ? "success" : "warning"
+                                      }
+                                      style={{ fontSize: "0.7rem" }}
+                                    >
+                                      {doc.file_linked ? "연결됨" : "미연결"}
+                                    </Badge>
+                                  ) : (
+                                    <Badge
+                                      bg="danger"
+                                      style={{ fontSize: "0.7rem" }}
+                                    >
+                                      파일 없음
+                                    </Badge>
+                                  )}
+                                </td>
+                                <td>
+                                  <Button
+                                    variant="outline-primary"
+                                    size="sm"
+                                    className="me-1 py-0"
+                                    onClick={() =>
+                                      window.open(
+                                        `/${contentType === "comic" ? "comics-view" : "book-view"}/${doc.book_id}?category=${encodeURIComponent(selectedMismatch.category)}`,
+                                        "_blank",
+                                        "noopener",
+                                      )
+                                    }
+                                  >
+                                    조회
+                                  </Button>
+                                  {!doc.file_linked && (
+                                    <Button
+                                      variant="outline-danger"
+                                      size="sm"
+                                      className="py-0"
+                                      onClick={() => {
+                                        if (
+                                          !window.confirm(
+                                            `ID ${doc.book_id} (${doc.title}) ES 문서를 삭제하시겠습니까? (파일은 유지됩니다)`,
+                                          )
+                                        )
+                                          return;
+                                        jsonDeleteReq(
+                                          apiPrefix +
+                                            "/category-mismatches/es-doc/" +
+                                            doc.book_id,
+                                          null,
+                                          () => {
+                                            setActionResult({
+                                              type: "success",
+                                              message: `ID ${doc.book_id} 문서가 삭제되었습니다.`,
+                                            });
+                                            setSelectedMismatch(null);
+                                            loadData();
+                                          },
+                                          (error) =>
+                                            setActionResult({
+                                              type: "danger",
+                                              message: error || "삭제 실패",
+                                            }),
+                                        );
+                                      }}
+                                    >
+                                      삭제
+                                    </Button>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </>
                     )}
-                  </Card.Body>
-                </Card>
-              )}
+                  <div className="d-flex flex-wrap gap-1">
+                    {selectedMismatch.mismatchType === "es_only" && (
+                      <>
+                        <Button
+                          variant="outline-warning"
+                          size="sm"
+                          onClick={() =>
+                            window.open(
+                              `/${contentType === "comic" ? "comics-edit" : "book-edit"}/${selectedMismatch.bookId}?category=${encodeURIComponent(selectedMismatch.category)}`,
+                              "_blank",
+                              "noopener",
+                            )
+                          }
+                        >
+                          편집
+                        </Button>
+                        <Button
+                          variant="outline-primary"
+                          size="sm"
+                          onClick={() =>
+                            window.open(
+                              `/${contentType === "comic" ? "comics-view" : "book-view"}/${selectedMismatch.bookId}?category=${encodeURIComponent(selectedMismatch.category)}`,
+                              "_blank",
+                              "noopener",
+                            )
+                          }
+                        >
+                          조회
+                        </Button>
+                        <Button
+                          variant="outline-danger"
+                          size="sm"
+                          onClick={handleDeleteEsDoc}
+                        >
+                          삭제
+                        </Button>
+                      </>
+                    )}
+                    {selectedMismatch.mismatchType === "fs_only" && (
+                      <>
+                        <Button
+                          variant="outline-success"
+                          size="sm"
+                          onClick={handleIndexFile}
+                          disabled={indexingFile}
+                        >
+                          {indexingFile && (
+                            <Spinner
+                              animation="border"
+                              size="sm"
+                              className="me-1"
+                            />
+                          )}
+                          ES 적재
+                        </Button>
+                        <Button
+                          variant="outline-danger"
+                          size="sm"
+                          onClick={handleDeleteFile}
+                        >
+                          파일 삭제
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </Card.Body>
+              </Card>
+            )}
 
-              {/* 불일치 항목 선택 시 */}
-              {selectedMismatch && (
-                <Card>
-                  <Card.Header className="py-1">
-                    <strong>{selectedMismatch.label}</strong>
-                  </Card.Header>
-                  <Card.Body>
-                    <div
-                      className="text-muted mb-2"
-                      style={{ fontSize: "0.85rem" }}
-                    >
-                      {selectedMismatch.mismatchType === "es_only"
-                        ? `${contentLabel} 정보만 존재하고 파일시스템에는 존재하지 않습니다.`
-                        : selectedMismatch.mismatchType === "duplicate"
-                          ? "동일한 파일 경로로 ES에 중복 문서가 존재합니다. 파일 삭제 후 재적재 시 발생할 수 있습니다."
-                          : `${contentLabel} 정보는 없고 파일시스템에만 존재합니다.`}
-                    </div>
-                    {selectedMismatch.mismatchType === "duplicate" &&
-                      selectedMismatch.dupDocs && (
-                        <>
-                          <table
-                            className="table table-sm table-bordered mb-2"
-                            style={{ fontSize: "0.8rem" }}
-                          >
-                            <thead>
-                              <tr>
-                                <th>ID</th>
-                                <th>제목</th>
-                                <th>저자</th>
-                                <th>파일 연결</th>
-                                <th>액션</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {selectedMismatch.dupDocs.map((doc) => (
-                                <tr key={doc.book_id}>
-                                  <td>{doc.book_id}</td>
-                                  <td>{doc.title}</td>
-                                  <td>{doc.author}</td>
-                                  <td className="text-center">
-                                    {selectedMismatch.fileExists ? (
-                                      <Badge
-                                        bg={
-                                          doc.file_linked
-                                            ? "success"
-                                            : "warning"
-                                        }
-                                        style={{ fontSize: "0.7rem" }}
-                                      >
-                                        {doc.file_linked ? "연결됨" : "미연결"}
-                                      </Badge>
-                                    ) : (
-                                      <Badge
-                                        bg="danger"
-                                        style={{ fontSize: "0.7rem" }}
-                                      >
-                                        파일 없음
-                                      </Badge>
-                                    )}
-                                  </td>
-                                  <td>
-                                    <Button
-                                      variant="outline-primary"
-                                      size="sm"
-                                      className="me-1 py-0"
-                                      onClick={() =>
-                                        window.open(
-                                          `/${contentType === "comic" ? "comics-view" : "book-view"}/${doc.book_id}?category=${encodeURIComponent(selectedMismatch.category)}`,
-                                          "_blank",
-                                          "noopener",
-                                        )
-                                      }
-                                    >
-                                      조회
-                                    </Button>
-                                    {!doc.file_linked && (
-                                      <Button
-                                        variant="outline-danger"
-                                        size="sm"
-                                        className="py-0"
-                                        onClick={() => {
-                                          if (
-                                            !window.confirm(
-                                              `ID ${doc.book_id} (${doc.title}) ES 문서를 삭제하시겠습니까? (파일은 유지됩니다)`,
-                                            )
-                                          )
-                                            return;
-                                          jsonDeleteReq(
-                                            apiPrefix +
-                                              "/category-mismatches/es-doc/" +
-                                              doc.book_id,
-                                            null,
-                                            () => {
-                                              setActionResult({
-                                                type: "success",
-                                                message: `ID ${doc.book_id} 문서가 삭제되었습니다.`,
-                                              });
-                                              setSelectedMismatch(null);
-                                              loadData();
-                                            },
-                                            (error) =>
-                                              setActionResult({
-                                                type: "danger",
-                                                message: error || "삭제 실패",
-                                              }),
-                                          );
-                                        }}
-                                      >
-                                        삭제
-                                      </Button>
-                                    )}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </>
-                      )}
-                    <div className="d-flex flex-wrap gap-1">
-                      {selectedMismatch.mismatchType === "es_only" && (
-                        <>
-                          <Button
-                            variant="outline-warning"
-                            size="sm"
-                            onClick={() =>
-                              window.open(
-                                `/${contentType === "comic" ? "comics-edit" : "book-edit"}/${selectedMismatch.bookId}?category=${encodeURIComponent(selectedMismatch.category)}`,
-                                "_blank",
-                                "noopener",
-                              )
-                            }
-                          >
-                            편집
-                          </Button>
-                          <Button
-                            variant="outline-primary"
-                            size="sm"
-                            onClick={() =>
-                              window.open(
-                                `/${contentType === "comic" ? "comics-view" : "book-view"}/${selectedMismatch.bookId}?category=${encodeURIComponent(selectedMismatch.category)}`,
-                                "_blank",
-                                "noopener",
-                              )
-                            }
-                          >
-                            조회
-                          </Button>
-                          <Button
-                            variant="outline-danger"
-                            size="sm"
-                            onClick={handleDeleteEsDoc}
-                          >
-                            삭제
-                          </Button>
-                        </>
-                      )}
-                      {selectedMismatch.mismatchType === "fs_only" && (
-                        <>
-                          <Button
-                            variant="outline-success"
-                            size="sm"
-                            onClick={handleIndexFile}
-                            disabled={indexingFile}
-                          >
-                            {indexingFile && (
-                              <Spinner
-                                animation="border"
-                                size="sm"
-                                className="me-1"
-                              />
-                            )}
-                            ES 적재
-                          </Button>
-                          <Button
-                            variant="outline-danger"
-                            size="sm"
-                            onClick={handleDeleteFile}
-                          >
-                            파일 삭제
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </Card.Body>
-                </Card>
-              )}
-
-              {/* 아무것도 선택 안 됨 */}
-              {!selectedCategory && !selectedMismatch && !actionResult && (
-                <div className="text-muted p-3">
-                  왼쪽에서 디렉토리를 선택하세요.
-                </div>
-              )}
-              {actionResult && (
-                <div
-                  className={`p-3 ${actionResult.type === "success" ? "text-success" : "text-danger"}`}
-                  style={{ fontSize: "0.85rem" }}
-                >
-                  {actionResult.message}
-                </div>
-              )}
-            </Col>
-          </Row>
-        )}
-      </Card.Body>
+            {/* 아무것도 선택 안 됨 */}
+            {!selectedCategory && !selectedMismatch && !actionResult && (
+              <div className="text-muted p-3">
+                왼쪽에서 디렉토리를 선택하세요.
+              </div>
+            )}
+            {actionResult && (
+              <div
+                className={`p-3 ${actionResult.type === "success" ? "text-success" : "text-danger"}`}
+                style={{ fontSize: "0.85rem" }}
+              >
+                {actionResult.message}
+              </div>
+            )}
+          </Col>
+        </Row>
+      )}
 
       {/* 이름 변경 모달 */}
       <Modal
@@ -1487,12 +1452,11 @@ export default function CategoryAdmin({
           </Button>
         </Modal.Footer>
       </Modal>
-    </Card>
+    </>
   );
 }
 
 CategoryAdmin.propTypes = {
   contentType: PropTypes.string,
-  title: PropTypes.string,
   initialShowOnlyAbnormal: PropTypes.bool,
 };

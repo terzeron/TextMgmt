@@ -252,3 +252,61 @@ describe("refreshOnVisible 디바운스", () => {
     tab.stopProactiveRefresh();
   });
 });
+
+describe("recordBookView", () => {
+  let fetchMock;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    window.__ENV__ = { VITE_API_URL_PREFIX: "/api" };
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("책은 /books/view-history/{id} 로 POST 한다", async () => {
+    fetchMock.mockResolvedValue({ ok: true });
+    const tab = await openTab();
+
+    expect(await tab.recordBookView("", 42)).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/books/view-history/42",
+      expect.objectContaining({ method: "POST", credentials: "include" }),
+    );
+  });
+
+  it("만화는 prefix 를 붙여 /comics/view-history/{id} 로 POST 한다", async () => {
+    fetchMock.mockResolvedValue({ ok: true });
+    const tab = await openTab();
+
+    expect(await tab.recordBookView("/comics", 7)).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/comics/view-history/7",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("bookId 가 없으면 요청하지 않는다", async () => {
+    const tab = await openTab();
+
+    expect(await tab.recordBookView("", undefined)).toBe(false);
+    expect(await tab.recordBookView("", 0)).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("서버가 거부해도 예외를 던지지 않는다", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    const tab = await openTab();
+
+    expect(await tab.recordBookView("", 42)).toBe(false);
+  });
+
+  it("네트워크 오류를 삼켜 열람을 막지 않는다", async () => {
+    fetchMock.mockRejectedValue(new Error("offline"));
+    const tab = await openTab();
+
+    expect(await tab.recordBookView("", 42)).toBe(false);
+  });
+});

@@ -8,9 +8,11 @@ const {
   mockJsonGetReq,
   mockRawJsonGetReq,
   mockGetApiUrlPrefix,
+  mockRecordBookView,
   mockOutletContext,
   mockRouteState,
 } = vi.hoisted(() => ({
+  mockRecordBookView: vi.fn(() => Promise.resolve(true)),
   mockJsonGetReq: vi.fn(),
   mockRawJsonGetReq: vi.fn(),
   mockGetApiUrlPrefix: vi.fn(() => "http://localhost:8000"),
@@ -29,6 +31,7 @@ vi.mock("../src/Common", () => ({
   jsonGetReq: mockJsonGetReq,
   rawJsonGetReq: mockRawJsonGetReq,
   getApiUrlPrefix: mockGetApiUrlPrefix,
+  recordBookView: mockRecordBookView,
 }));
 
 // 카테고리 목록은 커서 페이지네이션 때문에 rawJsonGetReq(원본 응답)를 쓴다.
@@ -377,6 +380,80 @@ describe("View", () => {
     await waitFor(() => {
       expect(screen.getByTestId("book-info-view")).toBeTruthy();
       expect(screen.getByTestId("view-single")).toBeTruthy();
+    });
+  });
+
+  it("책을 열면 조회 이력을 1건 기록한다", async () => {
+    mockRecordBookView.mockClear();
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ 소설: 1 });
+      } else if (url === "/categories/소설") {
+        resolve([
+          {
+            book_id: 42,
+            title: "테스트소설",
+            file_type: "epub",
+            file_path: "/test.epub",
+            category: "소설",
+          },
+        ]);
+      }
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-소설")).toBeTruthy();
+    });
+    screen.getByTestId("folder-item-소설").click();
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-소설/42")).toBeTruthy();
+    });
+
+    // 열람 전에는 기록하지 않는다
+    expect(mockRecordBookView).not.toHaveBeenCalled();
+
+    screen.getByTestId("folder-item-소설/42").click();
+
+    await waitFor(() => {
+      expect(mockRecordBookView).toHaveBeenCalledWith("", 42);
+    });
+    // 같은 책을 계속 보는 동안 중복 기록하지 않는다
+    expect(mockRecordBookView).toHaveBeenCalledTimes(1);
+  });
+
+  it("만화 열람 시 apiPrefix 를 붙여 기록한다", async () => {
+    mockRecordBookView.mockClear();
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") {
+        resolve({ 액션: 1 });
+      } else if (url === "/comics/categories/액션") {
+        resolve([
+          {
+            book_id: 7,
+            title: "테스트만화",
+            file_type: "zip",
+            file_path: "/test.zip",
+            category: "액션",
+          },
+        ]);
+      }
+    });
+
+    render(<View basePath="/comics-view" apiPrefix="/comics" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-액션")).toBeTruthy();
+    });
+    screen.getByTestId("folder-item-액션").click();
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-액션/7")).toBeTruthy();
+    });
+    screen.getByTestId("folder-item-액션/7").click();
+
+    await waitFor(() => {
+      expect(mockRecordBookView).toHaveBeenCalledWith("/comics", 7);
     });
   });
 
