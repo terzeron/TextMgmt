@@ -171,6 +171,29 @@ export function parseEntryId(entryId) {
 }
 
 /**
+ * 라우트에서 딥링크 대상(카테고리, bookId)을 뽑는다.
+ * 방법 B: /{basePath}/{bookId}?category=... (우선)
+ * 하위호환: /{basePath}/{category}/{bookId} (폴백)
+ *
+ * @param {string} routeWildcard - useParams()["*"] 값
+ * @param {string|null} qCategory - searchParams 의 category 값
+ * @returns {{ routeCategory: string|undefined, routeBookId: string|undefined }}
+ */
+export function parseRouteTarget(routeWildcard, qCategory) {
+  const wildcard = routeWildcard || "";
+  const routeCategory =
+    qCategory || (wildcard ? parseEntryId(wildcard)?.category : undefined);
+  const routeBookId = qCategory
+    ? /^\d+$/.test(wildcard)
+      ? wildcard
+      : undefined
+    : wildcard
+      ? parseEntryId(wildcard)?.bookId
+      : undefined;
+  return { routeCategory, routeBookId };
+}
+
+/**
  * 2단계 트리에서 카테고리 ID로 폴더를 검색한다.
  * 1단계(최상위)와 2단계(children) 모두 검색.
  *

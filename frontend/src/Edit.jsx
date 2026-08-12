@@ -18,12 +18,7 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCheck, faTrash, faSpinner } from "@fortawesome/free-solid-svg-icons";
 
-import {
-  getApiUrlPrefix,
-  jsonDeleteReq,
-  jsonGetReq,
-  jsonPutReq,
-} from "./Common";
+import { getApiUrlPrefix, jsonDeleteReq, jsonPutReq } from "./Common";
 import Folder from "./Folder";
 import BookInfoView from "./BookInfoView";
 import Bookstore from "./Bookstore";
@@ -35,48 +30,27 @@ import SearchResult from "./SearchResult";
 import ViewSingle from "./ViewSingle";
 import { DateTime } from "luxon";
 import {
-  findCommonPrefix,
-  buildFolderHierarchy,
   parseEntryId,
+  parseRouteTarget,
   findFolderInTree,
   updateFolderChildren,
-  updateFolderInTree,
   determineNextEntryId,
   determinePrevEntryId,
+  MORE_ENTRY_FILE_TYPE,
+  MORE_ENTRY_SUFFIX,
 } from "./folderUtils";
-
-// 모바일 감지 훅
-function useIsMobile(breakpoint = 768) {
-  const [isMobile, setIsMobile] = useState(
-    typeof window !== "undefined" ? window.innerWidth < breakpoint : false,
-  );
-
-  useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < breakpoint);
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, [breakpoint]);
-
-  return isMobile;
-}
+import useIsMobile from "./useIsMobile";
+import { useCategoryTree } from "./useCategoryTree";
 
 export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
   const isMobile = useIsMobile();
   const params = useParams();
   const [searchParams] = useSearchParams();
   // 방법 B: /edit/bookId?category=... (우선) → 하위호환: /edit/category/bookId (폴백)
-  const routeWildcard = params["*"] || "";
-  const qCategory = searchParams.get("category");
-  const routeCategory =
-    qCategory ||
-    (routeWildcard ? parseEntryId(routeWildcard)?.category : undefined);
-  const routeBookId = qCategory
-    ? /^\d+$/.test(routeWildcard)
-      ? routeWildcard
-      : undefined
-    : routeWildcard
-      ? parseEntryId(routeWildcard)?.bookId
-      : undefined;
+  const { routeCategory, routeBookId } = parseRouteTarget(
+    params["*"],
+    searchParams.get("category"),
+  );
   const {
     searchResults,
     hasSearched,
@@ -89,8 +63,6 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
-  const [folderData, setFolderData] = useState([]);
-  const [categoryList, setCategoryList] = useState([]);
   const [otherCategoryList, setOtherCategoryList] = useState([]);
   const [selectedEntryId, setSelectedEntryId] = useState("");
   const [selectedItems, setSelectedItems] = useState([]);
@@ -119,6 +91,18 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
   // URL 기반 초기 선택 완료 여부 (삭제 후 재선택 방지)
   const routeInitializedRef = useRef(false);
 
+  const {
+    folderData,
+    setFolderData,
+    categoryList,
+    loadCategoryPage,
+    loadBookById,
+  } = useCategoryTree({
+    apiPrefix,
+    onError: (error) =>
+      setErrorMessage(`디렉토리 데이터를 불러올 수 없습니다. ${error}`),
+  });
+
   // 메시지 자동 사라짐 (3초 후)
   useEffect(() => {
     if (successMessage) {
@@ -134,62 +118,10 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
     }
   }, [errorMessage]);
 
+  // 화면 전환 시 이전 책의 잔여 상태를 정리한다. (폴더 트리 자체는 훅이 정리)
   useEffect(
     () => {
-      const categoryListUrl = apiPrefix + "/categories";
-      jsonGetReq(
-        categoryListUrl,
-        null,
-        (categoryCounts) => {
-          // categoryCounts: {"_epub": 5, "_pdf": 3, "_root": 2, ...}
-          const categoryList = Object.keys(categoryCounts);
-
-          // _root 카테고리(최상위 파일) 분리
-          const hasRootFiles = categoryList.includes("_root");
-          const nonEmptyCategories = categoryList.filter((c) => c !== "_root");
-
-          const commonPrefix = findCommonPrefix(nonEmptyCategories);
-
-          // 2단계 계층 구조 생성
-          let data = buildFolderHierarchy(
-            nonEmptyCategories.sort((a, b) => a.localeCompare(b)),
-            commonPrefix,
-            categoryCounts,
-          );
-
-          // 최상위 파일이 있으면 가져와서 추가
-          if (hasRootFiles) {
-            jsonGetReq(
-              apiPrefix + "/categories/_root",
-              null,
-              (bookList) => {
-                const rootFiles = bookList
-                  .sort((a, b) => a["title"].localeCompare(b["title"]))
-                  .map((book) => ({
-                    id: "/" + book["book_id"].toString(),
-                    label: book["title"] + "." + book["file_type"],
-                    fileType: book["file_type"],
-                    children: [],
-                    book: book,
-                  }));
-                setFolderData([...data, ...rootFiles]);
-              },
-              () => {
-                setFolderData(data);
-              },
-            );
-          } else {
-            setFolderData(data);
-          }
-          setCategoryList(categoryList);
-        },
-        (error) => {
-          setErrorMessage(`디렉토리 데이터를 불러올 수 없습니다. ${error}`);
-        },
-      );
-
       return () => {
-        setFolderData([]);
         setOtherCategoryList([]);
         setSelectedEntryId("");
 
@@ -260,10 +192,63 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
     return { ...book, title: title, author: author, file_type: extension };
   }, []);
 
+  // 폴더 트리와 무관하게 책 한 권을 직접 열어 편집 패널에 반영한다.
+  // 카테고리 목록은 ES max_result_window(10000) 때문에 잘릴 수 있으므로,
+  // 목록에서 못 찾은 책은 여기로 폴백해야 편집이 가능하다.
+  // 트리 컨텍스트가 없으므로 이전/다음 이동만 비활성화된다.
+  const selectBookById = useCallback(
+    (bookId) => {
+      loadBookById(
+        bookId,
+        (book) => {
+          // URL의 category 대신 API 응답의 실제 category 사용 (위조 방지)
+          const realCategory = book["category"] || "_root";
+          setSelectedEntryId(`${realCategory}/${bookId}`);
+          setOriginalBookInfo(book);
+          setBookInfo(decomposeTitle(book));
+          setSearchTrigger((prev) => prev + 1);
+          setViewUrl(
+            "/viewer/" +
+              book["file_type"] +
+              "/" +
+              bookId +
+              "?path=" +
+              encodeURIComponent(book["file_path"]) +
+              (apiPrefix ? "&api=" + encodeURIComponent(apiPrefix) : ""),
+          );
+          setDownloadUrl(getApiUrlPrefix() + apiPrefix + "/download/" + bookId);
+          setOtherCategoryList(
+            categoryList
+              .sort((a, b) => a.localeCompare(b))
+              .filter(
+                (cat) =>
+                  cat !== realCategory && cat !== "_root" && !cat.includes("/"),
+              ),
+          );
+          // 목록에 없는 책이므로 트리 기반 이전/다음 이동은 불가능하다.
+          setNextEntryId("");
+          nextEntryIdRef.current = null;
+          setPrevEntryId("");
+          prevEntryIdRef.current = null;
+        },
+        (message) => {
+          setErrorMessage(`책 정보를 불러올 수 없습니다. ${message}`);
+        },
+      );
+    },
+    [apiPrefix, categoryList, decomposeTitle, loadBookById],
+  );
+
   const entryClicked = useCallback(
     (selectedEntryId) => {
       // 처리 중에는 폴더 클릭을 무시하여 ref 덮어쓰기 방지
       if (isProcessingRef.current) return;
+
+      // '더 보기' 노드는 책이 아니라 다음 페이지 요청이다.
+      if (selectedEntryId.endsWith(MORE_ENTRY_SUFFIX)) {
+        loadCategoryPage(selectedEntryId.slice(0, -MORE_ENTRY_SUFFIX.length));
+        return;
+      }
 
       // 선택된 항목 업데이트 (UI 동기화)
       setSelectedItems([selectedEntryId]);
@@ -278,37 +263,9 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
           return;
         }
 
-        const booksInCategoryUrl = apiPrefix + "/categories/" + selectedEntryId;
         // booksLoaded 플래그로 중복 로딩 방지
         if (!selectedFolderData.booksLoaded) {
-          jsonGetReq(booksInCategoryUrl, null, (bookList) => {
-            const bookEntries = bookList
-              .sort((a, b) => a["title"].localeCompare(b["title"]))
-              .map((book) => ({
-                id: selectedEntryId + "/" + book["book_id"].toString(),
-                label: book["title"] + "." + book["file_type"],
-                fileType: book["file_type"],
-                children: [],
-                book: book,
-              }));
-
-            const data = updateFolderInTree(
-              folderData,
-              selectedEntryId,
-              (item) => {
-                // 기존 하위 폴더 children 보존 후 책 추가
-                const existingSubfolders = (item.children || []).filter(
-                  (c) => c.fileType === "folder",
-                );
-                return {
-                  ...item,
-                  booksLoaded: true,
-                  children: [...existingSubfolders, ...bookEntries],
-                };
-              },
-            );
-            setFolderData(data);
-          });
+          loadCategoryPage(selectedEntryId);
         }
       } else if (selectedFolderData && selectedFolderData.book) {
         // 최상위 파일 (folderData에 직접 포함된 파일)
@@ -408,14 +365,24 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
             setPrevEntryId(prevEntryId);
             prevEntryIdRef.current = prevEntryId;
           } else {
-            setErrorMessage(`선택한 책을 찾을 수 없습니다. (ID: ${bookId})`);
+            // 목록이 상한에 걸려 잘렸거나 아직 페이지를 덜 불러온 경우다.
+            // 목록에 의존하지 않고 책 자체를 직접 조회한다.
+            selectBookById(bookId);
           }
         } else {
           setErrorMessage(`선택한 카테고리를 찾을 수 없습니다. (${category})`);
         }
       }
     },
-    [folderData, categoryList, decomposeTitle, apiPrefix, basePath],
+    [
+      folderData,
+      categoryList,
+      decomposeTitle,
+      apiPrefix,
+      basePath,
+      loadCategoryPage,
+      selectBookById,
+    ],
   );
 
   // entryClicked ref 업데이트 (최신 함수 참조 유지)
@@ -457,53 +424,29 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
       if (!categoryItem) {
         // 폴더 트리에 없는 경로 (3레벨 이상) - 백엔드에서 직접 조회
         routeInitializedRef.current = true;
-        jsonGetReq(
-          apiPrefix + "/books/" + routeBookId,
-          null,
-          (book) => {
-            // URL의 category 대신 API 응답의 실제 category 사용 (위조 방지)
-            const realCategory = book["category"] || routeCategory;
-            setSelectedEntryId(`${realCategory}/${routeBookId}`);
-            setOriginalBookInfo(book);
-            const newBook = decomposeTitle(book);
-            setBookInfo(newBook);
-            setSearchTrigger((prev) => prev + 1);
-            setViewUrl(
-              "/viewer/" +
-                book["file_type"] +
-                "/" +
-                routeBookId +
-                "?path=" +
-                encodeURIComponent(book["file_path"]) +
-                (apiPrefix ? "&api=" + encodeURIComponent(apiPrefix) : ""),
-            );
-            setDownloadUrl(
-              getApiUrlPrefix() + apiPrefix + "/download/" + routeBookId,
-            );
-            const otherCats = categoryList
-              .sort((a, b) => a.localeCompare(b))
-              .filter(
-                (cat) =>
-                  cat !== realCategory && cat !== "_root" && !cat.includes("/"),
-              );
-            setOtherCategoryList(otherCats);
-          },
-          (error) => {
-            setErrorMessage(`책 정보를 불러올 수 없습니다. ${error}`);
-          },
-        );
+        selectBookById(routeBookId);
         return;
       }
       // load children if not yet
       if (!categoryItem.booksLoaded) {
         // 카테고리 로딩만 트리거 (아직 초기화 완료 아님 - 로딩 후 재실행 필요)
         entryClicked(routeCategory);
-      } else {
-        routeInitializedRef.current = true;
-        entryClicked(`${routeCategory}/${routeBookId}`);
+        return;
       }
+      // 목록에 있으면 트리 컨텍스트(이전/다음 이동)까지 갖춘 선택을 수행한다.
+      routeInitializedRef.current = true;
+      const entryId = `${routeCategory}/${routeBookId}`;
+      const isInLoadedList = (categoryItem.children || []).some(
+        (child) => child.id === entryId,
+      );
+      if (isInLoadedList) {
+        entryClicked(entryId);
+        return;
+      }
+      // 목록에 없는 경우(카테고리가 10000건 상한에 걸려 잘린 경우 등)에는
+      // 목록에 의존하지 않고 책 자체를 직접 조회한다. 트리 탐색만 비활성화된다.
+      selectBookById(routeBookId);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix는 mount 시 고정 prop이라 의도적으로 deps에서 제외
   }, [
     routeCategory,
     routeBookId,
@@ -511,6 +454,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
     categoryList,
     decomposeTitle,
     entryClicked,
+    selectBookById,
   ]);
 
   // 초기 로딩 시 첫 번째 파일 자동 선택
@@ -688,7 +632,15 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
           newDirName,
           (children) => {
             const folders = children.filter((c) => c.fileType === "folder");
-            const books = children.filter((c) => c.fileType !== "folder");
+            // '더 보기'는 책이 아니라 다음 페이지 요청 노드이므로 정렬에서 빼고
+            // 항상 맨 뒤에 유지한다.
+            const moreEntries = children.filter(
+              (c) => c.fileType === MORE_ENTRY_FILE_TYPE,
+            );
+            const books = children.filter(
+              (c) =>
+                c.fileType !== "folder" && c.fileType !== MORE_ENTRY_FILE_TYPE,
+            );
             const insertIdx = books.findIndex(
               (b) => newEntry.label.localeCompare(b.label) < 0,
             );
@@ -697,7 +649,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
             } else {
               books.splice(insertIdx, 0, newEntry);
             }
-            return [...folders, ...books];
+            return [...folders, ...books, ...moreEntries];
           },
         );
         console.log(
