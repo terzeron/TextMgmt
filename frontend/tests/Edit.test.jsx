@@ -12,18 +12,19 @@ afterEach(cleanup);
 
 // ── mock 함수 ──
 
-const { mockJsonGetReq, mockJsonPutReq, mockJsonDeleteReq } = vi.hoisted(
-  () => ({
+const { mockJsonGetReq, mockJsonPutReq, mockJsonDeleteReq, mockRawJsonGetReq } =
+  vi.hoisted(() => ({
     mockJsonGetReq: vi.fn(),
     mockJsonPutReq: vi.fn(),
     mockJsonDeleteReq: vi.fn(),
-  }),
-);
+    mockRawJsonGetReq: vi.fn(),
+  }));
 
 vi.mock("../src/Common", () => ({
   jsonGetReq: mockJsonGetReq,
   jsonPutReq: mockJsonPutReq,
   jsonDeleteReq: mockJsonDeleteReq,
+  rawJsonGetReq: mockRawJsonGetReq,
   getApiUrlPrefix: () => "http://localhost:8000",
   ROOT_DIRECTORY: "_root",
 }));
@@ -262,11 +263,36 @@ function setupMockCategories(
   });
 }
 
+/**
+ * 카테고리 책 목록은 커서 페이지네이션(rawJsonGetReq)으로 조회한다.
+ * 기존 테스트들은 목록을 jsonGetReq 로 mocking 해 두었으므로, 페이지 요청을
+ * 그 mock 으로 위임하고 응답을 API envelope 로 감싸 준다.
+ * (한 페이지에 전부 담기는 소량 데이터이므로 next_cursor 는 비운다.)
+ */
+function bridgeRawJsonGetReqToJsonGetReq() {
+  mockRawJsonGetReq.mockImplementation((url, resolve, reject) => {
+    const bareUrl = url.split("?")[0];
+    mockJsonGetReq(
+      bareUrl,
+      null,
+      (result) =>
+        resolve({
+          status: "success",
+          result,
+          total: Array.isArray(result) ? result.length : 0,
+          next_cursor: "",
+        }),
+      (error) => reject && reject(error),
+    );
+  });
+}
+
 describe("Edit", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.spyOn(console, "log").mockImplementation(() => {});
+    bridgeRawJsonGetReqToJsonGetReq();
   });
 
   afterEach(() => {
@@ -1474,7 +1500,9 @@ describe("Edit", () => {
   // SimilarBooks.onSelect(=entryClicked)로 로딩된 카테고리의 존재하지 않는
   // bookId를 선택하면 children.find(...)?.book 가 undefined → 411.
 
-  it("로딩된 카테고리에서 존재하지 않는 책 ID 선택 시 에러 메시지를 표시한다", async () => {
+  // 목록에 없는 책은 곧바로 오류를 내지 않고 단건 조회로 폴백한다.
+  // (카테고리 목록이 10000건 상한에 걸려 잘렸을 수 있기 때문)
+  it("로딩된 카테고리에 없는 책 ID 선택 시 단건 조회로 폴백한다", async () => {
     setupMockCategories();
     render(<Edit />);
     await waitFor(() => {
@@ -1486,10 +1514,31 @@ describe("Edit", () => {
       expect(screen.getByTestId("book-info")).toBeTruthy();
     });
 
-    // 같은 카테고리, 존재하지 않는 bookId 선택
+    // 같은 카테고리, 목록에 없는 bookId 선택
     fireEvent.click(screen.getByTestId("similar-select-missing"));
     await waitFor(() => {
-      expect(screen.getByText(/선택한 책을 찾을 수 없습니다/)).toBeTruthy();
+      expect(mockJsonGetReq.mock.calls.some((c) => c[0] === "/books/777")).toBe(
+        true,
+      );
+    });
+  });
+
+  it("단건 조회까지 실패하면 책 정보 오류 메시지를 표시한다", async () => {
+    setupMockCategories();
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info")).toBeTruthy();
+    });
+
+    // setupMockCategories 는 목록에 없는 book_id 를 reject 한다
+    fireEvent.click(screen.getByTestId("similar-select-missing"));
+    await waitFor(() => {
+      expect(screen.getByText(/책 정보를 불러올 수 없습니다/)).toBeTruthy();
     });
   });
 
@@ -2285,9 +2334,30 @@ describe("Edit", () => {
 
   it("최상위 파일이 여러 개면 제목순으로 정렬한다", async () => {
     const rootBooks = [
-      { book_id: 3, title: "다랑", author: "", file_type: "pdf", file_path: "c.pdf", category: "_root" },
-      { book_id: 1, title: "가람", author: "", file_type: "pdf", file_path: "a.pdf", category: "_root" },
-      { book_id: 2, title: "나람", author: "", file_type: "pdf", file_path: "b.pdf", category: "_root" },
+      {
+        book_id: 3,
+        title: "다랑",
+        author: "",
+        file_type: "pdf",
+        file_path: "c.pdf",
+        category: "_root",
+      },
+      {
+        book_id: 1,
+        title: "가람",
+        author: "",
+        file_type: "pdf",
+        file_path: "a.pdf",
+        category: "_root",
+      },
+      {
+        book_id: 2,
+        title: "나람",
+        author: "",
+        file_type: "pdf",
+        file_path: "b.pdf",
+        category: "_root",
+      },
     ];
     mockJsonGetReq.mockImplementation((url, payload, resolve) => {
       if (url === "/categories") resolve({ _root: 3 });
@@ -2374,5 +2444,328 @@ describe("Edit", () => {
       configurable: true,
       value: originalWidth,
     });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// 대용량 카테고리(ES max_result_window 10000건 초과) 회귀 테스트
+//
+// 실제 장애: /book-edit/200903648?category=0_telegram 이 빈 화면으로 뜬다.
+// 0_telegram 은 32,301권이지만 /categories/{cat} 은 10,000건에서 잘리고,
+// Edit 은 "카테고리 목록을 받아 그 안에서 책을 찾는" 구조라 잘린 뒤의
+// 책에는 도달할 수 없다. View.jsx 는 이미 해결되어 있으나 Edit.jsx 만
+// 누락된 상태다.
+// ────────────────────────────────────────────────────────────────────
+
+describe("Edit - 대용량 카테고리(10000건 초과)", () => {
+  const LARGE_CATEGORY = "0_telegram";
+  const LARGE_CATEGORY_TOTAL = 32301;
+
+  // 목록 상한에 걸려 응답에 포함되지 못하는 실제 책
+  const TRUNCATED_BOOK = {
+    book_id: 200903648,
+    title: "Why 와이 한국사 신화와 전설",
+    author: "박연아, 문철영, 극동 만화 연구소",
+    file_type: "pdf",
+    file_path:
+      "0_telegram/[박연아, 문철영, 극동 만화 연구소]Why 와이 한국사 신화와 전설.pdf",
+    category: LARGE_CATEGORY,
+  };
+
+  // 서버가 실제로 돌려주는 잘린 목록 (author 빈 값들이 상한을 소진)
+  const TRUNCATED_LIST = [
+    {
+      book_id: 1001,
+      title: "가나다 1권",
+      author: "",
+      file_type: "epub",
+      file_path: "0_telegram/가나다 1권.epub",
+      category: LARGE_CATEGORY,
+    },
+    {
+      book_id: 1002,
+      title: "손만 대도 맛있어! 5권",
+      author: "",
+      file_type: "epub",
+      file_path: "0_telegram/손만 대도 맛있어! 5권.epub",
+      category: LARGE_CATEGORY,
+    },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([new URLSearchParams()]);
+  });
+
+  async function setRoute(bookId, category) {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": String(bookId) });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams(`category=${category}`),
+    ]);
+  }
+
+  /** 잘린 목록 + 책 단건 조회는 정상 동작하는 서버를 흉내낸다. */
+  function setupTruncatedCategory() {
+    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
+      if (url === "/categories") {
+        resolve({ [LARGE_CATEGORY]: LARGE_CATEGORY_TOTAL });
+      } else if (url.startsWith("/categories/")) {
+        // 상한에 걸려 잘린 목록 — 대상 책이 들어있지 않다
+        resolve(TRUNCATED_LIST);
+      } else if (url === `/books/${TRUNCATED_BOOK.book_id}`) {
+        // 단건 조회는 상한과 무관하게 항상 성공한다
+        resolve(TRUNCATED_BOOK);
+      } else if (url.startsWith("/books/")) {
+        if (reject) reject("No book found");
+      } else {
+        resolve({});
+      }
+    });
+    // 페이지네이션 경로로 전환되더라도 동일하게 잘린 첫 페이지를 준다
+    mockRawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("/categories/")) {
+        resolve({
+          status: "success",
+          result: TRUNCATED_LIST,
+          total: LARGE_CATEGORY_TOTAL,
+          next_cursor: "CURSOR_PAGE_2",
+        });
+      } else {
+        resolve({ status: "success", result: [] });
+      }
+    });
+  }
+
+  // ── 1층: 목록에 없는 책도 열려야 한다 ──
+
+  it("카테고리 목록이 잘려 책이 없으면 /books/{id} 단건 조회로 편집 화면을 연다", async () => {
+    setupTruncatedCategory();
+    await setRoute(TRUNCATED_BOOK.book_id, LARGE_CATEGORY);
+
+    render(<Edit />);
+
+    // 책 정보가 실제로 화면에 렌더되어야 한다 (현재는 bookInfo={} 라 렌더 안 됨)
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe(
+        TRUNCATED_BOOK.title,
+      );
+    });
+    expect(screen.getByTestId("book-author").textContent).toBe(
+      TRUNCATED_BOOK.author,
+    );
+  });
+
+  it("목록에 없는 책은 단건 조회 API를 호출한다", async () => {
+    setupTruncatedCategory();
+    await setRoute(TRUNCATED_BOOK.book_id, LARGE_CATEGORY);
+
+    render(<Edit />);
+
+    await waitFor(() => {
+      const calls = mockJsonGetReq.mock.calls;
+      expect(
+        calls.some((c) => c[0] === `/books/${TRUNCATED_BOOK.book_id}`),
+      ).toBe(true);
+    });
+  });
+
+  it("단건 조회까지 실패하면 오류를 표시하고 편집 패널은 열지 않는다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
+      if (url === "/categories") {
+        resolve({ [LARGE_CATEGORY]: LARGE_CATEGORY_TOTAL });
+      } else if (url.startsWith("/categories/")) {
+        resolve(TRUNCATED_LIST);
+      } else if (url.startsWith("/books/")) {
+        if (reject) reject("No book found by '99999999'");
+      } else {
+        resolve({});
+      }
+    });
+    mockRawJsonGetReq.mockImplementation((url, resolve) =>
+      resolve({
+        status: "success",
+        result: TRUNCATED_LIST,
+        total: LARGE_CATEGORY_TOTAL,
+        next_cursor: "",
+      }),
+    );
+    await setRoute(99999999, LARGE_CATEGORY);
+
+    render(<Edit />);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("book-info")).toBeNull();
+    });
+    // 존재하지 않는 책이므로 단건 조회를 시도했어야 한다
+    expect(
+      mockJsonGetReq.mock.calls.some((c) => c[0] === "/books/99999999"),
+    ).toBe(true);
+  });
+
+  // ── 2층: 목록도 전량 탐색 가능해야 한다 ──
+
+  it("카테고리 책 목록을 커서 페이지네이션(limit)으로 요청한다", async () => {
+    setupTruncatedCategory();
+    await setRoute(TRUNCATED_BOOK.book_id, LARGE_CATEGORY);
+
+    render(<Edit />);
+
+    await waitFor(() => {
+      const urls = [
+        ...mockRawJsonGetReq.mock.calls.map((c) => c[0]),
+        ...mockJsonGetReq.mock.calls.map((c) => c[0]),
+      ];
+      const categoryCalls = urls.filter((u) =>
+        u.startsWith(`/categories/${LARGE_CATEGORY}`),
+      );
+      expect(categoryCalls.length).toBeGreaterThan(0);
+      // 상한 없는 커서 조회여야 한다 (limit 파라미터 필수)
+      expect(categoryCalls.every((u) => u.includes("limit="))).toBe(true);
+    });
+  });
+
+  it("다음 페이지가 남아 있으면 '더 보기' 노드를 트리에 추가한다", async () => {
+    setupTruncatedCategory();
+    await setRoute(TRUNCATED_BOOK.book_id, LARGE_CATEGORY);
+
+    render(<Edit />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`folder-item-${LARGE_CATEGORY}/__more__`),
+      ).toBeTruthy();
+    });
+    expect(
+      screen.getByTestId(`folder-item-${LARGE_CATEGORY}/__more__`).textContent,
+    ).toContain(String(LARGE_CATEGORY_TOTAL));
+  });
+
+  it("'더 보기'를 누르면 커서로 다음 페이지를 이어붙인다", async () => {
+    setupTruncatedCategory();
+    await setRoute(TRUNCATED_BOOK.book_id, LARGE_CATEGORY);
+
+    render(<Edit />);
+
+    const moreId = `folder-item-${LARGE_CATEGORY}/__more__`;
+    await waitFor(() => {
+      expect(screen.getByTestId(moreId)).toBeTruthy();
+    });
+
+    // 2페이지는 대상 책을 포함해서 돌려준다
+    mockRawJsonGetReq.mockImplementation((url, resolve) => {
+      resolve({
+        status: "success",
+        result: [TRUNCATED_BOOK],
+        total: LARGE_CATEGORY_TOTAL,
+        next_cursor: "",
+      });
+    });
+
+    fireEvent.click(screen.getByTestId(moreId));
+
+    await waitFor(() => {
+      const urls = mockRawJsonGetReq.mock.calls.map((c) => c[0]);
+      expect(urls.some((u) => u.includes("cursor=CURSOR_PAGE_2"))).toBe(true);
+    });
+    // 이어붙인 책이 트리에 나타나고, 더 이상 '더 보기'는 없어야 한다
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(
+          `folder-item-${LARGE_CATEGORY}/${TRUNCATED_BOOK.book_id}`,
+        ),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByTestId(moreId)).toBeNull();
+  });
+
+  // '더 보기'는 책이 아니므로 책 정렬에 끼어들면 안 된다.
+  it("페이지가 남은 카테고리로 책을 옮겨도 '더 보기'가 맨 뒤에 남는다", async () => {
+    const MOVED_BOOK = {
+      book_id: 301,
+      title: "하늘을 나는 배",
+      author: "",
+      file_type: "epub",
+      file_path: "1_fiction/하늘을 나는 배.epub",
+      category: "1_fiction",
+    };
+    const SCIENCE_FIRST_PAGE = [
+      {
+        book_id: 201,
+        title: "가나다 과학",
+        author: "",
+        file_type: "epub",
+        file_path: "2_science/가나다 과학.epub",
+        category: "2_science",
+      },
+    ];
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve({ "1_fiction": 1, "2_science": 9999 });
+      else resolve({});
+    });
+    // 2_science 는 다음 페이지가 남아 '더 보기'가 붙는다
+    mockRawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.startsWith("/categories/1_fiction")) {
+        resolve({
+          status: "success",
+          result: [MOVED_BOOK],
+          total: 1,
+          next_cursor: "",
+        });
+      } else {
+        resolve({
+          status: "success",
+          result: SCIENCE_FIRST_PAGE,
+          total: 9999,
+          next_cursor: "SCIENCE_PAGE_2",
+        });
+      }
+    });
+    mockJsonPutReq.mockImplementation((url, payload, resolve) =>
+      resolve({ result: "success" }),
+    );
+
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+
+    // 두 카테고리를 모두 펼쳐 children 을 채운다
+    fireEvent.click(screen.getByTestId("folder-item-2_science"));
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-2_science/__more__")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-1_fiction/301")).toBeTruthy();
+    });
+
+    // 책 선택 후 2_science 로 이동
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/301"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("select-dir"));
+    fireEvent.click(screen.getByTestId("move-dir"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-2_science/301")).toBeTruthy();
+    });
+
+    // '더 보기'는 옮겨진 책보다 뒤에 있어야 한다
+    const ids = Array.from(
+      screen.getByTestId("folder-open").querySelectorAll("[data-testid]"),
+    ).map((el) => el.dataset.testid);
+    expect(ids.indexOf("folder-item-2_science/__more__")).toBeGreaterThan(
+      ids.indexOf("folder-item-2_science/301"),
+    );
   });
 });

@@ -20,6 +20,7 @@ import {
   rawJsonGetReq,
   getApiUrlPrefix,
   tryRefreshToken,
+  refreshOnVisible,
   startProactiveRefresh,
   stopProactiveRefresh,
 } from "./Common.js";
@@ -175,10 +176,12 @@ export default function Navigation() {
     };
     loadSession();
 
-    // 탭이 다시 활성화되면 토큰 상태 확인 후 필요 시 갱신
+    // 탭이 다시 활성화되면 토큰 상태 확인 후 필요 시 갱신.
+    // 여러 탭이 한꺼번에 활성화될 때 각 탭이 refresh 를 쏘면 회전된 토큰이 재제출되어
+    // 서버가 재사용으로 오판하므로 디바운스된 진입점을 쓴다.
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        tryRefreshToken();
+        refreshOnVisible();
       }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);

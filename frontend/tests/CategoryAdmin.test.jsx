@@ -36,9 +36,13 @@ vi.mock("../src/categoryMappingCache", () => ({
 
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 
-import CategoryAdmin from "../src/CategoryAdmin";
+import CategoryAdminBase from "../src/CategoryAdmin";
 
 // ── 헬퍼 ──
+
+const CategoryAdmin = (props) => (
+  <CategoryAdminBase initialShowOnlyAbnormal={false} {...props} />
+);
 
 const CATEGORIES_RESPONSE = {
   "1_fiction": 10,
@@ -106,53 +110,20 @@ describe("CategoryAdmin", () => {
     mockJsonPutReq.mockReset();
   });
 
-  // ── 초기 렌더링 (접힌 상태) ──
+  // ── 초기 렌더링 ──
+  // 카드 헤더가 없어졌으므로 마운트 즉시 본문이 렌더링된다.
 
-  it("초기 상태에서 타이틀 헤더를 표시한다", async () => {
-    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
-    render(<CategoryAdmin title="책 카테고리 관리" />);
-    await waitFor(() => {
-      expect(screen.getByText("책 카테고리 관리")).toBeTruthy();
-    });
-  });
-
-  // ── 펼치기/접기 ──
-
-  it("헤더 클릭 시 카드가 펼쳐진다", async () => {
+  it("마운트 직후 본문을 렌더링한다", async () => {
     setupMockResponses({}, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
     await waitFor(() => {
-      expect(screen.getByText("카테고리 관리")).toBeTruthy();
-    });
-    fireEvent.click(screen.getByText("카테고리 관리"));
-    await waitFor(() => {
       expect(screen.getByText("카테고리 없음")).toBeTruthy();
-    });
-  });
-
-  it("펼친 상태에서 헤더 클릭 시 접힌다", async () => {
-    setupMockResponses({}, MISMATCH_RESPONSE_EMPTY);
-    render(<CategoryAdmin />);
-    await waitFor(() => {
-      expect(screen.getByText("카테고리 관리")).toBeTruthy();
-    });
-    fireEvent.click(screen.getByText("카테고리 관리"));
-    await waitFor(() => {
-      expect(screen.getByText("카테고리 없음")).toBeTruthy();
-    });
-    fireEvent.click(screen.getByText("카테고리 관리"));
-    await waitFor(() => {
-      expect(screen.queryByText("카테고리 없음")).toBeNull();
     });
   });
 
   it("카테고리가 있으면 트리 뷰로 펼쳐진다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    await waitFor(() => {
-      expect(screen.getByText("카테고리 관리")).toBeTruthy();
-    });
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -194,7 +165,6 @@ describe("CategoryAdmin", () => {
   it('카테고리가 없으면 "카테고리 없음" 메시지를 표시한다', async () => {
     setupMockResponses({}, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("카테고리 없음")).toBeTruthy();
     });
@@ -203,7 +173,6 @@ describe("CategoryAdmin", () => {
   it("트리에 모든 카테고리를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
       expect(screen.getByText("2_science")).toBeTruthy();
@@ -214,7 +183,6 @@ describe("CategoryAdmin", () => {
   it("fs_only 카테고리도 트리에 포함된다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("4_fs_only_cat")).toBeTruthy();
     });
@@ -223,11 +191,171 @@ describe("CategoryAdmin", () => {
   it("_root 카테고리가 트리에 포함된다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
     expect(screen.getByText("_root")).toBeTruthy();
+  });
+
+  it("디렉토리 목록 헤더에 이상 항목만 보기 토글을 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    const header = screen.getByText("디렉토리 목록").closest(".card-header");
+    const toggle = within(header).getByLabelText("이상 항목만 보기");
+    expect(toggle).toBeTruthy();
+    expect(toggle.checked).toBe(false);
+  });
+
+  it("기본값으로 이상 항목만 보기 토글이 켜져 있다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdminBase />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    expect(screen.getByLabelText("이상 항목만 보기").checked).toBe(true);
+    expect(screen.getByText("1_fiction")).toBeTruthy();
+    expect(screen.queryByText("3_history")).toBeNull();
+  });
+
+  it("이상 항목만 보기 활성화 시 정상 카테고리를 숨긴다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("3_history")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByLabelText("이상 항목만 보기"));
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+      expect(screen.getByText("2_science")).toBeTruthy();
+      expect(screen.getByText("4_fs_only_cat")).toBeTruthy();
+      expect(screen.queryByText("3_history")).toBeNull();
+      expect(screen.queryByText("_root")).toBeNull();
+    });
+  });
+
+  it("이상 항목만 보기 상태에서 펼친 디렉토리의 정상 하위 항목을 숨긴다", async () => {
+    const categories = {
+      parent: 10,
+      "parent/abnormal_child": 3,
+      "parent/normal_child": 7,
+    };
+    const mismatchData = {
+      mismatches: [{ category: "parent", es_count: 10, fs_count: 9, diff: 1 }],
+      es_only: [{ category: "parent/abnormal_child", es_count: 3 }],
+      fs_only: [],
+    };
+    setupMockResponses(categories, mismatchData);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("parent")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByLabelText("이상 항목만 보기"));
+    await waitFor(() => {
+      const tree = screen.getByRole("tree");
+      expect(within(tree).getByText("parent")).toBeTruthy();
+      expect(within(tree).queryByText("normal_child")).toBeNull();
+    });
+
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(categories);
+      else if (url === "/category-mismatches") resolve(mismatchData);
+      else if (url.startsWith("/category-mismatches/parent")) {
+        resolve({
+          es_only: [
+            {
+              book_id: 101,
+              title: "Missing File",
+              file_type: "pdf",
+              file_path: "parent/missing.pdf",
+            },
+          ],
+          fs_only: [],
+          duplicates: [],
+        });
+      } else if (url.startsWith("/category-mappings"))
+        resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+    });
+
+    fireEvent.click(screen.getByText("parent"));
+    await waitFor(() => {
+      const tree = screen.getByRole("tree");
+      expect(within(tree).getByText("Missing File.pdf")).toBeTruthy();
+      expect(within(tree).queryByText("normal_child")).toBeNull();
+    });
+  });
+
+  it("디렉토리를 펼친 뒤 이상 항목만 보기로 전환해도 정상 하위 항목을 숨긴다", async () => {
+    const categories = {
+      parent: 10,
+      "parent/abnormal_child": 3,
+      "parent/normal_child": 7,
+    };
+    const mismatchData = {
+      mismatches: [{ category: "parent", es_count: 10, fs_count: 9, diff: 1 }],
+      es_only: [{ category: "parent/abnormal_child", es_count: 3 }],
+      fs_only: [],
+    };
+    setupMockResponses(categories, mismatchData);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("parent")).toBeTruthy();
+    });
+
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(categories);
+      else if (url === "/category-mismatches") resolve(mismatchData);
+      else if (url.startsWith("/category-mismatches/parent")) {
+        resolve({
+          es_only: [
+            {
+              book_id: 101,
+              title: "Missing File",
+              file_type: "pdf",
+              file_path: "parent/missing.pdf",
+            },
+          ],
+          fs_only: [],
+          duplicates: [],
+        });
+      } else if (url.startsWith("/category-mappings"))
+        resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+    });
+
+    fireEvent.click(screen.getByText("parent"));
+    await waitFor(() => {
+      const tree = screen.getByRole("tree");
+      expect(within(tree).getByText("normal_child")).toBeTruthy();
+      expect(within(tree).getByText("Missing File.pdf")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByLabelText("이상 항목만 보기"));
+    await waitFor(() => {
+      const tree = screen.getByRole("tree");
+      expect(within(tree).getByText("Missing File.pdf")).toBeTruthy();
+      expect(within(tree).queryByText("normal_child")).toBeNull();
+    });
+  });
+
+  it("만화 카테고리 관리에도 이상 항목만 보기 토글을 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA, {
+      apiPrefix: "/comics",
+    });
+    render(<CategoryAdmin contentType="comic" />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    const header = screen.getByText("디렉토리 목록").closest(".card-header");
+    expect(within(header).getByLabelText("이상 항목만 보기")).toBeTruthy();
   });
 
   // ── 로딩 상태 ──
@@ -238,7 +366,6 @@ describe("CategoryAdmin", () => {
       resolvers[url] = resolve;
     });
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     expect(screen.getByText("로딩 중...")).toBeTruthy();
 
     // 4개 API 모두 resolve
@@ -259,7 +386,6 @@ describe("CategoryAdmin", () => {
       categoriesError: "Network error",
     });
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(
         screen.getByText(/카테고리 목록을 불러올 수 없습니다/),
@@ -272,7 +398,6 @@ describe("CategoryAdmin", () => {
       mismatchError: "Server error",
     });
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(
         screen.getByText(/불일치 데이터를 불러올 수 없습니다/),
@@ -285,7 +410,6 @@ describe("CategoryAdmin", () => {
       categoriesError: "fail",
     });
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(
         screen.getByText(/카테고리 목록을 불러올 수 없습니다/),
@@ -299,7 +423,6 @@ describe("CategoryAdmin", () => {
   it("불일치가 있는 폴더 클릭 시 /category-mismatches/{id} API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -348,7 +471,6 @@ describe("CategoryAdmin", () => {
   it("booksLoaded 플래그로 중복 API 호출을 방지한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -394,7 +516,6 @@ describe("CategoryAdmin", () => {
   it("ES-only 항목 선택 시 삭제/편집/조회 버튼이 표시된다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -436,7 +557,6 @@ describe("CategoryAdmin", () => {
   it("삭제 버튼 클릭 시 DELETE /books/{bookId} API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -495,7 +615,6 @@ describe("CategoryAdmin", () => {
   it("삭제 실패 시 에러 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -547,7 +666,6 @@ describe("CategoryAdmin", () => {
   it("FS-only 항목 선택 시 ES 적재/파일 삭제 버튼이 표시된다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -583,7 +701,6 @@ describe("CategoryAdmin", () => {
   it("ES 적재 버튼 클릭 시 POST /category-mismatches/index-file API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -614,15 +731,19 @@ describe("CategoryAdmin", () => {
       expect(screen.getByText("ES 적재")).toBeTruthy();
     });
 
-    mockJsonPostReq.mockImplementation((url, payload, resolve) => {
-      resolve({ book_id: 999 });
-    });
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, reject, final) => {
+        resolve({ book_id: 999 });
+        final();
+      },
+    );
 
     fireEvent.click(screen.getByText("ES 적재"));
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/category-mismatches/index-file",
         { file_path: "1_fiction/orphan.txt" },
+        expect.any(Function),
         expect.any(Function),
         expect.any(Function),
       );
@@ -634,10 +755,9 @@ describe("CategoryAdmin", () => {
     expect(screen.queryByText("orphan.txt")).toBeNull();
   });
 
-  it("ES 적재 실패 시 에러 메시지를 표시한다", async () => {
+  it("ES 적재 요청 중 버튼 내부에 spinner를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -668,9 +788,54 @@ describe("CategoryAdmin", () => {
       expect(screen.getByText("ES 적재")).toBeTruthy();
     });
 
-    mockJsonPostReq.mockImplementation((url, payload, resolve, reject) => {
-      reject("적재 오류");
+    mockJsonPostReq.mockImplementation(() => {});
+
+    fireEvent.click(screen.getByText("ES 적재"));
+
+    const indexButton = screen.getByRole("button", { name: /ES 적재/ });
+    expect(indexButton.disabled).toBe(true);
+    expect(indexButton.querySelector(".spinner-border")).toBeTruthy();
+  });
+
+  it("ES 적재 실패 시 에러 메시지를 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByRole("tree")).toBeTruthy();
     });
+
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches")
+        resolve(MISMATCH_RESPONSE_WITH_DATA);
+      else if (url.startsWith("/category-mismatches/")) {
+        resolve({
+          es_only: [],
+          fs_only: [
+            { file_name: "orphan.txt", file_path: "1_fiction/orphan.txt" },
+          ],
+        });
+      } else if (url.startsWith("/category-mappings"))
+        resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("orphan.txt")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("orphan.txt"));
+    await waitFor(() => {
+      expect(screen.getByText("ES 적재")).toBeTruthy();
+    });
+
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, reject, final) => {
+        reject("적재 오류");
+        final();
+      },
+    );
 
     fireEvent.click(screen.getByText("ES 적재"));
     await waitFor(() => {
@@ -681,7 +846,6 @@ describe("CategoryAdmin", () => {
   it("파일 삭제 버튼 클릭 시 POST /category-mismatches/delete-file API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -735,7 +899,6 @@ describe("CategoryAdmin", () => {
   it("파일 삭제 실패 시 에러 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -779,13 +942,13 @@ describe("CategoryAdmin", () => {
   // ── 만화 contentType 테스트 ──
 
   describe('contentType="comic"', () => {
-    it("만화 카테고리 관리 타이틀을 표시한다", async () => {
+    it("마운트 직후 만화 본문을 렌더링한다", async () => {
       setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, {
         apiPrefix: "/comics",
       });
-      render(<CategoryAdmin contentType="comic" title="만화 카테고리 관리" />);
+      render(<CategoryAdmin contentType="comic" />);
       await waitFor(() => {
-        expect(screen.getByText("만화 카테고리 관리")).toBeTruthy();
+        expect(screen.getByText("디렉토리 목록")).toBeTruthy();
       });
     });
 
@@ -793,7 +956,7 @@ describe("CategoryAdmin", () => {
       setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, {
         apiPrefix: "/comics",
       });
-      render(<CategoryAdmin contentType="comic" title="만화 카테고리 관리" />);
+      render(<CategoryAdmin contentType="comic" />);
       await waitFor(() => {
         expect(mockJsonGetReq).toHaveBeenCalledWith(
           "/comics/categories",
@@ -826,8 +989,7 @@ describe("CategoryAdmin", () => {
       setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA, {
         apiPrefix: "/comics",
       });
-      render(<CategoryAdmin contentType="comic" title="만화 카테고리 관리" />);
-      fireEvent.click(screen.getByText("만화 카테고리 관리"));
+      render(<CategoryAdmin contentType="comic" />);
       await waitFor(() => {
         expect(screen.getByRole("tree")).toBeTruthy();
       });
@@ -886,8 +1048,7 @@ describe("CategoryAdmin", () => {
       setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA, {
         apiPrefix: "/comics",
       });
-      render(<CategoryAdmin contentType="comic" title="만화 카테고리 관리" />);
-      fireEvent.click(screen.getByText("만화 카테고리 관리"));
+      render(<CategoryAdmin contentType="comic" />);
       await waitFor(() => {
         expect(screen.getByRole("tree")).toBeTruthy();
       });
@@ -934,7 +1095,6 @@ describe("CategoryAdmin", () => {
   it("비노출 체크박스 클릭 시 POST /hidden-categories API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -965,7 +1125,6 @@ describe("CategoryAdmin", () => {
   it("이름 변경 버튼 클릭 시 모달이 뜨고 변경 API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -998,7 +1157,6 @@ describe("CategoryAdmin", () => {
   it("삭제 버튼 클릭 시 모달이 뜨고 삭제 API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1029,7 +1187,6 @@ describe("CategoryAdmin", () => {
   it("ES 재적재 버튼 클릭 시 모달이 뜨고 재적재 API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1062,7 +1219,6 @@ describe("CategoryAdmin", () => {
   it("키워드 추가 시 POST API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1090,7 +1246,6 @@ describe("CategoryAdmin", () => {
   it("키워드 삭제 시 DELETE API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1125,7 +1280,6 @@ describe("CategoryAdmin", () => {
   it("중복 항목 선택 시 중복 문서 테이블을 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -1190,7 +1344,6 @@ describe("CategoryAdmin", () => {
     };
     setupMockResponses(categories, mismatchData);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -1206,7 +1359,6 @@ describe("CategoryAdmin", () => {
       else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
     });
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -1220,7 +1372,6 @@ describe("CategoryAdmin", () => {
       else if (url.startsWith("/hidden-categories")) reject("히든 오류");
     });
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -1231,7 +1382,6 @@ describe("CategoryAdmin", () => {
   it("불일치 상세 조회 실패 시 에러 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -1257,7 +1407,6 @@ describe("CategoryAdmin", () => {
   it("불일치 상세 응답에 fs_count가 있으면 파일 건수를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -1303,7 +1452,6 @@ describe("CategoryAdmin", () => {
   it("빈 키워드로 추가 시 API를 호출하지 않는다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1318,7 +1466,6 @@ describe("CategoryAdmin", () => {
   it("이미 등록된 키워드 추가 시 경고 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1342,7 +1489,6 @@ describe("CategoryAdmin", () => {
   it("키워드 추가 실패 시 에러 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1369,7 +1515,6 @@ describe("CategoryAdmin", () => {
   it("키워드 추가 성공 시 매핑 목록에 새 키워드가 추가된다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1396,7 +1541,6 @@ describe("CategoryAdmin", () => {
   it("키워드 삭제 실패 시 에러 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1426,7 +1570,6 @@ describe("CategoryAdmin", () => {
   it("키워드 삭제 성공 시 매핑 목록에서 키워드가 제거된다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1456,7 +1599,6 @@ describe("CategoryAdmin", () => {
   it("비노출 설정 변경 실패 시 에러 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1484,7 +1626,6 @@ describe("CategoryAdmin", () => {
   it("현재 이름과 동일한 이름으로 변경 시 경고 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1509,7 +1650,6 @@ describe("CategoryAdmin", () => {
   it("이름 변경 성공 시 loadData를 다시 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1543,7 +1683,6 @@ describe("CategoryAdmin", () => {
   it("이름 변경 실패 시 에러 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1573,7 +1712,6 @@ describe("CategoryAdmin", () => {
   it("카테고리 삭제 성공 시 loadData를 다시 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1604,7 +1742,6 @@ describe("CategoryAdmin", () => {
   it("카테고리 삭제 실패 시 에러 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1632,7 +1769,6 @@ describe("CategoryAdmin", () => {
   it("ES 재적재 성공 시 성공 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1658,7 +1794,6 @@ describe("CategoryAdmin", () => {
   it("ES 재적재 실패 시 에러 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1686,7 +1821,6 @@ describe("CategoryAdmin", () => {
   it("키워드 입력 필드에서 Enter 키 입력 시 키워드를 추가한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1717,7 +1851,6 @@ describe("CategoryAdmin", () => {
   it("이름 변경 모달에서 Enter 키 입력 시 이름을 변경한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -1753,7 +1886,6 @@ describe("CategoryAdmin", () => {
   it("ES-only 항목의 편집 버튼 클릭 시 window.open을 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -1810,7 +1942,6 @@ describe("CategoryAdmin", () => {
   it("중복 항목의 조회 버튼 클릭 시 window.open을 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -1876,7 +2007,6 @@ describe("CategoryAdmin", () => {
   it("중복 항목의 미연결 문서 삭제 버튼 클릭 시 API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -1948,7 +2078,6 @@ describe("CategoryAdmin", () => {
   it("중복 항목의 삭제 confirm 취소 시 API를 호출하지 않는다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -1999,7 +2128,6 @@ describe("CategoryAdmin", () => {
   it("중복 항목 삭제 실패 시 에러 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -2058,7 +2186,6 @@ describe("CategoryAdmin", () => {
   it('중복 항목에서 파일이 없는 경우 "파일 없음" 뱃지를 표시한다', async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -2105,7 +2232,6 @@ describe("CategoryAdmin", () => {
   it("이름 변경 모달 취소 버튼 클릭 시 모달이 닫힌다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -2122,7 +2248,6 @@ describe("CategoryAdmin", () => {
   it("삭제 모달 취소 버튼 클릭 시 모달이 닫힌다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -2139,7 +2264,6 @@ describe("CategoryAdmin", () => {
   it("ES 재적재 모달 취소 버튼 클릭 시 모달이 닫힌다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -2158,7 +2282,6 @@ describe("CategoryAdmin", () => {
   it("이름 변경 모달 X 버튼 클릭 시 모달이 닫힌다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -2176,7 +2299,6 @@ describe("CategoryAdmin", () => {
   it("삭제 모달 X 버튼 클릭 시 모달이 닫힌다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -2194,7 +2316,6 @@ describe("CategoryAdmin", () => {
   it("ES 재적재 모달 X 버튼 클릭 시 모달이 닫힌다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -2214,7 +2335,6 @@ describe("CategoryAdmin", () => {
   it("ES-only 삭제 시 warning이 있으면 warning 메시지도 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -2267,8 +2387,7 @@ describe("CategoryAdmin", () => {
       setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA, {
         apiPrefix: "/comics",
       });
-      render(<CategoryAdmin contentType="comic" title="만화 카테고리 관리" />);
-      fireEvent.click(screen.getByText("만화 카테고리 관리"));
+      render(<CategoryAdmin contentType="comic" />);
       await waitFor(() => {
         expect(screen.getByRole("tree")).toBeTruthy();
       });
@@ -2329,7 +2448,6 @@ describe("CategoryAdmin", () => {
     const mismatchData = { mismatches: [], es_only: [], fs_only: [] };
     setupMockResponses(categories, mismatchData);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -2354,7 +2472,6 @@ describe("CategoryAdmin", () => {
     const mismatchData = { mismatches: [], es_only: [], fs_only: [] };
     setupMockResponses(categories, mismatchData);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -2375,7 +2492,6 @@ describe("CategoryAdmin", () => {
     const mismatchData = { mismatches: [], es_only: [], fs_only: [] };
     setupMockResponses(categories, mismatchData, { hiddenResult: [] });
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("a")).toBeTruthy();
     });
@@ -2430,7 +2546,6 @@ describe("CategoryAdmin 다크 테마 및 폴백 경로", () => {
   it("다크 테마에서도 트리를 렌더링한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     renderDark(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -2441,7 +2556,6 @@ describe("CategoryAdmin 다크 테마 및 폴백 경로", () => {
   it("불일치 응답에 mismatches/es_only/fs_only 가 없어도 트리를 만든다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, {});
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -2453,7 +2567,6 @@ describe("CategoryAdmin 다크 테마 및 폴백 경로", () => {
       hiddenResult: null,
     });
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -2465,7 +2578,6 @@ describe("CategoryAdmin 다크 테마 및 폴백 경로", () => {
   it("ES 문서 수가 없는 카테고리는 0건으로 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("4_fs_only_cat")).toBeTruthy();
     });
@@ -2479,7 +2591,6 @@ describe("CategoryAdmin 다크 테마 및 폴백 경로", () => {
   it("Enter 이외의 키는 키워드 추가/이름 변경을 트리거하지 않는다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -2502,7 +2613,6 @@ describe("CategoryAdmin 다크 테마 및 폴백 경로", () => {
   it("빈 키워드로 Enter 를 눌러도 API 를 호출하지 않는다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -2517,7 +2627,6 @@ describe("CategoryAdmin 다크 테마 및 폴백 경로", () => {
   it("빈 이름으로 Enter 를 눌러도 이름 변경 API 를 호출하지 않는다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -2534,7 +2643,6 @@ describe("CategoryAdmin 다크 테마 및 폴백 경로", () => {
   it("매핑이 없던 카테고리에 키워드를 추가하면 배열을 새로 만든다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("3_history")).toBeTruthy();
     });
@@ -2558,7 +2666,6 @@ describe("CategoryAdmin 다크 테마 및 폴백 경로", () => {
   it("비노출 토글 응답이 null 이어도 빈 집합으로 처리한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
@@ -2595,7 +2702,6 @@ describe("CategoryAdmin 기본 에러 메시지 폴백", () => {
   // 패널을 펼치고 1_fiction 을 선택한 상태까지 진행하는 헬퍼
   const openAndSelect = async (category = "1_fiction") => {
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText(category)).toBeTruthy();
     });
@@ -2605,7 +2711,6 @@ describe("CategoryAdmin 기본 에러 메시지 폴백", () => {
   it("불일치 상세 조회 에러가 비어 있으면 기본 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -2782,7 +2887,6 @@ describe("CategoryAdmin 잔여 분기", () => {
   it("placeholder(로딩 중...) 노드 클릭은 무시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -2806,7 +2910,6 @@ describe("CategoryAdmin 잔여 분기", () => {
         apiPrefix: "/comics",
       });
       render(<CategoryAdmin contentType="comic" />);
-      fireEvent.click(screen.getByText("카테고리 관리"));
       await waitFor(() => {
         expect(screen.getByRole("tree")).toBeTruthy();
       });
@@ -2819,7 +2922,12 @@ describe("CategoryAdmin 잔여 분기", () => {
                 file_path: "1_fiction/dup.pdf",
                 file_exists: true,
                 docs: [
-                  { book_id: 2001, title: "만화중복", author: "A", file_linked: false },
+                  {
+                    book_id: 2001,
+                    title: "만화중복",
+                    author: "A",
+                    file_linked: false,
+                  },
                 ],
               },
             ],
@@ -2859,7 +2967,6 @@ describe("CategoryAdmin 잔여 분기", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
@@ -2872,7 +2979,12 @@ describe("CategoryAdmin 잔여 분기", () => {
               file_path: "1_fiction/dup.pdf",
               file_exists: true,
               docs: [
-                { book_id: 3001, title: "미연결중복", author: "A", file_linked: false },
+                {
+                  book_id: 3001,
+                  title: "미연결중복",
+                  author: "A",
+                  file_linked: false,
+                },
               ],
             },
           ],
@@ -2922,7 +3034,6 @@ describe("CategoryAdmin 성공 메시지 자동 소멸", () => {
 
   const openAndSelect = async () => {
     render(<CategoryAdmin />);
-    fireEvent.click(screen.getByText("카테고리 관리"));
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });

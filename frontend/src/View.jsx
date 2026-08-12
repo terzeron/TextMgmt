@@ -2,49 +2,27 @@ import { useEffect, useState, useCallback, Suspense } from "react";
 import { useParams, useSearchParams, useOutletContext } from "react-router-dom";
 import PropTypes from "prop-types";
 
-import { getApiUrlPrefix } from "./Common";
+import { getApiUrlPrefix, recordBookView } from "./Common";
 
 import "./View.css";
 import "bootstrap/dist/css/bootstrap.min.css";
 import { Container, Row, Col, Card, Alert } from "react-bootstrap";
 
-import { jsonGetReq, rawJsonGetReq } from "./Common";
 import Folder from "./Folder.jsx";
 import ViewSingle from "./ViewSingle.jsx";
 import BookInfoView from "./BookInfoView.jsx";
 import BookLoadError from "./BookLoadError.jsx";
 import SearchResult from "./SearchResult";
 import {
-  findCommonPrefix,
-  buildFolderHierarchy,
   parseEntryId,
+  parseRouteTarget,
   findFolderInTree,
-  updateFolderInTree,
   determineNextEntryId,
   determinePrevEntryId,
-  MORE_ENTRY_FILE_TYPE,
   MORE_ENTRY_SUFFIX,
 } from "./folderUtils";
-
-// 카테고리 책 목록의 페이지 크기. 카테고리가 ES max_result_window(10000)를
-// 넘어도 커서로 이어받아 전체에 도달할 수 있게 한다. 한 페이지 size 자체는
-// max_result_window 이내여야 하므로 그 범위에서 크게 잡는다.
-const CATEGORY_PAGE_SIZE = 5000;
-
-// 모바일 감지 훅
-function useIsMobile(breakpoint = 768) {
-  const [isMobile, setIsMobile] = useState(
-    typeof window !== "undefined" ? window.innerWidth < breakpoint : false,
-  );
-
-  useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < breakpoint);
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, [breakpoint]);
-
-  return isMobile;
-}
+import useIsMobile from "./useIsMobile";
+import { useCategoryTree } from "./useCategoryTree";
 
 export default function View({ basePath = "/book-view", apiPrefix = "" }) {
   const isMobile = useIsMobile();
@@ -52,18 +30,10 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
   const params = useParams();
   const [searchParams] = useSearchParams();
   // 방법 B: /view/bookId?category=... (우선) → 하위호환: /view/category/bookId (폴백)
-  const routeWildcard = params["*"] || "";
-  const qCategory = searchParams.get("category");
-  const routeCategory =
-    qCategory ||
-    (routeWildcard ? parseEntryId(routeWildcard)?.category : undefined);
-  const routeBookId = qCategory
-    ? /^\d+$/.test(routeWildcard)
-      ? routeWildcard
-      : undefined
-    : routeWildcard
-      ? parseEntryId(routeWildcard)?.bookId
-      : undefined;
+  const { routeCategory, routeBookId } = parseRouteTarget(
+    params["*"],
+    searchParams.get("category"),
+  );
   const {
     searchResults,
     hasSearched,
@@ -79,195 +49,38 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
   const [selectedEntryId, setSelectedEntryId] = useState("");
   const [nextEntryId, setNextEntryId] = useState("");
   const [prevEntryId, setPrevEntryId] = useState("");
-  const [folderData, setFolderData] = useState([]);
-  const [hiddenCategories, setHiddenCategories] = useState(new Set());
   const [bookInfo, setBookInfo] = useState({});
   const [bookLoadError, setBookLoadError] = useState("");
   const [viewUrl, setViewUrl] = useState("");
   const [downloadUrl, setDownloadUrl] = useState("");
 
+  // 열람 이력 기록. setBookInfo 호출 지점이 여러 곳이라 각 지점에 심으면 누락·중복이
+  // 생기므로, 선택된 책이 바뀌는 것만 한 곳에서 감지한다.
+  const viewedBookId = bookInfo?.book_id;
   useEffect(() => {
-    const categoryListUrl = apiPrefix + "/categories";
-    jsonGetReq(
-      categoryListUrl,
-      null,
-      (categoryCounts) => {
-        // categoryCounts: {"_epub": 5, "_pdf": 3, "_root": 2, ...}
-        const categoryList = Object.keys(categoryCounts);
+    if (!viewedBookId) return;
+    recordBookView(apiPrefix, viewedBookId);
+  }, [apiPrefix, viewedBookId]);
 
-        // _root 카테고리(최상위 파일) 분리
-        const hasRootFiles = categoryList.includes("_root");
-        const nonEmptyCategories = categoryList.filter((c) => c !== "_root");
+  const { folderData, loadCategoryPage, loadBookById } = useCategoryTree({
+    apiPrefix,
+    role,
+    onError: (error) => setErrorMessage(`can't load directory data, ${error}`),
+  });
 
-        const buildAndSetFolderData = (filteredCategories, counts) => {
-          const commonPrefix = findCommonPrefix(filteredCategories);
-
-          // 2단계 계층 구조 생성
-          let data = buildFolderHierarchy(
-            filteredCategories.sort((a, b) => a.localeCompare(b)),
-            commonPrefix,
-            counts,
-          );
-
-          // 최상위 파일이 있으면 가져와서 추가
-          if (hasRootFiles) {
-            jsonGetReq(
-              apiPrefix + "/categories/_root",
-              null,
-              (bookList) => {
-                const rootFiles = bookList
-                  .sort((a, b) => a["title"].localeCompare(b["title"]))
-                  .map((book) => ({
-                    id: "/" + book["book_id"].toString(),
-                    label: book["title"] + "." + book["file_type"],
-                    fileType: book["file_type"],
-                    children: [],
-                    book: book,
-                  }));
-                setFolderData([...data, ...rootFiles]);
-              },
-              () => {
-                setFolderData(data);
-              },
-            );
-          } else {
-            setFolderData(data);
-          }
-        };
-
-        // viewer인 경우 비노출 카테고리 필터링
-        if (role === "viewer") {
-          const contentType = apiPrefix === "" ? "book" : "comic";
-          jsonGetReq(
-            `/hidden-categories?content_type=${contentType}`,
-            null,
-            (hiddenList) => {
-              const hiddenSet = new Set(hiddenList || []);
-              setHiddenCategories(hiddenSet);
-              const filteredCategories = nonEmptyCategories.filter((cat) => {
-                for (const hidden of hiddenSet) {
-                  if (cat === hidden || cat.startsWith(hidden + "/")) {
-                    return false;
-                  }
-                }
-                return true;
-              });
-              buildAndSetFolderData(filteredCategories, categoryCounts);
-            },
-            () => {
-              // hidden 목록 로드 실패 시 전체 카테고리 표시
-              buildAndSetFolderData(nonEmptyCategories, categoryCounts);
-            },
-          );
-        } else {
-          buildAndSetFolderData(nonEmptyCategories, categoryCounts);
-        }
-      },
-      (error) => {
-        setErrorMessage(`can't load directory data, ${error}`);
-      },
-    );
-
+  // 화면 전환 시 이전 책의 잔여 상태를 정리한다.
+  useEffect(() => {
     return () => {
       setErrorMessage("");
       setSuccessMessage("");
       setSelectedEntryId("");
       setNextEntryId("");
-      setFolderData([]);
       setBookInfo({});
       setBookLoadError("");
       setViewUrl("");
       setDownloadUrl("");
     };
   }, [role, apiPrefix]);
-
-  // 카테고리의 책 목록을 커서 기반으로 한 페이지씩 이어 불러온다.
-  // 서버가 표시 순서(제목)대로 정렬해 주므로 페이지를 그대로 이어붙이면 된다.
-  const loadCategoryPage = useCallback(
-    (category) => {
-      const folder = findFolderInTree(folderData, category);
-      if (!folder || folder.loadingBooks) {
-        return;
-      }
-      const cursor = folder.booksCursor || "";
-      const url =
-        apiPrefix +
-        "/categories/" +
-        category +
-        `?limit=${CATEGORY_PAGE_SIZE}` +
-        (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
-
-      setFolderData((prev) =>
-        updateFolderInTree(prev, category, (item) => ({
-          ...item,
-          loadingBooks: true,
-        })),
-      );
-
-      const stopLoading = () =>
-        setFolderData((prev) =>
-          updateFolderInTree(prev, category, (item) => ({
-            ...item,
-            loadingBooks: false,
-          })),
-        );
-
-      rawJsonGetReq(
-        url,
-        (data) => {
-          if (!data || data["status"] !== "success") {
-            stopLoading();
-            return;
-          }
-          const bookList = data["result"] || [];
-          const nextCursor = data["next_cursor"] || "";
-          const total = data["total"] || 0;
-          const bookEntries = bookList.map((book) => ({
-            id: category + "/" + book["book_id"].toString(),
-            label: book["title"] + "." + book["file_type"],
-            fileType: book["file_type"],
-            children: [],
-            book: book,
-          }));
-
-          setFolderData((prev) =>
-            updateFolderInTree(prev, category, (item) => {
-              const children = item.children || [];
-              // 하위 폴더는 앞에, 이미 불러온 책은 순서대로 유지하고 뒤에 이어붙인다.
-              const subfolders = children.filter(
-                (c) => c.fileType === "folder",
-              );
-              const loadedBooks = children.filter(
-                (c) =>
-                  c.fileType !== "folder" &&
-                  c.fileType !== MORE_ENTRY_FILE_TYPE,
-              );
-              const books = [...loadedBooks, ...bookEntries];
-              const moreEntry = nextCursor
-                ? [
-                    {
-                      id: category + MORE_ENTRY_SUFFIX,
-                      label: `더 보기 (${books.length}/${total})`,
-                      fileType: MORE_ENTRY_FILE_TYPE,
-                      children: [],
-                    },
-                  ]
-                : [];
-              return {
-                ...item,
-                booksLoaded: true,
-                loadingBooks: false,
-                booksCursor: nextCursor,
-                children: [...subfolders, ...books, ...moreEntry],
-              };
-            }),
-          );
-        },
-        stopLoading,
-      );
-    },
-    [folderData, apiPrefix],
-  );
 
   const entryClicked = useCallback(
     (selectedEntryId) => {
@@ -366,25 +179,13 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
     [folderData, apiPrefix, basePath, loadCategoryPage],
   );
 
-  // 책 한 권을 폴더 트리와 무관하게 /books/{id}로 직접 조회한다.
-  // 카테고리 목록(/categories/{category})은 ES max_result_window 때문에
-  // 10000건에서 잘리므로, 목록에 의존하면 그 뒤의 책은 열 수 없다.
-  const loadBookById = useCallback(
+  // 폴더 트리와 무관하게 책 한 권을 직접 열어 화면에 반영한다.
+  // (트리 목록은 상한에 걸려 잘릴 수 있으므로 목록에 의존하지 않는다.)
+  const selectBookById = useCallback(
     (bookId) => {
-      jsonGetReq(
-        apiPrefix + "/books/" + bookId,
-        null,
+      loadBookById(
+        bookId,
         (book) => {
-          // viewer인 경우 hidden 카테고리 접근 차단
-          if (role === "viewer" && hiddenCategories.size > 0) {
-            const bookCat = book["category"] || "";
-            for (const hidden of hiddenCategories) {
-              if (bookCat === hidden || bookCat.startsWith(hidden + "/")) {
-                setBookLoadError("접근 권한이 없는 카테고리입니다.");
-                return;
-              }
-            }
-          }
           setBookLoadError("");
           setBookInfo(book);
           setViewUrl(
@@ -400,12 +201,12 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
           );
           setDownloadUrl(getApiUrlPrefix() + apiPrefix + "/download/" + bookId);
         },
-        (error) => {
-          setBookLoadError(`${error}`);
+        (message) => {
+          setBookLoadError(message);
         },
       );
     },
-    [apiPrefix, role, hiddenCategories],
+    [apiPrefix, loadBookById],
   );
 
   // folderData 변경 시 nextEntryId/prevEntryId 재계산
@@ -427,7 +228,7 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
       const categoryItem = findFolderInTree(folderData, routeCategory);
       if (!categoryItem) {
         // 폴더 트리에 없는 경로 (3레벨 이상) - 백엔드에서 직접 조회
-        loadBookById(routeBookId);
+        selectBookById(routeBookId);
         return;
       }
       // If category children not loaded, load them first
@@ -446,7 +247,7 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
       }
       // 목록에 없는 경우(카테고리가 10000건 상한에 걸려 잘린 경우 등)에는
       // 목록에 의존하지 않고 책 자체를 직접 조회한다. 트리 탐색만 비활성화된다.
-      loadBookById(routeBookId);
+      selectBookById(routeBookId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix/hiddenCategories/role은 라우트 변경 시점에만 재평가하면 충분 (의도된 누락)
   }, [routeCategory, routeBookId, folderData, entryClicked]);
