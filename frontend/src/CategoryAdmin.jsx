@@ -292,12 +292,16 @@ function buildMismatchCounts(mismatchData) {
 export default function CategoryAdmin({
   contentType = "book",
   title = "카테고리 관리",
+  initialShowOnlyAbnormal = true,
 }) {
   // 공통 상태
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const [showOnlyAbnormal, setShowOnlyAbnormal] = useState(
+    initialShowOnlyAbnormal,
+  );
 
   // 카테고리 트리
   const [folderData, setFolderData] = useState([]);
@@ -321,6 +325,7 @@ export default function CategoryAdmin({
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showReloadModal, setShowReloadModal] = useState(false);
   const [reloading, setReloading] = useState(false);
+  const [indexingFile, setIndexingFile] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
 
   const apiPrefix = contentType === "comic" ? "/comics" : "";
@@ -822,6 +827,7 @@ export default function CategoryAdmin({
     if (!selectedMismatch || selectedMismatch.mismatchType !== "fs_only")
       return;
     setActionResult(null);
+    setIndexingFile(true);
     jsonPostReq(
       apiPrefix + "/category-mismatches/index-file",
       { file_path: selectedMismatch.filePath },
@@ -843,6 +849,7 @@ export default function CategoryAdmin({
       (error) => {
         setActionResult({ type: "error", message: `ES 적재 실패: ${error}` });
       },
+      () => setIndexingFile(false),
     );
   }, [selectedMismatch, folderData, apiPrefix]);
 
@@ -903,6 +910,56 @@ export default function CategoryAdmin({
     ? mappings[selectedCategory] || []
     : [];
 
+  const displayedFolderData = useMemo(() => {
+    if (!showOnlyAbnormal) return folderData;
+
+    const filterAbnormalItems = (items) =>
+      items.flatMap((item) => {
+        const children = item.children || [];
+        const filteredChildren = filterAbnormalItems(children);
+        const placeholderChildren = children.filter(
+          (child) => child.fileType === "placeholder",
+        );
+        const isAbnormal =
+          Boolean(item.mismatchType) || Number(item.count || 0) > 0;
+
+        if (!isAbnormal && filteredChildren.length === 0) return [];
+
+        return [
+          {
+            ...item,
+            children: [...filteredChildren, ...placeholderChildren],
+          },
+        ];
+      });
+
+    return filterAbnormalItems(folderData);
+  }, [folderData, showOnlyAbnormal]);
+
+  const displayedTreeMeta = useMemo(() => {
+    const ids = [];
+    const collectIds = (items) => {
+      for (const item of items) {
+        ids.push(item.id);
+        if (item.children?.length) {
+          collectIds(item.children);
+        }
+      }
+    };
+
+    collectIds(displayedFolderData);
+
+    return {
+      ids: new Set(ids),
+      key: `${contentType}:${showOnlyAbnormal ? "abnormal" : "all"}:${ids.join("|")}`,
+    };
+  }, [contentType, displayedFolderData, showOnlyAbnormal]);
+
+  const displayedExpandedItems = useMemo(
+    () => expandedItems.filter((itemId) => displayedTreeMeta.ids.has(itemId)),
+    [expandedItems, displayedTreeMeta],
+  );
+
   const treeViewStyles = useMemo(
     () => ({
       height: "fit-content",
@@ -958,14 +1015,27 @@ export default function CategoryAdmin({
           <Row className="g-0">
             <Col md={4}>
               <Card>
-                <Card.Header className="py-1">디렉토리 목록</Card.Header>
+                <Card.Header className="py-1 d-flex justify-content-between align-items-center gap-2">
+                  <span>디렉토리 목록</span>
+                  <Form.Check
+                    type="switch"
+                    id={`show-only-abnormal-${contentType}`}
+                    label="이상 항목만 보기"
+                    checked={showOnlyAbnormal}
+                    onChange={(event) =>
+                      setShowOnlyAbnormal(event.target.checked)
+                    }
+                    className="m-0"
+                  />
+                </Card.Header>
                 <div id="dir_list">
                   <RichTreeView
-                    items={folderData}
+                    key={displayedTreeMeta.key}
+                    items={displayedFolderData}
                     aria-label="category admin"
                     sx={treeViewStyles}
                     slots={{ item: AdminTreeItem }}
-                    expandedItems={expandedItems}
+                    expandedItems={displayedExpandedItems}
                     onSelectedItemsChange={handleTreeItemClick}
                   />
                 </div>
@@ -1268,7 +1338,15 @@ export default function CategoryAdmin({
                             variant="outline-success"
                             size="sm"
                             onClick={handleIndexFile}
+                            disabled={indexingFile}
                           >
+                            {indexingFile && (
+                              <Spinner
+                                animation="border"
+                                size="sm"
+                                className="me-1"
+                              />
+                            )}
                             ES 적재
                           </Button>
                           <Button
@@ -1416,4 +1494,5 @@ export default function CategoryAdmin({
 CategoryAdmin.propTypes = {
   contentType: PropTypes.string,
   title: PropTypes.string,
+  initialShowOnlyAbnormal: PropTypes.bool,
 };

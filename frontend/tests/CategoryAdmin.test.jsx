@@ -36,9 +36,13 @@ vi.mock("../src/categoryMappingCache", () => ({
 
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 
-import CategoryAdmin from "../src/CategoryAdmin";
+import CategoryAdminBase from "../src/CategoryAdmin";
 
 // ── 헬퍼 ──
+
+const CategoryAdmin = (props) => (
+  <CategoryAdminBase initialShowOnlyAbnormal={false} {...props} />
+);
 
 const CATEGORIES_RESPONSE = {
   "1_fiction": 10,
@@ -228,6 +232,173 @@ describe("CategoryAdmin", () => {
       expect(screen.getByRole("tree")).toBeTruthy();
     });
     expect(screen.getByText("_root")).toBeTruthy();
+  });
+
+  it("디렉토리 목록 헤더에 이상 항목만 보기 토글을 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    const header = screen.getByText("디렉토리 목록").closest(".card-header");
+    const toggle = within(header).getByLabelText("이상 항목만 보기");
+    expect(toggle).toBeTruthy();
+    expect(toggle.checked).toBe(false);
+  });
+
+  it("기본값으로 이상 항목만 보기 토글이 켜져 있다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdminBase />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    expect(screen.getByLabelText("이상 항목만 보기").checked).toBe(true);
+    expect(screen.getByText("1_fiction")).toBeTruthy();
+    expect(screen.queryByText("3_history")).toBeNull();
+  });
+
+  it("이상 항목만 보기 활성화 시 정상 카테고리를 숨긴다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("3_history")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByLabelText("이상 항목만 보기"));
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+      expect(screen.getByText("2_science")).toBeTruthy();
+      expect(screen.getByText("4_fs_only_cat")).toBeTruthy();
+      expect(screen.queryByText("3_history")).toBeNull();
+      expect(screen.queryByText("_root")).toBeNull();
+    });
+  });
+
+  it("이상 항목만 보기 상태에서 펼친 디렉토리의 정상 하위 항목을 숨긴다", async () => {
+    const categories = {
+      parent: 10,
+      "parent/abnormal_child": 3,
+      "parent/normal_child": 7,
+    };
+    const mismatchData = {
+      mismatches: [{ category: "parent", es_count: 10, fs_count: 9, diff: 1 }],
+      es_only: [{ category: "parent/abnormal_child", es_count: 3 }],
+      fs_only: [],
+    };
+    setupMockResponses(categories, mismatchData);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("parent")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByLabelText("이상 항목만 보기"));
+    await waitFor(() => {
+      const tree = screen.getByRole("tree");
+      expect(within(tree).getByText("parent")).toBeTruthy();
+      expect(within(tree).queryByText("normal_child")).toBeNull();
+    });
+
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(categories);
+      else if (url === "/category-mismatches") resolve(mismatchData);
+      else if (url.startsWith("/category-mismatches/parent")) {
+        resolve({
+          es_only: [
+            {
+              book_id: 101,
+              title: "Missing File",
+              file_type: "pdf",
+              file_path: "parent/missing.pdf",
+            },
+          ],
+          fs_only: [],
+          duplicates: [],
+        });
+      } else if (url.startsWith("/category-mappings"))
+        resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+    });
+
+    fireEvent.click(screen.getByText("parent"));
+    await waitFor(() => {
+      const tree = screen.getByRole("tree");
+      expect(within(tree).getByText("Missing File.pdf")).toBeTruthy();
+      expect(within(tree).queryByText("normal_child")).toBeNull();
+    });
+  });
+
+  it("디렉토리를 펼친 뒤 이상 항목만 보기로 전환해도 정상 하위 항목을 숨긴다", async () => {
+    const categories = {
+      parent: 10,
+      "parent/abnormal_child": 3,
+      "parent/normal_child": 7,
+    };
+    const mismatchData = {
+      mismatches: [{ category: "parent", es_count: 10, fs_count: 9, diff: 1 }],
+      es_only: [{ category: "parent/abnormal_child", es_count: 3 }],
+      fs_only: [],
+    };
+    setupMockResponses(categories, mismatchData);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("parent")).toBeTruthy();
+    });
+
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(categories);
+      else if (url === "/category-mismatches") resolve(mismatchData);
+      else if (url.startsWith("/category-mismatches/parent")) {
+        resolve({
+          es_only: [
+            {
+              book_id: 101,
+              title: "Missing File",
+              file_type: "pdf",
+              file_path: "parent/missing.pdf",
+            },
+          ],
+          fs_only: [],
+          duplicates: [],
+        });
+      } else if (url.startsWith("/category-mappings"))
+        resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+    });
+
+    fireEvent.click(screen.getByText("parent"));
+    await waitFor(() => {
+      const tree = screen.getByRole("tree");
+      expect(within(tree).getByText("normal_child")).toBeTruthy();
+      expect(within(tree).getByText("Missing File.pdf")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByLabelText("이상 항목만 보기"));
+    await waitFor(() => {
+      const tree = screen.getByRole("tree");
+      expect(within(tree).getByText("Missing File.pdf")).toBeTruthy();
+      expect(within(tree).queryByText("normal_child")).toBeNull();
+    });
+  });
+
+  it("만화 카테고리 관리에도 이상 항목만 보기 토글을 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA, {
+      apiPrefix: "/comics",
+    });
+    render(<CategoryAdmin contentType="comic" title="만화 카테고리 관리" />);
+    fireEvent.click(screen.getByText("만화 카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    const header = screen.getByText("디렉토리 목록").closest(".card-header");
+    expect(within(header).getByLabelText("이상 항목만 보기")).toBeTruthy();
   });
 
   // ── 로딩 상태 ──
@@ -614,8 +785,9 @@ describe("CategoryAdmin", () => {
       expect(screen.getByText("ES 적재")).toBeTruthy();
     });
 
-    mockJsonPostReq.mockImplementation((url, payload, resolve) => {
+    mockJsonPostReq.mockImplementation((url, payload, resolve, reject, final) => {
       resolve({ book_id: 999 });
+      final();
     });
 
     fireEvent.click(screen.getByText("ES 적재"));
@@ -625,6 +797,7 @@ describe("CategoryAdmin", () => {
         { file_path: "1_fiction/orphan.txt" },
         expect.any(Function),
         expect.any(Function),
+        expect.any(Function),
       );
     });
 
@@ -632,6 +805,49 @@ describe("CategoryAdmin", () => {
       expect(screen.getByText("ES에 적재되었습니다.")).toBeTruthy();
     });
     expect(screen.queryByText("orphan.txt")).toBeNull();
+  });
+
+  it("ES 적재 요청 중 버튼 내부에 spinner를 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    fireEvent.click(screen.getByText("카테고리 관리"));
+    await waitFor(() => {
+      expect(screen.getByRole("tree")).toBeTruthy();
+    });
+
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches")
+        resolve(MISMATCH_RESPONSE_WITH_DATA);
+      else if (url.startsWith("/category-mismatches/")) {
+        resolve({
+          es_only: [],
+          fs_only: [
+            { file_name: "orphan.txt", file_path: "1_fiction/orphan.txt" },
+          ],
+        });
+      } else if (url.startsWith("/category-mappings"))
+        resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("orphan.txt")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("orphan.txt"));
+    await waitFor(() => {
+      expect(screen.getByText("ES 적재")).toBeTruthy();
+    });
+
+    mockJsonPostReq.mockImplementation(() => {});
+
+    fireEvent.click(screen.getByText("ES 적재"));
+
+    const indexButton = screen.getByRole("button", { name: /ES 적재/ });
+    expect(indexButton.disabled).toBe(true);
+    expect(indexButton.querySelector(".spinner-border")).toBeTruthy();
   });
 
   it("ES 적재 실패 시 에러 메시지를 표시한다", async () => {
@@ -668,8 +884,9 @@ describe("CategoryAdmin", () => {
       expect(screen.getByText("ES 적재")).toBeTruthy();
     });
 
-    mockJsonPostReq.mockImplementation((url, payload, resolve, reject) => {
+    mockJsonPostReq.mockImplementation((url, payload, resolve, reject, final) => {
       reject("적재 오류");
+      final();
     });
 
     fireEvent.click(screen.getByText("ES 적재"));

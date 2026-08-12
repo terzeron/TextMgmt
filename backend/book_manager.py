@@ -1115,6 +1115,39 @@ class BookManager:
                 return ("Error", f"ES 업데이트 예외, 파일 롤백 완료: {e}")
         return ("Error", f"can't update book information of '{book_id}' in ElasticSearch, no such a book")
 
+    def _normalize_stored_file_path(self, file_path: str) -> str:
+        if not file_path:
+            return ""
+
+        path = Path(file_path)
+        if path.is_absolute():
+            try:
+                return str(path.resolve(strict=False).relative_to(self.path_prefix.resolve(strict=False)))
+            except (OSError, ValueError):
+                return file_path.lstrip("/")
+
+        normalized = posixpath.normpath(file_path.replace("\\", "/"))
+        if normalized == ".":
+            return ""
+        if normalized.startswith("./"):
+            return normalized[2:]
+        return normalized
+
+    def _search_all_docs_by_category(self, category: str) -> list[tuple[int, dict[str, Any], float]]:
+        result: list[tuple[int, dict[str, Any], float]] = []
+        search_after: list[Any] | None = None
+
+        while True:
+            page, _total, next_search_after = self.es_manager.search_by_category_paged(
+                category,
+                size=MAX_CATEGORY_RESULT_COUNT,
+                search_after=search_after,
+            )
+            result.extend(page)
+            if next_search_after is None:
+                return result
+            search_after = next_search_after
+
     def get_category_mismatches(self) -> dict[str, Any]:
         """파일시스템의 1레벨 디렉토리 기준으로 ES와 파일 경로 불일치를 검출"""
         import time as _time
@@ -1205,13 +1238,11 @@ class BookManager:
         import os as _os
 
         # 1. ES 문서 목록 (file_path 기준, 중복 감지 포함)
-        doc_list = self.es_manager.search_by_category(category, max_result_count=MAX_CATEGORY_RESULT_COUNT)
-        if len(doc_list) >= MAX_CATEGORY_RESULT_COUNT:
-            LOGGER.warning("get_category_mismatch_details: category '%s' 결과가 상한(%d)에 도달하여 잘렸습니다.", category, MAX_CATEGORY_RESULT_COUNT)
+        doc_list = self._search_all_docs_by_category(category)
         es_files: dict[str, dict[str, Any]] = {}
         path_docs: dict[str, list[dict[str, Any]]] = {}
         for book_id, doc, _score in doc_list:
-            rel_path = doc.get("file_path", "")
+            rel_path = self._normalize_stored_file_path(doc.get("file_path") or "")
             path_docs.setdefault(rel_path, []).append({"book_id": book_id, **doc})
             es_files[rel_path] = {"book_id": book_id, **doc}
 

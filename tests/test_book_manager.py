@@ -401,6 +401,13 @@ class DummyES:
     def search_by_category(self, category: str, max_result_count: int):
         return self.category_docs
 
+    def search_by_category_paged(self, category: str, size: int = 500, search_after=None):
+        start = search_after[0] if search_after else 0
+        page = self.category_docs[start : start + size]
+        next_start = start + len(page)
+        next_search_after = [next_start] if len(page) == size and next_start < len(self.category_docs) else None
+        return page, len(self.category_docs), next_search_after
+
     def count_by_categories(self, categories):
         return {c: self.counts.get(c, 0) for c in categories}
 
@@ -1682,6 +1689,24 @@ def test_category_mismatch_details_es_only(tmp_path: Path):
     (tmp_path / "A").mkdir()
     details = manager.get_category_mismatch_details("A")
     assert details["es_only"]
+
+
+def test_category_mismatch_details_normalizes_absolute_es_paths(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    category_dir = tmp_path / "A"
+    category_dir.mkdir()
+    file_path = category_dir / "same.txt"
+    file_path.write_text("x")
+
+    es.category_docs = [
+        (file_path.stat().st_ino, make_doc(str(file_path)), 1.0),
+    ]
+
+    details = manager.get_category_mismatch_details("A")
+
+    assert details["es_only"] == []
+    assert details["fs_only"] == []
 
 
 def test_category_mismatch_details_stat_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -3416,19 +3441,24 @@ def test_get_books_in_category_warns_on_truncation(tmp_path: Path, monkeypatch, 
     assert any("상한" in r.getMessage() and "get_books_in_category" in r.getMessage() for r in caplog.records)
 
 
-def test_get_category_mismatch_details_warns_on_truncation(tmp_path: Path, monkeypatch, caplog):
-    """결과가 MAX_CATEGORY_RESULT_COUNT 에 도달하면 잘림 경고를 남긴다 (book_manager.py:1069)."""
+def test_get_category_mismatch_details_reads_all_pages(tmp_path: Path, monkeypatch):
+    """상한 크기의 첫 페이지에서 멈추지 않고 다음 페이지까지 비교한다."""
     import backend.book_manager as bm_mod
 
     monkeypatch.setattr(bm_mod, "MAX_CATEGORY_RESULT_COUNT", 1)
     es = DummyES()
-    f = tmp_path / "A" / "x.txt"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text("z")
-    es.category_docs = [(f.stat().st_ino, make_doc("A/x.txt"), 1.0)]
+    first = tmp_path / "A" / "first.txt"
+    second = tmp_path / "A" / "second.txt"
+    first.parent.mkdir(parents=True, exist_ok=True)
+    first.write_text("x")
+    second.write_text("y")
+    es.category_docs = [
+        (first.stat().st_ino, make_doc("A/first.txt"), 1.0),
+        (second.stat().st_ino, make_doc("A/second.txt"), 1.0),
+    ]
     manager = make_manager(tmp_path, es)
 
-    with caplog.at_level(logging.WARNING):
-        manager.get_category_mismatch_details("A")
+    details = manager.get_category_mismatch_details("A")
 
-    assert any("상한" in r.getMessage() and "get_category_mismatch_details" in r.getMessage() for r in caplog.records)
+    assert details["es_only"] == []
+    assert details["fs_only"] == []
