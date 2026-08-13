@@ -1945,11 +1945,12 @@ class TestValidateEpub:
         """epubcheck --json 출력을 흉내내는 JSON 바이트를 반환."""
         import json
 
-        data = {"messages": messages or [], "checker": {"nFatal": 0, "nError": 0 if valid else 1, "nWarning": 0, "nUsage": 0, "nInfo": 0}}
+        # 실제 epubcheck는 checker에 nInfo를 넣지 않고, 메시지 ID 키는 대문자 "ID"다.
+        data = {"messages": messages or [], "checker": {"nFatal": 0, "nError": 0 if valid else 1, "nWarning": 0, "nUsage": 0}}
         if publication:
             data["publication"] = publication
         if not valid and not messages:
-            data["messages"] = [{"severity": "ERROR", "id": "RSC-005", "message": "Test error message", "locations": [{"path": "OEBPS/ch1.xhtml", "line": 10, "column": 5}]}]
+            data["messages"] = [{"severity": "ERROR", "ID": "RSC-005", "message": "Test error message", "locations": [{"path": "OEBPS/ch1.xhtml", "line": 10, "column": 5}]}]
         return json.dumps(data).encode("utf-8")
 
     def _mock_epubcheck_exec(self, json_bytes, returncode=0):
@@ -2024,7 +2025,10 @@ class TestValidateEpub:
             assert len(body["result"]["messages"]) > 0
             msg = body["result"]["messages"][0]
             assert msg["severity"] == "ERROR"
+            assert msg["id"] == "RSC-005"
             assert msg["location"]["path"] == "OEBPS/ch1.xhtml"
+            # nInfo가 없는 실제 출력에서도 summary.info가 채워져야 한다
+            assert body["result"]["summary"]["info"] == 0
         finally:
             _cleanup_book(client, bm, book_id, epub_path)
 
@@ -2572,6 +2576,7 @@ async def test_epub_unquoted_href_and_full_view(tmp_path):
     from backend.book_manager import BookManager
 
     from backend.book import Book
+
     epub_file = Book.path_prefix / "encoded_book.epub"
     epub_file.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(epub_file, "w") as zf:
@@ -2619,15 +2624,7 @@ async def test_epub_unquoted_href_and_full_view(tmp_path):
     mock_book.file_path = epub_file
 
     bm.es_manager = MagicMock()
-    bm.es_manager.search_by_id = MagicMock(return_value={
-        "category": "test",
-        "title": "Test Book",
-        "author": "Author",
-        "file_path": "encoded_book.epub",
-        "file_type": "epub",
-        "file_size": 1000,
-        "updated_time": "2026-01-01T00:00:00.000000",
-    })
+    bm.es_manager.search_by_id = MagicMock(return_value={"category": "test", "title": "Test Book", "author": "Author", "file_path": "encoded_book.epub", "file_type": "epub", "file_size": 1000, "updated_time": "2026-01-01T00:00:00.000000"})
 
     try:
         resp = await bm.get_book_preview(book_id=1, chapters=0)
@@ -2649,4 +2646,3 @@ async def test_epub_unquoted_href_and_full_view(tmp_path):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

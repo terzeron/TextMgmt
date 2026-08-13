@@ -13,3 +13,7 @@ updates:
       interval: "weekly"
     target-branch: "develop"
     rebase-strategy: "auto"
+    # caniuse-lite 는 데이터 갱신용으로 devDependencies 에 직접 선언해 둔 것이라
+    # 매니페스트 범위를 매번 올릴 이유가 없다. 범위가 이미 새 버전을 허용하면
+    # package.json 은 그대로 두고 package-lock.json 의 resolved 버전만 갱신한다.
+    versioning-strategy: "increase-if-necessary"

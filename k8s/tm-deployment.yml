@@ -14,11 +14,20 @@ spec:
       labels:
         app: tm-backend-app
     spec:
+      # syscall 표면 축소. 컨테이너별로 지정하지 않아도 pod 내 전체에 적용된다.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         - name: wait-for-es
           image: busybox:1.37
+          # nc 한 줄만 실행하므로 비루트·읽기전용 rootfs로 충분하다.
           securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           command:
@@ -151,6 +160,9 @@ spec:
       labels:
         app: tm-frontend-app
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: tm-frontend
           image: registry.terzeron.com/terzeron/tm_frontend:latest

@@ -557,11 +557,13 @@ class BookManager:
                 pass
 
         # 결과 구조화
+        # epubcheck JSON의 메시지 ID 키는 대문자 "ID"다(5.1.0/5.3.0 동일).
+        # 소문자로 읽으면 RSC-005 같은 진단 코드가 전부 빈 문자열이 된다.
         messages = []
         for msg in data.get("messages", []):
             locations = msg.get("locations", [])
             loc = locations[0] if locations else {}
-            messages.append({"severity": msg.get("severity", ""), "id": msg.get("id", ""), "message": msg.get("message", ""), "location": {"path": loc.get("path", ""), "line": loc.get("line", -1), "column": loc.get("column", -1)} if loc else None})
+            messages.append({"severity": msg.get("severity", ""), "id": msg.get("ID", ""), "message": msg.get("message", ""), "location": {"path": loc.get("path", ""), "line": loc.get("line", -1), "column": loc.get("column", -1)} if loc else None})
 
         # publication 메타데이터
         pub_raw = data.get("publication", {})
@@ -570,10 +572,13 @@ class BookManager:
             publication = {"title": pub_raw.get("title", ""), "creator": pub_raw.get("creator", ""), "date": pub_raw.get("date", ""), "publisher": pub_raw.get("publisher", "")}
 
         # 요약 카운트
+        # checker는 nFatal/nError/nWarning/nUsage만 준다. nInfo는 존재하지 않아
+        # 읽으면 항상 0이 되므로 INFO 건수는 메시지에서 직접 센다.
         checker = data.get("checker", {})
+        info_count = sum(1 for m in messages if m["severity"] == "INFO")
 
         rel_path = str(book.file_path.relative_to(self.path_prefix))
-        result = {"valid": proc.returncode == 0, "file_path": rel_path, "messages": messages, "summary": {"fatal": checker.get("nFatal", 0), "error": checker.get("nError", 0), "warning": checker.get("nWarning", 0), "usage": checker.get("nUsage", 0), "info": checker.get("nInfo", 0)}}
+        result = {"valid": proc.returncode == 0, "file_path": rel_path, "messages": messages, "summary": {"fatal": checker.get("nFatal", 0), "error": checker.get("nError", 0), "warning": checker.get("nWarning", 0), "usage": checker.get("nUsage", 0), "info": info_count}}
         if publication:
             result["publication"] = publication
 
@@ -1138,11 +1143,7 @@ class BookManager:
         search_after: list[Any] | None = None
 
         while True:
-            page, _total, next_search_after = self.es_manager.search_by_category_paged(
-                category,
-                size=MAX_CATEGORY_RESULT_COUNT,
-                search_after=search_after,
-            )
+            page, _total, next_search_after = self.es_manager.search_by_category_paged(category, size=MAX_CATEGORY_RESULT_COUNT, search_after=search_after)
             result.extend(page)
             if next_search_after is None:
                 return result

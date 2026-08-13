@@ -27,6 +27,10 @@ spec:
       labels:
         app: tm-mysql-app
     spec:
+      # entrypoint가 root로 시작해야 하는 것과 무관하게 syscall 표면은 줄일 수 있다.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: mysql
           image: mysql:8.0

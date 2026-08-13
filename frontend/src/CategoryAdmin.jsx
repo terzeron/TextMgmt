@@ -38,7 +38,6 @@ import { animated, useSpring } from "@react-spring/web";
 import Collapse from "@mui/material/Collapse";
 import Typography from "@mui/material/Typography";
 import Box from "@mui/material/Box";
-import FolderRounded from "@mui/icons-material/FolderRounded";
 import clsx from "clsx";
 
 import { jsonGetReq, jsonPostReq, jsonPutReq, jsonDeleteReq } from "./Common";
@@ -49,6 +48,7 @@ import {
   findFolderInTree,
   updateFolderInTree,
 } from "./folderUtils";
+import { TreeNodeIcon } from "./fileTypeIcons";
 import "./Folder.css";
 
 // ── MUI TreeItem 스타일 (Folder.jsx의 CustomTreeItem 스타일 재사용) ──
@@ -149,15 +149,15 @@ function DotIcon() {
 }
 
 function AdminLabel({
-  icon: Icon,
-  iconColor,
+  fileType,
+  nodeLabel,
+  muted,
   expandable,
+  expanded,
   count,
   children,
   ...other
 }) {
-  /* v8 ignore next -- tree icons always provide a concrete color. */
-  const resolvedIconColor = iconColor || "inherit";
   return (
     <TreeItemLabel
       {...other}
@@ -168,13 +168,12 @@ function AdminLabel({
         overflow: "hidden",
       }}
     >
-      {Icon && (
-        <Box
-          component={Icon}
-          className="labelIcon"
-          sx={{ mr: 1, fontSize: "1.2rem", color: resolvedIconColor }}
-        />
-      )}
+      <TreeNodeIcon
+        fileType={fileType}
+        label={nodeLabel}
+        expandable={expandable}
+        muted={muted}
+      />
       <StyledTreeItemLabelText
         variant="body2"
         sx={{ flex: "1 1 0%", minWidth: 0, wordBreak: "break-word" }}
@@ -198,15 +197,17 @@ function AdminLabel({
           {count}
         </Typography>
       )}
-      {expandable && <DotIcon />}
+      {expandable && expanded && <DotIcon />}
     </TreeItemLabel>
   );
 }
 
 AdminLabel.propTypes = {
-  icon: PropTypes.elementType,
-  iconColor: PropTypes.string,
+  fileType: PropTypes.string,
+  nodeLabel: PropTypes.string,
+  muted: PropTypes.bool,
   expandable: PropTypes.bool,
+  expanded: PropTypes.bool,
   count: PropTypes.number,
   children: PropTypes.node,
 };
@@ -236,8 +237,6 @@ const AdminTreeItem = React.forwardRef(function AdminTreeItem(props, ref) {
 
   const item = useMemo(() => publicAPI.getItem(itemId), [publicAPI, itemId]);
   const expandable = isExpandable(children);
-  const icon = FolderRounded;
-  const iconColor = item?.isHidden ? "#9e9e9e" : "#ffc107";
   const opacity = item?.isHidden ? 0.5 : 1;
 
   return (
@@ -258,9 +257,11 @@ const AdminTreeItem = React.forwardRef(function AdminTreeItem(props, ref) {
           </TreeItemIconContainer>
           <AdminLabel
             {...getLabelProps({
-              icon,
-              iconColor,
-              expandable: expandable && status.expanded,
+              fileType: item?.fileType,
+              nodeLabel: item?.label,
+              muted: Boolean(item?.isHidden),
+              expandable,
+              expanded: status.expanded,
               count: item?.count,
             })}
           />
@@ -812,15 +813,15 @@ export default function CategoryAdmin({
           ? `${contentLabel} 정보가 삭제되었습니다. (${warning})`
           : `${contentLabel} 정보가 삭제되었습니다.`;
         setActionResult({ type: "success", message: msg });
-          const data = updateFolderInTree(
-            folderData,
-            selectedMismatch.category,
-            (folder) => ({
-              ...folder,
-              /* v8 ignore next -- mismatch folders always carry a children array. */
-              children: (folder.children || []).filter(
-                (c) => c.id !== selectedMismatch.id,
-              ),
+        const data = updateFolderInTree(
+          folderData,
+          selectedMismatch.category,
+          (folder) => ({
+            ...folder,
+            /* v8 ignore next -- mismatch folders always carry a children array. */
+            children: (folder.children || []).filter(
+              (c) => c.id !== selectedMismatch.id,
+            ),
           }),
         );
         setFolderData(data);
@@ -843,15 +844,15 @@ export default function CategoryAdmin({
       { file_path: selectedMismatch.filePath },
       () => {
         setActionResult({ type: "success", message: "ES에 적재되었습니다." });
-          const data = updateFolderInTree(
-            folderData,
-            selectedMismatch.category,
-            (folder) => ({
-              ...folder,
-              /* v8 ignore next -- mismatch folders always carry a children array. */
-              children: (folder.children || []).filter(
-                (c) => c.id !== selectedMismatch.id,
-              ),
+        const data = updateFolderInTree(
+          folderData,
+          selectedMismatch.category,
+          (folder) => ({
+            ...folder,
+            /* v8 ignore next -- mismatch folders always carry a children array. */
+            children: (folder.children || []).filter(
+              (c) => c.id !== selectedMismatch.id,
+            ),
           }),
         );
         setFolderData(data);
@@ -874,15 +875,15 @@ export default function CategoryAdmin({
       { file_path: selectedMismatch.filePath },
       () => {
         setActionResult({ type: "success", message: "파일이 삭제되었습니다." });
-          const data = updateFolderInTree(
-            folderData,
-            selectedMismatch.category,
-            (folder) => ({
-              ...folder,
-              /* v8 ignore next -- mismatch folders always carry a children array. */
-              children: (folder.children || []).filter(
-                (c) => c.id !== selectedMismatch.id,
-              ),
+        const data = updateFolderInTree(
+          folderData,
+          selectedMismatch.category,
+          (folder) => ({
+            ...folder,
+            /* v8 ignore next -- mismatch folders always carry a children array. */
+            children: (folder.children || []).filter(
+              (c) => c.id !== selectedMismatch.id,
+            ),
           }),
         );
         setFolderData(data);
