@@ -58,7 +58,9 @@ export default defineConfig({
   build: {
     // E2E 커버리지 수집 시에는 inline 소스맵으로 빌드해, Playwright가 모은 V8
     // 커버리지를 MCR이 원본 src로 역매핑할 때 외부 .map을 원격 fetch할 필요가 없게 한다.
-    sourcemap: process.env.E2E_COVERAGE === "1" ? "inline" : true,
+    // 그 외(배포용 빌드)에는 소스맵을 만들지 않는다. dist 는 nginx 이미지에 통째로
+    // 복사되므로 .map 을 남기면 전체 원본 코드가 그대로 서빙된다.
+    sourcemap: process.env.E2E_COVERAGE === "1" ? "inline" : false,
     rollupOptions: {
       output: {
         manualChunks: (id) => {

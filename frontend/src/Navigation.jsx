@@ -194,7 +194,10 @@ export default function Navigation() {
   }, [clientId]);
 
   const onLoginSuccess = async (credentialResponse) => {
-    console.log("Google Login Success:", credentialResponse);
+    // credentialResponse 자체는 로그로 남기지 않는다. credential 은 /auth/google 에
+    // 그대로 제출하면 세션이 발급되는 Google ID Token 이라, 콘솔에 찍히는 순간
+    // 재사용 가능한 자격증명이 브라우저 로그에 남는다.
+    console.log("Google Login Success");
 
     try {
       // 백엔드에서 Google ID Token 검증
