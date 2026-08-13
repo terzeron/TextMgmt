@@ -52,7 +52,7 @@ deploy_image() {
 
 build_backend() {
     echo "=== Building backend ($TAG) ==="
-    docker build -q "${BUILD_FLAGS[@]}" -f backend/Dockerfile --build-arg TM_BACKEND_PORT="$TM_BACKEND_PORT" -t "terzeron/tm_backend:$TAG" . > /dev/null && \
+    docker build -q "${BUILD_FLAGS[@]}" -f backend/Dockerfile --build-arg TM_BACKEND_DEFAULT_PORT="${TM_BACKEND_PORT:-8020}" -t "terzeron/tm_backend:$TAG" . > /dev/null && \
     BACKEND_DIGEST="$(push_image tm_backend)"
 }
 
