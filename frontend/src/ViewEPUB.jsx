@@ -293,6 +293,7 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
   );
 
   const containerHeight = preview ? "60vh" : "100dvh";
+  const readerKey = `${bookId}-${preview ? "preview" : "full"}`;
 
   return (
     <div
@@ -346,7 +347,9 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
       <Suspense fallback={<div className="loading">로딩 중...</div>}>
         {epubData && (
           <ReactReader
+            key={readerKey}
             locationChanged={handleLocationChanged}
+            location={preview ? 0 : undefined}
             url={epubData}
             title={!preview ? bookTitle : undefined}
             getRendition={getRendition}
