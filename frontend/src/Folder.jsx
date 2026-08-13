@@ -11,13 +11,6 @@ import { Card } from "react-bootstrap";
 import Box from "@mui/material/Box";
 import Collapse from "@mui/material/Collapse";
 import Typography from "@mui/material/Typography";
-import ArticleIcon from "@mui/icons-material/Article";
-import DeleteIcon from "@mui/icons-material/Delete";
-import FolderOpenIcon from "@mui/icons-material/FolderOpen";
-import FolderRounded from "@mui/icons-material/FolderRounded";
-import ImageIcon from "@mui/icons-material/Image";
-import PictureAsPdfIcon from "@mui/icons-material/PictureAsPdf";
-import VideoCameraBackIcon from "@mui/icons-material/VideoCameraBack";
 import { RichTreeView } from "@mui/x-tree-view/RichTreeView";
 import { treeItemClasses } from "@mui/x-tree-view/TreeItem";
 import { useTreeItem } from "@mui/x-tree-view/useTreeItem";
@@ -35,6 +28,7 @@ import {
   faChevronRight,
 } from "@fortawesome/free-solid-svg-icons";
 import { findFolderInTree, MORE_ENTRY_FILE_TYPE } from "./folderUtils";
+import { TreeNodeIcon } from "./fileTypeIcons";
 
 function DotIcon() {
   return (
@@ -132,27 +126,11 @@ const StyledTreeItemLabelText = styled(Typography)({
   fontWeight: 500,
 });
 
-const MemoizedIcon = React.memo(({ Icon, color }) => {
-  /* v8 ignore next -- tree item icons always pass a concrete color. */
-  const resolvedColor = color || "inherit";
-  return (
-    <Box
-      component={Icon}
-      className="labelIcon"
-      sx={{ mr: 1, fontSize: "1.2rem", color: resolvedColor }}
-    />
-  );
-});
-MemoizedIcon.displayName = "MemoizedIcon";
-MemoizedIcon.propTypes = {
-  Icon: PropTypes.elementType.isRequired,
-  color: PropTypes.string,
-};
-
 function CustomLabel({
-  icon: Icon,
-  iconColor,
+  fileType,
+  nodeLabel,
   expandable,
+  expanded,
   count,
   children,
   ...other
@@ -167,7 +145,11 @@ function CustomLabel({
         overflow: "hidden",
       }}
     >
-      {Icon && <MemoizedIcon Icon={Icon} color={iconColor} />}
+      <TreeNodeIcon
+        fileType={fileType}
+        label={nodeLabel}
+        expandable={expandable}
+      />
       <StyledTreeItemLabelText
         variant="body2"
         sx={{ flex: "1 1 0%", minWidth: 0, wordBreak: "break-word" }}
@@ -191,15 +173,16 @@ function CustomLabel({
           {count}
         </Typography>
       )}
-      {expandable && <DotIcon />}
+      {expandable && expanded && <DotIcon />}
     </TreeItemLabel>
   );
 }
 
 CustomLabel.propTypes = {
-  icon: PropTypes.elementType,
-  iconColor: PropTypes.string,
+  fileType: PropTypes.string,
+  nodeLabel: PropTypes.string,
   expandable: PropTypes.bool,
+  expanded: PropTypes.bool,
   count: PropTypes.number,
   children: PropTypes.node,
 };
@@ -209,43 +192,6 @@ const isExpandable = (reactChildren) => {
     return reactChildren.length > 0 && reactChildren.some(isExpandable);
   }
   return Boolean(reactChildren);
-};
-
-const getIconFromFileType = (fileType) => {
-  switch (fileType) {
-    case "image":
-    case "jpg":
-    case "jpeg":
-    case "png":
-    case "gif":
-    case "webp":
-    case "bmp":
-    case "tiff":
-    case "svg":
-      return { icon: ImageIcon, color: "#4caf50" }; // 초록
-    case "pdf":
-      return { icon: PictureAsPdfIcon, color: "#f44336" }; // 빨강
-    case "doc":
-    case "docx":
-      return { icon: ArticleIcon, color: "#2196f3" }; // 파랑
-    case "epub":
-      return { icon: ArticleIcon, color: "#9c27b0" }; // 보라
-    case "rtf":
-    case "html":
-    case "txt":
-      return { icon: ArticleIcon, color: "#607d8b" }; // 회색
-    case "video":
-      return { icon: VideoCameraBackIcon, color: "#ff9800" }; // 주황
-    /* v8 ignore next 2 -- folder nodes are handled before file-type icon fallback. */
-    case "folder":
-      return { icon: FolderRounded, color: "#ffc107" }; // 노랑
-    case "pinned":
-      return { icon: FolderOpenIcon, color: "#ffc107" };
-    case "trash":
-      return { icon: DeleteIcon, color: "#9e9e9e" };
-    default:
-      return { icon: ArticleIcon, color: "#607d8b" };
-  }
 };
 
 export const CustomTreeItem = React.forwardRef(
@@ -266,12 +212,6 @@ export const CustomTreeItem = React.forwardRef(
 
     const item = useMemo(() => publicAPI.getItem(itemId), [publicAPI, itemId]);
     const expandable = isExpandable(children);
-    const { icon, iconColor } = useMemo(() => {
-      if (expandable || item?.fileType === "folder")
-        return { icon: FolderRounded, iconColor: "#ffc107" };
-      const result = getIconFromFileType(item?.fileType);
-      return { icon: result.icon, iconColor: result.color };
-    }, [expandable, item?.fileType]);
 
     return (
       <TreeItemProvider {...getContextProviderProps()}>
@@ -292,9 +232,10 @@ export const CustomTreeItem = React.forwardRef(
 
             <CustomLabel
               {...getLabelProps({
-                icon,
-                iconColor,
-                expandable: expandable && status.expanded,
+                fileType: item?.fileType,
+                nodeLabel: item?.label,
+                expandable,
+                expanded: status.expanded,
                 count: item?.count,
               })}
             />

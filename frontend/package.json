@@ -44,6 +44,7 @@
     "react": "^19.2.8",
     "react-bootstrap": "^2.10.2",
     "react-dom": "^19.2.8",
+    "react-file-icon": "^1.6.0",
     "react-reader": "^2.0.15",
     "react-router-dom": "^7.18.2",
     "rtf.js": "^3.0.9",
