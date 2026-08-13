@@ -823,6 +823,40 @@ describe("ViewEPUB", () => {
     expect(displaySpy).not.toHaveBeenCalled();
   });
 
+  it("미리보기에서 bookId가 바뀌면 첫 위치로 ReactReader를 초기화한다", async () => {
+    const { rerender } = render(<ViewEPUB bookId={42} preview={true} />);
+
+    await waitFor(() => {
+      expect(mockReactReader).toHaveBeenCalled();
+    });
+
+    let lastCall =
+      mockReactReader.mock.calls[mockReactReader.mock.calls.length - 1];
+    expect(lastCall[0].location).toBe(0);
+
+    await act(async () => {
+      lastCall[0].locationChanged("epubcfi(/old-book-page)");
+    });
+
+    rerender(<ViewEPUB bookId={43} preview={true} />);
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "http://localhost:8000/preview/43?chapters=10",
+        expect.any(Object),
+      );
+    });
+    await waitFor(() => {
+      expect(
+        mockReactReader.mock.calls.some((call) => call[0].url === mockArrayBuffer),
+      ).toBe(true);
+    });
+
+    lastCall =
+      mockReactReader.mock.calls[mockReactReader.mock.calls.length - 1];
+    expect(lastCall[0].location).toBe(0);
+  });
+
   // ── relocated 이벤트 ──
 
   it("전체보기에서 getRendition이 relocated 리스너를 등록한다", async () => {
@@ -1165,6 +1199,27 @@ describe("ViewEPUB", () => {
       capturedGetRendition(rendition2);
     });
 
+    expect(rendition1.destroy).toHaveBeenCalled();
+  });
+
+  it("getRendition 재호출 시 이전 rendition.destroy()가 실패해도 새 rendition으로 교체한다", async () => {
+    autoLoad = true;
+    render(<ViewEPUB bookId={42} />);
+
+    await waitFor(() => {
+      expect(capturedGetRendition).not.toBeNull();
+    });
+
+    const rendition1 = createMockRendition({ destroyThrows: true });
+    const rendition2 = createMockRendition();
+
+    await act(async () => {
+      capturedGetRendition(rendition1);
+    });
+
+    expect(() => {
+      capturedGetRendition(rendition2);
+    }).not.toThrow();
     expect(rendition1.destroy).toHaveBeenCalled();
   });
 

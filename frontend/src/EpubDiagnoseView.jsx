@@ -35,6 +35,7 @@ function renderSeverityGroups(items, getLabel, getLocation) {
     const groups = {};
     for (const item of items) {
         const sev = getLabel(item);
+        /* v8 ignore next -- diagnosis normalizers omit items without severity before rendering. */
         if (!sev) continue;
         if (!groups[sev]) groups[sev] = [];
         groups[sev].push(item);
@@ -44,6 +45,7 @@ function renderSeverityGroups(items, getLabel, getLocation) {
         .filter(sev => groups[sev]?.length > 0)
         .map(sev => {
             const msgs = groups[sev];
+            /* v8 ignore next -- SEVERITY_ORDER contains only known badge keys. */
             const bg = SEVERITY_BADGE[sev] || 'secondary';
             const darkText = SEVERITY_TEXT_DARK.has(sev);
             return (

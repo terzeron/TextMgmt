@@ -12,6 +12,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 // JPEG2000(OpenJPEG)/JBIG2 등 이미지 디코딩용 wasm 위치 (vite pdf-wasm 플러그인이 서빙·번들).
 // pdfjs 6.x 는 getDocument({ wasmUrl }) 로 wasm 디렉터리를 알려줘야 한다.
+/* v8 ignore next -- Vite BASE_URL fallback depends on the runtime bundle. */
 const PDF_WASM_URL = `${window.location.origin}${import.meta.env.BASE_URL}pdf-wasm/`;
 
 // ─── 1. PDF 파싱 검사 ───

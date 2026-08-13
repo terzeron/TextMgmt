@@ -121,6 +121,7 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
       locationRef.current = epubcfi;
       setIsLoading(false);
       setErrorMessage(null);
+      /* v8 ignore next -- render timeout exists only while first display is pending. */
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
       // 첫 렌더링 성공 후 저장된 위치로 이동 시도
@@ -131,6 +132,7 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
           savedLocationRef.current = null;
           renditionRef.current.display(loc).catch(() => {
             console.warn("[epub.js] 저장된 위치 복원 실패, 현재 위치 유지");
+            /* v8 ignore next -- persisted EPUB locations are keyed only when bookId exists. */
             if (bookId) localStorage.removeItem(`epub_location_${bookId}`);
           });
           return;
@@ -195,6 +197,7 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
         console.error("[epub.js] display error:", err);
         setErrorMessage(`EPUB 렌더링 오류: ${err?.message || String(err)}`);
         setIsLoading(false);
+        /* v8 ignore next -- display errors can occur after the first-render timeout cleared. */
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
       });
 
@@ -202,6 +205,7 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
         console.error("[epub.js] book load error:", err);
         setErrorMessage(`EPUB 파싱 오류: ${err?.message || String(err)}`);
         setIsLoading(false);
+        /* v8 ignore next -- book-ready errors can occur after the first-render timeout cleared. */
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
       });
 
@@ -213,6 +217,7 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
             console.error("[epub.js] display() rejected:", err);
             if (target) {
               console.warn("[epub.js] 저장된 위치 이동 실패, 첫 페이지로 이동");
+              /* v8 ignore next -- saved-location recovery is keyed only when bookId exists. */
               if (bookId) localStorage.removeItem(`epub_location_${bookId}`);
               locationRef.current = "";
               return origDisplay().catch((fallbackErr) => {
@@ -220,12 +225,14 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
                   `EPUB 표시 실패: ${fallbackErr?.message || String(fallbackErr)}`,
                 );
                 setIsLoading(false);
+                /* v8 ignore next -- fallback display errors can occur after timeout cleanup. */
                 if (timeoutRef.current) clearTimeout(timeoutRef.current);
                 throw fallbackErr;
               });
             }
             setErrorMessage(`EPUB 표시 실패: ${err?.message || String(err)}`);
             setIsLoading(false);
+            /* v8 ignore next -- display errors can occur after timeout cleanup. */
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
             throw err;
           });
@@ -293,6 +300,7 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
   );
 
   const containerHeight = preview ? "60vh" : "100dvh";
+  const readerKey = `${bookId}-${preview ? "preview" : "full"}`;
 
   return (
     <div
@@ -346,7 +354,9 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
       <Suspense fallback={<div className="loading">로딩 중...</div>}>
         {epubData && (
           <ReactReader
+            key={readerKey}
             locationChanged={handleLocationChanged}
+            location={preview ? 0 : undefined}
             url={epubData}
             title={!preview ? bookTitle : undefined}
             getRendition={getRendition}

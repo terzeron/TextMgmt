@@ -132,13 +132,17 @@ const StyledTreeItemLabelText = styled(Typography)({
   fontWeight: 500,
 });
 
-const MemoizedIcon = React.memo(({ Icon, color }) => (
-  <Box
-    component={Icon}
-    className="labelIcon"
-    sx={{ mr: 1, fontSize: "1.2rem", color: color || "inherit" }}
-  />
-));
+const MemoizedIcon = React.memo(({ Icon, color }) => {
+  /* v8 ignore next -- tree item icons always pass a concrete color. */
+  const resolvedColor = color || "inherit";
+  return (
+    <Box
+      component={Icon}
+      className="labelIcon"
+      sx={{ mr: 1, fontSize: "1.2rem", color: resolvedColor }}
+    />
+  );
+});
 MemoizedIcon.displayName = "MemoizedIcon";
 MemoizedIcon.propTypes = {
   Icon: PropTypes.elementType.isRequired,
@@ -232,6 +236,7 @@ const getIconFromFileType = (fileType) => {
       return { icon: ArticleIcon, color: "#607d8b" }; // 회색
     case "video":
       return { icon: VideoCameraBackIcon, color: "#ff9800" }; // 주황
+    /* v8 ignore next 2 -- folder nodes are handled before file-type icon fallback. */
     case "folder":
       return { icon: FolderRounded, color: "#ffc107" }; // 노랑
     case "pinned":

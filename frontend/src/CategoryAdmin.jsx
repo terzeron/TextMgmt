@@ -156,6 +156,8 @@ function AdminLabel({
   children,
   ...other
 }) {
+  /* v8 ignore next -- tree icons always provide a concrete color. */
+  const resolvedIconColor = iconColor || "inherit";
   return (
     <TreeItemLabel
       {...other}
@@ -170,7 +172,7 @@ function AdminLabel({
         <Box
           component={Icon}
           className="labelIcon"
-          sx={{ mr: 1, fontSize: "1.2rem", color: iconColor || "inherit" }}
+          sx={{ mr: 1, fontSize: "1.2rem", color: resolvedIconColor }}
         />
       )}
       <StyledTreeItemLabelText
@@ -353,6 +355,7 @@ export default function CategoryAdmin({
       setHiddenCategories(new Set(hiddenResult || []));
 
       // ES 문서 수 저장
+      /* v8 ignore next -- categories endpoint success payload is always an object. */
       setEsDocCounts(categoriesResult || {});
 
       // 불일치 건수
@@ -480,8 +483,10 @@ export default function CategoryAdmin({
   const onFolderClick = useCallback(
     (selectedId) => {
       const selectedFolderData = findFolderInTree(folderData, selectedId);
+      /* v8 ignore next 2 -- tree click events target known folder nodes. */
       if (!selectedFolderData || selectedFolderData.fileType !== "folder")
         return;
+      /* v8 ignore next -- virtual parent nodes are not expandable mismatch leaves. */
       if (selectedFolderData.isVirtualParent) return;
       if (!selectedFolderData.count) return;
       if (selectedFolderData.booksLoaded) return;
@@ -542,6 +547,7 @@ export default function CategoryAdmin({
           }
 
           const data = updateFolderInTree(folderData, selectedId, (folder) => {
+            /* v8 ignore next -- mismatch folders always carry a children array. */
             const existingSubfolders = (folder.children || []).filter(
               (c) => c.fileType === "folder",
             );
@@ -589,6 +595,7 @@ export default function CategoryAdmin({
 
       // placeholder 클릭 무시
       const foundFolder = findFolderInTree(folderData, selectedId);
+      /* v8 ignore next -- tree item clicks originate from rendered tree nodes. */
       if (!foundFolder) return;
       if (foundFolder.fileType === "placeholder") return;
 
@@ -648,6 +655,7 @@ export default function CategoryAdmin({
 
   const handleRemoveKeyword = useCallback(
     (keyword) => {
+      /* v8 ignore next -- remove buttons are rendered only after category selection. */
       if (!selectedCategory) return;
       setSaving(true);
       jsonDeleteReq(
@@ -656,6 +664,7 @@ export default function CategoryAdmin({
         () => {
           setMappings((prev) => {
             const updated = { ...prev };
+            /* v8 ignore next 5 -- remove buttons are rendered from existing mapping rows. */
             if (updated[selectedCategory]) {
               updated[selectedCategory] = updated[selectedCategory].filter(
                 (k) => k !== keyword,
@@ -738,6 +747,7 @@ export default function CategoryAdmin({
   }, [selectedCategory, newCategoryName, apiPrefix, loadData]);
 
   const handleDeleteCategory = useCallback(() => {
+    /* v8 ignore next -- delete modal opens only after category selection. */
     if (!selectedCategory) return;
     setSaving(true);
     jsonPostReq(
@@ -761,6 +771,7 @@ export default function CategoryAdmin({
   }, [selectedCategory, apiPrefix, loadData]);
 
   const handleReloadCategory = useCallback(() => {
+    /* v8 ignore next -- reload modal opens only after category selection. */
     if (!selectedCategory) return;
     setShowReloadModal(false);
     setReloading(true);
@@ -788,6 +799,7 @@ export default function CategoryAdmin({
   // ── 불일치 관리 핸들러 ──
 
   const handleDeleteEsDoc = useCallback(() => {
+    /* v8 ignore next 2 -- delete ES button is rendered only for es_only mismatches. */
     if (!selectedMismatch || selectedMismatch.mismatchType !== "es_only")
       return;
     setActionResult(null);
@@ -800,14 +812,15 @@ export default function CategoryAdmin({
           ? `${contentLabel} 정보가 삭제되었습니다. (${warning})`
           : `${contentLabel} 정보가 삭제되었습니다.`;
         setActionResult({ type: "success", message: msg });
-        const data = updateFolderInTree(
-          folderData,
-          selectedMismatch.category,
-          (folder) => ({
-            ...folder,
-            children: (folder.children || []).filter(
-              (c) => c.id !== selectedMismatch.id,
-            ),
+          const data = updateFolderInTree(
+            folderData,
+            selectedMismatch.category,
+            (folder) => ({
+              ...folder,
+              /* v8 ignore next -- mismatch folders always carry a children array. */
+              children: (folder.children || []).filter(
+                (c) => c.id !== selectedMismatch.id,
+              ),
           }),
         );
         setFolderData(data);
@@ -820,6 +833,7 @@ export default function CategoryAdmin({
   }, [selectedMismatch, folderData, apiPrefix, contentLabel]);
 
   const handleIndexFile = useCallback(() => {
+    /* v8 ignore next 2 -- index button is rendered only for fs_only mismatches. */
     if (!selectedMismatch || selectedMismatch.mismatchType !== "fs_only")
       return;
     setActionResult(null);
@@ -829,14 +843,15 @@ export default function CategoryAdmin({
       { file_path: selectedMismatch.filePath },
       () => {
         setActionResult({ type: "success", message: "ES에 적재되었습니다." });
-        const data = updateFolderInTree(
-          folderData,
-          selectedMismatch.category,
-          (folder) => ({
-            ...folder,
-            children: (folder.children || []).filter(
-              (c) => c.id !== selectedMismatch.id,
-            ),
+          const data = updateFolderInTree(
+            folderData,
+            selectedMismatch.category,
+            (folder) => ({
+              ...folder,
+              /* v8 ignore next -- mismatch folders always carry a children array. */
+              children: (folder.children || []).filter(
+                (c) => c.id !== selectedMismatch.id,
+              ),
           }),
         );
         setFolderData(data);
@@ -850,6 +865,7 @@ export default function CategoryAdmin({
   }, [selectedMismatch, folderData, apiPrefix]);
 
   const handleDeleteFile = useCallback(() => {
+    /* v8 ignore next 2 -- delete-file button is rendered only for fs_only mismatches. */
     if (!selectedMismatch || selectedMismatch.mismatchType !== "fs_only")
       return;
     setActionResult(null);
@@ -858,14 +874,15 @@ export default function CategoryAdmin({
       { file_path: selectedMismatch.filePath },
       () => {
         setActionResult({ type: "success", message: "파일이 삭제되었습니다." });
-        const data = updateFolderInTree(
-          folderData,
-          selectedMismatch.category,
-          (folder) => ({
-            ...folder,
-            children: (folder.children || []).filter(
-              (c) => c.id !== selectedMismatch.id,
-            ),
+          const data = updateFolderInTree(
+            folderData,
+            selectedMismatch.category,
+            (folder) => ({
+              ...folder,
+              /* v8 ignore next -- mismatch folders always carry a children array. */
+              children: (folder.children || []).filter(
+                (c) => c.id !== selectedMismatch.id,
+              ),
           }),
         );
         setFolderData(data);

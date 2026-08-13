@@ -346,6 +346,30 @@ describe("EpubDiagnoseView", () => {
 
       expect(jsonGetReq).toHaveBeenCalledTimes(1);
     });
+
+    it("bookId 변경 후 다시 진단하면 이전 AbortController를 정리한다", async () => {
+      setupMocks();
+      const abortSpy = vi.spyOn(AbortController.prototype, "abort");
+      const { rerender } = render(
+        <EpubDiagnoseView bookId={1} fileType="epub" />,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByText(/파일 정합성 진단/));
+      });
+      await waitFor(() => expect(jsonGetReq).toHaveBeenCalledTimes(1));
+
+      await act(async () => {
+        rerender(<EpubDiagnoseView bookId={2} fileType="epub" />);
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByText(/파일 정합성 진단/));
+      });
+
+      await waitFor(() => expect(jsonGetReq).toHaveBeenCalledTimes(2));
+      expect(abortSpy).toHaveBeenCalled();
+    });
   });
 
   describe("백엔드 결과 표시", () => {

@@ -201,6 +201,82 @@ describe("크로스탭 refresh single-flight", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     tab.stopProactiveRefresh();
   });
+
+  it("BroadcastChannel이 없으면 저장소 결과만 남기고 진행한다", async () => {
+    installWebLocksMock();
+    vi.stubGlobal("BroadcastChannel", undefined);
+    fetchMock.mockResolvedValue(okResponse());
+    const tab = await openTab();
+
+    expect(await tab.tryRefreshToken()).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    tab.stopProactiveRefresh();
+  });
+
+  it("BroadcastChannel 생성 실패를 무시하고 refresh를 완료한다", async () => {
+    installWebLocksMock();
+    vi.stubGlobal(
+      "BroadcastChannel",
+      class {
+        constructor() {
+          throw new Error("channel disabled");
+        }
+      },
+    );
+    fetchMock.mockResolvedValue(okResponse());
+    const tab = await openTab();
+
+    expect(await tab.tryRefreshToken()).toBe(true);
+    tab.stopProactiveRefresh();
+  });
+
+  it("fallback lock 저장소 접근 실패 시 조율 없이 refresh를 진행한다", async () => {
+    vi.stubGlobal("navigator", {});
+    const getItemSpy = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new Error("storage blocked");
+      });
+    fetchMock.mockResolvedValue(okResponse());
+    const tab = await openTab();
+
+    expect(await tab.tryRefreshToken()).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    getItemSpy.mockRestore();
+    tab.stopProactiveRefresh();
+  });
+
+  it("Web Locks 요청이 실패하면 락 없이 refresh를 시도한다", async () => {
+    vi.stubGlobal("navigator", {
+      locks: {
+        request: vi.fn(async () => {
+          throw new Error("locks unavailable");
+        }),
+      },
+    });
+    fetchMock.mockResolvedValue(okResponse());
+    const tab = await openTab();
+
+    expect(await tab.tryRefreshToken()).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    tab.stopProactiveRefresh();
+  });
+
+  it("대기 후에도 락을 얻지 못하면 false를 반환한다", async () => {
+    const held = installWebLocksMock();
+    vi.useFakeTimers();
+    vi.stubGlobal("BroadcastChannel", undefined);
+    localStorage.setItem("tm_auth_refresh_result", "{bad json");
+    held.add("tm-auth-refresh");
+    const tab = await openTab();
+
+    const result = tab.tryRefreshToken();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await result).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+    tab.stopProactiveRefresh();
+  });
 });
 
 describe("refreshOnVisible 디바운스", () => {

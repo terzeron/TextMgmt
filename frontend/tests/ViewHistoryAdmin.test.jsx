@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
 
 const { mockJsonGetReq } = vi.hoisted(() => ({ mockJsonGetReq: vi.fn() }));
 
@@ -161,6 +161,41 @@ describe("ViewHistoryAdmin", () => {
     ).toBeTruthy();
   });
 
+  it("응답 result가 비어 있으면 users/limit fallback을 사용한다", async () => {
+    mockJsonGetReq.mockImplementation(resolveWith(null));
+
+    render(<ViewHistoryAdmin />);
+
+    expect(
+      await screen.findByText("조회 이력이 있는 사용자가 없습니다."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/유형별 최근/)).toBeNull();
+  });
+
+  it("조회 시각이 없으면 대시로 표시한다", async () => {
+    mockJsonGetReq.mockImplementation(
+      resolveWith({
+        limit: 50,
+        users: [
+          {
+            ...USER_BOOK_ONLY,
+            last_viewed_at: 0,
+            book: [{ ...USER_BOOK_ONLY.book[0], viewed_at: null }],
+          },
+        ],
+      }),
+    );
+
+    const { container } = render(<ViewHistoryAdmin />);
+    await screen.findByText("booksonly@example.com");
+
+    const cells = [...container.querySelectorAll("td")].map(
+      (td) => td.textContent,
+    );
+    expect(cells).toContain("-");
+    expect(container.textContent).toContain("마지막 조회 -");
+  });
+
   it("조회 실패 시 에러를 표시한다", async () => {
     mockJsonGetReq.mockImplementation(rejectWith(new Error("boom")));
 
@@ -169,6 +204,18 @@ describe("ViewHistoryAdmin", () => {
     expect(
       await screen.findByText("조회 목록을 불러오지 못했습니다."),
     ).toBeTruthy();
+  });
+
+  it("조회 실패 알림을 닫을 수 있다", async () => {
+    mockJsonGetReq.mockImplementation(rejectWith(new Error("boom")));
+
+    render(<ViewHistoryAdmin />);
+
+    expect(
+      await screen.findByText("조회 목록을 불러오지 못했습니다."),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Close alert"));
+    expect(screen.queryByText("조회 목록을 불러오지 못했습니다.")).toBeNull();
   });
 
   it("로딩 상태를 표시한다", async () => {
