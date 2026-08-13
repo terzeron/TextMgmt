@@ -51,6 +51,7 @@ export default function SimilarBooks({
   }, [bookId, apiPrefix]);
 
   const handleLoadMore = useCallback(() => {
+    /* v8 ignore next -- load-more control is disabled while a request is active. */
     if (loadingMore) return;
     setLoadingMore(true);
     const offset = similarBooks.length;

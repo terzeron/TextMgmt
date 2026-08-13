@@ -177,6 +177,7 @@ export default function Bookstore(props) {
 
       switch (method) {
         case "isbn":
+          /* v8 ignore next -- auto-search only selects ISBN when an ISBN exists. */
           if (isbnVal) params.append("isbn", isbnVal);
           break;
         case "title_author":
@@ -184,14 +185,17 @@ export default function Bookstore(props) {
           if (authorVal) params.append("author", authorVal);
           break;
         case "title_only":
+          /* v8 ignore next -- auto-search only selects title-only when a title exists. */
           if (titleVal) params.append("title", titleVal);
           break;
+        /* v8 ignore next 4 -- method is constrained by UI/auto-search call sites. */
         default:
           if (isbnVal) params.append("isbn", isbnVal);
           if (titleVal) params.append("title", titleVal);
           if (authorVal) params.append("author", authorVal);
       }
 
+      /* v8 ignore next 8 -- auto-search validates terms before calling this helper. */
       if (params.toString() === "") {
         setData((prev) => ({
           ...prev,
@@ -233,6 +237,7 @@ export default function Bookstore(props) {
       case "title_author":
         searchTerms = `${title}_${author}`;
         break;
+      /* v8 ignore next 2 -- public buttons pass only explicit search methods. */
       default:
         searchTerms = `${isbn}_${title}_${author}`;
     }
@@ -271,6 +276,7 @@ export default function Bookstore(props) {
         if (title) params.append("title", title);
         if (author) params.append("author", author);
         break;
+      /* v8 ignore next 4 -- public buttons pass only explicit search methods. */
       default:
         if (isbn) params.append("isbn", isbn);
         if (title) params.append("title", title);

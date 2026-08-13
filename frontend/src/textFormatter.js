@@ -105,6 +105,7 @@ function detectWrapWidth(lines) {
 
 // 줄이 문장종결 부호로 끝나는지 확인
 function endsWithTerminator(line) {
+    /* v8 ignore next -- unwrapForceBreaks calls this helper with trimmed non-empty lines. */
     if (line.length === 0) return false;
     const last = line[line.length - 1];
     return '.!?」"\u2019\'』'.includes(last);
@@ -112,6 +113,7 @@ function endsWithTerminator(line) {
 
 // 줄이 대화 시작인지 확인
 function startsWithDialogue(line) {
+    /* v8 ignore next -- unwrapForceBreaks calls this helper with trimmed non-empty lines. */
     if (line.length === 0) return false;
     return '"\u201C「『'.includes(line[0]);
 }

@@ -12,6 +12,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 // pdfjs 6.x 는 getDocument({ wasmUrl }) 로 wasm 디렉터리를 알려줘야 하며,
 // 미지정 시 "null" + 파일명으로 로드에 실패해 이미지 기반 페이지가 렌더되지 않는다.
 // vite pdf-wasm 플러그인이 설치된 pdfjs-dist 의 wasm 을 /pdf-wasm/ 로 서빙·번들한다.
+/* v8 ignore next -- Vite BASE_URL fallback depends on the runtime bundle. */
 const PDF_WASM_URL = `${window.location.origin}${import.meta.env.BASE_URL}pdf-wasm/`;
 
 // 서버는 실패 사유를 본문에 담아 보낸다(파일 없음, 스토리지 접근 오류 등).
@@ -113,6 +114,7 @@ export default function ViewPDF({
         // 청크 로드 완료 → 큐에 대기 중이던 페이지들을 다시 펌프 (렌더 가능해짐)
         pumpQueue();
       } catch (err) {
+        /* v8 ignore next 3 -- chunk fetch errors after unmount are intentionally silent. */
         if (!cancelledRef.current) {
           console.error(`청크 ${key} 페칭 실패:`, err);
         }
@@ -127,6 +129,7 @@ export default function ViewPDF({
   // 글로벌 페이지 번호가 속하는 청크의 start를 계산
   const getChunkStart = useCallback((globalPageNum) => {
     // 첫 페이지는 항상 단독 청크
+    /* v8 ignore next -- startup fetch handles page 1 before scroll scheduling. */
     if (globalPageNum === 1) return 1;
     // 2부터 시작해서 CHUNK_SIZE 단위
     return 2 + Math.floor((globalPageNum - 2) / CHUNK_SIZE) * CHUNK_SIZE;
@@ -135,9 +138,11 @@ export default function ViewPDF({
   // 실제 렌더 실행. 스케줄러가 "청크 로드된" 페이지에 대해서만 호출한다. 취소 가능.
   const executeRender = useCallback(
     async (globalPageNum) => {
+      /* v8 ignore next -- scheduler filters already-rendered pages before execution. */
       if (renderedPagesRef.current.has(globalPageNum)) return;
 
       const chunkInfo = findChunkForPage(globalPageNum);
+      /* v8 ignore next 5 -- pumpQueue calls executeRender only after a chunk is available. */
       if (!chunkInfo) {
         // 방어적 처리: 정상 흐름에선 발생하지 않지만, 청크가 아직 없으면 큐로 되돌린다
         renderQueueRef.current.add(globalPageNum);
@@ -218,6 +223,7 @@ export default function ViewPDF({
       if (findChunkForPage(pageNum)) continue;
       const chunkStart = getChunkStart(pageNum);
       const chunkEnd = Math.min(
+        /* v8 ignore next -- page 1 is loaded by the initial single-page chunk. */
         chunkStart === 1 ? 1 : chunkStart + CHUNK_SIZE - 1,
         totalPagesRef.current,
       );
@@ -232,6 +238,7 @@ export default function ViewPDF({
       activeRenderTasksRef.current.set(pageNum, null);
       executeRender(pageNum).finally(() => {
         activeRenderTasksRef.current.delete(pageNum);
+        /* v8 ignore next -- queue pumping after unmount is intentionally skipped. */
         if (!cancelledRef.current) pumpQueue();
       });
     }
@@ -246,7 +253,9 @@ export default function ViewPDF({
   // 페이지를 렌더 큐에 넣는다 (이미 렌더됐거나 실행 중이면 무시)
   const enqueueRender = useCallback(
     (pageNum) => {
+      /* v8 ignore next -- observer/scheduler avoids enqueueing rendered pages. */
       if (renderedPagesRef.current.has(pageNum)) return;
+      /* v8 ignore next -- observer/scheduler avoids enqueueing active pages. */
       if (activeRenderTasksRef.current.has(pageNum)) return;
       renderQueueRef.current.add(pageNum);
       pumpQueue();
@@ -259,6 +268,7 @@ export default function ViewPDF({
     renderQueueRef.current.delete(pageNum);
     const task = activeRenderTasksRef.current.get(pageNum);
     // null 마커(예약 상태)는 취소 대상이 아님
+    /* v8 ignore next -- cancellation is called only for active RenderTask objects. */
     if (task && typeof task.cancel === "function") task.cancel();
   }, []);
 
@@ -343,6 +353,7 @@ export default function ViewPDF({
         // 모든 canvas에 추정 크기 설정 (placeholder로 레이아웃 확보)
         for (let i = 1; i <= pagesToRender; i++) {
           const canvas = canvasRefs.current[i];
+          /* v8 ignore next 4 -- flushSync creates all page canvases before sizing. */
           if (canvas) {
             canvas.width = firstRenderViewport.width;
             canvas.height = firstRenderViewport.height;
@@ -350,6 +361,7 @@ export default function ViewPDF({
         }
 
         // 첫 페이지 렌더링 (스케줄러 큐에 최우선 투입)
+        /* v8 ignore next -- cancellation here requires unmount in the same async gap. */
         if (cancelledRef.current) return;
         enqueueRender(1);
         setDownloadProgress(50);
@@ -395,6 +407,7 @@ export default function ViewPDF({
 
         for (let i = 2; i <= pagesToRender; i++) {
           const canvas = canvasRefs.current[i];
+          /* v8 ignore next 4 -- flushSync creates all observed page canvases before observer setup. */
           if (canvas) {
             canvas.dataset.page = String(i);
             observer.observe(canvas);

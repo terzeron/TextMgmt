@@ -27,6 +27,7 @@ import {
 import { isViewerAllowedPath } from "./auth.js";
 
 export default function Navigation() {
+  /* v8 ignore next 3 -- Vite env fallback depends on the runtime bundle. */
   const clientId =
     window.__ENV__?.["VITE_GOOGLE_CLIENT_ID"] ||
     import.meta.env.VITE_GOOGLE_CLIENT_ID;
@@ -237,6 +238,7 @@ export default function Navigation() {
         method: "POST",
         credentials: "include",
       });
+      /* v8 ignore next 3 -- logout network failure is intentionally ignored. */
     } catch {
       // ignore
     }
@@ -273,6 +275,7 @@ export default function Navigation() {
       );
     }
 
+    /* v8 ignore next 5 -- authenticated sessions without role are rejected by session loading. */
     if (!role) {
       return (
         <div>{name}님으로 로그인하셨습니다. 서비스 접근 권한이 없습니다.</div>

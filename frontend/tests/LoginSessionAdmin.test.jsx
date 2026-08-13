@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
+import {
+  render,
+  screen,
+  cleanup,
+  waitFor,
+  fireEvent,
+} from "@testing-library/react";
 
 const { mockJsonGetReq, mockJsonDeleteReq } = vi.hoisted(() => ({
   mockJsonGetReq: vi.fn(),
@@ -145,6 +151,43 @@ describe("LoginSessionAdmin", () => {
     expect(await screen.findByText("표시할 세션이 없습니다.")).toBeTruthy();
   });
 
+  it("응답 result가 비어 있으면 빈 목록 fallback을 사용한다", async () => {
+    mockJsonGetReq.mockImplementation(resolveWith(null));
+
+    render(<LoginSessionAdmin />);
+
+    expect(await screen.findByText("표시할 세션이 없습니다.")).toBeTruthy();
+    expect(screen.queryByText(/활성 .* 전체/)).toBeNull();
+  });
+
+  it("시간 값이 없으면 대시로 표시하고 알 수 없는 상태는 원문을 표시한다", async () => {
+    mockJsonGetReq.mockImplementation(
+      resolveWith(
+        page([
+          {
+            ...ACTIVE_SESSION,
+            session_id: "c".repeat(32),
+            session_label: "cccccccc...",
+            status: "unknown",
+            created_at: 0,
+            last_seen_at: null,
+            expires_at: undefined,
+            revoke_reason: "",
+            is_current: false,
+          },
+        ]),
+      ),
+    );
+
+    const { container } = render(<LoginSessionAdmin />);
+
+    expect(await screen.findByText("unknown")).toBeTruthy();
+    const cells = [...container.querySelectorAll("td")].map(
+      (td) => td.textContent,
+    );
+    expect(cells.filter((text) => text === "-").length).toBeGreaterThanOrEqual(4);
+  });
+
   it("조회 실패 시 에러를 표시한다", async () => {
     mockJsonGetReq.mockImplementation(rejectWith(new Error("boom")));
 
@@ -153,6 +196,20 @@ describe("LoginSessionAdmin", () => {
     expect(
       await screen.findByText("세션 목록을 불러오지 못했습니다."),
     ).toBeTruthy();
+  });
+
+  it("조회 실패 알림을 닫을 수 있다", async () => {
+    mockJsonGetReq.mockImplementation(rejectWith(new Error("boom")));
+
+    render(<LoginSessionAdmin />);
+
+    expect(
+      await screen.findByText("세션 목록을 불러오지 못했습니다."),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Close alert"));
+    expect(
+      screen.queryByText("세션 목록을 불러오지 못했습니다."),
+    ).toBeNull();
   });
 
   it("로딩 상태를 표시한다", async () => {
@@ -208,6 +265,21 @@ describe("LoginSessionAdmin", () => {
     expect(mockJsonDeleteReq).not.toHaveBeenCalled();
   });
 
+  it("모달 닫기 버튼으로 폐기 확인을 취소한다", async () => {
+    mockJsonGetReq.mockImplementation(resolveWith(page([ACTIVE_SESSION])));
+
+    render(<LoginSessionAdmin />);
+    await screen.findByText("admin@example.com");
+
+    fireEvent.click(screen.getByRole("button", { name: /세션 폐기/ }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(mockJsonDeleteReq).not.toHaveBeenCalled();
+  });
+
   it("확인 후 DELETE /auth/sessions/{id} 를 호출한다", async () => {
     mockJsonGetReq.mockImplementation(resolveWith(page([ACTIVE_SESSION])));
     mockJsonDeleteReq.mockImplementation(
@@ -225,6 +297,36 @@ describe("LoginSessionAdmin", () => {
       `/auth/sessions/${"a".repeat(32)}`,
     );
     expect(await screen.findByText("세션을 폐기했습니다.")).toBeTruthy();
+  });
+
+  it("폐기 성공 알림을 닫을 수 있다", async () => {
+    mockJsonGetReq.mockImplementation(resolveWith(page([ACTIVE_SESSION])));
+    mockJsonDeleteReq.mockImplementation(
+      resolveWith({ revoked: true, revoked_current: false, status: "revoked" }),
+    );
+
+    render(<LoginSessionAdmin />);
+    await screen.findByText("admin@example.com");
+
+    fireEvent.click(screen.getByRole("button", { name: /세션 폐기/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "폐기" }));
+    expect(await screen.findByText("세션을 폐기했습니다.")).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Close alert"));
+    expect(screen.queryByText("세션을 폐기했습니다.")).toBeNull();
+  });
+
+  it("폐기 요청 중 버튼 문구를 바꾼다", async () => {
+    mockJsonGetReq.mockImplementation(resolveWith(page([ACTIVE_SESSION])));
+    mockJsonDeleteReq.mockImplementation(() => {});
+
+    render(<LoginSessionAdmin />);
+    await screen.findByText("admin@example.com");
+
+    fireEvent.click(screen.getByRole("button", { name: /세션 폐기/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "폐기" }));
+
+    expect(await screen.findByText("폐기 중...")).toBeTruthy();
   });
 
   it("현재 세션을 폐기하면 미인증 흐름으로 리로드한다", async () => {
@@ -291,6 +393,14 @@ describe("LoginSessionAdmin", () => {
     await waitFor(() => {
       const urls = mockJsonGetReq.mock.calls.map((c) => c[0]);
       expect(urls.some((u) => u.includes("page=2"))).toBe(true);
+    });
+
+    const previous = screen.getByRole("button", { name: "이전" });
+    fireEvent.click(previous);
+
+    await waitFor(() => {
+      const urls = mockJsonGetReq.mock.calls.map((c) => c[0]);
+      expect(urls.filter((u) => u.includes("page=1")).length).toBeGreaterThan(1);
     });
   });
 });

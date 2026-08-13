@@ -134,6 +134,29 @@ describe('ViewRTF', () => {
         const img = document.querySelector('img');
         expect(img?.getAttribute('src') || '').not.toMatch(/^data:image\/svg\+xml/i);
     });
+
+    it('렌더 완료 전에 unmount되면 DOM 주입을 건너뛴다', async () => {
+        let resolveRender;
+        const renderPromise = new Promise((resolve) => {
+            resolveRender = resolve;
+        });
+        mockRender.mockReturnValue(renderPromise);
+        mockTextGetReq.mockImplementation((url, payload, resolve) => {
+            resolve('rtf content');
+        });
+
+        const { unmount } = render(<ViewRTF bookId={1} />);
+        await waitFor(() => expect(mockRender).toHaveBeenCalled());
+
+        unmount();
+        const mockElement = document.createElement('p');
+        mockElement.textContent = '늦게 도착한 본문';
+        resolveRender([mockElement]);
+
+        await renderPromise;
+        await Promise.resolve();
+        expect(screen.queryByText('늦게 도착한 본문')).toBeNull();
+    });
 });
 
 describe('ViewRTF - src 없는 img', () => {
