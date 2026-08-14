@@ -249,14 +249,37 @@ refresh_token_store = _LazyProxy(create_refresh_token_store, "refresh token stor
 view_history_store = _LazyProxy(create_view_history_store, "view history store")
 
 
-def _request_ip_prefix(request: Request) -> str:
-    """관측용 IP 프리픽스. IPv4 는 /24, IPv6 는 /48 까지만 남긴다.
+def _client_ip(request: Request) -> str:
+    """실제 접속 클라이언트 IP. 경유 프록시 IP 가 잡히지 않도록 헤더 우선순위를 둔다.
 
-    Traefik 뒤에 있으므로 X-Forwarded-For 의 첫 항목을 우선 사용한다. 스푸핑 가능한
-    값이지만 진단 전용이고 인가 판단에 쓰지 않으므로 허용한다.
+    실제 경로는 클라이언트 → Cloudflare → Traefik → 백엔드 pod 다. 이 구성에서는
+    - `request.client.host` 는 Traefik pod IP (Service 가 externalTrafficPolicy=Cluster 라 SNAT),
+    - `X-Forwarded-For` 첫 항목은 Cloudflare edge IP (Cloudflare 가 XFF 를 보내지 않아
+      Traefik 이 자기가 본 peer 로 헤더를 새로 만든다)
+    라서 둘 다 프록시 IP 다. Cloudflare 가 원 클라이언트 IP 로 덮어써 주는
+    `CF-Connecting-IP` 를 우선 쓰고, Cloudflare 를 거치지 않는 경로(사내망 직결·로컬
+    개발)에서만 XFF·peer 로 내려간다. 스푸핑 가능한 값이지만 표시·감사 전용이며 인가
+    판단에는 쓰지 않는다.
     """
+    for header in ("CF-Connecting-IP", "True-Client-IP"):
+        value = request.headers.get(header, "").strip()
+        if value:
+            return value
     forwarded = request.headers.get("X-Forwarded-For", "")
-    client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "")
+    if forwarded:
+        first_hop = forwarded.split(",")[0].strip()
+        if first_hop:
+            return first_hop
+    return request.client.host if request.client else ""
+
+
+def _request_user_agent(request: Request) -> str:
+    return request.headers.get("User-Agent", "")
+
+
+def _request_ip_prefix(request: Request) -> str:
+    """관측 로그용 IP 프리픽스. IPv4 는 /24, IPv6 는 /48 까지만 남긴다."""
+    client_ip = _client_ip(request)
     if not client_ip:
         return ""
     if ":" in client_ip:
@@ -289,13 +312,13 @@ def _log_refresh_rotation_rejected(request: Request, *, status: str, email: str,
     )
 
 
-def _issue_auth_tokens(email: str, role: str, name: str = "", picture: str = "", family_id: str | None = None) -> tuple[str, str]:
+def _issue_auth_tokens(email: str, role: str, name: str = "", picture: str = "", family_id: str | None = None, client_ip: str = "", user_agent: str = "") -> tuple[str, str]:
     issued_at = int(time.time())
     refresh_token_id = uuid.uuid4().hex
     refresh_family_id = family_id or uuid.uuid4().hex
     access_token = create_jwt_token(email=email, role=role, name=name, picture=picture)
     refresh_token = create_refresh_token(email=email, role=role, name=name, picture=picture, family_id=refresh_family_id, token_id=refresh_token_id)
-    refresh_token_store.store_issued(token_id=refresh_token_id, family_id=refresh_family_id, email=email, issued_at=issued_at, expires_at=issued_at + REFRESH_TOKEN_EXPIRATION_SECONDS)
+    refresh_token_store.store_issued(token_id=refresh_token_id, family_id=refresh_family_id, email=email, issued_at=issued_at, expires_at=issued_at + REFRESH_TOKEN_EXPIRATION_SECONDS, client_ip=client_ip, user_agent=user_agent)
     return access_token, refresh_token
 
 
@@ -755,7 +778,7 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
 
 
 @app.post("/auth/google")
-async def verify_google_token(request_body: dict):
+async def verify_google_token(request: Request, request_body: dict):
     credential = request_body.get("credential")
     if not credential:
         raise HTTPException(status_code=400, detail="Credential is required")
@@ -785,7 +808,7 @@ async def verify_google_token(request_body: dict):
         LOGGER.warning("Unauthorized email login attempt: %s", email)
         raise HTTPException(status_code=403, detail="Access denied")
 
-    access_token, refresh_token = _issue_auth_tokens(email=email, role=role, name=name, picture=picture)
+    access_token, refresh_token = _issue_auth_tokens(email=email, role=role, name=name, picture=picture, client_ip=_client_ip(request), user_agent=_request_user_agent(request))
 
     response = JSONResponse({"status": "success", "email": email, "name": name, "picture": picture, "role": role, "expires_in": ACCESS_TOKEN_EXPIRATION_SECONDS})
     _set_auth_cookies(response, access_token, refresh_token)
@@ -812,7 +835,7 @@ async def refresh_access_token(request: Request):
     issued_at = int(time.time())
     new_token_id = uuid.uuid4().hex
     try:
-        rotation_status = refresh_token_store.rotate(current_token_id=current_token_id, new_token_id=new_token_id, family_id=family_id, email=email, issued_at=issued_at, expires_at=issued_at + REFRESH_TOKEN_EXPIRATION_SECONDS)
+        rotation_status = refresh_token_store.rotate(current_token_id=current_token_id, new_token_id=new_token_id, family_id=family_id, email=email, issued_at=issued_at, expires_at=issued_at + REFRESH_TOKEN_EXPIRATION_SECONDS, client_ip=_client_ip(request), user_agent=_request_user_agent(request))
     except Exception as e:
         LOGGER.error("refresh_token_store.rotate() failed for %s: %s", email, e)
         raise HTTPException(status_code=503, detail="서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.")

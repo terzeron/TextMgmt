@@ -46,6 +46,26 @@ StatusBadge.propTypes = {
   status: PropTypes.string.isRequired,
 };
 
+// 백엔드가 요약과 원문을 함께 내려준다(요약은 원문에서 파생되므로 둘 다 있거나 둘 다 없다).
+// 표에는 요약만 두고 원문은 툴팁으로 보여준다.
+function UserAgentCell({ summary, raw }) {
+  if (!summary) return <>-</>;
+  return (
+    <span
+      className="d-inline-block text-truncate"
+      style={{ maxWidth: "16rem" }}
+      title={raw}
+    >
+      {summary}
+    </span>
+  );
+}
+
+UserAgentCell.propTypes = {
+  summary: PropTypes.string,
+  raw: PropTypes.string,
+};
+
 export default function LoginSessionAdmin() {
   const [items, setItems] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -174,6 +194,8 @@ export default function LoginSessionAdmin() {
               <th>상태</th>
               <th>계정</th>
               <th>세션</th>
+              <th>접속 IP</th>
+              <th>User Agent</th>
               <th>생성 시각</th>
               <th>마지막 갱신</th>
               <th>만료 시각</th>
@@ -196,6 +218,16 @@ export default function LoginSessionAdmin() {
                       현재 세션
                     </Badge>
                   )}
+                </td>
+                {/* IP/UA 는 마지막 갱신 시점 값이다. 컬럼 추가 이전 세션은 비어 있다. */}
+                <td className="text-nowrap">
+                  <code>{session.client_ip || "-"}</code>
+                </td>
+                <td>
+                  <UserAgentCell
+                    summary={session.user_agent_summary}
+                    raw={session.user_agent}
+                  />
                 </td>
                 <td>{formatEpoch(session.created_at)}</td>
                 <td>{formatEpoch(session.last_seen_at)}</td>
