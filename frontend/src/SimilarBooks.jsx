@@ -99,16 +99,10 @@ export default function SimilarBooks({
                 return (
                 <div
                   key={book.book_id}
-                  className={book.score >= 90 ? "highlight-secondary" : ""}
-                  style={{
-                    padding: "4px",
-                    borderBottom: "1px solid #eee",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                  }}
+                  className={`search-result-item ${book.score >= 90 ? "highlight-secondary" : ""}`.trim()}
                 >
                   <span
+                    className="search-result-item-text"
                     style={{ cursor: "pointer" }}
                     onClick={() =>
                       onSelect && onSelect(`${category}/${book.book_id}`)

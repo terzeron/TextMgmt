@@ -41,9 +41,9 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                 const categoryParam = encodeURIComponent(category);
                                 const fileType = book.file_type || 'epub';
                                 return (
-                                <div key={book.book_id} style={{padding: '4px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
-                                    <span>{category}/{filename}</span>
-                                    <div>
+                                <div key={book.book_id} className="search-result-item">
+                                    <span className="search-result-item-text">{category}/{filename}</span>
+                                    <div className="search-result-item-actions">
                                         {showEditButton && (
                                             <Button
                                                 variant="outline-warning" size="sm"
