@@ -57,7 +57,8 @@ export function useCategoryTree({ apiPrefix, role, onError }) {
       null,
       (categoryCounts) => {
         // categoryCounts: {"_epub": 5, "_pdf": 3, "_root": 2, ...}
-        const allCategories = Object.keys(categoryCounts);
+        const counts = categoryCounts || {};
+        const allCategories = Object.keys(counts);
 
         // _root 카테고리(최상위 파일) 분리
         const hasRootFiles = allCategories.includes("_root");
@@ -66,9 +67,9 @@ export function useCategoryTree({ apiPrefix, role, onError }) {
         const buildAndSetFolderData = (filteredCategories) => {
           const commonPrefix = findCommonPrefix(filteredCategories);
           const data = buildFolderHierarchy(
-            filteredCategories.sort((a, b) => a.localeCompare(b)),
+            filteredCategories.sort((a, b) => (a || "").localeCompare(b || "")),
             commonPrefix,
-            categoryCounts,
+            counts,
           );
 
           // 최상위 파일이 있으면 가져와서 추가
@@ -77,11 +78,13 @@ export function useCategoryTree({ apiPrefix, role, onError }) {
               apiPrefix + "/categories/_root",
               null,
               (bookList) => {
-                const rootFiles = bookList
-                  .sort((a, b) => a["title"].localeCompare(b["title"]))
+                const rootFiles = (Array.isArray(bookList) ? bookList : [])
+                  .sort((a, b) =>
+                    (a?.["title"] || "").localeCompare(b?.["title"] || ""),
+                  )
                   .map((book) => ({
-                    id: "/" + book["book_id"].toString(),
-                    label: book["title"] + "." + book["file_type"],
+                    id: "/" + book["book_id"]?.toString(),
+                    label: (book["title"] || "") + "." + (book["file_type"] || ""),
                     fileType: book["file_type"],
                     children: [],
                     book: book,

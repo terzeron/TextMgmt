@@ -32,14 +32,22 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                 <Card.Body>
                     {results && results.length > 0 ? (
                         <>
-                            {results.map((book) => (
+                            {results.map((book) => {
+                                const filename = (book.file_path || '').split('/').pop() || book.title || 'Unknown';
+                                const category = book.category || '_root';
+                                const safeBasePath = basePath || '/book-edit';
+                                const viewBasePath = safeBasePath.replace('-edit', '-view');
+                                const filePathParam = encodeURIComponent(book.file_path || '');
+                                const categoryParam = encodeURIComponent(category);
+                                const fileType = book.file_type || 'epub';
+                                return (
                                 <div key={book.book_id} style={{padding: '4px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
-                                    <span>{book.category}/{book.file_path.split('/').pop()}</span>
+                                    <span>{category}/{filename}</span>
                                     <div>
                                         {showEditButton && (
                                             <Button
                                                 variant="outline-warning" size="sm"
-                                                onClick={() => window.open(`${basePath}/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
+                                                onClick={() => window.open(`${safeBasePath}/${book.book_id}?category=${categoryParam}`, '_blank', 'noopener')}
                                                 style={{marginRight: '4px'}}
                                             >
                                                 편집
@@ -47,7 +55,7 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                         )}
                                         <Button
                                             variant="outline-primary" size="sm"
-                                            onClick={() => window.open(`${basePath.replace('-edit', '-view')}/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
+                                            onClick={() => window.open(`${viewBasePath}/${book.book_id}?category=${categoryParam}`, '_blank', 'noopener')}
                                             style={{marginRight: '4px'}}
                                         >
                                             조회
@@ -56,8 +64,8 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                             <Button
                                                 variant="outline-secondary" size="sm"
                                                 onClick={() => {
-                                                    const apiParam = basePath.startsWith('/comics') ? '&api=%2Fcomics' : '';
-                                                    window.open(`/viewer/${book.file_type}/${book.book_id}?path=${encodeURIComponent(book.file_path)}${apiParam}`, '_blank', 'noopener');
+                                                    const apiParam = safeBasePath.startsWith('/comics') ? '&api=%2Fcomics' : '';
+                                                    window.open(`/viewer/${fileType}/${book.book_id}?path=${filePathParam}${apiParam}`, '_blank', 'noopener');
                                                 }}
                                             >
                                                 전체 보기
@@ -65,7 +73,8 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                         )}
                                     </div>
                                 </div>
-                            ))}
+                                );
+                            })}
                             {hasMore && (
                                 <div className="search-result-load-more-wrapper">
                                     <div

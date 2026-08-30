@@ -24,17 +24,17 @@ export default function BookInfoView(props) {
     const [isComposingTitle, setIsComposingTitle] = useState(false);
 
     useEffect(() => {
-        const bookInfo = props.bookInfo
+        const bookInfo = props.bookInfo || {};
         // book_id와 category는 UI에 표시하지 않아 상태 업데이트 생략
-        setTitle(bookInfo['title']);
-        setAuthor(bookInfo['author']);
-        setFileType(bookInfo['file_type']);
-        setFilePath(bookInfo['file_path']);
-        setFileSize(bookInfo['file_size']);
+        setTitle(bookInfo['title'] || '');
+        setAuthor(bookInfo['author'] || '');
+        setFileType(bookInfo['file_type'] || '');
+        setFilePath(bookInfo['file_path'] || '');
+        setFileSize(bookInfo['file_size'] || 0);
         setLineCount(bookInfo['line_count'] || 0);
         setPageCount(bookInfo['page_count'] || 0);
         setIsbn(bookInfo['isbn'] || '');
-        setIsEditEnabled(props.isEditEnabled);
+        setIsEditEnabled(Boolean(props.isEditEnabled));
     }, [props]);
 
     return (
@@ -61,7 +61,7 @@ export default function BookInfoView(props) {
                 <Col xs="3">
                     <InputGroup size="sm">
                         <InputGroup.Text>크기</InputGroup.Text>
-                        <Form.Control value={fileSize.toLocaleString()} readOnly disabled/>
+                        <Form.Control value={(fileSize ?? 0).toLocaleString()} readOnly disabled/>
                     </InputGroup>
                 </Col>
                 <Col xs="3">

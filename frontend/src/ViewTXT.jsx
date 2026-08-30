@@ -26,7 +26,8 @@ export default function ViewTXT({bookId, lineCount, apiPrefix = ''}) {
             downloadUrl,
             null,
             (result) => {
-                const lines = result.split("\n");
+                const text = typeof result === "string" ? result : String(result || "");
+                const lines = text.split("\n");
                 const lineList = lineCount > 0 ? lines.slice(0, lineCount) : lines;
                 setFileContent(lineList);
                 setIsLoading(false);

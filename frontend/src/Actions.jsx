@@ -381,7 +381,7 @@ export default function Actions(props) {
           class: "btn-light",
         };
       });
-    setRenderingInfoList(infoList);
+    setRenderingInfoList(infoList || []);
   }, [props.otherCategoryList]);
 
   return (
@@ -405,7 +405,7 @@ export default function Actions(props) {
           다음 책으로
           {props.isProcessing && <FontAwesomeIcon icon={faSpinner} spin />}
         </Button>
-        {!props.selectedEntryId.startsWith(ROOT_DIRECTORY) > 0 && (
+        {!props.selectedEntryId?.startsWith(ROOT_DIRECTORY) && (
           <Button
             variant="outline-warning"
             className="btn-xs"
@@ -419,7 +419,7 @@ export default function Actions(props) {
             />
           </Button>
         )}
-        {renderingInfoList.map((info) => {
+        {(renderingInfoList || []).map((info) => {
           const highlightRank = highlightedCategories.indexOf(info["key"]);
           const isTop1 = highlightRank === 0;
           const isTop2to5 = highlightRank >= 1 && highlightRank <= 4;
