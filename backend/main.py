@@ -21,7 +21,7 @@ from google.oauth2 import id_token as google_id_token
 
 from pydantic import BaseModel
 from backend.auth import require_auth, require_admin, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, observation_hash, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
-from backend.book_manager import BookManager
+from backend.book_manager import BookManager, MAX_LATEST_BOOK_COUNT
 from backend.comics_manager import ComicsManager
 from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
 from backend.category_mapping import CategoryMapping
@@ -114,6 +114,7 @@ GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 GENERIC_SERVER_ERROR_DETAIL = "서버 내부 오류가 발생했습니다"
 GENERIC_MAPPING_ERROR_DETAIL = "카테고리 매핑 처리 중 오류가 발생했습니다"
 GENERIC_HIDDEN_CATEGORY_ERROR_DETAIL = "비노출 카테고리 처리 중 오류가 발생했습니다"
+GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL = "최신 자료 검색 제외 카테고리 처리 중 오류가 발생했습니다"
 GENERIC_MISMATCH_ERROR = "카테고리 불일치 조회 중 오류가 발생했습니다"
 
 
@@ -334,6 +335,10 @@ async def _get_viewer_hidden_categories(payload: dict, content_type: str) -> lis
     return await asyncio.to_thread(category_mapping.get_hidden_categories, content_type=content_type)
 
 
+async def _get_latest_excluded_categories(content_type: str) -> list[str]:
+    return await asyncio.to_thread(category_mapping.get_latest_excluded_categories, content_type=content_type)
+
+
 async def _ensure_viewer_category_allowed(payload: dict, category: str, content_type: str) -> None:
     hidden_categories = await _get_viewer_hidden_categories(payload, content_type)
     if _category_matches_hidden(category, hidden_categories):
@@ -364,6 +369,7 @@ class BookModel(BaseModel):
     line_count: int = 0
     page_count: int = 0
     isbn: str = ""
+    created_time: str = ""
     updated_time: str
     score: float = 0.0
 
@@ -475,6 +481,22 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
+    @router.get("/latest")
+    async def get_latest_books(limit: int = Query(MAX_LATEST_BOOK_COUNT, ge=1, le=MAX_LATEST_BOOK_COUNT), payload: dict = Depends(require_auth)) -> dict[str, Any]:
+        LOGGER.debug("# get_latest_books(limit=%d)", limit)
+        response_object: dict[str, Any] = {"status": "failure"}
+        hidden_categories = await _get_viewer_hidden_categories(payload, content_type)
+        latest_excluded_categories = await _get_latest_excluded_categories(content_type)
+        excluded_categories = list(dict.fromkeys(hidden_categories + latest_excluded_categories))
+        result, total, error = await manager.get_latest_books(size=limit, exclude_categories=excluded_categories)
+        if error is None:
+            response_object["status"] = "success"
+            response_object["result"] = [BookModel(**book.dict()) for book in result]
+            response_object["total"] = total
+        else:
+            response_object["error"] = error
+        return response_object
+
     # 책 라우터는 루트, 만화 라우터는 /comics prefix 에 붙으므로 경로 템플릿을 유형별로
     # 맞춘다: POST /books/view-history/{id} 와 POST /comics/view-history/{id}.
     view_history_path = "/books/view-history/{book_id}" if content_type == "book" else "/view-history/{book_id}"
@@ -531,6 +553,12 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             for hidden_cat in hidden_list:
                 if hidden_cat.startswith(cat_prefix):
                     await asyncio.to_thread(category_mapping.set_hidden, hidden_cat, False, content_type=content_type)
+            # latest_excluded_categories에서 해당 카테고리 및 하위 카테고리 정리
+            await asyncio.to_thread(category_mapping.set_latest_excluded, body.category, False, content_type=content_type)
+            latest_excluded_list = await asyncio.to_thread(category_mapping.get_latest_excluded_categories, content_type=content_type)
+            for excluded_cat in latest_excluded_list:
+                if excluded_cat.startswith(cat_prefix):
+                    await asyncio.to_thread(category_mapping.set_latest_excluded, excluded_cat, False, content_type=content_type)
             if not mapping_deleted:
                 LOGGER.warning("delete_category: MySQL 키워드 매핑 삭제 대상 없음 (category='%s')", body.category)
             result["mapping_deleted"] = mapping_deleted
@@ -1117,6 +1145,10 @@ class HiddenCategoryModel(BaseModel):
     hidden: bool
 
 
+class LatestExcludedCategoryModel(BaseModel):
+    excluded: bool
+
+
 @app.get("/hidden-categories")
 async def get_hidden_categories(payload: dict = Depends(require_auth), content_type: str = "book") -> dict[str, Any]:
     """비노출 카테고리 목록 조회"""
@@ -1146,3 +1178,34 @@ async def set_hidden_category(category: str, body: HiddenCategoryModel, content_
     except Exception as e:
         LOGGER.error("set_hidden_category error: %s", e)
         raise HTTPException(status_code=500, detail=GENERIC_HIDDEN_CATEGORY_ERROR_DETAIL)
+
+
+@app.get("/latest-excluded-categories")
+async def get_latest_excluded_categories(payload: dict = Depends(require_auth), content_type: str = "book") -> dict[str, Any]:
+    """최신 자료 검색 제외 카테고리 목록 조회"""
+    LOGGER.debug("# get_latest_excluded_categories(content_type=%s)", content_type)
+    try:
+        if payload.get("role") == "viewer":
+            return {"status": "success", "result": []}
+        categories = await _get_latest_excluded_categories(content_type)
+        return {"status": "success", "result": categories}
+    except Exception as e:
+        LOGGER.error("get_latest_excluded_categories error: %s", e)
+        raise HTTPException(status_code=500, detail=GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL)
+
+
+@app.post("/latest-excluded-categories/{category:path}", dependencies=[Depends(require_admin)])
+async def set_latest_excluded_category(category: str, body: LatestExcludedCategoryModel, content_type: str = "book") -> dict[str, Any]:
+    """카테고리 최신 자료 검색 제외 설정/해제"""
+    LOGGER.debug("# set_latest_excluded_category(category='%s', excluded=%s, content_type=%s)", category, body.excluded, content_type)
+    try:
+        success = await asyncio.to_thread(category_mapping.set_latest_excluded, category, body.excluded, content_type=content_type)
+        if success:
+            return {"status": "success", "result": await _get_latest_excluded_categories(content_type)}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to update latest excluded category")
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOGGER.error("set_latest_excluded_category error: %s", e)
+        raise HTTPException(status_code=500, detail=GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL)

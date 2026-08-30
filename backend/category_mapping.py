@@ -52,6 +52,9 @@ class CategoryMapping:
                 cursor.execute(
                     "CREATE TABLE IF NOT EXISTS hidden_categories (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(255) NOT NULL, content_type VARCHAR(10) NOT NULL DEFAULT 'book', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY unique_category_content_type (category, content_type), INDEX idx_category (category), INDEX idx_content_type (content_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
                 )
+                cursor.execute(
+                    "CREATE TABLE IF NOT EXISTS latest_excluded_categories (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(255) NOT NULL, content_type VARCHAR(10) NOT NULL DEFAULT 'book', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY unique_latest_excluded_category_content_type (category, content_type), INDEX idx_category (category), INDEX idx_content_type (content_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+                )
                 # 기존 테이블 마이그레이션: content_type 컬럼이 없으면 추가
                 self._migrate_add_content_type(cursor)
                 conn.commit()
@@ -59,7 +62,12 @@ class CategoryMapping:
 
     def _migrate_add_content_type(self, cursor) -> None:
         """기존 테이블에 content_type 컬럼 추가 마이그레이션"""
-        for table in ("category_keywords", "hidden_categories"):
+        table_unique_indexes = {
+            "category_keywords": "unique_category_keyword",
+            "hidden_categories": "unique_category_content_type",
+            "latest_excluded_categories": "unique_latest_excluded_category_content_type",
+        }
+        for table in table_unique_indexes:
             cursor.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = %s AND table_name = %s AND column_name = 'content_type'", (self.database, table))
             row = cursor.fetchone()
             if row and row["cnt"] == 0:
@@ -71,12 +79,12 @@ class CategoryMapping:
                     except Exception as e:
                         LOGGER.debug("Index unique_category_keyword not found, skipping: %s", e)
                     cursor.execute(f"ALTER TABLE {table} ADD UNIQUE KEY unique_category_keyword (category, keyword, content_type)")
-                elif table == "hidden_categories":
+                else:
                     try:
                         cursor.execute(f"ALTER TABLE {table} DROP INDEX category")
                     except Exception as e:
                         LOGGER.debug("Index category not found, skipping: %s", e)
-                    cursor.execute(f"ALTER TABLE {table} ADD UNIQUE KEY unique_category_content_type (category, content_type)")
+                    cursor.execute(f"ALTER TABLE {table} ADD UNIQUE KEY {table_unique_indexes[table]} (category, content_type)")
 
     def get_all_mappings(self, content_type: str = "book") -> dict[str, list[str]]:
         """모든 카테고리-키워드 매핑 조회
@@ -324,8 +332,38 @@ class CategoryMapping:
                     LOGGER.info("set_hidden(%s, False, %s): success", category, content_type)
                     return True
 
+    def get_latest_excluded_categories(self, content_type: str = "book") -> list[str]:
+        """최신 자료 검색에서 제외할 카테고리 목록 조회"""
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT category FROM latest_excluded_categories WHERE content_type = %s ORDER BY category", (content_type,))
+                rows = cursor.fetchall()
+
+        categories = [row["category"] for row in rows]
+        LOGGER.debug("get_latest_excluded_categories(%s): %d categories", content_type, len(categories))
+        return categories
+
+    def set_latest_excluded(self, category: str, excluded: bool, content_type: str = "book") -> bool:
+        """카테고리의 최신 자료 검색 제외 설정/해제"""
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                if excluded:
+                    try:
+                        cursor.execute("INSERT IGNORE INTO latest_excluded_categories (category, content_type) VALUES (%s, %s)", (category, content_type))
+                        conn.commit()
+                        LOGGER.info("set_latest_excluded(%s, True, %s): success", category, content_type)
+                        return True
+                    except Exception as e:
+                        LOGGER.error("set_latest_excluded(%s, True, %s) failed: %s", category, content_type, e)
+                        return False
+                else:
+                    cursor.execute("DELETE FROM latest_excluded_categories WHERE category = %s AND content_type = %s", (category, content_type))
+                    conn.commit()
+                    LOGGER.info("set_latest_excluded(%s, False, %s): success", category, content_type)
+                    return True
+
     def rename_category(self, old_category: str, new_category: str, content_type: str = "book") -> bool:
-        """카테고리명을 변경 (category_keywords, hidden_categories 테이블 모두 갱신)
+        """카테고리명을 변경 (category_keywords, hidden/latest 설정 테이블 모두 갱신)
 
         트랜잭션으로 원자적 처리한다.
 
@@ -342,6 +380,7 @@ class CategoryMapping:
                 try:
                     cursor.execute("UPDATE category_keywords SET category = %s WHERE category = %s AND content_type = %s", (new_category, old_category, content_type))
                     cursor.execute("UPDATE hidden_categories SET category = %s WHERE category = %s AND content_type = %s", (new_category, old_category, content_type))
+                    cursor.execute("UPDATE latest_excluded_categories SET category = %s WHERE category = %s AND content_type = %s", (new_category, old_category, content_type))
                     conn.commit()
                     LOGGER.info("rename_category(%s -> %s, %s): success", old_category, new_category, content_type)
                     return True
@@ -349,4 +388,3 @@ class CategoryMapping:
                     conn.rollback()
                     LOGGER.error("rename_category(%s -> %s, %s) failed: %s", old_category, new_category, content_type, e)
                     return False
-

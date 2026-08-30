@@ -5,6 +5,7 @@ import shutil
 import json
 import os
 import sys
+import threading
 import time
 import zipfile
 import tempfile
@@ -1250,6 +1251,43 @@ def test_book_manager_init_requires_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("TM_BOOK_DIR", raising=False)
     with pytest.raises(RuntimeError):
         BookManager()
+
+
+def test_book_manager_created_time_backfill_does_not_block_init(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    class FakeESManager:
+        def create_index(self):
+            return None
+
+        def backfill_created_time(self, path_prefix):
+            started.set()
+            release.wait(timeout=2)
+            finished.set()
+            return {"updated": 0, "skipped": 0, "failed": 0}
+
+    monkeypatch.setenv("TM_BOOK_DIR", str(tmp_path))
+    monkeypatch.setenv("TM_BACKFILL_CREATED_TIME_ON_STARTUP", "true")
+    monkeypatch.setattr("backend.book_manager.ESManager", FakeESManager)
+
+    release_timer = threading.Timer(0.35, release.set)
+    release_timer.start()
+    start = time.monotonic()
+    manager = BookManager()
+    elapsed = time.monotonic() - start
+
+    try:
+        assert started.wait(timeout=1)
+        assert elapsed < 0.2
+    finally:
+        release.set()
+        release_timer.cancel()
+        thread = getattr(manager, "_created_time_backfill_thread", None)
+        if thread is not None:
+            thread.join(timeout=2)
+    assert finished.is_set()
 
 
 def test_get_books_in_category_empty(tmp_path: Path):

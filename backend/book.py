@@ -31,7 +31,8 @@ class Book:
         self.page_count: int = info.get("page_count", 0)
         self.isbn: str = info.get("isbn", "")
         self.summary: str = info.get("summary", "")
-        self.updated_time: datetime = datetime.strptime(info["updated_time"], "%Y-%m-%dT%H:%M:%S.%f")
+        self.created_time: datetime = datetime.fromisoformat(info.get("created_time") or info["updated_time"])
+        self.updated_time: datetime = datetime.fromisoformat(info["updated_time"])
         self.score: float = score
 
     def dict(self) -> dict[str, Any]:
@@ -46,6 +47,7 @@ class Book:
             "line_count": self.line_count,
             "page_count": self.page_count,
             "isbn": self.isbn,
+            "created_time": self.created_time.strftime("%Y-%m-%dT%H:%M:%S.%f"),
             "updated_time": self.updated_time.strftime("%Y-%m-%dT%H:%M:%S.%f"),
             "score": self.score,
         }

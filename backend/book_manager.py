@@ -8,6 +8,7 @@ import sys
 import os
 import io
 import posixpath
+import threading
 
 import logging.config
 import shutil
@@ -34,6 +35,8 @@ MAX_CATEGORY_RESULT_COUNT = 10000
 # 커서 기반 카테고리 조회의 요청당 최대 페이지 크기 (CWE-770).
 # search_after라도 한 페이지 size는 ES max_result_window를 넘을 수 없다.
 MAX_CATEGORY_PAGE_SIZE = MAX_CATEGORY_RESULT_COUNT
+MAX_LATEST_BOOK_COUNT = 100
+CREATED_TIME_BACKFILL_ENV = "TM_BACKFILL_CREATED_TIME_ON_STARTUP"
 
 
 def encode_category_cursor(sort_values: list[Any]) -> str:
@@ -55,6 +58,10 @@ def _safe_xml_parser(recover: bool = False) -> Any:
     from lxml import etree  # type: ignore[attr-defined]
 
     return etree.XMLParser(recover=recover, resolve_entities=False, no_network=True, load_dtd=False)
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class BookManager:
@@ -490,6 +497,8 @@ class BookManager:
         LOGGER.debug(self.path_prefix)
         self.es_manager = ESManager()
         self.es_manager.create_index()
+        self._created_time_backfill_thread: threading.Thread | None = None
+        self._backfill_created_time_if_enabled()
         self._mismatch_cache: dict[str, Any] | None = None
         self._mismatch_cache_time: float = 0.0
 
@@ -533,6 +542,38 @@ class BookManager:
         if doc:
             return self.item_class(book_id=book_id, info=doc), None
         return None, f"No book found by '{book_id}'"
+
+    async def get_latest_books(self, size: int = MAX_LATEST_BOOK_COUNT, exclude_categories: list[str] | None = None) -> tuple[list[Book], int, str | None]:
+        LOGGER.debug("# get_latest_books(size=%d, exclude_categories=%s)", size, exclude_categories)
+        size = max(1, min(size, MAX_LATEST_BOOK_COUNT))
+        result_list, total = self.es_manager.search_latest_docs(max_result_count=size, exclude_categories=exclude_categories)
+        return [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in result_list], total, None
+
+    def _backfill_created_time_if_enabled(self) -> None:
+        if not hasattr(self, "_created_time_backfill_thread"):
+            self._created_time_backfill_thread = None
+        if not _env_flag_enabled(CREATED_TIME_BACKFILL_ENV):
+            return
+        if self._created_time_backfill_thread is not None and self._created_time_backfill_thread.is_alive():
+            return
+
+        def run_backfill() -> None:
+            try:
+                self.es_manager.backfill_created_time(self.path_prefix)
+            except Exception as e:
+                LOGGER.warning("created_time backfill failed: %s", e)
+
+        thread = threading.Thread(
+            target=run_backfill,
+            name=f"created-time-backfill-{getattr(self.es_manager, 'index_name', 'book')}",
+            daemon=True,
+        )
+        self._created_time_backfill_thread = thread
+        try:
+            thread.start()
+        except Exception as e:
+            self._created_time_backfill_thread = None
+            LOGGER.warning("created_time backfill failed to start: %s", e)
 
     async def validate_epub(self, book_id: int) -> tuple[dict[str, Any] | None, str | None]:
         """epubcheck를 실행하여 EPUB 파일의 구조적 유효성을 검증한다."""

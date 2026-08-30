@@ -208,6 +208,26 @@ class TestViewerHiddenAccess:
         assert r.status_code == 200
         mock_bm.search_by_keyword_paged.assert_called_once_with("test", size=10, offset=0, exclude_categories=["public", "secret", "secret/sub"])
 
+    def test_latest_uses_latest_excluded_categories(self, client, mock_bm, mock_cat):
+        mock_cat.get_latest_excluded_categories.return_value = ["no_latest"]
+        mock_bm.get_latest_books.return_value = ([], 0, None)
+
+        r = client.get("/latest?limit=5")
+
+        assert r.status_code == 200
+        mock_bm.get_latest_books.assert_called_once_with(size=5, exclude_categories=["no_latest"])
+
+    def test_viewer_latest_merges_hidden_and_latest_excluded_categories(self, client, mock_bm, mock_cat):
+        main_module.app.dependency_overrides[main_module.require_auth] = lambda: VIEWER_PAYLOAD
+        mock_cat.get_hidden_categories.return_value = ["secret", "shared"]
+        mock_cat.get_latest_excluded_categories.return_value = ["no_latest", "shared"]
+        mock_bm.get_latest_books.return_value = ([], 0, None)
+
+        r = client.get("/latest")
+
+        assert r.status_code == 200
+        mock_bm.get_latest_books.assert_called_once_with(size=100, exclude_categories=["secret", "shared", "no_latest"])
+
 
 # ── /pdf-pages/{book_id} ─────────────────────────────────────────────────────
 
@@ -609,6 +629,38 @@ class TestHiddenCategories:
     def test_set_hidden_failure_returns_500(self, client, mock_cat):
         mock_cat.set_hidden.return_value = False
         r = client.post("/hidden-categories/_draft", json={"hidden": True})
+        assert r.status_code == 500
+
+
+class TestLatestExcludedCategories:
+    def test_get(self, client, mock_cat):
+        mock_cat.get_latest_excluded_categories.return_value = ["_draft", "_archive"]
+        r = client.get("/latest-excluded-categories")
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": ["_draft", "_archive"]}
+
+    def test_get_viewer_hides_category_names(self, client, mock_cat):
+        main_module.app.dependency_overrides[main_module.require_auth] = lambda: VIEWER_PAYLOAD
+        mock_cat.get_latest_excluded_categories.return_value = ["_draft", "_archive"]
+
+        r = client.get("/latest-excluded-categories")
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": []}
+        mock_cat.get_latest_excluded_categories.assert_not_called()
+
+    def test_set_latest_excluded_success(self, client, mock_cat):
+        mock_cat.set_latest_excluded.return_value = True
+        mock_cat.get_latest_excluded_categories.return_value = ["_draft"]
+        r = client.post("/latest-excluded-categories/_draft", json={"excluded": True})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "success"
+        assert "_draft" in data["result"]
+
+    def test_set_latest_excluded_failure_returns_500(self, client, mock_cat):
+        mock_cat.set_latest_excluded.return_value = False
+        r = client.post("/latest-excluded-categories/_draft", json={"excluded": True})
         assert r.status_code == 500
 
 

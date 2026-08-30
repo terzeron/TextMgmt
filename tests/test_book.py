@@ -25,13 +25,14 @@ class TestBook(unittest.TestCase):
         assert book.file_path == Book.path_prefix / "category1" / "[anonymous] any book.epub"
         assert book.file_type == "file_type1"
         assert book.file_size == 100
+        assert book.created_time == book.updated_time
 
     def test_dict(self):
         book_id = 3
         info: dict[str, Any] = {"category": "category1", "title": "title1", "author": "author1", "file_path": Book.path_prefix / "category1" / "[anonymous] any book.epub", "file_type": "file_type1", "file_size": 100, "updated_time": "2021-01-01T00:00:00.000000"}
 
         book = Book(book_id, info)
-        assert book.dict() == {"book_id": 3, "category": "category1", "title": "title1", "author": "author1", "file_path": "category1/[anonymous] any book.epub", "file_type": "file_type1", "file_size": 100, "line_count": 0, "page_count": 0, "isbn": "", "updated_time": "2021-01-01T00:00:00.000000", "score": 0.0}
+        assert book.dict() == {"book_id": 3, "category": "category1", "title": "title1", "author": "author1", "file_path": "category1/[anonymous] any book.epub", "file_type": "file_type1", "file_size": 100, "line_count": 0, "page_count": 0, "isbn": "", "created_time": "2021-01-01T00:00:00.000000", "updated_time": "2021-01-01T00:00:00.000000", "score": 0.0}
 
     def test_json_and_str(self):
         book_id = 4
@@ -57,6 +58,22 @@ class TestBook(unittest.TestCase):
         assert book.summary == ""
         assert book.score == 12.5
         assert book.dict()["file_path"] == "category2/book2.pdf"
+
+    def test_init_uses_created_time_when_present(self):
+        info: dict[str, Any] = {
+            "category": "category3",
+            "title": "title3",
+            "author": "author3",
+            "file_path": "category3/book3.pdf",
+            "file_type": "pdf",
+            "file_size": 300,
+            "created_time": "2020-01-01T01:02:03.000000",
+            "updated_time": "2022-02-02T00:00:00.000000",
+        }
+
+        book = Book(6, info)
+
+        assert book.dict()["created_time"] == "2020-01-01T01:02:03.000000"
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ from bs4 import BeautifulSoup
 import chardet
 
 from backend.es_manager import ESManager
+from utils.file_time import path_created_time_with_source
 from utils.stat import Stat
 from utils.isbn import extract as extract_isbn
 from utils.parser_timeout import ParserTimeout, time_limit
@@ -1224,6 +1225,8 @@ class Loader:
             st = stat_result if stat_result else file_path.stat()
             inode_num = st.st_ino
             file_size = st.st_size
+            created_dt, created_time_source = path_created_time_with_source(file_path, st)
+            created_time = created_dt.isoformat()
             prefix = Loader.get_path_prefix(file_path)
             category = str(file_path.parent.relative_to(prefix))
             if category == ".":
@@ -1273,7 +1276,7 @@ class Loader:
                     return {}
 
                 return {
-                    inode_num: {"category": category, "title": title, "author": author, "file_path": str(file_path.relative_to(prefix)), "file_type": file_type, "file_size": int(file_size), "line_count": line_count, "page_count": page_count, "isbn": "", "summary": summary, "updated_time": datetime.now().isoformat()}
+                    inode_num: {"category": category, "title": title, "author": author, "file_path": str(file_path.relative_to(prefix)), "file_type": file_type, "file_size": int(file_size), "line_count": line_count, "page_count": page_count, "isbn": "", "summary": summary, "created_time": created_time, "created_time_source": created_time_source, "updated_time": datetime.now().isoformat()}
                 }
 
             # read content of each file
@@ -1349,6 +1352,8 @@ class Loader:
                     "page_count": page_count,
                     "isbn": isbn_list[0] if isbn_list else "",
                     "summary": summary,
+                    "created_time": created_time,
+                    "created_time_source": created_time_source,
                     "updated_time": datetime.now().isoformat(),
                 }
             }

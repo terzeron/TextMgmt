@@ -403,6 +403,10 @@ class TestReadFile:
         assert doc["title"] == "Title"
         assert doc["category"] == "cat"
         assert doc["file_type"] == "txt"
+        assert "created_time" in doc
+        assert doc["created_time"]
+        assert "created_time_source" in doc
+        assert doc["created_time_source"]
 
     def test_read_file_no_author(self, tmp_path: Path):
         Loader = _get_loader()
@@ -464,6 +468,8 @@ class TestReadFile:
 
         doc = list(result.values())[0]
         assert doc["summary"] == ""
+        assert "created_time" in doc
+        assert "created_time_source" in doc
 
     def test_read_file_skip_text_unsupported(self, tmp_path: Path):
         Loader = _get_loader()

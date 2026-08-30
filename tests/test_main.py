@@ -1031,6 +1031,12 @@ def test_category_mapping_endpoints(client, monkeypatch: pytest.MonkeyPatch):
         def set_hidden(self, category, hidden, content_type="book"):
             return True
 
+        def get_latest_excluded_categories(self, content_type="book"):
+            return ["B"]
+
+        def set_latest_excluded(self, category, excluded, content_type="book"):
+            return True
+
     monkeypatch.setattr(main, "category_mapping", DummyMapping())
 
     resp = client.get("/category-mappings")
@@ -1070,6 +1076,12 @@ def test_category_mapping_endpoints(client, monkeypatch: pytest.MonkeyPatch):
     assert resp.json()["result"] == ["A"]
 
     resp = client.post("/hidden-categories/A", json={"hidden": True})
+    assert resp.json()["status"] == "success"
+
+    resp = client.get("/latest-excluded-categories")
+    assert resp.json()["result"] == ["B"]
+
+    resp = client.post("/latest-excluded-categories/B", json={"excluded": True})
     assert resp.json()["status"] == "success"
 
 
@@ -1132,6 +1144,11 @@ class DummyManager:
     async def search_by_keyword_paged(self, keyword: str, size: int, offset: int, exclude_categories=None):
         return ([DummyBook({"book_id": 3, "category": "A", "title": "T3", "author": "U", "file_path": "c.txt", "file_type": "txt", "file_size": 1, "line_count": 0, "page_count": 0, "isbn": "", "updated_time": "2024-01-01T00:00:00.000000", "score": 9.0})], 1, None)
 
+    async def get_latest_books(self, size: int = 100, exclude_categories=None):
+        self.latest_size = size
+        self.latest_exclude_categories = exclude_categories
+        return ([DummyBook({"book_id": 4, "category": "A", "title": "T4", "author": "U", "file_path": "d.txt", "file_type": "txt", "file_size": 1, "line_count": 0, "page_count": 0, "isbn": "", "created_time": "2023-12-31T00:00:00.000000", "updated_time": "2024-01-01T00:00:00.000000", "score": 0.0})], 1, None)
+
     def get_category_mismatches(self):
         return {"mismatches": []}
 
@@ -1154,6 +1171,20 @@ class DummyManager:
         return {"content_type": content_type, "category": category, "indexed_count": 1, "deleted_count": 1, "failed_count": 0}, None
 
 
+class DummyCategoryMapping:
+    def get_hidden_categories(self, content_type="book"):
+        return []
+
+    def set_hidden(self, category, hidden, content_type="book"):
+        return True
+
+    def get_latest_excluded_categories(self, content_type="book"):
+        return []
+
+    def set_latest_excluded(self, category, excluded, content_type="book"):
+        return True
+
+
 @pytest.fixture()
 def dummy_client(tmp_path: Path):
     from fastapi.testclient import TestClient
@@ -1171,14 +1202,17 @@ def dummy_client(tmp_path: Path):
     dummy = DummyManager(tmp_path)
     orig_book_instance = getattr(main_mod.book_manager, "_instance", None)
     orig_comics_instance = getattr(main_mod.comics_manager, "_instance", None)
+    orig_category_mapping_instance = getattr(main_mod.category_mapping, "_instance", None)
     main_mod.book_manager._instance = dummy  # type: ignore[attr-defined]
     main_mod.comics_manager._instance = dummy  # type: ignore[attr-defined]
+    main_mod.category_mapping._instance = DummyCategoryMapping()  # type: ignore[attr-defined]
 
     with TestClient(main_mod.app) as c:
         yield c
 
     main_mod.book_manager._instance = orig_book_instance  # type: ignore[attr-defined]
     main_mod.comics_manager._instance = orig_comics_instance  # type: ignore[attr-defined]
+    main_mod.category_mapping._instance = orig_category_mapping_instance  # type: ignore[attr-defined]
     main_mod.app.dependency_overrides.clear()
 
 
@@ -1249,6 +1283,15 @@ def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
     resp = dummy_client.get("/search/kw?exclude_categories=A,B")
     assert resp.json()["status"] == "success"
 
+    resp = dummy_client.get("/latest")
+    assert resp.json()["status"] == "success"
+    assert resp.json()["total"] == 1
+    assert resp.json()["result"][0]["created_time"] == "2023-12-31T00:00:00.000000"
+    assert dummy._instance.latest_exclude_categories == []
+
+    resp = dummy_client.get("/latest?limit=101")
+    assert resp.status_code == 422
+
     async def get_epub(book_id: int):
         data = (await DummyManager(Path(".")).get_book(book_id))[0]
         data._data["file_type"] = "epub"
@@ -1292,6 +1335,45 @@ def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
 
     resp = dummy_client.get("/category-mismatches/A")
     assert resp.json()["status"] == "success"
+
+
+def test_latest_books_uses_latest_excluded_categories(dummy_client, monkeypatch):
+    from backend import main as main_mod
+
+    class DummyCatMap:
+        def get_hidden_categories(self, content_type="book"):
+            return []
+
+        def get_latest_excluded_categories(self, content_type="book"):
+            return ["blocked"]
+
+    monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyCatMap())
+
+    resp = dummy_client.get("/latest?limit=5")
+
+    assert resp.status_code == 200
+    assert main_mod.book_manager._instance.latest_size == 5
+    assert main_mod.book_manager._instance.latest_exclude_categories == ["blocked"]
+
+
+def test_latest_books_merges_viewer_hidden_and_latest_excluded_categories(dummy_client, monkeypatch):
+    from backend import main as main_mod
+
+    main_mod.app.dependency_overrides[main_mod.require_auth] = lambda: {"email": "viewer@example.com", "role": "viewer"}
+
+    class DummyCatMap:
+        def get_hidden_categories(self, content_type="book"):
+            return ["hidden", "shared"]
+
+        def get_latest_excluded_categories(self, content_type="book"):
+            return ["latest", "shared"]
+
+    monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyCatMap())
+
+    resp = dummy_client.get("/latest")
+
+    assert resp.status_code == 200
+    assert main_mod.book_manager._instance.latest_exclude_categories == ["hidden", "shared", "latest"]
 
 
 def test_custom_jsonable_encoder_fallback():
@@ -1480,6 +1562,12 @@ def test_category_mapping_error_branches(dummy_client, monkeypatch):
         def set_hidden(self, category: str, hidden: bool, content_type: str = "book"):
             raise RuntimeError("boom8")
 
+        def get_latest_excluded_categories(self, content_type: str = "book"):
+            raise RuntimeError("boom9")
+
+        def set_latest_excluded(self, category: str, excluded: bool, content_type: str = "book"):
+            raise RuntimeError("boom10")
+
     monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyMapping())
 
     resp = dummy_client.get("/category-mappings")
@@ -1517,6 +1605,14 @@ def test_category_mapping_error_branches(dummy_client, monkeypatch):
     resp = dummy_client.post("/hidden-categories/A", json={"hidden": True})
     assert resp.status_code == 500
     assert resp.json()["detail"] == main_mod.GENERIC_HIDDEN_CATEGORY_ERROR_DETAIL
+
+    resp = dummy_client.get("/latest-excluded-categories")
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == main_mod.GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL
+
+    resp = dummy_client.post("/latest-excluded-categories/A", json={"excluded": True})
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == main_mod.GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL
 
 
 def test_cookie_settings_variants(monkeypatch: pytest.MonkeyPatch):
@@ -1728,7 +1824,7 @@ def test_rename_category_mysql_mapping_failure(dummy_client, monkeypatch):
 
 
 def test_delete_category_hidden_subcategories(dummy_client, monkeypatch):
-    """Lines 330-331: delete_category cleans hidden subcategories"""
+    """delete_category cleans hidden and latest-excluded subcategories."""
     from backend import main as main_mod
 
     async def delete_ok(category):
@@ -1737,6 +1833,7 @@ def test_delete_category_hidden_subcategories(dummy_client, monkeypatch):
     main_mod.book_manager._instance.delete_category = delete_ok
 
     hidden_removed = []
+    latest_excluded_removed = []
 
     class DummyCatMap:
         def delete_category(self, cat, content_type="book", prefix=False):
@@ -1750,6 +1847,14 @@ def test_delete_category_hidden_subcategories(dummy_client, monkeypatch):
         def get_hidden_categories(self, content_type="book"):
             return ["A/sub1", "A/sub2", "B/other"]
 
+        def set_latest_excluded(self, cat, excluded, content_type="book"):
+            if not excluded:
+                latest_excluded_removed.append(cat)
+            return True
+
+        def get_latest_excluded_categories(self, content_type="book"):
+            return ["A/sub3", "A/sub4", "B/other"]
+
     monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyCatMap())
 
     resp = dummy_client.post("/categories/delete", json={"category": "A"})
@@ -1758,6 +1863,9 @@ def test_delete_category_hidden_subcategories(dummy_client, monkeypatch):
     assert "A/sub1" in hidden_removed
     assert "A/sub2" in hidden_removed
     assert "B/other" not in hidden_removed
+    assert "A/sub3" in latest_excluded_removed
+    assert "A/sub4" in latest_excluded_removed
+    assert "B/other" not in latest_excluded_removed
 
     del main_mod.book_manager._instance.delete_category
 
@@ -1916,6 +2024,12 @@ def test_delete_category_mapping_not_deleted(dummy_client, monkeypatch):
             return True
 
         def get_hidden_categories(self, content_type="book"):
+            return []
+
+        def set_latest_excluded(self, cat, excluded, content_type="book"):
+            return True
+
+        def get_latest_excluded_categories(self, content_type="book"):
             return []
 
     monkeypatch.setattr(main_mod.category_mapping, "_instance", DummyCatMap())

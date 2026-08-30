@@ -30,8 +30,10 @@ class DummyIndices:
     def __init__(self):
         self.exists_called = False
         self.created = False
+        self.created_body = None
         self.deleted = False
         self.put_mapping_called = False
+        self.put_mapping_properties = None
         self.mapping = {}
 
     def exists(self, index: str):
@@ -40,6 +42,7 @@ class DummyIndices:
 
     def create(self, index: str, body: dict[str, Any]):
         self.created = True
+        self.created_body = body
         return {"acknowledged": True}
 
     def get_mapping(self, index: str):
@@ -47,6 +50,7 @@ class DummyIndices:
 
     def put_mapping(self, index: str, properties: dict[str, Any]):
         self.put_mapping_called = True
+        self.put_mapping_properties = properties
         return {"acknowledged": True}
 
     def delete(self, index: str):
@@ -162,12 +166,49 @@ def test_create_index_paths(monkeypatch: pytest.MonkeyPatch):
     assert called["ensure"] == 2
 
 
+def test_create_index_includes_created_time_mapping(monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(es)
+    monkeypatch.setattr(manager, "do_exist_index", lambda: False)
+
+    assert manager.create_index()["acknowledged"] is True
+
+    props = es.indices.created_body["mappings"]["properties"]
+    assert props["created_time"] == {"type": "date"}
+    assert props["created_time_source"] == {"type": "keyword"}
+
+
 def test_ensure_category_nori_subfield_adds():
     es = DummyES()
     manager = make_manager(es)
     es.indices.mapping = {"idx": {"mappings": {"properties": {"category": {}}}}}
     manager._ensure_category_nori_subfield()
     assert es.indices.put_mapping_called is True
+
+
+def test_ensure_created_time_field_adds_missing_created_time_fields():
+    es = DummyES()
+    manager = make_manager(es)
+    es.indices.mapping = {"idx": {"mappings": {"properties": {"category": {}}}}}
+
+    manager._ensure_created_time_field()
+
+    assert es.indices.put_mapping_called is True
+    assert es.indices.put_mapping_properties == {
+        "created_time": {"type": "date"},
+        "created_time_source": {"type": "keyword"},
+    }
+
+
+def test_ensure_created_time_field_adds_missing_source_only():
+    es = DummyES()
+    manager = make_manager(es)
+    es.indices.mapping = {"idx": {"mappings": {"properties": {"created_time": {"type": "date"}}}}}
+
+    manager._ensure_created_time_field()
+
+    assert es.indices.put_mapping_called is True
+    assert es.indices.put_mapping_properties == {"created_time_source": {"type": "keyword"}}
 
 
 def test_search_and_scroll_and_paged():
@@ -1053,6 +1094,104 @@ def test_search_by_category_paged_passes_search_after_and_handles_error():
 
     es.search = boom
     assert manager.search_by_category_paged("A", size=5) == ([], 0, None)
+
+
+def test_search_latest_docs_sorts_by_created_time_and_excludes_hidden_categories():
+    es = DummyES()
+    manager = make_manager(es)
+    captured = {}
+
+    def fake_search(**kwargs):
+        captured.update(kwargs)
+        return {
+            "hits": {
+                "total": {"value": 1},
+                "hits": [
+                    {
+                        "_id": "7",
+                        "_source": {
+                            "category": "B",
+                            "title": "New",
+                            "author": "",
+                            "file_path": "B/new.txt",
+                            "file_type": "txt",
+                            "file_size": 1,
+                            "created_time": "2026-08-29T00:00:00.000000",
+                            "updated_time": "2026-08-30T00:00:00.000000",
+                        },
+                    }
+                ],
+            }
+        }
+
+    es.search = fake_search
+
+    result, total = manager.search_latest_docs(max_result_count=100, exclude_categories=["A"])
+
+    assert total == 1
+    assert result[0][0] == 7
+    assert captured["size"] == 100
+    assert captured["track_total_hits"] is True
+    assert captured["sort"][0] == {"created_time": {"order": "desc", "missing": "_last"}}
+    assert {"term": {"category": "A"}} in captured["query"]["bool"]["must_not"][0]["bool"]["should"]
+    assert {"prefix": {"category": "A/"}} in captured["query"]["bool"]["must_not"][0]["bool"]["should"]
+
+
+def test_backfill_created_time_updates_missing_docs(tmp_path: Path):
+    class BackfillES:
+        def __init__(self):
+            self.indices = DummyIndices()
+            self.bulk_body = []
+            self.cleared = False
+            self.refreshed = False
+            self.scroll_count = 0
+
+        def search(self, **kwargs):
+            assert kwargs["query"] == {
+                "bool": {
+                    "should": [
+                        {"bool": {"must_not": [{"exists": {"field": "created_time"}}]}},
+                        {"bool": {"must_not": [{"exists": {"field": "created_time_source"}}]}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+            return {
+                "_scroll_id": "s1",
+                "hits": {
+                    "hits": [
+                        {"_id": "1", "_source": {"file_path": "A/new.txt"}},
+                        {"_id": "2", "_source": {"file_path": "missing.txt"}},
+                    ]
+                },
+            }
+
+        def scroll(self, scroll_id, scroll):
+            self.scroll_count += 1
+            return {"_scroll_id": "s2", "hits": {"hits": []}}
+
+        def bulk(self, body, timeout="60s", refresh=False):
+            self.bulk_body.extend(body)
+            return {"errors": False}
+
+        def clear_scroll(self, scroll_id):
+            self.cleared = True
+
+    (tmp_path / "A").mkdir()
+    file_path = tmp_path / "A" / "new.txt"
+    file_path.write_text("new", encoding="utf-8")
+    es = BackfillES()
+    manager = make_manager(es)
+
+    result = manager.backfill_created_time(tmp_path)
+
+    assert result["updated"] == 1
+    assert result["skipped"] == 1
+    assert result["failed"] == 0
+    assert es.bulk_body[0] == {"update": {"_index": "idx", "_id": "1"}}
+    assert "created_time" in es.bulk_body[1]["doc"]
+    assert es.bulk_body[1]["doc"]["created_time_source"]
+    assert es.cleared is True
 
 
 def test_category_cursor_roundtrip_and_rejects_garbage():
