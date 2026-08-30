@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useOutletContext } from "react-router-dom";
 import PropTypes from "prop-types";
 
 import "bootstrap/dist/css/bootstrap.min.css";
@@ -30,6 +31,14 @@ const LATEST_CONFIG = {
 
 export default function LatestBooks({ contentType = "book" }) {
   const config = LATEST_CONFIG[contentType] || LATEST_CONFIG.book;
+  const {
+    searchResults = [],
+    hasSearched = false,
+    role = null,
+    searchTotal = 0,
+    handleLoadMore,
+    searchLoading = false,
+  } = useOutletContext() || {};
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
@@ -62,9 +71,21 @@ export default function LatestBooks({ contentType = "book" }) {
           {errorMessage}
         </Alert>
       )}
+      {hasSearched && (
+        <SearchResult
+          results={searchResults}
+          role={role}
+          showEditButton={role === "admin"}
+          onLoadMore={handleLoadMore}
+          hasMore={searchResults.length < searchTotal}
+          loading={searchLoading}
+          basePath={config.basePath}
+        />
+      )}
       <SearchResult
         results={items}
-        showEditButton={false}
+        role={role}
+        showEditButton={role === "admin"}
         basePath={config.basePath}
         title={config.title}
         emptyMessage={loading ? "로딩 중..." : config.emptyMessage}

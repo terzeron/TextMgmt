@@ -249,7 +249,7 @@ export const CustomTreeItem = React.forwardRef(
 
 export default function Folder(props) {
   const defaultExpandedItems = useMemo(
-    () => props.folderData.map((o) => o.id),
+    () => (props.folderData || []).map((o) => o.id),
     [props.folderData],
   );
   const treeViewStyles = useMemo(

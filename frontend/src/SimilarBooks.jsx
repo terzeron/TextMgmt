@@ -90,25 +90,26 @@ export default function SimilarBooks({
         <Card.Body>
           {similarBooks && similarBooks.length > 0 ? (
             <>
-              {similarBooks.map((book) => (
+              {similarBooks.map((book) => {
+                const filename = (book.file_path || '').split('/').pop() || book.title || 'Unknown';
+                const category = book.category || '_root';
+                const safeBasePath = basePath || '/book-edit';
+                const viewBasePath = safeBasePath.replace('-edit', '-view');
+                const categoryParam = encodeURIComponent(category);
+                const displayName = (!category || category === '_root') ? filename : `${category}/${filename}`;
+                return (
                 <div
                   key={book.book_id}
-                  className={book.score >= 90 ? "highlight-secondary" : ""}
-                  style={{
-                    padding: "4px",
-                    borderBottom: "1px solid #eee",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                  }}
+                  className={`search-result-item ${book.score >= 90 ? "highlight-secondary" : ""}`.trim()}
                 >
                   <span
+                    className="search-result-item-text"
                     style={{ cursor: "pointer" }}
                     onClick={() =>
-                      onSelect && onSelect(`${book.category}/${book.book_id}`)
+                      onSelect && onSelect(`${category}/${book.book_id}`)
                     }
                   >
-                    {book.category}/{book.file_path.split("/").pop()}
+                    {displayName}
                   </span>
                   <div style={{ whiteSpace: "nowrap", flexShrink: 0 }}>
                     {book.score > 0 && (
@@ -132,7 +133,7 @@ export default function SimilarBooks({
                       className="btn-xs"
                       onClick={() =>
                         window.open(
-                          `${basePath}/${book.book_id}?category=${encodeURIComponent(book.category)}`,
+                          `${safeBasePath}/${book.book_id}?category=${categoryParam}`,
                           "_blank",
                           "noopener",
                         )
@@ -146,7 +147,7 @@ export default function SimilarBooks({
                       className="btn-xs"
                       onClick={() =>
                         window.open(
-                          `${basePath.replace("-edit", "-view")}/${book.book_id}?category=${encodeURIComponent(book.category)}`,
+                          `${viewBasePath}/${book.book_id}?category=${categoryParam}`,
                           "_blank",
                           "noopener",
                         )
@@ -157,7 +158,8 @@ export default function SimilarBooks({
                     </Button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
               {hasMore && (
                 <div className="search-result-load-more-wrapper">
                   <div

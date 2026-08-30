@@ -348,7 +348,7 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
           {hasSearched && (
             <SearchResult
               results={searchResults}
-              showEditButton={false}
+              role={role}
               onLoadMore={handleLoadMore}
               hasMore={searchResults.length < searchTotal}
               loading={searchLoading}

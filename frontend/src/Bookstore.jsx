@@ -72,9 +72,9 @@ export default function Bookstore(props) {
 
   // bookInfo 변경 시 로컬 필드만 동기화 (검색은 트리거하지 않음)
   useEffect(() => {
-    setTitle(props.bookInfo.title || "");
-    setAuthor(props.bookInfo.author || "");
-    setIsbn(props.bookInfo.isbn || "");
+    setTitle(props.bookInfo?.title || "");
+    setAuthor(props.bookInfo?.author || "");
+    setIsbn(props.bookInfo?.isbn || "");
   }, [props.bookInfo]);
 
   // 책 정보 로딩 또는 이름 변경 시에만 자동 검색 실행

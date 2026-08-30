@@ -73,7 +73,7 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
                                 </tr>
                             </thead>
                             <tbody>
-                                {Object.entries(debugInfo.bookstoreKeywords).map(([store, info]) => {
+                                {Object.entries(debugInfo.bookstoreKeywords || {}).map(([store, info]) => {
                                     const name = getStoreName(store);
                                     return (
                                     <tr key={store}>
@@ -88,10 +88,10 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
                                             </Badge>
                                         </td>
                                         <td className="text-muted" style={{fontSize: '0.75rem'}}>
-                                            {info.original}
+                                            {info?.original || ''}
                                         </td>
                                         <td>
-                                            {info.keywords.map(kw => (
+                                            {(info?.keywords || []).map(kw => (
                                                 <Badge key={kw} bg="primary" className="me-1">{kw}</Badge>
                                             ))}
                                         </td>

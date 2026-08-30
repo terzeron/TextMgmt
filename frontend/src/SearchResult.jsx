@@ -9,8 +9,9 @@ import {Card, Button} from 'react-bootstrap';
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {faChevronDown, faChevronRight} from "@fortawesome/free-solid-svg-icons";
 
-export default function SearchResult({results, showEditButton = true, onLoadMore, hasMore = false, loading = false, basePath = '/book-edit', title = '검색 결과', emptyMessage = '검색 결과가 없습니다.'}) {
+export default function SearchResult({results, role, showEditButton, onLoadMore, hasMore = false, loading = false, basePath = '/book-edit', title = '검색 결과', emptyMessage = '검색 결과가 없습니다.'}) {
     const [isOpen, setIsOpen] = useState(true);
+    const canEdit = showEditButton !== undefined ? showEditButton : (role === 'admin');
 
     useEffect(() => {
         if (results && results.length > 0) {
@@ -32,14 +33,24 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                 <Card.Body>
                     {results && results.length > 0 ? (
                         <>
-                            {results.map((book) => (
-                                <div key={book.book_id} style={{padding: '4px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
-                                    <span>{book.category}/{book.file_path.split('/').pop()}</span>
-                                    <div>
-                                        {showEditButton && (
+                            {results.map((book) => {
+                                const filename = (book.file_path || '').split('/').pop() || book.title || 'Unknown';
+                                const category = book.category || '_root';
+                                const safeBasePath = basePath || '/book-edit';
+                                const editBasePath = safeBasePath.replace('-view', '-edit');
+                                const viewBasePath = safeBasePath.replace('-edit', '-view');
+                                const filePathParam = encodeURIComponent(book.file_path || '');
+                                const categoryParam = encodeURIComponent(category);
+                                const fileType = book.file_type || 'epub';
+                                const displayName = (!category || category === '_root') ? filename : `${category}/${filename}`;
+                                return (
+                                <div key={book.book_id} className="search-result-item">
+                                    <span className="search-result-item-text">{displayName}</span>
+                                    <div className="search-result-item-actions">
+                                        {canEdit && (
                                             <Button
                                                 variant="outline-warning" size="sm"
-                                                onClick={() => window.open(`${basePath}/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
+                                                onClick={() => window.open(`${editBasePath}/${book.book_id}?category=${categoryParam}`, '_blank', 'noopener')}
                                                 style={{marginRight: '4px'}}
                                             >
                                                 편집
@@ -47,25 +58,24 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                         )}
                                         <Button
                                             variant="outline-primary" size="sm"
-                                            onClick={() => window.open(`${basePath.replace('-edit', '-view')}/${book.book_id}?category=${encodeURIComponent(book.category)}`, '_blank', 'noopener')}
+                                            onClick={() => window.open(`${viewBasePath}/${book.book_id}?category=${categoryParam}`, '_blank', 'noopener')}
                                             style={{marginRight: '4px'}}
                                         >
                                             조회
                                         </Button>
-                                        {showEditButton || (
-                                            <Button
-                                                variant="outline-secondary" size="sm"
-                                                onClick={() => {
-                                                    const apiParam = basePath.startsWith('/comics') ? '&api=%2Fcomics' : '';
-                                                    window.open(`/viewer/${book.file_type}/${book.book_id}?path=${encodeURIComponent(book.file_path)}${apiParam}`, '_blank', 'noopener');
-                                                }}
-                                            >
-                                                전체 보기
-                                            </Button>
-                                        )}
+                                        <Button
+                                            variant="outline-secondary" size="sm"
+                                            onClick={() => {
+                                                const apiParam = safeBasePath.startsWith('/comics') ? '&api=%2Fcomics' : '';
+                                                window.open(`/viewer/${fileType}/${book.book_id}?path=${filePathParam}${apiParam}`, '_blank', 'noopener');
+                                            }}
+                                        >
+                                            전체보기
+                                        </Button>
                                     </div>
                                 </div>
-                            ))}
+                                );
+                            })}
                             {hasMore && (
                                 <div className="search-result-load-more-wrapper">
                                     <div
@@ -93,6 +103,7 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
 
 SearchResult.propTypes = {
     results: PropTypes.array,
+    role: PropTypes.string,
     showEditButton: PropTypes.bool,
     onLoadMore: PropTypes.func,
     hasMore: PropTypes.bool,
@@ -104,7 +115,8 @@ SearchResult.propTypes = {
 
 SearchResult.defaultProps = {
     results: [],
-    showEditButton: true,
+    role: null,
+    showEditButton: undefined,
     hasMore: false,
     loading: false,
     title: '검색 결과',

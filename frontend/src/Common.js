@@ -331,8 +331,8 @@ function processResponse(response, type) {
 
 function processData(data, type, resolve, reject) {
   if (type === "JSON") {
-    if (data["status"] === "success") {
-      if (typeof data["result"] === "object") {
+    if (data && data["status"] === "success") {
+      if (data["result"] && typeof data["result"] === "object") {
         if (data["last_modified_time"]) {
           data["result"]["last_modified_time"] = DateTime.fromISO(
             data["last_modified_time"],
@@ -354,7 +354,7 @@ function processData(data, type, resolve, reject) {
         resolve(data["result"]);
       }
     } else {
-      reject(data["error"]);
+      reject(data ? data["error"] : "Unknown error");
     }
   } else {
     resolve(data);

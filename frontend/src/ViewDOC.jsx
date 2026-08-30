@@ -44,9 +44,11 @@ export default function ViewDOC({
         .then((response) => response.arrayBuffer())
         .then((buffer) => mammoth.convertToHtml({ arrayBuffer: buffer }))
         .then((result) => {
+          const rawValue = result?.value || "";
           const paragraphs =
-            result.value.split("</p>").slice(0, lineCount).join("</p>") +
-            "</p>";
+            lineCount > 0
+              ? rawValue.split("</p>").slice(0, lineCount).join("</p>") + "</p>"
+              : rawValue;
           setContent(DOMPurify.sanitize(paragraphs));
           setIsLoading(false);
         })

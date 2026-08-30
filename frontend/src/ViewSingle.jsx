@@ -93,14 +93,17 @@ export default function ViewSingle(props) {
       "/categories/" +
       paramCategory.split("/").map(encodeURIComponent).join("/");
     jsonGetReq(apiUrl, null, (books) => {
-      books.sort((a, b) => a.title.localeCompare(b.title));
-      const currentIndex = books.findIndex(
-        (b) => b.book_id === Number(entryId),
+      if (!Array.isArray(books)) return;
+      const sortedBooks = [...books].sort((a, b) =>
+        (a?.title || "").localeCompare(b?.title || ""),
       );
-      setPrevBook(currentIndex > 0 ? books[currentIndex - 1] : null);
+      const currentIndex = sortedBooks.findIndex(
+        (b) => b?.book_id === Number(entryId),
+      );
+      setPrevBook(currentIndex > 0 ? sortedBooks[currentIndex - 1] : null);
       setNextBook(
-        currentIndex >= 0 && currentIndex < books.length - 1
-          ? books[currentIndex + 1]
+        currentIndex >= 0 && currentIndex < sortedBooks.length - 1
+          ? sortedBooks[currentIndex + 1]
           : null,
       );
     });
@@ -108,13 +111,14 @@ export default function ViewSingle(props) {
 
   const navigateToBook = useCallback(
     (book) => {
+      if (!book) return;
       const url =
         "/viewer/" +
-        book.file_type +
+        (book.file_type || "") +
         "/" +
         book.book_id +
         "?path=" +
-        encodeURIComponent(book.file_path) +
+        encodeURIComponent(book.file_path || "") +
         (paramApiPrefix ? "&api=" + encodeURIComponent(paramApiPrefix) : "") +
         "&category=" +
         encodeURIComponent(paramCategory);
@@ -166,7 +170,8 @@ export default function ViewSingle(props) {
     gif: <ViewImage bookId={bookId} apiPrefix={ap} />,
     png: <ViewImage bookId={bookId} apiPrefix={ap} />,
   };
-  const renderComponent = componentMap[fileType];
+  const normalizedFileType = (fileType || "").toLowerCase();
+  const renderComponent = componentMap[normalizedFileType];
 
   return (
     <Card className={standalone ? "standalone-viewer" : ""}>
@@ -182,7 +187,7 @@ export default function ViewSingle(props) {
                   size="sm"
                   className="float-end"
                 >
-                  전체 보기
+                  전체보기
                 </Button>
               </a>
             )}

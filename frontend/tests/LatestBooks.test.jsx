@@ -2,9 +2,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, cleanup } from "@testing-library/react";
 
-const { mockRawJsonGetReq } = vi.hoisted(() => ({
+const { mockRawJsonGetReq, mockUseOutletContext } = vi.hoisted(() => ({
   mockRawJsonGetReq: vi.fn(),
+  mockUseOutletContext: vi.fn(() => ({ role: "viewer" })),
 }));
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual("react-router-dom");
+  return {
+    ...actual,
+    useOutletContext: mockUseOutletContext,
+  };
+});
 
 vi.mock("../src/Common.js", () => ({
   rawJsonGetReq: mockRawJsonGetReq,
@@ -118,5 +127,85 @@ describe("LatestBooks", () => {
     await waitFor(() => {
       expect(screen.getByText("최신 만화 목록을 불러오지 못했습니다.")).toBeTruthy();
     });
+  });
+
+  it("admin 역할일 때 showEditButton을 true로 전달한다", async () => {
+    mockRawJsonGetReq.mockImplementation((_url, resolve, _reject, final) => {
+      resolve({
+        status: "success",
+        result: [{ book_id: 1, title: "새 책", category: "A", file_path: "A/new.txt", file_type: "txt" }],
+        total: 1,
+      });
+      final();
+    });
+
+    mockUseOutletContext.mockReturnValue({ role: "admin" });
+
+    render(<LatestBooks />);
+
+    await waitFor(() => {
+      expect(mockRawJsonGetReq).toHaveBeenCalled();
+    });
+    const list = screen.getByTestId("search-result");
+    expect(list.dataset.showEdit).toBe("true");
+  });
+
+  it("hasSearched=true일 때 검색 결과와 최신 목록이 함께 렌더링된다", async () => {
+    mockRawJsonGetReq.mockImplementation((_url, resolve, _reject, final) => {
+      resolve({
+        status: "success",
+        result: [{ book_id: 1, title: "최신 책 1", category: "A", file_path: "A/new.txt", file_type: "txt" }],
+        total: 1,
+      });
+      final();
+    });
+
+    mockUseOutletContext.mockReturnValue({
+      hasSearched: true,
+      searchResults: [{ book_id: 2, title: "검색된 책", category: "B", file_path: "B/search.txt", file_type: "txt" }],
+      role: "viewer",
+      searchTotal: 1,
+    });
+
+    render(<LatestBooks />);
+
+    await waitFor(() => {
+      expect(mockRawJsonGetReq).toHaveBeenCalled();
+    });
+
+    const results = screen.getAllByTestId("search-result");
+    expect(results.length).toBe(2);
+    expect(results[0].textContent).toContain("검색된 책");
+    expect(results[1].textContent).toContain("최신 책 1");
+  });
+
+  it("만화 컨텍스트에서 hasSearched=true일 때 만화 검색 결과와 최신 만화가 함께 렌더링된다", async () => {
+    mockRawJsonGetReq.mockImplementation((_url, resolve, _reject, final) => {
+      resolve({
+        status: "success",
+        result: [{ book_id: 1, title: "최신 만화 1", category: "C", file_path: "C/new.zip", file_type: "zip" }],
+        total: 1,
+      });
+      final();
+    });
+
+    mockUseOutletContext.mockReturnValue({
+      hasSearched: true,
+      searchResults: [{ book_id: 2, title: "검색된 만화", category: "C", file_path: "C/search.zip", file_type: "zip" }],
+      role: "admin",
+      searchTotal: 1,
+    });
+
+    render(<LatestBooks contentType="comic" />);
+
+    await waitFor(() => {
+      expect(mockRawJsonGetReq).toHaveBeenCalled();
+    });
+
+    const results = screen.getAllByTestId("search-result");
+    expect(results.length).toBe(2);
+    expect(results[0].dataset.basePath).toBe("/comics-view");
+    expect(results[0].textContent).toContain("검색된 만화");
+    expect(results[1].textContent).toContain("최신 만화 1");
   });
 });

@@ -411,6 +411,24 @@ describe("SimilarBooks", () => {
     expect(screen.queryByText(/deep\/nested/)).toBeNull();
   });
 
+  it("_root 카테고리인 경우 _root 접두어를 제외하고 파일명만 표시한다", async () => {
+    mockBooks([
+      {
+        ...makeBook(1, 95),
+        category: "_root",
+        file_path: "RootBook.epub",
+      },
+    ]);
+
+    render(<SimilarBooks bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("RootBook.epub")).toBeTruthy();
+    });
+
+    expect(screen.queryByText("_root/RootBook.epub")).toBeNull();
+  });
+
   it('"더 보기" 로드 중 에러 발생 시 loadingMore가 해제된다', async () => {
     let callCount = 0;
     mockRawJsonGetReq.mockImplementation((url, resolve, reject) => {
