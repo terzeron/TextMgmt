@@ -19,6 +19,12 @@ vi.mock("../src/ComicsView", () => ({
   default: () => <div>ComicsView route</div>,
 }));
 
+vi.mock("../src/LatestBooks", () => ({
+  default: ({ contentType = "book" }) => (
+    <div>{contentType === "comic" ? "Latest comics route" : "Latest books route"}</div>
+  ),
+}));
+
 vi.mock("../src/ViewSingle", () => ({
   default: () => <div>ViewSingle route</div>,
 }));
@@ -56,5 +62,25 @@ describe("App lazy routes", () => {
     );
 
     expect(await screen.findByText("ComicsEdit lazy route")).toBeTruthy();
+  });
+
+  it("routes /book-latest to latest books", async () => {
+    render(
+      <MemoryRouter initialEntries={["/book-latest"]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Latest books route")).toBeTruthy();
+  });
+
+  it("routes /comics-latest to latest comics", async () => {
+    render(
+      <MemoryRouter initialEntries={["/comics-latest"]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Latest comics route")).toBeTruthy();
   });
 });

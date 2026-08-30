@@ -23,6 +23,12 @@ describe('SearchResult', () => {
         expect(screen.getByText('검색 결과가 없습니다.')).toBeTruthy();
     });
 
+    it('헤더와 빈 메시지를 커스터마이즈할 수 있다', () => {
+        render(<SearchResult results={[]} title="최신 책" emptyMessage="최신 책이 없습니다." />);
+        expect(screen.getByText('최신 책')).toBeTruthy();
+        expect(screen.getByText('최신 책이 없습니다.')).toBeTruthy();
+    });
+
     it('헤더 클릭으로 결과를 접을 수 있다', () => {
         render(<SearchResult results={sampleResults} />);
         expect(screen.getByText('소설/novel1.epub')).toBeTruthy();

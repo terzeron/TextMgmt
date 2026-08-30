@@ -296,6 +296,10 @@ function buildMismatchStats(mismatchData) {
   };
 }
 
+function encodeCategoryPath(category) {
+  return category.split("/").map(encodeURIComponent).join("/");
+}
+
 // ── 메인 컴포넌트 ──
 
 export default function CategoryAdmin({
@@ -314,6 +318,10 @@ export default function CategoryAdmin({
   const [folderData, setFolderData] = useState([]);
   const [expandedItems, setExpandedItems] = useState([]);
   const [hiddenCategories, setHiddenCategories] = useState(new Set());
+  const [latestExcludedCategories, setLatestExcludedCategories] = useState(
+    new Set(),
+  );
+  const latestExcludedRequestIdRef = useRef(0);
   const [esDocCounts, setEsDocCounts] = useState({});
   const [fsFileCounts, setFsFileCounts] = useState({}); // lazy-loaded per category
   const [mismatchStats, setMismatchStats] = useState({
@@ -351,6 +359,9 @@ export default function CategoryAdmin({
   const loadData = useCallback(() => {
     setLoading(true);
     setMessage("");
+    setLatestExcludedCategories(new Set());
+    const latestExcludedRequestId = latestExcludedRequestIdRef.current + 1;
+    latestExcludedRequestIdRef.current = latestExcludedRequestId;
 
     let categoriesResult = null;
     let mismatchResult = null;
@@ -488,6 +499,21 @@ export default function CategoryAdmin({
       () => {
         hiddenResult = [];
         tryBuild();
+      },
+    );
+
+    jsonGetReq(
+      `/latest-excluded-categories?content_type=${contentType}`,
+      null,
+      (result) => {
+        if (latestExcludedRequestIdRef.current === latestExcludedRequestId) {
+          setLatestExcludedCategories(new Set(result || []));
+        }
+      },
+      () => {
+        if (latestExcludedRequestIdRef.current === latestExcludedRequestId) {
+          setLatestExcludedCategories(new Set());
+        }
       },
     );
   }, [apiPrefix, contentType]);
@@ -706,7 +732,7 @@ export default function CategoryAdmin({
     (category, currentlyHidden) => {
       setSaving(true);
       jsonPostReq(
-        `/hidden-categories/${category.split("/").map(encodeURIComponent).join("/")}?content_type=${contentType}`,
+        `/hidden-categories/${encodeCategoryPath(category)}?content_type=${contentType}`,
         { hidden: !currentlyHidden },
         (result) => {
           const newHidden = new Set(result || []);
@@ -726,6 +752,26 @@ export default function CategoryAdmin({
         },
         (error) => {
           setMessage(error || "비노출 설정 변경에 실패했습니다.");
+          setTimeout(() => setMessage(""), 3000);
+        },
+        () => setSaving(false),
+      );
+    },
+    [contentType],
+  );
+
+  const handleToggleLatestExcluded = useCallback(
+    (category, currentlyExcluded) => {
+      latestExcludedRequestIdRef.current += 1;
+      setSaving(true);
+      jsonPostReq(
+        `/latest-excluded-categories/${encodeCategoryPath(category)}?content_type=${contentType}`,
+        { excluded: !currentlyExcluded },
+        (result) => {
+          setLatestExcludedCategories(new Set(result || []));
+        },
+        (error) => {
+          setMessage(error || "최신 자료 검색 제외 설정 변경에 실패했습니다.");
           setTimeout(() => setMessage(""), 3000);
         },
         () => setSaving(false),
@@ -1184,6 +1230,20 @@ export default function CategoryAdmin({
                       handleToggleHidden(
                         selectedCategory,
                         hiddenCategories.has(selectedCategory),
+                      )
+                    }
+                    disabled={saving}
+                    className="mb-2"
+                  />
+                  <Form.Check
+                    type="checkbox"
+                    id={`latest-excluded-${contentType}-${selectedCategory}`}
+                    label="최신 자료 검색 제외"
+                    checked={latestExcludedCategories.has(selectedCategory)}
+                    onChange={() =>
+                      handleToggleLatestExcluded(
+                        selectedCategory,
+                        latestExcludedCategories.has(selectedCategory),
                       )
                     }
                     disabled={saving}

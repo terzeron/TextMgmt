@@ -47,6 +47,14 @@ describe('isViewerAllowedPath', () => {
         expect(isViewerAllowedPath('/book-view/123?category=test')).toBe(true);
     });
 
+    it('/book-latest 경로 허용', () => {
+        expect(isViewerAllowedPath('/book-latest')).toBe(true);
+    });
+
+    it('/comics-latest 경로 허용', () => {
+        expect(isViewerAllowedPath('/comics-latest')).toBe(true);
+    });
+
     it('/comics-view 경로 허용', () => {
         expect(isViewerAllowedPath('/comics-view')).toBe(true);
     });

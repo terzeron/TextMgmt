@@ -9,7 +9,7 @@ import {Card, Button} from 'react-bootstrap';
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {faChevronDown, faChevronRight} from "@fortawesome/free-solid-svg-icons";
 
-export default function SearchResult({results, showEditButton = true, onLoadMore, hasMore = false, loading = false, basePath = '/book-edit'}) {
+export default function SearchResult({results, showEditButton = true, onLoadMore, hasMore = false, loading = false, basePath = '/book-edit', title = '검색 결과', emptyMessage = '검색 결과가 없습니다.'}) {
     const [isOpen, setIsOpen] = useState(true);
 
     useEffect(() => {
@@ -25,7 +25,7 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                 style={{cursor: 'pointer', userSelect: 'none'}}
                 className="py-2">
                 <FontAwesomeIcon icon={isOpen ? faChevronDown : faChevronRight} className="me-2"/>
-                검색 결과
+                {title}
             </Card.Header>
             {isOpen && (
             <Suspense fallback={<div className="loading">로딩 중...</div>}>
@@ -82,7 +82,7 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                             )}
                         </>
                     ) : (
-                        <div>검색 결과가 없습니다.</div>
+                        <div>{emptyMessage}</div>
                     )}
                 </Card.Body>
             </Suspense>
@@ -98,11 +98,15 @@ SearchResult.propTypes = {
     hasMore: PropTypes.bool,
     loading: PropTypes.bool,
     basePath: PropTypes.string,
+    title: PropTypes.string,
+    emptyMessage: PropTypes.string,
 };
 
 SearchResult.defaultProps = {
     results: [],
     showEditButton: true,
     hasMore: false,
-    loading: false
+    loading: false,
+    title: '검색 결과',
+    emptyMessage: '검색 결과가 없습니다.'
 };

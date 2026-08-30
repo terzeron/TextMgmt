@@ -69,6 +69,7 @@ const MAPPINGS_RESPONSE = {
 };
 
 const HIDDEN_RESPONSE = ["3_history"];
+const LATEST_EXCLUDED_RESPONSE = ["2_science"];
 
 function setupMockResponses(
   categoriesResult,
@@ -79,6 +80,7 @@ function setupMockResponses(
     apiPrefix = "",
     mappingsResult = MAPPINGS_RESPONSE,
     hiddenResult = HIDDEN_RESPONSE,
+    latestExcludedResult = LATEST_EXCLUDED_RESPONSE,
   } = {},
 ) {
   mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
@@ -98,6 +100,8 @@ function setupMockResponses(
       resolve(mappingsResult);
     } else if (url.startsWith("/hidden-categories")) {
       resolve(hiddenResult);
+    } else if (url.startsWith("/latest-excluded-categories")) {
+      resolve(latestExcludedResult);
     }
   });
 }
@@ -131,7 +135,7 @@ describe("CategoryAdmin", () => {
 
   // ── 데이터 로딩 ──
 
-  it("4개 API를 모두 호출한다", async () => {
+  it("필수 데이터 API와 최신 자료 제외 설정 API를 모두 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
     await waitFor(() => {
@@ -155,6 +159,12 @@ describe("CategoryAdmin", () => {
       );
       expect(mockJsonGetReq).toHaveBeenCalledWith(
         "/hidden-categories?content_type=book",
+        null,
+        expect.any(Function),
+        expect.any(Function),
+      );
+      expect(mockJsonGetReq).toHaveBeenCalledWith(
+        "/latest-excluded-categories?content_type=book",
         null,
         expect.any(Function),
         expect.any(Function),
@@ -1050,6 +1060,12 @@ describe("CategoryAdmin", () => {
           expect.any(Function),
           expect.any(Function),
         );
+        expect(mockJsonGetReq).toHaveBeenCalledWith(
+          "/latest-excluded-categories?content_type=comic",
+          null,
+          expect.any(Function),
+          expect.any(Function),
+        );
       });
     });
 
@@ -1181,6 +1197,82 @@ describe("CategoryAdmin", () => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/hidden-categories/1_fiction?content_type=book",
         { hidden: true },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
+  it("최신 자료 검색 제외 설정이 있으면 체크박스를 선택 상태로 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, {
+      latestExcludedResult: ["2_science"],
+    });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("2_science")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("2_science"));
+    await waitFor(() => {
+      expect(screen.getByLabelText("최신 자료 검색 제외").checked).toBe(true);
+    });
+  });
+
+  it("최신 자료 검색 제외 체크박스 클릭 시 POST /latest-excluded-categories API를 호출한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, {
+      latestExcludedResult: [],
+    });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByLabelText("최신 자료 검색 제외")).toBeTruthy();
+    });
+
+    mockJsonPostReq.mockImplementation((url, payload, resolve) => {
+      resolve(["1_fiction"]);
+    });
+
+    fireEvent.click(screen.getByLabelText("최신 자료 검색 제외"));
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/latest-excluded-categories/1_fiction?content_type=book",
+        { excluded: true },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
+  it("만화 카테고리에서 최신 자료 검색 제외 체크박스 클릭 시 comic content_type으로 호출한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, {
+      apiPrefix: "/comics",
+      latestExcludedResult: [],
+    });
+    render(<CategoryAdmin contentType="comic" />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByLabelText("최신 자료 검색 제외")).toBeTruthy();
+    });
+
+    mockJsonPostReq.mockImplementation((url, payload, resolve) => {
+      resolve(["1_fiction"]);
+    });
+
+    fireEvent.click(screen.getByLabelText("최신 자료 검색 제외"));
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/latest-excluded-categories/1_fiction?content_type=comic",
+        { excluded: true },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
