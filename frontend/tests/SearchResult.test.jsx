@@ -18,6 +18,16 @@ describe('SearchResult', () => {
         expect(screen.getByText('역사/ancient.pdf')).toBeTruthy();
     });
 
+    it('_root 카테고리인 경우 접두어를 제외하고 파일명만 표시한다', () => {
+        const rootResults = [
+            { book_id: 3, category: '_root', file_path: '/books/root_novel.epub', file_type: 'epub' },
+            { book_id: 4, category: '', file_path: '/books/empty_cat.epub', file_type: 'epub' }
+        ];
+        render(<SearchResult results={rootResults} />);
+        expect(screen.getByText('root_novel.epub')).toBeTruthy();
+        expect(screen.getByText('empty_cat.epub')).toBeTruthy();
+    });
+
     it('결과가 없으면 "검색 결과가 없습니다" 메시지를 표시한다', () => {
         render(<SearchResult results={[]} />);
         expect(screen.getByText('검색 결과가 없습니다.')).toBeTruthy();

@@ -40,9 +40,10 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                 const filePathParam = encodeURIComponent(book.file_path || '');
                                 const categoryParam = encodeURIComponent(category);
                                 const fileType = book.file_type || 'epub';
+                                const displayName = (!category || category === '_root') ? filename : `${category}/${filename}`;
                                 return (
                                 <div key={book.book_id} className="search-result-item">
-                                    <span className="search-result-item-text">{category}/{filename}</span>
+                                    <span className="search-result-item-text">{displayName}</span>
                                     <div className="search-result-item-actions">
                                         {showEditButton && (
                                             <Button

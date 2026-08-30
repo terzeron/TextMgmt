@@ -96,6 +96,7 @@ export default function SimilarBooks({
                 const safeBasePath = basePath || '/book-edit';
                 const viewBasePath = safeBasePath.replace('-edit', '-view');
                 const categoryParam = encodeURIComponent(category);
+                const displayName = (!category || category === '_root') ? filename : `${category}/${filename}`;
                 return (
                 <div
                   key={book.book_id}
@@ -108,7 +109,7 @@ export default function SimilarBooks({
                       onSelect && onSelect(`${category}/${book.book_id}`)
                     }
                   >
-                    {category}/{filename}
+                    {displayName}
                   </span>
                   <div style={{ whiteSpace: "nowrap", flexShrink: 0 }}>
                     {book.score > 0 && (
