@@ -861,12 +861,40 @@ export default function CategoryAdmin({
   }, [selectedCategory, apiPrefix]);
 
   const handleReloadCategoryMismatches = useCallback(() => {
-    /* v8 ignore next -- mismatch reload modal opens only after category selection. */
-    if (!selectedCategory) return;
     setShowMismatchReloadModal(false);
     setMismatchReloading(true);
     setSaving(true);
     setMessage("");
+
+    if (!selectedCategory) {
+      jsonPostReq(
+        `${apiPrefix}/category-mismatches/reload-all`,
+        null,
+        (result) => {
+          const indexed = result?.indexed_count ?? 0;
+          const deleted = result?.deleted_count ?? 0;
+          const remaining = result?.after_count ?? 0;
+          const failed = result?.failed_count ?? 0;
+          loadData();
+          setMessage(
+            `전체 이상 항목 ES 재적재 완료 (적재 ${indexed}건, ES 정리 ${deleted}건, 남은 이상 ${remaining}건${
+              failed ? `, 실패 ${failed}건` : ""
+            })`,
+          );
+          setTimeout(() => setMessage(""), 5000);
+        },
+        (error) => {
+          setMessage(error || "이상 항목 ES 재적재에 실패했습니다.");
+          setTimeout(() => setMessage(""), 5000);
+        },
+        () => {
+          setMismatchReloading(false);
+          setSaving(false);
+        },
+      );
+      return;
+    }
+
     jsonPostReq(
       `${apiPrefix}/category-mismatches/reload-mismatches`,
       { category: selectedCategory },
@@ -1161,9 +1189,19 @@ export default function CategoryAdmin({
                   <Button
                     variant="outline-warning"
                     size="sm"
-                    disabled={saving || selectedMismatchCount === 0}
+                    disabled={
+                      saving ||
+                      mismatchReloading ||
+                      (selectedCategory
+                        ? selectedMismatchCount === 0
+                        : mismatchStats.itemCount === 0)
+                    }
                     onClick={() => setShowMismatchReloadModal(true)}
-                    title="선택 디렉토리 이상 항목만 ES 재적재"
+                    title={
+                      selectedCategory
+                        ? "선택 디렉토리 이상 항목만 ES 재적재"
+                        : "하위 전체 이상 항목 ES 재적재"
+                    }
                   >
                     {mismatchReloading ? (
                       <Spinner animation="border" size="sm" />
@@ -1678,8 +1716,17 @@ export default function CategoryAdmin({
         </Modal.Header>
         <Modal.Body>
           <p className="fw-bold">
-            카테고리 &apos;{selectedCategory}&apos;의 이상 항목{" "}
-            {selectedMismatchCount}건만 ES에 재적재합니다.
+            {selectedCategory ? (
+              <>
+                카테고리 &apos;{selectedCategory}&apos;의 이상 항목{" "}
+                {selectedMismatchCount}건만 ES에 재적재합니다.
+              </>
+            ) : (
+              <>
+                현재 불일치 카테고리 {mismatchStats.categoryCount}개의 이상 항목{" "}
+                {mismatchStats.itemCount}건을 ES에 재적재합니다.
+              </>
+            )}
           </p>
           <p className="text-muted">
             누락 파일은 적재하고 연결되지 않은 ES 문서는 정리합니다.
