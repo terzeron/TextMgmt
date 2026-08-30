@@ -31,8 +31,14 @@ const LATEST_CONFIG = {
 
 export default function LatestBooks({ contentType = "book" }) {
   const config = LATEST_CONFIG[contentType] || LATEST_CONFIG.book;
-  const outletContext = useOutletContext();
-  const role = outletContext?.role;
+  const {
+    searchResults = [],
+    hasSearched = false,
+    role = null,
+    searchTotal = 0,
+    handleLoadMore,
+    searchLoading = false,
+  } = useOutletContext() || {};
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
@@ -64,6 +70,17 @@ export default function LatestBooks({ contentType = "book" }) {
         <Alert variant="danger" className="mb-2">
           {errorMessage}
         </Alert>
+      )}
+      {hasSearched && (
+        <SearchResult
+          results={searchResults}
+          role={role}
+          showEditButton={role === "admin"}
+          onLoadMore={handleLoadMore}
+          hasMore={searchResults.length < searchTotal}
+          loading={searchLoading}
+          basePath={config.basePath}
+        />
       )}
       <SearchResult
         results={items}
