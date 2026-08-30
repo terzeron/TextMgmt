@@ -692,6 +692,46 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             LOGGER.error("reload_category 응답: failure — %s", error)
         return response_object
 
+    @router.post("/category-mismatches/reload-mismatches", dependencies=admin_dep)
+    async def reload_category_mismatch_files(body: CategoryDeleteModel) -> dict[str, Any]:
+        """특정 카테고리의 현재 불일치 항목만 ES에 재적재/정리"""
+        LOGGER.info("reload_category_mismatch_files 요청: category='%s', content_type='%s'", body.category, content_type)
+        response_object: dict[str, Any] = {"status": "failure"}
+        try:
+            result, error = await manager.reload_category_mismatch_files(body.category, content_type=content_type)
+        except Exception as e:
+            LOGGER.error("reload_category_mismatch_files error: %s", e)
+            response_object["error"] = GENERIC_MISMATCH_ERROR
+            return response_object
+        if error is None:
+            response_object["status"] = "success"
+            response_object["result"] = result
+            LOGGER.info("reload_category_mismatch_files 응답: success — %s", result)
+        else:
+            response_object["error"] = error
+            LOGGER.error("reload_category_mismatch_files 응답: failure — %s", error)
+        return response_object
+
+    @router.post("/category-mismatches/reload-all", dependencies=admin_dep)
+    async def reload_all_category_mismatches() -> dict[str, Any]:
+        """현재 카테고리 불일치 항목을 일괄 ES 재적재/정리"""
+        LOGGER.info("reload_all_category_mismatches 요청: content_type='%s'", content_type)
+        response_object: dict[str, Any] = {"status": "failure"}
+        try:
+            result, error = await manager.reload_category_mismatches(content_type=content_type)
+        except Exception as e:
+            LOGGER.error("reload_all_category_mismatches error: %s", e)
+            response_object["error"] = GENERIC_MISMATCH_ERROR
+            return response_object
+        if error is None:
+            response_object["status"] = "success"
+            response_object["result"] = result
+            LOGGER.info("reload_all_category_mismatches 응답: success — %s", result)
+        else:
+            response_object["error"] = error
+            LOGGER.error("reload_all_category_mismatches 응답: failure — %s", error)
+        return response_object
+
     @router.get("/category-mismatches/{category:path}", dependencies=admin_dep)
     async def get_category_mismatch_details(category: str) -> dict[str, Any]:
         """특정 카테고리의 책 수준 불일치 상세 조회"""

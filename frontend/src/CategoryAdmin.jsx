@@ -288,6 +288,14 @@ function buildMismatchCounts(mismatchData) {
   return counts;
 }
 
+function buildMismatchStats(mismatchData) {
+  const counts = buildMismatchCounts(mismatchData);
+  return {
+    categoryCount: Object.keys(counts).length,
+    itemCount: Object.values(counts).reduce((sum, count) => sum + count, 0),
+  };
+}
+
 // ── 메인 컴포넌트 ──
 
 export default function CategoryAdmin({
@@ -308,6 +316,10 @@ export default function CategoryAdmin({
   const [hiddenCategories, setHiddenCategories] = useState(new Set());
   const [esDocCounts, setEsDocCounts] = useState({});
   const [fsFileCounts, setFsFileCounts] = useState({}); // lazy-loaded per category
+  const [mismatchStats, setMismatchStats] = useState({
+    categoryCount: 0,
+    itemCount: 0,
+  });
 
   // 선택 상태
   const [selectedCategory, setSelectedCategory] = useState("");
@@ -323,7 +335,11 @@ export default function CategoryAdmin({
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showReloadModal, setShowReloadModal] = useState(false);
+  const [showMismatchReloadModal, setShowMismatchReloadModal] = useState(false);
+  const [showBulkReloadModal, setShowBulkReloadModal] = useState(false);
   const [reloading, setReloading] = useState(false);
+  const [mismatchReloading, setMismatchReloading] = useState(false);
+  const [bulkReloading, setBulkReloading] = useState(false);
   const [indexingFile, setIndexingFile] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
 
@@ -361,6 +377,7 @@ export default function CategoryAdmin({
 
       // 불일치 건수
       const mismatchCounts = buildMismatchCounts(mismatchResult);
+      setMismatchStats(buildMismatchStats(mismatchResult));
 
       // 모든 카테고리 목록
       const esCategories = Object.keys(categoriesResult);
@@ -797,6 +814,72 @@ export default function CategoryAdmin({
     );
   }, [selectedCategory, apiPrefix]);
 
+  const handleReloadCategoryMismatches = useCallback(() => {
+    /* v8 ignore next -- mismatch reload modal opens only after category selection. */
+    if (!selectedCategory) return;
+    setShowMismatchReloadModal(false);
+    setMismatchReloading(true);
+    setSaving(true);
+    setMessage("");
+    jsonPostReq(
+      `${apiPrefix}/category-mismatches/reload-mismatches`,
+      { category: selectedCategory },
+      (result) => {
+        const indexed = result?.indexed_count ?? 0;
+        const deleted = result?.deleted_count ?? 0;
+        const remaining = result?.after_count ?? 0;
+        const failed = result?.failed_count ?? 0;
+        loadData();
+        setMessage(
+          `카테고리 '${selectedCategory}' 이상 항목 ES 재적재 완료 (적재 ${indexed}건, ES 정리 ${deleted}건, 남은 이상 ${remaining}건${
+            failed ? `, 실패 ${failed}건` : ""
+          })`,
+        );
+        setTimeout(() => setMessage(""), 5000);
+      },
+      (error) => {
+        setMessage(error || "이상 항목 ES 재적재에 실패했습니다.");
+        setTimeout(() => setMessage(""), 5000);
+      },
+      () => {
+        setMismatchReloading(false);
+        setSaving(false);
+      },
+    );
+  }, [selectedCategory, apiPrefix, loadData]);
+
+  const handleBulkReloadMismatches = useCallback(() => {
+    setShowBulkReloadModal(false);
+    setBulkReloading(true);
+    setSaving(true);
+    setMessage("");
+    jsonPostReq(
+      `${apiPrefix}/category-mismatches/reload-all`,
+      null,
+      (result) => {
+        const indexed = result?.indexed_count ?? 0;
+        const deleted = result?.deleted_count ?? 0;
+        const remaining = result?.after_count ?? 0;
+        const failed = result?.failed_count ?? 0;
+        loadData();
+        setMessage(
+          `불일치 일괄 ES 재적재 완료 (적재 ${indexed}건, ES 정리 ${deleted}건, 남은 이상 ${remaining}건${
+            failed ? `, 실패 ${failed}건` : ""
+          })`,
+        );
+        setTimeout(() => setMessage(""), 5000);
+      },
+      (error) => {
+        setMessage(error || "불일치 일괄 ES 재적재에 실패했습니다.");
+        setTimeout(() => setMessage(""), 5000);
+      },
+      () => {
+        setBulkReloading(false);
+        setSaving(false);
+      },
+    );
+  }, [apiPrefix, loadData]);
+
   // ── 불일치 관리 핸들러 ──
 
   const handleDeleteEsDoc = useCallback(() => {
@@ -923,6 +1006,10 @@ export default function CategoryAdmin({
   const currentKeywords = selectedCategory
     ? mappings[selectedCategory] || []
     : [];
+  const selectedFolder = selectedCategory
+    ? findFolderInTree(folderData, selectedCategory)
+    : null;
+  const selectedMismatchCount = Number(selectedFolder?.count || 0);
 
   const displayedFolderData = useMemo(() => {
     if (!showOnlyAbnormal) return folderData;
@@ -1007,16 +1094,50 @@ export default function CategoryAdmin({
             <Card>
               <Card.Header className="py-1 d-flex justify-content-between align-items-center gap-2">
                 <span>디렉토리 목록</span>
-                <Form.Check
-                  type="switch"
-                  id={`show-only-abnormal-${contentType}`}
-                  label="이상 항목만 보기"
-                  checked={showOnlyAbnormal}
-                  onChange={(event) =>
-                    setShowOnlyAbnormal(event.target.checked)
-                  }
-                  className="m-0"
-                />
+                <div className="d-flex flex-wrap justify-content-end align-items-center gap-2">
+                  <Button
+                    variant="outline-success"
+                    size="sm"
+                    disabled={
+                      saving || bulkReloading || mismatchStats.itemCount === 0
+                    }
+                    onClick={() => setShowBulkReloadModal(true)}
+                    title="불일치 일괄 재적재"
+                  >
+                    {bulkReloading ? (
+                      <Spinner animation="border" size="sm" />
+                    ) : (
+                      <>
+                        일괄 재적재 <FontAwesomeIcon icon={faRotate} />
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline-warning"
+                    size="sm"
+                    disabled={saving || selectedMismatchCount === 0}
+                    onClick={() => setShowMismatchReloadModal(true)}
+                    title="선택 디렉토리 이상 항목만 ES 재적재"
+                  >
+                    {mismatchReloading ? (
+                      <Spinner animation="border" size="sm" />
+                    ) : (
+                      <>
+                        이상 항목 재적재 <FontAwesomeIcon icon={faRotate} />
+                      </>
+                    )}
+                  </Button>
+                  <Form.Check
+                    type="switch"
+                    id={`show-only-abnormal-${contentType}`}
+                    label="이상 항목만 보기"
+                    checked={showOnlyAbnormal}
+                    onChange={(event) =>
+                      setShowOnlyAbnormal(event.target.checked)
+                    }
+                    className="m-0"
+                  />
+                </div>
               </Card.Header>
               <div id="dir_list">
                 <RichTreeView
@@ -1102,6 +1223,21 @@ export default function CategoryAdmin({
                       ) : (
                         <>
                           ES 재적재 <FontAwesomeIcon icon={faRotate} />
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline-warning"
+                      size="sm"
+                      disabled={saving || selectedMismatchCount === 0}
+                      onClick={() => setShowMismatchReloadModal(true)}
+                      title="이상 항목만 ES 재적재"
+                    >
+                      {mismatchReloading ? (
+                        <Spinner animation="border" size="sm" />
+                      ) : (
+                        <>
+                          이상 항목 재적재 <FontAwesomeIcon icon={faRotate} />
                         </>
                       )}
                     </Button>
@@ -1467,6 +1603,84 @@ export default function CategoryAdmin({
             disabled={saving}
           >
             {reloading ? <Spinner animation="border" size="sm" /> : "재적재"}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* 이상 항목 ES 재적재 확인 모달 */}
+      <Modal
+        show={showMismatchReloadModal}
+        onHide={() => setShowMismatchReloadModal(false)}
+        centered
+      >
+        <Modal.Header closeButton>
+          <Modal.Title>이상 항목 재적재</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="fw-bold">
+            카테고리 &apos;{selectedCategory}&apos;의 이상 항목{" "}
+            {selectedMismatchCount}건만 ES에 재적재합니다.
+          </p>
+          <p className="text-muted">
+            누락 파일은 적재하고 연결되지 않은 ES 문서는 정리합니다.
+          </p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button
+            variant="secondary"
+            onClick={() => setShowMismatchReloadModal(false)}
+          >
+            취소
+          </Button>
+          <Button
+            variant="warning"
+            onClick={handleReloadCategoryMismatches}
+            disabled={saving || mismatchReloading}
+          >
+            {mismatchReloading ? (
+              <Spinner animation="border" size="sm" />
+            ) : (
+              "이상 항목 재적재"
+            )}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* 불일치 일괄 ES 재적재 확인 모달 */}
+      <Modal
+        show={showBulkReloadModal}
+        onHide={() => setShowBulkReloadModal(false)}
+        centered
+      >
+        <Modal.Header closeButton>
+          <Modal.Title>불일치 일괄 재적재</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="fw-bold">
+            현재 불일치 카테고리 {mismatchStats.categoryCount}개의 이상 항목{" "}
+            {mismatchStats.itemCount}건을 ES에 재적재합니다.
+          </p>
+          <p className="text-muted">
+            누락 파일은 적재하고 연결되지 않은 ES 문서는 정리합니다.
+          </p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button
+            variant="secondary"
+            onClick={() => setShowBulkReloadModal(false)}
+          >
+            취소
+          </Button>
+          <Button
+            variant="success"
+            onClick={handleBulkReloadMismatches}
+            disabled={saving || bulkReloading}
+          >
+            {bulkReloading ? (
+              <Spinner animation="border" size="sm" />
+            ) : (
+              "일괄 재적재"
+            )}
           </Button>
         </Modal.Footer>
       </Modal>
