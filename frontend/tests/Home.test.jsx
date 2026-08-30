@@ -31,7 +31,7 @@ describe("Home", () => {
   it("role 이 없으면 /wake 를 호출하지 않는다", () => {
     outletContext.role = undefined;
     render(<Home />);
-    expect(screen.getByText("낡은 책 창고")).toBeDefined();
+    expect(screen.getByText("은채네 책방")).toBeDefined();
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -45,6 +45,6 @@ describe("Home", () => {
     outletContext.role = "user";
     fetch.mockReturnValueOnce(Promise.reject(new Error("offline")));
     render(<Home />);
-    expect(screen.getByText("낡은 책 창고")).toBeDefined();
+    expect(screen.getByText("은채네 책방")).toBeDefined();
   });
 });
