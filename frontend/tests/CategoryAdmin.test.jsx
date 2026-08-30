@@ -392,6 +392,64 @@ describe("CategoryAdmin", () => {
     );
   });
 
+  it("불일치 항목이 없으면 디렉토리 목록 헤더의 이상 항목 재적재 버튼을 비활성화한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    const header = screen.getByText("디렉토리 목록").closest(".card-header");
+    const mismatchReloadButton = within(header).getByRole("button", {
+      name: /이상 항목 재적재/,
+    });
+    expect(mismatchReloadButton.disabled).toBe(true);
+  });
+
+  it("디렉토리 목록 헤더에서 카테고리 미선택 상태에서는 전체 이상 항목을 재적재한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    const header = screen.getByText("디렉토리 목록").closest(".card-header");
+    const mismatchReloadButton = within(header).getByRole("button", {
+      name: /이상 항목 재적재/,
+    });
+    expect(mismatchReloadButton.disabled).toBe(false);
+    fireEvent.click(mismatchReloadButton);
+
+    const modal = await screen.findByRole("dialog");
+    expect(
+      within(modal).getByText(/현재 불일치 카테고리 3개의 이상 항목 19건을 ES에 재적재합니다/),
+    ).toBeTruthy();
+
+    mockJsonPostReq.mockImplementation((url, payload, resolve, _reject, done) => {
+      resolve({
+        indexed_count: 1,
+        deleted_count: 1,
+        after_count: 0,
+        failed_count: 0,
+      });
+      if (done) done();
+    });
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+    );
+
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/category-mismatches/reload-all",
+        null,
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+      expect(screen.getByText(/전체 이상 항목 ES 재적재 완료/)).toBeTruthy();
+    });
+  });
+
   it("디렉토리 목록 헤더에서 선택 카테고리의 이상 항목만 재적재한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
@@ -403,7 +461,7 @@ describe("CategoryAdmin", () => {
     const mismatchReloadButton = within(header).getByRole("button", {
       name: /이상 항목 재적재/,
     });
-    expect(mismatchReloadButton.disabled).toBe(true);
+    expect(mismatchReloadButton.disabled).toBe(false);
 
     fireEvent.click(screen.getByText("1_fiction"));
     expect(mismatchReloadButton.disabled).toBe(false);
