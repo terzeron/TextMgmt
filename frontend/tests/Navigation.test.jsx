@@ -102,6 +102,8 @@ describe("Navigation Component", () => {
     await waitFor(() => {
       expect(screen.getByText("책 편집")).toBeDefined();
     });
+    expect(screen.getByText("최신 책")).toBeDefined();
+    expect(screen.getByText("최신 만화")).toBeDefined();
     expect(fetch).toHaveBeenCalledWith("/api/auth/me", expect.anything());
   });
 

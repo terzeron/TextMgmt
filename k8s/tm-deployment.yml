@@ -82,6 +82,8 @@ spec:
               value: book
             - name: TM_ES_COMICS_INDEX
               value: comics
+            - name: TM_BACKFILL_CREATED_TIME_ON_STARTUP
+              value: "true"
             - name: TM_GOOGLE_CLIENT_ID
               valueFrom:
                 secretKeyRef:
@@ -127,11 +129,23 @@ spec:
             # java 등 $HOME/XDG 기반 캐시·설정 쓰기를 writable emptyDir(/tmp)로 redirect.
             - name: HOME
               value: /tmp
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "test -d /books && [ $(ls -1A /books 2>/dev/null | wc -l) -gt 0 ] && test -d /comics && [ $(ls -1A /comics 2>/dev/null | wc -l) -gt 0 ]"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
           volumeMounts:
             - name: books-pvc
               mountPath: /books
+              mountPropagation: HostToContainer
             - name: comics-pvc
               mountPath: /comics
+              mountPropagation: HostToContainer
             - name: tmp
               mountPath: /tmp
       volumes:

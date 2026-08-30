@@ -826,13 +826,54 @@ class TestRefreshRotationObservation:
         assert "event=refresh-rotation-rejected" not in caplog.text
 
 
+def _ip_request(headers, client_host: str | None = "192.0.2.9"):
+    scope_headers = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+    scope = {"type": "http", "headers": scope_headers, "client": (client_host, 1234) if client_host else None}
+    return Request(scope)
+
+
+class TestClientIp:
+    """실제 접속 IP 는 경유 프록시(Cloudflare edge, Traefik) IP 가 아니어야 한다."""
+
+    def test_prefers_cf_connecting_ip_over_proxy_hops(self):
+        """운영 경로에서 XFF 첫 항목은 Cloudflare edge IP 라 신뢰할 수 없다."""
+        req = _ip_request({"CF-Connecting-IP": "203.0.113.77", "X-Forwarded-For": "104.22.17.33"}, client_host="10.1.202.80")
+        assert main_mod._client_ip(req) == "203.0.113.77"
+
+    def test_falls_back_to_true_client_ip(self):
+        req = _ip_request({"True-Client-IP": "203.0.113.78", "X-Forwarded-For": "104.22.17.33"})
+        assert main_mod._client_ip(req) == "203.0.113.78"
+
+    def test_falls_back_to_forwarded_for_without_cloudflare(self):
+        """Cloudflare 를 거치지 않는 경로에서는 XFF 첫 항목을 쓴다."""
+        req = _ip_request({"X-Forwarded-For": "198.51.100.23, 10.1.2.3"})
+        assert main_mod._client_ip(req) == "198.51.100.23"
+
+    def test_falls_back_to_peer_when_no_headers(self):
+        assert main_mod._client_ip(_ip_request({})) == "192.0.2.9"
+
+    def test_ignores_blank_headers(self):
+        req = _ip_request({"CF-Connecting-IP": "  ", "X-Forwarded-For": " , 10.1.2.3"})
+        assert main_mod._client_ip(req) == "192.0.2.9"
+
+    def test_returns_empty_when_no_client_info(self):
+        assert main_mod._client_ip(_ip_request({}, client_host=None)) == ""
+
+    def test_keeps_full_ipv6(self):
+        req = _ip_request({"CF-Connecting-IP": "2001:db8:abcd:1234::1"})
+        assert main_mod._client_ip(req) == "2001:db8:abcd:1234::1"
+
+
 class TestRequestIpPrefix:
     """관측용 IP 프리픽스는 IPv4 /24, IPv6 /48 까지만 남긴다."""
 
     def _request(self, headers, client_host: str | None = "192.0.2.9"):
-        scope_headers = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
-        scope = {"type": "http", "headers": scope_headers, "client": (client_host, 1234) if client_host else None}
-        return Request(scope)
+        return _ip_request(headers, client_host)
+
+    def test_masks_cf_connecting_ip(self):
+        """프리픽스도 프록시 IP 가 아니라 실제 클라이언트 IP 를 기준으로 만든다."""
+        req = self._request({"CF-Connecting-IP": "203.0.113.77", "X-Forwarded-For": "104.22.17.33"})
+        assert main_mod._request_ip_prefix(req) == "203.0.113"
 
     def test_uses_forwarded_for_first_hop_ipv4(self):
         req = self._request({"X-Forwarded-For": "198.51.100.23, 10.1.2.3"})
@@ -858,30 +899,13 @@ FAMILY_B = "b" * 32
 
 
 def _session_item(family_id=FAMILY_A, **overrides):
-    item = {
-        "session_id": family_id,
-        "session_label": f"{family_id[:8]}...",
-        "email": "admin@example.com",
-        "status": "active",
-        "created_at": 1786500000,
-        "last_seen_at": 1786501200,
-        "expires_at": 1787106000,
-        "revoked_at": None,
-        "revoke_reason": None,
-        "token_count": 6,
-        "valid_token_count": 1,
-        "is_current": False,
-    }
+    item = {"session_id": family_id, "session_label": f"{family_id[:8]}...", "email": "admin@example.com", "status": "active", "created_at": 1786500000, "last_seen_at": 1786501200, "expires_at": 1787106000, "revoked_at": None, "revoke_reason": None, "token_count": 6, "valid_token_count": 1, "is_current": False}
     item.update(overrides)
     return item
 
 
 def _session_page(items):
-    return {
-        "items": items,
-        "pagination": {"page": 1, "pageSize": 50, "totalItems": len(items), "totalPages": 1},
-        "summary": {"active": len(items), "expired": 0, "revoked": 0, "total": len(items)},
-    }
+    return {"items": items, "pagination": {"page": 1, "pageSize": 50, "totalItems": len(items), "totalPages": 1}, "summary": {"active": len(items), "expired": 0, "revoked": 0, "total": len(items)}}
 
 
 class TestListLoginSessions:
@@ -1100,3 +1124,61 @@ class TestLoginSessionAuthorization:
         for (path, methods), route in routes.items():
             dependency_calls = [d.call for d in route.dependant.dependencies]
             assert main_mod.require_admin in dependency_calls, f"{methods} {path} 에 require_admin 이 없습니다"
+
+
+class TestLoginSessionClientInfo:
+    """로그인·갱신 시점의 실제 접속 IP 와 User-Agent 가 세션 저장소까지 전달되는지 본다."""
+
+    REAL_IP = "203.0.113.77"
+    PROXY_IP = "104.22.17.33"  # Cloudflare edge. XFF 로만 오면 이 값이 잡힌다.
+    UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+    @property
+    def _headers(self):
+        return {"CF-Connecting-IP": self.REAL_IP, "X-Forwarded-For": self.PROXY_IP, "User-Agent": self.UA}
+
+    def test_google_login_records_real_client_ip(self, auth_client, monkeypatch):
+        captured: dict = {}
+        monkeypatch.setattr(main_mod, "TM_GOOGLE_CLIENT_ID", "cid")
+        monkeypatch.setattr(main_mod.google_id_token, "verify_oauth2_token", lambda credential, request, audience: {"aud": audience, "iss": "https://accounts.google.com", "email": "e@example.com", "email_verified": True, "name": "N", "picture": "P"})
+        monkeypatch.setattr(main_mod, "determine_role", lambda email: "user")
+        monkeypatch.setattr(main_mod, "create_jwt_token", lambda **kwargs: "jwt")
+        monkeypatch.setattr(main_mod, "create_refresh_token", lambda **kwargs: "rjwt")
+        monkeypatch.setattr(main_mod.refresh_token_store, "store_issued", lambda **kwargs: captured.update(kwargs))
+
+        resp = auth_client.post("/auth/google", json={"credential": "c"}, headers=self._headers)
+
+        assert resp.status_code == 200
+        assert captured["client_ip"] == self.REAL_IP
+        assert captured["client_ip"] != self.PROXY_IP
+        assert captured["user_agent"] == self.UA
+
+    def test_refresh_updates_client_info(self, auth_client, monkeypatch):
+        """세션의 IP/UA 는 마지막 갱신 값이므로 refresh 마다 다시 전달돼야 한다."""
+        captured: dict = {}
+
+        def _rotate(**kwargs):
+            captured.update(kwargs)
+            return "ok"
+
+        monkeypatch.setattr(main_mod, "decode_refresh_token", lambda token: {"email": "e@example.com", "role": "user", "name": "n", "picture": "p", "fid": "F", "jti": "J"})
+        monkeypatch.setattr(main_mod, "determine_role", lambda email: "user")
+        monkeypatch.setattr(main_mod, "create_jwt_token", lambda **kwargs: "jwt")
+        monkeypatch.setattr(main_mod, "create_refresh_token", lambda **kwargs: "rjwt")
+        monkeypatch.setattr(main_mod.refresh_token_store, "rotate", _rotate)
+
+        resp = auth_client.post("/auth/refresh", cookies={main_mod.REFRESH_COOKIE_NAME: "tok"}, headers=self._headers)
+
+        assert resp.status_code == 200
+        assert captured["client_ip"] == self.REAL_IP
+        assert captured["user_agent"] == self.UA
+
+    def test_sessions_api_exposes_client_info(self, auth_client, monkeypatch):
+        session = {"session_id": "a" * 32, "session_label": "aaaaaaaa...", "email": "admin@example.com", "status": "active", "created_at": 1, "last_seen_at": 2, "expires_at": 3, "revoked_at": None, "revoke_reason": None, "token_count": 1, "valid_token_count": 1, "client_ip": self.REAL_IP, "user_agent": self.UA, "user_agent_summary": "Chrome 131 / macOS 10.15", "is_current": False}
+        monkeypatch.setattr(main_mod.refresh_token_store, "list_sessions", lambda **kwargs: {"items": [session], "pagination": {"page": 1, "pageSize": 50, "totalItems": 1, "totalPages": 1}, "summary": {"active": 1, "expired": 0, "revoked": 0, "total": 1}})
+
+        item = auth_client.get("/auth/sessions").json()["result"]["items"][0]
+
+        assert item["client_ip"] == self.REAL_IP
+        assert item["user_agent"] == self.UA
+        assert item["user_agent_summary"] == "Chrome 131 / macOS 10.15"

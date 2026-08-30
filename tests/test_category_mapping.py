@@ -76,9 +76,18 @@ def build_cm(fake_cursor):
 
 class TestCategoryMapping(unittest.TestCase):
     def test_init(self):
-        cursor = FakeCursor(fetchone_rows=[{"cnt": 0}, {"cnt": 0}])
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 0}, {"cnt": 0}, {"cnt": 0}])
         cm_mod, cm = build_cm(cursor)
         assert cm is not None
+
+    def test_init_creates_latest_excluded_categories_table(self):
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}, {"cnt": 1}, {"cnt": 1}])
+        cm_mod, cm = build_cm(cursor)
+        assert cm is not None
+        assert any(
+            "CREATE TABLE IF NOT EXISTS latest_excluded_categories" in str(sql)
+            for sql, _ in cursor.executed
+        )
 
     def test_get_all_and_keywords(self):
         cursor = FakeCursor(rows=[{"category": "c1", "keyword": "k1"}, {"category": "c1", "keyword": "k2"}])
@@ -190,6 +199,31 @@ class TestCategoryMapping(unittest.TestCase):
         cm._get_connection = _conn_hidden
         assert cm.get_hidden_categories() == ["c1"]
 
+    def test_get_and_set_latest_excluded_categories(self):
+        cursor_latest = FakeCursor(rows=[{"category": "c1"}])
+        cm_mod, cm = build_cm(FakeCursor(fetchone_rows=[{"cnt": 1}, {"cnt": 1}, {"cnt": 1}]))
+
+        @contextlib.contextmanager
+        def _conn_latest():
+            yield FakeConn(cursor_latest)
+
+        cm._get_connection = _conn_latest
+        assert cm.get_latest_excluded_categories() == ["c1"]
+
+        cursor_set = FakeCursor()
+        conn = FakeConn(cursor_set)
+
+        @contextlib.contextmanager
+        def _conn_set():
+            yield conn
+
+        cm._get_connection = _conn_set
+        assert cm.set_latest_excluded("cat", True) is True
+        assert cm.set_latest_excluded("cat", False) is True
+        assert conn.committed is True
+        assert any("INSERT IGNORE INTO latest_excluded_categories" in str(sql) for sql, _ in cursor_set.executed)
+        assert any("DELETE FROM latest_excluded_categories" in str(sql) for sql, _ in cursor_set.executed)
+
     def test_categories_search_and_rename(self):
         cursor = FakeCursor(rows=[{"category": "a"}, {"category": "b"}])
         cm_mod, cm = build_cm(cursor)
@@ -211,6 +245,7 @@ class TestCategoryMapping(unittest.TestCase):
 
         cm._get_connection = _conn_rename
         assert cm.rename_category("old", "new") is True
+        assert any("UPDATE latest_excluded_categories SET category" in str(sql) for sql, _ in cursor_rename.executed)
 
         def raise_error(sql, params):
             raise Exception("fail")
@@ -252,6 +287,23 @@ class TestCategoryMapping(unittest.TestCase):
 
         cm._get_connection = _conn_fail
         assert cm.set_hidden("cat", True) is False
+
+    def test_set_latest_excluded_failure(self):
+        cursor = FakeCursor()
+        cm_mod, cm = build_cm(cursor)
+
+        def raise_error(sql, params):
+            raise Exception("fail")
+
+        cursor_fail = FakeCursor(execute_side_effect=raise_error)
+        conn_fail = FakeConn(cursor_fail)
+
+        @contextlib.contextmanager
+        def _conn_fail():
+            yield conn_fail
+
+        cm._get_connection = _conn_fail
+        assert cm.set_latest_excluded("cat", True) is False
 
     def test_migrate_drop_index_exception_category_keywords(self):
         """Lines 72-73: exception when dropping unique_category_keyword index"""
@@ -338,7 +390,7 @@ class TestCategoryMapping(unittest.TestCase):
         assert conn.committed is True
 
     def test_migrate_skips_when_content_type_already_exists(self):
-        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}, {"cnt": 1}])
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}, {"cnt": 1}, {"cnt": 1}])
         cm_mod, cm = build_cm(cursor)
         alter_queries = [sql for sql, _ in cursor.executed if "ALTER TABLE" in str(sql)]
         assert cm is not None

@@ -69,6 +69,7 @@ const MAPPINGS_RESPONSE = {
 };
 
 const HIDDEN_RESPONSE = ["3_history"];
+const LATEST_EXCLUDED_RESPONSE = ["2_science"];
 
 function setupMockResponses(
   categoriesResult,
@@ -79,6 +80,7 @@ function setupMockResponses(
     apiPrefix = "",
     mappingsResult = MAPPINGS_RESPONSE,
     hiddenResult = HIDDEN_RESPONSE,
+    latestExcludedResult = LATEST_EXCLUDED_RESPONSE,
   } = {},
 ) {
   mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
@@ -98,6 +100,8 @@ function setupMockResponses(
       resolve(mappingsResult);
     } else if (url.startsWith("/hidden-categories")) {
       resolve(hiddenResult);
+    } else if (url.startsWith("/latest-excluded-categories")) {
+      resolve(latestExcludedResult);
     }
   });
 }
@@ -131,7 +135,7 @@ describe("CategoryAdmin", () => {
 
   // ── 데이터 로딩 ──
 
-  it("4개 API를 모두 호출한다", async () => {
+  it("필수 데이터 API와 최신 자료 제외 설정 API를 모두 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
     await waitFor(() => {
@@ -155,6 +159,12 @@ describe("CategoryAdmin", () => {
       );
       expect(mockJsonGetReq).toHaveBeenCalledWith(
         "/hidden-categories?content_type=book",
+        null,
+        expect.any(Function),
+        expect.any(Function),
+      );
+      expect(mockJsonGetReq).toHaveBeenCalledWith(
+        "/latest-excluded-categories?content_type=book",
         null,
         expect.any(Function),
         expect.any(Function),
@@ -358,6 +368,74 @@ describe("CategoryAdmin", () => {
     expect(within(header).getByLabelText("이상 항목만 보기")).toBeTruthy();
   });
 
+  it("불일치 항목이 있으면 일괄 재적재 버튼을 활성화한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    expect(screen.getByRole("button", { name: /일괄 재적재/ }).disabled).toBe(
+      false,
+    );
+  });
+
+  it("불일치 항목이 없으면 일괄 재적재 버튼을 비활성화한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    expect(screen.getByRole("button", { name: /일괄 재적재/ }).disabled).toBe(
+      true,
+    );
+  });
+
+  it("디렉토리 목록 헤더에서 선택 카테고리의 이상 항목만 재적재한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    const header = screen.getByText("디렉토리 목록").closest(".card-header");
+    const mismatchReloadButton = within(header).getByRole("button", {
+      name: /이상 항목 재적재/,
+    });
+    expect(mismatchReloadButton.disabled).toBe(true);
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    expect(mismatchReloadButton.disabled).toBe(false);
+    fireEvent.click(mismatchReloadButton);
+
+    const modal = await screen.findByRole("dialog");
+    expect(within(modal).getByText(/2건만 ES에 재적재합니다/)).toBeTruthy();
+
+    mockJsonPostReq.mockImplementation((url, payload, resolve, _reject, done) => {
+      resolve({
+        indexed_count: 1,
+        deleted_count: 1,
+        after_count: 0,
+        failed_count: 0,
+      });
+      if (done) done();
+    });
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+    );
+
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/category-mismatches/reload-mismatches",
+        { category: "1_fiction" },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
   // ── 로딩 상태 ──
 
   it("API 응답 전에 펼치면 로딩 스피너를 표시한다", async () => {
@@ -368,7 +446,7 @@ describe("CategoryAdmin", () => {
     render(<CategoryAdmin />);
     expect(screen.getByText("로딩 중...")).toBeTruthy();
 
-    // 4개 API 모두 resolve
+    // tree 렌더링에 필요한 4개 API resolve
     resolvers["/categories"](CATEGORIES_RESPONSE);
     resolvers["/category-mismatches"](MISMATCH_RESPONSE_EMPTY);
     resolvers["/category-mappings?content_type=book"](MAPPINGS_RESPONSE);
@@ -982,6 +1060,12 @@ describe("CategoryAdmin", () => {
           expect.any(Function),
           expect.any(Function),
         );
+        expect(mockJsonGetReq).toHaveBeenCalledWith(
+          "/latest-excluded-categories?content_type=comic",
+          null,
+          expect.any(Function),
+          expect.any(Function),
+        );
       });
     });
 
@@ -1120,6 +1204,82 @@ describe("CategoryAdmin", () => {
     });
   });
 
+  it("최신 자료 검색 제외 설정이 있으면 체크박스를 선택 상태로 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, {
+      latestExcludedResult: ["2_science"],
+    });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("2_science")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("2_science"));
+    await waitFor(() => {
+      expect(screen.getByLabelText("최신 자료 검색 제외").checked).toBe(true);
+    });
+  });
+
+  it("최신 자료 검색 제외 체크박스 클릭 시 POST /latest-excluded-categories API를 호출한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, {
+      latestExcludedResult: [],
+    });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByLabelText("최신 자료 검색 제외")).toBeTruthy();
+    });
+
+    mockJsonPostReq.mockImplementation((url, payload, resolve) => {
+      resolve(["1_fiction"]);
+    });
+
+    fireEvent.click(screen.getByLabelText("최신 자료 검색 제외"));
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/latest-excluded-categories/1_fiction?content_type=book",
+        { excluded: true },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
+  it("만화 카테고리에서 최신 자료 검색 제외 체크박스 클릭 시 comic content_type으로 호출한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, {
+      apiPrefix: "/comics",
+      latestExcludedResult: [],
+    });
+    render(<CategoryAdmin contentType="comic" />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByLabelText("최신 자료 검색 제외")).toBeTruthy();
+    });
+
+    mockJsonPostReq.mockImplementation((url, payload, resolve) => {
+      resolve(["1_fiction"]);
+    });
+
+    fireEvent.click(screen.getByLabelText("최신 자료 검색 제외"));
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/latest-excluded-categories/1_fiction?content_type=comic",
+        { excluded: true },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
   // ── 카테고리 관리 (이름 변경 / 삭제 / 재적재) ──
 
   it("이름 변경 버튼 클릭 시 모달이 뜨고 변경 API를 호출한다", async () => {
@@ -1211,6 +1371,45 @@ describe("CategoryAdmin", () => {
         expect.any(Function),
         expect.any(Function),
       );
+    });
+  });
+
+  it("일괄 재적재 실행 시 reload-all API를 호출하고 결과를 표시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /일괄 재적재/ }));
+
+    const modal = await screen.findByRole("dialog");
+    expect(within(modal).getByText("불일치 일괄 재적재")).toBeTruthy();
+
+    mockJsonPostReq.mockImplementation((url, payload, resolve, reject, final) => {
+      resolve({
+        indexed_count: 4,
+        deleted_count: 2,
+        after_count: 1,
+        failed_count: 0,
+      });
+      final();
+    });
+
+    fireEvent.click(within(modal).getByRole("button", { name: "일괄 재적재" }));
+
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/category-mismatches/reload-all",
+        null,
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/불일치 일괄 ES 재적재 완료/)).toBeTruthy();
+      expect(screen.getByText(/남은 이상 1건/)).toBeTruthy();
     });
   });
 
@@ -2274,6 +2473,43 @@ describe("CategoryAdmin", () => {
     fireEvent.click(within(modal).getByRole("button", { name: "취소" }));
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  it("이상 항목 재적재 버튼은 선택 카테고리의 불일치만 재적재한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    fireEvent.click(screen.getByTitle("이상 항목만 ES 재적재"));
+    const modal = await screen.findByRole("dialog");
+    expect(within(modal).getByText(/2건만 ES에 재적재합니다/)).toBeTruthy();
+
+    mockJsonPostReq.mockImplementation((url, payload, resolve, _reject, done) => {
+      resolve({
+        indexed_count: 1,
+        deleted_count: 1,
+        after_count: 0,
+        failed_count: 0,
+      });
+      if (done) done();
+    });
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+    );
+
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/category-mismatches/reload-mismatches",
+        { category: "1_fiction" },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+      expect(screen.getByText(/이상 항목 ES 재적재 완료/)).toBeTruthy();
     });
   });
 

@@ -23,5 +23,6 @@ class ComicsManager(BookManager):
         LOGGER.debug(self.path_prefix)
         self.es_manager = ESManager(index_name=os.environ["TM_ES_COMICS_INDEX"])
         self.es_manager.create_index()
+        self._backfill_created_time_if_enabled()
         self._mismatch_cache = None
         self._mismatch_cache_time: float = 0.0

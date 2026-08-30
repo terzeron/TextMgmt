@@ -98,6 +98,7 @@ def test_rotate_rejects_expired_token_without_creating_replacement(tmp_path):
 class _FakeCursor:
     def __init__(self, conn):
         self._conn = conn
+        self._last_sql = ""
 
     def __enter__(self):
         return self
@@ -106,9 +107,13 @@ class _FakeCursor:
         return False
 
     def execute(self, sql, params=None):
+        self._last_sql = sql
         self._conn.executed.append((sql.strip().split()[0].upper(), params))
 
     def fetchone(self):
+        # 컬럼 존재 확인(information_schema)은 마이그레이션 전용 질의라 응답 모양이 다르다.
+        if "information_schema.columns" in self._last_sql:
+            return {"cnt": self._conn.existing_column_count}
         return self._conn.select_row
 
     def fetchall(self):
@@ -121,8 +126,10 @@ class _FakeCursor:
 class _FakeConn:
     """rotate 상태머신 검증용 pymysql 연결 대역."""
 
-    def __init__(self, select_row=None):
+    def __init__(self, select_row=None, existing_column_count=1):
         self.select_row = select_row
+        # 1 이면 client_ip/user_agent 가 이미 있는 테이블(= ALTER 생략), 0 이면 마이그레이션 대상.
+        self.existing_column_count = existing_column_count
         self.executed = []
         self.committed = False
         self.rolled_back = False
@@ -491,7 +498,7 @@ def test_list_sessions_does_not_expose_token_internals(tmp_path):
 
     assert "jti" not in item
     assert "replaced_by" not in item
-    assert set(item.keys()) == {"session_id", "session_label", "email", "status", "created_at", "last_seen_at", "expires_at", "revoked_at", "revoke_reason", "token_count", "valid_token_count", "is_current"}
+    assert set(item.keys()) == {"session_id", "session_label", "email", "status", "created_at", "last_seen_at", "expires_at", "revoked_at", "revoke_reason", "token_count", "valid_token_count", "client_ip", "user_agent", "user_agent_summary", "is_current"}
     # 라벨은 family_id 앞부분만 보여준다
     assert item["session_label"].endswith("...")
     assert len(item["session_label"]) == 11
@@ -607,7 +614,20 @@ def test_mysql_list_sessions_uses_same_derivation(monkeypatch):
     from backend.refresh_token_store import MySQLRefreshTokenStore
 
     now = int(time.time())
-    row = {"family_id": "a" * 32, "email": "admin@example.com", "created_at": now - 100, "last_seen_at": now - 10, "max_expires_at": now + 2000, "token_count": 3, "valid_token_count": 1, "active_expires_at": now + 2000, "terminal_reason": None, "revoked_at": None}
+    row = {
+        "family_id": "a" * 32,
+        "email": "admin@example.com",
+        "created_at": now - 100,
+        "last_seen_at": now - 10,
+        "max_expires_at": now + 2000,
+        "token_count": 3,
+        "valid_token_count": 1,
+        "active_expires_at": now + 2000,
+        "terminal_reason": None,
+        "revoked_at": None,
+        "client_ip": "203.0.113.7",
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    }
     _install_fresh_conns(monkeypatch, row)
     store = MySQLRefreshTokenStore()
 
@@ -625,7 +645,20 @@ def test_mysql_revoke_session_revokes_and_reports_status(monkeypatch):
     from backend.refresh_token_store import MySQLRefreshTokenStore
 
     now = int(time.time())
-    row = {"family_id": "a" * 32, "email": "admin@example.com", "created_at": now - 100, "last_seen_at": now - 10, "max_expires_at": now + 2000, "token_count": 3, "valid_token_count": 1, "active_expires_at": now + 2000, "terminal_reason": None, "revoked_at": None}
+    row = {
+        "family_id": "a" * 32,
+        "email": "admin@example.com",
+        "created_at": now - 100,
+        "last_seen_at": now - 10,
+        "max_expires_at": now + 2000,
+        "token_count": 3,
+        "valid_token_count": 1,
+        "active_expires_at": now + 2000,
+        "terminal_reason": None,
+        "revoked_at": None,
+        "client_ip": "203.0.113.7",
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    }
     conns = _install_fresh_conns(monkeypatch, row)
     store = MySQLRefreshTokenStore()
 
@@ -644,3 +677,182 @@ def test_mysql_revoke_session_unknown_family(monkeypatch):
     store = MySQLRefreshTokenStore()
 
     assert store.revoke_session(family_id="d" * 32) == {"found": False, "revoked": False, "session": None}
+
+
+# ========== 접속 IP / User-Agent 수집 ==========
+
+
+CHROME_MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+SAFARI_IOS_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+
+
+def test_list_sessions_reports_latest_client_info(tmp_path):
+    """세션의 IP/UA 는 family 안에서 가장 최근 발급된 토큰 값을 보여준다."""
+    from backend.refresh_token_store import RefreshTokenStore
+
+    store = RefreshTokenStore(str(tmp_path / "client_info.sqlite3"))
+    now = int(time.time())
+    store.store_issued(token_id="t1", family_id="a" * 32, email="admin@example.com", issued_at=now - 100, expires_at=now + 1000, client_ip="203.0.113.7", user_agent=CHROME_MAC_UA)
+    # 같은 세션이 다른 회선에서 갱신되면 최신 값으로 덮인다
+    store.rotate(current_token_id="t1", new_token_id="t2", family_id="a" * 32, email="admin@example.com", issued_at=now - 10, expires_at=now + 2000, client_ip="198.51.100.42", user_agent=SAFARI_IOS_UA)
+
+    item = store.list_sessions(status="all")["items"][0]
+
+    assert item["client_ip"] == "198.51.100.42"
+    assert item["user_agent"] == SAFARI_IOS_UA
+    assert item["user_agent_summary"] == "Safari 17 / iOS 17"
+
+
+def test_list_sessions_returns_empty_client_info_for_legacy_rows(tmp_path):
+    """컬럼 추가 이전에 쌓인 세션은 빈 문자열로 나온다(None 이 화면까지 새지 않는다)."""
+    store, _ = _session_fixture(tmp_path)
+
+    for item in store.list_sessions(status="all")["items"]:
+        assert item["client_ip"] == ""
+        assert item["user_agent"] == ""
+        assert item["user_agent_summary"] == ""
+
+
+def test_store_truncates_oversized_client_info(tmp_path):
+    """UA 는 상한이 없으므로 컬럼 폭에 맞게 잘라 저장한다."""
+    from backend.refresh_token_store import MAX_USER_AGENT_LENGTH, RefreshTokenStore
+
+    store = RefreshTokenStore(str(tmp_path / "truncate.sqlite3"))
+    now = int(time.time())
+    store.store_issued(token_id="t1", family_id="a" * 32, email="admin@example.com", issued_at=now, expires_at=now + 1000, client_ip="203.0.113.7", user_agent="U" * (MAX_USER_AGENT_LENGTH * 2))
+
+    item = store.list_sessions(status="all")["items"][0]
+
+    assert len(item["user_agent"]) == MAX_USER_AGENT_LENGTH
+
+
+def test_sqlite_migration_adds_client_columns(tmp_path):
+    """컬럼 추가 이전 스키마의 DB 를 열어도 ALTER 로 보정되고 조회가 동작한다."""
+    from backend.refresh_token_store import RefreshTokenStore
+
+    db_path = tmp_path / "legacy.sqlite3"
+    legacy = sqlite3.connect(db_path)
+    legacy.execute("CREATE TABLE refresh_tokens (jti TEXT PRIMARY KEY, family_id TEXT NOT NULL, email TEXT NOT NULL, issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, replaced_by TEXT, revoked_at INTEGER, revoke_reason TEXT)")
+    now = int(time.time())
+    legacy.execute("INSERT INTO refresh_tokens VALUES ('t1', ?, 'admin@example.com', ?, ?, NULL, NULL, NULL)", ("a" * 32, now, now + 1000))
+    legacy.commit()
+    legacy.close()
+
+    store = RefreshTokenStore(str(db_path))
+
+    with sqlite3.connect(db_path) as check:
+        columns = {row[0] for row in check.execute("SELECT name FROM pragma_table_info('refresh_tokens')")}
+    assert {"client_ip", "user_agent"} <= columns
+    assert store.list_sessions(status="all")["items"][0]["client_ip"] == ""
+
+
+def test_mysql_migration_adds_client_columns_when_missing(monkeypatch):
+    """MySQL 도 기존 테이블에 컬럼이 없으면 ALTER 를 실행한다."""
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    conns: list[_FakeConn] = []
+
+    def _connect(**kw):
+        conn = _FakeConn(None, existing_column_count=0)
+        conns.append(conn)
+        return conn
+
+    monkeypatch.setattr("pymysql.connect", _connect)
+    MySQLRefreshTokenStore()
+
+    assert _verbs(conns[0]).count("ALTER") == 2
+
+
+def test_mysql_migration_skips_alter_when_columns_exist(monkeypatch):
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    conns = _install_fresh_conns(monkeypatch, None)
+    MySQLRefreshTokenStore()
+
+    assert "ALTER" not in _verbs(conns[0])
+
+
+@pytest.mark.parametrize(
+    "user_agent,expected",
+    [
+        (CHROME_MAC_UA, "Chrome 131 / macOS 10.15"),
+        (SAFARI_IOS_UA, "Safari 17 / iOS 17"),
+        ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0", "Edge 131 / Windows 10+"),
+        ("Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0", "Firefox 133 / Linux"),
+        ("Mozilla/5.0 (Linux; Android 14; SM-S918N) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/23.0 Chrome/115.0.0.0 Mobile Safari/537.36", "Samsung Internet 23 / Android 14"),
+        # 파생 브라우저는 Chrome 토큰을 함께 달고 다니므로 파생 쪽이 이겨야 한다
+        ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Whale/3.28.266.14 Safari/537.36", "Whale 3 / Windows 10+"),
+        # 브라우저를 못 알아보면 원문 앞부분으로 봇/스크립트를 식별한다
+        ("curl/8.5.0", "curl/8.5.0"),
+        ("", ""),
+    ],
+)
+def test_summarize_user_agent(user_agent, expected):
+    from backend.refresh_token_store import summarize_user_agent
+
+    assert summarize_user_agent(user_agent) == expected
+
+
+# ========== 실제 MySQL 대상 검증 (집계 SQL / 마이그레이션) ==========
+
+
+@pytest.fixture()
+def mysql_store(mysql_container):
+    """실제 MySQL 컨테이너에 붙은 스토어. 테스트마다 테이블을 비운다."""
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    store = MySQLRefreshTokenStore()
+    with store._connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE refresh_tokens")
+        conn.commit()
+    return store
+
+
+def test_mysql_aggregate_sql_runs_and_reports_latest_client_info(mysql_store):
+    """윈도우 함수 기반 집계가 MySQL 8 에서 실제로 실행되고 최신 IP/UA 를 돌려준다."""
+    now = int(time.time())
+    mysql_store.store_issued(token_id="t1", family_id="a" * 32, email="admin@example.com", issued_at=now - 100, expires_at=now + 1000, client_ip="203.0.113.7", user_agent=CHROME_MAC_UA)
+    assert mysql_store.rotate(current_token_id="t1", new_token_id="t2", family_id="a" * 32, email="admin@example.com", issued_at=now - 10, expires_at=now + 2000, client_ip="198.51.100.42", user_agent=SAFARI_IOS_UA) == "ok"
+
+    page = mysql_store.list_sessions(status="all")
+
+    assert len(page["items"]) == 1
+    item = page["items"][0]
+    assert item["status"] == "active"
+    assert item["token_count"] == 2
+    assert item["client_ip"] == "198.51.100.42"
+    assert item["user_agent"] == SAFARI_IOS_UA
+    assert item["user_agent_summary"] == "Safari 17 / iOS 17"
+
+
+def test_mysql_aggregate_sql_filters_by_email(mysql_store):
+    """{where} 가 서브쿼리로 들어가도 파라미터 순서(now, now, email)가 맞는지 본다."""
+    now = int(time.time())
+    mysql_store.store_issued(token_id="t1", family_id="a" * 32, email="admin@example.com", issued_at=now, expires_at=now + 1000, client_ip="203.0.113.7", user_agent=CHROME_MAC_UA)
+    mysql_store.store_issued(token_id="t2", family_id="b" * 32, email="viewer@example.com", issued_at=now, expires_at=now + 1000, client_ip="198.51.100.42", user_agent=SAFARI_IOS_UA)
+
+    page = mysql_store.list_sessions(status="all", email="viewer@example.com")
+
+    assert [i["email"] for i in page["items"]] == ["viewer@example.com"]
+    assert page["items"][0]["client_ip"] == "198.51.100.42"
+
+
+def test_mysql_migration_adds_columns_to_legacy_table(mysql_container):
+    """컬럼 없는 기존 테이블을 열어도 ALTER 로 보정되고 기존 row 는 NULL 로 남는다."""
+    from backend.refresh_token_store import MySQLRefreshTokenStore
+
+    bootstrap = MySQLRefreshTokenStore()
+    with bootstrap._connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DROP TABLE IF EXISTS refresh_tokens")
+            cur.execute("CREATE TABLE refresh_tokens (jti VARCHAR(64) PRIMARY KEY, family_id VARCHAR(64) NOT NULL, email VARCHAR(320) NOT NULL, issued_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, replaced_by VARCHAR(64), revoked_at BIGINT, revoke_reason VARCHAR(64), INDEX idx_refresh_tokens_family (family_id)) ENGINE=InnoDB")
+            now = int(time.time())
+            cur.execute("INSERT INTO refresh_tokens VALUES ('t1', %s, 'admin@example.com', %s, %s, NULL, NULL, NULL)", ("a" * 32, now, now + 1000))
+        conn.commit()
+
+    store = MySQLRefreshTokenStore()  # _init_db 가 마이그레이션을 수행한다
+
+    item = store.list_sessions(status="all")["items"][0]
+    assert item["client_ip"] == ""
+    assert item["user_agent"] == ""

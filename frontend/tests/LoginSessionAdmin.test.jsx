@@ -32,6 +32,10 @@ const ACTIVE_SESSION = {
   revoke_reason: null,
   token_count: 6,
   valid_token_count: 1,
+  client_ip: "203.0.113.77",
+  user_agent:
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  user_agent_summary: "Chrome 131 / macOS 10.15",
   is_current: true,
 };
 
@@ -108,6 +112,8 @@ describe("LoginSessionAdmin", () => {
       "상태",
       "계정",
       "세션",
+      "접속 IP",
+      "User Agent",
       "생성 시각",
       "마지막 갱신",
       "만료 시각",
@@ -120,6 +126,33 @@ describe("LoginSessionAdmin", () => {
     }
     expect(screen.getByText("admin@example.com")).toBeTruthy();
     expect(screen.getByText("viewer@example.com")).toBeTruthy();
+  });
+
+  it("접속 IP 와 User Agent 를 표시한다", async () => {
+    mockJsonGetReq.mockImplementation(resolveWith(page([ACTIVE_SESSION])));
+
+    render(<LoginSessionAdmin />);
+
+    expect(await screen.findByText("203.0.113.77")).toBeTruthy();
+    // 표에는 요약만 두고 원문은 툴팁(title)으로 보여준다
+    const ua = screen.getByText("Chrome 131 / macOS 10.15");
+    expect(ua.getAttribute("title")).toBe(ACTIVE_SESSION.user_agent);
+  });
+
+  it("접속 정보가 없는 예전 세션은 빈 값으로 표시한다", async () => {
+    const legacy = {
+      ...ACTIVE_SESSION,
+      client_ip: "",
+      user_agent: "",
+      user_agent_summary: "",
+    };
+    mockJsonGetReq.mockImplementation(resolveWith(page([legacy])));
+
+    render(<LoginSessionAdmin />);
+
+    await waitFor(() => expect(mockJsonGetReq).toHaveBeenCalled());
+    expect(screen.queryByText("203.0.113.77")).toBeNull();
+    expect(screen.queryByText("Chrome 131 / macOS 10.15")).toBeNull();
   });
 
   it("현재 세션에는 배지를 표시한다", async () => {

@@ -314,7 +314,9 @@ export default function Navigation() {
           <Navbar.Collapse id="basic-navbar-nav">
             <Nav className="me-auto my-2 my-lg-0">
               {role && <Nav.Link href="/book-view">책</Nav.Link>}
+              {role && <Nav.Link href="/book-latest">최신 책</Nav.Link>}
               {role && <Nav.Link href="/comics-view">만화</Nav.Link>}
+              {role && <Nav.Link href="/comics-latest">최신 만화</Nav.Link>}
               {role === "admin" && (
                 <Nav.Link href="/book-edit">책 편집</Nav.Link>
               )}

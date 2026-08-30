@@ -5,6 +5,7 @@ import shutil
 import json
 import os
 import sys
+import threading
 import time
 import zipfile
 import tempfile
@@ -378,6 +379,8 @@ class DummyES:
         self.similar_paged = ([], 0)
         self.deleted_by_category = {"deleted": 2, "failures": []}
         self.keyword_paged = ([], 0)
+        self.deleted_ids = []
+        self.deleted_file_paths = []
 
     def search_by_id(self, book_id: int):
         return self.doc
@@ -387,6 +390,14 @@ class DummyES:
 
     def delete(self, book_id: int):
         return self.delete_ok
+
+    def delete_by_file_paths(self, file_paths, exclude_ids=None):
+        self.deleted_file_paths.append((list(file_paths), list(exclude_ids or [])))
+        return 0
+
+    def delete_by_ids(self, ids, chunk_size: int = 10000):
+        self.deleted_ids.extend(ids)
+        return len(ids)
 
     def insert(self, data):
         self.inserted.append(data)
@@ -676,6 +687,36 @@ def test_category_mismatch_details_root(tmp_path: Path):
     es.category_docs = [(root_file.stat().st_ino, make_doc("root.txt"), 1.0)]
     details = manager.get_category_mismatch_details("_root")
     assert details["fs_count"] >= 1
+
+
+def test_category_mismatches_ignore_non_indexable_files(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.aggregate = {}
+    (tmp_path / "AGENTS.md").write_text("rules", encoding="utf-8")
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "count.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    result = manager.get_category_mismatches()
+    assert result == {"mismatches": [], "es_only": [], "fs_only": []}
+    assert manager.get_category_mismatch_details("_root")["fs_count"] == 0
+    assert manager.get_category_mismatch_details("A")["fs_only"] == []
+
+
+def test_category_mismatches_include_detected_indexable_files(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.aggregate = {}
+    (tmp_path / "A").mkdir()
+    epub_with_wrong_extension = tmp_path / "A" / "book.bak"
+    with zipfile.ZipFile(epub_with_wrong_extension, "w") as zf:
+        zf.writestr("META-INF/container.xml", "<container/>")
+
+    result = manager.get_category_mismatches()
+    assert result["fs_only"] == [{"category": "A", "fs_count": 1}]
+    details = manager.get_category_mismatch_details("A")
+    assert details["fs_count"] == 1
+    assert details["fs_only"] == [{"file_name": "book.bak", "file_path": "A/book.bak"}]
 
 
 def asyncio_runner(coro):
@@ -1212,6 +1253,43 @@ def test_book_manager_init_requires_env(monkeypatch: pytest.MonkeyPatch):
         BookManager()
 
 
+def test_book_manager_created_time_backfill_does_not_block_init(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    class FakeESManager:
+        def create_index(self):
+            return None
+
+        def backfill_created_time(self, path_prefix):
+            started.set()
+            release.wait(timeout=2)
+            finished.set()
+            return {"updated": 0, "skipped": 0, "failed": 0}
+
+    monkeypatch.setenv("TM_BOOK_DIR", str(tmp_path))
+    monkeypatch.setenv("TM_BACKFILL_CREATED_TIME_ON_STARTUP", "true")
+    monkeypatch.setattr("backend.book_manager.ESManager", FakeESManager)
+
+    release_timer = threading.Timer(0.35, release.set)
+    release_timer.start()
+    start = time.monotonic()
+    manager = BookManager()
+    elapsed = time.monotonic() - start
+
+    try:
+        assert started.wait(timeout=1)
+        assert elapsed < 0.2
+    finally:
+        release.set()
+        release_timer.cancel()
+        thread = getattr(manager, "_created_time_backfill_thread", None)
+        if thread is not None:
+            thread.join(timeout=2)
+    assert finished.is_set()
+
+
 def test_get_books_in_category_empty(tmp_path: Path):
     es = DummyES()
     es.category_docs = []
@@ -1442,6 +1520,147 @@ def test_index_single_file_success(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     result, err = asyncio_runner(manager.index_single_file("A/test.txt"))
     assert result == 123
     assert err is None
+
+
+def test_index_single_file_removes_existing_path_docs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    (tmp_path / "A").mkdir(parents=True, exist_ok=True)
+    txt_file = tmp_path / "A" / "test.txt"
+    txt_file.write_text("hello world")
+    fake_data = {123: make_doc("A/test.txt")}
+    monkeypatch.setattr("utils.loader.Loader.read_file", lambda p: fake_data)
+
+    result, err = asyncio_runner(manager.index_single_file("A/test.txt"))
+
+    assert result == 123
+    assert err is None
+    assert es.deleted_file_paths == [(["A/test.txt"], [123])]
+
+
+def test_reload_category_mismatches_indexes_missing_files_and_deletes_stale_docs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+
+    details_by_category = {
+        "A": {
+            "fs_only": [{"file_path": "A/new.txt"}],
+            "es_only": [{"book_id": 10}],
+            "duplicates": [
+                {
+                    "file_path": "A/dup.txt",
+                    "file_exists": True,
+                    "docs": [
+                        {"book_id": 20, "file_linked": False},
+                        {"book_id": 21, "file_linked": False},
+                    ],
+                },
+                {
+                    "file_path": "A/linked.txt",
+                    "file_exists": True,
+                    "docs": [
+                        {"book_id": 22, "file_linked": True},
+                        {"book_id": 23, "file_linked": False},
+                    ],
+                },
+            ],
+        },
+        "B": {
+            "fs_only": [],
+            "es_only": [{"book_id": 30}],
+            "duplicates": [],
+        },
+        "C": {
+            "fs_only": [{"file_path": "C/new.txt"}],
+            "es_only": [],
+            "duplicates": [],
+        },
+    }
+    indexed_paths = []
+
+    def fake_summary():
+        return {
+            "mismatches": [{"category": "A", "diff": 3}],
+            "es_only": [{"category": "B", "es_count": 1}],
+            "fs_only": [{"category": "C", "fs_count": 1}],
+        }
+
+    async def fake_index_single_file(file_path: str, clean_existing: bool = True):
+        indexed_paths.append(file_path)
+        return 1000 + len(indexed_paths), None
+
+    monkeypatch.setattr(manager, "get_category_mismatches", fake_summary)
+    monkeypatch.setattr(
+        manager,
+        "get_category_mismatch_details",
+        lambda category: details_by_category[category],
+    )
+    monkeypatch.setattr(manager, "index_single_file", fake_index_single_file)
+
+    result, err = asyncio_runner(manager.reload_category_mismatches())
+
+    assert err is None
+    assert indexed_paths == ["A/new.txt", "A/dup.txt", "C/new.txt"]
+    assert es.deleted_ids == [10, 20, 21, 23, 30]
+    assert result["category_count"] == 3
+    assert result["indexed_count"] == 3
+    assert result["deleted_count"] == 5
+    assert result["failed_count"] == 0
+
+
+def test_reload_category_mismatch_files_limits_to_selected_category(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    detail_calls = []
+    details = [
+        {
+            "fs_only": [{"file_path": "A/new.txt"}],
+            "es_only": [{"book_id": 10}],
+            "duplicates": [
+                {
+                    "file_path": "A/dup.txt",
+                    "file_exists": True,
+                    "docs": [
+                        {"book_id": 20, "file_linked": False},
+                        {"book_id": 21, "file_linked": False},
+                    ],
+                },
+            ],
+        },
+        {"fs_only": [], "es_only": [], "duplicates": []},
+    ]
+    indexed_calls = []
+
+    def fake_details(category: str):
+        detail_calls.append(category)
+        return details.pop(0)
+
+    async def fake_index_single_file(file_path: str, clean_existing: bool = True):
+        indexed_calls.append((file_path, clean_existing))
+        return 1000 + len(indexed_calls), None
+
+    monkeypatch.setattr(manager, "get_category_mismatch_details", fake_details)
+    monkeypatch.setattr(manager, "index_single_file", fake_index_single_file)
+
+    result, err = asyncio_runner(manager.reload_category_mismatch_files("A"))
+
+    assert err is None
+    assert detail_calls == ["A", "A"]
+    assert indexed_calls == [("A/new.txt", True), ("A/dup.txt", False)]
+    assert es.deleted_ids == [10, 20, 21]
+    assert result["category"] == "A"
+    assert result["category_count"] == 1
+    assert result["before_count"] == 3
+    assert result["after_count"] == 0
+    assert result["indexed_count"] == 2
+    assert result["deleted_count"] == 3
+    assert result["failed_count"] == 0
 
 
 def test_rename_category_target_dir_exists(tmp_path: Path):

@@ -10,6 +10,7 @@ from itertools import islice
 import time
 from elasticsearch import Elasticsearch
 from elastic_transport import SerializationError, ConnectionError, ConnectionTimeout
+from utils.file_time import path_created_time_with_source
 
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
@@ -135,21 +136,27 @@ class ESManager:
                 "page_count": {"type": "integer"},
                 "isbn": {"type": "keyword"},
                 "summary": {"type": "text", "analyzer": "nori_analyzer"},
+                "created_time": {"type": "date"},
+                "created_time_source": {"type": "keyword"},
                 "updated_time": {"type": "date"},
             }
         }
 
         if self.do_exist_index():
-            self._ensure_category_nori_subfield()
+            self._ensure_existing_index_mappings()
             return {"acknowledged": True}
         try:
             return cast(dict[str, Any], self.es.indices.create(index=self.index_name, body={"settings": settings, "mappings": mappings}))
         except BadRequestError as e:
             if "resource_already_exists_exception" in str(e):
                 LOGGER.info("Index %s already exists, skipping creation", self.index_name)
-                self._ensure_category_nori_subfield()
+                self._ensure_existing_index_mappings()
                 return {"acknowledged": True}
             raise
+
+    def _ensure_existing_index_mappings(self) -> None:
+        self._ensure_category_nori_subfield()
+        self._ensure_created_time_field()
 
     def _ensure_category_nori_subfield(self) -> None:
         """기존 인덱스에 category.nori 서브필드가 없으면 추가"""
@@ -163,6 +170,24 @@ class ESManager:
             LOGGER.info("category.nori sub-field added successfully")
         except Exception as e:
             LOGGER.warning("Failed to add category.nori sub-field: %s", e)
+
+    def _ensure_created_time_field(self) -> None:
+        """기존 인덱스에 created_time 관련 필드가 없으면 추가"""
+        try:
+            mapping = self.es.indices.get_mapping(index=self.index_name)
+            properties = mapping[self.index_name]["mappings"].get("properties", {})
+            missing_properties = {}
+            if "created_time" not in properties:
+                missing_properties["created_time"] = {"type": "date"}
+            if "created_time_source" not in properties:
+                missing_properties["created_time_source"] = {"type": "keyword"}
+            if not missing_properties:
+                return
+            LOGGER.info("Adding created_time fields to index %s: %s", self.index_name, sorted(missing_properties))
+            self.es.indices.put_mapping(index=self.index_name, properties=missing_properties)
+            LOGGER.info("created_time fields added successfully")
+        except Exception as e:
+            LOGGER.warning("Failed to add created_time fields: %s", e)
 
     def delete_index(self) -> None:
         LOGGER.debug("delete_index()")
@@ -304,6 +329,127 @@ class ESManager:
         if exclude_categories:
             query["bool"]["must_not"] = [{"prefix": {"category": cat}} for cat in exclude_categories]
         return self._search_paged(query, size=size, offset=offset)
+
+    LATEST_SORT: list[dict[str, Any]] = [
+        {"created_time": {"order": "desc", "missing": "_last"}},
+        {"updated_time": {"order": "desc", "missing": "_last"}},
+        {"file_path": {"order": "asc"}},
+    ]
+
+    @staticmethod
+    def _exclude_category_queries(categories: list[str] | None) -> list[dict[str, Any]]:
+        if not categories:
+            return []
+        result = []
+        for category in categories:
+            if not category:
+                continue
+            result.append({"bool": {"should": [{"term": {"category": category}}, {"prefix": {"category": category + "/"}}], "minimum_should_match": 1}})
+        return result
+
+    def search_latest_docs(self, max_result_count: int = 100, exclude_categories: list[str] | None = None) -> tuple[list[tuple[int, dict[str, Any], float]], int]:
+        LOGGER.debug("search_latest_docs(max_result_count=%d, exclude_categories=%s)", max_result_count, exclude_categories)
+        size = max(1, min(max_result_count, 10000))
+        query: dict[str, Any] = {"match_all": {}}
+        excluded = self._exclude_category_queries(exclude_categories)
+        if excluded:
+            query = {"bool": {"must": [{"match_all": {}}], "must_not": excluded}}
+        try:
+            response = self.es.search(index=self.index_name, query=query, sort=self.LATEST_SORT, size=size, track_total_hits=True)
+        except Exception as e:
+            LOGGER.error("search_latest_docs error: %s", e)
+            return [], 0
+        hits = response["hits"]["hits"]
+        total = response["hits"]["total"]["value"]
+        return [(int(hit["_id"]), hit["_source"], 0.0) for hit in hits], total
+
+    def backfill_created_time(self, path_prefix: Path, batch_size: int = 500) -> dict[str, int]:
+        """created_time이 없는 기존 ES 문서를 실제 파일 stat 기준으로 채운다."""
+        LOGGER.info("backfill_created_time(index=%s) start", self.index_name)
+        result = {"updated": 0, "skipped": 0, "failed": 0}
+        query = {
+            "bool": {
+                "should": [
+                    {"bool": {"must_not": [{"exists": {"field": "created_time"}}]}},
+                    {"bool": {"must_not": [{"exists": {"field": "created_time_source"}}]}},
+                ],
+                "minimum_should_match": 1,
+            }
+        }
+        scroll_id = None
+        resolved_prefix = path_prefix.resolve(strict=False)
+
+        def resolve_path(stored_path: str) -> Path | None:
+            if not stored_path:
+                return None
+            candidate = Path(stored_path)
+            full_path = candidate if candidate.is_absolute() else path_prefix / stored_path
+            try:
+                resolved = full_path.resolve(strict=False)
+                if not resolved.is_relative_to(resolved_prefix):
+                    return None
+            except OSError:
+                return None
+            return resolved
+
+        def update_hits(hits: list[dict[str, Any]]) -> None:
+            bulk_body: list[dict[str, Any]] = []
+            pending = 0
+            for hit in hits:
+                source = hit.get("_source", {})
+                file_path = resolve_path(str(source.get("file_path", "")))
+                if file_path is None or not file_path.is_file():
+                    result["skipped"] += 1
+                    continue
+                try:
+                    created_dt, created_time_source = path_created_time_with_source(file_path)
+                    created_time = created_dt.isoformat()
+                except OSError:
+                    result["failed"] += 1
+                    continue
+                bulk_body.append({"update": {"_index": self.index_name, "_id": hit["_id"]}})
+                bulk_body.append({"doc": {"created_time": created_time, "created_time_source": created_time_source}})
+                pending += 1
+            if not bulk_body:
+                return
+            try:
+                bulk_result = self.es.bulk(body=bulk_body, timeout="60s", refresh=False)
+            except Exception as e:
+                LOGGER.error("backfill_created_time bulk error: %s", e)
+                result["failed"] += pending
+                return
+            if bulk_result.get("errors"):
+                failed = 0
+                for item in bulk_result.get("items", []):
+                    if item.get("update", {}).get("error"):
+                        failed += 1
+                result["failed"] += failed
+                result["updated"] += pending - failed
+            else:
+                result["updated"] += pending
+
+        try:
+            response = self.es.search(index=self.index_name, query=query, scroll="10m", size=batch_size, source=["file_path"])
+            scroll_id = response.get("_scroll_id")
+            hits = response["hits"]["hits"]
+            while hits:
+                update_hits(hits)
+                response = self.es.scroll(scroll_id=scroll_id, scroll="10m")
+                scroll_id = response.get("_scroll_id")
+                hits = response["hits"]["hits"]
+        except Exception as e:
+            LOGGER.error("backfill_created_time error: %s", e)
+            result["failed"] += 1
+        finally:
+            if scroll_id:
+                try:
+                    self.es.clear_scroll(scroll_id=scroll_id)
+                except Exception as e:
+                    LOGGER.debug("Failed to clear created_time backfill scroll: %s", e)
+        if result["updated"] > 0:
+            self.refresh()
+        LOGGER.info("backfill_created_time(index=%s) done: %s", self.index_name, result)
+        return result
 
     def search_similar_docs(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = -1, exclude_id: int | None = None) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:

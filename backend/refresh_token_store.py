@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import sqlite3
 import tempfile
 import time
@@ -34,8 +35,14 @@ ADMIN_REVOKE_REASON = "admin-revoked"
 SESSION_LABEL_LENGTH = 8
 # 세션 목록은 family 단위로 집계되지만 만료 row 정리(purge)가 없으므로 상한을 둔다.
 MAX_SESSION_GROUPS = 2000
+# IPv6 최대 표기 길이(45자). IPv4-mapped 표기까지 포함한다.
+MAX_CLIENT_IP_LENGTH = 45
+# User-Agent 는 상한이 없으므로 저장 전에 자른다.
+MAX_USER_AGENT_LENGTH = 512
 
 # family 단위 집계. `{p}` 는 store 별 placeholder(?, %s)로 치환한다.
+# 접속 IP/UA 는 family 안에서 가장 최근에 발급된 토큰(= 마지막 refresh 갱신) 값을 쓴다.
+# `{p}` 두 개가 서브쿼리의 {where} 보다 앞서 나오므로 파라미터 순서는 (now, now, ...) 다.
 _SESSION_AGGREGATE_SQL = """
     SELECT family_id,
            email,
@@ -46,13 +53,82 @@ _SESSION_AGGREGATE_SQL = """
            SUM(CASE WHEN revoked_at IS NULL AND expires_at >= {p} THEN 1 ELSE 0 END) AS valid_token_count,
            MAX(CASE WHEN revoked_at IS NULL AND expires_at >= {p} THEN expires_at ELSE 0 END) AS active_expires_at,
            MAX(CASE WHEN revoke_reason IS NOT NULL AND revoke_reason <> 'rotated' THEN revoke_reason END) AS terminal_reason,
-           MAX(revoked_at) AS revoked_at
-    FROM refresh_tokens
-    {where}
+           MAX(revoked_at) AS revoked_at,
+           MAX(CASE WHEN recency_rank = 1 THEN client_ip END) AS client_ip,
+           MAX(CASE WHEN recency_rank = 1 THEN user_agent END) AS user_agent
+    FROM (
+        SELECT family_id,
+               email,
+               issued_at,
+               expires_at,
+               revoked_at,
+               revoke_reason,
+               client_ip,
+               user_agent,
+               ROW_NUMBER() OVER (PARTITION BY family_id ORDER BY issued_at DESC, jti DESC) AS recency_rank
+        FROM refresh_tokens
+        {where}
+    ) ranked
     GROUP BY family_id, email
     ORDER BY MAX(issued_at) DESC
     LIMIT {limit}
 """
+
+# UA 요약용 패턴. 파생 브라우저가 Chrome/Safari 토큰을 함께 달고 다니므로 순서가 중요하다.
+_UA_BROWSER_PATTERNS = (
+    (re.compile(r"Edg(?:e|A|iOS)?/(\d+)"), "Edge {0}"),
+    (re.compile(r"OPR/(\d+)"), "Opera {0}"),
+    (re.compile(r"SamsungBrowser/(\d+)"), "Samsung Internet {0}"),
+    (re.compile(r"Whale/(\d+)"), "Whale {0}"),
+    (re.compile(r"(?:FxiOS|Firefox)/(\d+)"), "Firefox {0}"),
+    (re.compile(r"(?:CriOS|Chrome)/(\d+)"), "Chrome {0}"),
+    (re.compile(r"Version/(\d+)[\d.]* (?:Mobile/\S+ )?Safari"), "Safari {0}"),
+)
+_UA_OS_PATTERNS = (
+    (re.compile(r"iPhone OS (\d+)"), "iOS {0}"),
+    (re.compile(r"CPU OS (\d+)"), "iPadOS {0}"),
+    (re.compile(r"Mac OS X (\d+[._]\d+)"), "macOS {0}"),
+    (re.compile(r"Android (\d+)"), "Android {0}"),
+    (re.compile(r"Windows NT 10\.0"), "Windows 10+"),
+    (re.compile(r"Windows NT ([\d.]+)"), "Windows NT {0}"),
+    (re.compile(r"CrOS"), "ChromeOS"),
+    (re.compile(r"Linux"), "Linux"),
+)
+# 브라우저를 못 알아본 UA(스크립트·봇)는 앞쪽 제품 토큰만 남긴다.
+UA_FALLBACK_LENGTH = 40
+
+
+def _match_ua_pattern(user_agent: str, patterns: tuple) -> str:
+    for pattern, template in patterns:
+        match = pattern.search(user_agent)
+        if match:
+            return template.format(*(g.replace("_", ".") for g in match.groups()))
+    return ""
+
+
+def summarize_user_agent(user_agent: str) -> str:
+    """UA 원문을 '브라우저 / OS' 한 줄로 줄인다. 원문은 별도 필드로 함께 노출한다.
+
+    외부 UA 파서를 새로 의존성으로 들이지 않고, 관리 화면에서 기기를 구분할 정도만
+    정규식으로 뽑는다. 판별에 실패하면 원문 앞부분을 그대로 보여줘 봇/스크립트도
+    식별할 수 있게 한다.
+    """
+    if not user_agent:
+        return ""
+    browser = _match_ua_pattern(user_agent, _UA_BROWSER_PATTERNS)
+    os_name = _match_ua_pattern(user_agent, _UA_OS_PATTERNS)
+    if browser and os_name:
+        return f"{browser} / {os_name}"
+    if browser or os_name:
+        return browser or os_name
+    return user_agent[:UA_FALLBACK_LENGTH]
+
+
+def _truncate(value: str | None, limit: int) -> str | None:
+    """빈 값은 NULL 로, 긴 값은 컬럼 폭에 맞게 자른다."""
+    if not value:
+        return None
+    return value[:limit]
 
 
 def _session_aggregate_sql(placeholder: str, *, by_email: bool, by_family: bool) -> str:
@@ -96,6 +172,10 @@ def _derive_session(row: Any) -> dict[str, Any]:
         "revoke_reason": terminal_reason if status == "revoked" else None,
         "token_count": int(row["token_count"]),
         "valid_token_count": valid_token_count,
+        # 마지막 refresh 갱신 시점의 접속 정보. 컬럼 추가 이전 세션은 빈 문자열이다.
+        "client_ip": row["client_ip"] or "",
+        "user_agent": row["user_agent"] or "",
+        "user_agent_summary": summarize_user_agent(row["user_agent"] or ""),
         "is_current": False,
     }
 
@@ -144,7 +224,9 @@ class RefreshTokenStore:
                     expires_at INTEGER NOT NULL,
                     replaced_by TEXT,
                     revoked_at INTEGER,
-                    revoke_reason TEXT
+                    revoke_reason TEXT,
+                    client_ip TEXT,
+                    user_agent TEXT
                 )
                 """
             )
@@ -154,20 +236,32 @@ class RefreshTokenStore:
                 ON refresh_tokens (family_id)
                 """
             )
+            self._migrate_add_client_columns(conn)
 
-    def store_issued(self, *, token_id: str, family_id: str, email: str, issued_at: int, expires_at: int) -> None:
+    @staticmethod
+    def _migrate_add_client_columns(conn: sqlite3.Connection) -> None:
+        """컬럼 추가 이전에 만들어진 DB 에 client_ip/user_agent 를 붙인다."""
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(refresh_tokens)")}
+        for column in ("client_ip", "user_agent"):
+            if column not in existing:
+                LOGGER.info("Migrating refresh_tokens: adding %s column", column)
+                conn.execute(f"ALTER TABLE refresh_tokens ADD COLUMN {column} TEXT")
+
+    def store_issued(self, *, token_id: str, family_id: str, email: str, issued_at: int, expires_at: int, client_ip: str = "", user_agent: str = "") -> None:
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO refresh_tokens
-                    (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason)
-                VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL)
+                    (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason, client_ip, user_agent)
+                VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
                 """,
-                (token_id, family_id, email, issued_at, expires_at),
+                (token_id, family_id, email, issued_at, expires_at, _truncate(client_ip, MAX_CLIENT_IP_LENGTH), _truncate(user_agent, MAX_USER_AGENT_LENGTH)),
             )
 
-    def rotate(self, *, current_token_id: str, new_token_id: str, family_id: str, email: str, issued_at: int, expires_at: int) -> str:
+    def rotate(self, *, current_token_id: str, new_token_id: str, family_id: str, email: str, issued_at: int, expires_at: int, client_ip: str = "", user_agent: str = "") -> str:
         now = int(time.time())
+        stored_ip = _truncate(client_ip, MAX_CLIENT_IP_LENGTH)
+        stored_ua = _truncate(user_agent, MAX_USER_AGENT_LENGTH)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -194,10 +288,10 @@ class RefreshTokenStore:
                     conn.execute(
                         """
                         INSERT INTO refresh_tokens
-                            (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason)
-                        VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL)
+                            (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason, client_ip, user_agent)
+                        VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
                         """,
-                        (new_token_id, family_id, email, issued_at, expires_at),
+                        (new_token_id, family_id, email, issued_at, expires_at, stored_ip, stored_ua),
                     )
                     conn.execute("COMMIT")
                     return "ok"
@@ -212,10 +306,10 @@ class RefreshTokenStore:
             conn.execute(
                 """
                 INSERT INTO refresh_tokens
-                    (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason)
-                VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL)
+                    (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason, client_ip, user_agent)
+                VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
                 """,
-                (new_token_id, family_id, email, issued_at, expires_at),
+                (new_token_id, family_id, email, issued_at, expires_at, stored_ip, stored_ua),
             )
             conn.execute(
                 """
@@ -328,31 +422,46 @@ class MySQLRefreshTokenStore:
                         replaced_by VARCHAR(64),
                         revoked_at BIGINT,
                         revoke_reason VARCHAR(64),
+                        client_ip VARCHAR(45),
+                        user_agent VARCHAR(512),
                         INDEX idx_refresh_tokens_family (family_id)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                     """
                 )
+                self._migrate_add_client_columns(cur)
             conn.commit()
 
-    def store_issued(self, *, token_id: str, family_id: str, email: str, issued_at: int, expires_at: int) -> None:
+    def _migrate_add_client_columns(self, cur: Any) -> None:
+        """컬럼 추가 이전에 만들어진 테이블에 client_ip/user_agent 를 붙인다."""
+        for column, definition in (("client_ip", "VARCHAR(45)"), ("user_agent", "VARCHAR(512)")):
+            cur.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = %s AND table_name = 'refresh_tokens' AND column_name = %s", (self.database, column))
+            row = cur.fetchone()
+            if row and row["cnt"] == 0:
+                LOGGER.info("Migrating refresh_tokens: adding %s column", column)
+                cur.execute(f"ALTER TABLE refresh_tokens ADD COLUMN {column} {definition}")
+
+    def store_issued(self, *, token_id: str, family_id: str, email: str, issued_at: int, expires_at: int, client_ip: str = "", user_agent: str = "") -> None:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO refresh_tokens
-                        (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason)
-                    VALUES (%s, %s, %s, %s, %s, NULL, NULL, NULL)
+                        (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason, client_ip, user_agent)
+                    VALUES (%s, %s, %s, %s, %s, NULL, NULL, NULL, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         family_id = VALUES(family_id), email = VALUES(email),
                         issued_at = VALUES(issued_at), expires_at = VALUES(expires_at),
-                        replaced_by = NULL, revoked_at = NULL, revoke_reason = NULL
+                        replaced_by = NULL, revoked_at = NULL, revoke_reason = NULL,
+                        client_ip = VALUES(client_ip), user_agent = VALUES(user_agent)
                     """,
-                    (token_id, family_id, email, issued_at, expires_at),
+                    (token_id, family_id, email, issued_at, expires_at, _truncate(client_ip, MAX_CLIENT_IP_LENGTH), _truncate(user_agent, MAX_USER_AGENT_LENGTH)),
                 )
             conn.commit()
 
-    def rotate(self, *, current_token_id: str, new_token_id: str, family_id: str, email: str, issued_at: int, expires_at: int) -> str:
+    def rotate(self, *, current_token_id: str, new_token_id: str, family_id: str, email: str, issued_at: int, expires_at: int, client_ip: str = "", user_agent: str = "") -> str:
         now = int(time.time())
+        stored_ip = _truncate(client_ip, MAX_CLIENT_IP_LENGTH)
+        stored_ua = _truncate(user_agent, MAX_USER_AGENT_LENGTH)
         with self._connect() as conn:
             try:
                 conn.begin()
@@ -375,10 +484,10 @@ class MySQLRefreshTokenStore:
                             cur.execute(
                                 """
                                 INSERT INTO refresh_tokens
-                                    (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason)
-                                VALUES (%s, %s, %s, %s, %s, NULL, NULL, NULL)
+                                    (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason, client_ip, user_agent)
+                                VALUES (%s, %s, %s, %s, %s, NULL, NULL, NULL, %s, %s)
                                 """,
-                                (new_token_id, family_id, email, issued_at, expires_at),
+                                (new_token_id, family_id, email, issued_at, expires_at, stored_ip, stored_ua),
                             )
                             conn.commit()
                             return "ok"
@@ -393,10 +502,10 @@ class MySQLRefreshTokenStore:
                     cur.execute(
                         """
                         INSERT INTO refresh_tokens
-                            (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason)
-                        VALUES (%s, %s, %s, %s, %s, NULL, NULL, NULL)
+                            (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason, client_ip, user_agent)
+                        VALUES (%s, %s, %s, %s, %s, NULL, NULL, NULL, %s, %s)
                         """,
-                        (new_token_id, family_id, email, issued_at, expires_at),
+                        (new_token_id, family_id, email, issued_at, expires_at, stored_ip, stored_ua),
                     )
                     cur.execute("UPDATE refresh_tokens SET replaced_by = %s, revoked_at = %s, revoke_reason = %s WHERE jti = %s", (new_token_id, issued_at, "rotated", current_token_id))
                 conn.commit()

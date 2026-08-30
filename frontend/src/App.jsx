@@ -6,6 +6,7 @@ import Navigation from "./Navigation";
 import ErrorPage from "./ErrorPage";
 import Home from "./Home";
 import BookView from "./BookView";
+import LatestBooks from "./LatestBooks";
 import ComicsView from "./ComicsView";
 import ViewSingle from "./ViewSingle";
 import Admin from "./Admin";
@@ -42,6 +43,11 @@ export default function App() {
             errorElement={<ErrorPage />}
           />
           <Route
+            path="book-latest"
+            element={<LatestBooks />}
+            errorElement={<ErrorPage />}
+          />
+          <Route
             path="comics-edit/*"
             element={
               <Suspense fallback={null}>
@@ -53,6 +59,11 @@ export default function App() {
           <Route
             path="comics-view/*"
             element={<ComicsView />}
+            errorElement={<ErrorPage />}
+          />
+          <Route
+            path="comics-latest"
+            element={<LatestBooks contentType="comic" />}
             errorElement={<ErrorPage />}
           />
           <Route
