@@ -20,7 +20,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
 from pydantic import BaseModel
-from backend.auth import require_auth, require_admin, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, observation_hash, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
+from backend.auth import require_auth, require_admin, optional_auth, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, observation_hash, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
 from backend.book_manager import BookManager, MAX_LATEST_BOOK_COUNT
 from backend.comics_manager import ComicsManager
 from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
@@ -1209,3 +1209,36 @@ async def set_latest_excluded_category(category: str, body: LatestExcludedCatego
     except Exception as e:
         LOGGER.error("set_latest_excluded_category error: %s", e)
         raise HTTPException(status_code=500, detail=GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL)
+
+
+class ClientErrorLogModel(BaseModel):
+    error_type: Literal["REACT_RENDER_ERROR", "WINDOW_ERROR", "UNHANDLED_PROMISE", "CUSTOM_ERROR"]
+    message: str
+    stack: str | None = None
+    component_stack: str | None = None
+    url: str
+    user_agent: str | None = None
+    timestamp: str | None = None
+
+
+@app.post("/logs/client-error")
+async def log_client_error(body: ClientErrorLogModel, auth_user: dict | None = Depends(optional_auth)) -> dict[str, str]:
+    """프론트엔드 런타임/렌더링 에러 로그 수집 및 기록"""
+    email = auth_user.get("email") if auth_user else "anonymous"
+    role = auth_user.get("role") if auth_user else "anonymous"
+
+    LOGGER.error(
+        "[CLIENT_ERROR] type=%s, user=%s(%s), url=%s, message=%s",
+        body.error_type,
+        email,
+        role,
+        body.url,
+        body.message,
+    )
+    if body.component_stack:
+        LOGGER.error("[CLIENT_ERROR] Component Stack:\n%s", body.component_stack.strip())
+    if body.stack:
+        LOGGER.error("[CLIENT_ERROR] Stack Trace:\n%s", body.stack.strip())
+
+    return {"status": "ok"}
+

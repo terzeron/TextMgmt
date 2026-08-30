@@ -130,3 +130,11 @@ async def require_admin(request: Request) -> dict:
         raise HTTPException(status_code=403, detail="Admin access required")
     payload["role"] = current_role
     return payload
+
+
+async def optional_auth(request: Request) -> dict | None:
+    try:
+        return await require_auth(request)
+    except HTTPException:
+        return None
+
