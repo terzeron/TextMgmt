@@ -58,10 +58,23 @@ describe('SearchResult', () => {
         expect(editButtons.length).toBe(2);
     });
 
-    it('showEditButton=false일 때 편집 버튼을 숨기고 전체 보기 버튼을 표시한다', () => {
+    it('role="admin"일 때 편집 버튼을 표시한다', () => {
+        render(<SearchResult results={sampleResults} role="admin" />);
+        const editButtons = screen.getAllByText('편집');
+        expect(editButtons.length).toBe(2);
+    });
+
+    it('role="viewer"일 때 편집 버튼을 숨긴다', () => {
+        render(<SearchResult results={sampleResults} role="viewer" />);
+        expect(screen.queryByText('편집')).toBeNull();
+        const viewAllButtons = screen.getAllByText('전체보기');
+        expect(viewAllButtons.length).toBe(2);
+    });
+
+    it('showEditButton=false일 때 편집 버튼을 숨기고 전체보기 버튼을 표시한다', () => {
         render(<SearchResult results={sampleResults} showEditButton={false} />);
         expect(screen.queryByText('편집')).toBeNull();
-        const viewAllButtons = screen.getAllByText('전체 보기');
+        const viewAllButtons = screen.getAllByText('전체보기');
         expect(viewAllButtons.length).toBe(2);
     });
 
@@ -126,11 +139,11 @@ describe('SearchResult', () => {
         vi.unstubAllGlobals();
     });
 
-    it('전체 보기 버튼 클릭 시 window.open을 호출한다', () => {
+    it('전체보기 버튼 클릭 시 window.open을 호출한다', () => {
         const mockOpen = vi.fn();
         vi.stubGlobal('open', mockOpen);
         render(<SearchResult results={sampleResults} showEditButton={false} />);
-        const viewAllButtons = screen.getAllByText('전체 보기');
+        const viewAllButtons = screen.getAllByText('전체보기');
         fireEvent.click(viewAllButtons[0]);
         expect(mockOpen).toHaveBeenCalledWith(
             `/viewer/epub/1?path=${encodeURIComponent('/books/novel1.epub')}`,
@@ -209,11 +222,11 @@ describe('SearchResult', () => {
         vi.unstubAllGlobals();
     });
 
-    it('basePath="/comics-view" 전체 보기 버튼 클릭 시 api 파라미터가 포함된다', () => {
+    it('basePath="/comics-view" 전체보기 버튼 클릭 시 api 파라미터가 포함된다', () => {
         const mockOpen = vi.fn();
         vi.stubGlobal('open', mockOpen);
         render(<SearchResult results={sampleResults} showEditButton={false} basePath="/comics-view" />);
-        const viewAllButtons = screen.getAllByText('전체 보기');
+        const viewAllButtons = screen.getAllByText('전체보기');
         fireEvent.click(viewAllButtons[0]);
         expect(mockOpen).toHaveBeenCalledWith(
             expect.stringContaining('&api=%2Fcomics'),
@@ -223,14 +236,28 @@ describe('SearchResult', () => {
         vi.unstubAllGlobals();
     });
 
-    it('basePath="/book-view" 전체 보기 버튼 클릭 시 api 파라미터가 포함되지 않는다', () => {
+    it('basePath="/book-view" 전체보기 버튼 클릭 시 api 파라미터가 포함되지 않는다', () => {
         const mockOpen = vi.fn();
         vi.stubGlobal('open', mockOpen);
         render(<SearchResult results={sampleResults} showEditButton={false} basePath="/book-view" />);
-        const viewAllButtons = screen.getAllByText('전체 보기');
+        const viewAllButtons = screen.getAllByText('전체보기');
         fireEvent.click(viewAllButtons[0]);
         expect(mockOpen).toHaveBeenCalledWith(
             expect.not.stringContaining('&api='),
+            '_blank',
+            'noopener'
+        );
+        vi.unstubAllGlobals();
+    });
+
+    it('basePath="/book-view"에서 role="admin"일 때 편집 버튼 클릭 시 book-edit URL로 열린다', () => {
+        const mockOpen = vi.fn();
+        vi.stubGlobal('open', mockOpen);
+        render(<SearchResult results={sampleResults} role="admin" basePath="/book-view" />);
+        const editButtons = screen.getAllByText('편집');
+        fireEvent.click(editButtons[0]);
+        expect(mockOpen).toHaveBeenCalledWith(
+            `/book-edit/1?category=${encodeURIComponent('소설')}`,
             '_blank',
             'noopener'
         );

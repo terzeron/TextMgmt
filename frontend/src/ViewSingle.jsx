@@ -187,7 +187,7 @@ export default function ViewSingle(props) {
                   size="sm"
                   className="float-end"
                 >
-                  전체 보기
+                  전체보기
                 </Button>
               </a>
             )}

@@ -269,7 +269,7 @@ describe("ViewSingle", () => {
       />,
     );
     await waitFor(() => {
-      expect(screen.getByText("전체 보기")).toBeTruthy();
+      expect(screen.getByText("전체보기")).toBeTruthy();
       expect(screen.getByText("다운로드")).toBeTruthy();
     });
   });

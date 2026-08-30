@@ -9,8 +9,9 @@ import {Card, Button} from 'react-bootstrap';
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {faChevronDown, faChevronRight} from "@fortawesome/free-solid-svg-icons";
 
-export default function SearchResult({results, showEditButton = true, onLoadMore, hasMore = false, loading = false, basePath = '/book-edit', title = '검색 결과', emptyMessage = '검색 결과가 없습니다.'}) {
+export default function SearchResult({results, role, showEditButton, onLoadMore, hasMore = false, loading = false, basePath = '/book-edit', title = '검색 결과', emptyMessage = '검색 결과가 없습니다.'}) {
     const [isOpen, setIsOpen] = useState(true);
+    const canEdit = showEditButton !== undefined ? showEditButton : (role === 'admin');
 
     useEffect(() => {
         if (results && results.length > 0) {
@@ -36,6 +37,7 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                 const filename = (book.file_path || '').split('/').pop() || book.title || 'Unknown';
                                 const category = book.category || '_root';
                                 const safeBasePath = basePath || '/book-edit';
+                                const editBasePath = safeBasePath.replace('-view', '-edit');
                                 const viewBasePath = safeBasePath.replace('-edit', '-view');
                                 const filePathParam = encodeURIComponent(book.file_path || '');
                                 const categoryParam = encodeURIComponent(category);
@@ -45,10 +47,10 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                 <div key={book.book_id} className="search-result-item">
                                     <span className="search-result-item-text">{displayName}</span>
                                     <div className="search-result-item-actions">
-                                        {showEditButton && (
+                                        {canEdit && (
                                             <Button
                                                 variant="outline-warning" size="sm"
-                                                onClick={() => window.open(`${safeBasePath}/${book.book_id}?category=${categoryParam}`, '_blank', 'noopener')}
+                                                onClick={() => window.open(`${editBasePath}/${book.book_id}?category=${categoryParam}`, '_blank', 'noopener')}
                                                 style={{marginRight: '4px'}}
                                             >
                                                 편집
@@ -61,17 +63,15 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
                                         >
                                             조회
                                         </Button>
-                                        {showEditButton || (
-                                            <Button
-                                                variant="outline-secondary" size="sm"
-                                                onClick={() => {
-                                                    const apiParam = safeBasePath.startsWith('/comics') ? '&api=%2Fcomics' : '';
-                                                    window.open(`/viewer/${fileType}/${book.book_id}?path=${filePathParam}${apiParam}`, '_blank', 'noopener');
-                                                }}
-                                            >
-                                                전체 보기
-                                            </Button>
-                                        )}
+                                        <Button
+                                            variant="outline-secondary" size="sm"
+                                            onClick={() => {
+                                                const apiParam = safeBasePath.startsWith('/comics') ? '&api=%2Fcomics' : '';
+                                                window.open(`/viewer/${fileType}/${book.book_id}?path=${filePathParam}${apiParam}`, '_blank', 'noopener');
+                                            }}
+                                        >
+                                            전체보기
+                                        </Button>
                                     </div>
                                 </div>
                                 );
@@ -103,6 +103,7 @@ export default function SearchResult({results, showEditButton = true, onLoadMore
 
 SearchResult.propTypes = {
     results: PropTypes.array,
+    role: PropTypes.string,
     showEditButton: PropTypes.bool,
     onLoadMore: PropTypes.func,
     hasMore: PropTypes.bool,
@@ -114,7 +115,8 @@ SearchResult.propTypes = {
 
 SearchResult.defaultProps = {
     results: [],
-    showEditButton: true,
+    role: null,
+    showEditButton: undefined,
     hasMore: false,
     loading: false,
     title: '검색 결과',
