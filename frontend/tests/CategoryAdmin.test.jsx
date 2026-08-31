@@ -36,7 +36,7 @@ vi.mock("../src/categoryMappingCache", () => ({
 
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 
-import CategoryAdminBase from "../src/CategoryAdmin";
+import CategoryAdminBase, { formatErrorMessage } from "../src/CategoryAdmin";
 
 // ── 헬퍼 ──
 
@@ -3430,6 +3430,68 @@ describe("CategoryAdmin 성공 메시지 자동 소멸", () => {
     });
     await waitFor(() => {
       expect(screen.queryByText(/7건 처리/)).toBeNull();
+    });
+  });
+
+  describe("formatErrorMessage & 에러 객체 핸들링", () => {
+    it("다양한 형태의 에러 입력(문자열, Error 인스턴스, 객체, null)을 안전하게 문자열로 변환한다", () => {
+      expect(formatErrorMessage(null, "기본 오류")).toBe("기본 오류");
+      expect(formatErrorMessage("서버 통신 실패")).toBe("서버 통신 실패");
+      expect(formatErrorMessage(new Error("네트워크 연결 오류"))).toBe(
+        "네트워크 연결 오류",
+      );
+      expect(formatErrorMessage({ message: "상세 오류 메시지" })).toBe(
+        "상세 오류 메시지",
+      );
+      expect(formatErrorMessage({ detail: "FastAPI 유효성 검사 실패" })).toBe(
+        "FastAPI 유효성 검사 실패",
+      );
+      expect(formatErrorMessage({ error: "DB 연결 실패" })).toBe("DB 연결 실패");
+      expect(formatErrorMessage(12345)).toBe("12345");
+    });
+
+    it("API 실패 시 reject 콜백에 Error 객체가 전달되어도 TypeError 없이 alert 박스에 표시된다", async () => {
+      setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+      await openAndSelect();
+
+      mockJsonPostReq.mockImplementation(
+        (url, payload, _resolve, reject, done) => {
+          reject(new Error("Internal Server Error (500)"));
+          if (done) done();
+        },
+      );
+
+      const input = screen.getByPlaceholderText("새 키워드 입력");
+      fireEvent.change(input, { target: { value: "새키워드" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => {
+        const alert = screen.getByText("Internal Server Error (500)");
+        expect(alert).toBeTruthy();
+        expect(alert.className).toContain("alert-info");
+      });
+    });
+
+    it("실패/오류 단어가 포함된 Error 객체 메시지는 alert-danger 스타일이 적용된다", async () => {
+      setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+      await openAndSelect();
+
+      mockJsonPostReq.mockImplementation(
+        (url, payload, _resolve, reject, done) => {
+          reject(new Error("키워드 저장 실패"));
+          if (done) done();
+        },
+      );
+
+      const input = screen.getByPlaceholderText("새 키워드 입력");
+      fireEvent.change(input, { target: { value: "새키워드" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => {
+        const alert = screen.getByText("키워드 저장 실패");
+        expect(alert).toBeTruthy();
+        expect(alert.className).toContain("alert-danger");
+      });
     });
   });
 });

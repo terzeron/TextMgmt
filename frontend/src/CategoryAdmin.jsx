@@ -300,6 +300,21 @@ function encodeCategoryPath(category) {
   return category.split("/").map(encodeURIComponent).join("/");
 }
 
+/**
+ * 에러 객체 또는 문자열에서 안전하게 에러 메시지를 추출
+ */
+export function formatErrorMessage(err, fallback = "오류가 발생했습니다.") {
+  if (!err) return fallback;
+  if (typeof err === "string") return err;
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === "object") {
+    if (typeof err.message === "string" && err.message) return err.message;
+    if (typeof err.detail === "string" && err.detail) return err.detail;
+    if (typeof err.error === "string" && err.error) return err.error;
+  }
+  return String(err) || fallback;
+}
+
 // ── 메인 컴포넌트 ──
 
 export default function CategoryAdmin({
@@ -604,7 +619,9 @@ export default function CategoryAdmin({
           setFolderData(data);
         },
         (error) => {
-          setMessage(error || "불일치 상세 조회에 실패했습니다.");
+          setMessage(
+            formatErrorMessage(error, "불일치 상세 조회에 실패했습니다."),
+          );
           setTimeout(() => setMessage(""), 5000);
         },
       );
@@ -690,7 +707,12 @@ export default function CategoryAdmin({
         setTimeout(() => keywordInputRef.current?.focus(), 0);
       },
       (error) => {
-        setMessage(error || "이미 등록된 키워드이거나 추가에 실패했습니다.");
+        setMessage(
+          formatErrorMessage(
+            error,
+            "이미 등록된 키워드이거나 추가에 실패했습니다.",
+          ),
+        );
         setTimeout(() => setMessage(""), 3000);
       },
       () => setSaving(false),
@@ -719,7 +741,7 @@ export default function CategoryAdmin({
           });
         },
         (error) => {
-          setMessage(error || "삭제에 실패했습니다.");
+          setMessage(formatErrorMessage(error, "삭제에 실패했습니다."));
           setTimeout(() => setMessage(""), 3000);
         },
         () => setSaving(false),
@@ -751,7 +773,9 @@ export default function CategoryAdmin({
           });
         },
         (error) => {
-          setMessage(error || "비노출 설정 변경에 실패했습니다.");
+          setMessage(
+            formatErrorMessage(error, "비노출 설정 변경에 실패했습니다."),
+          );
           setTimeout(() => setMessage(""), 3000);
         },
         () => setSaving(false),
@@ -771,7 +795,12 @@ export default function CategoryAdmin({
           setLatestExcludedCategories(new Set(result || []));
         },
         (error) => {
-          setMessage(error || "최신 자료 검색 제외 설정 변경에 실패했습니다.");
+          setMessage(
+            formatErrorMessage(
+              error,
+              "최신 자료 검색 제외 설정 변경에 실패했습니다.",
+            ),
+          );
           setTimeout(() => setMessage(""), 3000);
         },
         () => setSaving(false),
@@ -803,7 +832,7 @@ export default function CategoryAdmin({
         loadData();
       },
       (error) => {
-        setMessage(error || "이름 변경에 실패했습니다.");
+        setMessage(formatErrorMessage(error, "이름 변경에 실패했습니다."));
         setTimeout(() => setMessage(""), 5000);
       },
       () => setSaving(false),
@@ -827,7 +856,7 @@ export default function CategoryAdmin({
         loadData();
       },
       (error) => {
-        setMessage(error || "삭제에 실패했습니다.");
+        setMessage(formatErrorMessage(error, "삭제에 실패했습니다."));
         setTimeout(() => setMessage(""), 5000);
       },
       () => setSaving(false),
@@ -850,7 +879,7 @@ export default function CategoryAdmin({
         setTimeout(() => setMessage(""), 5000);
       },
       (error) => {
-        setMessage(error || "ES 재적재에 실패했습니다.");
+        setMessage(formatErrorMessage(error, "ES 재적재에 실패했습니다."));
         setTimeout(() => setMessage(""), 5000);
       },
       () => {
@@ -884,7 +913,9 @@ export default function CategoryAdmin({
           setTimeout(() => setMessage(""), 5000);
         },
         (error) => {
-          setMessage(error || "이상 항목 ES 재적재에 실패했습니다.");
+          setMessage(
+            formatErrorMessage(error, "이상 항목 ES 재적재에 실패했습니다."),
+          );
           setTimeout(() => setMessage(""), 5000);
         },
         () => {
@@ -912,7 +943,9 @@ export default function CategoryAdmin({
         setTimeout(() => setMessage(""), 5000);
       },
       (error) => {
-        setMessage(error || "이상 항목 ES 재적재에 실패했습니다.");
+        setMessage(
+          formatErrorMessage(error, "이상 항목 ES 재적재에 실패했습니다."),
+        );
         setTimeout(() => setMessage(""), 5000);
       },
       () => {
@@ -944,7 +977,9 @@ export default function CategoryAdmin({
         setTimeout(() => setMessage(""), 5000);
       },
       (error) => {
-        setMessage(error || "불일치 일괄 ES 재적재에 실패했습니다.");
+        setMessage(
+          formatErrorMessage(error, "불일치 일괄 ES 재적재에 실패했습니다."),
+        );
         setTimeout(() => setMessage(""), 5000);
       },
       () => {
@@ -1076,7 +1111,8 @@ export default function CategoryAdmin({
 
   // ── 파생 값 ──
 
-  const isSubcategory = selectedCategory.includes("/");
+  const isSubcategory =
+    typeof selectedCategory === "string" && selectedCategory.includes("/");
   const currentKeywords = selectedCategory
     ? mappings[selectedCategory] || []
     : [];
@@ -1144,15 +1180,20 @@ export default function CategoryAdmin({
     [],
   );
 
+  const messageText =
+    typeof message === "string"
+      ? message
+      : message?.message || (message ? String(message) : "");
+
   // ── 렌더링 ──
 
   return (
     <>
-      {message && (
+      {messageText && (
         <div
-          className={`alert ${message.includes("실패") || message.includes("오류") ? "alert-danger" : "alert-info"} py-1 mb-2`}
+          className={`alert ${messageText.includes("실패") || messageText.includes("오류") ? "alert-danger" : "alert-info"} py-1 mb-2`}
         >
-          {message}
+          {messageText}
         </div>
       )}
       {loading ? (
