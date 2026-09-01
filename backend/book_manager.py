@@ -39,6 +39,12 @@ MAX_CATEGORY_PAGE_SIZE = MAX_CATEGORY_RESULT_COUNT
 # 카테고리 불일치 재적재 시 파일을 묶어서 ES에 색인하는 배치 크기.
 # 파일 1건씩 색인하면 이상 항목이 수천 건일 때 재적재가 수십 분~수 시간 걸린다.
 BULK_REINDEX_BATCH_SIZE = 200
+
+# 대량 재적재 배치의 파일 파싱 프로세스 강제 타임아웃(초).
+# Loader.read_file 내부 time_limit()의 SIGALRM 상한은 메인 스레드 전용이라
+# asyncio.to_thread로 호출되는 이 경로(워커 스레드)에서는 무력화된다.
+# Loader.PDF_STAGE_TIMEOUT(30초) 단계가 여러 번 누적될 수 있어 여유를 둔 상한.
+HARD_PARSE_TIMEOUT_SECONDS = 150
 MAX_LATEST_BOOK_COUNT = 100
 CREATED_TIME_BACKFILL_ENV = "TM_BACKFILL_CREATED_TIME_ON_STARTUP"
 
@@ -1438,6 +1444,7 @@ class BookManager:
         """여러 파일을 배치로 파싱해 ES에 한 번에 색인한다 (파일 1건씩 insert+refresh하는 것보다 훨씬 빠름).
         반환: (file_path -> 새 book_id 매핑, 실패 목록)"""
         from utils.loader import Loader
+        from utils.parser_timeout import ParserTimeout, run_with_hard_timeout
 
         merged: dict[int, dict[str, Any]] = {}
         id_by_path: dict[str, int] = {}
@@ -1448,7 +1455,12 @@ class BookManager:
             if not abs_path.is_relative_to(self.path_prefix.resolve()) or not abs_path.is_file():
                 failures.append({"file_path": file_path, "error": f"파일을 찾을 수 없습니다: {file_path}"})
                 continue
-            data = await asyncio.to_thread(Loader.read_file, abs_path)
+            try:
+                data = await asyncio.to_thread(run_with_hard_timeout, Loader.read_file, (abs_path,), None, HARD_PARSE_TIMEOUT_SECONDS)
+            except ParserTimeout as e:
+                LOGGER.error("파일 파싱 타임아웃: %s (%s)", file_path, e)
+                failures.append({"file_path": file_path, "error": f"파싱 시간 초과: {file_path}"})
+                continue
             if not data or len(data) != 1:
                 failures.append({"file_path": file_path, "error": f"지원하지 않는 파일 형식입니다: {file_path}"})
                 continue
