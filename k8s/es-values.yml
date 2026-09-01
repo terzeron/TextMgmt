@@ -17,6 +17,11 @@ eck-elasticsearch:
       count: 1
       config:
         node.store.allow_mmap: false
+        # cpu limit(2코어)은 컨테이너 안에서 nproc으로 보면 호스트의 16코어 그대로 보여서
+        # 스레드풀(search=25, write=16, get=25 등)이 16코어 기준으로 과대산정되고,
+        # 실제 CFS 쿼터(2코어)를 넘는 순간 커널이 쓰로틀링해 간헐적 지연을 일으켰다
+        # (nr_throttled=3165, throttled_usec≈262.7s 실측, 2026-09-01).
+        node.processors: 2
       podTemplate:
         spec:
           initContainers:
