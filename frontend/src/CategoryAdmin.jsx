@@ -1538,7 +1538,10 @@ export default function CategoryAdmin({
                                           (error) =>
                                             setActionResult({
                                               type: "danger",
-                                              message: error || "삭제 실패",
+                                              message: formatErrorMessage(
+                                                error,
+                                                "삭제 실패",
+                                              ),
                                             }),
                                         );
                                       }}
