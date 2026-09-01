@@ -126,7 +126,7 @@ describe("clientLogger", () => {
 
     expect(navigator.sendBeacon).toHaveBeenCalledWith(
       "http://api.test.com/logs/client-error",
-      expect.any(Blob)
+      expect.any(Blob),
     );
     delete window.__ENV__;
   });
@@ -159,5 +159,150 @@ describe("clientLogger", () => {
     window.dispatchEvent(promiseEvent);
 
     expect(navigator.sendBeacon).toHaveBeenCalledTimes(1);
+  });
+
+  it("message가 없으면 기본 메시지 Unknown error로 대체된다", () => {
+    navigator.sendBeacon = undefined;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    global.fetch = fetchMock;
+
+    reportClientError({ errorType: "CUSTOM_ERROR", message: "" });
+
+    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sentBody.message).toBe("Unknown error");
+  });
+
+  it("navigator와 fetch가 모두 없는 환경에서는 전송하지 않고 false를 반환한다", () => {
+    const originalNavigator = globalThis.navigator;
+    const originalFetch = globalThis.fetch;
+    try {
+      delete globalThis.navigator;
+      delete globalThis.fetch;
+
+      const result = reportClientError({
+        errorType: "CUSTOM_ERROR",
+        message: "No navigator, no fetch",
+      });
+
+      expect(result).toBe(false);
+    } finally {
+      globalThis.navigator = originalNavigator;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("fetch 호출이 동기적으로 예외를 던지면 false를 반환한다", () => {
+    navigator.sendBeacon = undefined;
+    global.fetch = vi.fn(() => {
+      throw new Error("fetch construction failed");
+    });
+
+    const result = reportClientError({
+      errorType: "CUSTOM_ERROR",
+      message: "Sync throw from fetch",
+    });
+
+    expect(result).toBe(false);
+  });
+
+  it("fetch가 reject되어도 예외 없이 무음 처리된다", async () => {
+    navigator.sendBeacon = undefined;
+    const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
+    global.fetch = fetchMock;
+
+    const result = reportClientError({
+      errorType: "CUSTOM_ERROR",
+      message: "Reject test",
+    });
+
+    expect(result).toBe(true);
+    await expect(fetchMock.mock.results[0].value).rejects.toThrow(
+      "network down",
+    );
+  });
+
+  it("이미 초기화된 상태에서 다시 호출하면 리스너를 중복 등록하지 않는다", () => {
+    navigator.sendBeacon = vi.fn().mockReturnValue(true);
+
+    initGlobalErrorLogging();
+    const secondCleanup = initGlobalErrorLogging();
+
+    window.dispatchEvent(
+      new ErrorEvent("error", { message: "Should report once" }),
+    );
+
+    expect(navigator.sendBeacon).toHaveBeenCalledTimes(1);
+    expect(typeof secondCleanup).toBe("function");
+    expect(() => secondCleanup()).not.toThrow();
+  });
+
+  it("event.message가 없고 event.error.message가 있으면 이를 사용한다", () => {
+    navigator.sendBeacon = undefined;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    global.fetch = fetchMock;
+    initGlobalErrorLogging();
+
+    window.dispatchEvent(
+      new ErrorEvent("error", {
+        message: "",
+        error: new Error("Message from error object"),
+      }),
+    );
+
+    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sentBody.message).toBe("Message from error object");
+  });
+
+  it("event.message와 event.error가 모두 없으면 event를 문자열로 변환한다", () => {
+    navigator.sendBeacon = undefined;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    global.fetch = fetchMock;
+    initGlobalErrorLogging();
+
+    const errorEvent = new ErrorEvent("error", {});
+    window.dispatchEvent(errorEvent);
+
+    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sentBody.message).toBe(String(errorEvent));
+  });
+
+  it("filename과 window.location이 모두 없으면 url이 빈 문자열로 처리된다", () => {
+    navigator.sendBeacon = undefined;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    global.fetch = fetchMock;
+
+    const originalLocationDescriptor = Object.getOwnPropertyDescriptor(
+      window,
+      "location",
+    );
+    Object.defineProperty(window, "location", {
+      value: undefined,
+      configurable: true,
+    });
+    try {
+      initGlobalErrorLogging();
+      window.dispatchEvent(
+        new ErrorEvent("error", { message: "No location test" }),
+      );
+    } finally {
+      Object.defineProperty(window, "location", originalLocationDescriptor);
+    }
+
+    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sentBody.url).toBe("");
+  });
+
+  it("reason에 message가 없고 문자열도 아니면 기본 문구를 사용한다", () => {
+    navigator.sendBeacon = undefined;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    global.fetch = fetchMock;
+    initGlobalErrorLogging();
+
+    const promiseEvent = new CustomEvent("unhandledrejection");
+    Object.defineProperty(promiseEvent, "reason", { value: { code: 42 } });
+    window.dispatchEvent(promiseEvent);
+
+    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sentBody.message).toBe("Unhandled Promise Rejection");
   });
 });
