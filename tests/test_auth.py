@@ -106,7 +106,7 @@ class TestCreateRefreshToken:
         token = setup_env.create_refresh_token("admin@example.com", "admin")
         payload = jwt.decode(token, "testsecret123", algorithms=["HS256"])
         assert payload["exp"] > time.time()
-        assert payload["exp"] <= time.time() + 7 * 24 * 3600 + 5
+        assert payload["exp"] <= time.time() + 30 * 24 * 3600 + 5
 
 
 class TestDecodeRefreshToken:
@@ -1174,7 +1174,23 @@ class TestLoginSessionClientInfo:
         assert captured["user_agent"] == self.UA
 
     def test_sessions_api_exposes_client_info(self, auth_client, monkeypatch):
-        session = {"session_id": "a" * 32, "session_label": "aaaaaaaa...", "email": "admin@example.com", "status": "active", "created_at": 1, "last_seen_at": 2, "expires_at": 3, "revoked_at": None, "revoke_reason": None, "token_count": 1, "valid_token_count": 1, "client_ip": self.REAL_IP, "user_agent": self.UA, "user_agent_summary": "Chrome 131 / macOS 10.15", "is_current": False}
+        session = {
+            "session_id": "a" * 32,
+            "session_label": "aaaaaaaa...",
+            "email": "admin@example.com",
+            "status": "active",
+            "created_at": 1,
+            "last_seen_at": 2,
+            "expires_at": 3,
+            "revoked_at": None,
+            "revoke_reason": None,
+            "token_count": 1,
+            "valid_token_count": 1,
+            "client_ip": self.REAL_IP,
+            "user_agent": self.UA,
+            "user_agent_summary": "Chrome 131 / macOS 10.15",
+            "is_current": False,
+        }
         monkeypatch.setattr(main_mod.refresh_token_store, "list_sessions", lambda **kwargs: {"items": [session], "pagination": {"page": 1, "pageSize": 50, "totalItems": 1, "totalPages": 1}, "summary": {"active": 1, "expired": 0, "revoked": 0, "total": 1}})
 
         item = auth_client.get("/auth/sessions").json()["result"]["items"][0]

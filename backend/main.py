@@ -725,12 +725,18 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         """특정 카테고리의 현재 불일치 항목만 ES에 재적재/정리"""
         LOGGER.info("reload_category_mismatch_files 요청: category='%s', content_type='%s'", body.category, content_type)
         response_object: dict[str, Any] = {"status": "failure"}
+        acquired, lock_error = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type)
+        if not acquired:
+            response_object["error"] = lock_error
+            return response_object
         try:
             result, error = await manager.reload_category_mismatch_files(body.category, content_type=content_type)
         except Exception as e:
             LOGGER.error("reload_category_mismatch_files error: %s", e)
             response_object["error"] = GENERIC_MISMATCH_ERROR
             return response_object
+        finally:
+            await asyncio.to_thread(category_mapping.release_reload_lock, content_type)
         if error is None:
             response_object["status"] = "success"
             response_object["result"] = result
@@ -745,12 +751,18 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         """현재 카테고리 불일치 항목을 일괄 ES 재적재/정리"""
         LOGGER.info("reload_all_category_mismatches 요청: content_type='%s'", content_type)
         response_object: dict[str, Any] = {"status": "failure"}
+        acquired, lock_error = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type)
+        if not acquired:
+            response_object["error"] = lock_error
+            return response_object
         try:
             result, error = await manager.reload_category_mismatches(content_type=content_type)
         except Exception as e:
             LOGGER.error("reload_all_category_mismatches error: %s", e)
             response_object["error"] = GENERIC_MISMATCH_ERROR
             return response_object
+        finally:
+            await asyncio.to_thread(category_mapping.release_reload_lock, content_type)
         if error is None:
             response_object["status"] = "success"
             response_object["result"] = result
@@ -1227,18 +1239,10 @@ async def log_client_error(body: ClientErrorLogModel, auth_user: dict | None = D
     email = auth_user.get("email") if auth_user else "anonymous"
     role = auth_user.get("role") if auth_user else "anonymous"
 
-    LOGGER.error(
-        "[CLIENT_ERROR] type=%s, user=%s(%s), url=%s, message=%s",
-        body.error_type,
-        email,
-        role,
-        body.url,
-        body.message,
-    )
+    LOGGER.error("[CLIENT_ERROR] type=%s, user=%s(%s), url=%s, message=%s", body.error_type, email, role, body.url, body.message)
     if body.component_stack:
         LOGGER.error("[CLIENT_ERROR] Component Stack:\n%s", body.component_stack.strip())
     if body.stack:
         LOGGER.error("[CLIENT_ERROR] Stack Trace:\n%s", body.stack.strip())
 
     return {"status": "ok"}
-

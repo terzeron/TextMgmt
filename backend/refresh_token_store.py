@@ -124,6 +124,25 @@ def summarize_user_agent(user_agent: str) -> str:
     return user_agent[:UA_FALLBACK_LENGTH]
 
 
+def _parse_browser_name_version(user_agent: str) -> tuple[str, int] | None:
+    """브라우저 이름과 메이저 버전을 분리해서 뽑는다.
+
+    summarize_user_agent 와 같은 패턴을 쓰되, 세션 병합에서 버전 인접 여부(±1)를
+    비교하려면 정수 버전이 필요해 별도로 둔다.
+    """
+    if not user_agent:
+        return None
+    for pattern, template in _UA_BROWSER_PATTERNS:
+        match = pattern.search(user_agent)
+        if match:
+            try:
+                version = int(match.group(1))
+            except (IndexError, ValueError):
+                return None
+            return template.split(" {0}")[0], version
+    return None
+
+
 def _truncate(value: str | None, limit: int) -> str | None:
     """빈 값은 NULL 로, 긴 값은 컬럼 폭에 맞게 자른다."""
     if not value:
@@ -177,17 +196,86 @@ def _derive_session(row: Any) -> dict[str, Any]:
         "user_agent": row["user_agent"] or "",
         "user_agent_summary": summarize_user_agent(row["user_agent"] or ""),
         "is_current": False,
+        "merged_family_ids": [family_id],
     }
 
 
+# 브라우저 자동 업데이트로 세션이 갈라져 보이지 않도록 병합을 허용하는 최대 버전 차이.
+SESSION_MERGE_VERSION_TOLERANCE = 1
+
+
+def _combine_sessions(members: list[dict[str, Any]]) -> dict[str, Any]:
+    """같은 기기의 브라우저 업데이트로 판단된 세션 묶음을 화면 표시용 한 행으로 합친다.
+
+    family_id 회전·재사용탐지 상태는 절대 건드리지 않는다. revoke 는 여전히
+    최신(primary) family 하나만 대상으로 한다 (main.py:revoke_login_session).
+    """
+    if len(members) == 1:
+        return members[0]
+    # 표시 필드(client_ip/user_agent/expires_at 등)는 실제로 살아 있는 세션을
+    # 우선한다 - 더 최근에 만들어졌지만 이미 만료된 family 를 대표로 삼지 않는다.
+    active_members = [m for m in members if m["status"] == "active"]
+    primary = max(active_members or members, key=lambda s: s["last_seen_at"])
+    combined = dict(primary)
+    combined["status"] = "active" if active_members else "expired"
+    combined["created_at"] = min(m["created_at"] for m in members)
+    combined["last_seen_at"] = max(m["last_seen_at"] for m in members)
+    combined["token_count"] = sum(m["token_count"] for m in members)
+    combined["valid_token_count"] = sum(m["valid_token_count"] for m in members)
+    combined["is_current"] = any(m["is_current"] for m in members)
+    combined["merged_family_ids"] = [m["session_id"] for m in members]
+    return combined
+
+
+def _merge_similar_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """같은 계정·접속 IP·OS에서 브라우저 메이저 버전만 인접(±1)하게 바뀐 세션들을
+    하나의 표시 행으로 묶는다 (브라우저 자동 업데이트로 세션이 여러 개로 보이는 문제).
+
+    - revoked 세션은 관리자의 명시적 폐기 이력을 가리지 않도록 병합하지 않는다.
+    - UA 를 브라우저/OS 로 파싱하지 못하거나 client_ip 가 없는 세션도 병합하지 않는다.
+    - 병합은 표시 전용이며 family_id/rotate()/재사용탐지에는 영향을 주지 않는다.
+    """
+    buckets: dict[tuple[str, str, str, str], list[tuple[int, dict[str, Any]]]] = {}
+    passthrough: list[dict[str, Any]] = []
+    for session in sessions:
+        if session["status"] == "revoked":
+            passthrough.append(session)
+            continue
+        browser = _parse_browser_name_version(session["user_agent"])
+        os_name = _match_ua_pattern(session["user_agent"], _UA_OS_PATTERNS)
+        if not browser or not os_name or not session["client_ip"]:
+            passthrough.append(session)
+            continue
+        key = (session["email"], session["client_ip"], os_name, browser[0])
+        buckets.setdefault(key, []).append((browser[1], session))
+
+    merged = passthrough
+    for entries in buckets.values():
+        entries.sort(key=lambda entry: entry[1]["last_seen_at"])
+        chain_version, chain = entries[0][0], [entries[0][1]]
+        for version, session in entries[1:]:
+            if abs(version - chain_version) <= SESSION_MERGE_VERSION_TOLERANCE:
+                chain.append(session)
+            else:
+                merged.append(_combine_sessions(chain))
+                chain = [session]
+            chain_version = version
+        merged.append(_combine_sessions(chain))
+    return merged
+
+
 def _build_session_page(rows: list[Any], *, status: str, page: int, page_size: int, current_family_id: str | None) -> dict[str, Any]:
-    """집계 row 들을 상태 요약·필터·페이징이 적용된 응답으로 만든다."""
+    """집계 row 들을 병합·상태 요약·필터·페이징이 적용된 응답으로 만든다."""
     sessions = [_derive_session(row) for row in rows]
+    if current_family_id:
+        for session in sessions:
+            if session["session_id"] == current_family_id:
+                session["is_current"] = True
+    sessions = _merge_similar_sessions(sessions)
+
     summary = {"active": 0, "expired": 0, "revoked": 0, "total": len(sessions)}
     for session in sessions:
         summary[session["status"]] += 1
-        if current_family_id and session["session_id"] == current_family_id:
-            session["is_current"] = True
 
     filtered = sessions if status == "all" else [s for s in sessions if s["status"] == status]
     filtered.sort(key=lambda s: s["last_seen_at"], reverse=True)

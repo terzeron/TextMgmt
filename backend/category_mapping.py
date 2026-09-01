@@ -2,6 +2,7 @@
 
 import os
 import logging.config
+from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -14,6 +15,9 @@ LOGGER = logging.getLogger(__name__)
 
 class CategoryMapping:
     """카테고리별 키워드 매핑을 관리하는 클래스 (MySQL 기반)"""
+
+    # 재적재 락이 이 시간 이상 유지되면 비정상 종료로 간주하고 강제 해제한다.
+    RELOAD_LOCK_STALE_SECONDS = 3 * 60 * 60
 
     def __init__(self, host: str | None = None, port: int | None = None, database: str | None = None, user: str | None = None, password: str | None = None) -> None:
         """
@@ -55,6 +59,7 @@ class CategoryMapping:
                 cursor.execute(
                     "CREATE TABLE IF NOT EXISTS latest_excluded_categories (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(255) NOT NULL, content_type VARCHAR(10) NOT NULL DEFAULT 'book', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY unique_latest_excluded_category_content_type (category, content_type), INDEX idx_category (category), INDEX idx_content_type (content_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
                 )
+                cursor.execute("CREATE TABLE IF NOT EXISTS reload_locks (content_type VARCHAR(10) NOT NULL PRIMARY KEY, started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
                 # 기존 테이블 마이그레이션: content_type 컬럼이 없으면 추가
                 self._migrate_add_content_type(cursor)
                 conn.commit()
@@ -62,11 +67,7 @@ class CategoryMapping:
 
     def _migrate_add_content_type(self, cursor) -> None:
         """기존 테이블에 content_type 컬럼 추가 마이그레이션"""
-        table_unique_indexes = {
-            "category_keywords": "unique_category_keyword",
-            "hidden_categories": "unique_category_content_type",
-            "latest_excluded_categories": "unique_latest_excluded_category_content_type",
-        }
+        table_unique_indexes = {"category_keywords": "unique_category_keyword", "hidden_categories": "unique_category_content_type", "latest_excluded_categories": "unique_latest_excluded_category_content_type"}
         for table in table_unique_indexes:
             cursor.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = %s AND table_name = %s AND column_name = 'content_type'", (self.database, table))
             row = cursor.fetchone()
@@ -266,7 +267,6 @@ class CategoryMapping:
         LOGGER.info("delete_category(%s, %s, prefix=%s): %s", category, content_type, prefix, "success" if deleted else "not found")
         return deleted
 
-
     def search_by_keyword(self, keyword: str, content_type: str = "book") -> list[str]:
         """키워드로 카테고리 검색 (부분 일치)
 
@@ -388,3 +388,34 @@ class CategoryMapping:
                     conn.rollback()
                     LOGGER.error("rename_category(%s -> %s, %s) failed: %s", old_category, new_category, content_type, e)
                     return False
+
+    def acquire_reload_lock(self, content_type: str = "book") -> tuple[bool, str | None]:
+        """카테고리 불일치 재적재 락을 획득한다. 이미 진행 중이면 (False, 안내 메시지)를 반환.
+
+        재적재가 pod 재시작 등으로 락을 못 지우고 죽었을 경우를 대비해,
+        RELOAD_LOCK_STALE_SECONDS보다 오래된 락은 stale로 간주하고 강제로 갈아치운다.
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                try:
+                    cursor.execute("INSERT INTO reload_locks (content_type) VALUES (%s)", (content_type,))
+                    conn.commit()
+                    return True, None
+                except pymysql.IntegrityError:
+                    conn.rollback()
+                    cursor.execute("SELECT started_at FROM reload_locks WHERE content_type = %s", (content_type,))
+                    row = cursor.fetchone()
+                    if row and (datetime.now() - row["started_at"]) > timedelta(seconds=self.RELOAD_LOCK_STALE_SECONDS):
+                        LOGGER.warning("acquire_reload_lock(%s): stale 락(%s) 감지, 강제 해제 후 재획득", content_type, row["started_at"])
+                        cursor.execute("DELETE FROM reload_locks WHERE content_type = %s", (content_type,))
+                        cursor.execute("INSERT INTO reload_locks (content_type) VALUES (%s)", (content_type,))
+                        conn.commit()
+                        return True, None
+                    return False, "이미 재적재 작업이 진행 중입니다. 완료 후 다시 시도하세요."
+
+    def release_reload_lock(self, content_type: str = "book") -> None:
+        """재적재 락을 해제한다."""
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM reload_locks WHERE content_type = %s", (content_type,))
+                conn.commit()

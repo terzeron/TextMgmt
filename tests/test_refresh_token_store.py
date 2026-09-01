@@ -498,10 +498,71 @@ def test_list_sessions_does_not_expose_token_internals(tmp_path):
 
     assert "jti" not in item
     assert "replaced_by" not in item
-    assert set(item.keys()) == {"session_id", "session_label", "email", "status", "created_at", "last_seen_at", "expires_at", "revoked_at", "revoke_reason", "token_count", "valid_token_count", "client_ip", "user_agent", "user_agent_summary", "is_current"}
+    assert set(item.keys()) == {"session_id", "session_label", "email", "status", "created_at", "last_seen_at", "expires_at", "revoked_at", "revoke_reason", "token_count", "valid_token_count", "client_ip", "user_agent", "user_agent_summary", "is_current", "merged_family_ids"}
     # 라벨은 family_id 앞부분만 보여준다
     assert item["session_label"].endswith("...")
     assert len(item["session_label"]) == 11
+
+
+def _chrome_ua(version: str) -> str:
+    return f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version}.0.0.0 Safari/537.36"
+
+
+def test_list_sessions_merges_adjacent_browser_version_upgrade(tmp_path):
+    """같은 계정·IP·OS 에서 브라우저 버전만 1 올라간 두 family 는 한 행으로 합친다."""
+    store = RefreshTokenStore(str(tmp_path / "sessions.sqlite3"))
+    now = int(time.time())
+    store.store_issued(token_id="old1", family_id="d" * 32, email="admin@example.com", issued_at=now - 500, expires_at=now + 500, client_ip="1.2.3.4", user_agent=_chrome_ua("130"))
+    store.store_issued(token_id="new1", family_id="e" * 32, email="admin@example.com", issued_at=now - 10, expires_at=now + 1000, client_ip="1.2.3.4", user_agent=_chrome_ua("131"))
+
+    items = store.list_sessions(status="all")["items"]
+
+    assert len(items) == 1
+    merged = items[0]
+    assert merged["session_id"] == "e" * 32
+    assert set(merged["merged_family_ids"]) == {"d" * 32, "e" * 32}
+    assert merged["status"] == "active"
+    assert merged["created_at"] == now - 500
+    assert merged["last_seen_at"] == now - 10
+    assert merged["token_count"] == 2
+    assert merged["valid_token_count"] == 2
+    assert merged["user_agent"] == _chrome_ua("131")
+
+
+def test_list_sessions_does_not_merge_across_different_ip(tmp_path):
+    store = RefreshTokenStore(str(tmp_path / "sessions.sqlite3"))
+    now = int(time.time())
+    store.store_issued(token_id="f1", family_id="f" * 32, email="admin@example.com", issued_at=now - 500, expires_at=now + 500, client_ip="1.2.3.4", user_agent=_chrome_ua("130"))
+    store.store_issued(token_id="g1", family_id="0" * 32, email="admin@example.com", issued_at=now - 10, expires_at=now + 1000, client_ip="9.9.9.9", user_agent=_chrome_ua("131"))
+
+    items = store.list_sessions(status="all")["items"]
+
+    assert len(items) == 2
+
+
+def test_list_sessions_does_not_merge_when_version_gap_exceeds_tolerance(tmp_path):
+    store = RefreshTokenStore(str(tmp_path / "sessions.sqlite3"))
+    now = int(time.time())
+    store.store_issued(token_id="h1", family_id="1" * 32, email="admin@example.com", issued_at=now - 500, expires_at=now + 500, client_ip="1.2.3.4", user_agent=_chrome_ua("125"))
+    store.store_issued(token_id="i1", family_id="2" * 32, email="admin@example.com", issued_at=now - 10, expires_at=now + 1000, client_ip="1.2.3.4", user_agent=_chrome_ua("131"))
+
+    items = store.list_sessions(status="all")["items"]
+
+    assert len(items) == 2
+
+
+def test_list_sessions_never_merges_revoked_sessions(tmp_path):
+    """관리자가 명시적으로 폐기한 세션은 최신 활성 세션과 절대 합치지 않는다."""
+    store = RefreshTokenStore(str(tmp_path / "sessions.sqlite3"))
+    now = int(time.time())
+    store.store_issued(token_id="j1", family_id="3" * 32, email="admin@example.com", issued_at=now - 500, expires_at=now + 500, client_ip="1.2.3.4", user_agent=_chrome_ua("130"))
+    store.revoke_family("3" * 32, reason="admin-revoked")
+    store.store_issued(token_id="k1", family_id="4" * 32, email="admin@example.com", issued_at=now - 10, expires_at=now + 1000, client_ip="1.2.3.4", user_agent=_chrome_ua("131"))
+
+    items = store.list_sessions(status="all")["items"]
+
+    assert len(items) == 2
+    assert {i["status"] for i in items} == {"revoked", "active"}
 
 
 def test_list_sessions_marks_current_session(tmp_path):
@@ -846,7 +907,9 @@ def test_mysql_migration_adds_columns_to_legacy_table(mysql_container):
     with bootstrap._connect() as conn:
         with conn.cursor() as cur:
             cur.execute("DROP TABLE IF EXISTS refresh_tokens")
-            cur.execute("CREATE TABLE refresh_tokens (jti VARCHAR(64) PRIMARY KEY, family_id VARCHAR(64) NOT NULL, email VARCHAR(320) NOT NULL, issued_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, replaced_by VARCHAR(64), revoked_at BIGINT, revoke_reason VARCHAR(64), INDEX idx_refresh_tokens_family (family_id)) ENGINE=InnoDB")
+            cur.execute(
+                "CREATE TABLE refresh_tokens (jti VARCHAR(64) PRIMARY KEY, family_id VARCHAR(64) NOT NULL, email VARCHAR(320) NOT NULL, issued_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, replaced_by VARCHAR(64), revoked_at BIGINT, revoke_reason VARCHAR(64), INDEX idx_refresh_tokens_family (family_id)) ENGINE=InnoDB"
+            )
             now = int(time.time())
             cur.execute("INSERT INTO refresh_tokens VALUES ('t1', %s, 'admin@example.com', %s, %s, NULL, NULL, NULL)", ("a" * 32, now, now + 1000))
         conn.commit()

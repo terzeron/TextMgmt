@@ -218,6 +218,15 @@ export default function LoginSessionAdmin() {
                       현재 세션
                     </Badge>
                   )}
+                  {session.merged_family_ids?.length > 1 && (
+                    <Badge
+                      bg="secondary"
+                      className="ms-2"
+                      title="같은 기기의 브라우저 버전 업데이트로 판단해 합쳐 보여줍니다. 폐기는 최신 세션에만 적용됩니다."
+                    >
+                      +{session.merged_family_ids.length - 1} 이전 로그인
+                    </Badge>
+                  )}
                 </td>
                 {/* IP/UA 는 마지막 갱신 시점 값이다. 컬럼 추가 이전 세션은 비어 있다. */}
                 <td className="text-nowrap">
