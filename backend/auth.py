@@ -17,7 +17,7 @@ if not JWT_SECRET:
     sys.exit(-1)
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRATION_SECONDS = 2 * 3600  # 2시간
-REFRESH_TOKEN_EXPIRATION_SECONDS = 7 * 24 * 3600  # 7일
+REFRESH_TOKEN_EXPIRATION_SECONDS = 30 * 24 * 3600  # 30일
 ACCESS_COOKIE_NAME = "tm_access_token"
 REFRESH_COOKIE_NAME = "tm_refresh_token"
 
@@ -137,4 +137,3 @@ async def optional_auth(request: Request) -> dict | None:
         return await require_auth(request)
     except HTTPException:
         return None
-
