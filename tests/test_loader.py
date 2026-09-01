@@ -1530,6 +1530,56 @@ class TestPdfParserTimeout:
         t.join(timeout=10)
         assert outcome == ["ran"], outcome
 
+    def test_run_with_hard_timeout_returns_result_on_success(self):
+        from utils.parser_timeout import run_with_hard_timeout
+
+        assert run_with_hard_timeout(lambda x, y: x + y, (1,), {"y": 2}, timeout=5) == 3
+
+    def test_run_with_hard_timeout_propagates_exception(self):
+        import pytest
+
+        from utils.parser_timeout import run_with_hard_timeout
+
+        def boom():
+            raise ValueError("배치 중 오류")
+
+        with pytest.raises(ValueError, match="배치 중 오류"):
+            run_with_hard_timeout(boom, timeout=5)
+
+    def test_run_with_hard_timeout_kills_infinite_loop_from_main_thread(self):
+        """다른 안전장치 없이도 시간 초과 시 프로세스를 강제 종료해야 한다."""
+        import pytest
+
+        from utils.parser_timeout import ParserTimeout, run_with_hard_timeout
+
+        with pytest.raises(ParserTimeout):
+            run_with_hard_timeout(self._spin, (None,), timeout=0.3)
+
+    def test_run_with_hard_timeout_kills_infinite_loop_from_worker_thread(self):
+        """`time_limit()`과 달리, 워커 스레드에서 호출해도 타임아웃이 걸려야 한다.
+
+        재현 대상 버그: `asyncio.to_thread`로 호출되는 대량 재적재 경로에서는
+        SIGALRM 기반 `time_limit()`이 무력화되어(test_time_limit_is_noop_in_worker_thread)
+        손상 파일 1건이 재적재 루프 전체를 무한정 붙잡을 수 있었다.
+        """
+        import threading
+
+        from utils.parser_timeout import ParserTimeout, run_with_hard_timeout
+
+        outcome: list[str] = []
+
+        def run():
+            try:
+                run_with_hard_timeout(self._spin, (None,), timeout=0.3)
+                outcome.append("finished")
+            except ParserTimeout:
+                outcome.append("timed_out")
+
+        t = threading.Thread(target=run)
+        t.start()
+        t.join(timeout=10)
+        assert outcome == ["timed_out"], outcome
+
     def test_hung_stage_falls_through_to_next_parser(self, tmp_path: Path, monkeypatch):
         """한 파서가 멈춰도 타임아웃 후 다음 파서로 넘어가 결과를 얻어야 한다."""
         Loader = _get_loader()
@@ -4435,10 +4485,7 @@ class TestLoaderMainBranches:
         out = capsys.readouterr().out
 
         assert result == 0
-        assert set(inserted_paths) == {
-            "d1/[author] direct1.txt",
-            "d2/[author] direct2.txt",
-        }
+        assert set(inserted_paths) == {"d1/[author] direct1.txt", "d2/[author] direct2.txt"}
         assert "하위 디렉토리별 샘플 파일 등록" not in out
 
     def test_main_parses_batch_with_two_worker_threads(self, monkeypatch, tmp_path, capsys):
@@ -4461,21 +4508,7 @@ class TestLoaderMainBranches:
             logging.getLogger().warning("problem:%s", file_path.name)
             barrier.wait()
             st = stat_result if stat_result is not None else file_path.stat()
-            return {
-                st.st_ino: {
-                    "category": "_root",
-                    "title": file_path.stem,
-                    "author": "",
-                    "file_path": str(file_path.relative_to(tmp_path)),
-                    "file_type": "txt",
-                    "file_size": st.st_size,
-                    "line_count": 1,
-                    "page_count": 0,
-                    "isbn": "",
-                    "summary": file_path.stem,
-                    "updated_time": "2026-08-11T00:00:00",
-                }
-            }
+            return {st.st_ino: {"category": "_root", "title": file_path.stem, "author": "", "file_path": str(file_path.relative_to(tmp_path)), "file_type": "txt", "file_size": st.st_size, "line_count": 1, "page_count": 0, "isbn": "", "summary": file_path.stem, "updated_time": "2026-08-11T00:00:00"}}
 
         mock_es = MagicMock()
         mock_es.es.ping.return_value = True
@@ -4512,21 +4545,7 @@ class TestLoaderMainBranches:
             st = stat_result if stat_result is not None else file_path.stat()
             if file_path.suffix == ".pdf":
                 pdf_thread_ids.append(threading.get_ident())
-            return {
-                st.st_ino: {
-                    "category": "_root",
-                    "title": file_path.stem,
-                    "author": "",
-                    "file_path": str(file_path.relative_to(tmp_path)),
-                    "file_type": file_path.suffix[1:],
-                    "file_size": st.st_size,
-                    "line_count": 1,
-                    "page_count": 0,
-                    "isbn": "",
-                    "summary": file_path.stem,
-                    "updated_time": "2026-08-11T00:00:00",
-                }
-            }
+            return {st.st_ino: {"category": "_root", "title": file_path.stem, "author": "", "file_path": str(file_path.relative_to(tmp_path)), "file_type": file_path.suffix[1:], "file_size": st.st_size, "line_count": 1, "page_count": 0, "isbn": "", "summary": file_path.stem, "updated_time": "2026-08-11T00:00:00"}}
 
         mock_es = MagicMock()
         mock_es.es.ping.return_value = True
