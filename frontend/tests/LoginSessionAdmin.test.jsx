@@ -167,6 +167,35 @@ describe("LoginSessionAdmin", () => {
     expect(screen.getAllByText("현재 세션")).toHaveLength(1);
   });
 
+  it("병합된 세션에는 이전 로그인 배지를 표시한다", async () => {
+    const merged = {
+      ...ACTIVE_SESSION,
+      merged_family_ids: [
+        ACTIVE_SESSION.session_id,
+        "d".repeat(32),
+        "e".repeat(32),
+      ],
+    };
+    mockJsonGetReq.mockImplementation(resolveWith(page([merged])));
+
+    render(<LoginSessionAdmin />);
+
+    expect(await screen.findByText("+2 이전 로그인")).toBeTruthy();
+  });
+
+  it("병합되지 않은 세션에는 이전 로그인 배지가 없다", async () => {
+    const single = {
+      ...ACTIVE_SESSION,
+      merged_family_ids: [ACTIVE_SESSION.session_id],
+    };
+    mockJsonGetReq.mockImplementation(resolveWith(page([single])));
+
+    render(<LoginSessionAdmin />);
+
+    await screen.findByText("aaaaaaaa...");
+    expect(screen.queryByText(/이전 로그인/)).toBeNull();
+  });
+
   it("session_id 전체를 화면에 노출하지 않는다", async () => {
     mockJsonGetReq.mockImplementation(resolveWith(page([ACTIVE_SESSION])));
 
@@ -218,7 +247,9 @@ describe("LoginSessionAdmin", () => {
     const cells = [...container.querySelectorAll("td")].map(
       (td) => td.textContent,
     );
-    expect(cells.filter((text) => text === "-").length).toBeGreaterThanOrEqual(4);
+    expect(cells.filter((text) => text === "-").length).toBeGreaterThanOrEqual(
+      4,
+    );
   });
 
   it("조회 실패 시 에러를 표시한다", async () => {
@@ -240,9 +271,7 @@ describe("LoginSessionAdmin", () => {
       await screen.findByText("세션 목록을 불러오지 못했습니다."),
     ).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Close alert"));
-    expect(
-      screen.queryByText("세션 목록을 불러오지 못했습니다."),
-    ).toBeNull();
+    expect(screen.queryByText("세션 목록을 불러오지 못했습니다.")).toBeNull();
   });
 
   it("로딩 상태를 표시한다", async () => {
@@ -433,7 +462,9 @@ describe("LoginSessionAdmin", () => {
 
     await waitFor(() => {
       const urls = mockJsonGetReq.mock.calls.map((c) => c[0]);
-      expect(urls.filter((u) => u.includes("page=1")).length).toBeGreaterThan(1);
+      expect(urls.filter((u) => u.includes("page=1")).length).toBeGreaterThan(
+        1,
+      );
     });
   });
 });
