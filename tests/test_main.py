@@ -1184,6 +1184,12 @@ class DummyCategoryMapping:
     def set_latest_excluded(self, category, excluded, content_type="book"):
         return True
 
+    def acquire_reload_lock(self, content_type="book"):
+        return True, None
+
+    def release_reload_lock(self, content_type="book"):
+        return None
+
 
 @pytest.fixture()
 def dummy_client(tmp_path: Path):

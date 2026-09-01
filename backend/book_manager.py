@@ -35,6 +35,10 @@ MAX_CATEGORY_RESULT_COUNT = 10000
 # 커서 기반 카테고리 조회의 요청당 최대 페이지 크기 (CWE-770).
 # search_after라도 한 페이지 size는 ES max_result_window를 넘을 수 없다.
 MAX_CATEGORY_PAGE_SIZE = MAX_CATEGORY_RESULT_COUNT
+
+# 카테고리 불일치 재적재 시 파일을 묶어서 ES에 색인하는 배치 크기.
+# 파일 1건씩 색인하면 이상 항목이 수천 건일 때 재적재가 수십 분~수 시간 걸린다.
+BULK_REINDEX_BATCH_SIZE = 200
 MAX_LATEST_BOOK_COUNT = 100
 CREATED_TIME_BACKFILL_ENV = "TM_BACKFILL_CREATED_TIME_ON_STARTUP"
 
@@ -84,27 +88,7 @@ class BookManager:
         ".tiff": "image/tiff",
         ".svg": "image/svg+xml",
     }
-    INDEXABLE_FILE_TYPES = frozenset(
-        {
-            "txt",
-            "epub",
-            "pdf",
-            "docx",
-            "doc",
-            "hwp",
-            "rtf",
-            "html",
-            "jpg",
-            "jpeg",
-            "png",
-            "gif",
-            "webp",
-            "bmp",
-            "tiff",
-            "svg",
-            "cbz",
-        },
-    )
+    INDEXABLE_FILE_TYPES = frozenset({"txt", "epub", "pdf", "docx", "doc", "hwp", "rtf", "html", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg", "cbz"})
 
     CACHE_MAX_AGE_SECONDS = 86400  # 1일
     # PdfReader 캐시는 "개수"가 아니라 "바이트"로 제한한다.
@@ -563,11 +547,7 @@ class BookManager:
             except Exception as e:
                 LOGGER.warning("created_time backfill failed: %s", e)
 
-        thread = threading.Thread(
-            target=run_backfill,
-            name=f"created-time-backfill-{getattr(self.es_manager, 'index_name', 'book')}",
-            daemon=True,
-        )
+        thread = threading.Thread(target=run_backfill, name=f"created-time-backfill-{getattr(self.es_manager, 'index_name', 'book')}", daemon=True)
         self._created_time_backfill_thread = thread
         try:
             thread.start()
@@ -1210,9 +1190,7 @@ class BookManager:
         if not category or ".." in category or "\x00" in category:
             return False
         try:
-            return (self.path_prefix / category).resolve(strict=False).is_relative_to(
-                self.path_prefix.resolve(strict=False),
-            )
+            return (self.path_prefix / category).resolve(strict=False).is_relative_to(self.path_prefix.resolve(strict=False))
         except OSError:
             return False
 
@@ -1253,11 +1231,7 @@ class BookManager:
 
     @staticmethod
     def _mismatch_detail_item_count(details: dict[str, Any]) -> int:
-        return (
-            len(details.get("fs_only", []) or [])
-            + len(details.get("es_only", []) or [])
-            + len(details.get("duplicates", []) or [])
-        )
+        return len(details.get("fs_only", []) or []) + len(details.get("es_only", []) or []) + len(details.get("duplicates", []) or [])
 
     def _search_all_docs_by_category(self, category: str) -> list[tuple[int, dict[str, Any], float]]:
         result: list[tuple[int, dict[str, Any], float]] = []
@@ -1460,60 +1434,90 @@ class BookManager:
         except IOError as e:
             return "Error", f"파일 삭제 실패: {e}"
 
+    async def _bulk_index_files(self, file_paths: list[str], clean_existing: bool) -> tuple[dict[str, int], list[dict[str, Any]]]:
+        """여러 파일을 배치로 파싱해 ES에 한 번에 색인한다 (파일 1건씩 insert+refresh하는 것보다 훨씬 빠름).
+        반환: (file_path -> 새 book_id 매핑, 실패 목록)"""
+        from utils.loader import Loader
+
+        merged: dict[int, dict[str, Any]] = {}
+        id_by_path: dict[str, int] = {}
+        failures: list[dict[str, Any]] = []
+
+        for file_path in file_paths:
+            abs_path = (self.path_prefix / file_path).resolve()
+            if not abs_path.is_relative_to(self.path_prefix.resolve()) or not abs_path.is_file():
+                failures.append({"file_path": file_path, "error": f"파일을 찾을 수 없습니다: {file_path}"})
+                continue
+            data = await asyncio.to_thread(Loader.read_file, abs_path)
+            if not data or len(data) != 1:
+                failures.append({"file_path": file_path, "error": f"지원하지 않는 파일 형식입니다: {file_path}"})
+                continue
+            book_id, doc = next(iter(data.items()))
+            merged[book_id] = doc
+            id_by_path[file_path] = book_id
+
+        if not merged:
+            return {}, failures
+
+        if clean_existing:
+            stale_paths = [path for doc in merged.values() if isinstance(path := doc.get("file_path"), str)]
+            await asyncio.to_thread(self.es_manager.delete_by_file_paths, stale_paths, exclude_ids=list(merged.keys()))
+
+        doc_id_list = await asyncio.to_thread(self.es_manager.insert, merged)
+        indexed_ids = set(doc_id_list or [])
+
+        indexed: dict[str, int] = {}
+        for file_path, book_id in id_by_path.items():
+            if book_id in indexed_ids:
+                indexed[file_path] = book_id
+            else:
+                failures.append({"file_path": file_path, "error": "ES 적재 실패"})
+        return indexed, failures
+
     async def _reload_category_mismatch_details(self, category: str, details: dict[str, Any]) -> dict[str, Any]:
-        category_result: dict[str, Any] = {
-            "category": category,
-            "indexed_count": 0,
-            "deleted_count": 0,
-            "failures": [],
-        }
+        category_result: dict[str, Any] = {"category": category, "indexed_count": 0, "deleted_count": 0, "failures": []}
         ids_to_delete: set[int] = set()
 
+        fs_only_paths: list[str] = []
         for item in details.get("fs_only", []) or []:
             file_path = item.get("file_path")
             if not isinstance(file_path, str) or not file_path:
-                category_result["failures"].append(
-                    {"file_path": file_path, "error": "file_path가 비어있습니다"},
-                )
+                category_result["failures"].append({"file_path": file_path, "error": "file_path가 비어있습니다"})
                 continue
-            book_id, error = await self.index_single_file(file_path)
-            if error is None and book_id is not None:
-                category_result["indexed_count"] += 1
-            else:
-                category_result["failures"].append(
-                    {"file_path": file_path, "error": error or "ES 적재 실패"},
-                )
+            fs_only_paths.append(file_path)
 
-        for item in details.get("duplicates", []) or []:
+        duplicate_items = details.get("duplicates", []) or []
+        dup_reindex_paths: list[str] = []
+        for item in duplicate_items:
             docs = item.get("docs", []) or []
             file_path = item.get("file_path")
             file_exists = bool(item.get("file_exists"))
-            linked_ids = {
-                int(doc["book_id"])
-                for doc in docs
-                if doc.get("file_linked") and "book_id" in doc
-            }
+            linked_ids = {int(doc["book_id"]) for doc in docs if doc.get("file_linked") and "book_id" in doc}
             if file_exists and not linked_ids:
                 if not isinstance(file_path, str) or not file_path:
-                    category_result["failures"].append(
-                        {
-                            "file_path": file_path,
-                            "error": "file_path가 비어있습니다",
-                        },
-                    )
+                    category_result["failures"].append({"file_path": file_path, "error": "file_path가 비어있습니다"})
                     continue
-                book_id, error = await self.index_single_file(file_path, clean_existing=False)
-                if error is None and book_id is not None:
-                    category_result["indexed_count"] += 1
-                    linked_ids.add(book_id)
-                else:
-                    category_result["failures"].append(
-                        {
-                            "file_path": file_path,
-                            "error": error or "ES 적재 실패",
-                        },
-                    )
-                    continue
+                dup_reindex_paths.append(file_path)
+
+        indexed_book_id_by_path: dict[str, int] = {}
+        for paths, clean_existing in ((fs_only_paths, True), (dup_reindex_paths, False)):
+            for batch_start in range(0, len(paths), BULK_REINDEX_BATCH_SIZE):
+                batch = paths[batch_start : batch_start + BULK_REINDEX_BATCH_SIZE]
+                indexed, failures = await self._bulk_index_files(batch, clean_existing=clean_existing)
+                indexed_book_id_by_path.update(indexed)
+                category_result["indexed_count"] += len(indexed)
+                category_result["failures"].extend(failures)
+
+        for item in duplicate_items:
+            docs = item.get("docs", []) or []
+            file_path = item.get("file_path")
+            file_exists = bool(item.get("file_exists"))
+            linked_ids = {int(doc["book_id"]) for doc in docs if doc.get("file_linked") and "book_id" in doc}
+            if file_exists and not linked_ids:
+                new_book_id = indexed_book_id_by_path.get(file_path)
+                if new_book_id is None:
+                    continue  # 색인 실패 — failures에 이미 기록됨
+                linked_ids.add(new_book_id)
 
             for doc in docs:
                 book_id = doc.get("book_id")
@@ -1529,15 +1533,10 @@ class BookManager:
                 ids_to_delete.add(book_id)
 
         if ids_to_delete:
-            deleted = self.es_manager.delete_by_ids(sorted(ids_to_delete))
+            deleted = await asyncio.to_thread(self.es_manager.delete_by_ids, sorted(ids_to_delete))
             category_result["deleted_count"] += deleted
             if deleted < len(ids_to_delete):
-                category_result["failures"].append(
-                    {
-                        "category": category,
-                        "error": f"ES 문서 {len(ids_to_delete)}건 중 {deleted}건만 삭제됨",
-                    },
-                )
+                category_result["failures"].append({"category": category, "error": f"ES 문서 {len(ids_to_delete)}건 중 {deleted}건만 삭제됨"})
 
         return category_result
 
@@ -1546,47 +1545,28 @@ class BookManager:
         LOGGER.info("reload_category_mismatches 시작: content_type='%s'", content_type)
 
         self._clear_mismatch_cache()
-        before = self.get_category_mismatches()
+        before = await asyncio.to_thread(self.get_category_mismatches)
         categories = self._mismatch_categories(before)
-        result: dict[str, Any] = {
-            "content_type": content_type,
-            "category_count": len(categories),
-            "before_count": self._mismatch_item_count(before),
-            "after_count": 0,
-            "indexed_count": 0,
-            "deleted_count": 0,
-            "failed_count": 0,
-            "failures": [],
-            "categories": [],
-        }
+        result: dict[str, Any] = {"content_type": content_type, "category_count": len(categories), "before_count": self._mismatch_item_count(before), "after_count": 0, "indexed_count": 0, "deleted_count": 0, "failed_count": 0, "failures": [], "categories": []}
 
         for category in categories:
             if not self._is_safe_category_name(category):
-                result["categories"].append(
-                    {
-                        "category": category,
-                        "indexed_count": 0,
-                        "deleted_count": 0,
-                        "failures": [
-                            {"category": category, "error": "잘못된 카테고리 경로입니다"},
-                        ],
-                    },
-                )
+                result["categories"].append({"category": category, "indexed_count": 0, "deleted_count": 0, "failures": [{"category": category, "error": "잘못된 카테고리 경로입니다"}]})
                 continue
 
-            details = self.get_category_mismatch_details(category)
+            details = await asyncio.to_thread(self.get_category_mismatch_details, category)
             category_result = await self._reload_category_mismatch_details(category, details)
             result["indexed_count"] += category_result["indexed_count"]
             result["deleted_count"] += category_result["deleted_count"]
             result["categories"].append(category_result)
 
         try:
-            self.es_manager.refresh()
+            await asyncio.to_thread(self.es_manager.refresh)
         except Exception as e:
             result["failures"].append({"error": f"ES refresh 실패: {e}"})
 
         self._clear_mismatch_cache()
-        after = self.get_category_mismatches()
+        after = await asyncio.to_thread(self.get_category_mismatches)
         result["after_count"] = self._mismatch_item_count(after)
 
         refresh_failure_count = len(result["failures"])
@@ -1595,16 +1575,7 @@ class BookManager:
             result["failures"].extend(category_result["failures"])
         result["failed_count"] += refresh_failure_count
 
-        LOGGER.info(
-            "reload_category_mismatches 완료: content_type='%s', categories=%d, indexed=%d, deleted=%d, failed=%d, before=%d, after=%d",
-            content_type,
-            result["category_count"],
-            result["indexed_count"],
-            result["deleted_count"],
-            result["failed_count"],
-            result["before_count"],
-            result["after_count"],
-        )
+        LOGGER.info("reload_category_mismatches 완료: content_type='%s', categories=%d, indexed=%d, deleted=%d, failed=%d, before=%d, after=%d", content_type, result["category_count"], result["indexed_count"], result["deleted_count"], result["failed_count"], result["before_count"], result["after_count"])
         return result, None
 
     async def reload_category_mismatch_files(self, category: str, content_type: str = "book") -> tuple[dict[str, Any], str | None]:
@@ -1617,7 +1588,7 @@ class BookManager:
             return {}, "잘못된 카테고리 경로입니다"
 
         self._clear_mismatch_cache()
-        before_details = self.get_category_mismatch_details(category)
+        before_details = await asyncio.to_thread(self.get_category_mismatch_details, category)
         category_result = await self._reload_category_mismatch_details(category, before_details)
         result: dict[str, Any] = {
             "content_type": content_type,
@@ -1633,26 +1604,17 @@ class BookManager:
         }
 
         try:
-            self.es_manager.refresh()
+            await asyncio.to_thread(self.es_manager.refresh)
         except Exception as e:
             result["failures"].append({"error": f"ES refresh 실패: {e}"})
 
         self._clear_mismatch_cache()
-        after_details = self.get_category_mismatch_details(category)
+        after_details = await asyncio.to_thread(self.get_category_mismatch_details, category)
         result["after_count"] = self._mismatch_detail_item_count(after_details)
         result["failures"].extend(category_result["failures"])
         result["failed_count"] = len(result["failures"])
 
-        LOGGER.info(
-            "reload_category_mismatch_files 완료: content_type='%s', category='%s', indexed=%d, deleted=%d, failed=%d, before=%d, after=%d",
-            content_type,
-            category,
-            result["indexed_count"],
-            result["deleted_count"],
-            result["failed_count"],
-            result["before_count"],
-            result["after_count"],
-        )
+        LOGGER.info("reload_category_mismatch_files 완료: content_type='%s', category='%s', indexed=%d, deleted=%d, failed=%d, before=%d, after=%d", content_type, category, result["indexed_count"], result["deleted_count"], result["failed_count"], result["before_count"], result["after_count"])
         return result, None
 
     async def reload_category(self, category: str, content_type: str = "book") -> tuple[dict[str, Any], str | None]:

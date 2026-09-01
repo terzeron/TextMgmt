@@ -1538,72 +1538,107 @@ def test_index_single_file_removes_existing_path_docs(tmp_path: Path, monkeypatc
     assert es.deleted_file_paths == [(["A/test.txt"], [123])]
 
 
-def test_reload_category_mismatches_indexes_missing_files_and_deletes_stale_docs(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_bulk_index_files_merges_multiple_files_into_one_insert_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     es = DummyES()
     manager = make_manager(tmp_path, es)
+
+    book_id_by_relpath = {"A/one.txt": 501, "A/two.txt": 502, "A/bad.txt": None}
+    abs_to_relpath = {}
+    for rel_path in book_id_by_relpath:
+        file_path = tmp_path / rel_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text("x")
+        abs_to_relpath[file_path.resolve()] = rel_path
+
+    def fake_read_file(abs_path):
+        rel_path = abs_to_relpath[abs_path]
+        book_id = book_id_by_relpath[rel_path]
+        if book_id is None:
+            return {}  # 파싱 실패 시뮬레이션
+        return {book_id: make_doc(rel_path)}
+
+    monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
+
+    indexed, failures = asyncio_runner(manager._bulk_index_files(["A/one.txt", "A/two.txt", "A/bad.txt"], clean_existing=True))
+
+    assert indexed == {"A/one.txt": 501, "A/two.txt": 502}
+    assert len(failures) == 1
+    assert failures[0]["file_path"] == "A/bad.txt"
+    # 파일마다 insert하지 않고 여러 파일이 insert 1번으로 묶여 나간다
+    assert len(es.inserted) == 1
+    assert sorted(es.inserted[0].keys()) == [501, 502]
+    assert es.deleted_file_paths == [(["A/one.txt", "A/two.txt"], [501, 502])]
+
+
+def test_reload_category_mismatch_details_batches_large_fs_only_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    monkeypatch.setattr("backend.book_manager.BULK_REINDEX_BATCH_SIZE", 2)
+
+    rel_paths = ["A/f1.txt", "A/f2.txt", "A/f3.txt"]
+    abs_to_relpath = {}
+    for i, rel_path in enumerate(rel_paths, start=1):
+        file_path = tmp_path / rel_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text("x")
+        abs_to_relpath[file_path.resolve()] = (rel_path, 2000 + i)
+
+    def fake_read_file(abs_path):
+        rel_path, book_id = abs_to_relpath[abs_path]
+        return {book_id: make_doc(rel_path)}
+
+    monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
+
+    details = {"fs_only": [{"file_path": p} for p in rel_paths], "es_only": [], "duplicates": []}
+    category_result = asyncio_runner(manager._reload_category_mismatch_details("A", details))
+
+    assert category_result["indexed_count"] == 3
+    assert category_result["failures"] == []
+    # 배치 크기를 2로 patch했으므로 파일 3개가 2건(2+1)의 insert 호출로 나뉜다
+    assert [len(batch) for batch in es.inserted] == [2, 1]
+
+
+def test_reload_category_mismatches_indexes_missing_files_and_deletes_stale_docs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+
+    book_id_by_relpath = {"A/new.txt": 1001, "A/dup.txt": 1002, "C/new.txt": 1003}
+    abs_to_relpath = {}
+    for rel_path in book_id_by_relpath:
+        file_path = tmp_path / rel_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text("x")
+        abs_to_relpath[file_path.resolve()] = rel_path
+
+    def fake_read_file(abs_path):
+        rel_path = abs_to_relpath[abs_path]
+        return {book_id_by_relpath[rel_path]: make_doc(rel_path)}
 
     details_by_category = {
         "A": {
             "fs_only": [{"file_path": "A/new.txt"}],
             "es_only": [{"book_id": 10}],
-            "duplicates": [
-                {
-                    "file_path": "A/dup.txt",
-                    "file_exists": True,
-                    "docs": [
-                        {"book_id": 20, "file_linked": False},
-                        {"book_id": 21, "file_linked": False},
-                    ],
-                },
-                {
-                    "file_path": "A/linked.txt",
-                    "file_exists": True,
-                    "docs": [
-                        {"book_id": 22, "file_linked": True},
-                        {"book_id": 23, "file_linked": False},
-                    ],
-                },
-            ],
+            "duplicates": [{"file_path": "A/dup.txt", "file_exists": True, "docs": [{"book_id": 20, "file_linked": False}, {"book_id": 21, "file_linked": False}]}, {"file_path": "A/linked.txt", "file_exists": True, "docs": [{"book_id": 22, "file_linked": True}, {"book_id": 23, "file_linked": False}]}],
         },
-        "B": {
-            "fs_only": [],
-            "es_only": [{"book_id": 30}],
-            "duplicates": [],
-        },
-        "C": {
-            "fs_only": [{"file_path": "C/new.txt"}],
-            "es_only": [],
-            "duplicates": [],
-        },
+        "B": {"fs_only": [], "es_only": [{"book_id": 30}], "duplicates": []},
+        "C": {"fs_only": [{"file_path": "C/new.txt"}], "es_only": [], "duplicates": []},
     }
-    indexed_paths = []
 
     def fake_summary():
-        return {
-            "mismatches": [{"category": "A", "diff": 3}],
-            "es_only": [{"category": "B", "es_count": 1}],
-            "fs_only": [{"category": "C", "fs_count": 1}],
-        }
-
-    async def fake_index_single_file(file_path: str, clean_existing: bool = True):
-        indexed_paths.append(file_path)
-        return 1000 + len(indexed_paths), None
+        return {"mismatches": [{"category": "A", "diff": 3}], "es_only": [{"category": "B", "es_count": 1}], "fs_only": [{"category": "C", "fs_count": 1}]}
 
     monkeypatch.setattr(manager, "get_category_mismatches", fake_summary)
-    monkeypatch.setattr(
-        manager,
-        "get_category_mismatch_details",
-        lambda category: details_by_category[category],
-    )
-    monkeypatch.setattr(manager, "index_single_file", fake_index_single_file)
+    monkeypatch.setattr(manager, "get_category_mismatch_details", lambda category: details_by_category[category])
+    monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
 
     result, err = asyncio_runner(manager.reload_category_mismatches())
 
     assert err is None
-    assert indexed_paths == ["A/new.txt", "A/dup.txt", "C/new.txt"]
+    # 색인은 파일 1건씩이 아니라 배치(카테고리당 fs_only/duplicates 그룹 단위)로 묶여 나간다.
+    inserted_ids = sorted(book_id for batch in es.inserted for book_id in batch)
+    assert inserted_ids == [1001, 1002, 1003]
+    # fs_only(clean_existing=True)만 delete_by_file_paths로 기존 문서를 정리한다.
+    assert es.deleted_file_paths == [(["A/new.txt"], [1001]), (["C/new.txt"], [1003])]
     assert es.deleted_ids == [10, 20, 21, 23, 30]
     assert result["category_count"] == 3
     assert result["indexed_count"] == 3
@@ -1611,48 +1646,39 @@ def test_reload_category_mismatches_indexes_missing_files_and_deletes_stale_docs
     assert result["failed_count"] == 0
 
 
-def test_reload_category_mismatch_files_limits_to_selected_category(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_reload_category_mismatch_files_limits_to_selected_category(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     es = DummyES()
     manager = make_manager(tmp_path, es)
     detail_calls = []
-    details = [
-        {
-            "fs_only": [{"file_path": "A/new.txt"}],
-            "es_only": [{"book_id": 10}],
-            "duplicates": [
-                {
-                    "file_path": "A/dup.txt",
-                    "file_exists": True,
-                    "docs": [
-                        {"book_id": 20, "file_linked": False},
-                        {"book_id": 21, "file_linked": False},
-                    ],
-                },
-            ],
-        },
-        {"fs_only": [], "es_only": [], "duplicates": []},
-    ]
-    indexed_calls = []
+    details = [{"fs_only": [{"file_path": "A/new.txt"}], "es_only": [{"book_id": 10}], "duplicates": [{"file_path": "A/dup.txt", "file_exists": True, "docs": [{"book_id": 20, "file_linked": False}, {"book_id": 21, "file_linked": False}]}]}, {"fs_only": [], "es_only": [], "duplicates": []}]
+
+    book_id_by_relpath = {"A/new.txt": 1001, "A/dup.txt": 1002}
+    abs_to_relpath = {}
+    for rel_path in book_id_by_relpath:
+        file_path = tmp_path / rel_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text("x")
+        abs_to_relpath[file_path.resolve()] = rel_path
+
+    def fake_read_file(abs_path):
+        rel_path = abs_to_relpath[abs_path]
+        return {book_id_by_relpath[rel_path]: make_doc(rel_path)}
 
     def fake_details(category: str):
         detail_calls.append(category)
         return details.pop(0)
 
-    async def fake_index_single_file(file_path: str, clean_existing: bool = True):
-        indexed_calls.append((file_path, clean_existing))
-        return 1000 + len(indexed_calls), None
-
     monkeypatch.setattr(manager, "get_category_mismatch_details", fake_details)
-    monkeypatch.setattr(manager, "index_single_file", fake_index_single_file)
+    monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
 
     result, err = asyncio_runner(manager.reload_category_mismatch_files("A"))
 
     assert err is None
     assert detail_calls == ["A", "A"]
-    assert indexed_calls == [("A/new.txt", True), ("A/dup.txt", False)]
+    # fs_only(clean_existing=True)만 delete_by_file_paths 호출 — duplicates 재색인(clean_existing=False)은 호출 없음
+    assert es.deleted_file_paths == [(["A/new.txt"], [1001])]
+    inserted_ids = sorted(book_id for batch in es.inserted for book_id in batch)
+    assert inserted_ids == [1001, 1002]
     assert es.deleted_ids == [10, 20, 21]
     assert result["category"] == "A"
     assert result["category_count"] == 1
@@ -1918,9 +1944,7 @@ def test_category_mismatch_details_normalizes_absolute_es_paths(tmp_path: Path):
     file_path = category_dir / "same.txt"
     file_path.write_text("x")
 
-    es.category_docs = [
-        (file_path.stat().st_ino, make_doc(str(file_path)), 1.0),
-    ]
+    es.category_docs = [(file_path.stat().st_ino, make_doc(str(file_path)), 1.0)]
 
     details = manager.get_category_mismatch_details("A")
 
@@ -3671,10 +3695,7 @@ def test_get_category_mismatch_details_reads_all_pages(tmp_path: Path, monkeypat
     first.parent.mkdir(parents=True, exist_ok=True)
     first.write_text("x")
     second.write_text("y")
-    es.category_docs = [
-        (first.stat().st_ino, make_doc("A/first.txt"), 1.0),
-        (second.stat().st_ino, make_doc("A/second.txt"), 1.0),
-    ]
+    es.category_docs = [(first.stat().st_ino, make_doc("A/first.txt"), 1.0), (second.stat().st_ino, make_doc("A/second.txt"), 1.0)]
     manager = make_manager(tmp_path, es)
 
     details = manager.get_category_mismatch_details("A")

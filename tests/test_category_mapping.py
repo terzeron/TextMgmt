@@ -1,6 +1,7 @@
 import contextlib
 import sys
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 import types
 import importlib
@@ -84,10 +85,7 @@ class TestCategoryMapping(unittest.TestCase):
         cursor = FakeCursor(fetchone_rows=[{"cnt": 1}, {"cnt": 1}, {"cnt": 1}])
         cm_mod, cm = build_cm(cursor)
         assert cm is not None
-        assert any(
-            "CREATE TABLE IF NOT EXISTS latest_excluded_categories" in str(sql)
-            for sql, _ in cursor.executed
-        )
+        assert any("CREATE TABLE IF NOT EXISTS latest_excluded_categories" in str(sql) for sql, _ in cursor.executed)
 
     def test_get_all_and_keywords(self):
         cursor = FakeCursor(rows=[{"category": "c1", "keyword": "k1"}, {"category": "c1", "keyword": "k2"}])
@@ -352,7 +350,6 @@ class TestCategoryMapping(unittest.TestCase):
         assert cm.update_all_mappings({"c1": ["k1"]}) is False
         assert conn_fail.rolled_back is True
 
-
     def test_get_all_mappings_empty_and_remove_keyword_not_found(self):
         cursor = FakeCursor(rows=[], rowcount=0)
         cm_mod, cm = build_cm(cursor)
@@ -395,3 +392,74 @@ class TestCategoryMapping(unittest.TestCase):
         alter_queries = [sql for sql, _ in cursor.executed if "ALTER TABLE" in str(sql)]
         assert cm is not None
         assert alter_queries == []
+
+    def test_acquire_reload_lock_success(self):
+        cursor = FakeCursor()
+        cm_mod, cm = build_cm(cursor)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        acquired, error = cm.acquire_reload_lock("book")
+        assert acquired is True
+        assert error is None
+        assert any("INSERT INTO reload_locks" in str(sql) for sql, _ in cursor.executed)
+
+    def test_acquire_reload_lock_already_in_progress(self):
+        cm_mod, cm = build_cm(FakeCursor())
+        calls = {"n": 0}
+
+        def side_effect(sql, params):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise cm_mod.pymysql.IntegrityError("dup")
+
+        cursor = FakeCursor(fetchone_rows=[{"started_at": datetime.now()}], execute_side_effect=side_effect)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        acquired, error = cm.acquire_reload_lock("book")
+        assert acquired is False
+        assert error is not None
+        assert "진행 중" in error
+
+    def test_acquire_reload_lock_replaces_stale_lock(self):
+        cm_mod, cm = build_cm(FakeCursor())
+        calls = {"n": 0}
+
+        def side_effect(sql, params):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise cm_mod.pymysql.IntegrityError("dup")
+
+        old_started_at = datetime.now() - timedelta(seconds=cm.RELOAD_LOCK_STALE_SECONDS + 60)
+        cursor = FakeCursor(fetchone_rows=[{"started_at": old_started_at}], execute_side_effect=side_effect)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        acquired, error = cm.acquire_reload_lock("book")
+        assert acquired is True
+        assert error is None
+        executed_sql = [sql for sql, _ in cursor.executed]
+        assert sum("INSERT INTO reload_locks" in s for s in executed_sql) == 2
+        assert sum("DELETE FROM reload_locks" in s for s in executed_sql) == 1
+
+    def test_release_reload_lock(self):
+        cursor = FakeCursor()
+        cm_mod, cm = build_cm(cursor)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        cm.release_reload_lock("book")
+        assert any("DELETE FROM reload_locks" in str(sql) for sql, _ in cursor.executed)

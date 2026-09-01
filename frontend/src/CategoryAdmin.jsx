@@ -1211,13 +1211,13 @@ export default function CategoryAdmin({
                 <span>디렉토리 목록</span>
                 <div className="d-flex flex-wrap justify-content-end align-items-center gap-2">
                   <Button
-                    variant="outline-success"
+                    variant="outline-danger"
                     size="sm"
                     disabled={
                       saving || bulkReloading || mismatchStats.itemCount === 0
                     }
                     onClick={() => setShowBulkReloadModal(true)}
-                    title="불일치 일괄 재적재"
+                    title="불일치 일괄 재적재 (이상 항목이 많으면 오래 걸릴 수 있음)"
                   >
                     {bulkReloading ? (
                       <Spinner animation="border" size="sm" />
@@ -1811,6 +1811,12 @@ export default function CategoryAdmin({
           <p className="text-muted">
             누락 파일은 적재하고 연결되지 않은 ES 문서는 정리합니다.
           </p>
+          <p className="text-danger mb-0">
+            <FontAwesomeIcon icon={faRotate} className="me-1" />
+            이상 항목 수가 많으면 완료까지 오래 걸릴 수 있는 작업입니다. 완료
+            전까지는 페이지를 벗어나도 서버에서 계속 진행되며, 같은 작업이 중복
+            실행되지 않도록 서버에서 막습니다.
+          </p>
         </Modal.Body>
         <Modal.Footer>
           <Button
@@ -1820,7 +1826,7 @@ export default function CategoryAdmin({
             취소
           </Button>
           <Button
-            variant="success"
+            variant="danger"
             onClick={handleBulkReloadMismatches}
             disabled={saving || bulkReloading}
           >
