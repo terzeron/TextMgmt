@@ -37,7 +37,7 @@
     "bootstrap": "^5.3.3",
     "clsx": "^2.1.1",
     "crc-32": "^1.2.2",
-    "dompurify": "^3.4.12",
+    "dompurify": "^3.4.13",
     "luxon": "^3.4.4",
     "mammoth": "^1.12.1",
     "pdfjs-dist": "^6.2.108",
