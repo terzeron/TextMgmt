@@ -429,6 +429,74 @@ describe("SimilarBooks", () => {
     expect(screen.queryByText("_root/RootBook.epub")).toBeNull();
   });
 
+  it("file_path가 없으면 title로 파일명을 대체한다", async () => {
+    mockBooks([
+      {
+        ...makeBook(1, 95),
+        file_path: "",
+        title: "대체 제목",
+      },
+    ]);
+
+    render(<SimilarBooks bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/대체 제목/)).toBeTruthy();
+    });
+  });
+
+  it("file_path와 title이 모두 없으면 Unknown으로 표시한다", async () => {
+    mockBooks([
+      {
+        ...makeBook(1, 95),
+        file_path: "",
+        title: "",
+      },
+    ]);
+
+    render(<SimilarBooks bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Unknown/)).toBeTruthy();
+    });
+  });
+
+  it("category가 없으면 _root로 대체하여 카테고리 접두어 없이 표시한다", async () => {
+    mockBooks([
+      {
+        ...makeBook(1, 95),
+        category: "",
+        file_path: "NoCategoryBook.epub",
+      },
+    ]);
+
+    render(<SimilarBooks bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("NoCategoryBook.epub")).toBeTruthy();
+    });
+  });
+
+  it("basePath가 빈 문자열이면 기본 경로(/book-edit)를 사용한다", async () => {
+    mockBooks([makeBook(42, 95)]);
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+
+    render(<SimilarBooks bookId={1} basePath="" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Book 42\.pdf/)).toBeTruthy();
+    });
+
+    const editBtns = screen.getAllByText("편집");
+    fireEvent.click(editBtns[0]);
+    expect(openSpy).toHaveBeenCalledWith(
+      expect.stringContaining("/book-edit/42"),
+      "_blank",
+      "noopener",
+    );
+    openSpy.mockRestore();
+  });
+
   it('"더 보기" 로드 중 에러 발생 시 loadingMore가 해제된다', async () => {
     let callCount = 0;
     mockRawJsonGetReq.mockImplementation((url, resolve, reject) => {
