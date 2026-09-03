@@ -363,6 +363,7 @@ export default function CategoryAdmin({
   const [reloading, setReloading] = useState(false);
   const [mismatchReloading, setMismatchReloading] = useState(false);
   const [bulkReloading, setBulkReloading] = useState(false);
+  const [remainingMismatchCount, setRemainingMismatchCount] = useState(null);
   const [indexingFile, setIndexingFile] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
 
@@ -536,6 +537,35 @@ export default function CategoryAdmin({
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // ── 재적재 진행 중 잔여 이상 항목 건수 폴링 (진행 중일 때만, 10초 간격) ──
+
+  useEffect(() => {
+    if (!mismatchReloading && !bulkReloading) {
+      setRemainingMismatchCount(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const pollRemainingCount = () => {
+      jsonGetReq(
+        apiPrefix + "/category-mismatches",
+        null,
+        (result) => {
+          if (cancelled) return;
+          setRemainingMismatchCount(buildMismatchStats(result).itemCount);
+        },
+        () => {},
+      );
+    };
+
+    pollRemainingCount();
+    const intervalId = setInterval(pollRemainingCount, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [mismatchReloading, bulkReloading, apiPrefix]);
 
   // ── 폴더 클릭 → 불일치 detail lazy-load ──
 
@@ -1220,7 +1250,14 @@ export default function CategoryAdmin({
                     title="불일치 일괄 재적재 (이상 항목이 많으면 오래 걸릴 수 있음)"
                   >
                     {bulkReloading ? (
-                      <Spinner animation="border" size="sm" />
+                      <span className="d-flex align-items-center gap-1">
+                        <Spinner animation="border" size="sm" />
+                        {remainingMismatchCount !== null && (
+                          <small style={{ fontSize: "0.7rem" }}>
+                            잔여 {remainingMismatchCount}건
+                          </small>
+                        )}
+                      </span>
                     ) : (
                       <>
                         일괄 재적재 <FontAwesomeIcon icon={faRotate} />
@@ -1245,7 +1282,14 @@ export default function CategoryAdmin({
                     }
                   >
                     {mismatchReloading ? (
-                      <Spinner animation="border" size="sm" />
+                      <span className="d-flex align-items-center gap-1">
+                        <Spinner animation="border" size="sm" />
+                        {remainingMismatchCount !== null && (
+                          <small style={{ fontSize: "0.7rem" }}>
+                            잔여 {remainingMismatchCount}건
+                          </small>
+                        )}
+                      </span>
                     ) : (
                       <>
                         이상 항목 재적재 <FontAwesomeIcon icon={faRotate} />
@@ -1373,7 +1417,14 @@ export default function CategoryAdmin({
                       title="이상 항목만 ES 재적재"
                     >
                       {mismatchReloading ? (
-                        <Spinner animation="border" size="sm" />
+                        <span className="d-flex align-items-center gap-1">
+                          <Spinner animation="border" size="sm" />
+                          {remainingMismatchCount !== null && (
+                            <small style={{ fontSize: "0.7rem" }}>
+                              잔여 {remainingMismatchCount}건
+                            </small>
+                          )}
+                        </span>
                       ) : (
                         <>
                           이상 항목 재적재 <FontAwesomeIcon icon={faRotate} />

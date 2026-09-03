@@ -422,18 +422,22 @@ describe("CategoryAdmin", () => {
 
     const modal = await screen.findByRole("dialog");
     expect(
-      within(modal).getByText(/현재 불일치 카테고리 3개의 이상 항목 19건을 ES에 재적재합니다/),
+      within(modal).getByText(
+        /현재 불일치 카테고리 3개의 이상 항목 19건을 ES에 재적재합니다/,
+      ),
     ).toBeTruthy();
 
-    mockJsonPostReq.mockImplementation((url, payload, resolve, _reject, done) => {
-      resolve({
-        indexed_count: 1,
-        deleted_count: 1,
-        after_count: 0,
-        failed_count: 0,
-      });
-      if (done) done();
-    });
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, _reject, done) => {
+        resolve({
+          indexed_count: 1,
+          deleted_count: 1,
+          after_count: 0,
+          failed_count: 0,
+        });
+        if (done) done();
+      },
+    );
     fireEvent.click(
       within(modal).getByRole("button", { name: "이상 항목 재적재" }),
     );
@@ -470,15 +474,17 @@ describe("CategoryAdmin", () => {
     const modal = await screen.findByRole("dialog");
     expect(within(modal).getByText(/2건만 ES에 재적재합니다/)).toBeTruthy();
 
-    mockJsonPostReq.mockImplementation((url, payload, resolve, _reject, done) => {
-      resolve({
-        indexed_count: 1,
-        deleted_count: 1,
-        after_count: 0,
-        failed_count: 0,
-      });
-      if (done) done();
-    });
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, _reject, done) => {
+        resolve({
+          indexed_count: 1,
+          deleted_count: 1,
+          after_count: 0,
+          failed_count: 0,
+        });
+        if (done) done();
+      },
+    );
     fireEvent.click(
       within(modal).getByRole("button", { name: "이상 항목 재적재" }),
     );
@@ -1444,15 +1450,17 @@ describe("CategoryAdmin", () => {
     const modal = await screen.findByRole("dialog");
     expect(within(modal).getByText("불일치 일괄 재적재")).toBeTruthy();
 
-    mockJsonPostReq.mockImplementation((url, payload, resolve, reject, final) => {
-      resolve({
-        indexed_count: 4,
-        deleted_count: 2,
-        after_count: 1,
-        failed_count: 0,
-      });
-      final();
-    });
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, reject, final) => {
+        resolve({
+          indexed_count: 4,
+          deleted_count: 2,
+          after_count: 1,
+          failed_count: 0,
+        });
+        final();
+      },
+    );
 
     fireEvent.click(within(modal).getByRole("button", { name: "일괄 재적재" }));
 
@@ -2546,15 +2554,17 @@ describe("CategoryAdmin", () => {
     const modal = await screen.findByRole("dialog");
     expect(within(modal).getByText(/2건만 ES에 재적재합니다/)).toBeTruthy();
 
-    mockJsonPostReq.mockImplementation((url, payload, resolve, _reject, done) => {
-      resolve({
-        indexed_count: 1,
-        deleted_count: 1,
-        after_count: 0,
-        failed_count: 0,
-      });
-      if (done) done();
-    });
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, _reject, done) => {
+        resolve({
+          indexed_count: 1,
+          deleted_count: 1,
+          after_count: 0,
+          failed_count: 0,
+        });
+        if (done) done();
+      },
+    );
     fireEvent.click(
       within(modal).getByRole("button", { name: "이상 항목 재적재" }),
     );
@@ -3446,7 +3456,9 @@ describe("CategoryAdmin 성공 메시지 자동 소멸", () => {
       expect(formatErrorMessage({ detail: "FastAPI 유효성 검사 실패" })).toBe(
         "FastAPI 유효성 검사 실패",
       );
-      expect(formatErrorMessage({ error: "DB 연결 실패" })).toBe("DB 연결 실패");
+      expect(formatErrorMessage({ error: "DB 연결 실패" })).toBe(
+        "DB 연결 실패",
+      );
       expect(formatErrorMessage(12345)).toBe("12345");
     });
 
@@ -3493,5 +3505,111 @@ describe("CategoryAdmin 성공 메시지 자동 소멸", () => {
         expect(alert.className).toContain("alert-danger");
       });
     });
+  });
+});
+
+// ── 재적재 진행 중 잔여 이상 항목 건수 폴링 ──
+
+describe("CategoryAdmin 재적재 진행 상태 폴링", () => {
+  beforeEach(() => {
+    mockJsonGetReq.mockReset();
+    mockJsonDeleteReq.mockReset();
+    mockJsonPostReq.mockReset();
+    mockJsonPutReq.mockReset();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("일괄 재적재 진행 중에는 10초마다 잔여 건수를 폴링해 표시하고, 완료되면 멈춘다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /일괄 재적재/ }));
+    const modal = await screen.findByRole("dialog");
+
+    let capturedFinal;
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, reject, final) => {
+        // 응답을 즉시 resolve하지 않고 보류 — 재적재가 진행 중인 상태를 흉내낸다.
+        capturedFinal = final;
+      },
+    );
+
+    const getCallCountFor = (url) =>
+      mockJsonGetReq.mock.calls.filter((call) => call[0] === url).length;
+
+    fireEvent.click(within(modal).getByRole("button", { name: "일괄 재적재" }));
+
+    // 즉시 1회 폴링되어 잔여 건수가 표시된다 (2 + 8 + 9 = 19건)
+    await waitFor(() => {
+      expect(screen.getByText("잔여 19건")).toBeTruthy();
+    });
+    const countAfterFirstPoll = getCallCountFor("/category-mismatches");
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(getCallCountFor("/category-mismatches")).toBe(
+      countAfterFirstPoll + 1,
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(getCallCountFor("/category-mismatches")).toBe(
+      countAfterFirstPoll + 2,
+    );
+
+    // 재적재가 완료되면 폴링이 멈추고 잔여 건수 표시가 사라진다
+    const countBeforeCompletion = getCallCountFor("/category-mismatches");
+    await act(async () => {
+      capturedFinal();
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/잔여 \d+건/)).toBeNull();
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(30000);
+    });
+    expect(getCallCountFor("/category-mismatches")).toBe(countBeforeCompletion);
+  });
+
+  it("컴포넌트가 언마운트되면 재적재 진행 중 폴링을 멈춘다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    const { unmount } = render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리 목록")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /일괄 재적재/ }));
+    const modal = await screen.findByRole("dialog");
+
+    mockJsonPostReq.mockImplementation(() => {
+      // 응답을 영원히 보류 — 화면 이탈 시점까지 재적재가 진행 중인 상태.
+    });
+
+    const getCallCountFor = (url) =>
+      mockJsonGetReq.mock.calls.filter((call) => call[0] === url).length;
+
+    fireEvent.click(within(modal).getByRole("button", { name: "일괄 재적재" }));
+    await waitFor(() => {
+      expect(screen.getByText("잔여 19건")).toBeTruthy();
+    });
+
+    const countAtUnmount = getCallCountFor("/category-mismatches");
+    unmount();
+
+    await act(async () => {
+      vi.advanceTimersByTime(30000);
+    });
+    expect(getCallCountFor("/category-mismatches")).toBe(countAtUnmount);
   });
 });
