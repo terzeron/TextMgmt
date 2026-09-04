@@ -408,6 +408,25 @@ class TestReadFile:
         assert "created_time_source" in doc
         assert doc["created_time_source"]
 
+    def test_read_file_accepts_explicit_path_prefix(self, tmp_path: Path):
+        Loader = _get_loader()
+        original_prefix = Loader.path_prefix
+        Loader.path_prefix = tmp_path / "other"
+
+        cat_dir = tmp_path / "cat"
+        cat_dir.mkdir()
+        f = cat_dir / "Title.txt"
+        f.write_text("content", encoding="utf-8")
+
+        try:
+            result = Loader.read_file(f, path_prefix=tmp_path)
+        finally:
+            Loader.path_prefix = original_prefix
+
+        inode = list(result.keys())[0]
+        assert result[inode]["category"] == "cat"
+        assert result[inode]["file_path"] == "cat/Title.txt"
+
     def test_read_file_no_author(self, tmp_path: Path):
         Loader = _get_loader()
         original_prefix = Loader.path_prefix

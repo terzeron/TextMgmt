@@ -1146,26 +1146,69 @@ class BookManager:
             except IOError as e:
                 return "Error", f"can't move '{file_path}' to '{new_full_path}', {e}"
 
-            # update book info in ElasticSearch
+            # Replace the ES entry from the moved file so derived metadata stays in sync.
             new_relative_path = new_full_path.relative_to(self.path_prefix)
+            old_doc = dict(doc)
+            old_doc_deleted = False
             try:
-                if self.es_manager.update(book_id, category=new_category, title=new_title, author=new_author, file_path=str(new_relative_path), file_type=new_type):
-                    return "Ok", None
-                LOGGER.error("update_book: ES update failed for book_id=%d, rolling back file move", book_id)
+                if not self.es_manager.delete(book_id):
+                    LOGGER.error("update_book: ES delete failed for book_id=%d, rolling back file move", book_id)
+                    try:
+                        new_full_path.rename(file_path)
+                    except OSError as rollback_err:
+                        LOGGER.error("update_book: rollback failed for book_id=%d: %s", book_id, rollback_err)
+                        return ("Error", f"ES 문서 삭제 실패, 파일 롤백도 실패: {rollback_err}")
+                    return ("Error", f"ES 문서 삭제 실패, 파일 롤백 완료: book_id={book_id}")
+                old_doc_deleted = True
+
+                from utils.loader import Loader
+
+                data = Loader.read_file(new_full_path, path_prefix=self.path_prefix)
+                if not data or len(data) != 1:
+                    reindex_error = f"지원하지 않는 파일 형식입니다: {new_relative_path}"
+                else:
+                    new_doc = dict(next(iter(data.values())))
+                    new_doc.update({"category": new_category, "title": new_title, "author": new_author, "file_path": str(new_relative_path), "file_type": new_type})
+                    self.es_manager.delete_by_file_paths([str(new_relative_path)], exclude_ids=[book_id])
+                    reindexed_book_id, reindex_error = await self.add_book({book_id: new_doc})
+                    if reindexed_book_id == book_id and reindex_error is None:
+                        self._clear_mismatch_cache()
+                        return "Ok", None
+
+                LOGGER.error("update_book: ES reindex failed for book_id=%d, rolling back file move: %s", book_id, reindex_error)
                 try:
                     new_full_path.rename(file_path)
                 except OSError as rollback_err:
                     LOGGER.error("update_book: rollback failed for book_id=%d: %s", book_id, rollback_err)
-                    return ("Error", f"ES 업데이트 실패, 파일 롤백도 실패: {rollback_err}")
-                return ("Error", f"ES 업데이트 실패, 파일 롤백 완료: book_id={book_id}")
+                    return ("Error", f"ES 재색인 실패, 파일 롤백도 실패: ES={reindex_error}, rollback={rollback_err}")
+
+                try:
+                    restored_book_id, restore_error = await self.add_book({book_id: old_doc})
+                except Exception as restore_err:
+                    LOGGER.error("update_book: old ES document restore failed for book_id=%d: %s", book_id, restore_err)
+                    return ("Error", f"ES 재색인 실패, 파일 롤백 완료, 기존 ES 문서 복구 실패: {restore_err}")
+                if restored_book_id != book_id or restore_error is not None:
+                    LOGGER.error("update_book: old ES document restore failed for book_id=%d: %s", book_id, restore_error)
+                    return ("Error", f"ES 재색인 실패, 파일 롤백 완료, 기존 ES 문서 복구 실패: {restore_error}")
+                return ("Error", f"ES 재색인 실패, 파일 롤백 및 기존 ES 문서 복구 완료: {reindex_error}")
             except Exception as e:
-                LOGGER.error("update_book: ES update exception for book_id=%d: %s, rolling back file move", book_id, e)
+                LOGGER.error("update_book: ES reindex exception for book_id=%d: %s, rolling back file move", book_id, e)
                 try:
                     new_full_path.rename(file_path)
                 except OSError as rollback_err:
                     LOGGER.error("update_book: rollback failed for book_id=%d: %s", book_id, rollback_err)
-                    return ("Error", f"ES 업데이트와 파일 롤백 모두 실패: ES={e}, rollback={rollback_err}")
-                return ("Error", f"ES 업데이트 예외, 파일 롤백 완료: {e}")
+                    return ("Error", f"ES 재색인 예외, 파일 롤백 실패: ES={e}, rollback={rollback_err}")
+                if old_doc_deleted:
+                    try:
+                        restored_book_id, restore_error = await self.add_book({book_id: old_doc})
+                    except Exception as restore_err:
+                        LOGGER.error("update_book: old ES document restore failed for book_id=%d: %s", book_id, restore_err)
+                        return ("Error", f"ES 재색인 예외, 파일 롤백 완료, 기존 ES 문서 복구 실패: {restore_err}")
+                    if restored_book_id != book_id or restore_error is not None:
+                        LOGGER.error("update_book: old ES document restore failed for book_id=%d: %s", book_id, restore_error)
+                        return ("Error", f"ES 재색인 예외, 파일 롤백 완료, 기존 ES 문서 복구 실패: {restore_error}")
+                    return ("Error", f"ES 재색인 예외, 파일 롤백 및 기존 ES 문서 복구 완료: {e}")
+                return ("Error", f"ES 문서 삭제 예외, 파일 롤백 완료: {e}")
         return ("Error", f"can't update book information of '{book_id}' in ElasticSearch, no such a book")
 
     def _normalize_stored_file_path(self, file_path: str) -> str:
@@ -1211,6 +1254,295 @@ class BookManager:
 
         detected_type = Loader.detect_file_type(file_path, declared_type)
         return detected_type in self.INDEXABLE_FILE_TYPES
+
+    @staticmethod
+    def _normalize_classification_text(value: str) -> str:
+        return re.sub(r"\s+", " ", value.casefold()).strip()
+
+    @staticmethod
+    def _is_top_level_target_category(category: str) -> bool:
+        return bool(category) and category != "_root" and "/" not in category
+
+    def _category_dir(self, category: str) -> Path:
+        return self.path_prefix if category == "_root" else self.path_prefix / category
+
+    def _classification_haystack(self, file_path: Path) -> str:
+        parts = [file_path.name, file_path.stem]
+        try:
+            relative_path = file_path.relative_to(self.path_prefix)
+            parts.extend(relative_path.parts[:-1])
+        except ValueError:
+            parts.extend(file_path.parts[:-1])
+        return self._normalize_classification_text(" ".join(str(part) for part in parts))
+
+    def _classify_file_to_top_category(self, file_path: Path, source_category: str, mappings: dict[str, list[str]]) -> tuple[str | None, list[str], str | None]:
+        haystack = self._classification_haystack(file_path)
+        scored: list[tuple[int, int, str, list[str]]] = []
+
+        for raw_category, raw_keywords in mappings.items():
+            if not isinstance(raw_category, str):
+                continue
+            target_category = raw_category.strip()
+            if target_category == source_category:
+                continue
+            if not self._is_top_level_target_category(target_category):
+                continue
+            if not self._is_safe_category_name(target_category):
+                continue
+
+            matched_keywords: list[str] = []
+            seen_keywords: set[str] = set()
+            for raw_keyword in raw_keywords or []:
+                if not isinstance(raw_keyword, str):
+                    continue
+                keyword = raw_keyword.strip()
+                normalized_keyword = self._normalize_classification_text(keyword)
+                if not normalized_keyword or normalized_keyword in seen_keywords:
+                    continue
+                seen_keywords.add(normalized_keyword)
+                if normalized_keyword in haystack:
+                    matched_keywords.append(keyword)
+
+            if matched_keywords:
+                score = sum(len(self._normalize_classification_text(keyword)) for keyword in matched_keywords)
+                scored.append((score, len(matched_keywords), target_category, matched_keywords))
+
+        if not scored:
+            return None, [], "매칭되는 키워드가 없습니다"
+
+        scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
+        best_score, best_match_count, best_category, best_keywords = scored[0]
+        tied_categories = [category for score, count, category, _keywords in scored if score == best_score and count == best_match_count]
+        if len(tied_categories) > 1:
+            return None, best_keywords, f"여러 카테고리가 동일 점수로 일치합니다: {', '.join(tied_categories[:3])}"
+
+        return best_category, best_keywords, None
+
+    def _iter_category_indexable_files(self, category: str, recursive: bool = False) -> list[Path]:
+        category_dir = self._category_dir(category)
+        iterator = category_dir.rglob("*") if recursive else category_dir.iterdir()
+        files: list[Path] = []
+        root = self.path_prefix.resolve(strict=False)
+
+        for file_path in iterator:
+            try:
+                relative_to_category = file_path.relative_to(category_dir)
+            except ValueError:
+                continue
+            if any(part.startswith(".") for part in relative_to_category.parts):
+                continue
+            if file_path.is_symlink() or not file_path.is_file():
+                continue
+            try:
+                if not file_path.resolve().is_relative_to(root):
+                    continue
+            except OSError:
+                continue
+            if self._is_indexable_file_path(file_path):
+                files.append(file_path)
+
+        return sorted(files)
+
+    async def _move_classified_file(self, file_path: Path, target_category: str, matched_keywords: list[str], content_type: str, dry_run: bool = False) -> tuple[dict[str, Any] | None, str | None]:
+        root = self.path_prefix.resolve(strict=False)
+        try:
+            old_rel_path = str(file_path.relative_to(self.path_prefix))
+        except ValueError:
+            return None, "잘못된 파일 경로입니다"
+
+        target_path = self.path_prefix / target_category / file_path.name
+        try:
+            if not target_path.resolve(strict=False).is_relative_to(root):
+                return None, "잘못된 대상 경로입니다"
+        except OSError:
+            return None, "잘못된 대상 경로입니다"
+
+        target_rel_path = str(target_path.relative_to(self.path_prefix))
+        if target_path.exists():
+            try:
+                is_same_file = file_path.samefile(target_path)
+            except OSError:
+                is_same_file = False
+            if not is_same_file:
+                return None, f"대상 경로에 파일이 이미 존재합니다: {target_rel_path}"
+
+        if dry_run:
+            return {
+                "status": "dry_run",
+                "from": old_rel_path,
+                "to": target_rel_path,
+                "target_category": target_category,
+                "matched_keywords": matched_keywords,
+                "deleted_count": 0,
+            }, None
+
+        old_book_id: int | None = None
+        old_doc: dict[str, Any] | None = None
+        try:
+            old_book_id = file_path.stat().st_ino
+            old_doc = self.es_manager.search_by_id(old_book_id) or None
+        except Exception as e:
+            LOGGER.warning("auto_classify_category: 기존 ES 문서 조회 실패 (%s): %s", old_rel_path, e)
+
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(file_path), str(target_path))
+        except OSError as e:
+            return None, f"파일 이동 실패: {e}"
+
+        deleted_count = 0
+        try:
+            deleted_count += self.es_manager.delete_by_file_paths([old_rel_path])
+
+            if old_doc:
+                new_book_id = target_path.stat().st_ino
+                new_doc = dict(old_doc)
+            else:
+                from utils.loader import Loader
+
+                data = Loader.read_file(target_path, skip_text=content_type == "comic", path_prefix=self.path_prefix)
+                if not data or len(data) != 1:
+                    raise RuntimeError(f"지원하지 않는 파일 형식입니다: {target_rel_path}")
+                new_book_id, new_doc = next(iter(data.items()))
+                new_doc = dict(new_doc)
+
+            new_doc["category"] = target_category
+            new_doc["file_path"] = target_rel_path
+            deleted_count += self.es_manager.delete_by_file_paths([target_rel_path], exclude_ids=[new_book_id])
+            inserted_book_id, add_error = await self.add_book({new_book_id: new_doc})
+            if inserted_book_id != new_book_id or add_error is not None:
+                raise RuntimeError(add_error or "ES 적재 실패")
+
+            return {
+                "status": "moved",
+                "from": old_rel_path,
+                "to": target_rel_path,
+                "book_id": new_book_id,
+                "target_category": target_category,
+                "matched_keywords": matched_keywords,
+                "deleted_count": deleted_count,
+            }, None
+        except Exception as e:
+            rollback_messages: list[str] = []
+            try:
+                if target_path.exists() and not file_path.exists():
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(target_path), str(file_path))
+            except OSError as rollback_err:
+                rollback_messages.append(f"파일 롤백 실패: {rollback_err}")
+
+            if old_book_id is not None and old_doc:
+                try:
+                    restored_book_id, restore_error = await self.add_book({old_book_id: old_doc})
+                    if restored_book_id != old_book_id or restore_error is not None:
+                        rollback_messages.append(f"기존 ES 문서 복구 실패: {restore_error}")
+                except Exception as restore_err:
+                    rollback_messages.append(f"기존 ES 문서 복구 실패: {restore_err}")
+
+            message = str(e)
+            if rollback_messages:
+                message = f"{message}; {'; '.join(rollback_messages)}"
+            return None, message
+
+    async def auto_classify_category(
+        self,
+        category: str,
+        mappings: dict[str, list[str]],
+        content_type: str = "book",
+        recursive: bool = False,
+        dry_run: bool = False,
+        on_progress: Callable[[dict[str, int]], None] | None = None,
+    ) -> tuple[dict[str, Any], str | None]:
+        """선택 카테고리의 파일을 키워드 매핑으로 최상위 카테고리에 이동하고 ES를 교체한다."""
+        LOGGER.info("auto_classify_category 시작: category='%s', content_type='%s', recursive=%s, dry_run=%s", category, content_type, recursive, dry_run)
+
+        if not category:
+            return {}, "카테고리 이름이 비어있습니다"
+        if not self._is_safe_category_name(category):
+            return {}, "잘못된 카테고리 경로입니다"
+
+        source_dir = self._category_dir(category)
+        if not source_dir.is_dir():
+            return {}, f"디렉토리를 찾을 수 없습니다: {category}"
+
+        result: dict[str, Any] = {
+            "content_type": content_type,
+            "source_category": category,
+            "recursive": recursive,
+            "dry_run": dry_run,
+            "total_count": 0,
+            "remaining_count": 0,
+            "processed_count": 0,
+            "moved_count": 0,
+            "dry_run_count": 0,
+            "indexed_count": 0,
+            "deleted_count": 0,
+            "skipped_count": 0,
+            "failed_count": 0,
+            "files": [],
+            "skipped": [],
+            "failures": [],
+        }
+
+        def emit_progress() -> None:
+            result["skipped_count"] = len(result["skipped"])
+            result["failed_count"] = len(result["failures"])
+            result["remaining_count"] = max(0, result["total_count"] - result["processed_count"])
+            if on_progress is not None:
+                on_progress(
+                    {
+                        "total_count": result["total_count"],
+                        "remaining_count": result["remaining_count"],
+                        "processed_count": result["processed_count"],
+                        "moved_count": result["moved_count"],
+                        "skipped_count": result["skipped_count"],
+                        "failed_count": result["failed_count"],
+                    }
+                )
+
+        file_paths = list(self._iter_category_indexable_files(category, recursive=recursive))
+        result["total_count"] = len(file_paths)
+        result["remaining_count"] = result["total_count"]
+        emit_progress()
+
+        for file_path in file_paths:
+            result["processed_count"] += 1
+            try:
+                rel_path = str(file_path.relative_to(self.path_prefix))
+            except ValueError:
+                result["failures"].append({"file_path": str(file_path), "error": "잘못된 파일 경로입니다"})
+                emit_progress()
+                continue
+
+            target_category, matched_keywords, reason = self._classify_file_to_top_category(file_path, category, mappings)
+            if target_category is None:
+                result["skipped"].append({"file_path": rel_path, "reason": reason or "분류 대상 카테고리를 찾을 수 없습니다", "matched_keywords": matched_keywords})
+                emit_progress()
+                continue
+
+            file_result, error = await self._move_classified_file(file_path, target_category, matched_keywords, content_type=content_type, dry_run=dry_run)
+            if error is not None or file_result is None:
+                result["failures"].append({"file_path": rel_path, "target_category": target_category, "error": error or "자동 분류 실패", "matched_keywords": matched_keywords})
+                emit_progress()
+                continue
+
+            result["files"].append(file_result)
+            result["deleted_count"] += int(file_result.get("deleted_count") or 0)
+            if dry_run:
+                result["dry_run_count"] += 1
+            else:
+                result["moved_count"] += 1
+                result["indexed_count"] += 1
+            emit_progress()
+
+        result["skipped_count"] = len(result["skipped"])
+        result["failed_count"] = len(result["failures"])
+        result["remaining_count"] = max(0, result["total_count"] - result["processed_count"])
+        if result["moved_count"] or result["failed_count"]:
+            self._clear_mismatch_cache()
+
+        LOGGER.info("auto_classify_category 완료: content_type='%s', category='%s', processed=%d, moved=%d, skipped=%d, failed=%d", content_type, category, result["processed_count"], result["moved_count"], result["skipped_count"], result["failed_count"])
+        return result, None
 
     @staticmethod
     def _mismatch_item_count(mismatch_data: dict[str, Any]) -> int:

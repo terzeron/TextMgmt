@@ -55,6 +55,14 @@ describe("Admin", () => {
     expect(tabs.map((t) => t.textContent)).toEqual(SUBTAB_LABELS);
   });
 
+  it("관리 내부 서브 탭에 전용 modern tab class를 적용한다", () => {
+    render(<Admin />);
+
+    const tabList = screen.getByRole("tablist");
+    expect(tabList.classList.contains("admin-modern-tabs")).toBe(true);
+    expect(tabList.classList.contains("nav-tabs")).toBe(true);
+  });
+
   it("기본으로 로그인 세션 관리 탭을 보여준다", () => {
     render(<Admin />);
 

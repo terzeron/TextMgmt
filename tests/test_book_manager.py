@@ -30,10 +30,12 @@ CATEGORY2 = "_txt"
 @pytest.fixture(autouse=True)
 def restore_book_path_prefix():
     original = Book.path_prefix
+    original_loader_path_prefix = Loader.path_prefix
     try:
         yield
     finally:
         Book.path_prefix = original
+        Loader.path_prefix = original_loader_path_prefix
 
 
 def inspect_book_info(book: Book) -> None:
@@ -380,6 +382,7 @@ class DummyES:
         self.deleted_by_category = {"deleted": 2, "failures": []}
         self.keyword_paged = ([], 0)
         self.deleted_ids = []
+        self.deleted_doc_ids = []
         self.deleted_file_paths = []
 
     def search_by_id(self, book_id: int):
@@ -389,6 +392,7 @@ class DummyES:
         return self.updated
 
     def delete(self, book_id: int):
+        self.deleted_doc_ids.append(book_id)
         return self.delete_ok
 
     def delete_by_file_paths(self, file_paths, exclude_ids=None):
@@ -447,6 +451,7 @@ class DummyES:
 def make_manager(tmp_path: Path, es: DummyES | dict | None) -> BookManager:
     manager = BookManager.__new__(BookManager)
     manager.path_prefix = tmp_path
+    Loader.path_prefix = tmp_path
     if isinstance(es, DummyES):
         manager.es_manager = es
     else:
@@ -522,20 +527,27 @@ def test_update_book_conflict_and_success_and_rollback(tmp_path: Path):
     assert conflict.exists()
     assert not original.exists()
 
-    # rollback on ES update failure
+    # rollback on ES reindex failure
     doc2 = make_doc("A/old2.txt")
     old2 = tmp_path / "A" / "old2.txt"
     old2.write_text("z")
     es.search_by_id = lambda _id: doc2
-    es.updated = False
+
+    def fail_new_insert(data):
+        doc_to_insert = next(iter(data.values()))
+        if doc_to_insert["file_path"] == "A/new2.txt":
+            return []
+        return list(data.keys())
+
+    es.insert = fail_new_insert
     new2 = tmp_path / "A" / "new2.txt"
     status, msg = asyncio_runner(manager.update_book(2, "A", "T", "U", new2, ".txt"))
     assert status == "Error"
     assert old2.exists()
 
 
-def test_update_book_es_false_rollback_succeeds(tmp_path: Path):
-    """ES update returns False → file is rolled back and a meaningful error is returned."""
+def test_update_book_reindexes_moved_file_by_delete_and_insert(tmp_path: Path):
+    """이동 후 기존 ES 문서를 삭제하고 새 위치 문서를 다시 insert한다."""
     es = DummyES()
     manager = make_manager(tmp_path, es)
 
@@ -543,20 +555,51 @@ def test_update_book_es_false_rollback_succeeds(tmp_path: Path):
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_text("content")
     es.search_by_id = lambda _id: make_doc("A/src.txt")
-    es.updated = False
+
+    def fail_update(*args, **kwargs):
+        raise AssertionError("update_book must replace the ES entry, not update it in place")
+
+    es.update = fail_update
+
+    dst = tmp_path / "B" / "dst.txt"
+    status, msg = asyncio_runner(manager.update_book(1, "B", "Renamed", "Author", dst, "txt"))
+
+    assert status == "Ok"
+    assert msg is None
+    assert es.deleted_doc_ids == [1]
+    assert es.deleted_file_paths == [(["B/dst.txt"], [1])]
+    assert len(es.inserted) == 1
+    assert es.inserted[0][1]["category"] == "B"
+    assert es.inserted[0][1]["title"] == "Renamed"
+    assert es.inserted[0][1]["author"] == "Author"
+    assert es.inserted[0][1]["file_path"] == "B/dst.txt"
+    assert not src.exists()
+    assert dst.exists()
+
+
+def test_update_book_delete_false_rollback_succeeds(tmp_path: Path):
+    """ES delete returns False → file is rolled back and a meaningful error is returned."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+
+    src = tmp_path / "A" / "src.txt"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("content")
+    es.search_by_id = lambda _id: make_doc("A/src.txt")
+    es.delete_ok = False
 
     dst = tmp_path / "A" / "dst.txt"
     status, msg = asyncio_runner(manager.update_book(1, "A", "T", "U", dst, ".txt"))
 
     assert status == "Error"
     assert msg is not None
-    assert "ES 업데이트 실패" in msg
+    assert "ES 문서 삭제 실패" in msg
     assert src.exists(), "rollback should have restored the source file"
     assert not dst.exists(), "destination should not exist after rollback"
 
 
-def test_update_book_es_false_rollback_fails(tmp_path: Path):
-    """ES update returns False and rollback rename also fails → combined error message."""
+def test_update_book_delete_false_rollback_fails(tmp_path: Path):
+    """ES delete returns False and rollback rename also fails → combined error message."""
     es = DummyES()
     manager = make_manager(tmp_path, es)
 
@@ -564,7 +607,7 @@ def test_update_book_es_false_rollback_fails(tmp_path: Path):
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_text("content")
     es.search_by_id = lambda _id: make_doc("A/src2.txt")
-    es.updated = False
+    es.delete_ok = False
 
     dst = tmp_path / "A" / "dst2.txt"
 
@@ -585,8 +628,8 @@ def test_update_book_es_false_rollback_fails(tmp_path: Path):
     assert "롤백" in msg
 
 
-def test_update_book_es_exception_rollback_succeeds(tmp_path: Path):
-    """ES update raises exception → file is rolled back and a meaningful error is returned."""
+def test_update_book_delete_exception_rollback_succeeds(tmp_path: Path):
+    """ES delete raises exception → file is rolled back and a meaningful error is returned."""
     es = DummyES()
     manager = make_manager(tmp_path, es)
 
@@ -595,17 +638,17 @@ def test_update_book_es_exception_rollback_succeeds(tmp_path: Path):
     src.write_text("content")
     es.search_by_id = lambda _id: make_doc("A/src3.txt")
 
-    def raise_on_update(*args, **kwargs):
+    def raise_on_delete(*args, **kwargs):
         raise RuntimeError("ES connection error")
 
-    es.update = raise_on_update
+    es.delete = raise_on_delete
 
     dst = tmp_path / "A" / "dst3.txt"
     status, msg = asyncio_runner(manager.update_book(1, "A", "T", "U", dst, ".txt"))
 
     assert status == "Error"
     assert msg is not None
-    assert "ES 업데이트 예외" in msg
+    assert "ES 문서 삭제 예외" in msg
     assert src.exists(), "rollback should have restored the source file"
     assert not dst.exists()
 
@@ -1689,6 +1732,251 @@ def test_reload_category_mismatch_files_limits_to_selected_category(tmp_path: Pa
     assert result["failed_count"] == 0
 
 
+def test_auto_classify_category_moves_matching_file_and_reindexes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    source_dir = tmp_path / "0_inbox"
+    source_dir.mkdir(parents=True)
+    source_file = source_dir / "쉬운 과학 이야기.txt"
+    source_file.write_text("hello")
+
+    def fake_read_file(abs_path, stat_result=None, skip_text=False, path_prefix=None):
+        assert path_prefix == tmp_path
+        rel_path = str(abs_path.relative_to(tmp_path))
+        return {
+            abs_path.stat().st_ino: {
+                **make_doc(rel_path, "txt"),
+                "category": rel_path.split("/", 1)[0],
+                "file_path": rel_path,
+            }
+        }
+
+    monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
+
+    result, err = asyncio_runner(
+        manager.auto_classify_category(
+            "0_inbox",
+            {
+                "0_inbox": ["미분류"],
+                "1_fiction": ["소설"],
+                "2_science": ["과학"],
+                "2_science/physics": ["물리"],
+            },
+        )
+    )
+
+    target_file = tmp_path / "2_science" / "쉬운 과학 이야기.txt"
+    assert err is None
+    assert not source_file.exists()
+    assert target_file.exists()
+    assert result["processed_count"] == 1
+    assert result["moved_count"] == 1
+    assert result["indexed_count"] == 1
+    assert result["failed_count"] == 0
+    assert result["files"][0]["from"] == "0_inbox/쉬운 과학 이야기.txt"
+    assert result["files"][0]["to"] == "2_science/쉬운 과학 이야기.txt"
+    assert es.deleted_file_paths[0] == (["0_inbox/쉬운 과학 이야기.txt"], [])
+    assert es.inserted[0]
+    indexed_doc = next(iter(es.inserted[0].values()))
+    assert indexed_doc["category"] == "2_science"
+    assert indexed_doc["file_path"] == "2_science/쉬운 과학 이야기.txt"
+
+
+def test_auto_classify_category_reports_remaining_progress(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    source_dir = tmp_path / "0_inbox"
+    source_dir.mkdir(parents=True)
+    source_file = source_dir / "쉬운 과학 이야기.txt"
+    source_file.write_text("hello")
+
+    def fake_read_file(abs_path, stat_result=None, skip_text=False, path_prefix=None):
+        rel_path = str(abs_path.relative_to(tmp_path))
+        return {
+            abs_path.stat().st_ino: {
+                **make_doc(rel_path, "txt"),
+                "category": rel_path.split("/", 1)[0],
+                "file_path": rel_path,
+            }
+        }
+
+    monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
+    progress_updates: list[dict[str, int]] = []
+
+    result, err = asyncio_runner(
+        manager.auto_classify_category(
+            "0_inbox",
+            {"2_science": ["과학"]},
+            on_progress=progress_updates.append,
+        )
+    )
+
+    assert err is None
+    assert result["total_count"] == 1
+    assert result["remaining_count"] == 0
+    assert progress_updates[0]["total_count"] == 1
+    assert progress_updates[0]["remaining_count"] == 1
+    assert progress_updates[-1]["processed_count"] == 1
+    assert progress_updates[-1]["moved_count"] == 1
+    assert progress_updates[-1]["remaining_count"] == 0
+
+
+def test_auto_classify_root_category_non_recursive_moves_only_top_level_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    source_file = tmp_path / "쉬운 과학 이야기.txt"
+    source_file.write_text("root")
+    nested_dir = tmp_path / "0_inbox"
+    nested_dir.mkdir()
+    nested_file = nested_dir / "깊은 과학 이야기.txt"
+    nested_file.write_text("nested")
+
+    def fake_read_file(abs_path, stat_result=None, skip_text=False, path_prefix=None):
+        assert path_prefix == tmp_path
+        rel_path = str(abs_path.relative_to(tmp_path))
+        return {
+            abs_path.stat().st_ino: {
+                **make_doc(rel_path, "txt"),
+                "category": rel_path.split("/", 1)[0] if "/" in rel_path else "_root",
+                "file_path": rel_path,
+            }
+        }
+
+    monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
+
+    result, err = asyncio_runner(
+        manager.auto_classify_category(
+            "_root",
+            {
+                "2_science": ["과학"],
+            },
+            recursive=False,
+        )
+    )
+
+    target_file = tmp_path / "2_science" / "쉬운 과학 이야기.txt"
+    assert err is None
+    assert not source_file.exists()
+    assert target_file.exists()
+    assert nested_file.exists()
+    assert not (tmp_path / "2_science" / "깊은 과학 이야기.txt").exists()
+    assert result["source_category"] == "_root"
+    assert result["recursive"] is False
+    assert result["processed_count"] == 1
+    assert result["moved_count"] == 1
+    assert result["files"][0]["from"] == "쉬운 과학 이야기.txt"
+    assert result["files"][0]["to"] == "2_science/쉬운 과학 이야기.txt"
+    assert es.deleted_file_paths[0] == (["쉬운 과학 이야기.txt"], [])
+
+
+def test_auto_classify_category_preserves_existing_es_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source_dir = tmp_path / "0_inbox"
+    source_dir.mkdir(parents=True)
+    source_file = source_dir / "수정 과학.txt"
+    source_file.write_text("hello")
+    old_doc = {
+        **make_doc("0_inbox/수정 과학.txt", "txt"),
+        "category": "0_inbox",
+        "title": "관리자가 수정한 제목",
+        "author": "관리자가 수정한 저자",
+        "summary": "관리자가 유지하려는 요약",
+    }
+    es = DummyES(doc=old_doc)
+    manager = make_manager(tmp_path, es)
+
+    def fail_read_file(*args, **kwargs):
+        raise AssertionError("existing ES metadata should be reused")
+
+    monkeypatch.setattr("utils.loader.Loader.read_file", fail_read_file)
+
+    result, err = asyncio_runner(
+        manager.auto_classify_category(
+            "0_inbox",
+            {
+                "2_science": ["과학"],
+            },
+        )
+    )
+
+    assert err is None
+    assert result["moved_count"] == 1
+    indexed_doc = next(iter(es.inserted[0].values()))
+    assert indexed_doc["category"] == "2_science"
+    assert indexed_doc["file_path"] == "2_science/수정 과학.txt"
+    assert indexed_doc["title"] == "관리자가 수정한 제목"
+    assert indexed_doc["author"] == "관리자가 수정한 저자"
+    assert indexed_doc["summary"] == "관리자가 유지하려는 요약"
+
+
+def test_auto_classify_category_skips_ambiguous_and_existing_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    source_dir = tmp_path / "0_inbox"
+    source_dir.mkdir(parents=True)
+    ambiguous = source_dir / "과학 역사 입문.txt"
+    conflict = source_dir / "새 과학.txt"
+    ambiguous.write_text("ambiguous")
+    conflict.write_text("conflict")
+    target_dir = tmp_path / "2_science"
+    target_dir.mkdir()
+    (target_dir / conflict.name).write_text("already exists")
+
+    monkeypatch.setattr("utils.loader.Loader.read_file", lambda *args, **kwargs: {})
+
+    result, err = asyncio_runner(
+        manager.auto_classify_category(
+            "0_inbox",
+            {
+                "2_science": ["과학"],
+                "3_history": ["역사"],
+            },
+        )
+    )
+
+    assert err is None
+    assert ambiguous.exists()
+    assert conflict.exists()
+    assert result["moved_count"] == 0
+    assert result["skipped_count"] == 1
+    assert result["failed_count"] == 1
+    assert "여러 카테고리" in result["skipped"][0]["reason"]
+    assert "대상 경로에 파일이 이미 존재합니다" in result["failures"][0]["error"]
+
+
+def test_auto_classify_category_rolls_back_file_when_reindex_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    source_dir = tmp_path / "0_inbox"
+    source_dir.mkdir(parents=True)
+    source_file = source_dir / "과학 실패.txt"
+    source_file.write_text("hello")
+
+    monkeypatch.setattr("utils.loader.Loader.read_file", lambda *args, **kwargs: {})
+
+    result, err = asyncio_runner(
+        manager.auto_classify_category(
+            "0_inbox",
+            {
+                "2_science": ["과학"],
+            },
+        )
+    )
+
+    assert err is None
+    assert source_file.exists()
+    assert not (tmp_path / "2_science" / source_file.name).exists()
+    assert result["moved_count"] == 0
+    assert result["failed_count"] == 1
+    assert "지원하지 않는 파일 형식입니다" in result["failures"][0]["error"]
+
+
+def test_auto_classify_category_rejects_invalid_category(tmp_path: Path):
+    manager = make_manager(tmp_path, DummyES())
+    result, err = asyncio_runner(manager.auto_classify_category("../bad", {"A": ["x"]}))
+    assert result == {}
+    assert err == "잘못된 카테고리 경로입니다"
+
+
 def test_rename_category_target_dir_exists(tmp_path: Path):
     es = DummyES()
     manager = make_manager(tmp_path, es)
@@ -1840,8 +2128,8 @@ def test_update_book_os_error_on_resolve(tmp_path: Path, monkeypatch: pytest.Mon
     assert "잘못된 경로" in msg
 
 
-def test_update_book_es_exception_rollback_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Lines 840-847: ES update exception + rollback failure"""
+def test_update_book_reindex_exception_rollback_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """ES reindex exception + rollback failure"""
     es = DummyES()
     manager = make_manager(tmp_path, es)
     doc = make_doc("A/old.txt")
@@ -1851,10 +2139,10 @@ def test_update_book_es_exception_rollback_failure(tmp_path: Path, monkeypatch: 
     original.write_text("x")
     new_path = tmp_path / "A" / "new.txt"
 
-    def raise_update(*args, **kwargs):
+    def raise_insert(*args, **kwargs):
         raise RuntimeError("es fail")
 
-    es.update = raise_update
+    es.insert = raise_insert
     calls = {"count": 0}
     orig_rename = Path.rename
 

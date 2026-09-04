@@ -3,6 +3,7 @@ import { useOutletContext } from "react-router-dom";
 
 import "./Edit.css";
 import "bootstrap/dist/css/bootstrap.min.css";
+import "./Admin.css";
 import { Tab, Tabs } from "react-bootstrap";
 
 import CategoryAdmin from "./CategoryAdmin";
@@ -23,7 +24,7 @@ export default function Admin() {
       id="admin-subtabs"
       activeKey={activeTab}
       onSelect={(key) => setActiveTab(key || SESSION_TAB)}
-      className="mb-3"
+      className="admin-modern-tabs mb-3"
     >
       <Tab eventKey={SESSION_TAB} title="로그인 세션 관리">
         {activeTab === SESSION_TAB && <LoginSessionAdmin />}

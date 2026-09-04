@@ -32,17 +32,22 @@ os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
 # env var 설정 후 import해야 Book.path_prefix가 올바른 경로로 초기화된다
 from backend.book import Book  # noqa: E402
 from backend.comics import Comics  # noqa: E402
+from utils.loader import Loader  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def restore_model_path_prefixes():
     original_book_prefix = Book.path_prefix
     original_comics_prefix = Comics.path_prefix
+    original_loader_path_prefix = Loader.path_prefix
+    original_loader_comics_path_prefix = Loader.comics_path_prefix
     try:
         yield
     finally:
         Book.path_prefix = original_book_prefix
         Comics.path_prefix = original_comics_prefix
+        Loader.path_prefix = original_loader_path_prefix
+        Loader.comics_path_prefix = original_loader_comics_path_prefix
 
 
 from testcontainers.core.container import DockerContainer  # noqa: E402
