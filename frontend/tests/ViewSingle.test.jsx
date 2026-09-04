@@ -199,13 +199,27 @@ describe("ViewSingle", () => {
     expect(window.location.href).toContain("102");
   });
 
-
   // ── standalone 네비게이션 경계 ──
 
   const BOOKS = [
-    { book_id: 100, title: "Book 0", file_type: "epub", file_path: "1_fiction/0.epub" },
-    { book_id: 101, title: "Book 1", file_type: "epub", file_path: "1_fiction/a.epub" },
-    { book_id: 102, title: "Book 2", file_type: "epub", file_path: "1_fiction/b.epub" },
+    {
+      book_id: 100,
+      title: "Book 0",
+      file_type: "epub",
+      file_path: "1_fiction/0.epub",
+    },
+    {
+      book_id: 101,
+      title: "Book 1",
+      file_type: "epub",
+      file_path: "1_fiction/a.epub",
+    },
+    {
+      book_id: 102,
+      title: "Book 2",
+      file_type: "epub",
+      file_path: "1_fiction/b.epub",
+    },
   ];
 
   it("첫 번째 책에서는 이전 책 버튼이 비활성화된다", async () => {
@@ -213,14 +227,18 @@ describe("ViewSingle", () => {
     mockUseSearchParams.mockReturnValue([
       new URLSearchParams("path=1_fiction/0.epub&category=1_fiction"),
     ]);
-    Common.jsonGetReq.mockImplementation((url, payload, resolve) => resolve(BOOKS));
+    Common.jsonGetReq.mockImplementation((url, payload, resolve) =>
+      resolve(BOOKS),
+    );
 
     render(<ViewSingle />);
 
     await waitFor(() => {
       expect(screen.getByText(/다음 책으로/)).toBeTruthy();
     });
-    expect(screen.getByText(/이전 책으로/).closest("button").disabled).toBe(true);
+    expect(screen.getByText(/이전 책으로/).closest("button").disabled).toBe(
+      true,
+    );
   });
 
   it("마지막 책에서는 다음 책 버튼이 비활성화된다", async () => {
@@ -228,22 +246,30 @@ describe("ViewSingle", () => {
     mockUseSearchParams.mockReturnValue([
       new URLSearchParams("path=1_fiction/b.epub&category=1_fiction"),
     ]);
-    Common.jsonGetReq.mockImplementation((url, payload, resolve) => resolve(BOOKS));
+    Common.jsonGetReq.mockImplementation((url, payload, resolve) =>
+      resolve(BOOKS),
+    );
 
     render(<ViewSingle />);
 
     await waitFor(() => {
       expect(screen.getByText(/이전 책으로/)).toBeTruthy();
     });
-    expect(screen.getByText(/다음 책으로/).closest("button").disabled).toBe(true);
+    expect(screen.getByText(/다음 책으로/).closest("button").disabled).toBe(
+      true,
+    );
   });
 
   it("api 파라미터가 있으면 이전 책 이동 URL 에 api 를 포함한다", async () => {
     mockUseParams.mockReturnValue({ entryId: "101", fileType: "epub" });
     mockUseSearchParams.mockReturnValue([
-      new URLSearchParams("path=1_fiction/a.epub&category=1_fiction&api=/comics"),
+      new URLSearchParams(
+        "path=1_fiction/a.epub&category=1_fiction&api=/comics",
+      ),
     ]);
-    Common.jsonGetReq.mockImplementation((url, payload, resolve) => resolve(BOOKS));
+    Common.jsonGetReq.mockImplementation((url, payload, resolve) =>
+      resolve(BOOKS),
+    );
 
     render(<ViewSingle />);
 
@@ -254,6 +280,91 @@ describe("ViewSingle", () => {
     fireEvent.click(screen.getByText(/이전 책으로/));
     expect(window.location.href).toContain("100");
     expect(window.location.href).toContain("api=");
+  });
+
+  // ── 카테고리 응답 엣지 케이스 ──
+
+  it("카테고리 응답이 배열이 아니면 이전/다음 책 정보를 설정하지 않는다", async () => {
+    mockUseParams.mockReturnValue({ entryId: "101", fileType: "epub" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("path=1_fiction/a.epub&category=1_fiction"),
+    ]);
+    Common.jsonGetReq.mockImplementation((url, payload, resolve) =>
+      resolve({ not: "an array" }),
+    );
+
+    render(<ViewSingle />);
+
+    await waitFor(() => {
+      expect(Common.jsonGetReq).toHaveBeenCalled();
+    });
+
+    expect(screen.queryByText(/이전 책으로/)).toBeNull();
+    expect(screen.queryByText(/다음 책으로/)).toBeNull();
+  });
+
+  it("책 목록에 title이 없는 항목이 있어도 정렬 시 오류 없이 처리한다", async () => {
+    mockUseParams.mockReturnValue({ entryId: "101", fileType: "epub" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("path=1_fiction/a.epub&category=1_fiction"),
+    ]);
+    const BOOKS_NO_TITLE = [
+      {
+        book_id: 100,
+        title: "Book 0",
+        file_type: "epub",
+        file_path: "1_fiction/0.epub",
+      },
+      { book_id: 101, file_type: "epub", file_path: "1_fiction/a.epub" }, // title 없음
+      {
+        book_id: 102,
+        title: "Book 2",
+        file_type: "epub",
+        file_path: "1_fiction/b.epub",
+      },
+    ];
+    Common.jsonGetReq.mockImplementation((url, payload, resolve) =>
+      resolve(BOOKS_NO_TITLE),
+    );
+
+    render(<ViewSingle />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/다음 책으로/)).toBeTruthy();
+    });
+    // title이 없는 책(101)이 정렬상 맨 앞으로 오므로 이전 책 버튼은 비활성화된다
+    expect(screen.getByText(/이전 책으로/).closest("button").disabled).toBe(
+      true,
+    );
+  });
+
+  it("이동할 책에 file_type/file_path가 없으면 빈 값으로 URL을 구성한다", async () => {
+    mockUseParams.mockReturnValue({ entryId: "300", fileType: "epub" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("path=1_fiction/a.epub&category=1_fiction"),
+    ]);
+    const BOOKS_MISSING_FIELDS = [
+      {
+        book_id: 300,
+        title: "A",
+        file_type: "epub",
+        file_path: "1_fiction/a.epub",
+      },
+      { book_id: 301, title: "B" }, // file_type, file_path 없음
+    ];
+    Common.jsonGetReq.mockImplementation((url, payload, resolve) =>
+      resolve(BOOKS_MISSING_FIELDS),
+    );
+
+    render(<ViewSingle />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/다음 책으로/)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText(/다음 책으로/));
+    expect(window.location.href).toContain("/viewer//301");
+    expect(window.location.href).toContain("path=&");
   });
 
   // ── 기타 버튼 및 엣지 케이스 ──

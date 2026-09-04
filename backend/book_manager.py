@@ -17,7 +17,7 @@ import tempfile
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote, urlparse, unquote
 from fastapi.responses import FileResponse, Response
 from bs4 import BeautifulSoup
@@ -1440,7 +1440,7 @@ class BookManager:
         except IOError as e:
             return "Error", f"파일 삭제 실패: {e}"
 
-    async def _bulk_index_files(self, file_paths: list[str], clean_existing: bool) -> tuple[dict[str, int], list[dict[str, Any]]]:
+    async def _bulk_index_files(self, file_paths: list[str], clean_existing: bool, on_progress: Callable[[dict[str, int]], None] | None = None) -> tuple[dict[str, int], list[dict[str, Any]]]:
         """여러 파일을 배치로 파싱해 ES에 한 번에 색인한다 (파일 1건씩 insert+refresh하는 것보다 훨씬 빠름).
         반환: (file_path -> 새 book_id 매핑, 실패 목록)"""
         from utils.loader import Loader
@@ -1451,6 +1451,10 @@ class BookManager:
         failures: list[dict[str, Any]] = []
 
         for file_path in file_paths:
+            # 파일 1건 파싱은 최대 HARD_PARSE_TIMEOUT_SECONDS까지 걸릴 수 있는 유일한 지점이라,
+            # 여기서 매번 heartbeat를 찍어야 대량 재적재 도중에도 "작업이 살아있다"는 신호가 끊기지 않는다.
+            if on_progress is not None:
+                on_progress({})
             abs_path = (self.path_prefix / file_path).resolve()
             if not abs_path.is_relative_to(self.path_prefix.resolve()) or not abs_path.is_file():
                 failures.append({"file_path": file_path, "error": f"파일을 찾을 수 없습니다: {file_path}"})
@@ -1486,7 +1490,7 @@ class BookManager:
                 failures.append({"file_path": file_path, "error": "ES 적재 실패"})
         return indexed, failures
 
-    async def _reload_category_mismatch_details(self, category: str, details: dict[str, Any]) -> dict[str, Any]:
+    async def _reload_category_mismatch_details(self, category: str, details: dict[str, Any], on_progress: Callable[[dict[str, int]], None] | None = None) -> dict[str, Any]:
         category_result: dict[str, Any] = {"category": category, "indexed_count": 0, "deleted_count": 0, "failures": []}
         ids_to_delete: set[int] = set()
 
@@ -1515,7 +1519,7 @@ class BookManager:
         for paths, clean_existing in ((fs_only_paths, True), (dup_reindex_paths, False)):
             for batch_start in range(0, len(paths), BULK_REINDEX_BATCH_SIZE):
                 batch = paths[batch_start : batch_start + BULK_REINDEX_BATCH_SIZE]
-                indexed, failures = await self._bulk_index_files(batch, clean_existing=clean_existing)
+                indexed, failures = await self._bulk_index_files(batch, clean_existing=clean_existing, on_progress=on_progress)
                 indexed_book_id_by_path.update(indexed)
                 category_result["indexed_count"] += len(indexed)
                 category_result["failures"].extend(failures)
@@ -1552,7 +1556,7 @@ class BookManager:
 
         return category_result
 
-    async def reload_category_mismatches(self, content_type: str = "book") -> tuple[dict[str, Any], str | None]:
+    async def reload_category_mismatches(self, content_type: str = "book", on_progress: Callable[[dict[str, int]], None] | None = None) -> tuple[dict[str, Any], str | None]:
         """현재 카테고리 불일치 항목을 파일 단위로 ES에 재적재/정리한다."""
         LOGGER.info("reload_category_mismatches 시작: content_type='%s'", content_type)
 
@@ -1560,6 +1564,8 @@ class BookManager:
         before = await asyncio.to_thread(self.get_category_mismatches)
         categories = self._mismatch_categories(before)
         result: dict[str, Any] = {"content_type": content_type, "category_count": len(categories), "before_count": self._mismatch_item_count(before), "after_count": 0, "indexed_count": 0, "deleted_count": 0, "failed_count": 0, "failures": [], "categories": []}
+        if on_progress is not None:
+            on_progress({"before_count": result["before_count"]})
 
         for category in categories:
             if not self._is_safe_category_name(category):
@@ -1567,10 +1573,12 @@ class BookManager:
                 continue
 
             details = await asyncio.to_thread(self.get_category_mismatch_details, category)
-            category_result = await self._reload_category_mismatch_details(category, details)
+            category_result = await self._reload_category_mismatch_details(category, details, on_progress=on_progress)
             result["indexed_count"] += category_result["indexed_count"]
             result["deleted_count"] += category_result["deleted_count"]
             result["categories"].append(category_result)
+            if on_progress is not None:
+                on_progress({"indexed_count": result["indexed_count"], "deleted_count": result["deleted_count"]})
 
         try:
             await asyncio.to_thread(self.es_manager.refresh)
@@ -1590,7 +1598,7 @@ class BookManager:
         LOGGER.info("reload_category_mismatches 완료: content_type='%s', categories=%d, indexed=%d, deleted=%d, failed=%d, before=%d, after=%d", content_type, result["category_count"], result["indexed_count"], result["deleted_count"], result["failed_count"], result["before_count"], result["after_count"])
         return result, None
 
-    async def reload_category_mismatch_files(self, category: str, content_type: str = "book") -> tuple[dict[str, Any], str | None]:
+    async def reload_category_mismatch_files(self, category: str, content_type: str = "book", on_progress: Callable[[dict[str, int]], None] | None = None) -> tuple[dict[str, Any], str | None]:
         """선택 카테고리의 현재 불일치 항목만 파일 단위로 ES에 재적재/정리한다."""
         LOGGER.info("reload_category_mismatch_files 시작: category='%s', content_type='%s'", category, content_type)
 
@@ -1601,7 +1609,9 @@ class BookManager:
 
         self._clear_mismatch_cache()
         before_details = await asyncio.to_thread(self.get_category_mismatch_details, category)
-        category_result = await self._reload_category_mismatch_details(category, before_details)
+        if on_progress is not None:
+            on_progress({"before_count": self._mismatch_detail_item_count(before_details)})
+        category_result = await self._reload_category_mismatch_details(category, before_details, on_progress=on_progress)
         result: dict[str, Any] = {
             "content_type": content_type,
             "category": category,

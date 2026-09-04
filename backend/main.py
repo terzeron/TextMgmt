@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Literal, Callable, TypeVar
 from urllib.parse import urlparse
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -720,57 +720,78 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             LOGGER.error("reload_category 응답: failure — %s", error)
         return response_object
 
-    @router.post("/category-mismatches/reload-mismatches", dependencies=admin_dep)
-    async def reload_category_mismatch_files(body: CategoryDeleteModel) -> dict[str, Any]:
-        """특정 카테고리의 현재 불일치 항목만 ES에 재적재/정리"""
-        LOGGER.info("reload_category_mismatch_files 요청: category='%s', content_type='%s'", body.category, content_type)
-        response_object: dict[str, Any] = {"status": "failure"}
-        acquired, lock_error = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type)
-        if not acquired:
-            response_object["error"] = lock_error
-            return response_object
+    def _on_reload_progress(counts: dict[str, int]) -> None:
+        # book_manager의 재적재 루프 안(동기 for문)에서 직접 호출되므로 asyncio.to_thread로 감쌀 수
+        # 없다 — heartbeat는 PK 1건짜리 짧은 UPDATE라 블로킹 비용은 감내 가능한 수준으로 본다.
+        category_mapping.heartbeat_reload_lock(content_type, **counts)
+
+    async def _run_reload_mismatch_files_job(category: str) -> None:
         try:
-            result, error = await manager.reload_category_mismatch_files(body.category, content_type=content_type)
+            result, error = await manager.reload_category_mismatch_files(category, content_type=content_type, on_progress=_on_reload_progress)
         except Exception as e:
             LOGGER.error("reload_category_mismatch_files error: %s", e)
-            response_object["error"] = GENERIC_MISMATCH_ERROR
-            return response_object
-        finally:
-            await asyncio.to_thread(category_mapping.release_reload_lock, content_type)
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", GENERIC_MISMATCH_ERROR)
+            return
         if error is None:
-            response_object["status"] = "success"
-            response_object["result"] = result
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "done", None, indexed_count=result["indexed_count"], deleted_count=result["deleted_count"], failed_count=result["failed_count"], before_count=result["before_count"], after_count=result["after_count"])
             LOGGER.info("reload_category_mismatch_files 응답: success — %s", result)
         else:
-            response_object["error"] = error
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", error)
             LOGGER.error("reload_category_mismatch_files 응답: failure — %s", error)
+
+    async def _run_reload_all_mismatches_job() -> None:
+        try:
+            result, error = await manager.reload_category_mismatches(content_type=content_type, on_progress=_on_reload_progress)
+        except Exception as e:
+            LOGGER.error("reload_all_category_mismatches error: %s", e)
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", GENERIC_MISMATCH_ERROR)
+            return
+        if error is None:
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "done", None, indexed_count=result["indexed_count"], deleted_count=result["deleted_count"], failed_count=result["failed_count"], before_count=result["before_count"], after_count=result["after_count"])
+            LOGGER.info("reload_all_category_mismatches 응답: success — %s", result)
+        else:
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", error)
+            LOGGER.error("reload_all_category_mismatches 응답: failure — %s", error)
+
+    @router.post("/category-mismatches/reload-mismatches", dependencies=admin_dep)
+    async def reload_category_mismatch_files(body: CategoryDeleteModel, background_tasks: BackgroundTasks) -> dict[str, Any]:
+        """특정 카테고리의 현재 불일치 항목만 ES에 재적재/정리 (백그라운드 실행, 즉시 응답)"""
+        LOGGER.info("reload_category_mismatch_files 요청: category='%s', content_type='%s'", body.category, content_type)
+        response_object: dict[str, Any] = {"status": "failure"}
+        acquired, lock_error = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, body.category)
+        if not acquired:
+            status = await asyncio.to_thread(category_mapping.get_reload_status, content_type)
+            response_object["status"] = "success"
+            response_object["result"] = {"already_running": True, **(status or {})}
+            LOGGER.info("reload_category_mismatch_files: 진행 중인 작업에 연결 — %s", lock_error)
+            return response_object
+        background_tasks.add_task(_run_reload_mismatch_files_job, body.category)
+        response_object["status"] = "success"
+        response_object["result"] = {"started": True, "content_type": content_type, "category": body.category}
         return response_object
 
     @router.post("/category-mismatches/reload-all", dependencies=admin_dep)
-    async def reload_all_category_mismatches() -> dict[str, Any]:
-        """현재 카테고리 불일치 항목을 일괄 ES 재적재/정리"""
+    async def reload_all_category_mismatches(background_tasks: BackgroundTasks) -> dict[str, Any]:
+        """현재 카테고리 불일치 항목을 일괄 ES 재적재/정리 (백그라운드 실행, 즉시 응답)"""
         LOGGER.info("reload_all_category_mismatches 요청: content_type='%s'", content_type)
         response_object: dict[str, Any] = {"status": "failure"}
-        acquired, lock_error = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type)
+        acquired, lock_error = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, None)
         if not acquired:
-            response_object["error"] = lock_error
-            return response_object
-        try:
-            result, error = await manager.reload_category_mismatches(content_type=content_type)
-        except Exception as e:
-            LOGGER.error("reload_all_category_mismatches error: %s", e)
-            response_object["error"] = GENERIC_MISMATCH_ERROR
-            return response_object
-        finally:
-            await asyncio.to_thread(category_mapping.release_reload_lock, content_type)
-        if error is None:
+            status = await asyncio.to_thread(category_mapping.get_reload_status, content_type)
             response_object["status"] = "success"
-            response_object["result"] = result
-            LOGGER.info("reload_all_category_mismatches 응답: success — %s", result)
-        else:
-            response_object["error"] = error
-            LOGGER.error("reload_all_category_mismatches 응답: failure — %s", error)
+            response_object["result"] = {"already_running": True, **(status or {})}
+            LOGGER.info("reload_all_category_mismatches: 진행 중인 작업에 연결 — %s", lock_error)
+            return response_object
+        background_tasks.add_task(_run_reload_all_mismatches_job)
+        response_object["status"] = "success"
+        response_object["result"] = {"started": True, "content_type": content_type}
         return response_object
+
+    @router.get("/category-mismatches/reload-status", dependencies=admin_dep)
+    async def get_reload_status() -> dict[str, Any]:
+        """진행 중이거나 마지막으로 끝난 재적재 작업 상태 조회 (폴링용)"""
+        status = await asyncio.to_thread(category_mapping.get_reload_status, content_type)
+        return {"status": "success", "result": status or {"status": "idle"}}
 
     @router.get("/category-mismatches/{category:path}", dependencies=admin_dep)
     async def get_category_mismatch_details(category: str) -> dict[str, Any]:

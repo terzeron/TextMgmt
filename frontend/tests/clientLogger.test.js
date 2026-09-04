@@ -6,6 +6,7 @@ import {
   removeGlobalErrorLogging,
   _resetDedupCacheForTesting,
 } from "../src/clientLogger";
+import * as Common from "../src/Common";
 
 describe("clientLogger", () => {
   beforeEach(() => {
@@ -304,5 +305,54 @@ describe("clientLogger", () => {
 
     const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(sentBody.message).toBe("Unhandled Promise Rejection");
+  });
+
+  it("getApiUrlPrefix가 예외를 던지면 기본 경로(/logs/client-error)로 폴백한다", () => {
+    navigator.sendBeacon = vi.fn().mockReturnValue(true);
+    const spy = vi.spyOn(Common, "getApiUrlPrefix").mockImplementation(() => {
+      throw new Error("prefix boom");
+    });
+
+    reportClientError({ errorType: "CUSTOM_ERROR", message: "Prefix throws" });
+
+    expect(navigator.sendBeacon).toHaveBeenCalledWith(
+      "/logs/client-error",
+      expect.any(Blob),
+    );
+    spy.mockRestore();
+  });
+
+  it("error 이벤트 처리 중 예외가 발생하면 무음 처리된다", () => {
+    navigator.sendBeacon = undefined;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    global.fetch = fetchMock;
+    initGlobalErrorLogging();
+
+    const errorEvent = new ErrorEvent("error", { message: "will throw" });
+    Object.defineProperty(errorEvent, "message", {
+      get() {
+        throw new Error("message access boom");
+      },
+    });
+
+    expect(() => window.dispatchEvent(errorEvent)).not.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("unhandledrejection 이벤트 처리 중 예외가 발생하면 무음 처리된다", () => {
+    navigator.sendBeacon = undefined;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    global.fetch = fetchMock;
+    initGlobalErrorLogging();
+
+    const promiseEvent = new CustomEvent("unhandledrejection");
+    Object.defineProperty(promiseEvent, "reason", {
+      get() {
+        throw new Error("reason access boom");
+      },
+    });
+
+    expect(() => window.dispatchEvent(promiseEvent)).not.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -387,15 +387,15 @@ class TestCategoryMapping(unittest.TestCase):
         assert conn.committed is True
 
     def test_migrate_skips_when_content_type_already_exists(self):
-        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}, {"cnt": 1}, {"cnt": 1}])
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 12)
         cm_mod, cm = build_cm(cursor)
         alter_queries = [sql for sql, _ in cursor.executed if "ALTER TABLE" in str(sql)]
         assert cm is not None
         assert alter_queries == []
 
     def test_acquire_reload_lock_success(self):
-        cursor = FakeCursor()
-        cm_mod, cm = build_cm(cursor)
+        cm_mod, cm = build_cm(FakeCursor())
+        cursor = FakeCursor(fetchone_rows=[None])
 
         @contextlib.contextmanager
         def _conn():
@@ -409,14 +409,7 @@ class TestCategoryMapping(unittest.TestCase):
 
     def test_acquire_reload_lock_already_in_progress(self):
         cm_mod, cm = build_cm(FakeCursor())
-        calls = {"n": 0}
-
-        def side_effect(sql, params):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise cm_mod.pymysql.IntegrityError("dup")
-
-        cursor = FakeCursor(fetchone_rows=[{"started_at": datetime.now()}], execute_side_effect=side_effect)
+        cursor = FakeCursor(fetchone_rows=[{"status": "running", "updated_at": datetime.now()}])
 
         @contextlib.contextmanager
         def _conn():
@@ -427,18 +420,12 @@ class TestCategoryMapping(unittest.TestCase):
         assert acquired is False
         assert error is not None
         assert "진행 중" in error
+        assert not any("INSERT INTO reload_locks" in str(sql) for sql, _ in cursor.executed)
 
     def test_acquire_reload_lock_replaces_stale_lock(self):
         cm_mod, cm = build_cm(FakeCursor())
-        calls = {"n": 0}
-
-        def side_effect(sql, params):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise cm_mod.pymysql.IntegrityError("dup")
-
-        old_started_at = datetime.now() - timedelta(seconds=cm.RELOAD_LOCK_STALE_SECONDS + 60)
-        cursor = FakeCursor(fetchone_rows=[{"started_at": old_started_at}], execute_side_effect=side_effect)
+        old_updated_at = datetime.now() - timedelta(seconds=cm.RELOAD_LOCK_HEARTBEAT_STALE_SECONDS + 60)
+        cursor = FakeCursor(fetchone_rows=[{"status": "running", "updated_at": old_updated_at}])
 
         @contextlib.contextmanager
         def _conn():
@@ -449,8 +436,7 @@ class TestCategoryMapping(unittest.TestCase):
         assert acquired is True
         assert error is None
         executed_sql = [sql for sql, _ in cursor.executed]
-        assert sum("INSERT INTO reload_locks" in s for s in executed_sql) == 2
-        assert sum("DELETE FROM reload_locks" in s for s in executed_sql) == 1
+        assert sum("INSERT INTO reload_locks" in s for s in executed_sql) == 1
 
     def test_release_reload_lock(self):
         cursor = FakeCursor()
@@ -463,3 +449,95 @@ class TestCategoryMapping(unittest.TestCase):
         cm._get_connection = _conn
         cm.release_reload_lock("book")
         assert any("DELETE FROM reload_locks" in str(sql) for sql, _ in cursor.executed)
+
+    def test_heartbeat_reload_lock_touches_updated_at_only(self):
+        cm_mod, cm = build_cm(FakeCursor())
+        cursor = FakeCursor()
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        cm.heartbeat_reload_lock("book")
+        sql, params = cursor.executed[-1]
+        assert "updated_at = NOW()" in sql
+        assert "indexed_count" not in sql
+        assert params == ("book",)
+
+    def test_heartbeat_reload_lock_updates_counts(self):
+        cm_mod, cm = build_cm(FakeCursor())
+        cursor = FakeCursor()
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        cm.heartbeat_reload_lock("book", indexed_count=3, deleted_count=1)
+        sql, params = cursor.executed[-1]
+        assert "indexed_count = %s" in sql
+        assert "deleted_count = %s" in sql
+        assert params == (3, 1, "book")
+
+    def test_heartbeat_reload_lock_rejects_unknown_field(self):
+        cm_mod, cm = build_cm(FakeCursor())
+        with self.assertRaises(ValueError):
+            cm.heartbeat_reload_lock("book", bogus_count=1)
+
+    def test_complete_reload_lock_records_final_status(self):
+        cm_mod, cm = build_cm(FakeCursor())
+        cursor = FakeCursor()
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        cm.complete_reload_lock("book", "done", None, indexed_count=5, deleted_count=2, failed_count=0, before_count=7, after_count=0)
+        sql, params = cursor.executed[-1]
+        assert "status = %s" in sql
+        assert params[0] == "done"
+        assert params[-1] == "book"
+
+    def test_get_reload_status_none_when_no_row(self):
+        cm_mod, cm = build_cm(FakeCursor())
+        cursor = FakeCursor(fetchone_rows=[None])
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        assert cm.get_reload_status("book") is None
+
+    def test_get_reload_status_returns_running_row(self):
+        cm_mod, cm = build_cm(FakeCursor())
+        now = datetime.now()
+        row = {"category": "A", "status": "running", "started_at": now, "updated_at": now, "indexed_count": 1, "deleted_count": 0, "failed_count": 0, "before_count": 2, "after_count": 0, "error": None}
+        cursor = FakeCursor(fetchone_rows=[row])
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        status = cm.get_reload_status("book")
+        assert status["status"] == "running"
+        assert status["category"] == "A"
+        assert status["indexed_count"] == 1
+
+    def test_get_reload_status_reports_stale_running_as_failed(self):
+        cm_mod, cm = build_cm(FakeCursor())
+        old_updated_at = datetime.now() - timedelta(seconds=cm.RELOAD_LOCK_HEARTBEAT_STALE_SECONDS + 60)
+        row = {"category": "A", "status": "running", "started_at": old_updated_at, "updated_at": old_updated_at, "indexed_count": 0, "deleted_count": 0, "failed_count": 0, "before_count": 0, "after_count": 0, "error": None}
+        cursor = FakeCursor(fetchone_rows=[row])
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        status = cm.get_reload_status("book")
+        assert status["status"] == "failed"
+        assert status["error"]

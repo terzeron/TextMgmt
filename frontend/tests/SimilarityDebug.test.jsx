@@ -291,6 +291,45 @@ describe("매칭 상세 뱃지 표시", () => {
   });
 });
 
+// ── bookstoreKeywords 및 항목 필드 누락 시 기본값 처리 (line 76, 91, 94) ──
+
+describe("bookstoreKeywords 누락/필드 누락 시 기본값 처리", () => {
+  it("bookstoreKeywords가 없으면 빈 객체로 대체되어 키워드 테이블에 행이 없다", () => {
+    mockGetSimilarityDebugInfo.mockReturnValue({ categoryDetails: [] });
+    render(
+      <SimilarityDebug
+        suggestedCategories={{ yes24_0_0: "소설" }}
+        categoryList={["소설"]}
+      />,
+    );
+    fireEvent.click(screen.getByText("유사도 계산 디버그"));
+    expect(screen.getByText("서점 카테고리에서 추출된 키워드:")).toBeTruthy();
+    const heading = screen.getByText("서점");
+    const table = heading.closest("table");
+    expect(table.querySelectorAll("tbody tr").length).toBe(0);
+  });
+
+  it("항목에 original/keywords가 없으면 빈 문자열/빈 배열로 안전하게 처리된다", () => {
+    mockGetSimilarityDebugInfo.mockReturnValue(
+      makeDebugInfo({ yes24_0_0: {} }),
+    );
+    render(
+      <SimilarityDebug
+        suggestedCategories={{ yes24_0_0: "소설" }}
+        categoryList={["소설"]}
+      />,
+    );
+    fireEvent.click(screen.getByText("유사도 계산 디버그"));
+    const badge = screen.getByText("yes24");
+    const row = badge.closest("tr");
+    const cells = row.querySelectorAll("td");
+    // 원본 카테고리 열: info.original이 없으므로 빈 문자열
+    expect(cells[1].textContent).toBe("");
+    // 추출 키워드 열: info.keywords가 없으므로 뱃지 없이 비어있음
+    expect(cells[2].querySelectorAll(".badge").length).toBe(0);
+  });
+});
+
 describe("SimilarityDebug 카테고리 매핑 초기화", () => {
   it("캐시가 초기화되지 않았으면 fetchCategoryMappings로 매핑을 로드한다", () => {
     mockIsCacheInit.mockReturnValueOnce(false);

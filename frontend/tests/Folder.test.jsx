@@ -253,6 +253,12 @@ describe("Folder", () => {
     expect(screen.getByText("디렉토리")).toBeTruthy();
   });
 
+  it("folderData가 null이어도 크래시 없이 렌더링한다", () => {
+    render(<Folder {...defaultProps} folderData={null} />);
+    expect(screen.getByText("디렉토리")).toBeTruthy();
+    expect(screen.queryByRole("tree")).toBeNull();
+  });
+
   // ── selectedItems ──
 
   it("selectedItems prop을 전달할 수 있다", () => {

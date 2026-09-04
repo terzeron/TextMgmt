@@ -111,7 +111,6 @@ export default function ViewSingle(props) {
 
   const navigateToBook = useCallback(
     (book) => {
-      if (!book) return;
       const url =
         "/viewer/" +
         (book.file_type || "") +

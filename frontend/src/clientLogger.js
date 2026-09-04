@@ -14,11 +14,9 @@ function isDuplicateError(key) {
     return true;
   }
   recentErrors.set(key, now);
+  // size > MAX_RECENT_KEYS(>0)이 보장되므로 맵은 비어있지 않고 next().value는 항상 정의된다.
   if (recentErrors.size > MAX_RECENT_KEYS) {
-    const oldestKey = recentErrors.keys().next().value;
-    if (oldestKey !== undefined) {
-      recentErrors.delete(oldestKey);
-    }
+    recentErrors.delete(recentErrors.keys().next().value);
   }
   return false;
 }
@@ -66,10 +64,14 @@ export function reportClientError({
     error_type: errorType,
     message: errorMsg.slice(0, 2000),
     stack: stack ? String(stack).slice(0, 5000) : null,
-    component_stack: componentStack ? String(componentStack).slice(0, 5000) : null,
+    component_stack: componentStack
+      ? String(componentStack).slice(0, 5000)
+      : null,
     url:
       url ||
-      (typeof window !== "undefined" && window.location ? window.location.href : ""),
+      (typeof window !== "undefined" && window.location
+        ? window.location.href
+        : ""),
     user_agent:
       userAgent ||
       (typeof navigator !== "undefined" ? navigator.userAgent : null),
@@ -137,9 +139,7 @@ export function initGlobalErrorLogging() {
           (event.error && event.error.message) ||
           String(event),
         stack: event.error?.stack,
-        url:
-          event.filename ||
-          (window.location ? window.location.href : ""),
+        url: event.filename || (window.location ? window.location.href : ""),
       });
     } catch {
       // 무음 처리
@@ -153,9 +153,7 @@ export function initGlobalErrorLogging() {
         errorType: "UNHANDLED_PROMISE",
         message:
           reason?.message ||
-          (typeof reason === "string"
-            ? reason
-            : "Unhandled Promise Rejection"),
+          (typeof reason === "string" ? reason : "Unhandled Promise Rejection"),
         stack: reason?.stack,
       });
     } catch {
@@ -177,14 +175,12 @@ export function removeGlobalErrorLogging() {
   if (typeof window === "undefined" || !_isGlobalLoggingInitialized) {
     return;
   }
-  if (_errorHandler) {
-    window.removeEventListener("error", _errorHandler);
-    _errorHandler = null;
-  }
-  if (_unhandledRejectionHandler) {
-    window.removeEventListener("unhandledrejection", _unhandledRejectionHandler);
-    _unhandledRejectionHandler = null;
-  }
+  // _isGlobalLoggingInitialized가 true라는 건 initGlobalErrorLogging에서 두 핸들러를
+  // 방금 함께 등록했다는 뜻이라, 이 시점엔 둘 다 항상 non-null이다.
+  window.removeEventListener("error", _errorHandler);
+  _errorHandler = null;
+  window.removeEventListener("unhandledrejection", _unhandledRejectionHandler);
+  _unhandledRejectionHandler = null;
   _isGlobalLoggingInitialized = false;
 }
 

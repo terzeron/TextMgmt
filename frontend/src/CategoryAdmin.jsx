@@ -312,7 +312,7 @@ export function formatErrorMessage(err, fallback = "오류가 발생했습니다
     if (typeof err.detail === "string" && err.detail) return err.detail;
     if (typeof err.error === "string" && err.error) return err.error;
   }
-  return String(err) || fallback;
+  return String(err);
 }
 
 // ── 메인 컴포넌트 ──
@@ -363,6 +363,7 @@ export default function CategoryAdmin({
   const [reloading, setReloading] = useState(false);
   const [mismatchReloading, setMismatchReloading] = useState(false);
   const [bulkReloading, setBulkReloading] = useState(false);
+  const [reloadProgressCount, setReloadProgressCount] = useState(null);
   const [indexingFile, setIndexingFile] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
 
@@ -536,6 +537,111 @@ export default function CategoryAdmin({
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // ── 재적재 작업 상태 반영 (서버가 공유하는 단일 진행 상태를 그대로 반영) ──
+  // 백엔드는 콘텐츠 타입당 재적재 작업을 하나만 추적한다: 카테고리가 있으면
+  // "이상 항목 재적재", 없으면 "일괄 재적재"로 간주해 두 스피너 중 하나만 켠다.
+
+  const applyReloadStatus = useCallback(
+    (status) => {
+      if (!status || status.status === "idle") {
+        setMismatchReloading(false);
+        setBulkReloading(false);
+        setReloadProgressCount(null);
+        return false;
+      }
+      if (status.status === "running") {
+        // 어느 버튼에 스피너를 켤지는 클릭한 쪽에서 이미 결정했으므로 여기서는
+        // 건드리지 않는다 — category 유무로 다시 정하면 "이상 항목 재적재"를
+        // 눌렀는데 "일괄 재적재" 쪽이 도는 것처럼 보이는 문제가 생긴다.
+        setReloadProgressCount(
+          (status.indexed_count || 0) + (status.deleted_count || 0),
+        );
+        return true;
+      }
+
+      setMismatchReloading(false);
+      setBulkReloading(false);
+      setReloadProgressCount(null);
+      loadData();
+      if (status.status === "done") {
+        const indexed = status.indexed_count || 0;
+        const deleted = status.deleted_count || 0;
+        const remaining = status.after_count || 0;
+        const failed = status.failed_count || 0;
+        const label = status.category
+          ? `카테고리 '${status.category}' 이상 항목`
+          : "이상 항목 일괄";
+        setMessage(
+          `${label} ES 재적재 완료 (적재 ${indexed}건, ES 정리 ${deleted}건, 남은 이상 ${remaining}건${
+            failed ? `, 실패 ${failed}건` : ""
+          })`,
+        );
+      } else {
+        setMessage(
+          formatErrorMessage(
+            status.error,
+            "이상 항목 ES 재적재에 실패했습니다.",
+          ),
+        );
+      }
+      setTimeout(() => setMessage(""), 5000);
+      return false;
+    },
+    [loadData],
+  );
+
+  // 마운트 시 한 번: 새로고침해도 이미 진행 중인 작업이 있으면 바로 붙어서 보여준다.
+  // 이때는 어떤 버튼을 눌러서 시작됐는지 알 수 없으므로, category 유무로 추측해
+  // 스피너를 켤 버튼을 정한다(진행 중에 다시 폴링될 때는 이 추측을 건드리지 않음).
+  useEffect(() => {
+    let cancelled = false;
+    jsonGetReq(
+      apiPrefix + "/category-mismatches/reload-status",
+      null,
+      (result) => {
+        if (cancelled) return;
+        if (result && result.status === "running") {
+          setMismatchReloading(!!result.category);
+          setBulkReloading(!result.category);
+          setReloadProgressCount(
+            (result.indexed_count || 0) + (result.deleted_count || 0),
+          );
+          return;
+        }
+        applyReloadStatus(result);
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiPrefix]);
+
+  // 진행 중일 때만 10초 간격으로 상태 폴링
+  useEffect(() => {
+    if (!mismatchReloading && !bulkReloading) return undefined;
+
+    let cancelled = false;
+    const pollStatus = () => {
+      jsonGetReq(
+        apiPrefix + "/category-mismatches/reload-status",
+        null,
+        (result) => {
+          if (!cancelled) applyReloadStatus(result);
+        },
+        () => {},
+      );
+    };
+
+    pollStatus();
+    const intervalId = setInterval(pollStatus, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [mismatchReloading, bulkReloading, apiPrefix, applyReloadStatus]);
 
   // ── 폴더 클릭 → 불일치 detail lazy-load ──
 
@@ -889,105 +995,62 @@ export default function CategoryAdmin({
     );
   }, [selectedCategory, apiPrefix]);
 
+  // 재적재는 서버에서 백그라운드로 돈다 — 여기서는 시작만 확인하고, 완료/실패 메시지는
+  // 위쪽 상태 폴링(applyReloadStatus)이 처리한다. 이미 진행 중이면 서버가
+  // {already_running: true, ...}를 성공 응답으로 돌려주므로 에러 토스트 없이 그대로 붙는다.
   const handleReloadCategoryMismatches = useCallback(() => {
     setShowMismatchReloadModal(false);
+    // 카테고리 미선택 시에도 내부적으로는 reload-all을 호출하지만, 사용자가 누른 건
+    // "이상 항목 재적재" 버튼이므로 그 버튼에 스피너를 켠다("일괄 재적재"는 건드리지 않음).
     setMismatchReloading(true);
+    setBulkReloading(false);
     setSaving(true);
     setMessage("");
 
-    if (!selectedCategory) {
-      jsonPostReq(
-        `${apiPrefix}/category-mismatches/reload-all`,
-        null,
-        (result) => {
-          const indexed = result?.indexed_count ?? 0;
-          const deleted = result?.deleted_count ?? 0;
-          const remaining = result?.after_count ?? 0;
-          const failed = result?.failed_count ?? 0;
-          loadData();
-          setMessage(
-            `전체 이상 항목 ES 재적재 완료 (적재 ${indexed}건, ES 정리 ${deleted}건, 남은 이상 ${remaining}건${
-              failed ? `, 실패 ${failed}건` : ""
-            })`,
-          );
-          setTimeout(() => setMessage(""), 5000);
-        },
-        (error) => {
-          setMessage(
-            formatErrorMessage(error, "이상 항목 ES 재적재에 실패했습니다."),
-          );
-          setTimeout(() => setMessage(""), 5000);
-        },
-        () => {
-          setMismatchReloading(false);
-          setSaving(false);
-        },
-      );
-      return;
-    }
+    const url = selectedCategory
+      ? `${apiPrefix}/category-mismatches/reload-mismatches`
+      : `${apiPrefix}/category-mismatches/reload-all`;
+    const payload = selectedCategory ? { category: selectedCategory } : null;
 
     jsonPostReq(
-      `${apiPrefix}/category-mismatches/reload-mismatches`,
-      { category: selectedCategory },
-      (result) => {
-        const indexed = result?.indexed_count ?? 0;
-        const deleted = result?.deleted_count ?? 0;
-        const remaining = result?.after_count ?? 0;
-        const failed = result?.failed_count ?? 0;
-        loadData();
-        setMessage(
-          `카테고리 '${selectedCategory}' 이상 항목 ES 재적재 완료 (적재 ${indexed}건, ES 정리 ${deleted}건, 남은 이상 ${remaining}건${
-            failed ? `, 실패 ${failed}건` : ""
-          })`,
-        );
-        setTimeout(() => setMessage(""), 5000);
-      },
+      url,
+      payload,
+      () => {},
       (error) => {
         setMessage(
-          formatErrorMessage(error, "이상 항목 ES 재적재에 실패했습니다."),
+          formatErrorMessage(error, "이상 항목 ES 재적재 시작에 실패했습니다."),
         );
         setTimeout(() => setMessage(""), 5000);
-      },
-      () => {
         setMismatchReloading(false);
-        setSaving(false);
+        setBulkReloading(false);
       },
+      () => setSaving(false),
     );
-  }, [selectedCategory, apiPrefix, loadData]);
+  }, [selectedCategory, apiPrefix]);
 
   const handleBulkReloadMismatches = useCallback(() => {
     setShowBulkReloadModal(false);
     setBulkReloading(true);
+    setMismatchReloading(false);
     setSaving(true);
     setMessage("");
     jsonPostReq(
       `${apiPrefix}/category-mismatches/reload-all`,
       null,
-      (result) => {
-        const indexed = result?.indexed_count ?? 0;
-        const deleted = result?.deleted_count ?? 0;
-        const remaining = result?.after_count ?? 0;
-        const failed = result?.failed_count ?? 0;
-        loadData();
-        setMessage(
-          `불일치 일괄 ES 재적재 완료 (적재 ${indexed}건, ES 정리 ${deleted}건, 남은 이상 ${remaining}건${
-            failed ? `, 실패 ${failed}건` : ""
-          })`,
-        );
-        setTimeout(() => setMessage(""), 5000);
-      },
+      () => {},
       (error) => {
         setMessage(
-          formatErrorMessage(error, "불일치 일괄 ES 재적재에 실패했습니다."),
+          formatErrorMessage(
+            error,
+            "불일치 일괄 ES 재적재 시작에 실패했습니다.",
+          ),
         );
         setTimeout(() => setMessage(""), 5000);
-      },
-      () => {
         setBulkReloading(false);
-        setSaving(false);
       },
+      () => setSaving(false),
     );
-  }, [apiPrefix, loadData]);
+  }, [apiPrefix]);
 
   // ── 불일치 관리 핸들러 ──
 
@@ -1180,10 +1243,9 @@ export default function CategoryAdmin({
     [],
   );
 
-  const messageText =
-    typeof message === "string"
-      ? message
-      : message?.message || (message ? String(message) : "");
+  // message는 이 컴포넌트 안에서 항상 문자열로만 세팅된다(setMessage 호출부 전부 문자열 리터럴/
+  // 템플릿 리터럴 또는 formatErrorMessage()의 반환값).
+  const messageText = message;
 
   // ── 렌더링 ──
 
@@ -1220,7 +1282,14 @@ export default function CategoryAdmin({
                     title="불일치 일괄 재적재 (이상 항목이 많으면 오래 걸릴 수 있음)"
                   >
                     {bulkReloading ? (
-                      <Spinner animation="border" size="sm" />
+                      <span className="d-flex align-items-center gap-1">
+                        <Spinner animation="border" size="sm" />
+                        {reloadProgressCount !== null && (
+                          <small style={{ fontSize: "0.7rem" }}>
+                            처리 {reloadProgressCount}건
+                          </small>
+                        )}
+                      </span>
                     ) : (
                       <>
                         일괄 재적재 <FontAwesomeIcon icon={faRotate} />
@@ -1245,7 +1314,14 @@ export default function CategoryAdmin({
                     }
                   >
                     {mismatchReloading ? (
-                      <Spinner animation="border" size="sm" />
+                      <span className="d-flex align-items-center gap-1">
+                        <Spinner animation="border" size="sm" />
+                        {reloadProgressCount !== null && (
+                          <small style={{ fontSize: "0.7rem" }}>
+                            처리 {reloadProgressCount}건
+                          </small>
+                        )}
+                      </span>
                     ) : (
                       <>
                         이상 항목 재적재 <FontAwesomeIcon icon={faRotate} />
@@ -1373,7 +1449,14 @@ export default function CategoryAdmin({
                       title="이상 항목만 ES 재적재"
                     >
                       {mismatchReloading ? (
-                        <Spinner animation="border" size="sm" />
+                        <span className="d-flex align-items-center gap-1">
+                          <Spinner animation="border" size="sm" />
+                          {reloadProgressCount !== null && (
+                            <small style={{ fontSize: "0.7rem" }}>
+                              처리 {reloadProgressCount}건
+                            </small>
+                          )}
+                        </span>
                       ) : (
                         <>
                           이상 항목 재적재 <FontAwesomeIcon icon={faRotate} />

@@ -1164,14 +1164,21 @@ class DummyManager:
     async def reload_category(self, category: str, content_type: str = "book"):
         return {"category": category, "processed_count": 1}, None
 
-    async def reload_category_mismatches(self, content_type: str = "book"):
-        return {"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0}, None
+    async def reload_category_mismatches(self, content_type: str = "book", on_progress=None):
+        if on_progress is not None:
+            on_progress({"indexed_count": 2, "deleted_count": 3})
+        return {"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 5, "after_count": 0}, None
 
-    async def reload_category_mismatch_files(self, category: str, content_type: str = "book"):
-        return {"content_type": content_type, "category": category, "indexed_count": 1, "deleted_count": 1, "failed_count": 0}, None
+    async def reload_category_mismatch_files(self, category: str, content_type: str = "book", on_progress=None):
+        if on_progress is not None:
+            on_progress({"indexed_count": 1, "deleted_count": 1})
+        return {"content_type": content_type, "category": category, "indexed_count": 1, "deleted_count": 1, "failed_count": 0, "before_count": 2, "after_count": 0}, None
 
 
 class DummyCategoryMapping:
+    def __init__(self):
+        self._status = None
+
     def get_hidden_categories(self, content_type="book"):
         return []
 
@@ -1184,11 +1191,24 @@ class DummyCategoryMapping:
     def set_latest_excluded(self, category, excluded, content_type="book"):
         return True
 
-    def acquire_reload_lock(self, content_type="book"):
+    def acquire_reload_lock(self, content_type="book", category=None):
+        if self._status and self._status.get("status") == "running":
+            return False, "이미 재적재 작업이 진행 중입니다. 완료 후 다시 시도하세요."
+        self._status = {"category": category, "status": "running", "indexed_count": 0, "deleted_count": 0, "failed_count": 0, "before_count": 0, "after_count": 0, "error": None}
         return True, None
 
+    def heartbeat_reload_lock(self, content_type="book", **counts):
+        if self._status is not None:
+            self._status.update(counts)
+
+    def complete_reload_lock(self, content_type="book", status="done", error=None, **counts):
+        self._status = {**(self._status or {}), "status": status, "error": error, **counts}
+
+    def get_reload_status(self, content_type="book"):
+        return self._status
+
     def release_reload_lock(self, content_type="book"):
-        return None
+        self._status = None
 
 
 @pytest.fixture()
@@ -1333,10 +1353,20 @@ def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
 
     resp = dummy_client.post("/category-mismatches/reload-mismatches", json={"category": "A"})
     assert resp.json()["status"] == "success"
+    assert resp.json()["result"]["started"] is True
     assert resp.json()["result"]["category"] == "A"
+
+    resp = dummy_client.get("/category-mismatches/reload-status")
+    assert resp.json()["status"] == "success"
+    assert resp.json()["result"]["status"] == "done"
+    assert resp.json()["result"]["indexed_count"] == 1
 
     resp = dummy_client.post("/category-mismatches/reload-all")
     assert resp.json()["status"] == "success"
+    assert resp.json()["result"]["started"] is True
+
+    resp = dummy_client.get("/category-mismatches/reload-status")
+    assert resp.json()["result"]["status"] == "done"
     assert resp.json()["result"]["indexed_count"] == 2
 
     resp = dummy_client.get("/category-mismatches/A")
@@ -1421,10 +1451,10 @@ def test_main_error_branches(dummy_client, monkeypatch):
     async def reload_category_error(category: str, content_type: str = "book"):
         return (None, "fail")
 
-    async def reload_category_mismatches_error(content_type: str = "book"):
+    async def reload_category_mismatches_error(content_type: str = "book", on_progress=None):
         return (None, "bulk fail")
 
-    async def reload_category_mismatch_files_error(category: str, content_type: str = "book"):
+    async def reload_category_mismatch_files_error(category: str, content_type: str = "book", on_progress=None):
         return (None, "mismatch fail")
 
     def get_category_mismatches_error():
@@ -1488,17 +1518,26 @@ def test_main_error_branches(dummy_client, monkeypatch):
     assert resp.json()["error"] == "fail"
 
     resp = dummy_client.post("/category-mismatches/reload-mismatches", json={"category": "A"})
-    assert resp.json()["error"] == "mismatch fail"
+    assert resp.json()["result"]["started"] is True
+    resp = dummy_client.get("/category-mismatches/reload-status")
+    assert resp.json()["result"]["status"] == "failed"
+    assert resp.json()["result"]["error"] == "mismatch fail"
 
-    async def reload_category_mismatch_files_raise(category: str, content_type: str = "book"):
+    async def reload_category_mismatch_files_raise(category: str, content_type: str = "book", on_progress=None):
         raise RuntimeError("mismatch boom")
 
     monkeypatch.setattr(main_mod.book_manager, "reload_category_mismatch_files", reload_category_mismatch_files_raise)
     resp = dummy_client.post("/category-mismatches/reload-mismatches", json={"category": "A"})
-    assert resp.json()["error"] == main_mod.GENERIC_MISMATCH_ERROR
+    assert resp.json()["result"]["started"] is True
+    resp = dummy_client.get("/category-mismatches/reload-status")
+    assert resp.json()["result"]["status"] == "failed"
+    assert resp.json()["result"]["error"] == main_mod.GENERIC_MISMATCH_ERROR
 
     resp = dummy_client.post("/category-mismatches/reload-all")
-    assert resp.json()["error"] == "bulk fail"
+    assert resp.json()["result"]["started"] is True
+    resp = dummy_client.get("/category-mismatches/reload-status")
+    assert resp.json()["result"]["status"] == "failed"
+    assert resp.json()["result"]["error"] == "bulk fail"
 
     resp = dummy_client.get("/category-mismatches/A")
     assert resp.json()["error"] == main_mod.GENERIC_MISMATCH_ERROR
