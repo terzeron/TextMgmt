@@ -351,6 +351,37 @@ class TestCategoryMismatchAdmin:
             dry_run=False,
         )
 
+    def test_auto_classify_with_deterministic_options(self, client, mock_bm, mock_cat):
+        mappings = {"1_general": ["상식"]}
+        result = {"source_category": "0_inbox", "moved_count": 1, "skipped_count": 0, "failed_count": 0}
+        mock_cat.get_all_mappings.return_value = mappings
+        mock_bm.auto_classify_category.return_value = (result, None)
+
+        r = client.post(
+            "/categories/auto-classify",
+            json={
+                "category": "0_inbox",
+                "clean_existing": True,
+                "use_bookstore": False,
+                "use_content_meta": True,
+                "delay": 2.0,
+            },
+        )
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": result}
+        mock_bm.auto_classify_category.assert_awaited_once_with(
+            "0_inbox",
+            mappings,
+            content_type="book",
+            recursive=False,
+            dry_run=False,
+            clean_existing=True,
+            use_bookstore=False,
+            use_content_meta=True,
+            delay=2.0,
+        )
+
     def test_index_file_success(self, client, mock_bm):
         mock_bm.index_single_file.return_value = (42, None)
         r = client.post("/category-mismatches/index-file", json={"file_path": "_epub/test.epub"})
