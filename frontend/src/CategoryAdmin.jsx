@@ -406,11 +406,22 @@ export default function CategoryAdmin({
   const [bulkReloading, setBulkReloading] = useState(false);
   const [autoClassifying, setAutoClassifying] = useState(false);
   const [autoClassifyPolling, setAutoClassifyPolling] = useState(false);
-  const [reloadRemainingCount, setReloadRemainingCount] = useState(null);
+  // 일괄(전체) 재적재 락(__all__)의 잔여 건수. 이 상태는 "일괄" 버튼만 반영한다.
+  const [bulkRemainingCount, setBulkRemainingCount] = useState(null);
+  // 현재 선택된 카테고리 전용 락의 잔여 건수. 카테고리별 락은 서로 독립적이므로
+  // bulkRemainingCount와 분리해서 관리한다.
+  const [mismatchRemainingCount, setMismatchRemainingCount] = useState(null);
   const [autoClassifyRemainingCount, setAutoClassifyRemainingCount] =
     useState(null);
-  const reloadButtonIntentRef = useRef(null);
-  const reloadStartPendingRef = useRef(false);
+  // 시작 요청(POST)이 서버에 반영되기 전에 폴링(GET)이 먼저 도착해 아직 "idle"인 상태를
+  // 읽어버릴 수 있다. 그 사이에는 idle 응답을 무시하고 스피너를 유지한다. 각 작업은
+  // 독립적으로 시작될 수 있으므로 각자의 ref로 관리한다.
+  const bulkStartPendingRef = useRef(false);
+  const mismatchStartPendingRef = useRef(false);
+  const autoClassifyStartPendingRef = useRef(false);
+  const bulkStatusRequestIdRef = useRef(0);
+  const mismatchStatusRequestIdRef = useRef(0);
+  const autoClassifyStatusRequestIdRef = useRef(0);
   const [indexingFile, setIndexingFile] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
 
@@ -585,45 +596,30 @@ export default function CategoryAdmin({
     loadData();
   }, [loadData]);
 
-  // ── 재적재 작업 상태 반영 (서버가 공유하는 단일 진행 상태를 그대로 반영) ──
-  // 백엔드는 콘텐츠 타입당 재적재 작업을 하나만 추적한다: 카테고리가 있으면
-  // "이상 항목 재적재", 없으면 "일괄 재적재"로 간주해 두 스피너 중 하나만 켠다.
-
-  const applyReloadButtonIntent = useCallback((intent) => {
-    if (intent === "mismatch") {
-      setMismatchReloading(true);
-      setBulkReloading(false);
-    } else if (intent === "bulk") {
-      setMismatchReloading(false);
-      setBulkReloading(true);
-    }
-  }, []);
+  // ── 재적재 작업 상태 반영 ──
+  // 백엔드는 카테고리별 락과 전체(일괄) 락을 독립적으로 추적하므로, 두 락을 각각 폴링해
+  // 서로 다른 카테고리(또는 카테고리 vs 일괄)의 진행 상태가 뒤섞이지 않게 한다.
 
   const applyReloadStatus = useCallback(
-    (status) => {
+    (status, setRunning, setRemaining, startPendingRef) => {
       if (!status || status.status === "idle") {
-        if (reloadStartPendingRef.current) return true;
-        reloadButtonIntentRef.current = null;
-        setMismatchReloading(false);
-        setBulkReloading(false);
-        setReloadRemainingCount(null);
+        // 시작 요청(POST)이 서버에 반영되기 전에 이 폴링이 먼저 도착해 stale한 idle을
+        // 읽은 것일 수 있다. 그 경우 스피너를 끄지 않고 유지한다.
+        if (startPendingRef.current) return true;
+        setRunning(false);
+        setRemaining(null);
         return false;
       }
       if (status.status === "running") {
-        reloadStartPendingRef.current = false;
-        // 사용자가 누른 버튼이 있으면 category 유무보다 그 의도를 우선한다.
-        applyReloadButtonIntent(reloadButtonIntentRef.current);
-        setReloadRemainingCount((current) =>
-          getReloadRemainingCount(status, current),
-        );
+        startPendingRef.current = false;
+        setRunning(true);
+        setRemaining((current) => getReloadRemainingCount(status, current));
         return true;
       }
 
-      reloadStartPendingRef.current = false;
-      reloadButtonIntentRef.current = null;
-      setMismatchReloading(false);
-      setBulkReloading(false);
-      setReloadRemainingCount(null);
+      startPendingRef.current = false;
+      setRunning(false);
+      setRemaining(null);
       loadData();
       if (status.status === "done") {
         const indexed = status.indexed_count || 0;
@@ -649,81 +645,93 @@ export default function CategoryAdmin({
       setTimeout(() => setMessage(""), 5000);
       return false;
     },
-    [applyReloadButtonIntent, loadData],
+    [loadData],
   );
 
-  // 마운트 시 한 번: 새로고침해도 이미 진행 중인 작업이 있으면 바로 붙어서 보여준다.
-  // 이때는 어떤 버튼을 눌러서 시작됐는지 알 수 없으므로, category 유무로 추측해
-  // 스피너를 켤 버튼을 정한다(진행 중에 다시 폴링될 때는 이 추측을 건드리지 않음).
+  // 일괄(전체) 락 상태 폴링: 마운트 시 및 category 변경 시 한 번 확인하고,
+  // 진행 중일 때만 10초 간격으로 이어서 폴링한다.
   useEffect(() => {
-    let cancelled = false;
-    jsonGetReq(
-      apiPrefix + "/category-mismatches/reload-status",
-      null,
-      (result) => {
-        if (cancelled) return;
-        if (result && result.status === "running") {
-          const intent = reloadButtonIntentRef.current;
-          if (intent) {
-            applyReloadButtonIntent(intent);
-          } else {
-            setMismatchReloading(!!result.category);
-            setBulkReloading(!result.category);
-          }
-          setReloadRemainingCount((current) =>
-            getReloadRemainingCount(result, current),
-          );
-          return;
-        }
-        if (reloadButtonIntentRef.current) return;
-        applyReloadStatus(result);
-      },
-      () => {},
-    );
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiPrefix]);
-
-  // 진행 중일 때만 10초 간격으로 상태 폴링
-  useEffect(() => {
-    if (!mismatchReloading && !bulkReloading) return undefined;
-
     let cancelled = false;
     const pollStatus = () => {
+      const requestId = bulkStatusRequestIdRef.current + 1;
+      bulkStatusRequestIdRef.current = requestId;
       jsonGetReq(
         apiPrefix + "/category-mismatches/reload-status",
         null,
         (result) => {
-          if (!cancelled) applyReloadStatus(result);
+          if (!cancelled && requestId === bulkStatusRequestIdRef.current)
+            applyReloadStatus(
+              result,
+              setBulkReloading,
+              setBulkRemainingCount,
+              bulkStartPendingRef,
+            );
         },
         () => {},
       );
     };
 
     pollStatus();
-    const intervalId = setInterval(pollStatus, 10000);
+    const intervalId = bulkReloading ? setInterval(pollStatus, 10000) : null;
     return () => {
       cancelled = true;
-      clearInterval(intervalId);
+      if (intervalId) clearInterval(intervalId);
     };
-  }, [mismatchReloading, bulkReloading, apiPrefix, applyReloadStatus]);
+  }, [bulkReloading, apiPrefix, applyReloadStatus]);
+
+  // 선택된 카테고리 전용 락 상태 폴링: 카테고리를 선택했을 때만 동작하며, 다른
+  // 카테고리나 일괄 재적재와는 독립적으로 이 카테고리의 진행 상태만 추적한다.
+  useEffect(() => {
+    if (!selectedCategory) return undefined;
+
+    let cancelled = false;
+    const pollStatus = () => {
+      const requestId = mismatchStatusRequestIdRef.current + 1;
+      mismatchStatusRequestIdRef.current = requestId;
+      jsonGetReq(
+        `${apiPrefix}/category-mismatches/reload-status?category=${encodeURIComponent(selectedCategory)}`,
+        null,
+        (result) => {
+          if (!cancelled && requestId === mismatchStatusRequestIdRef.current)
+            applyReloadStatus(
+              result,
+              setMismatchReloading,
+              setMismatchRemainingCount,
+              mismatchStartPendingRef,
+            );
+        },
+        () => {},
+      );
+    };
+
+    pollStatus();
+    const intervalId = mismatchReloading
+      ? setInterval(pollStatus, 10000)
+      : null;
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [selectedCategory, mismatchReloading, apiPrefix, applyReloadStatus]);
 
   const applyAutoClassifyStatus = useCallback(
     (status) => {
       if (!status || status.status === "idle") {
+        if (autoClassifyStartPendingRef.current) return true;
         setAutoClassifying(false);
         setAutoClassifyPolling(false);
         setAutoClassifyRemainingCount(null);
         return false;
       }
       if (status.status === "running") {
+        autoClassifyStartPendingRef.current = false;
         setAutoClassifying(true);
+        setAutoClassifyPolling(true);
         setAutoClassifyRemainingCount(getAutoClassifyRemainingCount(status));
         return true;
       }
 
+      autoClassifyStartPendingRef.current = false;
       setAutoClassifying(false);
       setAutoClassifyPolling(false);
       setAutoClassifyRemainingCount(null);
@@ -740,7 +748,9 @@ export default function CategoryAdmin({
           `${label} 자동 분류 완료 (이동 ${moved}건, 제외 ${skipped}건, 실패 ${failed}건)`,
         );
       } else {
-        setMessage(formatErrorMessage(status.error, "자동 분류에 실패했습니다."));
+        setMessage(
+          formatErrorMessage(status.error, "자동 분류에 실패했습니다."),
+        );
       }
       setTimeout(() => setMessage(""), 5000);
       return false;
@@ -749,15 +759,45 @@ export default function CategoryAdmin({
   );
 
   useEffect(() => {
+    let cancelled = false;
+    const requestId = autoClassifyStatusRequestIdRef.current + 1;
+    autoClassifyStatusRequestIdRef.current = requestId;
+    jsonGetReq(
+      apiPrefix + "/categories/auto-classify-status",
+      null,
+      (result) => {
+        if (
+          !cancelled &&
+          requestId === autoClassifyStatusRequestIdRef.current &&
+          !autoClassifyStartPendingRef.current &&
+          result?.status === "running"
+        ) {
+          applyAutoClassifyStatus(result);
+        }
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [apiPrefix, applyAutoClassifyStatus]);
+
+  useEffect(() => {
     if (!autoClassifyPolling) return undefined;
 
     let cancelled = false;
     const pollStatus = () => {
+      const requestId = autoClassifyStatusRequestIdRef.current + 1;
+      autoClassifyStatusRequestIdRef.current = requestId;
       jsonGetReq(
         apiPrefix + "/categories/auto-classify-status",
         null,
         (result) => {
-          if (!cancelled) applyAutoClassifyStatus(result);
+          if (
+            !cancelled &&
+            requestId === autoClassifyStatusRequestIdRef.current
+          )
+            applyAutoClassifyStatus(result);
         },
         () => {},
       );
@@ -1124,8 +1164,13 @@ export default function CategoryAdmin({
   }, [selectedCategory, apiPrefix]);
 
   const handleAutoClassifyCategory = useCallback(() => {
-    const category = selectedCategory || "_root";
+    if (!selectedCategory) {
+      setShowAutoClassifyModal(false);
+      return;
+    }
+    const category = selectedCategory;
     setShowAutoClassifyModal(false);
+    autoClassifyStartPendingRef.current = true;
     setAutoClassifying(true);
     setAutoClassifyPolling(false);
     setAutoClassifyRemainingCount(null);
@@ -1141,6 +1186,7 @@ export default function CategoryAdmin({
         setAutoClassifyPolling(true);
       },
       (error) => {
+        autoClassifyStartPendingRef.current = false;
         setAutoClassifying(false);
         setAutoClassifyPolling(false);
         setAutoClassifyRemainingCount(null);
@@ -1153,65 +1199,96 @@ export default function CategoryAdmin({
     );
   }, [selectedCategory, apiPrefix, applyAutoClassifyStatus]);
 
-  // 재적재는 서버에서 백그라운드로 돈다 — 여기서는 시작만 확인하고, 완료/실패 메시지는
-  // 위쪽 상태 폴링(applyReloadStatus)이 처리한다. 이미 진행 중이면 서버가
-  // {already_running: true, ...}를 성공 응답으로 돌려주므로 에러 토스트 없이 그대로 붙는다.
+  // 재적재는 서버에서 백그라운드로 돈다. 여기서는 시작만 확인하고, 완료/실패 메시지는
+  // 위쪽 상태 폴링(applyReloadStatus)이 처리한다. 카테고리별 락과 전체(일괄) 락은 서로
+  // 독립적이지만, 일괄이 진행 중이면 모든 카테고리에 영향을 주므로 카테고리별 요청을 막고,
+  // 그 반대도 마찬가지다. 이 경우 서버는 에러가 아니라 그 "다른" 작업의 상태를
+  // {already_running: true, ...}로 돌려주므로, 그 결과의 category가 내가 요청한 것과
+  // 다르면 내 요청은 시작되지 않은 것이니 스피너를 켜 둔 채로 두면 안 된다.
   const handleReloadCategoryMismatches = useCallback(() => {
     setShowMismatchReloadModal(false);
-    // 카테고리 미선택 시에도 내부적으로는 reload-all을 호출하지만, 사용자가 누른 건
-    // "이상 항목 재적재" 버튼이므로 그 버튼에 스피너를 켠다("일괄 재적재"는 건드리지 않음).
-    reloadButtonIntentRef.current = "mismatch";
-    reloadStartPendingRef.current = true;
+    if (!selectedCategory) {
+      setMessage("카테고리를 먼저 선택하세요.");
+      setTimeout(() => setMessage(""), 3000);
+      return;
+    }
+
+    mismatchStartPendingRef.current = true;
     setMismatchReloading(true);
-    setBulkReloading(false);
-    setReloadRemainingCount(
-      selectedCategory
-        ? Number(findFolderInTree(folderData, selectedCategory)?.count || 0)
-        : mismatchStats.itemCount,
+    setMismatchRemainingCount(
+      Number(findFolderInTree(folderData, selectedCategory)?.count || 0),
     );
     setSaving(true);
     setMessage("");
 
-    const url = selectedCategory
-      ? `${apiPrefix}/category-mismatches/reload-mismatches`
-      : `${apiPrefix}/category-mismatches/reload-all`;
-    const payload = selectedCategory ? { category: selectedCategory } : null;
-
     jsonPostReq(
-      url,
-      payload,
-      () => {
-        reloadStartPendingRef.current = false;
+      `${apiPrefix}/category-mismatches/reload-mismatches`,
+      { category: selectedCategory },
+      (result) => {
+        const requestedCategory = selectedCategory;
+        if (
+          result &&
+          result.already_running &&
+          (result.category || null) !== requestedCategory
+        ) {
+          mismatchStartPendingRef.current = false;
+          setMismatchReloading(false);
+          setMismatchRemainingCount(null);
+          setMessage(
+            result.category
+              ? `카테고리 '${result.category}' 재적재가 이미 진행 중이라 지금은 실행할 수 없습니다. 완료 후 다시 시도하세요.`
+              : "일괄 재적재가 이미 진행 중이라 지금은 실행할 수 없습니다. 완료 후 다시 시도하세요.",
+          );
+          setTimeout(() => setMessage(""), 5000);
+        } else if (result && result.already_running) {
+          applyReloadStatus(
+            result,
+            setMismatchReloading,
+            setMismatchRemainingCount,
+            mismatchStartPendingRef,
+          );
+        }
       },
       (error) => {
         setMessage(
           formatErrorMessage(error, "이상 항목 ES 재적재 시작에 실패했습니다."),
         );
         setTimeout(() => setMessage(""), 5000);
-        reloadStartPendingRef.current = false;
-        reloadButtonIntentRef.current = null;
+        mismatchStartPendingRef.current = false;
         setMismatchReloading(false);
-        setBulkReloading(false);
-        setReloadRemainingCount(null);
+        setMismatchRemainingCount(null);
       },
       () => setSaving(false),
     );
-  }, [selectedCategory, folderData, mismatchStats.itemCount, apiPrefix]);
+  }, [selectedCategory, folderData, apiPrefix, applyReloadStatus]);
 
   const handleBulkReloadMismatches = useCallback(() => {
     setShowBulkReloadModal(false);
-    reloadButtonIntentRef.current = "bulk";
-    reloadStartPendingRef.current = true;
+    bulkStartPendingRef.current = true;
     setBulkReloading(true);
-    setMismatchReloading(false);
-    setReloadRemainingCount(mismatchStats.itemCount);
+    setBulkRemainingCount(mismatchStats.itemCount);
     setSaving(true);
     setMessage("");
     jsonPostReq(
       `${apiPrefix}/category-mismatches/reload-all`,
       null,
-      () => {
-        reloadStartPendingRef.current = false;
+      (result) => {
+        if (result && result.already_running && result.category) {
+          bulkStartPendingRef.current = false;
+          setBulkReloading(false);
+          setBulkRemainingCount(null);
+          setMessage(
+            `카테고리 '${result.category}' 재적재가 이미 진행 중이라 지금은 일괄 재적재를 실행할 수 없습니다. 완료 후 다시 시도하세요.`,
+          );
+          setTimeout(() => setMessage(""), 5000);
+        } else if (result && result.already_running) {
+          applyReloadStatus(
+            result,
+            setBulkReloading,
+            setBulkRemainingCount,
+            bulkStartPendingRef,
+          );
+        }
       },
       (error) => {
         setMessage(
@@ -1221,14 +1298,13 @@ export default function CategoryAdmin({
           ),
         );
         setTimeout(() => setMessage(""), 5000);
-        reloadStartPendingRef.current = false;
-        reloadButtonIntentRef.current = null;
+        bulkStartPendingRef.current = false;
         setBulkReloading(false);
-        setReloadRemainingCount(null);
+        setBulkRemainingCount(null);
       },
       () => setSaving(false),
     );
-  }, [apiPrefix, mismatchStats.itemCount]);
+  }, [apiPrefix, mismatchStats.itemCount, applyReloadStatus]);
 
   // ── 불일치 관리 핸들러 ──
 
@@ -1458,7 +1534,9 @@ export default function CategoryAdmin({
                   label="이상 항목만"
                   aria-label="이상 항목만 보기"
                   checked={showOnlyAbnormal}
-                  onChange={(event) => setShowOnlyAbnormal(event.target.checked)}
+                  onChange={(event) =>
+                    setShowOnlyAbnormal(event.target.checked)
+                  }
                   className="m-0"
                 />
                 <Button
@@ -1466,7 +1544,10 @@ export default function CategoryAdmin({
                   size="sm"
                   aria-label="일괄 재적재"
                   disabled={
-                    saving || bulkReloading || mismatchStats.itemCount === 0
+                    saving ||
+                    bulkReloading ||
+                    mismatchReloading ||
+                    mismatchStats.itemCount === 0
                   }
                   onClick={() => setShowBulkReloadModal(true)}
                   title="불일치 일괄 재적재 (이상 항목이 많으면 오래 걸릴 수 있음)"
@@ -1474,9 +1555,9 @@ export default function CategoryAdmin({
                   {bulkReloading ? (
                     <span className="d-flex align-items-center gap-1">
                       <Spinner animation="border" size="sm" />
-                      {reloadRemainingCount !== null && (
+                      {bulkRemainingCount !== null && (
                         <small style={{ fontSize: "0.7rem" }}>
-                          잔여 {reloadRemainingCount}건
+                          잔여 {bulkRemainingCount}건
                         </small>
                       )}
                     </span>
@@ -1492,24 +1573,24 @@ export default function CategoryAdmin({
                   aria-label="이상 항목 재적재"
                   disabled={
                     saving ||
+                    !selectedCategory ||
+                    bulkReloading ||
                     mismatchReloading ||
-                    (selectedCategory
-                      ? selectedMismatchCount === 0
-                      : mismatchStats.itemCount === 0)
+                    selectedMismatchCount === 0
                   }
                   onClick={() => setShowMismatchReloadModal(true)}
                   title={
                     selectedCategory
                       ? "선택 디렉토리 이상 항목만 ES 재적재"
-                      : "하위 전체 이상 항목 ES 재적재"
+                      : "카테고리를 선택하면 이상 항목만 ES 재적재할 수 있습니다"
                   }
                 >
                   {mismatchReloading ? (
                     <span className="d-flex align-items-center gap-1">
                       <Spinner animation="border" size="sm" />
-                      {reloadRemainingCount !== null && (
+                      {mismatchRemainingCount !== null && (
                         <small style={{ fontSize: "0.7rem" }}>
-                          잔여 {reloadRemainingCount}건
+                          잔여 {mismatchRemainingCount}건
                         </small>
                       )}
                     </span>
@@ -1517,28 +1598,6 @@ export default function CategoryAdmin({
                     <span className="d-flex align-items-center gap-1">
                       이상 항목 <FontAwesomeIcon icon={faRotate} />
                     </span>
-                  )}
-                </Button>
-                <Button
-                  variant="outline-primary"
-                  size="sm"
-                  disabled={saving || autoClassifying}
-                  onClick={() => setShowAutoClassifyModal(true)}
-                  title="자동 분류"
-                >
-                  {autoClassifying ? (
-                    <span className="d-flex align-items-center gap-1">
-                      <Spinner animation="border" size="sm" />
-                      <small style={{ fontSize: "0.7rem" }}>
-                        {autoClassifyRemainingCount !== null
-                          ? `잔여 ${autoClassifyRemainingCount}건`
-                          : "분류 중"}
-                      </small>
-                    </span>
-                  ) : (
-                    <>
-                      자동 분류 <FontAwesomeIcon icon={faRotate} />
-                    </>
                   )}
                 </Button>
               </Card.Header>
@@ -1646,16 +1705,20 @@ export default function CategoryAdmin({
                     <Button
                       variant="outline-warning"
                       size="sm"
-                      disabled={saving || selectedMismatchCount === 0}
+                      disabled={
+                        saving ||
+                        bulkReloading ||
+                        selectedMismatchCount === 0
+                      }
                       onClick={() => setShowMismatchReloadModal(true)}
                       title="이상 항목만 ES 재적재"
                     >
                       {mismatchReloading ? (
                         <span className="d-flex align-items-center gap-1">
                           <Spinner animation="border" size="sm" />
-                          {reloadRemainingCount !== null && (
+                          {mismatchRemainingCount !== null && (
                             <small style={{ fontSize: "0.7rem" }}>
-                              잔여 {reloadRemainingCount}건
+                              잔여 {mismatchRemainingCount}건
                             </small>
                           )}
                         </span>
@@ -1663,6 +1726,28 @@ export default function CategoryAdmin({
                         <span className="d-flex align-items-center gap-1">
                           이상 항목 재적재 <FontAwesomeIcon icon={faRotate} />
                         </span>
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline-primary"
+                      size="sm"
+                      disabled={saving || autoClassifying}
+                      onClick={() => setShowAutoClassifyModal(true)}
+                      title="자동 분류"
+                    >
+                      {autoClassifying ? (
+                        <span className="d-flex align-items-center gap-1">
+                          <Spinner animation="border" size="sm" />
+                          <small style={{ fontSize: "0.7rem" }}>
+                            {autoClassifyRemainingCount !== null
+                              ? `잔여 ${autoClassifyRemainingCount}건`
+                              : "분류 중"}
+                          </small>
+                        </span>
+                      ) : (
+                        <>
+                          자동 분류 <FontAwesomeIcon icon={faRotate} />
+                        </>
                       )}
                     </Button>
                   </div>
@@ -2017,8 +2102,8 @@ export default function CategoryAdmin({
           </p>
           <p className="text-muted">
             하위 디렉토리는 포함하지 않습니다. 기존 ES 엔트리는 이전 경로
-            기준으로 삭제하고, 이동된 새 위치에서 다시 ES에 적재합니다.
-            분류가 모호하거나 대상 파일이 이미 있으면 건너뜁니다.
+            기준으로 삭제하고, 이동된 새 위치에서 다시 ES에 적재합니다. 분류가
+            모호하거나 대상 파일이 이미 있으면 건너뜁니다.
           </p>
         </Modal.Body>
         <Modal.Footer>
@@ -2097,10 +2182,7 @@ export default function CategoryAdmin({
                 {selectedMismatchCount}건만 ES에 재적재합니다.
               </>
             ) : (
-              <>
-                현재 불일치 카테고리 {mismatchStats.categoryCount}개의 이상 항목{" "}
-                {mismatchStats.itemCount}건을 ES에 재적재합니다.
-              </>
+              <>왼쪽에서 카테고리를 먼저 선택하세요.</>
             )}
           </p>
           <p className="text-muted">
@@ -2117,7 +2199,9 @@ export default function CategoryAdmin({
           <Button
             variant="warning"
             onClick={handleReloadCategoryMismatches}
-            disabled={saving || mismatchReloading}
+            disabled={
+              saving || bulkReloading || mismatchReloading || !selectedCategory
+            }
           >
             {mismatchReloading ? (
               <Spinner animation="border" size="sm" />
