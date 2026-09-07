@@ -1202,3 +1202,47 @@ def test_naver_series_links_and_info():
     assert info["title"] == "Title"
     assert info["author"] == "작가명"
     assert info["category"] == "장르"
+
+
+def test_kyobo_bookstore_links_and_info():
+    from backend.bookstore import KyoboBookstore
+
+    store = KyoboBookstore(verbose=False)
+    html = """
+    <html>
+      <ul class="prod_list">
+        <li class="prod_item">
+          <a class="prod_info" href="/detail/S000001234">상세링크</a>
+          <span class="prod_name">교보 도서 제목</span>
+          <span class="author rep">교보 작가</span>
+        </li>
+      </ul>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    links = store.extract_search_links(soup)
+    assert len(links) == 1
+    assert "detail/S000001234" in links[0]
+
+    detail_html = """
+    <html>
+      <h1 class="prod_title">교보 도서 제목</h1>
+      <span class="author rep">교보 작가</span>
+      <ol class="breadcrumb_list">
+        <li><a>홈</a></li>
+        <li><a>국내도서</a></li>
+        <li><a>소설</a></li>
+        <li><a>한국소설</a></li>
+      </ol>
+      <dl>
+        <dt>ISBN</dt>
+        <dd>9788934900011</dd>
+      </dl>
+    </html>
+    """
+    detail_soup = BeautifulSoup(detail_html, "html.parser")
+    info = store.extract_book_info(detail_soup)
+    assert info["title"] == "교보 도서 제목"
+    assert info["author"] == "교보 작가"
+    assert info["category"] == "소설 > 한국소설"
+    assert info["isbn"] == "9788934900011"
