@@ -1176,8 +1176,10 @@ class DummyManager:
 
 
 class DummyCategoryMapping:
+    BULK_LOCK_KEY = "__all__"
+
     def __init__(self):
-        self._status = None
+        self._locks: dict[str, dict] = {}  # lock_key -> status
 
     def get_hidden_categories(self, content_type="book"):
         return []
@@ -1192,23 +1194,35 @@ class DummyCategoryMapping:
         return True
 
     def acquire_reload_lock(self, content_type="book", category=None):
-        if self._status and self._status.get("status") == "running":
-            return False, "이미 재적재 작업이 진행 중입니다. 완료 후 다시 시도하세요."
-        self._status = {"category": category, "status": "running", "indexed_count": 0, "deleted_count": 0, "failed_count": 0, "before_count": 0, "after_count": 0, "error": None}
-        return True, None
+        lock_key = category or self.BULK_LOCK_KEY
+        check_keys = [lock_key] if lock_key == self.BULK_LOCK_KEY else [lock_key, self.BULK_LOCK_KEY]
+        for key in check_keys:
+            status = self._locks.get(key)
+            if status and status.get("status") == "running":
+                if key == lock_key:
+                    message = "이미 재적재 작업이 진행 중입니다. 완료 후 다시 시도하세요."
+                else:
+                    message = "다른 재적재 작업이 진행 중이라 지금은 실행할 수 없습니다. 완료 후 다시 시도하세요."
+                return False, message, status
+        self._locks[lock_key] = {"category": category, "status": "running", "indexed_count": 0, "deleted_count": 0, "failed_count": 0, "before_count": 0, "after_count": 0, "error": None}
+        return True, None, None
 
-    def heartbeat_reload_lock(self, content_type="book", **counts):
-        if self._status is not None:
-            self._status.update(counts)
+    def heartbeat_reload_lock(self, content_type="book", category=None, **counts):
+        lock_key = category or self.BULK_LOCK_KEY
+        if lock_key in self._locks:
+            self._locks[lock_key].update(counts)
 
-    def complete_reload_lock(self, content_type="book", status="done", error=None, **counts):
-        self._status = {**(self._status or {}), "status": status, "error": error, **counts}
+    def complete_reload_lock(self, content_type="book", status="done", error=None, category=None, **counts):
+        lock_key = category or self.BULK_LOCK_KEY
+        self._locks[lock_key] = {**(self._locks.get(lock_key) or {}), "status": status, "error": error, **counts}
 
-    def get_reload_status(self, content_type="book"):
-        return self._status
+    def get_reload_status(self, content_type="book", category=None):
+        lock_key = category or self.BULK_LOCK_KEY
+        return self._locks.get(lock_key)
 
-    def release_reload_lock(self, content_type="book"):
-        self._status = None
+    def release_reload_lock(self, content_type="book", category=None):
+        lock_key = category or self.BULK_LOCK_KEY
+        self._locks.pop(lock_key, None)
 
 
 @pytest.fixture()
@@ -1356,7 +1370,8 @@ def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
     assert resp.json()["result"]["started"] is True
     assert resp.json()["result"]["category"] == "A"
 
-    resp = dummy_client.get("/category-mismatches/reload-status")
+    # 카테고리별 락은 그 카테고리로 조회해야 한다 — 일괄(전체) 락과는 독립적인 행이다.
+    resp = dummy_client.get("/category-mismatches/reload-status", params={"category": "A"})
     assert resp.json()["status"] == "success"
     assert resp.json()["result"]["status"] == "done"
     assert resp.json()["result"]["indexed_count"] == 1
@@ -1519,7 +1534,7 @@ def test_main_error_branches(dummy_client, monkeypatch):
 
     resp = dummy_client.post("/category-mismatches/reload-mismatches", json={"category": "A"})
     assert resp.json()["result"]["started"] is True
-    resp = dummy_client.get("/category-mismatches/reload-status")
+    resp = dummy_client.get("/category-mismatches/reload-status", params={"category": "A"})
     assert resp.json()["result"]["status"] == "failed"
     assert resp.json()["result"]["error"] == "mismatch fail"
 
@@ -1529,7 +1544,7 @@ def test_main_error_branches(dummy_client, monkeypatch):
     monkeypatch.setattr(main_mod.book_manager, "reload_category_mismatch_files", reload_category_mismatch_files_raise)
     resp = dummy_client.post("/category-mismatches/reload-mismatches", json={"category": "A"})
     assert resp.json()["result"]["started"] is True
-    resp = dummy_client.get("/category-mismatches/reload-status")
+    resp = dummy_client.get("/category-mismatches/reload-status", params={"category": "A"})
     assert resp.json()["result"]["status"] == "failed"
     assert resp.json()["result"]["error"] == main_mod.GENERIC_MISMATCH_ERROR
 

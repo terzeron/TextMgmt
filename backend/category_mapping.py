@@ -23,6 +23,10 @@ class CategoryMapping:
     # 여유 있게 잡는다.
     RELOAD_LOCK_HEARTBEAT_STALE_SECONDS = 5 * 60
 
+    # reload_locks의 락 단위(lock_key). 카테고리별 재적재는 카테고리명을 그대로 쓰고,
+    # 일괄/전체 재적재는 모든 카테고리에 영향을 주므로 이 sentinel을 쓴다.
+    BULK_LOCK_KEY = "__all__"
+
     def __init__(self, host: str | None = None, port: int | None = None, database: str | None = None, user: str | None = None, password: str | None = None) -> None:
         """
         Args:
@@ -68,6 +72,8 @@ class CategoryMapping:
                 self._migrate_add_content_type(cursor)
                 # reload_locks를 진행 상황까지 담는 공유 작업 상태 테이블로 확장
                 self._migrate_reload_locks(cursor)
+                # reload_locks를 content_type 단일 락에서 (content_type, lock_key) 복합 락으로 확장
+                self._migrate_reload_locks_lock_key(cursor)
                 conn.commit()
         LOGGER.debug("Database initialized")
 
@@ -112,6 +118,24 @@ class CategoryMapping:
             if row and row["cnt"] == 0:
                 LOGGER.info("Migrating table reload_locks: adding %s column", column)
                 cursor.execute(alter_sql)
+
+    def _migrate_reload_locks_lock_key(self, cursor) -> None:
+        """reload_locks를 content_type 단일 락에서 (content_type, lock_key) 복합 락으로 확장한다.
+
+        기존 행은 category가 있으면 그 카테고리를, 없으면 BULK_LOCK_KEY를 lock_key로 채워
+        그대로 보존한다. 이 이후로는 카테고리별 재적재와 일괄 재적재가 서로 다른 행을 쓰므로
+        서로 다른 카테고리끼리는 물론, 카테고리별 작업과 일괄 작업도 (일괄이 전체에 영향을
+        주는 경우를 제외하고) 독립적으로 동시 진행될 수 있다.
+        """
+        cursor.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = %s AND table_name = 'reload_locks' AND column_name = 'lock_key'", (self.database,))
+        row = cursor.fetchone()
+        if row and row["cnt"] > 0:
+            return
+        LOGGER.info("Migrating table reload_locks: adding lock_key column and switching primary key to (content_type, lock_key)")
+        # DDL의 DEFAULT 절은 바인드 파라미터를 지원하지 않으므로, 상수인 BULK_LOCK_KEY를 직접 삽입한다.
+        cursor.execute(f"ALTER TABLE reload_locks ADD COLUMN lock_key VARCHAR(255) NOT NULL DEFAULT '{self.BULK_LOCK_KEY}'")
+        cursor.execute("UPDATE reload_locks SET lock_key = COALESCE(category, %s)", (self.BULK_LOCK_KEY,))
+        cursor.execute("ALTER TABLE reload_locks DROP PRIMARY KEY, ADD PRIMARY KEY (content_type, lock_key)")
 
     def get_all_mappings(self, content_type: str = "book") -> dict[str, list[str]]:
         """모든 카테고리-키워드 매핑 조회
@@ -415,68 +439,97 @@ class CategoryMapping:
                     LOGGER.error("rename_category(%s -> %s, %s) failed: %s", old_category, new_category, content_type, e)
                     return False
 
-    def acquire_reload_lock(self, content_type: str = "book", category: str | None = None) -> tuple[bool, str | None]:
-        """카테고리 불일치 재적재 작업 상태를 초기화하고 락을 획득한다. 이미 진행 중이면 (False, 안내 메시지)를 반환.
+    def acquire_reload_lock(self, content_type: str = "book", category: str | None = None) -> tuple[bool, str | None, dict[str, Any] | None]:
+        """카테고리 불일치 재적재 작업 상태를 초기화하고 락을 획득한다.
 
-        완료된 작업도 마지막 결과 조회를 위해 행을 지우지 않고 남겨두므로, INSERT 실패(중복 키)가
-        아니라 현재 status/heartbeat를 직접 봐서 획득 가능 여부를 판단한다. 재적재가 pod 재시작 등으로
+        category가 있으면 그 카테고리 전용 락을 쓰고, 없으면 전체(BULK_LOCK_KEY) 락을 쓴다. 일괄
+        재적재는 모든 카테고리에 영향을 주므로, 카테고리별 락을 잡을 때는 같은 카테고리 락뿐 아니라
+        전체 락도 진행 중이 아닌지 함께 확인하고, 전체 락을 잡을 때는 이 content_type의 어떤 락이든
+        진행 중이면 안 된다. 서로 다른 카테고리끼리는 이 검사에 걸리지 않아 독립적으로 동시 진행된다.
+
+        이미 다른 작업이 진행 중이면 (False, 안내 메시지, 그 작업의 현재 상태)를 반환한다. 완료된
+        작업도 마지막 결과 조회를 위해 행을 지우지 않고 남겨두므로, INSERT 실패(중복 키)가 아니라
+        현재 status/heartbeat를 직접 봐서 획득 가능 여부를 판단한다. 재적재가 pod 재시작 등으로
         heartbeat를 못 남기고 죽었을 경우를 대비해, RELOAD_LOCK_HEARTBEAT_STALE_SECONDS 동안
-        updated_at이 갱신되지 않은 'running' 행은 죽은 작업으로 간주하고 강제로 갈아치운다.
+        updated_at이 갱신되지 않은 'running' 행은 죽은 작업으로 간주하고 무시한다.
         """
+        lock_key = category or self.BULK_LOCK_KEY
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT status, updated_at FROM reload_locks WHERE content_type = %s FOR UPDATE", (content_type,))
-                row = cursor.fetchone()
-                if row and row["status"] == "running":
+                if lock_key == self.BULK_LOCK_KEY:
+                    cursor.execute("SELECT lock_key, status, updated_at FROM reload_locks WHERE content_type = %s FOR UPDATE", (content_type,))
+                else:
+                    cursor.execute("SELECT lock_key, status, updated_at FROM reload_locks WHERE content_type = %s AND lock_key IN (%s, %s) FOR UPDATE", (content_type, lock_key, self.BULK_LOCK_KEY))
+                rows = cursor.fetchall()
+
+                blocking_key = None
+                for row in rows:
+                    if row["status"] != "running":
+                        continue
                     if (datetime.now() - row["updated_at"]) <= timedelta(seconds=self.RELOAD_LOCK_HEARTBEAT_STALE_SECONDS):
-                        conn.commit()
-                        return False, "이미 재적재 작업이 진행 중입니다. 완료 후 다시 시도하세요."
-                    LOGGER.warning("acquire_reload_lock(%s): heartbeat(%s) 정지된 죽은 락 감지, 강제 해제 후 재획득", content_type, row["updated_at"])
+                        blocking_key = row["lock_key"]
+                        break
+                    LOGGER.warning("acquire_reload_lock(%s/%s): heartbeat(%s) 정지된 죽은 락(%s) 감지, 무시하고 진행", content_type, lock_key, row["updated_at"], row["lock_key"])
+
+                if blocking_key is not None:
+                    conn.commit()
+                    blocking_category = None if blocking_key == self.BULK_LOCK_KEY else blocking_key
+                    blocking_status = self.get_reload_status(content_type, blocking_category)
+                    if blocking_key == lock_key:
+                        message = "이미 재적재 작업이 진행 중입니다. 완료 후 다시 시도하세요."
+                    else:
+                        message = "다른 재적재 작업이 진행 중이라 지금은 실행할 수 없습니다. 완료 후 다시 시도하세요."
+                    return False, message, blocking_status
+
                 cursor.execute(
-                    "INSERT INTO reload_locks (content_type, category, status, started_at, updated_at, indexed_count, deleted_count, failed_count, before_count, after_count, error) "
-                    "VALUES (%s, %s, 'running', NOW(), NOW(), 0, 0, 0, 0, 0, NULL) "
+                    "INSERT INTO reload_locks (content_type, lock_key, category, status, started_at, updated_at, indexed_count, deleted_count, failed_count, before_count, after_count, error) "
+                    "VALUES (%s, %s, %s, 'running', NOW(), NOW(), 0, 0, 0, 0, 0, NULL) "
                     "ON DUPLICATE KEY UPDATE category = VALUES(category), status = 'running', started_at = NOW(), updated_at = NOW(), "
                     "indexed_count = 0, deleted_count = 0, failed_count = 0, before_count = 0, after_count = 0, error = NULL",
-                    (content_type, category),
+                    (content_type, lock_key, category),
                 )
                 conn.commit()
-                return True, None
+                return True, None, None
 
-    def heartbeat_reload_lock(self, content_type: str = "book", **progress_counts: int) -> None:
+    def heartbeat_reload_lock(self, content_type: str = "book", category: str | None = None, **progress_counts: int) -> None:
         """재적재 진행 중 heartbeat(updated_at)와 진행 카운트를 갱신한다."""
         allowed = {"indexed_count", "deleted_count", "failed_count", "before_count", "after_count"}
         unknown = set(progress_counts) - allowed
         if unknown:
             raise ValueError(f"알 수 없는 진행 카운트 필드: {unknown}")
+        lock_key = category or self.BULK_LOCK_KEY
         set_clause = "".join(f", {field} = %s" for field in progress_counts)
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(f"UPDATE reload_locks SET updated_at = NOW(){set_clause} WHERE content_type = %s", (*progress_counts.values(), content_type))
+                cursor.execute(f"UPDATE reload_locks SET updated_at = NOW(){set_clause} WHERE content_type = %s AND lock_key = %s", (*progress_counts.values(), content_type, lock_key))
                 conn.commit()
 
-    def complete_reload_lock(self, content_type: str = "book", status: str = "done", error: str | None = None, **final_counts: int) -> None:
+    def complete_reload_lock(self, content_type: str = "book", status: str = "done", error: str | None = None, category: str | None = None, **final_counts: int) -> None:
         """재적재 작업 완료(성공/실패)를 기록한다. 행은 삭제하지 않고 상태만 남겨, 새로고침 후에도
         마지막 결과를 볼 수 있게 한다. 다음 acquire_reload_lock 호출 시 덮어써진다."""
         allowed = {"indexed_count", "deleted_count", "failed_count", "before_count", "after_count"}
         unknown = set(final_counts) - allowed
         if unknown:
             raise ValueError(f"알 수 없는 진행 카운트 필드: {unknown}")
+        lock_key = category or self.BULK_LOCK_KEY
         set_clause = "".join(f", {field} = %s" for field in final_counts)
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(f"UPDATE reload_locks SET status = %s, updated_at = NOW(), error = %s{set_clause} WHERE content_type = %s", (status, error, *final_counts.values(), content_type))
+                cursor.execute(f"UPDATE reload_locks SET status = %s, updated_at = NOW(), error = %s{set_clause} WHERE content_type = %s AND lock_key = %s", (status, error, *final_counts.values(), content_type, lock_key))
                 conn.commit()
 
-    def get_reload_status(self, content_type: str = "book") -> dict[str, Any] | None:
-        """현재 재적재 작업 상태를 조회한다. 작업 이력이 없으면 None.
+    def get_reload_status(self, content_type: str = "book", category: str | None = None) -> dict[str, Any] | None:
+        """재적재 작업 상태를 조회한다. category가 있으면 그 카테고리 전용 락을, 없으면 전체
+        (BULK_LOCK_KEY) 락을 조회한다. 작업 이력이 없으면 None.
 
         status가 'running'인데 heartbeat가 RELOAD_LOCK_HEARTBEAT_STALE_SECONDS 이상 끊겼으면,
         DB 행을 고치지 않고 조회 결과에서만 'failed'로 보여준다(실제 재획득/정리는
         acquire_reload_lock이 다음 시작 시점에 처리).
         """
+        lock_key = category or self.BULK_LOCK_KEY
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT category, status, started_at, updated_at, indexed_count, deleted_count, failed_count, before_count, after_count, error FROM reload_locks WHERE content_type = %s", (content_type,))
+                cursor.execute("SELECT category, status, started_at, updated_at, indexed_count, deleted_count, failed_count, before_count, after_count, error FROM reload_locks WHERE content_type = %s AND lock_key = %s", (content_type, lock_key))
                 row = cursor.fetchone()
         if not row:
             return None
@@ -498,9 +551,10 @@ class CategoryMapping:
             "error": error,
         }
 
-    def release_reload_lock(self, content_type: str = "book") -> None:
+    def release_reload_lock(self, content_type: str = "book", category: str | None = None) -> None:
         """재적재 락 행을 완전히 지운다 (일반 완료 경로에서는 complete_reload_lock을 쓴다)."""
+        lock_key = category or self.BULK_LOCK_KEY
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM reload_locks WHERE content_type = %s", (content_type,))
+                cursor.execute("DELETE FROM reload_locks WHERE content_type = %s AND lock_key = %s", (content_type, lock_key))
                 conn.commit()

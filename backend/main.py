@@ -400,9 +400,46 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     router = APIRouter()
     auto_classify_status: dict[str, Any] = {"status": "idle", "remaining_count": 0}
 
+    def _auto_classify_status_path() -> Path | None:
+        try:
+            return Path(manager.path_prefix) / f".auto_classify_status_{content_type}.json"
+        except (TypeError, ValueError):
+            return None
+
+    def _read_auto_classify_status() -> dict[str, Any]:
+        status_path = _auto_classify_status_path()
+        if status_path is None or not status_path.exists():
+            return dict(auto_classify_status)
+        try:
+            with status_path.open("r", encoding="utf-8") as status_file:
+                status = json.load(status_file)
+        except Exception as e:
+            LOGGER.warning("auto_classify_status 파일 읽기 실패: %s", e)
+            return dict(auto_classify_status)
+        if not isinstance(status, dict):
+            return dict(auto_classify_status)
+        auto_classify_status.clear()
+        auto_classify_status.update(status)
+        return dict(auto_classify_status)
+
     def _replace_auto_classify_status(next_status: dict[str, Any]) -> None:
+        next_status = {**next_status, "updated_at": time.time()}
         auto_classify_status.clear()
         auto_classify_status.update(next_status)
+        status_path = _auto_classify_status_path()
+        if status_path is None or not status_path.parent.exists():
+            return
+        tmp_path = status_path.with_name(f"{status_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        try:
+            with tmp_path.open("w", encoding="utf-8") as status_file:
+                json.dump(next_status, status_file, ensure_ascii=False, separators=(",", ":"))
+            tmp_path.replace(status_path)
+        except Exception as e:
+            LOGGER.warning("auto_classify_status 파일 쓰기 실패: %s", e)
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _remaining_auto_classify_count(status: dict[str, Any]) -> int:
         remaining = status.get("remaining_count")
@@ -436,7 +473,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         )
 
     def _on_auto_classify_progress(progress: dict[str, int]) -> None:
-        next_status = {**auto_classify_status, **progress, "status": "running"}
+        next_status = {**_read_auto_classify_status(), **progress, "status": "running"}
         next_status["remaining_count"] = _remaining_auto_classify_count(next_status)
         _replace_auto_classify_status(next_status)
 
@@ -456,16 +493,16 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             result, error = await manager.auto_classify_category(category, mappings, on_progress=_on_auto_classify_progress, **classify_kwargs)
         except Exception as e:
             LOGGER.error("auto_classify_category async error: %s", e)
-            _replace_auto_classify_status({**auto_classify_status, "status": "failed", "error": "자동 분류에 실패했습니다."})
+            _replace_auto_classify_status({**_read_auto_classify_status(), "status": "failed", "error": "자동 분류에 실패했습니다."})
             return
 
         if error is None:
-            next_status = {**auto_classify_status, **result, "status": "done"}
+            next_status = {**_read_auto_classify_status(), **result, "status": "done"}
             next_status["remaining_count"] = _remaining_auto_classify_count(next_status)
             _replace_auto_classify_status(next_status)
             LOGGER.info("auto_classify_category async 응답: success — %s", result)
         else:
-            _replace_auto_classify_status({**auto_classify_status, "status": "failed", "error": error})
+            _replace_auto_classify_status({**_read_auto_classify_status(), "status": "failed", "error": error})
             LOGGER.error("auto_classify_category async 응답: failure — %s", error)
 
     @router.put("/books/{book_id}", dependencies=admin_dep)
@@ -656,14 +693,15 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         )
         response_object: dict[str, Any] = {"status": "failure"}
         if body.async_mode:
-            if auto_classify_status.get("status") == "running":
+            current_status = _read_auto_classify_status()
+            if current_status.get("status") == "running":
                 response_object["status"] = "success"
-                response_object["result"] = {"already_running": True, **auto_classify_status}
+                response_object["result"] = {"already_running": True, **current_status}
                 return response_object
             _start_auto_classify_status(body.category, body.recursive, body.dry_run, clean_existing=body.clean_existing, use_bookstore=body.use_bookstore, use_content_meta=body.use_content_meta)
             background_tasks.add_task(_run_auto_classify_job, body.category, body.recursive, body.dry_run, clean_existing=body.clean_existing, use_bookstore=body.use_bookstore, use_content_meta=body.use_content_meta, delay=body.delay)
             response_object["status"] = "success"
-            response_object["result"] = {"started": True, **auto_classify_status}
+            response_object["result"] = {"started": True, **_read_auto_classify_status()}
             return response_object
 
         classify_kwargs: dict[str, Any] = {"content_type": content_type, "recursive": body.recursive, "dry_run": body.dry_run}
@@ -699,7 +737,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     @router.get("/categories/auto-classify-status", dependencies=admin_dep)
     async def get_auto_classify_status() -> dict[str, Any]:
         """진행 중이거나 마지막으로 끝난 자동 분류 작업 상태 조회 (폴링용)"""
-        return {"status": "success", "result": dict(auto_classify_status)}
+        return {"status": "success", "result": _read_auto_classify_status()}
 
     @router.get("/categories/{category:path}")
     async def get_books_in_category(category: str, limit: int = 0, cursor: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:
@@ -853,34 +891,37 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             LOGGER.error("reload_category 응답: failure — %s", error)
         return response_object
 
-    def _on_reload_progress(counts: dict[str, int]) -> None:
-        # book_manager의 재적재 루프 안(동기 for문)에서 직접 호출되므로 asyncio.to_thread로 감쌀 수
-        # 없다 — heartbeat는 PK 1건짜리 짧은 UPDATE라 블로킹 비용은 감내 가능한 수준으로 본다.
-        category_mapping.heartbeat_reload_lock(content_type, **counts)
+    def _make_reload_progress_cb(category: str | None) -> Callable[[dict[str, int]], None]:
+        def _on_reload_progress(counts: dict[str, int]) -> None:
+            # book_manager의 재적재 루프 안(동기 for문)에서 직접 호출되므로 asyncio.to_thread로 감쌀 수
+            # 없다 — heartbeat는 PK 1건짜리 짧은 UPDATE라 블로킹 비용은 감내 가능한 수준으로 본다.
+            category_mapping.heartbeat_reload_lock(content_type, category=category, **counts)
+
+        return _on_reload_progress
 
     async def _run_reload_mismatch_files_job(category: str) -> None:
         try:
-            result, error = await manager.reload_category_mismatch_files(category, content_type=content_type, on_progress=_on_reload_progress)
+            result, error = await manager.reload_category_mismatch_files(category, content_type=content_type, on_progress=_make_reload_progress_cb(category))
         except Exception as e:
             LOGGER.error("reload_category_mismatch_files error: %s", e)
-            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", GENERIC_MISMATCH_ERROR)
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", GENERIC_MISMATCH_ERROR, category)
             return
         if error is None:
-            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "done", None, indexed_count=result["indexed_count"], deleted_count=result["deleted_count"], failed_count=result["failed_count"], before_count=result["before_count"], after_count=result["after_count"])
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "done", None, category, indexed_count=result["indexed_count"], deleted_count=result["deleted_count"], failed_count=result["failed_count"], before_count=result["before_count"], after_count=result["after_count"])
             LOGGER.info("reload_category_mismatch_files 응답: success — %s", result)
         else:
-            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", error)
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", error, category)
             LOGGER.error("reload_category_mismatch_files 응답: failure — %s", error)
 
     async def _run_reload_all_mismatches_job() -> None:
         try:
-            result, error = await manager.reload_category_mismatches(content_type=content_type, on_progress=_on_reload_progress)
+            result, error = await manager.reload_category_mismatches(content_type=content_type, on_progress=_make_reload_progress_cb(None))
         except Exception as e:
             LOGGER.error("reload_all_category_mismatches error: %s", e)
             await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", GENERIC_MISMATCH_ERROR)
             return
         if error is None:
-            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "done", None, indexed_count=result["indexed_count"], deleted_count=result["deleted_count"], failed_count=result["failed_count"], before_count=result["before_count"], after_count=result["after_count"])
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "done", None, None, indexed_count=result["indexed_count"], deleted_count=result["deleted_count"], failed_count=result["failed_count"], before_count=result["before_count"], after_count=result["after_count"])
             LOGGER.info("reload_all_category_mismatches 응답: success — %s", result)
         else:
             await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", error)
@@ -888,14 +929,17 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
 
     @router.post("/category-mismatches/reload-mismatches", dependencies=admin_dep)
     async def reload_category_mismatch_files(body: CategoryDeleteModel, background_tasks: BackgroundTasks) -> dict[str, Any]:
-        """특정 카테고리의 현재 불일치 항목만 ES에 재적재/정리 (백그라운드 실행, 즉시 응답)"""
+        """특정 카테고리의 현재 불일치 항목만 ES에 재적재/정리 (백그라운드 실행, 즉시 응답).
+
+        카테고리별 락을 쓰므로, 다른 카테고리의 재적재와는 독립적으로 동시 진행된다. 일괄
+        재적재가 이미 진행 중이면(모든 카테고리에 영향을 주므로) 대신 그 작업 상태에 연결된다.
+        """
         LOGGER.info("reload_category_mismatch_files 요청: category='%s', content_type='%s'", body.category, content_type)
         response_object: dict[str, Any] = {"status": "failure"}
-        acquired, lock_error = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, body.category)
+        acquired, lock_error, blocking_status = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, body.category)
         if not acquired:
-            status = await asyncio.to_thread(category_mapping.get_reload_status, content_type)
             response_object["status"] = "success"
-            response_object["result"] = {"already_running": True, **(status or {})}
+            response_object["result"] = {"already_running": True, **(blocking_status or {})}
             LOGGER.info("reload_category_mismatch_files: 진행 중인 작업에 연결 — %s", lock_error)
             return response_object
         background_tasks.add_task(_run_reload_mismatch_files_job, body.category)
@@ -905,14 +949,17 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
 
     @router.post("/category-mismatches/reload-all", dependencies=admin_dep)
     async def reload_all_category_mismatches(background_tasks: BackgroundTasks) -> dict[str, Any]:
-        """현재 카테고리 불일치 항목을 일괄 ES 재적재/정리 (백그라운드 실행, 즉시 응답)"""
+        """현재 카테고리 불일치 항목을 일괄 ES 재적재/정리 (백그라운드 실행, 즉시 응답).
+
+        모든 카테고리에 영향을 주므로, 카테고리별 재적재든 다른 일괄 재적재든 이 content_type에
+        진행 중인 작업이 하나라도 있으면 획득할 수 없고 그 작업 상태에 연결된다.
+        """
         LOGGER.info("reload_all_category_mismatches 요청: content_type='%s'", content_type)
         response_object: dict[str, Any] = {"status": "failure"}
-        acquired, lock_error = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, None)
+        acquired, lock_error, blocking_status = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, None)
         if not acquired:
-            status = await asyncio.to_thread(category_mapping.get_reload_status, content_type)
             response_object["status"] = "success"
-            response_object["result"] = {"already_running": True, **(status or {})}
+            response_object["result"] = {"already_running": True, **(blocking_status or {})}
             LOGGER.info("reload_all_category_mismatches: 진행 중인 작업에 연결 — %s", lock_error)
             return response_object
         background_tasks.add_task(_run_reload_all_mismatches_job)
@@ -921,9 +968,12 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.get("/category-mismatches/reload-status", dependencies=admin_dep)
-    async def get_reload_status() -> dict[str, Any]:
-        """진행 중이거나 마지막으로 끝난 재적재 작업 상태 조회 (폴링용)"""
-        status = await asyncio.to_thread(category_mapping.get_reload_status, content_type)
+    async def get_reload_status(category: str | None = None) -> dict[str, Any]:
+        """진행 중이거나 마지막으로 끝난 재적재 작업 상태 조회 (폴링용).
+
+        category 생략 시 일괄/전체 재적재 락 상태를, 지정 시 그 카테고리 전용 락 상태를 본다.
+        """
+        status = await asyncio.to_thread(category_mapping.get_reload_status, content_type, category)
         return {"status": "success", "result": status or {"status": "idle"}}
 
     @router.get("/category-mismatches/{category:path}", dependencies=admin_dep)
