@@ -554,6 +554,85 @@ describe("CategoryAdmin", () => {
     });
   });
 
+  it("이상 항목 선택 상태에서도 해당 카테고리의 이상 항목 재적재를 실행한다", async () => {
+    const mismatchData = {
+      mismatches: [
+        { category: "1_fiction", es_count: 12345, fs_count: 0, diff: 12345 },
+      ],
+      es_only: [],
+      fs_only: [],
+    };
+    setupMockResponses(CATEGORIES_RESPONSE, mismatchData);
+    render(<CategoryAdminBase />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches") resolve(mismatchData);
+      else if (
+        url.startsWith("/category-mismatches/1_fiction") &&
+        !url.startsWith("/category-mismatches/reload-status")
+      ) {
+        resolve({
+          es_only: [
+            {
+              book_id: 101,
+              title: "Missing File",
+              file_type: "pdf",
+              file_path: "1_fiction/missing.pdf",
+            },
+          ],
+          fs_only: [],
+          duplicates: [],
+        });
+      } else if (url.startsWith("/category-mismatches/reload-status")) {
+        resolve({ status: "idle" });
+      } else if (url.startsWith("/category-mappings"))
+        resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        resolve(LATEST_EXCLUDED_RESPONSE);
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("Missing File.pdf")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("Missing File.pdf"));
+
+    const header = screen.getByText("디렉토리").closest(".card-header");
+    const mismatchReloadButton = within(header).getByRole("button", {
+      name: /이상 항목 재적재/,
+    });
+    expect(mismatchReloadButton.disabled).toBe(false);
+    fireEvent.click(mismatchReloadButton);
+
+    const modal = await screen.findByRole("dialog");
+    expect(within(modal).getByText(/12345건만 ES에 재적재합니다/)).toBeTruthy();
+
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, _reject, done) => {
+        resolve({ started: true });
+        if (done) done();
+      },
+    );
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+    );
+
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/category-mismatches/reload-mismatches",
+        { category: "1_fiction" },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
   // ── 로딩 상태 ──
 
   it("API 응답 전에 펼치면 로딩 스피너를 표시한다", async () => {

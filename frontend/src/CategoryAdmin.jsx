@@ -296,6 +296,20 @@ function buildMismatchStats(mismatchData) {
   };
 }
 
+function countLoadedMismatchEntries(folder) {
+  return (folder?.children || []).reduce(
+    (count, child) => count + (child.mismatchType ? 1 : 0),
+    0,
+  );
+}
+
+function getMismatchReloadTargetCount(folder) {
+  const folderCount = Number(folder?.count || 0);
+  if (Number.isFinite(folderCount) && folderCount > 0) return folderCount;
+
+  return countLoadedMismatchEntries(folder);
+}
+
 function encodeCategoryPath(category) {
   return category.split("/").map(encodeURIComponent).join("/");
 }
@@ -427,6 +441,14 @@ export default function CategoryAdmin({
 
   const apiPrefix = contentType === "comic" ? "/comics" : "";
   const contentLabel = contentType === "comic" ? "만화" : "책";
+  const mismatchReloadTargetCategory =
+    selectedCategory || selectedMismatch?.category || "";
+  const mismatchReloadTargetFolder = mismatchReloadTargetCategory
+    ? findFolderInTree(folderData, mismatchReloadTargetCategory)
+    : null;
+  const selectedMismatchCount = getMismatchReloadTargetCount(
+    mismatchReloadTargetFolder,
+  );
 
   // ── 데이터 로드 ──
 
@@ -682,14 +704,14 @@ export default function CategoryAdmin({
   // 선택된 카테고리 전용 락 상태 폴링: 카테고리를 선택했을 때만 동작하며, 다른
   // 카테고리나 일괄 재적재와는 독립적으로 이 카테고리의 진행 상태만 추적한다.
   useEffect(() => {
-    if (!selectedCategory) return undefined;
+    if (!mismatchReloadTargetCategory) return undefined;
 
     let cancelled = false;
     const pollStatus = () => {
       const requestId = mismatchStatusRequestIdRef.current + 1;
       mismatchStatusRequestIdRef.current = requestId;
       jsonGetReq(
-        `${apiPrefix}/category-mismatches/reload-status?category=${encodeURIComponent(selectedCategory)}`,
+        `${apiPrefix}/category-mismatches/reload-status?category=${encodeURIComponent(mismatchReloadTargetCategory)}`,
         null,
         (result) => {
           if (!cancelled && requestId === mismatchStatusRequestIdRef.current)
@@ -712,7 +734,12 @@ export default function CategoryAdmin({
       cancelled = true;
       if (intervalId) clearInterval(intervalId);
     };
-  }, [selectedCategory, mismatchReloading, apiPrefix, applyReloadStatus]);
+  }, [
+    mismatchReloadTargetCategory,
+    mismatchReloading,
+    apiPrefix,
+    applyReloadStatus,
+  ]);
 
   const applyAutoClassifyStatus = useCallback(
     (status) => {
@@ -1207,7 +1234,8 @@ export default function CategoryAdmin({
   // 다르면 내 요청은 시작되지 않은 것이니 스피너를 켜 둔 채로 두면 안 된다.
   const handleReloadCategoryMismatches = useCallback(() => {
     setShowMismatchReloadModal(false);
-    if (!selectedCategory) {
+    const targetCategory = mismatchReloadTargetCategory;
+    if (!targetCategory) {
       setMessage("카테고리를 먼저 선택하세요.");
       setTimeout(() => setMessage(""), 3000);
       return;
@@ -1215,17 +1243,15 @@ export default function CategoryAdmin({
 
     mismatchStartPendingRef.current = true;
     setMismatchReloading(true);
-    setMismatchRemainingCount(
-      Number(findFolderInTree(folderData, selectedCategory)?.count || 0),
-    );
+    setMismatchRemainingCount(selectedMismatchCount);
     setSaving(true);
     setMessage("");
 
     jsonPostReq(
       `${apiPrefix}/category-mismatches/reload-mismatches`,
-      { category: selectedCategory },
+      { category: targetCategory },
       (result) => {
-        const requestedCategory = selectedCategory;
+        const requestedCategory = targetCategory;
         if (
           result &&
           result.already_running &&
@@ -1260,7 +1286,12 @@ export default function CategoryAdmin({
       },
       () => setSaving(false),
     );
-  }, [selectedCategory, folderData, apiPrefix, applyReloadStatus]);
+  }, [
+    mismatchReloadTargetCategory,
+    selectedMismatchCount,
+    apiPrefix,
+    applyReloadStatus,
+  ]);
 
   const handleBulkReloadMismatches = useCallback(() => {
     setShowBulkReloadModal(false);
@@ -1433,10 +1464,6 @@ export default function CategoryAdmin({
   const currentKeywords = selectedCategory
     ? mappings[selectedCategory] || []
     : [];
-  const selectedFolder = selectedCategory
-    ? findFolderInTree(folderData, selectedCategory)
-    : null;
-  const selectedMismatchCount = Number(selectedFolder?.count || 0);
   const autoClassifyTargetLabel = selectedCategory
     ? getAutoClassifyTargetLabel(selectedCategory)
     : getAutoClassifyTargetLabel("_root");
@@ -1573,14 +1600,14 @@ export default function CategoryAdmin({
                   aria-label="이상 항목 재적재"
                   disabled={
                     saving ||
-                    !selectedCategory ||
+                    !mismatchReloadTargetCategory ||
                     bulkReloading ||
                     mismatchReloading ||
                     selectedMismatchCount === 0
                   }
                   onClick={() => setShowMismatchReloadModal(true)}
                   title={
-                    selectedCategory
+                    mismatchReloadTargetCategory
                       ? "선택 디렉토리 이상 항목만 ES 재적재"
                       : "카테고리를 선택하면 이상 항목만 ES 재적재할 수 있습니다"
                   }
@@ -2176,9 +2203,9 @@ export default function CategoryAdmin({
         </Modal.Header>
         <Modal.Body>
           <p className="fw-bold">
-            {selectedCategory ? (
+            {mismatchReloadTargetCategory ? (
               <>
-                카테고리 &apos;{selectedCategory}&apos;의 이상 항목{" "}
+                카테고리 &apos;{mismatchReloadTargetCategory}&apos;의 이상 항목{" "}
                 {selectedMismatchCount}건만 ES에 재적재합니다.
               </>
             ) : (
@@ -2200,7 +2227,11 @@ export default function CategoryAdmin({
             variant="warning"
             onClick={handleReloadCategoryMismatches}
             disabled={
-              saving || bulkReloading || mismatchReloading || !selectedCategory
+              saving ||
+              bulkReloading ||
+              mismatchReloading ||
+              !mismatchReloadTargetCategory ||
+              selectedMismatchCount === 0
             }
           >
             {mismatchReloading ? (
