@@ -1,0 +1,889 @@
+#!/usr/bin/env python3
+"""
+BookClassifierService - 결정론적(Deterministic) 도서 자동 분류 엔진
+1번: 3대 온라인 서점(Yes24, 알라딘, 교보) 교차 검증 및 2/3 다수결 판정
+2번: EPUB 메타데이터(dc:subject 등) 및 TXT 상단 본문 키워드 정적 스코어링 판정
+"""
+
+import os
+import re
+import json
+import shutil
+import logging
+import zipfile
+import urllib.parse
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore
+
+logger = logging.getLogger(__name__)
+
+
+STANDARD_CATEGORIES = [
+    "0_html", "0_hwp", "0_telegram",
+    "1_동양고전", "1_동양고전한문", "1_문헌서지", "1_서양고전", "1_올재", "1_한국고전국역총서",
+    "2_동서문화사월드북", "2_문예세계문학선", "2_문학일반서평작법독서", "2_소설Abe전집", "2_소설역사", "2_소설외국",
+    "2_소설일본", "2_소설일본게이고", "2_소설일본하루키", "2_소설중국", "2_소설한국", "2_수필서간일기", "2_시",
+    "2_열린책들세계문학", "2_을유세계문학전집",
+    "3_SF", "3_SF그리폰북스", "3_SF영문", "3_SF직지", "3_SF환상문학전집", "3_그래픽노블", "3_라이트노벨",
+    "3_무협", "3_셜록홈즈", "3_스릴러", "3_여성향", "3_장르문학자료", "3_판타지", "3_판타지pdf",
+    "4_경영마케팅", "4_경제", "4_누워서읽는법학", "4_법", "4_사회인류", "4_살림지식총서", "4_시공디스커버리",
+    "4_심리학뇌과학", "4_역사인물", "4_인문일반논픽션", "4_정치외교군사", "4_종교신화", "4_철학윤리",
+    "5_그림으로_읽는", "5_미술예술건축", "5_사진영상", "5_서브컬쳐", "5_수학과학일반", "5_스포츠", "5_영화", "5_음악", "5_이지사이언스",
+    "6_재테크", "6_처세술리더십창의성",
+    "7_교육일반", "7_국어교육", "7_언어일반", "7_영문일반", "7_영어교육", "7_외국어교육", "7_외국인을위한한국어읽기",
+    "7_일문일반", "7_일어교육", "7_중문일반", "7_중어한자교육",
+    "8_IT", "8_건강일반", "8_공인중개사", "8_모델링", "8_밀리터리", "8_성", "8_실용의학회계", "8_악보", "8_여행", "8_요리음료",
+    "9_BLGL", "9_격언명언", "9_북스캔OCR", "9_성인", "9_어린이육아", "9_역학해몽퍼즐", "9_유머", "9_청소년"
+]
+
+def extract_explicit_genre(filename: str) -> Optional[str]:
+    """파일명(URL 디코딩 후)에 명시된 장르 태그나 접두어를 추출하여 표준 카테고리로 반환"""
+    fname = urllib.parse.unquote(filename)
+    tags = [
+        (r"\[[^\s\]]*(?:로맨스판타지|로맨스|로판|현대로맨스|현로|로맨틱판타지|동양로맨스)[^\s\]]*\]|\([^\s\)]*(?:로맨스판타지|로맨스|로판|현대로맨스|현로|로맨틱판타지|동양로맨스)[^\s\)]*\)|^(?:동양)?(?:로맨스판타지|로맨스|로판|현대로맨스|현로)[0-9a-zA-Z가-힣\s\(\)\]【】]*[\)\s\]]", "3_여성향"),
+        (r"\[[^\s\]]*(?:BL|GL|백합|오메가버스)[^\s\]]*\]|\([^\s\)]*(?:BL|GL|백합|오메가버스)[^\s\)]*\)|^\bBL\b", "9_BLGL"),
+        (r"\[[^\s\]]*(?:신무협|정통무협|무협소설|무협|선협)[^\s\]]*\]|\([^\s\)]*(?:신무협|정통무협|무협소설|무협|선협)[^\s\)]*\)|^(?:미완\)|단편\))?무협[0-9a-zA-Z가-힣\s\(\)\]【】]*[\)\s\]]", "3_무협"),
+        (r"\[[^\s\]]*(?:퓨전판타지|현대판타지|게임판타지|퓨판|현판|겜판|판타지소설|판타지|레이드물|헌터물)[^\s\]]*\]|\([^\s\)]*(?:퓨전판타지|현대판타지|게임판타지|퓨판|현판|겜판|판타지소설|판타지)[^\s\)]*\)|^(?:현판|퓨판|겜판|판타지)[0-9a-zA-Z가-힣\s\(\)\]【】]*[\)\s\]]", "3_판타지"),
+        (r"\[(?:TS|티에스)\]|\((?:TS|티에스)\)|(?:^|[^a-zA-Z0-9가-힣])TS(?:물|소설|됐|은|는|이|가|도|[0-9\s\]\)_]|$)|^TS[가-힣\s]", "3_판타지"),
+        (r"\[[^\s\]]*(?:라이트노벨|라노벨)[^\s\]]*\]|\([^\s\)]*(?:라이트노벨|라노벨)[^\s\)]*\)", "3_라이트노벨"),
+        (r"\[[^\s\]]*(?:SF소설|과학소설|SF)[^\s\]]*\]|\([^\s\)]*(?:SF소설|과학소설|SF)[^\s\)]*\)|^\bSF\b[\s\)]", "3_SF"),
+        (r"\[[^\s\]]*(?:추리소설|미스터리소설|스릴러소설|추리|미스터리|스릴러)[^\s\]]*\]|\([^\s\)]*(?:추리소설|미스터리소설|스릴러소설|추리|미스터리|스릴러)[^\s\)]*\)", "3_스릴러"),
+        (r"\[[^\s\]]*(?:그래픽노블|만화|코믹스|웹툰)[^\s\]]*\]|\([^\s\)]*(?:그래픽노블|만화|코믹스|웹툰)[^\s\)]*\)", "3_그래픽노블"),
+        (r"\[[^\s\]]*(?:소설|한국소설)[^\s\]]*\]|\([^\s\)]*(?:소설|한국소설)[^\s\)]*\)", "2_소설한국"),
+    ]
+    for pat, cat in tags:
+        if re.search(pat, fname, re.IGNORECASE):
+            return cat
+    return None
+
+
+def inspect_epub_metadata(fpath: Path) -> Dict[str, str]:
+    """EPUB 파일 내부의 .opf 메타데이터(title, author, subject, description) 추출"""
+    meta = {"title": "", "author": "", "subject": "", "description": ""}
+    try:
+        with zipfile.ZipFile(fpath, "r") as z:
+            opf_files = [n for n in z.namelist() if n.endswith(".opf")]
+            if not opf_files:
+                return meta
+            opf_content = z.read(opf_files[0]).decode("utf-8", errors="ignore")
+            root = ET.fromstring(opf_content)
+            for elem in root.iter():
+                tag = elem.tag.split("}")[-1].lower()
+                if tag == "title" and elem.text and not meta["title"]:
+                    meta["title"] = elem.text.strip()
+                elif tag in ["creator", "author"] and elem.text and not meta["author"]:
+                    meta["author"] = elem.text.strip()
+                elif tag == "subject" and elem.text:
+                    if meta["subject"]:
+                        meta["subject"] += " > " + elem.text.strip()
+                    else:
+                        meta["subject"] = elem.text.strip()
+                elif tag == "description" and elem.text and not meta["description"]:
+                    meta["description"] = elem.text.strip()
+    except Exception:
+        pass
+    return meta
+
+
+def inspect_txt_content(fpath: Path) -> Dict[str, Any]:
+    """TXT 파일 앞부분 줄(최대 40줄)에서 해시태그 및 소개글 스니펫 추출"""
+    info = {"hashtags": [], "snippet": ""}
+    try:
+        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+            lines = [f.readline().strip() for _ in range(40)]
+            snippet = " ".join([l for l in lines if l])[:2000]
+            info["snippet"] = snippet
+            tags = re.findall(r"#([가-힣a-zA-Z0-9_]{2,15})", snippet)
+            info["hashtags"] = tags
+    except Exception:
+        pass
+    return info
+
+
+def title_similarity(t1: str, t2: str) -> float:
+    """두 도서 제목 간의 글자 bi-gram 유사도(Dice coefficient) 계산"""
+    s1 = re.sub(r"[^\w가-힣]", "", t1.lower())
+    s2 = re.sub(r"[^\w가-힣]", "", t2.lower())
+    if not s1 or not s2:
+        return 0.0
+    if s1 in s2 or s2 in s1:
+        return len(min(s1, s2, key=len)) / len(max(s1, s2, key=len))
+    b1 = set(s1[i:i+2] for i in range(len(s1)-1))
+    b2 = set(s2[i:i+2] for i in range(len(s2)-1))
+    if not b1 or not b2:
+        return 0.0
+    return 2.0 * len(b1 & b2) / (len(b1) + len(b2))
+
+
+def is_single_match_valid(search_title: str, found_title: str) -> bool:
+    """단일 서점 매칭 시 검색된 제목이 원본 검색어와 유효하게 일치하는지 검증 (추천도서 오매칭 방지)"""
+    if not found_title or not search_title:
+        return False
+    sim = title_similarity(search_title, found_title)
+    if sim >= 0.35:
+        return True
+
+    # 부제 등을 제외한 앞부분 단어 2개 이상 일치 여부 확인
+    st_clean = re.sub(r"[^\w가-힣\s]", "", search_title.lower()).strip()
+    ft_clean = re.sub(r"[^\w가-힣\s]", "", found_title.lower()).strip()
+    st_words = [w for w in st_clean.split() if len(w) >= 2]
+    ft_words = [w for w in ft_clean.split() if len(w) >= 2]
+    matching = [w for w in st_words if w in ft_words]
+    if len(matching) >= 2:
+        return True
+    if len(st_words) == 1 and len(ft_words) <= 3 and st_words[0] in ft_words:
+        return True
+
+    return False
+
+
+def score_text_genre(text: str) -> Optional[str]:
+    """본문 샘플(TXT 앞부분/EPUB 소개글)에서 도메인 키워드 빈도를 스코어링하여 장르 추론"""
+    if not text:
+        return None
+    t = text.lower()
+    scores = {
+        "3_무협": sum(1 for kw in ["문파", "화산파", "마교", "소교주", "맹주", "무림", "장문인", "절기", "검법", "도법", "내공", "심법", "기경팔맥", "소림", "무당", "개방", "사파", "정파", "백도", "흑도", "혈교", "비급", "강호", "천마", "신무협"] if kw in t),
+        "3_여성향": sum(1 for kw in ["영애", "공작가", "황태자", "남주", "여주", "시월드", "파혼", "후회남", "집착남", "황후", "황비", "악녀", "빙의녀", "로판", "로맨스", "남편", "이혼", "시어머니", "소설 속에 빙의"] if kw in t),
+        "9_BLGL": sum(1 for kw in ["미인공", "다정공", "강수", "단정수", "오메가버스", "알파", "오메가", "보이즈러브", "bl", "gl", "백합"] if kw in t),
+        "3_판타지": sum(1 for kw in ["던전", "헌터", "각성", "마나", "마법", "길드", "몬스터", "레이드", "시스템", "퀘스트", "플레이어", "용사", "마왕", "드래곤", "아카데미", "스킬", "스탯", "이세계", "전생", "아이템", "룬 문자", "상태창", "재벌가"] if kw in t),
+        "3_SF": sum(1 for kw in ["우주선", "안드로이드", "인공지능", "사이보그", "외계인", "행성", "타임머신", "디스토피아"] if kw in t),
+        "3_스릴러": sum(1 for kw in ["살인사건", "연쇄살인", "형사", "수사관", "시체", "밀실", "트릭", "용의자", "알리바이", "탐정"] if kw in t),
+    }
+    best_cat, best_score = max(scores.items(), key=lambda x: x[1])
+    if best_score >= 2:
+        return best_cat
+    return None
+
+
+def resolve_genre_conflict(cats: List[str], fname: str, text_sample: str = "") -> Optional[str]:
+    """서점 간 사소한 장르 차이(특히 3_* 계열) 충돌 시 파일명과 본문 키워드로 보조 판단"""
+    valid_cats = set(cats)
+    fname_lower = fname.lower()
+    text_lower = (fname + " " + text_sample).lower()
+
+    # 1. 무협 vs 판타지
+    if "3_무협" in valid_cats and "3_판타지" in valid_cats:
+        wuxia_kws = ["문파", "화산", "마교", "소교주", "맹주", "무림", "장문인", "절기", "검법", "도법", "내공", "심법", "소림", "무당", "개방", "사파", "정파", "강호", "천마"]
+        fantasy_kws = ["던전", "헌터", "각성", "마나", "마법", "길드", "몬스터", "레이드", "시스템", "퀘스트", "플레이어", "용사", "마왕", "드래곤", "아카데미", "스킬", "스탯", "이세계", "재벌"]
+        w_score = sum(1 for kw in wuxia_kws if kw in text_lower)
+        f_score = sum(1 for kw in fantasy_kws if kw in text_lower)
+        if w_score > f_score:
+            return "3_무협"
+        elif f_score > w_score:
+            return "3_판타지"
+        return "3_무협" if "무협" in fname_lower else "3_판타지"
+
+    # 2. 그래픽노블 vs 라이트노벨
+    if "3_그래픽노블" in valid_cats and "3_라이트노벨" in valid_cats:
+        ext = Path(fname).suffix.lower()
+        if ext in [".txt", ".epub"]:
+            return "3_라이트노벨"
+        return "3_그래픽노블"
+
+    # 3. 그래픽노블 vs 판타지
+    if "3_그래픽노블" in valid_cats and "3_판타지" in valid_cats:
+        ext = Path(fname).suffix.lower()
+        if ext in [".txt", ".epub"]:
+            return "3_판타지"
+        return "3_그래픽노블"
+
+    # 4. 판타지 vs 여성향 (로맨스판타지)
+    if "3_판타지" in valid_cats and "3_여성향" in valid_cats:
+        rofan_kws = ["영애", "공작", "황태자", "남주", "여주", "시월드", "파혼", "후회남", "집착", "황후", "악녀", "빙의", "로판", "로맨스"]
+        if any(kw in text_lower for kw in rofan_kws):
+            return "3_여성향"
+        return "3_판타지"
+
+    # 5. 그래픽노블 vs 여성향
+    if "3_그래픽노블" in valid_cats and "3_여성향" in valid_cats:
+        ext = Path(fname).suffix.lower()
+        if ext in [".txt", ".epub"]:
+            return "3_여성향"
+        return "3_그래픽노블"
+
+    # 6. 라이트노벨 vs 여성향 (TL, 여성향 라노벨, 로맨스)
+    if "3_라이트노벨" in valid_cats and "3_여성향" in valid_cats:
+        rofan_kws = ["영애", "공작", "황태자", "남주", "여주", "시월드", "파혼", "후회남", "집착", "황후", "악녀", "빙의", "로판", "로맨스", "하숙생", "선생님", "선배"]
+        if any(kw in text_lower for kw in rofan_kws):
+            return "3_여성향"
+        return "3_라이트노벨"
+
+    # 7. 라이트노벨 vs 판타지
+    if "3_라이트노벨" in valid_cats and "3_판타지" in valid_cats:
+        ln_kws = ["라노벨", "라이트노벨", "이세계", "마왕", "용사", "슬라임", "전생", "히로인"]
+        if any(kw in text_lower for kw in ln_kws):
+            return "3_라이트노벨"
+        return "3_판타지"
+
+    # 8. 소설한국 vs 수필서간일기
+    if "2_소설한국" in valid_cats and "2_수필서간일기" in valid_cats:
+        if any(kw in text_lower for kw in ["에세이", "일기", "산문"]):
+            return "2_수필서간일기"
+        return "2_소설한국"
+
+    # 9. 소설역사 vs 역사인물 / 경제
+    if "2_소설역사" in valid_cats and any(c in valid_cats for c in ["4_역사인물", "4_경제"]):
+        if any(kw in text_lower for kw in ["소설", "대하", "야사", "열전"]):
+            return "2_소설역사"
+
+    # 10. 소설한국 vs 역사인물
+    if "2_소설한국" in valid_cats and "4_역사인물" in valid_cats:
+        if any(kw in text_lower for kw in ["소설", "이야기", "단편", "전집", "문학"]):
+            return "2_소설한국"
+
+    # 11. 처세술 vs 경영/마케팅/경제
+    if "6_처세술리더십창의성" in valid_cats and any(c in valid_cats for c in ["4_경영마케팅", "4_경제"]):
+        if any(kw in text_lower for kw in ["성공", "처세", "습관", "인간관계", "대화법", "시간관리"]):
+            return "6_처세술리더십창의성"
+
+    return None
+
+
+def evaluate_category_decision(
+    fname: str,
+    fpath: Optional[Path],
+    raw_title: str,
+    raw_author: str,
+    search_title: str,
+    y_entry: Dict[str, Any],
+    a_entry: Dict[str, Any],
+    k_entry: Dict[str, Any],
+    trust_single_match: bool = True
+) -> Tuple[Optional[str], str, str]:
+    """
+    파일명, 3개 서점 결과, 파일 내부 메타데이터/텍스트를 결합하여 최종 카테고리 결정
+    """
+    # 1. 파일명 명시적 장르
+    explicit_genre = extract_explicit_genre(fname)
+
+    y_map = y_entry.get("mapped") if y_entry else None
+    a_map = a_entry.get("mapped") if a_entry else None
+    k_map = k_entry.get("mapped") if k_entry else None
+    valid_maps = [m for m in [y_map, a_map, k_map] if m]
+    from collections import Counter
+    counts = Counter(valid_maps)
+
+    # Priority 1: 파일명 명시적 장르가 존재하는 경우
+    # 서점 다수결(>=2)이 명시적 장르와 정면 배치되지 않는 한 파일명의 명시적 장르를 최우선 채택
+    if explicit_genre:
+        opposing_majority = any(cnt >= 2 and cat != explicit_genre for cat, cnt in counts.items())
+        if not opposing_majority:
+            return explicit_genre, "explicit_genre", f"Explicit genre in filename -> {explicit_genre}"
+
+    # Priority 2: 3개 서점 2/3 이상 다수결
+    for cat, count in counts.items():
+        if count >= 2:
+            return cat, "majority", f"Majority vote ({count}/3) -> {cat}"
+
+    # 본문 및 메타데이터 샘플 추출
+    text_sample = ""
+    epub_meta: Dict[str, str] = {}
+    txt_info: Dict[str, Any] = {}
+    if fpath and fpath.exists():
+        ext = fpath.suffix.lower()
+        if ext == ".epub":
+            epub_meta = inspect_epub_metadata(fpath)
+            text_sample = f"{epub_meta.get('title', '')} {epub_meta.get('subject', '')} {epub_meta.get('description', '')}"
+        elif ext == ".txt":
+            txt_info = inspect_txt_content(fpath)
+            text_sample = f"{' '.join(txt_info.get('hashtags', []))} {txt_info.get('snippet', '')}"
+
+    # Priority 3: 서점 간 사소한 장르 충돌 해결
+    if len(valid_maps) >= 2:
+        resolved = resolve_genre_conflict(valid_maps, fname, text_sample)
+        if resolved:
+            return resolved, "conflict_resolved", f"Conflict resolved by keywords -> {resolved}"
+
+    # Priority 4: 단일 서점 매칭 신뢰
+    if len(valid_maps) == 1 and trust_single_match:
+        single_cat = valid_maps[0]
+        found_title = ""
+        for store_entry in [y_entry, a_entry, k_entry]:
+            if store_entry and store_entry.get("mapped") == single_cat:
+                found_title = store_entry.get("title", "")
+                break
+        if is_single_match_valid(search_title, found_title):
+            return single_cat, "single_match", f"Single match trusted ({single_cat}) for '{found_title[:30]}'"
+
+    # Priority 5: 파일 내부 메타데이터 / 본문 스코어링 활용
+    if fpath and fpath.exists():
+        ext = fpath.suffix.lower()
+        if ext == ".epub" and epub_meta:
+            subj = epub_meta.get("subject", "")
+            if subj:
+                meta_cat = map_category(subj, raw_title, raw_author)
+                if meta_cat:
+                    return meta_cat, "content_metadata", f"EPUB dc:subject -> {meta_cat}"
+            desc = epub_meta.get("description", "")
+            if desc:
+                desc_cat = map_category(desc, raw_title, raw_author)
+                if desc_cat:
+                    return desc_cat, "content_metadata", f"EPUB dc:description -> {desc_cat}"
+            # EPUB 본문/설명 키워드 스코어링
+            sc_cat = score_text_genre(text_sample)
+            if sc_cat:
+                return sc_cat, "content_metadata", f"EPUB content scored -> {sc_cat}"
+
+        elif ext == ".txt" and txt_info:
+            for tag in txt_info.get("hashtags", []):
+                tag_cat = map_category(tag, raw_title, raw_author) or extract_explicit_genre(f"[{tag}]")
+                if tag_cat:
+                    return tag_cat, "content_metadata", f"TXT #{tag} -> {tag_cat}"
+            # TXT 본문 키워드 스코어링
+            sc_cat = score_text_genre(txt_info.get("snippet", ""))
+            if sc_cat:
+                return sc_cat, "content_metadata", f"TXT content scored -> {sc_cat}"
+
+    # 최종 미해결 상태
+    if len(valid_maps) >= 2:
+        return None, "conflict", f"Conflict: Y:{y_map} vs A:{a_map} vs K:{k_map}"
+    elif len(valid_maps) == 1:
+        return None, "single_match", f"Single match (untrusted): {valid_maps[0]}"
+    else:
+        return None, "not_found", "Not found"
+
+
+def clean_filename_to_author_title(filename: str) -> Tuple[str, str, str]:
+    # URL 인코딩 해제 (예: %5B로맨스판타지%5D -> [로맨스판타지])
+    filename = urllib.parse.unquote(filename)
+    stem = os.path.splitext(filename)[0]
+    stem = re.sub(r"\s*\([^)]*z-lib[^)]*\)", "", stem, flags=re.I)
+    stem = re.sub(r"\s*\([^)]*1lib[^)]*\)", "", stem, flags=re.I)
+
+    # 방통위/검열 우회용 문자 사이 점 제거: 예: 신.화.급 -> 신화급
+    stem = re.sub(r"(?<=[가-힣a-zA-Z0-9])\.(?=[가-힣a-zA-Z0-9])", "", stem)
+    stem = stem.replace("_", " ").strip()
+
+    # 해시태그 및 특수 기호 접두어 제거 (#나무, #공금, ★공금, (019), (19) 등)
+    stem = re.sub(r"^[#★■◆●▲\s]*(?:나무|공금|숲|텍본|완결|스캔|TXT|txt|EPUB|epub)[\s]*", "", stem)
+    stem = re.sub(r"^#\S+\s*", "", stem)
+    stem = re.sub(r"^[\s\(\[【]*(?:019|19|19금|성인)[\s\)\]】]*", "", stem)
+    stem = re.sub(r"^[\s\(\[【]*(?:完|완|완결|외전|텍본|스캔|TXT|txt)[\s\)\]】]*", "", stem)
+    stem = re.sub(r"^[\s\(\[【]*(?:현대\s*판타지|판타지|무협|로판|로맨스|현판|퓨판|SF)[\s\)\]】]*", "", stem)
+
+    # 1. @author 패턴 처리
+    author_from_at = ""
+    at_match = re.search(r"@([^\s\(\)\[\]\-]+)", stem)
+    if at_match:
+        author_from_at = at_match.group(1).strip()
+        stem = re.sub(r"@[^\s\(\)\[\]\-]+(?:\([^\)]*\))?", "", stem).strip()
+
+    # 2. 뒤쪽에 붙은 저자 패턴 (예: 제목 1-300 완[]설봉, 제목 [저자], 제목-저자, 제목 (저자))
+    end_author_match = re.search(r"\[(?:\s*|저자:?|글:?)\]?\s*([가-힣a-zA-Z]{2,10})\s*\]?\s*$", stem)
+    if end_author_match and not author_from_at:
+        author_from_at = end_author_match.group(1).strip()
+        stem = re.sub(r"\[(?:\s*|저자:?|글:?)\]?\s*[가-힣a-zA-Z]{2,10}\s*\]?\s*$", "", stem).strip()
+
+    end_paren_match = re.search(r"\((?:\s*|저자:?|글:?)?\s*([가-힣a-zA-Z]{2,10})\s*\)\s*$", stem)
+    if end_paren_match and not author_from_at:
+        cand = end_paren_match.group(1).strip()
+        if not re.search(r"(완결|완|개정판|외전|단편|1부|2부|판타지|무협|로판|스릴러)", cand):
+            author_from_at = cand
+            stem = re.sub(r"\((?:\s*|저자:?|글:?)?\s*[가-힣a-zA-Z]{2,10}\s*\)\s*$", "", stem).strip()
+
+    end_dash_author = re.search(r"[-－]\s*([가-힣a-zA-Z]{2,4})\s*$", stem)
+    if end_dash_author and not author_from_at:
+        cand = end_dash_author.group(1).strip()
+        if not re.search(r"(완결|완|개정판|외전|단편|1부|2부|판타지|무협|로판|스릴러|텍본)", cand):
+            author_from_at = cand
+            stem = re.sub(r"[-－]\s*[가-힣a-zA-Z]{2,4}\s*$", "", stem).strip()
+
+    # 3. [저자] 제목 패턴
+    m = re.search(r"^\[(?P<author>[^\]]+)\]\s*(?P<title>.+)$", stem)
+    if m:
+        raw_author = m.group("author").strip()
+        raw_title = m.group("title").strip()
+    else:
+        # 저자 - 제목 패턴 확인
+        dash_m = re.match(r"^([가-힣]{2,4})\s*[-－]\s*(.+)$", stem)
+        if dash_m and not author_from_at:
+            raw_author = dash_m.group(1).strip()
+            raw_title = dash_m.group(2).strip()
+        else:
+            raw_author = author_from_at
+            raw_title = stem.strip()
+
+    if not raw_author and author_from_at:
+        raw_author = author_from_at
+
+    # 저자 정제
+    author = raw_author
+    author = re.sub(r"\s*(저|역|지음|옮김|펴냄|엮음|글|그림|원작)\b.*$", "", author)
+    author = re.sub(r"\s*외\s*\d*명?$", "", author)
+    author = author.strip()
+
+    # 제목 정제
+    search_title = raw_title
+    search_title = re.sub(r"^\[[^\]]*\]\s*", "", search_title)
+
+    for sep in [" - ", "－", " : "]:
+        if sep in search_title:
+            search_title = search_title.split(sep, 1)[0].strip()
+
+    # 접두/접미 완결 표기 및 권수 정제
+    search_title = re.sub(r"^[#\s]+", "", search_title)
+    search_title = re.sub(r"^[\s\(\[【]*(?:完|완|완결|외전|텍본|스캔|TXT|txt)[\s\)\]】]*", "", search_title)
+    search_title = re.sub(r"\(개정판\)", "", search_title)
+    search_title = re.sub(r"\([^\)]*완[^\)]*\)", "", search_title)
+    search_title = re.sub(r"\([^\)]*로판[^\)]*\)", "", search_title)
+    search_title = re.sub(r"\(19\)", "", search_title)
+    search_title = re.sub(r"\[[0-9~]+부\]", "", search_title)
+    search_title = re.sub(r"\s+\d+\s+(?:완|完|외전|특외|에필|후기|미완|완결|완외포|완외|붙음).*", "", search_title)
+    search_title = re.sub(r"\s+\d+(?:화|권|부|완|完|외|외전|특외|에필|후기|미완|완결|완외포)\b.*", "", search_title)
+    search_title = re.sub(r"\s+\d{1,4}\s+\d{1,4}.*", "", search_title)
+    search_title = re.sub(r"[\s,]+(?:1[-~]\d+|\d+[-~]\d+.*|\d+[-~]\d+권.*|\d+화.*|\d+권.*|\d+부.*|\b完\b.*|\b완\b.*|\b외전\b.*|\b특외\b.*|\b에필\b.*|\b후기\b.*|\b완외포\b.*|\b완외\b.*|\b완결\b.*|\b단권\b.*|\b미완\b.*)$", "", search_title)
+    search_title = re.sub(r"\s*\b(?:issue|vol|v)\.?\s*\d+\b.*", "", search_title, flags=re.I)
+    search_title = re.sub(r"\s*\b\d{1,3}\b$", "", search_title)  # 끝의 1, 2, 01, 02 등
+    search_title = re.sub(r"\s*\([^)]*\)", "", search_title).strip()
+    search_title = re.sub(r"\s*\[[^\]]*\]", "", search_title).strip()
+    search_title = re.sub(r"^\s*[-~=,.]+\s*", "", search_title).strip()
+    search_title = re.sub(r"\s*[-~=,.]+\s*$", "", search_title).strip()
+
+    return author, raw_title, search_title
+
+
+def map_category(cat_str: str, raw_title: str, raw_author: str) -> Optional[str]:
+    if not cat_str and not raw_title and not raw_author:
+        return None
+
+    cat = cat_str or ""
+    parts = [p.strip() for p in cat.split(">")] if cat else []
+    leaf_cat = " > ".join(parts[1:]) if len(parts) > 1 else cat
+
+    # 1. 저자/시리즈 고유 규칙
+    if "히가시노 게이고" in raw_author or "히가시노게이고" in raw_author:
+        return "2_소설일본게이고"
+    if "무라카미 하루키" in raw_author or "무라카미하루키" in raw_author:
+        return "2_소설일본하루키"
+    if "을유세계문학" in raw_title or "을유세계문학" in cat:
+        return "2_을유세계문학전집"
+    if "열린책들 세계문학" in raw_title or "열린책들세계문학" in raw_title or "열린책들" in raw_title:
+        return "2_열린책들세계문학"
+    if "문예세계문학선" in raw_title:
+        return "2_문예세계문학선"
+    if "살림지식총서" in raw_title:
+        return "4_살림지식총서"
+    if "시공디스커버리" in raw_title:
+        return "4_시공디스커버리"
+    if "올재 클래식스" in raw_title or "(올재" in raw_title or "올재" in raw_title:
+        return "1_올재"
+    if "누워서 읽는 법학" in raw_title or "누워서읽는법학" in raw_title:
+        return "4_누워서읽는법학"
+    if "이지사이언스" in raw_title:
+        return "5_이지사이언스"
+    if "그림으로 읽는" in raw_title or "그림으로읽는" in raw_title:
+        return "5_그림으로_읽는"
+    if any(k in raw_title for k in ["손자병법", "육도, 삼략", "육도삼략", "한비자", "장자", "채근담", "논어", "맹자"]):
+        return "1_동양고전"
+
+    # 2. 카테고리 매핑 규칙
+    if any(k in cat for k in ["라이트노벨", "라이트 노벨", "라노벨"]):
+        return "3_라이트노벨"
+    if any(k in cat for k in ["BL", "GL", "야오이", "백합", "BL/GL", "퀴어"]):
+        return "9_BLGL"
+    if any(k in cat for k in ["그래픽노블", "그래픽 노블", "만화/코믹", "코믹스", "웹툰", "만화"]):
+        return "3_그래픽노블"
+
+    if any(k in cat for k in ["추리", "미스터리", "스릴러", "서스펜스", "공포소설", "호러", "하드보일드"]):
+        return "3_스릴러"
+    if any(k in cat for k in ["과학소설", "사이버펑크"]) or ("SF" in cat and "SF" in leaf_cat):
+        return "3_SF"
+    if any(k in cat for k in ["판타지소설", "판타지", "현대판타지", "게임소설", "퓨전판타지", "현대", "퓨전"]):
+        if "SF" not in cat and "로맨스" not in cat and "로맨틱판타지" not in cat:
+            return "3_판타지"
+    if any(k in cat for k in ["무협", "신무협", "무협소설"]):
+        return "3_무협"
+    if any(k in cat for k in ["로맨스", "로판", "로맨스판타지", "로맨틱판타지", "사랑소설", "연애소설", "칙릿"]):
+        return "3_여성향"
+
+    if any(k in cat for k in ["에세이", "수필", "일기", "서간", "산문집"]):
+        return "2_수필서간일기"
+    if any(k in cat for k in ["한국소설", "한국단편", "한국장편", "한국 문학", "한국문학"]):
+        return "2_소설한국"
+    if any(k in cat for k in ["일본소설", "일본문학", "일본장편", "일본단편"]):
+        return "2_소설일본"
+    if any(k in cat for k in ["중국소설", "중국문학", "대만소설"]):
+        return "2_소설중국"
+    if any(k in cat for k in [
+        "영미소설", "영국소설", "미국소설", "프랑스소설", "독일소설", "러시아소설",
+        "유럽소설", "스페인소설", "남미소설", "외국소설", "세계의 소설", "각국소설", "북유럽소설", "고전문학"
+    ]):
+        return "2_소설외국"
+    if any(k in cat for k in ["역사소설", "대하역사소설", "대하소설"]):
+        return "2_소설역사"
+    if any(k in cat for k in ["시집", "한국시", "외국시", "현대시", "희곡", "시/희곡"]):
+        if "소설" not in cat and "에세이" not in cat:
+            return "2_시"
+    if any(k in cat for k in ["독서 에세이", "글쓰기", "작법", "문학비평", "문학이론", "서평", "책읽기", "문학의 이해", "독서법"]):
+        return "2_문학일반서평작법독서"
+    if any(k in cat for k in ["문헌정보", "서지학", "기록관리", "문헌학"]):
+        return "1_문헌서지"
+    if any(k in cat for k in ["동양고전", "사서삼경", "제자백가", "한문학", "한문"]):
+        return "1_동양고전"
+    if any(k in cat for k in ["서양고전", "그리스로마", "그리스 로마"]):
+        return "1_서양고전"
+
+    if any(k in cat for k in ["투자", "재테크", "주식", "증권", "부동산", "경매", "가상화폐", "비트코인", "자산관리", "금융상품", "펀드", "연금", "환테크", "청약"]):
+        return "6_재테크"
+    if any(k in leaf_cat for k in ["경제학", "경제일반", "경제전망", "경제사", "각국 경제", "금융/화폐", "국제경제", "화폐", "거시경제", "미시경제", "행동경제학", "경제"]):
+        return "4_경제"
+    if any(k in cat for k in ["경제학", "경제사", "각국 경제", "거시경제", "미시경제", "행동경제학"]):
+        return "4_경제"
+    if any(k in cat for k in ["마케팅", "브랜딩", "광고", "창업", "스타트업", "경영전략", "경영일반", "비즈니스", "조직관리", "e-비즈니스", "기획", "세일즈", "CEO"]):
+        return "4_경영마케팅"
+    if any(k in leaf_cat for k in ["경영"]):
+        return "4_경영마케팅"
+
+    if any(k in cat for k in ["자기계발", "성공/처세", "처세술", "인간관계", "화술", "대화법", "시간관리", "습관", "동기부여", "창의성", "성공학", "마인드셋", "리더십"]):
+        return "6_처세술리더십창의성"
+
+    if any(k in cat for k in ["심리", "심리학", "정신분석", "뇌과학", "상담심리", "임상심리", "인지심리"]):
+        return "4_심리학뇌과학"
+    if any(k in cat for k in ["철학", "서양철학", "동양철학", "윤리학", "사상", "현대철학"]):
+        return "4_철학윤리"
+    if any(k in cat for k in ["한국사", "동양사", "서양사", "세계사", "역사인물", "역사학", "평전", "전기", "조선사", "고려사", "근현대사", "역사", "조선시대"]):
+        return "4_역사인물"
+    if any(k in cat for k in ["정치", "외교", "군사", "국제정치", "안보", "통일", "국방", "정치학"]):
+        return "4_정치외교군사"
+    if any(k in cat for k in ["법학", "법률", "헌법", "형법", "민법", "소송", "행정/법률"]):
+        return "4_법"
+    if any(k in cat for k in ["사회학", "사회문제", "언론", "미디어", "인류학", "문화인류", "여성학", "페미니즘", "노동", "사회과학"]):
+        return "4_사회인류"
+    if any(k in cat for k in ["종교", "기독교", "불교", "가톨릭", "천주교", "이슬람", "성경", "신앙", "신화"]):
+        return "4_종교신화"
+    if any(k in cat for k in ["인문학", "교양인문", "인문일반", "인문", "논픽션"]):
+        return "4_인문일반논픽션"
+
+    if any(k in cat for k in ["수학", "물리학", "화학", "생물학", "생명과학", "지구과학", "천문학", "자연과학", "교양과학", "기초과학", "과학"]):
+        return "5_수학과학일반"
+
+    if any(k in cat for k in ["미술", "예술", "건축", "디자인", "공예", "조각", "회화", "도예"]):
+        return "5_미술예술건축"
+    if any(k in cat for k in ["음악", "클래식음악", "대중음악", "작곡", "악기", "가요", "뮤지컬"]):
+        return "5_음악"
+    if any(k in cat for k in ["영화", "시나리오", "각본", "영화사", "드라마 대본"]):
+        return "5_영화"
+    if any(k in cat for k in ["사진", "영상제작", "카메라", "영상편집"]):
+        return "5_사진영상"
+    if any(k in cat for k in ["스포츠", "골프", "축구", "야구", "마라톤", "헬스", "피트니스", "수영", "등산", "운동"]):
+        return "5_스포츠"
+    if any(k in cat for k in ["서브컬쳐", "캐릭터 드로잉", "일러스트", "만화작법"]):
+        return "5_서브컬쳐"
+
+    if any(k in cat for k in ["교육학", "학습법", "공부법", "독서지도", "교육"]):
+        return "7_교육일반"
+    if any(k in cat for k in ["국어", "한국어", "맞춤법", "어휘"]):
+        return "7_국어교육"
+    if any(k in cat for k in ["영어", "영문법", "영어회화", "토익", "토플", "수능영어", "영단어"]):
+        return "7_영어교육"
+    if any(k in cat for k in ["일본어", "일어", "JLPT"]):
+        return "7_일어교육"
+    if any(k in cat for k in ["중국어", "HSK", "한자"]):
+        return "7_중어한자교육"
+    if any(k in cat for k in ["외국어", "프랑스어", "독일어", "스페인어", "러시아어"]):
+        return "7_외국어교육"
+    if any(k in cat for k in ["언어학", "번역", "통역"]):
+        return "7_언어일반"
+    if any(k in cat for k in ["영어원서", "영문원서", "영한대역"]):
+        return "7_영문일반"
+
+    if any(k in cat for k in ["컴퓨터", "IT", "프로그래밍", "소프트웨어", "코딩", "인공지능", "AI", "빅데이터", "네트워크", "모바일/태블릿", "웹개발", "데이터베이스"]):
+        return "8_IT"
+
+    if any(k in cat for k in ["건강", "의학", "질병", "치료", "한의학", "다이어트", "영양", "수면", "면역", "당뇨", "치매"]):
+        return "8_건강일반"
+    if any(k in cat for k in ["요리", "베이킹", "레시피", "와인", "커피", "음료", "디저트", "주류"]):
+        return "8_요리음료"
+    if any(k in cat for k in ["여행", "국내여행", "해외여행", "여행에세이", "가이드북"]):
+        return "8_여행"
+    if any(k in cat for k in ["공인중개사"]):
+        return "8_공인중개사"
+    if any(k in cat for k in ["프라모델", "모형", "모델링"]):
+        return "8_모델링"
+    if any(k in cat for k in ["밀리터리", "무기", "군사무기"]):
+        return "8_밀리터리"
+    if any(k in cat for k in ["성교육", "성의학"]):
+        return "8_성"
+    if any(k in cat for k in ["살림", "인테리어", "수예", "뜨개질", "원예", "반려동물", "가정살림", "가사"]):
+        return "8_실용의학회계"
+    if any(k in cat for k in ["악보", "스코어", "Songbook"]):
+        return "8_악보"
+
+    if any(k in cat for k in ["어린이", "유아", "그림책", "동화책", "동화", "육아", "자녀교육", "부모"]):
+        return "9_어린이육아"
+    if any(k in cat for k in ["청소년", "청소년문학", "청소년교양", "청소년 인문"]):
+        return "9_청소년"
+    if any(k in cat for k in ["사주", "타로", "점성술", "풍수", "해몽", "퍼즐", "스도쿠", "바둑"]):
+        return "9_역학해몽퍼즐"
+    if any(k in cat for k in ["유머", "개그", "만담"]):
+        return "9_유머"
+    if any(k in cat for k in ["명언", "격언", "아포리즘"]):
+        return "9_격언명언"
+
+    if "경제" in cat:
+        return "4_경제"
+
+
+def get_effective_filename(fpath: Path, target_dir: Path) -> str:
+    """
+    서브디렉토리 내 파일명이 단순 번호나 권수(예: 01.txt, 1권.epub)인 경우
+    부모 디렉토리명(작품명)을 결합하여 고유하고 온전한 도서 파일명을 생성.
+    또한 부모 디렉토리에 [저자]나 @저자가 명시되어 있고 파일명에 없으면 부모의 저자 정보를 상속 결합.
+    """
+    fname = fpath.name
+    if fpath.parent == target_dir:
+        return fname
+    parent_name = fpath.parent.name
+    stem = fpath.stem.strip()
+    is_short = re.match(r"^(\d+|[0-9~]+권|[0-9~]+화|[0-9~]+부|\bvol\.?\s*\d+|\bv\d+)$", stem, re.IGNORECASE) or len(stem) <= 3
+    if is_short:
+        return f"{parent_name} {fname}"
+
+    parent_m = re.search(r"(\[[^\]]+\]|@[^\s]+)", parent_name)
+    file_m = re.search(r"(\[[^\]]+\]|@[^\s]+)", fname)
+    if parent_m and not file_m:
+        author_tag = parent_m.group(1)
+        return f"{author_tag} {fname}"
+
+    return fname
+
+
+def clean_empty_parent_dirs(parent_dir: Path, stop_dir: Path):
+    """파일 이동/삭제 후 비어 있는 상위 서브디렉토리를 안전하게 재귀 청소"""
+    curr = parent_dir
+    while curr != stop_dir and curr.exists() and curr.is_dir():
+        items = [p for p in curr.iterdir() if not p.name.startswith(".")]
+        if not items:
+            try:
+                curr.rmdir()
+                curr = curr.parent
+            except Exception:
+                break
+        else:
+            break
+
+
+
+class BookClassifierService:
+    """
+    도서 자동 분류 통합 서비스 클래스
+    - 3대 서점(Yes24, 알라딘, 교보) 크롤링 & 다수결 (1번)
+    - EPUB 메타데이터 & TXT 본문 분석 (2번)
+    - 캐시 영구화 및 중복 정리/안전 이동
+    """
+
+    def __init__(
+        self,
+        library_root: Path | str = "/mnt/data/text",
+        cache_file: Optional[Path | str] = None,
+        delay: float = 1.2,
+        verbose: bool = False
+    ):
+        self.library_root = Path(library_root)
+        self.delay = delay
+        self.verbose = verbose
+        if cache_file:
+            self.cache_file = Path(cache_file)
+        else:
+            self.cache_file = self.library_root / "classification_cache.json"
+
+        self.cache: Dict[str, Dict[str, Any]] = {}
+        self.title_cache: Dict[str, Dict[str, Any]] = {}
+        self.load_cache()
+
+        self.yes24 = Yes24Bookstore(verbose=verbose)
+        self.aladin = AladinBookstore(verbose=verbose)
+        self.kyobo = KyoboBookstore(verbose=verbose)
+
+    def load_cache(self) -> None:
+        if self.cache_file.exists():
+            try:
+                with open(self.cache_file, "r", encoding="utf-8") as f:
+                    self.cache = json.load(f)
+                logger.info(f"Loaded {len(self.cache)} cached entries from {self.cache_file}")
+            except Exception as e:
+                logger.warning(f"Failed to load cache: {e}")
+                self.cache = {}
+
+        self.build_title_index()
+
+    def save_cache(self) -> None:
+        try:
+            temp_path = self.cache_file.with_suffix(".tmp")
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(self.cache, f, ensure_ascii=False, indent=2)
+            temp_path.replace(self.cache_file)
+        except Exception as e:
+            logger.error(f"Failed to save cache: {e}")
+
+    def build_title_index(self) -> None:
+        self.title_cache = {}
+        for k, v in self.cache.items():
+            st = v.get("search_title")
+            if st and (v.get("yes24", {}).get("cat") or v.get("aladin", {}).get("cat") or v.get("kyobo", {}).get("cat")):
+                if st not in self.title_cache or v.get("status") in ["moved", "already_exists_cleaned", "matched"]:
+                    self.title_cache[st] = v
+
+    def query_bookstores(self, search_title: str, raw_author: str, raw_title: str) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+        import time
+
+        def _do_query(store: AbstractBookstore) -> Dict[str, Any]:
+            res = {"title": "", "author": "", "cat": "", "mapped": None, "url": ""}
+            try:
+                results, _, _ = store.search(title=search_title, author=raw_author)
+                if results and len(results) > 0:
+                    found_title, found_author, cat_str, detail_url, _, _ = results[0]
+                    res["title"] = found_title
+                    res["author"] = found_author
+                    res["cat"] = cat_str
+                    res["mapped"] = map_category(cat_str, raw_title, raw_author)
+                    res["url"] = detail_url
+            except Exception as e:
+                logger.debug("Store query failed: %s", e)
+            return res
+
+        y_entry = _do_query(self.yes24)
+        time.sleep(self.delay)
+        a_entry = _do_query(self.aladin)
+        time.sleep(self.delay)
+        k_entry = _do_query(self.kyobo)
+        time.sleep(self.delay)
+
+        return y_entry, a_entry, k_entry
+
+    def classify_file(
+        self,
+        fpath: Path,
+        source_dir: Path,
+        trust_single_match: bool = True,
+        use_bookstore: bool = True,
+        use_content_meta: bool = True,
+        cache_only: bool = False,
+    ) -> Tuple[Optional[str], str, str, Dict[str, Any]]:
+        fname = fpath.name
+        effective_fname = get_effective_filename(fpath, source_dir)
+        raw_author, raw_title, search_title = clean_filename_to_author_title(effective_fname)
+
+        try:
+            rel_path = str(fpath.relative_to(source_dir))
+        except ValueError:
+            rel_path = fname
+
+        cache_key = rel_path if rel_path in self.cache else (effective_fname if effective_fname in self.cache else (fname if fname in self.cache else rel_path))
+        entry = self.cache.get(cache_key)
+
+        if not entry and search_title in self.title_cache:
+            ref_entry = self.title_cache[search_title]
+            ref_author = ref_entry.get("author", "")
+            if not (raw_author and ref_author and raw_author != ref_author and raw_author not in ref_author and ref_author not in raw_author):
+                entry = {
+                    "filename": effective_fname,
+                    "rel_path": rel_path,
+                    "author": raw_author or ref_author,
+                    "title": raw_title,
+                    "search_title": search_title,
+                    "yes24": dict(ref_entry.get("yes24", {})),
+                    "aladin": dict(ref_entry.get("aladin", {})),
+                    "kyobo": dict(ref_entry.get("kyobo", {})),
+                    "status": "pending",
+                    "target_category": None
+                }
+                self.cache[cache_key] = entry
+
+        if not entry:
+            if cache_only:
+                return None, "cache_only_skip", "Not in cache", {}
+
+            y_entry, a_entry, k_entry = ({"title": "", "author": "", "cat": "", "mapped": None, "url": ""},) * 3
+            if use_bookstore:
+                y_entry, a_entry, k_entry = self.query_bookstores(search_title, raw_author, raw_title)
+
+            entry = {
+                "filename": effective_fname,
+                "rel_path": rel_path,
+                "author": raw_author,
+                "title": raw_title,
+                "search_title": search_title,
+                "yes24": y_entry,
+                "aladin": a_entry,
+                "kyobo": k_entry,
+                "status": "pending",
+                "target_category": None
+            }
+            self.cache[cache_key] = entry
+
+        target_cat, method, reason = evaluate_category_decision(
+            effective_fname,
+            fpath if use_content_meta else None,
+            raw_title,
+            raw_author,
+            search_title,
+            entry.get("yes24", {}),
+            entry.get("aladin", {}),
+            entry.get("kyobo", {}),
+            trust_single_match=trust_single_match
+        )
+
+        entry["target_category"] = target_cat
+        entry["status"] = method if target_cat else ("conflict" if "conflict" in method else "not_found")
+        return target_cat, method, reason, entry
+
+    def process_file(
+        self,
+        fpath: Path,
+        source_dir: Path,
+        auto_move: bool = True,
+        clean_existing: bool = True,
+        dry_run: bool = False,
+        trust_single_match: bool = True,
+        use_bookstore: bool = True,
+        use_content_meta: bool = True,
+        cache_only: bool = False,
+    ) -> Dict[str, Any]:
+        target_cat, method, reason, entry = self.classify_file(
+            fpath,
+            source_dir,
+            trust_single_match=trust_single_match,
+            use_bookstore=use_bookstore,
+            use_content_meta=use_content_meta,
+            cache_only=cache_only
+        )
+
+        result = {
+            "file": str(fpath),
+            "target_category": target_cat,
+            "method": method,
+            "reason": reason,
+            "action": "none"
+        }
+
+        if not target_cat:
+            return result
+
+        dest_dir = self.library_root / target_cat
+        dest_path = dest_dir / fpath.name
+
+        if dest_path.exists():
+            if clean_existing:
+                if not dry_run:
+                    fpath.unlink()
+                    clean_empty_parent_dirs(fpath.parent, source_dir)
+                    if entry:
+                        entry["status"] = "already_exists_cleaned"
+                result["action"] = "cleaned_duplicate"
+            else:
+                result["action"] = "skipped_already_exists"
+        else:
+            if auto_move and not dry_run:
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(fpath), str(dest_path))
+                clean_empty_parent_dirs(fpath.parent, source_dir)
+                if entry:
+                    entry["status"] = "moved"
+            result["action"] = "moved" if (auto_move and not dry_run) else "classified"
+
+        return result

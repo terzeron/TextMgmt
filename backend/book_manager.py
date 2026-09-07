@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, Response
 from bs4 import BeautifulSoup
 from backend.es_manager import ESManager
 from backend.book import Book
+from backend.book_classifier import BookClassifierService, clean_empty_parent_dirs
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -1275,7 +1276,15 @@ class BookManager:
             parts.extend(file_path.parts[:-1])
         return self._normalize_classification_text(" ".join(str(part) for part in parts))
 
-    def _classify_file_to_top_category(self, file_path: Path, source_category: str, mappings: dict[str, list[str]]) -> tuple[str | None, list[str], str | None]:
+    def _classify_file_to_top_category(
+        self,
+        file_path: Path,
+        source_category: str,
+        mappings: dict[str, list[str]],
+        classifier_service: BookClassifierService | None = None,
+        use_bookstore: bool = True,
+        use_content_meta: bool = True,
+    ) -> tuple[str | None, list[str], str | None]:
         haystack = self._classification_haystack(file_path)
         scored: list[tuple[int, int, str, list[str]]] = []
 
@@ -1307,16 +1316,27 @@ class BookManager:
                 score = sum(len(self._normalize_classification_text(keyword)) for keyword in matched_keywords)
                 scored.append((score, len(matched_keywords), target_category, matched_keywords))
 
-        if not scored:
-            return None, [], "매칭되는 키워드가 없습니다"
+        if scored:
+            scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
+            best_score, best_match_count, best_category, best_keywords = scored[0]
+            tied_categories = [category for score, count, category, _keywords in scored if score == best_score and count == best_match_count]
+            if len(tied_categories) > 1:
+                return None, best_keywords, f"여러 카테고리가 동일 점수로 일치합니다: {', '.join(tied_categories[:3])}"
+            return best_category, best_keywords, None
 
-        scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
-        best_score, best_match_count, best_category, best_keywords = scored[0]
-        tied_categories = [category for score, count, category, _keywords in scored if score == best_score and count == best_match_count]
-        if len(tied_categories) > 1:
-            return None, best_keywords, f"여러 카테고리가 동일 점수로 일치합니다: {', '.join(tied_categories[:3])}"
+        if classifier_service is not None:
+            source_dir = self._category_dir(source_category)
+            target_cat, method, reason, _ = classifier_service.classify_file(
+                file_path,
+                source_dir,
+                use_bookstore=use_bookstore,
+                use_content_meta=use_content_meta,
+            )
+            if target_cat and target_cat != source_category:
+                return target_cat, [f"deterministic:{method}"], None
+            return None, [], reason
 
-        return best_category, best_keywords, None
+        return None, [], "매칭되는 키워드가 없습니다"
 
     def _iter_category_indexable_files(self, category: str, recursive: bool = False) -> list[Path]:
         category_dir = self._category_dir(category)
@@ -1343,7 +1363,16 @@ class BookManager:
 
         return sorted(files)
 
-    async def _move_classified_file(self, file_path: Path, target_category: str, matched_keywords: list[str], content_type: str, dry_run: bool = False) -> tuple[dict[str, Any] | None, str | None]:
+    async def _move_classified_file(
+        self,
+        file_path: Path,
+        target_category: str,
+        matched_keywords: list[str],
+        content_type: str,
+        dry_run: bool = False,
+        clean_existing: bool = False,
+        source_category: str | None = None,
+    ) -> tuple[dict[str, Any] | None, str | None]:
         root = self.path_prefix.resolve(strict=False)
         try:
             old_rel_path = str(file_path.relative_to(self.path_prefix))
@@ -1364,11 +1393,38 @@ class BookManager:
             except OSError:
                 is_same_file = False
             if not is_same_file:
+                if clean_existing:
+                    if dry_run:
+                        return {
+                            "status": "dry_run",
+                            "action": "duplicate_clean",
+                            "from": old_rel_path,
+                            "to": target_rel_path,
+                            "target_category": target_category,
+                            "matched_keywords": matched_keywords,
+                            "deleted_count": 0,
+                        }, None
+                    try:
+                        file_path.unlink()
+                        if source_category:
+                            clean_empty_parent_dirs(file_path.parent, self._category_dir(source_category))
+                        deleted_count = self.es_manager.delete_by_file_paths([old_rel_path])
+                        return {
+                            "status": "duplicate_cleaned",
+                            "from": old_rel_path,
+                            "to": target_rel_path,
+                            "target_category": target_category,
+                            "matched_keywords": matched_keywords,
+                            "deleted_count": deleted_count,
+                        }, None
+                    except Exception as e:
+                        return None, f"중복 파일 정리 실패: {e}"
                 return None, f"대상 경로에 파일이 이미 존재합니다: {target_rel_path}"
 
         if dry_run:
             return {
                 "status": "dry_run",
+                "action": "move",
                 "from": old_rel_path,
                 "to": target_rel_path,
                 "target_category": target_category,
@@ -1384,9 +1440,12 @@ class BookManager:
         except Exception as e:
             LOGGER.warning("auto_classify_category: 기존 ES 문서 조회 실패 (%s): %s", old_rel_path, e)
 
+        old_parent = file_path.parent
         try:
             target_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(file_path), str(target_path))
+            if source_category:
+                clean_empty_parent_dirs(old_parent, self._category_dir(source_category))
         except OSError as e:
             return None, f"파일 이동 실패: {e}"
 
@@ -1447,14 +1506,27 @@ class BookManager:
     async def auto_classify_category(
         self,
         category: str,
-        mappings: dict[str, list[str]],
+        mappings: dict[str, list[str]] | None = None,
         content_type: str = "book",
         recursive: bool = False,
         dry_run: bool = False,
+        clean_existing: bool = False,
+        use_bookstore: bool = True,
+        use_content_meta: bool = True,
+        delay: float = 1.2,
         on_progress: Callable[[dict[str, int]], None] | None = None,
     ) -> tuple[dict[str, Any], str | None]:
-        """선택 카테고리의 파일을 키워드 매핑으로 최상위 카테고리에 이동하고 ES를 교체한다."""
-        LOGGER.info("auto_classify_category 시작: category='%s', content_type='%s', recursive=%s, dry_run=%s", category, content_type, recursive, dry_run)
+        """선택 카테고리의 파일을 키워드 매핑 및 결정론적 분류(서점 다수결/메타데이터)로 최상위 카테고리에 이동하고 ES를 교체한다."""
+        LOGGER.info(
+            "auto_classify_category 시작: category='%s', content_type='%s', recursive=%s, dry_run=%s, clean_existing=%s, use_bookstore=%s, use_content_meta=%s",
+            category,
+            content_type,
+            recursive,
+            dry_run,
+            clean_existing,
+            use_bookstore,
+            use_content_meta,
+        )
 
         if not category:
             return {}, "카테고리 이름이 비어있습니다"
@@ -1464,6 +1536,11 @@ class BookManager:
         source_dir = self._category_dir(category)
         if not source_dir.is_dir():
             return {}, f"디렉토리를 찾을 수 없습니다: {category}"
+
+        mappings = mappings or {}
+        classifier_service: BookClassifierService | None = None
+        if use_bookstore or use_content_meta:
+            classifier_service = BookClassifierService(library_root=self.path_prefix, delay=delay)
 
         result: dict[str, Any] = {
             "content_type": content_type,
@@ -1475,6 +1552,7 @@ class BookManager:
             "processed_count": 0,
             "moved_count": 0,
             "dry_run_count": 0,
+            "duplicate_cleaned_count": 0,
             "indexed_count": 0,
             "deleted_count": 0,
             "skipped_count": 0,
@@ -1514,13 +1592,28 @@ class BookManager:
                 emit_progress()
                 continue
 
-            target_category, matched_keywords, reason = self._classify_file_to_top_category(file_path, category, mappings)
+            target_category, matched_keywords, reason = self._classify_file_to_top_category(
+                file_path,
+                category,
+                mappings,
+                classifier_service=classifier_service,
+                use_bookstore=use_bookstore,
+                use_content_meta=use_content_meta,
+            )
             if target_category is None:
                 result["skipped"].append({"file_path": rel_path, "reason": reason or "분류 대상 카테고리를 찾을 수 없습니다", "matched_keywords": matched_keywords})
                 emit_progress()
                 continue
 
-            file_result, error = await self._move_classified_file(file_path, target_category, matched_keywords, content_type=content_type, dry_run=dry_run)
+            file_result, error = await self._move_classified_file(
+                file_path,
+                target_category,
+                matched_keywords,
+                content_type=content_type,
+                dry_run=dry_run,
+                clean_existing=clean_existing,
+                source_category=category,
+            )
             if error is not None or file_result is None:
                 result["failures"].append({"file_path": rel_path, "target_category": target_category, "error": error or "자동 분류 실패", "matched_keywords": matched_keywords})
                 emit_progress()
@@ -1530,6 +1623,8 @@ class BookManager:
             result["deleted_count"] += int(file_result.get("deleted_count") or 0)
             if dry_run:
                 result["dry_run_count"] += 1
+            elif file_result.get("status") == "duplicate_cleaned":
+                result["duplicate_cleaned_count"] += 1
             else:
                 result["moved_count"] += 1
                 result["indexed_count"] += 1
@@ -1538,10 +1633,19 @@ class BookManager:
         result["skipped_count"] = len(result["skipped"])
         result["failed_count"] = len(result["failures"])
         result["remaining_count"] = max(0, result["total_count"] - result["processed_count"])
-        if result["moved_count"] or result["failed_count"]:
+        if result["moved_count"] or result["duplicate_cleaned_count"] or result["failed_count"]:
             self._clear_mismatch_cache()
 
-        LOGGER.info("auto_classify_category 완료: content_type='%s', category='%s', processed=%d, moved=%d, skipped=%d, failed=%d", content_type, category, result["processed_count"], result["moved_count"], result["skipped_count"], result["failed_count"])
+        LOGGER.info(
+            "auto_classify_category 완료: content_type='%s', category='%s', processed=%d, moved=%d, duplicate_cleaned=%d, skipped=%d, failed=%d",
+            content_type,
+            category,
+            result["processed_count"],
+            result["moved_count"],
+            result["duplicate_cleaned_count"],
+            result["skipped_count"],
+            result["failed_count"],
+        )
         return result, None
 
     @staticmethod

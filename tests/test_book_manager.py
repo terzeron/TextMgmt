@@ -1977,6 +1977,63 @@ def test_auto_classify_category_rejects_invalid_category(tmp_path: Path):
     assert err == "잘못된 카테고리 경로입니다"
 
 
+def test_auto_classify_category_cleans_existing_duplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    source_dir = tmp_path / "0_inbox"
+    source_dir.mkdir(parents=True)
+    conflict = source_dir / "중복 도서.txt"
+    conflict.write_text("conflict duplicate")
+    target_dir = tmp_path / "2_science"
+    target_dir.mkdir()
+    (target_dir / conflict.name).write_text("already exists in target")
+
+    result, err = asyncio_runner(
+        manager.auto_classify_category(
+            "0_inbox",
+            {"2_science": ["중복"]},
+            clean_existing=True,
+        )
+    )
+
+    assert err is None
+    assert not conflict.exists()
+    assert (target_dir / conflict.name).read_text() == "already exists in target"
+    assert result["moved_count"] == 0
+    assert result["duplicate_cleaned_count"] == 1
+    assert result["failed_count"] == 0
+
+
+def test_auto_classify_category_uses_deterministic_classifier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    source_dir = tmp_path / "0_inbox"
+    source_dir.mkdir(parents=True)
+    rofan_book = source_dir / "[로판] 황녀님이 너무해.txt"
+    rofan_book.write_text("황녀님과 기사단장 이야기")
+
+    target_dir = tmp_path / "3_fiction" / "로판"
+    target_dir.mkdir(parents=True)
+
+    fake_doc = {"title": "황녀님이 너무해", "author": "작가", "category": "0_inbox", "file_path": str(rofan_book.relative_to(tmp_path))}
+    monkeypatch.setattr("utils.loader.Loader.read_file", lambda *args, **kwargs: {12345: fake_doc})
+
+    result, err = asyncio_runner(
+        manager.auto_classify_category(
+            "0_inbox",
+            mappings={},
+            use_bookstore=False,
+            use_content_meta=True,
+        )
+    )
+
+    assert err is None
+    assert not rofan_book.exists()
+    assert (tmp_path / "3_여성향" / rofan_book.name).exists()
+    assert result["moved_count"] == 1
+    assert result["failed_count"] == 0
+
+
 def test_rename_category_target_dir_exists(tmp_path: Path):
     es = DummyES()
     manager = make_manager(tmp_path, es)
