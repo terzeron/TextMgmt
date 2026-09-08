@@ -10,7 +10,10 @@ import {
   act,
 } from "@testing-library/react";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.sessionStorage.clear();
+});
 
 // mock 함수 호이스팅
 const { mockJsonGetReq, mockJsonDeleteReq, mockJsonPostReq, mockJsonPutReq } =
@@ -486,22 +489,66 @@ describe("CategoryAdmin", () => {
     expect(mismatchReloadButton.disabled).toBe(true);
   });
 
-  it("디렉토리 헤더에서 카테고리 미선택 상태이면 이상 항목 재적재를 실행하지 않는다", async () => {
-    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
-    render(<CategoryAdmin />);
+  it("이상 항목만 보기 기본 상태에서 미선택이어도 이상 항목 재적재 모달에서 전체 이상 항목을 재적재한다", async () => {
+    const largeMismatchData = {
+      mismatches: [
+        {
+          category: "1_fiction",
+          es_count: 50000,
+          fs_count: 0,
+          diff: 50000,
+        },
+      ],
+      es_only: [{ category: "2_science", es_count: 8 }],
+      fs_only: [{ category: "4_fs_only_cat", fs_count: 9 }],
+    };
+    setupMockResponses(CATEGORIES_RESPONSE, largeMismatchData);
+    render(<CategoryAdminBase />);
     await waitFor(() => {
       expect(screen.getByText("디렉토리")).toBeTruthy();
     });
 
     const header = screen.getByText("디렉토리").closest(".card-header");
+    expect(within(header).getByLabelText("이상 항목만 보기").checked).toBe(true);
+
     const mismatchReloadButton = within(header).getByRole("button", {
       name: /이상 항목 재적재/,
     });
-    expect(mismatchReloadButton.disabled).toBe(true);
+    expect(mismatchReloadButton.disabled).toBe(false);
     fireEvent.click(mismatchReloadButton);
 
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(mockJsonPostReq).not.toHaveBeenCalled();
+    const modal = await screen.findByRole("dialog");
+    expect(within(modal).queryByText("불일치 일괄 재적재")).toBeNull();
+    expect(within(modal).getAllByText("이상 항목 재적재").length).toBeGreaterThan(
+      0,
+    );
+    expect(
+      within(modal).getByText(/전체 이상 항목 50017건을 ES에 재적재합니다/),
+    ).toBeTruthy();
+    expect(within(modal).getByText("작업 대상: 50017건")).toBeTruthy();
+
+    const confirmButton = within(modal).getByRole("button", {
+      name: "이상 항목 재적재",
+    });
+    expect(confirmButton.disabled).toBe(false);
+
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, _reject, done) => {
+        resolve({ started: true });
+        if (done) done();
+      },
+    );
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/category-mismatches/reload-all",
+        { reload_source: "mismatch" },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
   });
 
   it("디렉토리 헤더에서 선택 카테고리의 이상 항목만 재적재한다", async () => {
@@ -516,7 +563,7 @@ describe("CategoryAdmin", () => {
       within(header).getByRole("button", {
         name: /이상 항목 재적재/,
       }).disabled,
-    ).toBe(true);
+    ).toBe(false);
 
     fireEvent.click(screen.getByText("1_fiction"));
     const mismatchReloadButton = within(header).getByRole("button", {
@@ -527,6 +574,7 @@ describe("CategoryAdmin", () => {
 
     const modal = await screen.findByRole("dialog");
     expect(within(modal).getByText(/2건만 ES에 재적재합니다/)).toBeTruthy();
+    expect(within(modal).getByText("작업 대상: 2건")).toBeTruthy();
 
     mockJsonPostReq.mockImplementation(
       (url, payload, resolve, _reject, done) => {
@@ -1959,7 +2007,7 @@ describe("CategoryAdmin", () => {
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/category-mismatches/reload-all",
-        null,
+        { reload_source: "bulk" },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
@@ -4398,6 +4446,209 @@ describe("CategoryAdmin 재적재 버튼별 스피너 및 실패 처리", () => 
     mockJsonPutReq.mockReset();
   });
 
+  it("미선택 이상 항목 재적재를 누르면 일괄 버튼이 아니라 이상 항목 버튼만 스피닝한다", async () => {
+    const largeMismatchData = {
+      mismatches: [
+        {
+          category: "1_fiction",
+          es_count: 50000,
+          fs_count: 0,
+          diff: 50000,
+        },
+      ],
+      es_only: [{ category: "2_science", es_count: 8 }],
+      fs_only: [{ category: "4_fs_only_cat", fs_count: 9 }],
+    };
+    setupMockResponses(CATEGORIES_RESPONSE, largeMismatchData);
+
+    let allReloadStarted = false;
+    const originalGetImpl = mockJsonGetReq.getMockImplementation();
+    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
+      if (url === "/category-mismatches/reload-status") {
+        resolve(
+          allReloadStarted
+            ? {
+                status: "running",
+                category: null,
+                before_count: 50017,
+                indexed_count: 17,
+                deleted_count: 0,
+              }
+            : { status: "idle" },
+        );
+        return;
+      }
+      originalGetImpl(url, payload, resolve, reject);
+    });
+
+    render(<CategoryAdminBase />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리")).toBeTruthy();
+    });
+
+    const header = screen.getByText("디렉토리").closest(".card-header");
+    const bulkButton = within(header).getByRole("button", {
+      name: /일괄 재적재/,
+    });
+    const mismatchButton = within(header).getByRole("button", {
+      name: /이상 항목 재적재/,
+    });
+
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, _reject, done) => {
+        resolve({ started: true });
+        if (done) done();
+      },
+    );
+
+    fireEvent.click(mismatchButton);
+    const modal = await screen.findByRole("dialog");
+    allReloadStarted = true;
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+    );
+
+    await waitFor(() => {
+      expect(within(mismatchButton).getByText("잔여 50000건")).toBeTruthy();
+    });
+    expect(bulkButton.querySelector(".spinner-border")).toBeNull();
+    expect(bulkButton.textContent).toContain("일괄");
+    expect(bulkButton.textContent).not.toContain("잔여");
+    expect(mockJsonPostReq).toHaveBeenCalledWith(
+      "/category-mismatches/reload-all",
+      { reload_source: "mismatch" },
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
+  it("미선택 이상 항목 재적재 진행 중 새로 마운트해도 일괄 버튼에 진행 상태를 붙이지 않는다", async () => {
+    const largeMismatchData = {
+      mismatches: [
+        {
+          category: "1_fiction",
+          es_count: 50000,
+          fs_count: 0,
+          diff: 50000,
+        },
+      ],
+      es_only: [{ category: "2_science", es_count: 8 }],
+      fs_only: [{ category: "4_fs_only_cat", fs_count: 9 }],
+    };
+    setupMockResponses(CATEGORIES_RESPONSE, largeMismatchData);
+
+    let allReloadStarted = false;
+    const originalGetImpl = mockJsonGetReq.getMockImplementation();
+    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
+      if (url === "/category-mismatches/reload-status") {
+        resolve(
+          allReloadStarted
+            ? {
+                status: "running",
+                category: null,
+                before_count: 50017,
+                indexed_count: 17,
+                deleted_count: 0,
+              }
+            : { status: "idle" },
+        );
+        return;
+      }
+      originalGetImpl(url, payload, resolve, reject);
+    });
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, _reject, done) => {
+        resolve({ started: true });
+        if (done) done();
+      },
+    );
+
+    const { unmount } = render(<CategoryAdminBase />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리")).toBeTruthy();
+    });
+
+    const header = screen.getByText("디렉토리").closest(".card-header");
+    const mismatchButton = within(header).getByRole("button", {
+      name: /이상 항목 재적재/,
+    });
+
+    fireEvent.click(mismatchButton);
+    const modal = await screen.findByRole("dialog");
+    allReloadStarted = true;
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+    );
+
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/category-mismatches/reload-all",
+        { reload_source: "mismatch" },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+    unmount();
+
+    render(<CategoryAdminBase />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리")).toBeTruthy();
+    });
+
+    const remountedBulkButton = screen.getByTitle(
+      "불일치 일괄 재적재 (이상 항목이 많으면 오래 걸릴 수 있음)",
+    );
+    const remountedMismatchButton = screen.getByTitle(
+      "전체 이상 항목 ES 재적재",
+    );
+
+    await waitFor(() => {
+      expect(
+        within(remountedMismatchButton).getByText("잔여 50000건"),
+      ).toBeTruthy();
+    });
+    expect(remountedBulkButton.querySelector(".spinner-border")).toBeNull();
+    expect(remountedBulkButton.textContent).toContain("일괄");
+    expect(remountedBulkButton.textContent).not.toContain("잔여");
+  });
+
+  it("backend가 이상 항목 source로 보고한 전체 재적재는 session 없이도 이상 항목 버튼에 붙는다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    window.sessionStorage.clear();
+
+    const originalGetImpl = mockJsonGetReq.getMockImplementation();
+    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
+      if (url === "/category-mismatches/reload-status") {
+        resolve({
+          status: "running",
+          category: null,
+          reload_source: "mismatch",
+          before_count: 50017,
+          indexed_count: 17,
+          deleted_count: 0,
+        });
+        return;
+      }
+      originalGetImpl(url, payload, resolve, reject);
+    });
+
+    render(<CategoryAdminBase />);
+
+    const bulkButton = await screen.findByTitle(
+      "불일치 일괄 재적재 (이상 항목이 많으면 오래 걸릴 수 있음)",
+    );
+    const mismatchButton = screen.getByTitle("전체 이상 항목 ES 재적재");
+
+    await waitFor(() => {
+      expect(within(mismatchButton).getByText("잔여 50000건")).toBeTruthy();
+    });
+    expect(bulkButton.querySelector(".spinner-border")).toBeNull();
+    expect(bulkButton.textContent).toContain("일괄");
+    expect(bulkButton.textContent).not.toContain("잔여");
+  });
+
   it("카테고리별 이상 항목 재적재를 누르면 일괄 버튼은 스피닝하지 않는다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
@@ -4797,7 +5048,7 @@ describe("CategoryAdmin 재적재 버튼별 스피너 및 실패 처리", () => 
     });
 
     const mismatchButton = screen.getByTitle(
-      "카테고리를 선택하면 이상 항목만 ES 재적재할 수 있습니다",
+      "전체 이상 항목 ES 재적재",
     );
     expect(mismatchButton.querySelector(".spinner-border")).toBeNull();
     expect(mismatchButton.disabled).toBe(true);

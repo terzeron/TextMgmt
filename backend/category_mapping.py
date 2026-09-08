@@ -26,6 +26,9 @@ class CategoryMapping:
     # reload_locks의 락 단위(lock_key). 카테고리별 재적재는 카테고리명을 그대로 쓰고,
     # 일괄/전체 재적재는 모든 카테고리에 영향을 주므로 이 sentinel을 쓴다.
     BULK_LOCK_KEY = "__all__"
+    RELOAD_SOURCE_BULK = "bulk"
+    RELOAD_SOURCE_MISMATCH = "mismatch"
+    RELOAD_SOURCES = {RELOAD_SOURCE_BULK, RELOAD_SOURCE_MISMATCH}
 
     def __init__(self, host: str | None = None, port: int | None = None, database: str | None = None, user: str | None = None, password: str | None = None) -> None:
         """
@@ -111,6 +114,7 @@ class CategoryMapping:
             "before_count": "ALTER TABLE reload_locks ADD COLUMN before_count INT NOT NULL DEFAULT 0",
             "after_count": "ALTER TABLE reload_locks ADD COLUMN after_count INT NOT NULL DEFAULT 0",
             "error": "ALTER TABLE reload_locks ADD COLUMN error TEXT NULL",
+            "reload_source": "ALTER TABLE reload_locks ADD COLUMN reload_source VARCHAR(20) NOT NULL DEFAULT 'bulk'",
         }
         for column, alter_sql in new_columns.items():
             cursor.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = %s AND table_name = 'reload_locks' AND column_name = %s", (self.database, column))
@@ -118,6 +122,8 @@ class CategoryMapping:
             if row and row["cnt"] == 0:
                 LOGGER.info("Migrating table reload_locks: adding %s column", column)
                 cursor.execute(alter_sql)
+                if column == "reload_source":
+                    cursor.execute("UPDATE reload_locks SET reload_source = %s WHERE category IS NOT NULL", (self.RELOAD_SOURCE_MISMATCH,))
 
     def _migrate_reload_locks_lock_key(self, cursor) -> None:
         """reload_locks를 content_type 단일 락에서 (content_type, lock_key) 복합 락으로 확장한다.
@@ -439,7 +445,14 @@ class CategoryMapping:
                     LOGGER.error("rename_category(%s -> %s, %s) failed: %s", old_category, new_category, content_type, e)
                     return False
 
-    def acquire_reload_lock(self, content_type: str = "book", category: str | None = None) -> tuple[bool, str | None, dict[str, Any] | None]:
+    def _normalize_reload_source(self, reload_source: str | None = None, category: str | None = None) -> str:
+        if category:
+            return self.RELOAD_SOURCE_MISMATCH
+        if reload_source in self.RELOAD_SOURCES:
+            return reload_source
+        return self.RELOAD_SOURCE_BULK
+
+    def acquire_reload_lock(self, content_type: str = "book", category: str | None = None, reload_source: str | None = None) -> tuple[bool, str | None, dict[str, Any] | None]:
         """카테고리 불일치 재적재 작업 상태를 초기화하고 락을 획득한다.
 
         category가 있으면 그 카테고리 전용 락을 쓰고, 없으면 전체(BULK_LOCK_KEY) 락을 쓴다. 일괄
@@ -454,6 +467,7 @@ class CategoryMapping:
         updated_at이 갱신되지 않은 'running' 행은 죽은 작업으로 간주하고 무시한다.
         """
         lock_key = category or self.BULK_LOCK_KEY
+        normalized_reload_source = self._normalize_reload_source(reload_source, category)
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
                 if lock_key == self.BULK_LOCK_KEY:
@@ -482,11 +496,11 @@ class CategoryMapping:
                     return False, message, blocking_status
 
                 cursor.execute(
-                    "INSERT INTO reload_locks (content_type, lock_key, category, status, started_at, updated_at, indexed_count, deleted_count, failed_count, before_count, after_count, error) "
-                    "VALUES (%s, %s, %s, 'running', NOW(), NOW(), 0, 0, 0, 0, 0, NULL) "
+                    "INSERT INTO reload_locks (content_type, lock_key, category, reload_source, status, started_at, updated_at, indexed_count, deleted_count, failed_count, before_count, after_count, error) "
+                    "VALUES (%s, %s, %s, %s, 'running', NOW(), NOW(), 0, 0, 0, 0, 0, NULL) "
                     "ON DUPLICATE KEY UPDATE category = VALUES(category), status = 'running', started_at = NOW(), updated_at = NOW(), "
-                    "indexed_count = 0, deleted_count = 0, failed_count = 0, before_count = 0, after_count = 0, error = NULL",
-                    (content_type, lock_key, category),
+                    "reload_source = VALUES(reload_source), indexed_count = 0, deleted_count = 0, failed_count = 0, before_count = 0, after_count = 0, error = NULL",
+                    (content_type, lock_key, category, normalized_reload_source),
                 )
                 conn.commit()
                 return True, None, None
@@ -529,7 +543,7 @@ class CategoryMapping:
         lock_key = category or self.BULK_LOCK_KEY
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT category, status, started_at, updated_at, indexed_count, deleted_count, failed_count, before_count, after_count, error FROM reload_locks WHERE content_type = %s AND lock_key = %s", (content_type, lock_key))
+                cursor.execute("SELECT category, reload_source, status, started_at, updated_at, indexed_count, deleted_count, failed_count, before_count, after_count, error FROM reload_locks WHERE content_type = %s AND lock_key = %s", (content_type, lock_key))
                 row = cursor.fetchone()
         if not row:
             return None
@@ -540,6 +554,7 @@ class CategoryMapping:
             error = error or "응답 없이 중단된 것으로 보입니다."
         return {
             "category": row["category"],
+            "reload_source": self._normalize_reload_source(row.get("reload_source"), row["category"]),
             "status": status,
             "started_at": row["started_at"].isoformat() if row["started_at"] else None,
             "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,

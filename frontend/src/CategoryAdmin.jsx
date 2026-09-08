@@ -274,6 +274,53 @@ const AdminTreeItem = React.forwardRef(function AdminTreeItem(props, ref) {
 
 // ── 불일치 건수 계산 ──
 
+const ALL_RELOAD_OWNER_SESSION_KEY_PREFIX =
+  "CategoryAdmin.allReloadOwner.";
+
+function normalizeAllReloadOwner(owner) {
+  return owner === "mismatch" || owner === "bulk" ? owner : null;
+}
+
+function getAllReloadStatusOwner(status, fallbackOwner = null) {
+  return (
+    normalizeAllReloadOwner(status?.reload_source) ||
+    normalizeAllReloadOwner(fallbackOwner) ||
+    "bulk"
+  );
+}
+
+function getAllReloadOwnerSessionKey(contentType) {
+  return `${ALL_RELOAD_OWNER_SESSION_KEY_PREFIX}${contentType || "book"}`;
+}
+
+function getStoredAllReloadOwner(contentType) {
+  if (typeof window === "undefined") return null;
+
+  try {
+    return normalizeAllReloadOwner(
+      window.sessionStorage.getItem(getAllReloadOwnerSessionKey(contentType)),
+    );
+  } catch {
+    return null;
+  }
+}
+
+function storeAllReloadOwner(contentType, owner) {
+  if (typeof window === "undefined") return;
+
+  try {
+    const key = getAllReloadOwnerSessionKey(contentType);
+    const normalizedOwner = normalizeAllReloadOwner(owner);
+    if (normalizedOwner) {
+      window.sessionStorage.setItem(key, normalizedOwner);
+    } else {
+      window.sessionStorage.removeItem(key);
+    }
+  } catch {
+    // sessionStorage can be unavailable in restricted browser contexts.
+  }
+}
+
 function buildMismatchCounts(mismatchData) {
   const counts = {};
   for (const item of mismatchData.mismatches || []) {
@@ -418,12 +465,15 @@ export default function CategoryAdmin({
   const [reloading, setReloading] = useState(false);
   const [mismatchReloading, setMismatchReloading] = useState(false);
   const [bulkReloading, setBulkReloading] = useState(false);
+  const [allReloadOwner, setAllReloadOwner] = useState(() =>
+    getStoredAllReloadOwner(contentType),
+  );
   const [autoClassifying, setAutoClassifying] = useState(false);
   const [autoClassifyPolling, setAutoClassifyPolling] = useState(false);
   // 일괄(전체) 재적재 락(__all__)의 잔여 건수. 이 상태는 "일괄" 버튼만 반영한다.
   const [bulkRemainingCount, setBulkRemainingCount] = useState(null);
-  // 현재 선택된 카테고리 전용 락의 잔여 건수. 카테고리별 락은 서로 독립적이므로
-  // bulkRemainingCount와 분리해서 관리한다.
+  // 이상 항목 버튼이 시작한 작업의 잔여 건수. 선택 카테고리 전용 작업뿐 아니라
+  // 미선택 상태에서 시작한 전체 이상 항목 작업도 이 상태로 표시한다.
   const [mismatchRemainingCount, setMismatchRemainingCount] = useState(null);
   const [autoClassifyRemainingCount, setAutoClassifyRemainingCount] =
     useState(null);
@@ -449,6 +499,22 @@ export default function CategoryAdmin({
   const selectedMismatchCount = getMismatchReloadTargetCount(
     mismatchReloadTargetFolder,
   );
+  const mismatchReloadTargetCount = mismatchReloadTargetCategory
+    ? selectedMismatchCount
+    : mismatchStats.itemCount;
+
+  const updateAllReloadOwner = useCallback(
+    (owner) => {
+      const normalizedOwner = normalizeAllReloadOwner(owner);
+      storeAllReloadOwner(contentType, normalizedOwner);
+      setAllReloadOwner(normalizedOwner);
+    },
+    [contentType],
+  );
+
+  useEffect(() => {
+    setAllReloadOwner(getStoredAllReloadOwner(contentType));
+  }, [contentType]);
 
   // ── 데이터 로드 ──
 
@@ -670,8 +736,41 @@ export default function CategoryAdmin({
     [loadData],
   );
 
-  // 일괄(전체) 락 상태 폴링: 마운트 시 및 category 변경 시 한 번 확인하고,
-  // 진행 중일 때만 10초 간격으로 이어서 폴링한다.
+  const clearNonOwnerAllReloadState = useCallback((owner) => {
+    if (owner === "mismatch") {
+      setBulkReloading(false);
+      setBulkRemainingCount(null);
+    } else {
+      setMismatchReloading(false);
+      setMismatchRemainingCount(null);
+    }
+  }, []);
+
+  const applyAllReloadStatus = useCallback(
+    (status, fallbackOwner = allReloadOwner) => {
+      const statusOwner = getAllReloadStatusOwner(status, fallbackOwner);
+      const isMismatchOwner = statusOwner === "mismatch";
+      clearNonOwnerAllReloadState(statusOwner);
+      const isActive = applyReloadStatus(
+        status,
+        isMismatchOwner ? setMismatchReloading : setBulkReloading,
+        isMismatchOwner ? setMismatchRemainingCount : setBulkRemainingCount,
+        bulkStartPendingRef,
+      );
+
+      updateAllReloadOwner(isActive ? statusOwner : null);
+      return isActive;
+    },
+    [
+      allReloadOwner,
+      applyReloadStatus,
+      clearNonOwnerAllReloadState,
+      updateAllReloadOwner,
+    ],
+  );
+
+  // 전체 락 상태 폴링: backend에서는 category=null 락 하나지만, UI에서는 그 작업을
+  // 시작한 버튼에만 spinner와 잔여 건수를 표시한다.
   useEffect(() => {
     let cancelled = false;
     const pollStatus = () => {
@@ -681,25 +780,31 @@ export default function CategoryAdmin({
         apiPrefix + "/category-mismatches/reload-status",
         null,
         (result) => {
-          if (!cancelled && requestId === bulkStatusRequestIdRef.current)
-            applyReloadStatus(
-              result,
-              setBulkReloading,
-              setBulkRemainingCount,
-              bulkStartPendingRef,
-            );
+          if (!cancelled && requestId === bulkStatusRequestIdRef.current) {
+            applyAllReloadStatus(result);
+          }
         },
         () => {},
       );
     };
 
     pollStatus();
-    const intervalId = bulkReloading ? setInterval(pollStatus, 10000) : null;
+    const isAllReloadRunning =
+      allReloadOwner === "mismatch" ? mismatchReloading : bulkReloading;
+    const intervalId = isAllReloadRunning
+      ? setInterval(pollStatus, 10000)
+      : null;
     return () => {
       cancelled = true;
       if (intervalId) clearInterval(intervalId);
     };
-  }, [bulkReloading, apiPrefix, applyReloadStatus]);
+  }, [
+    allReloadOwner,
+    bulkReloading,
+    mismatchReloading,
+    apiPrefix,
+    applyAllReloadStatus,
+  ]);
 
   // 선택된 카테고리 전용 락 상태 폴링: 카테고리를 선택했을 때만 동작하며, 다른
   // 카테고리나 일괄 재적재와는 독립적으로 이 카테고리의 진행 상태만 추적한다.
@@ -1232,12 +1337,83 @@ export default function CategoryAdmin({
   // 그 반대도 마찬가지다. 이 경우 서버는 에러가 아니라 그 "다른" 작업의 상태를
   // {already_running: true, ...}로 돌려주므로, 그 결과의 category가 내가 요청한 것과
   // 다르면 내 요청은 시작되지 않은 것이니 스피너를 켜 둔 채로 두면 안 된다.
+  const startAllReloadMismatches = useCallback(
+    (owner, failureMessage, blockedActionLabel) => {
+      const isMismatchOwner = owner === "mismatch";
+      const setOwnerReloading = isMismatchOwner
+        ? setMismatchReloading
+        : setBulkReloading;
+      const setOwnerRemainingCount = isMismatchOwner
+        ? setMismatchRemainingCount
+        : setBulkRemainingCount;
+
+      updateAllReloadOwner(owner);
+      bulkStatusRequestIdRef.current += 1;
+      bulkStartPendingRef.current = true;
+      setOwnerReloading(true);
+      setOwnerRemainingCount(mismatchStats.itemCount);
+      setSaving(true);
+      setMessage("");
+      jsonPostReq(
+        `${apiPrefix}/category-mismatches/reload-all`,
+        { reload_source: owner },
+        (result) => {
+          if (result && result.already_running && result.category) {
+            bulkStartPendingRef.current = false;
+            setOwnerReloading(false);
+            setOwnerRemainingCount(null);
+            updateAllReloadOwner(null);
+            setMessage(
+              `카테고리 '${result.category}' 재적재가 이미 진행 중이라 지금은 ${blockedActionLabel}를 실행할 수 없습니다. 완료 후 다시 시도하세요.`,
+            );
+            setTimeout(() => setMessage(""), 5000);
+          } else if (result && result.already_running) {
+            applyAllReloadStatus(result, owner);
+          } else {
+            const responseOwner =
+              normalizeAllReloadOwner(result?.reload_source) || owner;
+            if (responseOwner !== owner) {
+              setOwnerReloading(false);
+              setOwnerRemainingCount(null);
+              if (responseOwner === "mismatch") {
+                setMismatchReloading(true);
+                setMismatchRemainingCount(mismatchStats.itemCount);
+              } else {
+                setBulkReloading(true);
+                setBulkRemainingCount(mismatchStats.itemCount);
+              }
+            }
+            updateAllReloadOwner(responseOwner);
+          }
+        },
+        (error) => {
+          setMessage(formatErrorMessage(error, failureMessage));
+          setTimeout(() => setMessage(""), 5000);
+          bulkStartPendingRef.current = false;
+          setOwnerReloading(false);
+          setOwnerRemainingCount(null);
+          updateAllReloadOwner(null);
+        },
+        () => setSaving(false),
+      );
+    },
+    [
+      apiPrefix,
+      mismatchStats.itemCount,
+      applyAllReloadStatus,
+      updateAllReloadOwner,
+    ],
+  );
+
   const handleReloadCategoryMismatches = useCallback(() => {
     setShowMismatchReloadModal(false);
     const targetCategory = mismatchReloadTargetCategory;
     if (!targetCategory) {
-      setMessage("카테고리를 먼저 선택하세요.");
-      setTimeout(() => setMessage(""), 3000);
+      startAllReloadMismatches(
+        "mismatch",
+        "이상 항목 ES 재적재 시작에 실패했습니다.",
+        "이상 항목 재적재",
+      );
       return;
     }
 
@@ -1291,51 +1467,17 @@ export default function CategoryAdmin({
     selectedMismatchCount,
     apiPrefix,
     applyReloadStatus,
+    startAllReloadMismatches,
   ]);
 
   const handleBulkReloadMismatches = useCallback(() => {
     setShowBulkReloadModal(false);
-    bulkStartPendingRef.current = true;
-    setBulkReloading(true);
-    setBulkRemainingCount(mismatchStats.itemCount);
-    setSaving(true);
-    setMessage("");
-    jsonPostReq(
-      `${apiPrefix}/category-mismatches/reload-all`,
-      null,
-      (result) => {
-        if (result && result.already_running && result.category) {
-          bulkStartPendingRef.current = false;
-          setBulkReloading(false);
-          setBulkRemainingCount(null);
-          setMessage(
-            `카테고리 '${result.category}' 재적재가 이미 진행 중이라 지금은 일괄 재적재를 실행할 수 없습니다. 완료 후 다시 시도하세요.`,
-          );
-          setTimeout(() => setMessage(""), 5000);
-        } else if (result && result.already_running) {
-          applyReloadStatus(
-            result,
-            setBulkReloading,
-            setBulkRemainingCount,
-            bulkStartPendingRef,
-          );
-        }
-      },
-      (error) => {
-        setMessage(
-          formatErrorMessage(
-            error,
-            "불일치 일괄 ES 재적재 시작에 실패했습니다.",
-          ),
-        );
-        setTimeout(() => setMessage(""), 5000);
-        bulkStartPendingRef.current = false;
-        setBulkReloading(false);
-        setBulkRemainingCount(null);
-      },
-      () => setSaving(false),
+    startAllReloadMismatches(
+      "bulk",
+      "불일치 일괄 ES 재적재 시작에 실패했습니다.",
+      "일괄 재적재",
     );
-  }, [apiPrefix, mismatchStats.itemCount, applyReloadStatus]);
+  }, [startAllReloadMismatches]);
 
   // ── 불일치 관리 핸들러 ──
 
@@ -1600,16 +1742,15 @@ export default function CategoryAdmin({
                   aria-label="이상 항목 재적재"
                   disabled={
                     saving ||
-                    !mismatchReloadTargetCategory ||
                     bulkReloading ||
                     mismatchReloading ||
-                    selectedMismatchCount === 0
+                    mismatchReloadTargetCount === 0
                   }
                   onClick={() => setShowMismatchReloadModal(true)}
                   title={
                     mismatchReloadTargetCategory
                       ? "선택 디렉토리 이상 항목만 ES 재적재"
-                      : "카테고리를 선택하면 이상 항목만 ES 재적재할 수 있습니다"
+                      : "전체 이상 항목 ES 재적재"
                   }
                 >
                   {mismatchReloading ? (
@@ -2209,8 +2350,14 @@ export default function CategoryAdmin({
                 {selectedMismatchCount}건만 ES에 재적재합니다.
               </>
             ) : (
-              <>왼쪽에서 카테고리를 먼저 선택하세요.</>
+              <>
+                전체 이상 항목 {mismatchReloadTargetCount}건을 ES에
+                재적재합니다.
+              </>
             )}
+          </p>
+          <p className="mb-1 fw-semibold">
+            작업 대상: {mismatchReloadTargetCount}건
           </p>
           <p className="text-muted">
             누락 파일은 적재하고 연결되지 않은 ES 문서는 정리합니다.
@@ -2230,8 +2377,7 @@ export default function CategoryAdmin({
               saving ||
               bulkReloading ||
               mismatchReloading ||
-              !mismatchReloadTargetCategory ||
-              selectedMismatchCount === 0
+              mismatchReloadTargetCount === 0
             }
           >
             {mismatchReloading ? (

@@ -387,14 +387,22 @@ class TestCategoryMapping(unittest.TestCase):
         assert conn.committed is True
 
     def test_migrate_skips_when_content_type_already_exists(self):
-        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 13)
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 14)
         cm_mod, cm = build_cm(cursor)
         alter_queries = [sql for sql, _ in cursor.executed if "ALTER TABLE" in str(sql)]
         assert cm is not None
         assert alter_queries == []
 
+    def test_migrate_reload_locks_adds_reload_source(self):
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 12 + [{"cnt": 0}, {"cnt": 1}])
+        cm_mod, cm = build_cm(cursor)
+        executed_sql = [sql for sql, _ in cursor.executed]
+        assert any("ADD COLUMN reload_source" in s for s in executed_sql)
+        assert any("SET reload_source = %s WHERE category IS NOT NULL" in s for s in executed_sql)
+        assert cm is not None
+
     def test_migrate_reload_locks_adds_lock_key_and_switches_primary_key(self):
-        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 12 + [{"cnt": 0}])
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 13 + [{"cnt": 0}])
         cm_mod, cm = build_cm(cursor)
         executed_sql = [sql for sql, _ in cursor.executed]
         assert any("ADD COLUMN lock_key" in s for s in executed_sql)
@@ -405,6 +413,55 @@ class TestCategoryMapping(unittest.TestCase):
     def test_acquire_reload_lock_success(self):
         cm_mod, cm = build_cm(FakeCursor())
         cursor = FakeCursor(rows=[])
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        acquired, error, blocking = cm.acquire_reload_lock("book")
+        assert acquired is True
+        assert error is None
+        assert blocking is None
+        assert any("INSERT INTO reload_locks" in str(sql) for sql, _ in cursor.executed)
+
+    def test_acquire_reload_lock_stores_reload_source(self):
+        cm_mod, cm = build_cm(FakeCursor())
+        cursor = FakeCursor(rows=[])
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        acquired, error, blocking = cm.acquire_reload_lock("book", reload_source="mismatch")
+        assert acquired is True
+        assert error is None
+        assert blocking is None
+        sql, params = next((sql, params) for sql, params in cursor.executed if "INSERT INTO reload_locks" in str(sql))
+        assert "reload_source" in sql
+        assert "reload_source = VALUES(reload_source)" in sql
+        assert params == ("book", "__all__", None, "mismatch")
+
+    def test_acquire_reload_lock_defaults_unknown_reload_source_to_bulk(self):
+        cm_mod, cm = build_cm(FakeCursor())
+        cursor = FakeCursor(rows=[])
+
+        @contextlib.contextmanager
+        def _conn():
+            yield FakeConn(cursor)
+
+        cm._get_connection = _conn
+        acquired, error, blocking = cm.acquire_reload_lock("book", reload_source="unknown")
+        assert acquired is True
+        assert error is None
+        assert blocking is None
+        _sql, params = next((sql, params) for sql, params in cursor.executed if "INSERT INTO reload_locks" in str(sql))
+        assert params == ("book", "__all__", None, "bulk")
+
+    def test_acquire_reload_lock_ignores_finished_lock_rows(self):
+        cm_mod, cm = build_cm(FakeCursor())
+        cursor = FakeCursor(rows=[{"lock_key": "__all__", "status": "done", "updated_at": datetime.now()}])
 
         @contextlib.contextmanager
         def _conn():
@@ -589,6 +646,11 @@ class TestCategoryMapping(unittest.TestCase):
         assert params[-2] == "book"
         assert params[-1] == "1_fiction"
 
+    def test_complete_reload_lock_rejects_unknown_field(self):
+        cm_mod, cm = build_cm(FakeCursor())
+        with self.assertRaises(ValueError):
+            cm.complete_reload_lock("book", "done", None, bogus_count=1)
+
     def test_get_reload_status_none_when_no_row(self):
         cm_mod, cm = build_cm(FakeCursor())
         cursor = FakeCursor(fetchone_rows=[None])
@@ -603,7 +665,7 @@ class TestCategoryMapping(unittest.TestCase):
     def test_get_reload_status_returns_running_row(self):
         cm_mod, cm = build_cm(FakeCursor())
         now = datetime.now()
-        row = {"category": "A", "status": "running", "started_at": now, "updated_at": now, "indexed_count": 1, "deleted_count": 0, "failed_count": 0, "before_count": 2, "after_count": 0, "error": None}
+        row = {"category": "A", "reload_source": "mismatch", "status": "running", "started_at": now, "updated_at": now, "indexed_count": 1, "deleted_count": 0, "failed_count": 0, "before_count": 2, "after_count": 0, "error": None}
         cursor = FakeCursor(fetchone_rows=[row])
 
         @contextlib.contextmanager
@@ -614,6 +676,7 @@ class TestCategoryMapping(unittest.TestCase):
         status = cm.get_reload_status("book")
         assert status["status"] == "running"
         assert status["category"] == "A"
+        assert status["reload_source"] == "mismatch"
         assert status["indexed_count"] == 1
 
     def test_get_reload_status_reports_stale_running_as_failed(self):

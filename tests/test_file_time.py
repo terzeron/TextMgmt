@@ -50,6 +50,29 @@ def test_linux_statx_btime_returns_none_when_btime_mask_is_missing(monkeypatch: 
     assert file_time._linux_statx_btime("book.txt") is None
 
 
+def test_linux_statx_btime_returns_none_on_non_linux_platform(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(file_time.sys, "platform", "darwin")
+
+    assert file_time._linux_statx_btime("book.txt") is None
+
+
+def test_linux_statx_btime_returns_none_when_statx_is_unavailable(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        file_time.ctypes,
+        "CDLL",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+
+    assert file_time._linux_statx_btime("book.txt") is None
+
+
+def test_linux_statx_btime_returns_none_when_syscall_fails(monkeypatch: pytest.MonkeyPatch):
+    fake_statx = FakeStatxFn(result=-1)
+    monkeypatch.setattr(file_time.ctypes, "CDLL", lambda *args, **kwargs: SimpleNamespace(statx=fake_statx))
+
+    assert file_time._linux_statx_btime("book.txt") is None
+
+
 def test_path_created_time_prefers_linux_btime(monkeypatch: pytest.MonkeyPatch):
     expected = datetime(2024, 1, 2, 3, 4, 5, 123456)
     monkeypatch.setattr(file_time, "_linux_statx_btime", lambda _path: expected)
@@ -85,3 +108,23 @@ def test_stat_created_time_keeps_platform_birthtime_priority():
         datetime.fromtimestamp(1_600_000_000.5),
         file_time.CREATED_TIME_SOURCE_ST_BIRTHTIME,
     )
+
+
+def test_stat_created_time_uses_birthtime_when_birthtime_ns_is_missing():
+    stat_result = SimpleNamespace(
+        st_birthtime=1_700_000_000,
+        st_ctime=1_800_000_000,
+    )
+
+    assert file_time.stat_created_time_with_source(stat_result) == (
+        datetime.fromtimestamp(1_700_000_000),
+        file_time.CREATED_TIME_SOURCE_ST_BIRTHTIME,
+    )
+
+
+def test_created_time_iso_helpers(monkeypatch: pytest.MonkeyPatch):
+    stat_result = SimpleNamespace(st_ctime=datetime(2025, 1, 2, 3, 4, 5).timestamp())
+    monkeypatch.setattr(file_time, "_linux_statx_btime", lambda _path: None)
+
+    assert file_time.stat_created_time_iso(stat_result) == "2025-01-02T03:04:05"
+    assert file_time.path_created_time_iso("book.txt", stat_result) == "2025-01-02T03:04:05"

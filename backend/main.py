@@ -383,6 +383,10 @@ class CategoryDeleteModel(BaseModel):
     category: str
 
 
+class ReloadAllMismatchesModel(BaseModel):
+    reload_source: Literal["bulk", "mismatch"] = "bulk"
+
+
 class CategoryAutoClassifyModel(BaseModel):
     category: str
     recursive: bool = False
@@ -936,7 +940,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         """
         LOGGER.info("reload_category_mismatch_files 요청: category='%s', content_type='%s'", body.category, content_type)
         response_object: dict[str, Any] = {"status": "failure"}
-        acquired, lock_error, blocking_status = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, body.category)
+        acquired, lock_error, blocking_status = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, body.category, "mismatch")
         if not acquired:
             response_object["status"] = "success"
             response_object["result"] = {"already_running": True, **(blocking_status or {})}
@@ -944,19 +948,20 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             return response_object
         background_tasks.add_task(_run_reload_mismatch_files_job, body.category)
         response_object["status"] = "success"
-        response_object["result"] = {"started": True, "content_type": content_type, "category": body.category}
+        response_object["result"] = {"started": True, "content_type": content_type, "category": body.category, "reload_source": "mismatch"}
         return response_object
 
     @router.post("/category-mismatches/reload-all", dependencies=admin_dep)
-    async def reload_all_category_mismatches(background_tasks: BackgroundTasks) -> dict[str, Any]:
+    async def reload_all_category_mismatches(background_tasks: BackgroundTasks, body: ReloadAllMismatchesModel | None = None) -> dict[str, Any]:
         """현재 카테고리 불일치 항목을 일괄 ES 재적재/정리 (백그라운드 실행, 즉시 응답).
 
         모든 카테고리에 영향을 주므로, 카테고리별 재적재든 다른 일괄 재적재든 이 content_type에
         진행 중인 작업이 하나라도 있으면 획득할 수 없고 그 작업 상태에 연결된다.
         """
-        LOGGER.info("reload_all_category_mismatches 요청: content_type='%s'", content_type)
+        reload_source = body.reload_source if body else "bulk"
+        LOGGER.info("reload_all_category_mismatches 요청: content_type='%s', reload_source='%s'", content_type, reload_source)
         response_object: dict[str, Any] = {"status": "failure"}
-        acquired, lock_error, blocking_status = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, None)
+        acquired, lock_error, blocking_status = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, None, reload_source)
         if not acquired:
             response_object["status"] = "success"
             response_object["result"] = {"already_running": True, **(blocking_status or {})}
@@ -964,7 +969,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             return response_object
         background_tasks.add_task(_run_reload_all_mismatches_job)
         response_object["status"] = "success"
-        response_object["result"] = {"started": True, "content_type": content_type}
+        response_object["result"] = {"started": True, "content_type": content_type, "reload_source": reload_source}
         return response_object
 
     @router.get("/category-mismatches/reload-status", dependencies=admin_dep)
