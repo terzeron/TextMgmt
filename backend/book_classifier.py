@@ -561,6 +561,17 @@ def map_category(cat_str: str, raw_title: str, raw_author: str) -> Optional[str]
     if any(k in cat for k in ["수학", "물리학", "화학", "생물학", "생명과학", "지구과학", "천문학", "자연과학", "교양과학", "기초과학", "과학"]):
         return "5_수학과학일반"
 
+    # 구체적인 복합 카테고리를 먼저 판정한다. 아래의 broad keyword(회화/국어/교육/의학/영어)
+    # 보다 늦게 검사하면 substring match 때문에 다른 분야로 오분류된다.
+    if any(k in cat for k in ["영어원서", "영문원서", "영한대역"]):
+        return "7_영문일반"
+    if any(k in cat for k in ["영어회화", "토익", "토플", "수능영어", "영단어"]):
+        return "7_영어교육"
+    if any(k in cat for k in ["중국어", "HSK", "한자"]):
+        return "7_중어한자교육"
+    if any(k in cat for k in ["성교육", "성의학"]):
+        return "8_성"
+
     if any(k in cat for k in ["미술", "예술", "건축", "디자인", "공예", "조각", "회화", "도예"]):
         return "5_미술예술건축"
     if any(k in cat for k in ["음악", "클래식음악", "대중음악", "작곡", "악기", "가요", "뮤지컬"]):
@@ -578,18 +589,14 @@ def map_category(cat_str: str, raw_title: str, raw_author: str) -> Optional[str]
         return "7_교육일반"
     if any(k in cat for k in ["국어", "한국어", "맞춤법", "어휘"]):
         return "7_국어교육"
-    if any(k in cat for k in ["영어", "영문법", "영어회화", "토익", "토플", "수능영어", "영단어"]):
+    if any(k in cat for k in ["영어", "영문법"]):
         return "7_영어교육"
     if any(k in cat for k in ["일본어", "일어", "JLPT"]):
         return "7_일어교육"
-    if any(k in cat for k in ["중국어", "HSK", "한자"]):
-        return "7_중어한자교육"
     if any(k in cat for k in ["외국어", "프랑스어", "독일어", "스페인어", "러시아어"]):
         return "7_외국어교육"
     if any(k in cat for k in ["언어학", "번역", "통역"]):
         return "7_언어일반"
-    if any(k in cat for k in ["영어원서", "영문원서", "영한대역"]):
-        return "7_영문일반"
 
     if any(k in cat for k in ["컴퓨터", "IT", "프로그래밍", "소프트웨어", "코딩", "인공지능", "AI", "빅데이터", "네트워크", "모바일/태블릿", "웹개발", "데이터베이스"]):
         return "8_IT"
@@ -606,8 +613,6 @@ def map_category(cat_str: str, raw_title: str, raw_author: str) -> Optional[str]
         return "8_모델링"
     if any(k in cat for k in ["밀리터리", "무기", "군사무기"]):
         return "8_밀리터리"
-    if any(k in cat for k in ["성교육", "성의학"]):
-        return "8_성"
     if any(k in cat for k in ["살림", "인테리어", "수예", "뜨개질", "원예", "반려동물", "가정살림", "가사"]):
         return "8_실용의학회계"
     if any(k in cat for k in ["악보", "스코어", "Songbook"]):
