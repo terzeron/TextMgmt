@@ -1391,6 +1391,56 @@ def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
     assert resp.json()["status"] == "success"
 
 
+def test_reload_job_flushes_progress_on_a_fixed_interval(tmp_path: Path, monkeypatch):
+    """진행 콜백이 없는 구간(전체 스캔, ES refresh 등)에서도 잔여 건수가 주기적으로 갱신돼야 한다.
+
+    book_manager는 파일 단위로 on_progress를 호출하지만, 시작 시 전체 불일치 스캔이나 마지막
+    refresh 구간에는 콜백이 아예 없다. 그 구간에서도 화면의 잔여 건수와 heartbeat가 멈추지
+    않도록, 재적재 job은 고정 주기로 최신 카운트를 DB에 flush해야 한다.
+    """
+    import asyncio
+    from fastapi.testclient import TestClient
+    from backend import main as main_mod
+
+    heartbeats: list[dict] = []
+
+    class RecordingCategoryMapping(DummyCategoryMapping):
+        def heartbeat_reload_lock(self, content_type="book", category=None, **counts):
+            heartbeats.append(dict(counts))
+            super().heartbeat_reload_lock(content_type, category, **counts)
+
+    class SilentScanManager(DummyManager):
+        async def reload_category_mismatches(self, content_type: str = "book", on_progress=None):
+            # 콜백 없는 전체 스캔 구간
+            await asyncio.sleep(0.15)
+            if on_progress is not None:
+                on_progress({"before_count": 10})
+            # 콜백 없는 refresh/재스캔 구간
+            await asyncio.sleep(0.15)
+            return {"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 10, "after_count": 0}, None
+
+    monkeypatch.setattr(main_mod, "RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS", 0.02)
+    main_mod.app.dependency_overrides[main_mod.require_auth] = lambda: {"email": "u@e.com", "role": "user"}
+    main_mod.app.dependency_overrides[main_mod.require_admin] = lambda: {"email": "a@e.com", "role": "admin"}
+    orig_book = getattr(main_mod.book_manager, "_instance", None)
+    orig_catmap = getattr(main_mod.category_mapping, "_instance", None)
+    main_mod.book_manager._instance = SilentScanManager(tmp_path)  # type: ignore[attr-defined]
+    main_mod.category_mapping._instance = RecordingCategoryMapping()  # type: ignore[attr-defined]
+    try:
+        with TestClient(main_mod.app) as client:
+            resp = client.post("/category-mismatches/reload-all")
+            assert resp.json()["status"] == "success"
+    finally:
+        main_mod.book_manager._instance = orig_book  # type: ignore[attr-defined]
+        main_mod.category_mapping._instance = orig_catmap  # type: ignore[attr-defined]
+        main_mod.app.dependency_overrides.clear()
+
+    # 콜백이 1번뿐인 0.3초짜리 작업에서 0.02초 주기 flush면 여러 번 찍혀야 한다.
+    assert len(heartbeats) >= 5, f"주기적 flush가 일어나지 않았다: {heartbeats}"
+    # 마지막 flush에는 콜백으로 들어온 최신 카운트가 실려 있어야 한다.
+    assert heartbeats[-1].get("before_count") == 10
+
+
 def test_latest_books_uses_latest_excluded_categories(dummy_client, monkeypatch):
     from backend import main as main_mod
 

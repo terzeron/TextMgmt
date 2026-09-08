@@ -1876,8 +1876,14 @@ class BookManager:
         except IOError as e:
             return "Error", f"파일 삭제 실패: {e}"
 
-    async def _bulk_index_files(self, file_paths: list[str], clean_existing: bool, on_progress: Callable[[dict[str, int]], None] | None = None) -> tuple[dict[str, int], list[dict[str, Any]]]:
+    async def _bulk_index_files(self, file_paths: list[str], clean_existing: bool, on_progress: Callable[[dict[str, int]], None] | None = None, progress_base: dict[str, int] | None = None) -> tuple[dict[str, int], list[dict[str, Any]]]:
         """여러 파일을 배치로 파싱해 ES에 한 번에 색인한다 (파일 1건씩 insert+refresh하는 것보다 훨씬 빠름).
+
+        progress_base는 이 배치 이전까지 확정된 누적 카운트다. 배치의 ES insert는 마지막에 한 번만
+        일어나므로 배치 도중에는 "파싱에 성공한 파일 수"를 잠정 indexed_count로 얹어 보고하고,
+        배치가 끝나면 호출자가 실제 색인 건수로 정정한다. 잠정값은 진행률 표시 전용이며 작업
+        완료 시 기록되는 최종 카운트에는 영향을 주지 않는다.
+
         반환: (file_path -> 새 book_id 매핑, 실패 목록)"""
         from utils.loader import Loader
         from utils.parser_timeout import ParserTimeout, run_with_hard_timeout
@@ -1885,12 +1891,15 @@ class BookManager:
         merged: dict[int, dict[str, Any]] = {}
         id_by_path: dict[str, int] = {}
         failures: list[dict[str, Any]] = []
+        base_counts = dict(progress_base or {})
+        base_indexed = int(base_counts.get("indexed_count") or 0)
 
         for file_path in file_paths:
             # 파일 1건 파싱은 최대 HARD_PARSE_TIMEOUT_SECONDS까지 걸릴 수 있는 유일한 지점이라,
-            # 여기서 매번 heartbeat를 찍어야 대량 재적재 도중에도 "작업이 살아있다"는 신호가 끊기지 않는다.
+            # 여기서 매번 진행률을 보고해야 대량 재적재 도중에도 "작업이 살아있다"는 신호가 끊기지 않고,
+            # 화면의 잔여 건수도 카테고리 경계가 아니라 파일 단위로 움직인다.
             if on_progress is not None:
-                on_progress({})
+                on_progress({**base_counts, "indexed_count": base_indexed + len(id_by_path)})
             abs_path = (self.path_prefix / file_path).resolve()
             if not abs_path.is_relative_to(self.path_prefix.resolve()) or not abs_path.is_file():
                 failures.append({"file_path": file_path, "error": f"파일을 찾을 수 없습니다: {file_path}"})
@@ -1926,9 +1935,14 @@ class BookManager:
                 failures.append({"file_path": file_path, "error": "ES 적재 실패"})
         return indexed, failures
 
-    async def _reload_category_mismatch_details(self, category: str, details: dict[str, Any], on_progress: Callable[[dict[str, int]], None] | None = None) -> dict[str, Any]:
+    async def _reload_category_mismatch_details(self, category: str, details: dict[str, Any], on_progress: Callable[[dict[str, int]], None] | None = None, progress_base: dict[str, int] | None = None) -> dict[str, Any]:
+        """progress_base는 이전 카테고리까지 확정된 누적 카운트로, on_progress에는 항상 이 값을 더한
+        전역 누적치를 보고한다(화면의 잔여 건수는 전역 기준이라 카테고리 로컬 값을 보내면 안 된다)."""
         category_result: dict[str, Any] = {"category": category, "indexed_count": 0, "deleted_count": 0, "failures": []}
         ids_to_delete: set[int] = set()
+        base_counts = dict(progress_base or {})
+        running_indexed = int(base_counts.get("indexed_count") or 0)
+        running_deleted = int(base_counts.get("deleted_count") or 0)
 
         fs_only_paths: list[str] = []
         for item in details.get("fs_only", []) or []:
@@ -1955,10 +1969,14 @@ class BookManager:
         for paths, clean_existing in ((fs_only_paths, True), (dup_reindex_paths, False)):
             for batch_start in range(0, len(paths), BULK_REINDEX_BATCH_SIZE):
                 batch = paths[batch_start : batch_start + BULK_REINDEX_BATCH_SIZE]
-                indexed, failures = await self._bulk_index_files(batch, clean_existing=clean_existing, on_progress=on_progress)
+                indexed, failures = await self._bulk_index_files(batch, clean_existing=clean_existing, on_progress=on_progress, progress_base={"indexed_count": running_indexed, "deleted_count": running_deleted})
                 indexed_book_id_by_path.update(indexed)
                 category_result["indexed_count"] += len(indexed)
                 category_result["failures"].extend(failures)
+                # 배치 도중 보고한 잠정값을 실제 색인 건수로 정정한다.
+                running_indexed += len(indexed)
+                if on_progress is not None:
+                    on_progress({"indexed_count": running_indexed, "deleted_count": running_deleted})
 
         for item in duplicate_items:
             docs = item.get("docs", []) or []
@@ -1987,6 +2005,9 @@ class BookManager:
         if ids_to_delete:
             deleted = await asyncio.to_thread(self.es_manager.delete_by_ids, sorted(ids_to_delete))
             category_result["deleted_count"] += deleted
+            running_deleted += deleted
+            if on_progress is not None:
+                on_progress({"indexed_count": running_indexed, "deleted_count": running_deleted})
             if deleted < len(ids_to_delete):
                 category_result["failures"].append({"category": category, "error": f"ES 문서 {len(ids_to_delete)}건 중 {deleted}건만 삭제됨"})
 
@@ -2009,7 +2030,7 @@ class BookManager:
                 continue
 
             details = await asyncio.to_thread(self.get_category_mismatch_details, category)
-            category_result = await self._reload_category_mismatch_details(category, details, on_progress=on_progress)
+            category_result = await self._reload_category_mismatch_details(category, details, on_progress=on_progress, progress_base={"indexed_count": result["indexed_count"], "deleted_count": result["deleted_count"]})
             result["indexed_count"] += category_result["indexed_count"]
             result["deleted_count"] += category_result["deleted_count"]
             result["categories"].append(category_result)

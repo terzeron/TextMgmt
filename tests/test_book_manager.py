@@ -1732,6 +1732,85 @@ def test_reload_category_mismatch_files_limits_to_selected_category(tmp_path: Pa
     assert result["failed_count"] == 0
 
 
+def test_reload_category_mismatch_files_reports_progress_during_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """카테고리 전용 재적재도 진행 중에 indexed_count/deleted_count를 올려야 한다.
+
+    이전에는 시작 시 before_count 1회만 emit하고, 실제 카운트는 작업이 끝난 뒤에야
+    기록돼서 화면의 잔여 건수가 작업 내내 최초 대상 건수에 고정됐다.
+    """
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    details = [
+        {"fs_only": [{"file_path": "A/f1.txt"}, {"file_path": "A/f2.txt"}, {"file_path": "A/f3.txt"}], "es_only": [{"book_id": 10}], "duplicates": []},
+        {"fs_only": [], "es_only": [], "duplicates": []},
+    ]
+
+    abs_to_relpath = {}
+    for i, rel_path in enumerate(["A/f1.txt", "A/f2.txt", "A/f3.txt"], start=1):
+        file_path = tmp_path / rel_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text("x")
+        abs_to_relpath[file_path.resolve()] = (rel_path, 3000 + i)
+
+    def fake_read_file(abs_path):
+        rel_path, book_id = abs_to_relpath[abs_path]
+        return {book_id: make_doc(rel_path)}
+
+    monkeypatch.setattr(manager, "get_category_mismatch_details", lambda category: details.pop(0))
+    monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
+
+    progress_updates: list[dict[str, int]] = []
+    result, err = asyncio_runner(manager.reload_category_mismatch_files("A", on_progress=progress_updates.append))
+
+    assert err is None
+    assert result["indexed_count"] == 3
+    assert result["deleted_count"] == 1
+
+    # 파일 단위로 indexed_count가 단조 증가하며 보고돼야 한다
+    indexed_series = [u["indexed_count"] for u in progress_updates if "indexed_count" in u]
+    assert indexed_series, "진행 중 indexed_count가 한 번도 보고되지 않았다"
+    assert indexed_series == sorted(indexed_series)
+    assert max(indexed_series) == 3
+    # 파일 3건이므로 중간 보고가 최소 3회는 있어야 한다 (끝에 1회만 몰리면 안 됨)
+    assert len(indexed_series) >= 3
+    deleted_series = [u["deleted_count"] for u in progress_updates if "deleted_count" in u]
+    assert max(deleted_series) == 1
+
+
+def test_reload_category_mismatches_reports_progress_within_category(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """일괄 재적재도 카테고리 경계가 아니라 파일 단위로 누적 진행률을 보고해야 한다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+
+    rel_paths = ["A/f1.txt", "A/f2.txt", "A/f3.txt", "A/f4.txt"]
+    abs_to_relpath = {}
+    for i, rel_path in enumerate(rel_paths, start=1):
+        file_path = tmp_path / rel_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text("x")
+        abs_to_relpath[file_path.resolve()] = (rel_path, 4000 + i)
+
+    def fake_read_file(abs_path):
+        rel_path, book_id = abs_to_relpath[abs_path]
+        return {book_id: make_doc(rel_path)}
+
+    monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
+    monkeypatch.setattr(manager, "get_category_mismatches", lambda: {"mismatches": [], "es_only": [], "fs_only": [{"category": "A", "fs_count": len(rel_paths)}]})
+    monkeypatch.setattr(manager, "get_category_mismatch_details", lambda category: {"fs_only": [{"file_path": p} for p in rel_paths], "es_only": [], "duplicates": []})
+
+    progress_updates: list[dict[str, int]] = []
+    result, err = asyncio_runner(manager.reload_category_mismatches(on_progress=progress_updates.append))
+
+    assert err is None
+    assert result["indexed_count"] == 4
+
+    indexed_series = [u["indexed_count"] for u in progress_updates if "indexed_count" in u]
+    assert indexed_series == sorted(indexed_series)
+    assert max(indexed_series) == 4
+    # 카테고리가 1개뿐이므로, 카테고리 경계에서만 보고하면 1회밖에 안 나온다
+    assert len(indexed_series) >= 4
+
+
 def test_auto_classify_category_moves_matching_file_and_reindexes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     es = DummyES()
     manager = make_manager(tmp_path, es)

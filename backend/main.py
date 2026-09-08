@@ -8,7 +8,8 @@ import time
 import logging.config
 import uuid
 from pathlib import Path
-from typing import Any, Literal, Callable, TypeVar
+from typing import Any, AsyncIterator, Literal, Callable, TypeVar
+from contextlib import asynccontextmanager, suppress
 from urllib.parse import urlparse
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -116,6 +117,8 @@ GENERIC_MAPPING_ERROR_DETAIL = "카테고리 매핑 처리 중 오류가 발생�
 GENERIC_HIDDEN_CATEGORY_ERROR_DETAIL = "비노출 카테고리 처리 중 오류가 발생했습니다"
 GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL = "최신 자료 검색 제외 카테고리 처리 중 오류가 발생했습니다"
 GENERIC_MISMATCH_ERROR = "카테고리 불일치 조회 중 오류가 발생했습니다"
+# 재적재 진행 카운트를 DB에 기록하는 주기. 화면(폴링 10초)에서 잔여 건수가 이 주기로 움직인다.
+RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS = 30
 
 
 _SameSite = Literal["lax", "strict", "none"]
@@ -895,17 +898,49 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             LOGGER.error("reload_category 응답: failure — %s", error)
         return response_object
 
-    def _make_reload_progress_cb(category: str | None) -> Callable[[dict[str, int]], None]:
+    def _make_reload_progress_cb(latest_counts: dict[str, int]) -> Callable[[dict[str, int]], None]:
+        """book_manager의 진행 보고를 메모리에만 누적한다.
+
+        보고는 파일 1건마다 들어오므로 여기서 DB를 때리면 UPDATE가 파일 수만큼 나간다. 실제 flush는
+        _flush_reload_progress_periodically가 고정 주기로 담당한다.
+        """
+
         def _on_reload_progress(counts: dict[str, int]) -> None:
-            # book_manager의 재적재 루프 안(동기 for문)에서 직접 호출되므로 asyncio.to_thread로 감쌀 수
-            # 없다 — heartbeat는 PK 1건짜리 짧은 UPDATE라 블로킹 비용은 감내 가능한 수준으로 본다.
-            category_mapping.heartbeat_reload_lock(content_type, category=category, **counts)
+            latest_counts.update(counts)
 
         return _on_reload_progress
 
+    async def _flush_reload_progress_periodically(category: str | None, latest_counts: dict[str, int]) -> None:
+        """RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS마다 최신 진행 카운트를 재적재 락에 기록한다.
+
+        진행 콜백이 전혀 없는 구간(시작 시 전체 불일치 스캔, 카테고리별 상세 조회, 마지막 ES
+        refresh와 재스캔)에서도 heartbeat와 화면의 잔여 건수가 멈추지 않게 하는 것이 목적이다.
+        카운트가 아직 없으면 빈 UPDATE가 나가 heartbeat(updated_at)만 갱신된다.
+        """
+        while True:
+            await asyncio.sleep(RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS)
+            try:
+                await asyncio.to_thread(category_mapping.heartbeat_reload_lock, content_type, category, **dict(latest_counts))
+            except Exception as e:
+                # flush 실패로 재적재 자체를 중단시키지는 않는다 — 다음 주기에 다시 시도한다.
+                LOGGER.warning("재적재 진행률 flush 실패 (category=%s): %s", category, e)
+
+    @asynccontextmanager
+    async def _reload_progress_reporter(category: str | None) -> AsyncIterator[Callable[[dict[str, int]], None]]:
+        """진행 콜백과 주기적 flush 태스크를 함께 관리한다."""
+        latest_counts: dict[str, int] = {}
+        flusher = asyncio.create_task(_flush_reload_progress_periodically(category, latest_counts))
+        try:
+            yield _make_reload_progress_cb(latest_counts)
+        finally:
+            flusher.cancel()
+            with suppress(asyncio.CancelledError):
+                await flusher
+
     async def _run_reload_mismatch_files_job(category: str) -> None:
         try:
-            result, error = await manager.reload_category_mismatch_files(category, content_type=content_type, on_progress=_make_reload_progress_cb(category))
+            async with _reload_progress_reporter(category) as on_progress:
+                result, error = await manager.reload_category_mismatch_files(category, content_type=content_type, on_progress=on_progress)
         except Exception as e:
             LOGGER.error("reload_category_mismatch_files error: %s", e)
             await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", GENERIC_MISMATCH_ERROR, category)
@@ -919,7 +954,8 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
 
     async def _run_reload_all_mismatches_job() -> None:
         try:
-            result, error = await manager.reload_category_mismatches(content_type=content_type, on_progress=_make_reload_progress_cb(None))
+            async with _reload_progress_reporter(None) as on_progress:
+                result, error = await manager.reload_category_mismatches(content_type=content_type, on_progress=on_progress)
         except Exception as e:
             LOGGER.error("reload_all_category_mismatches error: %s", e)
             await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", GENERIC_MISMATCH_ERROR)
