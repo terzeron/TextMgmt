@@ -1218,7 +1218,7 @@ class Loader:
         return None
 
     @staticmethod
-    def read_file(file_path: Path, stat_result: os.stat_result | None = None, skip_text: bool = False) -> dict[int, dict[str, Any]]:
+    def read_file(file_path: Path, stat_result: os.stat_result | None = None, skip_text: bool = False, path_prefix: Path | None = None) -> dict[int, dict[str, Any]]:
         if file_path.is_file():
             sys.stdout.flush()
             # read metadata of each file (stat 결과 재사용)
@@ -1227,7 +1227,7 @@ class Loader:
             file_size = st.st_size
             created_dt, created_time_source = path_created_time_with_source(file_path, st)
             created_time = created_dt.isoformat()
-            prefix = Loader.get_path_prefix(file_path)
+            prefix = path_prefix if path_prefix is not None else Loader.get_path_prefix(file_path)
             category = str(file_path.parent.relative_to(prefix))
             if category == ".":
                 category = "_root"

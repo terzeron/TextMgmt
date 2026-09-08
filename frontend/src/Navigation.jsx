@@ -25,6 +25,20 @@ import {
   stopProactiveRefresh,
 } from "./Common.js";
 import { isViewerAllowedPath } from "./auth.js";
+import "./Navigation.css";
+
+const VIEW_NAV_ITEMS = [
+  { href: "/book-view", label: "책" },
+  { href: "/book-latest", label: "최신 책" },
+  { href: "/comics-view", label: "만화" },
+  { href: "/comics-latest", label: "최신 만화" },
+];
+
+const ADMIN_NAV_ITEMS = [
+  { href: "/book-edit", label: "책 편집" },
+  { href: "/comics-edit", label: "만화 편집" },
+  { href: "/admin", label: "관리" },
+];
 
 export default function Navigation() {
   /* v8 ignore next 3 -- Vite env fallback depends on the runtime bundle. */
@@ -50,6 +64,8 @@ export default function Navigation() {
   const navigate = useNavigate();
   const isComicsContext = location.pathname.startsWith("/comics-");
   const searchPrefix = isComicsContext ? "/comics" : "";
+  const isActiveNavItem = (href) =>
+    location.pathname === href || location.pathname.startsWith(`${href}/`);
 
   // viewer일 때 비노출 카테고리 목록 로드
   useEffect(() => {
@@ -306,34 +322,35 @@ export default function Navigation() {
   return (
     <GoogleOAuthProvider clientId={clientId}>
       <div>
-        <Navbar bg="light" expand="sm">
+        <Navbar bg="light" expand="sm" className="textmgmt-navbar">
           <Navbar.Brand href="/">
             <img src="/book.png" alt="Text" width="32" height="32" />
           </Navbar.Brand>
           <Navbar.Toggle aria-controls="basic-navbar-nav" />
           <Navbar.Collapse id="basic-navbar-nav">
-            <Nav className="me-auto my-2 my-lg-0 align-items-sm-center">
-              {role && (
-                <>
-                  <Nav.Link href="/book-view">책</Nav.Link>
-                  <span className="text-muted d-none d-sm-inline mx-1">|</span>
-                  <Nav.Link href="/book-latest">최신 책</Nav.Link>
-                  <span className="text-muted d-none d-sm-inline mx-1">|</span>
-                  <Nav.Link href="/comics-view">만화</Nav.Link>
-                  <span className="text-muted d-none d-sm-inline mx-1">|</span>
-                  <Nav.Link href="/comics-latest">최신 만화</Nav.Link>
-                </>
-              )}
-              {role === "admin" && (
-                <>
-                  <span className="text-muted d-none d-sm-inline mx-1">|</span>
-                  <Nav.Link href="/book-edit">책 편집</Nav.Link>
-                  <span className="text-muted d-none d-sm-inline mx-1">|</span>
-                  <Nav.Link href="/comics-edit">만화 편집</Nav.Link>
-                  <span className="text-muted d-none d-sm-inline mx-1">|</span>
-                  <Nav.Link href="/admin">관리</Nav.Link>
-                </>
-              )}
+            <Nav className="textmgmt-top-tabs me-auto my-2 my-lg-0">
+              {role &&
+                VIEW_NAV_ITEMS.map((item) => (
+                  <Nav.Link
+                    key={item.href}
+                    href={item.href}
+                    active={isActiveNavItem(item.href)}
+                    className="textmgmt-top-tab"
+                  >
+                    {item.label}
+                  </Nav.Link>
+                ))}
+              {role === "admin" &&
+                ADMIN_NAV_ITEMS.map((item) => (
+                  <Nav.Link
+                    key={item.href}
+                    href={item.href}
+                    active={isActiveNavItem(item.href)}
+                    className="textmgmt-top-tab"
+                  >
+                    {item.label}
+                  </Nav.Link>
+                ))}
             </Nav>
             <div className="d-flex align-items-center ms-auto">
               {role && (

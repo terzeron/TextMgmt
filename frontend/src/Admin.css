@@ -1,0 +1,55 @@
+.admin-modern-tabs.nav-tabs {
+    border-bottom: 1px solid var(--bs-border-color);
+    gap: 0;
+}
+
+.admin-modern-tabs.nav-tabs .nav-item {
+    margin-bottom: 0;
+}
+
+.admin-modern-tabs.nav-tabs .nav-link {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    color: var(--bs-secondary-color);
+    font-weight: 600;
+    margin-bottom: 0;
+    padding: 0.55rem 0.85rem;
+    position: relative;
+    transition: color 0.15s ease;
+}
+
+.admin-modern-tabs.nav-tabs .nav-item + .nav-item .nav-link {
+    border-left: 1px solid var(--bs-border-color-translucent);
+}
+
+.admin-modern-tabs.nav-tabs .nav-link::after {
+    background: transparent;
+    bottom: -1px;
+    content: "";
+    height: 2px;
+    left: 0.85rem;
+    position: absolute;
+    right: 0.85rem;
+}
+
+.admin-modern-tabs.nav-tabs .nav-link:hover,
+.admin-modern-tabs.nav-tabs .nav-link:focus {
+    border-color: transparent;
+    color: var(--bs-body-color);
+}
+
+.admin-modern-tabs.nav-tabs .nav-link:hover::after,
+.admin-modern-tabs.nav-tabs .nav-link:focus::after {
+    background: var(--bs-border-color);
+}
+
+.admin-modern-tabs.nav-tabs .nav-link.active {
+    background: transparent;
+    border-color: transparent;
+    color: var(--bs-primary);
+}
+
+.admin-modern-tabs.nav-tabs .nav-link.active::after {
+    background: var(--bs-primary);
+}

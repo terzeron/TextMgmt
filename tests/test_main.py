@@ -1176,8 +1176,10 @@ class DummyManager:
 
 
 class DummyCategoryMapping:
+    BULK_LOCK_KEY = "__all__"
+
     def __init__(self):
-        self._status = None
+        self._locks: dict[str, dict] = {}  # lock_key -> status
 
     def get_hidden_categories(self, content_type="book"):
         return []
@@ -1191,24 +1193,36 @@ class DummyCategoryMapping:
     def set_latest_excluded(self, category, excluded, content_type="book"):
         return True
 
-    def acquire_reload_lock(self, content_type="book", category=None):
-        if self._status and self._status.get("status") == "running":
-            return False, "이미 재적재 작업이 진행 중입니다. 완료 후 다시 시도하세요."
-        self._status = {"category": category, "status": "running", "indexed_count": 0, "deleted_count": 0, "failed_count": 0, "before_count": 0, "after_count": 0, "error": None}
-        return True, None
+    def acquire_reload_lock(self, content_type="book", category=None, reload_source="bulk"):
+        lock_key = category or self.BULK_LOCK_KEY
+        check_keys = [lock_key] if lock_key == self.BULK_LOCK_KEY else [lock_key, self.BULK_LOCK_KEY]
+        for key in check_keys:
+            status = self._locks.get(key)
+            if status and status.get("status") == "running":
+                if key == lock_key:
+                    message = "이미 재적재 작업이 진행 중입니다. 완료 후 다시 시도하세요."
+                else:
+                    message = "다른 재적재 작업이 진행 중이라 지금은 실행할 수 없습니다. 완료 후 다시 시도하세요."
+                return False, message, status
+        self._locks[lock_key] = {"category": category, "reload_source": reload_source, "status": "running", "indexed_count": 0, "deleted_count": 0, "failed_count": 0, "before_count": 0, "after_count": 0, "error": None}
+        return True, None, None
 
-    def heartbeat_reload_lock(self, content_type="book", **counts):
-        if self._status is not None:
-            self._status.update(counts)
+    def heartbeat_reload_lock(self, content_type="book", category=None, **counts):
+        lock_key = category or self.BULK_LOCK_KEY
+        if lock_key in self._locks:
+            self._locks[lock_key].update(counts)
 
-    def complete_reload_lock(self, content_type="book", status="done", error=None, **counts):
-        self._status = {**(self._status or {}), "status": status, "error": error, **counts}
+    def complete_reload_lock(self, content_type="book", status="done", error=None, category=None, **counts):
+        lock_key = category or self.BULK_LOCK_KEY
+        self._locks[lock_key] = {**(self._locks.get(lock_key) or {}), "status": status, "error": error, **counts}
 
-    def get_reload_status(self, content_type="book"):
-        return self._status
+    def get_reload_status(self, content_type="book", category=None):
+        lock_key = category or self.BULK_LOCK_KEY
+        return self._locks.get(lock_key)
 
-    def release_reload_lock(self, content_type="book"):
-        self._status = None
+    def release_reload_lock(self, content_type="book", category=None):
+        lock_key = category or self.BULK_LOCK_KEY
+        self._locks.pop(lock_key, None)
 
 
 @pytest.fixture()
@@ -1355,8 +1369,10 @@ def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
     assert resp.json()["status"] == "success"
     assert resp.json()["result"]["started"] is True
     assert resp.json()["result"]["category"] == "A"
+    assert resp.json()["result"]["reload_source"] == "mismatch"
 
-    resp = dummy_client.get("/category-mismatches/reload-status")
+    # 카테고리별 락은 그 카테고리로 조회해야 한다 — 일괄(전체) 락과는 독립적인 행이다.
+    resp = dummy_client.get("/category-mismatches/reload-status", params={"category": "A"})
     assert resp.json()["status"] == "success"
     assert resp.json()["result"]["status"] == "done"
     assert resp.json()["result"]["indexed_count"] == 1
@@ -1364,13 +1380,65 @@ def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
     resp = dummy_client.post("/category-mismatches/reload-all")
     assert resp.json()["status"] == "success"
     assert resp.json()["result"]["started"] is True
+    assert resp.json()["result"]["reload_source"] == "bulk"
 
     resp = dummy_client.get("/category-mismatches/reload-status")
     assert resp.json()["result"]["status"] == "done"
     assert resp.json()["result"]["indexed_count"] == 2
+    assert resp.json()["result"]["reload_source"] == "bulk"
 
     resp = dummy_client.get("/category-mismatches/A")
     assert resp.json()["status"] == "success"
+
+
+def test_reload_job_flushes_progress_on_a_fixed_interval(tmp_path: Path, monkeypatch):
+    """진행 콜백이 없는 구간(전체 스캔, ES refresh 등)에서도 잔여 건수가 주기적으로 갱신돼야 한다.
+
+    book_manager는 파일 단위로 on_progress를 호출하지만, 시작 시 전체 불일치 스캔이나 마지막
+    refresh 구간에는 콜백이 아예 없다. 그 구간에서도 화면의 잔여 건수와 heartbeat가 멈추지
+    않도록, 재적재 job은 고정 주기로 최신 카운트를 DB에 flush해야 한다.
+    """
+    import asyncio
+    from fastapi.testclient import TestClient
+    from backend import main as main_mod
+
+    heartbeats: list[dict] = []
+
+    class RecordingCategoryMapping(DummyCategoryMapping):
+        def heartbeat_reload_lock(self, content_type="book", category=None, **counts):
+            heartbeats.append(dict(counts))
+            super().heartbeat_reload_lock(content_type, category, **counts)
+
+    class SilentScanManager(DummyManager):
+        async def reload_category_mismatches(self, content_type: str = "book", on_progress=None):
+            # 콜백 없는 전체 스캔 구간
+            await asyncio.sleep(0.15)
+            if on_progress is not None:
+                on_progress({"before_count": 10})
+            # 콜백 없는 refresh/재스캔 구간
+            await asyncio.sleep(0.15)
+            return {"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 10, "after_count": 0}, None
+
+    monkeypatch.setattr(main_mod, "RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS", 0.02)
+    main_mod.app.dependency_overrides[main_mod.require_auth] = lambda: {"email": "u@e.com", "role": "user"}
+    main_mod.app.dependency_overrides[main_mod.require_admin] = lambda: {"email": "a@e.com", "role": "admin"}
+    orig_book = getattr(main_mod.book_manager, "_instance", None)
+    orig_catmap = getattr(main_mod.category_mapping, "_instance", None)
+    main_mod.book_manager._instance = SilentScanManager(tmp_path)  # type: ignore[attr-defined]
+    main_mod.category_mapping._instance = RecordingCategoryMapping()  # type: ignore[attr-defined]
+    try:
+        with TestClient(main_mod.app) as client:
+            resp = client.post("/category-mismatches/reload-all")
+            assert resp.json()["status"] == "success"
+    finally:
+        main_mod.book_manager._instance = orig_book  # type: ignore[attr-defined]
+        main_mod.category_mapping._instance = orig_catmap  # type: ignore[attr-defined]
+        main_mod.app.dependency_overrides.clear()
+
+    # 콜백이 1번뿐인 0.3초짜리 작업에서 0.02초 주기 flush면 여러 번 찍혀야 한다.
+    assert len(heartbeats) >= 5, f"주기적 flush가 일어나지 않았다: {heartbeats}"
+    # 마지막 flush에는 콜백으로 들어온 최신 카운트가 실려 있어야 한다.
+    assert heartbeats[-1].get("before_count") == 10
 
 
 def test_latest_books_uses_latest_excluded_categories(dummy_client, monkeypatch):
@@ -1519,7 +1587,7 @@ def test_main_error_branches(dummy_client, monkeypatch):
 
     resp = dummy_client.post("/category-mismatches/reload-mismatches", json={"category": "A"})
     assert resp.json()["result"]["started"] is True
-    resp = dummy_client.get("/category-mismatches/reload-status")
+    resp = dummy_client.get("/category-mismatches/reload-status", params={"category": "A"})
     assert resp.json()["result"]["status"] == "failed"
     assert resp.json()["result"]["error"] == "mismatch fail"
 
@@ -1529,18 +1597,37 @@ def test_main_error_branches(dummy_client, monkeypatch):
     monkeypatch.setattr(main_mod.book_manager, "reload_category_mismatch_files", reload_category_mismatch_files_raise)
     resp = dummy_client.post("/category-mismatches/reload-mismatches", json={"category": "A"})
     assert resp.json()["result"]["started"] is True
-    resp = dummy_client.get("/category-mismatches/reload-status")
+    resp = dummy_client.get("/category-mismatches/reload-status", params={"category": "A"})
     assert resp.json()["result"]["status"] == "failed"
     assert resp.json()["result"]["error"] == main_mod.GENERIC_MISMATCH_ERROR
 
     resp = dummy_client.post("/category-mismatches/reload-all")
     assert resp.json()["result"]["started"] is True
+    assert resp.json()["result"]["reload_source"] == "bulk"
     resp = dummy_client.get("/category-mismatches/reload-status")
     assert resp.json()["result"]["status"] == "failed"
     assert resp.json()["result"]["error"] == "bulk fail"
+    assert resp.json()["result"]["reload_source"] == "bulk"
 
     resp = dummy_client.get("/category-mismatches/A")
     assert resp.json()["error"] == main_mod.GENERIC_MISMATCH_ERROR
+
+
+def test_reload_all_mismatches_preserves_requested_reload_source(dummy_client):
+    resp = dummy_client.post("/category-mismatches/reload-all", json={"reload_source": "mismatch"})
+    assert resp.json()["status"] == "success"
+    assert resp.json()["result"]["started"] is True
+    assert resp.json()["result"]["reload_source"] == "mismatch"
+
+    resp = dummy_client.get("/category-mismatches/reload-status")
+    assert resp.json()["status"] == "success"
+    assert resp.json()["result"]["status"] == "done"
+    assert resp.json()["result"]["reload_source"] == "mismatch"
+
+
+def test_reload_all_mismatches_rejects_unknown_reload_source(dummy_client):
+    resp = dummy_client.post("/category-mismatches/reload-all", json={"reload_source": "unknown"})
+    assert resp.status_code == 422
 
 
 def test_wake_storage_error(monkeypatch: pytest.MonkeyPatch):

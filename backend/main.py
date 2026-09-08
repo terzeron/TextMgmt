@@ -8,7 +8,8 @@ import time
 import logging.config
 import uuid
 from pathlib import Path
-from typing import Any, Literal, Callable, TypeVar
+from typing import Any, AsyncIterator, Literal, Callable, TypeVar
+from contextlib import asynccontextmanager, suppress
 from urllib.parse import urlparse
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -116,6 +117,8 @@ GENERIC_MAPPING_ERROR_DETAIL = "카테고리 매핑 처리 중 오류가 발생�
 GENERIC_HIDDEN_CATEGORY_ERROR_DETAIL = "비노출 카테고리 처리 중 오류가 발생했습니다"
 GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL = "최신 자료 검색 제외 카테고리 처리 중 오류가 발생했습니다"
 GENERIC_MISMATCH_ERROR = "카테고리 불일치 조회 중 오류가 발생했습니다"
+# 재적재 진행 카운트를 DB에 기록하는 주기. 화면(폴링 10초)에서 잔여 건수가 이 주기로 움직인다.
+RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS = 30
 
 
 _SameSite = Literal["lax", "strict", "none"]
@@ -383,10 +386,131 @@ class CategoryDeleteModel(BaseModel):
     category: str
 
 
+class ReloadAllMismatchesModel(BaseModel):
+    reload_source: Literal["bulk", "mismatch"] = "bulk"
+
+
+class CategoryAutoClassifyModel(BaseModel):
+    category: str
+    recursive: bool = False
+    dry_run: bool = False
+    async_mode: bool = False
+    clean_existing: bool = False
+    use_bookstore: bool = True
+    use_content_meta: bool = True
+    delay: float = 1.2
+
+
 def create_item_router(manager, content_type: str = "book") -> APIRouter:
     """공통 CRUD 엔드포인트를 생성하는 라우터 팩토리"""
     admin_dep = [Depends(require_admin)]
     router = APIRouter()
+    auto_classify_status: dict[str, Any] = {"status": "idle", "remaining_count": 0}
+
+    def _auto_classify_status_path() -> Path | None:
+        try:
+            return Path(manager.path_prefix) / f".auto_classify_status_{content_type}.json"
+        except (TypeError, ValueError):
+            return None
+
+    def _read_auto_classify_status() -> dict[str, Any]:
+        status_path = _auto_classify_status_path()
+        if status_path is None or not status_path.exists():
+            return dict(auto_classify_status)
+        try:
+            with status_path.open("r", encoding="utf-8") as status_file:
+                status = json.load(status_file)
+        except Exception as e:
+            LOGGER.warning("auto_classify_status 파일 읽기 실패: %s", e)
+            return dict(auto_classify_status)
+        if not isinstance(status, dict):
+            return dict(auto_classify_status)
+        auto_classify_status.clear()
+        auto_classify_status.update(status)
+        return dict(auto_classify_status)
+
+    def _replace_auto_classify_status(next_status: dict[str, Any]) -> None:
+        next_status = {**next_status, "updated_at": time.time()}
+        auto_classify_status.clear()
+        auto_classify_status.update(next_status)
+        status_path = _auto_classify_status_path()
+        if status_path is None or not status_path.parent.exists():
+            return
+        tmp_path = status_path.with_name(f"{status_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        try:
+            with tmp_path.open("w", encoding="utf-8") as status_file:
+                json.dump(next_status, status_file, ensure_ascii=False, separators=(",", ":"))
+            tmp_path.replace(status_path)
+        except Exception as e:
+            LOGGER.warning("auto_classify_status 파일 쓰기 실패: %s", e)
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _remaining_auto_classify_count(status: dict[str, Any]) -> int:
+        remaining = status.get("remaining_count")
+        if isinstance(remaining, int):
+            return max(0, remaining)
+        total = status.get("total_count")
+        processed = status.get("processed_count")
+        if isinstance(total, int):
+            return max(0, total - int(processed or 0))
+        return 0
+
+    def _start_auto_classify_status(category: str, recursive: bool, dry_run: bool, clean_existing: bool = False, use_bookstore: bool = True, use_content_meta: bool = True) -> None:
+        _replace_auto_classify_status(
+            {
+                "status": "running",
+                "content_type": content_type,
+                "source_category": category,
+                "recursive": recursive,
+                "dry_run": dry_run,
+                "clean_existing": clean_existing,
+                "use_bookstore": use_bookstore,
+                "use_content_meta": use_content_meta,
+                "total_count": 0,
+                "remaining_count": 0,
+                "processed_count": 0,
+                "moved_count": 0,
+                "duplicate_cleaned_count": 0,
+                "skipped_count": 0,
+                "failed_count": 0,
+            }
+        )
+
+    def _on_auto_classify_progress(progress: dict[str, int]) -> None:
+        next_status = {**_read_auto_classify_status(), **progress, "status": "running"}
+        next_status["remaining_count"] = _remaining_auto_classify_count(next_status)
+        _replace_auto_classify_status(next_status)
+
+    async def _run_auto_classify_job(category: str, recursive: bool, dry_run: bool, clean_existing: bool = False, use_bookstore: bool = True, use_content_meta: bool = True, delay: float = 1.2) -> None:
+        classify_kwargs: dict[str, Any] = {"content_type": content_type, "recursive": recursive, "dry_run": dry_run}
+        if clean_existing:
+            classify_kwargs["clean_existing"] = True
+        if not use_bookstore:
+            classify_kwargs["use_bookstore"] = False
+        if not use_content_meta:
+            classify_kwargs["use_content_meta"] = False
+        if delay != 1.2:
+            classify_kwargs["delay"] = delay
+
+        try:
+            mappings = await asyncio.to_thread(category_mapping.get_all_mappings, content_type=content_type)
+            result, error = await manager.auto_classify_category(category, mappings, on_progress=_on_auto_classify_progress, **classify_kwargs)
+        except Exception as e:
+            LOGGER.error("auto_classify_category async error: %s", e)
+            _replace_auto_classify_status({**_read_auto_classify_status(), "status": "failed", "error": "자동 분류에 실패했습니다."})
+            return
+
+        if error is None:
+            next_status = {**_read_auto_classify_status(), **result, "status": "done"}
+            next_status["remaining_count"] = _remaining_auto_classify_count(next_status)
+            _replace_auto_classify_status(next_status)
+            LOGGER.info("auto_classify_category async 응답: success — %s", result)
+        else:
+            _replace_auto_classify_status({**_read_auto_classify_status(), "status": "failed", "error": error})
+            LOGGER.error("auto_classify_category async 응답: failure — %s", error)
 
     @router.put("/books/{book_id}", dependencies=admin_dep)
     async def update_book(book_id: int, book_item: BookModel, force: bool = False) -> dict[str, Any]:
@@ -568,6 +692,60 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
+    @router.post("/categories/auto-classify", dependencies=admin_dep)
+    async def auto_classify_category(body: CategoryAutoClassifyModel, background_tasks: BackgroundTasks) -> dict[str, Any]:
+        """선택 카테고리 파일을 키워드 매핑 기반으로 최상위 카테고리에 자동 분류"""
+        LOGGER.info(
+            "auto_classify_category 요청: category='%s', content_type='%s', recursive=%s, dry_run=%s, async_mode=%s, clean_existing=%s, use_bookstore=%s, use_content_meta=%s", body.category, content_type, body.recursive, body.dry_run, body.async_mode, body.clean_existing, body.use_bookstore, body.use_content_meta
+        )
+        response_object: dict[str, Any] = {"status": "failure"}
+        if body.async_mode:
+            current_status = _read_auto_classify_status()
+            if current_status.get("status") == "running":
+                response_object["status"] = "success"
+                response_object["result"] = {"already_running": True, **current_status}
+                return response_object
+            _start_auto_classify_status(body.category, body.recursive, body.dry_run, clean_existing=body.clean_existing, use_bookstore=body.use_bookstore, use_content_meta=body.use_content_meta)
+            background_tasks.add_task(_run_auto_classify_job, body.category, body.recursive, body.dry_run, clean_existing=body.clean_existing, use_bookstore=body.use_bookstore, use_content_meta=body.use_content_meta, delay=body.delay)
+            response_object["status"] = "success"
+            response_object["result"] = {"started": True, **_read_auto_classify_status()}
+            return response_object
+
+        classify_kwargs: dict[str, Any] = {"content_type": content_type, "recursive": body.recursive, "dry_run": body.dry_run}
+        fields_set = getattr(body, "model_fields_set", None)
+        if fields_set is None:
+            fields_set = getattr(body, "__fields_set__", set())
+        if "clean_existing" in fields_set:
+            classify_kwargs["clean_existing"] = body.clean_existing
+        if "use_bookstore" in fields_set:
+            classify_kwargs["use_bookstore"] = body.use_bookstore
+        if "use_content_meta" in fields_set:
+            classify_kwargs["use_content_meta"] = body.use_content_meta
+        if "delay" in fields_set:
+            classify_kwargs["delay"] = body.delay
+
+        try:
+            mappings = await asyncio.to_thread(category_mapping.get_all_mappings, content_type=content_type)
+            result, error = await manager.auto_classify_category(body.category, mappings, **classify_kwargs)
+        except Exception as e:
+            LOGGER.error("auto_classify_category error: %s", e)
+            response_object["error"] = "자동 분류에 실패했습니다."
+            return response_object
+
+        if error is None:
+            response_object["status"] = "success"
+            response_object["result"] = result
+            LOGGER.info("auto_classify_category 응답: success — %s", result)
+        else:
+            response_object["error"] = error
+            LOGGER.error("auto_classify_category 응답: failure — %s", error)
+        return response_object
+
+    @router.get("/categories/auto-classify-status", dependencies=admin_dep)
+    async def get_auto_classify_status() -> dict[str, Any]:
+        """진행 중이거나 마지막으로 끝난 자동 분류 작업 상태 조회 (폴링용)"""
+        return {"status": "success", "result": _read_auto_classify_status()}
+
     @router.get("/categories/{category:path}")
     async def get_books_in_category(category: str, limit: int = 0, cursor: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:
         LOGGER.debug("# get_books_in_category(category='%s', limit=%d, cursor='%s')", category, limit, cursor)
@@ -720,34 +898,70 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             LOGGER.error("reload_category 응답: failure — %s", error)
         return response_object
 
-    def _on_reload_progress(counts: dict[str, int]) -> None:
-        # book_manager의 재적재 루프 안(동기 for문)에서 직접 호출되므로 asyncio.to_thread로 감쌀 수
-        # 없다 — heartbeat는 PK 1건짜리 짧은 UPDATE라 블로킹 비용은 감내 가능한 수준으로 본다.
-        category_mapping.heartbeat_reload_lock(content_type, **counts)
+    def _make_reload_progress_cb(latest_counts: dict[str, int]) -> Callable[[dict[str, int]], None]:
+        """book_manager의 진행 보고를 메모리에만 누적한다.
+
+        보고는 파일 1건마다 들어오므로 여기서 DB를 때리면 UPDATE가 파일 수만큼 나간다. 실제 flush는
+        _flush_reload_progress_periodically가 고정 주기로 담당한다.
+        """
+
+        def _on_reload_progress(counts: dict[str, int]) -> None:
+            latest_counts.update(counts)
+
+        return _on_reload_progress
+
+    async def _flush_reload_progress_periodically(category: str | None, latest_counts: dict[str, int]) -> None:
+        """RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS마다 최신 진행 카운트를 재적재 락에 기록한다.
+
+        진행 콜백이 전혀 없는 구간(시작 시 전체 불일치 스캔, 카테고리별 상세 조회, 마지막 ES
+        refresh와 재스캔)에서도 heartbeat와 화면의 잔여 건수가 멈추지 않게 하는 것이 목적이다.
+        카운트가 아직 없으면 빈 UPDATE가 나가 heartbeat(updated_at)만 갱신된다.
+        """
+        while True:
+            await asyncio.sleep(RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS)
+            try:
+                await asyncio.to_thread(category_mapping.heartbeat_reload_lock, content_type, category, **dict(latest_counts))
+            except Exception as e:
+                # flush 실패로 재적재 자체를 중단시키지는 않는다 — 다음 주기에 다시 시도한다.
+                LOGGER.warning("재적재 진행률 flush 실패 (category=%s): %s", category, e)
+
+    @asynccontextmanager
+    async def _reload_progress_reporter(category: str | None) -> AsyncIterator[Callable[[dict[str, int]], None]]:
+        """진행 콜백과 주기적 flush 태스크를 함께 관리한다."""
+        latest_counts: dict[str, int] = {}
+        flusher = asyncio.create_task(_flush_reload_progress_periodically(category, latest_counts))
+        try:
+            yield _make_reload_progress_cb(latest_counts)
+        finally:
+            flusher.cancel()
+            with suppress(asyncio.CancelledError):
+                await flusher
 
     async def _run_reload_mismatch_files_job(category: str) -> None:
         try:
-            result, error = await manager.reload_category_mismatch_files(category, content_type=content_type, on_progress=_on_reload_progress)
+            async with _reload_progress_reporter(category) as on_progress:
+                result, error = await manager.reload_category_mismatch_files(category, content_type=content_type, on_progress=on_progress)
         except Exception as e:
             LOGGER.error("reload_category_mismatch_files error: %s", e)
-            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", GENERIC_MISMATCH_ERROR)
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", GENERIC_MISMATCH_ERROR, category)
             return
         if error is None:
-            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "done", None, indexed_count=result["indexed_count"], deleted_count=result["deleted_count"], failed_count=result["failed_count"], before_count=result["before_count"], after_count=result["after_count"])
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "done", None, category, indexed_count=result["indexed_count"], deleted_count=result["deleted_count"], failed_count=result["failed_count"], before_count=result["before_count"], after_count=result["after_count"])
             LOGGER.info("reload_category_mismatch_files 응답: success — %s", result)
         else:
-            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", error)
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", error, category)
             LOGGER.error("reload_category_mismatch_files 응답: failure — %s", error)
 
     async def _run_reload_all_mismatches_job() -> None:
         try:
-            result, error = await manager.reload_category_mismatches(content_type=content_type, on_progress=_on_reload_progress)
+            async with _reload_progress_reporter(None) as on_progress:
+                result, error = await manager.reload_category_mismatches(content_type=content_type, on_progress=on_progress)
         except Exception as e:
             LOGGER.error("reload_all_category_mismatches error: %s", e)
             await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", GENERIC_MISMATCH_ERROR)
             return
         if error is None:
-            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "done", None, indexed_count=result["indexed_count"], deleted_count=result["deleted_count"], failed_count=result["failed_count"], before_count=result["before_count"], after_count=result["after_count"])
+            await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "done", None, None, indexed_count=result["indexed_count"], deleted_count=result["deleted_count"], failed_count=result["failed_count"], before_count=result["before_count"], after_count=result["after_count"])
             LOGGER.info("reload_all_category_mismatches 응답: success — %s", result)
         else:
             await asyncio.to_thread(category_mapping.complete_reload_lock, content_type, "failed", error)
@@ -755,42 +969,52 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
 
     @router.post("/category-mismatches/reload-mismatches", dependencies=admin_dep)
     async def reload_category_mismatch_files(body: CategoryDeleteModel, background_tasks: BackgroundTasks) -> dict[str, Any]:
-        """특정 카테고리의 현재 불일치 항목만 ES에 재적재/정리 (백그라운드 실행, 즉시 응답)"""
+        """특정 카테고리의 현재 불일치 항목만 ES에 재적재/정리 (백그라운드 실행, 즉시 응답).
+
+        카테고리별 락을 쓰므로, 다른 카테고리의 재적재와는 독립적으로 동시 진행된다. 일괄
+        재적재가 이미 진행 중이면(모든 카테고리에 영향을 주므로) 대신 그 작업 상태에 연결된다.
+        """
         LOGGER.info("reload_category_mismatch_files 요청: category='%s', content_type='%s'", body.category, content_type)
         response_object: dict[str, Any] = {"status": "failure"}
-        acquired, lock_error = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, body.category)
+        acquired, lock_error, blocking_status = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, body.category, "mismatch")
         if not acquired:
-            status = await asyncio.to_thread(category_mapping.get_reload_status, content_type)
             response_object["status"] = "success"
-            response_object["result"] = {"already_running": True, **(status or {})}
+            response_object["result"] = {"already_running": True, **(blocking_status or {})}
             LOGGER.info("reload_category_mismatch_files: 진행 중인 작업에 연결 — %s", lock_error)
             return response_object
         background_tasks.add_task(_run_reload_mismatch_files_job, body.category)
         response_object["status"] = "success"
-        response_object["result"] = {"started": True, "content_type": content_type, "category": body.category}
+        response_object["result"] = {"started": True, "content_type": content_type, "category": body.category, "reload_source": "mismatch"}
         return response_object
 
     @router.post("/category-mismatches/reload-all", dependencies=admin_dep)
-    async def reload_all_category_mismatches(background_tasks: BackgroundTasks) -> dict[str, Any]:
-        """현재 카테고리 불일치 항목을 일괄 ES 재적재/정리 (백그라운드 실행, 즉시 응답)"""
-        LOGGER.info("reload_all_category_mismatches 요청: content_type='%s'", content_type)
+    async def reload_all_category_mismatches(background_tasks: BackgroundTasks, body: ReloadAllMismatchesModel | None = None) -> dict[str, Any]:
+        """현재 카테고리 불일치 항목을 일괄 ES 재적재/정리 (백그라운드 실행, 즉시 응답).
+
+        모든 카테고리에 영향을 주므로, 카테고리별 재적재든 다른 일괄 재적재든 이 content_type에
+        진행 중인 작업이 하나라도 있으면 획득할 수 없고 그 작업 상태에 연결된다.
+        """
+        reload_source = body.reload_source if body else "bulk"
+        LOGGER.info("reload_all_category_mismatches 요청: content_type='%s', reload_source='%s'", content_type, reload_source)
         response_object: dict[str, Any] = {"status": "failure"}
-        acquired, lock_error = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, None)
+        acquired, lock_error, blocking_status = await asyncio.to_thread(category_mapping.acquire_reload_lock, content_type, None, reload_source)
         if not acquired:
-            status = await asyncio.to_thread(category_mapping.get_reload_status, content_type)
             response_object["status"] = "success"
-            response_object["result"] = {"already_running": True, **(status or {})}
+            response_object["result"] = {"already_running": True, **(blocking_status or {})}
             LOGGER.info("reload_all_category_mismatches: 진행 중인 작업에 연결 — %s", lock_error)
             return response_object
         background_tasks.add_task(_run_reload_all_mismatches_job)
         response_object["status"] = "success"
-        response_object["result"] = {"started": True, "content_type": content_type}
+        response_object["result"] = {"started": True, "content_type": content_type, "reload_source": reload_source}
         return response_object
 
     @router.get("/category-mismatches/reload-status", dependencies=admin_dep)
-    async def get_reload_status() -> dict[str, Any]:
-        """진행 중이거나 마지막으로 끝난 재적재 작업 상태 조회 (폴링용)"""
-        status = await asyncio.to_thread(category_mapping.get_reload_status, content_type)
+    async def get_reload_status(category: str | None = None) -> dict[str, Any]:
+        """진행 중이거나 마지막으로 끝난 재적재 작업 상태 조회 (폴링용).
+
+        category 생략 시 일괄/전체 재적재 락 상태를, 지정 시 그 카테고리 전용 락 상태를 본다.
+        """
+        status = await asyncio.to_thread(category_mapping.get_reload_status, content_type, category)
         return {"status": "success", "result": status or {"status": "idle"}}
 
     @router.get("/category-mismatches/{category:path}", dependencies=admin_dep)

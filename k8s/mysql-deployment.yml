@@ -111,7 +111,46 @@ data:
         id INT AUTO_INCREMENT PRIMARY KEY,
         category VARCHAR(255) NOT NULL,
         keyword VARCHAR(255) NOT NULL,
+        content_type VARCHAR(10) NOT NULL DEFAULT 'book',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY unique_category_keyword (category, keyword),
-        INDEX idx_category (category)
+        UNIQUE KEY unique_category_keyword (category, keyword, content_type),
+        INDEX idx_category (category),
+        INDEX idx_content_type (content_type)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS hidden_categories (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        category VARCHAR(255) NOT NULL,
+        content_type VARCHAR(10) NOT NULL DEFAULT 'book',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_category_content_type (category, content_type),
+        INDEX idx_category (category),
+        INDEX idx_content_type (content_type)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS latest_excluded_categories (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        category VARCHAR(255) NOT NULL,
+        content_type VARCHAR(10) NOT NULL DEFAULT 'book',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_latest_excluded_category_content_type (category, content_type),
+        INDEX idx_category (category),
+        INDEX idx_content_type (content_type)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS reload_locks (
+        content_type VARCHAR(10) NOT NULL,
+        lock_key VARCHAR(255) NOT NULL DEFAULT '__all__',
+        category VARCHAR(255) NULL,
+        reload_source VARCHAR(20) NOT NULL DEFAULT 'bulk',
+        status VARCHAR(10) NOT NULL DEFAULT 'running',
+        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        indexed_count INT NOT NULL DEFAULT 0,
+        deleted_count INT NOT NULL DEFAULT 0,
+        failed_count INT NOT NULL DEFAULT 0,
+        before_count INT NOT NULL DEFAULT 0,
+        after_count INT NOT NULL DEFAULT 0,
+        error TEXT NULL,
+        PRIMARY KEY (content_type, lock_key)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

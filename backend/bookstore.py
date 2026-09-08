@@ -15,6 +15,7 @@ import http.client
 from abc import ABC, abstractmethod
 from typing import TypedDict
 import uuid
+import shutil
 
 http.client._MAXHEADERS = 1000  # type: ignore[attr-defined]  # allow more response headers
 
@@ -193,15 +194,29 @@ class AbstractBookstore(ABC):
 
     def _save_html_to_tmp(self, html: str, url: str):
         try:
+            tmp_dir = tempfile.gettempdir()
+            # 디스크 가용 공간이 500MB 이하이면 저장 건너뜀 (tmpfs 고갈 방지)
+            try:
+                usage = shutil.disk_usage(tmp_dir)
+                if usage.free < 500 * 1024 * 1024:
+                    return
+            except Exception:
+                pass
+
             # URL 기반 deterministic UUID 생성
             filename = f"{uuid.uuid5(uuid.NAMESPACE_URL, url)}.html"
-            path = os.path.join(tempfile.gettempdir(), filename)
+            path = os.path.join(tmp_dir, filename)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(html)
             if self.verbose:
                 logger.info(f"Saved HTML to {path}")
+        except OSError as e:
+            if getattr(e, "errno", None) == 28:  # No space left on device
+                pass
+            else:
+                logger.debug(f"Failed to save HTML to tmp: {e}")
         except Exception as e:
-            logger.error(f"Failed to save HTML to tmp: {e}")
+            logger.debug(f"Failed to save HTML to tmp: {e}")
 
     def _load_html_from_tmp(self, url: str) -> str | None:
         """
@@ -835,5 +850,93 @@ class NaverSeriesBookstore(AbstractBookstore):
         return info
 
 
+# Kyobo 구현
+class KyoboBookstore(AbstractBookstore):
+    BASE_URL = "https://search.kyobobook.co.kr"
+    SUPPORTS_ISBN_SEARCH = True
+
+    def __init__(self, base_dir: str = ".", verbose: bool = True):
+        super().__init__(base_dir=base_dir, verbose=verbose)
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://www.kyobobook.co.kr/"
+        })
+
+    def build_search_url(self, keyword: str) -> str:
+        encoded = quote(keyword)
+        return f"{self.BASE_URL}/search?keyword={encoded}"
+
+    def build_isbn_search_url(self, isbn: str) -> str:
+        return f"{self.BASE_URL}/search?keyword={isbn}"
+
+    def extract_search_links(self, soup: BeautifulSoup) -> list[str]:
+        items = soup.select("ul.prod_list > li.prod_item")
+        links: list[str] = []
+        seen: set[str] = set()
+        for it in items[: self.MAX_RESULTS]:
+            link_el = it.select_one("a.prod_info, a.prod_link")
+            if link_el and link_el.get("href"):
+                href = str(link_el["href"])
+                full = urljoin("https://product.kyobobook.co.kr", href)
+                if full not in seen:
+                    seen.add(full)
+                    links.append(full)
+        if not links:
+            for a_tag in soup.select('a[href*="/detail/"], a[href*="ebook-product.kyobobook.co.kr"]'):
+                href = str(a_tag.get("href", ""))
+                if href and href not in seen:
+                    seen.add(href)
+                    links.append(href)
+                    if len(links) >= self.MAX_RESULTS:
+                        break
+        if self.verbose:
+            logger.info(f"Kyobo에서 {len(links)}개의 상세 페이지 링크를 찾았습니다")
+        return links
+
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
+        info: BookInfo = {"title": "", "author": "", "category": "", "isbn": ""}
+        # 제목 추출
+        title_el = soup.select_one("h1.prod_title, .prod_info_title, h2.gd_name")
+        if title_el:
+            info["title"] = title_el.get_text(strip=True)
+        elif soup.title and soup.title.string:
+            info["title"] = soup.title.string.split("|")[0].strip()
+
+        # 저자 추출
+        author_el = soup.select_one(".author.rep, .author a, span.gd_auth a")
+        if author_el:
+            info["author"] = author_el.get_text(strip=True)
+
+        # 카테고리 추출
+        cat_els = soup.select("ol.breadcrumb_list > li > a, .breadcrumb a, .btn_sub_depth, .box_detail_category a")
+        labels = [el.get_text(strip=True) for el in cat_els if el.get_text(strip=True) not in ["홈", "국내도서", "eBook", "외국도서", "sam"]]
+        if labels:
+            info["category"] = " > ".join(labels)
+
+        # ISBN 추출
+        for dt in soup.find_all(["dt", "th", "span"]):
+            txt = dt.get_text(strip=True)
+            if "ISBN" in txt:
+                parent = dt.find_parent(["dl", "tr", "div"])
+                if parent:
+                    dd = parent.find(["dd", "td", "span"])
+                    if dd:
+                        isbn_m = re.search(r"(\d{10,13})", dd.get_text())
+                        if isbn_m:
+                            info["isbn"] = isbn_m.group(1)
+                            break
+        return info
+
+
 # 공개 API
-__all__ = ["AbstractBookstore", "Yes24Bookstore", "AladinBookstore", "RidibooksBookstore", "NaverShoppingBookstore", "MunpiaBookstore", "NaverSeriesBookstore"]
+__all__ = [
+    "AbstractBookstore",
+    "Yes24Bookstore",
+    "AladinBookstore",
+    "KyoboBookstore",
+    "RidibooksBookstore",
+    "NaverShoppingBookstore",
+    "MunpiaBookstore",
+    "NaverSeriesBookstore",
+]

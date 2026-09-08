@@ -1,6 +1,7 @@
 """Route-level mock tests for backend/main.py — no ES/MySQL required."""
 
 import importlib
+import json
 import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -53,6 +54,17 @@ def mock_bm():
     object.__setattr__(main_module.book_manager, "_instance", m)
     yield m
     object.__setattr__(main_module.book_manager, "_instance", prev)
+
+
+@pytest.fixture
+def mock_cm():
+    """Inject an AsyncMock into the comics_manager _LazyProxy without triggering ComicsManager()."""
+    m = AsyncMock()
+    m.es_manager = MagicMock()
+    prev = main_module.comics_manager._instance
+    object.__setattr__(main_module.comics_manager, "_instance", m)
+    yield m
+    object.__setattr__(main_module.comics_manager, "_instance", prev)
 
 
 @pytest.fixture
@@ -249,6 +261,157 @@ class TestPdfPages:
 
 
 class TestCategoryMismatchAdmin:
+    def test_auto_classify_success(self, client, mock_bm, mock_cat):
+        mappings = {"2_science": ["과학"]}
+        result = {"source_category": "0_inbox", "moved_count": 1, "skipped_count": 0, "failed_count": 0}
+        mock_cat.get_all_mappings.return_value = mappings
+        mock_bm.auto_classify_category.return_value = (result, None)
+
+        r = client.post("/categories/auto-classify", json={"category": "0_inbox", "recursive": True})
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": result}
+        mock_cat.get_all_mappings.assert_called_once_with(content_type="book")
+        mock_bm.auto_classify_category.assert_awaited_once_with(
+            "0_inbox",
+            mappings,
+            content_type="book",
+            recursive=True,
+            dry_run=False,
+        )
+
+    def test_auto_classify_async_mode_starts_background_job_and_exposes_status(self, client, mock_bm, mock_cat, tmp_path):
+        mappings = {"2_science": ["과학"]}
+        result = {
+            "source_category": "0_inbox",
+            "total_count": 3,
+            "processed_count": 3,
+            "remaining_count": 0,
+            "moved_count": 2,
+            "skipped_count": 1,
+            "failed_count": 0,
+        }
+        mock_bm.path_prefix = tmp_path
+        mock_cat.get_all_mappings.return_value = mappings
+
+        async def fake_auto_classify(*args, on_progress=None, **kwargs):
+            if on_progress:
+                on_progress(
+                    {
+                        "total_count": 3,
+                        "processed_count": 1,
+                        "remaining_count": 2,
+                    }
+                )
+            return result, None
+
+        mock_bm.auto_classify_category.side_effect = fake_auto_classify
+
+        r = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
+
+        assert r.status_code == 200
+        assert r.json()["status"] == "success"
+        assert r.json()["result"]["started"] is True
+        status = client.get("/categories/auto-classify-status")
+        assert status.status_code == 200
+        assert status.json()["result"]["status"] == "done"
+        assert status.json()["result"]["remaining_count"] == 0
+        assert status.json()["result"]["moved_count"] == 2
+        status_file = tmp_path / ".auto_classify_status_book.json"
+        assert status_file.exists()
+        shared_status = json.loads(status_file.read_text(encoding="utf-8"))
+        assert shared_status["status"] == "done"
+        assert shared_status["moved_count"] == 2
+        mock_bm.auto_classify_category.assert_awaited_once()
+        _, kwargs = mock_bm.auto_classify_category.await_args
+        assert kwargs["content_type"] == "book"
+        assert kwargs["recursive"] is False
+        assert kwargs["dry_run"] is False
+        assert callable(kwargs["on_progress"])
+
+    def test_auto_classify_status_reads_shared_status_file(self, client, mock_bm, tmp_path):
+        mock_bm.path_prefix = tmp_path
+        status_file = tmp_path / ".auto_classify_status_book.json"
+        status_file.write_text(
+            json.dumps(
+                {
+                    "status": "running",
+                    "source_category": "shared_file",
+                    "total_count": 9,
+                    "processed_count": 4,
+                    "remaining_count": 5,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        status = client.get("/categories/auto-classify-status")
+
+        assert status.status_code == 200
+        assert status.json()["result"]["status"] == "running"
+        assert status.json()["result"]["source_category"] == "shared_file"
+        assert status.json()["result"]["remaining_count"] == 5
+
+    def test_auto_classify_failure(self, client, mock_bm, mock_cat):
+        mock_cat.get_all_mappings.return_value = {"2_science": ["과학"]}
+        mock_bm.auto_classify_category.return_value = ({}, "잘못된 카테고리 경로입니다")
+
+        r = client.post("/categories/auto-classify", json={"category": "../bad"})
+
+        assert r.status_code == 200
+        assert r.json()["status"] == "failure"
+        assert r.json()["error"] == "잘못된 카테고리 경로입니다"
+
+    def test_auto_classify_comics_prefix_uses_comic_mapping(self, client, mock_cm, mock_cat):
+        mappings = {"2_science": ["SF"]}
+        result = {"source_category": "0_inbox", "moved_count": 2, "skipped_count": 0, "failed_count": 0}
+        mock_cat.get_all_mappings.return_value = mappings
+        mock_cm.auto_classify_category.return_value = (result, None)
+
+        r = client.post("/comics/categories/auto-classify", json={"category": "0_inbox"})
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": result}
+        mock_cat.get_all_mappings.assert_called_once_with(content_type="comic")
+        mock_cm.auto_classify_category.assert_awaited_once_with(
+            "0_inbox",
+            mappings,
+            content_type="comic",
+            recursive=False,
+            dry_run=False,
+        )
+
+    def test_auto_classify_with_deterministic_options(self, client, mock_bm, mock_cat):
+        mappings = {"1_general": ["상식"]}
+        result = {"source_category": "0_inbox", "moved_count": 1, "skipped_count": 0, "failed_count": 0}
+        mock_cat.get_all_mappings.return_value = mappings
+        mock_bm.auto_classify_category.return_value = (result, None)
+
+        r = client.post(
+            "/categories/auto-classify",
+            json={
+                "category": "0_inbox",
+                "clean_existing": True,
+                "use_bookstore": False,
+                "use_content_meta": True,
+                "delay": 2.0,
+            },
+        )
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "success", "result": result}
+        mock_bm.auto_classify_category.assert_awaited_once_with(
+            "0_inbox",
+            mappings,
+            content_type="book",
+            recursive=False,
+            dry_run=False,
+            clean_existing=True,
+            use_bookstore=False,
+            use_content_meta=True,
+            delay=2.0,
+        )
+
     def test_index_file_success(self, client, mock_bm):
         mock_bm.index_single_file.return_value = (42, None)
         r = client.post("/category-mismatches/index-file", json={"file_path": "_epub/test.epub"})

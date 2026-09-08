@@ -107,6 +107,45 @@ describe("Navigation Component", () => {
     expect(fetch).toHaveBeenCalledWith("/api/auth/me", expect.anything());
   });
 
+  it("최상위 탭을 구분자 문자 없이 현대적인 탭 class로 렌더링한다", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "success",
+        result: { role: "admin", name: "Test User", email: "test@example.com" },
+      }),
+    });
+
+    const { container } = render(
+      <MemoryRouter initialEntries={["/book-view"]}>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("관리");
+
+    const topTabs = container.querySelector(".textmgmt-top-tabs");
+    expect(topTabs).toBeTruthy();
+    expect(topTabs.textContent).not.toContain("|");
+
+    const tabLinks = Array.from(
+      topTabs.querySelectorAll(".textmgmt-top-tab"),
+    );
+    expect(tabLinks.map((link) => link.textContent)).toEqual([
+      "책",
+      "최신 책",
+      "만화",
+      "최신 만화",
+      "책 편집",
+      "만화 편집",
+      "관리",
+    ]);
+    expect(
+      screen.getByRole("link", { name: "책" }).classList.contains("active"),
+    ).toBe(true);
+  });
+
   it("handles login success", async () => {
     // Initial session check fails
     fetch.mockResolvedValueOnce({ ok: false });

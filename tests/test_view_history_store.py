@@ -1,7 +1,10 @@
+import logging
 import time
+from contextlib import contextmanager
 
 import pytest
 
+import backend.view_history_store as view_history_store_mod
 from backend.view_history_store import MAX_RECENT_VIEWS, ViewHistoryStore, create_view_history_store
 
 
@@ -138,6 +141,142 @@ def test_snapshot_survives_when_source_book_is_gone(store):
 def test_rejects_unknown_content_type(store):
     with pytest.raises(ValueError, match="content_type"):
         store.record_view(email="a@example.com", content_type="magazine", book_id=1, title="x")
+
+
+def test_record_view_rolls_back_and_reraises_on_db_error():
+    class FailingCursor:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, *_args):
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("trim failed")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeConn:
+        def __init__(self):
+            self.cursor_obj = FailingCursor()
+            self.began = False
+            self.committed = False
+            self.rolled_back = False
+
+        def begin(self):
+            self.began = True
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            self.rolled_back = True
+
+    store = ViewHistoryStore.__new__(ViewHistoryStore)
+    conn = FakeConn()
+
+    @contextmanager
+    def fake_connection():
+        yield conn
+
+    store._get_connection = fake_connection
+
+    with pytest.raises(RuntimeError, match="trim failed"):
+        store.record_view(
+            email="a@example.com",
+            content_type="book",
+            book_id=1,
+            title="책",
+        )
+
+    assert conn.began is True
+    assert conn.committed is False
+    assert conn.rolled_back is True
+
+
+def test_list_recent_views_warns_and_skips_unknown_content_type(monkeypatch, caplog):
+    class RowsCursor:
+        def __init__(self, rows):
+            self.rows = rows
+            self.executed = []
+
+        def execute(self, sql, params):
+            self.executed.append((sql, params))
+
+        def fetchall(self):
+            return self.rows
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeConn:
+        def __init__(self, rows):
+            self.cursor_obj = RowsCursor(rows)
+
+        def cursor(self):
+            return self.cursor_obj
+
+    rows = [
+        {
+            "email": "book@example.com",
+            "content_type": "magazine",
+            "book_id": 1,
+            "title": "잡지",
+            "category": "",
+            "viewed_at": 20,
+        },
+        {
+            "email": "book@example.com",
+            "content_type": "book",
+            "book_id": 2,
+            "title": "책",
+            "category": "소설",
+            "viewed_at": 10,
+        },
+    ]
+    store = ViewHistoryStore.__new__(ViewHistoryStore)
+    conn = FakeConn(rows)
+
+    @contextmanager
+    def fake_connection():
+        yield conn
+
+    store._get_connection = fake_connection
+    monkeypatch.setattr(view_history_store_mod, "MAX_HISTORY_ROWS", len(rows))
+    caplog.set_level(logging.WARNING, logger=view_history_store_mod.LOGGER.name)
+
+    result = store.list_recent_views()
+
+    assert conn.cursor_obj.executed[0][1] == (len(rows),)
+    assert result == {
+        "limit": MAX_RECENT_VIEWS,
+        "users": [
+            {
+                "email": "book@example.com",
+                "last_viewed_at": 10,
+                "book": [
+                    {
+                        "book_id": 2,
+                        "title": "책",
+                        "category": "소설",
+                        "viewed_at": 10,
+                    }
+                ],
+                "comic": [],
+            }
+        ],
+    }
+    assert "조회 이력이 상한" in caplog.text
+    assert "알 수 없는 content_type" in caplog.text
 
 
 def test_empty_store_returns_no_users(store):
