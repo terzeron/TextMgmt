@@ -1246,3 +1246,77 @@ def test_kyobo_bookstore_links_and_info():
     assert info["author"] == "교보 작가"
     assert info["category"] == "소설 > 한국소설"
     assert info["isbn"] == "9788934900011"
+
+
+def test_save_html_to_tmp_disk_and_exception_branches():
+    from collections import namedtuple
+    from unittest.mock import patch
+    from backend.bookstore import Yes24Bookstore
+
+    store = Yes24Bookstore(verbose=True)
+    DiskUsage = namedtuple("DiskUsage", ["total", "used", "free"])
+
+    # 202: free < 500MB -> 저장 건너뜀
+    with patch("shutil.disk_usage", return_value=DiskUsage(1000, 900, 100 * 1024 * 1024)):
+        with patch("builtins.open") as mock_open:
+            store._save_html_to_tmp("<html></html>", "https://example.com/1")
+            mock_open.assert_not_called()
+
+    # 203-204: disk_usage 예외 발생 시 pass
+    with patch("shutil.disk_usage", side_effect=Exception("Disk check failed")):
+        with patch("builtins.open") as mock_open:
+            store._save_html_to_tmp("<html></html>", "https://example.com/2")
+            mock_open.assert_called_once()
+
+    # 214-215: OSError(errno=28, No space left on device)
+    err28 = OSError("No space left")
+    err28.errno = 28
+    with patch("builtins.open", side_effect=err28):
+        store._save_html_to_tmp("<html></html>", "https://example.com/3")
+
+    # 218-219: 기타 Exception
+    with patch("builtins.open", side_effect=RuntimeError("Unexpected")):
+        store._save_html_to_tmp("<html></html>", "https://example.com/4")
+
+
+def test_kyobo_urls_and_fallback_links_and_title():
+    from backend.bookstore import KyoboBookstore
+
+    store = KyoboBookstore(verbose=True)
+
+    # 867-868: build_search_url
+    url = store.build_search_url("삼국지")
+    assert "keyword=%EC%82%BC%EA%B5%AD%EC%A7%80" in url
+
+    # 871: build_isbn_search_url
+    isbn_url = store.build_isbn_search_url("9788934900011")
+    assert "keyword=9788934900011" in isbn_url
+
+    # 886-894: extract_search_links fallback to a[href*="/detail/"] with verbose=True
+    html_fallback = """
+    <html>
+      <div>
+        <a href="https://product.kyobobook.co.kr/detail/S00001">상세1</a>
+        <a href="https://ebook-product.kyobobook.co.kr/detail/E00002">상세2</a>
+      </div>
+    </html>
+    """
+    soup_fb = BeautifulSoup(html_fallback, "html.parser")
+    links = store.extract_search_links(soup_fb)
+    assert len(links) == 2
+
+    # 903-904: extract_book_info title from soup.title.string
+    html_title_only = """
+    <html>
+      <head>
+        <title>교보문고 상세 도서 | 교보문고</title>
+      </head>
+      <body>
+        <span class="author rep">김작가</span>
+      </body>
+    </html>
+    """
+    soup_title = BeautifulSoup(html_title_only, "html.parser")
+    info = store.extract_book_info(soup_title)
+    assert info["title"] == "교보문고 상세 도서"
+    assert info["author"] == "김작가"

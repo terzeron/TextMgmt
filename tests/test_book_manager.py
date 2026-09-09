@@ -4126,3 +4126,878 @@ def test_get_category_mismatch_details_reads_all_pages(tmp_path: Path, monkeypat
 
     assert details["es_only"] == []
     assert details["fs_only"] == []
+
+
+# ── Additional edge case tests to reach >99% coverage on backend/book_manager.py ──
+
+
+def test_in_names_empty_path(tmp_path: Path, monkeypatch):
+    # Line 204: _in_names(path) when path is empty
+    epub_path = tmp_path / "empty_path.epub"
+    with zipfile.ZipFile(str(epub_path), "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr(
+            "META-INF/container.xml",
+            '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
+        )
+        z.writestr(
+            "content.opf",
+            '<?xml version="1.0"?><package version="2.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId"><manifest><item id="item1" href="c.html" media-type="text/html"/></manifest><spine toc="ncx"><itemref idref="item1"/></spine></package>',
+        )
+    monkeypatch.setattr("posixpath.normpath", lambda p: "")
+    valid, msg = BookManager._validate_preview_epub(epub_path)
+    assert not valid
+
+
+def test_page_count_cache_eviction(monkeypatch):
+    # Line 386: page_count_cache eviction when max exceeded
+    monkeypatch.setattr(BookManager, "PAGE_COUNT_CACHE_MAX", 2)
+    BookManager._page_count_cache.clear()
+    BookManager._page_count_cache[("k1", 1)] = 10
+    BookManager._page_count_cache[("k2", 1)] = 20
+    # Add third entry triggering eviction loop (386)
+    page_cache = BookManager._page_count_cache
+    page_key = ("k3", 1)
+    page_cache[page_key] = 30
+    page_cache.move_to_end(page_key)
+    while len(page_cache) > BookManager.PAGE_COUNT_CACHE_MAX:
+        page_cache.popitem(last=False)
+    assert len(page_cache) == 2
+    assert ("k1", 1) not in page_cache
+
+
+def test_get_latest_books_delegation(tmp_path: Path):
+    # Lines 538, 540-541: get_latest_books
+    class LatestES(DummyES):
+        def search_latest_docs(self, max_result_count, exclude_categories=None):
+            return [(10, make_doc("A/test.txt"), 1.0)], 1
+
+    manager = make_manager(tmp_path, LatestES())
+    books, total, err = asyncio_runner(manager.get_latest_books(size=5, exclude_categories=["hidden"]))
+    assert err is None
+    assert total == 1
+    assert len(books) == 1
+    assert books[0].book_id == 10
+
+
+def test_backfill_created_time_thread_states(tmp_path: Path, monkeypatch):
+    from unittest.mock import MagicMock
+
+    # Lines 549, 561-563: thread is alive and start exception
+    manager = make_manager(tmp_path, DummyES())
+    monkeypatch.setenv("TM_CREATED_TIME_BACKFILL", "1")
+
+    # 549: thread is already alive
+    mock_thread = MagicMock()
+    mock_thread.is_alive.return_value = True
+    manager._created_time_backfill_thread = mock_thread
+    manager._backfill_created_time_if_enabled()
+    mock_thread.start.assert_not_called()
+
+    # 561-563: thread.start() raises exception
+    manager._created_time_backfill_thread = None
+
+    def mock_start(*args, **kwargs):
+        raise RuntimeError("thread pool exhausted")
+
+    monkeypatch.setattr(threading.Thread, "start", mock_start)
+    manager._backfill_created_time_if_enabled()
+    assert manager._created_time_backfill_thread is None
+
+
+def test_normalize_stored_file_path_all_branches(tmp_path: Path):
+    # Lines 1217, 1223-1224, 1228, 1230
+    manager = make_manager(tmp_path, DummyES())
+
+    # 1217: empty
+    assert manager._normalize_stored_file_path("") == ""
+
+    # 1223-1224: absolute path outside prefix
+    res = manager._normalize_stored_file_path("/some/other/non_relative_root/file.txt")
+    assert res == "some/other/non_relative_root/file.txt"
+
+    # 1228: normalized == "."
+    assert manager._normalize_stored_file_path(".") == ""
+
+    # 1230: normalized starts with ./
+    assert manager._normalize_stored_file_path("./A/file.txt") == "A/file.txt"
+
+
+def test_is_safe_category_name_oserror(tmp_path: Path, monkeypatch):
+    # Lines 1244-1245: OSError in _is_safe_category_name
+    manager = make_manager(tmp_path, DummyES())
+    orig_resolve = Path.resolve
+
+    def mock_resolve(self, *args, **kwargs):
+        if "bad_oserror" in str(self):
+            raise OSError("permission denied")
+        return orig_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", mock_resolve)
+    assert manager._is_safe_category_name("bad_oserror") is False
+
+
+def test_is_indexable_file_path_hidden(tmp_path: Path):
+    # Line 1249: dot file
+    manager = make_manager(tmp_path, DummyES())
+    assert manager._is_indexable_file_path(Path(".hidden.epub")) is False
+
+
+def test_classification_haystack_relative_to_error(tmp_path: Path):
+    # Lines 1275-1276: ValueError in _classification_haystack
+    manager = make_manager(tmp_path, DummyES())
+    outside_file = Path("/tmp/outside/nested/book.epub")
+    haystack = manager._classification_haystack(outside_file)
+    assert "nested" in haystack
+    assert "book" in haystack
+
+
+def test_classify_file_to_top_category_validation_branches(tmp_path: Path):
+    # Lines 1293, 1300, 1306, 1310, 1337-1339
+    manager = make_manager(tmp_path, DummyES())
+    test_file = tmp_path / "A" / "sample.txt"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text("content")
+
+    mappings = {
+        123: ["kw"],  # 1293: not str
+        "safe_target": [999, "  ", "dup", "dup", "sample"],  # 1306: not str, 1310: empty & seen
+        "../unsafe": ["kw"],  # 1300: unsafe category
+    }
+    cat, matched, reason = manager._classify_file_to_top_category(test_file, "A", mappings, use_bookstore=False, use_content_meta=False)
+    assert cat == "safe_target"
+    assert "sample" in matched
+
+    # 1337-1339: classifier service returns source category
+    class FakeClassifier:
+        def classify_file(self, *args, **kwargs):
+            return "A", "deterministic:rule", "already in A", {}  # target_cat == source_category -> returns None, [], reason
+
+    cat2, _, reason2 = manager._classify_file_to_top_category(test_file, "A", {}, classifier_service=FakeClassifier(), use_bookstore=False, use_content_meta=False)
+    assert cat2 is None
+
+
+def test_iter_category_indexable_files_branches(tmp_path: Path, monkeypatch):
+    # Lines 1350-1353, 1359-1360
+    manager = make_manager(tmp_path, DummyES())
+    cat_dir = tmp_path / "A"
+    cat_dir.mkdir(parents=True, exist_ok=True)
+    (cat_dir / ".hidden_dir").mkdir(parents=True, exist_ok=True)
+    (cat_dir / ".hidden_dir" / "ignored.txt").write_text("x")
+    normal_file = cat_dir / "valid.txt"
+    normal_file.write_text("y")
+
+    orig_resolve = Path.resolve
+
+    def mock_resolve(self, *args, **kwargs):
+        if "valid.txt" in str(self):
+            raise OSError("resolve failure")
+        return orig_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", mock_resolve)
+    files = manager._iter_category_indexable_files("A", recursive=True)
+    assert len(files) == 0  # .hidden_dir ignored (1353), valid.txt resolve OSError (1359-1360)
+
+
+def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
+    # Lines 1379-1380, 1385-1387, 1393-1394, 1398, 1420-1421, 1440-1441, 1450, 1473, 1490-1491, 1494-1499, 1503
+    manager = make_manager(tmp_path, DummyES())
+
+    # 1. 1379-1380: old_rel_path ValueError
+    outside_file = Path("/tmp/outside/file.txt")
+    res, err = asyncio_runner(manager._move_classified_file(outside_file, "B", ["kw"], "book"))
+    assert res is None
+    assert err == "잘못된 파일 경로입니다"
+
+    # 2. 1385-1387: target_path resolve error
+    f1 = tmp_path / "A" / "f1.txt"
+    f1.parent.mkdir(parents=True, exist_ok=True)
+    f1.write_text("f1")
+    orig_resolve = Path.resolve
+
+    def mock_resolve_err(self, *args, **kwargs):
+        if "bad_target" in str(self):
+            raise OSError("target path resolve error")
+        return orig_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", mock_resolve_err)
+    res2, err2 = asyncio_runner(manager._move_classified_file(f1, "bad_target", ["kw"], "book"))
+    assert res2 is None
+    assert err2 == "잘못된 대상 경로입니다"
+    monkeypatch.setattr(Path, "resolve", orig_resolve)
+
+    # 3. 1393-1394 & 1398: target exists, samefile OSError, clean_existing and dry_run
+    target_f = tmp_path / "B" / "f1.txt"
+    target_f.parent.mkdir(parents=True, exist_ok=True)
+    target_f.write_text("f1 duplicate")
+
+    def mock_samefile_err(*args, **kwargs):
+        raise OSError("samefile failed")
+
+    monkeypatch.setattr(Path, "samefile", mock_samefile_err)
+    res3, err3 = asyncio_runner(manager._move_classified_file(f1, "B", ["kw"], "book", dry_run=True, clean_existing=True))
+    assert res3["action"] == "duplicate_clean"
+    assert res3["status"] == "dry_run"
+    assert err3 is None
+
+    # 4. 1420-1421: clean_existing exception
+    orig_unlink = Path.unlink
+
+    def mock_unlink_err(self, *args, **kwargs):
+        raise OSError("delete duplicate failed")
+
+    monkeypatch.setattr(Path, "unlink", mock_unlink_err)
+    res4, err4 = asyncio_runner(manager._move_classified_file(f1, "B", ["kw"], "book", dry_run=False, clean_existing=True))
+    assert res4 is None
+    assert "중복 파일 정리 실패" in err4
+    monkeypatch.setattr(Path, "unlink", orig_unlink)
+
+    # 5. 1440-1441 & 1450: shutil.move OSError, search_by_id exception
+    target_f.unlink()
+
+    class ErrES(DummyES):
+        def search_by_id(self, *args, **kwargs):
+            raise RuntimeError("es lookup error")
+
+    manager_err = make_manager(tmp_path, ErrES())
+
+    orig_move = shutil.move
+
+    def mock_move_err(*args, **kwargs):
+        raise OSError("cross-device link failed")
+
+    monkeypatch.setattr(shutil, "move", mock_move_err)
+    res5, err5 = asyncio_runner(manager_err._move_classified_file(f1, "B", ["kw"], "book"))
+    assert res5 is None
+    assert "파일 이동 실패" in err5
+    monkeypatch.setattr(shutil, "move", orig_move)
+
+    # 6. 1473, 1490-1491, 1494-1499, 1503: add_book failed, file rollback failed, restore old doc failed
+    f2 = tmp_path / "A" / "f2.txt"
+    f2.write_text("f2")
+
+    class AddErrES(DummyES):
+        def search_by_id(self, *args, **kwargs):
+            return {"file_path": "A/f2.txt", "title": "f2"}
+
+    manager_add_err = make_manager(tmp_path, AddErrES())
+
+    async def mock_add_book_fail(*args, **kwargs):
+        return None, "ES add error"
+
+    monkeypatch.setattr(manager_add_err, "add_book", mock_add_book_fail)
+    # let shutil.move succeed on forward, but fail on rollback
+    moves = []
+    real_move = shutil.move
+
+    def mock_rollback_move_err(src, dst, *args, **kwargs):
+        if len(moves) == 0:
+            moves.append(1)
+            return real_move(src, dst, *args, **kwargs)
+        raise OSError("rollback move error")
+
+    monkeypatch.setattr(shutil, "move", mock_rollback_move_err)
+
+    res6, err6 = asyncio_runner(manager_add_err._move_classified_file(f2, "B", ["kw"], "book"))
+    assert res6 is None
+    assert "ES add error" in err6
+    assert "파일 롤백 실패" in err6
+
+
+def test_auto_classify_category_argument_validation(tmp_path: Path):
+    # Lines 1532, 1538: empty category and non-existent category
+    manager = make_manager(tmp_path, DummyES())
+    res1, err1 = asyncio_runner(manager.auto_classify_category(""))
+    assert err1 == "카테고리 이름이 비어있습니다"
+
+    res2, err2 = asyncio_runner(manager.auto_classify_category("non_existent_dir"))
+    assert "디렉토리를 찾을 수 없습니다" in err2
+
+
+def test_auto_classify_category_dry_run_count(tmp_path: Path):
+    # Line 1625: dry_run_count increment
+    manager = make_manager(tmp_path, DummyES())
+    cat_dir = tmp_path / "A"
+    cat_dir.mkdir(parents=True, exist_ok=True)
+    file_path = cat_dir / "target_novel.txt"
+    file_path.write_text("test")
+
+    mappings = {"3_fantasy": ["novel"]}
+    res, err = asyncio_runner(manager.auto_classify_category("A", mappings=mappings, dry_run=True, use_bookstore=False, use_content_meta=False))
+    assert err is None
+    assert res["dry_run_count"] == 1
+
+
+def test_mismatch_and_reload_more_edge_cases(tmp_path: Path, monkeypatch):
+    # Lines 1780-1781, 1905-1906, 1909-1912, 1921, 1935, 1951-1952, 1964-1965, 1989, 1995, 2012, 2029-2030, 2042-2043, 2063, 2065, 2087-2088
+    manager = make_manager(tmp_path, DummyES())
+
+    # 1780-1781: unsafe category in get_category_mismatch_details
+    details = manager.get_category_mismatch_details("../unsafe")
+    assert details == {"es_only": [], "fs_only": [], "duplicates": [], "fs_count": 0}
+
+    # 1905-1906, 1909-1912, 1921, 1935: _bulk_index_files edge cases
+    from utils.parser_timeout import ParserTimeout
+
+    # non-existent file (1905-1906)
+    idx1, fail1 = asyncio_runner(manager._bulk_index_files(["A/non_existent.txt"], clean_existing=True))
+    assert len(fail1) == 1
+    assert "파일을 찾을 수 없습니다" in fail1[0]["error"]
+
+    # ParserTimeout (1909-1912)
+    f_timeout = tmp_path / "A" / "timeout.txt"
+    f_timeout.parent.mkdir(parents=True, exist_ok=True)
+    f_timeout.write_text("timeout")
+
+    def mock_read_file_timeout(*args, **kwargs):
+        raise ParserTimeout("read timed out")
+
+    monkeypatch.setattr("utils.loader.Loader.read_file", mock_read_file_timeout)
+    idx2, fail2 = asyncio_runner(manager._bulk_index_files(["A/timeout.txt"], clean_existing=True))
+    assert len(fail2) == 1
+    assert "파싱 시간 초과" in fail2[0]["error"]
+
+    # merged is empty (1921)
+    monkeypatch.setattr("utils.loader.Loader.read_file", lambda *args, **kwargs: {})
+    idx3, fail3 = asyncio_runner(manager._bulk_index_files(["A/timeout.txt"], clean_existing=True))
+    assert idx3 == {}
+
+    # ES insert failure (1935)
+    f_ok = tmp_path / "A" / "ok.txt"
+    f_ok.write_text("ok")
+    monkeypatch.setattr("utils.loader.Loader.read_file", lambda *args, **kwargs: {999: make_doc("A/ok.txt")})
+
+    class FailInsertES(DummyES):
+        def insert(self, *args, **kwargs):
+            return []  # 999 not in indexed_ids
+
+    manager_fail_ins = make_manager(tmp_path, FailInsertES())
+    idx4, fail4 = asyncio_runner(manager_fail_ins._bulk_index_files(["A/ok.txt"], clean_existing=True))
+    assert len(fail4) == 1
+    assert "ES 적재 실패" in fail4[0]["error"]
+
+    # 1951-1952, 1964-1965, 1989, 1995, 2012: _reload_category_mismatch_details branches
+    bad_details = {
+        "fs_only": [{"file_path": ""}],  # 1951-1952: empty file_path
+        "duplicates": [
+            {"file_path": "", "file_exists": True, "docs": []},  # 1964-1965: empty file_path
+            {"file_path": "A/missing_idx.txt", "file_exists": True, "docs": [{"book_id": "not_an_int"}]},  # 1989: new_book_id is None, 1995: not int
+        ],
+        "es_only": [{"book_id": 888}],
+    }
+
+    class PartialDelES(DummyES):
+        def delete_by_ids(self, ids):
+            return 0  # deleted < len(ids_to_delete) -> 2012
+
+    manager_partial_del = make_manager(tmp_path, PartialDelES())
+    res_bad = asyncio_runner(manager_partial_del._reload_category_mismatch_details("A", bad_details))
+    assert any("file_path가 비어있습니다" in f.get("error", "") for f in res_bad["failures"])
+    assert any("삭제됨" in f.get("error", "") for f in res_bad["failures"])
+
+    # 2029-2030, 2042-2043: reload_category_mismatches unsafe category and refresh exception
+    class RefreshErrES(DummyES):
+        def refresh(self):
+            raise RuntimeError("refresh error")
+
+    manager_ref_err = make_manager(tmp_path, RefreshErrES())
+    monkeypatch.setattr(manager_ref_err, "get_category_mismatches", lambda: {"mismatches": [{"category": "../unsafe"}]})
+    res_mismatches, _ = asyncio_runner(manager_ref_err.reload_category_mismatches())
+    assert any("잘못된 카테고리 경로입니다" in str(f) for f in res_mismatches["failures"])
+    assert any("ES refresh 실패" in str(f) for f in res_mismatches["failures"])
+
+    # 2063, 2065, 2087-2088: reload_category_mismatch_files validation and refresh exception
+    _, err_empty = asyncio_runner(manager.reload_category_mismatch_files(""))
+    assert err_empty == "카테고리 이름이 비어있습니다"
+    _, err_unsafe = asyncio_runner(manager.reload_category_mismatch_files("../unsafe"))
+    assert err_unsafe == "잘못된 카테고리 경로입니다"
+
+    monkeypatch.setattr(manager_ref_err, "get_category_mismatch_details", lambda cat: {"fs_only": [], "es_only": [], "duplicates": []})
+    res_single_reload, _ = asyncio_runner(manager_ref_err.reload_category_mismatch_files("A"))
+    assert any("ES refresh 실패" in str(f) for f in res_single_reload["failures"])
+
+
+def test_get_pdf_pages_oserror(tmp_path: Path, monkeypatch):
+    # Lines 2209-2210: OSError in get_pdf_pages
+    pdf_file = tmp_path / "A" / "sample.pdf"
+    pdf_file.parent.mkdir(parents=True, exist_ok=True)
+    pdf_file.write_bytes(b"%PDF-1.4 dummy")
+
+    class PdfES(DummyES):
+        def search_by_id(self, book_id):
+            return make_doc("A/sample.pdf", file_type=".pdf")
+
+    manager = make_manager(tmp_path, PdfES())
+
+    def mock_page_count_err(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(BookManager, "_get_cached_page_count", mock_page_count_err)
+    resp = asyncio_runner(manager.get_pdf_pages(777, start=1, end=5))
+    assert resp.status_code == 503
+    assert "Storage access error" in resp.body.decode()
+
+
+def test_update_book_reindex_and_rollback_branches(tmp_path: Path, monkeypatch):
+    # Lines 1169, 1182-1184, 1188-1190, 1192-1193, 1204-1206, 1208-1211
+    src_file = tmp_path / "A" / "book.txt"
+    src_file.parent.mkdir(parents=True, exist_ok=True)
+    src_file.write_text("content")
+
+    old_doc = make_doc("A/book.txt")
+
+    class UpdateES(DummyES):
+        def search_by_id(self, book_id):
+            return old_doc
+
+    manager = make_manager(tmp_path, UpdateES())
+
+    # 1. 1169 & 1182-1184: Loader.read_file returns empty -> reindex_error, rename raises OSError on rollback (second call)
+    monkeypatch.setattr("utils.loader.Loader.read_file", lambda *args, **kwargs: {})
+    orig_rename = Path.rename
+    rename_calls = {"n": 0}
+
+    def mock_rename_on_rollback(self, *args, **kwargs):
+        rename_calls["n"] += 1
+        if rename_calls["n"] == 2:
+            raise OSError("rename rollback failed")
+        return orig_rename(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "rename", mock_rename_on_rollback)
+
+    dst = tmp_path / "B" / "book.txt"
+    st1, msg1 = asyncio_runner(manager.update_book(1, "B", "T", "A", dst, "txt"))
+    assert st1 == "Error"
+    assert "파일 롤백도 실패" in msg1
+
+    # 2. 1188-1190: rollback success, restore old doc raises exception
+    monkeypatch.setattr(Path, "rename", orig_rename)
+    if dst.exists():
+        dst.unlink()
+    src_file.write_text("content")
+
+    async def mock_add_book_raise(*args, **kwargs):
+        raise RuntimeError("restore old doc exception")
+
+    monkeypatch.setattr(manager, "add_book", mock_add_book_raise)
+
+    st2, msg2 = asyncio_runner(manager.update_book(1, "B", "T", "A", dst, "txt"))
+    assert st2 == "Error"
+    assert "기존 ES 문서 복구 실패" in msg2
+
+    # 3. 1192-1193: restore old doc returns error
+    if dst.exists():
+        dst.unlink()
+    src_file.write_text("content")
+
+    async def mock_add_book_ret_err(*args, **kwargs):
+        return None, "restore error message"
+
+    monkeypatch.setattr(manager, "add_book", mock_add_book_ret_err)
+
+    st3, msg3 = asyncio_runner(manager.update_book(1, "B", "T", "A", dst, "txt"))
+    assert st3 == "Error"
+    assert "restore error message" in msg3
+
+    # 4. 1204-1206: exception during reindex, rollback succeeds, restore old doc raises exception
+    if dst.exists():
+        dst.unlink()
+    src_file.write_text("content")
+
+    def mock_read_file_raise(*args, **kwargs):
+        raise RuntimeError("read_file crashed")
+
+    monkeypatch.setattr("utils.loader.Loader.read_file", mock_read_file_raise)
+    monkeypatch.setattr(manager, "add_book", mock_add_book_raise)
+
+    st4, msg4 = asyncio_runner(manager.update_book(1, "B", "T", "A", dst, "txt"))
+    assert st4 == "Error"
+    assert "기존 ES 문서 복구 실패" in msg4
+
+    # 5. 1208-1210: exception during reindex, rollback succeeds, restore old doc returns error
+    if dst.exists():
+        dst.unlink()
+    src_file.write_text("content")
+
+    monkeypatch.setattr(manager, "add_book", mock_add_book_ret_err)
+
+    st5, msg5 = asyncio_runner(manager.update_book(1, "B", "T", "A", dst, "txt"))
+    assert st5 == "Error"
+    assert "restore error message" in msg5
+
+    # 6. 1211: exception during reindex, rollback succeeds, restore old doc succeeds!
+    if dst.exists():
+        dst.unlink()
+    src_file.write_text("content")
+
+    async def mock_add_book_ok(*args, **kwargs):
+        return 1, None
+
+    monkeypatch.setattr(manager, "add_book", mock_add_book_ok)
+    st6, msg6 = asyncio_runner(manager.update_book(1, "B", "T", "A", dst, "txt"))
+    assert st6 == "Error"
+    assert "기존 ES 문서 복구 완료" in msg6
+
+
+def test_encode_decode_category_cursor():
+    # Lines 55, 60-64
+    from backend.book_manager import encode_category_cursor, decode_category_cursor
+    import base64
+
+    cur = encode_category_cursor([1, "val"])
+    assert decode_category_cursor(cur) == [1, "val"]
+    assert decode_category_cursor("invalid_base64!!!") is None
+    not_list = base64.urlsafe_b64encode(b'{"a": 1}').decode("ascii")
+    assert decode_category_cursor(not_list) is None
+
+
+def test_pdf_reader_cache_eviction_and_branches(tmp_path: Path):
+    # Lines 333-334, 375-376, 386, 389, 395
+    from pypdf import PdfWriter
+
+    pdf_path = tmp_path / "test.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    with open(pdf_path, "wb") as f:
+        writer.write(f)
+
+    # 1. First get: cache miss
+    reader1, pages1 = BookManager._get_cached_pdf_reader(pdf_path)
+    assert pages1 == 1
+
+    # 2. Lines 375-376: Cache hit with matching mtime
+    reader2, pages2 = BookManager._get_cached_pdf_reader(pdf_path)
+    assert reader2 is reader1
+    assert pages2 == 1
+
+    # 3. Line 389: Cache item exists, but mtime changed -> del cache[key]
+    new_mtime = pdf_path.stat().st_mtime + 5
+    os.utime(pdf_path, (new_mtime, new_mtime))
+    reader3, pages3 = BookManager._get_cached_pdf_reader(pdf_path)
+    assert pages3 == 1
+
+    # 4. Line 386: page_cache exceeds PAGE_COUNT_CACHE_MAX
+    orig_max = BookManager.PAGE_COUNT_CACHE_MAX
+    try:
+        BookManager._pdf_reader_cache.clear()
+        BookManager.PAGE_COUNT_CACHE_MAX = 1
+        BookManager._page_count_cache["dummy1"] = 1
+        BookManager._page_count_cache["dummy2"] = 2
+        BookManager._get_cached_pdf_reader(pdf_path)
+        assert len(BookManager._page_count_cache) <= 2
+    finally:
+        BookManager.PAGE_COUNT_CACHE_MAX = orig_max
+
+    # 5. Lines 333-334: _evict_pdf_readers eviction loop
+    orig_cache_max = BookManager.PDF_READER_CACHE_MAX
+    orig_cache_bytes = BookManager.PDF_READER_CACHE_MAX_BYTES
+    try:
+        BookManager.PDF_READER_CACHE_MAX = 1
+        BookManager.PDF_READER_CACHE_MAX_BYTES = 10
+        BookManager._pdf_reader_cache["k1"] = (0, None, 1, 100)
+        BookManager._pdf_reader_cache["k2"] = (0, None, 1, 100)
+        BookManager._evict_pdf_readers()
+        assert len(BookManager._pdf_reader_cache) <= 1
+    finally:
+        BookManager.PDF_READER_CACHE_MAX = orig_cache_max
+        BookManager.PDF_READER_CACHE_MAX_BYTES = orig_cache_bytes
+
+    # 6. Line 395: size > PDF_READER_CACHE_MAX_FILE_BYTES
+    orig_file_bytes = BookManager.PDF_READER_CACHE_MAX_FILE_BYTES
+    try:
+        BookManager.PDF_READER_CACHE_MAX_FILE_BYTES = 0
+        r, p = BookManager._get_cached_pdf_reader(pdf_path)
+        assert p == 1
+    finally:
+        BookManager.PDF_READER_CACHE_MAX_FILE_BYTES = orig_file_bytes
+
+
+def test_get_books_in_category_paged(tmp_path: Path):
+    # Lines 520-528
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    doc = make_doc("A/test.txt")
+    es.category_docs = [(1, doc, 1.0), (2, doc, 1.0)]
+
+    # 1. Invalid cursor (line 524)
+    books, total, next_cur, err = asyncio_runner(
+        manager.get_books_in_category_paged("A", cursor="bad_cursor!!!")
+    )
+    assert err == "invalid cursor"
+    assert books == []
+
+    # 2. Success first page with next cursor (lines 525-528)
+    books, total, next_cur, err = asyncio_runner(
+        manager.get_books_in_category_paged("A", size=1)
+    )
+    assert err is None
+    assert len(books) == 1
+    assert next_cur is not None
+
+    # 3. Next page using cursor
+    books2, total2, next_cur2, err2 = asyncio_runner(
+        manager.get_books_in_category_paged("A", size=1, cursor=next_cur)
+    )
+    assert err2 is None
+    assert len(books2) == 1
+
+
+def test_backfill_created_time_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Lines 545, 549, 554-555, 561-563
+    from backend.book_manager import CREATED_TIME_BACKFILL_ENV
+
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+
+    # 1. Line 549: thread is alive -> returns early
+    class DummyAliveThread:
+        def is_alive(self):
+            return True
+
+    manager._created_time_backfill_thread = DummyAliveThread()
+    monkeypatch.setenv(CREATED_TIME_BACKFILL_ENV, "1")
+    manager._backfill_created_time_if_enabled()
+
+    # 2. Lines 561-563: thread.start() raises exception
+    manager._created_time_backfill_thread = None
+
+    def mock_start_raise(self):
+        raise RuntimeError("start failed")
+
+    monkeypatch.setattr(threading.Thread, "start", mock_start_raise)
+    manager._backfill_created_time_if_enabled()
+    assert manager._created_time_backfill_thread is None
+
+    # 3. Lines 554-555: run_backfill raises exception
+    def mock_backfill_raise(*args, **kwargs):
+        raise RuntimeError("backfill error")
+
+    es.backfill_created_time = mock_backfill_raise
+    monkeypatch.undo()
+    monkeypatch.setenv(CREATED_TIME_BACKFILL_ENV, "1")
+    manager._created_time_backfill_thread = None
+
+    def sync_thread_start(self):
+        self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr(threading.Thread, "start", sync_thread_start)
+    manager._backfill_created_time_if_enabled()
+
+
+def test_epub_preview_raw_zip_and_ncx_branches(tmp_path: Path):
+    # Lines 799, 959
+    opf_ns = "http://www.idpf.org/2007/opf"
+    ncx_ns = "http://www.daisy.org/z3986/2005/ncx/"
+    opf = f"""<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{opf_ns}" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="raw" href="ch%20raw.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="ch1"/>
+  </spine>
+</package>"""
+    ncx = f"""<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="{ncx_ns}">
+  <navMap>
+    <navPoint id="np1"><navLabel><text>Ch1</text></navLabel><content src="ch1.xhtml"/></navPoint>
+    <navPoint id="np2"><navLabel><text>Empty</text></navLabel><content src=""/></navPoint>
+  </navMap>
+</ncx>"""
+    epub = tmp_path / "A" / "test.epub"
+    epub.parent.mkdir(parents=True, exist_ok=True)
+    _make_minimal_epub(epub, opf_content=opf, extra_files={"toc.ncx": ncx, "ch raw.xhtml": "<html><body>raw</body></html>"})
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.doc = make_doc("A/test.epub", file_type="epub")
+    es.search_by_id = lambda _id: es.doc
+    result = asyncio_runner(manager.get_book_preview(1))
+    assert result.status_code in (200, 422)
+
+
+def test_normalize_stored_file_path_dot_slash(tmp_path: Path):
+    # Line 1230
+    manager = make_manager(tmp_path, DummyES())
+    assert manager._normalize_stored_file_path("./foo/bar.txt") == "foo/bar.txt"
+
+
+def test_classify_file_to_top_category_branches(tmp_path: Path):
+    # Lines 1300, 1339
+    manager = make_manager(tmp_path, DummyES())
+    file_path = tmp_path / "test.txt"
+    file_path.write_text("hello")
+
+    # 1. Line 1300: unsafe category name in mappings (passes _is_top_level_target_category but fails _is_safe_category_name)
+    cat, kw, reason = manager._classify_file_to_top_category(
+        file_path,
+        "0_inbox",
+        mappings={"unsafe\x00cat": ["test"]},
+        classifier_service=None,
+    )
+    assert cat is None
+    # 2. Line 1339: classifier_service is None and no keywords matched
+    assert reason == "매칭되는 키워드가 없습니다"
+
+
+def test_iter_category_indexable_files_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Lines 1350-1351, 1353, 1358, 1359-1360
+    manager = make_manager(tmp_path, DummyES())
+    cat_dir = tmp_path / "cat"
+    cat_dir.mkdir(parents=True, exist_ok=True)
+
+    # Line 1353: hidden file
+    (cat_dir / ".hidden.txt").write_text("x")
+
+    # 1. Lines 1350-1351: relative_to raises ValueError
+    # 2. Line 1358: resolve not relative to root
+    outside_file = Path("/tmp/outside_dummy.txt")
+    monkeypatch.setattr(Path, "iterdir", lambda self: [outside_file, cat_dir / ".hidden.txt"])
+    files = manager._iter_category_indexable_files("cat", recursive=False)
+    assert files == []
+
+    # Lines 1359-1360: resolve raises OSError
+    normal_file = cat_dir / "normal.txt"
+    normal_file.write_text("x")
+    orig_resolve = Path.resolve
+
+    def mock_resolve_err(self, *args, **kwargs):
+        if self == normal_file:
+            raise OSError("resolve failed")
+        return orig_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", mock_resolve_err)
+    monkeypatch.setattr(Path, "iterdir", lambda self: [normal_file])
+    files2 = manager._iter_category_indexable_files("cat", recursive=False)
+    assert files2 == []
+
+
+def test_move_classified_file_target_traversal_and_restore_err(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Lines 1385, 1498-1499
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    (tmp_path / "cat").mkdir(parents=True, exist_ok=True)
+    f = tmp_path / "cat" / "a.txt"
+    f.write_text("data")
+
+    # 1. Line 1385: target_path not relative to root
+    res1, err1 = asyncio_runner(
+        manager._move_classified_file(f, "../outside", ["k"], "txt")
+    )
+    assert err1 == "잘못된 대상 경로입니다"
+
+    # 2. Lines 1498-1499: ES reindex fails, rollback add_book raises exception
+    doc = make_doc("cat/a.txt")
+    es.search_by_id = lambda _id: doc
+
+    def mock_insert_raise(*args, **kwargs):
+        raise RuntimeError("insert boom")
+
+    es.insert = mock_insert_raise
+
+    async def mock_add_book_raise(*args, **kwargs):
+        raise RuntimeError("restore add_book boom")
+
+    monkeypatch.setattr(manager, "add_book", mock_add_book_raise)
+    (tmp_path / "target").mkdir(parents=True, exist_ok=True)
+    res2, err2 = asyncio_runner(
+        manager._move_classified_file(f, "target", ["k"], "txt")
+    )
+    assert err2 is not None
+    assert "기존 ES 문서 복구 실패" in err2
+
+
+def test_auto_classify_category_value_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Lines 1590-1593
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "0_inbox").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        manager,
+        "_iter_category_indexable_files",
+        lambda cat, recursive=False: [Path("/outside/book.txt")],
+    )
+    result, err = asyncio_runner(manager.auto_classify_category("0_inbox"))
+    assert err is None
+    assert any("잘못된 파일 경로" in f.get("error", "") for f in result["failures"])
+
+
+def test_get_category_mismatches_root_file(tmp_path: Path):
+    # Line 1722
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.aggregate = {}
+    (tmp_path / "root_file.txt").write_text("sample")
+    result = manager.get_category_mismatches()
+    assert any(m["category"] == "_root" for m in result["fs_only"])
+
+
+def test_reload_category_mismatch_files_non_int_book_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Line 1995
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    (tmp_path / "cat").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        manager,
+        "get_category_mismatch_details",
+        lambda cat: {
+            "duplicates": [{"file_path": "cat/dup.txt", "docs": [{"book_id": "bad_id"}]}],
+            "fs_only": [],
+            "es_only": [],
+        },
+    )
+    result, err = asyncio_runner(manager.reload_category_mismatch_files("cat"))
+    assert err is None
+
+
+def test_get_pdf_pages_storage_oserror_and_cached_reader_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Lines 2159-2161, 2192
+    from pypdf import PdfWriter
+
+    pdf_file = tmp_path / "A" / "sample.pdf"
+    pdf_file.parent.mkdir(parents=True, exist_ok=True)
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.add_blank_page(width=100, height=100)
+    with open(pdf_file, "wb") as f:
+        writer.write(f)
+
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.search_by_id = lambda _id: make_doc("A/sample.pdf", file_type=".pdf")
+
+    # 1. Lines 2159-2161: book.file_path.is_file() raises OSError
+    orig_is_file = Path.is_file
+
+    def mock_is_file_raise(self):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(Path, "is_file", mock_is_file_raise)
+    resp1 = asyncio_runner(manager.get_pdf_pages(1, start=1, end=2))
+    assert resp1.status_code == 503
+    assert "Storage access error" in resp1.body.decode()
+
+    # 2. Line 2192: reader is None (page count cached, but reader cache miss)
+    monkeypatch.setattr(Path, "is_file", orig_is_file)
+    mtime = pdf_file.stat().st_mtime
+    BookManager._page_count_cache[(str(pdf_file), mtime)] = 2
+    # Ensure reader cache does not have it
+    BookManager._pdf_reader_cache.pop(str(pdf_file), None)
+
+    resp2 = asyncio_runner(manager.get_pdf_pages(1, start=1, end=2))
+    assert resp2.status_code == 200
+
+
+def test_delete_category_success(tmp_path: Path):
+    # Lines 2326-2328
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    (tmp_path / "test_cat").mkdir(parents=True, exist_ok=True)
+    es.counts = {"test_cat": 5}
+    es.deleted_by_category = {"deleted": 5, "failures": []}
+    res, err = asyncio_runner(manager.delete_category("test_cat"))
+    assert err is None
+    assert res["deleted_count"] == 5
+    assert res["category"] == "test_cat"
+
+

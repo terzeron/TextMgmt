@@ -1208,3 +1208,204 @@ def test_category_cursor_roundtrip_and_rejects_garbage():
 
     not_a_list = base64.urlsafe_b64encode(json.dumps({"a": 1}).encode()).decode()
     assert decode_category_cursor(not_a_list) is None
+
+
+def test_search_latest_docs_edge_cases():
+    es = DummyES()
+    manager = make_manager(es)
+
+    # 342: None categories
+    assert manager._exclude_category_queries(None) == []
+    # 346: empty category string skipped
+    queries = manager._exclude_category_queries(["", "valid_cat"])
+    assert len(queries) == 1
+
+    # 359-361: es.search exception
+    def bad_search(*args, **kwargs):
+        raise RuntimeError("ES connection error")
+    es.search = bad_search
+    docs, total = manager.search_latest_docs()
+    assert docs == []
+    assert total == 0
+
+
+def test_backfill_created_time_all_error_branches(tmp_path):
+    class MockBackfillES:
+        def __init__(self):
+            self.cleared = False
+            self.search_error = False
+            self.bulk_error = False
+            self.bulk_items_error = False
+            self.clear_scroll_error = False
+            self.hits = []
+
+        def search(self, *args, **kwargs):
+            if self.search_error:
+                raise RuntimeError("Search error")
+            return {"_scroll_id": "s1", "hits": {"hits": self.hits}}
+
+        def scroll(self, *args, **kwargs):
+            return {"_scroll_id": "s1", "hits": {"hits": []}}
+
+        def bulk(self, body, *args, **kwargs):
+            if self.bulk_error:
+                raise RuntimeError("Bulk error")
+            if self.bulk_items_error:
+                return {"errors": True, "items": [{"update": {"error": "Item error"}}]}
+            return {"errors": False, "items": []}
+
+        def clear_scroll(self, *args, **kwargs):
+            if self.clear_scroll_error:
+                raise RuntimeError("Clear scroll error")
+            self.cleared = True
+
+    # 1. search_error (440-442) & clear_scroll_error (447-448)
+    es = MockBackfillES()
+    es.search_error = True
+    es.clear_scroll_error = True
+    manager = make_manager(es)
+    res = manager.backfill_created_time(tmp_path)
+    assert res["failed"] == 1
+
+    # 2. bulk_body 비어있을 때 return (414) - 유효하지 않은 파일만 있는 경우 (384, 390-392)
+    es2 = MockBackfillES()
+    es2.hits = [
+        {"_id": "1", "_source": {"file_path": ""}},  # 384: not stored_path
+        {"_id": "2", "_source": {"file_path": "/outside/prefix/file.txt"}},  # 390-392: outside prefix
+        {"_id": "3", "_source": {"file_path": str(tmp_path / "nonexistent.txt")}},  # not file
+    ]
+    manager2 = make_manager(es2)
+    res2 = manager2.backfill_created_time(tmp_path)
+    assert res2["skipped"] == 3
+    assert res2["updated"] == 0
+
+    # 3. path_created_time_with_source OSError (407-409)
+    valid_file = tmp_path / "test_file.txt"
+    valid_file.write_text("content", encoding="utf-8")
+    es3 = MockBackfillES()
+    es3.hits = [{"_id": "1", "_source": {"file_path": str(valid_file)}}]
+    manager3 = make_manager(es3)
+    with patch("backend.es_manager.path_created_time_with_source", side_effect=OSError("stat error")):
+        res3 = manager3.backfill_created_time(tmp_path)
+        assert res3["failed"] == 1
+
+    # 4. bulk_error (417-420)
+    es4 = MockBackfillES()
+    es4.hits = [{"_id": "1", "_source": {"file_path": str(valid_file)}}]
+    es4.bulk_error = True
+    manager4 = make_manager(es4)
+    res4 = manager4.backfill_created_time(tmp_path)
+    assert res4["failed"] == 1
+
+    # 5. bulk_items_error (422-427)
+    es5 = MockBackfillES()
+    es5.hits = [{"_id": "1", "_source": {"file_path": str(valid_file)}}]
+    es5.bulk_items_error = True
+    manager5 = make_manager(es5)
+    res5 = manager5.backfill_created_time(tmp_path)
+    assert res5["failed"] == 1
+    assert res5["updated"] == 0
+
+
+def test_get_doc_ids_by_path_prefix_clear_scroll_error():
+    class ScrollErrES(DummyES):
+        def search(self, *args, **kwargs):
+            return {"_scroll_id": "s_err", "hits": {"hits": []}}
+        def clear_scroll(self, *args, **kwargs):
+            raise RuntimeError("clear scroll error")
+
+    es = ScrollErrES()
+    manager = make_manager(es)
+    # 586-587: clear_scroll exception handled silently
+    ids = manager.get_doc_ids_by_path_prefix("some/prefix")
+    assert ids == set()
+
+
+def test_ensure_category_nori_and_created_time_fields_already_present():
+    class ExistingFieldsIndices:
+        def __init__(self):
+            self.put_mapping_called = False
+        def get_mapping(self, index):
+            return {
+                index: {
+                    "mappings": {
+                        "properties": {
+                            "category": {"type": "keyword", "fields": {"nori": {"type": "text"}}},
+                            "created_time": {"type": "date"},
+                            "created_time_source": {"type": "keyword"},
+                        }
+                    }
+                }
+            }
+        def put_mapping(self, *args, **kwargs):
+            self.put_mapping_called = True
+
+    class ExistingFieldsES(DummyES):
+        def __init__(self):
+            super().__init__()
+            self.indices = ExistingFieldsIndices()
+
+    es = ExistingFieldsES()
+    manager = make_manager(es)
+    manager._ensure_category_nori_subfield()
+    assert not es.indices.put_mapping_called
+    manager._ensure_created_time_field()
+    assert not es.indices.put_mapping_called
+
+
+def test_backfill_created_time_resolve_oserror_and_clear_scroll_error(tmp_path, monkeypatch):
+    class ClearScrollErrES(DummyES):
+        def __init__(self):
+            super().__init__()
+            self.cleared = False
+        def search(self, *args, **kwargs):
+            return {"_scroll_id": "scroll_123", "hits": {"hits": [{"_id": "1", "_source": {"file_path": "some/bad/path"}}]}}
+        def scroll(self, *args, **kwargs):
+            return {"_scroll_id": "scroll_123", "hits": {"hits": []}}
+        def clear_scroll(self, *args, **kwargs):
+            self.cleared = True
+            raise RuntimeError("clear_scroll failed")
+
+    orig_resolve = Path.resolve
+    def mock_resolve(self, *args, **kwargs):
+        if "bad" in str(self):
+            raise OSError("mock resolve error")
+        return orig_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", mock_resolve)
+    es = ClearScrollErrES()
+    manager = make_manager(es)
+    res = manager.backfill_created_time(tmp_path)
+    assert es.cleared
+    assert res["skipped"] == 1
+
+
+def test_search_similar_docs_paged_with_exclude_id():
+    class MsearchES(DummyES):
+        def msearch(self, searches):
+            return {
+                "responses": [
+                    {"hits": {"hits": [{"_score": 10.0}]}},
+                    {"hits": {"total": {"value": 1}, "hits": [{"_id": "2", "_score": 8.0, "_source": {"title": "foo"}}]}},
+                ]
+            }
+
+    es = MsearchES()
+    manager = make_manager(es)
+    results, total = manager.search_similar_docs_paged(title="test", exclude_id=1)
+    assert total == 1
+    assert len(results) == 1
+    assert results[0][0] == 2
+    assert results[0][2] == 80.0
+
+
+def test_search_by_id_success():
+    class GetES(DummyES):
+        def get(self, index, id):
+            return {"_id": id, "_source": {"title": "found_book"}}
+
+    es = GetES()
+    manager = make_manager(es)
+    source = manager.search_by_id(42)
+    assert source == {"title": "found_book"}
+
