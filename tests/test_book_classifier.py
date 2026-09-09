@@ -477,3 +477,37 @@ def test_inspect_txt_content_cp949_and_header_genre(tmp_path):
     assert res.get("header_genre") == "판타지"
     assert "룬의 아이들" in res.get("snippet", "")
 
+
+def test_classify_5_genres_from_content_all_categories():
+    from backend.book_classifier import classify_5_genres_from_content
+
+    # 1. 3_무협
+    wuxia_text = "화산파의 장문인은 단전의 진기를 운기조식하여 매화검법의 절기를 펼쳤다. 마교와 천마의 위협에 강호 무림이 진동했다."
+    cat, score, _ = classify_5_genres_from_content("무림기", wuxia_text)
+    assert cat == "3_무협"
+
+    # 2. 3_판타지
+    fantasy_text = "각성한 S급 헌터는 던전 게이트 안에서 보스 몬스터 드래곤을 마주했다. 상태창에 새로운 스킬과 마나가 생성되었다."
+    cat, score, _ = classify_5_genres_from_content("나혼자만렙", fantasy_text)
+    assert cat == "3_판타지"
+
+    # 3. 3_여성향
+    rofan_text = "공작가의 시한부 악녀로 빙의한 영애는 냉혈한 황태자와의 파혼을 결심했다. 무도회에서 남주인공의 눈빛이 마주쳤다."
+    cat, score, _ = classify_5_genres_from_content("악녀의파혼", rofan_text)
+    assert cat == "3_여성향"
+
+    # 4. 9_BLGL
+    bl_text = "우성 알파인 다정공과 오메가버스 세계관의 단정수가 페로몬에 반응하여 각인되었다. 에스퍼와 가이드의 파장이 일치했다."
+    cat, score, _ = classify_5_genres_from_content("패션", bl_text)
+    assert cat == "9_BLGL"
+
+    # 5. 9_성인
+    adult_text = "그녀는 뜨거운 애액을 흘리며 교성을 내질렀고 그의 단단한 자지가 질내로 깊숙이 삽입되어 정액을 사정했다. 유두가 바짝 서 올랐다."
+    cat, score, _ = classify_5_genres_from_content("야설모음", adult_text)
+    assert cat == "9_성인"
+
+    # 6. 일반 비문학/영문 도서는 None
+    non_fiction = "The quick brown fox jumps over the lazy dog. General cooking recipes for breakfast and dinner."
+    cat, score, _ = classify_5_genres_from_content("Cookery", non_fiction)
+    assert cat is None
+

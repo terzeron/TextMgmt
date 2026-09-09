@@ -195,16 +195,125 @@ def is_title_match_reliable(search_title: str, found_title: str) -> bool:
     return False
 
 
+def extract_content_first_1000_words(fpath: Path) -> str:
+    """TXT/EPUB 파일에서 처음 약 1000단어 분량의 본문 텍스트를 추출 (인코딩 자동 감지)"""
+    ext = fpath.suffix.lower()
+    text = ""
+    if ext == ".txt":
+        for enc in ["utf-8", "cp949"]:
+            try:
+                with open(fpath, "r", encoding=enc, errors="ignore") as f:
+                    lines = [f.readline() for _ in range(400)]
+                raw = "".join(lines)
+                if re.search(r"[가-힣]{3,}", raw):
+                    text = raw
+                    break
+            except Exception:
+                continue
+    elif ext == ".epub":
+        try:
+            with zipfile.ZipFile(fpath, "r") as z:
+                htmls = [n for n in z.namelist() if n.lower().endswith((".html", ".xhtml", ".htm")) and not any(k in n.lower() for k in ["cover", "nav", "toc", "title"])]
+                if not htmls:
+                    htmls = [n for n in z.namelist() if n.lower().endswith((".html", ".xhtml", ".htm"))]
+                chunks = []
+                for h in htmls[:3]:
+                    try:
+                        raw = z.read(h).decode("utf-8", errors="ignore")
+                        clean = re.sub(r"<[^>]+>", " ", raw)
+                        if len(clean.strip()) > 50:
+                            chunks.append(clean)
+                    except Exception:
+                        pass
+                text = " ".join(chunks)
+        except Exception:
+            pass
+
+    words = text.split()
+    return " ".join(words[:1000])
+
+
+def count_genre_word_patterns(text: str, kws: List[str]) -> int:
+    cnt = 0
+    for kw in kws:
+        if kw == "마나":
+            cnt += len(re.findall(r"(?:^|[^\w가-힣])마나(?:[를이가의로통량석홀]?)(?:$|[^\w가-힣])", text))
+        elif kw in ["bl", "gl"]:
+            cnt += len(re.findall(r"(?:^|[^a-zA-Z])" + kw + r"(?:$|[^a-zA-Z])", text))
+        else:
+            cnt += text.count(kw)
+    return cnt
+
+
+def classify_5_genres_from_content(title: str, text: str) -> Tuple[Optional[str], int, str]:
+    """
+    도서 제목과 본문 처음 1000단어를 정밀 분석하여
+    3_무협, 3_판타지, 3_여성향, 9_BLGL, 9_성인 5대 장르로 결정론적 분류
+    """
+    if not text:
+        return None, 0, "empty_text"
+
+    # 한글 비율 검증 (20% 미만이면 외국어/영문 제외)
+    hangul_chars = len(re.findall(r"[가-힣]", text))
+    total_chars = len(text)
+    if total_chars < 15 or (hangul_chars / total_chars) < 0.20:
+        return None, 0, "not_enough_hangul"
+
+    t = (title + " " + text).lower()
+
+    # 1. 3_무협
+    wuxia_core = ["무협", "무림", "단전", "내공", "진기", "운기조식", "기경팔맥", "주화입마", "환골탈태", "화산파", "무당파", "소림사", "개방", "사파", "정파", "마교", "천마", "비급", "검법", "도법", "심법"]
+    wuxia_kws = wuxia_core + ["강호", "임독이맥", "종남파", "혈교", "장문인", "소교주", "맹주", "무림맹", "절기", "초식"]
+    w_has_core = any(kw in t for kw in wuxia_core)
+    wuxia_score = count_genre_word_patterns(t, wuxia_kws) if w_has_core else 0
+
+    # 2. 3_판타지
+    fantasy_core = ["판타지", "던전", "몬스터", "헌터", "각성", "레이드", "게이트", "상태창", "마나", "마법진", "오크", "고블린", "드래곤", "엘프", "마왕", "용사", "이세계", "귀환자", "만렙"]
+    fantasy_kws = fantasy_core + ["길드", "시스템", "퀘스트", "스킬", "스탯", "레벨업", "플레이어", "인벤토리", "아이템", "서클", "전생", "회귀", "아카데미"]
+    f_has_core = any(kw in t for kw in fantasy_core)
+    fantasy_score = count_genre_word_patterns(t, fantasy_kws) if f_has_core else 0
+
+    # 3. 3_여성향 (로맨스, 로판)
+    rofan_core = ["로맨스", "로판", "현로", "영애", "황태자", "황후", "황비", "남주", "여주", "남주인공", "여주인공", "파혼", "시월드", "후회남", "집착남", "계략남", "시한부", "악녀", "햇살여주"]
+    rofan_kws = rofan_core + ["공작", "공작가", "황제", "황실", "사교계", "무도회", "드레스", "시녀", "집사", "약혼", "키스", "설렘"]
+    ro_has_core = any(kw in t for kw in rofan_core)
+    rofan_score = count_genre_word_patterns(t, rofan_kws) if ro_has_core else 0
+
+    # 4. 9_BLGL
+    bl_core = ["미인공", "미남공", "다정공", "광공", "집착공", "연하공", "연상공", "후회공", "미인수", "단정수", "강수", "지랄수", "임신수", "순진수", "오메가버스", "가이드버스", "에스퍼", "가이딩", "히트사이클", "페로몬", "노팅", "각인", "백합", "보이즈러브", "동성애"]
+    bl_has_core = any(kw in t for kw in bl_core) or bool(re.search(r"(?:^|[^a-zA-Z])(?:bl|gl)(?:$|[^a-zA-Z])", t))
+    bl_score = count_genre_word_patterns(t, bl_core + ["bl", "gl"]) if bl_has_core else 0
+
+    # 5. 9_성인 (야설/성인소설)
+    adult_kws = ["야설", "성인소설", "음란", "음탕", "육덕", "최면", "조교", "근친", "스와핑", "섹스", "자위", "사정액", "쿠퍼액", "애액", "정액", "자지", "보지에", "보지를", "보지속", "음순", "클리토리스", "귀두", "유두", "유륜", "젖가슴", "피스톤", "허리짓", "교성", "오르가즘", "절정에", "펠라치오"]
+    matched_adult_kws = [kw for kw in adult_kws if kw in t]
+    adult_score = sum(t.count(kw) for kw in adult_kws)
+    is_adult = len(matched_adult_kws) >= 3 and adult_score >= 5
+
+    # 중재 우선순위
+    if bl_score >= 2 and bl_score >= adult_score * 0.5:
+        return "9_BLGL", bl_score, f"bl_score={bl_score}"
+    if rofan_score >= 3 and rofan_score >= adult_score * 0.4:
+        return "3_여성향", rofan_score, f"rofan_score={rofan_score}"
+    if wuxia_score >= 3 and wuxia_score >= fantasy_score:
+        return "3_무협", wuxia_score, f"wuxia_score={wuxia_score}"
+    if fantasy_score >= 3:
+        return "3_판타지", fantasy_score, f"fantasy_score={fantasy_score}"
+    if is_adult:
+        return "9_성인", adult_score, f"adult_kws={len(matched_adult_kws)}, adult_score={adult_score}"
+
+    return None, 0, "no_genre_matched"
+
+
 def score_text_genre(text: str) -> Optional[str]:
-    """본문 샘플(TXT 앞부분/EPUB 소개글)에서 도메인 키워드 빈도를 스코어링하여 장르 추론"""
+    """기존 호환용 본문 키워드 스코어링"""
+    cat, score, _ = classify_5_genres_from_content("", text)
+    if cat:
+        return cat
     if not text:
         return None
     t = text.lower()
     scores = {
-        "3_무협": sum(1 for kw in ["문파", "화산파", "마교", "소교주", "맹주", "무림", "장문인", "절기", "검법", "도법", "내공", "심법", "기경팔맥", "소림", "무당", "개방", "사파", "정파", "백도", "흑도", "혈교", "비급", "강호", "천마", "신무협"] if kw in t),
-        "3_여성향": sum(1 for kw in ["영애", "공작가", "황태자", "남주", "여주", "시월드", "파혼", "후회남", "집착남", "황후", "황비", "악녀", "빙의녀", "로판", "로맨스", "남편", "이혼", "시어머니", "소설 속에 빙의"] if kw in t),
-        "9_BLGL": sum(1 for kw in ["미인공", "다정공", "강수", "단정수", "오메가버스", "알파", "오메가", "보이즈러브", "bl", "gl", "백합"] if kw in t),
-        "3_판타지": sum(1 for kw in ["던전", "헌터", "각성", "마나", "마법", "길드", "몬스터", "레이드", "시스템", "퀘스트", "플레이어", "용사", "마왕", "드래곤", "아카데미", "스킬", "스탯", "이세계", "전생", "아이템", "룬 문자", "상태창", "재벌가"] if kw in t),
         "3_SF": sum(1 for kw in ["우주선", "안드로이드", "인공지능", "사이보그", "외계인", "행성", "타임머신", "디스토피아"] if kw in t),
         "3_스릴러": sum(1 for kw in ["살인사건", "연쇄살인", "형사", "수사관", "시체", "밀실", "트릭", "용의자", "알리바이", "탐정"] if kw in t),
     }
@@ -421,7 +530,7 @@ def evaluate_category_decision(
         if is_single_match_valid(search_title, found_title):
             return single_cat, "single_match", f"Single match trusted ({single_cat}) for '{found_title[:30]}'"
 
-    # Priority 5: 파일 내부 메타데이터 / 본문 스코어링 활용
+    # Priority 5: 파일 내부 메타데이터 및 처음 1000단어 본문 정밀 장르 분석 활용
     if fpath and fpath.exists():
         ext = fpath.suffix.lower()
         if ext == ".epub" and epub_meta:
@@ -435,10 +544,6 @@ def evaluate_category_decision(
                 desc_cat = map_category(desc, raw_title, raw_author)
                 if desc_cat:
                     return desc_cat, "content_metadata", f"EPUB dc:description -> {desc_cat}"
-            # EPUB 본문/설명 키워드 스코어링
-            sc_cat = score_text_genre(text_sample)
-            if sc_cat:
-                return sc_cat, "content_metadata", f"EPUB content scored -> {sc_cat}"
 
         elif ext == ".txt" and txt_info:
             hg = txt_info.get("header_genre")
@@ -450,10 +555,19 @@ def evaluate_category_decision(
                 tag_cat = map_category(tag, raw_title, raw_author) or extract_explicit_genre(f"[{tag}]")
                 if tag_cat:
                     return tag_cat, "content_metadata", f"TXT #{tag} -> {tag_cat}"
-            # TXT 본문 키워드 스코어링
-            sc_cat = score_text_genre(txt_info.get("snippet", ""))
-            if sc_cat:
-                return sc_cat, "content_metadata", f"TXT content scored -> {sc_cat}"
+
+        # 본문 처음 1000단어 5대 장르(3_무협, 3_판타지, 3_여성향, 9_BLGL, 9_성인) 정밀 스코어링
+        first_1000 = extract_content_first_1000_words(fpath)
+        scoring_text = (first_1000 + " " + text_sample).strip()
+        g5_cat, g5_score, g5_reason = classify_5_genres_from_content(fname, scoring_text)
+        if g5_cat:
+            prefix = "EPUB content scored" if ext == ".epub" else ("TXT content scored" if ext == ".txt" else "Content scored")
+            return g5_cat, "content_metadata", f"{prefix} -> {g5_cat} ({g5_reason})"
+
+        # 기존 일반 장르(3_SF, 3_스릴러 등) 스코어링 폴백
+        sc_cat = score_text_genre(text_sample or first_1000)
+        if sc_cat:
+            return sc_cat, "content_metadata", f"Content scored -> {sc_cat}"
 
     # 최종 미해결 상태
     if len(valid_maps) >= 2:
