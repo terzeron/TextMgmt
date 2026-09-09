@@ -292,6 +292,8 @@ def count_genre_word_patterns(text: str, kws: List[str]) -> int:
             cnt += len(re.findall(r"(?<!무)단전(?:[를이가의로통량석홀]?)(?:$|[^\w가-힣])", text))
         elif kw == "진기":
             cnt += len(re.findall(r"(?<!민)진기(?!한)(?:[를가의로]?)(?:$|[^\w가-힣])", text))
+        elif kw == "강수":
+            cnt += len(re.findall(r"(?<![가-힣a-zA-Z])강수(?:[를이가의로]?)(?:$|[^\w가-힣])", text))
         elif kw == "마나":
             cnt += len(re.findall(r"(?:^|[^\w가-힣])마나(?:[를이가의로통량석홀]?)(?:$|[^\w가-힣])", text))
         elif kw in ["bl", "gl"]:
@@ -306,28 +308,42 @@ def count_genre_word_patterns(text: str, kws: List[str]) -> int:
 # ==========================================
 WUXIA_CORE = [
     "무협", "무림", "단전", "내공", "진기", "운기조식", "기경팔맥", "주화입마", "환골탈태",
-    "화산파", "무당파", "소림사", "개방", "사파", "정파", "마교", "천마", "비급", "검법", "도법", "심법"
+    "화산파", "무당파", "소림사", "개방", "사파", "정파", "마교", "천마", "비급", "검법", "도법", "심법",
+    "세가", "사천당가", "남궁세가", "제갈세가", "모용세가", "하북팽가", "소가주", "녹림", "암기", "독공", "독문", "검기"
 ]
-WUXIA_KWS = WUXIA_CORE + ["강호", "임독이맥", "종남파", "혈교", "장문인", "소교주", "맹주", "무림맹", "절기", "초식"]
+WUXIA_KWS = WUXIA_CORE + [
+    "강호", "임독이맥", "종남파", "혈교", "장문인", "소교주", "맹주", "무림맹", "절기", "초식",
+    "공자", "가주", "하오문", "점창파", "도기", "호법", "총채주"
+]
 
-# 판타지 (무협 오탐 방지를 위해 전생/회귀/마왕 제외)
+# 판타지: 현대 헌터물 + 중세 서양 판타지/영지물/제국물 전면 보강
 FANTASY_CORE = [
     "판타지", "던전", "몬스터", "헌터", "각성", "레이드", "게이트", "상태창", "마나", "마법진",
-    "오크", "고블린", "드래곤", "엘프", "용사", "이세계", "귀환자", "만렙"
+    "오크", "고블린", "드래곤", "엘프", "용사", "이세계", "귀환자", "만렙",
+    "오러", "소드마스터", "기사단", "마법사", "마탑", "영지", "영주", "마력"
 ]
-FANTASY_KWS = FANTASY_CORE + ["길드", "시스템", "퀘스트", "스킬", "스탯", "레벨업", "플레이어", "인벤토리", "아이템", "서클", "아카데미", "골렘", "마물"]
+FANTASY_KWS = FANTASY_CORE + [
+    "길드", "시스템", "퀘스트", "스킬", "스탯", "레벨업", "플레이어", "인벤토리", "아이템", "서클", "아카데미", "골렘", "마물",
+    "제국", "왕국", "공국", "백작", "남작", "차원이동", "환생자", "기사"
+]
 
+# 여성향/로판: 서양 판타지 영지물과 겹치는 작위(황제, 공작, 영애) 및 시한부는 CORE에서 제외하고
+# 결정적 로맨스 관계성 어휘가 최소 1개 이상 존재할 때만 보조 키워드 점수 합산
 ROFAN_CORE = [
-    "로맨스", "로판", "현로", "영애", "황태자", "황후", "황비", "남주", "여주", "남주인공", "여주인공",
-    "파혼", "시월드", "후회남", "집착남", "계략남", "시한부", "악녀", "햇살여주"
+    "로맨스", "로판", "현로", "남주", "여주", "남주인공", "여주인공",
+    "파혼", "시월드", "후회남", "집착남", "계략남", "악녀", "햇살여주", "빙의녀"
 ]
-ROFAN_KWS = ROFAN_CORE + ["공작", "공작가", "황제", "황실", "사교계", "무도회", "드레스", "시녀", "집사", "약혼", "키스", "설렘"]
+ROFAN_KWS = ROFAN_CORE + [
+    "공작", "공작가", "황제", "황실", "사교계", "무도회", "드레스", "시녀", "집사", "약혼", "키스", "설렘", "영애", "시한부"
+]
 
+# BL: 페로몬/강수/각인은 생물학 및 인명 오탐 방지를 위해 CORE에서 제외하고
+# 결정적 BL 관계성 어휘가 최소 1개 이상 존재할 때만 보조 키워드 점수 합산
 BL_CORE = [
-    "미인공", "미남공", "다정공", "광공", "집착공", "연하공", "연상공", "후회공", "미인수", "단정수", "강수", "지랄수",
-    "임신수", "순진수", "오메가버스", "가이드버스", "에스퍼", "가이딩", "히트사이클", "페로몬", "노팅", "각인", "백합", "보이즈러브", "동성애"
+    "미인공", "미남공", "다정공", "광공", "집착공", "연하공", "연상공", "후회공", "미인수", "단정수", "지랄수",
+    "임신수", "순진수", "오메가버스", "가이드버스", "보이즈러브", "동성애", "백합"
 ]
-BL_KWS = BL_CORE + ["bl", "gl"]
+BL_KWS = BL_CORE + ["에스퍼", "가이딩", "히트사이클", "페로몬", "노팅", "각인", "강수", "bl", "gl"]
 
 ADULT_KWS = [
     "야설", "성인소설", "음란", "음탕", "육덕", "최면", "조교", "근친", "스와핑", "섹스", "자위",
@@ -359,8 +375,14 @@ def calculate_5_genre_scores_and_ratios(title: str, text: str) -> Dict[str, Any]
 
     w_score = count_genre_word_patterns(combined, WUXIA_KWS) if any(kw in combined for kw in WUXIA_CORE) else 0
     f_score = count_genre_word_patterns(combined, FANTASY_KWS) if any(kw in combined for kw in FANTASY_CORE) else 0
-    r_score = count_genre_word_patterns(combined, ROFAN_KWS) if any(kw in combined for kw in ROFAN_CORE) else 0
-    b_score = count_genre_word_patterns(combined, BL_KWS) if (any(kw in combined for kw in BL_CORE) or bool(re.search(r"(?:^|[^a-zA-Z])(?:bl|gl)(?:$|[^a-zA-Z])", combined))) else 0
+
+    # 여성향: 결정적 로맨스 관계성 어휘(ROFAN_CORE)가 존재할 때만 유효 인정
+    has_rofan_core = any(kw in combined for kw in ROFAN_CORE)
+    r_score = count_genre_word_patterns(combined, ROFAN_KWS) if has_rofan_core else 0
+
+    # BL: 결정적 BL 어휘(BL_CORE)나 독립 단어 bl/gl이 존재할 때만 유효 인정 (단독 페로몬/강수 오탐 방지)
+    has_bl_core = any(kw in combined for kw in BL_CORE) or bool(re.search(r"(?:^|[^a-zA-Z])(?:bl|gl)(?:$|[^a-zA-Z])", combined))
+    b_score = count_genre_word_patterns(combined, BL_KWS) if has_bl_core else 0
 
     matched_adult = [kw for kw in ADULT_KWS if kw in combined]
     a_score = sum(combined.count(kw) for kw in ADULT_KWS) if (len(matched_adult) >= 3 and sum(combined.count(kw) for kw in ADULT_KWS) >= 5) else 0
@@ -372,6 +394,19 @@ def calculate_5_genre_scores_and_ratios(title: str, text: str) -> Dict[str, Any]
         "9_BLGL": b_score,
         "9_성인": a_score,
     }
+
+    # 파일명 명시적 장르(extract_explicit_genre) 최우선 보호 및 가중치 적용
+    explicit_cat = extract_explicit_genre(title)
+    if explicit_cat and explicit_cat in scores:
+        scores[explicit_cat] += 5
+        if explicit_cat == "3_무협":
+            # 파일명에 무협이 명시된 경우 우연한 노이즈로 인한 BL/여성향 이탈 원천 차단
+            scores["9_BLGL"] = 0
+            scores["3_여성향"] = 0
+        elif explicit_cat == "3_판타지":
+            scores["9_BLGL"] = 0
+            scores["3_여성향"] = 0
+
     total_score = sum(scores.values())
 
     if total_score == 0:
