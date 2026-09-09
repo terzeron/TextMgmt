@@ -1003,9 +1003,90 @@ def test_map_category_and_effective_filename_branches(tmp_path):
     # 1034: cat_str="지역경제 > 총론" -> 933/936 패스 후 1034 경제 폴백 매칭
     assert map_category("지역경제 > 총론", "제목", "저자") == "4_경제"
 
-    # 1058: file_m 있고 parent_m 없거나 둘 다 있는 경우
     parent_dir = tmp_path / "작품"
     parent_dir.mkdir(exist_ok=True)
     f = parent_dir / "[저자] 제목 1권.txt"
     f.touch()
     assert get_effective_filename(f, tmp_path) == "[저자] 제목 1권.txt"
+
+
+def test_clean_disclaimer_and_colophon_and_wuxia_false_positives():
+    from backend.book_classifier import (
+        clean_disclaimer_and_colophon,
+        count_genre_word_patterns,
+        calculate_5_genre_scores_and_ratios,
+        classify_5_genres_from_content,
+        WUXIA_CORE,
+        WUXIA_KWS,
+    )
+
+    # 1. 저작권/판권지 문구 정제 검증
+    sample_colophon = (
+        "그리스 로마 신화 4권 이야기. 헤라클레스는 영웅이다.\n"
+        "이 전자책은 저작권법에 의하여 보호를 받는 저작물이므로 무단전재와 무단복제를 금합니다.\n"
+        "지은이 이윤기 발행인 최봉수 편집인 이수미 디자인 민진기 마케팅 서재근\n"
+        "ISBN 978-89-01-07085-8 04210"
+    )
+    cleaned = clean_disclaimer_and_colophon(sample_colophon)
+    assert "무단전재" not in cleaned
+    assert "민진기" not in cleaned
+
+    # 2. '무단전재' 및 '민진기'가 무협 키워드로 오탐되지 않는지 검증
+    raw_disclaimer = "저작물이므로 무단전재와 무단복제를 금하며 디자인 민진기 제작 한동수"
+    w_score_raw = count_genre_word_patterns(raw_disclaimer, WUXIA_KWS)
+    assert w_score_raw == 0
+
+    # 형용사 '진기한'도 진기(眞氣)로 오탐되지 않음
+    assert count_genre_word_patterns("시장에서 진기한 골동품을 발견했다.", WUXIA_KWS) == 0
+
+    # 3. 진짜 무협 문맥에서는 정상 카운트
+    real_wuxia = "단전의 내공을 끌어올려 진기를 운용하고 검법을 펼쳤다."
+    assert count_genre_word_patterns(real_wuxia, ["단전", "진기", "검법"]) == 3
+
+    # 4. 이윤기의 그리스 로마 신화 판권지가 무협으로 오분류되지 않음 검증
+    res = calculate_5_genre_scores_and_ratios("이윤기의 그리스 로마 신화 4권", sample_colophon)
+    assert res["scores"]["3_무협"] == 0
+    assert res["cluster"] != "확실한_3_무협"
+    assert res["cluster"] != "준확실_3_무협"
+
+    cat, score, _ = classify_5_genres_from_content("이윤기의 그리스 로마 신화 4권", sample_colophon)
+    assert cat != "3_무협"
+
+
+def test_four_misclassified_books_regression_fix():
+    from backend.book_classifier import calculate_5_genre_scores_and_ratios, classify_5_genres_from_content
+
+    # 1. 천마는 평범하게 살 수 없다: 영지, 영주, 황제, 공작이 나와도 로맨스 코어가 없으므로 판타지로 분류
+    cheonma_text = (
+        "로렌스 가문의 영애가 드미트리 영지를 방문하는 날이다. 영주이자 공작인 아버지. "
+        "로만 드미트리 황제 폐하의 검을 모으기 위함이었다. 오러와 기사단의 훈련."
+    )
+    res_cm = calculate_5_genre_scores_and_ratios("천마는 평범하게 살 수 없다 1권", cheonma_text)
+    assert res_cm["scores"]["3_여성향"] == 0
+    assert res_cm["scores"]["3_판타지"] >= 5
+    cat_cm, _, _ = classify_5_genres_from_content("천마는 평범하게 살 수 없다 1권", cheonma_text)
+    assert cat_cm == "3_판타지"
+
+    # 2. 백씨세가 시한부 공자: '시한부'가 나와도 로맨스 코어가 없으므로 여성향 0점, 무협 태그 보호
+    baek_text = "백이강은 백씨세가의 시한부 공자였다. 단전이 깨지고 내공을 쌓을 수 없었으나 불사신검을 얻었다."
+    res_bk = calculate_5_genre_scores_and_ratios("무협)미완)백씨세가 시한부 공자", baek_text)
+    assert res_bk["scores"]["3_여성향"] == 0
+    assert res_bk["scores"]["3_무협"] >= 5
+    cat_bk, _, _ = classify_5_genres_from_content("무협)미완)백씨세가 시한부 공자", baek_text)
+    assert cat_bk in ["3_무협", "3_판타지"]
+
+    # 3. 파브르 in 사천당가: 곤충 페로몬 및 도마뱀 영문(bawangling)이 나와도 BL 0점, 사천당가 무협 점수 획득
+    fabre_text = "사천당가의 독문 비급. 곤충은 페로몬으로 대화한다. bawangling cave gecko 녀석의 독."
+    res_fb = calculate_5_genre_scores_and_ratios("파브르 in 사천당가 1권", fabre_text)
+    assert res_fb["scores"]["9_BLGL"] == 0
+    assert res_fb["scores"]["3_무협"] >= 2
+
+    # 4. 단목세가의 역대급 망나니: 인물 이름 '동방강수'가 나와도 BL 코어가 없으므로 BL 0점, 무협 태그 보호
+    danmok_text = "녹림의 총채주 동방강수가 반갑게 맞이했다. 단목세가의 천마신공과 사파 무림의 격돌."
+    res_dm = calculate_5_genre_scores_and_ratios("무협)한야월-단목세가의 역대급 망나니", danmok_text)
+    assert res_dm["scores"]["9_BLGL"] == 0
+    assert res_dm["scores"]["3_무협"] >= 5
+    cat_dm, _, _ = classify_5_genres_from_content("무협)한야월-단목세가의 역대급 망나니", danmok_text)
+    assert cat_dm == "3_무협"
+
+

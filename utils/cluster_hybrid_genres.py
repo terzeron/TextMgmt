@@ -47,6 +47,7 @@ def main():
     parser.add_argument("--library-root", type=Path, default=Path("/mnt/data/text"))
     parser.add_argument("--limit", type=int, default=0, help="0 for all")
     parser.add_argument("--auto-move-pure", action="store_true", help="Move high-confidence (pure >= 75%%) clusters automatically")
+    parser.add_argument("--move-hybrids-to", type=str, default="", help="Target category to move all hybrid clusters (e.g. 3_판타지)")
     parser.add_argument("--clean-existing", action="store_true", default=True)
     parser.add_argument("--report", type=Path, default=Path("/mnt/data/text/hybrid_clustering_report.json"))
     args = parser.parse_args()
@@ -85,15 +86,30 @@ def main():
             dest_dir = args.library_root / target_cat
             dest_path = dest_dir / p.name
             dest_dir.mkdir(parents=True, exist_ok=True)
-            if dest_path.exists():
-                if args.clean_existing:
-                    p.unlink()
+            if dest_path.resolve() != p.resolve():
+                if dest_path.exists():
+                    if args.clean_existing:
+                        p.unlink()
+                        clean_empty_parent_dirs(p.parent, args.source_dir)
+                        cleaned_count += 1
+                else:
+                    p.rename(dest_path)
                     clean_empty_parent_dirs(p.parent, args.source_dir)
-                    cleaned_count += 1
-            else:
-                p.rename(dest_path)
-                clean_empty_parent_dirs(p.parent, args.source_dir)
-                moved_count += 1
+                    moved_count += 1
+        elif args.move_hybrids_to and c.startswith("하이브리드_"):
+            dest_dir = args.library_root / args.move_hybrids_to
+            dest_path = dest_dir / p.name
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            if dest_path.resolve() != p.resolve():
+                if dest_path.exists():
+                    if args.clean_existing:
+                        p.unlink()
+                        clean_empty_parent_dirs(p.parent, args.source_dir)
+                        cleaned_count += 1
+                else:
+                    p.rename(dest_path)
+                    clean_empty_parent_dirs(p.parent, args.source_dir)
+                    moved_count += 1
 
         if idx % 1000 == 0:
             print(f"[{idx}/{total_files}] 분석 진행 중... (클러스터 수: {len(clusters)})", flush=True)
@@ -134,16 +150,16 @@ def main():
     for c in semi_clusters:
         items = clusters[c]
         print(f"  ▶ {c}: {len(items)}권")
-        for it in items[:2]:
+        for it in items[:3]:
             r_str = ", ".join([f"{k.split('_')[-1]}:{v}%" for k, v in it['ratios'].items() if v > 0])
-            print(f"     - \"{it['filename'][:50]}\" [{r_str}]")
+            print(f"     - \"{it['filename'][:50]}\" [{r_str}] (score: {it['total_score']})")
 
     print("\n-------------------------------------------------------")
     print("### 4. [미분류 및 기타]")
     for c in other_clusters:
         print(f"  ▶ {c}: {len(clusters[c])}권")
 
-    if args.auto_move_pure:
+    if args.auto_move_pure or args.move_hybrids_to:
         print(f"\n[자동 이동 결과] 신규 이동: {moved_count}권, 중복 정리: {cleaned_count}권")
 
     # JSON 저장

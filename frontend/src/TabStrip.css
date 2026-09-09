@@ -1,0 +1,91 @@
+/* 최상단 탭(Navigation.jsx)과 관리 서브탭(Admin.jsx)이 이 파일을 공유한다.
+   값을 한 곳에서 바꾸면 두 띠에 같이 반영된다.
+
+   두 띠 모두 bootstrap 의 navbar-nav 와 nav-tabs 를 붙이지 않는다. 그래야
+   .navbar-expand-sm .navbar-nav .nav-link (0,3,0) 이나
+   .nav-tabs .nav-link.active (0,3,0) 와 경쟁하지 않고, 아래의 짧은 선택자만으로
+   import 순서와 무관하게 이긴다. 아래 구분선은 띠가 아니라 띠를 담은 바가
+   갖는다(Navigation.css 의 .navbar, Admin.css 의 .admin-subtabs). 최상단 바는
+   brand 와 검색창까지 걸쳐 선을 그어야 하기 때문이다. */
+
+.tab-strip {
+    align-items: stretch;
+    align-self: stretch;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0;
+    padding: 0;
+}
+
+/* 항목 높이는 padding 과 line-height 로만 정해진다.
+   좌우 0.425rem 은 이전 0.85rem 의 절반이다. */
+.tab-strip-item.nav-link {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    color: var(--bs-secondary-color);
+    display: flex;
+    font-weight: 600;
+    margin-bottom: 0;
+    padding: 0.4rem 0.425rem;
+    /* App.css 의 `button { padding-left/right: 5px !important }` 는 button 항목
+       (서브탭)에만 걸려 a 항목(최상단)과 좌우 padding 이 어긋난다. 요소 선택자
+       + !important 라 클래스 규칙으로는 못 이기므로 여기서도 !important 를 쓴다.
+       App.css 의 규칙은 앱 전체 버튼에 걸리므로 그대로 둔다. */
+    padding-left: 0.425rem !important;
+    padding-right: 0.425rem !important;
+    position: relative;
+    transition: color 0.15s ease;
+}
+
+.tab-strip-item.nav-link:not(:first-child) {
+    border-left: 1px solid var(--bs-border-color-translucent);
+}
+
+/* 활성·hover 표시용 밑줄. 좌우 인셋을 항목 좌우 padding 과 같게 둔다. */
+.tab-strip-item.nav-link::after {
+    background: transparent;
+    bottom: -1px;
+    content: "";
+    height: 2px;
+    left: 0.425rem;
+    position: absolute;
+    right: 0.425rem;
+}
+
+.tab-strip-item.nav-link:hover,
+.tab-strip-item.nav-link:focus {
+    color: var(--bs-body-color);
+}
+
+.tab-strip-item.nav-link:hover::after,
+.tab-strip-item.nav-link:focus::after {
+    background: var(--bs-border-color);
+}
+
+.tab-strip-item.nav-link.active {
+    color: var(--bs-primary);
+}
+
+.tab-strip-item.nav-link.active::after {
+    background: var(--bs-primary);
+}
+
+/* 좁은 폭에서는 세로로 쌓고 구분선을 위쪽으로 옮긴다. */
+@media (max-width: 575.98px) {
+    .tab-strip {
+        flex-direction: column;
+    }
+
+    .tab-strip-item.nav-link {
+        justify-content: center;
+        text-align: center;
+    }
+
+    .tab-strip-item.nav-link:not(:first-child) {
+        border-left: 0;
+        border-top: 1px solid var(--bs-border-color-translucent);
+    }
+}

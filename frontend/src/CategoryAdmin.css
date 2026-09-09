@@ -1,0 +1,12 @@
+/* 좌우 컬럼이 서로의 스크롤에 끌려가지 않게 한다. 왼쪽 디렉토리 컬럼만 sticky +
+   자체 스크롤로 만들고, 오른쪽 기능 패널은 페이지 스크롤을 따른다. 값은 책 편집
+   탭의 #edit .directory-menu(Edit.css) 및 #view .directory-menu(View.css)와 같다.
+   md 미만에서는 두 컬럼이 위아래로 쌓이므로 고정 높이를 주지 않는다. */
+@media (min-width: 768px) {
+  .category-admin-directory {
+    height: calc(100vh - 80px);
+    overflow-y: auto;
+    position: sticky;
+    top: 0;
+  }
+}

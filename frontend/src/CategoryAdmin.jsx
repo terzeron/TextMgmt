@@ -50,6 +50,7 @@ import {
 } from "./folderUtils";
 import { TreeNodeIcon } from "./fileTypeIcons";
 import "./Folder.css";
+import "./CategoryAdmin.css";
 
 // ── MUI TreeItem 스타일 (Folder.jsx의 CustomTreeItem 스타일 재사용) ──
 
@@ -1693,8 +1694,8 @@ export default function CategoryAdmin({
         <div className="text-muted p-3">카테고리 없음</div>
       ) : (
         <Row className="g-0">
-          <Col md={4}>
-            <Card>
+          <Col md={4} className="category-admin-directory">
+            <Card className="h-100">
               <Card.Header className="py-1 d-flex flex-wrap align-items-center gap-2">
                 <span className="me-auto">디렉토리</span>
                 <Form.Check
@@ -1769,17 +1770,19 @@ export default function CategoryAdmin({
                   )}
                 </Button>
               </Card.Header>
-              <div id="dir_list">
-                <RichTreeView
-                  key={displayedTreeMeta.key}
-                  items={displayedFolderData}
-                  aria-label="category admin"
-                  sx={treeViewStyles}
-                  slots={{ item: AdminTreeItem }}
-                  expandedItems={displayedExpandedItems}
-                  onSelectedItemsChange={handleTreeItemClick}
-                />
-              </div>
+              <Card.Body className="overflow-auto">
+                <div id="dir_list">
+                  <RichTreeView
+                    key={displayedTreeMeta.key}
+                    items={displayedFolderData}
+                    aria-label="category admin"
+                    sx={treeViewStyles}
+                    slots={{ item: AdminTreeItem }}
+                    expandedItems={displayedExpandedItems}
+                    onSelectedItemsChange={handleTreeItemClick}
+                  />
+                </div>
+              </Card.Body>
             </Card>
           </Col>
           <Col md={8}>
