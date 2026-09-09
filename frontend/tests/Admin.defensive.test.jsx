@@ -20,19 +20,33 @@ vi.mock("../src/ViewHistoryAdmin", () => ({
 }));
 
 vi.mock("react-bootstrap", () => {
-  const Tab = ({ children }) => <div>{children}</div>;
-  Tab.Container = ({ children, onSelect }) => (
-    <div>
-      <button onClick={() => onSelect(null)}>reset tab</button>
-      {children}
-    </div>
-  );
-  Tab.Content = ({ children }) => <div>{children}</div>;
-  Tab.Pane = ({ children }) => <div>{children}</div>;
-
-  const Nav = ({ children }) => <div>{children}</div>;
-  Nav.Link = ({ children }) => <div>{children}</div>;
-
+  function Tab({ children }) {
+    return <div>{children}</div>;
+  }
+  function TabContainer({ children, onSelect }) {
+    return (
+      <div>
+        <button onClick={() => onSelect(null)}>reset tab</button>
+        {children}
+      </div>
+    );
+  }
+  function TabContent({ children }) {
+    return <div>{children}</div>;
+  }
+  function TabPane({ children }) {
+    return <div>{children}</div>;
+  }
+  function Nav({ children }) {
+    return <div>{children}</div>;
+  }
+  function NavLink({ children }) {
+    return <div>{children}</div>;
+  }
+  Tab.Container = TabContainer;
+  Tab.Content = TabContent;
+  Tab.Pane = TabPane;
+  Nav.Link = NavLink;
   return { Nav, Tab };
 });
 
