@@ -89,15 +89,35 @@ def inspect_epub_metadata(fpath: Path) -> Dict[str, str]:
 
 
 def inspect_txt_content(fpath: Path) -> Dict[str, Any]:
-    """TXT 파일 앞부분 줄(최대 40줄)에서 해시태그 및 소개글 스니펫 추출"""
+    """TXT 파일 앞부분 줄(최대 40줄)에서 해시태그, 헤더 장르 및 소개글 스니펫 추출 (UTF-8 실패 시 CP949 자동 폴백)"""
     info = {"hashtags": [], "snippet": ""}
     try:
-        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-            lines = [f.readline().strip() for _ in range(40)]
-            snippet = " ".join([l for l in lines if l])[:2000]
-            info["snippet"] = snippet
-            tags = re.findall(r"#([가-힣a-zA-Z0-9_]{2,15})", snippet)
-            info["hashtags"] = tags
+        lines = []
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                lines = [f.readline() for _ in range(40)]
+        except UnicodeDecodeError:
+            with open(fpath, "r", encoding="cp949", errors="ignore") as f:
+                lines = [f.readline() for _ in range(40)]
+
+        raw_text = "".join(lines)
+        if not re.search(r"[가-힣]{2,}", raw_text):
+            try:
+                with open(fpath, "r", encoding="cp949", errors="ignore") as f:
+                    lines = [f.readline() for _ in range(40)]
+            except Exception:
+                pass
+
+        lines = [l.strip() for l in lines]
+        snippet = " ".join([l for l in lines if l])[:2000]
+        info["snippet"] = snippet
+        tags = re.findall(r"#([가-힣a-zA-Z0-9_]{2,15})", snippet)
+        info["hashtags"] = tags
+
+        m = re.search(r"(?:장르|분류)\s*[:：]\s*([가-힣a-zA-Z]+)|(?:^|\s)\[([가-힣]{2,6})\]|(?:^|\s)【([가-힣]{2,6})】", snippet)
+        if m:
+            g = m.group(1) or m.group(2) or m.group(3)
+            info["header_genre"] = g
     except Exception:
         pass
     return info
@@ -135,6 +155,41 @@ def is_single_match_valid(search_title: str, found_title: str) -> bool:
     if len(matching) >= 2:
         return True
     if len(st_words) == 1 and len(ft_words) <= 3 and st_words[0] in ft_words:
+        return True
+
+    return False
+
+
+def is_title_match_reliable(search_title: str, found_title: str) -> bool:
+    """서점 간 충돌 해소 및 엄격한 단일 매칭 판정을 위한 고신뢰도 제목 일치 검증"""
+    if not found_title or not search_title:
+        return False
+    st_clean = re.sub(r"[^\w가-힣\s]", "", search_title.lower()).strip()
+    ft_clean = re.sub(r"[^\w가-힣\s]", "", found_title.lower()).strip()
+    st_words = [w for w in st_clean.split() if len(w) >= 2]
+    ft_words = [w for w in ft_clean.split() if len(w) >= 2]
+    if not st_words:
+        return False
+
+    # 음반/OST 오매칭 필터링 (도서 파일인데 음반/사운드트랙으로 매칭되는 경우 방지)
+    if any(ost_kw in found_title.upper() for ost_kw in ["O.S.T", "OST", "(CD", "CD-ROM", "음반", "사운드트랙"]):
+        return False
+
+    # 1. 공백 제외 완전 일치 또는 통째 포함
+    s1 = re.sub(r"\s+", "", st_clean)
+    s2 = re.sub(r"\s+", "", ft_clean)
+    if s1 == s2:
+        return True
+    if s1 in s2 and len(s1) >= 4:
+        return True
+
+    # 2. search_title의 단어 중 70% 이상이 found_title에 포함되고 bi-gram 유사도 >= 0.5
+    matching = [w for w in st_words if any(w in fw or fw in w for fw in ft_words)]
+    ratio = len(matching) / len(st_words)
+    sim = title_similarity(search_title, found_title)
+    if ratio >= 0.7 and sim >= 0.5:
+        return True
+    if len(st_words) == 1 and len(ft_words) <= 2 and st_words[0] in ft_words and sim >= 0.6:
         return True
 
     return False
@@ -240,6 +295,43 @@ def resolve_genre_conflict(cats: List[str], fname: str, text_sample: str = "") -
         if any(kw in text_lower for kw in ["성공", "처세", "습관", "인간관계", "대화법", "시간관리"]):
             return "6_처세술리더십창의성"
 
+    # 12. 소설외국 vs 스릴러
+    if "2_소설외국" in valid_cats and "3_스릴러" in valid_cats:
+        thriller_kws = ["추리", "미스터리", "스릴러", "살인", "탐정", "형사", "사건", "범인", "시체", "밀실", "수사", "경감", "셜록"]
+        if any(kw in text_lower or kw in fname_lower for kw in thriller_kws):
+            return "3_스릴러"
+        return "2_소설외국"
+
+    # 13. 여성향 vs BLGL
+    if "3_여성향" in valid_cats and "9_BLGL" in valid_cats:
+        bl_kws = ["bl", "백합", "오메가버스", "알파오메가", "공수", "광공", "다정공", "미인수", "임신수", "비엘"]
+        rofan_kws = ["로맨스", "로판", "여주", "남주", "황태자", "공작", "영애", "시월드"]
+        if any(kw in text_lower or kw in fname_lower for kw in bl_kws):
+            return "9_BLGL"
+        if any(kw in text_lower or kw in fname_lower for kw in rofan_kws):
+            return "3_여성향"
+
+    # 14. 소설한국 vs 스릴러
+    if "2_소설한국" in valid_cats and "3_스릴러" in valid_cats:
+        thriller_kws = ["추리", "미스터리", "스릴러", "살인", "탐정", "형사", "사건", "범인", "수사"]
+        if any(kw in text_lower or kw in fname_lower for kw in thriller_kws):
+            return "3_스릴러"
+        return "2_소설한국"
+
+    # 15. 소설외국 vs 판타지
+    if "2_소설외국" in valid_cats and "3_판타지" in valid_cats:
+        fantasy_kws = ["판타지", "마법", "드래곤", "엘프", "던전", "마왕", "용사", "이세계"]
+        if any(kw in text_lower or kw in fname_lower for kw in fantasy_kws):
+            return "3_판타지"
+        return "2_소설외국"
+
+    # 16. 소설외국 vs 여성향
+    if "2_소설외국" in valid_cats and "3_여성향" in valid_cats:
+        ro_kws = ["로맨스", "로판", "사랑", "연애", "신부", "귀부인"]
+        if any(kw in text_lower or kw in fname_lower for kw in ro_kws):
+            return "3_여성향"
+        return "2_소설외국"
+
     return None
 
 
@@ -292,6 +384,26 @@ def evaluate_category_decision(
             txt_info = inspect_txt_content(fpath)
             text_sample = f"{' '.join(txt_info.get('hashtags', []))} {txt_info.get('snippet', '')}"
 
+    # Priority 2.5: 서점 간 충돌 중 유효 제목 매칭 필터링 (False Conflict 해소)
+    # 한 서점은 정확한 책을 찾았으나 다른 서점이 엉뚱한 추천도서를 반환하여 발생한 거짓 충돌 해소
+    if len(valid_maps) >= 2:
+        valid_title_candidates = []
+        for store_entry in [y_entry, a_entry, k_entry]:
+            if not store_entry or not store_entry.get("mapped"):
+                continue
+            f_title = store_entry.get("title", "")
+            if is_title_match_reliable(search_title, f_title):
+                valid_title_candidates.append((store_entry.get("mapped"), f_title))
+
+        if len(valid_title_candidates) == 1:
+            m_cat, m_title = valid_title_candidates[0]
+            return m_cat, "single_valid_match_resolved", f"False conflict resolved by title similarity ({m_cat}) for '{m_title[:30]}'"
+        elif len(valid_title_candidates) >= 2:
+            cand_counts = Counter([c[0] for c in valid_title_candidates])
+            for c_cat, c_cnt in cand_counts.items():
+                if c_cnt >= 2:
+                    return c_cat, "majority", f"Majority vote ({c_cnt}/3) after title validation -> {c_cat}"
+
     # Priority 3: 서점 간 사소한 장르 충돌 해결
     if len(valid_maps) >= 2:
         resolved = resolve_genre_conflict(valid_maps, fname, text_sample)
@@ -329,6 +441,11 @@ def evaluate_category_decision(
                 return sc_cat, "content_metadata", f"EPUB content scored -> {sc_cat}"
 
         elif ext == ".txt" and txt_info:
+            hg = txt_info.get("header_genre")
+            if hg:
+                hg_cat = extract_explicit_genre(f"[{hg}]") or map_category(hg, raw_title, raw_author)
+                if hg_cat:
+                    return hg_cat, "content_metadata", f"TXT header [{hg}] -> {hg_cat}"
             for tag in txt_info.get("hashtags", []):
                 tag_cat = map_category(tag, raw_title, raw_author) or extract_explicit_genre(f"[{tag}]")
                 if tag_cat:

@@ -435,3 +435,45 @@ def test_book_classifier_service_process_file(tmp_path):
     assert res_move["action"] == "moved"
     assert not fpath.exists()
     assert (lib_root / "3_판타지" / fpath.name).exists()
+
+
+def test_evaluate_category_decision_resolves_false_conflict_by_title_similarity():
+    # yes24는 무관한 추천 도서(유사도 낮음), kyobo는 정확한 제목 일치
+    yes24 = {"title": "세네카 오늘을 빼앗기고 있는 당신에게", "mapped": "4_철학윤리"}
+    kyobo = {"title": "공포의 산장", "mapped": "2_소설외국"}
+    aladin = {"title": "", "mapped": None}
+
+    cat, method, reason = evaluate_category_decision(
+        "공포의 산장.epub",
+        None,
+        "공포의 산장",
+        "",
+        "공포의 산장",
+        yes24,
+        aladin,
+        kyobo,
+    )
+    assert cat == "2_소설외국"
+    assert method == "single_valid_match_resolved"
+    assert "False conflict resolved" in reason
+
+
+def test_resolve_genre_conflict_new_rules():
+    # 1. 소설외국 vs 스릴러 (스릴러 키워드 포함 시 3_스릴러, 없을 시 2_소설외국)
+    assert resolve_genre_conflict(["2_소설외국", "3_스릴러"], "셜록홈즈의 모험.txt", "") == "3_스릴러"
+    assert resolve_genre_conflict(["2_소설외국", "3_스릴러"], "어린왕자.txt", "") == "2_소설외국"
+
+    # 2. 여성향 vs BLGL
+    assert resolve_genre_conflict(["3_여성향", "9_BLGL"], "[BL] 패션.txt", "") == "9_BLGL"
+    assert resolve_genre_conflict(["3_여성향", "9_BLGL"], "황태자의 약혼녀.txt", "") == "3_여성향"
+
+
+def test_inspect_txt_content_cp949_and_header_genre(tmp_path):
+    f = tmp_path / "test_cp949.txt"
+    content = "=====================\n[판타지] 룬의 아이들 1권\n=====================\n프롤로그..."
+    f.write_bytes(content.encode("cp949"))
+
+    res = inspect_txt_content(f)
+    assert res.get("header_genre") == "판타지"
+    assert "룬의 아이들" in res.get("snippet", "")
+
