@@ -55,12 +55,21 @@ describe("Admin", () => {
     expect(tabs.map((t) => t.textContent)).toEqual(SUBTAB_LABELS);
   });
 
-  it("관리 내부 서브 탭에 전용 modern tab class를 적용한다", () => {
+  it("서브 탭 띠가 최상단 탭과 같은 공유 클래스를 쓴다", () => {
     render(<Admin />);
 
     const tabList = screen.getByRole("tablist");
-    expect(tabList.classList.contains("admin-modern-tabs")).toBe(true);
-    expect(tabList.classList.contains("nav-tabs")).toBe(true);
+    expect(tabList.tagName).toBe("NAV");
+    // 최상단 탭(Navigation.jsx)과 공유하는 띠 클래스
+    expect(tabList.classList.contains("tab-strip")).toBe(true);
+    expect(tabList.classList.contains("admin-subtabs")).toBe(true);
+    // bootstrap 의 (0,3,0) 규칙과 경쟁하지 않도록 nav-tabs 는 붙이지 않는다
+    expect(tabList.classList.contains("nav-tabs")).toBe(false);
+
+    for (const tab of screen.getAllByRole("tab")) {
+      expect(tab.classList.contains("tab-strip-item")).toBe(true);
+      expect(tab.classList.contains("nav-link")).toBe(true);
+    }
   });
 
   it("기본으로 로그인 세션 관리 탭을 보여준다", () => {

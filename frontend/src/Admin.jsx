@@ -4,6 +4,7 @@ import { useOutletContext } from "react-router-dom";
 import "./Edit.css";
 import "bootstrap/dist/css/bootstrap.min.css";
 import "./Admin.css";
+import "./TabStrip.css";
 import { Nav, Tab } from "react-bootstrap";
 
 import CategoryAdmin from "./CategoryAdmin";
@@ -49,17 +50,20 @@ export default function Admin() {
       activeKey={activeTab}
       onSelect={(key) => setActiveTab(key || SESSION_TAB)}
     >
-      {/* 최상단 탭(Navigation.jsx)과 같이 nav 요소로 띠를 만든다. Tabs는 ul을
-          강제하므로 Tab.Container + Nav 로 낮춰 조립한다. TabContext 안의 Nav 는
-          role="tablist" 와 방향키 이동을 그대로 유지한다. */}
-      <Nav
-        as="nav"
-        variant="tabs"
-        id="admin-subtabs"
-        className="admin-modern-tabs mb-3"
-      >
+      {/* 최상단 탭(Navigation.jsx)과 같은 구조로 조립한다. 컨테이너는 nav 요소에
+          nav + tab-strip, 항목은 nav-link + tab-strip-item 이고 스타일은
+          TabStrip.css 를 공유한다. Tabs 는 ul 을 강제하므로 Tab.Container + Nav
+          로 낮췄다. TabContext 안의 Nav 는 role="tablist" 와 방향키 이동을 그대로
+          유지한다. 띠 아래 간격은 최상단 탭처럼 border-bottom 1px 만 둔다. */}
+      <Nav as="nav" id="admin-subtabs" className="admin-subtabs tab-strip">
         {SUBTABS.map(({ key, title }) => (
-          <Nav.Link as="button" type="button" key={key} eventKey={key}>
+          <Nav.Link
+            as="button"
+            type="button"
+            className="tab-strip-item"
+            key={key}
+            eventKey={key}
+          >
             {title}
           </Nav.Link>
         ))}

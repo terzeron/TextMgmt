@@ -26,6 +26,7 @@ import {
 } from "./Common.js";
 import { isViewerAllowedPath } from "./auth.js";
 import "./Navigation.css";
+import "./TabStrip.css";
 
 const VIEW_NAV_ITEMS = [
   { href: "/book-view", label: "책" },
@@ -328,14 +329,17 @@ export default function Navigation() {
           </Navbar.Brand>
           <Navbar.Toggle aria-controls="basic-navbar-nav" />
           <Navbar.Collapse id="basic-navbar-nav">
-            <Nav className="textmgmt-top-tabs me-auto">
+            {/* navbar={false} 로 bootstrap 의 navbar-nav 를 떼고 nav 만 받는다.
+                그러면 서브탭 띠와 클래스 구성이 같아지고, TabStrip.css 의 짧은
+                선택자가 bootstrap 규칙과 경쟁하지 않는다. */}
+            <Nav navbar={false} className="textmgmt-top-tabs tab-strip me-auto">
               {role &&
                 VIEW_NAV_ITEMS.map((item) => (
                   <Nav.Link
                     key={item.href}
                     href={item.href}
                     active={isActiveNavItem(item.href)}
-                    className="textmgmt-top-tab"
+                    className="textmgmt-top-tab tab-strip-item"
                   >
                     {item.label}
                   </Nav.Link>
@@ -346,7 +350,7 @@ export default function Navigation() {
                     key={item.href}
                     href={item.href}
                     active={isActiveNavItem(item.href)}
-                    className="textmgmt-top-tab"
+                    className="textmgmt-top-tab tab-strip-item"
                   >
                     {item.label}
                   </Nav.Link>
