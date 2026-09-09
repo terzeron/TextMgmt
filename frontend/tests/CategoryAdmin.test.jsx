@@ -5424,3 +5424,645 @@ describe("CategoryAdmin 잔여 커버리지 보강", () => {
     }
   });
 });
+
+describe("CategoryAdmin 재적재 충돌 및 폴링 방어 처리", () => {
+  beforeEach(() => {
+    mockJsonGetReq.mockReset();
+    mockJsonDeleteReq.mockReset();
+    mockJsonPostReq.mockReset();
+    mockJsonPutReq.mockReset();
+  });
+
+  // 재적재 상태 폴링 응답을 보류시킨다. POST 응답이 만든 상태가 곧바로 도착한
+  // idle 폴링 응답에 덮이면 검증하려는 분기의 결과를 관찰할 수 없다.
+  function setupWithHeldReloadStatus({
+    mismatchResult = MISMATCH_RESPONSE_WITH_DATA,
+    detailResult = null,
+    autoClassifyStatus = { status: "idle" },
+  } = {}) {
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches") resolve(mismatchResult);
+      else if (url.startsWith("/category-mismatches/reload-status")) return;
+      else if (url === "/categories/auto-classify-status")
+        resolve(autoClassifyStatus);
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        resolve(LATEST_EXCLUDED_RESPONSE);
+      else if (detailResult && url.startsWith("/category-mismatches/"))
+        resolve(detailResult);
+    });
+  }
+
+  // 확인 모달이 사라지는 동안에는 모달 버튼과 헤더 버튼의 접근성 이름이 겹치므로
+  // 헤더 안에서만 버튼을 찾는다.
+  function headerButton(name) {
+    const header = screen.getByText("디렉토리").closest(".card-header");
+    return within(header).getByRole("button", { name });
+  }
+
+  function resolvePost(result) {
+    mockJsonPostReq.mockImplementation(
+      (_url, _payload, resolve, _reject, done) => {
+        resolve(result);
+        if (done) done();
+      },
+    );
+  }
+
+  // ── 일괄/전체 재적재 시작 응답 처리 ──
+
+  it("일괄 재적재 시작이 다른 카테고리 작업에 막히면 스피너를 끄고 차단 메시지를 표시한다", async () => {
+    setupWithHeldReloadStatus();
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리")).toBeTruthy();
+    });
+
+    resolvePost({ already_running: true, category: "2_science" });
+    fireEvent.click(headerButton("일괄 재적재"));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "일괄 재적재" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /카테고리 '2_science' 재적재가 이미 진행 중이라 지금은 일괄 재적재를 실행할 수 없습니다/,
+        ),
+      ).toBeTruthy();
+    });
+    expect(
+      headerButton("일괄 재적재").querySelector(".spinner-border"),
+    ).toBeNull();
+    expect(
+      window.sessionStorage.getItem("CategoryAdmin.allReloadOwner.book"),
+    ).toBeNull();
+  });
+
+  it("일괄 재적재 시작 응답이 카테고리 없는 already_running이면 진행 상태를 그대로 반영한다", async () => {
+    setupWithHeldReloadStatus();
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리")).toBeTruthy();
+    });
+
+    resolvePost({
+      already_running: true,
+      status: "running",
+      remaining_count: 3,
+    });
+    fireEvent.click(headerButton("일괄 재적재"));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "일괄 재적재" }));
+
+    await waitFor(() => {
+      expect(
+        within(headerButton("일괄 재적재")).getByText("잔여 3건"),
+      ).toBeTruthy();
+    });
+    expect(
+      window.sessionStorage.getItem("CategoryAdmin.allReloadOwner.book"),
+    ).toBe("bulk");
+  });
+
+  it("일괄 재적재 시작 응답의 reload_source가 이상 항목이면 이상 항목 스피너로 전환한다", async () => {
+    setupWithHeldReloadStatus();
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리")).toBeTruthy();
+    });
+
+    resolvePost({ reload_source: "mismatch" });
+    fireEvent.click(headerButton("일괄 재적재"));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "일괄 재적재" }));
+
+    await waitFor(() => {
+      expect(
+        within(headerButton("이상 항목 재적재")).getByText("잔여 19건"),
+      ).toBeTruthy();
+    });
+    expect(
+      headerButton("일괄 재적재").querySelector(".spinner-border"),
+    ).toBeNull();
+    expect(
+      window.sessionStorage.getItem("CategoryAdmin.allReloadOwner.book"),
+    ).toBe("mismatch");
+  });
+
+  it("전체 이상 항목 재적재 시작 응답의 reload_source가 일괄이면 일괄 스피너로 전환한다", async () => {
+    setupWithHeldReloadStatus();
+    render(<CategoryAdminBase />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리")).toBeTruthy();
+    });
+
+    resolvePost({ reload_source: "bulk" });
+    fireEvent.click(headerButton("이상 항목 재적재"));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        within(headerButton("일괄 재적재")).getByText("잔여 19건"),
+      ).toBeTruthy();
+    });
+    expect(
+      headerButton("이상 항목 재적재").querySelector(".spinner-border"),
+    ).toBeNull();
+  });
+
+  // ── 카테고리별 이상 항목 재적재 시작 응답 처리 ──
+
+  it("카테고리 이상 항목 재적재가 다른 카테고리 작업에 막히면 차단 메시지를 표시한다", async () => {
+    setupWithHeldReloadStatus();
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    resolvePost({ already_running: true, category: "2_science" });
+    fireEvent.click(screen.getByTitle("이상 항목만 ES 재적재"));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /카테고리 '2_science' 재적재가 이미 진행 중이라 지금은 실행할 수 없습니다/,
+        ),
+      ).toBeTruthy();
+    });
+    expect(
+      headerButton("이상 항목 재적재").querySelector(".spinner-border"),
+    ).toBeNull();
+  });
+
+  it("카테고리 이상 항목 재적재가 일괄 작업에 막히면 일괄 진행 중 메시지를 표시한다", async () => {
+    setupWithHeldReloadStatus();
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    resolvePost({ already_running: true });
+    fireEvent.click(screen.getByTitle("이상 항목만 ES 재적재"));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /일괄 재적재가 이미 진행 중이라 지금은 실행할 수 없습니다/,
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  it("같은 카테고리의 already_running 응답은 폴링과 같은 경로로 상태를 반영한다", async () => {
+    setupWithHeldReloadStatus();
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    resolvePost({
+      already_running: true,
+      category: "1_fiction",
+      status: "done",
+      indexed_count: 3,
+      deleted_count: 1,
+      after_count: 0,
+      failed_count: 0,
+    });
+    fireEvent.click(screen.getByTitle("이상 항목만 ES 재적재"));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /카테고리 '1_fiction' 이상 항목 ES 재적재 완료 \(적재 3건, ES 정리 1건, 남은 이상 0건\)/,
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  // ── 자동 분류 상태/모달 ──
+
+  it("자동 분류 상태가 idle로 돌아오면 진행 표시를 끈다", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let autoStatus = { status: "idle" };
+      mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+        if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+        else if (url === "/category-mismatches")
+          resolve(MISMATCH_RESPONSE_EMPTY);
+        else if (url.startsWith("/category-mismatches/reload-status"))
+          resolve({ status: "idle" });
+        else if (url === "/categories/auto-classify-status")
+          resolve(autoStatus);
+        else if (url.startsWith("/category-mappings"))
+          resolve(MAPPINGS_RESPONSE);
+        else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+        else if (url.startsWith("/latest-excluded-categories"))
+          resolve(LATEST_EXCLUDED_RESPONSE);
+      });
+      render(<CategoryAdmin />);
+      await waitFor(() => {
+        expect(screen.getByText("1_fiction")).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByText("1_fiction"));
+      fireEvent.click(screen.getByTitle("자동 분류"));
+      const modal = await screen.findByRole("dialog");
+      autoStatus = { status: "running", remaining_count: 5 };
+      resolvePost({ started: true });
+      fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
+
+      await waitFor(() => {
+        expect(
+          within(screen.getByTitle("자동 분류")).getByText("잔여 5건"),
+        ).toBeTruthy();
+      });
+
+      autoStatus = { status: "idle" };
+      await act(async () => {
+        vi.advanceTimersByTime(3000);
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getByTitle("자동 분류").querySelector(".spinner-border"),
+        ).toBeNull();
+      });
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("자동 분류 확인 중 선택이 해제되면 요청 없이 모달만 닫는다", async () => {
+    const detailResult = {
+      es_only: [
+        {
+          book_id: 101,
+          title: "Missing File",
+          file_type: "pdf",
+          file_path: "1_fiction/missing.pdf",
+        },
+      ],
+      fs_only: [],
+      duplicates: [],
+    };
+    setupWithHeldReloadStatus({ detailResult });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("Missing File.pdf")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTitle("자동 분류"));
+    const modal = await screen.findByRole("dialog");
+
+    // 모달이 열린 뒤 이상 항목을 선택하면 카테고리 선택이 해제된다.
+    fireEvent.click(screen.getByText("Missing File.pdf"));
+    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+  });
+
+  it("자동 분류 확인 모달을 X 버튼과 취소 버튼으로 각각 닫을 수 있다", async () => {
+    setupWithHeldReloadStatus();
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+
+    fireEvent.click(screen.getByTitle("자동 분류"));
+    let modal = await screen.findByRole("dialog");
+    fireEvent.click(modal.querySelector(".btn-close"));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    fireEvent.click(screen.getByTitle("자동 분류"));
+    modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "취소" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+  });
+
+  // ── 폴링 실패 및 stale 응답 ──
+
+  it("카테고리별 재적재 상태 폴링이 실패해도 선택 화면을 유지한다", async () => {
+    mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches")
+        resolve(MISMATCH_RESPONSE_WITH_DATA);
+      else if (url.startsWith("/category-mismatches/reload-status?category="))
+        reject("status error");
+      else if (url.startsWith("/category-mismatches/reload-status"))
+        resolve({ status: "idle" });
+      else if (url === "/categories/auto-classify-status")
+        resolve({ status: "idle" });
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        resolve(LATEST_EXCLUDED_RESPONSE);
+    });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByTitle("이상 항목만 ES 재적재")).toBeTruthy();
+    });
+  });
+
+  it("자동 분류 상태 조회가 실패해도 화면을 유지한다", async () => {
+    mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
+      else if (url.startsWith("/category-mismatches/reload-status"))
+        resolve({ status: "idle" });
+      else if (url === "/categories/auto-classify-status")
+        reject("auto classify status error");
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        resolve(LATEST_EXCLUDED_RESPONSE);
+    });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+  });
+
+  it("자동 분류 폴링 요청이 실패해도 진행 표시를 유지한다", async () => {
+    let failAutoStatus = false;
+    mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
+      else if (url.startsWith("/category-mismatches/reload-status"))
+        resolve({ status: "idle" });
+      else if (url === "/categories/auto-classify-status") {
+        if (failAutoStatus) reject("poll error");
+        else resolve({ status: "idle" });
+      } else if (url.startsWith("/category-mappings"))
+        resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        resolve(LATEST_EXCLUDED_RESPONSE);
+    });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    fireEvent.click(screen.getByTitle("자동 분류"));
+    const modal = await screen.findByRole("dialog");
+    failAutoStatus = true;
+    resolvePost({ started: true });
+    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByTitle("자동 분류").querySelector(".spinner-border"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("언마운트 뒤 도착한 자동 분류 폴링 응답은 무시한다", async () => {
+    const heldAutoStatusResolvers = [];
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
+      else if (url.startsWith("/category-mismatches/reload-status"))
+        resolve({ status: "idle" });
+      else if (url === "/categories/auto-classify-status")
+        heldAutoStatusResolvers.push(resolve);
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        resolve(LATEST_EXCLUDED_RESPONSE);
+    });
+    const { unmount } = render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    fireEvent.click(screen.getByTitle("자동 분류"));
+    const modal = await screen.findByRole("dialog");
+    resolvePost({ started: true });
+    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
+
+    await waitFor(() => {
+      expect(heldAutoStatusResolvers.length).toBeGreaterThan(1);
+    });
+
+    const lastResolve =
+      heldAutoStatusResolvers[heldAutoStatusResolvers.length - 1];
+    unmount();
+    expect(() =>
+      lastResolve({ status: "running", remaining_count: 9 }),
+    ).not.toThrow();
+  });
+
+  it("콘텐츠 타입이 바뀌면 이전 최신 자료 제외 응답을 무시한다", async () => {
+    const latestExcludedCalls = [];
+    mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
+      if (url.endsWith("/categories")) resolve(CATEGORIES_RESPONSE);
+      else if (url.endsWith("/category-mismatches"))
+        resolve(MISMATCH_RESPONSE_EMPTY);
+      else if (url.includes("/category-mismatches/reload-status"))
+        resolve({ status: "idle" });
+      else if (url.includes("/categories/auto-classify-status"))
+        resolve({ status: "idle" });
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        latestExcludedCalls.push({ resolve, reject });
+    });
+
+    const { rerender } = render(<CategoryAdmin contentType="book" />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    rerender(<CategoryAdmin contentType="comic" />);
+    await waitFor(() => {
+      expect(latestExcludedCalls.length).toBe(2);
+    });
+
+    // 첫 요청(=이전 contentType)의 응답은 늦게 도착하더라도 반영되지 않는다.
+    await act(async () => {
+      latestExcludedCalls[0].resolve(["1_fiction"]);
+      latestExcludedCalls[0].reject("stale error");
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByLabelText("최신 자료 검색 제외").checked).toBe(false);
+    });
+  });
+
+  // ── 재적재 소유자 세션 저장 ──
+
+  it("sessionStorage 접근이 차단되어도 재적재 소유자 없이 렌더링한다", async () => {
+    const getItemSpy = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new Error("sessionStorage blocked");
+      });
+    try {
+      setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+      render(<CategoryAdmin />);
+      await waitFor(() => {
+        expect(screen.getByText("1_fiction")).toBeTruthy();
+      });
+      expect(getItemSpy).toHaveBeenCalled();
+    } finally {
+      getItemSpy.mockRestore();
+    }
+  });
+
+  it("일괄 재적재 차단 메시지는 5초 뒤 사라진다", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      setupWithHeldReloadStatus();
+      render(<CategoryAdmin />);
+      await waitFor(() => {
+        expect(screen.getByText("디렉토리")).toBeTruthy();
+      });
+
+      resolvePost({ already_running: true, category: "2_science" });
+      fireEvent.click(headerButton("일괄 재적재"));
+      const modal = await screen.findByRole("dialog");
+      fireEvent.click(
+        within(modal).getByRole("button", { name: "일괄 재적재" }),
+      );
+
+      const blockedMessage =
+        /카테고리 '2_science' 재적재가 이미 진행 중이라 지금은 일괄 재적재를 실행할 수 없습니다/;
+      await waitFor(() => {
+        expect(screen.getByText(blockedMessage)).toBeTruthy();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(screen.queryByText(blockedMessage)).toBeNull();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("카테고리 이상 항목 재적재 차단 메시지는 5초 뒤 사라진다", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      setupWithHeldReloadStatus();
+      render(<CategoryAdmin />);
+      await waitFor(() => {
+        expect(screen.getByText("1_fiction")).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByText("1_fiction"));
+      resolvePost({ already_running: true, category: "2_science" });
+      fireEvent.click(screen.getByTitle("이상 항목만 ES 재적재"));
+      const modal = await screen.findByRole("dialog");
+      fireEvent.click(
+        within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+      );
+
+      const blockedMessage =
+        /카테고리 '2_science' 재적재가 이미 진행 중이라 지금은 실행할 수 없습니다/;
+      await waitFor(() => {
+        expect(screen.getByText(blockedMessage)).toBeTruthy();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(screen.queryByText(blockedMessage)).toBeNull();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("sessionStorage 저장이 차단되어도 일괄 재적재를 시작한다", async () => {
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new Error("sessionStorage blocked");
+      });
+    try {
+      setupWithHeldReloadStatus();
+      render(<CategoryAdmin />);
+      await waitFor(() => {
+        expect(screen.getByText("디렉토리")).toBeTruthy();
+      });
+
+      resolvePost({ started: true });
+      fireEvent.click(headerButton("일괄 재적재"));
+      const modal = await screen.findByRole("dialog");
+      fireEvent.click(
+        within(modal).getByRole("button", { name: "일괄 재적재" }),
+      );
+
+      await waitFor(() => {
+        expect(
+          headerButton("일괄 재적재").querySelector(".spinner-border"),
+        ).toBeTruthy();
+      });
+      expect(setItemSpy).toHaveBeenCalled();
+    } finally {
+      setItemSpy.mockRestore();
+    }
+  });
+
+  it("contentType이 비어 있으면 기본 book 세션 키로 재적재 소유자를 읽는다", async () => {
+    const getItemSpy = vi.spyOn(Storage.prototype, "getItem");
+    try {
+      setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+      render(
+        <CategoryAdminBase contentType="" initialShowOnlyAbnormal={false} />,
+      );
+      await waitFor(() => {
+        expect(screen.getByText("1_fiction")).toBeTruthy();
+      });
+      expect(getItemSpy).toHaveBeenCalledWith(
+        "CategoryAdmin.allReloadOwner.book",
+      );
+    } finally {
+      getItemSpy.mockRestore();
+    }
+  });
+});

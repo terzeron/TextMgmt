@@ -1,11 +1,31 @@
-.textmgmt-navbar {
+/* Navigation.css is bundled before bootstrap.min.css (imported by Admin.jsx
+   and others), so a single-class selector loses to bootstrap's own .navbar
+   padding rule. Qualify with .navbar to win regardless of order. */
+.navbar.textmgmt-navbar {
     border-bottom: 1px solid var(--bs-border-color);
+    padding-bottom: 0;
     padding-left: 0.75rem;
     padding-right: 0.75rem;
+    padding-top: 0;
+}
+
+/* Brand's default vertical padding would drive the bar height. */
+.textmgmt-navbar .navbar-brand {
+    align-items: center;
+    display: flex;
+    padding-bottom: 0;
+    padding-top: 0;
+}
+
+/* Let the tab strip fill the whole bar instead of being centered in it. */
+.textmgmt-navbar .navbar-collapse {
+    align-items: stretch;
+    align-self: stretch;
 }
 
 .textmgmt-top-tabs.navbar-nav {
-    align-items: center;
+    align-items: stretch;
+    align-self: stretch;
     display: flex;
     flex-wrap: wrap;
     gap: 0;
@@ -13,16 +33,16 @@
 }
 
 .textmgmt-top-tabs.navbar-nav .nav-link.textmgmt-top-tab {
+    align-items: center;
     background: transparent;
     border: 0;
     border-radius: 0;
     color: var(--bs-secondary-color);
+    display: flex;
     font-weight: 600;
-    line-height: 1.2;
-    padding: 0.55rem 0.85rem;
+    padding: 0.3rem 0.85rem;
     position: relative;
-    transition:
-        color 0.15s ease;
+    transition: color 0.15s ease;
 }
 
 .textmgmt-top-tabs.navbar-nav .nav-link.textmgmt-top-tab:not(:first-child) {
@@ -31,7 +51,7 @@
 
 .textmgmt-top-tabs.navbar-nav .nav-link.textmgmt-top-tab::after {
     background: transparent;
-    bottom: 0.15rem;
+    bottom: -1px;
     content: "";
     height: 2px;
     left: 0.85rem;
@@ -68,6 +88,7 @@
     }
 
     .textmgmt-top-tabs.navbar-nav .nav-link.textmgmt-top-tab {
+        justify-content: center;
         text-align: center;
     }
 }
