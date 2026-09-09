@@ -86,28 +86,30 @@ def main():
             dest_dir = args.library_root / target_cat
             dest_path = dest_dir / p.name
             dest_dir.mkdir(parents=True, exist_ok=True)
-            if dest_path.exists():
-                if args.clean_existing:
-                    p.unlink()
+            if dest_path.resolve() != p.resolve():
+                if dest_path.exists():
+                    if args.clean_existing:
+                        p.unlink()
+                        clean_empty_parent_dirs(p.parent, args.source_dir)
+                        cleaned_count += 1
+                else:
+                    p.rename(dest_path)
                     clean_empty_parent_dirs(p.parent, args.source_dir)
-                    cleaned_count += 1
-            else:
-                p.rename(dest_path)
-                clean_empty_parent_dirs(p.parent, args.source_dir)
-                moved_count += 1
+                    moved_count += 1
         elif args.move_hybrids_to and c.startswith("하이브리드_"):
             dest_dir = args.library_root / args.move_hybrids_to
             dest_path = dest_dir / p.name
             dest_dir.mkdir(parents=True, exist_ok=True)
-            if dest_path.exists():
-                if args.clean_existing:
-                    p.unlink()
+            if dest_path.resolve() != p.resolve():
+                if dest_path.exists():
+                    if args.clean_existing:
+                        p.unlink()
+                        clean_empty_parent_dirs(p.parent, args.source_dir)
+                        cleaned_count += 1
+                else:
+                    p.rename(dest_path)
                     clean_empty_parent_dirs(p.parent, args.source_dir)
-                    cleaned_count += 1
-            else:
-                p.rename(dest_path)
-                clean_empty_parent_dirs(p.parent, args.source_dir)
-                moved_count += 1
+                    moved_count += 1
 
         if idx % 1000 == 0:
             print(f"[{idx}/{total_files}] 분석 진행 중... (클러스터 수: {len(clusters)})", flush=True)
@@ -157,7 +159,7 @@ def main():
     for c in other_clusters:
         print(f"  ▶ {c}: {len(clusters[c])}권")
 
-    if args.auto_move_pure:
+    if args.auto_move_pure or args.move_hybrids_to:
         print(f"\n[자동 이동 결과] 신규 이동: {moved_count}권, 중복 정리: {cleaned_count}권")
 
     # JSON 저장
