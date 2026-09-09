@@ -328,7 +328,7 @@ export default function Navigation() {
           </Navbar.Brand>
           <Navbar.Toggle aria-controls="basic-navbar-nav" />
           <Navbar.Collapse id="basic-navbar-nav">
-            <Nav className="textmgmt-top-tabs me-auto my-2 my-lg-0">
+            <Nav className="textmgmt-top-tabs me-auto">
               {role &&
                 VIEW_NAV_ITEMS.map((item) => (
                   <Nav.Link
@@ -361,7 +361,7 @@ export default function Navigation() {
                   }}
                   className="me-2"
                 >
-                  <InputGroup>
+                  <InputGroup size="sm">
                     <FormControl
                       type="text"
                       placeholder="키워드"
@@ -397,8 +397,8 @@ export default function Navigation() {
                         src={picture}
                         alt={email}
                         title={email}
-                        width="38"
-                        height="38"
+                        width="30"
+                        height="30"
                         className="rounded-circle"
                         style={{ border: "1px solid #cccccc" }}
                       />

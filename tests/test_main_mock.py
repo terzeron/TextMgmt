@@ -3,6 +3,7 @@
 import importlib
 import json
 import time
+from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.responses import Response
@@ -627,7 +628,7 @@ class TestAuthGoogle:
         assert r.status_code == 400
 
     def test_google_api_error_returns_401(self, client):
-        with patch("backend.main.google_id_token.verify_oauth2_token", side_effect=ValueError("bad")):
+        with patch("backend.main.TM_GOOGLE_CLIENT_ID", "mock_client_id"), patch("backend.main.google_id_token.verify_oauth2_token", side_effect=ValueError("bad")):
             r = client.post("/auth/google", json={"credential": "bad_token"})
         assert r.status_code == 401
 
@@ -899,3 +900,213 @@ def test_search_similar_books_filters_hidden_categories_for_viewer(client, mock_
     data = r.json()
     assert data["status"] == "success"
     assert data["total"] == 1  # hidden_similar 제외, visible_similar 만 남음
+
+
+# ── Additional edge case tests to reach 100% coverage on backend/main.py ──
+
+
+def test_auto_classify_status_path_error(client, mock_bm):
+    # 413-414: TypeError when path_prefix is invalid type
+    mock_bm.path_prefix = 12345
+    r = client.get("/categories/auto-classify-status")
+    assert r.status_code == 200
+    assert "status" in r.json()["result"]
+
+
+def test_auto_classify_status_read_corrupt_json(client, mock_bm, tmp_path):
+    # 423-425: corrupted JSON
+    mock_bm.path_prefix = tmp_path
+    status_file = tmp_path / ".auto_classify_status_book.json"
+    status_file.write_text("{corrupt json", encoding="utf-8")
+    r = client.get("/categories/auto-classify-status")
+    assert r.status_code == 200
+    assert "status" in r.json()["result"]
+
+
+def test_auto_classify_status_read_non_dict_json(client, mock_bm, tmp_path):
+    # 427: non-dict JSON
+    mock_bm.path_prefix = tmp_path
+    status_file = tmp_path / ".auto_classify_status_book.json"
+    status_file.write_text("[1, 2, 3]", encoding="utf-8")
+    r = client.get("/categories/auto-classify-status")
+    assert r.status_code == 200
+    assert "status" in r.json()["result"]
+
+
+def test_auto_classify_replace_status_parent_not_exists(client, mock_bm, tmp_path):
+    # 438: status_path.parent does not exist
+    mock_bm.path_prefix = tmp_path / "non_existent_folder"
+    r = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
+    assert r.status_code == 200
+    assert r.json()["status"] == "success"
+
+
+def test_auto_classify_replace_status_write_error(client, mock_bm, tmp_path, monkeypatch):
+    # 444-449: error during write to status file
+    mock_bm.path_prefix = tmp_path
+    orig_open = Path.open
+
+    def mock_open(self, mode="r", *args, **kwargs):
+        if "w" in mode and "auto_classify_status" in str(self):
+            raise OSError("disk write error")
+        return orig_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", mock_open)
+    r = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
+    assert r.status_code == 200
+    assert r.json()["status"] == "success"
+
+
+def test_remaining_auto_classify_count_fallback(client, mock_bm, mock_cat, tmp_path):
+    # 455-459: on_progress callback with total_count/processed_count and no remaining_count
+    mock_bm.path_prefix = tmp_path
+    mock_cat.get_all_mappings.return_value = {}
+
+    async def fake_classify_1(*args, on_progress=None, **kwargs):
+        if on_progress:
+            on_progress({"total_count": 10, "processed_count": 3})
+        return {"source_category": "0_inbox", "moved_count": 0, "skipped_count": 0, "failed_count": 0}, None
+
+    mock_bm.auto_classify_category.side_effect = fake_classify_1
+    r1 = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
+    assert r1.status_code == 200
+
+    async def fake_classify_2(*args, on_progress=None, **kwargs):
+        if on_progress:
+            on_progress({"total_count": "invalid"})
+        return {"source_category": "0_inbox", "moved_count": 0, "skipped_count": 0, "failed_count": 0}, None
+
+    mock_bm.auto_classify_category.side_effect = fake_classify_2
+    r2 = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
+    assert r2.status_code == 200
+
+
+def test_auto_classify_job_and_pydantic_branches(mock_bm, mock_cat, tmp_path):
+    from fastapi import BackgroundTasks
+    import asyncio
+
+    mock_bm.path_prefix = tmp_path
+    router = main_module.create_item_router(mock_bm, content_type="book")
+    endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/auto-classify")
+    freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
+    _run_job = freevars["_run_auto_classify_job"]
+
+    # 1. 490, 492, 494, 496, 501-504: clean_existing, use_bookstore=False, use_content_meta=False, delay != 1.2, exception
+    mock_cat.get_all_mappings.return_value = {}
+    mock_bm.auto_classify_category.side_effect = RuntimeError("async crashed")
+    asyncio.run(_run_job("0_inbox", recursive=False, dry_run=False, clean_existing=True, use_bookstore=False, use_content_meta=False, delay=0.5))
+
+    # 2. 512-513: error is not None
+    mock_bm.auto_classify_category.side_effect = None
+    mock_bm.auto_classify_category.return_value = ({}, "something failed in classify")
+    asyncio.run(_run_job("0_inbox", recursive=False, dry_run=False))
+
+    # 3. 717: model_fields_set is None -> fallback to __fields_set__
+    #    730-733: sync auto_classify_category exception
+    mock_bm.auto_classify_category.side_effect = RuntimeError("sync error")
+
+    job_freevars = dict(zip(_run_job.__code__.co_freevars, [c.cell_contents for c in _run_job.__closure__]))
+
+    # 4. 455-459: _remaining_auto_classify_count fallback calculations
+    _remaining_count = job_freevars["_remaining_auto_classify_count"]
+    assert _remaining_count({"total_count": 10, "processed_count": 3}) == 7
+    assert _remaining_count({"total_count": "invalid"}) == 0
+
+    # 5. 438: status_path.parent does not exist
+    _replace_status = job_freevars["_replace_auto_classify_status"]
+    mock_bm.path_prefix = tmp_path / "non_existent_subdir"
+    _replace_status({"status": "test"})
+
+    # 6. 444-449: status_path write error and unlink
+    mock_bm.path_prefix = tmp_path
+    orig_open = Path.open
+    def mock_open_err(self, mode="r", *args, **kwargs):
+        if "w" in mode and "auto_classify_status" in str(self):
+            raise OSError("disk write error")
+        return orig_open(self, mode, *args, **kwargs)
+
+    try:
+        Path.open = mock_open_err
+        _replace_status({"status": "test_err"})
+    finally:
+        Path.open = orig_open
+
+    class FakeBody:
+        model_fields_set = None
+        __fields_set__ = {"clean_existing", "use_bookstore", "use_content_meta", "delay"}
+        category = "0_inbox"
+        async_mode = False
+        recursive = False
+        dry_run = False
+        clean_existing = True
+        use_bookstore = True
+        use_content_meta = True
+        delay = 1.0
+
+    res = asyncio.run(endpoint(body=FakeBody(), background_tasks=BackgroundTasks()))
+    assert res["status"] == "failure"
+    assert res["error"] == "자동 분류에 실패했습니다."
+
+
+def test_get_latest_books_error(client, mock_bm, mock_cat):
+    # 621: get_latest_books returns error
+    mock_cat.get_latest_excluded_categories.return_value = []
+    mock_bm.get_latest_books.return_value = ([], 0, "failed to get latest")
+    r = client.get("/latest")
+    assert r.status_code == 200
+    assert r.json()["status"] == "failure"
+    assert r.json()["error"] == "failed to get latest"
+
+
+def test_auto_classify_already_running(client, mock_bm, tmp_path):
+    # 705-707: already running
+    mock_bm.path_prefix = tmp_path
+    status_file = tmp_path / ".auto_classify_status_book.json"
+    status_file.write_text(json.dumps({"status": "running", "source_category": "0_inbox"}), encoding="utf-8")
+
+    r = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
+    assert r.status_code == 200
+    assert r.json()["status"] == "success"
+    assert r.json()["result"]["already_running"] is True
+
+
+
+def test_reload_progress_flush_exception(client, mock_bm, mock_cat, monkeypatch):
+    # 924-926: exception in _flush_reload_progress_periodically
+    monkeypatch.setattr(main_module, "RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS", 0.001)
+    mock_cat.acquire_reload_lock.return_value = (True, None, None)
+    mock_cat.heartbeat_reload_lock.side_effect = RuntimeError("heartbeat db failed")
+
+    async def slow_reload(*args, **kwargs):
+        import asyncio
+
+        await asyncio.sleep(0.01)
+        return ({"indexed_count": 0, "deleted_count": 0, "failed_count": 0, "before_count": 0, "after_count": 0}, None)
+
+    mock_bm.reload_category_mismatches.side_effect = slow_reload
+    r = client.post("/category-mismatches/reload-all")
+    assert r.status_code == 200
+
+
+def test_reload_all_mismatches_job_exception(client, mock_bm, mock_cat):
+    # 959-962: exception in _run_reload_all_mismatches_job
+    mock_cat.acquire_reload_lock.return_value = (True, None, None)
+    mock_bm.reload_category_mismatches.side_effect = RuntimeError("mismatch scan crashed")
+
+    r = client.post("/category-mismatches/reload-all")
+    assert r.status_code == 200
+    mock_cat.complete_reload_lock.assert_called_with("book", "failed", main_module.GENERIC_MISMATCH_ERROR)
+
+
+def test_reload_locks_already_running(client, mock_cat):
+    # 981-984: reload_category_mismatch_files lock busy
+    mock_cat.acquire_reload_lock.return_value = (False, "lock busy", {"status": "running"})
+    r1 = client.post("/category-mismatches/reload-mismatches", json={"category": "0_inbox"})
+    assert r1.status_code == 200
+    assert r1.json()["result"]["already_running"] is True
+
+    # 1002-1005: reload_all_category_mismatches lock busy
+    r2 = client.post("/category-mismatches/reload-all")
+    assert r2.status_code == 200
+    assert r2.json()["result"]["already_running"] is True
+

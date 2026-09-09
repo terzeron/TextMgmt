@@ -146,14 +146,19 @@ def run_direct_classifier(
     limit: int = 1000,
     offset: int = 0,
     uncached_only: bool = False,
+    re_evaluate: bool = False,
 ) -> int:
     """BookClassifierService를 직접 로컬에서 실행하여 도서 분류를 수행한다."""
+    if re_evaluate:
+        use_bookstore = False
+        LOGGER.info("=== [초고속 재평가 모드 (--re-evaluate)] 외부 서점 딜레이 없이 캐시 및 정적 메타데이터로 즉시 판정 ===")
+
     source_dir = library_root / category if category != "_root" else library_root
     if not source_dir.is_dir():
         LOGGER.error("디렉토리를 찾을 수 없습니다: %s", source_dir)
         return 1
 
-    LOGGER.info("BookClassifierService 초기화 (root=%s, delay=%.1fs)", library_root, delay)
+    LOGGER.info("BookClassifierService 초기화 (root=%s, delay=%.1fs, re_evaluate=%s)", library_root, delay, re_evaluate)
     classifier = BookClassifierService(library_root=library_root, delay=delay)
 
     exts = {".epub", ".pdf", ".txt", ".html", ".htm"}
@@ -294,6 +299,7 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=1000, help="한 번에 처리할 최대 권수 (기본값: 1000)")
     parser.add_argument("--offset", type=int, default=0, help="처리 시작 위치 오프셋 (기본값: 0)")
     parser.add_argument("--uncached-only", action="store_true", help="캐시에 아직 조회되지 않은 신규 도서만 우선 수집")
+    parser.add_argument("--re-evaluate", action="store_true", help="이미 캐시된 도서들에 대해 개선된 규칙으로 외부 요청 없이 즉시 초고속 재평가 및 이동")
     parser.add_argument("--delay", type=float, default=1.2, help="서점 크롤링 시 요청 대기 시간(초) (기본값: 1.2)")
     parser.add_argument("--dry-run", action="store_true", help="실제 파일 이동/삭제 없이 시뮬레이션만 수행")
     parser.add_argument("--no-recursive", action="store_true", help="하위 디렉토리 재귀 탐색 비활성화")
@@ -330,6 +336,7 @@ def main() -> int:
             limit=args.limit,
             offset=args.offset,
             uncached_only=args.uncached_only,
+            re_evaluate=args.re_evaluate,
         )
 
 
