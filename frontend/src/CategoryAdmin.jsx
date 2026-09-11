@@ -362,7 +362,7 @@ function encodeCategoryPath(category) {
   return category.split("/").map(encodeURIComponent).join("/");
 }
 
-function getAutoClassifyTargetLabel(category) {
+function getCategoryTargetLabel(category) {
   return category === "_root" ? "최상위 디렉토리" : `카테고리 '${category}'`;
 }
 
@@ -462,6 +462,7 @@ export default function CategoryAdmin({
   const [showReloadModal, setShowReloadModal] = useState(false);
   const [showMismatchReloadModal, setShowMismatchReloadModal] = useState(false);
   const [showBulkReloadModal, setShowBulkReloadModal] = useState(false);
+  const [showDeleteFileModal, setShowDeleteFileModal] = useState(false);
   const [showAutoClassifyModal, setShowAutoClassifyModal] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [mismatchReloading, setMismatchReloading] = useState(false);
@@ -492,6 +493,7 @@ export default function CategoryAdmin({
 
   const apiPrefix = contentType === "comic" ? "/comics" : "";
   const contentLabel = contentType === "comic" ? "만화" : "책";
+  const isRootCategory = selectedCategory === "_root";
   const mismatchReloadTargetCategory =
     selectedCategory || selectedMismatch?.category || "";
   const mismatchReloadTargetFolder = mismatchReloadTargetCategory
@@ -872,7 +874,7 @@ export default function CategoryAdmin({
         const moved = status.moved_count || 0;
         const skipped = status.skipped_count || 0;
         const failed = status.failed_count || 0;
-        const label = getAutoClassifyTargetLabel(
+        const label = getCategoryTargetLabel(
           status.source_category || "_root",
         );
         setSelectedCategory("");
@@ -1281,7 +1283,7 @@ export default function CategoryAdmin({
       { category: selectedCategory },
       (result) => {
         setMessage(
-          `카테고리 '${selectedCategory}' ES 재적재 완료 (${result.processed_count}건 처리)`,
+          `${getCategoryTargetLabel(selectedCategory)} ES 재적재 완료 (${result.processed_count}건 처리)`,
         );
         setTimeout(() => setMessage(""), 5000);
       },
@@ -1549,6 +1551,7 @@ export default function CategoryAdmin({
   }, [selectedMismatch, folderData, apiPrefix]);
 
   const handleDeleteFile = useCallback(() => {
+    setShowDeleteFileModal(false);
     /* v8 ignore next 2 -- delete-file button is rendered only for fs_only mismatches. */
     if (!selectedMismatch || selectedMismatch.mismatchType !== "fs_only")
       return;
@@ -1608,8 +1611,8 @@ export default function CategoryAdmin({
     ? mappings[selectedCategory] || []
     : [];
   const autoClassifyTargetLabel = selectedCategory
-    ? getAutoClassifyTargetLabel(selectedCategory)
-    : getAutoClassifyTargetLabel("_root");
+    ? getCategoryTargetLabel(selectedCategory)
+    : getCategoryTargetLabel("_root");
 
   const displayedFolderData = useMemo(() => {
     if (!showOnlyAbnormal) return folderData;
@@ -1840,21 +1843,29 @@ export default function CategoryAdmin({
                     <Button
                       variant="outline-secondary"
                       size="sm"
-                      disabled={saving}
+                      disabled={saving || isRootCategory}
                       onClick={() => {
                         setNewCategoryName(selectedCategory);
                         setShowRenameModal(true);
                       }}
-                      title="이름 변경"
+                      title={
+                        isRootCategory
+                          ? "최상위 디렉토리는 이름을 변경할 수 없습니다"
+                          : "이름 변경"
+                      }
                     >
                       이름 변경 <FontAwesomeIcon icon={faEdit} />
                     </Button>
                     <Button
                       variant="outline-danger"
                       size="sm"
-                      disabled={saving}
+                      disabled={saving || isRootCategory}
                       onClick={() => setShowDeleteModal(true)}
-                      title="카테고리 삭제"
+                      title={
+                        isRootCategory
+                          ? "최상위 디렉토리는 삭제할 수 없습니다"
+                          : "카테고리 삭제"
+                      }
                     >
                       삭제 <FontAwesomeIcon icon={faTrash} />
                     </Button>
@@ -2155,7 +2166,7 @@ export default function CategoryAdmin({
                         <Button
                           variant="outline-danger"
                           size="sm"
-                          onClick={handleDeleteFile}
+                          onClick={() => setShowDeleteFileModal(true)}
                         >
                           파일 삭제
                         </Button>
@@ -2227,7 +2238,38 @@ export default function CategoryAdmin({
         </Modal.Footer>
       </Modal>
 
-      {/* 삭제 확인 모달 */}
+      {/* 파일 삭제 확인 모달 */}
+      <Modal
+        show={showDeleteFileModal}
+        onHide={() => setShowDeleteFileModal(false)}
+        centered
+      >
+        <Modal.Header closeButton>
+          <Modal.Title>파일 삭제</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="text-danger fw-bold">
+            파일 &apos;{selectedMismatch?.filePath}&apos;을(를) 디스크에서
+            삭제합니다.
+          </p>
+          <p className="text-muted">
+            원본 파일이 사라집니다. 이 작업은 되돌릴 수 없습니다.
+          </p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button
+            variant="secondary"
+            onClick={() => setShowDeleteFileModal(false)}
+          >
+            취소
+          </Button>
+          <Button variant="danger" onClick={handleDeleteFile}>
+            삭제
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* 카테고리 삭제 확인 모달 */}
       <Modal
         show={showDeleteModal}
         onHide={() => setShowDeleteModal(false)}
@@ -2237,11 +2279,14 @@ export default function CategoryAdmin({
           <Modal.Title>카테고리 삭제</Modal.Title>
         </Modal.Header>
         <Modal.Body>
-          <p className="text-danger fw-bold">
-            카테고리 &apos;{selectedCategory}&apos; 및 하위 카테고리의 모든
-            문서가 삭제됩니다.
+          <p className="fw-bold">
+            카테고리 &apos;{selectedCategory}&apos; 및 하위 카테고리의 ES 문서를
+            삭제합니다.
           </p>
-          <p className="text-muted">이 작업은 되돌릴 수 없습니다.</p>
+          <p className="text-muted">
+            파일은 디스크에 그대로 남습니다. 다시 필요하면 ES 재적재로 되살릴 수
+            있습니다.
+          </p>
         </Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowDeleteModal(false)}>
@@ -2314,12 +2359,13 @@ export default function CategoryAdmin({
         </Modal.Header>
         <Modal.Body>
           <p className="fw-bold">
-            카테고리 &apos;{selectedCategory}&apos;의 모든 파일을 ES에
+            {getCategoryTargetLabel(selectedCategory)}의 모든 파일을 ES에
             재적재합니다.
           </p>
           <p className="text-muted">
-            하위 디렉토리를 포함하여 전체 재적재하며, 파일 수에 따라 수 분이
-            소요될 수 있습니다.
+            {selectedCategory === "_root"
+              ? "최상위 디렉토리에 바로 있는 파일만 재적재하며, 하위 카테고리는 건드리지 않습니다."
+              : "하위 디렉토리를 포함하여 전체 재적재하며, 파일 수에 따라 수 분이 소요될 수 있습니다."}
           </p>
         </Modal.Body>
         <Modal.Footer>

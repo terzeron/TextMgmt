@@ -1106,18 +1106,26 @@ def get_effective_filename(fpath: Path, target_dir: Path) -> str:
 
 
 def clean_empty_parent_dirs(parent_dir: Path, stop_dir: Path):
-    """파일 이동/삭제 후 비어 있는 상위 서브디렉토리를 안전하게 재귀 청소"""
-    curr = parent_dir
-    while curr != stop_dir and curr.exists() and curr.is_dir():
-        items = [p for p in curr.iterdir() if not p.name.startswith(".")]
-        if not items:
-            try:
-                curr.rmdir()
-                curr = curr.parent
-            except Exception:
+    """파일 이동/삭제 후 비어 있는 상위 서브디렉토리를 안전하게 재귀 청소
+
+    stop_dir 자신과 그 바깥은 절대 지우지 않는다. 두 경로를 정규화하지 않고 `!=`로만 비교하면
+    '..'가 낀 표기나 문자열 인자로는 stop_dir를 알아보지 못해 조상 디렉토리까지 거슬러 올라간다.
+    비었는지 판정도 rmdir과 같은 기준(숨김 파일 포함)으로 본다.
+    """
+    try:
+        curr = Path(parent_dir).resolve(strict=False)
+        stop = Path(stop_dir).resolve(strict=False)
+    except OSError:
+        return
+
+    while curr != stop and curr.is_relative_to(stop) and curr.is_dir():
+        try:
+            if any(curr.iterdir()):
                 break
-        else:
+            curr.rmdir()
+        except OSError:
             break
+        curr = curr.parent
 
 
 
