@@ -1,12 +1,17 @@
 import sys
 import os
+import re
+import shutil
+import subprocess
 import unittest
 import zipfile
 import zlib
 import tempfile
 import warnings
 import importlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 # loader.py가 import 시점에 환경 변수와 외부 모듈을 요구하므로 사전 설정
@@ -4658,3 +4663,520 @@ def test_main_recursive_reload_deletes_orphans(tmp_path, monkeypatch):
     assert m.inserted, "파일이 적재되어야 한다"
     assert m.deleted_ids == [999999], "orphan 만 삭제되어야 한다 (live inode 는 보존)"
     assert 999999 not in m.inserted
+
+
+# ---- coverage: 미커버 분기 보강 (report_problems / reencode / read_from_text / PDF 단계) ----
+
+
+class TestReportProblems:
+    """indexed=False일 때 사유를 만들어 붙이는 분기."""
+
+    def test_unsupported_suffix_is_reported(self, tmp_path: Path, capsys):
+        from utils.loader import report_problems
+
+        f = tmp_path / "book.xyz"
+        f.write_text("x", encoding="utf-8")
+
+        assert report_problems(f, [], indexed=False) is True
+        out = capsys.readouterr().out
+        assert "지원하지 않는 파일 형식 '.xyz'" in out
+
+    def test_vanished_file_is_reported(self, tmp_path: Path, capsys):
+        from utils.loader import report_problems
+
+        f = tmp_path / "gone.txt"  # 만들지 않는다
+
+        assert report_problems(f, [], indexed=False) is True
+        out = capsys.readouterr().out
+        assert "파일이 사라짐" in out
+
+    def test_duplicate_path_line_is_dropped(self, tmp_path: Path, capsys):
+        """read_from_pdf 등이 경로를 따로 로깅하므로 경로 중복 줄은 제거한다."""
+        from utils.loader import report_problems
+
+        f = tmp_path / "ok.txt"
+        f.write_text("x", encoding="utf-8")
+
+        assert report_problems(f, [str(f)], indexed=True) is False
+        assert capsys.readouterr().out == ""
+
+
+class TestLoaderModuleImportGuards:
+    def test_pypdf_read_warning_filter_failure_is_ignored(self, monkeypatch):
+        """pypdf가 PdfReadWarning을 더 이상 노출하지 않아도 import는 살아 있어야 한다 (55-56)."""
+        import runpy
+
+        import pypdf.errors
+
+        monkeypatch.setenv("TM_ES_BOOK_INDEX", "test_books")
+        monkeypatch.setenv("TM_ES_COMICS_INDEX", "test_comics")
+        monkeypatch.delattr(pypdf.errors, "PdfReadWarning", raising=True)
+
+        module_globals = runpy.run_module("utils.loader", run_name="not_main")
+        assert "Loader" in module_globals
+
+
+def _register_decode_only_codec():
+    """디코딩은 되지만 인코딩은 실패하는 코덱을 등록한다.
+
+    reencode의 바이트 왕복 검사에서 `text.encode(source_enc)`가 UnicodeEncodeError를
+    내는 경로(256-257)는 표준 코덱 조합으로는 만들 수 없어 코덱을 직접 심는다.
+    """
+    import codecs
+
+    name = "tmdecodeonly"
+
+    def _decode(data, errors="strict"):
+        return bytes(data).decode("latin-1"), len(data)
+
+    def _encode(text, errors="strict"):
+        raise UnicodeEncodeError(name, text, 0, 1, "encode not supported")
+
+    def _search(requested):
+        if requested == name:
+            return codecs.CodecInfo(_encode, _decode, name=name)
+        return None
+
+    codecs.register(_search)
+    return name, lambda: codecs.unregister(_search)
+
+
+class TestReencodeCandidateRejection:
+    """후보 인코딩을 버리는 조건들."""
+
+    def test_candidate_that_cannot_be_reencoded_is_skipped(self, tmp_path: Path, monkeypatch):
+        """왕복 인코딩 자체가 실패하는 후보는 조용히 버린다 (256-257)."""
+        import chardet
+
+        Loader = _get_loader()
+        name, unregister = _register_decode_only_codec()
+        try:
+            monkeypatch.setattr(chardet, "detect", lambda _b: {"encoding": None, "confidence": 0.0})
+            monkeypatch.setattr(Loader, "TEXT_ENCODINGS", ["utf-8", name])
+
+            f = tmp_path / "cannot_reencode.txt"
+            raw = "한글".encode("euc-kr")
+            f.write_bytes(raw)
+
+            changed, reason = Loader.reencode_text_file_to_utf8(f)
+            assert not changed
+            assert reason == "무손실 디코딩 가능한 인코딩을 찾지 못함"
+            assert f.read_bytes() == raw
+        finally:
+            unregister()
+
+    def test_mojibake_candidate_is_skipped(self, tmp_path: Path, monkeypatch):
+        """왕복은 통과해도 mojibake 구간이 많으면 그 후보를 채택하지 않는다 (264).
+
+        상위바이트가 대부분 고립되어 cp1252가 후보로 올라가지만, 그 안에 섞인
+        EUC-KR 2바이트 쌍이 한글로 되살아나므로 cp1252 해석은 틀린 것이다.
+        """
+        import chardet
+
+        Loader = _get_loader()
+        monkeypatch.setattr(chardet, "detect", lambda _b: {"encoding": None, "confidence": 0.0})
+
+        f = tmp_path / "mojibake_candidate.txt"
+        raw = b"a\xe9" * 60 + b" \xc7\xd1 \xb1\xdb \xc7\xd1 "
+        f.write_bytes(raw)
+
+        # 전제 확인: cp1252 해석 결과에 한글로 복원되는 구간이 상한 이상 존재한다.
+        assert Loader._count_mojibake_runs(raw.decode("cp1252")) >= Loader.PDF_MOJIBAKE_RUN_LIMIT
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert not changed
+        assert reason == "무손실 디코딩 가능한 인코딩을 찾지 못함"
+        assert f.read_bytes() == raw
+
+    def test_readback_failure_is_reported(self, tmp_path: Path, monkeypatch):
+        """저장 직후 재읽기가 실패하면 성공으로 보고하지 않는다 (320-321)."""
+        Loader = _get_loader()
+        f = tmp_path / "readback.txt"
+        f.write_bytes("한글 본문입니다\n".encode("cp949"))
+
+        real_read_bytes = Path.read_bytes
+        calls = {"n": 0}
+
+        def flaky_read_bytes(self):
+            calls["n"] += 1
+            if calls["n"] >= 2:  # 1회차는 원본 읽기, 2회차가 저장 후 재읽기
+                raise OSError("EIO")
+            return real_read_bytes(self)
+
+        monkeypatch.setattr(Path, "read_bytes", flaky_read_bytes)
+
+        changed, reason = Loader.reencode_text_file_to_utf8(f)
+        assert not changed
+        assert reason.startswith("저장 후 재읽기 실패")
+
+
+class TestReadFromTextReplaceFallback:
+    """엄격 디코딩이 전부 실패했을 때의 errors='replace' 폴백 루프."""
+
+    def test_replace_candidate_without_letters_is_skipped(self, tmp_path: Path, monkeypatch):
+        """글자가 하나도 없는 폴백 결과는 채택하지 않고 빈 본문으로 끝낸다 (372-373, 379-382)."""
+        import chardet
+
+        Loader = _get_loader()
+        monkeypatch.setattr(chardet, "detect", lambda _b: {"encoding": None, "confidence": 0.0})
+        monkeypatch.setattr(Loader, "TEXT_ENCODINGS", ["utf-16", "cp949"])
+
+        f = tmp_path / "no_letters.txt"
+        # 홀수 길이라 utf-16 엄격 디코딩은 실패하고, cp949는 문장부호만 만든다.
+        f.write_bytes(b"\xa1\xa2" * 50 + b"\xa1")
+
+        summary, line_count, page_count, raw_content = Loader.read_from_text(f)
+        assert summary == ""
+        assert raw_content == ""
+        assert (line_count, page_count) == (0, 0)
+
+    def test_replace_read_error_is_swallowed(self, tmp_path: Path, monkeypatch):
+        """폴백 읽기 자체가 I/O 오류로 죽어도 적재 루프를 세우지 않는다 (377-378)."""
+        import chardet
+
+        Loader = _get_loader()
+        monkeypatch.setattr(chardet, "detect", lambda _b: {"encoding": None, "confidence": 0.0})
+        monkeypatch.setattr(Loader, "TEXT_ENCODINGS", ["utf-16", "cp949"])
+
+        f = tmp_path / "io_error.txt"
+        f.write_bytes(b"\xa1\xa2" * 50 + b"\xa1")
+
+        real_open = Path.open
+
+        def flaky_open(self, *args, **kwargs):
+            if kwargs.get("errors") == "replace":
+                raise OSError("EIO")
+            return real_open(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", flaky_open)
+
+        summary, _line_count, _page_count, raw_content = Loader.read_from_text(f)
+        assert summary == ""
+        assert raw_content == ""
+
+
+class TestCountMojibakeRunsGuard:
+    def test_unencodable_run_is_not_counted(self, monkeypatch):
+        """latin-1로 되돌릴 수 없는 구간은 mojibake 판정에서 제외한다 (519-520)."""
+        import utils.loader as loader_mod
+
+        Loader = _get_loader()
+        # 기본 정규식은 latin-1 범위만 잡으므로, 범위 밖 구간을 잡도록 바꿔 가드를 검증한다.
+        monkeypatch.setattr(loader_mod, "PDF_LATIN1_RUN_RE", re.compile(r"[가-힣]{2,}"))
+
+        assert Loader._count_mojibake_runs("한글 본문입니다") == 0
+
+
+class TestZipContainerType:
+    def test_non_zip_file_returns_none(self, tmp_path: Path):
+        """ZIP이 아니면 판별 불가 (539-540)."""
+        Loader = _get_loader()
+        f = tmp_path / "not_a_zip.bin"
+        f.write_bytes(b"PK\x03\x04 but truncated")
+
+        assert Loader._zip_container_type(f) is None
+
+    def test_unknown_zip_payload_returns_none(self, tmp_path: Path):
+        """epub/docx/cbz 어디에도 해당하지 않는 ZIP은 판별 불가 (541)."""
+        Loader = _get_loader()
+        f = tmp_path / "plain.zip"
+        with zipfile.ZipFile(f, "w") as zf:
+            zf.writestr("notes.txt", "hello")
+
+        assert Loader._zip_container_type(f) is None
+
+
+class TestPikepdfRepairRoundTrip:
+    def test_repair_reopens_rewritten_buffer(self, tmp_path: Path):
+        """pikepdf 재작성 결과를 메모리에서 그대로 다시 읽는다 (627-629)."""
+        import pypdf
+
+        Loader = _get_loader()
+        pdf = tmp_path / "valid.pdf"
+        writer = pypdf.PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        with pdf.open("wb") as f:
+            writer.write(f)
+
+        text, page_count = Loader._pdf_text_by_pikepdf_repair(pdf)
+        assert page_count == 1
+        assert text == ""  # 빈 페이지라 텍스트 레이어가 없다
+
+
+class TestPdfplumberTextSizeLimit:
+    def test_page_loop_stops_at_text_size(self, tmp_path: Path, monkeypatch):
+        """TEXT_SIZE를 채우면 남은 페이지를 읽지 않는다 (648)."""
+        Loader = _get_loader()
+        pdf = tmp_path / "long.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock")
+
+        read_pages: list[int] = []
+
+        class MockPlumberPage:
+            def __init__(self, idx):
+                self.idx = idx
+
+            def extract_text(self):
+                read_pages.append(self.idx)
+                return "가" * 3000
+
+            def close(self):
+                pass
+
+        class MockPlumberPdf:
+            pages = [MockPlumberPage(i) for i in range(5)]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        import pdfplumber
+
+        monkeypatch.setattr(pdfplumber, "open", lambda *a, **k: MockPlumberPdf())
+
+        text, page_count = Loader._pdf_text_by_pdfplumber(pdf)
+        assert page_count == 5
+        assert read_pages == [0, 1], "TEXT_SIZE를 넘긴 뒤에도 계속 읽었다"
+        assert len(text) == 6000
+
+
+class TestPdftotextFailureModes:
+    def test_missing_binary_returns_empty(self, tmp_path: Path, monkeypatch):
+        """pdftotext가 설치되어 있지 않으면 빈 결과로 넘어간다 (658)."""
+        Loader = _get_loader()
+        pdf = tmp_path / "nobinary.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock")
+
+        monkeypatch.setattr(Loader, "_pdftotext_path_checked", False)
+        monkeypatch.setattr(Loader, "_pdftotext_path", None)
+        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+
+        assert Loader._pdf_text_by_pdftotext(pdf) == ("", 0)
+
+    def test_nonzero_returncode_returns_empty(self, tmp_path: Path, monkeypatch):
+        """pdftotext가 실패 코드로 끝나면 stdout을 신뢰하지 않는다 (663)."""
+        Loader = _get_loader()
+        pdf = tmp_path / "badexit.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock")
+
+        class MockCompletedProcess:
+            returncode = 1
+            stdout = b"partial garbage"
+
+        monkeypatch.setattr(Loader, "_pdftotext_path_checked", False)
+        monkeypatch.setattr(Loader, "_pdftotext_path", None)
+        monkeypatch.setattr(shutil, "which", lambda *a, **k: "/usr/bin/pdftotext")
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: MockCompletedProcess())
+
+        assert Loader._pdf_text_by_pdftotext(pdf) == ("", 0)
+
+
+class TestPdfRepairOutcomes:
+    """구조 복구가 성공도 타임아웃도 아닌 나머지 결과 (735-738)."""
+
+    @staticmethod
+    def _all_stages_fail(monkeypatch, Loader):
+        for name in ("_pdf_text_by_pypdfium2", "_pdf_text_by_pdfplumber", "_pdf_text_by_pdftotext"):
+            monkeypatch.setattr(Loader, name, staticmethod(lambda p: ("", 0)))
+
+    def test_repair_result_is_recorded_as_damaged(self, tmp_path: Path, monkeypatch):
+        """복구는 됐지만 mojibake면 damaged로 기록한다 (735-736)."""
+        from utils.stat import Stat
+
+        Loader = _get_loader()
+        pdf = tmp_path / "repair_damaged.pdf"
+        pdf.write_bytes(b"%PDF-1.6 mock")
+
+        self._all_stages_fail(monkeypatch, Loader)
+        damaged = "".join(f" {w.encode('euc-kr').decode('latin-1')} " for w in ("즐기는", "들어서", "필요한", "함께"))
+        monkeypatch.setattr(Loader, "_pdf_text_by_pikepdf_repair", staticmethod(lambda p: (damaged, 7)))
+
+        recorded: list[tuple[str, str]] = []
+        monkeypatch.setattr(Stat, "record_pdf_stage", staticmethod(lambda stage, elapsed, outcome: recorded.append((stage, outcome))))
+
+        _summary, _line_count, page_count = Loader.read_from_pdf(pdf)
+        assert page_count == 7
+        assert ("_pdf_text_by_pikepdf_repair", "damaged") in recorded
+
+    def test_repair_result_is_recorded_as_empty(self, tmp_path: Path, monkeypatch):
+        """복구본에 텍스트 레이어가 없으면 empty로 기록한다 (737-738)."""
+        from utils.stat import Stat
+
+        Loader = _get_loader()
+        pdf = tmp_path / "repair_empty.pdf"
+        pdf.write_bytes(b"%PDF-1.6 mock")
+
+        self._all_stages_fail(monkeypatch, Loader)
+        monkeypatch.setattr(Loader, "_pdf_text_by_pikepdf_repair", staticmethod(lambda p: ("   \n ", 12)))
+
+        recorded: list[tuple[str, str]] = []
+        monkeypatch.setattr(Stat, "record_pdf_stage", staticmethod(lambda stage, elapsed, outcome: recorded.append((stage, outcome))))
+
+        summary, _line_count, page_count = Loader.read_from_pdf(pdf)
+        assert not summary.strip()
+        assert page_count == 12
+        assert ("_pdf_text_by_pikepdf_repair", "empty") in recorded
+
+
+class TestReadFilePageCountTimeout:
+    """페이지 수만 뽑는 경로에서도 pypdf가 무한히 돌면 안 된다."""
+
+    @staticmethod
+    def _patch_parser_timeout(monkeypatch):
+        from utils.parser_timeout import ParserTimeout
+
+        def boom(*_a, **_k):
+            raise ParserTimeout("pypdf/page_count")
+
+        monkeypatch.setattr("pypdf.PdfReader", boom)
+
+    def test_skip_text_pdf_page_count_timeout(self, tmp_path: Path, monkeypatch, caplog):
+        """skip_text 경로의 pypdf 타임아웃 (1267-1268)."""
+        import logging
+
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "path_prefix", tmp_path)
+        monkeypatch.setattr(Loader, "comics_path_prefix", tmp_path / "comics")
+
+        pdf = tmp_path / "hang.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock")
+        monkeypatch.setattr(Loader, "_fast_pdf_page_count", staticmethod(lambda p: None))
+        self._patch_parser_timeout(monkeypatch)
+
+        with caplog.at_level(logging.ERROR):
+            data = Loader.read_file(pdf, skip_text=True)
+
+        item = next(iter(data.values()))
+        assert item["page_count"] == 0
+        assert "페이지 수 추출 타임아웃" in "\n".join(r.getMessage() for r in caplog.records)
+
+    def test_comics_pdf_page_count_timeout(self, tmp_path: Path, monkeypatch, caplog):
+        """comics 경로의 pypdf 타임아웃 (1312-1313)."""
+        import logging
+
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "path_prefix", tmp_path)
+        monkeypatch.setattr(Loader, "comics_path_prefix", tmp_path)
+
+        pdf = tmp_path / "comic.pdf"
+        pdf.write_bytes(b"%PDF-1.4 mock")
+        monkeypatch.setattr(Loader, "_fast_pdf_page_count", staticmethod(lambda p: None))
+        self._patch_parser_timeout(monkeypatch)
+
+        with caplog.at_level(logging.ERROR):
+            data = Loader.read_file(pdf)
+
+        item = next(iter(data.values()))
+        assert item["page_count"] == 0
+        assert "페이지 수 추출 타임아웃" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+class TestReadFileReencodeMode:
+    """--reencode 모드에서 read_file이 적재 전에 파일을 UTF-8로 바꾼다 (1291-1297)."""
+
+    def test_converted_file_is_logged(self, tmp_path: Path, monkeypatch, caplog):
+        import logging
+
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "path_prefix", tmp_path)
+        monkeypatch.setattr(Loader, "comics_path_prefix", tmp_path / "comics")
+        monkeypatch.setattr(Loader, "reencode_txt_mode", True)
+        monkeypatch.setattr(Loader, "reencode_txt_dry_run", False)
+
+        f = tmp_path / "[작가] 제목.txt"
+        original = "한글 소설 본문입니다.\n둘째 줄\n"
+        f.write_bytes(original.encode("cp949"))
+
+        with caplog.at_level(logging.WARNING):
+            data = Loader.read_file(f)
+
+        assert f.read_bytes().decode("utf-8") == original
+        assert len(data) == 1
+        assert "UTF-8 재인코딩:" in "\n".join(r.getMessage() for r in caplog.records)
+
+    def test_skipped_file_is_logged_with_reason(self, tmp_path: Path, monkeypatch, caplog):
+        """변환하지 못한 파일은 사유를 남긴다 (1296-1297)."""
+        import logging
+
+        Loader = _get_loader()
+        monkeypatch.setattr(Loader, "path_prefix", tmp_path)
+        monkeypatch.setattr(Loader, "comics_path_prefix", tmp_path / "comics")
+        monkeypatch.setattr(Loader, "reencode_txt_mode", True)
+        monkeypatch.setattr(Loader, "reencode_txt_dry_run", False)
+
+        f = tmp_path / "broken.txt"
+        raw = bytes([0x80, 0x81, 0xFE, 0xFF, 0x00, 0x9C, 0x90]) * 40
+        f.write_bytes(raw)
+
+        with caplog.at_level(logging.WARNING):
+            Loader.read_file(f)
+
+        assert f.read_bytes() == raw
+        assert "UTF-8 재인코딩 건너뜀:" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+class TestLoaderMainReencodeOptions:
+    def test_reencode_options_are_parsed(self, monkeypatch, tmp_path):
+        """--reencode / --reencode-dry-run / --reencode-backup-dir (1445-1451)."""
+        Loader = _setup_loader_env(monkeypatch, tmp_path)
+        # monkeypatch로 먼저 잡아 두어야 테스트 후 클래스 상태가 원복된다.
+        monkeypatch.setattr(Loader, "reencode_txt_mode", False)
+        monkeypatch.setattr(Loader, "reencode_txt_dry_run", False)
+        monkeypatch.setattr(Loader, "reencode_backup_dir", None)
+
+        backup_dir = tmp_path / "backup"
+        (tmp_path / "[작가] 책.txt").write_text("본문입니다\n", encoding="utf-8")
+        monkeypatch.setattr("sys.argv", ["loader", "--reencode", "--reencode-dry-run", "--reencode-backup-dir", str(backup_dir), "book", str(tmp_path)])
+
+        from utils.loader import main
+
+        mock_es = MagicMock()
+        mock_es.es.ping.return_value = True
+        mock_es.get_existing_paths.return_value = {}
+        mock_es.delete_by_file_paths.return_value = 0
+        mock_es.insert.return_value = []
+        monkeypatch.setattr("utils.loader.ESManager", lambda index_name: mock_es)
+
+        assert main() == 0
+        assert Loader.reencode_txt_mode is True
+        assert Loader.reencode_txt_dry_run is True
+        assert Loader.reencode_backup_dir == backup_dir
+
+    def test_pdf_only_batch_runs_without_worker_pool(self, monkeypatch, tmp_path):
+        """PDF는 워커 스레드에 올리지 않으므로 스레드풀 없이 처리된다 (1591-1593)."""
+        import pypdf
+
+        Loader = _setup_loader_env(monkeypatch, tmp_path)
+        pdf = tmp_path / "[작가] 만화.pdf"
+        writer = pypdf.PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        with pdf.open("wb") as f:
+            writer.write(f)
+
+        monkeypatch.setattr("sys.argv", ["loader", "book", str(pdf)])
+
+        used_pool: list[str] = []
+        real_executor = ThreadPoolExecutor
+
+        class TrackingExecutor(real_executor):
+            def __init__(self, *a, **k):
+                used_pool.append("used")
+                super().__init__(*a, **k)
+
+        monkeypatch.setattr("utils.loader.ThreadPoolExecutor", TrackingExecutor)
+
+        from utils.loader import main
+
+        inserted: dict[int, dict[str, Any]] = {}
+        mock_es = MagicMock()
+        mock_es.es.ping.return_value = True
+        mock_es.delete_by_file_paths.return_value = 0
+        mock_es.insert.side_effect = lambda data, *a, **k: inserted.update(data) or list(data.keys())
+        monkeypatch.setattr("utils.loader.ESManager", lambda index_name: mock_es)
+
+        assert main() == 0
+        assert used_pool == [], "PDF만 있는 배치에서 스레드풀을 만들었다"
+        assert len(inserted) == 1
+        assert next(iter(inserted.values()))["page_count"] == 1
