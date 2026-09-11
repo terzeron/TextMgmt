@@ -129,3 +129,49 @@ def test_sys_path_insert(monkeypatch):
     monkeypatch.setattr(sys, "path", [p for p in sys.path if p != repo_str])
     runpy.run_module("utils.cluster_hybrid_genres", run_name="test_mod")
 
+
+
+def test_main_cli_move_hybrids_to(tmp_path: Path, monkeypatch, capsys):
+    """--move-hybrids-to: 하이브리드 클러스터를 지정 카테고리로 모은다 (신규 이동 + 중복 정리)."""
+    src_dir = tmp_path / "source"
+    src_dir.mkdir()
+    lib_root = tmp_path / "library"
+    lib_root.mkdir()
+    report_file = tmp_path / "report_hybrid.json"
+
+    hybrid_text = "화산파 내공 검법 던전 상태창 마나 스킬 몬스터 레이드 " * 20
+
+    # 1. 대상 폴더에 같은 이름이 이미 있는 경우 → clean_existing으로 원본 삭제
+    dest_cat = lib_root / "3_판타지"
+    dest_cat.mkdir(parents=True, exist_ok=True)
+    (dest_cat / "중복하이브리드.txt").write_text("기존 파일", encoding="utf-8")
+    f_dup = src_dir / "중복하이브리드.txt"
+    f_dup.write_text(hybrid_text, encoding="utf-8")
+
+    # 2. 대상 폴더에 없는 경우 → 이동
+    f_new = src_dir / "신규하이브리드.txt"
+    f_new.write_text(hybrid_text, encoding="utf-8")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cluster_hybrid_genres.py",
+            "--source-dir", str(src_dir),
+            "--library-root", str(lib_root),
+            "--move-hybrids-to", "3_판타지",
+            "--clean-existing",
+            "--limit", "2",
+            "--report", str(report_file),
+        ],
+    )
+
+    main()
+
+    report = json.loads(report_file.read_text(encoding="utf-8"))
+    clusters = {r["cluster"] for r in report["results"]} if "results" in report else set()
+    assert any(c.startswith("하이브리드_") for c in clusters) or "하이브리드" in capsys.readouterr().out
+
+    assert not f_dup.exists(), "대상에 이미 있는 원본을 정리하지 않았다"
+    assert not f_new.exists(), "신규 하이브리드를 이동하지 않았다"
+    assert (dest_cat / "신규하이브리드.txt").exists()

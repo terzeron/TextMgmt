@@ -40,6 +40,7 @@ MAX_CATEGORY_PAGE_SIZE = MAX_CATEGORY_RESULT_COUNT
 # 카테고리 불일치 재적재 시 파일을 묶어서 ES에 색인하는 배치 크기.
 # 파일 1건씩 색인하면 이상 항목이 수천 건일 때 재적재가 수십 분~수 시간 걸린다.
 BULK_REINDEX_BATCH_SIZE = 200
+DUPLICATE_NAME_MAX_INDEX = 1000
 
 # 대량 재적재 배치의 파일 파싱 프로세스 강제 타임아웃(초).
 # Loader.read_file 내부 time_limit()의 SIGALRM 상한은 메인 스레드 전용이라
@@ -1363,6 +1364,40 @@ class BookManager:
 
         return sorted(files)
 
+    @staticmethod
+    def _is_duplicate_content(source: Path, target: Path) -> bool:
+        """같은 책의 사본인지 판정한다. 크기가 다르면 즉시 다른 파일로 본다.
+
+        본문이 수백 MB인 파일이 있어 해시는 크기가 같을 때만 계산한다. 읽기에 실패하면
+        (권한, I/O 오류) 중복이 아니라고 보수적으로 판정해 원본을 지우지 않는다.
+        """
+        try:
+            if source.stat().st_size != target.stat().st_size:
+                return False
+            return BookManager._file_digest(source) == BookManager._file_digest(target)
+        except OSError as e:
+            LOGGER.warning("_is_duplicate_content: 비교 실패 (%s vs %s): %s", source, target, e)
+            return False
+
+    @staticmethod
+    def _file_digest(path: Path) -> str:
+        import hashlib
+
+        digest = hashlib.blake2b(digest_size=16)
+        with path.open("rb") as f:
+            while chunk := f.read(1024 * 1024):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _next_numbered_path(target_path: Path) -> Path | None:
+        """'name.ext'가 이미 있을 때 'name (1).ext', 'name (2).ext' 순으로 빈 자리를 찾는다."""
+        for n in range(1, DUPLICATE_NAME_MAX_INDEX + 1):
+            candidate = target_path.with_name(f"{target_path.stem} ({n}){target_path.suffix}")
+            if not candidate.exists():
+                return candidate
+        return None
+
     async def _move_classified_file(
         self,
         file_path: Path,
@@ -1392,7 +1427,15 @@ class BookManager:
                 is_same_file = file_path.samefile(target_path)
             except OSError:
                 is_same_file = False
-            if not is_same_file:
+            if not is_same_file and not self._is_duplicate_content(file_path, target_path):
+                # 이름만 겹치고 내용이 다르면 서로 다른 책이다. 어느 쪽도 지우지 않고
+                # 새 파일에 '파일이름 (1).확장자'처럼 번호를 붙여 둘 다 남긴다.
+                numbered_path = self._next_numbered_path(target_path)
+                if numbered_path is None:
+                    return None, f"대상 경로에 같은 이름의 파일이 너무 많습니다: {target_rel_path}"
+                target_path = numbered_path
+                target_rel_path = str(target_path.relative_to(self.path_prefix))
+            elif not is_same_file:
                 if clean_existing:
                     if dry_run:
                         return {
@@ -2096,6 +2139,45 @@ class BookManager:
         LOGGER.info("reload_category_mismatch_files 완료: content_type='%s', category='%s', indexed=%d, deleted=%d, failed=%d, before=%d, after=%d", content_type, category, result["indexed_count"], result["deleted_count"], result["failed_count"], result["before_count"], result["after_count"])
         return result, None
 
+    async def _reload_root_files(self, content_type: str = "book") -> tuple[dict[str, Any], str | None]:
+        """'_root'는 실제 디렉토리가 아니라 최상위 파일을 묶어 부르는 이름이라 loader를 쓸 수 없다.
+
+        loader에 path_prefix를 넘기면 --recursive는 라이브러리 전체를, 비재귀는 하위 디렉토리
+        샘플까지 건드린다. 둘 다 '최상위 디렉토리 재적재'가 아니므로 최상위 파일만 직접 색인한다.
+        """
+        import os as _os
+
+        LOGGER.info("_reload_root_files 시작: content_type='%s'", content_type)
+        file_names: list[str] = []
+        try:
+            with _os.scandir(str(self.path_prefix)) as it:
+                for entry in it:
+                    if entry.is_file(follow_symlinks=False) and self._is_indexable_file_path(Path(entry.path)):
+                        file_names.append(entry.name)
+        except OSError as e:
+            LOGGER.error("_reload_root_files: 최상위 디렉토리 스캔 실패 — %s", e)
+            return {}, f"최상위 디렉토리를 읽을 수 없습니다: {e}"
+
+        processed = 0
+        failures: list[dict[str, Any]] = []
+        for batch_start in range(0, len(file_names), BULK_REINDEX_BATCH_SIZE):
+            indexed, batch_failures = await self._bulk_index_files(file_names[batch_start : batch_start + BULK_REINDEX_BATCH_SIZE], clean_existing=True)
+            processed += len(indexed)
+            failures.extend(batch_failures)
+
+        try:
+            await asyncio.to_thread(self.es_manager.refresh)
+        except Exception as e:
+            failures.append({"error": f"ES refresh 실패: {e}"})
+
+        self._clear_mismatch_cache()
+        if failures:
+            LOGGER.error("_reload_root_files 실패: processed=%d, failed=%d — %s", processed, len(failures), failures[0])
+            return {}, f"최상위 파일 재적재 실패 {len(failures)}건: {failures[0].get('error')}"
+
+        LOGGER.info("_reload_root_files 완료: processed=%d", processed)
+        return {"category": "_root", "processed_count": processed}, None
+
     async def reload_category(self, category: str, content_type: str = "book") -> tuple[dict[str, Any], str | None]:
         """카테고리 전체를 ES에 재적재 (loader.py --recursive --reload 호출)"""
         LOGGER.info("reload_category 시작: category='%s', content_type='%s'", category, content_type)
@@ -2104,6 +2186,8 @@ class BookManager:
             return {}, "카테고리 이름이 비어있습니다"
         if ".." in category:
             return {}, "카테고리 이름에 '..'는 사용할 수 없습니다"
+        if category == "_root":
+            return await self._reload_root_files(content_type)
 
         abs_dir = (self.path_prefix / category).resolve()
         if not abs_dir.is_relative_to(self.path_prefix.resolve()):
@@ -2227,6 +2311,13 @@ class BookManager:
             return {}, "이전 카테고리와 새 카테고리가 동일합니다"
         if ".." in old_category or ".." in new_category:
             return {}, "카테고리 이름에 '..'는 사용할 수 없습니다"
+        # '_root'는 최상위 파일을 묶어 부르는 이름일 뿐 디렉토리가 아니다. 이름을 바꾸면 파일은
+        # 최상위에 남은 채 ES category만 바뀌어 불일치가 생기고, 반대로 실제 디렉토리를 '_root'로
+        # 만들면 그 이름이 최상위를 가리키는지 진짜 디렉토리인지 구분할 수 없게 된다.
+        if old_category == "_root":
+            return {}, "최상위 디렉토리는 이름을 변경할 수 없습니다"
+        if new_category == "_root":
+            return {}, "'_root'는 최상위 디렉토리를 가리키는 예약된 이름이라 사용할 수 없습니다"
 
         # 경로 검증 (Path Traversal 방지)
         old_dir_check = (self.path_prefix / old_category).resolve()
@@ -2236,8 +2327,9 @@ class BookManager:
         if not new_dir_check.is_relative_to(self.path_prefix.resolve()):
             return {}, f"잘못된 경로입니다: {new_category}"
 
-        # ES에서 old/new 카테고리 문서 수를 msearch로 한 번에 확인
-        counts = self.es_manager.count_by_categories([old_category, new_category])
+        # ES에서 old/new 카테고리 문서 수를 msearch로 한 번에 확인. 디렉토리 rename은 하위
+        # 카테고리까지 옮기므로 양쪽 모두 하위 문서를 포함해 센다.
+        counts = self.es_manager.count_by_categories([old_category, new_category], prefix=True)
         old_count = counts[old_category]
         if old_count == 0:
             return {}, f"카테고리 '{old_category}'에 문서가 없습니다"
@@ -2303,6 +2395,9 @@ class BookManager:
             return {}, "카테고리 이름이 비어있습니다"
         if ".." in category:
             return {}, "카테고리 이름에 '..'는 사용할 수 없습니다"
+        # '_root'를 지우면 최상위 파일의 ES 문서만 사라지고 파일은 그대로 남아 불일치가 생긴다.
+        if category == "_root":
+            return {}, "최상위 디렉토리는 삭제할 수 없습니다"
 
         # 경로 검증 (Path Traversal 방지)
         dir_check = (self.path_prefix / category).resolve()

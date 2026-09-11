@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import utils.isbn as isbn
+from utils.parser_timeout import ParserTimeout
 
 
 class TestISBN(unittest.TestCase):
@@ -491,3 +492,92 @@ def test_extract_pdf_falls_back_to_pypdf_when_pdfium_fails(tmp_path: Path, monke
     result = isbn.extract(pdf)
 
     assert "9788994492032" in result
+
+
+# ---- coverage: PDF ISBN 추출의 미커버 분기 ----
+
+
+def test_extract_pdf_uses_given_content_first(tmp_path: Path, monkeypatch):
+    """이미 읽어 둔 content에 ISBN이 있으면 PDF를 다시 열지 않는다 (322)."""
+    from utils import isbn
+
+    pdf = tmp_path / "book.pdf"
+    pdf.write_bytes(b"%PDF-1.4 mock")
+
+    def fail(_p):
+        raise AssertionError("content로 끝났어야 하는데 PDF를 다시 파싱함")
+
+    monkeypatch.setattr(isbn, "extract_pdf_text_by_pdfium", fail)
+
+    assert isbn.extract(pdf, content="ISBN 978-89-94492-03-2") == ["9788994492032"]
+
+
+def test_extract_pdf_pdfium_timeout_gives_up(tmp_path: Path, monkeypatch):
+    """pdfium 단계가 상한을 넘기면 pypdf로 넘어가지 않고 포기한다 (333-334)."""
+    from utils import isbn
+
+    pdf = tmp_path / "hang.pdf"
+    pdf.write_bytes(b"%PDF-1.4 mock")
+
+    def timeout(_p):
+        raise ParserTimeout("isbn/pdfium")
+
+    def fail(_p):
+        raise AssertionError("타임아웃 후에도 pypdf를 시도함")
+
+    monkeypatch.setattr(isbn, "extract_pdf_text_by_pdfium", timeout)
+    monkeypatch.setattr(isbn, "extract_pdf_text_by_pypdf", fail)
+
+    assert isbn.extract(pdf) == []
+
+
+def test_extract_pdf_stops_when_pdfium_text_has_no_isbn(tmp_path: Path, monkeypatch):
+    """pdfium이 텍스트를 뽑았는데 ISBN이 없으면 pypdf를 다시 돌리지 않는다 (342)."""
+    from utils import isbn
+
+    pdf = tmp_path / "no_isbn.pdf"
+    pdf.write_bytes(b"%PDF-1.4 mock")
+
+    def fail(_p):
+        raise AssertionError("pdfium 결과가 있는데 pypdf를 시도함")
+
+    monkeypatch.setattr(isbn, "extract_pdf_text_by_pdfium", lambda _p: ("본문만 있고 국제표준도서번호는 없다", 12))
+    monkeypatch.setattr(isbn, "extract_pdf_text_by_pypdf", fail)
+
+    assert isbn.extract(pdf) == []
+
+
+def test_extract_pdf_timeout_outside_stage_guards(tmp_path: Path, monkeypatch):
+    """단계 가드 밖에서 반복 알람이 터져도 ISBN만 포기하고 예외를 흘리지 않는다 (359-361).
+
+    time_limit은 0.5초 간격으로 알람을 반복하므로, 파서가 알람을 삼킨 뒤
+    검색 단계에서 ParserTimeout이 뒤늦게 올라올 수 있다.
+    """
+    from utils import isbn
+
+    pdf = tmp_path / "late_timeout.pdf"
+    pdf.write_bytes(b"%PDF-1.4 mock")
+
+    def late_timeout(_content):
+        raise ParserTimeout("isbn/pdfium")
+
+    monkeypatch.setattr(isbn, "extract_pdf_text_by_pdfium", lambda _p: ("본문 텍스트", 3))
+    monkeypatch.setattr(isbn, "search_in_content", late_timeout)
+
+    assert isbn.extract(pdf) == []
+
+
+def test_extract_pdf_unexpected_error_is_swallowed(tmp_path: Path, monkeypatch):
+    """예상 못 한 오류가 나도 ISBN 추출 실패로만 끝난다 (362-363)."""
+    from utils import isbn
+
+    pdf = tmp_path / "boom.pdf"
+    pdf.write_bytes(b"%PDF-1.4 mock")
+
+    def boom(_content):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(isbn, "extract_pdf_text_by_pdfium", lambda _p: ("본문 텍스트", 3))
+    monkeypatch.setattr(isbn, "search_in_content", boom)
+
+    assert isbn.extract(pdf) == []

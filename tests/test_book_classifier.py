@@ -274,6 +274,44 @@ def test_clean_empty_parent_dirs_stops_when_directory_has_visible_items(tmp_path
 
     assert child.exists()
 
+def test_clean_empty_parent_dirs_keeps_dir_holding_only_hidden_files(tmp_path):
+    """rmdir은 숨김 파일까지 봐야 성공한다. 보이는 항목만 세면 코드와 실제 동작이 어긋난다."""
+    stop_dir = tmp_path / "library"
+    child = stop_dir / "series"
+    child.mkdir(parents=True)
+    (child / ".nomedia").write_text("", encoding="utf-8")
+
+    clean_empty_parent_dirs(child, stop_dir)
+
+    assert child.exists()
+
+
+def test_clean_empty_parent_dirs_never_climbs_past_stop_dir(tmp_path):
+    """stop_dir를 정규화 없이 비교하면 못 알아보고 조상까지 거슬러 올라간다."""
+    stop_dir = tmp_path / "library"
+    child = stop_dir / "series"
+    child.mkdir(parents=True)
+    # 같은 디렉토리를 '..'를 낀 다른 표기로 넘긴다.
+    unnormalized_stop = stop_dir / "series" / ".."
+
+    clean_empty_parent_dirs(child, unnormalized_stop)
+
+    assert stop_dir.exists()
+    assert tmp_path.exists()
+
+
+def test_clean_empty_parent_dirs_accepts_str_stop_dir(tmp_path):
+    """호출자가 문자열을 넘기면 Path와 절대 같아지지 않아 stop_dir를 지나친다."""
+    stop_dir = tmp_path / "library"
+    child = stop_dir / "series"
+    child.mkdir(parents=True)
+
+    clean_empty_parent_dirs(child, str(stop_dir))
+
+    assert stop_dir.exists()
+    assert not child.exists()
+
+
 def test_evaluate_category_decision_majority():
     y = {"mapped": "3_판타지", "title": "테스트"}
     a = {"mapped": "3_판타지", "title": "테스트"}

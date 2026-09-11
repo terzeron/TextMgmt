@@ -264,6 +264,29 @@ def test_aggregate_grouped_delete_insert_update_counts():
     assert manager.delete(1) is True
 
 
+def test_rename_category_includes_subcategories():
+    """term 쿼리만 쓰면 하위 카테고리 문서가 남아 FS와 ES가 어긋난다."""
+    es = DummyES()
+    manager = make_manager(es)
+    captured = {}
+
+    def capture(index, query, script, conflicts="abort", refresh=False):
+        captured["query"] = query
+        captured["script"] = script
+        return {"updated": 4, "failures": []}
+
+    es.update_by_query = capture
+    manager.rename_category("A", "B")
+
+    should = captured["query"]["bool"]["should"]
+    assert {"term": {"category": "A"}} in should
+    assert {"prefix": {"category": "A/"}} in should
+    params = captured["script"]["params"]
+    assert params["old_category"] == "A"
+    assert params["old_prefix"] == "A/"
+    assert params["new_prefix"] == "B/"
+
+
 def test_search_by_keyword_paged_with_exclude_categories():
     es = DummyES()
     manager = make_manager(es)

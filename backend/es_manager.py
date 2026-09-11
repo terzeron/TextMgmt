@@ -686,15 +686,22 @@ class ESManager:
         result = self.es.count(index=self.index_name, query=query)
         return result["count"]
 
-    def count_by_categories(self, categories: list[str]) -> dict[str, int]:
-        """여러 카테고리의 문서 수를 msearch로 한 번에 조회"""
+    def count_by_categories(self, categories: list[str], prefix: bool = False) -> dict[str, int]:
+        """여러 카테고리의 문서 수를 msearch로 한 번에 조회
+
+        prefix=True이면 하위 카테고리(category/*) 문서도 함께 센다.
+        """
         if len(categories) == 1:
-            return {categories[0]: self.count_by_category(categories[0])}
-        LOGGER.debug("count_by_categories(categories=%s)", categories)
+            return {categories[0]: self.count_by_category(categories[0], prefix=prefix)}
+        LOGGER.debug("count_by_categories(categories=%s, prefix=%s)", categories, prefix)
         searches: list[dict[str, Any]] = []
         for cat in categories:
+            if prefix:
+                query: dict[str, Any] = {"bool": {"should": [{"term": {"category": cat}}, {"prefix": {"category": cat + "/"}}], "minimum_should_match": 1}}
+            else:
+                query = {"term": {"category": cat}}
             searches.append({"index": self.index_name})
-            searches.append({"size": 0, "track_total_hits": True, "query": {"term": {"category": cat}}})
+            searches.append({"size": 0, "track_total_hits": True, "query": query})
         response = self.es.msearch(searches=searches)
         result: dict[str, int] = {}
         for cat, resp in zip(categories, response["responses"]):
@@ -716,17 +723,24 @@ class ESManager:
         LOGGER.debug("rename_category(old='%s', new='%s')", old_category, new_category)
         old_prefix = old_category + "/"
         new_prefix = new_category + "/"
+        # 디렉토리 rename은 하위 카테고리까지 통째로 옮기므로, ES도 'A'와 'A/*'를 함께 갱신해야
+        # 한다. term만 쓰면 하위 카테고리 문서가 예전 경로로 남아 FS와 조용히 어긋난다.
         script = {
             "source": """
-                ctx._source.category = params.new_category;
-                if (ctx._source.file_path.startsWith(params.old_prefix)) {
+                if (ctx._source.category == params.old_category) {
+                    ctx._source.category = params.new_category;
+                } else if (ctx._source.category.startsWith(params.old_prefix)) {
+                    ctx._source.category = params.new_prefix + ctx._source.category.substring(params.old_prefix.length());
+                }
+                if (ctx._source.file_path != null && ctx._source.file_path.startsWith(params.old_prefix)) {
                     ctx._source.file_path = params.new_prefix + ctx._source.file_path.substring(params.old_prefix.length());
                 }
             """,
             "lang": "painless",
-            "params": {"new_category": new_category, "old_prefix": old_prefix, "new_prefix": new_prefix},
+            "params": {"old_category": old_category, "new_category": new_category, "old_prefix": old_prefix, "new_prefix": new_prefix},
         }
-        result = self.es.update_by_query(index=self.index_name, query={"term": {"category": old_category}}, script=script, conflicts="abort", refresh=True)
+        query = {"bool": {"should": [{"term": {"category": old_category}}, {"prefix": {"category": old_prefix}}], "minimum_should_match": 1}}
+        result = self.es.update_by_query(index=self.index_name, query=query, script=script, conflicts="abort", refresh=True)
         return {"updated": result.get("updated", 0), "failures": result.get("failures", [])}
 
     def delete_by_category(self, category: str, prefix: bool = False) -> dict[str, Any]:

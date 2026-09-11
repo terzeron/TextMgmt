@@ -1193,6 +1193,52 @@ describe("CategoryAdmin", () => {
     });
   });
 
+  it("파일 삭제는 확인 모달에서 취소하면 API를 호출하지 않는다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByRole("tree")).toBeTruthy();
+    });
+
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches")
+        resolve(MISMATCH_RESPONSE_WITH_DATA);
+      else if (
+        url.startsWith("/category-mismatches/") &&
+        !url.startsWith("/category-mismatches/reload-status")
+      ) {
+        resolve({
+          es_only: [],
+          fs_only: [
+            { file_name: "orphan.txt", file_path: "1_fiction/orphan.txt" },
+          ],
+        });
+      } else if (url.startsWith("/category-mappings"))
+        resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("orphan.txt")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("orphan.txt"));
+
+    mockJsonPostReq.mockClear();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "파일 삭제" }),
+    );
+
+    const modal = await screen.findByRole("dialog");
+    expect(within(modal).getByText(/되돌릴 수 없습니다/)).toBeTruthy();
+    fireEvent.click(within(modal).getByRole("button", { name: "취소" }));
+
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+    // 트리에 항목이 그대로 남아 있다 (모달 본문에도 같은 경로가 찍히므로 getAll로 본다).
+    expect(screen.getAllByText("orphan.txt").length).toBeGreaterThan(0);
+  });
+
   it("파일 삭제 버튼 클릭 시 POST /category-mismatches/delete-file API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
@@ -1233,7 +1279,9 @@ describe("CategoryAdmin", () => {
       resolve({ success: true });
     });
 
-    fireEvent.click(screen.getByText("파일 삭제"));
+    fireEvent.click(screen.getByRole("button", { name: "파일 삭제" }));
+    const deleteFileModal = await screen.findByRole("dialog");
+    fireEvent.click(within(deleteFileModal).getByRole("button", { name: "삭제" }));
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/category-mismatches/delete-file",
@@ -1289,7 +1337,9 @@ describe("CategoryAdmin", () => {
       reject("삭제 실패");
     });
 
-    fireEvent.click(screen.getByText("파일 삭제"));
+    fireEvent.click(screen.getByRole("button", { name: "파일 삭제" }));
+    const deleteFileModal = await screen.findByRole("dialog");
+    fireEvent.click(within(deleteFileModal).getByRole("button", { name: "삭제" }));
     await waitFor(() => {
       expect(screen.getByText("파일 삭제 실패: 삭제 실패")).toBeTruthy();
     });
@@ -1565,6 +1615,23 @@ describe("CategoryAdmin", () => {
   });
 
   // ── 카테고리 관리 (이름 변경 / 삭제 / 재적재) ──
+
+  it("_root 선택 시 이름 변경/삭제 버튼을 막는다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("_root")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("_root"));
+
+    const renameBtn = screen.getByTitle(
+      "최상위 디렉토리는 이름을 변경할 수 없습니다",
+    );
+    const deleteBtn = screen.getByTitle("최상위 디렉토리는 삭제할 수 없습니다");
+    expect(renameBtn.disabled).toBe(true);
+    expect(deleteBtn.disabled).toBe(true);
+  });
 
   it("이름 변경 버튼 클릭 시 모달이 뜨고 변경 API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);

@@ -423,8 +423,13 @@ class DummyES:
         next_search_after = [next_start] if len(page) == size and next_start < len(self.category_docs) else None
         return page, len(self.category_docs), next_search_after
 
-    def count_by_categories(self, categories):
-        return {c: self.counts.get(c, 0) for c in categories}
+    def count_by_categories(self, categories, prefix: bool = False):
+        def total(cat):
+            if not prefix:
+                return self.counts.get(cat, 0)
+            return sum(n for c, n in self.counts.items() if c == cat or c.startswith(cat + "/"))
+
+        return {c: total(c) for c in categories}
 
     def rename_category(self, old_category: str, new_category: str):
         return {"updated": 3, "failures": []}
@@ -1998,7 +2003,8 @@ def test_auto_classify_category_skips_ambiguous_and_existing_target(tmp_path: Pa
     conflict.write_text("conflict")
     target_dir = tmp_path / "2_science"
     target_dir.mkdir()
-    (target_dir / conflict.name).write_text("already exists")
+    # 내용까지 같아야 중복으로 보고 실패시킨다. 내용이 다르면 번호를 붙여 둘 다 남긴다.
+    (target_dir / conflict.name).write_text("conflict")
 
     monkeypatch.setattr("utils.loader.Loader.read_file", lambda *args, **kwargs: {})
 
@@ -2065,7 +2071,7 @@ def test_auto_classify_category_cleans_existing_duplicate(tmp_path: Path, monkey
     conflict.write_text("conflict duplicate")
     target_dir = tmp_path / "2_science"
     target_dir.mkdir()
-    (target_dir / conflict.name).write_text("already exists in target")
+    (target_dir / conflict.name).write_text("conflict duplicate")
 
     result, err = asyncio_runner(
         manager.auto_classify_category(
@@ -2077,10 +2083,35 @@ def test_auto_classify_category_cleans_existing_duplicate(tmp_path: Path, monkey
 
     assert err is None
     assert not conflict.exists()
-    assert (target_dir / conflict.name).read_text() == "already exists in target"
+    assert (target_dir / conflict.name).read_text() == "conflict duplicate"
     assert result["moved_count"] == 0
     assert result["duplicate_cleaned_count"] == 1
     assert result["failed_count"] == 0
+
+
+def test_auto_classify_category_numbers_conflicting_different_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """이름만 겹치고 내용이 다르면 실패가 아니라 번호를 붙인 이동으로 처리한다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    source_dir = tmp_path / "0_inbox"
+    source_dir.mkdir(parents=True)
+    conflict = source_dir / "중복 도서.txt"
+    conflict.write_text("원본과 다른 내용", encoding="utf-8")
+    target_dir = tmp_path / "2_science"
+    target_dir.mkdir()
+    (target_dir / conflict.name).write_text("기존 파일", encoding="utf-8")
+
+    result, err = asyncio_runner(
+        manager.auto_classify_category("0_inbox", {"2_science": ["중복"]}, clean_existing=True)
+    )
+
+    assert err is None
+    assert result["moved_count"] == 1
+    assert result["failed_count"] == 0
+    assert result["duplicate_cleaned_count"] == 0
+    assert (target_dir / "중복 도서.txt").read_text(encoding="utf-8") == "기존 파일"
+    assert (target_dir / "중복 도서 (1).txt").read_text(encoding="utf-8") == "원본과 다른 내용"
+    assert not conflict.exists()
 
 
 def test_auto_classify_category_uses_deterministic_classifier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -2459,6 +2490,63 @@ def test_reload_category_full_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     result, err = asyncio_runner(manager.reload_category("A", content_type="comic"))
     assert err is None
     assert result["processed_count"] == 5
+
+
+def test_delete_category_rejects_root(tmp_path: Path):
+    """'_root'는 실제 카테고리가 아니라 최상위 파일 묶음이라 삭제 대상이 될 수 없다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.counts = {"_root": 3}
+
+    result, err = asyncio_runner(manager.delete_category("_root"))
+    assert result == {}
+    assert "최상위 디렉토리" in err
+    assert es.deleted_by_category["deleted"] == 2  # delete_by_category 미호출
+
+
+def test_rename_category_rejects_root_as_source(tmp_path: Path):
+    """'_root'를 이름 변경하면 파일은 최상위에 남고 ES category만 바뀌어 불일치가 생긴다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.counts = {"_root": 3, "새이름": 0}
+
+    result, err = asyncio_runner(manager.rename_category("_root", "새이름"))
+    assert result == {}
+    assert "최상위 디렉토리" in err
+
+
+def test_rename_category_rejects_root_as_target(tmp_path: Path):
+    """'_root'는 예약된 이름이라 실제 디렉토리 이름으로 쓸 수 없다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    (tmp_path / "A").mkdir()
+    es.counts = {"A": 3, "_root": 0}
+
+    result, err = asyncio_runner(manager.rename_category("A", "_root"))
+    assert result == {}
+    assert "_root" in err
+    assert (tmp_path / "A").is_dir()
+
+
+def test_reload_category_root_reloads_top_level_files_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """'_root'는 실제 디렉토리가 아니라 최상위 파일 묶음이라, loader 대신 최상위 파일만 재적재한다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    (tmp_path / "root.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "sub.txt").write_text("y", encoding="utf-8")
+
+    async def fail_exec(*args, **kwargs):
+        raise AssertionError("_root는 loader subprocess를 실행하면 안 된다")
+
+    monkeypatch.setattr("backend.book_manager.asyncio.create_subprocess_exec", fail_exec)
+
+    result, err = asyncio_runner(manager.reload_category("_root"))
+    assert err is None
+    assert result["category"] == "_root"
+    assert result["processed_count"] == 1
+    indexed_paths = [doc["file_path"] for batch in es.inserted for doc in batch.values()]
+    assert indexed_paths == ["root.txt"]
 
 
 def test_get_pdf_pages_file_not_found(tmp_path: Path):
@@ -4299,6 +4387,86 @@ def test_iter_category_indexable_files_branches(tmp_path: Path, monkeypatch):
     assert len(files) == 0  # .hidden_dir ignored (1353), valid.txt resolve OSError (1359-1360)
 
 
+def test_rename_category_counts_subcategory_documents(tmp_path: Path):
+    """문서가 하위 카테고리에만 있어도 디렉토리는 존재하므로 이름을 바꿀 수 있어야 한다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    (tmp_path / "A").mkdir()
+    es.counts = {"A/sub": 3}
+
+    result, err = asyncio_runner(manager.rename_category("A", "B"))
+
+    assert err is None
+    assert result["fs_renamed"] is True
+    assert (tmp_path / "B").is_dir()
+
+
+def test_rename_category_blocks_target_with_subcategory_documents(tmp_path: Path):
+    """대상 카테고리가 하위에만 문서를 가져도 충돌이다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    (tmp_path / "A").mkdir()
+    es.counts = {"A": 2, "B/sub": 5}
+
+    result, err = asyncio_runner(manager.rename_category("A", "B"))
+
+    assert result == {}
+    assert "이미" in err
+    assert (tmp_path / "A").is_dir()
+
+
+def test_move_classified_file_keeps_both_when_content_differs(tmp_path: Path):
+    """이름만 같고 내용이 다르면 둘 다 남기고 새 파일에 괄호 번호를 붙인다."""
+    manager = make_manager(tmp_path, DummyES())
+    src = tmp_path / "A" / "book.txt"
+    src.parent.mkdir(parents=True)
+    src.write_text("새 파일 내용", encoding="utf-8")
+    existing = tmp_path / "B" / "book.txt"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("기존 파일 내용은 다르다", encoding="utf-8")
+
+    result, err = asyncio_runner(manager._move_classified_file(src, "B", ["kw"], "book", clean_existing=True))
+
+    assert err is None
+    assert result["to"] == "B/book (1).txt"
+    assert existing.read_text(encoding="utf-8") == "기존 파일 내용은 다르다"
+    assert (tmp_path / "B" / "book (1).txt").read_text(encoding="utf-8") == "새 파일 내용"
+    assert not src.exists()
+
+
+def test_move_classified_file_numbers_up_when_bracket_name_taken(tmp_path: Path):
+    """'(1)'도 이미 있으면 '(2)'로 넘어간다."""
+    manager = make_manager(tmp_path, DummyES())
+    src = tmp_path / "A" / "book.txt"
+    src.parent.mkdir(parents=True)
+    src.write_text("세 번째", encoding="utf-8")
+    (tmp_path / "B").mkdir()
+    (tmp_path / "B" / "book.txt").write_text("첫 번째", encoding="utf-8")
+    (tmp_path / "B" / "book (1).txt").write_text("두 번째", encoding="utf-8")
+
+    result, err = asyncio_runner(manager._move_classified_file(src, "B", ["kw"], "book"))
+
+    assert err is None
+    assert result["to"] == "B/book (2).txt"
+    assert (tmp_path / "B" / "book (2).txt").read_text(encoding="utf-8") == "세 번째"
+
+
+def test_move_classified_file_same_size_different_content_keeps_both(tmp_path: Path):
+    """크기가 같아도 내용이 다르면 중복이 아니다."""
+    manager = make_manager(tmp_path, DummyES())
+    src = tmp_path / "A" / "book.txt"
+    src.parent.mkdir(parents=True)
+    src.write_text("AAAA", encoding="utf-8")
+    (tmp_path / "B").mkdir()
+    (tmp_path / "B" / "book.txt").write_text("BBBB", encoding="utf-8")
+
+    result, err = asyncio_runner(manager._move_classified_file(src, "B", ["kw"], "book", clean_existing=True))
+
+    assert err is None
+    assert result["to"] == "B/book (1).txt"
+    assert (tmp_path / "B" / "book.txt").read_text(encoding="utf-8") == "BBBB"
+
+
 def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
     # Lines 1379-1380, 1385-1387, 1393-1394, 1398, 1420-1421, 1440-1441, 1450, 1473, 1490-1491, 1494-1499, 1503
     manager = make_manager(tmp_path, DummyES())
@@ -4329,7 +4497,7 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
     # 3. 1393-1394 & 1398: target exists, samefile OSError, clean_existing and dry_run
     target_f = tmp_path / "B" / "f1.txt"
     target_f.parent.mkdir(parents=True, exist_ok=True)
-    target_f.write_text("f1 duplicate")
+    target_f.write_text("f1")  # 내용까지 같아야 중복 정리 대상이다
 
     def mock_samefile_err(*args, **kwargs):
         raise OSError("samefile failed")
