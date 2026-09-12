@@ -58,6 +58,12 @@ MIN_SYLLABLES_FOR_LIKENESS = 50
 # 손상 0.006 이하, 정상 0.271 이상. 사이가 비어 있어 경계를 넉넉히 잡는다.
 MOJIBAKE_LIKENESS_THRESHOLD = 0.10
 
+# 한글이 전체의 이 비율에 못 미치면 판정하지 않는다.
+# 영문 OCR 문서에 한글 잡음이 60자쯤 섞이면 음절 수 하한은 넘지만, 문서의 0.2%를 보고
+# 전체를 손상이라 부르는 셈이 된다. 실측에서 이 유형이 오탐 1,971건을 만들었다.
+# 실제 손상 파일은 한글 비율 0.48~0.85, 정상 한국어는 0.40~0.70 이라 여유가 크다.
+MIN_HANGUL_RATIO = 0.10
+
 # 표본 크기. 앞부분만 보면 표지와 판권지에 속아 본문 손상을 놓친다.
 DEFAULT_HEAD_CHARS = 20000
 DEFAULT_TAIL_CHARS = 10000
@@ -84,9 +90,12 @@ def classify_text(text: str) -> Tuple[str, Optional[float]]:
     """본문 표본으로 손상 여부를 판정한다"""
     if not text or len(text) < 200:
         return VERDICT_UNREADABLE, None
+    hangul = sum(1 for ch in text if "가" <= ch <= "힣")
+    if hangul / len(text) < MIN_HANGUL_RATIO:
+        # 한국어 문서가 아니다(한문 원전, 중국어, 일본어, 영문, 악보). 판정 대상이 아니다.
+        return VERDICT_UNDETERMINED, None
     likeness = korean_likeness(text)
     if likeness is None:
-        # 한글이 거의 없는 문서(한문 원전, 영문 문헌, 악보)는 이 방법으로 판정할 수 없다
         return VERDICT_UNDETERMINED, None
     if likeness < MOJIBAKE_LIKENESS_THRESHOLD:
         return VERDICT_CORRUPTED, likeness

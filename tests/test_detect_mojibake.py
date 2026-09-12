@@ -133,3 +133,23 @@ def test_scan_counts_verdicts_per_category(tmp_path):
     assert len(report["corrupted"]) == 2
     # 리포트는 그대로 JSON 으로 저장할 수 있어야 한다
     json.dumps(report, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# 한글 비율 하한
+# ---------------------------------------------------------------------------
+
+# 영문 본문에 OCR 잡음으로 한글이 조금 섞인 문서. 음절 수 하한은 넘지만
+# 문서의 0.2%를 보고 전체를 판정하면 안 된다.
+ENGLISH_WITH_HANGUL_NOISE = ENGLISH * 12 + "".join("뷁뾃쎯퉳깗" for _ in range(12))
+
+
+def test_english_document_with_hangul_noise_is_undetermined():
+    assert korean_likeness(ENGLISH_WITH_HANGUL_NOISE) is not None  # 음절 수 하한은 넘는다
+    assert classify_text(ENGLISH_WITH_HANGUL_NOISE)[0] == VERDICT_UNDETERMINED
+
+
+def test_korean_document_is_still_judged():
+    """한글이 본문의 다수인 문서는 그대로 판정한다"""
+    assert classify_text(CLEAN_KOREAN)[0] == VERDICT_CLEAN
+    assert classify_text(CORRUPTED)[0] == VERDICT_CORRUPTED

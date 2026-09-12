@@ -3,7 +3,7 @@ import zipfile
 import pytest
 
 from backend.category_lexicon import CategoryLexicon, get_kiwi
-from utils.corpus_lexicon import build_lexicon, collect_all, explain_file, is_mojibake, collect_category, list_category_dirs, list_category_files, load_collected, read_document_text, read_epub_text, read_txt_text, sample_files, split_holdout, write_lexicon
+from utils.corpus_lexicon import build_lexicon, collect_all, decode_best, explain_file, is_mojibake, collect_category, list_category_dirs, list_category_files, load_collected, read_document_text, read_epub_text, read_txt_text, sample_files, split_holdout, write_lexicon
 
 WUXIA_SENTENCES = ["소림사 장로가 강호에서 내공을 운기조식하며 무림맹 검법을 수련했다.", "화산파 장문인은 단전에 진기를 모아 주화입마를 피했다.", "마교 천마가 사파 무인들을 이끌고 정파 문파를 습격했다."]
 FANTASY_SENTENCES = ["던전에서 몬스터를 사냥하는 헌터가 각성하여 레이드에 참가했다.", "마법사가 마나를 모아 마법진을 그리고 드래곤을 소환했다.", "상태창을 열어 스킬과 스탯을 확인한 플레이어가 길드에 가입했다."]
@@ -367,3 +367,51 @@ def test_collection_excludes_corrupted_documents(tmp_path, kiwi):
     # 깨진 토큰이 사전 원재료에 들어가지 않는다
     assert "무림맹" in res["df"]
     assert not any("쒎똿耶" in w for w in res["df"])
+
+
+# ---------------------------------------------------------------------------
+# 인코딩 선택
+# ---------------------------------------------------------------------------
+
+def test_decode_best_reads_cp949_korean(tmp_path):
+    """CP949 로 저장된 한국어 텍스트는 CP949 로 읽혀야 한다"""
+    원문 = "그 중 일부만이 연기나 예능 등의 다른 분야로 진출하게 된다. " * 6
+    assert decode_best(원문.encode("cp949")) == 원문
+
+
+def test_decode_best_reads_utf8_korean(tmp_path):
+    원문 = "소림사 장로가 강호에서 내공을 운기조식하며 검법을 수련했다. " * 6
+    assert decode_best(원문.encode("utf-8")) == 원문
+
+
+def test_decode_best_does_not_pick_cp949_for_valid_utf8():
+    """
+    유효한 UTF-8 을 CP949 로 다시 읽으면 더 한국어처럼 보이는 쓰레기가 나올 수 있다.
+    그쪽을 고르면 이미 손상된 파일을 정상으로 오판한다.
+    """
+    손상본문 = ("소림사 장로가 강호에서 내공을 운기조식하며 검법을 수련했다. " * 24).encode("utf-8").decode("cp949", errors="ignore")
+    assert decode_best(손상본문.encode("utf-8")) == 손상본문
+
+
+def test_decode_best_tolerates_truncated_multibyte_tail():
+    """표본을 바이트 단위로 자르면 마지막 문자가 잘린다. 그것 때문에 인코딩을 바꿔선 안 된다."""
+    원문 = "무림맹의 장문인으로서 제자들을 이끌었다. " * 10
+    raw = 원문.encode("utf-8")
+    잘린것 = decode_best(raw[:-1])
+    assert 잘린것.startswith("무림맹의 장문인으로서")
+    assert "�" not in 잘린것
+
+
+def test_decode_best_on_empty_bytes():
+    assert decode_best(b"") == ""
+
+
+def test_read_txt_text_prefers_cp949_over_accidental_hangul(tmp_path):
+    """
+    CP949 파일을 UTF-8 로 잘못 읽어도 한글이 우연히 섞인다.
+    '한글이 있으면 채택' 기준은 실측에서 정상 소설 1,856건을 손상으로 오판했다.
+    """
+    원문 = "그 중 일부만이 연기나 예능 등의 다른 분야로 진출하게 된다. " * 40
+    p = tmp_path / "cp949.txt"
+    p.write_bytes(원문.encode("cp949"))
+    assert "일부만이 연기나 예능" in read_txt_text(p, 5000, 0)

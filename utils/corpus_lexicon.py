@@ -38,7 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from utils.detect_mojibake import VERDICT_CORRUPTED, classify_text  # noqa: E402
+from utils.detect_mojibake import VERDICT_CORRUPTED, classify_text, korean_likeness  # noqa: E402
 from backend.category_lexicon import (  # noqa: E402
     DEFAULT_LEXICON_PATH,
     UNIQUE_BONUS,
@@ -103,6 +103,50 @@ def list_category_files(cat_dir: Path) -> List[Path]:
     return files
 
 
+def decode_best(raw: bytes) -> str:
+    """
+    바이트 열을 올바른 인코딩으로 디코딩한다.
+
+    UTF-8 은 자기검증 인코딩이다. CP949 로 저장된 한국어 텍스트는 바이트 쌍이
+    유효한 UTF-8 시퀀스가 되는 일이 거의 없어 엄격 디코딩에서 실패한다.
+    그래서 "엄격 UTF-8 성공 여부"가 가장 신뢰할 수 있는 판별이다.
+
+    두 가지를 하면 안 된다.
+    - "한글이 하나라도 나오면 채택": CP949 파일을 UTF-8로 잘못 읽은 결과에도 한글이
+      우연히 섞인다. 실측에서 정상 CP949 소설 1,856건이 손상으로 오판됐다.
+    - "likeness 가 가장 높은 인코딩 채택": 이미 손상된 파일을 CP949 로 다시 읽으면
+      더 한국어처럼 보이는 다른 쓰레기가 나와 손상을 놓친다.
+    """
+    if not raw:
+        return ""
+
+    # 잘린 멀티바이트 문자 때문에 엄격 디코딩이 헛되이 실패하지 않도록 꼬리를 다듬는다
+    for trim in range(0, 4):
+        chunk = raw[: len(raw) - trim] if trim else raw
+        try:
+            return chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+
+    for enc in ("cp949", "euc-kr"):
+        for trim in range(0, 2):
+            chunk = raw[: len(raw) - trim] if trim else raw
+            try:
+                return chunk.decode(enc)
+            except UnicodeDecodeError:
+                continue
+
+    # 어느 것으로도 깨끗이 안 읽히면 한국어로 가장 잘 읽히는 쪽을 쓴다
+    best_text, best_score = "", -1.0
+    for enc in ("utf-8", "cp949", "euc-kr"):
+        text = raw.decode(enc, errors="ignore")
+        likeness = korean_likeness(text)
+        score = likeness if likeness is not None else 0.001
+        if score > best_score:
+            best_score, best_text = score, text
+    return best_text
+
+
 def read_txt_text(fpath: Path, head_chars: int, tail_chars: int) -> str:
     """TXT 앞부분과 뒷부분을 인코딩 추정하여 읽는다"""
     try:
@@ -110,23 +154,13 @@ def read_txt_text(fpath: Path, head_chars: int, tail_chars: int) -> str:
     except OSError:
         return ""
 
-    def decode(raw: bytes) -> str:
-        for enc in ("utf-8", "cp949", "euc-kr"):
-            try:
-                text = raw.decode(enc, errors="ignore")
-            except Exception:
-                continue
-            if _HANGUL_RE.search(text):
-                return text
-        return raw.decode("utf-8", errors="ignore")
-
     parts: List[str] = []
     try:
         with open(fpath, "rb") as f:
-            parts.append(decode(f.read(head_chars * 3))[:head_chars])
+            parts.append(decode_best(f.read(head_chars * 3))[:head_chars])
             if tail_chars > 0 and size > head_chars * 3:
                 f.seek(max(0, size - tail_chars * 3))
-                parts.append(decode(f.read())[-tail_chars:])
+                parts.append(decode_best(f.read())[-tail_chars:])
     except OSError:
         return ""
     return " ".join(parts)
