@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore
+from backend.category_lexicon import MIN_SIMILARITY as LEXICON_MIN_SIMILARITY, extract_word_set, get_default_lexicon
 
 logger = logging.getLogger(__name__)
 
@@ -669,6 +670,118 @@ def resolve_genre_conflict(cats: List[str], fname: str, text_sample: str = "") -
     return None
 
 
+# ==========================================
+# 가중치 합 판정 (Weighted Sum Decision)
+#
+# 파일명 명시 장르와 서점 2/3 다수결은 신뢰도가 높아 기존대로 조기 반환한다.
+# 그 아래 신호들은 먼저 맞은 쪽이 이기는 캐스케이드 대신 점수를 합산해
+# 최고점 카테고리를 고른다. 신호 하나가 약해도 여러 개가 같은 방향이면 판정이 선다.
+# ==========================================
+# 가중치 배정 원칙: 캐스케이드 시절 단독으로 판정을 내리던 신호는 전부 ACCEPT_MIN_SCORE
+# 이상을 받는다. 그래야 신호가 하나뿐일 때의 분류율이 떨어지지 않는다.
+# 서점 표 하나(store_vote)는 캐스케이드에서도 단독 판정권이 없었으므로 기준 아래에 둔다.
+# 가중치 간 순서는 캐스케이드의 우선순위를 그대로 따르고, 인접 신호끼리는
+# ACCEPT_MARGIN(1.25배) 이상 벌려 정면 충돌 시 상위 신호가 이기게 한다.
+WEIGHT_SINGLE_VALID_MATCH = 3.0
+WEIGHT_SINGLE_MATCH = 2.8
+WEIGHT_CONFLICT_RESOLVED = 2.6
+WEIGHT_EPUB_SUBJECT = 2.6
+WEIGHT_TXT_HEADER_GENRE = 2.6
+WEIGHT_EPUB_DESCRIPTION = 2.0
+WEIGHT_TXT_HASHTAG = 2.0
+WEIGHT_STORE_VOTE = 1.0
+
+# 기존 5대 장르 스코어링과 신규 어휘 사전은 단독으로도 판정을 설 수 있어야 하므로
+# 하한을 채택 기준(ACCEPT_MIN_SCORE)과 같게 둔다. 캐스케이드 시절 동작이 그대로 유지된다.
+GENRE5_BASE_WEIGHT = 2.0
+GENRE5_MAX_WEIGHT = 2.5
+LEXICON_BASE_WEIGHT = 2.0
+LEXICON_TOP_K = 3
+
+# 메타데이터 몇 단어만으로 어휘 사전을 돌리면 잡음이 커진다. 최소 어휘 수를 요구한다.
+LEXICON_MIN_WORDS = 30
+
+ACCEPT_MIN_SCORE = 2.0
+ACCEPT_MARGIN = 1.25
+
+# 우승 카테고리를 지지한 신호 중 이 순서에서 가장 앞선 것의 이름을 method로 쓴다.
+# 순서는 교체 이전 캐스케이드의 우선순위와 같다.
+METHOD_PRIORITY = [
+    "single_valid_match_resolved",
+    "conflict_resolved",
+    "single_match",
+    "content_metadata",
+    "lexicon",
+    "store_vote",
+]
+
+
+class SignalAccumulator:
+    """카테고리별 신호 점수를 모으고 채택 여부를 판정한다"""
+
+    def __init__(self) -> None:
+        self.scores: Dict[str, float] = {}
+        self.signals: Dict[str, List[Tuple[str, str, float]]] = {}
+
+    def add(self, cat: Optional[str], weight: float, method: str, reason: str) -> None:
+        if not cat or weight <= 0:
+            return
+        self.scores[cat] = self.scores.get(cat, 0.0) + weight
+        self.signals.setdefault(cat, []).append((method, reason, weight))
+
+    def ranked(self) -> List[Tuple[str, float]]:
+        return sorted(self.scores.items(), key=lambda kv: (-kv[1], kv[0]))
+
+    def breakdown(self, cat: str) -> str:
+        return ", ".join(f"{m}+{w:.1f}" for m, _r, w in self.signals.get(cat, []))
+
+    def decide(self) -> Optional[Tuple[str, str, str]]:
+        """
+        최고점이 ACCEPT_MIN_SCORE 이상이고 2위보다 ACCEPT_MARGIN 배 이상 앞설 때만 채택한다.
+        신호가 팽팽하면 오분류 대신 판정을 보류한다.
+        """
+        order = self.ranked()
+        if not order:
+            return None
+        best_cat, best_score = order[0]
+        second_score = order[1][1] if len(order) > 1 else 0.0
+        if best_score < ACCEPT_MIN_SCORE:
+            return None
+        if second_score > 0 and best_score < second_score * ACCEPT_MARGIN:
+            return None
+
+        contributions = self.signals[best_cat]
+        method, reason, _w = min(
+            contributions,
+            key=lambda s: (METHOD_PRIORITY.index(s[0]) if s[0] in METHOD_PRIORITY else len(METHOD_PRIORITY)),
+        )
+        detail = f"{reason} | weighted {best_score:.2f} vs {second_score:.2f} [{self.breakdown(best_cat)}]"
+        return best_cat, method, detail
+
+
+def score_text_with_lexicon(text: str) -> List[Tuple[str, float, float]]:
+    """
+    코퍼스 어휘 사전으로 본문을 점수화한다.
+    사전이 없거나 kiwipiepy 로드에 실패하면 빈 목록을 돌려주고 판정은 기존 신호만으로 선다.
+    """
+    if not text or len(text) < 200:
+        return []
+    lexicon = get_default_lexicon()
+    if lexicon is None:
+        return []
+    words = extract_word_set(text)
+    if len(words) < LEXICON_MIN_WORDS:
+        return []
+    sims = lexicon.score_words(words)
+    if not sims:
+        return []
+    order = sorted(sims.items(), key=lambda kv: kv[1], reverse=True)
+    best = order[0][1]
+    if best < LEXICON_MIN_SIMILARITY:
+        return []
+    return [(cat, sim / best, sim) for cat, sim in order[:LEXICON_TOP_K]]
+
+
 def evaluate_category_decision(
     fname: str,
     fpath: Optional[Path],
@@ -681,7 +794,7 @@ def evaluate_category_decision(
     trust_single_match: bool = True
 ) -> Tuple[Optional[str], str, str]:
     """
-    파일명, 3개 서점 결과, 파일 내부 메타데이터/텍스트를 결합하여 최종 카테고리 결정
+    파일명, 3개 서점 결과, 파일 내부 메타데이터/본문, 코퍼스 어휘 사전을 결합하여 최종 카테고리 결정
     """
     # 1. 파일명 명시적 장르
     explicit_genre = extract_explicit_genre(fname)
@@ -718,7 +831,14 @@ def evaluate_category_decision(
             txt_info = inspect_txt_content(fpath)
             text_sample = f"{' '.join(txt_info.get('hashtags', []))} {txt_info.get('snippet', '')}"
 
-    # Priority 2.5: 서점 간 충돌 중 유효 제목 매칭 필터링 (False Conflict 해소)
+    # ---- 이하 신호는 캐스케이드 대신 가중치 합으로 모은다 ----
+    acc = SignalAccumulator()
+
+    # 서점 매핑 자체를 약한 표로 반영 (다수결에 못 미친 1건씩)
+    for cat in valid_maps:
+        acc.add(cat, WEIGHT_STORE_VOTE, "store_vote", f"Bookstore vote -> {cat}")
+
+    # 유효 제목 매칭 필터링 (False Conflict 해소)
     # 한 서점은 정확한 책을 찾았으나 다른 서점이 엉뚱한 추천도서를 반환하여 발생한 거짓 충돌 해소
     if len(valid_maps) >= 2:
         valid_title_candidates = []
@@ -731,15 +851,18 @@ def evaluate_category_decision(
 
         if len(valid_title_candidates) == 1:
             m_cat, m_title = valid_title_candidates[0]
-            return m_cat, "single_valid_match_resolved", f"False conflict resolved by title similarity ({m_cat}) for '{m_title[:30]}'"
+            acc.add(
+                m_cat, WEIGHT_SINGLE_VALID_MATCH, "single_valid_match_resolved",
+                f"False conflict resolved by title similarity ({m_cat}) for '{m_title[:30]}'",
+            )
 
-    # Priority 3: 서점 간 사소한 장르 충돌 해결
+    # 서점 간 사소한 장르 충돌 해결
     if len(valid_maps) >= 2:
         resolved = resolve_genre_conflict(valid_maps, fname, text_sample)
         if resolved:
-            return resolved, "conflict_resolved", f"Conflict resolved by keywords -> {resolved}"
+            acc.add(resolved, WEIGHT_CONFLICT_RESOLVED, "conflict_resolved", f"Conflict resolved by keywords -> {resolved}")
 
-    # Priority 4: 단일 서점 매칭 신뢰
+    # 단일 서점 매칭 신뢰
     if len(valid_maps) == 1 and trust_single_match:
         single_cat = valid_maps[0]
         found_title = ""
@@ -748,33 +871,32 @@ def evaluate_category_decision(
                 found_title = store_entry.get("title", "")
                 break
         if is_single_match_valid(search_title, found_title):
-            return single_cat, "single_match", f"Single match trusted ({single_cat}) for '{found_title[:30]}'"
+            acc.add(
+                single_cat, WEIGHT_SINGLE_MATCH, "single_match",
+                f"Single match trusted ({single_cat}) for '{found_title[:30]}'",
+            )
 
-    # Priority 5: 파일 내부 메타데이터 및 처음 1000단어 본문 정밀 장르 분석 활용
+    # 파일 내부 메타데이터 및 본문 분석
     if fpath and fpath.exists():
         ext = fpath.suffix.lower()
         if ext == ".epub" and epub_meta:
             subj = epub_meta.get("subject", "")
             if subj:
                 meta_cat = map_category(subj, raw_title, raw_author)
-                if meta_cat:
-                    return meta_cat, "content_metadata", f"EPUB dc:subject -> {meta_cat}"
+                acc.add(meta_cat, WEIGHT_EPUB_SUBJECT, "content_metadata", f"EPUB dc:subject -> {meta_cat}")
             desc = epub_meta.get("description", "")
             if desc:
                 desc_cat = map_category(desc, raw_title, raw_author)
-                if desc_cat:
-                    return desc_cat, "content_metadata", f"EPUB dc:description -> {desc_cat}"
+                acc.add(desc_cat, WEIGHT_EPUB_DESCRIPTION, "content_metadata", f"EPUB dc:description -> {desc_cat}")
 
         elif ext == ".txt" and txt_info:
             hg = txt_info.get("header_genre")
             if hg:
                 hg_cat = extract_explicit_genre(f"[{hg}]") or map_category(hg, raw_title, raw_author)
-                if hg_cat:
-                    return hg_cat, "content_metadata", f"TXT header [{hg}] -> {hg_cat}"
+                acc.add(hg_cat, WEIGHT_TXT_HEADER_GENRE, "content_metadata", f"TXT header [{hg}] -> {hg_cat}")
             for tag in txt_info.get("hashtags", []):
                 tag_cat = map_category(tag, raw_title, raw_author) or extract_explicit_genre(f"[{tag}]")
-                if tag_cat:
-                    return tag_cat, "content_metadata", f"TXT #{tag} -> {tag_cat}"
+                acc.add(tag_cat, WEIGHT_TXT_HASHTAG, "content_metadata", f"TXT #{tag} -> {tag_cat}")
 
         # 본문 처음 1000단어 5대 장르(3_무협, 3_판타지, 3_여성향, 9_BLGL, 9_성인) 정밀 스코어링
         first_1000 = extract_content_first_1000_words(fpath)
@@ -782,12 +904,24 @@ def evaluate_category_decision(
         g5_cat, g5_score, g5_reason = classify_5_genres_from_content(fname, scoring_text)
         if g5_cat:
             prefix = "EPUB content scored" if ext == ".epub" else ("TXT content scored" if ext == ".txt" else "Content scored")
-            return g5_cat, "content_metadata", f"{prefix} -> {g5_cat} ({g5_reason})"
+            g5_weight = min(GENRE5_MAX_WEIGHT, GENRE5_BASE_WEIGHT + g5_score * 0.05)
+            acc.add(g5_cat, g5_weight, "content_metadata", f"{prefix} -> {g5_cat} ({g5_reason})")
+        else:
+            # 기존 일반 장르(3_SF, 3_스릴러 등) 스코어링 폴백
+            sc_cat = score_text_genre(text_sample or first_1000)
+            if sc_cat:
+                acc.add(sc_cat, GENRE5_BASE_WEIGHT, "content_metadata", f"Content scored -> {sc_cat}")
 
-        # 기존 일반 장르(3_SF, 3_스릴러 등) 스코어링 폴백
-        sc_cat = score_text_genre(text_sample or first_1000)
-        if sc_cat:
-            return sc_cat, "content_metadata", f"Content scored -> {sc_cat}"
+        # 코퍼스 어휘 사전: 카테고리별 top-1000 단어와 고유 단어 세트 기반 유사도
+        for lex_cat, norm_score, sim in score_text_with_lexicon(scoring_text):
+            acc.add(
+                lex_cat, LEXICON_BASE_WEIGHT * norm_score, "lexicon",
+                f"Corpus lexicon -> {lex_cat} (sim={sim:.3f}, norm={norm_score:.2f})",
+            )
+
+    decision = acc.decide()
+    if decision:
+        return decision
 
     # 최종 미해결 상태
     if len(valid_maps) >= 2:
