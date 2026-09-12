@@ -38,6 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from utils.detect_mojibake import VERDICT_CORRUPTED, classify_text  # noqa: E402
 from backend.category_lexicon import (  # noqa: E402
     DEFAULT_LEXICON_PATH,
     UNIQUE_BONUS,
@@ -58,7 +59,9 @@ CATEGORY_DIR_RE = re.compile(r"^[1-9]_")
 
 # 샘플링 기본값. 3_판타지 78,027건 대 9_격언명언 7건의 불균형에 상한을 건다.
 DEFAULT_MAX_FILES = 300
-DEFAULT_MIN_FILES = 20
+# 카테고리는 전부 사전을 갖는다. 읽을 수 있는 문서가 1건이라도 있으면 만든다.
+# (파일이 0건인 카테고리만 물리적으로 불가능해 건너뛴다)
+DEFAULT_MIN_FILES = 1
 DEFAULT_HEAD_CHARS = 20000
 DEFAULT_TAIL_CHARS = 10000
 DEFAULT_TOP_N = 1000
@@ -69,6 +72,9 @@ DEFAULT_BATCH_SIZE = 16
 CF_PRESENCE = 0.03  # 이 비율 이상 등장해야 해당 카테고리에 "있다"고 본다
 UNIQUE_EXCLUSIVITY = 0.8  # 전 카테고리 출현률 합에서 차지하는 몫
 UNIQUE_MIN_PRESENCE = 0.05
+# 문서가 몇 건뿐인 카테고리는 1개 문서에만 나온 단어도 출현률이 높게 잡힌다.
+# 절대 문서 수 하한을 둬서 고유 단어 세트가 잡음으로 차는 것을 막는다.
+UNIQUE_MIN_DOCS = 3
 HOLDOUT_RATIO = 0.2
 
 _T = TypeVar("_T", str, Path)
@@ -190,6 +196,23 @@ def split_holdout(files: Sequence[_T], ratio: float, seed: int, salt: str) -> Tu
 
 
 # ---------------------------------------------------------------------------
+# 인코딩 손상 문서 제외
+#
+# 코퍼스에는 원본 텍스트를 CP949로 잘못 읽고 UTF-8로 다시 저장한 파일이 섞여 있다.
+# 파일 자체는 유효한 UTF-8이라 디코딩으로는 걸러지지 않고 내용만 깨진다.
+# 이런 문서가 들어가면 어휘가 통째로 잡음이 된다.
+#
+# 판정은 `utils.detect_mojibake` 로 일원화한다. 여기서 별도 기준을 두면
+# 같은 파일에 사전 빌더와 전수 검사기가 다른 답을 낸다.
+# ---------------------------------------------------------------------------
+
+
+def is_mojibake(text: str) -> bool:
+    """인코딩 손상으로 내용이 깨진 텍스트인지 판정한다"""
+    return classify_text(text)[0] == VERDICT_CORRUPTED
+
+
+# ---------------------------------------------------------------------------
 # 1단계: 카테고리별 문서빈도 수집
 # ---------------------------------------------------------------------------
 
@@ -211,12 +234,20 @@ def collect_category(cat: str, cat_dir: Path, work_dir: Path, max_files: int = D
     n_docs = 0
     t0 = time.time()
     # kiwi는 리스트를 넘겨야 워커가 병렬로 돈다. 배치 단위로 읽고 한 번에 토큰화한다.
+    n_corrupted = 0
     for start in range(0, len(train), batch_size):
         texts = [read_document_text(p, head_chars, tail_chars) for p in train[start : start + batch_size]]
         texts = [t for t in texts if t and len(t) >= 200]
-        if not texts:
+        # 손상 판정은 문자 세기라서 형태소 분석보다 훨씬 싸다. 토큰화 전에 걸러낸다.
+        clean = []
+        for t in texts:
+            if is_mojibake(t):
+                n_corrupted += 1
+            else:
+                clean.append(t)
+        if not clean:
             continue
-        for words in extract_word_sets(texts, kiwi=kiwi):
+        for words in extract_word_sets(clean, kiwi=kiwi):
             if not words:
                 continue
             df.update(words)
@@ -226,12 +257,12 @@ def collect_category(cat: str, cat_dir: Path, work_dir: Path, max_files: int = D
         LOGGER.info(f"{cat}: 본문 추출 성공 {n_docs}건 < 최소 {min_files}건, 건너뜀")
         return None
 
-    result = {"category": cat, "total_files": len(files), "sampled_files": len(sampled), "doc_count": n_docs, "df": dict(df), "holdout": [str(p) for p in holdout], "elapsed_sec": round(time.time() - t0, 1)}
+    result = {"category": cat, "total_files": len(files), "sampled_files": len(sampled), "doc_count": n_docs, "corrupted_docs": n_corrupted, "df": dict(df), "holdout": [str(p) for p in holdout], "elapsed_sec": round(time.time() - t0, 1)}
     work_dir.mkdir(parents=True, exist_ok=True)
     out_path = work_dir / f"{cat}.json.gz"
     with gzip.open(out_path, "wt", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False)
-    LOGGER.info(f"{cat}: 문서 {n_docs}건, 고유단어 {len(df)}개, {result['elapsed_sec']}초 -> {out_path.name}")
+    LOGGER.info(f"{cat}: 문서 {n_docs}건(손상 제외 {n_corrupted}건), 고유단어 {len(df)}개, {result['elapsed_sec']}초 -> {out_path.name}")
     return result
 
 
@@ -276,7 +307,7 @@ def load_collected(work_dir: Path) -> Dict[str, Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def build_lexicon(collected: Dict[str, Dict[str, Any]], top_n: int = DEFAULT_TOP_N, cf_presence: float = CF_PRESENCE, unique_exclusivity: float = UNIQUE_EXCLUSIVITY, unique_min_presence: float = UNIQUE_MIN_PRESENCE) -> Dict[str, Any]:
+def build_lexicon(collected: Dict[str, Dict[str, Any]], top_n: int = DEFAULT_TOP_N, cf_presence: float = CF_PRESENCE, unique_exclusivity: float = UNIQUE_EXCLUSIVITY, unique_min_presence: float = UNIQUE_MIN_PRESENCE, unique_min_docs: int = UNIQUE_MIN_DOCS) -> Dict[str, Any]:
     """
     카테고리별 문서빈도에서 카테고리 단위 TF-IDF 가중치를 계산해 사전을 만든다.
 
@@ -329,7 +360,14 @@ def build_lexicon(collected: Dict[str, Dict[str, Any]], top_n: int = DEFAULT_TOP
             continue
 
         words = {w: round(v, 6) for w, v in top}
-        unique = sorted(w for w, _ in top if presence[cat][w] >= unique_min_presence and presence_sum[w] > 0 and (presence[cat][w] / presence_sum[w]) >= unique_exclusivity)
+        raw_df = collected[cat]["df"]
+        unique = sorted(
+            w for w, _ in top
+            if raw_df.get(w, 0) >= unique_min_docs
+            and presence[cat][w] >= unique_min_presence
+            and presence_sum[w] > 0
+            and (presence[cat][w] / presence_sum[w]) >= unique_exclusivity
+        )
         norm = math.sqrt(sum(v * v for v in words.values())) or 1.0
 
         categories_out[cat] = {"doc_count": int(collected[cat]["doc_count"]), "total_files": int(collected[cat].get("total_files", 0)), "norm": round(norm, 6), "words": words, "unique": unique}
@@ -337,7 +375,8 @@ def build_lexicon(collected: Dict[str, Dict[str, Any]], top_n: int = DEFAULT_TOP
     return {
         "version": 1,
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "params": {"top_n": top_n, "cf_presence": cf_presence, "unique_exclusivity": unique_exclusivity, "unique_min_presence": unique_min_presence, "unique_bonus": UNIQUE_BONUS, "category_count": len(categories_out)},
+        "params": {"top_n": top_n, "cf_presence": cf_presence, "unique_exclusivity": unique_exclusivity, "unique_min_presence": unique_min_presence,
+            "unique_min_docs": unique_min_docs, "unique_bonus": UNIQUE_BONUS, "category_count": len(categories_out)},
         "categories": categories_out,
     }
 
@@ -432,6 +471,8 @@ def explain_file(fpath: Path, lex: CategoryLexicon, top_k: int = 5, head_chars: 
     if not text or len(text) < 200:
         return {"file": str(fpath), "error": "본문을 읽지 못했거나 너무 짧다"}
 
+    if is_mojibake(text):
+        return {"file": str(fpath), "error": "인코딩이 손상된 문서"}
     words = extract_word_sets([text], kiwi=kiwi)[0]
     sims = lex.score_words(words)
     order = sorted(sims.items(), key=lambda kv: kv[1], reverse=True)[:top_k]

@@ -121,6 +121,48 @@ def extract_word_set(text: str, kiwi: Any = None) -> Set[str]:
     return set(extract_nouns(text, kiwi=kiwi))
 
 
+# 조사(J*), 어미(E*), 용언(V*)은 한국어 문장을 굴러가게 하는 문법 형태소다.
+# 정상 한국어 산문은 토큰의 40~60%가 여기 해당한다.
+GRAMMAR_TAG_PREFIXES = ("J", "E", "V")
+
+
+def grammar_ratio(tokens: Iterable[Any]) -> float:
+    """토큰 중 문법 형태소(조사·어미·용언)가 차지하는 비율"""
+    toks = list(tokens)
+    if not toks:
+        return 0.0
+    return sum(1 for t in toks if t.tag[:1] in GRAMMAR_TAG_PREFIXES) / len(toks)
+
+
+def analyze_texts(texts: List[str], kiwi: Any = None) -> List[Tuple[Set[str], float]]:
+    """
+    한 번의 토큰화로 단어 집합과 문법 형태소 비율을 함께 구한다.
+
+    문법 형태소 비율은 인코딩 손상 판정에 쓴다. 손상 텍스트는 한글처럼 보여도
+    조사와 어미가 없어 비율이 0.03 언저리로 떨어진다.
+    """
+    if not texts:
+        return []
+    k = kiwi if kiwi is not None else get_kiwi()
+    if k is None:
+        return [(set(), 0.0) for _ in texts]
+    try:
+        results = list(k.tokenize(texts))
+    except Exception as e:  # pragma: no cover - 입력 의존
+        logger.warning(f"일괄 형태소 분석 실패, 개별 처리로 대체: {e}")
+        results = []
+        for t in texts:
+            try:
+                results.append(k.tokenize(t))
+            except Exception:
+                results.append([])
+    out: List[Tuple[Set[str], float]] = []
+    for tokens in results:
+        toks = list(tokens)
+        out.append((set(merge_contiguous_nouns(toks)), grammar_ratio(toks)))
+    return out
+
+
 def extract_word_sets(texts: List[str], kiwi: Any = None) -> List[Set[str]]:
     """
     여러 본문을 한 번에 토큰화하여 단어 집합 목록을 돌려준다.
@@ -128,17 +170,7 @@ def extract_word_sets(texts: List[str], kiwi: Any = None) -> List[Set[str]]:
     kiwi는 문자열 하나를 넘기면 `num_workers` 설정과 무관하게 단일 스레드로 돈다.
     리스트를 넘겨야 워커가 실제로 병렬 처리한다(실측 1워커 57,754자/s -> 8워커 199,676자/s).
     """
-    if not texts:
-        return []
-    k = kiwi if kiwi is not None else get_kiwi()
-    if k is None:
-        return [set() for _ in texts]
-    try:
-        results = list(k.tokenize(texts))
-    except Exception as e:  # pragma: no cover - 입력 의존
-        logger.warning(f"일괄 형태소 분석 실패, 개별 처리로 대체: {e}")
-        return [extract_word_set(t, kiwi=k) for t in texts]
-    return [set(merge_contiguous_nouns(tokens)) for tokens in results]
+    return [words for words, _gram in analyze_texts(texts, kiwi=kiwi)]
 
 
 class CategoryLexicon:

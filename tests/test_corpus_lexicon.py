@@ -3,7 +3,7 @@ import zipfile
 import pytest
 
 from backend.category_lexicon import CategoryLexicon, get_kiwi
-from utils.corpus_lexicon import build_lexicon, collect_all, explain_file, collect_category, list_category_dirs, list_category_files, load_collected, read_document_text, read_epub_text, read_txt_text, sample_files, split_holdout, write_lexicon
+from utils.corpus_lexicon import build_lexicon, collect_all, explain_file, is_mojibake, collect_category, list_category_dirs, list_category_files, load_collected, read_document_text, read_epub_text, read_txt_text, sample_files, split_holdout, write_lexicon
 
 WUXIA_SENTENCES = ["소림사 장로가 강호에서 내공을 운기조식하며 무림맹 검법을 수련했다.", "화산파 장문인은 단전에 진기를 모아 주화입마를 피했다.", "마교 천마가 사파 무인들을 이끌고 정파 문파를 습격했다."]
 FANTASY_SENTENCES = ["던전에서 몬스터를 사냥하는 헌터가 각성하여 레이드에 참가했다.", "마법사가 마나를 모아 마법진을 그리고 드래곤을 소환했다.", "상태창을 열어 스킬과 스탯을 확인한 플레이어가 길드에 가입했다."]
@@ -267,3 +267,103 @@ def test_explain_file_reports_error_for_unreadable_file(built, tmp_path, kiwi):
     p = tmp_path / "tiny.txt"
     p.write_text("짧다", encoding="utf-8")
     assert "error" in explain_file(p, lex, kiwi=kiwi)
+
+
+# ---------------------------------------------------------------------------
+# 꼬리 카테고리 (문서 수가 적은 카테고리)
+# ---------------------------------------------------------------------------
+
+def test_tiny_category_still_gets_a_lexicon(tmp_path, kiwi):
+    """문서가 몇 건뿐이어도 카테고리는 사전을 갖는다"""
+    root = tmp_path / "corpus"
+    for cat, sentences, n in [("9_격언명언", ECON_SENTENCES, 7), ("3_무협", WUXIA_SENTENCES, 25)]:
+        d = root / cat
+        d.mkdir(parents=True)
+        for i in range(n):
+            (d / f"{i}.txt").write_text((" ".join(sentences) + FILLER) * 20, encoding="utf-8")
+
+    work = tmp_path / "work"
+    collect_all(root, work, holdout_ratio=0.0, num_workers=1)
+    lexicon = build_lexicon(load_collected(work), top_n=50)
+
+    assert set(lexicon["categories"]) == {"9_격언명언", "3_무협"}
+    assert lexicon["categories"]["9_격언명언"]["doc_count"] == 7
+
+
+def test_zero_file_category_is_skipped(tmp_path, kiwi):
+    """파일이 0건이면 사전을 만들 근거가 없으므로 건너뛴다"""
+    d = tmp_path / "1_올재"
+    d.mkdir()
+    assert collect_category("1_올재", d, tmp_path / "work", kiwi=kiwi) is None
+
+
+def test_unique_words_require_a_minimum_document_count(kiwi):
+    """1개 문서에만 나온 단어는 출현률이 높아도 고유 단어로 인정하지 않는다"""
+    collected = {
+        "9_격언명언": {"category": "9_격언명언", "doc_count": 4, "df": {"흔한말": 4, "한번만나온말": 1}},
+        "3_무협": {"category": "3_무협", "doc_count": 100, "df": {"무림": 90}},
+    }
+    lexicon = build_lexicon(collected, top_n=50, unique_min_docs=3)
+    unique = set(lexicon["categories"]["9_격언명언"]["unique"])
+    assert "흔한말" in unique
+    assert "한번만나온말" not in unique
+
+
+def test_unique_min_docs_guard_can_be_relaxed():
+    collected = {
+        "9_격언명언": {"category": "9_격언명언", "doc_count": 4, "df": {"한번만나온말": 1}},
+        "3_무협": {"category": "3_무협", "doc_count": 100, "df": {"무림": 90}},
+    }
+    lexicon = build_lexicon(collected, top_n=50, unique_min_docs=1)
+    assert "한번만나온말" in set(lexicon["categories"]["9_격언명언"]["unique"])
+
+
+# ---------------------------------------------------------------------------
+# 인코딩 손상 탐지
+# ---------------------------------------------------------------------------
+
+# 중국어 텍스트를 잘못된 코드페이지로 읽어 저장한 실제 코퍼스 파일에서 발췌
+MOJIBAKE_TEXT = "쒎똿耶먨ㄷ뱿竊뚧닊룵쐣訝鰲믧뙝╈ 쒍鰲믧뙝弱긷룵꺗縕룝뗥똿耶먲펯앲끽똿耶먪쉪鴉멩뎸떯걥弱뤸툍뵥쑉뎸恙껆쉪訝鰲믧뙝竊뚧룢雅녵 " * 6
+CLEAN_TEXT = "소림사 장로가 강호에서 내공을 운기조식하며 화산파 검법을 수련했다. 그는 무림맹의 장문인으로서 제자들을 이끌었다. " * 6
+# 국한문 혼용 정상 문헌. 한자가 한글 조사에 그대로 붙지만 손상이 아니다.
+HANJA_MIXED_TEXT = "孟子의 德을 논하자면 仁義禮智가 그 바탕이 된다고 하였다. 朱子는 集註에서 이를 자세히 풀이하였다. " * 8
+
+
+def test_is_mojibake_flags_corrupted_text():
+    assert is_mojibake(MOJIBAKE_TEXT) is True
+
+
+def test_is_mojibake_accepts_clean_korean():
+    assert is_mojibake(CLEAN_TEXT) is False
+
+
+def test_is_mojibake_accepts_hanja_mixed_korean():
+    """국한문 혼용은 한자가 한글에 붙어도 손상이 아니다"""
+    assert is_mojibake(HANJA_MIXED_TEXT) is False
+
+
+def test_is_mojibake_ignores_non_korean_documents():
+    """한글이 거의 없는 문서(한문 원전, 중국어, 일본어, 영문)는 판정 대상이 아니다"""
+    assert is_mojibake("The quick brown fox jumps over the lazy dog. " * 10) is False
+    assert is_mojibake("孟子曰 仁義禮智 信也 天下之達道也 君子之道 費而隱 " * 20) is False
+
+
+def test_is_mojibake_skips_short_text():
+    assert is_mojibake("짧은 글") is False
+
+
+def test_collection_excludes_corrupted_documents(tmp_path, kiwi):
+    d = tmp_path / "9_격언명언"
+    d.mkdir()
+    for i in range(6):
+        (d / f"clean_{i}.txt").write_text(CLEAN_TEXT * 3, encoding="utf-8")
+    for i in range(2):
+        (d / f"broken_{i}.txt").write_text(MOJIBAKE_TEXT * 3, encoding="utf-8")
+
+    res = collect_category("9_격언명언", d, tmp_path / "work", holdout_ratio=0.0, kiwi=kiwi)
+    assert res is not None
+    assert res["doc_count"] == 6
+    assert res["corrupted_docs"] == 2
+    # 깨진 토큰이 사전 원재료에 들어가지 않는다
+    assert "무림맹" in res["df"]
+    assert not any("쒎똿耶" in w for w in res["df"])
