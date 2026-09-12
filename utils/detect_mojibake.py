@@ -117,7 +117,11 @@ def inspect_file(path_str: str) -> Dict[str, Any]:
         size = p.stat().st_size
     except OSError:
         size = 0
-    return {"path": path_str, "category": p.relative_to(DEFAULT_LIBRARY_ROOT).parts[0] if str(p).startswith(str(DEFAULT_LIBRARY_ROOT)) else "", "verdict": verdict, "likeness": round(likeness, 4) if likeness is not None else None, "size": size, "sample_len": len(text)}
+    reason = ""
+    if verdict == VERDICT_UNREADABLE:
+        # 같은 '판독 불가'라도 원인이 다르다. 빈 파일과 본문 추출 실패를 구분해 둔다.
+        reason = "missing_or_empty" if size == 0 else ("no_text_extracted" if not text else "too_short")
+    return {"path": path_str, "category": p.relative_to(DEFAULT_LIBRARY_ROOT).parts[0] if str(p).startswith(str(DEFAULT_LIBRARY_ROOT)) else "", "verdict": verdict, "likeness": round(likeness, 4) if likeness is not None else None, "size": size, "sample_len": len(text), "reason": reason}
 
 
 def list_library_files(root: Path) -> List[Path]:
@@ -170,8 +174,10 @@ def scan(root: Path, workers: int = DEFAULT_WORKERS, limit: int = 0, progress_ev
         "counts": counts,
         "elapsed_sec": round(time.time() - t0, 1),
         "per_category": per_category,
+        # clean 을 뺀 전부를 남긴다. 목록이 없으면 나중에 원인을 되짚을 수 없다.
         "corrupted": [r for r in results if r["verdict"] == VERDICT_CORRUPTED],
-        "undetermined_sample": [r for r in results if r["verdict"] == VERDICT_UNDETERMINED][:200],
+        "unreadable": [r for r in results if r["verdict"] == VERDICT_UNREADABLE],
+        "undetermined": [r for r in results if r["verdict"] == VERDICT_UNDETERMINED],
     }
 
 

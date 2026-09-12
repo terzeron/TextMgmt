@@ -153,3 +153,38 @@ def test_korean_document_is_still_judged():
     """한글이 본문의 다수인 문서는 그대로 판정한다"""
     assert classify_text(CLEAN_KOREAN)[0] == VERDICT_CLEAN
     assert classify_text(CORRUPTED)[0] == VERDICT_CORRUPTED
+
+
+# ---------------------------------------------------------------------------
+# 리포트 구성
+# ---------------------------------------------------------------------------
+
+def test_report_keeps_every_non_clean_file(tmp_path):
+    """clean 을 뺀 전부를 목록으로 남긴다. 없으면 나중에 원인을 되짚을 수 없다."""
+    d = tmp_path / "3_무협"
+    d.mkdir()
+    (d / "clean.txt").write_text(CLEAN_KOREAN * 4, encoding="utf-8")
+    (d / "broken.txt").write_text(CORRUPTED, encoding="utf-8")
+    (d / "english.txt").write_text(ENGLISH * 4, encoding="utf-8")
+    (d / "empty.txt").write_text("", encoding="utf-8")
+
+    report = scan(tmp_path, workers=1)
+    assert [r["path"] for r in report["corrupted"]] == [str(d / "broken.txt")]
+    assert [r["path"] for r in report["undetermined"]] == [str(d / "english.txt")]
+    assert [r["path"] for r in report["unreadable"]] == [str(d / "empty.txt")]
+
+
+def test_unreadable_reason_distinguishes_empty_from_short(tmp_path):
+    empty = tmp_path / "empty.txt"
+    empty.write_text("", encoding="utf-8")
+    short = tmp_path / "short.txt"
+    short.write_text("짧은 글", encoding="utf-8")
+
+    assert inspect_file(str(empty))["reason"] == "missing_or_empty"
+    assert inspect_file(str(short))["reason"] == "too_short"
+
+
+def test_clean_file_has_no_reason(tmp_path):
+    p = tmp_path / "clean.txt"
+    p.write_text(CLEAN_KOREAN * 4, encoding="utf-8")
+    assert inspect_file(str(p))["reason"] == ""

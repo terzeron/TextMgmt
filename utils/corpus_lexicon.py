@@ -120,6 +120,15 @@ def decode_best(raw: bytes) -> str:
     if not raw:
         return ""
 
+    # UTF-16 은 BOM 이나 널 바이트 밀도로 먼저 알아본다. 후보에서 빼 두면 UTF-16 한국어
+    # 텍스트를 통째로 깨진 것으로 읽는다(실측 97건).
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16", errors="ignore")
+    if len(raw) >= 200 and raw.count(0) > len(raw) * 0.25:
+        even_nulls = raw[1::2].count(0)
+        enc = "utf-16-le" if even_nulls > raw[0::2].count(0) else "utf-16-be"
+        return raw.decode(enc, errors="ignore")
+
     # 잘린 멀티바이트 문자 때문에 엄격 디코딩이 헛되이 실패하지 않도록 꼬리를 다듬는다
     for trim in range(0, 4):
         chunk = raw[: len(raw) - trim] if trim else raw
@@ -173,8 +182,13 @@ def read_epub_text(fpath: Path, head_chars: int, tail_chars: int) -> str:
             names = [n for n in z.namelist() if n.lower().endswith((".html", ".xhtml", ".htm"))]
             if not names:
                 return ""
-            body = [n for n in names if not any(k in n.lower() for k in ("cover", "nav", "toc", "titlepage"))]
+            body = [n for n in names if not any(k in n.lower() for k in ("cover", "nav", "toc", "titlepage", "index", "contents"))]
             names = body or names
+            # 앞쪽 문서는 표지·목차·판권지다. 거기서 표본을 뽑으면 본문을 못 본다.
+            # 목차만 읽고 어휘가 빈약하다는 이유로 손상 판정이 나온 사례가 있었다.
+            if len(names) > 4:
+                mid = len(names) // 3
+                names = names[mid:] + names[:mid]
 
             def gather(chunk_names: List[str], budget: int) -> str:
                 out: List[str] = []

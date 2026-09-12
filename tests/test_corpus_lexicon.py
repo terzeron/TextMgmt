@@ -415,3 +415,34 @@ def test_read_txt_text_prefers_cp949_over_accidental_hangul(tmp_path):
     p = tmp_path / "cp949.txt"
     p.write_bytes(원문.encode("cp949"))
     assert "일부만이 연기나 예능" in read_txt_text(p, 5000, 0)
+
+
+def test_decode_best_reads_utf16_with_bom():
+    """
+    한글 UTF-16 은 널 바이트가 거의 없다(U+AC00~U+D7A3 의 상위 바이트가 0xAC~0xD7).
+    널 바이트 밀도만 보면 못 찾으므로 BOM 을 먼저 본다.
+    """
+    원문 = "가상현실 온라인게임의 세계로 들어선 그는 낙원을 보았다. " * 10
+    assert decode_best(원문.encode("utf-16")) == 원문
+
+
+def test_decode_best_reads_utf16_le_without_bom():
+    원문 = "The quick brown fox. " * 20
+    assert decode_best(원문.encode("utf-16-le")) == 원문
+
+
+def test_read_epub_text_samples_body_not_table_of_contents(tmp_path):
+    """
+    앞쪽 문서만 읽으면 목차를 본문으로 착각한다.
+    목차만 읽고 어휘가 빈약하다는 이유로 손상 판정이 나온 사례가 있었다.
+    """
+    p = tmp_path / "book.epub"
+    목차 = "처세 365 일 ( 채근담 ): 1 월 1 일 " * 40
+    본문 = "무림맹의 장문인은 제자들을 이끌고 강호로 나섰다. " * 40
+    with zipfile.ZipFile(p, "w") as z:
+        for i in range(3):
+            z.writestr(f"OPS/front{i}.xhtml", f"<html><body><p>{목차}</p></body></html>")
+        for i in range(6):
+            z.writestr(f"OPS/ch{i}.xhtml", f"<html><body><p>{본문}</p></body></html>")
+    text = read_epub_text(p, 20000, 0)
+    assert "무림맹의 장문인" in text
