@@ -207,7 +207,7 @@ def collect_category(cat: str, cat_dir: Path, work_dir: Path, max_files: int = D
     sampled = sample_files(files, max_files, seed, cat)
     train, holdout = split_holdout(sampled, holdout_ratio, seed, cat)
 
-    df: Counter = Counter()
+    df: Counter[str] = Counter()
     n_docs = 0
     t0 = time.time()
     # kiwi는 리스트를 넘겨야 워커가 병렬로 돈다. 배치 단위로 읽고 한 번에 토큰화한다.
@@ -298,7 +298,7 @@ def build_lexicon(collected: Dict[str, Dict[str, Any]], top_n: int = DEFAULT_TOP
         presence[cat] = {w: c / n_docs for w, c in entry["df"].items()}
 
     # cf(w): 유의미하게 등장하는 카테고리 수, presence_sum(w): 전 카테고리 출현률 합
-    cf: Counter = Counter()
+    cf: Counter[str] = Counter()
     presence_sum: Dict[str, float] = defaultdict(float)
     for cat in cats:
         for w, p in presence[cat].items():
@@ -367,14 +367,14 @@ def evaluate_holdout(lexicon_path: Path, collected: Dict[str, Dict[str, Any]], l
     kiwi = get_kiwi(num_workers=num_workers)
 
     per_cat: Dict[str, Dict[str, int]] = {}
-    totals = Counter()
-    confusion: Counter = Counter()
+    totals: Counter[str] = Counter()
+    confusion: Counter[Tuple[str, str]] = Counter()
 
     for cat in sorted(collected):
         holdout = [Path(p) for p in collected[cat].get("holdout", [])][:limit_per_category]
         if not holdout:
             continue
-        stat = Counter()
+        stat: Counter[str] = Counter()
         for fpath in holdout:
             if not fpath.exists():
                 continue
@@ -418,6 +418,50 @@ def evaluate_holdout(lexicon_path: Path, collected: Dict[str, Dict[str, Any]], l
     }
 
 
+def explain_file(fpath: Path, lex: CategoryLexicon, top_k: int = 5, head_chars: int = DEFAULT_HEAD_CHARS, tail_chars: int = DEFAULT_TAIL_CHARS, kiwi: Any = None) -> Dict[str, Any]:
+    """
+    파일 한 건의 카테고리 판정 근거를 모아 돌려준다.
+
+    - lexicon: 코퍼스 어휘 사전 상위 후보와 실제로 맞은 단어
+    - legacy: 기존 5대 장르 스코어링 결과
+    - weighted: 서점 조회 없이 파일 내용만으로 돌린 최종 가중치 합 판정
+    """
+    from backend.book_classifier import classify_5_genres_from_content, evaluate_category_decision  # noqa: PLC0415
+
+    text = read_document_text(fpath, head_chars, tail_chars)
+    if not text or len(text) < 200:
+        return {"file": str(fpath), "error": "본문을 읽지 못했거나 너무 짧다"}
+
+    words = extract_word_sets([text], kiwi=kiwi)[0]
+    sims = lex.score_words(words)
+    order = sorted(sims.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
+    best = order[0][1] if order else 0.0
+
+    candidates = []
+    for cat, sim in order:
+        weights = lex._weights[cat]
+        matched = sorted(((w, weights[w]) for w in words if w in weights), key=lambda kv: -kv[1])[:15]
+        candidates.append({
+            "category": cat,
+            "similarity": round(sim, 6),
+            "normalized": round(sim / best, 4) if best else 0.0,
+            "matched_unique": sorted(w for w in words if w in lex._unique.get(cat, set()))[:15],
+            "matched_top_words": [w for w, _v in matched],
+        })
+
+    legacy_cat, legacy_score, legacy_reason = classify_5_genres_from_content(fpath.name, text[:8000])
+    empty: Dict[str, Any] = {"mapped": None}
+    final_cat, method, reason = evaluate_category_decision(fpath.name, fpath, fpath.stem, "", fpath.stem, empty, empty, empty)
+
+    return {
+        "file": str(fpath),
+        "word_count": len(words),
+        "lexicon": candidates,
+        "legacy": {"category": legacy_cat, "score": legacy_score, "reason": legacy_reason},
+        "weighted": {"category": final_cat, "method": method, "reason": reason},
+    }
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -425,7 +469,7 @@ def evaluate_holdout(lexicon_path: Path, collected: Dict[str, Dict[str, Any]], l
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="카테고리별 어휘 사전 빌더")
-    parser.add_argument("command", choices=["collect", "build", "evaluate", "inspect"])
+    parser.add_argument("command", choices=["collect", "build", "evaluate", "inspect", "classify"])
     parser.add_argument("--library-root", type=Path, default=DEFAULT_LIBRARY_ROOT)
     parser.add_argument("--work-dir", type=Path, default=DEFAULT_WORK_DIR)
     parser.add_argument("--out", type=Path, default=DEFAULT_LEXICON_PATH)
@@ -442,6 +486,8 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--report", type=Path, default=None)
+    parser.add_argument("--file", type=Path, action="append", default=None, help="classify 대상 파일 (반복 지정 가능)")
+    parser.add_argument("--top-k", type=int, default=5)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -473,6 +519,19 @@ def main() -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         LOGGER.info(f"리포트: {out}")
+        return 0
+
+    if args.command == "classify":
+        if not args.file:
+            LOGGER.error("--file 로 대상 파일을 지정하라")
+            return 1
+        lex = CategoryLexicon.load(args.out)
+        if lex is None:
+            LOGGER.error(f"사전을 읽지 못했다: {args.out}")
+            return 1
+        kiwi = get_kiwi(num_workers=args.num_workers)
+        results = [explain_file(f, lex, top_k=args.top_k, head_chars=args.head_chars, tail_chars=args.tail_chars, kiwi=kiwi) for f in args.file]
+        print(json.dumps(results, ensure_ascii=False, indent=2))
         return 0
 
     if args.command == "inspect":

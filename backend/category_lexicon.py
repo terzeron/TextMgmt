@@ -17,7 +17,7 @@ import math
 import re
 import threading
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +218,7 @@ class CategoryLexicon:
         """본문 텍스트에 대한 카테고리별 코사인 유사도."""
         return self.score_words(extract_word_set(text, kiwi=kiwi))
 
-    def rank(self, text: str, top_k: int = 5, kiwi: Any = None) -> List[tuple]:
+    def rank(self, text: str, top_k: int = 5, kiwi: Any = None) -> List[Tuple[str, float, float]]:
         """
         (카테고리, 정규화점수 0~1, 원유사도) 를 점수 내림차순으로 최대 top_k개 반환.
 
