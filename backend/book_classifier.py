@@ -13,6 +13,7 @@ import logging
 import zipfile
 import urllib.parse
 import xml.etree.ElementTree as ET
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -716,7 +717,10 @@ WEIGHT_EPUB_SUBJECT = 4.3
 WEIGHT_TXT_HEADER_GENRE = 4.3
 WEIGHT_EPUB_DESCRIPTION = 3.2
 WEIGHT_TXT_HASHTAG = 3.2
-WEIGHT_STORE_VOTE = 1.0
+# 제목 검사를 통과 못 한 서점 표. 두 곳이 같은 답을 내도 ACCEPT_MIN_SCORE 에
+# 닿지 않게 잡는다. 1.0 으로 두면 2표(2.0)만으로 판정되어 제목 검사를 우회한다.
+# 실측에서 그 경로가 28건을 64.3% 정답률로 판정하고 있었다.
+WEIGHT_STORE_VOTE = 0.9
 
 # 기존 5대 장르 스코어링과 신규 어휘 사전은 단독으로도 판정을 설 수 있어야 하므로
 # 하한을 채택 기준(ACCEPT_MIN_SCORE)과 같게 둔다. 캐스케이드 시절 동작이 그대로 유지된다.
@@ -746,6 +750,10 @@ LEXICON_MIN_WORDS = 30
 # 아래 extract_content_head_tail_words 는 .txt 를 250줄까지만 읽어 3분의 1도 안 되는
 # 분량을 준다. 5대 장르 스코어링은 그 분량 기준으로 임계값이 맞춰져 있으므로 그대로 두고,
 # 사전에는 전용 추출기를 쓴다.
+
+# 서점이 찾은 제목이 파일명과 이만큼 닮아야 다수결에 참여시킨다.
+# 실측(236건): 조건 없음 69.5%, 0.5 이상 69.1%, 0.6 이상 81.1%, 0.7 이상 77.4%
+MAJORITY_MIN_TITLE_SIMILARITY = 0.6
 
 ACCEPT_MIN_SCORE = 2.0
 ACCEPT_MARGIN = 1.25
@@ -865,7 +873,6 @@ def evaluate_category_decision(
     a_map = a_entry.get("mapped") if a_entry else None
     k_map = k_entry.get("mapped") if k_entry else None
     valid_maps = [m for m in [y_map, a_map, k_map] if m]
-    from collections import Counter
     counts = Counter(valid_maps)
 
     # Priority 1: 파일명 명시적 장르가 존재하는 경우
@@ -888,9 +895,19 @@ def evaluate_category_decision(
         return name_cat, "filename_lexicon", f"Filename model -> {name_cat} (posterior={name_conf:.3f})"
 
     # Priority 3: 3개 서점 2/3 이상 다수결
-    for cat, count in counts.items():
+    #
+    # 서점이 찾아온 제목이 파일명과 충분히 닮았을 때만 표로 센다.
+    # 이 검사가 없으면 `사자 소학` 에 `어린이 사자소학`, `마신 03권` 에 `마신 8 개정판`
+    # 같은 다른 책의 카테고리가 그대로 다수결에 들어간다.
+    # 서점 조회 실측(236건)에서 유사도 조건 없이는 69.5%, 0.6 이상만 세면 81.1% 였다.
+    trusted = [
+        entry.get("mapped")
+        for entry in (y_entry, a_entry, k_entry)
+        if entry and entry.get("mapped") and title_similarity(search_title, entry.get("title", "")) >= MAJORITY_MIN_TITLE_SIMILARITY
+    ]
+    for cat, count in Counter(trusted).items():
         if count >= 2:
-            return cat, "majority", f"Majority vote ({count}/3) -> {cat}"
+            return cat, "majority", f"Majority vote ({count}/3, title-checked) -> {cat}"
 
     # 본문 및 메타데이터 샘플 추출
     text_sample = ""
