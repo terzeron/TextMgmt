@@ -1,0 +1,861 @@
+{
+  "total_docs": 2044,
+  "lexicon_decided_rate": 0.2725,
+  "lexicon_precision": 0.8456,
+  "weighted_precision": 0.5705,
+  "lexicon_top1_accuracy": 0.2304,
+  "lexicon_top3_accuracy": 0.252,
+  "lexicon_abstain_rate": 0.7275,
+  "legacy_top1_accuracy": 0.0362,
+  "legacy_abstain_rate": 0.7666,
+  "weighted_top1_accuracy": 0.2534,
+  "weighted_abstain_rate": 0.5558,
+  "per_category": {
+    "1_동양고전": {
+      "n": 30,
+      "lexicon_abstain": 19,
+      "legacy_abstain": 23,
+      "weighted_abstain": 16,
+      "lexicon_hit": 6,
+      "lexicon_top3_hit": 9,
+      "weighted_hit": 7
+    },
+    "1_동양고전한문": {
+      "n": 20,
+      "lexicon_abstain": 16,
+      "legacy_abstain": 20,
+      "weighted_abstain": 15,
+      "weighted_hit": 2,
+      "lexicon_hit": 1,
+      "lexicon_top3_hit": 4
+    },
+    "1_서양고전": {
+      "n": 30,
+      "lexicon_abstain": 25,
+      "legacy_abstain": 21,
+      "weighted_abstain": 16,
+      "weighted_hit": 4,
+      "lexicon_hit": 2,
+      "lexicon_top3_hit": 2
+    },
+    "2_동서문화사월드북": {
+      "n": 21,
+      "lexicon_abstain": 20,
+      "legacy_abstain": 20,
+      "weighted_abstain": 20,
+      "lexicon_hit": 1,
+      "lexicon_top3_hit": 1,
+      "weighted_hit": 1
+    },
+    "2_문예세계문학선": {
+      "n": 30,
+      "lexicon_hit": 19,
+      "lexicon_top3_hit": 19,
+      "legacy_abstain": 24,
+      "lexicon_abstain": 11,
+      "weighted_hit": 3,
+      "weighted_abstain": 2
+    },
+    "2_문학일반서평작법독서": {
+      "n": 30,
+      "lexicon_abstain": 30,
+      "legacy_abstain": 22,
+      "weighted_abstain": 28,
+      "weighted_hit": 1
+    },
+    "2_소설Abe전집": {
+      "n": 28,
+      "lexicon_abstain": 26,
+      "legacy_abstain": 28,
+      "weighted_abstain": 26
+    },
+    "2_소설역사": {
+      "n": 30,
+      "lexicon_abstain": 12,
+      "legacy_abstain": 22,
+      "weighted_abstain": 8,
+      "lexicon_hit": 18,
+      "lexicon_top3_hit": 18,
+      "weighted_hit": 18
+    },
+    "2_소설외국": {
+      "n": 30,
+      "lexicon_abstain": 28,
+      "legacy_abstain": 26,
+      "weighted_abstain": 24,
+      "lexicon_top3_hit": 2,
+      "lexicon_hit": 1,
+      "weighted_hit": 1
+    },
+    "2_소설일본": {
+      "n": 30,
+      "lexicon_abstain": 29,
+      "legacy_abstain": 26,
+      "weighted_abstain": 26,
+      "lexicon_top3_hit": 1
+    },
+    "2_소설일본게이고": {
+      "n": 26,
+      "lexicon_abstain": 25,
+      "legacy_abstain": 21,
+      "weighted_abstain": 20,
+      "lexicon_hit": 1,
+      "lexicon_top3_hit": 1,
+      "weighted_hit": 1
+    },
+    "2_소설일본하루키": {
+      "n": 30,
+      "lexicon_abstain": 24,
+      "legacy_abstain": 29,
+      "weighted_abstain": 22,
+      "lexicon_hit": 5,
+      "lexicon_top3_hit": 6,
+      "weighted_hit": 5
+    },
+    "2_소설중국": {
+      "n": 30,
+      "lexicon_abstain": 23,
+      "legacy_abstain": 25,
+      "weighted_abstain": 22,
+      "lexicon_top3_hit": 6,
+      "lexicon_hit": 4,
+      "weighted_hit": 4
+    },
+    "2_소설한국": {
+      "n": 30,
+      "lexicon_abstain": 29,
+      "legacy_abstain": 24,
+      "weighted_abstain": 28
+    },
+    "2_수필서간일기": {
+      "n": 30,
+      "lexicon_abstain": 29,
+      "legacy_abstain": 27,
+      "weighted_hit": 3,
+      "weighted_abstain": 24
+    },
+    "2_시": {
+      "n": 29,
+      "lexicon_abstain": 28,
+      "legacy_abstain": 27,
+      "weighted_abstain": 23,
+      "weighted_hit": 3
+    },
+    "2_열린책들세계문학": {
+      "n": 13,
+      "lexicon_abstain": 9,
+      "legacy_abstain": 12,
+      "weighted_abstain": 3,
+      "lexicon_hit": 4,
+      "lexicon_top3_hit": 4,
+      "weighted_hit": 1
+    },
+    "2_을유세계문학전집": {
+      "n": 28,
+      "lexicon_abstain": 20,
+      "legacy_abstain": 23,
+      "weighted_abstain": 7,
+      "lexicon_hit": 8,
+      "lexicon_top3_hit": 8,
+      "weighted_hit": 5
+    },
+    "3_SF": {
+      "n": 30,
+      "lexicon_abstain": 30,
+      "legacy_abstain": 23,
+      "weighted_abstain": 25,
+      "weighted_hit": 4
+    },
+    "3_SF그리폰북스": {
+      "n": 25,
+      "lexicon_abstain": 22,
+      "legacy_abstain": 23,
+      "weighted_abstain": 23,
+      "lexicon_top3_hit": 3
+    },
+    "3_SF영문": {
+      "n": 6,
+      "lexicon_abstain": 3,
+      "legacy_abstain": 6,
+      "weighted_abstain": 2,
+      "lexicon_top3_hit": 3
+    },
+    "3_SF직지": {
+      "n": 1,
+      "lexicon_abstain": 1,
+      "legacy_abstain": 1,
+      "weighted_abstain": 1
+    },
+    "3_SF환상문학전집": {
+      "n": 27,
+      "lexicon_abstain": 22,
+      "legacy_abstain": 21,
+      "weighted_abstain": 17,
+      "lexicon_top3_hit": 5
+    },
+    "3_그래픽노블": {
+      "n": 26,
+      "lexicon_abstain": 21,
+      "weighted_abstain": 14,
+      "legacy_abstain": 17,
+      "lexicon_hit": 1,
+      "lexicon_top3_hit": 1,
+      "weighted_hit": 1
+    },
+    "3_라이트노벨": {
+      "n": 30,
+      "lexicon_abstain": 28,
+      "legacy_abstain": 9,
+      "weighted_abstain": 16,
+      "lexicon_top3_hit": 1
+    },
+    "3_무협": {
+      "n": 30,
+      "lexicon_hit": 27,
+      "lexicon_top3_hit": 27,
+      "legacy_hit": 25,
+      "weighted_hit": 29,
+      "lexicon_abstain": 3,
+      "weighted_abstain": 1,
+      "legacy_abstain": 2
+    },
+    "3_셜록홈즈": {
+      "n": 30,
+      "lexicon_hit": 25,
+      "lexicon_top3_hit": 25,
+      "weighted_hit": 27,
+      "legacy_abstain": 15,
+      "lexicon_abstain": 5,
+      "weighted_abstain": 3
+    },
+    "3_스릴러": {
+      "n": 30,
+      "lexicon_abstain": 30,
+      "legacy_abstain": 27,
+      "weighted_abstain": 24,
+      "weighted_hit": 2
+    },
+    "3_여성향": {
+      "n": 30,
+      "lexicon_abstain": 28,
+      "weighted_abstain": 18,
+      "legacy_abstain": 16,
+      "weighted_hit": 9,
+      "legacy_hit": 8
+    },
+    "3_장르문학자료": {
+      "n": 23,
+      "lexicon_abstain": 9,
+      "legacy_abstain": 4,
+      "weighted_abstain": 4,
+      "lexicon_hit": 14,
+      "lexicon_top3_hit": 14,
+      "weighted_hit": 14
+    },
+    "3_판타지": {
+      "n": 30,
+      "lexicon_abstain": 29,
+      "legacy_abstain": 10,
+      "weighted_abstain": 8,
+      "legacy_hit": 18,
+      "weighted_hit": 20
+    },
+    "4_경영마케팅": {
+      "n": 30,
+      "lexicon_abstain": 29,
+      "legacy_abstain": 23,
+      "weighted_abstain": 24,
+      "lexicon_top3_hit": 1,
+      "weighted_hit": 1
+    },
+    "4_경제": {
+      "n": 29,
+      "lexicon_abstain": 24,
+      "legacy_abstain": 25,
+      "weighted_abstain": 21,
+      "lexicon_top3_hit": 4,
+      "weighted_hit": 1
+    },
+    "4_법": {
+      "n": 30,
+      "lexicon_abstain": 7,
+      "legacy_abstain": 25,
+      "weighted_abstain": 7,
+      "lexicon_hit": 23,
+      "lexicon_top3_hit": 23,
+      "weighted_hit": 23
+    },
+    "4_사회인류": {
+      "n": 30,
+      "lexicon_abstain": 30,
+      "legacy_abstain": 22,
+      "weighted_abstain": 20
+    },
+    "4_살림지식총서": {
+      "n": 27,
+      "lexicon_abstain": 27,
+      "legacy_abstain": 16,
+      "weighted_abstain": 7
+    },
+    "4_시공디스커버리": {
+      "n": 26,
+      "lexicon_abstain": 26,
+      "legacy_abstain": 13,
+      "weighted_abstain": 17
+    },
+    "4_심리학뇌과학": {
+      "n": 30,
+      "lexicon_abstain": 30,
+      "legacy_abstain": 24,
+      "weighted_abstain": 24,
+      "weighted_hit": 1
+    },
+    "4_역사인물": {
+      "n": 30,
+      "lexicon_abstain": 29,
+      "legacy_abstain": 21,
+      "weighted_abstain": 24,
+      "weighted_hit": 2
+    },
+    "4_인문일반논픽션": {
+      "n": 30,
+      "lexicon_abstain": 29,
+      "legacy_abstain": 24,
+      "weighted_abstain": 25,
+      "lexicon_top3_hit": 1
+    },
+    "4_정치외교군사": {
+      "n": 29,
+      "lexicon_abstain": 28,
+      "weighted_abstain": 18,
+      "legacy_abstain": 25,
+      "weighted_hit": 2
+    },
+    "4_종교신화": {
+      "n": 30,
+      "lexicon_abstain": 20,
+      "legacy_abstain": 24,
+      "weighted_hit": 8,
+      "weighted_abstain": 15,
+      "lexicon_hit": 9,
+      "lexicon_top3_hit": 9
+    },
+    "4_철학윤리": {
+      "n": 30,
+      "lexicon_abstain": 30,
+      "weighted_abstain": 25,
+      "legacy_abstain": 26,
+      "weighted_hit": 2
+    },
+    "5_미술예술건축": {
+      "n": 30,
+      "lexicon_abstain": 28,
+      "legacy_abstain": 17,
+      "weighted_abstain": 25,
+      "lexicon_hit": 1,
+      "lexicon_top3_hit": 1,
+      "weighted_hit": 1
+    },
+    "5_사진영상": {
+      "n": 6,
+      "lexicon_abstain": 5,
+      "legacy_abstain": 5,
+      "weighted_hit": 2,
+      "weighted_abstain": 3
+    },
+    "5_서브컬쳐": {
+      "n": 2,
+      "lexicon_abstain": 2,
+      "weighted_abstain": 2,
+      "legacy_abstain": 1
+    },
+    "5_수학과학일반": {
+      "n": 30,
+      "lexicon_abstain": 30,
+      "legacy_abstain": 25,
+      "weighted_abstain": 27
+    },
+    "5_스포츠": {
+      "n": 12,
+      "lexicon_abstain": 6,
+      "legacy_abstain": 8,
+      "weighted_abstain": 4,
+      "lexicon_hit": 5,
+      "lexicon_top3_hit": 5,
+      "weighted_hit": 6
+    },
+    "5_영화": {
+      "n": 30,
+      "lexicon_abstain": 25,
+      "weighted_abstain": 18,
+      "legacy_abstain": 22,
+      "lexicon_top3_hit": 5,
+      "weighted_hit": 5,
+      "lexicon_hit": 4
+    },
+    "5_음악": {
+      "n": 30,
+      "lexicon_abstain": 22,
+      "legacy_abstain": 21,
+      "weighted_abstain": 11,
+      "weighted_hit": 13,
+      "lexicon_hit": 7,
+      "lexicon_top3_hit": 7
+    },
+    "5_이지사이언스": {
+      "n": 3,
+      "lexicon_abstain": 3,
+      "weighted_abstain": 3,
+      "legacy_abstain": 2
+    },
+    "6_재테크": {
+      "n": 30,
+      "lexicon_hit": 21,
+      "lexicon_top3_hit": 21,
+      "legacy_abstain": 23,
+      "weighted_hit": 23,
+      "lexicon_abstain": 9,
+      "weighted_abstain": 7
+    },
+    "6_처세술리더십창의성": {
+      "n": 30,
+      "lexicon_abstain": 30,
+      "legacy_abstain": 27,
+      "weighted_abstain": 28
+    },
+    "7_교육일반": {
+      "n": 30,
+      "lexicon_abstain": 30,
+      "legacy_abstain": 24,
+      "weighted_abstain": 28,
+      "weighted_hit": 1
+    },
+    "7_국어교육": {
+      "n": 27,
+      "lexicon_abstain": 19,
+      "weighted_abstain": 12,
+      "legacy_abstain": 18,
+      "weighted_hit": 1,
+      "lexicon_top3_hit": 3
+    },
+    "7_언어일반": {
+      "n": 1,
+      "lexicon_abstain": 1,
+      "legacy_abstain": 1,
+      "weighted_abstain": 1
+    },
+    "7_영문일반": {
+      "n": 30,
+      "lexicon_hit": 25,
+      "lexicon_top3_hit": 25,
+      "legacy_abstain": 30,
+      "weighted_hit": 25,
+      "lexicon_abstain": 5,
+      "weighted_abstain": 5
+    },
+    "7_영어교육": {
+      "n": 30,
+      "lexicon_abstain": 25,
+      "legacy_abstain": 22,
+      "weighted_abstain": 19,
+      "lexicon_top3_hit": 5,
+      "weighted_hit": 8,
+      "lexicon_hit": 4
+    },
+    "7_외국어교육": {
+      "n": 30,
+      "lexicon_hit": 26,
+      "lexicon_top3_hit": 26,
+      "legacy_abstain": 27,
+      "lexicon_abstain": 4,
+      "weighted_hit": 7,
+      "weighted_abstain": 1
+    },
+    "7_외국인을위한한국어읽기": {
+      "n": 15,
+      "lexicon_hit": 15,
+      "lexicon_top3_hit": 15,
+      "legacy_abstain": 15,
+      "weighted_hit": 9
+    },
+    "7_일문일반": {
+      "n": 30,
+      "lexicon_hit": 26,
+      "lexicon_top3_hit": 26,
+      "legacy_abstain": 30,
+      "weighted_hit": 26,
+      "lexicon_abstain": 4,
+      "weighted_abstain": 4
+    },
+    "7_일어교육": {
+      "n": 4,
+      "lexicon_top3_hit": 1,
+      "legacy_abstain": 3,
+      "weighted_hit": 3,
+      "lexicon_abstain": 3
+    },
+    "7_중문일반": {
+      "n": 30,
+      "lexicon_abstain": 1,
+      "legacy_abstain": 30,
+      "weighted_abstain": 1,
+      "lexicon_hit": 29,
+      "lexicon_top3_hit": 29,
+      "weighted_hit": 29
+    },
+    "7_중어한자교육": {
+      "n": 9,
+      "lexicon_hit": 5,
+      "lexicon_top3_hit": 5,
+      "legacy_abstain": 6,
+      "lexicon_abstain": 4,
+      "weighted_abstain": 4,
+      "weighted_hit": 4
+    },
+    "8_IT": {
+      "n": 29,
+      "lexicon_top3_hit": 10,
+      "lexicon_hit": 9,
+      "weighted_hit": 9,
+      "lexicon_abstain": 18,
+      "legacy_abstain": 16,
+      "weighted_abstain": 14
+    },
+    "8_건강일반": {
+      "n": 30,
+      "lexicon_hit": 11,
+      "lexicon_top3_hit": 11,
+      "legacy_abstain": 29,
+      "weighted_hit": 12,
+      "lexicon_abstain": 19,
+      "weighted_abstain": 16
+    },
+    "8_모델링": {
+      "n": 9,
+      "lexicon_abstain": 6,
+      "legacy_abstain": 9,
+      "weighted_abstain": 6,
+      "lexicon_hit": 1,
+      "lexicon_top3_hit": 1,
+      "weighted_hit": 1
+    },
+    "8_밀리터리": {
+      "n": 27,
+      "lexicon_abstain": 2,
+      "legacy_abstain": 27,
+      "weighted_abstain": 2,
+      "lexicon_hit": 25,
+      "lexicon_top3_hit": 25,
+      "weighted_hit": 25
+    },
+    "8_성": {
+      "n": 30,
+      "lexicon_hit": 17,
+      "lexicon_top3_hit": 17,
+      "legacy_abstain": 24,
+      "weighted_hit": 17,
+      "lexicon_abstain": 13,
+      "weighted_abstain": 10
+    },
+    "8_실용의학회계": {
+      "n": 30,
+      "lexicon_abstain": 27,
+      "legacy_abstain": 22,
+      "weighted_abstain": 23,
+      "lexicon_hit": 1,
+      "lexicon_top3_hit": 1,
+      "weighted_hit": 1
+    },
+    "8_악보": {
+      "n": 30,
+      "lexicon_hit": 25,
+      "lexicon_top3_hit": 25,
+      "legacy_abstain": 30,
+      "weighted_hit": 26,
+      "lexicon_abstain": 3,
+      "weighted_abstain": 3
+    },
+    "8_여행": {
+      "n": 29,
+      "lexicon_abstain": 22,
+      "legacy_abstain": 21,
+      "weighted_abstain": 11,
+      "weighted_hit": 3,
+      "lexicon_top3_hit": 7,
+      "lexicon_hit": 5
+    },
+    "8_요리음료": {
+      "n": 30,
+      "lexicon_hit": 8,
+      "lexicon_top3_hit": 14,
+      "legacy_abstain": 22,
+      "weighted_hit": 8,
+      "lexicon_abstain": 15,
+      "weighted_abstain": 14
+    },
+    "9_BLGL": {
+      "n": 30,
+      "lexicon_abstain": 30,
+      "legacy_hit": 3,
+      "weighted_hit": 6,
+      "weighted_abstain": 15,
+      "legacy_abstain": 22
+    },
+    "9_격언명언": {
+      "n": 1,
+      "lexicon_abstain": 1,
+      "legacy_abstain": 1,
+      "weighted_abstain": 1
+    },
+    "9_북스캔OCR": {
+      "n": 29,
+      "lexicon_abstain": 28,
+      "legacy_abstain": 29,
+      "weighted_abstain": 28
+    },
+    "9_성인": {
+      "n": 30,
+      "lexicon_abstain": 14,
+      "legacy_hit": 20,
+      "weighted_hit": 23,
+      "lexicon_hit": 16,
+      "lexicon_top3_hit": 16,
+      "legacy_abstain": 5,
+      "weighted_abstain": 2
+    },
+    "9_어린이육아": {
+      "n": 30,
+      "lexicon_abstain": 30,
+      "legacy_abstain": 23,
+      "weighted_abstain": 23,
+      "weighted_hit": 2
+    },
+    "9_역학해몽퍼즐": {
+      "n": 17,
+      "lexicon_abstain": 15,
+      "legacy_abstain": 17,
+      "weighted_abstain": 15,
+      "lexicon_hit": 2,
+      "lexicon_top3_hit": 2,
+      "weighted_hit": 2
+    },
+    "9_유머": {
+      "n": 30,
+      "lexicon_abstain": 16,
+      "legacy_abstain": 27,
+      "weighted_abstain": 13,
+      "lexicon_hit": 14,
+      "lexicon_top3_hit": 14,
+      "weighted_hit": 14
+    },
+    "9_청소년": {
+      "n": 30,
+      "lexicon_abstain": 29,
+      "legacy_abstain": 24,
+      "weighted_abstain": 24,
+      "weighted_hit": 1
+    }
+  },
+  "top_confusions": [
+    {
+      "true": "8_요리음료",
+      "predicted": "8_건강일반",
+      "count": 6
+    },
+    {
+      "true": "3_SF환상문학전집",
+      "predicted": "7_영문일반",
+      "count": 5
+    },
+    {
+      "true": "4_경제",
+      "predicted": "6_재테크",
+      "count": 4
+    },
+    {
+      "true": "1_동양고전한문",
+      "predicted": "7_중문일반",
+      "count": 3
+    },
+    {
+      "true": "1_서양고전",
+      "predicted": "7_영문일반",
+      "count": 3
+    },
+    {
+      "true": "7_국어교육",
+      "predicted": "7_영문일반",
+      "count": 3
+    },
+    {
+      "true": "7_국어교육",
+      "predicted": "7_외국인을위한한국어읽기",
+      "count": 3
+    },
+    {
+      "true": "1_동양고전",
+      "predicted": "2_소설역사",
+      "count": 2
+    },
+    {
+      "true": "2_소설Abe전집",
+      "predicted": "7_영문일반",
+      "count": 2
+    },
+    {
+      "true": "3_SF그리폰북스",
+      "predicted": "7_영문일반",
+      "count": 2
+    },
+    {
+      "true": "3_SF영문",
+      "predicted": "7_영문일반",
+      "count": 2
+    },
+    {
+      "true": "3_그래픽노블",
+      "predicted": "9_성인",
+      "count": 2
+    },
+    {
+      "true": "7_국어교육",
+      "predicted": "8_여행",
+      "count": 2
+    },
+    {
+      "true": "8_실용의학회계",
+      "predicted": "6_재테크",
+      "count": 2
+    },
+    {
+      "true": "1_동양고전",
+      "predicted": "7_영문일반",
+      "count": 1
+    },
+    {
+      "true": "1_동양고전",
+      "predicted": "3_스릴러",
+      "count": 1
+    },
+    {
+      "true": "1_동양고전",
+      "predicted": "1_동양고전한문",
+      "count": 1
+    },
+    {
+      "true": "2_소설외국",
+      "predicted": "3_스릴러",
+      "count": 1
+    },
+    {
+      "true": "2_소설일본",
+      "predicted": "2_소설역사",
+      "count": 1
+    },
+    {
+      "true": "2_소설일본하루키",
+      "predicted": "8_요리음료",
+      "count": 1
+    },
+    {
+      "true": "2_소설중국",
+      "predicted": "3_장르문학자료",
+      "count": 1
+    },
+    {
+      "true": "2_소설중국",
+      "predicted": "3_무협",
+      "count": 1
+    },
+    {
+      "true": "2_소설중국",
+      "predicted": "2_소설역사",
+      "count": 1
+    },
+    {
+      "true": "2_소설한국",
+      "predicted": "3_무협",
+      "count": 1
+    },
+    {
+      "true": "2_수필서간일기",
+      "predicted": "2_소설외국",
+      "count": 1
+    },
+    {
+      "true": "2_시",
+      "predicted": "3_스릴러",
+      "count": 1
+    },
+    {
+      "true": "3_SF그리폰북스",
+      "predicted": "8_악보",
+      "count": 1
+    },
+    {
+      "true": "3_SF영문",
+      "predicted": "7_중문일반",
+      "count": 1
+    },
+    {
+      "true": "3_그래픽노블",
+      "predicted": "3_무협",
+      "count": 1
+    },
+    {
+      "true": "3_그래픽노블",
+      "predicted": "2_소설역사",
+      "count": 1
+    },
+    {
+      "true": "3_라이트노벨",
+      "predicted": "7_일문일반",
+      "count": 1
+    },
+    {
+      "true": "3_라이트노벨",
+      "predicted": "3_무협",
+      "count": 1
+    },
+    {
+      "true": "3_여성향",
+      "predicted": "3_무협",
+      "count": 1
+    },
+    {
+      "true": "3_여성향",
+      "predicted": "9_성인",
+      "count": 1
+    },
+    {
+      "true": "3_판타지",
+      "predicted": "3_무협",
+      "count": 1
+    },
+    {
+      "true": "4_경영마케팅",
+      "predicted": "6_재테크",
+      "count": 1
+    },
+    {
+      "true": "4_경제",
+      "predicted": "7_영문일반",
+      "count": 1
+    },
+    {
+      "true": "4_역사인물",
+      "predicted": "3_무협",
+      "count": 1
+    },
+    {
+      "true": "4_인문일반논픽션",
+      "predicted": "8_여행",
+      "count": 1
+    },
+    {
+      "true": "4_정치외교군사",
+      "predicted": "6_재테크",
+      "count": 1
+    }
+  ]
+}

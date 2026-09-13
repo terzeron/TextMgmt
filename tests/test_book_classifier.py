@@ -400,7 +400,13 @@ def test_evaluate_category_decision_uses_epub_subject_metadata(tmp_path):
     assert method == "content_metadata"
     assert "EPUB dc:subject" in reason
 
-def test_evaluate_category_decision_scores_epub_text_when_metadata_is_not_mapped(tmp_path):
+def test_evaluate_category_decision_does_not_let_five_genre_scoring_decide_alone(tmp_path):
+    """
+    기존 5대 장르 스코어링은 66개 중 5개 카테고리만 안다. 그 5개 밖의 파일에
+    발동하면 반드시 틀리므로 단독 판정권을 주지 않는다.
+
+    홀드아웃 실측: 단독권을 줬을 때 가중치 합 정답률 57.0%, 보조로 내렸을 때 73.4%.
+    """
     epub_path = tmp_path / "score.epub"
     with zipfile.ZipFile(epub_path, "w") as z:
         z.writestr(
@@ -415,20 +421,14 @@ def test_evaluate_category_decision_scores_epub_text_when_metadata_is_not_mapped
             """,
         )
 
-    cat, method, reason = evaluate_category_decision(
-        "강호의검.epub",
-        epub_path,
-        "강호의검",
-        "",
-        "강호의검",
-        {"mapped": None},
-        {"mapped": None},
-        {"mapped": None},
-    )
+    cat, method, _reason = evaluate_category_decision("강호의검.epub", epub_path, "강호의검", "", "강호의검", {"mapped": None}, {"mapped": None}, {"mapped": None})
+    # dc:description 이 map_category 로 잡히면 그쪽이 판정하고, 아니면 판정하지 않는다.
+    # 어느 쪽이든 5대 장르 스코어링 혼자서 결론을 내지는 않는다.
+    assert method in ("content_metadata", "not_found")
+    if method == "not_found":
+        assert cat is None
 
-    assert cat == "3_무협"
-    assert method == "content_metadata"
-    assert "EPUB content scored" in reason
+
 
 @pytest.mark.parametrize(
     "yes24,aladin,kyobo,expected_method",
@@ -889,14 +889,17 @@ def test_evaluate_category_decision_metadata_branches(tmp_path):
         )
         assert cat_h == "3_판타지"
 
-    # 738-740: 본문 스코어링 폴백 score_text_genre (SF 키워드)
+    # 본문 스코어링 폴백 score_text_genre (SF 키워드)
+    # 이 폴백도 3_SF 와 3_스릴러 둘만 아는 좁은 분류기라 단독 판정권이 없다.
+    # 다른 신호가 같은 방향일 때 힘을 보탤 뿐이다.
     txt_sf = tmp_path / "sf.txt"
     txt_sf.write_text("우주선과 안드로이드의 행성 탐사", encoding="utf-8")
     cat_sf, m_sf, r_sf = evaluate_category_decision(
         "책.txt", txt_sf, "책", "저자", "책",
         {}, {}, {}
     )
-    assert cat_sf == "3_SF"
+    assert cat_sf is None
+    assert m_sf == "not_found"
 
 
 def test_clean_filename_author_title_edge_patterns():

@@ -43,6 +43,7 @@ from backend.category_lexicon import (  # noqa: E402
     DEFAULT_LEXICON_PATH,
     SERIES_TO_PARENT,
     NB_ALPHA,
+    resolve_parent,
     CategoryLexicon,
     analyze_texts,
     decode_best,
@@ -376,6 +377,12 @@ def evaluate_holdout(lexicon_path: Path, collected: Dict[str, Dict[str, Any]], l
     confusion: Counter[Tuple[str, str]] = Counter()
 
     for cat in sorted(collected):
+        # 모델은 하위 카테고리를 상위 장르로 합쳐 학습했으므로 어휘 사전은 상위 장르만
+        # 내놓는다. 반면 파일명 시리즈 신호는 하위 카테고리를 내놓는다.
+        # 둘 다 맞는 답이므로 정확한 하위 카테고리와 그 상위 장르를 모두 정답으로 친다.
+        # 이걸 빠뜨리면 한쪽이 자동으로 전부 오답이 된다.
+        true_cat = resolve_parent(cat)
+        accepted = {cat, true_cat}
         holdout = [Path(p) for p in collected[cat].get("holdout", [])][:limit_per_category]
         if not holdout:
             continue
@@ -394,17 +401,17 @@ def evaluate_holdout(lexicon_path: Path, collected: Dict[str, Dict[str, Any]], l
                 stat["lexicon_abstain"] += 1
                 totals["lexicon_abstain"] += 1
             else:
-                if ranked[0][0] == cat:
+                if ranked[0][0] in accepted:
                     stat["lexicon_hit"] += 1
                     totals["lexicon_hit"] += 1
                 else:
                     confusion[(cat, ranked[0][0])] += 1
-                if any(c == cat for c, _n, _s in ranked):
+                if any(c in accepted for c, _n, _s in ranked):
                     stat["lexicon_top3_hit"] += 1
                     totals["lexicon_top3_hit"] += 1
 
             old_cat, _score, _reason = classify_5_genres_from_content(fpath.name, text[:8000])
-            if old_cat == cat:
+            if old_cat in accepted:
                 stat["legacy_hit"] += 1
                 totals["legacy_hit"] += 1
             elif not old_cat:
@@ -413,7 +420,7 @@ def evaluate_holdout(lexicon_path: Path, collected: Dict[str, Dict[str, Any]], l
 
             # 최종 판정. 서점 결과를 비워 파일 내용만으로 돌린다.
             final_cat, _method, _why = evaluate_category_decision(fpath.name, fpath, fpath.stem, "", fpath.stem, empty, empty, empty)
-            if final_cat == cat:
+            if final_cat in accepted:
                 stat["weighted_hit"] += 1
                 totals["weighted_hit"] += 1
             elif not final_cat:
@@ -426,6 +433,9 @@ def evaluate_holdout(lexicon_path: Path, collected: Dict[str, Dict[str, Any]], l
     n = totals["n"] or 1
     return {
         "total_docs": totals["n"],
+        "lexicon_decided_rate": round(1 - totals["lexicon_abstain"] / n, 4),
+        "lexicon_precision": round(totals["lexicon_hit"] / max(1, n - totals["lexicon_abstain"]), 4),
+        "weighted_precision": round(totals["weighted_hit"] / max(1, n - totals["weighted_abstain"]), 4),
         "lexicon_top1_accuracy": round(totals["lexicon_hit"] / n, 4),
         "lexicon_top3_accuracy": round(totals["lexicon_top3_hit"] / n, 4),
         "lexicon_abstain_rate": round(totals["lexicon_abstain"] / n, 4),
@@ -537,9 +547,9 @@ def main() -> int:
         report = evaluate_holdout(args.out, collected, limit_per_category=args.eval_limit, head_chars=args.head_chars, tail_chars=args.tail_chars, num_workers=args.num_workers)
         LOGGER.info(
             f"홀드아웃 {report['total_docs']}건\n"
-            f"  어휘사전  top-1 {report['lexicon_top1_accuracy']:.1%}  top-3 {report['lexicon_top3_accuracy']:.1%}  무판정 {report['lexicon_abstain_rate']:.1%}\n"
+            f"  어휘사전  답한비율 {report['lexicon_decided_rate']:.1%}  그중 정답률 {report['lexicon_precision']:.1%}  (전체 대비 {report['lexicon_top1_accuracy']:.1%})\n"
             f"  기존5장르 top-1 {report['legacy_top1_accuracy']:.1%}  무판정 {report['legacy_abstain_rate']:.1%}\n"
-            f"  가중치합  top-1 {report['weighted_top1_accuracy']:.1%}  무판정 {report['weighted_abstain_rate']:.1%}"
+            f"  가중치합  답한비율 {1 - report['weighted_abstain_rate']:.1%}  그중 정답률 {report['weighted_precision']:.1%}  (전체 대비 {report['weighted_top1_accuracy']:.1%})"
         )
         out = args.report or (args.work_dir / "holdout_report.json")
         out.parent.mkdir(parents=True, exist_ok=True)

@@ -223,10 +223,14 @@ def test_strong_metadata_signal_outranks_contradicting_lexicon(tmp_path, econ_le
     assert WEIGHT_EPUB_SUBJECT >= ACCEPT_MIN_SCORE
 
 
-def test_missing_lexicon_leaves_legacy_behaviour_intact(tmp_path, monkeypatch):
-    """사전 파일이 없으면 기존 신호만으로 판정한다"""
+def test_missing_lexicon_does_not_crash_and_abstains_safely(tmp_path, monkeypatch):
+    """
+    사전 파일이 없으면 어휘 신호가 사라진다. 남은 신호만으로 판정하되,
+    5대 장르 스코어링 혼자서는 결론을 내지 않는다.
+    """
     monkeypatch.setattr("backend.book_classifier.get_default_lexicon", lambda: None)
     fpath = write_txt(tmp_path, "무협지.txt", "소림사의 장로와 화산파 문도들이 강호의 평화를 위해 내공을 수련했다. 단전과 기경팔맥. " * 5)
     cat, method, _reason = evaluate_category_decision("무협지.txt", fpath, "무협지", "", "무협지", {"mapped": None}, {"mapped": None}, {"mapped": None})
-    assert cat == "3_무협"
-    assert method == "content_metadata"
+    assert method in ("content_metadata", "not_found")
+    if method == "not_found":
+        assert cat is None

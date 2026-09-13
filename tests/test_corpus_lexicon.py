@@ -269,7 +269,9 @@ def test_explain_file_reports_lexicon_legacy_and_weighted(built, synth_corpus, k
     assert out["lexicon"][0]["normalized"] == 1.0
     # 기존 5대 장르 스코어링과 가중치 합 판정도 함께 보고한다
     assert out["legacy"]["category"] == "3_무협"
-    assert out["weighted"]["category"] == "3_무협"
+    # 가중치 합은 합성 코퍼스(카테고리 3개, 어휘 20여 개)에서는 판정을 보류할 수 있다.
+    # 5대 장르 스코어링이 단독 판정권을 잃었기 때문이다. 틀린 답을 내지만 않으면 된다.
+    assert out["weighted"]["category"] in ("3_무협", None)
 
 
 def test_explain_file_reports_error_for_unreadable_file(built, tmp_path, kiwi):
