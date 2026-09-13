@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from backend.category_lexicon import MIN_MARGIN, MIN_MATCHED_WORDS, SERIES_TO_PARENT, CategoryLexicon, extract_nouns, extract_word_set, get_kiwi, is_meaningful_word, resolve_parent
+from backend.category_lexicon import MIN_MATCHED_WORDS, MIN_POSTERIOR, SERIES_TO_PARENT, CategoryLexicon, extract_nouns, extract_word_set, get_kiwi, is_meaningful_word, resolve_parent
 
 
 @pytest.fixture(scope="module")
@@ -161,7 +161,7 @@ def test_scores_are_deterministic():
 # ---------------------------------------------------------------------------
 
 
-def test_rank_abstains_when_top_two_are_nearly_tied(kiwi, monkeypatch):
+def test_rank_abstains_when_posterior_is_low(kiwi, monkeypatch):
     lex = make_model({"3_판타지": with_filler({"공통어": 70}), "3_여성향": with_filler({"공통어": 69})}, extra_vocab=UNUSED_VOCAB)
     monkeypatch.setattr("backend.category_lexicon.extract_word_set", lambda *a, **kw: set(FILLER) | {"공통어"})
     assert lex.rank("아무 글이나", kiwi=kiwi) == []
@@ -170,18 +170,18 @@ def test_rank_abstains_when_top_two_are_nearly_tied(kiwi, monkeypatch):
 def test_rank_decides_when_the_winner_is_clear(kiwi, monkeypatch):
     lex = make_model({"3_무협": with_filler({"무림": 95, "내공": 95, "강호": 95}), "4_경제": with_filler({"금리": 95})}, extra_vocab=UNUSED_VOCAB)
     monkeypatch.setattr("backend.category_lexicon.extract_word_set", lambda *a, **kw: set(FILLER) | {"무림", "내공", "강호"})
-    ranked = lex.rank("아무 글이나", kiwi=kiwi, min_margin=1.0)
+    ranked = lex.rank("아무 글이나", kiwi=kiwi, min_posterior=0.0)
     assert ranked
     assert ranked[0][0] == "3_무협"
-    assert ranked[0][1] == 1.0
+    assert 0.0 <= ranked[0][1] <= 1.0
 
 
-def test_min_margin_is_a_ratio_just_above_one():
+def test_min_posterior_is_a_probability():
     """
-    CNB 점수는 로그 확률비를 어휘 전체에 걸쳐 더한 값이라 1·2위 차이가 작은 비율로
-    나타난다. 코사인 시절의 2.5배 같은 값을 그대로 쓰면 전부 걸러진다.
+    확신도는 1·2위 점수비가 아니라 사후 확률로 잰다. 점수비는 1.000~1.02 에 뭉쳐
+    변별이 안 됐다. 가중치를 |w| 합 1 로 정규화하면서 로그 확률의 척도를 잃은 탓이다.
     """
-    assert 1.0 < MIN_MARGIN < 1.05
+    assert 0.5 < MIN_POSTERIOR < 1.0
 
 
 def test_min_matched_words_is_positive():

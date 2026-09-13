@@ -244,7 +244,7 @@ def test_end_to_end_lexicon_classifies_probe_text(built, kiwi, sentences, expect
     """
     _collected, _lexicon, lex = built
     probe = " ".join(sentences) * 3
-    ranked = lex.rank(probe, top_k=3, kiwi=kiwi, min_margin=1.0)
+    ranked = lex.rank(probe, top_k=3, kiwi=kiwi, min_posterior=0.0)
     assert ranked, f"{expected}: 판정 없음"
     assert ranked[0][0] == expected
 

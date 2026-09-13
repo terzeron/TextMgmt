@@ -41,8 +41,10 @@ if str(REPO_ROOT) not in sys.path:
 from utils.detect_mojibake import VERDICT_CORRUPTED, classify_text, korean_likeness  # noqa: E402
 from backend.category_lexicon import (  # noqa: E402
     DEFAULT_LEXICON_PATH,
+    FILENAME_LEXICON_PATH,
     SERIES_TO_PARENT,
     NB_ALPHA,
+    extract_filename_features,
     resolve_parent,
     CategoryLexicon,
     analyze_texts,
@@ -343,6 +345,57 @@ def build_lexicon(collected: Dict[str, Dict[str, Any]], vocab_size: int = DEFAUL
     }
 
 
+def build_filename_lexicon(library_root: Path, max_files: int = 600, min_files: int = DEFAULT_MIN_FILES, seed: int = DEFAULT_SEED, holdout_ratio: float = HOLDOUT_RATIO, min_feature_docs: int = 5, kiwi: Any = None) -> Dict[str, Any]:
+    """
+    파일명만으로 카테고리를 맞히는 Complement NB 모델을 만든다.
+
+    코퍼스 파일명이 곧 학습 데이터다. 파일을 열지 않으므로 본문 모델보다 훨씬 빠르고,
+    실측에서 판정률과 정답률이 모두 높았다.
+      본문   답한비율  7.9%  정답률 94.4%
+      파일명 답한비율 16.4%  정답률 97.9%
+
+    본문 모델과 같은 seed·같은 홀드아웃 분할을 써서 두 모델을 나란히 평가할 수 있게 한다.
+    """
+    k = kiwi if kiwi is not None else get_kiwi(num_workers=8)
+    df: Counter[Tuple[str, str]] = Counter()
+    doc_count: Counter[str] = Counter()
+    holdout: Dict[str, List[str]] = {}
+
+    for cat in list_category_dirs(library_root):
+        files = list_category_files(library_root / cat)
+        if len(files) < min_files:
+            continue
+        train, hold = split_holdout(sample_files(files, max_files, seed, cat), holdout_ratio, seed, cat)
+        parent = SERIES_TO_PARENT.get(cat, cat)
+        for p in train:
+            doc_count[parent] += 1
+            for w in extract_filename_features(p.name, kiwi=k):
+                df[(parent, w)] += 1
+        holdout[cat] = [str(p) for p in hold]
+        LOGGER.info(f"{cat}: 학습 {len(train)}건, 홀드아웃 {len(hold)}건 -> {parent}")
+
+    cats = sorted(doc_count)
+    if not cats:
+        raise ValueError("파일명을 모으지 못했다")
+    total: Counter[str] = Counter()
+    for (_c, w), n in df.items():
+        total[w] += n
+    vocab = {w for w, n in total.items() if n >= min_feature_docs}
+    if not vocab:
+        raise ValueError("특징이 비어 있다")
+
+    return {
+        "version": 2,
+        "model": "complement_naive_bayes",
+        "features": "filename",
+        "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "params": {"vocab_size": len(vocab), "min_feature_docs": min_feature_docs, "alpha": NB_ALPHA, "category_count": len(cats), "max_files": max_files},
+        "total_df": {w: int(total[w]) for w in vocab},
+        "categories": {c: {"doc_count": int(doc_count[c]), "df": {w: int(df[(c, w)]) for w in vocab if (c, w) in df}} for c in cats},
+        "holdout": holdout,
+    }
+
+
 def write_lexicon(lexicon: Dict[str, Any], out_path: Path) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(out_path, "wt", encoding="utf-8") as f:
@@ -500,7 +553,7 @@ def explain_file(fpath: Path, lex: CategoryLexicon, top_k: int = 5, head_chars: 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="카테고리별 어휘 사전 빌더")
-    parser.add_argument("command", choices=["collect", "build", "evaluate", "inspect", "classify"])
+    parser.add_argument("command", choices=["collect", "build", "build-filename", "evaluate", "inspect", "classify"])
     parser.add_argument("--library-root", type=Path, default=DEFAULT_LIBRARY_ROOT)
     parser.add_argument("--work-dir", type=Path, default=DEFAULT_WORK_DIR)
     parser.add_argument("--out", type=Path, default=DEFAULT_LEXICON_PATH)
@@ -526,6 +579,12 @@ def main() -> int:
     if args.command == "collect":
         done = collect_all(args.library_root, args.work_dir, categories=args.category, resume=not args.no_resume, num_workers=args.num_workers, max_files=args.max_files, min_files=args.min_files, head_chars=args.head_chars, tail_chars=args.tail_chars, seed=args.seed, holdout_ratio=args.holdout_ratio, batch_size=args.batch_size)
         LOGGER.info(f"수집 완료: {len(done)}개 카테고리")
+        return 0
+
+    if args.command == "build-filename":
+        model = build_filename_lexicon(args.library_root, kiwi=get_kiwi(num_workers=args.num_workers))
+        path = write_lexicon(model, FILENAME_LEXICON_PATH)
+        LOGGER.info(f"파일명 모델: {path} ({path.stat().st_size / 1024 / 1024:.2f}MB, 카테고리 {model['params']['category_count']}개, 특징 {model['params']['vocab_size']:,}개)")
         return 0
 
     if args.command == "build":

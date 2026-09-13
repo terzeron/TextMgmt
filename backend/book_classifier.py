@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore
-from backend.category_lexicon import SERIES_TO_PARENT, MIN_MARGIN as LEXICON_MIN_MARGIN, extract_word_set, get_default_lexicon, read_document_text
+from backend.category_lexicon import (FILENAME_MIN_FEATURES, FILENAME_MIN_POSTERIOR, FILENAME_TEMPERATURE, MIN_POSTERIOR as LEXICON_MIN_POSTERIOR, SERIES_TO_PARENT,
+                                      extract_filename_features, extract_word_set, get_default_lexicon, get_filename_lexicon, read_document_text)
 
 logger = logging.getLogger(__name__)
 
@@ -694,9 +695,16 @@ def resolve_genre_conflict(cats: List[str], fname: str, text_sample: str = "") -
 #     어휘 사전이 위   정답률 76.6%   <- 채택. 답하는 양은 그대로이고 정답률만 오른다
 #     어휘 사전 압도적  정답률 76.2%
 #     어휘 사전만 판정권 정답률 81.0% (답한 비율 29.2% 로 줄어 전체로는 손해)
-WEIGHT_SERIES_IN_FILENAME = 11.8
-WEIGHT_SINGLE_VALID_MATCH = 9.4
-WEIGHT_SINGLE_MATCH = 7.5
+# 파일명 분류기. 본문보다 판정률이 2배, 정답률이 3.5%p 높아 위에 둔다.
+#   본문   답한비율  7.9%  정답률 94.4%
+#   파일명 답한비율 16.4%  정답률 97.9%
+# 본문은 장르를 숨기고 파일명은 드러낸다. 판타지 본문과 로판 본문은 어휘가 겹치지만
+# `[TS] 고인물이...` 와 `로판 속 악녀의...` 는 파일명에서 갈린다.
+WEIGHT_FILENAME_LEXICON = 7.5
+
+WEIGHT_SERIES_IN_FILENAME = 18.5
+WEIGHT_SINGLE_VALID_MATCH = 14.8
+WEIGHT_SINGLE_MATCH = 11.8
 WEIGHT_CONFLICT_RESOLVED = 4.3
 WEIGHT_EPUB_SUBJECT = 4.3
 WEIGHT_TXT_HEADER_GENRE = 4.3
@@ -740,6 +748,7 @@ ACCEPT_MARGIN = 1.25
 # 순서는 교체 이전 캐스케이드의 우선순위와 같다.
 METHOD_PRIORITY = [
     "series_in_filename",
+    "filename_lexicon",
     "single_valid_match_resolved",
     "conflict_resolved",
     "single_match",
@@ -805,17 +814,28 @@ def score_text_with_lexicon(text: str) -> List[Tuple[str, float, float]]:
     words = extract_word_set(text)
     if len(words) < LEXICON_MIN_WORDS:
         return []
-    scores = lexicon.score_words(words)
-    if not scores:
+    ranked = lexicon.posterior(lexicon.score_words(words))
+    if not ranked or ranked[0][1] < LEXICON_MIN_POSTERIOR:
+        # 1위의 사후 확률이 낮으면 찍지 않는다. 다른 신호에 판정을 넘긴다.
         return []
-    order = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
-    best = order[0][1]
-    if best <= 0:
+    return ranked[:LEXICON_TOP_K]
+
+
+def score_filename_with_lexicon(fname: str) -> List[Tuple[str, float, float]]:
+    """
+    파일명 분류기로 카테고리를 점수화한다.
+    모델이 없거나 특징이 모자라면 빈 목록을 돌려주고 판정은 다른 신호에 맡긴다.
+    """
+    lexicon = get_filename_lexicon()
+    if lexicon is None:
         return []
-    if len(order) > 1 and order[1][1] > 0 and best < order[1][1] * LEXICON_MIN_MARGIN:
-        # 1위와 2위가 사실상 동점이면 찍지 않는다. 다른 신호에 판정을 넘긴다.
+    features = extract_filename_features(fname)
+    if len(features) < FILENAME_MIN_FEATURES:
         return []
-    return [(cat, sc / best, sc) for cat, sc in order[:LEXICON_TOP_K]]
+    ranked = lexicon.posterior(lexicon.score_words(features, min_matched=FILENAME_MIN_FEATURES), temperature=FILENAME_TEMPERATURE)
+    if not ranked or ranked[0][1] < FILENAME_MIN_POSTERIOR:
+        return []
+    return ranked[:LEXICON_TOP_K]
 
 
 def evaluate_category_decision(
@@ -876,6 +896,12 @@ def evaluate_category_decision(
     series_cat = map_category(urllib.parse.unquote(fname), raw_title, raw_author)
     if series_cat in SERIES_TO_PARENT:
         acc.add(series_cat, WEIGHT_SERIES_IN_FILENAME, "series_in_filename", f"Series keyword in filename -> {series_cat}")
+
+    # 파일명 분류기. 서점 조회가 없을 때 가장 잘 듣는 신호다.
+    name_ranked = score_filename_with_lexicon(fname)
+    if name_ranked:
+        name_cat, name_conf, _sc = name_ranked[0]
+        acc.add(name_cat, WEIGHT_FILENAME_LEXICON, "filename_lexicon", f"Filename model -> {name_cat} (posterior={name_conf:.3f})")
 
     # 서점 매핑 자체를 약한 표로 반영 (다수결에 못 미친 1건씩)
     for cat in valid_maps:
@@ -959,12 +985,10 @@ def evaluate_category_decision(
         lexicon_text = read_document_text(fpath)
         lex_ranked = score_text_with_lexicon((lexicon_text + " " + text_sample).strip())
         if lex_ranked:
-            lex_cat, _norm, sim = lex_ranked[0]
-            runner_up = lex_ranked[1][1] if len(lex_ranked) > 1 else 0.0
-            confidence = max(0.0, 1.0 - runner_up)
+            lex_cat, confidence, sim = lex_ranked[0]
             acc.add(
                 lex_cat, LEXICON_BASE_WEIGHT + LEXICON_CONFIDENCE_BONUS * confidence, "lexicon",
-                f"Corpus lexicon (CNB) -> {lex_cat} (score={sim:.6f}, confidence={confidence:.2f})",
+                f"Corpus lexicon (CNB) -> {lex_cat} (posterior={confidence:.3f})",
             )
 
     decision = acc.decide()
