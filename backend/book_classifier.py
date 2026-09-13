@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore
-from backend.category_lexicon import MIN_SIMILARITY as LEXICON_MIN_SIMILARITY, extract_word_set, get_default_lexicon
+from backend.category_lexicon import MIN_SIMILARITY as LEXICON_MIN_SIMILARITY, extract_word_set, get_default_lexicon, read_document_text
 
 logger = logging.getLogger(__name__)
 
@@ -682,24 +682,42 @@ def resolve_genre_conflict(cats: List[str], fname: str, text_sample: str = "") -
 # 서점 표 하나(store_vote)는 캐스케이드에서도 단독 판정권이 없었으므로 기준 아래에 둔다.
 # 가중치 간 순서는 캐스케이드의 우선순위를 그대로 따르고, 인접 신호끼리는
 # ACCEPT_MARGIN(1.25배) 이상 벌려 정면 충돌 시 상위 신호가 이기게 한다.
-WEIGHT_SINGLE_VALID_MATCH = 3.0
-WEIGHT_SINGLE_MATCH = 2.8
-WEIGHT_CONFLICT_RESOLVED = 2.6
-WEIGHT_EPUB_SUBJECT = 2.6
-WEIGHT_TXT_HEADER_GENRE = 2.6
-WEIGHT_EPUB_DESCRIPTION = 2.0
-WEIGHT_TXT_HASHTAG = 2.0
+WEIGHT_SINGLE_VALID_MATCH = 8.6
+WEIGHT_SINGLE_MATCH = 6.8
+WEIGHT_CONFLICT_RESOLVED = 5.4
+WEIGHT_EPUB_SUBJECT = 5.4
+WEIGHT_TXT_HEADER_GENRE = 5.4
+WEIGHT_EPUB_DESCRIPTION = 4.3
+WEIGHT_TXT_HASHTAG = 4.3
 WEIGHT_STORE_VOTE = 1.0
 
 # 기존 5대 장르 스코어링과 신규 어휘 사전은 단독으로도 판정을 설 수 있어야 하므로
 # 하한을 채택 기준(ACCEPT_MIN_SCORE)과 같게 둔다. 캐스케이드 시절 동작이 그대로 유지된다.
+# 기존 5대 장르 스코어링은 81개 중 5개 카테고리만 안다. 그 5개 밖의 파일에 발동하면
+# 반드시 틀린다. 홀드아웃 실측에서 어휘 사전이 맞힌 답을 63건 뒤집어 놓았다.
+# 단독 판정은 계속 가능하게 두되(ACCEPT_MIN_SCORE 이상), 사전을 뒤집지는 못하게
+# 상한을 어휘 사전 하한보다 1.25배 아래에 둔다.
 GENRE5_BASE_WEIGHT = 2.0
-GENRE5_MAX_WEIGHT = 2.5
-LEXICON_BASE_WEIGHT = 2.0
+GENRE5_MAX_WEIGHT = 2.2
+
+# 어휘 사전은 1위 하나만 기여한다. 2·3위까지 후보로 올리면 사전이 이미 고른 답의
+# 차점자를 경쟁자로 세우는 꼴이라, 서로 비슷한 점수 때문에 마진 검사를 스스로 못 넘긴다.
+# 홀드아웃 실측에서 이 때문에 무판정이 55%까지 올라갔다.
+# 대신 1위가 2위를 얼마나 앞섰는지를 가중치에 반영한다.
+#   압도적이면 2.5 -> 2.0 짜리 메타데이터 신호를 이긴다 (2.5/2.0 = 1.25)
+#   박빙이면 2.0 -> 2.6 짜리 dc:subject·헤더 장르에 진다 (2.6/2.0 = 1.3)
+LEXICON_BASE_WEIGHT = 2.8
+LEXICON_CONFIDENCE_BONUS = 0.6
 LEXICON_TOP_K = 3
 
 # 메타데이터 몇 단어만으로 어휘 사전을 돌리면 잡음이 커진다. 최소 어휘 수를 요구한다.
 LEXICON_MIN_WORDS = 30
+
+# 사전은 backend.category_lexicon.read_document_text 로 만들었다. 점수를 매길 때도
+# 같은 함수를 써야 학습 때와 보는 분량이 같아진다.
+# 아래 extract_content_head_tail_words 는 .txt 를 250줄까지만 읽어 3분의 1도 안 되는
+# 분량을 준다. 5대 장르 스코어링은 그 분량 기준으로 임계값이 맞춰져 있으므로 그대로 두고,
+# 사전에는 전용 추출기를 쓴다.
 
 ACCEPT_MIN_SCORE = 2.0
 ACCEPT_MARGIN = 1.25
@@ -913,10 +931,15 @@ def evaluate_category_decision(
                 acc.add(sc_cat, GENRE5_BASE_WEIGHT, "content_metadata", f"Content scored -> {sc_cat}")
 
         # 코퍼스 어휘 사전: 카테고리별 top-1000 단어와 고유 단어 세트 기반 유사도
-        for lex_cat, norm_score, sim in score_text_with_lexicon(scoring_text):
+        lexicon_text = read_document_text(fpath)
+        lex_ranked = score_text_with_lexicon((lexicon_text + " " + text_sample).strip())
+        if lex_ranked:
+            lex_cat, _norm, sim = lex_ranked[0]
+            runner_up = lex_ranked[1][1] if len(lex_ranked) > 1 else 0.0
+            confidence = max(0.0, 1.0 - runner_up)
             acc.add(
-                lex_cat, LEXICON_BASE_WEIGHT * norm_score, "lexicon",
-                f"Corpus lexicon -> {lex_cat} (sim={sim:.3f}, norm={norm_score:.2f})",
+                lex_cat, LEXICON_BASE_WEIGHT + LEXICON_CONFIDENCE_BONUS * confidence, "lexicon",
+                f"Corpus lexicon -> {lex_cat} (sim={sim:.3f}, confidence={confidence:.2f})",
             )
 
     decision = acc.decide()

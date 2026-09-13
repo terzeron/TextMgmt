@@ -2,8 +2,8 @@ import zipfile
 
 import pytest
 
-from backend.category_lexicon import CategoryLexicon, get_kiwi
-from utils.corpus_lexicon import build_lexicon, collect_all, decode_best, explain_file, is_mojibake, collect_category, list_category_dirs, list_category_files, load_collected, read_document_text, read_epub_text, read_txt_text, sample_files, split_holdout, write_lexicon
+from backend.category_lexicon import CategoryLexicon, decode_best, get_kiwi, read_document_text, read_epub_text, read_txt_text
+from utils.corpus_lexicon import build_lexicon, collect_all, explain_file, is_mojibake, collect_category, list_category_dirs, list_category_files, load_collected, sample_files, split_holdout, write_lexicon
 
 WUXIA_SENTENCES = ["소림사 장로가 강호에서 내공을 운기조식하며 무림맹 검법을 수련했다.", "화산파 장문인은 단전에 진기를 모아 주화입마를 피했다.", "마교 천마가 사파 무인들을 이끌고 정파 문파를 습격했다."]
 FANTASY_SENTENCES = ["던전에서 몬스터를 사냥하는 헌터가 각성하여 레이드에 참가했다.", "마법사가 마나를 모아 마법진을 그리고 드래곤을 소환했다.", "상태창을 열어 스킬과 스탯을 확인한 플레이어가 길드에 가입했다."]

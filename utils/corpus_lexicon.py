@@ -43,8 +43,13 @@ from backend.category_lexicon import (  # noqa: E402
     DEFAULT_LEXICON_PATH,
     UNIQUE_BONUS,
     CategoryLexicon,
+    analyze_texts,
+    decode_best,
     extract_word_sets,
     get_kiwi,
+    read_document_text,
+    read_epub_text,
+    read_txt_text,
 )
 
 LOGGER = logging.getLogger("corpus_lexicon")
@@ -101,127 +106,6 @@ def list_category_files(cat_dir: Path) -> List[Path]:
     files = [p for p in cat_dir.rglob("*") if p.is_file() and p.suffix.lower() in TEXT_EXTS and not p.name.startswith(".")]
     files.sort()
     return files
-
-
-def decode_best(raw: bytes) -> str:
-    """
-    바이트 열을 올바른 인코딩으로 디코딩한다.
-
-    UTF-8 은 자기검증 인코딩이다. CP949 로 저장된 한국어 텍스트는 바이트 쌍이
-    유효한 UTF-8 시퀀스가 되는 일이 거의 없어 엄격 디코딩에서 실패한다.
-    그래서 "엄격 UTF-8 성공 여부"가 가장 신뢰할 수 있는 판별이다.
-
-    두 가지를 하면 안 된다.
-    - "한글이 하나라도 나오면 채택": CP949 파일을 UTF-8로 잘못 읽은 결과에도 한글이
-      우연히 섞인다. 실측에서 정상 CP949 소설 1,856건이 손상으로 오판됐다.
-    - "likeness 가 가장 높은 인코딩 채택": 이미 손상된 파일을 CP949 로 다시 읽으면
-      더 한국어처럼 보이는 다른 쓰레기가 나와 손상을 놓친다.
-    """
-    if not raw:
-        return ""
-
-    # UTF-16 은 BOM 이나 널 바이트 밀도로 먼저 알아본다. 후보에서 빼 두면 UTF-16 한국어
-    # 텍스트를 통째로 깨진 것으로 읽는다(실측 97건).
-    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-        return raw.decode("utf-16", errors="ignore")
-    if len(raw) >= 200 and raw.count(0) > len(raw) * 0.25:
-        even_nulls = raw[1::2].count(0)
-        enc = "utf-16-le" if even_nulls > raw[0::2].count(0) else "utf-16-be"
-        return raw.decode(enc, errors="ignore")
-
-    # 잘린 멀티바이트 문자 때문에 엄격 디코딩이 헛되이 실패하지 않도록 꼬리를 다듬는다
-    for trim in range(0, 4):
-        chunk = raw[: len(raw) - trim] if trim else raw
-        try:
-            return chunk.decode("utf-8")
-        except UnicodeDecodeError:
-            continue
-
-    for enc in ("cp949", "euc-kr"):
-        for trim in range(0, 2):
-            chunk = raw[: len(raw) - trim] if trim else raw
-            try:
-                return chunk.decode(enc)
-            except UnicodeDecodeError:
-                continue
-
-    # 어느 것으로도 깨끗이 안 읽히면 한국어로 가장 잘 읽히는 쪽을 쓴다
-    best_text, best_score = "", -1.0
-    for enc in ("utf-8", "cp949", "euc-kr"):
-        text = raw.decode(enc, errors="ignore")
-        likeness = korean_likeness(text)
-        score = likeness if likeness is not None else 0.001
-        if score > best_score:
-            best_score, best_text = score, text
-    return best_text
-
-
-def read_txt_text(fpath: Path, head_chars: int, tail_chars: int) -> str:
-    """TXT 앞부분과 뒷부분을 인코딩 추정하여 읽는다"""
-    try:
-        size = fpath.stat().st_size
-    except OSError:
-        return ""
-
-    parts: List[str] = []
-    try:
-        with open(fpath, "rb") as f:
-            parts.append(decode_best(f.read(head_chars * 3))[:head_chars])
-            if tail_chars > 0 and size > head_chars * 3:
-                f.seek(max(0, size - tail_chars * 3))
-                parts.append(decode_best(f.read())[-tail_chars:])
-    except OSError:
-        return ""
-    return " ".join(parts)
-
-
-def read_epub_text(fpath: Path, head_chars: int, tail_chars: int) -> str:
-    """EPUB 본문 앞쪽/뒤쪽 챕터의 태그를 걷어낸 텍스트"""
-    try:
-        with zipfile.ZipFile(fpath, "r") as z:
-            names = [n for n in z.namelist() if n.lower().endswith((".html", ".xhtml", ".htm"))]
-            if not names:
-                return ""
-            body = [n for n in names if not any(k in n.lower() for k in ("cover", "nav", "toc", "titlepage", "index", "contents"))]
-            names = body or names
-            # 앞쪽 문서는 표지·목차·판권지다. 거기서 표본을 뽑으면 본문을 못 본다.
-            # 목차만 읽고 어휘가 빈약하다는 이유로 손상 판정이 나온 사례가 있었다.
-            if len(names) > 4:
-                mid = len(names) // 3
-                names = names[mid:] + names[:mid]
-
-            def gather(chunk_names: List[str], budget: int) -> str:
-                out: List[str] = []
-                total = 0
-                for n in chunk_names:
-                    if total >= budget:
-                        break
-                    try:
-                        raw = z.read(n).decode("utf-8", errors="ignore")
-                    except Exception:
-                        continue
-                    clean = _WS_RE.sub(" ", _TAG_RE.sub(" ", raw)).strip()
-                    if len(clean) < 50:
-                        continue
-                    out.append(clean)
-                    total += len(clean)
-                return " ".join(out)[:budget]
-
-            head = gather(names, head_chars)
-            tail = gather(list(reversed(names)), tail_chars) if tail_chars > 0 else ""
-            return (head + " " + tail).strip()
-    except (zipfile.BadZipFile, OSError, RuntimeError):
-        return ""
-
-
-def read_document_text(fpath: Path, head_chars: int = DEFAULT_HEAD_CHARS, tail_chars: int = DEFAULT_TAIL_CHARS) -> str:
-    """확장자에 맞춰 본문 표본을 읽는다"""
-    ext = fpath.suffix.lower()
-    if ext == ".txt":
-        return read_txt_text(fpath, head_chars, tail_chars)
-    if ext == ".epub":
-        return read_epub_text(fpath, head_chars, tail_chars)
-    return ""
 
 
 def sample_files(files: Sequence[_T], max_files: int, seed: int, salt: str) -> List[_T]:
@@ -443,15 +327,20 @@ def write_lexicon(lexicon: Dict[str, Any], out_path: Path) -> Path:
 
 def evaluate_holdout(lexicon_path: Path, collected: Dict[str, Dict[str, Any]], limit_per_category: int = 30, head_chars: int = DEFAULT_HEAD_CHARS, tail_chars: int = DEFAULT_TAIL_CHARS, num_workers: int = 8) -> Dict[str, Any]:
     """
-    학습에서 제외한 홀드아웃 파일로 기존 로직과 신규 어휘 사전의 top-1 정확도를 비교한다.
-    서점 조회 없이 파일 내용만 쓴다.
+    학습에서 제외한 홀드아웃 파일로 세 가지 판정의 정확도를 비교한다.
+    코퍼스 디렉토리 이름이 곧 정답 레이블이다. 서점 조회 없이 파일 내용만 쓴다.
+
+      lexicon  : 신규 어휘 사전 단독 (top-1 과 top-3)
+      legacy   : 기존 5대 장르 키워드 스코어링
+      weighted : 최종 가중치 합 판정 (evaluate_category_decision)
     """
-    from backend.book_classifier import classify_5_genres_from_content  # noqa: PLC0415
+    from backend.book_classifier import classify_5_genres_from_content, evaluate_category_decision  # noqa: PLC0415
 
     lex = CategoryLexicon.load(lexicon_path)
     if lex is None:
         raise RuntimeError(f"사전을 읽지 못했다: {lexicon_path}")
     kiwi = get_kiwi(num_workers=num_workers)
+    empty: Dict[str, Any] = {"mapped": None}
 
     per_cat: Dict[str, Dict[str, int]] = {}
     totals: Counter[str] = Counter()
@@ -471,16 +360,19 @@ def evaluate_holdout(lexicon_path: Path, collected: Dict[str, Dict[str, Any]], l
             stat["n"] += 1
             totals["n"] += 1
 
-            ranked = lex.rank(text, top_k=1, kiwi=kiwi)
-            lex_cat = ranked[0][0] if ranked else None
-            if lex_cat == cat:
-                stat["lexicon_hit"] += 1
-                totals["lexicon_hit"] += 1
-            elif lex_cat:
-                confusion[(cat, lex_cat)] += 1
-            else:
+            ranked = lex.rank(text, top_k=3, kiwi=kiwi)
+            if not ranked:
                 stat["lexicon_abstain"] += 1
                 totals["lexicon_abstain"] += 1
+            else:
+                if ranked[0][0] == cat:
+                    stat["lexicon_hit"] += 1
+                    totals["lexicon_hit"] += 1
+                else:
+                    confusion[(cat, ranked[0][0])] += 1
+                if any(c == cat for c, _n, _s in ranked):
+                    stat["lexicon_top3_hit"] += 1
+                    totals["lexicon_top3_hit"] += 1
 
             old_cat, _score, _reason = classify_5_genres_from_content(fpath.name, text[:8000])
             if old_cat == cat:
@@ -490,6 +382,15 @@ def evaluate_holdout(lexicon_path: Path, collected: Dict[str, Dict[str, Any]], l
                 stat["legacy_abstain"] += 1
                 totals["legacy_abstain"] += 1
 
+            # 최종 판정. 서점 결과를 비워 파일 내용만으로 돌린다.
+            final_cat, _method, _why = evaluate_category_decision(fpath.name, fpath, fpath.stem, "", fpath.stem, empty, empty, empty)
+            if final_cat == cat:
+                stat["weighted_hit"] += 1
+                totals["weighted_hit"] += 1
+            elif not final_cat:
+                stat["weighted_abstain"] += 1
+                totals["weighted_abstain"] += 1
+
         if stat["n"]:
             per_cat[cat] = dict(stat)
 
@@ -497,11 +398,14 @@ def evaluate_holdout(lexicon_path: Path, collected: Dict[str, Dict[str, Any]], l
     return {
         "total_docs": totals["n"],
         "lexicon_top1_accuracy": round(totals["lexicon_hit"] / n, 4),
+        "lexicon_top3_accuracy": round(totals["lexicon_top3_hit"] / n, 4),
         "lexicon_abstain_rate": round(totals["lexicon_abstain"] / n, 4),
         "legacy_top1_accuracy": round(totals["legacy_hit"] / n, 4),
         "legacy_abstain_rate": round(totals["legacy_abstain"] / n, 4),
+        "weighted_top1_accuracy": round(totals["weighted_hit"] / n, 4),
+        "weighted_abstain_rate": round(totals["weighted_abstain"] / n, 4),
         "per_category": per_cat,
-        "top_confusions": [{"true": t, "predicted": p, "count": c} for (t, p), c in confusion.most_common(30)],
+        "top_confusions": [{"true": t, "predicted": p, "count": c} for (t, p), c in confusion.most_common(40)],
     }
 
 
@@ -518,9 +422,9 @@ def explain_file(fpath: Path, lex: CategoryLexicon, top_k: int = 5, head_chars: 
     text = read_document_text(fpath, head_chars, tail_chars)
     if not text or len(text) < 200:
         return {"file": str(fpath), "error": "본문을 읽지 못했거나 너무 짧다"}
-
     if is_mojibake(text):
         return {"file": str(fpath), "error": "인코딩이 손상된 문서"}
+
     words = extract_word_sets([text], kiwi=kiwi)[0]
     sims = lex.score_words(words)
     order = sorted(sims.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
@@ -603,7 +507,12 @@ def main() -> int:
             LOGGER.error(f"수집 결과가 없다: {args.work_dir}")
             return 1
         report = evaluate_holdout(args.out, collected, limit_per_category=args.eval_limit, head_chars=args.head_chars, tail_chars=args.tail_chars, num_workers=args.num_workers)
-        LOGGER.info(f"홀드아웃 {report['total_docs']}건: 어휘사전 top-1 {report['lexicon_top1_accuracy']:.1%} (무판정 {report['lexicon_abstain_rate']:.1%}), 기존 5대장르 top-1 {report['legacy_top1_accuracy']:.1%} (무판정 {report['legacy_abstain_rate']:.1%})")
+        LOGGER.info(
+            f"홀드아웃 {report['total_docs']}건\n"
+            f"  어휘사전  top-1 {report['lexicon_top1_accuracy']:.1%}  top-3 {report['lexicon_top3_accuracy']:.1%}  무판정 {report['lexicon_abstain_rate']:.1%}\n"
+            f"  기존5장르 top-1 {report['legacy_top1_accuracy']:.1%}  무판정 {report['legacy_abstain_rate']:.1%}\n"
+            f"  가중치합  top-1 {report['weighted_top1_accuracy']:.1%}  무판정 {report['weighted_abstain_rate']:.1%}"
+        )
         out = args.report or (args.work_dir / "holdout_report.json")
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
