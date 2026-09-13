@@ -41,7 +41,8 @@ if str(REPO_ROOT) not in sys.path:
 from utils.detect_mojibake import VERDICT_CORRUPTED, classify_text, korean_likeness  # noqa: E402
 from backend.category_lexicon import (  # noqa: E402
     DEFAULT_LEXICON_PATH,
-    UNIQUE_BONUS,
+    SERIES_TO_PARENT,
+    NB_ALPHA,
     CategoryLexicon,
     analyze_texts,
     decode_best,
@@ -69,17 +70,26 @@ DEFAULT_MAX_FILES = 300
 DEFAULT_MIN_FILES = 1
 DEFAULT_HEAD_CHARS = 20000
 DEFAULT_TAIL_CHARS = 10000
-DEFAULT_TOP_N = 1000
 DEFAULT_SEED = 20260912
 DEFAULT_BATCH_SIZE = 16
 
-# 사전 선정 임계값
-CF_PRESENCE = 0.03  # 이 비율 이상 등장해야 해당 카테고리에 "있다"고 본다
-UNIQUE_EXCLUSIVITY = 0.8  # 전 카테고리 출현률 합에서 차지하는 몫
-UNIQUE_MIN_PRESENCE = 0.05
-# 문서가 몇 건뿐인 카테고리는 1개 문서에만 나온 단어도 출현률이 높게 잡힌다.
-# 절대 문서 수 하한을 둬서 고유 단어 세트가 잡음으로 차는 것을 막는다.
-UNIQUE_MIN_DOCS = 3
+# 어휘 크기. 카이제곱으로 고른 30,000개가 정밀도 우선 구간에서 가장 좋았다.
+# 홀드아웃 2,044건, Complement NB, 답한 비율별 정답률:
+#   카이제곱 10,000 : 20% 구간 87.1%   15% 구간 90.4%
+#   카이제곱 30,000 : 20% 구간 90.2%   15% 구간 92.5%
+#   카이제곱 60,000 : 20% 구간 89.0%   15% 구간 91.8%
+#   문서빈도 60,000 : 20% 구간 77.9%   15% 구간 79.7%
+#   전체   262,994 : 20% 구간 85.0%   15% 구간 91.8%
+# 같은 6만 개라도 고르는 기준이 다르면 77.9% 대 89.0% 이다. 자질 선택이 크게 작용한다.
+# 그리고 전체 어휘보다 잘 고른 3만 개가 낫다. 저장도 9분의 1이다.
+DEFAULT_VOCAB_SIZE = 30000
+
+# Laplace 평활 계수
+NB_ALPHA = 1.0
+
+# 어휘에 넣기 위한 최소 문서 수. 1~2건짜리는 우연이다.
+MIN_DOC_FREQ = 3
+
 HOLDOUT_RATIO = 0.2
 
 _T = TypeVar("_T", str, Path)
@@ -239,76 +249,95 @@ def load_collected(work_dir: Path) -> Dict[str, Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def build_lexicon(collected: Dict[str, Dict[str, Any]], top_n: int = DEFAULT_TOP_N, cf_presence: float = CF_PRESENCE, unique_exclusivity: float = UNIQUE_EXCLUSIVITY, unique_min_presence: float = UNIQUE_MIN_PRESENCE, unique_min_docs: int = UNIQUE_MIN_DOCS) -> Dict[str, Any]:
+def chi_square_scores(cats: List[str], merged: Dict[str, Dict[str, Any]], total_df: Counter[str], vocab: List[str], n_docs: int) -> Dict[str, float]:
     """
-    카테고리별 문서빈도에서 카테고리 단위 TF-IDF 가중치를 계산해 사전을 만든다.
+    단어마다 카테고리별 카이제곱의 최댓값. "이 단어가 나오는지 여부가 카테고리와
+    통계적으로 얼마나 연관되는가" 를 잰다.
 
-        p(c,w)      = w를 포함한 c의 문서 수 / c의 문서 수
-        cf(w)       = p(c,w) >= cf_presence 인 카테고리 수
-        weight(c,w) = p(c,w) * log(C / cf(w))
-
-    `사람`, `생각` 같은 범용 명사는 모든 카테고리에 나타나 log(C/C)=0 으로 자동 소거된다.
+    TF-IDF 순위로 어휘를 고르면 안 된다. TF-IDF 는 검색에서 중요한 단어를 고르는
+    척도지 분류에 도움되는 단어를 고르는 척도가 아니다. 실측에서 같은 6만 개를
+    문서빈도순으로 고르면 77.9%, 카이제곱순으로 고르면 89.0% 였다.
     """
-    cats = sorted(collected)
-    n_cats = len(cats)
-    if n_cats == 0:
+    scores: Dict[str, float] = {}
+    for w in vocab:
+        tot_t = total_df[w]
+        best = 0.0
+        for c in cats:
+            n_c = merged[c]["doc_count"]
+            n11 = merged[c]["df"].get(w, 0)      # c 에 속하고 w 를 포함
+            n10 = tot_t - n11                     # c 가 아니고 w 를 포함
+            n01 = n_c - n11                       # c 에 속하고 w 가 없음
+            n00 = n_docs - n_c - n10              # c 도 아니고 w 도 없음
+            den = (n11 + n01) * (n11 + n10) * (n10 + n00) * (n01 + n00)
+            if den <= 0:
+                continue
+            best = max(best, n_docs * (n11 * n00 - n10 * n01) ** 2 / den)
+        scores[w] = best
+    return scores
+
+
+def build_lexicon(collected: Dict[str, Dict[str, Any]], vocab_size: int = DEFAULT_VOCAB_SIZE, min_doc_freq: int = MIN_DOC_FREQ) -> Dict[str, Any]:
+    """
+    Complement Naive Bayes 모델을 만든다.
+
+    코사인 유사도(TF-IDF 중심점) 방식에서 옮겨왔다. 그 방식은 "맞은 단어 전체의
+    겹침 비율" 을 보기 때문에, `오우거` 같은 결정적 단어 하나가 `사람`·`시간` 같은
+    흔한 단어 수백 개에 묻힌다. NB 는 단어마다 로그 확률비를 더하므로 결정적 단어
+    하나가 판정을 뒤집을 수 있다. 사람이 장르를 알아보는 방식에 더 가깝다.
+
+    Complement 변형을 쓰는 이유는 클래스 불균형이다. 3_판타지 78,027건과
+    9_격언명언 7건을 같은 저울에 올리는 문제를 이 변형이 정면으로 다룬다.
+
+    저장은 가중치가 아니라 원시 문서빈도로 한다. 가중치는 전 어휘에 대해 0 이 아니라
+    조밀해지지만, 문서빈도는 희소해서 훨씬 작다. 가중치는 적재할 때 계산한다.
+    """
+    # 하위 카테고리(출판사 전집 등)는 상위 장르에 합친다. 따로 두면 같은 어휘로
+    # 서로 경쟁하며 점수를 깎고, 어느 쪽도 이기지 못해 판정이 보류된다.
+    merged: Dict[str, Dict[str, Any]] = {}
+    for cat, entry in collected.items():
+        target = SERIES_TO_PARENT.get(cat, cat)
+        if target not in merged:
+            merged[target] = {"category": target, "doc_count": 0, "df": Counter(), "merged_from": []}
+        merged[target]["doc_count"] += int(entry["doc_count"])
+        merged[target]["df"].update(entry["df"])
+        if target != cat:
+            merged[target]["merged_from"].append(cat)
+
+    cats = sorted(merged)
+    if not cats:
         raise ValueError("수집 결과가 비어 있다")
+    n_docs = sum(merged[c]["doc_count"] for c in cats)
 
-    presence: Dict[str, Dict[str, float]] = {}
-    for cat in cats:
-        entry = collected[cat]
-        n_docs = int(entry["doc_count"])
-        presence[cat] = {w: c / n_docs for w, c in entry["df"].items()}
+    total_df: Counter[str] = Counter()
+    for c in cats:
+        total_df.update(merged[c]["df"])
+    base_vocab = [w for w, n in total_df.items() if n >= min_doc_freq]
+    if not base_vocab:
+        raise ValueError("어휘가 비어 있다")
 
-    # cf(w): 유의미하게 등장하는 카테고리 수, presence_sum(w): 전 카테고리 출현률 합
-    cf: Counter[str] = Counter()
-    presence_sum: Dict[str, float] = defaultdict(float)
-    for cat in cats:
-        for w, p in presence[cat].items():
-            presence_sum[w] += p
-            if p >= cf_presence:
-                cf[w] += 1
+    chi = chi_square_scores(cats, merged, total_df, base_vocab, n_docs)
+    if vocab_size and vocab_size < len(base_vocab):
+        vocab = sorted(base_vocab, key=lambda w: (-chi[w], w))[:vocab_size]
+    else:
+        vocab = sorted(base_vocab)
+    vocab_set = set(vocab)
 
     categories_out: Dict[str, Any] = {}
     for cat in cats:
-        scored: List[Tuple[str, float]] = []
-        for w, p in presence[cat].items():
-            n_present = cf.get(w, 0)
-            if n_present == 0:
-                # 어느 카테고리에서도 임계치를 못 넘은 희귀어. 자기 카테고리에만 존재한다고 본다.
-                n_present = 1
-            idf = math.log(n_cats / n_present)
-            if idf <= 0.0:
-                continue
-            weight = p * idf
-            if weight <= 0.0:
-                continue
-            scored.append((w, weight))
-
-        scored.sort(key=lambda kv: (-kv[1], kv[0]))
-        top = scored[:top_n]
-        if not top:
-            LOGGER.warning(f"{cat}: 변별력 있는 단어가 없어 사전에서 제외")
-            continue
-
-        words = {w: round(v, 6) for w, v in top}
-        raw_df = collected[cat]["df"]
-        unique = sorted(
-            w for w, _ in top
-            if raw_df.get(w, 0) >= unique_min_docs
-            and presence[cat][w] >= unique_min_presence
-            and presence_sum[w] > 0
-            and (presence[cat][w] / presence_sum[w]) >= unique_exclusivity
-        )
-        norm = math.sqrt(sum(v * v for v in words.values())) or 1.0
-
-        categories_out[cat] = {"doc_count": int(collected[cat]["doc_count"]), "total_files": int(collected[cat].get("total_files", 0)), "norm": round(norm, 6), "words": words, "unique": unique}
+        own = merged[cat]["df"]
+        categories_out[cat] = {
+            "doc_count": int(merged[cat]["doc_count"]),
+            "merged_from": merged[cat]["merged_from"],
+            # 희소 저장. 이 카테고리에 실제로 나온 어휘만 남긴다.
+            "df": {w: int(own[w]) for w in own if w in vocab_set},
+        }
 
     return {
-        "version": 1,
+        "version": 2,
+        "model": "complement_naive_bayes",
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "params": {"top_n": top_n, "cf_presence": cf_presence, "unique_exclusivity": unique_exclusivity, "unique_min_presence": unique_min_presence,
-            "unique_min_docs": unique_min_docs, "unique_bonus": UNIQUE_BONUS, "category_count": len(categories_out)},
+        "params": {"vocab_size": len(vocab), "min_doc_freq": min_doc_freq, "alpha": NB_ALPHA, "category_count": len(cats), "doc_count": n_docs},
+        "total_df": {w: int(total_df[w]) for w in vocab},
         "categories": categories_out,
     }
 
@@ -438,7 +467,6 @@ def explain_file(fpath: Path, lex: CategoryLexicon, top_k: int = 5, head_chars: 
             "category": cat,
             "similarity": round(sim, 6),
             "normalized": round(sim / best, 4) if best else 0.0,
-            "matched_unique": sorted(w for w in words if w in lex._unique.get(cat, set()))[:15],
             "matched_top_words": [w for w, _v in matched],
         })
 
@@ -471,7 +499,7 @@ def main() -> int:
     parser.add_argument("--min-files", type=int, default=DEFAULT_MIN_FILES)
     parser.add_argument("--head-chars", type=int, default=DEFAULT_HEAD_CHARS)
     parser.add_argument("--tail-chars", type=int, default=DEFAULT_TAIL_CHARS)
-    parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
+    parser.add_argument("--vocab-size", type=int, default=DEFAULT_VOCAB_SIZE)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--holdout-ratio", type=float, default=HOLDOUT_RATIO)
     parser.add_argument("--eval-limit", type=int, default=30, help="평가 시 카테고리당 홀드아웃 상한")
@@ -495,7 +523,7 @@ def main() -> int:
         if not collected:
             LOGGER.error(f"수집 결과가 없다: {args.work_dir}. 먼저 collect 를 실행하라.")
             return 1
-        lexicon = build_lexicon(collected, top_n=args.top_n)
+        lexicon = build_lexicon(collected, vocab_size=args.vocab_size)
         path = write_lexicon(lexicon, args.out)
         size_mb = path.stat().st_size / 1024 / 1024
         LOGGER.info(f"사전 생성: {path} ({size_mb:.2f}MB, 카테고리 {lexicon['params']['category_count']}개)")
@@ -543,10 +571,8 @@ def main() -> int:
             if not words:
                 continue
             top = sorted(words.items(), key=lambda kv: -kv[1])[:25]
-            uniq = sorted(lex._unique.get(cat, set()))[:15]
-            print(f"\n[{cat}] 문서 {lex.doc_counts.get(cat)}건, 단어 {len(words)}개, 고유 {len(lex._unique.get(cat, set()))}개")
+            print(f"\n[{cat}] 문서 {lex.doc_counts.get(cat)}건")
             print("  top   : " + ", ".join(f"{w}({v:.3f})" for w, v in top))
-            print("  unique: " + ", ".join(uniq))
         return 0
 
     return 1

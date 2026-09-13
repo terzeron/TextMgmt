@@ -27,11 +27,26 @@ DEFAULT_LEXICON_PATH = Path(__file__).resolve().parent / "data" / "category_lexi
 # kiwi 품사 태그 중 내용어로 취급할 것: 일반명사, 고유명사, 외국어, 한자, 숫자
 NOUN_TAGS = frozenset({"NNG", "NNP", "SL", "SH", "SN"})
 
-# 고유 단어(해당 카테고리에서만 관찰되는 단어)에 곱하는 배수
-UNIQUE_BONUS = 1.5
+# Laplace 평활 계수. 사전을 만들 때와 같은 값을 써야 한다.
+NB_ALPHA = 1.0
 
-# 코사인 유사도가 이 값에 못 미치면 신호 없음으로 본다
-MIN_SIMILARITY = 0.02
+# 1위가 2위를 이 배수만큼 앞서지 못하면 판정하지 않는다.
+#
+# Complement NB 점수는 로그 확률비를 어휘 전체에 걸쳐 더한 값이라 1·2위 차이가
+# 작은 비율로 나타난다. 코사인 유사도 때의 2.5배 같은 값과 척도가 다르다.
+#
+# 홀드아웃 2,044건 실측 (카이제곱 3만 어휘, 본문만, 서점 조회 없음):
+#   답한 비율 100%  정답률 41.6%
+#   답한 비율  30%  정답률 82.5%
+#   답한 비율  20%  정답률 90.2%     <- 채택
+#   답한 비율  15%  정답률 92.5%
+#   답한 비율  10%  정답률 94.6%
+# 파일을 실제로 옮기는 용도라 정밀도를 앞에 둔다. 애매하면 답하지 않고
+# 파일명·서점 같은 다른 신호에 판정을 넘긴다.
+MIN_MARGIN = 1.0068
+
+# 어휘에 하나도 걸리지 않으면 판정할 근거가 없다
+MIN_MATCHED_WORDS = 10
 
 _HANGUL_RE = re.compile(r"[가-힣]")
 
@@ -172,6 +187,41 @@ def extract_word_sets(texts: List[str], kiwi: Any = None) -> List[Set[str]]:
     리스트를 넘겨야 워커가 실제로 병렬 처리한다(실측 1워커 57,754자/s -> 8워커 199,676자/s).
     """
     return [words for words, _gram in analyze_texts(texts, kiwi=kiwi)]
+
+
+# ---------------------------------------------------------------------------
+# 하위 카테고리 -> 상위 장르
+#
+# 출판사 전집·작가 전집·특정 시리즈는 장르가 아니라 묶음 이름이다.
+# `2_을유세계문학전집` 과 `2_소설외국` 은 같은 종류의 책이라 본문 어휘로는 구분되지
+# 않는다. 그런데도 사전을 따로 만들면 둘이 같은 어휘로 서로 경쟁하며 점수를 깎는다.
+#
+# 그래서 사전은 상위 장르로 합쳐서 만들고, 하위 카테고리 배정은 파일명에 그 시리즈
+# 이름이 정확히 들어 있을 때만 한다.
+SERIES_TO_PARENT = {
+    "2_을유세계문학전집": "2_소설외국",
+    "2_열린책들세계문학": "2_소설외국",
+    "2_동서문화사월드북": "2_소설외국",
+    "2_문예세계문학선": "2_소설외국",
+    "2_소설Abe전집": "2_소설일본",
+    "2_소설일본게이고": "2_소설일본",
+    "2_소설일본하루키": "2_소설일본",
+    "3_SF그리폰북스": "3_SF",
+    "3_SF환상문학전집": "3_SF",
+    "3_SF직지": "3_SF",
+    "3_SF영문": "3_SF",
+    "3_셜록홈즈": "3_스릴러",
+    "4_살림지식총서": "4_인문일반논픽션",
+    "4_시공디스커버리": "4_인문일반논픽션",
+    "5_이지사이언스": "5_수학과학일반",
+}
+
+
+def resolve_parent(category: Optional[str]) -> Optional[str]:
+    """하위 카테고리면 상위 장르를, 아니면 그대로 돌려준다"""
+    if not category:
+        return category
+    return SERIES_TO_PARENT.get(category, category)
 
 
 # 한국어에서 압도적으로 자주 쓰이는 음절. /mnt/data/text/nf_common.py 의
@@ -349,26 +399,52 @@ def read_document_text(fpath: Path, head_chars: int = TEXT_HEAD_CHARS, tail_char
 
 
 class CategoryLexicon:
-    """카테고리별 top-N 단어 가중치와 고유 단어 세트를 담고 텍스트를 점수화한다."""
+    """
+    Complement Naive Bayes 분류기.
+
+    코사인 유사도(TF-IDF 중심점) 방식에서 옮겨왔다. 그 방식은 "맞은 단어 전체의
+    겹침 비율" 을 보기 때문에 `오우거` 같은 결정적 단어 하나가 `사람`·`시간` 같은
+    흔한 단어 수백 개에 묻혔다. NB 는 단어마다 로그 확률비를 더하므로 결정적 단어
+    하나가 판정을 뒤집을 수 있다. 사람이 장르를 알아보는 방식에 더 가깝다.
+
+    저장된 것은 카테고리별 문서빈도이고 가중치는 적재할 때 계산한다.
+    가중치는 어휘 전체에 조밀해서 그대로 저장하면 파일이 몇 배로 커진다.
+    """
 
     def __init__(self, data: Dict[str, Any]) -> None:
-        self.version: int = int(data.get("version", 1))
+        self.version: int = int(data.get("version", 2))
         self.params: Dict[str, Any] = data.get("params", {})
         self.built_at: str = data.get("built_at", "")
-        self._weights: Dict[str, Dict[str, float]] = {}
-        self._unique: Dict[str, Set[str]] = {}
-        self._norms: Dict[str, float] = {}
         self.doc_counts: Dict[str, int] = {}
+        self._weights: Dict[str, Dict[str, float]] = {}
+        self._vocab: Set[str] = set()
 
-        for cat, entry in (data.get("categories") or {}).items():
-            words = {w: float(v) for w, v in (entry.get("words") or {}).items()}
-            if not words:
-                continue
-            self._weights[cat] = words
-            self._unique[cat] = set(entry.get("unique") or [])
+        total_df: Dict[str, int] = {w: int(n) for w, n in (data.get("total_df") or {}).items()}
+        cats = sorted((data.get("categories") or {}).keys())
+        if not total_df or not cats:
+            return
+
+        self._vocab = set(total_df)
+        alpha = float(self.params.get("alpha", NB_ALPHA))
+        n_vocab = len(self._vocab)
+
+        for cat in cats:
+            entry = data["categories"][cat]
+            own = {w: int(n) for w, n in (entry.get("df") or {}).items()}
             self.doc_counts[cat] = int(entry.get("doc_count", 0))
-            norm = entry.get("norm")
-            self._norms[cat] = float(norm) if norm else math.sqrt(sum(v * v for v in words.values())) or 1.0
+
+            # 여집합(이 카테고리가 아닌 문서들)에서의 출현 수.
+            # Complement 변형을 쓰는 이유는 클래스 불균형이다. 3_판타지 78,027건과
+            # 9_격언명언 7건을 같은 저울에 올리는 문제를 이 변형이 정면으로 다룬다.
+            comp = {w: total_df[w] - own.get(w, 0) for w in self._vocab}
+            denom = sum(comp.values()) + alpha * n_vocab
+            if denom <= 0:
+                continue
+            raw = {w: math.log((comp[w] + alpha) / denom) for w in self._vocab}
+            norm = sum(abs(v) for v in raw.values()) or 1.0
+            # 부호를 뒤집어 점수가 클수록 그 카테고리답게 만든다.
+            # 여집합에서 드문 단어일수록 이 카테고리를 강하게 가리킨다.
+            self._weights[cat] = {w: -v / norm for w, v in raw.items()}
 
     @property
     def categories(self) -> List[str]:
@@ -379,7 +455,7 @@ class CategoryLexicon:
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> Optional["CategoryLexicon"]:
-        """gzip JSON 사전을 읽는다. 파일이 없거나 손상되면 None."""
+        """gzip JSON 모델을 읽는다. 파일이 없거나 손상되면 None."""
         p = Path(path) if path else DEFAULT_LEXICON_PATH
         if not p.exists():
             logger.info(f"어휘 사전 파일 없음: {p}")
@@ -398,47 +474,33 @@ class CategoryLexicon:
         return lex
 
     def score_words(self, words: Set[str]) -> Dict[str, float]:
-        """
-        단어 집합에 대한 카테고리별 코사인 유사도.
-
-        raw(c) = Σ weight(c,w) × (고유 단어면 1.5) 를 카테고리 벡터의 L2 노름으로 나눈다.
-        노름으로 나누지 않으면 어휘 가중치 총량이 큰 카테고리가 항상 이긴다.
-        """
-        if not words:
+        """단어 집합에 대한 카테고리별 Complement NB 점수"""
+        hit = [w for w in words if w in self._vocab]
+        if len(hit) < MIN_MATCHED_WORDS:
             return {}
-        doc_norm = math.sqrt(len(words))
-        sims: Dict[str, float] = {}
-        for cat, weights in self._weights.items():
-            uniq = self._unique[cat]
-            acc = 0.0
-            for w in words:
-                weight = weights.get(w)
-                if weight is None:
-                    continue
-                acc += weight * (UNIQUE_BONUS if w in uniq else 1.0)
-            if acc <= 0.0:
-                continue
-            sims[cat] = acc / (self._norms[cat] * doc_norm)
-        return sims
+        return {cat: sum(wc[w] for w in hit) for cat, wc in self._weights.items()}
 
     def score_text(self, text: str, kiwi: Any = None) -> Dict[str, float]:
-        """본문 텍스트에 대한 카테고리별 코사인 유사도."""
+        """본문 텍스트에 대한 카테고리별 점수"""
         return self.score_words(extract_word_set(text, kiwi=kiwi))
 
-    def rank(self, text: str, top_k: int = 5, kiwi: Any = None) -> List[Tuple[str, float, float]]:
+    def rank(self, text: str, top_k: int = 5, kiwi: Any = None, min_margin: float = MIN_MARGIN) -> List[Tuple[str, float, float]]:
         """
-        (카테고리, 정규화점수 0~1, 원유사도) 를 점수 내림차순으로 최대 top_k개 반환.
+        (카테고리, 1위 대비 비율, 원점수) 를 점수 내림차순으로 최대 top_k개 반환.
 
-        최고 유사도가 MIN_SIMILARITY 미만이면 신호 없음으로 보고 빈 목록.
+        1위가 2위를 min_margin 배만큼 앞서지 못하면 신호 없음으로 보고 빈 목록을
+        돌려준다. 찍지 않고 다른 신호에 판정을 넘긴다.
         """
-        sims = self.score_text(text, kiwi=kiwi)
-        if not sims:
+        scores = self.score_text(text, kiwi=kiwi)
+        if not scores:
             return []
-        ordered = sorted(sims.items(), key=lambda kv: kv[1], reverse=True)
+        ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
         best = ordered[0][1]
-        if best < MIN_SIMILARITY:
+        if best <= 0:
             return []
-        return [(cat, round(sim / best, 4), round(sim, 6)) for cat, sim in ordered[:top_k]]
+        if min_margin > 1.0 and len(ordered) > 1 and ordered[1][1] > 0 and best < ordered[1][1] * min_margin:
+            return []
+        return [(cat, round(sc / best, 4), round(sc, 8)) for cat, sc in ordered[:top_k]]
 
 
 _default_lexicon: Optional[CategoryLexicon] = None

@@ -42,7 +42,7 @@ def built(synth_corpus, tmp_path_factory, kiwi):
     work = tmp_path_factory.mktemp("work")
     collect_all(synth_corpus, work, min_files=5, max_files=25, holdout_ratio=0.2, num_workers=1)
     collected = load_collected(work)
-    lexicon = build_lexicon(collected, top_n=50)
+    lexicon = build_lexicon(collected, vocab_size=5000)
     path = write_lexicon(lexicon, work / "lex.json.gz")
     return collected, lexicon, CategoryLexicon.load(path)
 
@@ -195,52 +195,63 @@ def test_build_lexicon_rejects_empty_input():
         build_lexicon({})
 
 
-def test_build_lexicon_drops_words_common_to_every_category(built):
-    _collected, lexicon, _lex = built
-    # '사람', '생각' 은 세 카테고리 전부에 등장하므로 log(C/C)=0 으로 소거된다
-    for cat, entry in lexicon["categories"].items():
-        assert "사람" not in entry["words"], cat
-        assert "생각" not in entry["words"], cat
+def test_common_words_carry_almost_no_weight(built):
+    """
+    코사인 방식은 모든 카테고리에 나오는 단어를 IDF 0 으로 아예 버렸다.
+    CNB 는 버리지 않고 가중치로 다룬다. 범용어는 카테고리 간 가중치 차이가 거의 없다.
+    """
+    _collected, _lexicon, lex = built
+    cats = lex.categories
+    spreads = {}
+    for w in ("사람", "생각", "무림맹", "몬스터"):
+        if w not in lex._vocab:
+            continue
+        vals = [lex._weights[c][w] for c in cats]
+        spreads[w] = max(vals) - min(vals)
+    assert "무림맹" in spreads, "도메인 용어가 어휘에 없다"
+    if "사람" in spreads:
+        assert spreads["사람"] < spreads["무림맹"]
+
 
 
 def test_build_lexicon_keeps_domain_terms(built):
     _collected, lexicon, _lex = built
-    assert "무림맹" in lexicon["categories"]["3_무협"]["words"]
-    assert "몬스터" in lexicon["categories"]["3_판타지"]["words"]
-    assert "거시경제학" in lexicon["categories"]["4_경제"]["words"]
+    assert "무림맹" in lexicon["categories"]["3_무협"]["df"]
+    assert "몬스터" in lexicon["categories"]["3_판타지"]["df"]
+    assert "거시경제학" in lexicon["categories"]["4_경제"]["df"]
 
 
-def test_unique_sets_are_category_exclusive(built):
+
+def test_build_lexicon_records_params_and_counts(built):
     _collected, lexicon, _lex = built
-    uniques = {cat: set(entry["unique"]) for cat, entry in lexicon["categories"].items()}
-    assert "무림맹" in uniques["3_무협"]
-    assert "던전" in uniques["3_판타지"]
-    for cat_a, words_a in uniques.items():
-        for cat_b, words_b in uniques.items():
-            if cat_a != cat_b:
-                assert words_a & words_b == set(), f"{cat_a} 와 {cat_b} 의 고유 단어가 겹친다"
-
-
-def test_build_lexicon_records_params_and_norm(built):
-    _collected, lexicon, _lex = built
-    assert lexicon["params"]["top_n"] == 50
+    assert lexicon["model"] == "complement_naive_bayes"
+    assert lexicon["params"]["vocab_size"] > 0
     assert lexicon["params"]["category_count"] == 3
     for entry in lexicon["categories"].values():
-        assert entry["norm"] > 0
-        assert entry["doc_count"] == 20
+        assert entry["doc_count"] > 0
+        assert entry["df"]
 
 
-@pytest.mark.parametrize("probe,expected", [("마교 천마가 무림맹 장문인과 강호에서 검법으로 싸웠다", "3_무협"), ("헌터가 던전에서 몬스터를 잡고 레이드 길드에 가입했다", "3_판타지"), ("통화정책과 환율이 무역수지와 물가에 미치는 영향", "4_경제")])
-def test_end_to_end_lexicon_classifies_probe_text(built, kiwi, probe, expected):
+
+@pytest.mark.parametrize(
+    "sentences,expected",
+    [(WUXIA_SENTENCES, "3_무협"), (FANTASY_SENTENCES, "3_판타지"), (ECON_SENTENCES, "4_경제")],
+)
+def test_end_to_end_lexicon_classifies_probe_text(built, kiwi, sentences, expected):
+    """
+    CNB 는 맞은 어휘가 최소 개수를 넘어야 판정한다. 합성 코퍼스는 어휘가 20여 개뿐이라
+    한 문장으로는 모자라므로, 해당 카테고리의 문장 전부를 본문처럼 쓴다.
+    """
     _collected, _lexicon, lex = built
-    ranked = lex.rank(probe, top_k=3, kiwi=kiwi)
+    probe = " ".join(sentences) * 3
+    ranked = lex.rank(probe, top_k=3, kiwi=kiwi, min_margin=1.0)
     assert ranked, f"{expected}: 판정 없음"
     assert ranked[0][0] == expected
 
 
 def test_end_to_end_lexicon_abstains_on_unrelated_text(built, kiwi):
     _collected, _lexicon, lex = built
-    assert lex.rank("The quick brown fox jumps over the lazy dog.", kiwi=kiwi) == []
+    assert lex.rank("The quick brown fox jumps over the lazy dog. " * 12, kiwi=kiwi) == []
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +267,6 @@ def test_explain_file_reports_lexicon_legacy_and_weighted(built, synth_corpus, k
     assert out["word_count"] > 0
     assert out["lexicon"][0]["category"] == "3_무협"
     assert out["lexicon"][0]["normalized"] == 1.0
-    assert "무림맹" in out["lexicon"][0]["matched_unique"]
     # 기존 5대 장르 스코어링과 가중치 합 판정도 함께 보고한다
     assert out["legacy"]["category"] == "3_무협"
     assert out["weighted"]["category"] == "3_무협"
@@ -284,7 +294,7 @@ def test_tiny_category_still_gets_a_lexicon(tmp_path, kiwi):
 
     work = tmp_path / "work"
     collect_all(root, work, holdout_ratio=0.0, num_workers=1)
-    lexicon = build_lexicon(load_collected(work), top_n=50)
+    lexicon = build_lexicon(load_collected(work), vocab_size=5000)
 
     assert set(lexicon["categories"]) == {"9_격언명언", "3_무협"}
     assert lexicon["categories"]["9_격언명언"]["doc_count"] == 7
@@ -297,25 +307,6 @@ def test_zero_file_category_is_skipped(tmp_path, kiwi):
     assert collect_category("1_올재", d, tmp_path / "work", kiwi=kiwi) is None
 
 
-def test_unique_words_require_a_minimum_document_count(kiwi):
-    """1개 문서에만 나온 단어는 출현률이 높아도 고유 단어로 인정하지 않는다"""
-    collected = {
-        "9_격언명언": {"category": "9_격언명언", "doc_count": 4, "df": {"흔한말": 4, "한번만나온말": 1}},
-        "3_무협": {"category": "3_무협", "doc_count": 100, "df": {"무림": 90}},
-    }
-    lexicon = build_lexicon(collected, top_n=50, unique_min_docs=3)
-    unique = set(lexicon["categories"]["9_격언명언"]["unique"])
-    assert "흔한말" in unique
-    assert "한번만나온말" not in unique
-
-
-def test_unique_min_docs_guard_can_be_relaxed():
-    collected = {
-        "9_격언명언": {"category": "9_격언명언", "doc_count": 4, "df": {"한번만나온말": 1}},
-        "3_무협": {"category": "3_무협", "doc_count": 100, "df": {"무림": 90}},
-    }
-    lexicon = build_lexicon(collected, top_n=50, unique_min_docs=1)
-    assert "한번만나온말" in set(lexicon["categories"]["9_격언명언"]["unique"])
 
 
 # ---------------------------------------------------------------------------
@@ -446,3 +437,11 @@ def test_read_epub_text_samples_body_not_table_of_contents(tmp_path):
             z.writestr(f"OPS/ch{i}.xhtml", f"<html><body><p>{본문}</p></body></html>")
     text = read_epub_text(p, 20000, 0)
     assert "무림맹의 장문인" in text
+
+
+# ---------------------------------------------------------------------------
+# 고유어 정의 (2위 카테고리 대비 우세)
+# ---------------------------------------------------------------------------
+
+
+

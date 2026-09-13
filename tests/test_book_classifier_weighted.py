@@ -31,22 +31,39 @@ def kiwi():
     return k
 
 
-def make_lexicon(categories):
-    data = {"version": 1, "categories": {}}
-    for cat, words in categories.items():
-        norm = math.sqrt(sum(v * v for v in words.values())) or 1.0
-        data["categories"][cat] = {"doc_count": 100, "norm": round(norm, 6), "words": words, "unique": []}
-    return CategoryLexicon(data)
+def make_lexicon(categories, unused_vocab=200):
+    """
+    {카테고리: {단어: 문서수}} 로 Complement NB 모델을 만든다.
+
+    문서에 나오지 않는 어휘를 섞어야 한다. 문서가 어휘 전체를 덮으면 가중치 합이
+    1 로 정규화되는 성질 때문에 모든 카테고리 점수가 같아진다.
+    """
+    total = {}
+    for words in categories.values():
+        for w, n in words.items():
+            total[w] = total.get(w, 0) + n
+    for i in range(unused_vocab):
+        total[f"문서에없는말{i}"] = 1
+    return CategoryLexicon({
+        "version": 2,
+        "params": {"alpha": 1.0, "vocab_size": len(total)},
+        "total_df": total,
+        "categories": {cat: {"doc_count": 100, "df": words} for cat, words in categories.items()},
+    })
 
 
 @pytest.fixture
 def econ_lexicon(kiwi, monkeypatch):
-    """ECON_TEXT 가 확실히 4_경제 로 판정되는 사전을 기본 사전 자리에 꽂는다"""
+    """ECON_TEXT 가 확실히 4_경제 로 판정되는 모델을 기본 사전 자리에 꽂는다"""
     from backend.category_lexicon import extract_word_set
 
     words = extract_word_set(ECON_TEXT, kiwi=kiwi)
     assert len(words) >= LEXICON_MIN_WORDS, f"테스트 본문의 어휘가 {len(words)}개로 부족하다"
-    lex = make_lexicon({"4_경제": {w: 0.8 for w in sorted(words)}, "3_무협": {"무림": 0.9, "내공": 0.8}})
+    lex = make_lexicon({
+        # 경제 어휘는 4_경제 에만, 무협 어휘는 3_무협 에만 나온다
+        "4_경제": {w: 90 for w in sorted(words)},
+        "3_무협": {"무림": 90, "내공": 90, "강호": 90, "검법": 90},
+    })
     monkeypatch.setattr("backend.book_classifier.get_default_lexicon", lambda: lex)
     return lex
 

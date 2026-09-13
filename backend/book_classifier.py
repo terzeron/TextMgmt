@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore
-from backend.category_lexicon import MIN_SIMILARITY as LEXICON_MIN_SIMILARITY, extract_word_set, get_default_lexicon, read_document_text
+from backend.category_lexicon import SERIES_TO_PARENT, MIN_MARGIN as LEXICON_MIN_MARGIN, extract_word_set, get_default_lexicon, read_document_text
 
 logger = logging.getLogger(__name__)
 
@@ -682,6 +682,10 @@ def resolve_genre_conflict(cats: List[str], fname: str, text_sample: str = "") -
 # 서점 표 하나(store_vote)는 캐스케이드에서도 단독 판정권이 없었으므로 기준 아래에 둔다.
 # 가중치 간 순서는 캐스케이드의 우선순위를 그대로 따르고, 인접 신호끼리는
 # ACCEPT_MARGIN(1.25배) 이상 벌려 정면 충돌 시 상위 신호가 이기게 한다.
+# 파일명에 시리즈 이름이 정확히 들어 있을 때만 하위 카테고리로 보낸다.
+# 사전은 상위 장르(2_소설외국)까지만 판정하므로, 하위 배정은 이 신호가 전담한다.
+# 정확한 키워드 일치라 신뢰도가 가장 높다.
+WEIGHT_SERIES_IN_FILENAME = 10.8
 WEIGHT_SINGLE_VALID_MATCH = 8.6
 WEIGHT_SINGLE_MATCH = 6.8
 WEIGHT_CONFLICT_RESOLVED = 5.4
@@ -725,6 +729,7 @@ ACCEPT_MARGIN = 1.25
 # 우승 카테고리를 지지한 신호 중 이 순서에서 가장 앞선 것의 이름을 method로 쓴다.
 # 순서는 교체 이전 캐스케이드의 우선순위와 같다.
 METHOD_PRIORITY = [
+    "series_in_filename",
     "single_valid_match_resolved",
     "conflict_resolved",
     "single_match",
@@ -790,14 +795,17 @@ def score_text_with_lexicon(text: str) -> List[Tuple[str, float, float]]:
     words = extract_word_set(text)
     if len(words) < LEXICON_MIN_WORDS:
         return []
-    sims = lexicon.score_words(words)
-    if not sims:
+    scores = lexicon.score_words(words)
+    if not scores:
         return []
-    order = sorted(sims.items(), key=lambda kv: kv[1], reverse=True)
+    order = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     best = order[0][1]
-    if best < LEXICON_MIN_SIMILARITY:
+    if best <= 0:
         return []
-    return [(cat, sim / best, sim) for cat, sim in order[:LEXICON_TOP_K]]
+    if len(order) > 1 and order[1][1] > 0 and best < order[1][1] * LEXICON_MIN_MARGIN:
+        # 1위와 2위가 사실상 동점이면 찍지 않는다. 다른 신호에 판정을 넘긴다.
+        return []
+    return [(cat, sc / best, sc) for cat, sc in order[:LEXICON_TOP_K]]
 
 
 def evaluate_category_decision(
@@ -851,6 +859,13 @@ def evaluate_category_decision(
 
     # ---- 이하 신호는 캐스케이드 대신 가중치 합으로 모은다 ----
     acc = SignalAccumulator()
+
+    # 파일명에 시리즈 이름이 있으면 하위 카테고리로 보낸다.
+    # map_category 결과 중 하위 카테고리인 것만 받는다. 일반 장르어까지 받으면
+    # 파일명의 흔한 단어가 잡음이 된다.
+    series_cat = map_category(urllib.parse.unquote(fname), raw_title, raw_author)
+    if series_cat in SERIES_TO_PARENT:
+        acc.add(series_cat, WEIGHT_SERIES_IN_FILENAME, "series_in_filename", f"Series keyword in filename -> {series_cat}")
 
     # 서점 매핑 자체를 약한 표로 반영 (다수결에 못 미친 1건씩)
     for cat in valid_maps:
@@ -939,7 +954,7 @@ def evaluate_category_decision(
             confidence = max(0.0, 1.0 - runner_up)
             acc.add(
                 lex_cat, LEXICON_BASE_WEIGHT + LEXICON_CONFIDENCE_BONUS * confidence, "lexicon",
-                f"Corpus lexicon -> {lex_cat} (sim={sim:.3f}, confidence={confidence:.2f})",
+                f"Corpus lexicon (CNB) -> {lex_cat} (score={sim:.6f}, confidence={confidence:.2f})",
             )
 
     decision = acc.decide()
