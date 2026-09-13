@@ -354,8 +354,13 @@ def test_evaluate_category_decision_resolves_store_conflict_with_txt_content(tmp
     assert method == "conflict_resolved"
     assert "Conflict resolved" in reason
 
-def test_evaluate_category_decision_trusts_valid_single_match():
-    cat, method, reason = evaluate_category_decision(
+def test_evaluate_category_decision_does_not_trust_a_single_bookstore_alone():
+    """
+    서점 한 곳만 찾은 결과는 단독 판정권이 없다.
+    서점 조회를 켠 실측(236건)에서 정답률이 28.6% 였다. 제목이 비슷한 다른 책을
+    집어오는 경우가 많다. 다른 신호와 같은 방향일 때만 힘을 보탠다.
+    """
+    cat, method, _reason = evaluate_category_decision(
         "달빛조각사.txt",
         None,
         "달빛조각사",
@@ -366,9 +371,8 @@ def test_evaluate_category_decision_trusts_valid_single_match():
         {"mapped": None},
     )
 
-    assert cat == "3_판타지"
+    assert cat is None
     assert method == "single_match"
-    assert "Single match trusted" in reason
 
 def test_evaluate_category_decision_uses_epub_subject_metadata(tmp_path):
     epub_path = tmp_path / "subject.epub"
@@ -475,26 +479,25 @@ def test_book_classifier_service_process_file(tmp_path):
     assert (lib_root / "3_판타지" / fpath.name).exists()
 
 
-def test_evaluate_category_decision_resolves_false_conflict_by_title_similarity():
-    # yes24는 무관한 추천 도서(유사도 낮음), kyobo는 정확한 제목 일치
-    yes24 = {"title": "세네카 오늘을 빼앗기고 있는 당신에게", "mapped": "4_철학윤리"}
-    kyobo = {"title": "공포의 산장", "mapped": "2_소설외국"}
-    aladin = {"title": "", "mapped": None}
-
-    cat, method, reason = evaluate_category_decision(
-        "공포의 산장.epub",
+def test_evaluate_category_decision_does_not_resolve_false_conflict_alone():
+    """
+    제목 유사도로 걸러낸 단일 매칭도 마찬가지로 단독 판정권이 없다(실측 정답률 30.0%).
+    서점 간 충돌이 남으면 판정을 보류한다.
+    """
+    cat, method, _reason = evaluate_category_decision(
+        "정확한책.txt",
         None,
-        "공포의 산장",
-        "",
-        "공포의 산장",
-        yes24,
-        aladin,
-        kyobo,
+        "정확한책",
+        "저자",
+        "정확한책",
+        # resolve_genre_conflict 가 다루지 않는 조합을 써서 단일 매칭 신호만 남긴다
+        {"mapped": "4_경제", "title": "정확한책"},
+        {"mapped": "8_요리음료", "title": "전혀 다른 책 제목"},
+        {"mapped": None},
     )
-    assert cat == "2_소설외국"
-    assert method == "single_valid_match_resolved"
-    assert "False conflict resolved" in reason
 
+    assert cat is None
+    assert method == "conflict"
 
 def test_resolve_genre_conflict_new_rules():
     # 1. 소설외국 vs 스릴러 (스릴러 키워드 포함 시 3_스릴러, 없을 시 2_소설외국)

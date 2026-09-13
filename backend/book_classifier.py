@@ -703,8 +703,14 @@ def resolve_genre_conflict(cats: List[str], fname: str, text_sample: str = "") -
 WEIGHT_FILENAME_LEXICON = 7.5
 
 WEIGHT_SERIES_IN_FILENAME = 18.5
-WEIGHT_SINGLE_VALID_MATCH = 14.8
-WEIGHT_SINGLE_MATCH = 11.8
+# 서점 한 곳만 찾았을 때의 신호. 서점 조회를 켠 실측(236건)에서 정답률이 낮았다.
+#   single_match                28건  정답률 28.6%
+#   single_valid_match_resolved 10건  정답률 30.0%
+# 10건 중 7건이 틀린다. 제목이 비슷한 다른 책을 집어오는 경우가 많다.
+# 단독 판정권을 빼고 보조로만 쓴다(ACCEPT_MIN_SCORE 미만).
+# 서점 표(1.0)가 함께 더해지므로 합계가 ACCEPT_MIN_SCORE 미만이 되도록 잡는다.
+WEIGHT_SINGLE_VALID_MATCH = 0.9
+WEIGHT_SINGLE_MATCH = 0.8
 WEIGHT_CONFLICT_RESOLVED = 4.3
 WEIGHT_EPUB_SUBJECT = 4.3
 WEIGHT_TXT_HEADER_GENRE = 4.3
@@ -869,7 +875,19 @@ def evaluate_category_decision(
         if not opposing_majority:
             return explicit_genre, "explicit_genre", f"Explicit genre in filename -> {explicit_genre}"
 
-    # Priority 2: 3개 서점 2/3 이상 다수결
+    # Priority 2: 파일명 분류기가 확신하면 서점 다수결보다 먼저 채택한다.
+    #
+    # 서점 다수결을 조기 반환으로 두면 파일명 분류기가 판정할 기회를 잃는다.
+    # 서점 조회를 켠 실측(236건)에서 둘 다 답한 34건을 직접 비교하면
+    #   서점 다수결   64.7%
+    #   파일명 분류기  91.2%
+    # 전체로도 답하는 양은 그대로이고 정답률만 71.9% -> 79.1% 로 오른다.
+    name_ranked = score_filename_with_lexicon(fname)
+    if name_ranked:
+        name_cat, name_conf, _sc = name_ranked[0]
+        return name_cat, "filename_lexicon", f"Filename model -> {name_cat} (posterior={name_conf:.3f})"
+
+    # Priority 3: 3개 서점 2/3 이상 다수결
     for cat, count in counts.items():
         if count >= 2:
             return cat, "majority", f"Majority vote ({count}/3) -> {cat}"
@@ -896,12 +914,6 @@ def evaluate_category_decision(
     series_cat = map_category(urllib.parse.unquote(fname), raw_title, raw_author)
     if series_cat in SERIES_TO_PARENT:
         acc.add(series_cat, WEIGHT_SERIES_IN_FILENAME, "series_in_filename", f"Series keyword in filename -> {series_cat}")
-
-    # 파일명 분류기. 서점 조회가 없을 때 가장 잘 듣는 신호다.
-    name_ranked = score_filename_with_lexicon(fname)
-    if name_ranked:
-        name_cat, name_conf, _sc = name_ranked[0]
-        acc.add(name_cat, WEIGHT_FILENAME_LEXICON, "filename_lexicon", f"Filename model -> {name_cat} (posterior={name_conf:.3f})")
 
     # 서점 매핑 자체를 약한 표로 반영 (다수결에 못 미친 1건씩)
     for cat in valid_maps:
