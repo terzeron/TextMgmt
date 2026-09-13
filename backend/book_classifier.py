@@ -685,14 +685,23 @@ def resolve_genre_conflict(cats: List[str], fname: str, text_sample: str = "") -
 # 파일명에 시리즈 이름이 정확히 들어 있을 때만 하위 카테고리로 보낸다.
 # 사전은 상위 장르(2_소설외국)까지만 판정하므로, 하위 배정은 이 신호가 전담한다.
 # 정확한 키워드 일치라 신뢰도가 가장 높다.
-WEIGHT_SERIES_IN_FILENAME = 10.8
-WEIGHT_SINGLE_VALID_MATCH = 8.6
-WEIGHT_SINGLE_MATCH = 6.8
-WEIGHT_CONFLICT_RESOLVED = 5.4
-WEIGHT_EPUB_SUBJECT = 5.4
-WEIGHT_TXT_HEADER_GENRE = 5.4
-WEIGHT_EPUB_DESCRIPTION = 4.3
-WEIGHT_TXT_HASHTAG = 4.3
+# 순서는 실측 정답률로 정한다. 어휘 사전(CNB)이 EPUB 메타데이터보다 정확하므로
+# 위에 둔다. 캐스케이드 시절의 관행적 순서를 그대로 쓰면 좋은 신호가 나쁜 신호에
+# 끌려 내려간다.
+#   판정 경로별 실측: lexicon 79.4%, content_metadata 55.9%, explicit_genre 58.3%
+#   구성별 실측(홀드아웃 885건, 답한 비율은 모두 35% 안팎):
+#     메타데이터가 위  정답률 70.9%
+#     어휘 사전이 위   정답률 76.6%   <- 채택. 답하는 양은 그대로이고 정답률만 오른다
+#     어휘 사전 압도적  정답률 76.2%
+#     어휘 사전만 판정권 정답률 81.0% (답한 비율 29.2% 로 줄어 전체로는 손해)
+WEIGHT_SERIES_IN_FILENAME = 11.8
+WEIGHT_SINGLE_VALID_MATCH = 9.4
+WEIGHT_SINGLE_MATCH = 7.5
+WEIGHT_CONFLICT_RESOLVED = 4.3
+WEIGHT_EPUB_SUBJECT = 4.3
+WEIGHT_TXT_HEADER_GENRE = 4.3
+WEIGHT_EPUB_DESCRIPTION = 3.2
+WEIGHT_TXT_HASHTAG = 3.2
 WEIGHT_STORE_VOTE = 1.0
 
 # 기존 5대 장르 스코어링과 신규 어휘 사전은 단독으로도 판정을 설 수 있어야 하므로
@@ -711,7 +720,7 @@ WEIGHT_STORE_VOTE = 1.0
 GENRE5_BASE_WEIGHT = 1.2
 GENRE5_MAX_WEIGHT = 1.5
 
-LEXICON_BASE_WEIGHT = 2.8
+LEXICON_BASE_WEIGHT = 5.4
 LEXICON_CONFIDENCE_BONUS = 0.6
 LEXICON_TOP_K = 3
 
