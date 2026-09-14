@@ -129,6 +129,8 @@ class ESManager:
                 "category": {"type": "keyword", "fields": {"nori": {"type": "text", "analyzer": "nori_analyzer"}}},
                 "title": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
                 "author": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
+                # EPUB 의 dc:publisher. 전집 판정의 결정적 증거라 자동분류가 쓴다.
+                "publisher": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}},
                 "file_path": {"type": "keyword"},
                 "file_type": {"type": "keyword"},
                 "file_size": {"type": "unsigned_long"},
@@ -157,6 +159,7 @@ class ESManager:
     def _ensure_existing_index_mappings(self) -> None:
         self._ensure_category_nori_subfield()
         self._ensure_created_time_field()
+        self._ensure_publisher_field()
 
     def _ensure_category_nori_subfield(self) -> None:
         """기존 인덱스에 category.nori 서브필드가 없으면 추가"""
@@ -188,6 +191,19 @@ class ESManager:
             LOGGER.info("created_time fields added successfully")
         except Exception as e:
             LOGGER.warning("Failed to add created_time fields: %s", e)
+
+    def _ensure_publisher_field(self) -> None:
+        """기존 인덱스에 publisher 필드가 없으면 추가"""
+        try:
+            mapping = self.es.indices.get_mapping(index=self.index_name)
+            properties = mapping[self.index_name]["mappings"].get("properties", {})
+            if "publisher" in properties:
+                return
+            LOGGER.info("Adding publisher field to index %s", self.index_name)
+            self.es.indices.put_mapping(index=self.index_name, properties={"publisher": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}}})
+            LOGGER.info("publisher field added successfully")
+        except Exception as e:
+            LOGGER.warning("Failed to add publisher field: %s", e)
 
     def delete_index(self) -> None:
         LOGGER.debug("delete_index()")
@@ -330,11 +346,7 @@ class ESManager:
             query["bool"]["must_not"] = [{"prefix": {"category": cat}} for cat in exclude_categories]
         return self._search_paged(query, size=size, offset=offset)
 
-    LATEST_SORT: list[dict[str, Any]] = [
-        {"created_time": {"order": "desc", "missing": "_last"}},
-        {"updated_time": {"order": "desc", "missing": "_last"}},
-        {"file_path": {"order": "asc"}},
-    ]
+    LATEST_SORT: list[dict[str, Any]] = [{"created_time": {"order": "desc", "missing": "_last"}}, {"updated_time": {"order": "desc", "missing": "_last"}}, {"file_path": {"order": "asc"}}]
 
     @staticmethod
     def _exclude_category_queries(categories: list[str] | None) -> list[dict[str, Any]]:
@@ -367,15 +379,7 @@ class ESManager:
         """created_time이 없는 기존 ES 문서를 실제 파일 stat 기준으로 채운다."""
         LOGGER.info("backfill_created_time(index=%s) start", self.index_name)
         result = {"updated": 0, "skipped": 0, "failed": 0}
-        query = {
-            "bool": {
-                "should": [
-                    {"bool": {"must_not": [{"exists": {"field": "created_time"}}]}},
-                    {"bool": {"must_not": [{"exists": {"field": "created_time_source"}}]}},
-                ],
-                "minimum_should_match": 1,
-            }
-        }
+        query = {"bool": {"should": [{"bool": {"must_not": [{"exists": {"field": "created_time"}}]}}, {"bool": {"must_not": [{"exists": {"field": "created_time_source"}}]}}], "minimum_should_match": 1}}
         scroll_id = None
         resolved_prefix = path_prefix.resolve(strict=False)
 

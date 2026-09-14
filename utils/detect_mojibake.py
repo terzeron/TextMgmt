@@ -42,7 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from backend.category_lexicon import COMMON_HANGUL_SYLLABLES, MIN_SYLLABLES_FOR_LIKENESS, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, korean_likeness  # noqa: E402,F401
+from backend.classifier.reader import COMMON_HANGUL_SYLLABLES, MIN_SYLLABLES_FOR_LIKENESS, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, korean_likeness  # noqa: E402,F401
 
 LOGGER = logging.getLogger("detect_mojibake")
 
@@ -89,7 +89,7 @@ def classify_text(text: str) -> Tuple[str, Optional[float]]:
 
 def inspect_file(path_str: str) -> Dict[str, Any]:
     """파일 한 건을 읽어 판정한다. 워커 프로세스에서 호출된다."""
-    from utils.corpus_lexicon import read_document_text  # noqa: PLC0415  워커에서 지연 import
+    from backend.classifier.reader import read_document_text  # noqa: PLC0415  워커에서 지연 import
 
     p = Path(path_str)
     try:

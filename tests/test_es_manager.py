@@ -200,6 +200,41 @@ def test_ensure_created_time_field_adds_missing_created_time_fields():
     }
 
 
+def test_ensure_publisher_field_adds_it_when_missing():
+    es = DummyES()
+    manager = make_manager(es)
+    es.indices.mapping = {"idx": {"mappings": {"properties": {"title": {}}}}}
+
+    manager._ensure_publisher_field()
+
+    assert es.indices.put_mapping_called is True
+    # 자동분류가 전집을 가르는 데 쓰는 필드다. title/author 와 같은 모양으로 둔다.
+    assert es.indices.put_mapping_properties == {"publisher": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}}}
+
+
+def test_ensure_publisher_field_is_a_no_op_when_already_present():
+    es = DummyES()
+    manager = make_manager(es)
+    es.indices.mapping = {"idx": {"mappings": {"properties": {"publisher": {"type": "text"}}}}}
+
+    manager._ensure_publisher_field()
+
+    assert es.indices.put_mapping_called is False
+
+
+def test_ensure_publisher_field_swallows_errors():
+    es = DummyES()
+    manager = make_manager(es)
+
+    def boom(**kwargs):
+        raise RuntimeError("ES 가 응답하지 않는다")
+
+    es.indices.get_mapping = boom
+    # 매핑 추가에 실패해도 색인 생성 자체를 막으면 안 된다
+    manager._ensure_publisher_field()
+    assert es.indices.put_mapping_called is False
+
+
 def test_ensure_created_time_field_adds_missing_source_only():
     es = DummyES()
     manager = make_manager(es)

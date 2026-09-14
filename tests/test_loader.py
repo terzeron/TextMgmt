@@ -413,6 +413,48 @@ class TestReadFile:
         assert "created_time_source" in doc
         assert doc["created_time_source"]
 
+    def test_read_file_indexes_epub_publisher(self, tmp_path: Path):
+        """EPUB 의 dc:publisher 를 색인한다. 자동분류가 전집을 가르는 데 쓴다."""
+        import zipfile
+
+        Loader = _get_loader()
+        original_prefix = Loader.path_prefix
+        Loader.path_prefix = tmp_path
+
+        cat_dir = tmp_path / "2_소설외국"
+        cat_dir.mkdir()
+        f = cat_dir / "[작가] 제목.epub"
+        with zipfile.ZipFile(f, "w") as z:
+            z.writestr("content.opf", '<?xml version="1.0"?><package><metadata><dc:publisher>을유문화사</dc:publisher></metadata></package>')
+            z.writestr("ch1.xhtml", "<html><body><p>본문</p></body></html>")
+
+        try:
+            result = Loader.read_file(f)
+        finally:
+            Loader.path_prefix = original_prefix
+
+        doc = result[list(result.keys())[0]]
+        assert doc["publisher"] == "을유문화사"
+
+    def test_read_file_leaves_publisher_empty_for_non_epub(self, tmp_path: Path):
+        Loader = _get_loader()
+        original_prefix = Loader.path_prefix
+        Loader.path_prefix = tmp_path
+
+        cat_dir = tmp_path / "2_소설외국"
+        cat_dir.mkdir()
+        f = cat_dir / "[작가] 제목.txt"
+        f.write_text("본문", encoding="utf-8")
+
+        try:
+            result = Loader.read_file(f)
+        finally:
+            Loader.path_prefix = original_prefix
+
+        doc = result[list(result.keys())[0]]
+        # TXT 에는 dc:publisher 가 없다. 필드 자체는 늘 있어야 매핑이 흔들리지 않는다.
+        assert doc["publisher"] == ""
+
     def test_read_file_accepts_explicit_path_prefix(self, tmp_path: Path):
         Loader = _get_loader()
         original_prefix = Loader.path_prefix
