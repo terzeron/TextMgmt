@@ -9,7 +9,7 @@
 
 import logging
 import re
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Sequence
 
 import numpy as np
 from scipy.sparse import csr_matrix, hstack

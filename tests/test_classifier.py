@@ -12,7 +12,7 @@ from backend.classifier import BookCategoryClassifier
 from backend.classifier.config import DEFAULT_CONFIG, SERIES_TO_PARENT, config_hash, enabled_fields, load_config, merge_config, resolve_parent, save_config
 from backend.classifier.corpus import _document, absolute_path, attach_publishers, is_trainable, read_jsonl, write_jsonl
 from backend.classifier.features import FeatureSpace, field_text, make_vectorizer
-from backend.classifier.model import CategoryModel, Prediction, softmax_confidence
+from backend.classifier.model import DEFAULT_MODEL_PATH, MODEL_ENV, CategoryModel, Prediction, model_path, softmax_confidence
 from backend.classifier.reader import read_epub_publisher
 from backend.classifier.training import coverage_curve, evaluate, filter_by_size, format_report, max_coverage_at, train
 
@@ -474,7 +474,45 @@ def test_min_confidence_precedence(trained):
     model, _ = trained
     assert BookCategoryClassifier(model=model, min_confidence=0.55).min_confidence == 0.55
     assert BookCategoryClassifier(model=model).min_confidence == model.min_confidence
-    assert BookCategoryClassifier(model=None).min_confidence == DEFAULT_CONFIG["decision"]["min_confidence"]
+    # 모델이 없으면 판정하지 않는다
+    assert BookCategoryClassifier(model=None).min_confidence == 1.0
+
+
+def test_threshold_comes_from_the_holdout_when_config_leaves_it_open(trained):
+    """확신도 척도는 데이터마다 달라 고정값을 못 쓴다. 학습이 홀드아웃에서 고른다."""
+    model, report = trained
+    assert model.config["decision"]["min_confidence"] is None
+    assert model.min_confidence == report["at_precision_90"]["threshold"]
+    assert model.meta["calibrated_target"] == 0.90
+
+
+def test_explicit_threshold_wins_over_the_calibrated_one(trained):
+    model, _ = trained
+    model.config = merge_config(model.config, {"decision": {"min_confidence": 0.77}})
+    assert model.min_confidence == 0.77
+
+
+def test_uncalibrated_model_refuses_everything(trained):
+    """홀드아웃 기록이 없으면 오분류보다 무판정을 고른다."""
+    model, _ = trained
+    model.meta.pop("calibrated_threshold")
+    assert model.min_confidence == 1.0
+
+
+def test_target_accuracy_95_picks_the_stricter_threshold():
+    config = merge_config(
+        DEFAULT_CONFIG,
+        {
+            "corpus": {"min_per_category": 5},
+            "model": {"n_jobs": 1},
+            "fields": {"body_word": {"min_df": 1, "max_features": 5000}, "body_char": {"enabled": False}, "filename": {"min_df": 1}, "title": {"min_df": 1}, "author": {"min_df": 1}, "publisher": {"min_df": 1}, "file_type": {"min_df": 1}},
+            "holdout": 0.25,
+            "decision": {"target_accuracy": 0.95},
+        },
+    )
+    model, report = train(make_docs(), config, accept_parent=SERIES_TO_PARENT)
+    assert model.meta["calibrated_threshold"] == report["at_precision_95"]["threshold"]
+    assert model.meta["calibrated_target"] == 0.95
 
 
 def test_indexed_path_is_relative_to_the_library_root(tmp_path, trained):
@@ -506,3 +544,23 @@ def test_build_document_finds_documents_by_relative_path(tmp_path, trained):
     doc = clf.build_document(f)
     assert doc["text"] == VOCAB["3_무협"]
     assert doc["publisher"] == "을유문화사"
+
+
+def test_model_path_follows_the_environment_variable(tmp_path, monkeypatch):
+    monkeypatch.delenv(MODEL_ENV, raising=False)
+    assert model_path() == DEFAULT_MODEL_PATH
+
+    # pod 는 /books 로, 학습 머신은 /mnt/data/text 로 같은 파일을 본다. 복사가 없다.
+    monkeypatch.setenv(MODEL_ENV, "/books/.classifier/model.joblib")
+    assert model_path() == Path("/books/.classifier/model.joblib")
+
+
+def test_save_and_load_use_the_environment_path(tmp_path, monkeypatch, trained):
+    model, _ = trained
+    dest = tmp_path / "어딘가" / "model.joblib"
+    monkeypatch.setenv(MODEL_ENV, str(dest))
+
+    # 경로를 안 줘도 환경변수가 가리키는 곳에 쓰고 거기서 읽는다
+    assert model.save() == dest
+    assert dest.exists()
+    assert CategoryModel.load() is not None

@@ -48,7 +48,9 @@ class BookCategoryClassifier:
             return float(self._min_confidence)
         if self.model is not None:
             return self.model.min_confidence
-        return float(load_config()["decision"]["min_confidence"])
+        # 모델이 없으면 판정 자체를 안 한다. 설정값이 있어도 쓸 곳이 없다.
+        configured = load_config()["decision"].get("min_confidence")
+        return float(configured) if configured is not None else 1.0
 
     # ------------------------------------------------------------------
     # 특징 수집

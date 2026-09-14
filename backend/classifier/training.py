@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+from joblib import parallel_backend
 from sklearn.model_selection import train_test_split
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.svm import LinearSVC
@@ -72,13 +73,7 @@ def evaluate(model: CategoryModel, docs: Sequence[Dict[str, Any]], accept_parent
     conf = prob[np.arange(len(docs)), best]
     truth = np.array([x["cat"] for x in docs])
     correct = np.fromiter((p == t or parent.get(p, p) == parent.get(t, t) for p, t in zip(pred, truth)), bool, len(truth))
-    return {
-        "n": len(docs),
-        "top1_accuracy": float(correct.mean()),
-        "curve": coverage_curve(correct, conf),
-        "at_precision_90": max_coverage_at(correct, conf, 0.90),
-        "at_precision_95": max_coverage_at(correct, conf, 0.95),
-    }
+    return {"n": len(docs), "top1_accuracy": float(correct.mean()), "curve": coverage_curve(correct, conf), "at_precision_90": max_coverage_at(correct, conf, 0.90), "at_precision_95": max_coverage_at(correct, conf, 0.95)}
 
 
 def train(docs: Sequence[Dict[str, Any]], config: Dict[str, Any], accept_parent: Optional[Dict[str, str]] = None) -> Tuple[CategoryModel, Dict[str, Any]]:
@@ -101,32 +96,50 @@ def train(docs: Sequence[Dict[str, Any]], config: Dict[str, Any], accept_parent:
     X = space.fit_transform(train_docs)
     logger.info("특징 %d개, 벡터화 %.0f초", X.shape[1], time.time() - t0)
 
+    # liblinear 은 float64 만 받는다. 미리 한 번 바꿔 두면 클래스마다 변환 사본이 생기지 않는다.
+    # 이미 float64 면 건드리지 않는다. 그냥 astype 을 부르면 5GB 짜리 사본이 하나 더 생긴다.
+    if X.dtype != np.float64:
+        X = X.astype(np.float64)
+    logger.info("행렬 %.1fGB (%d x %d, 비영요소 %d개)", (X.data.nbytes + X.indices.nbytes + X.indptr.nbytes) / 1024**3, X.shape[0], X.shape[1], X.nnz)
+
     t0 = time.time()
     mcfg = config["model"]
     base = LinearSVC(C=float(mcfg["C"]), dual="auto", class_weight=None if mcfg.get("class_weight") in (None, "none") else mcfg["class_weight"])
     clf = OneVsRestClassifier(base, n_jobs=int(mcfg.get("n_jobs", 8)))
-    clf.fit(X, y[tr])
+    # 스레드 병렬을 쓴다. liblinear 이 `with nogil` 로 GIL 을 풀어 실제로 병렬이 된다.
+    #
+    # 다만 행렬을 하나만 쓰지는 않는다. liblinear 은 호출마다 자기 자료구조로 옮겨 담아,
+    # 스레드로 돌려도 워커 수에 비례해 메모리가 는다. 표본 4만 건(행렬 0.28GB) 실측:
+    #   n_jobs=1  fit 266초  +0.37GB      n_jobs=4  fit 131초  +1.71GB
+    #   n_jobs=2  fit 176초  +0.87GB      n_jobs=8  fit 122초  +3.23GB
+    # 즉 워커당 약 0.4GB, 행렬 크기의 1.4배다. 비영요소가 4.85배인 23만 건에 대입하면
+    # n_jobs=8 은 fit 에만 약 15.7GB 가 들어 10GB 상한에서 죽는다.
+    #
+    # 워커를 8에서 2로 줄여도 fit 은 2.2배밖에 안 느리다. 메모리는 3.7배 적게 쓴다.
+    with parallel_backend("threading", n_jobs=int(mcfg.get("n_jobs", 8))):
+        clf.fit(X, y[tr])
     elapsed = time.time() - t0
     logger.info("학습 %.0f초", elapsed)
 
-    model = CategoryModel({
-        "feature_space": space,
-        "classifier": clf,
-        "classes": clf.classes_,
-        "config": config,
-        "meta": {
-            "trained_at": datetime.now(timezone.utc).isoformat(),
-            "config_hash": config_hash(config),
-            "documents": len(kept),
-            "categories": sorted(set(y)),
-            "dropped_categories": dropped,
-            "features": int(X.shape[1]),
-            "blocks": space.describe(),
-            "train_seconds": round(elapsed, 1),
-        },
-    })
+    model = CategoryModel(
+        {
+            "feature_space": space,
+            "classifier": clf,
+            "classes": clf.classes_,
+            "config": config,
+            "meta": {"trained_at": datetime.now(timezone.utc).isoformat(), "config_hash": config_hash(config), "documents": len(kept), "categories": sorted(set(y)), "dropped_categories": dropped, "features": int(X.shape[1]), "blocks": space.describe(), "train_seconds": round(elapsed, 1)},
+        }
+    )
     report = evaluate(model, hold_docs, accept_parent=accept_parent)
     model.meta["holdout"] = report
+
+    # 임계값을 홀드아웃에서 고른다. 확신도 척도는 데이터마다 달라서 고정값을 못 쓴다.
+    target = float(config["decision"].get("target_accuracy") or 0.90)
+    picked = report["at_precision_95"] if target >= 0.95 else report["at_precision_90"]
+    model.meta["calibrated_threshold"] = picked["threshold"]
+    model.meta["calibrated_target"] = target
+    logger.info("임계값 %.3f 선택 (정답률 %.1f%% 목표, 그때 판정률 %.1f%%)", picked["threshold"], target * 100, picked["coverage"] * 100)
+
     return model, report
 
 

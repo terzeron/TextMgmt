@@ -11,6 +11,7 @@
 """
 
 import logging
+import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +21,24 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-MODEL_PATH = Path(__file__).resolve().parent / "model.joblib"
+# 모델 파일은 100MB 단위라 저장소에 두지 않는다. 대신 경로를 환경변수로 받는다.
+#
+# `books-pv` 가 호스트의 /mnt/data/text 를 pod 의 /books 로 마운트하므로,
+# 학습 머신과 pod 가 같은 파일을 본다. 복사하거나 이미지를 다시 굽지 않아도 된다.
+#   학습:  TM_CLASSIFIER_MODEL=/mnt/data/text/.classifier/model.joblib
+#   pod:   TM_CLASSIFIER_MODEL=/books/.classifier/model.joblib
+#
+# 환경변수가 없으면 모듈 옆을 본다. 테스트와 단독 실행용이다.
+MODEL_ENV = "TM_CLASSIFIER_MODEL"
+DEFAULT_MODEL_PATH = Path(__file__).resolve().parent / "model.joblib"
+
+
+def model_path() -> Path:
+    """설정된 모델 파일 경로."""
+    return Path(os.environ[MODEL_ENV]) if os.environ.get(MODEL_ENV) else DEFAULT_MODEL_PATH
+
+
+MODEL_PATH = model_path()
 
 
 @dataclass
@@ -58,7 +76,16 @@ class CategoryModel:
 
     @property
     def min_confidence(self) -> float:
-        return float(self.config["decision"].get("min_confidence", 0.9))
+        """판정 임계값. 설정에 숫자가 있으면 그것, 없으면 학습이 홀드아웃에서 고른 값."""
+        configured = self.config["decision"].get("min_confidence")
+        if configured is not None:
+            return float(configured)
+        calibrated = self.meta.get("calibrated_threshold")
+        if calibrated is not None:
+            return float(calibrated)
+        # 홀드아웃 기록이 없는 모델. 아무것도 판정하지 않는 편이 오분류보다 낫다.
+        logger.warning("임계값을 못 정했다. 설정에 min_confidence 를 넣거나 다시 학습할 것")
+        return 1.0
 
     def scores(self, docs: Sequence[Dict[str, Any]]) -> np.ndarray:
         X = self.feature_space.transform(docs)
@@ -91,20 +118,16 @@ class CategoryModel:
     def save(self, path: Path | str | None = None) -> Path:
         import joblib
 
-        p = Path(path) if path else MODEL_PATH
+        p = Path(path) if path else model_path()
         p.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(
-            {"feature_space": self.feature_space, "classifier": self.classifier, "classes": self.classes, "config": self.config, "meta": self.meta},
-            p,
-            compress=3,
-        )
+        joblib.dump({"feature_space": self.feature_space, "classifier": self.classifier, "classes": self.classes, "config": self.config, "meta": self.meta}, p, compress=3)
         return p
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> Optional["CategoryModel"]:
         import joblib
 
-        p = Path(path) if path else MODEL_PATH
+        p = Path(path) if path else model_path()
         if not p.exists():
             logger.info("모델 파일이 없다: %s", p)
             return None

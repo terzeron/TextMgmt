@@ -59,13 +59,35 @@ backend/classifier/
   training.py          학습 + 평가
   reader.py            파일 직접 읽기 (ES 에 없을 때의 대비책)
   config.py            설정 스키마 + 기본값 + 상위 장르 매핑
-  model.joblib         [데이터] 학습 산출물
   config.json          [데이터] 현재 설정
 utils/classify_cli.py  CLI
+
+/mnt/data/text/.classifier/
+  model.joblib         [데이터] 학습 산출물. 저장소 밖에 둔다
 ```
 
-데이터 파일이 2개라 하위 디렉토리를 안 만든다. 5개를 넘으면 그때
-`backend/classifier/data/` 를 만든다.
+설정 파일은 저장소에 둔다. 모델 파일은 안 둔다.
+
+### 모델 파일은 books 볼륨에 둔다
+
+`model.joblib` 은 100MB 단위다. 지금 저장소가 추적하는 파일 중 1MB 를 넘는 것이
+하나도 없고, 재학습마다 새 사본이 쌓이면 `.git`(522MB)이 빠르게 커진다.
+
+경로를 `TM_CLASSIFIER_MODEL` 환경변수로 받는다.
+
+| 위치      | 값                                                     |
+| --------- | ------------------------------------------------------ |
+| 학습 머신 | `/mnt/data/text/.classifier/model.joblib`              |
+| pod       | `/books/.classifier/model.joblib`                      |
+| 미설정    | `backend/classifier/model.joblib` (테스트·단독 실행용) |
+
+`books-pv` 가 호스트의 `/mnt/data/text` 를 pod 의 `/books` 로 마운트하므로
+(`k8s/books-volume.yml`) 둘은 같은 물리 파일이다. 학습하면 pod 가 재시작할 때
+새 모델을 읽는다. 이미지를 다시 굽지도, master 브랜치 작업 디렉토리로 복사하지도 않는다.
+
+이 디렉토리는 loader 의 색인 대상 안에 있다. 문제되지 않는다. loader 는 확장자로
+파서를 고르고 `joblib` 은 `supported_types` 에 없어 빈 결과를 돌려준다.
+레이블 규칙(`^[1-9]_`)이 학습 오염도 따로 막는다.
 
 백엔드 런타임은 `model.joblib` 만 읽는다. 학습은 백엔드 프로세스 밖에서 돈다.
 
@@ -90,14 +112,14 @@ loader 가 `file_path.relative_to(prefix)` 로 넣기 때문에 ES 의 `file_pat
 
 그래서 두 곳에서 루트를 붙인다.
 
-| 위치 | 하는 일 |
-|---|---|
-| `corpus.absolute_path()` | 학습 데이터의 상대 경로를 실제 경로로 |
+| 위치                                     | 하는 일                                  |
+| ---------------------------------------- | ---------------------------------------- |
+| `corpus.absolute_path()`                 | 학습 데이터의 상대 경로를 실제 경로로    |
 | `BookCategoryClassifier._indexed_path()` | 판정할 절대 경로를 ES 질의용 상대 경로로 |
 
 루트는 `config.json` 의 `corpus.library_root` 다(기본 `/mnt/data/text`).
 
-### 레이블은 '숫자_이름' 꼴만 쓴다
+### 레이블은 '숫자\_이름' 꼴만 쓴다
 
 ES 에는 카테고리가 아닌 디렉토리도 색인돼 있다. 실측에서 `trash` 733건,
 `.preview_cache` 46건, `_root` 10건이 레이블로 섞여 들어왔다.
@@ -195,13 +217,64 @@ EPUB 만 골라 파일에서 읽어 메우고, 결과를 `<출력파일>.publish
 - 제거 대상 함수를 쓰는 기존 테스트는 삭제하고 새 모듈 테스트로 대체
 - `pytest tests/` 전체 통과 확인
 
+## 10-1. 첫 학습 결과 (2026-09-14 18:20)
+
+문서 235,040건, 카테고리 79개, 홀드아웃 47,008건. 문자 n-gram 없음, `n_jobs=2`.
+
+| 판정률 | 정답률 | 임계값 |
+| ------ | ------ | ------ |
+| 50%    | 97.4%  | 0.128  |
+| 70%    | 94.3%  | 0.100  |
+| 80%    | 92.7%  | 0.082  |
+| 90%    | 90.4%  | 0.060  |
+| 100%   | 86.4%  | 0.019  |
+
+정답률 90% 를 유지하는 최대 판정률은 **91.6%** 다. 목표 90/90 을 넘겼다.
+모델 파일은 165MB, 특징 652,363개, 학습 1,122초.
+
+liblinear 이 `max_iter` 안에 수렴하지 못했다는 경고가 여러 클래스에서 났다.
+성적에 얼마나 영향이 있는지는 아직 안 쟀다.
+
+## 10-2. 학습은 별도 systemd 유닛에서 돌린다
+
+학습이 메모리 상한을 넘기면 그 프로세스만 죽는 게 아니었다. `DefaultOOMPolicy=stop`
+때문에 systemd 가 tmux pane scope 전체를 정지시켜, 같은 pane 의 개발 세션까지
+같이 끊겼다(실측 3회). `user@1000.service` 의 `MemoryMax` 는 12G 다.
+
+그래서 학습을 claude 와 다른 cgroup 에 둔다.
+
+```sh
+systemd-run --user --unit=classifier-train \
+  -p OOMPolicy=continue -p MemoryMax=10G -p MemorySwapMax=2G \
+  -p StandardOutput=append:tmp/classifier/train.log \
+  -p StandardError=append:tmp/classifier/train.log \
+  <학습 스크립트>
+```
+
+이러면 학습이 OOM 으로 죽어도 세션은 살아남는다.
+
 ## 11. 남은 위험
 
 - **이미지 크기**: `scikit-learn`+`scipy` 로 +120MB, `kiwipiepy` 제거로 −135MB,
   어휘 사전 제거로 −2MB, `model.joblib` +160MB. 합계 약 +143MB.
   백엔드 메모리 제한은 4Gi 이고 예측만 컨테이너 안에서 하므로 영향이 없다.
-- **모델 파일 크기**: 81클래스 × 50만 특징 = 약 160MB(float32). 학습 후 실측해
-  필요하면 희소화하거나 float16 으로 줄인다.
+- **모델 파일 크기**: 실측 165MB (79클래스 × 65만 특징). pod 메모리 제한은 4Gi 라
+  올릴 수 있다. 저장소 밖에 두므로 git 이 커지는 문제는 없다.
+- **학습 메모리**: fit 메모리는 워커 수에 정비례한다. 표본 4만 건(행렬 0.28GB) 실측:
+
+  | n_jobs | fit 시간 | 메모리 증가분 |
+  | ------ | -------- | ------------- |
+  | 1      | 266초    | 0.37GB        |
+  | 2      | 176초    | 0.87GB        |
+  | 4      | 131초    | 1.71GB        |
+  | 8      | 122초    | 3.23GB        |
+
+  스레드 병렬인데도 는다. liblinear 이 호출마다 자기 자료구조로 옮겨 담기 때문이다.
+  비영요소가 4.85배인 23만 건에서 `n_jobs=8` 은 fit 에만 약 15.7GB 를 쓴다.
+  기본값을 2 로 내렸다. 8 대비 2.2배 느리고 메모리는 3.7배 적다.
+  문자 n-gram 을 켜면 비영요소가 1.2억에서 4.6억으로 늘어 다시 위험해진다.
+  같은 장비에서 Elasticsearch 가 3GB, 다른 서비스가 4GB 를 이미 쓰고 있다.
+
 - **소수 카테고리**: `min_per_category` 기본 30 이라 그보다 적은 카테고리는 학습에서
   빠지고 영영 판정 대상이 아니다. 포맷 제한을 풀어 표본을 늘린 뒤 다시 재야 한다.
 - **파일 직접 읽기의 포맷 범위**: `reader.read_document_text` 는 `.txt` 와 `.epub` 만

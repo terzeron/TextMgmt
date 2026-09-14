@@ -12,6 +12,7 @@ import logging
 import sys
 import textwrap
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -228,7 +229,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=_help("""\
             본문 문자 n-gram 을 쓴다 (기본: 설정값)
               켜면: 조사가 붙어 단어 매칭이 깨지는 한국어 특성을 보완한다.
-                    메모리가 2배로 늘고 벡터화가 20분 이상 걸린다."""),
+                    메모리가 2배로 늘고 벡터화가 20분 이상 걸린다.
+                    23만 건 학습에서는 --n-jobs 를 3 이하로 같이 낮춰야 한다."""),
     )
     t.add_argument("--no-char-ngram", dest="char_ngram", action="store_false", help="본문 문자 n-gram 을 쓰지 않는다 (빠르고 가볍다)")
     t.add_argument(
@@ -249,9 +251,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help=_help("""\
             동시에 학습할 카테고리 수
-              기본 8 / 범위 1~코어수
-              높이면: 빨라진다. 카테고리마다 학습 행렬 사본이 생겨 메모리를 더 쓴다.
-              낮추면: 느리지만 메모리가 적게 든다."""),
+              기본 2 / 범위 1~코어수
+              높이면: 빨라지지만 조금만 빨라진다. 워커마다 행렬 크기의 1.4배를 더 쓴다.
+                      4만 건 실측: 1개 266초, 2개 176초, 4개 131초, 8개 122초.
+                      23만 건에서 8개로 두면 fit 에만 약 15.7GB 가 들어 죽는다.
+              낮추면: 메모리가 준다. 1개로 두면 가장 안전하고 2개보다 1.5배 느리다."""),
     )
     t.add_argument("--config", type=Path, default=None, metavar="PATH", help=f"설정 파일 (기본: {CONFIG_PATH})")
     t.add_argument("--save-config", action="store_true", help="이번에 쓴 설정을 config.json 에 저장한다")
@@ -586,7 +590,6 @@ def cmd_classify(args: argparse.Namespace) -> int:
 
 def cmd_reclassify(args: argparse.Namespace) -> int:
     import shutil
-    from collections import Counter
 
     from backend.classifier import BookCategoryClassifier
 
