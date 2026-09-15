@@ -2,7 +2,7 @@
 """자동분류 CLI 테스트
 
 CLI 는 운영 표면이라 한 번 터지면 긴 작업이 통째로 날아간다.
-`calibrate` 는 서점을 2,000번 조회한 뒤에야 마지막 집계에서 죽는 구조라,
+`bookstore-policy` 는 서점을 2,000번 조회한 뒤에야 마지막 집계에서 죽는 구조라,
 이름 하나만 빠져도 100분을 버린다. 그래서 명령마다 최소 한 번은 실제로 돌린다.
 """
 
@@ -88,7 +88,7 @@ def test_evaluate_prints_the_coverage_curve(model_file, capsys):
     assert "판정률" in capsys.readouterr().out
 
 
-def test_calibrate_runs_to_the_end_and_writes_the_threshold(model_file, monkeypatch, tmp_path, capsys):
+def test_bookstore_policy_runs_to_the_end_and_writes_the_threshold(model_file, monkeypatch, tmp_path, capsys):
     """서점 조회부터 집계·저장까지 실제로 통과시킨다.
 
     이 경로가 `Counter` 하나가 없어 마지막 줄에서 NameError 로 죽은 적이 있다.
@@ -101,8 +101,8 @@ def test_calibrate_runs_to_the_end_and_writes_the_threshold(model_file, monkeypa
 
     _, corpus = model_file
     path, _ = model_file
-    out = tmp_path / "calibration.json"
-    assert main(["calibrate", "--model", str(path), "--corpus", str(corpus), "--sample", "12", "--delay", "0", "--out", str(out)]) == 0
+    out = tmp_path / "policy.json"
+    assert main(["bookstore-policy", "--model", str(path), "--corpus", str(corpus), "--sample", "12", "--delay", "0", "--out", str(out)]) == 0
 
     saved = json.loads(out.read_text(encoding="utf-8"))
     assert saved["sample"] == 12

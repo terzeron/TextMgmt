@@ -24,6 +24,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore
 from backend.classifier import BookCategoryClassifier
+from backend.classifier.bookstore_policy import BookstorePolicy, map_bookstore_category
 
 logger = logging.getLogger(__name__)
 
@@ -612,12 +613,14 @@ class BookClassifierService:
     - 캐시 영구화 및 중복 정리/안전 이동
     """
 
-    def __init__(self, library_root: Path | str = "/mnt/data/text", cache_file: Optional[Path | str] = None, delay: float = 1.2, verbose: bool = False, es_manager: Any = None, classifier: Optional[BookCategoryClassifier] = None):
+    def __init__(self, library_root: Path | str = "/mnt/data/text", cache_file: Optional[Path | str] = None, delay: float = 1.2, verbose: bool = False, es_manager: Any = None, classifier: Optional[BookCategoryClassifier] = None, bookstore_policy: Optional["BookstorePolicy"] = None):
         self.library_root = Path(library_root)
         self.delay = delay
         self.verbose = verbose
         # 판정은 지도학습 모델이 한다. ES 를 주면 inode 로 특징을 집어 와 디스크를 안 읽는다.
         self.classifier = classifier if classifier is not None else BookCategoryClassifier(es_manager=es_manager)
+        # 모델과 서점 중 어느 쪽을 따를지 정하는 규칙. 파일이 없으면 예전 동작(모델 우선)이다.
+        self.bookstore_policy = bookstore_policy if bookstore_policy is not None else BookstorePolicy.load()
         if cache_file:
             self.cache_file = Path(cache_file)
         else:
@@ -672,7 +675,8 @@ class BookClassifierService:
                     res["title"] = found_title
                     res["author"] = found_author
                     res["cat"] = cat_str
-                    res["mapped"] = map_category(cat_str, raw_title, raw_author)
+                    # DB(category_keywords)가 먼저다. 운영이 관리하고 하드코딩 규칙보다 정밀하다.
+                    res["mapped"] = map_bookstore_category(cat_str, raw_title, raw_author)
                     res["url"] = detail_url
             except Exception as e:
                 logger.debug("Store query failed: %s", e)
@@ -745,24 +749,42 @@ class BookClassifierService:
         """
         모델로 판정하고, 확신이 모자라면 서점 다수결로 되돌아간다.
 
-        모델은 홀드아웃에서 판정률 92.7% / 정답률 90.0% 다. 서점은 같은 홀드아웃에서
+        모델은 홀드아웃에서 판정률 91.5% / 정답률 90.8% 다. 서점은 같은 홀드아웃에서
         판정률 50.8% / 정답률 85.8% 였다. 그래서 모델이 먼저다.
-        모델이 답을 못 하는 7%를 서점이 메운다.
+        모델이 답을 못 하는 8.5%를 서점이 메운다.
 
-        어느 쪽으로 갈아탈지는 `calibrate` 로 구간별 정답률을 재서 정할 수 있다.
+        다만 모델 확신도가 낮은 구간에서는 서점이 더 나을 수 있다. 그 경계는
+        `bookstore-policy` 가 구간별로 두 쪽 정답률을 재서 정한다. 규칙 파일이
+        없거나 서점이 이긴 구간이 없으면 경계는 0 이고, 모델이 늘 먼저다.
         """
-        model_cat, model_reason = self._decide_by_model(fpath, effective_fname)
+        model_cat, model_reason, confidence = self._decide_by_model(fpath, effective_fname)
+
+        store: Optional[Tuple[Optional[str], str, str]] = None
+
+        def bookstore() -> Tuple[Optional[str], str, str]:
+            # 서점 조회는 한 건에 3초 이상 걸린다. 한 번만 부른다.
+            nonlocal store
+            if store is None:
+                store = self._decide_by_bookstore(entry, trust_single_match=trust_single_match)
+            return store
+
+        if self.bookstore_policy.prefers_bookstore(confidence):
+            store_cat, store_method, store_reason = bookstore()
+            if store_cat:
+                return store_cat, store_method, f"{store_reason} (확신도 {confidence:.3f} < 경계 {self.bookstore_policy.override_below:.3f} 이라 서점 우선; 모델: {model_reason})"
+
         if model_cat:
             return model_cat, "model", model_reason
 
-        store_cat, store_method, store_reason = self._decide_by_bookstore(entry, trust_single_match=trust_single_match)
+        store_cat, store_method, store_reason = bookstore()
         if store_cat:
             return store_cat, store_method, f"{store_reason} (모델: {model_reason})"
         return None, store_method, f"{model_reason}; {store_reason}"
 
-    def _decide_by_model(self, fpath: Optional[Path], effective_fname: str) -> Tuple[Optional[str], str]:
+    def _decide_by_model(self, fpath: Optional[Path], effective_fname: str) -> Tuple[Optional[str], str, float]:
+        """판정 결과와 함께 확신도를 돌려준다. 확신도가 있어야 서점 결합 구간을 가른다."""
         if not self.classifier:
-            return None, "모델 파일이 없어 판정하지 않음"
+            return None, "모델 파일이 없어 판정하지 않음", 0.0
         try:
             if fpath is not None:
                 pred = self.classifier.classify_path(fpath)
@@ -771,19 +793,15 @@ class BookClassifierService:
                 pred = self.classifier.classify_document({"name": effective_fname, "text": "", "title": "", "author": "", "publisher": "", "type": Path(effective_fname).suffix.lstrip(".").lower()})
         except Exception as e:
             logger.warning("모델 판정에 실패했다 (%s): %s", effective_fname, e)
-            return None, f"모델 판정 실패: {e}"
-        return pred.category, pred.reason
+            return None, f"모델 판정 실패: {e}", 0.0
+        return pred.category, pred.reason, float(getattr(pred, "confidence", 0.0) or 0.0)
 
     def _decide_by_bookstore(self, entry: Dict[str, Any], trust_single_match: bool = True) -> Tuple[Optional[str], str, str]:
         """서점 3곳의 매핑 결과를 다수결로 모은다. 2곳 이상 같으면 채택한다."""
         from collections import Counter
 
         search_title = entry.get("search_title", "")
-        mapped = [
-            store.get("mapped")
-            for store in (entry.get("yes24", {}), entry.get("aladin", {}), entry.get("kyobo", {}))
-            if store.get("mapped") and is_title_match_reliable(search_title, store.get("title", ""))
-        ]
+        mapped = [store.get("mapped") for store in (entry.get("yes24", {}), entry.get("aladin", {}), entry.get("kyobo", {})) if store.get("mapped") and is_title_match_reliable(search_title, store.get("title", ""))]
         if not mapped:
             return None, "not_found", "서점에서 못 찾음"
 

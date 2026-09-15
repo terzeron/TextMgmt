@@ -36,7 +36,8 @@ TOP_DESCRIPTION = """\
   collect     Elasticsearch 에서 학습 데이터를 모은다
   train       모델을 학습하고 저장한다
   evaluate    저장된 모델의 판정률-정답률 곡선을 본다
-  calibrate   서점 신호의 결합 가중치를 학습한다
+  bookstore-policy
+              서점 신호를 언제 믿을지 정하는 규칙을 만든다
   classify    파일 하나를 판정하고 근거를 보여준다
   reclassify  디렉토리를 일괄 재분류한다
   info        저장된 모델의 학습 정보를 보여준다
@@ -75,11 +76,15 @@ EVALUATE_DESC = """\
 학습 없이 곡선만 보고 싶을 때, 또는 임계값을 어디에 둘지 고를 때 쓴다.
 """
 
-CALIBRATE_DESC = """\
-서점 신호를 모델과 어떻게 섞을지 학습한다.
+BOOKSTORE_POLICY_DESC = """\
+서점 신호를 언제 믿을지 정하는 규칙을 만든다.
+
+이름이 'calibrate' 였다. 확률 보정(calibration)을 하는 줄 알기 쉬워 바꿨다.
+확률 보정은 train 안에서 한다. 이 명령은 모델과 서점 중 어느 쪽을 따를지
+확신도 구간별로 재서 경계 하나를 고른다.
 
 서점 조회는 한 건에 3초 이상 걸려(서점 3곳 × 1초 대기) 23만 건에는 못 쓴다.
-그래서 작은 표본에만 조회하고, 그 위에서 결합 가중치를 정한다.
+그래서 작은 표본에만 조회한다.
 """
 
 CLASSIFY_DESC = """\
@@ -265,8 +270,8 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS, metavar="PATH", help=f"평가 데이터 (기본: {DEFAULT_CORPUS})")
     e.add_argument("--model", type=Path, default=MODEL_PATH, metavar="PATH", help="모델 파일")
 
-    # -- calibrate ----------------------------------------------------------
-    cal = sub.add_parser("calibrate", help="서점 신호의 결합 가중치를 학습한다", description=_fmt(CALIBRATE_DESC), formatter_class=argparse.RawTextHelpFormatter)
+    # -- bookstore-policy ---------------------------------------------------
+    cal = sub.add_parser("bookstore-policy", help="서점 신호를 언제 믿을지 정하는 규칙을 만든다", description=_fmt(BOOKSTORE_POLICY_DESC), formatter_class=argparse.RawTextHelpFormatter)
     cal.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS, metavar="PATH", help="표본을 뽑을 데이터")
     cal.add_argument("--model", type=Path, default=MODEL_PATH, metavar="PATH", help="모델 파일")
     cal.add_argument(
@@ -499,7 +504,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_calibrate(args: argparse.Namespace) -> int:
+def cmd_bookstore_policy(args: argparse.Namespace) -> int:
     """
     서점 신호를 언제 믿을지 잰다.
 
@@ -559,7 +564,7 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
         "bookstore_override_below": threshold,
     }
     print(f"\n  서점으로 갈아탈 확신도 상한: {threshold:.2f}" + ("  (서점이 모델을 이긴 구간이 없다)" if threshold == 0.0 else ""))
-    dest = args.out or args.model.parent / "bookstore_calibration.json"
+    dest = args.out or args.model.parent / "bookstore_policy.json"
     with Path(dest).open("w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     print(f"저장: {dest}")
@@ -666,7 +671,7 @@ def cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
-COMMANDS = {"collect": cmd_collect, "train": cmd_train, "evaluate": cmd_evaluate, "calibrate": cmd_calibrate, "classify": cmd_classify, "reclassify": cmd_reclassify, "info": cmd_info}
+COMMANDS = {"collect": cmd_collect, "train": cmd_train, "evaluate": cmd_evaluate, "bookstore-policy": cmd_bookstore_policy, "classify": cmd_classify, "reclassify": cmd_reclassify, "info": cmd_info}
 
 
 def main(argv: Optional[List[str]] = None) -> int:
