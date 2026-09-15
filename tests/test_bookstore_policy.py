@@ -309,3 +309,15 @@ def test_boundary_never_exceeds_the_measured_range(tmp_path):
     assert policy.override_below == 0.056
     assert policy.prefers_bookstore(0.05) is True
     assert policy.prefers_bookstore(0.2) is False, "재지 않은 고확신 구간은 모델이 지킨다"
+
+
+def test_service_passes_its_library_root_to_the_classifier(tmp_path):
+    """pod 는 책을 /books 로 마운트한다. 설정 기본값 /mnt/data/text 를 쓰면 경로 조회가 죽는다.
+
+    ES 의 file_path 는 라이브러리 루트 기준 상대 경로라, 루트가 어긋나면
+    상대 경로를 못 만들고 절대 경로로 질의해 0건이 된다.
+    """
+    from backend.book_classifier import BookClassifierService
+
+    service = BookClassifierService(library_root=tmp_path / "books", cache_file=tmp_path / "cache.json")
+    assert service.classifier.library_root == tmp_path / "books"

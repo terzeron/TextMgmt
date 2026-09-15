@@ -618,7 +618,10 @@ class BookClassifierService:
         self.delay = delay
         self.verbose = verbose
         # 판정은 지도학습 모델이 한다. ES 를 주면 inode 로 특징을 집어 와 디스크를 안 읽는다.
-        self.classifier = classifier if classifier is not None else BookCategoryClassifier(es_manager=es_manager)
+        # library_root 를 반드시 넘긴다. pod 는 책을 /books 로 마운트하는데 설정 기본값은
+        # /mnt/data/text 다. 루트가 어긋나면 ES 의 상대 경로를 못 만들어 경로 조회가 0건이 된다.
+        # inode 조회가 먼저라 평소엔 가려지지만, inode 가 바뀐 파일에서 대비책이 통째로 죽는다.
+        self.classifier = classifier if classifier is not None else BookCategoryClassifier(es_manager=es_manager, library_root=self.library_root)
         # 모델과 서점 중 어느 쪽을 따를지 정하는 규칙. 파일이 없으면 예전 동작(모델 우선)이다.
         self.bookstore_policy = bookstore_policy if bookstore_policy is not None else BookstorePolicy.load()
         if cache_file:
