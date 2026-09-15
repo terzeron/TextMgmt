@@ -45,9 +45,7 @@ jobs:
       # 여기서 실패한다.
       - run: npm ci
 
-      # lint 는 아직 게이트에 넣지 않는다. HEAD 기준으로 tests/ 에 미사용 변수와
-      # prop-types 오류 6건이 남아 있어, 지금 넣으면 모든 PR 이 즉시 막힌다.
-      # 해당 오류를 정리한 뒤 `- run: npm run lint` 를 여기에 추가한다.
+      - run: npm run lint
 
       - run: npm test
 
