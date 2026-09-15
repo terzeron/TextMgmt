@@ -57,6 +57,82 @@ describe("SimilarBooks", () => {
     });
   });
 
+  it("file_size가 있으면 바이트 숫자를 점수 왼쪽에 가장 작은 배지로 표시한다", async () => {
+    mockBooks([makeBook(1, 87.4)]);
+
+    render(<SimilarBooks bookId={1} />);
+    fireEvent.click(screen.getByText("유사한 책 목록"));
+
+    await waitFor(() => {
+      expect(screen.getByText("1,000")).toBeTruthy();
+      expect(screen.getByText("87")).toBeTruthy();
+    });
+
+    expect(screen.queryByText("1,000 B")).toBeNull();
+
+    const fileSizeBadge = screen.getByText("1,000");
+    const scoreBadge = screen.getByText("87");
+    const badges = Array.from(
+      fileSizeBadge.parentElement.querySelectorAll("span"),
+    );
+
+    expect(badges.indexOf(fileSizeBadge)).toBeLessThan(
+      badges.indexOf(scoreBadge),
+    );
+    expect(fileSizeBadge.style.padding).toBe("2px 6px");
+    expect(fileSizeBadge.style.fontSize).toBe("0.45rem");
+    expect(fileSizeBadge.style.lineHeight).toBe("1");
+    expect(fileSizeBadge.style.transform).toBe("scale(0.75)");
+  });
+
+  it("file_size가 1024 이상이어도 KB나 MB로 변환하지 않는다", async () => {
+    mockBooks([
+      {
+        ...makeBook(1, 87.4),
+        file_size: 1048576,
+      },
+    ]);
+
+    render(<SimilarBooks bookId={1} />);
+    fireEvent.click(screen.getByText("유사한 책 목록"));
+
+    await waitFor(() => {
+      expect(screen.getByText("1,048,576")).toBeTruthy();
+    });
+
+    expect(screen.queryByText(/MB|KB/)).toBeNull();
+  });
+
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["빈 문자열", ""],
+    ["음수", -1],
+    ["숫자가 아닌 문자열", "abc"],
+  ])("file_size가 %s이면 파일 크기 배지를 표시하지 않는다", async (_label, fileSize) => {
+    mockBooks([
+      {
+        ...makeBook(1, 87.4),
+        file_size: fileSize,
+      },
+    ]);
+
+    render(<SimilarBooks bookId={1} />);
+    fireEvent.click(screen.getByText("유사한 책 목록"));
+
+    await waitFor(() => {
+      expect(screen.getByText("87")).toBeTruthy();
+    });
+
+    const scoreBadge = screen.getByText("87");
+    const badges = Array.from(
+      scoreBadge.parentElement.querySelectorAll("span"),
+    );
+
+    expect(badges).toHaveLength(1);
+    expect(badges[0]).toBe(scoreBadge);
+  });
+
   it("score가 소수일 때 반올림하여 표시한다", async () => {
     mockBooks([makeBook(1, 92.6)]);
 
