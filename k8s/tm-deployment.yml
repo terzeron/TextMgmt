@@ -80,6 +80,10 @@ spec:
               valueFrom: { secretKeyRef: { name: tm-es-cred, key: password } }
             - name: TM_ES_BOOK_INDEX
               value: book
+            # books-pv 가 호스트의 /mnt/data/text 를 /books 로 마운트한다.
+            # 학습 머신이 쓴 모델을 pod 가 그대로 읽는다. 이미지를 다시 굽지 않는다.
+            - name: TM_CLASSIFIER_MODEL
+              value: /books/.classifier/model.joblib
             - name: TM_ES_COMICS_INDEX
               value: comics
             - name: TM_BACKFILL_CREATED_TIME_ON_STARTUP

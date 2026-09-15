@@ -1583,7 +1583,7 @@ class BookManager:
         mappings = mappings or {}
         classifier_service: BookClassifierService | None = None
         if use_bookstore or use_content_meta:
-            classifier_service = BookClassifierService(library_root=self.path_prefix, delay=delay)
+            classifier_service = BookClassifierService(library_root=self.path_prefix, delay=delay, es_manager=self.es_manager)
 
         result: dict[str, Any] = {
             "content_type": content_type,

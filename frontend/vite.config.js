@@ -74,13 +74,14 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["tests/setup.js"],
     reporters: ["./tests/reporter.js"],
+    // jsdom + coverage workers can exceed memory on high-core hosts.
+    // Override with VITEST_MAX_WORKERS when a larger runner is available.
+    maxWorkers: process.env.VITEST_MAX_WORKERS || 2,
     coverage: {
-      // MCR custom provider로 단위 테스트 커버리지를 V8로 수집한다.
-      // MCR 옵션(name/outputDir/reports 등)은 mcr.config.js에서 읽는다.
-      // raw 산출물은 e2e 커버리지와 병합(merge-coverage.mjs)하는 데 쓰인다.
-      provider: "custom",
-      customProviderModule: "vitest-monocart-coverage",
+      provider: "v8",
       include: ["src/**/*.{js,jsx}"],
+      reportsDirectory: "coverage-reports/unit",
+      reporter: [["text", { skipFull: true }], "html", "lcovonly"],
     },
   },
 });

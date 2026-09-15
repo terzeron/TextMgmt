@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-BookClassifierService - 결정론적(Deterministic) 도서 자동 분류 엔진
-1번: 3대 온라인 서점(Yes24, 알라딘, 교보) 교차 검증 및 2/3 다수결 판정
-2번: EPUB 메타데이터(dc:subject 등) 및 TXT 상단 본문 키워드 정적 스코어링 판정
+BookClassifierService - 도서 자동 분류의 운영 계층
+
+판정 자체는 `backend.classifier` 의 지도학습 모델이 한다. 이 모듈은 그 둘레의
+운영 기능을 맡는다: 캐시, 서점 조회, 파일명 파싱, 카테고리 매핑, 파일 이동, 중복 정리.
+
+예전에는 여기에 판정 로직이 같이 있었다. 우선순위 캐스케이드에 수작업 가중치 15개와
+장르 키워드 목록을 얹은 방식이었고, 홀드아웃 실측에서 판정률 50.8% / 정답률 85.8% 였다.
+선형 모델은 같은 홀드아웃에서 92.7% / 90.0% 다. 그래서 판정부만 들어냈다.
+설계: docs/superpowers/specs/2026-09-14-supervised-classifier-design.md
 """
 
 import os
@@ -14,30 +20,109 @@ import zipfile
 import urllib.parse
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore
+from backend.classifier import BookCategoryClassifier
+from backend.classifier.bookstore_policy import BookstorePolicy, map_bookstore_candidates
 
 logger = logging.getLogger(__name__)
 
 
 STANDARD_CATEGORIES = [
-    "0_html", "0_hwp", "0_telegram",
-    "1_동양고전", "1_동양고전한문", "1_문헌서지", "1_서양고전", "1_올재", "1_한국고전국역총서",
-    "2_동서문화사월드북", "2_문예세계문학선", "2_문학일반서평작법독서", "2_소설Abe전집", "2_소설역사", "2_소설외국",
-    "2_소설일본", "2_소설일본게이고", "2_소설일본하루키", "2_소설중국", "2_소설한국", "2_수필서간일기", "2_시",
-    "2_열린책들세계문학", "2_을유세계문학전집",
-    "3_SF", "3_SF그리폰북스", "3_SF영문", "3_SF직지", "3_SF환상문학전집", "3_그래픽노블", "3_라이트노벨",
-    "3_무협", "3_셜록홈즈", "3_스릴러", "3_여성향", "3_장르문학자료", "3_판타지", "3_판타지pdf",
-    "4_경영마케팅", "4_경제", "4_누워서읽는법학", "4_법", "4_사회인류", "4_살림지식총서", "4_시공디스커버리",
-    "4_심리학뇌과학", "4_역사인물", "4_인문일반논픽션", "4_정치외교군사", "4_종교신화", "4_철학윤리",
-    "5_그림으로_읽는", "5_미술예술건축", "5_사진영상", "5_서브컬쳐", "5_수학과학일반", "5_스포츠", "5_영화", "5_음악", "5_이지사이언스",
-    "6_재테크", "6_처세술리더십창의성",
-    "7_교육일반", "7_국어교육", "7_언어일반", "7_영문일반", "7_영어교육", "7_외국어교육", "7_외국인을위한한국어읽기",
-    "7_일문일반", "7_일어교육", "7_중문일반", "7_중어한자교육",
-    "8_IT", "8_건강일반", "8_공인중개사", "8_모델링", "8_밀리터리", "8_성", "8_실용의학회계", "8_악보", "8_여행", "8_요리음료",
-    "9_BLGL", "9_격언명언", "9_북스캔OCR", "9_성인", "9_어린이육아", "9_역학해몽퍼즐", "9_유머", "9_청소년"
+    "0_html",
+    "0_hwp",
+    "0_telegram",
+    "1_동양고전",
+    "1_동양고전한문",
+    "1_문헌서지",
+    "1_서양고전",
+    "1_올재",
+    "1_한국고전국역총서",
+    "2_동서문화사월드북",
+    "2_문예세계문학선",
+    "2_문학일반서평작법독서",
+    "2_소설Abe전집",
+    "2_소설역사",
+    "2_소설외국",
+    "2_소설일본",
+    "2_소설일본게이고",
+    "2_소설일본하루키",
+    "2_소설중국",
+    "2_소설한국",
+    "2_수필서간일기",
+    "2_시",
+    "2_열린책들세계문학",
+    "2_을유세계문학전집",
+    "3_SF",
+    "3_SF그리폰북스",
+    "3_SF영문",
+    "3_SF직지",
+    "3_SF환상문학전집",
+    "3_그래픽노블",
+    "3_라이트노벨",
+    "3_무협",
+    "3_셜록홈즈",
+    "3_스릴러",
+    "3_여성향",
+    "3_장르문학자료",
+    "3_판타지",
+    "3_판타지pdf",
+    "4_경영마케팅",
+    "4_경제",
+    "4_누워서읽는법학",
+    "4_법",
+    "4_사회인류",
+    "4_살림지식총서",
+    "4_시공디스커버리",
+    "4_심리학뇌과학",
+    "4_역사인물",
+    "4_인문일반논픽션",
+    "4_정치외교군사",
+    "4_종교신화",
+    "4_철학윤리",
+    "5_그림으로_읽는",
+    "5_미술예술건축",
+    "5_사진영상",
+    "5_서브컬쳐",
+    "5_수학과학일반",
+    "5_스포츠",
+    "5_영화",
+    "5_음악",
+    "5_이지사이언스",
+    "6_재테크",
+    "6_처세술리더십창의성",
+    "7_교육일반",
+    "7_국어교육",
+    "7_언어일반",
+    "7_영문일반",
+    "7_영어교육",
+    "7_외국어교육",
+    "7_외국인을위한한국어읽기",
+    "7_일문일반",
+    "7_일어교육",
+    "7_중문일반",
+    "7_중어한자교육",
+    "8_IT",
+    "8_건강일반",
+    "8_공인중개사",
+    "8_모델링",
+    "8_밀리터리",
+    "8_성",
+    "8_실용의학회계",
+    "8_악보",
+    "8_여행",
+    "8_요리음료",
+    "9_BLGL",
+    "9_격언명언",
+    "9_북스캔OCR",
+    "9_성인",
+    "9_어린이육아",
+    "9_역학해몽퍼즐",
+    "9_유머",
+    "9_청소년",
 ]
+
 
 def extract_explicit_genre(filename: str) -> Optional[str]:
     """파일명(URL 디코딩 후)에 명시된 장르 태그나 접두어를 추출하여 표준 카테고리로 반환"""
@@ -131,8 +216,8 @@ def title_similarity(t1: str, t2: str) -> float:
         return 0.0
     if s1 in s2 or s2 in s1:
         return len(min(s1, s2, key=len)) / len(max(s1, s2, key=len))
-    b1 = set(s1[i:i+2] for i in range(len(s1)-1))
-    b2 = set(s2[i:i+2] for i in range(len(s2)-1))
+    b1 = set(s1[i : i + 2] for i in range(len(s1) - 1))
+    b2 = set(s2[i : i + 2] for i in range(len(s2) - 1))
     if not b1 or not b2:
         return 0.0
     return 2.0 * len(b1 & b2) / (len(b1) + len(b2))
@@ -191,611 +276,6 @@ def is_title_match_reliable(search_title: str, found_title: str) -> bool:
         return True
 
     return False
-
-
-def extract_content_head_tail_words(fpath: Path, head_n: int = 500, tail_n: int = 500) -> str:
-    """TXT/EPUB 파일에서 처음 N단어와 마지막 N단어 분량의 본문 텍스트를 추출하여 결합 (하이브리드 장르 탐색용)"""
-    ext = fpath.suffix.lower()
-    head_text = ""
-    tail_text = ""
-
-    if ext == ".txt":
-        # Head
-        for enc in ["utf-8", "cp949"]:
-            try:
-                with open(fpath, "r", encoding=enc, errors="ignore") as f:
-                    lines = [f.readline() for _ in range(250)]
-                raw = "".join(lines)
-                if re.search(r"[가-힣]{3,}", raw):
-                    head_text = raw
-                    break
-            except Exception:
-                continue
-
-        # Tail (seek from end)
-        try:
-            size = fpath.stat().st_size
-            read_bytes = min(size, 40000)
-            for enc in ["utf-8", "cp949"]:
-                try:
-                    with open(fpath, "rb") as f:
-                        f.seek(max(0, size - read_bytes))
-                        raw_b = f.read()
-                    raw_str = raw_b.decode(enc, errors="ignore")
-                    lines = raw_str.splitlines()
-                    clean_lines = lines[1:] if len(lines) > 1 else lines
-                    raw = " ".join(clean_lines)
-                    if re.search(r"[가-힣]{3,}", raw):
-                        tail_text = raw
-                        break
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-    elif ext == ".epub":
-        try:
-            with zipfile.ZipFile(fpath, "r") as z:
-                htmls = [n for n in z.namelist() if n.lower().endswith((".html", ".xhtml", ".htm")) and not any(k in n.lower() for k in ["cover", "nav", "toc", "title"])]
-                if not htmls:
-                    htmls = [n for n in z.namelist() if n.lower().endswith((".html", ".xhtml", ".htm"))]
-                chunks_h = []
-                for h in htmls[:2]:
-                    raw = z.read(h).decode("utf-8", errors="ignore")
-                    clean = re.sub(r"<[^>]+>", " ", raw)
-                    if len(clean.strip()) > 50:
-                        chunks_h.append(clean)
-                head_text = " ".join(chunks_h)
-
-                chunks_t = []
-                for h in htmls[-2:]:
-                    raw = z.read(h).decode("utf-8", errors="ignore")
-                    clean = re.sub(r"<[^>]+>", " ", raw)
-                    if len(clean.strip()) > 50:
-                        chunks_t.append(clean)
-                tail_text = " ".join(chunks_t)
-        except Exception:
-            pass
-
-    h_words = head_text.split()[:head_n]
-    t_words = tail_text.split()[-tail_n:] if tail_text else []
-    return (" ".join(h_words) + " " + " ".join(t_words)).strip()
-
-
-def extract_content_first_1000_words(fpath: Path) -> str:
-    """TXT/EPUB 파일에서 처음 500단어와 마지막 500단어를 결합하여 1000단어 반환 (하위 호환)"""
-    return extract_content_head_tail_words(fpath, 500, 500)
-
-
-def clean_disclaimer_and_colophon(text: str) -> str:
-    """
-    저작권 경고, 무단전재 공지, 판권지(Colophon), 출판사 정보 등
-    장르 판정과 무관한 시스템/법적 문구를 텍스트 분석 전에 정제
-    """
-    if not text:
-        return ""
-    # 1. 무단전재, 무단복제, 저작권 관련 문장/블록 제거
-    cleaned = re.sub(r"무단\s*전재[^\n.]*(?:금합니다|금지|처벌|법적[^\n.]*책임)[^\n.]*", " ", text, flags=re.IGNORECASE)
-    cleaned = re.sub(r"이\s*(?:전자)?책은\s*저작권법[^\n.]*(?:보호|금합니다|처벌|금지)[^\n.]*", " ", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"저작권자의\s*(?:서면\s*)?동의\s*없이[^\n.]*(?:금합니다|처벌)[^\n.]*", " ", cleaned, flags=re.IGNORECASE)
-    # 2. 판권란 (발행인, 편집인, 디자인, 제작, 마케팅, 등록번호 등) 라인/블록 제거
-    cleaned = re.sub(r"(?:발행인|편집인|책임편집|디자인|제작|마케팅|펴낸곳|출판사|등록번호|isbn)\s+[:\w\s,&]+(?=[.\n]|$)", " ", cleaned, flags=re.IGNORECASE)
-    # 3. 조아라/문피아 뷰어 경고 문구 제거
-    cleaned = re.sub(r"\*경고\*[^\n.]*(?:정상적인 경로의 뷰어가 아닙니다|처벌대상이 되실 수 있으니)[^\n.]*", " ", cleaned, flags=re.IGNORECASE)
-    return cleaned
-
-
-def count_genre_word_patterns(text: str, kws: List[str]) -> int:
-    cnt = 0
-    for kw in kws:
-        if kw == "단전":
-            cnt += len(re.findall(r"(?<!무)단전(?:[를이가의로통량석홀]?)(?:$|[^\w가-힣])", text))
-        elif kw == "진기":
-            cnt += len(re.findall(r"(?<!민)진기(?!한)(?:[를가의로]?)(?:$|[^\w가-힣])", text))
-        elif kw == "강수":
-            cnt += len(re.findall(r"(?<![가-힣a-zA-Z])강수(?:[를이가의로]?)(?:$|[^\w가-힣])", text))
-        elif kw == "마나":
-            cnt += len(re.findall(r"(?:^|[^\w가-힣])마나(?:[를이가의로통량석홀]?)(?:$|[^\w가-힣])", text))
-        elif kw in ["bl", "gl"]:
-            cnt += len(re.findall(r"(?:^|[^a-zA-Z])" + kw + r"(?:$|[^a-zA-Z])", text))
-        else:
-            cnt += text.count(kw)
-    return cnt
-
-
-# ==========================================
-# 5대 장르(무협, 판타지, 여성향, BLGL, 성인) 도메인 키워드 상수 정의 (Single Source of Truth)
-# ==========================================
-WUXIA_CORE = [
-    "무협", "무림", "단전", "내공", "진기", "운기조식", "기경팔맥", "주화입마", "환골탈태",
-    "화산파", "무당파", "소림사", "개방", "사파", "정파", "마교", "천마", "비급", "검법", "도법", "심법",
-    "세가", "사천당가", "남궁세가", "제갈세가", "모용세가", "하북팽가", "소가주", "녹림", "암기", "독공", "독문", "검기"
-]
-WUXIA_KWS = WUXIA_CORE + [
-    "강호", "임독이맥", "종남파", "혈교", "장문인", "소교주", "맹주", "무림맹", "절기", "초식",
-    "공자", "가주", "하오문", "점창파", "도기", "호법", "총채주"
-]
-
-# 판타지: 현대 헌터물 + 중세 서양 판타지/영지물/제국물 전면 보강
-FANTASY_CORE = [
-    "판타지", "던전", "몬스터", "헌터", "각성", "레이드", "게이트", "상태창", "마나", "마법진",
-    "오크", "고블린", "드래곤", "엘프", "용사", "이세계", "귀환자", "만렙",
-    "오러", "소드마스터", "기사단", "마법사", "마탑", "영지", "영주", "마력"
-]
-FANTASY_KWS = FANTASY_CORE + [
-    "길드", "시스템", "퀘스트", "스킬", "스탯", "레벨업", "플레이어", "인벤토리", "아이템", "서클", "아카데미", "골렘", "마물",
-    "제국", "왕국", "공국", "백작", "남작", "차원이동", "환생자", "기사"
-]
-
-# 여성향/로판: 서양 판타지 영지물과 겹치는 작위(황제, 공작, 영애) 및 시한부는 CORE에서 제외하고
-# 결정적 로맨스 관계성 어휘가 최소 1개 이상 존재할 때만 보조 키워드 점수 합산
-ROFAN_CORE = [
-    "로맨스", "로판", "현로", "남주", "여주", "남주인공", "여주인공",
-    "파혼", "시월드", "후회남", "집착남", "계략남", "악녀", "햇살여주", "빙의녀"
-]
-ROFAN_KWS = ROFAN_CORE + [
-    "공작", "공작가", "황제", "황실", "사교계", "무도회", "드레스", "시녀", "집사", "약혼", "키스", "설렘", "영애", "시한부"
-]
-
-# BL: 페로몬/강수/각인은 생물학 및 인명 오탐 방지를 위해 CORE에서 제외하고
-# 결정적 BL 관계성 어휘가 최소 1개 이상 존재할 때만 보조 키워드 점수 합산
-BL_CORE = [
-    "미인공", "미남공", "다정공", "광공", "집착공", "연하공", "연상공", "후회공", "미인수", "단정수", "지랄수",
-    "임신수", "순진수", "오메가버스", "가이드버스", "보이즈러브", "동성애", "백합"
-]
-BL_KWS = BL_CORE + ["에스퍼", "가이딩", "히트사이클", "페로몬", "노팅", "각인", "강수", "bl", "gl"]
-
-ADULT_KWS = [
-    "야설", "성인소설", "음란", "음탕", "육덕", "최면", "조교", "근친", "스와핑", "섹스", "자위",
-    "사정액", "쿠퍼액", "애액", "정액", "자지", "보지에", "보지를", "보지속", "음순", "클리토리스",
-    "귀두", "유두", "유륜", "젖가슴", "피스톤", "허리짓", "교성", "오르가즘", "절정에", "펠라치오"
-]
-
-
-def calculate_5_genre_scores_and_ratios(title: str, text: str) -> Dict[str, Any]:
-    """
-    도서 제목과 텍스트(Head 500 + Tail 500)에서 5대 장르(무협, 판타지, 여성향, BL, 성인)의
-    빈도 점수, 비율(%), 및 클러스터를 산출하는 공통 핵심 분석 함수.
-    """
-    cleaned_text = clean_disclaimer_and_colophon(text)
-    combined = (title + " " + cleaned_text).lower()
-    total_chars = len(combined)
-    hangul_chars = len(re.findall(r"[가-힣]", combined))
-
-    if total_chars < 15 or (hangul_chars / total_chars) < 0.20:
-        return {
-            "valid": False,
-            "reason": "not_enough_hangul",
-            "scores": {},
-            "ratios": {},
-            "total_score": 0,
-            "cluster": "미분류_비문학영문",
-            "target_cat": None,
-        }
-
-    w_score = count_genre_word_patterns(combined, WUXIA_KWS) if any(kw in combined for kw in WUXIA_CORE) else 0
-    f_score = count_genre_word_patterns(combined, FANTASY_KWS) if any(kw in combined for kw in FANTASY_CORE) else 0
-
-    # 여성향: 결정적 로맨스 관계성 어휘(ROFAN_CORE)가 존재할 때만 유효 인정
-    has_rofan_core = any(kw in combined for kw in ROFAN_CORE)
-    r_score = count_genre_word_patterns(combined, ROFAN_KWS) if has_rofan_core else 0
-
-    # BL: 결정적 BL 어휘(BL_CORE)나 독립 단어 bl/gl이 존재할 때만 유효 인정 (단독 페로몬/강수 오탐 방지)
-    has_bl_core = any(kw in combined for kw in BL_CORE) or bool(re.search(r"(?:^|[^a-zA-Z])(?:bl|gl)(?:$|[^a-zA-Z])", combined))
-    b_score = count_genre_word_patterns(combined, BL_KWS) if has_bl_core else 0
-
-    matched_adult = [kw for kw in ADULT_KWS if kw in combined]
-    a_score = sum(combined.count(kw) for kw in ADULT_KWS) if (len(matched_adult) >= 3 and sum(combined.count(kw) for kw in ADULT_KWS) >= 5) else 0
-
-    scores = {
-        "3_무협": w_score,
-        "3_판타지": f_score,
-        "3_여성향": r_score,
-        "9_BLGL": b_score,
-        "9_성인": a_score,
-    }
-
-    # 파일명 명시적 장르(extract_explicit_genre) 최우선 보호 및 가중치 적용
-    explicit_cat = extract_explicit_genre(title)
-    if explicit_cat and explicit_cat in scores:
-        scores[explicit_cat] += 5
-        if explicit_cat == "3_무협":
-            # 파일명에 무협이 명시된 경우 우연한 노이즈로 인한 BL/여성향 이탈 원천 차단
-            scores["9_BLGL"] = 0
-            scores["3_여성향"] = 0
-        elif explicit_cat == "3_판타지":
-            scores["9_BLGL"] = 0
-            scores["3_여성향"] = 0
-
-    total_score = sum(scores.values())
-
-    if total_score == 0:
-        return {
-            "valid": False,
-            "reason": "zero_score",
-            "scores": scores,
-            "ratios": {k: 0.0 for k in scores},
-            "total_score": 0,
-            "cluster": "미분류_키워드부족",
-            "target_cat": None,
-        }
-
-    ratios = {k: round((v / total_score) * 100, 1) for k, v in scores.items()}
-
-    # 클러스터 및 타겟 카테고리 결정
-    cluster = "기타_복합"
-    target_cat = None
-
-    # 1. 단일 압도적 클러스터 (Dominant >= 75% 및 score >= 5)
-    for cat, r in ratios.items():
-        if r >= 75.0 and scores[cat] >= 5:
-            # 3_무협의 경우, 판타지 키워드가 2건 이상 검출되면 순수무협이 아닌 하이브리드로 판단하여 3_판타지로 분류
-            if cat == "3_무협" and scores["3_판타지"] >= 2:
-                cluster = "하이브리드_무협_판타지"
-                target_cat = "3_판타지"
-            else:
-                cluster = f"확실한_{cat}"
-                target_cat = cat
-            break
-
-    # 2. 하이브리드 클러스터
-    if not target_cat:
-        # 무협 vs 판타지 하이브리드 (3_무협은 순수무협만 유지, 하이브리드는 3_판타지로 자동 분류 지정)
-        if (ratios["3_무협"] + ratios["3_판타지"] >= 70.0 and ratios["3_무협"] >= 15.0 and ratios["3_판타지"] >= 15.0 and scores["3_판타지"] >= 2) or (scores["3_무협"] >= 2 and scores["3_판타지"] >= 2 and (scores["3_무협"] + scores["3_판타지"]) >= 5):
-            cluster = "하이브리드_무협_판타지"
-            target_cat = "3_판타지"
-        elif ratios["3_판타지"] + ratios["3_여성향"] >= 70.0 and ratios["3_판타지"] >= 20.0 and ratios["3_여성향"] >= 20.0 and scores["3_판타지"] >= 2 and scores["3_여성향"] >= 2 and (scores["3_판타지"] + scores["3_여성향"]) >= 5:
-            cluster = "하이브리드_판타지_로판"
-        elif ratios["3_판타지"] + ratios["9_성인"] >= 70.0 and ratios["3_판타지"] >= 20.0 and ratios["9_성인"] >= 20.0 and scores["3_판타지"] >= 2 and scores["9_성인"] >= 2 and (scores["3_판타지"] + scores["9_성인"]) >= 5:
-            cluster = "하이브리드_판타지_성인"
-        elif ratios["3_여성향"] + ratios["9_성인"] >= 70.0 and ratios["3_여성향"] >= 20.0 and ratios["9_성인"] >= 20.0 and scores["3_여성향"] >= 2 and scores["9_성인"] >= 2 and (scores["3_여성향"] + scores["9_성인"]) >= 5:
-            cluster = "하이브리드_로맨스_성인"
-        elif ratios["3_무협"] + ratios["9_성인"] >= 70.0 and ratios["3_무협"] >= 20.0 and ratios["9_성인"] >= 20.0 and scores["3_무협"] >= 2 and scores["9_성인"] >= 2 and (scores["3_무협"] + scores["9_성인"]) >= 5:
-            cluster = "하이브리드_무협_성인"
-        elif ratios["9_BLGL"] + ratios["9_성인"] >= 70.0 and ratios["9_BLGL"] >= 20.0 and ratios["9_성인"] >= 20.0 and scores["9_BLGL"] >= 2 and scores["9_성인"] >= 2 and (scores["9_BLGL"] + scores["9_성인"]) >= 5:
-            cluster = "하이브리드_BL_성인"
-        elif ratios["9_BLGL"] + ratios["3_판타지"] >= 70.0 and ratios["9_BLGL"] >= 20.0 and ratios["3_판타지"] >= 20.0 and scores["9_BLGL"] >= 2 and scores["3_판타지"] >= 2 and (scores["9_BLGL"] + scores["3_판타지"]) >= 5:
-            cluster = "하이브리드_BL_판타지"
-        else:
-            # 60% 이상 및 점수 4점 이상이면 준확실 (노이즈 3점 이하는 미분류/보류)
-            for cat, r in ratios.items():
-                if r >= 60.0 and scores[cat] >= 4:
-                    cluster = f"준확실_{cat}"
-                    target_cat = cat
-                    break
-
-    return {
-        "valid": True,
-        "scores": scores,
-        "ratios": ratios,
-        "total_score": total_score,
-        "cluster": cluster,
-        "target_cat": target_cat,
-    }
-
-
-def classify_5_genres_from_content(title: str, text: str) -> Tuple[Optional[str], int, str]:
-    """
-    도서 제목과 본문 처음/끝 500단어(총 1000단어)를 정밀 분석하여
-    3_무협, 3_판타지, 3_여성향, 9_BLGL, 9_성인 5대 장르로 결정론적 분류.
-    - 무협-판타지 하이브리드(판타지 어휘 유의미 포함)는 3_판타지로 분류
-    - 3_무협은 판타지 요소가 없는 순수 무협만 분류
-    """
-    res = calculate_5_genre_scores_and_ratios(title, text)
-    if not res.get("valid"):
-        return None, 0, res.get("reason", "empty_or_invalid")
-
-    scores = res["scores"]
-    target_cat = res.get("target_cat")
-    cluster = res.get("cluster", "")
-
-    # 1. 클러스터에서 명확히 결정된 카테고리가 있으면 우선 반환
-    if target_cat:
-        score = scores.get(target_cat, 0)
-        reason = f"cluster={cluster}"
-        if cluster == "하이브리드_무협_판타지":
-            reason += f":hybrid_wuxia_fantasy(w={scores.get('3_무협', 0)},f={scores.get('3_판타지', 0)}) -> 3_판타지"
-        elif cluster == "확실한_3_무협":
-            reason += f":pure_wuxia(w={scores.get('3_무협', 0)},f={scores.get('3_판타지', 0)})"
-        return target_cat, score, reason
-
-    # 2. 중재 우선순위 폴백
-    bl_score = scores.get("9_BLGL", 0)
-    rofan_score = scores.get("3_여성향", 0)
-    wuxia_score = scores.get("3_무협", 0)
-    fantasy_score = scores.get("3_판타지", 0)
-    adult_score = scores.get("9_성인", 0)
-
-    if bl_score >= 3 and bl_score >= adult_score * 0.5:
-        return "9_BLGL", bl_score, f"bl_score={bl_score}"
-    if rofan_score >= 4 and rofan_score >= adult_score * 0.4:
-        return "3_여성향", rofan_score, f"rofan_score={rofan_score}"
-
-    # 무협 vs 판타지 하이브리드 판정 규칙:
-    # 3_무협은 순수 무협만 남기며, 판타지 어휘가 2건 이상 포함된 하이브리드는 3_판타지로 분류
-    if wuxia_score >= 4 and fantasy_score >= 2:
-        return "3_판타지", fantasy_score, f"hybrid_wuxia_fantasy(w={wuxia_score},f={fantasy_score}) -> 3_판타지"
-    if wuxia_score >= 4 and fantasy_score < 2:
-        return "3_무협", wuxia_score, f"pure_wuxia(w={wuxia_score},f={fantasy_score})"
-    if fantasy_score >= 4:
-        return "3_판타지", fantasy_score, f"fantasy_score={fantasy_score}"
-
-    if adult_score >= 5:
-        return "9_성인", adult_score, f"adult_score={adult_score}"
-
-    return None, 0, "no_genre_matched"
-
-
-def score_text_genre(text: str) -> Optional[str]:
-    """기존 호환용 본문 키워드 스코어링"""
-    cleaned_text = clean_disclaimer_and_colophon(text)
-    cat, score, _ = classify_5_genres_from_content("", cleaned_text)
-    if cat:
-        return cat
-    if not cleaned_text:
-        return None
-    t = cleaned_text.lower()
-    scores = {
-        "3_SF": sum(1 for kw in ["우주선", "안드로이드", "인공지능", "사이보그", "외계인", "행성", "타임머신", "디스토피아"] if kw in t),
-        "3_스릴러": sum(1 for kw in ["살인사건", "연쇄살인", "형사", "수사관", "시체", "밀실", "트릭", "용의자", "알리바이", "탐정"] if kw in t),
-    }
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    best_cat, best_score = sorted_scores[0]
-    second_score = sorted_scores[1][1]
-    if best_score >= 2 and best_score > second_score:
-        return best_cat
-    return None
-
-
-def resolve_genre_conflict(cats: List[str], fname: str, text_sample: str = "") -> Optional[str]:
-    """서점 간 사소한 장르 차이(특히 3_* 계열) 충돌 시 파일명과 본문 키워드로 보조 판단"""
-    valid_cats = set(cats)
-    fname_lower = fname.lower()
-    text_lower = (fname + " " + text_sample).lower()
-
-    # 1. 무협 vs 판타지 (3_무협은 순수무협만 유지, 하이브리드는 3_판타지 분류)
-    if "3_무협" in valid_cats and "3_판타지" in valid_cats:
-        wuxia_kws = ["문파", "화산", "마교", "소교주", "맹주", "무림", "장문인", "절기", "검법", "도법", "내공", "심법", "소림", "무당", "개방", "사파", "정파", "강호", "천마"]
-        fantasy_kws = ["던전", "헌터", "각성", "마나", "마법", "길드", "몬스터", "레이드", "시스템", "퀘스트", "플레이어", "용사", "드래곤", "아카데미", "스킬", "스탯", "이세계", "재벌"]
-        w_score = sum(1 for kw in wuxia_kws if kw in text_lower)
-        f_score = sum(1 for kw in fantasy_kws if kw in text_lower)
-        # 판타지 키워드가 1회 이상 검출되면 하이브리드로 판단하여 3_판타지 분류
-        if f_score >= 1:
-            return "3_판타지"
-        if w_score >= 1:
-            return "3_무협"
-        return "3_무협" if "무협" in fname_lower else "3_판타지"
-
-    # 2. 그래픽노블 vs 라이트노벨
-    if "3_그래픽노블" in valid_cats and "3_라이트노벨" in valid_cats:
-        ext = Path(fname).suffix.lower()
-        if ext in [".txt", ".epub"]:
-            return "3_라이트노벨"
-        return "3_그래픽노블"
-
-    # 3. 그래픽노블 vs 판타지
-    if "3_그래픽노블" in valid_cats and "3_판타지" in valid_cats:
-        ext = Path(fname).suffix.lower()
-        if ext in [".txt", ".epub"]:
-            return "3_판타지"
-        return "3_그래픽노블"
-
-    # 4. 판타지 vs 여성향 (로맨스판타지)
-    if "3_판타지" in valid_cats and "3_여성향" in valid_cats:
-        rofan_kws = ["영애", "공작", "황태자", "남주", "여주", "시월드", "파혼", "후회남", "집착", "황후", "악녀", "빙의", "로판", "로맨스"]
-        if any(kw in text_lower for kw in rofan_kws):
-            return "3_여성향"
-        return "3_판타지"
-
-    # 5. 그래픽노블 vs 여성향
-    if "3_그래픽노블" in valid_cats and "3_여성향" in valid_cats:
-        ext = Path(fname).suffix.lower()
-        if ext in [".txt", ".epub"]:
-            return "3_여성향"
-        return "3_그래픽노블"
-
-    # 6. 라이트노벨 vs 여성향 (TL, 여성향 라노벨, 로맨스)
-    if "3_라이트노벨" in valid_cats and "3_여성향" in valid_cats:
-        rofan_kws = ["영애", "공작", "황태자", "남주", "여주", "시월드", "파혼", "후회남", "집착", "황후", "악녀", "빙의", "로판", "로맨스", "하숙생", "선생님", "선배"]
-        if any(kw in text_lower for kw in rofan_kws):
-            return "3_여성향"
-        return "3_라이트노벨"
-
-    # 7. 라이트노벨 vs 판타지
-    if "3_라이트노벨" in valid_cats and "3_판타지" in valid_cats:
-        ln_kws = ["라노벨", "라이트노벨", "이세계", "마왕", "용사", "슬라임", "전생", "히로인"]
-        if any(kw in text_lower for kw in ln_kws):
-            return "3_라이트노벨"
-        return "3_판타지"
-
-    # 8. 소설한국 vs 수필서간일기
-    if "2_소설한국" in valid_cats and "2_수필서간일기" in valid_cats:
-        if any(kw in text_lower for kw in ["에세이", "일기", "산문"]):
-            return "2_수필서간일기"
-        return "2_소설한국"
-
-    # 9. 소설역사 vs 역사인물 / 경제
-    if "2_소설역사" in valid_cats and any(c in valid_cats for c in ["4_역사인물", "4_경제"]):
-        if any(kw in text_lower for kw in ["소설", "대하", "야사", "열전"]):
-            return "2_소설역사"
-
-    # 10. 소설한국 vs 역사인물
-    if "2_소설한국" in valid_cats and "4_역사인물" in valid_cats:
-        if any(kw in text_lower for kw in ["소설", "이야기", "단편", "전집", "문학"]):
-            return "2_소설한국"
-
-    # 11. 처세술 vs 경영/마케팅/경제
-    if "6_처세술리더십창의성" in valid_cats and any(c in valid_cats for c in ["4_경영마케팅", "4_경제"]):
-        if any(kw in text_lower for kw in ["성공", "처세", "습관", "인간관계", "대화법", "시간관리"]):
-            return "6_처세술리더십창의성"
-
-    # 12. 소설외국 vs 스릴러
-    if "2_소설외국" in valid_cats and "3_스릴러" in valid_cats:
-        thriller_kws = ["추리", "미스터리", "스릴러", "살인", "탐정", "형사", "사건", "범인", "시체", "밀실", "수사", "경감", "셜록"]
-        if any(kw in text_lower or kw in fname_lower for kw in thriller_kws):
-            return "3_스릴러"
-        return "2_소설외국"
-
-    # 13. 여성향 vs BLGL
-    if "3_여성향" in valid_cats and "9_BLGL" in valid_cats:
-        bl_kws = ["bl", "백합", "오메가버스", "알파오메가", "공수", "광공", "다정공", "미인수", "임신수", "비엘"]
-        rofan_kws = ["로맨스", "로판", "여주", "남주", "황태자", "공작", "영애", "시월드"]
-        if any(kw in text_lower or kw in fname_lower for kw in bl_kws):
-            return "9_BLGL"
-        if any(kw in text_lower or kw in fname_lower for kw in rofan_kws):
-            return "3_여성향"
-
-    # 14. 소설한국 vs 스릴러
-    if "2_소설한국" in valid_cats and "3_스릴러" in valid_cats:
-        thriller_kws = ["추리", "미스터리", "스릴러", "살인", "탐정", "형사", "사건", "범인", "수사"]
-        if any(kw in text_lower or kw in fname_lower for kw in thriller_kws):
-            return "3_스릴러"
-        return "2_소설한국"
-
-    # 15. 소설외국 vs 판타지
-    if "2_소설외국" in valid_cats and "3_판타지" in valid_cats:
-        fantasy_kws = ["판타지", "마법", "드래곤", "엘프", "던전", "마왕", "용사", "이세계"]
-        if any(kw in text_lower or kw in fname_lower for kw in fantasy_kws):
-            return "3_판타지"
-        return "2_소설외국"
-
-    # 16. 소설외국 vs 여성향
-    if "2_소설외국" in valid_cats and "3_여성향" in valid_cats:
-        ro_kws = ["로맨스", "로판", "사랑", "연애", "신부", "귀부인"]
-        if any(kw in text_lower or kw in fname_lower for kw in ro_kws):
-            return "3_여성향"
-        return "2_소설외국"
-
-    return None
-
-
-def evaluate_category_decision(
-    fname: str,
-    fpath: Optional[Path],
-    raw_title: str,
-    raw_author: str,
-    search_title: str,
-    y_entry: Dict[str, Any],
-    a_entry: Dict[str, Any],
-    k_entry: Dict[str, Any],
-    trust_single_match: bool = True
-) -> Tuple[Optional[str], str, str]:
-    """
-    파일명, 3개 서점 결과, 파일 내부 메타데이터/텍스트를 결합하여 최종 카테고리 결정
-    """
-    # 1. 파일명 명시적 장르
-    explicit_genre = extract_explicit_genre(fname)
-
-    y_map = y_entry.get("mapped") if y_entry else None
-    a_map = a_entry.get("mapped") if a_entry else None
-    k_map = k_entry.get("mapped") if k_entry else None
-    valid_maps = [m for m in [y_map, a_map, k_map] if m]
-    from collections import Counter
-    counts = Counter(valid_maps)
-
-    # Priority 1: 파일명 명시적 장르가 존재하는 경우
-    # 서점 다수결(>=2)이 명시적 장르와 정면 배치되지 않는 한 파일명의 명시적 장르를 최우선 채택
-    if explicit_genre:
-        opposing_majority = any(cnt >= 2 and cat != explicit_genre for cat, cnt in counts.items())
-        if not opposing_majority:
-            return explicit_genre, "explicit_genre", f"Explicit genre in filename -> {explicit_genre}"
-
-    # Priority 2: 3개 서점 2/3 이상 다수결
-    for cat, count in counts.items():
-        if count >= 2:
-            return cat, "majority", f"Majority vote ({count}/3) -> {cat}"
-
-    # 본문 및 메타데이터 샘플 추출
-    text_sample = ""
-    epub_meta: Dict[str, str] = {}
-    txt_info: Dict[str, Any] = {}
-    if fpath and fpath.exists():
-        ext = fpath.suffix.lower()
-        if ext == ".epub":
-            epub_meta = inspect_epub_metadata(fpath)
-            text_sample = f"{epub_meta.get('title', '')} {epub_meta.get('subject', '')} {epub_meta.get('description', '')}"
-        elif ext == ".txt":
-            txt_info = inspect_txt_content(fpath)
-            text_sample = f"{' '.join(txt_info.get('hashtags', []))} {txt_info.get('snippet', '')}"
-
-    # Priority 2.5: 서점 간 충돌 중 유효 제목 매칭 필터링 (False Conflict 해소)
-    # 한 서점은 정확한 책을 찾았으나 다른 서점이 엉뚱한 추천도서를 반환하여 발생한 거짓 충돌 해소
-    if len(valid_maps) >= 2:
-        valid_title_candidates = []
-        for store_entry in [y_entry, a_entry, k_entry]:
-            if not store_entry or not store_entry.get("mapped"):
-                continue
-            f_title = store_entry.get("title", "")
-            if is_title_match_reliable(search_title, f_title):
-                valid_title_candidates.append((store_entry.get("mapped"), f_title))
-
-        if len(valid_title_candidates) == 1:
-            m_cat, m_title = valid_title_candidates[0]
-            return m_cat, "single_valid_match_resolved", f"False conflict resolved by title similarity ({m_cat}) for '{m_title[:30]}'"
-
-    # Priority 3: 서점 간 사소한 장르 충돌 해결
-    if len(valid_maps) >= 2:
-        resolved = resolve_genre_conflict(valid_maps, fname, text_sample)
-        if resolved:
-            return resolved, "conflict_resolved", f"Conflict resolved by keywords -> {resolved}"
-
-    # Priority 4: 단일 서점 매칭 신뢰
-    if len(valid_maps) == 1 and trust_single_match:
-        single_cat = valid_maps[0]
-        found_title = ""
-        for store_entry in [y_entry, a_entry, k_entry]:
-            if store_entry and store_entry.get("mapped") == single_cat:
-                found_title = store_entry.get("title", "")
-                break
-        if is_single_match_valid(search_title, found_title):
-            return single_cat, "single_match", f"Single match trusted ({single_cat}) for '{found_title[:30]}'"
-
-    # Priority 5: 파일 내부 메타데이터 및 처음 1000단어 본문 정밀 장르 분석 활용
-    if fpath and fpath.exists():
-        ext = fpath.suffix.lower()
-        if ext == ".epub" and epub_meta:
-            subj = epub_meta.get("subject", "")
-            if subj:
-                meta_cat = map_category(subj, raw_title, raw_author)
-                if meta_cat:
-                    return meta_cat, "content_metadata", f"EPUB dc:subject -> {meta_cat}"
-            desc = epub_meta.get("description", "")
-            if desc:
-                desc_cat = map_category(desc, raw_title, raw_author)
-                if desc_cat:
-                    return desc_cat, "content_metadata", f"EPUB dc:description -> {desc_cat}"
-
-        elif ext == ".txt" and txt_info:
-            hg = txt_info.get("header_genre")
-            if hg:
-                hg_cat = extract_explicit_genre(f"[{hg}]") or map_category(hg, raw_title, raw_author)
-                if hg_cat:
-                    return hg_cat, "content_metadata", f"TXT header [{hg}] -> {hg_cat}"
-            for tag in txt_info.get("hashtags", []):
-                tag_cat = map_category(tag, raw_title, raw_author) or extract_explicit_genre(f"[{tag}]")
-                if tag_cat:
-                    return tag_cat, "content_metadata", f"TXT #{tag} -> {tag_cat}"
-
-        # 본문 처음 1000단어 5대 장르(3_무협, 3_판타지, 3_여성향, 9_BLGL, 9_성인) 정밀 스코어링
-        first_1000 = extract_content_first_1000_words(fpath)
-        scoring_text = (first_1000 + " " + text_sample).strip()
-        g5_cat, g5_score, g5_reason = classify_5_genres_from_content(fname, scoring_text)
-        if g5_cat:
-            prefix = "EPUB content scored" if ext == ".epub" else ("TXT content scored" if ext == ".txt" else "Content scored")
-            return g5_cat, "content_metadata", f"{prefix} -> {g5_cat} ({g5_reason})"
-
-        # 기존 일반 장르(3_SF, 3_스릴러 등) 스코어링 폴백
-        sc_cat = score_text_genre(text_sample or first_1000)
-        if sc_cat:
-            return sc_cat, "content_metadata", f"Content scored -> {sc_cat}"
-
-    # 최종 미해결 상태
-    if len(valid_maps) >= 2:
-        return None, "conflict", f"Conflict: Y:{y_map} vs A:{a_map} vs K:{k_map}"
-    elif len(valid_maps) == 1:
-        return None, "single_match", f"Single match (untrusted): {valid_maps[0]}"
-    else:
-        return None, "not_found", "Not found"
 
 
 def clean_filename_to_author_title(filename: str) -> Tuple[str, str, str]:
@@ -956,10 +436,7 @@ def map_category(cat_str: str, raw_title: str, raw_author: str) -> Optional[str]
         return "2_소설일본"
     if any(k in cat for k in ["중국소설", "중국문학", "대만소설"]):
         return "2_소설중국"
-    if any(k in cat for k in [
-        "영미소설", "영국소설", "미국소설", "프랑스소설", "독일소설", "러시아소설",
-        "유럽소설", "스페인소설", "남미소설", "외국소설", "세계의 소설", "각국소설", "북유럽소설", "고전문학"
-    ]):
+    if any(k in cat for k in ["영미소설", "영국소설", "미국소설", "프랑스소설", "독일소설", "러시아소설", "유럽소설", "스페인소설", "남미소설", "외국소설", "세계의 소설", "각국소설", "북유럽소설", "고전문학"]):
         return "2_소설외국"
     if any(k in cat for k in ["역사소설", "대하역사소설", "대하소설"]):
         return "2_소설역사"
@@ -1128,7 +605,6 @@ def clean_empty_parent_dirs(parent_dir: Path, stop_dir: Path):
         curr = curr.parent
 
 
-
 class BookClassifierService:
     """
     도서 자동 분류 통합 서비스 클래스
@@ -1137,16 +613,17 @@ class BookClassifierService:
     - 캐시 영구화 및 중복 정리/안전 이동
     """
 
-    def __init__(
-        self,
-        library_root: Path | str = "/mnt/data/text",
-        cache_file: Optional[Path | str] = None,
-        delay: float = 1.2,
-        verbose: bool = False
-    ):
+    def __init__(self, library_root: Path | str = "/mnt/data/text", cache_file: Optional[Path | str] = None, delay: float = 1.2, verbose: bool = False, es_manager: Any = None, classifier: Optional[BookCategoryClassifier] = None, bookstore_policy: Optional["BookstorePolicy"] = None):
         self.library_root = Path(library_root)
         self.delay = delay
         self.verbose = verbose
+        # 판정은 지도학습 모델이 한다. ES 를 주면 inode 로 특징을 집어 와 디스크를 안 읽는다.
+        # library_root 를 반드시 넘긴다. pod 는 책을 /books 로 마운트하는데 설정 기본값은
+        # /mnt/data/text 다. 루트가 어긋나면 ES 의 상대 경로를 못 만들어 경로 조회가 0건이 된다.
+        # inode 조회가 먼저라 평소엔 가려지지만, inode 가 바뀐 파일에서 대비책이 통째로 죽는다.
+        self.classifier = classifier if classifier is not None else BookCategoryClassifier(es_manager=es_manager, library_root=self.library_root)
+        # 모델과 서점 중 어느 쪽을 따를지 정하는 규칙. 파일이 없으면 예전 동작(모델 우선)이다.
+        self.bookstore_policy = bookstore_policy if bookstore_policy is not None else BookstorePolicy.load()
         if cache_file:
             self.cache_file = Path(cache_file)
         else:
@@ -1201,7 +678,11 @@ class BookClassifierService:
                     res["title"] = found_title
                     res["author"] = found_author
                     res["cat"] = cat_str
-                    res["mapped"] = map_category(cat_str, raw_title, raw_author)
+                    # DB(category_keywords)가 먼저다. 운영이 관리하고 하드코딩 규칙보다 정밀하다.
+                    # 한 키워드가 여러 카테고리에 붙을 수 있다. 후보를 그대로 들고 가 다수결로 가른다.
+                    candidates = map_bookstore_candidates(cat_str, raw_title, raw_author)
+                    res["mapped"] = candidates[0] if len(candidates) == 1 else None
+                    res["candidates"] = candidates
                     res["url"] = detail_url
             except Exception as e:
                 logger.debug("Store query failed: %s", e)
@@ -1216,15 +697,7 @@ class BookClassifierService:
 
         return y_entry, a_entry, k_entry
 
-    def classify_file(
-        self,
-        fpath: Path,
-        source_dir: Path,
-        trust_single_match: bool = True,
-        use_bookstore: bool = True,
-        use_content_meta: bool = True,
-        cache_only: bool = False,
-    ) -> Tuple[Optional[str], str, str, Dict[str, Any]]:
+    def classify_file(self, fpath: Path, source_dir: Path, trust_single_match: bool = True, use_bookstore: bool = True, use_content_meta: bool = True, cache_only: bool = False) -> Tuple[Optional[str], str, str, Dict[str, Any]]:
         fname = fpath.name
         effective_fname = get_effective_filename(fpath, source_dir)
         raw_author, raw_title, search_title = clean_filename_to_author_title(effective_fname)
@@ -1251,7 +724,7 @@ class BookClassifierService:
                     "aladin": dict(ref_entry.get("aladin", {})),
                     "kyobo": dict(ref_entry.get("kyobo", {})),
                     "status": "pending",
-                    "target_category": None
+                    "target_category": None,
                 }
                 self.cache[cache_key] = entry
 
@@ -1263,64 +736,110 @@ class BookClassifierService:
             if use_bookstore:
                 y_entry, a_entry, k_entry = self.query_bookstores(search_title, raw_author, raw_title)
 
-            entry = {
-                "filename": effective_fname,
-                "rel_path": rel_path,
-                "author": raw_author,
-                "title": raw_title,
-                "search_title": search_title,
-                "yes24": y_entry,
-                "aladin": a_entry,
-                "kyobo": k_entry,
-                "status": "pending",
-                "target_category": None
-            }
+            entry = {"filename": effective_fname, "rel_path": rel_path, "author": raw_author, "title": raw_title, "search_title": search_title, "yes24": y_entry, "aladin": a_entry, "kyobo": k_entry, "status": "pending", "target_category": None}
             self.cache[cache_key] = entry
 
-        target_cat, method, reason = evaluate_category_decision(
-            effective_fname,
-            fpath if use_content_meta else None,
-            raw_title,
-            raw_author,
-            search_title,
-            entry.get("yes24", {}),
-            entry.get("aladin", {}),
-            entry.get("kyobo", {}),
-            trust_single_match=trust_single_match
-        )
+        target_cat, method, reason = self._decide(fpath if use_content_meta else None, effective_fname, entry, trust_single_match=trust_single_match)
 
         entry["target_category"] = target_cat
         entry["status"] = method if target_cat else ("conflict" if "conflict" in method else "not_found")
         return target_cat, method, reason, entry
 
-    def process_file(
-        self,
-        fpath: Path,
-        source_dir: Path,
-        auto_move: bool = True,
-        clean_existing: bool = True,
-        dry_run: bool = False,
-        trust_single_match: bool = True,
-        use_bookstore: bool = True,
-        use_content_meta: bool = True,
-        cache_only: bool = False,
-    ) -> Dict[str, Any]:
-        target_cat, method, reason, entry = self.classify_file(
-            fpath,
-            source_dir,
-            trust_single_match=trust_single_match,
-            use_bookstore=use_bookstore,
-            use_content_meta=use_content_meta,
-            cache_only=cache_only
-        )
+    # ------------------------------------------------------------------
+    # 판정
+    # ------------------------------------------------------------------
 
-        result = {
-            "file": str(fpath),
-            "target_category": target_cat,
-            "method": method,
-            "reason": reason,
-            "action": "none"
-        }
+    MIN_STORE_VOTES = 2
+
+    def _decide(self, fpath: Optional[Path], effective_fname: str, entry: Dict[str, Any], trust_single_match: bool = True) -> Tuple[Optional[str], str, str]:
+        """
+        모델로 판정하고, 확신이 모자라면 서점 다수결로 되돌아간다.
+
+        모델은 홀드아웃에서 판정률 91.5% / 정답률 90.8% 다. 서점은 같은 홀드아웃에서
+        판정률 50.8% / 정답률 85.8% 였다. 그래서 모델이 먼저다.
+        모델이 답을 못 하는 8.5%를 서점이 메운다.
+
+        다만 모델 확신도가 낮은 구간에서는 서점이 더 나을 수 있다. 그 경계는
+        `bookstore-policy` 가 구간별로 두 쪽 정답률을 재서 정한다. 규칙 파일이
+        없거나 서점이 이긴 구간이 없으면 경계는 0 이고, 모델이 늘 먼저다.
+        """
+        model_cat, model_reason, confidence = self._decide_by_model(fpath, effective_fname)
+
+        store: Optional[Tuple[Optional[str], str, str]] = None
+
+        def bookstore() -> Tuple[Optional[str], str, str]:
+            # 서점 조회는 한 건에 3초 이상 걸린다. 한 번만 부른다.
+            nonlocal store
+            if store is None:
+                store = self._decide_by_bookstore(entry, trust_single_match=trust_single_match)
+            return store
+
+        if self.bookstore_policy.prefers_bookstore(confidence):
+            store_cat, store_method, store_reason = bookstore()
+            if store_cat:
+                return store_cat, store_method, f"{store_reason} (확신도 {confidence:.3f} < 경계 {self.bookstore_policy.override_below:.3f} 이라 서점 우선; 모델: {model_reason})"
+
+        if model_cat:
+            return model_cat, "model", model_reason
+
+        store_cat, store_method, store_reason = bookstore()
+        if store_cat:
+            return store_cat, store_method, f"{store_reason} (모델: {model_reason})"
+        return None, store_method, f"{model_reason}; {store_reason}"
+
+    def _decide_by_model(self, fpath: Optional[Path], effective_fname: str) -> Tuple[Optional[str], str, float]:
+        """판정 결과와 함께 확신도를 돌려준다. 확신도가 있어야 서점 결합 구간을 가른다."""
+        if not self.classifier:
+            return None, "모델 파일이 없어 판정하지 않음", 0.0
+        try:
+            if fpath is not None:
+                pred = self.classifier.classify_path(fpath)
+            else:
+                # 본문을 안 보기로 한 호출이다. 파일명만으로 판정한다.
+                pred = self.classifier.classify_document({"name": effective_fname, "text": "", "title": "", "author": "", "publisher": "", "type": Path(effective_fname).suffix.lstrip(".").lower()})
+        except Exception as e:
+            logger.warning("모델 판정에 실패했다 (%s): %s", effective_fname, e)
+            return None, f"모델 판정 실패: {e}", 0.0
+        return pred.category, pred.reason, float(getattr(pred, "confidence", 0.0) or 0.0)
+
+    def _decide_by_bookstore(self, entry: Dict[str, Any], trust_single_match: bool = True) -> Tuple[Optional[str], str, str]:
+        """서점 3곳의 매핑 결과를 다수결로 모은다. 2곳 이상 같으면 채택한다.
+
+        한 서점이 후보를 여럿 낼 수 있다. DB 에서 한 키워드가 여러 카테고리에 붙는 것이
+        정상이기 때문이다(`클래식` 은 `1_서양고전` 이자 `5_음악`). 그때는 후보를 모두 세고,
+        다른 서점과 겹치는 카테고리가 이긴다. 겹치는 것이 없으면 판정하지 않는다.
+        """
+        from collections import Counter
+
+        search_title = entry.get("search_title", "")
+        votes: Counter = Counter()
+        ambiguous = 0
+        for store in (entry.get("yes24", {}), entry.get("aladin", {}), entry.get("kyobo", {})):
+            if not is_title_match_reliable(search_title, store.get("title", "")):
+                continue
+            candidates = store.get("candidates") or ([store["mapped"]] if store.get("mapped") else [])
+            if not candidates:
+                continue
+            if len(candidates) > 1:
+                ambiguous += 1
+            for cat in candidates:
+                votes[cat] += 1
+
+        if not votes:
+            return None, "not_found", "서점에서 못 찾음"
+
+        top, n = votes.most_common(1)[0]
+        if n >= self.MIN_STORE_VOTES:
+            return top, "bookstore_majority", f"서점 {n}곳이 {top} 로 일치"
+        # 한 곳만 답했는데 그 한 곳이 후보를 여럿 냈다면 고를 근거가 없다.
+        if len(votes) == 1 and ambiguous == 0 and trust_single_match:
+            return top, "bookstore_single", f"서점 한 곳만 찾음: {top}"
+        return None, "conflict", f"서점 판정이 갈림: {sorted(votes)}"
+
+    def process_file(self, fpath: Path, source_dir: Path, auto_move: bool = True, clean_existing: bool = True, dry_run: bool = False, trust_single_match: bool = True, use_bookstore: bool = True, use_content_meta: bool = True, cache_only: bool = False) -> Dict[str, Any]:
+        target_cat, method, reason, entry = self.classify_file(fpath, source_dir, trust_single_match=trust_single_match, use_bookstore=use_bookstore, use_content_meta=use_content_meta, cache_only=cache_only)
+
+        result = {"file": str(fpath), "target_category": target_cat, "method": method, "reason": reason, "action": "none"}
 
         if not target_cat:
             return result

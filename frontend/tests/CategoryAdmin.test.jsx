@@ -39,11 +39,12 @@ vi.mock("../src/categoryMappingCache", () => ({
 
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 
-import CategoryAdminBase, {
+import {
   formatErrorMessage,
   getAutoClassifyRemainingCount,
   getReloadRemainingCount,
-} from "../src/CategoryAdmin";
+} from "../src/categoryAdminUtils";
+import CategoryAdminBase from "../src/CategoryAdmin";
 
 // ── 헬퍼 ──
 

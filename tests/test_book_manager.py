@@ -2114,7 +2114,10 @@ def test_auto_classify_category_numbers_conflicting_different_file(tmp_path: Pat
     assert not conflict.exists()
 
 
-def test_auto_classify_category_uses_deterministic_classifier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_auto_classify_category_uses_the_supervised_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """자동분류 호출부가 학습된 모델의 판정을 그대로 따르는지 본다."""
+    from backend.classifier.model import Prediction
+
     es = DummyES()
     manager = make_manager(tmp_path, es)
     source_dir = tmp_path / "0_inbox"
@@ -2124,6 +2127,18 @@ def test_auto_classify_category_uses_deterministic_classifier(tmp_path: Path, mo
 
     target_dir = tmp_path / "3_fiction" / "로판"
     target_dir.mkdir(parents=True)
+
+    class StubClassifier:
+        def __bool__(self):
+            return True
+
+        def classify_path(self, fpath, min_confidence=None):
+            return Prediction("3_여성향", 0.96, [("3_여성향", 0.96)], "모델 확신도 0.960 -> 3_여성향")
+
+        def classify_document(self, doc, min_confidence=None):
+            return self.classify_path(None)
+
+    monkeypatch.setattr("backend.book_classifier.BookCategoryClassifier", lambda **kwargs: StubClassifier())
 
     fake_doc = {"title": "황녀님이 너무해", "author": "작가", "category": "0_inbox", "file_path": str(rofan_book.relative_to(tmp_path))}
     monkeypatch.setattr("utils.loader.Loader.read_file", lambda *args, **kwargs: {12345: fake_doc})

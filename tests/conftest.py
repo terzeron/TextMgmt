@@ -26,6 +26,11 @@ os.environ["TM_ADMIN_EMAIL"] = "admin@test.com"
 os.environ["TM_ALLOWED_EMAILS"] = "viewer@test.com"
 os.environ.setdefault("TM_ES_COMICS_INDEX", "test_comics_index")
 
+# 자동분류 모델은 /mnt/data 에 있는 165MB 짜리 운영 파일이다. 모델을 안 준
+# BookCategoryClassifier 는 그 파일을 읽어 버려서, 학습한 머신과 아닌 머신의
+# 테스트 결과가 갈렸다. 없는 경로를 가리켜 어디서나 "모델 없음" 으로 시작한다.
+os.environ["TM_CLASSIFIER_MODEL"] = str(PROJECT_ROOT / "tests/model-that-does-not-exist.joblib")
+
 # Disable Ryuk to avoid docker.sock mount issues with Colima
 os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
 
@@ -33,6 +38,16 @@ os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
 from backend.book import Book  # noqa: E402
 from backend.comics import Comics  # noqa: E402
 from utils.loader import Loader  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def reset_classifier_model_cache():
+    """기본 모델 캐시를 테스트마다 비운다. 한 테스트가 읽은 모델이 다음 테스트로 새지 않게 한다."""
+    from backend.classifier.model import reset_default_model
+
+    reset_default_model()
+    yield
+    reset_default_model()
 
 
 @pytest.fixture(autouse=True)

@@ -2,6 +2,8 @@
 import pytest
 import zipfile
 from pathlib import Path
+from backend.classifier import BookCategoryClassifier
+from backend.classifier.model import Prediction
 from backend.book_classifier import (
     extract_explicit_genre,
     inspect_epub_metadata,
@@ -10,11 +12,8 @@ from backend.book_classifier import (
     get_effective_filename,
     title_similarity,
     is_single_match_valid,
-    score_text_genre,
-    resolve_genre_conflict,
     map_category,
     clean_empty_parent_dirs,
-    evaluate_category_decision,
     BookClassifierService,
 )
 
@@ -123,49 +122,9 @@ def test_title_similarity_and_single_match_edge_cases():
     assert is_single_match_valid("알파 베타", "알파 감마 델타 엡실론 제타 에타 세타 베타") is True
     assert is_single_match_valid("무협", "현대 무협 소설") is True
 
-def test_score_text_genre():
-    txt_wuxia = "강호의 무림맹과 마교의 대결, 단전의 내공을 끌어올려 검법을 펼쳤다."
-    assert score_text_genre(txt_wuxia) == "3_무협"
-    txt_fantasy = "마법사가 마나를 모아 스킬을 발동하고 던전의 몬스터를 사냥했다. 상태창을 열었다."
-    assert score_text_genre(txt_fantasy) == "3_판타지"
-    txt_romance = "공작가의 황태자가 여주에게 다가와 파티 드레스를 칭찬했다. 로판 악역 영애의 삶."
-    assert score_text_genre(txt_romance) == "3_여성향"
 
-def test_score_text_genre_returns_none_without_enough_evidence():
-    assert score_text_genre("") is None
-    assert score_text_genre("조용한 오후에 책을 읽었다.") is None
 
-def test_resolve_genre_conflict():
-    cats = ["3_무협", "3_판타지"]
-    res = resolve_genre_conflict(cats, "[무협] 절대검제.txt")
-    assert res == "3_무협"
 
-@pytest.mark.parametrize(
-    "cats,fname,text_sample,expected",
-    [
-        (["3_무협", "3_판타지"], "던전 헌터.txt", "마나와 스킬로 몬스터를 사냥", "3_판타지"),
-        (["3_그래픽노블", "3_라이트노벨"], "이세계.txt", "", "3_라이트노벨"),
-        (["3_그래픽노블", "3_라이트노벨"], "이세계.cbz", "", "3_그래픽노블"),
-        (["3_그래픽노블", "3_판타지"], "마왕.epub", "", "3_판타지"),
-        (["3_그래픽노블", "3_판타지"], "마왕.cbz", "", "3_그래픽노블"),
-        (["3_판타지", "3_여성향"], "악녀.txt", "공작가 영애와 황태자", "3_여성향"),
-        (["3_판타지", "3_여성향"], "레이드.txt", "던전과 몬스터", "3_판타지"),
-        (["3_그래픽노블", "3_여성향"], "로판.epub", "", "3_여성향"),
-        (["3_그래픽노블", "3_여성향"], "로판.cbz", "", "3_그래픽노블"),
-        (["3_라이트노벨", "3_여성향"], "악역영애.txt", "로판 황태자 영애", "3_여성향"),
-        (["3_라이트노벨", "3_여성향"], "동아리.txt", "평범한 학교생활", "3_라이트노벨"),
-        (["3_라이트노벨", "3_판타지"], "슬라임.txt", "마왕과 용사와 이세계 전생", "3_라이트노벨"),
-        (["3_라이트노벨", "3_판타지"], "헌터.txt", "레이드와 몬스터", "3_판타지"),
-        (["2_소설한국", "2_수필서간일기"], "산문집.txt", "일기와 에세이", "2_수필서간일기"),
-        (["2_소설한국", "2_수필서간일기"], "단편집.txt", "문학 소설", "2_소설한국"),
-        (["2_소설역사", "4_역사인물"], "대하소설.txt", "대하 소설 열전", "2_소설역사"),
-        (["2_소설한국", "4_역사인물"], "단편문학.txt", "한국 단편 문학", "2_소설한국"),
-        (["6_처세술리더십창의성", "4_경영마케팅"], "성공습관.txt", "인간관계와 시간관리", "6_처세술리더십창의성"),
-        (["3_SF", "3_스릴러"], "미분류.txt", "", None),
-    ],
-)
-def test_resolve_genre_conflict_branches(cats, fname, text_sample, expected):
-    assert resolve_genre_conflict(cats, fname, text_sample) == expected
 
 @pytest.mark.parametrize(
     "cat_str,raw_title,raw_author,expected",
@@ -312,146 +271,30 @@ def test_clean_empty_parent_dirs_accepts_str_stop_dir(tmp_path):
     assert not child.exists()
 
 
-def test_evaluate_category_decision_majority():
-    y = {"mapped": "3_판타지", "title": "테스트"}
-    a = {"mapped": "3_판타지", "title": "테스트"}
-    k = {"mapped": "3_무협", "title": "테스트"}
-    cat, method, reason = evaluate_category_decision(
-        "테스트도서.txt", None, "테스트도서", "저자", "테스트도서", y, a, k
-    )
-    assert cat == "3_판타지"
-    assert method == "majority"
 
-def test_evaluate_category_decision_content_metadata(tmp_path):
-    txt_file = tmp_path / "정체불명소설.txt"
-    content_text = "#무협 " + ("소림사의 장로와 화산파 문도들이 강호의 평화를 위해 내공을 수련했다. 단전과 기경팔맥. " * 5)
-    txt_file.write_text(content_text, encoding="utf-8")
-    y = {"mapped": None}
-    a = {"mapped": None}
-    k = {"mapped": None}
-    cat, method, reason = evaluate_category_decision(
-        "정체불명소설.txt", txt_file, "정체불명소설", "", "정체불명소설", y, a, k
-    )
-    assert cat == "3_무협"
-    assert method == "content_metadata"
 
-def test_evaluate_category_decision_resolves_store_conflict_with_txt_content(tmp_path):
-    txt_file = tmp_path / "헌터.txt"
-    txt_file.write_text("던전 마나 스킬 몬스터 레이드 상태창", encoding="utf-8")
 
-    cat, method, reason = evaluate_category_decision(
-        "헌터.txt",
-        txt_file,
-        "헌터",
-        "",
-        "헌터",
-        {"mapped": "3_무협"},
-        {"mapped": "3_판타지"},
-        {"mapped": None},
-    )
 
-    assert cat == "3_판타지"
-    assert method == "conflict_resolved"
-    assert "Conflict resolved" in reason
 
-def test_evaluate_category_decision_trusts_valid_single_match():
-    cat, method, reason = evaluate_category_decision(
-        "달빛조각사.txt",
-        None,
-        "달빛조각사",
-        "",
-        "달빛조각사",
-        {"mapped": "3_판타지", "title": "달빛조각사 1권"},
-        {"mapped": None},
-        {"mapped": None},
-    )
 
-    assert cat == "3_판타지"
-    assert method == "single_match"
-    assert "Single match trusted" in reason
 
-def test_evaluate_category_decision_uses_epub_subject_metadata(tmp_path):
-    epub_path = tmp_path / "subject.epub"
-    with zipfile.ZipFile(epub_path, "w") as z:
-        z.writestr(
-            "OPS/content.opf",
-            """
-            <package xmlns:dc="http://purl.org/dc/elements/1.1/">
-              <metadata>
-                <dc:title>마법 학교</dc:title>
-                <dc:subject>판타지소설</dc:subject>
-              </metadata>
-            </package>
-            """,
-        )
 
-    cat, method, reason = evaluate_category_decision(
-        "마법학교.epub",
-        epub_path,
-        "마법학교",
-        "",
-        "마법학교",
-        {"mapped": None},
-        {"mapped": None},
-        {"mapped": None},
-    )
 
-    assert cat == "3_판타지"
-    assert method == "content_metadata"
-    assert "EPUB dc:subject" in reason
+class StubClassifier:
+    """항상 같은 카테고리를 확신 있게 내놓는 모델 대역."""
 
-def test_evaluate_category_decision_scores_epub_text_when_metadata_is_not_mapped(tmp_path):
-    epub_path = tmp_path / "score.epub"
-    with zipfile.ZipFile(epub_path, "w") as z:
-        z.writestr(
-            "OPS/content.opf",
-            """
-            <package xmlns:dc="http://purl.org/dc/elements/1.1/">
-              <metadata>
-                <dc:title>강호의 검</dc:title>
-                <dc:description>문파 마교 무림 내공 검법 강호</dc:description>
-              </metadata>
-            </package>
-            """,
-        )
+    def __init__(self, category="3_판타지", confidence=0.97):
+        self.prediction = Prediction(category, confidence, [(category, confidence)], f"모델 확신도 {confidence:.3f} -> {category}")
 
-    cat, method, reason = evaluate_category_decision(
-        "강호의검.epub",
-        epub_path,
-        "강호의검",
-        "",
-        "강호의검",
-        {"mapped": None},
-        {"mapped": None},
-        {"mapped": None},
-    )
+    def __bool__(self):
+        return True
 
-    assert cat == "3_무협"
-    assert method == "content_metadata"
-    assert "EPUB content scored" in reason
+    def classify_path(self, fpath, min_confidence=None):
+        return self.prediction
 
-@pytest.mark.parametrize(
-    "yes24,aladin,kyobo,expected_method",
-    [
-        ({"mapped": "3_SF"}, {"mapped": "3_스릴러"}, {"mapped": None}, "conflict"),
-        ({"mapped": "3_판타지", "title": "전혀 다른 책"}, {"mapped": None}, {"mapped": None}, "single_match"),
-        ({"mapped": None}, {"mapped": None}, {"mapped": None}, "not_found"),
-    ],
-)
-def test_evaluate_category_decision_unresolved_outcomes(yes24, aladin, kyobo, expected_method):
-    cat, method, _reason = evaluate_category_decision(
-        "미분류.txt",
-        None,
-        "미분류",
-        "",
-        "미분류",
-        yes24,
-        aladin,
-        kyobo,
-    )
+    def classify_document(self, doc, min_confidence=None):
+        return self.prediction
 
-    assert cat is None
-    assert method == expected_method
 
 def test_book_classifier_service_process_file(tmp_path):
     lib_root = tmp_path / "text"
@@ -462,7 +305,8 @@ def test_book_classifier_service_process_file(tmp_path):
     service = BookClassifierService(
         library_root=lib_root,
         cache_file=tmp_path / "cache.json",
-        verbose=False
+        verbose=False,
+        classifier=StubClassifier(),
     )
     res_dry = service.process_file(fpath, src_dir, auto_move=True, dry_run=True, use_bookstore=False)
     assert res_dry["target_category"] == "3_판타지"
@@ -475,35 +319,7 @@ def test_book_classifier_service_process_file(tmp_path):
     assert (lib_root / "3_판타지" / fpath.name).exists()
 
 
-def test_evaluate_category_decision_resolves_false_conflict_by_title_similarity():
-    # yes24는 무관한 추천 도서(유사도 낮음), kyobo는 정확한 제목 일치
-    yes24 = {"title": "세네카 오늘을 빼앗기고 있는 당신에게", "mapped": "4_철학윤리"}
-    kyobo = {"title": "공포의 산장", "mapped": "2_소설외국"}
-    aladin = {"title": "", "mapped": None}
 
-    cat, method, reason = evaluate_category_decision(
-        "공포의 산장.epub",
-        None,
-        "공포의 산장",
-        "",
-        "공포의 산장",
-        yes24,
-        aladin,
-        kyobo,
-    )
-    assert cat == "2_소설외국"
-    assert method == "single_valid_match_resolved"
-    assert "False conflict resolved" in reason
-
-
-def test_resolve_genre_conflict_new_rules():
-    # 1. 소설외국 vs 스릴러 (스릴러 키워드 포함 시 3_스릴러, 없을 시 2_소설외국)
-    assert resolve_genre_conflict(["2_소설외국", "3_스릴러"], "셜록홈즈의 모험.txt", "") == "3_스릴러"
-    assert resolve_genre_conflict(["2_소설외국", "3_스릴러"], "어린왕자.txt", "") == "2_소설외국"
-
-    # 2. 여성향 vs BLGL
-    assert resolve_genre_conflict(["3_여성향", "9_BLGL"], "[BL] 패션.txt", "") == "9_BLGL"
-    assert resolve_genre_conflict(["3_여성향", "9_BLGL"], "황태자의 약혼녀.txt", "") == "3_여성향"
 
 
 def test_inspect_txt_content_cp949_and_header_genre(tmp_path):
@@ -516,88 +332,14 @@ def test_inspect_txt_content_cp949_and_header_genre(tmp_path):
     assert "룬의 아이들" in res.get("snippet", "")
 
 
-def test_classify_5_genres_from_content_all_categories():
-    from backend.book_classifier import classify_5_genres_from_content
-
-    # 1. 3_무협
-    wuxia_text = "화산파의 장문인은 단전의 진기를 운기조식하여 매화검법의 절기를 펼쳤다. 마교와 천마의 위협에 강호 무림이 진동했다."
-    cat, score, _ = classify_5_genres_from_content("무림기", wuxia_text)
-    assert cat == "3_무협"
-
-    # 2. 3_판타지
-    fantasy_text = "각성한 S급 헌터는 던전 게이트 안에서 보스 몬스터 드래곤을 마주했다. 상태창에 새로운 스킬과 마나가 생성되었다."
-    cat, score, _ = classify_5_genres_from_content("나혼자만렙", fantasy_text)
-    assert cat == "3_판타지"
-
-    # 3. 3_여성향
-    rofan_text = "공작가의 시한부 악녀로 빙의한 영애는 냉혈한 황태자와의 파혼을 결심했다. 무도회에서 남주인공의 눈빛이 마주쳤다."
-    cat, score, _ = classify_5_genres_from_content("악녀의파혼", rofan_text)
-    assert cat == "3_여성향"
-
-    # 4. 9_BLGL
-    bl_text = "우성 알파인 다정공과 오메가버스 세계관의 단정수가 페로몬에 반응하여 각인되었다. 에스퍼와 가이드의 파장이 일치했다."
-    cat, score, _ = classify_5_genres_from_content("패션", bl_text)
-    assert cat == "9_BLGL"
-
-    # 5. 9_성인
-    adult_text = "그녀는 뜨거운 애액을 흘리며 교성을 내질렀고 그의 단단한 자지가 질내로 깊숙이 삽입되어 정액을 사정했다. 유두가 바짝 서 올랐다."
-    cat, score, _ = classify_5_genres_from_content("야설모음", adult_text)
-    assert cat == "9_성인"
-
-    # 6. 일반 비문학/영문 도서는 None
-    non_fiction = "The quick brown fox jumps over the lazy dog. General cooking recipes for breakfast and dinner."
-    cat, score, _ = classify_5_genres_from_content("Cookery", non_fiction)
-    assert cat is None
 
 
-def test_classify_5_genres_wuxia_fantasy_hybrid_routes_to_fantasy():
-    from backend.book_classifier import classify_5_genres_from_content
-
-    # 무협 키워드(화산파, 단전, 내공, 검법)가 다수 있어도 판타지 키워드(던전, 상태창, 스킬, 마나)가 2건 이상 포함되면 3_판타지로 분류
-    hybrid_text = (
-        "화산파의 후기지수는 단전의 내공을 끌어올려 검법을 펼쳤으나, "
-        "갑자기 눈앞에 푸른 상태창과 퀘스트 창이 떠올랐다. "
-        "던전 안의 몬스터를 처치하여 레벨업하고 마나를 획득하라는 시스템 메시지였다."
-    )
-    cat, score, reason = classify_5_genres_from_content("무한레벨업무림", hybrid_text)
-    assert cat == "3_판타지"
-    assert "hybrid_wuxia_fantasy" in reason
 
 
-def test_classify_5_genres_pure_wuxia_routes_to_wuxia():
-    from backend.book_classifier import classify_5_genres_from_content
-
-    # 판타지 키워드가 없는 순수 무협은 3_무협 유지
-    pure_wuxia_text = (
-        "소림사의 방주와 무당파의 장문인은 마교의 천마가 강호 무림을 침략한다는 소식을 듣고 "
-        "정파와 백도의 무림맹을 소집하여 화산파의 매화검법과 소림의 절기를 결집하기로 했다."
-    )
-    cat, score, reason = classify_5_genres_from_content("정통무협지", pure_wuxia_text)
-    assert cat == "3_무협"
-    assert "pure_wuxia" in reason
 
 
-def test_resolve_genre_conflict_hybrid_prefers_fantasy():
-    from backend.book_classifier import resolve_genre_conflict
-
-    # 서점 간 무협 vs 판타지 충돌 시 판타지 어휘가 있으면 3_판타지
-    assert resolve_genre_conflict(["3_무협", "3_판타지"], "작품.txt", "마나가 담긴 화산파 검법") == "3_판타지"
-    # 판타지 어휘 없이 순수 무협 어휘만 있으면 3_무협
-    assert resolve_genre_conflict(["3_무협", "3_판타지"], "작품.txt", "화산파의 매화검법과 내공") == "3_무협"
 
 
-def test_extract_content_head_tail_words(tmp_path):
-    from backend.book_classifier import extract_content_head_tail_words
-
-    f = tmp_path / "hybrid_test.txt"
-    head_content = "화산파 제자가 무공을 수련하며 강호를 방랑했다. " * 30 + "\n"
-    mid_content = "긴 여행의 중간 내용... " * 100 + "\n"
-    tail_content = "결국 그는 이계로 차원이동하여 드래곤과 마법사를 마주하고 마나를 각성했다. " * 30
-    f.write_text(head_content + mid_content + tail_content, encoding="utf-8")
-
-    combined = extract_content_head_tail_words(f, 50, 50)
-    assert "화산파" in combined
-    assert "드래곤" in combined or "마법사" in combined
 
 
 
@@ -620,206 +362,14 @@ def test_title_similarity_and_reliable_edge_cases():
     assert title_similarity("a", "b") == 0.0
 
 
-def test_extract_head_tail_words_exceptions_and_epub(tmp_path):
-    import zipfile
-    from backend.book_classifier import extract_content_head_tail_words
-
-    # EPUB 파일 생성 및 head/tail 파싱 (246-249, 254-257)
-    epub_path = tmp_path / "sample.epub"
-    with zipfile.ZipFile(epub_path, "w") as z:
-        z.writestr("mimetype", "application/epub+zip")
-        z.writestr("text/ch1.xhtml", "<html><body><p>" + "화산파 매화검법 수련 시작 " * 20 + "</p></body></html>")
-        z.writestr("text/ch2.xhtml", "<html><body><p>" + "단전의 내공을 운기조식하다 " * 20 + "</p></body></html>")
-        z.writestr("text/ch3.xhtml", "<html><body><p>" + "드래곤과 마주쳐 마나를 각성 " * 20 + "</p></body></html>")
-        z.writestr("text/ch4.xhtml", "<html><body><p>" + "이세계 판타지 모험의 끝 " * 20 + "</p></body></html>")
-
-    res = extract_content_head_tail_words(epub_path, 50, 50)
-    assert "화산파" in res
-    assert "이세계" in res
-
-    # 손상된 EPUB 파일 예외 (259-260)
-    bad_epub = tmp_path / "bad.epub"
-    bad_epub.write_bytes(b"not a zip file")
-    assert extract_content_head_tail_words(bad_epub) == ""
-
-    # 빈 TXT 파일
-    empty_txt = tmp_path / "empty.txt"
-    empty_txt.write_bytes(b"")
-    assert extract_content_head_tail_words(empty_txt) == ""
 
 
-def test_calculate_5_genre_scores_and_ratios_all_hybrid_clusters():
-    from backend.book_classifier import calculate_5_genre_scores_and_ratios
-
-    # 378-379: 단일 압도적 무협인데 판타지 >= 2 -> 하이브리드_무협_판타지
-    text_w_f = "소림사 화산파 무당파 내공 진기 마교 천마 " * 10 + " 던전 마나"
-    res1 = calculate_5_genre_scores_and_ratios("무림속", text_w_f)
-    assert res1["cluster"] == "하이브리드_무협_판타지"
-    assert res1["target_cat"] == "3_판타지"
-
-    # 391: 판타지 + 여성향
-    text_f_r = "던전 몬스터 헌터 각성 " * 5 + " 영애 황태자 남주 여주 " * 5
-    res2 = calculate_5_genre_scores_and_ratios("판타지로맨스", text_f_r)
-    assert res2["cluster"] == "하이브리드_판타지_로판"
-
-    # 393: 판타지 + 성인
-    text_f_a = "던전 몬스터 헌터 각성 " * 5 + " 섹스 자위 정액 클리토리스 음란 " * 5
-    res3 = calculate_5_genre_scores_and_ratios("판타지성인", text_f_a)
-    assert res3["cluster"] == "하이브리드_판타지_성인"
-
-    # 395: 로맨스 + 성인
-    text_r_a = "로맨스 남주 여주 황태자 " * 5 + " 섹스 자위 정액 클리토리스 음란 " * 5
-    res4 = calculate_5_genre_scores_and_ratios("로맨스성인", text_r_a)
-    assert res4["cluster"] == "하이브리드_로맨스_성인"
-
-    # 397: 무협 + 성인
-    text_w_a = "소림사 화산파 내공 진기 " * 5 + " 섹스 자위 정액 클리토리스 음란 " * 5
-    res5 = calculate_5_genre_scores_and_ratios("무협성인", text_w_a)
-    assert res5["cluster"] == "하이브리드_무협_성인"
-
-    # 399: BL + 성인
-    text_b_a = "미인공 미남공 다정공 미인수 단정수 " * 5 + " 섹스 자위 정액 클리토리스 음란 " * 5
-    res6 = calculate_5_genre_scores_and_ratios("BL성인", text_b_a)
-    assert res6["cluster"] == "하이브리드_BL_성인"
-
-    # 401: BL + 판타지
-    text_b_f = "미인공 미남공 다정공 미인수 단정수 " * 5 + " 던전 몬스터 헌터 각성 " * 5
-    res7 = calculate_5_genre_scores_and_ratios("BL판타지", text_b_f)
-    assert res7["cluster"] == "하이브리드_BL_판타지"
-
-    # 405-413: 60% 준확실 (로맨스 3개 + 무협 2개)
-    text_semi = "로맨스 남주 여주 화산파 소림사 " * 10
-    res8 = calculate_5_genre_scores_and_ratios("준확실", text_semi)
-    assert res8["cluster"] == "준확실_3_여성향"
-
-    # 한글 부족 (335)
-    res_en = calculate_5_genre_scores_and_ratios("English Book", "This is an english book without any hangul text.")
-    assert res_en["cluster"] == "미분류_비문학영문"
-
-    # 점수 0 (363)
-    res_zero = calculate_5_genre_scores_and_ratios("일반소설", "아침에 일어나서 밥을 먹고 학교에 갔다. 평범한 하루였다.")
-    assert res_zero["cluster"] == "미분류_키워드부족"
 
 
-def test_classify_5_genres_from_content_fallback_branches(monkeypatch):
-    from backend import book_classifier
-    from backend.book_classifier import classify_5_genres_from_content
-
-    # target_cat 없는 경우 모의 테스트 (451-474)
-    # 1. BL 폴백
-    mock_res_bl = {
-        "valid": True, "target_cat": None, "cluster": "기타_복합",
-        "scores": {"9_BLGL": 3, "3_여성향": 0, "3_무협": 0, "3_판타지": 0, "9_성인": 0}
-    }
-    monkeypatch.setattr(book_classifier, "calculate_5_genre_scores_and_ratios", lambda t, x: mock_res_bl)
-    cat, score, reason = classify_5_genres_from_content("t", "x")
-    assert cat == "9_BLGL"
-
-    # 2. 로판 폴백
-    mock_res_ro = {
-        "valid": True, "target_cat": None, "cluster": "기타_복합",
-        "scores": {"9_BLGL": 0, "3_여성향": 4, "3_무협": 0, "3_판타지": 0, "9_성인": 0}
-    }
-    monkeypatch.setattr(book_classifier, "calculate_5_genre_scores_and_ratios", lambda t, x: mock_res_ro)
-    cat, score, reason = classify_5_genres_from_content("t", "x")
-    assert cat == "3_여성향"
-
-    # 3. 무협 vs 판타지 하이브리드 폴백
-    mock_res_wf = {
-        "valid": True, "target_cat": None, "cluster": "기타_복합",
-        "scores": {"9_BLGL": 0, "3_여성향": 0, "3_무협": 4, "3_판타지": 3, "9_성인": 0}
-    }
-    monkeypatch.setattr(book_classifier, "calculate_5_genre_scores_and_ratios", lambda t, x: mock_res_wf)
-    cat, score, reason = classify_5_genres_from_content("t", "x")
-    assert cat == "3_판타지"
-    assert "hybrid_wuxia_fantasy" in reason
-
-    # 4. 순수 무협 폴백
-    mock_res_w = {
-        "valid": True, "target_cat": None, "cluster": "기타_복합",
-        "scores": {"9_BLGL": 0, "3_여성향": 0, "3_무협": 4, "3_판타지": 1, "9_성인": 0}
-    }
-    monkeypatch.setattr(book_classifier, "calculate_5_genre_scores_and_ratios", lambda t, x: mock_res_w)
-    cat, score, reason = classify_5_genres_from_content("t", "x")
-    assert cat == "3_무협"
-    assert "pure_wuxia" in reason
-
-    # 5. 판타지 폴백
-    mock_res_f = {
-        "valid": True, "target_cat": None, "cluster": "기타_복합",
-        "scores": {"9_BLGL": 0, "3_여성향": 0, "3_무협": 0, "3_판타지": 4, "9_성인": 0}
-    }
-    monkeypatch.setattr(book_classifier, "calculate_5_genre_scores_and_ratios", lambda t, x: mock_res_f)
-    cat, score, reason = classify_5_genres_from_content("t", "x")
-    assert cat == "3_판타지"
-
-    # 6. 성인 폴백
-    mock_res_a = {
-        "valid": True, "target_cat": None, "cluster": "기타_복합",
-        "scores": {"9_BLGL": 0, "3_여성향": 0, "3_무협": 0, "3_판타지": 0, "9_성인": 6}
-    }
-    monkeypatch.setattr(book_classifier, "calculate_5_genre_scores_and_ratios", lambda t, x: mock_res_a)
-    cat, score, reason = classify_5_genres_from_content("t", "x")
-    assert cat == "9_성인"
-
-    # 7. 매칭 없음
-    mock_res_none = {
-        "valid": True, "target_cat": None, "cluster": "기타_복합",
-        "scores": {"9_BLGL": 0, "3_여성향": 0, "3_무협": 0, "3_판타지": 0, "9_성인": 0}
-    }
-    monkeypatch.setattr(book_classifier, "calculate_5_genre_scores_and_ratios", lambda t, x: mock_res_none)
-    cat, score, reason = classify_5_genres_from_content("t", "x")
-    assert cat is None
-    assert reason == "no_genre_matched"
 
 
-def test_score_text_genre_sf_and_thriller():
-    from backend.book_classifier import score_text_genre
-
-    assert score_text_genre("외계인과 안드로이드가 우주선에서 만났다.") == "3_SF"
-    assert score_text_genre("형사가 연쇄살인 살인사건 현장을 수사했다.") == "3_스릴러"
-    assert score_text_genre("") is None
-    assert score_text_genre("아무런 키워드 없음") is None
 
 
-def test_inspect_txt_encoding_and_read_exceptions(tmp_path):
-    from unittest.mock import patch
-    from backend.book_classifier import inspect_txt_content, extract_content_head_tail_words
-
-    # 106-107: 한글 없는 영문 파일 -> cp949로 재시도하여 lines 읽기 (107 커버)
-    eng_f = tmp_path / "english.txt"
-    eng_f.write_text("Hello World without hangul keywords for test", encoding="utf-8")
-    inspect_txt_content(eng_f)
-
-    # 108-109: utf-8 성공 후 cp949 재시도 중 open 예외 -> pass
-    orig_open = open
-    calls = 0
-    def mock_fail_second(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise OSError("fail")
-        return orig_open(*args, **kwargs)
-    with patch("builtins.open", mock_fail_second):
-        inspect_txt_content(eng_f)
-
-    # 212-213 & 231-234: read 중 예외 발생 시 continue
-    sample_tail = tmp_path / "tail_err.txt"
-    sample_tail.write_text("가나다라마바사 " * 50, encoding="utf-8")
-    class MockFile:
-        def __enter__(self):
-            return self
-        def __exit__(self, *args):
-            pass
-        def seek(self, *args):
-            pass
-        def read(self, *args):
-            raise OSError("Read failed")
-        def readline(self):
-            raise OSError("Readline failed")
-
-    with patch("builtins.open", return_value=MockFile()):
-        extract_content_head_tail_words(sample_tail)
 
 
 def test_title_match_reliable_ratio():
@@ -831,72 +381,10 @@ def test_title_match_reliable_ratio():
     assert is_title_match_reliable("해리포터 마법사의 돌", "해리포터 비밀의 방") is False
 
 
-def test_semi_cluster_wuxia_fantasy_hybrid():
-    from backend.book_classifier import calculate_5_genre_scores_and_ratios
-
-    # 408-409: cat == "3_무협" r >= 60.0이고 scores["3_판타지"] >= 2 -> 하이브리드_무협_판타지
-    text = "화산파 소림사 무당파 내공 진기 마교 천마 " * 5 + "던전 마나"
-    res = calculate_5_genre_scores_and_ratios("무림판타지", text)
-    assert res["cluster"] == "하이브리드_무협_판타지"
-    assert res["target_cat"] == "3_판타지"
 
 
-def test_resolve_genre_conflict_novel_branches():
-    from backend.book_classifier import resolve_genre_conflict
-
-    # 595-598: 소설한국 vs 스릴러
-    assert resolve_genre_conflict(["2_소설한국", "3_스릴러"], "제목", "살인사건과 형사") == "3_스릴러"
-    assert resolve_genre_conflict(["2_소설한국", "3_스릴러"], "제목", "키워드 없음") == "2_소설한국"
-
-    # 602-605: 소설외국 vs 판타지
-    assert resolve_genre_conflict(["2_소설외국", "3_판타지"], "제목", "드래곤과 마법") == "3_판타지"
-    assert resolve_genre_conflict(["2_소설외국", "3_판타지"], "제목", "키워드 없음") == "2_소설외국"
-
-    # 609-612: 소설외국 vs 여성향
-    assert resolve_genre_conflict(["2_소설외국", "3_여성향"], "제목", "로맨스와 사랑") == "3_여성향"
-    assert resolve_genre_conflict(["2_소설외국", "3_여성향"], "제목", "키워드 없음") == "2_소설외국"
 
 
-def test_evaluate_category_decision_metadata_branches(tmp_path):
-    from unittest.mock import patch
-    from backend.book_classifier import evaluate_category_decision
-
-    # 681-684: valid_title_candidates >= 2 다수결 (제목 일치 검증 후 다수결)
-    y = {"title": "정확한책", "mapped": "3_판타지"}
-    a = {"title": "정확한책", "mapped": "3_판타지"}
-    k = {"title": "다른책", "mapped": "3_무협"}
-    cat, method, reason = evaluate_category_decision("정확한책", None, "정확한책", "저자", "정확한책", y, a, k)
-    assert cat == "3_판타지"
-
-    # 716: EPUB dc:description -> desc_cat
-    epub_f = tmp_path / "desc.epub"
-    epub_f.write_bytes(b"dummy")
-    with patch("backend.book_classifier.inspect_epub_metadata", return_value={"title": "", "subject": "", "description": "재테크와 주식 투자 이야기"}):
-        cat_d, m_d, r_d = evaluate_category_decision(
-            "책.epub", epub_f, "책", "저자", "책",
-            {}, {}, {}
-        )
-        assert cat_d == "6_재테크"
-        assert "dc:description" in r_d
-
-    # 721-723: TXT header [장르]
-    txt_f = tmp_path / "header.txt"
-    txt_f.write_text("본문", encoding="utf-8")
-    with patch("backend.book_classifier.inspect_txt_content", return_value={"snippet": "", "header_genre": "판타지", "hashtags": []}):
-        cat_h, m_h, r_h = evaluate_category_decision(
-            "책.txt", txt_f, "책", "저자", "책",
-            {}, {}, {}
-        )
-        assert cat_h == "3_판타지"
-
-    # 738-740: 본문 스코어링 폴백 score_text_genre (SF 키워드)
-    txt_sf = tmp_path / "sf.txt"
-    txt_sf.write_text("우주선과 안드로이드의 행성 탐사", encoding="utf-8")
-    cat_sf, m_sf, r_sf = evaluate_category_decision(
-        "책.txt", txt_sf, "책", "저자", "책",
-        {}, {}, {}
-    )
-    assert cat_sf == "3_SF"
 
 
 def test_clean_filename_author_title_edge_patterns():
@@ -1048,83 +536,108 @@ def test_map_category_and_effective_filename_branches(tmp_path):
     assert get_effective_filename(f, tmp_path) == "[저자] 제목 1권.txt"
 
 
-def test_clean_disclaimer_and_colophon_and_wuxia_false_positives():
-    from backend.book_classifier import (
-        clean_disclaimer_and_colophon,
-        count_genre_word_patterns,
-        calculate_5_genre_scores_and_ratios,
-        classify_5_genres_from_content,
-        WUXIA_CORE,
-        WUXIA_KWS,
-    )
-
-    # 1. 저작권/판권지 문구 정제 검증
-    sample_colophon = (
-        "그리스 로마 신화 4권 이야기. 헤라클레스는 영웅이다.\n"
-        "이 전자책은 저작권법에 의하여 보호를 받는 저작물이므로 무단전재와 무단복제를 금합니다.\n"
-        "지은이 이윤기 발행인 최봉수 편집인 이수미 디자인 민진기 마케팅 서재근\n"
-        "ISBN 978-89-01-07085-8 04210"
-    )
-    cleaned = clean_disclaimer_and_colophon(sample_colophon)
-    assert "무단전재" not in cleaned
-    assert "민진기" not in cleaned
-
-    # 2. '무단전재' 및 '민진기'가 무협 키워드로 오탐되지 않는지 검증
-    raw_disclaimer = "저작물이므로 무단전재와 무단복제를 금하며 디자인 민진기 제작 한동수"
-    w_score_raw = count_genre_word_patterns(raw_disclaimer, WUXIA_KWS)
-    assert w_score_raw == 0
-
-    # 형용사 '진기한'도 진기(眞氣)로 오탐되지 않음
-    assert count_genre_word_patterns("시장에서 진기한 골동품을 발견했다.", WUXIA_KWS) == 0
-
-    # 3. 진짜 무협 문맥에서는 정상 카운트
-    real_wuxia = "단전의 내공을 끌어올려 진기를 운용하고 검법을 펼쳤다."
-    assert count_genre_word_patterns(real_wuxia, ["단전", "진기", "검법"]) == 3
-
-    # 4. 이윤기의 그리스 로마 신화 판권지가 무협으로 오분류되지 않음 검증
-    res = calculate_5_genre_scores_and_ratios("이윤기의 그리스 로마 신화 4권", sample_colophon)
-    assert res["scores"]["3_무협"] == 0
-    assert res["cluster"] != "확실한_3_무협"
-    assert res["cluster"] != "준확실_3_무협"
-
-    cat, score, _ = classify_5_genres_from_content("이윤기의 그리스 로마 신화 4권", sample_colophon)
-    assert cat != "3_무협"
 
 
-def test_four_misclassified_books_regression_fix():
-    from backend.book_classifier import calculate_5_genre_scores_and_ratios, classify_5_genres_from_content
-
-    # 1. 천마는 평범하게 살 수 없다: 영지, 영주, 황제, 공작이 나와도 로맨스 코어가 없으므로 판타지로 분류
-    cheonma_text = (
-        "로렌스 가문의 영애가 드미트리 영지를 방문하는 날이다. 영주이자 공작인 아버지. "
-        "로만 드미트리 황제 폐하의 검을 모으기 위함이었다. 오러와 기사단의 훈련."
-    )
-    res_cm = calculate_5_genre_scores_and_ratios("천마는 평범하게 살 수 없다 1권", cheonma_text)
-    assert res_cm["scores"]["3_여성향"] == 0
-    assert res_cm["scores"]["3_판타지"] >= 5
-    cat_cm, _, _ = classify_5_genres_from_content("천마는 평범하게 살 수 없다 1권", cheonma_text)
-    assert cat_cm == "3_판타지"
-
-    # 2. 백씨세가 시한부 공자: '시한부'가 나와도 로맨스 코어가 없으므로 여성향 0점, 무협 태그 보호
-    baek_text = "백이강은 백씨세가의 시한부 공자였다. 단전이 깨지고 내공을 쌓을 수 없었으나 불사신검을 얻었다."
-    res_bk = calculate_5_genre_scores_and_ratios("무협)미완)백씨세가 시한부 공자", baek_text)
-    assert res_bk["scores"]["3_여성향"] == 0
-    assert res_bk["scores"]["3_무협"] >= 5
-    cat_bk, _, _ = classify_5_genres_from_content("무협)미완)백씨세가 시한부 공자", baek_text)
-    assert cat_bk in ["3_무협", "3_판타지"]
-
-    # 3. 파브르 in 사천당가: 곤충 페로몬 및 도마뱀 영문(bawangling)이 나와도 BL 0점, 사천당가 무협 점수 획득
-    fabre_text = "사천당가의 독문 비급. 곤충은 페로몬으로 대화한다. bawangling cave gecko 녀석의 독."
-    res_fb = calculate_5_genre_scores_and_ratios("파브르 in 사천당가 1권", fabre_text)
-    assert res_fb["scores"]["9_BLGL"] == 0
-    assert res_fb["scores"]["3_무협"] >= 2
-
-    # 4. 단목세가의 역대급 망나니: 인물 이름 '동방강수'가 나와도 BL 코어가 없으므로 BL 0점, 무협 태그 보호
-    danmok_text = "녹림의 총채주 동방강수가 반갑게 맞이했다. 단목세가의 천마신공과 사파 무림의 격돌."
-    res_dm = calculate_5_genre_scores_and_ratios("무협)한야월-단목세가의 역대급 망나니", danmok_text)
-    assert res_dm["scores"]["9_BLGL"] == 0
-    assert res_dm["scores"]["3_무협"] >= 5
-    cat_dm, _, _ = classify_5_genres_from_content("무협)한야월-단목세가의 역대급 망나니", danmok_text)
-    assert cat_dm == "3_무협"
 
 
+
+
+# ---------------------------------------------------------------------------
+# 판정 결합 — 모델이 먼저, 못 하면 서점
+# ---------------------------------------------------------------------------
+
+
+def _service(tmp_path, classifier):
+    return BookClassifierService(library_root=tmp_path, cache_file=tmp_path / "cache.json", classifier=classifier)
+
+
+class RefusingClassifier:
+    """확신이 모자라 판정을 거부하는 모델 대역."""
+
+    def __bool__(self):
+        return True
+
+    def classify_path(self, fpath, min_confidence=None):
+        return Prediction(None, 0.42, [("3_판타지", 0.42)], "확신도 0.420 < 임계값 0.90 이라 판정하지 않음")
+
+    def classify_document(self, doc, min_confidence=None):
+        return self.classify_path(None)
+
+
+def _entry(**stores):
+    base = {"search_title": "달빛조각사", "yes24": {}, "aladin": {}, "kyobo": {}}
+    base.update(stores)
+    return base
+
+
+def test_decide_prefers_the_model_over_bookstores(tmp_path):
+    service = _service(tmp_path, StubClassifier("3_판타지"))
+    entry = _entry(yes24={"mapped": "2_소설외국", "title": "달빛조각사"}, aladin={"mapped": "2_소설외국", "title": "달빛조각사"})
+    cat, method, reason = service._decide(None, "달빛조각사.txt", entry)
+    assert (cat, method) == ("3_판타지", "model")
+    assert "모델 확신도" in reason
+
+
+def test_decide_falls_back_to_bookstore_majority_when_the_model_refuses(tmp_path):
+    service = _service(tmp_path, RefusingClassifier())
+    entry = _entry(yes24={"mapped": "2_소설외국", "title": "달빛조각사"}, aladin={"mapped": "2_소설외국", "title": "달빛조각사"}, kyobo={"mapped": "3_판타지", "title": "달빛조각사"})
+    cat, method, reason = service._decide(None, "달빛조각사.txt", entry)
+    assert (cat, method) == ("2_소설외국", "bookstore_majority")
+    # 모델이 왜 못 했는지도 근거에 남아야 한다
+    assert "확신도" in reason
+
+
+def test_decide_takes_a_single_bookstore_only_when_trusted(tmp_path):
+    service = _service(tmp_path, RefusingClassifier())
+    entry = _entry(yes24={"mapped": "3_무협", "title": "달빛조각사"})
+
+    cat, method, _ = service._decide(None, "달빛조각사.txt", entry, trust_single_match=True)
+    assert (cat, method) == ("3_무협", "bookstore_single")
+
+    cat, method, _ = service._decide(None, "달빛조각사.txt", entry, trust_single_match=False)
+    assert cat is None
+    assert method == "conflict"
+
+
+def test_decide_reports_conflict_when_two_bookstores_disagree(tmp_path):
+    service = _service(tmp_path, RefusingClassifier())
+    entry = _entry(yes24={"mapped": "3_무협", "title": "달빛조각사"}, aladin={"mapped": "3_판타지", "title": "달빛조각사"})
+    cat, method, reason = service._decide(None, "달빛조각사.txt", entry, trust_single_match=True)
+    assert cat is None
+    assert method == "conflict"
+    assert "갈림" in reason
+
+
+def test_decide_ignores_bookstore_hits_whose_title_does_not_match(tmp_path):
+    service = _service(tmp_path, RefusingClassifier())
+    entry = _entry(yes24={"mapped": "3_무협", "title": "전혀 다른 책 제목"}, aladin={"mapped": "3_무협", "title": "또 다른 책"})
+    cat, method, _ = service._decide(None, "달빛조각사.txt", entry)
+    assert cat is None
+    assert method == "not_found"
+
+
+def test_decide_survives_a_model_that_raises(tmp_path):
+    class BrokenClassifier:
+        def __bool__(self):
+            return True
+
+        def classify_path(self, fpath, min_confidence=None):
+            raise RuntimeError("모델 폭발")
+
+        def classify_document(self, doc, min_confidence=None):
+            raise RuntimeError("모델 폭발")
+
+    service = _service(tmp_path, BrokenClassifier())
+    entry = _entry(yes24={"mapped": "3_무협", "title": "달빛조각사"}, aladin={"mapped": "3_무협", "title": "달빛조각사"})
+    cat, method, reason = service._decide(None, "달빛조각사.txt", entry)
+    # 모델이 터져도 서점 경로로 답한다
+    assert (cat, method) == ("3_무협", "bookstore_majority")
+    assert "모델 판정 실패" in reason
+
+
+def test_decide_returns_nothing_when_there_is_no_model_and_no_bookstore(tmp_path):
+    service = _service(tmp_path, BookCategoryClassifier(model=None))
+    cat, method, reason = service._decide(None, "달빛조각사.txt", _entry())
+    assert cat is None
+    assert method == "not_found"
+    assert "모델 파일이 없어" in reason

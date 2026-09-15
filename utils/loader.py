@@ -28,6 +28,7 @@ from striprtf.striprtf import rtf_to_text
 from bs4 import BeautifulSoup
 import chardet
 
+from backend.classifier.reader import read_epub_publisher
 from backend.es_manager import ESManager
 from utils.file_time import path_created_time_with_source
 from utils.stat import Stat
@@ -97,9 +98,7 @@ class ProblemCollector(logging.Handler):
             root = logging.getLogger()
             if ProblemCollector._active_count == 0:
                 # stdout 핸들러만 분리 (FileHandler 계열도 StreamHandler 하위지만 파일 로그는 유지)
-                ProblemCollector._detached_handlers = [
-                    h for h in root.handlers if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
-                ]
+                ProblemCollector._detached_handlers = [h for h in root.handlers if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)]
                 for handler in ProblemCollector._detached_handlers:
                     root.removeHandler(handler)
             root.addHandler(self)
@@ -1276,7 +1275,21 @@ class Loader:
                     return {}
 
                 return {
-                    inode_num: {"category": category, "title": title, "author": author, "file_path": str(file_path.relative_to(prefix)), "file_type": file_type, "file_size": int(file_size), "line_count": line_count, "page_count": page_count, "isbn": "", "summary": summary, "created_time": created_time, "created_time_source": created_time_source, "updated_time": datetime.now().isoformat()}
+                    inode_num: {
+                        "category": category,
+                        "title": title,
+                        "author": author,
+                        "file_path": str(file_path.relative_to(prefix)),
+                        "file_type": file_type,
+                        "file_size": int(file_size),
+                        "line_count": line_count,
+                        "page_count": page_count,
+                        "isbn": "",
+                        "summary": summary,
+                        "created_time": created_time,
+                        "created_time_source": created_time_source,
+                        "updated_time": datetime.now().isoformat(),
+                    }
                 }
 
             # read content of each file
@@ -1340,11 +1353,15 @@ class Loader:
                 isbn_content = raw_content if file_type == "txt" else summary if file_type == "pdf" else None
                 isbn_list = extract_isbn(file_path, content=isbn_content)
 
+            # dc:publisher 는 OPF 한 멤버만 풀면 나온다. 본문을 다시 읽지 않는다.
+            publisher = read_epub_publisher(file_path) if file_type == "epub" else ""
+
             return {
                 inode_num: {
                     "category": category,
                     "title": title,
                     "author": author,
+                    "publisher": publisher,
                     "file_path": str(file_path.relative_to(prefix)),
                     "file_type": file_type,
                     "file_size": int(file_size),
@@ -1499,12 +1516,7 @@ def main() -> int:
             return -1
         return 0
 
-    def process_file_iter(
-        file_iter: Iterable[Path],
-        skip_check: bool = False,
-        skip_text: bool = False,
-        seen_inodes: set[int] | None = None,
-    ) -> tuple[int, int, int]:
+    def process_file_iter(file_iter: Iterable[Path], skip_check: bool = False, skip_text: bool = False, seen_inodes: set[int] | None = None) -> tuple[int, int, int]:
         """파일 iterator를 배치 처리하여 ES에 저장. 반환: (처리 수, 건너뜀 수, 경로동기화 수)"""
         skipped_count = 0
         processed_count = 0
@@ -1571,15 +1583,10 @@ def main() -> int:
             # 파일 파싱 (stat 결과 재사용). 문제가 있는 파일만 경로와 사유를 출력
             batch_data: dict[int, dict[str, Any]] = {}
             new_inode_list = list(new_inodes)
-            worker_inodes = [
-                inode for inode in new_inode_list if can_parse_in_worker(file_stat_map[inode][0])
-            ]
+            worker_inodes = [inode for inode in new_inode_list if can_parse_in_worker(file_stat_map[inode][0])]
             worker_inode_set = set(worker_inodes)
             main_thread_inodes = [inode for inode in new_inode_list if inode not in worker_inode_set]
-            parse_results: dict[
-                int,
-                tuple[Path, list[str], dict[int, dict[str, Any]]],
-            ] = {}
+            parse_results: dict[int, tuple[Path, list[str], dict[int, dict[str, Any]]]] = {}
 
             if worker_inodes:
                 with ThreadPoolExecutor(max_workers=WORKER_COUNT) as executor:

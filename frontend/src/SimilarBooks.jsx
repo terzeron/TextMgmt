@@ -13,6 +13,16 @@ import {
   faChevronRight,
 } from "@fortawesome/free-solid-svg-icons";
 
+const formatFileSize = (bytes) => {
+  if (bytes === null || bytes === undefined) return "";
+  if (typeof bytes === "string" && bytes.trim() === "") return "";
+
+  const size = Number(bytes);
+  if (!Number.isFinite(size) || size < 0) return "";
+
+  return Math.trunc(size).toLocaleString("en-US");
+};
+
 export default function SimilarBooks({
   bookId,
   onSelect,
@@ -97,6 +107,7 @@ export default function SimilarBooks({
                 const viewBasePath = safeBasePath.replace('-edit', '-view');
                 const categoryParam = encodeURIComponent(category);
                 const displayName = (!category || category === '_root') ? filename : `${category}/${filename}`;
+                const fileSizeLabel = formatFileSize(book.file_size);
                 return (
                 <div
                   key={book.book_id}
@@ -112,6 +123,26 @@ export default function SimilarBooks({
                     {displayName}
                   </span>
                   <div style={{ whiteSpace: "nowrap", flexShrink: 0 }}>
+                    {fileSizeLabel && (
+                      <span
+                        style={{
+                          display: "inline-block",
+                          backgroundColor: "#fff",
+                          color: "#000",
+                          border: "1px solid #000",
+                          borderRadius: "4px",
+                          padding: "2px 6px",
+                          fontSize: "0.45rem",
+                          lineHeight: 1,
+                          transform: "scale(0.75)",
+                          transformOrigin: "right center",
+                          marginRight: "4px",
+                          verticalAlign: "middle",
+                        }}
+                      >
+                        {fileSizeLabel}
+                      </span>
+                    )}
                     {book.score > 0 && (
                       <span
                         style={{

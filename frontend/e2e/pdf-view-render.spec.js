@@ -16,7 +16,7 @@
  *   - /pdf-pages 청크 요청은 page.route()로 실제 유효한 PDF 바이트를 응답한다
  *     (실 백엔드 불필요). 각 페이지에 검은 사각형을 그려 캔버스에 픽셀이 남게 한다.
  */
-import { test, expect } from "./coverage-fixture.js";
+import { test, expect } from "@playwright/test";
 
 const TOTAL_PAGES = 3;
 
