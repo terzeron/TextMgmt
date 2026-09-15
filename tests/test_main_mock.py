@@ -333,6 +333,7 @@ class TestCategoryMismatchAdmin:
     def test_auto_classify_status_reads_shared_status_file(self, client, mock_bm, tmp_path):
         mock_bm.path_prefix = tmp_path
         status_file = tmp_path / ".auto_classify_status_book.json"
+        # updated_at 은 살아있다는 신호다. 없으면 죽은 작업으로 보고 failed 로 굳힌다.
         status_file.write_text(
             json.dumps(
                 {
@@ -341,6 +342,7 @@ class TestCategoryMismatchAdmin:
                     "total_count": 9,
                     "processed_count": 4,
                     "remaining_count": 5,
+                    "updated_at": time.time(),
                 }
             ),
             encoding="utf-8",
@@ -1062,7 +1064,7 @@ def test_auto_classify_already_running(client, mock_bm, tmp_path):
     # 705-707: already running
     mock_bm.path_prefix = tmp_path
     status_file = tmp_path / ".auto_classify_status_book.json"
-    status_file.write_text(json.dumps({"status": "running", "source_category": "0_inbox"}), encoding="utf-8")
+    status_file.write_text(json.dumps({"status": "running", "source_category": "0_inbox", "updated_at": time.time()}), encoding="utf-8")
 
     r = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
     assert r.status_code == 200
@@ -1110,3 +1112,20 @@ def test_reload_locks_already_running(client, mock_cat):
     assert r2.status_code == 200
     assert r2.json()["result"]["already_running"] is True
 
+
+
+def test_auto_classify_restarts_when_the_previous_run_died(client, mock_bm, tmp_path):
+    """재배포로 죽은 작업은 새 실행을 막지 않아야 한다.
+
+    상태 파일이 running 인 채로 굳으면 버튼을 눌러도 already_running 만 돌아와
+    화면이 계속 회전했다. 갱신이 끊긴 상태는 죽은 것으로 본다.
+    """
+    mock_bm.path_prefix = tmp_path
+    status_file = tmp_path / ".auto_classify_status_book.json"
+    status_file.write_text(json.dumps({"status": "running", "source_category": "0_inbox", "updated_at": time.time() - 3600}), encoding="utf-8")
+
+    r = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
+
+    assert r.status_code == 200
+    assert r.json()["result"].get("already_running") is None
+    assert r.json()["result"]["started"] is True
