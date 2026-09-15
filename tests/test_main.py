@@ -2191,3 +2191,68 @@ def test_main_requires_frontend_url():
     finally:
         if prev is not None:
             os.environ["TM_FRONTEND_URL"] = prev
+
+
+class TestStaleAutoClassifyStatus:
+    """재배포로 죽은 자동 분류 작업이 화면과 재실행을 막지 않아야 한다.
+
+    실제로 겪은 일이다. 재배포로 백그라운드 태스크가 사라졌는데 상태 파일은 running
+    으로 남아, POST 가 already_running 으로 막고 화면은 6분째 회전했다.
+    """
+
+    STALE = 5 * 60
+
+    def test_running_without_recent_heartbeat_becomes_failed(self):
+        from backend.main import stale_auto_classify_status
+
+        status = {"status": "running", "updated_at": 1000.0, "remaining_count": 19}
+        stale = stale_auto_classify_status(status, self.STALE, now=1000.0 + self.STALE + 1)
+
+        assert stale is not None
+        assert stale["status"] == "failed"
+        assert "다시 실행" in stale["error"]
+        # 진행 수치는 남겨 둔다. 어디까지 갔는지 보여야 한다
+        assert stale["remaining_count"] == 19
+
+    def test_running_with_recent_heartbeat_is_left_alone(self):
+        """오래 걸리는 정상 작업을 죽었다고 판정하면 안 된다."""
+        from backend.main import stale_auto_classify_status
+
+        status = {"status": "running", "updated_at": 1000.0}
+        assert stale_auto_classify_status(status, self.STALE, now=1000.0 + self.STALE - 1) is None
+
+    def test_status_without_heartbeat_is_treated_as_dead(self):
+        """updated_at 이 없으면 살아있다고 볼 근거가 없다."""
+        from backend.main import stale_auto_classify_status
+
+        assert stale_auto_classify_status({"status": "running"}, self.STALE) is not None
+        assert stale_auto_classify_status({"status": "running", "updated_at": "어제"}, self.STALE) is not None
+
+    def test_other_statuses_are_untouched(self):
+        from backend.main import stale_auto_classify_status
+
+        for state in ("idle", "done", "failed"):
+            assert stale_auto_classify_status({"status": state, "updated_at": 0.0}, self.STALE) is None
+
+
+def test_stale_running_status_lets_the_button_work_again(backend_test_setup):
+    """멈춘 상태 파일이 GET 한 번으로 풀려야 버튼을 다시 누를 수 있다.
+
+    순수 함수만 검증하면 배선이 빠져도 통과한다. 상태 파일부터 응답까지 확인한다.
+    """
+    import json
+    import time
+
+    bm = backend_test_setup["bm"]
+    client = backend_test_setup["client"]
+    status_path = bm.path_prefix / ".auto_classify_status_book.json"
+    stuck = {"status": "running", "remaining_count": 19, "updated_at": time.time() - 3600}
+    status_path.write_text(json.dumps(stuck), encoding="utf-8")
+
+    try:
+        result = client.get("/categories/auto-classify-status").json()
+        assert result["result"]["status"] == "failed"
+        # 파일도 함께 굳어야 다음 POST 가 already_running 으로 막히지 않는다
+        assert json.loads(status_path.read_text(encoding="utf-8"))["status"] == "failed"
+    finally:
+        status_path.unlink(missing_ok=True)

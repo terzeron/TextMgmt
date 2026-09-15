@@ -93,6 +93,27 @@ class CustomJSONResponse(JSONResponse):
 _original_jsonable_encoder = jsonable_encoder
 
 
+def stale_auto_classify_status(status: dict[str, Any], stale_seconds: float, now: float | None = None) -> dict[str, Any] | None:
+    """갱신이 끊긴 running 상태를 failed 로 바꾼 사본. 멀쩡하면 None 을 돌려준다.
+
+    자동 분류는 pod 메모리 안의 백그라운드 태스크라 재배포·재시작이면 사라지는데,
+    상태 파일은 볼륨에 남아 running 인 채로 굳는다. 그러면 POST 가 already_running
+    으로 막아 버튼을 다시 눌러도 시작되지 않고 화면은 계속 회전한다(실제로 겪음).
+
+    총 소요 시간이 아니라 "최근에 살아있다는 신호"로 판정해야, 정상적으로 오래 걸리는
+    작업과 죽어서 안 풀리는 상태를 구분할 수 있다.
+    """
+    if status.get("status") != "running":
+        return None
+    updated_at = status.get("updated_at")
+    if isinstance(updated_at, (int, float)):
+        age = (now if now is not None else time.time()) - float(updated_at)
+        if age <= stale_seconds:
+            return None
+    # updated_at 이 없거나 꼴이 틀린 상태 파일은 살아있다고 볼 근거가 없다.
+    return {**status, "status": "failed", "error": "백엔드가 다시 시작되어 자동 분류가 중단되었습니다. 다시 실행해 주세요."}
+
+
 def custom_jsonable_encoder(obj, **kwargs):
     """한글이 유니코드 이스케이프로 인코딩되지 않도록 하는 커스텀 인코더"""
     match obj:
@@ -407,6 +428,11 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     router = APIRouter()
     auto_classify_status: dict[str, Any] = {"status": "idle", "remaining_count": 0}
 
+    # 갱신이 이만큼 끊기면 죽은 작업으로 본다. category_mapping 의
+    # RELOAD_LOCK_HEARTBEAT_STALE_SECONDS 와 같은 방식이다.
+    # 파일 1건 처리는 서점 조회 때문에 3초 남짓이라 5분이면 넉넉하다.
+    AUTO_CLASSIFY_HEARTBEAT_STALE_SECONDS = 5 * 60
+
     def _auto_classify_status_path() -> Path | None:
         try:
             return Path(manager.path_prefix) / f".auto_classify_status_{content_type}.json"
@@ -425,9 +451,19 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             return dict(auto_classify_status)
         if not isinstance(status, dict):
             return dict(auto_classify_status)
+        status = _fail_if_stale(status)
         auto_classify_status.clear()
         auto_classify_status.update(status)
         return dict(auto_classify_status)
+
+    def _fail_if_stale(status: dict[str, Any]) -> dict[str, Any]:
+        """죽은 작업이 화면과 재실행을 막지 않도록, 갱신이 끊긴 running 을 failed 로 굳힌다."""
+        stale = stale_auto_classify_status(status, AUTO_CLASSIFY_HEARTBEAT_STALE_SECONDS)
+        if stale is None:
+            return status
+        LOGGER.warning("자동 분류 상태가 %.0f초 넘게 갱신되지 않아 중단된 작업으로 본다", AUTO_CLASSIFY_HEARTBEAT_STALE_SECONDS)
+        _replace_auto_classify_status(stale)
+        return stale
 
     def _replace_auto_classify_status(next_status: dict[str, Any]) -> None:
         next_status = {**next_status, "updated_at": time.time()}
