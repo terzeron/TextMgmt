@@ -31,6 +31,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # ES 의 file_path 는 이 디렉토리를 기준으로 한 상대 경로다.
         "library_root": "/mnt/data/text",
         # ES summary 가 이보다 짧으면 학습에 쓰지 않는다. 본문이 없는 셈이다.
+        #
+        # 본문이 0자인 문서도 여기서 함께 걸린다. 실측에서 PDF 18,656건 중 7,698건이
+        # 그랬는데(스캔본이라 이미지로만 되어 있다), 파일명만 남은 표본은 학습 품질을
+        # 떨어뜨린다. 표본 수보다 표본 품질을 택한다.
         "min_chars": 200,
         # 표본이 이보다 적은 카테고리는 학습에서 뺀다.
         "min_per_category": 30,
@@ -46,7 +50,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "body_char": {"enabled": True, "source": "text", "weight": 1.0, "analyzer": "char_wb", "ngram": [2, 4], "min_df": 20, "max_features": 300000, "max_chars": 1500},
         "filename": {"enabled": True, "source": "name", "weight": 1.0, "analyzer": "char_wb", "ngram": [2, 4], "min_df": 3, "max_features": 200000, "max_chars": 0},
         "title": {"enabled": True, "source": "title", "weight": 1.0, "analyzer": "char_wb", "ngram": [2, 4], "min_df": 3, "max_features": 100000, "max_chars": 0},
-        "author": {"enabled": True, "source": "author", "weight": 1.0, "analyzer": "char_wb", "ngram": [2, 4], "min_df": 3, "max_features": 100000, "max_chars": 0},
+        # 한국 저자명은 동명이인이 많아 카테고리 근거로 약하다. 과학칼럼니스트 이인식의
+        # 신화 책이 `5_수학과학일반` 으로 갔다. 저자 이름이 주제를 끌어당긴 결과다.
+        #
+        # 홀드아웃 8,000건 실측(재학습 없이 입력에서 저자를 지움):
+        #   원본        top-1 86.5%  판정률 91.9%  정답률 90.0%
+        #   저자 비움   top-1 85.8%  판정률 88.8%  정답률 90.0%
+        # 정답률은 그대로고 판정률만 떨어진다. 저자는 정확도에 기여하지 않으면서
+        # 확신도만 부풀린다. 그래서 0 으로 끄지 않고 영향력만 낮춘다.
+        "author": {"enabled": True, "source": "author", "weight": 0.3, "analyzer": "char_wb", "ngram": [2, 4], "min_df": 3, "max_features": 100000, "max_chars": 0},
         # 전집 판정의 결정적 증거. 을유문화사는 2_을유세계문학전집 의 98.6% 에 있고
         # 상위 장르 2_소설외국 에는 0.0% 다. 다른 필드에 묻히지 않게 가중치를 올려 둔다.
         "publisher": {"enabled": True, "source": "publisher", "weight": 3.0, "analyzer": "word", "ngram": [1, 2], "min_df": 2, "max_features": 50000, "max_chars": 0},

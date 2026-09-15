@@ -49,6 +49,10 @@ def is_trainable(doc: Dict[str, Any], min_chars: int, excluded_prefixes: Iterabl
 
     레이블은 '숫자_이름' 꼴 디렉토리다. 이 꼴이 아닌 trash, _root, .preview_cache 는
     카테고리가 아니라 운영용 디렉토리라 학습에 넣으면 레이블을 오염시킨다.
+
+    본문이 0자인 문서도 여기서 빠진다. 스캔 PDF 7,698건과 OCR 작업 디렉토리의 페이지
+    이미지 15,492건이 그렇다(실측). 파일명만 남은 표본은 표본 수를 늘리는 대신
+    학습 품질을 떨어뜨린다.
     """
     cat = doc.get("cat") or ""
     if not cat or not re.match(label_pattern, cat) or cat.startswith(tuple(excluded_prefixes)):
