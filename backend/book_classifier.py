@@ -24,7 +24,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore
 from backend.classifier import BookCategoryClassifier
-from backend.classifier.bookstore_policy import BookstorePolicy, map_bookstore_category
+from backend.classifier.bookstore_policy import BookstorePolicy, map_bookstore_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -676,7 +676,10 @@ class BookClassifierService:
                     res["author"] = found_author
                     res["cat"] = cat_str
                     # DB(category_keywords)가 먼저다. 운영이 관리하고 하드코딩 규칙보다 정밀하다.
-                    res["mapped"] = map_bookstore_category(cat_str, raw_title, raw_author)
+                    # 한 키워드가 여러 카테고리에 붙을 수 있다. 후보를 그대로 들고 가 다수결로 가른다.
+                    candidates = map_bookstore_candidates(cat_str, raw_title, raw_author)
+                    res["mapped"] = candidates[0] if len(candidates) == 1 else None
+                    res["candidates"] = candidates
                     res["url"] = detail_url
             except Exception as e:
                 logger.debug("Store query failed: %s", e)
@@ -797,20 +800,38 @@ class BookClassifierService:
         return pred.category, pred.reason, float(getattr(pred, "confidence", 0.0) or 0.0)
 
     def _decide_by_bookstore(self, entry: Dict[str, Any], trust_single_match: bool = True) -> Tuple[Optional[str], str, str]:
-        """서점 3곳의 매핑 결과를 다수결로 모은다. 2곳 이상 같으면 채택한다."""
+        """서점 3곳의 매핑 결과를 다수결로 모은다. 2곳 이상 같으면 채택한다.
+
+        한 서점이 후보를 여럿 낼 수 있다. DB 에서 한 키워드가 여러 카테고리에 붙는 것이
+        정상이기 때문이다(`클래식` 은 `1_서양고전` 이자 `5_음악`). 그때는 후보를 모두 세고,
+        다른 서점과 겹치는 카테고리가 이긴다. 겹치는 것이 없으면 판정하지 않는다.
+        """
         from collections import Counter
 
         search_title = entry.get("search_title", "")
-        mapped = [store.get("mapped") for store in (entry.get("yes24", {}), entry.get("aladin", {}), entry.get("kyobo", {})) if store.get("mapped") and is_title_match_reliable(search_title, store.get("title", ""))]
-        if not mapped:
+        votes: Counter = Counter()
+        ambiguous = 0
+        for store in (entry.get("yes24", {}), entry.get("aladin", {}), entry.get("kyobo", {})):
+            if not is_title_match_reliable(search_title, store.get("title", "")):
+                continue
+            candidates = store.get("candidates") or ([store["mapped"]] if store.get("mapped") else [])
+            if not candidates:
+                continue
+            if len(candidates) > 1:
+                ambiguous += 1
+            for cat in candidates:
+                votes[cat] += 1
+
+        if not votes:
             return None, "not_found", "서점에서 못 찾음"
 
-        top, votes = Counter(mapped).most_common(1)[0]
-        if votes >= self.MIN_STORE_VOTES:
-            return top, "bookstore_majority", f"서점 {votes}곳이 {top} 로 일치"
-        if len(mapped) == 1 and trust_single_match:
+        top, n = votes.most_common(1)[0]
+        if n >= self.MIN_STORE_VOTES:
+            return top, "bookstore_majority", f"서점 {n}곳이 {top} 로 일치"
+        # 한 곳만 답했는데 그 한 곳이 후보를 여럿 냈다면 고를 근거가 없다.
+        if len(votes) == 1 and ambiguous == 0 and trust_single_match:
             return top, "bookstore_single", f"서점 한 곳만 찾음: {top}"
-        return None, "conflict", f"서점 판정이 갈림: {sorted(set(mapped))}"
+        return None, "conflict", f"서점 판정이 갈림: {sorted(votes)}"
 
     def process_file(self, fpath: Path, source_dir: Path, auto_move: bool = True, clean_existing: bool = True, dry_run: bool = False, trust_single_match: bool = True, use_bookstore: bool = True, use_content_meta: bool = True, cache_only: bool = False) -> Dict[str, Any]:
         target_cat, method, reason, entry = self.classify_file(fpath, source_dir, trust_single_match=trust_single_match, use_bookstore=use_bookstore, use_content_meta=use_content_meta, cache_only=cache_only)

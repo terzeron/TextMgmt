@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.classifier.config import CONFIG_PATH, load_config, merge_config, save_config
+from backend.classifier.bookstore_policy import bands_from_cuts, quantile_bands
 from backend.classifier.model import MODEL_PATH, CategoryModel
 
 logger = logging.getLogger("classify_cli")
@@ -297,7 +298,18 @@ def build_parser() -> argparse.ArgumentParser:
               1.0 미만으로 낮추지 말 것. 서점이 차단할 수 있다.
               높이면: 안전하지만 전체 시간이 비례해 는다."""),
     )
-    cal.add_argument("--out", type=Path, default=None, metavar="PATH", help="결합 가중치를 저장할 파일")
+    cal.add_argument(
+        "--bands",
+        type=int,
+        default=6,
+        metavar="N",
+        help=_help("""\
+            확신도를 몇 구간으로 나눌 것인가
+              기본 6 / 범위 2~20
+              경계는 분위수 자리 근처에서 값이 가장 벌어진 곳으로 잡는다.
+              높이면: 구간이 촘촘해 경계를 세밀하게 잡지만 구간마다 건수가 줄어 흔들린다."""),
+    )
+    cal.add_argument("--out", type=Path, default=None, metavar="PATH", help="측정 결과를 저장할 파일")
 
     # -- classify -----------------------------------------------------------
     cl = sub.add_parser("classify", help="파일 하나를 판정하고 근거를 보여준다", description=_fmt(CLASSIFY_DESC), formatter_class=argparse.RawTextHelpFormatter)
@@ -541,10 +553,13 @@ def cmd_bookstore_policy(args: argparse.Namespace) -> int:
             rate = i / (time.time() - t0)
             print(f"  {i}/{len(sample)}  {rate * 60:.0f}건/분  남은 시간 약 {(len(sample) - i) / rate / 60:.0f}분", flush=True)
 
-    bands = [(0.0, 0.5), (0.5, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 0.95), (0.95, 1.01)]
+    # 구간은 고정값이 아니라 확신도 분포에서 고른다. 고정값으로 자르면 2,000건 중
+    # 1,884건이 한 구간에 몰렸다(실측). 분위수 자리 근처에서 값이 가장 벌어진 곳을
+    # 경계로 삼아, 사실상 같은 문서가 두 구간으로 갈리지 않게 한다.
+    cuts = quantile_bands([r["confidence"] for r in rows], count=args.bands)
     report: List[Dict[str, Any]] = []
     print("\n  확신도 구간   건수   모델 정답률   서점 응답률   서점 정답률")
-    for lo, hi in bands:
+    for lo, hi in bands_from_cuts(cuts):
         band = [r for r in rows if lo <= r["confidence"] < hi]
         if not band:
             continue
@@ -553,7 +568,7 @@ def cmd_bookstore_policy(args: argparse.Namespace) -> int:
         s_rate = len(answered) / len(band)
         s_acc = (sum(r["store_ok"] for r in answered) / len(answered)) if answered else 0.0
         report.append({"low": lo, "high": hi, "n": len(band), "model_accuracy": m_acc, "store_coverage": s_rate, "store_accuracy": s_acc})
-        print(f"  {lo:.2f}~{hi:.2f}   {len(band):>5}   {m_acc:>9.1%}   {s_rate:>9.1%}   {s_acc:>9.1%}")
+        print(f"  {lo:.3f}~{hi:.3f} {len(band):>5}   {m_acc:>9.1%}   {s_rate:>9.1%}   {s_acc:>9.1%}")
 
     better = [b for b in report if b["store_accuracy"] > b["model_accuracy"]]
     threshold = max((b["high"] for b in better), default=0.0)
@@ -562,8 +577,11 @@ def cmd_bookstore_policy(args: argparse.Namespace) -> int:
         "bands": report,
         # 이 확신도 미만일 때만 서점 판정으로 갈아탄다. 0 이면 서점이 이긴 구간이 없다는 뜻이다.
         "bookstore_override_below": threshold,
+        # 건별 결과를 남긴다. 구간을 다시 나눌 때 서점을 다시 조회하지 않아도 된다.
+        # 실측에서 표본 2,000건 조회에 4시간 35분이 걸렸다.
+        "rows": rows,
     }
-    print(f"\n  서점으로 갈아탈 확신도 상한: {threshold:.2f}" + ("  (서점이 모델을 이긴 구간이 없다)" if threshold == 0.0 else ""))
+    print(f"\n  서점으로 갈아탈 확신도 상한: {threshold:.3f}" + ("  (서점이 모델을 이긴 구간이 없다)" if threshold == 0.0 else ""))
     dest = args.out or args.model.parent / "bookstore_policy.json"
     with Path(dest).open("w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)

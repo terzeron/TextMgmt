@@ -10,10 +10,10 @@ import json
 
 import pytest
 
-from backend.classifier.bookstore_policy import BookstorePolicy, keyword_map, map_bookstore_category, match_keyword, reset_keyword_cache
+from backend.classifier.bookstore_policy import BookstorePolicy, bands_from_cuts, keyword_map, map_bookstore_candidates, map_bookstore_category, match_keyword, quantile_bands, reset_keyword_cache
 
 # 실제 DB 에 들어 있는 값에서 뽑았다. 하드코딩 규칙과 다른 4건이 포함돼 있다.
-DB_KEYWORDS = {"한문": "1_동양고전한문", "영어전문교육": "7_영어교육", "자녀교육": "9_어린이육아", "반도체": "8_IT", "클래식": "5_음악"}
+DB_KEYWORDS = {"한문": ["1_동양고전한문"], "영어전문교육": ["7_영어교육"], "자녀교육": ["9_어린이육아"], "반도체": ["8_IT"], "클래식": ["1_서양고전", "5_음악"], "환상문학": ["3_SF", "3_판타지"]}
 
 
 @pytest.fixture(autouse=True)
@@ -52,11 +52,12 @@ def test_keyword_map_survives_a_dead_database():
     assert keyword_map(broken) == {}
 
 
-def test_ambiguous_keyword_is_dropped(monkeypatch):
-    """같은 키워드가 두 카테고리에 있으면 쓰지 않는다.
+def test_keyword_with_two_categories_keeps_both(monkeypatch):
+    """한 키워드가 여러 카테고리에 붙는 것은 정상이다.
 
-    실제 DB 에 `환상문학`(3_SF, 3_판타지)과 `클래식`(1_서양고전, 5_음악)이 그렇다.
-    하나를 고르는 규칙은 자의적이라 하드코딩 규칙에 넘기는 편이 낫다.
+    테이블의 유일 키가 (category, keyword, content_type) 조합이고 search_by_keyword 도
+    목록을 돌려준다. `환상문학`(3_SF, 3_판타지)과 `클래식`(1_서양고전, 5_음악)이 그렇다.
+    어느 쪽인지는 서점 다수결이 가른다.
     """
     import backend.classifier.bookstore_policy as mod
 
@@ -64,21 +65,25 @@ def test_ambiguous_keyword_is_dropped(monkeypatch):
         def get_all_mappings(self, content_type="book"):
             return {"3_SF": ["환상문학", "과학소설"], "3_판타지": ["환상문학"], "5_음악": ["클래식"]}
 
-    monkeypatch.setattr(mod, "CategoryMapping", FakeMapping, raising=False)
     monkeypatch.setitem(__import__("sys").modules, "backend.category_mapping", type("M", (), {"CategoryMapping": FakeMapping}))
 
     loaded = mod._load_from_db()
-    assert "환상문학" not in loaded
-    assert loaded["과학소설"] == "3_SF"
-    assert loaded["클래식"] == "5_음악"
+    assert sorted(loaded["환상문학"]) == ["3_SF", "3_판타지"]
+    assert loaded["과학소설"] == ["3_SF"]
+
+
+def test_multi_category_keyword_gives_no_single_answer():
+    # 후보가 둘이면 한 서점만으로는 못 고른다. 다수결로 넘긴다.
+    assert map_bookstore_category("예술 > 클래식", "", "", DB_KEYWORDS) is None
+    assert sorted(map_bookstore_candidates("예술 > 클래식", "", "", DB_KEYWORDS)) == ["1_서양고전", "5_음악"]
 
 
 def test_match_keyword_prefers_the_longer_word():
     # '영어전문교육' 이 '영어' 보다 구체적이다. 짧은 쪽이 먼저 맞으면 7_교육일반 으로 샌다.
-    keywords = {"영어": "7_영어교육", "영어전문교육": "7_영어교육", "교육": "7_교육일반"}
-    assert match_keyword("외국어 > 영어전문교육", keywords) == "7_영어교육"
-    assert match_keyword("", keywords) is None
-    assert match_keyword("소설 > 한국소설", {}) is None
+    keywords = {"영어": ["7_영어교육"], "영어전문교육": ["7_영어교육"], "교육": ["7_교육일반"]}
+    assert match_keyword("외국어 > 영어전문교육", keywords) == ["7_영어교육"]
+    assert match_keyword("", keywords) == []
+    assert match_keyword("소설 > 한국소설", {}) == []
 
 
 # ---------------------------------------------------------------------------
@@ -225,3 +230,66 @@ def test_bookstore_is_queried_once_even_when_the_policy_prefers_it(tmp_path, mon
     monkeypatch.setattr(service, "_decide_by_bookstore", counting)
     service._decide(None, "달빛조각사.txt", _entry())
     assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# 확신도 구간
+# ---------------------------------------------------------------------------
+
+
+def test_quantile_bands_split_where_samples_are_sparse():
+    """경계는 값이 촘촘한 곳이 아니라 벌어진 곳에 잡혀야 한다.
+
+    고정 구간(0.5/0.7/0.8)으로 자르면 2,000건 중 1,884건이 한 칸에 몰렸다.
+    """
+    # 0.10 부근과 0.50 부근에 뭉쳐 있고 그 사이가 비어 있다
+    dense_low = [0.10 + i * 0.0001 for i in range(50)]
+    dense_high = [0.50 + i * 0.0001 for i in range(50)]
+    cuts = quantile_bands(dense_low + dense_high, count=2)
+
+    assert len(cuts) == 1
+    # 빈 구간 안에서 잘라야 한다. 뭉친 값 사이를 가르면 안 된다.
+    assert 0.1050 < cuts[0] < 0.50
+
+
+def test_quantile_bands_handle_tiny_samples():
+    assert quantile_bands([], count=4) == []
+    assert quantile_bands([0.3], count=4) == []
+
+
+def test_bands_from_cuts_covers_the_whole_range():
+    bands = bands_from_cuts([0.05, 0.12])
+    assert bands[0][0] == 0.0
+    assert bands[-1][1] > 1.0
+    # 구간이 끊기지 않고 이어져야 한다
+    assert [hi for _, hi in bands[:-1]] == [lo for lo, _ in bands[1:]]
+
+
+def test_overlapping_candidate_wins_the_vote(tmp_path):
+    """서점마다 후보를 여럿 내도 겹치는 카테고리가 이긴다.
+
+    `클래식` 은 1_서양고전 이자 5_음악 이다. 다른 서점이 5_음악 쪽을 가리키면 그쪽으로 굳는다.
+    """
+    model_refused = StubClassifier(StubPrediction(None, 0.01))
+    service = _service(tmp_path, model_refused, BookstorePolicy())
+
+    entry = {
+        "search_title": "사계",
+        "yes24": {"candidates": ["1_서양고전", "5_음악"], "title": "사계"},
+        "aladin": {"candidates": ["5_음악"], "title": "사계"},
+        "kyobo": {},
+    }
+    cat, method, _ = service._decide(None, "사계.epub", entry)
+    assert cat == "5_음악"
+    assert method == "bookstore_majority"
+
+
+def test_single_store_with_two_candidates_refuses(tmp_path):
+    """한 곳만 답했는데 후보가 둘이면 고를 근거가 없다. 수동으로 넘긴다."""
+    model_refused = StubClassifier(StubPrediction(None, 0.01))
+    service = _service(tmp_path, model_refused, BookstorePolicy())
+
+    entry = {"search_title": "사계", "yes24": {"candidates": ["1_서양고전", "5_음악"], "title": "사계"}, "aladin": {}, "kyobo": {}}
+    cat, method, _ = service._decide(None, "사계.epub", entry, trust_single_match=True)
+    assert cat is None
+    assert method == "conflict"

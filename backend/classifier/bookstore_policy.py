@@ -22,7 +22,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -30,37 +30,36 @@ logger = logging.getLogger(__name__)
 KEYWORD_CACHE_SECONDS = 300
 
 _lock = threading.Lock()
-_cached_keywords: Optional[Dict[str, str]] = None
+_cached_keywords: Optional[Dict[str, List[str]]] = None
 _cached_at = 0.0
 
 
-def _load_from_db() -> Dict[str, str]:
-    """DB 의 카테고리-키워드 매핑을 {키워드: 카테고리} 로 뒤집는다.
+def _load_from_db() -> Dict[str, List[str]]:
+    """DB 의 카테고리-키워드 매핑을 {키워드: [카테고리...]} 로 뒤집는다.
 
-    같은 키워드가 두 카테고리에 있으면 그 키워드는 버린다. 실측에서 `환상문학` 이
-    `3_SF` 와 `3_판타지` 에, `클래식` 이 `1_서양고전` 과 `5_음악` 에 함께 있었다.
-    둘 중 하나를 고르는 규칙은 자의적이라, 신호가 없는 것으로 보고 하드코딩 규칙에 넘긴다.
+    한 키워드가 여러 카테고리에 붙는 것은 정상이다. 테이블의 유일 키가
+    (category, keyword, content_type) 세 값의 조합이고, `search_by_keyword` 도
+    카테고리 목록을 돌려준다. `환상문학` 이 `3_SF` 와 `3_판타지` 에,
+    `클래식` 이 `1_서양고전` 과 `5_음악` 에 있는 것은 어느 쪽도 틀리지 않다.
+
+    그래서 버리지 않고 후보를 전부 남긴다. 어느 쪽인지는 서점 다수결이 가른다.
     """
     from backend.category_mapping import CategoryMapping
 
     mapping = CategoryMapping()
-    seen: Dict[str, set] = {}
+    out: Dict[str, List[str]] = {}
     for category, keywords in mapping.get_all_mappings("book").items():
         for keyword in keywords:
             word = (keyword or "").strip()
-            if word:
-                seen.setdefault(word, set()).add(category)
-
-    out: Dict[str, str] = {}
-    for word, categories in seen.items():
-        if len(categories) > 1:
-            logger.warning("키워드 '%s' 가 %s 에 함께 있다. 어느 쪽인지 정할 수 없어 쓰지 않는다", word, ", ".join(sorted(categories)))
-            continue
-        out[word] = next(iter(categories))
+            if not word:
+                continue
+            bucket = out.setdefault(word, [])
+            if category not in bucket:
+                bucket.append(category)
     return out
 
 
-def keyword_map(loader: Optional[Callable[[], Dict[str, str]]] = None, force: bool = False) -> Dict[str, str]:
+def keyword_map(loader: Optional[Callable[[], Dict[str, List[str]]]] = None, force: bool = False) -> Dict[str, List[str]]:
     """DB 키워드 맵. 5분간 캐시한다. DB 를 못 읽으면 빈 맵을 준다(하드코딩 규칙으로 넘어간다)."""
     global _cached_keywords, _cached_at
 
@@ -88,39 +87,90 @@ def reset_keyword_cache() -> None:
         _cached_at = 0.0
 
 
-def match_keyword(cat_str: str, keywords: Dict[str, str]) -> Optional[str]:
-    """서점 카테고리 문자열에서 DB 키워드를 찾는다.
+def match_keyword(cat_str: str, keywords: Dict[str, List[str]]) -> List[str]:
+    """서점 카테고리 문자열에 걸리는 DB 키워드의 카테고리 후보를 모은다.
 
     긴 키워드를 먼저 본다. '영어전문교육' 이 '영어' 보다 구체적이라 먼저 맞아야 한다.
+    첫 키워드가 후보를 하나만 주면 거기서 끝낸다. 여러 개를 주면(`클래식` 처럼)
+    후보를 그대로 돌려주고 서점 다수결이 가르게 둔다.
     """
     if not cat_str or not keywords:
-        return None
+        return []
     for word in sorted(keywords, key=len, reverse=True):
         if word in cat_str:
-            return keywords[word]
-    return None
+            return list(keywords[word])
+    return []
 
 
-def map_bookstore_category(cat_str: str, raw_title: str, raw_author: str, keywords: Optional[Dict[str, str]] = None) -> Optional[str]:
-    """서점이 준 카테고리를 내부 카테고리로 옮긴다.
+def map_bookstore_category(cat_str: str, raw_title: str, raw_author: str, keywords: Optional[Dict[str, List[str]]] = None) -> Optional[str]:
+    """서점이 준 카테고리를 내부 카테고리 하나로 옮긴다. 후보가 여럿이면 None 이다."""
+    candidates = map_bookstore_candidates(cat_str, raw_title, raw_author, keywords)
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def map_bookstore_candidates(cat_str: str, raw_title: str, raw_author: str, keywords: Optional[Dict[str, List[str]]] = None) -> List[str]:
+    """서점이 준 카테고리를 내부 카테고리 후보 목록으로 옮긴다.
 
     순서가 중요하다.
     1. 저자·시리즈 전용 규칙 - 가장 구체적이다. 히가시노 게이고는 '일본소설' 이기 전에
        `2_소설일본게이고` 다. 카테고리 문자열을 비워 호출하면 그 절만 탄다.
-    2. DB 키워드 - 운영이 관리하고 하드코딩보다 정밀하다.
+    2. DB 키워드 - 운영이 관리하고 하드코딩보다 정밀하다. 한 키워드가 여러 카테고리에
+       붙을 수 있고 그것이 정상이다. 후보를 전부 돌려준다.
     3. 하드코딩 규칙 전체 - DB 가 안 덮는 38개 카테고리를 메운다.
     """
     from backend.book_classifier import map_category
 
     specific = map_category("", raw_title, raw_author)
     if specific:
-        return specific
+        return [specific]
 
-    hit = match_keyword(cat_str, keyword_map() if keywords is None else keywords)
-    if hit:
-        return hit
+    hits = match_keyword(cat_str, keyword_map() if keywords is None else keywords)
+    if hits:
+        return hits
 
-    return map_category(cat_str, raw_title, raw_author)
+    fallback = map_category(cat_str, raw_title, raw_author)
+    return [fallback] if fallback else []
+
+
+def quantile_bands(confidences: Sequence[float], count: int = 6, window: float = 0.5) -> List[float]:
+    """확신도 분포를 보고 구간 경계를 고른다.
+
+    고정값(0.5, 0.7, 0.8)으로 자르면 안 된다. 실측에서 2,000건 중 1,884건이 첫 구간
+    하나에 몰렸다. 확신도는 79개 클래스에 softmax 를 씌운 값이라 중앙값이 0.13,
+    판정 임계값이 0.056 이다. 0~1 에 고루 퍼진다는 가정이 틀렸다.
+
+    그렇다고 분위수를 그대로 쓰면 값이 촘촘한 자리에서 경계가 그어져, 사실상 같은
+    문서들이 두 구간으로 갈린다. 그래서 분위수 자리 근처에서 이웃 값 사이가 가장 크게
+    벌어진 곳(밀도가 낮은 곳)으로 경계를 옮긴다.
+
+    `window` 는 분위수 한 칸의 몇 배만큼 좌우를 살필지다. 0.5 면 이웃 분위수의 중간까지다.
+    """
+    values = sorted(float(c) for c in confidences)
+    n = len(values)
+    if n < 2 or count < 2:
+        return []
+
+    step = n / count
+    reach = max(1, int(step * window))
+    cuts: List[float] = []
+    for i in range(1, count):
+        center = int(round(i * step))
+        lo = max(1, center - reach)
+        hi = min(n - 1, center + reach)
+        if lo >= hi:
+            continue
+        # 이웃한 두 값의 차이가 가장 큰 자리가 밀도가 가장 낮은 자리다.
+        best = max(range(lo, hi + 1), key=lambda k: values[k] - values[k - 1])
+        cut = (values[best] + values[best - 1]) / 2
+        if not cuts or cut > cuts[-1]:
+            cuts.append(cut)
+    return cuts
+
+
+def bands_from_cuts(cuts: Sequence[float]) -> List[Tuple[float, float]]:
+    """경계값 목록을 (하한, 상한) 구간으로 바꾼다. 마지막 구간의 상한은 1 을 넘겨 둔다."""
+    edges = [0.0] + [float(c) for c in cuts] + [1.01]
+    return [(edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
 
 
 @dataclass
