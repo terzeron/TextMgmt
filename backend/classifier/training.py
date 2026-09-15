@@ -104,7 +104,7 @@ def train(docs: Sequence[Dict[str, Any]], config: Dict[str, Any], accept_parent:
 
     t0 = time.time()
     mcfg = config["model"]
-    base = LinearSVC(C=float(mcfg["C"]), dual="auto", class_weight=None if mcfg.get("class_weight") in (None, "none") else mcfg["class_weight"])
+    base = LinearSVC(C=float(mcfg["C"]), dual="auto", class_weight=None if mcfg.get("class_weight") in (None, "none") else mcfg["class_weight"], max_iter=int(mcfg.get("max_iter", 1000)))
     clf = OneVsRestClassifier(base, n_jobs=int(mcfg.get("n_jobs", 8)))
     # 스레드 병렬을 쓴다. liblinear 이 `with nogil` 로 GIL 을 풀어 실제로 병렬이 된다.
     #

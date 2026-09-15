@@ -293,3 +293,19 @@ def test_single_store_with_two_candidates_refuses(tmp_path):
     cat, method, _ = service._decide(None, "사계.epub", entry, trust_single_match=True)
     assert cat is None
     assert method == "conflict"
+
+
+def test_boundary_never_exceeds_the_measured_range(tmp_path):
+    """재지 않은 구간까지 서점에 넘기면 안 된다.
+
+    거부 구간에서만 뽑으면 마지막 구간의 상한이 1.01(열린 위쪽 끝)이다. 모든 구간에서
+    서점이 이기면 경계가 1.01 로 나와 확신도와 무관하게 늘 서점을 따르게 된다.
+    실제로 그 값이 나왔다.
+    """
+    path = tmp_path / "bookstore_policy.json"
+    path.write_text(json.dumps({"sample": 800, "bookstore_override_below": 1.01, "measured_max_confidence": 0.056, "bands": []}), encoding="utf-8")
+
+    policy = BookstorePolicy.load(path)
+    assert policy.override_below == 0.056
+    assert policy.prefers_bookstore(0.05) is True
+    assert policy.prefers_bookstore(0.2) is False, "재지 않은 고확신 구간은 모델이 지킨다"

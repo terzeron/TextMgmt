@@ -257,6 +257,17 @@ def build_parser() -> argparse.ArgumentParser:
               낮추면: 학습 데이터가 늘지만 측정값의 오차가 커진다."""),
     )
     t.add_argument(
+        "--max-iter",
+        type=int,
+        default=None,
+        metavar="N",
+        help=_help("""\
+            liblinear 이 몇 번까지 반복할 것인가
+              기본 5000 / 범위 1000~50000
+              높이면: 수렴하지 못한 클래스가 준다. 학습이 그만큼 길어진다.
+              낮추면: 빠르지만 마진이 제자리가 아니라 정답률이 깎일 수 있다."""),
+    )
+    t.add_argument(
         "--n-jobs",
         type=int,
         default=None,
@@ -303,6 +314,16 @@ def build_parser() -> argparse.ArgumentParser:
               기본 1.0 / 범위 1.0~5.0
               1.0 미만으로 낮추지 말 것. 서점이 차단할 수 있다.
               높이면: 안전하지만 전체 시간이 비례해 는다."""),
+    )
+    cal.add_argument(
+        "--reband",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=_help("""\
+            저장된 측정 결과의 구간만 다시 나눈다 (서점을 다시 조회하지 않는다)
+              건별 결과가 파일에 남아 있어 구간 수를 바꿔 볼 수 있다.
+              표본 2,000건 조회에 4시간 35분이 걸렸으므로 재조회는 피한다."""),
     )
     cal.add_argument(
         "--sample-from",
@@ -437,6 +458,7 @@ def _overrides(args: argparse.Namespace) -> Dict[str, Any]:
     put(["corpus", "min_per_category"], getattr(args, "min_per_category", None))
     put(["model", "C"], getattr(args, "C", None))
     put(["model", "n_jobs"], getattr(args, "n_jobs", None))
+    put(["model", "max_iter"], getattr(args, "max_iter", None))
     put(["holdout"], getattr(args, "holdout", None))
     if getattr(args, "class_weight", None) is not None:
         put(["model", "class_weight"], None if args.class_weight == "none" else args.class_weight)
@@ -545,6 +567,9 @@ def cmd_bookstore_policy(args: argparse.Namespace) -> int:
     from backend.book_classifier import BookClassifierService, clean_filename_to_author_title
     from backend.classifier.config import resolve_parent
 
+    if args.reband:
+        return _reband(args)
+
     model = _load_model(args.model)
     docs = _load_corpus(args.corpus)
     hold = _holdout_docs(docs, model.config)
@@ -612,10 +637,19 @@ def cmd_bookstore_policy(args: argparse.Namespace) -> int:
         report.append({"low": lo, "high": hi, "n": len(band), "model_accuracy": m_acc, "store_coverage": s_rate, "store_accuracy": s_acc})
         print(f"  {lo:.3f}~{hi:.3f} {len(band):>5}   {m_acc:>9.1%}   {s_rate:>9.1%}   {s_acc:>9.1%}")
 
+    # 경계는 실제로 잰 범위를 넘으면 안 된다.
+    #
+    # 거부 구간에서만 뽑으면 마지막 구간의 상한이 1.01(열린 위쪽 끝)이라, 모든 구간에서
+    # 서점이 이겼을 때 경계가 1.01 로 나온다. 그대로 쓰면 재지도 않은 고확신 구간까지
+    # 서점이 가로챈다. 표본에서 본 가장 높은 확신도로 자른다.
+    measured_max = max((r["confidence"] for r in rows), default=0.0)
     better = [b for b in report if b["store_accuracy"] > b["model_accuracy"]]
-    threshold = max((b["high"] for b in better), default=0.0)
+    threshold = min(max((b["high"] for b in better), default=0.0), measured_max)
     out = {
         "sample": len(rows),
+        "sample_from": args.sample_from,
+        # 이 확신도까지만 쟀다. 경계는 여기를 못 넘는다.
+        "measured_max_confidence": measured_max,
         "bands": report,
         # 이 확신도 미만일 때만 서점 판정으로 갈아탄다. 0 이면 서점이 이긴 구간이 없다는 뜻이다.
         "bookstore_override_below": threshold,
@@ -625,6 +659,52 @@ def cmd_bookstore_policy(args: argparse.Namespace) -> int:
     }
     print(f"\n  서점으로 갈아탈 확신도 상한: {threshold:.3f}" + ("  (서점이 모델을 이긴 구간이 없다)" if threshold == 0.0 else ""))
     dest = args.out or args.model.parent / "bookstore_policy.json"
+    with Path(dest).open("w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    print(f"저장: {dest}")
+    return 0
+
+
+def _summarize_policy(rows: List[Dict[str, Any]], band_count: int) -> Dict[str, Any]:
+    """건별 결과를 구간으로 묶어 서점 경계를 고른다. 서점을 조회하지 않는다."""
+    cuts = quantile_bands([r["confidence"] for r in rows], count=band_count)
+    report: List[Dict[str, Any]] = []
+    print("\n  확신도 구간   건수   모델 정답률   서점 응답률   서점 정답률")
+    for lo, hi in bands_from_cuts(cuts):
+        band = [r for r in rows if lo <= r["confidence"] < hi]
+        if not band:
+            continue
+        answered = [r for r in band if r["store_answered"]]
+        m_acc = sum(r["model_ok"] for r in band) / len(band)
+        s_rate = len(answered) / len(band)
+        s_acc = (sum(r["store_ok"] for r in answered) / len(answered)) if answered else 0.0
+        report.append({"low": lo, "high": hi, "n": len(band), "model_accuracy": m_acc, "store_coverage": s_rate, "store_accuracy": s_acc})
+        print(f"  {lo:.3f}~{hi:.3f} {len(band):>5}   {m_acc:>9.1%}   {s_rate:>9.1%}   {s_acc:>9.1%}")
+
+    # 경계는 실제로 잰 범위를 넘으면 안 된다. 거부 구간만 뽑으면 마지막 구간의 상한이
+    # 1.01(열린 위쪽 끝)이라, 모든 구간에서 서점이 이길 때 경계가 1.01 로 나온다.
+    # 그대로 쓰면 재지도 않은 고확신 구간까지 서점이 가로챈다.
+    measured_max = max((r["confidence"] for r in rows), default=0.0)
+    better = [b for b in report if b["store_accuracy"] > b["model_accuracy"]]
+    threshold = min(max((b["high"] for b in better), default=0.0), measured_max)
+    print(f"\n  서점으로 갈아탈 확신도 상한: {threshold:.3f}" + ("  (서점이 모델을 이긴 구간이 없다)" if threshold == 0.0 else f"  (측정 범위 {measured_max:.3f} 까지)"))
+    return {"sample": len(rows), "measured_max_confidence": measured_max, "bands": report, "bookstore_override_below": threshold, "rows": rows}
+
+
+def _reband(args: argparse.Namespace) -> int:
+    """저장된 건별 결과로 구간만 다시 나눈다."""
+    path = Path(args.reband)
+    if not path.exists():
+        raise SystemExit(f"측정 결과 파일이 없다: {path}")
+    with path.open(encoding="utf-8") as f:
+        saved = json.load(f)
+    rows = saved.get("rows") or []
+    if not rows:
+        raise SystemExit(f"건별 결과가 없어 다시 나눌 수 없다: {path}\n서점 조회부터 다시 해야 한다.")
+
+    out = _summarize_policy(rows, args.bands)
+    out["sample_from"] = saved.get("sample_from", "unknown")
+    dest = args.out or path
     with Path(dest).open("w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     print(f"저장: {dest}")

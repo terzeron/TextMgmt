@@ -185,6 +185,8 @@ class BookstorePolicy:
     sample: int = 0
     bands: List[Dict[str, Any]] = field(default_factory=list)
     source: Optional[str] = None
+    # 표본에서 실제로 본 가장 높은 확신도. 경계는 여기를 넘을 수 없다.
+    measured_max: float = 0.0
 
     @classmethod
     def load(cls, path: Optional[Path | str] = None) -> "BookstorePolicy":
@@ -197,7 +199,13 @@ class BookstorePolicy:
         except (OSError, json.JSONDecodeError) as e:
             logger.warning("서점 규칙 파일을 못 읽었다 (%s): %s", p, e)
             return cls()
-        return cls(override_below=float(data.get("bookstore_override_below") or 0.0), sample=int(data.get("sample") or 0), bands=data.get("bands") or [], source=str(p))
+        measured_max = float(data.get("measured_max_confidence") or 0.0)
+        override = float(data.get("bookstore_override_below") or 0.0)
+        if measured_max and override > measured_max:
+            # 옛 파일이거나 잘못 계산된 경우. 재지 않은 구간까지 서점에 넘기지 않는다.
+            logger.warning("서점 경계 %.3f 가 측정 범위 %.3f 를 넘어 잘라 쓴다", override, measured_max)
+            override = measured_max
+        return cls(override_below=override, sample=int(data.get("sample") or 0), bands=data.get("bands") or [], source=str(p), measured_max=measured_max)
 
     def prefers_bookstore(self, confidence: float) -> bool:
         """이 확신도에서는 모델보다 서점을 믿는 것이 나은가."""
