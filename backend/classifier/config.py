@@ -50,8 +50,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "body_char": {"enabled": True, "source": "text", "weight": 1.0, "analyzer": "char_wb", "ngram": [2, 4], "min_df": 20, "max_features": 300000, "max_chars": 1500},
         "filename": {"enabled": True, "source": "name", "weight": 1.0, "analyzer": "char_wb", "ngram": [2, 4], "min_df": 3, "max_features": 200000, "max_chars": 0},
         "title": {"enabled": True, "source": "title", "weight": 1.0, "analyzer": "char_wb", "ngram": [2, 4], "min_df": 3, "max_features": 100000, "max_chars": 0},
-        # 한국 저자명은 동명이인이 많아 카테고리 근거로 약하다. 과학칼럼니스트 이인식의
-        # 신화 책이 `5_수학과학일반` 으로 갔다. 저자 이름이 주제를 끌어당긴 결과다.
+        # 한국 저자명은 동명이인이 많아 카테고리 근거로 약하다.
         #
         # 홀드아웃 8,000건 실측(재학습 없이 입력에서 저자를 지움):
         #   원본        top-1 86.5%  판정률 91.9%  정답률 90.0%
