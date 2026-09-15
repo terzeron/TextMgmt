@@ -510,7 +510,9 @@ describe("CategoryAdmin", () => {
     });
 
     const header = screen.getByText("디렉토리").closest(".card-header");
-    expect(within(header).getByLabelText("이상 항목만 보기").checked).toBe(true);
+    expect(within(header).getByLabelText("이상 항목만 보기").checked).toBe(
+      true,
+    );
 
     const mismatchReloadButton = within(header).getByRole("button", {
       name: /이상 항목 재적재/,
@@ -520,9 +522,9 @@ describe("CategoryAdmin", () => {
 
     const modal = await screen.findByRole("dialog");
     expect(within(modal).queryByText("불일치 일괄 재적재")).toBeNull();
-    expect(within(modal).getAllByText("이상 항목 재적재").length).toBeGreaterThan(
-      0,
-    );
+    expect(
+      within(modal).getAllByText("이상 항목 재적재").length,
+    ).toBeGreaterThan(0);
     expect(
       within(modal).getByText(/전체 이상 항목 50017건을 ES에 재적재합니다/),
     ).toBeTruthy();
@@ -1227,9 +1229,7 @@ describe("CategoryAdmin", () => {
     fireEvent.click(screen.getByText("orphan.txt"));
 
     mockJsonPostReq.mockClear();
-    fireEvent.click(
-      await screen.findByRole("button", { name: "파일 삭제" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "파일 삭제" }));
 
     const modal = await screen.findByRole("dialog");
     expect(within(modal).getByText(/되돌릴 수 없습니다/)).toBeTruthy();
@@ -1282,7 +1282,9 @@ describe("CategoryAdmin", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "파일 삭제" }));
     const deleteFileModal = await screen.findByRole("dialog");
-    fireEvent.click(within(deleteFileModal).getByRole("button", { name: "삭제" }));
+    fireEvent.click(
+      within(deleteFileModal).getByRole("button", { name: "삭제" }),
+    );
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/category-mismatches/delete-file",
@@ -1340,7 +1342,9 @@ describe("CategoryAdmin", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "파일 삭제" }));
     const deleteFileModal = await screen.findByRole("dialog");
-    fireEvent.click(within(deleteFileModal).getByRole("button", { name: "삭제" }));
+    fireEvent.click(
+      within(deleteFileModal).getByRole("button", { name: "삭제" }),
+    );
     await waitFor(() => {
       expect(screen.getByText("파일 삭제 실패: 삭제 실패")).toBeTruthy();
     });
@@ -1746,10 +1750,12 @@ describe("CategoryAdmin", () => {
         expect.any(Function),
         expect.any(Function),
       );
-      expect(
-        screen.getByText(/자동 분류 완료 \(이동 2건, 제외 1건, 실패 0건\)/),
-      ).toBeTruthy();
     });
+    // 완료 배너는 표시하지 않는다. 완료 신호는 선택 해제와 목록 갱신이다.
+    await waitFor(() => {
+      expect(screen.getByText("왼쪽에서 디렉토리를 선택하세요.")).toBeTruthy();
+    });
+    expect(screen.queryByText(/자동 분류 완료/)).toBeNull();
   });
 
   it("자동 분류 진행 중에는 버튼에 잔여 건 수를 표시한다", async () => {
@@ -1802,7 +1808,7 @@ describe("CategoryAdmin", () => {
     });
   });
 
-  it("자동 분류 완료 상태에 카운트와 source_category가 없어도 기본 완료 메시지를 표시한다", async () => {
+  it("자동 분류 완료 상태에 카운트와 source_category가 없어도 선택만 해제한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     const originalGetImpl = mockJsonGetReq.getMockImplementation();
     mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
@@ -1830,12 +1836,9 @@ describe("CategoryAdmin", () => {
     fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
 
     await waitFor(() => {
-      expect(
-        screen.getByText(
-          /최상위 디렉토리 자동 분류 완료 \(이동 0건, 제외 0건, 실패 0건\)/,
-        ),
-      ).toBeTruthy();
+      expect(screen.getByText("왼쪽에서 디렉토리를 선택하세요.")).toBeTruthy();
     });
+    expect(screen.queryByText(/자동 분류 완료/)).toBeNull();
   });
 
   it("자동 분류 작업이 실패 상태로 끝나면 에러 메시지를 표시한다", async () => {
@@ -2036,7 +2039,7 @@ describe("CategoryAdmin", () => {
     });
   });
 
-  it("일괄 재적재 실행 시 reload-all API를 호출하고 결과를 표시한다", async () => {
+  it("일괄 재적재 실행 시 reload-all API를 호출하고 완료 배너 없이 끝낸다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
     await waitFor(() => {
@@ -2082,9 +2085,11 @@ describe("CategoryAdmin", () => {
       );
     });
     await waitFor(() => {
-      expect(screen.getByText(/이상 항목 일괄 ES 재적재 완료/)).toBeTruthy();
-      expect(screen.getByText(/남은 이상 1건/)).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: /일괄 재적재/ }).textContent,
+      ).toContain("일괄");
     });
+    expect(screen.queryByText(/ES 재적재 완료/)).toBeNull();
   });
 
   // ── 키워드 매핑 ──
@@ -2344,7 +2349,7 @@ describe("CategoryAdmin", () => {
     expect(mockJsonPostReq).not.toHaveBeenCalled();
   });
 
-  it("이미 등록된 키워드 추가 시 경고 메시지를 표시한다", async () => {
+  it("이미 등록된 키워드는 추가 요청을 보내지 않는다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
     await waitFor(() => {
@@ -2359,10 +2364,8 @@ describe("CategoryAdmin", () => {
     const input = screen.getByPlaceholderText("새 키워드 입력");
     fireEvent.change(input, { target: { value: "소설" } });
     fireEvent.click(screen.getByText("추가"));
-    await waitFor(() => {
-      expect(screen.getByText("이미 등록된 키워드입니다.")).toBeTruthy();
-    });
     expect(mockJsonPostReq).not.toHaveBeenCalled();
+    expect(screen.queryByText("이미 등록된 키워드입니다.")).toBeNull();
   });
 
   // ── 키워드 추가 에러 콜백 (lines 470-473) ──
@@ -2504,7 +2507,7 @@ describe("CategoryAdmin", () => {
 
   // ── 이름 변경: 동일 이름 (line 534) ──
 
-  it("현재 이름과 동일한 이름으로 변경 시 경고 메시지를 표시한다", async () => {
+  it("현재 이름과 동일한 이름으로 변경하면 요청을 보내지 않는다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
     await waitFor(() => {
@@ -2520,10 +2523,8 @@ describe("CategoryAdmin", () => {
     fireEvent.change(input, { target: { value: "1_fiction" } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    await waitFor(() => {
-      expect(screen.getByText("현재 이름과 동일합니다.")).toBeTruthy();
-    });
     expect(mockJsonPutReq).not.toHaveBeenCalled();
+    expect(screen.queryByText("현재 이름과 동일합니다.")).toBeNull();
   });
 
   // ── 이름 변경 성공 메시지 (line 544) ──
@@ -2647,7 +2648,7 @@ describe("CategoryAdmin", () => {
 
   // ── ES 재적재 성공/에러 (lines 588-594) ──
 
-  it("ES 재적재 성공 시 성공 메시지를 표시한다", async () => {
+  it("ES 재적재 성공 시 완료 배너를 띄우지 않는다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
     await waitFor(() => {
@@ -2668,8 +2669,15 @@ describe("CategoryAdmin", () => {
 
     fireEvent.click(within(modal).getByRole("button", { name: "재적재" }));
     await waitFor(() => {
-      expect(screen.getByText(/재적재 완료.*5건 처리/)).toBeTruthy();
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/category-mismatches/reload",
+        { category: "1_fiction" },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
     });
+    expect(screen.queryByText(/재적재 완료/)).toBeNull();
   });
 
   it("ES 재적재 실패 시 에러 메시지를 표시한다", async () => {
@@ -3206,8 +3214,8 @@ describe("CategoryAdmin", () => {
         expect.any(Function),
         expect.any(Function),
       );
-      expect(screen.getByText(/이상 항목 ES 재적재 완료/)).toBeTruthy();
     });
+    expect(screen.queryByText(/ES 재적재 완료/)).toBeNull();
   });
 
   // ── 모달 onHide (X 버튼) (lines 984, 1017, 1040) ──
@@ -4011,27 +4019,6 @@ describe("CategoryAdmin 성공 메시지 자동 소멸", () => {
     expect(screen.queryByText(/변경했습니다/)).toBeNull();
   });
 
-  it("현재 이름과 동일하다는 안내는 3초 뒤 사라진다", async () => {
-    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
-    await openAndSelect();
-
-    fireEvent.click(screen.getByTitle("이름 변경"));
-    const modal = await screen.findByRole("dialog");
-    const input = modal.querySelector('input[type="text"]:not([disabled])');
-    fireEvent.change(input, { target: { value: "1_fiction" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-
-    await waitFor(() => {
-      expect(screen.getByText("현재 이름과 동일합니다.")).toBeTruthy();
-    });
-    await act(async () => {
-      vi.advanceTimersByTime(3000);
-    });
-    await waitFor(() => {
-      expect(screen.queryByText("현재 이름과 동일합니다.")).toBeNull();
-    });
-  });
-
   it("카테고리 삭제 성공 메시지는 5초 뒤 사라진다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     await openAndSelect();
@@ -4058,30 +4045,6 @@ describe("CategoryAdmin 성공 메시지 자동 소멸", () => {
       vi.advanceTimersByTime(5000);
     });
     expect(screen.queryByText(/삭제되었습니다/)).toBeNull();
-  });
-
-  it("ES 재적재 성공 메시지는 5초 뒤 사라진다", async () => {
-    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
-    await openAndSelect();
-
-    fireEvent.click(screen.getByTitle("ES 재적재"));
-    const modal = await screen.findByRole("dialog");
-
-    mockJsonPostReq.mockImplementation((url, payload, resolve, _r, done) => {
-      resolve({ processed_count: 7 });
-      if (done) done();
-    });
-    fireEvent.click(within(modal).getByRole("button", { name: "재적재" }));
-
-    await waitFor(() => {
-      expect(screen.getByText(/7건 처리/)).toBeTruthy();
-    });
-    await act(async () => {
-      vi.advanceTimersByTime(5000);
-    });
-    await waitFor(() => {
-      expect(screen.queryByText(/7건 처리/)).toBeNull();
-    });
   });
 
   describe("진행 잔여 건수 계산", () => {
@@ -4199,7 +4162,7 @@ describe("CategoryAdmin 성공 메시지 자동 소멸", () => {
       await waitFor(() => {
         const alert = screen.getByText("Internal Server Error (500)");
         expect(alert).toBeTruthy();
-        expect(alert.className).toContain("alert-info");
+        expect(alert.className).toContain("alert-danger");
       });
     });
 
@@ -4272,7 +4235,9 @@ describe("CategoryAdmin 자동 분류 진행 상태 폴링", () => {
 
     await waitFor(() => {
       const autoClassifyButton = screen.getByTitle("자동 분류");
-      expect(autoClassifyButton.querySelector(".spinner-border")).not.toBeNull();
+      expect(
+        autoClassifyButton.querySelector(".spinner-border"),
+      ).not.toBeNull();
       expect(within(autoClassifyButton).getByText("잔여 5건")).toBeTruthy();
     });
   });
@@ -4302,7 +4267,9 @@ describe("CategoryAdmin 자동 분류 진행 상태 폴링", () => {
 
     fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
     await waitFor(() => {
-      expect(autoStatusResolvers.length).toBeGreaterThan(initialStatusCallCount);
+      expect(autoStatusResolvers.length).toBeGreaterThan(
+        initialStatusCallCount,
+      );
     });
 
     act(() => {
@@ -4310,7 +4277,9 @@ describe("CategoryAdmin 자동 분류 진행 상태 폴링", () => {
     });
     await waitFor(() => {
       const autoClassifyButton = screen.getByTitle("자동 분류");
-      expect(autoClassifyButton.querySelector(".spinner-border")).not.toBeNull();
+      expect(
+        autoClassifyButton.querySelector(".spinner-border"),
+      ).not.toBeNull();
       expect(within(autoClassifyButton).getByText("분류 중")).toBeTruthy();
     });
 
@@ -4668,9 +4637,8 @@ describe("CategoryAdmin 재적재 버튼별 스피너 및 실패 처리", () => 
     const remountedBulkButton = screen.getByTitle(
       "불일치 일괄 재적재 (이상 항목이 많으면 오래 걸릴 수 있음)",
     );
-    const remountedMismatchButton = screen.getByTitle(
-      "전체 이상 항목 ES 재적재",
-    );
+    const remountedMismatchButton =
+      screen.getByTitle("전체 이상 항목 ES 재적재");
 
     await waitFor(() => {
       expect(
@@ -5009,7 +4977,7 @@ describe("CategoryAdmin 재적재 버튼별 스피너 및 실패 처리", () => 
     });
   });
 
-  it("완료 시 실패 건수가 있으면 메시지에 함께 표시하고, 카운트 필드가 없으면 0으로 처리한다", async () => {
+  it("카운트 필드가 없는 완료 응답에도 배너 없이 진행 표시를 끈다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
     await waitFor(() => {
@@ -5043,9 +5011,10 @@ describe("CategoryAdmin 재적재 버튼별 스피너 및 실패 처리", () => 
 
     await waitFor(() => {
       expect(
-        screen.getByText(/적재 0건, ES 정리 0건, 남은 이상 3건, 실패 2건/),
-      ).toBeTruthy();
+        screen.getByRole("button", { name: /일괄 재적재/ }).textContent,
+      ).toContain("일괄");
     });
+    expect(screen.queryByText(/ES 재적재 완료/)).toBeNull();
   });
 
   it("선택 카테고리 재적재가 진행 중일 때 잔여 이상 항목 건수를 표시한다", async () => {
@@ -5115,9 +5084,7 @@ describe("CategoryAdmin 재적재 버튼별 스피너 및 실패 처리", () => 
       expect(within(bulkButton).getByText("잔여 0건")).toBeTruthy();
     });
 
-    const mismatchButton = screen.getByTitle(
-      "전체 이상 항목 ES 재적재",
-    );
+    const mismatchButton = screen.getByTitle("전체 이상 항목 ES 재적재");
     expect(mismatchButton.querySelector(".spinner-border")).toBeNull();
     expect(mismatchButton.disabled).toBe(true);
   });
@@ -5720,12 +5687,11 @@ describe("CategoryAdmin 재적재 충돌 및 폴링 방어 처리", () => {
     );
 
     await waitFor(() => {
-      expect(
-        screen.getByText(
-          /카테고리 '1_fiction' 이상 항목 ES 재적재 완료 \(적재 3건, ES 정리 1건, 남은 이상 0건\)/,
-        ),
-      ).toBeTruthy();
+      expect(screen.getByTitle("이상 항목만 ES 재적재").textContent).toContain(
+        "이상 항목 재적재",
+      );
     });
+    expect(screen.queryByText(/ES 재적재 완료/)).toBeNull();
   });
 
   // ── 자동 분류 상태/모달 ──
@@ -6132,5 +6098,162 @@ describe("CategoryAdmin 재적재 충돌 및 폴링 방어 처리", () => {
     } finally {
       getItemSpy.mockRestore();
     }
+  });
+});
+
+describe("CategoryAdmin 직전 작업 상태 잔상 처리", () => {
+  beforeEach(() => {
+    mockJsonGetReq.mockReset();
+    mockJsonDeleteReq.mockReset();
+    mockJsonPostReq.mockReset();
+    mockJsonPutReq.mockReset();
+  });
+
+  // 백엔드는 새 작업이 시작되기 전까지 직전 작업의 done/error를 계속 돌려준다.
+  // 그 응답을 완료로 처리하면 탭을 열 때마다, 디렉토리를 고를 때마다 같은 배너와
+  // 목록 재조회가 되풀이된다.
+  function setupWithTerminalStatus(status) {
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches")
+        resolve(MISMATCH_RESPONSE_WITH_DATA);
+      else if (url.startsWith("/category-mismatches/reload-status"))
+        resolve(status);
+      else if (url === "/categories/auto-classify-status")
+        resolve({ status: "idle" });
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        resolve(LATEST_EXCLUDED_RESPONSE);
+    });
+  }
+
+  it("시작하지 않은 작업의 error 상태는 오류 배너로 띄우지 않는다", async () => {
+    setupWithTerminalStatus({ status: "error", error: "이전 재적재 실패" });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    expect(screen.queryByText("이전 재적재 실패")).toBeNull();
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByTitle("ES 재적재")).toBeTruthy();
+    });
+    expect(screen.queryByText("이전 재적재 실패")).toBeNull();
+  });
+
+  it("시작하지 않은 작업의 done 상태로는 목록을 다시 조회하지 않는다", async () => {
+    setupWithTerminalStatus({
+      status: "done",
+      category: "1_fiction",
+      indexed_count: 3,
+      deleted_count: 1,
+      after_count: 0,
+      failed_count: 0,
+    });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    const countCategoriesCalls = () =>
+      mockJsonGetReq.mock.calls.filter((call) => call[0] === "/categories")
+        .length;
+    const before = countCategoriesCalls();
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByTitle("ES 재적재")).toBeTruthy();
+    });
+
+    expect(countCategoriesCalls()).toBe(before);
+  });
+
+  it("직접 시작한 작업이 error로 끝나면 오류 배너를 표시한다", async () => {
+    setupWithTerminalStatus({ status: "error", error: "재적재 도중 중단" });
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, _reject, done) => {
+        resolve({ started: true });
+        if (done) done();
+      },
+    );
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /일괄 재적재/ }));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "일괄 재적재" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("재적재 도중 중단")).toBeTruthy();
+    });
+  });
+});
+
+describe("CategoryAdmin 재적재 중 버튼 비활성 일관성", () => {
+  beforeEach(() => {
+    mockJsonGetReq.mockReset();
+    mockJsonDeleteReq.mockReset();
+    mockJsonPostReq.mockReset();
+    mockJsonPutReq.mockReset();
+  });
+
+  // 헤더의 "일괄"·"이상 항목" 버튼과 오른쪽 액션 영역의 버튼은 같은 작업을 실행하므로
+  // 진행 중 비활성 조건도 같아야 한다.
+  function setupRunning(runningStatus) {
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches")
+        resolve(MISMATCH_RESPONSE_WITH_DATA);
+      else if (url.startsWith("/category-mismatches/reload-status"))
+        resolve(runningStatus);
+      else if (url === "/categories/auto-classify-status")
+        resolve({ status: "idle" });
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        resolve(LATEST_EXCLUDED_RESPONSE);
+    });
+  }
+
+  it("일괄 재적재 진행 중에는 오른쪽 액션 버튼도 함께 비활성이 된다", async () => {
+    setupRunning({ status: "running", category: null, remaining_count: 5 });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByTitle("ES 재적재")).toBeTruthy();
+    });
+
+    expect(screen.getByRole("button", { name: /일괄 재적재/ }).disabled).toBe(
+      true,
+    );
+    expect(screen.getByTitle("ES 재적재").disabled).toBe(true);
+    expect(screen.getByTitle("이상 항목만 ES 재적재").disabled).toBe(true);
+  });
+
+  it("카테고리 이상 항목 재적재 진행 중에는 오른쪽 액션 버튼도 함께 비활성이 된다", async () => {
+    setupRunning({
+      status: "running",
+      category: "1_fiction",
+      remaining_count: 2,
+    });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByTitle("ES 재적재").disabled).toBe(true);
+    });
+    expect(screen.getByTitle("이상 항목만 ES 재적재").disabled).toBe(true);
   });
 });
