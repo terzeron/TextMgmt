@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import React from "react";
+import PropTypes from "prop-types";
 import ErrorBoundary from "../src/ErrorBoundary";
 import * as clientLogger from "../src/clientLogger";
 
@@ -20,6 +20,12 @@ function ProblemChild({
   }
   return <div>Normal Content</div>;
 }
+
+ProblemChild.propTypes = {
+  shouldThrow: PropTypes.bool,
+  errorMessage: PropTypes.string,
+  throwValue: PropTypes.any,
+};
 
 describe("ErrorBoundary", () => {
   let reportSpy;
