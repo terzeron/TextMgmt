@@ -14,7 +14,7 @@ import pytest
 from backend.classifier.config import DEFAULT_CONFIG, SERIES_TO_PARENT, merge_config
 from backend.classifier.corpus import write_jsonl
 from backend.classifier.training import train
-from tests.test_classifier import make_docs
+from tests.test_classifier import VOCAB, make_docs
 from utils.classify_cli import COMMANDS, main
 
 # 학습을 몇 초 안에 끝내는 설정. 어휘가 갈려 있어 판정은 실제로 배운다.
@@ -109,6 +109,23 @@ def test_calibrate_runs_to_the_end_and_writes_the_threshold(model_file, monkeypa
     assert 0.0 <= saved["bookstore_override_below"] <= 1.01
     assert service.calls == 12
     assert "서점으로 갈아탈 확신도 상한" in capsys.readouterr().out
+
+
+def test_reclassify_uses_the_model_threshold_when_none_is_given(model_file, tmp_path, capsys):
+    """임계값을 안 주면 모델이 학습 때 고른 값을 쓴다.
+
+    이 기본값이 0.90 으로 박혀 있어 실제 라이브러리에서 40건 전부 판정 거부가 났다.
+    같은 파일을 classify 로 돌리면 판정됐다. 확신도 척도는 데이터마다 달라서
+    CLI 가 숫자를 정해 두면 안 된다.
+    """
+    path, _ = model_file
+    library = tmp_path / "library"
+    source = library / "3_무협"
+    source.mkdir(parents=True)
+    (source / "무림맹_장문인.txt").write_text(" ".join([VOCAB["3_무협"]] * 3), encoding="utf-8")
+
+    assert main(["reclassify", "3_무협", "--model", str(path), "--library-root", str(library), "--no-es"]) == 0
+    assert "판정 안 함 0건" in capsys.readouterr().out
 
 
 def test_reclassify_preview_does_not_move_files(model_file, tmp_path, capsys):

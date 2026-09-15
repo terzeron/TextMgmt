@@ -305,7 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="F",
         help=_help("""\
             이 확신도 미만이면 판정하지 않는다
-              기본 0.90 / 범위 0.00~0.99
+              기본: 모델이 학습 때 홀드아웃에서 고른 값 (info 로 확인)
               0.00 으로 두면 확신도와 무관하게 1위 후보를 보여준다."""),
     )
     cl.add_argument("--top", type=int, default=3, metavar="N", help="후보를 몇 개까지 보여줄 것인가 (기본 3)")
@@ -320,14 +320,15 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument(
         "--min-confidence",
         type=float,
-        default=0.90,
+        default=None,
         metavar="F",
         help=_help("""\
             이 확신도 미만이면 판정하지 않고 파일을 그대로 둔다
-              기본 0.90 / 범위 0.50~0.99
+              기본: 모델이 학습 때 홀드아웃에서 고른 값 (info 로 확인)
               높이면: 틀린 이동이 줄지만 손대지 않는 파일이 는다.
               낮추면: 더 많이 옮기지만 오분류가 는다.
-              홀드아웃에서 잰 대략의 지점은 evaluate 로 확인할 것."""),
+              확신도 척도는 데이터마다 다르다. 0.90 같은 값을 임의로 넣으면
+              아무것도 안 옮긴다. 바꾸려면 evaluate 의 곡선을 보고 정할 것."""),
     )
     r.add_argument("--apply", action="store_true", help="실제로 파일을 옮긴다 (기본은 미리보기)")
     r.add_argument(
