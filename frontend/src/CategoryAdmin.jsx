@@ -280,8 +280,7 @@ const AdminTreeItem = React.forwardRef(function AdminTreeItem(props, ref) {
 
 // ── 불일치 건수 계산 ──
 
-const ALL_RELOAD_OWNER_SESSION_KEY_PREFIX =
-  "CategoryAdmin.allReloadOwner.";
+const ALL_RELOAD_OWNER_SESSION_KEY_PREFIX = "CategoryAdmin.allReloadOwner.";
 
 function normalizeAllReloadOwner(owner) {
   return owner === "mismatch" || owner === "bulk" ? owner : null;
@@ -438,6 +437,10 @@ export default function CategoryAdmin({
   // 독립적으로 시작될 수 있으므로 각자의 ref로 관리한다.
   const bulkStartPendingRef = useRef(false);
   const mismatchStartPendingRef = useRef(false);
+  // 각 폴러가 "실행 중"을 실제로 관측했는지 기록한다. 이 기록이 없으면 백엔드가 계속
+  // 돌려주는 직전 작업의 done/error를 새 완료로 오인한다.
+  const allReloadTrackingRef = useRef(false);
+  const mismatchTrackingRef = useRef(false);
   const autoClassifyStartPendingRef = useRef(false);
   const bulkStatusRequestIdRef = useRef(0);
   const mismatchStatusRequestIdRef = useRef(0);
@@ -646,48 +649,44 @@ export default function CategoryAdmin({
   // 서로 다른 카테고리(또는 카테고리 vs 일괄)의 진행 상태가 뒤섞이지 않게 한다.
 
   const applyReloadStatus = useCallback(
-    (status, setRunning, setRemaining, startPendingRef) => {
+    (status, setRunning, setRemaining, startPendingRef, trackingRef) => {
       if (!status || status.status === "idle") {
         // 시작 요청(POST)이 서버에 반영되기 전에 이 폴링이 먼저 도착해 stale한 idle을
         // 읽은 것일 수 있다. 그 경우 스피너를 끄지 않고 유지한다.
         if (startPendingRef.current) return true;
+        trackingRef.current = false;
         setRunning(false);
         setRemaining(null);
         return false;
       }
       if (status.status === "running") {
         startPendingRef.current = false;
+        trackingRef.current = true;
         setRunning(true);
         setRemaining((current) => getReloadRemainingCount(status, current));
         return true;
       }
 
+      // 백엔드는 새 작업이 시작되기 전까지 직전 작업의 done/error를 계속 돌려준다.
+      // 이 컴포넌트가 그 작업을 추적하고 있지 않았다면(마운트 직후, 디렉토리 선택 변경
+      // 직후의 첫 폴링) 과거 작업의 잔상이므로 완료로 처리하지 않는다. 그러지 않으면
+      // 디렉토리를 클릭할 때마다 같은 완료/실패 안내와 loadData()가 되풀이된다.
+      const wasTracking = startPendingRef.current || trackingRef.current;
       startPendingRef.current = false;
+      trackingRef.current = false;
       setRunning(false);
       setRemaining(null);
+      if (!wasTracking) return false;
       loadData();
-      if (status.status === "done") {
-        const indexed = status.indexed_count || 0;
-        const deleted = status.deleted_count || 0;
-        const remaining = status.after_count || 0;
-        const failed = status.failed_count || 0;
-        const label = status.category
-          ? `카테고리 '${status.category}' 이상 항목`
-          : "이상 항목 일괄";
-        setMessage(
-          `${label} ES 재적재 완료 (적재 ${indexed}건, ES 정리 ${deleted}건, 남은 이상 ${remaining}건${
-            failed ? `, 실패 ${failed}건` : ""
-          })`,
-        );
-      } else {
+      if (status.status !== "done") {
         setMessage(
           formatErrorMessage(
             status.error,
             "이상 항목 ES 재적재에 실패했습니다.",
           ),
         );
+        setTimeout(() => setMessage(""), 5000);
       }
-      setTimeout(() => setMessage(""), 5000);
       return false;
     },
     [loadData],
@@ -713,6 +712,7 @@ export default function CategoryAdmin({
         isMismatchOwner ? setMismatchReloading : setBulkReloading,
         isMismatchOwner ? setMismatchRemainingCount : setBulkRemainingCount,
         bulkStartPendingRef,
+        allReloadTrackingRef,
       );
 
       updateAllReloadOwner(isActive ? statusOwner : null);
@@ -763,6 +763,12 @@ export default function CategoryAdmin({
     applyAllReloadStatus,
   ]);
 
+  // 대상 카테고리가 바뀌면 추적 기록을 버린다. 이전 카테고리에서 관측한 "실행 중"을
+  // 새 카테고리의 stale done에 그대로 적용하면 안 된다.
+  useEffect(() => {
+    mismatchTrackingRef.current = false;
+  }, [mismatchReloadTargetCategory]);
+
   // 선택된 카테고리 전용 락 상태 폴링: 카테고리를 선택했을 때만 동작하며, 다른
   // 카테고리나 일괄 재적재와는 독립적으로 이 카테고리의 진행 상태만 추적한다.
   useEffect(() => {
@@ -782,6 +788,7 @@ export default function CategoryAdmin({
               setMismatchReloading,
               setMismatchRemainingCount,
               mismatchStartPendingRef,
+              mismatchTrackingRef,
             );
         },
         () => {},
@@ -825,23 +832,14 @@ export default function CategoryAdmin({
       setAutoClassifyPolling(false);
       setAutoClassifyRemainingCount(null);
       if (status.status === "done") {
-        const moved = status.moved_count || 0;
-        const skipped = status.skipped_count || 0;
-        const failed = status.failed_count || 0;
-        const label = getCategoryTargetLabel(
-          status.source_category || "_root",
-        );
         setSelectedCategory("");
         loadData();
-        setMessage(
-          `${label} 자동 분류 완료 (이동 ${moved}건, 제외 ${skipped}건, 실패 ${failed}건)`,
-        );
       } else {
         setMessage(
           formatErrorMessage(status.error, "자동 분류에 실패했습니다."),
         );
+        setTimeout(() => setMessage(""), 5000);
       }
-      setTimeout(() => setMessage(""), 5000);
       return false;
     },
     [loadData],
@@ -1049,8 +1047,6 @@ export default function CategoryAdmin({
     const keyword = newKeyword.trim();
 
     if (mappings[selectedCategory]?.includes(keyword)) {
-      setMessage("이미 등록된 키워드입니다.");
-      setTimeout(() => setMessage(""), 3000);
       return;
     }
 
@@ -1176,8 +1172,6 @@ export default function CategoryAdmin({
     if (!selectedCategory || !newCategoryName.trim()) return;
     const trimmed = newCategoryName.trim();
     if (trimmed === selectedCategory) {
-      setMessage("현재 이름과 동일합니다.");
-      setTimeout(() => setMessage(""), 3000);
       return;
     }
 
@@ -1186,10 +1180,6 @@ export default function CategoryAdmin({
       `${apiPrefix}/categories/rename`,
       { old_category: selectedCategory, new_category: trimmed },
       () => {
-        setMessage(
-          `카테고리 '${selectedCategory}'을(를) '${trimmed}'(으)로 변경했습니다.`,
-        );
-        setTimeout(() => setMessage(""), 5000);
         setShowRenameModal(false);
         setSelectedCategory("");
         loadData();
@@ -1209,11 +1199,7 @@ export default function CategoryAdmin({
     jsonPostReq(
       `${apiPrefix}/categories/delete`,
       { category: selectedCategory },
-      (result) => {
-        setMessage(
-          `카테고리 '${selectedCategory}'이(가) 삭제되었습니다. (${result.deleted_count}건)`,
-        );
-        setTimeout(() => setMessage(""), 5000);
+      () => {
         setShowDeleteModal(false);
         setSelectedCategory("");
         loadData();
@@ -1235,12 +1221,7 @@ export default function CategoryAdmin({
     jsonPostReq(
       `${apiPrefix}/category-mismatches/reload`,
       { category: selectedCategory },
-      (result) => {
-        setMessage(
-          `${getCategoryTargetLabel(selectedCategory)} ES 재적재 완료 (${result.processed_count}건 처리)`,
-        );
-        setTimeout(() => setMessage(""), 5000);
-      },
+      () => {},
       (error) => {
         setMessage(formatErrorMessage(error, "ES 재적재에 실패했습니다."));
         setTimeout(() => setMessage(""), 5000);
@@ -1405,6 +1386,7 @@ export default function CategoryAdmin({
             setMismatchReloading,
             setMismatchRemainingCount,
             mismatchStartPendingRef,
+            mismatchTrackingRef,
           );
         }
       },
@@ -1629,19 +1611,15 @@ export default function CategoryAdmin({
 
   // message는 이 컴포넌트 안에서 항상 문자열로만 세팅된다(setMessage 호출부 전부 문자열 리터럴/
   // 템플릿 리터럴 또는 formatErrorMessage()의 반환값).
-  const messageText = message;
+  // 완료·안내 메시지는 더 이상 세팅하지 않는다. 상태 폴링이 직전 작업의 done을 계속
+  // 돌려주는 탓에 같은 완료 배너가 되풀이 노출되어 방해가 됐다. 남은 것은 오류뿐이므로
+  // 문자열로 심각도를 추측하지 않고 항상 alert-danger로 표시한다.
 
   // ── 렌더링 ──
 
   return (
     <>
-      {messageText && (
-        <div
-          className={`alert ${messageText.includes("실패") || messageText.includes("오류") ? "alert-danger" : "alert-info"} py-1 mb-2`}
-        >
-          {messageText}
-        </div>
-      )}
+      {message && <div className="alert alert-danger py-1 mb-2">{message}</div>}
       {loading ? (
         <div className="text-center p-4">
           <Spinner animation="border" />
@@ -1826,7 +1804,7 @@ export default function CategoryAdmin({
                     <Button
                       variant="outline-success"
                       size="sm"
-                      disabled={saving}
+                      disabled={saving || bulkReloading || mismatchReloading}
                       onClick={() => setShowReloadModal(true)}
                       title="ES 재적재"
                     >
@@ -1844,7 +1822,8 @@ export default function CategoryAdmin({
                       disabled={
                         saving ||
                         bulkReloading ||
-                        selectedMismatchCount === 0
+                        mismatchReloading ||
+                        mismatchReloadTargetCount === 0
                       }
                       onClick={() => setShowMismatchReloadModal(true)}
                       title="이상 항목만 ES 재적재"
