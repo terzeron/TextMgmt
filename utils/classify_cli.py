@@ -26,6 +26,12 @@ logger = logging.getLogger("classify_cli")
 
 DEFAULT_CORPUS = Path("tmp/classifier/corpus.jsonl")
 
+# 거부 구간 표본을 모으려면 그보다 넓은 풀에서 확신도를 재야 한다. 거부율이 8.5% 라
+# 표본의 20배를 훑으면 충분하다.
+POOL_FACTOR = 20
+# 'boundary' 에서 임계값의 몇 배까지 볼 것인가.
+BOUNDARY_FACTOR = 2.0
+
 
 # ---------------------------------------------------------------------------
 # 도움말 문안
@@ -299,6 +305,17 @@ def build_parser() -> argparse.ArgumentParser:
               높이면: 안전하지만 전체 시간이 비례해 는다."""),
     )
     cal.add_argument(
+        "--sample-from",
+        choices=["refused", "boundary", "all"],
+        default="refused",
+        help=_help("""\
+            표본을 어디서 뽑을 것인가 (기본 refused)
+              refused:  모델이 판정을 거부한 구간. 서점을 실제로 쓰는 자리다.
+              boundary: 거부 구간과 그 바로 위. 서점이 낮은 확신도의 답을
+                        가로챌 만한지도 함께 본다.
+              all:      홀드아웃 전체. 52%가 웹소설이라 서점이 불리하게 나온다."""),
+    )
+    cal.add_argument(
         "--bands",
         type=int,
         default=6,
@@ -532,10 +549,35 @@ def cmd_bookstore_policy(args: argparse.Namespace) -> int:
     docs = _load_corpus(args.corpus)
     hold = _holdout_docs(docs, model.config)
     random.Random(model.config["seed"]).shuffle(hold)
-    sample = hold[: args.sample]
+
+    # 서점을 실제로 쓰는 자리에서 재야 한다.
+    #
+    # 홀드아웃 전체에서 고르게 뽑으면 52%가 웹소설이 된다. 서점은 웹소설을 거의 안
+    # 다뤄 정답률이 낮게 나오는데, 정작 서점이 필요한 자리는 모델이 답을 못 하는
+    # 8.5%(논픽션에 몰려 있다)다. 실측에서 그 8.5%의 판정률을 서점이 45% -> 95%로
+    # 끌어올렸다. 균등 표본은 그 효과를 못 본다.
+    pool_size = max(args.sample * POOL_FACTOR, args.sample)
+    pool = hold[:pool_size]
+    pool_preds = model.predict(pool, min_confidence=0.0)
+    floor = model.min_confidence
+    if args.sample_from == "refused":
+        picked = [(d, p) for d, p in zip(pool, pool_preds) if p.confidence < floor]
+        where = f"모델이 판정을 거부한 구간(확신도 < {floor:.3f})"
+    elif args.sample_from == "boundary":
+        # 거부 구간과 그 바로 위. 서점이 낮은 확신도의 모델 답을 가로챌 만한지도 함께 본다.
+        picked = [(d, p) for d, p in zip(pool, pool_preds) if p.confidence < floor * BOUNDARY_FACTOR]
+        where = f"거부 구간과 그 위 (확신도 < {floor * BOUNDARY_FACTOR:.3f})"
+    else:
+        picked = list(zip(pool, pool_preds))
+        where = "홀드아웃 전체"
+
+    if not picked:
+        raise SystemExit(f"{where} 에 해당하는 문서가 없다. --sample-from 을 바꿀 것")
+    sample = [d for d, _ in picked[: args.sample]]
+    preds = [p for _, p in picked[: args.sample]]
+    print(f"표본 {len(sample):,}건을 {where} 에서 뽑았다 (후보 {len(picked):,}건 / 풀 {len(pool):,}건)", flush=True)
 
     service = BookClassifierService(delay=args.delay)
-    preds = model.predict(sample, min_confidence=0.0)
 
     rows: List[Dict[str, Any]] = []
     t0 = time.time()

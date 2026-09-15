@@ -102,7 +102,8 @@ def test_bookstore_policy_runs_to_the_end_and_writes_the_threshold(model_file, m
     _, corpus = model_file
     path, _ = model_file
     out = tmp_path / "policy.json"
-    assert main(["bookstore-policy", "--model", str(path), "--corpus", str(corpus), "--sample", "12", "--delay", "0", "--out", str(out)]) == 0
+    # 시험용 모델은 어휘가 뚜렷해 거부되는 문서가 없다. 집계 경로를 보려는 테스트라 전체에서 뽑는다.
+    assert main(["bookstore-policy", "--model", str(path), "--corpus", str(corpus), "--sample", "12", "--delay", "0", "--sample-from", "all", "--out", str(out)]) == 0
 
     saved = json.loads(out.read_text(encoding="utf-8"))
     assert saved["sample"] == 12
@@ -141,3 +142,33 @@ def test_reclassify_preview_does_not_move_files(model_file, tmp_path, capsys):
     # --apply 가 없으면 파일은 그대로 있어야 한다
     assert book.exists()
     assert "미리보기다" in capsys.readouterr().out
+
+
+def test_bookstore_policy_refuses_to_run_without_refused_documents(model_file, tmp_path):
+    """거부 구간에서 뽑으라고 했는데 그런 문서가 없으면 조용히 전체를 쓰지 않고 멈춘다.
+
+    서점을 4시간 조회한 뒤 엉뚱한 표본이었음을 아는 것보다 낫다.
+    """
+    path, corpus = model_file
+    with pytest.raises(SystemExit) as e:
+        main(["bookstore-policy", "--model", str(path), "--corpus", str(corpus), "--sample", "5", "--delay", "0", "--out", str(tmp_path / "p.json")])
+    assert "거부한 구간" in str(e.value)
+
+
+def test_bookstore_policy_saves_rows_for_rebanding(model_file, monkeypatch, tmp_path):
+    """건별 결과를 남겨야 구간을 다시 나눌 때 서점을 다시 조회하지 않는다.
+
+    표본 2,000건 조회에 4시간 35분이 걸렸다.
+    """
+    import backend.book_classifier as bc
+
+    service = FakeBookstoreService([("3_무협", "3_무협", "")])
+    monkeypatch.setattr(bc, "BookClassifierService", lambda **kwargs: service)
+
+    path, corpus = model_file
+    out = tmp_path / "policy.json"
+    assert main(["bookstore-policy", "--model", str(path), "--corpus", str(corpus), "--sample", "10", "--delay", "0", "--sample-from", "all", "--out", str(out)]) == 0
+
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["rows"]) == 10
+    assert {"confidence", "model_ok", "store_ok", "store_answered"} <= set(saved["rows"][0])
