@@ -9,7 +9,7 @@ const reactHooksRecommendedRules = reactHooks.configs.flat.recommended.rules;
 
 export default [
   {
-    ignores: ["dist/**", "coverage/**"],
+    ignores: ["dist/**", "coverage/**", "coverage-reports/**"],
   },
   {
     files,
