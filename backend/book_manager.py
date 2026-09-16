@@ -1471,6 +1471,64 @@ class BookManager:
 
         return result, None
 
+    async def apply_category_changes(
+        self,
+        items: list[dict[str, Any]],
+        allowed_file_paths: set[str],
+        *,
+        content_type: str = "book",
+        clean_existing: bool = False,
+        on_progress: Callable[[dict[str, int]], None] | None = None,
+    ) -> tuple[dict[str, Any], str | None]:
+        """승인된 항목만 실제로 옮긴다.
+
+        목적지(target_category)는 화면에서 관리자가 드롭다운으로 고쳐서 보낼 수 있어
+        브라우저가 준 값을 그대로 믿을 수 없다. file_path는 제안 목록(allowed_file_paths)에
+        있던 경로인지, target_category는 최상위 카테고리이면서 corpus 밖으로 못 나가는
+        안전한 이름인지 둘 다 다시 검증한다. 하나만 검사하면 임의 경로 이동을 막지 못한다.
+        """
+        result: dict[str, Any] = {"content_type": content_type, "total_count": len(items), "applied_count": 0, "failed_count": 0, "results": []}
+
+        for item in items:
+            file_path_value = item.get("file_path")
+            target_category = item.get("target_category")
+            entry: dict[str, Any] = {"file_path": file_path_value, "target_category": target_category, "apply_status": "failed", "apply_error": None}
+
+            if not isinstance(file_path_value, str) or file_path_value not in allowed_file_paths:
+                entry["apply_error"] = "제안 목록에 없는 파일입니다"
+            elif not isinstance(target_category, str) or not self._is_top_level_target_category(target_category) or not self._is_safe_category_name(target_category):
+                entry["apply_error"] = "옮길 수 없는 카테고리입니다"
+            else:
+                absolute_path = self.path_prefix / file_path_value
+                if not absolute_path.is_file():
+                    entry["apply_error"] = "파일을 찾을 수 없습니다"
+                else:
+                    # 제안 시점의 카테고리를 그대로 source_category로 써서 빈 디렉토리 정리 대상을 맞춘다.
+                    source_category = file_path_value.rsplit("/", 1)[0] if "/" in file_path_value else "_root"
+                    file_result, error = await self._move_classified_file(
+                        absolute_path,
+                        target_category,
+                        item.get("matched_keywords") or [],
+                        content_type=content_type,
+                        dry_run=False,
+                        clean_existing=clean_existing,
+                        source_category=source_category,
+                    )
+                    if error is not None or file_result is None:
+                        entry["apply_error"] = error or "분류 적용에 실패했습니다"
+                    else:
+                        entry["apply_status"] = "moved"
+
+            if entry["apply_status"] == "moved":
+                result["applied_count"] += 1
+            else:
+                result["failed_count"] += 1
+            result["results"].append(entry)
+            if on_progress is not None:
+                on_progress({"total_count": result["total_count"], "applied_count": result["applied_count"], "failed_count": result["failed_count"]})
+
+        return result, None
+
     def _classify_file_to_top_category(
         self,
         file_path: Path,

@@ -5441,3 +5441,63 @@ def test_propose_category_changes_lists_items_without_moving(tmp_path: Path):
     assert result["total_count"] == 1
     assert result["items"][0]["file_path"] == "A/과학소설 모음.epub"
     assert book.is_file()
+
+
+def test_apply_category_changes_rejects_unknown_file(tmp_path: Path):
+    """제안에 없던 파일은 옮기지 않는다. 화면이 보낸 경로를 그대로 믿으면 안 된다."""
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "book.epub").write_text("x")
+
+    result, error = asyncio_runner(
+        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "3_SF"}], allowed_file_paths=set())
+    )
+
+    assert error is None
+    assert result["applied_count"] == 0
+    assert result["results"][0]["apply_error"] == "제안 목록에 없는 파일입니다"
+
+
+def test_apply_category_changes_rejects_unsafe_target(tmp_path: Path):
+    """사용자가 고른 목적지도 검증한다."""
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "book.epub").write_text("x")
+    allowed = {"A/book.epub"}
+
+    result, _error = asyncio_runner(
+        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "../밖"}], allowed_file_paths=allowed)
+    )
+
+    assert result["applied_count"] == 0
+    assert "카테고리" in result["results"][0]["apply_error"]
+
+
+def test_apply_category_changes_uses_user_chosen_target(tmp_path: Path):
+    """사용자가 제안과 다른 목적지를 고르면 그쪽으로 옮긴다."""
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "book.epub").write_text("x")
+    allowed = {"A/book.epub"}
+
+    result, _error = asyncio_runner(
+        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths=allowed)
+    )
+
+    assert result["applied_count"] == 1
+    assert (tmp_path / "5_음악" / "book.epub").is_file()
+
+
+def test_apply_category_changes_records_missing_file(tmp_path: Path):
+    """제안을 만든 뒤 파일이 사라졌으면 실패로 남기고 나머지를 계속 처리한다."""
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    allowed = {"A/사라진책.epub"}
+
+    result, _error = asyncio_runner(
+        manager.apply_category_changes([{"file_path": "A/사라진책.epub", "target_category": "3_SF"}], allowed_file_paths=allowed)
+    )
+
+    assert result["failed_count"] == 1
+    assert "파일" in result["results"][0]["apply_error"]
