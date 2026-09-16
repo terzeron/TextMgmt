@@ -5395,6 +5395,7 @@ class FakeClassifier:
         ({"3_SF": ["과학소설"]}, FakeClassifier("5_음악", "model", "r", "5_음악", 0.9), "3_SF", "unsure"),
         ({"3_SF": ["과학소설"], "5_음악": ["과학소설"]}, FakeClassifier(None, "not_found", "r", None, 0.1), None, "unknown"),
         ({}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.9), "3_SF", "certain"),
+        ({}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.1), None, "unknown"),
         ({}, FakeClassifier("3_SF", "bookstore_majority", "r", None, 0.1), "3_SF", "certain"),
         ({}, FakeClassifier("3_SF", "bookstore_single", "r", None, 0.1), "3_SF", "unsure"),
         ({}, FakeClassifier(None, "conflict", "r", "3_SF", 0.1), None, "unknown"),
