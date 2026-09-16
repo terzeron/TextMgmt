@@ -362,13 +362,11 @@ class TestCategoryMismatchAdmin:
         assert kwargs["use_content_meta"] is True
         assert callable(kwargs["on_progress"])
 
-    def test_classify_proposal_progress_tick_exposes_items_so_far(self, mock_bm, mock_cat, tmp_path, monkeypatch):
+    def test_classify_proposal_progress_tick_exposes_items_so_far(self, mock_bm, mock_cat, tmp_path):
         """제안이 도는 도중 상태 파일을 읽으면 status: running과 지금까지의 items가 보인다.
 
         관리자가 240건짜리 작업 중간에 페이지를 열었을 때, 숫자 카운터뿐 아니라
-        그 시점까지 만들어진 items도 함께 보여야 한다는 요구를 검증한다. 두 tick
-        모두 실제로 디스크에 반영되는지 보려는 테스트라, 쓰로틀(2초)에 걸리지
-        않도록 가짜 시계로 매 tick 사이 3초씩 흐른 것처럼 만든다.
+        그 시점까지 만들어진 items도 함께 보여야 한다는 요구를 검증한다.
         """
         import asyncio
 
@@ -379,18 +377,13 @@ class TestCategoryMismatchAdmin:
         # _start_classify_proposal(status: running 선점)을 여기서 대신 재현한다.
         status_file.write_text(json.dumps({"status": "running", "total_count": 0, "processed_count": 0, "items": [], "updated_at": time.time()}), encoding="utf-8")
 
-        fake_clock = {"t": 0.0}
-        monkeypatch.setattr(main_module.time, "monotonic", lambda: fake_clock["t"])
-
         seen: list[dict] = []
         item_a = {"file_path": "0_inbox/a.epub", "target_category": "3_SF"}
         item_b = {"file_path": "0_inbox/b.epub", "target_category": "3_SF"}
 
         async def fake_propose(*args, on_progress=None, **kwargs):
-            fake_clock["t"] += 3.0
             on_progress({"total_count": 2, "processed_count": 1, "items": [item_a]})
             seen.append(json.loads(status_file.read_text(encoding="utf-8")))
-            fake_clock["t"] += 3.0
             on_progress({"total_count": 2, "processed_count": 2, "items": [item_a, item_b]})
             seen.append(json.loads(status_file.read_text(encoding="utf-8")))
             return {
@@ -655,176 +648,6 @@ class TestCategoryMismatchAdmin:
         asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], {"0_inbox/a.epub"}, False))
 
         assert seen["status_after_tick"] == "applying"
-
-    def test_classify_proposal_progress_writes_are_throttled(self, mock_bm, mock_cat, tmp_path, monkeypatch):
-        """진행률 콜백이 책마다 와도, 실제 상태 파일 쓰기는 2초 간격으로만 일어난다.
-
-        판타지처럼 수만 건짜리 카테고리는 매 tick마다 쓰면 총 쓰기 비용이 건수의
-        제곱에 비례해 커진다(쓸 때마다 계속 자라는 items 전체를 다시 직렬화하므로).
-        실제로 몇 초씩 sleep하지 않고, 가짜 시계로 책 한 권당 10ms씩만 흐른
-        것처럼 몰아서 검증한다.
-        """
-        import asyncio
-
-        mock_bm.path_prefix = tmp_path
-        mock_cat.get_all_mappings.return_value = {}
-
-        fake_clock = {"t": 0.0}
-        monkeypatch.setattr(main_module.time, "monotonic", lambda: fake_clock["t"])
-
-        write_count = {"n": 0}
-        real_dump = main_module.json.dump
-
-        def counting_dump(*args, **kwargs):
-            write_count["n"] += 1
-            return real_dump(*args, **kwargs)
-
-        monkeypatch.setattr(main_module.json, "dump", counting_dump)
-
-        n_books = 500
-
-        async def fake_propose(*args, on_progress=None, **kwargs):
-            items = []
-            for i in range(n_books):
-                fake_clock["t"] += 0.01  # 책 한 건 처리에 10ms 걸린다고 본다
-                items.append({"file_path": f"0_inbox/{i}.epub"})
-                on_progress({"total_count": n_books, "processed_count": i + 1, "items": list(items)})
-            return {
-                "content_type": "book",
-                "source_category": "0_inbox",
-                "total_count": n_books,
-                "processed_count": n_books,
-                "items": items,
-                "failures": [],
-            }, None
-
-        mock_bm.propose_category_changes.side_effect = fake_propose
-        router = main_module.create_item_router(mock_bm, content_type="book")
-        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal")
-        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
-        _run_proposal_job = freevars["_run_classify_proposal_job"]
-        _start_proposal = freevars["_start_classify_proposal"]
-
-        _start_proposal("0_inbox")
-        write_count["n"] = 0  # 시작 쓰기는 빼고, 도는 동안의 tick만 센다
-        asyncio.run(_run_proposal_job("0_inbox", True, True, 1.2))
-
-        # 500권 * 10ms = 5초짜리 작업이 2초 간격으로 쓰이면 중간 쓰기는 몇 회 안팎에
-        # 완료 쓰기 1회가 더해진다. 책마다 썼다면 500회가 나왔을 것이다.
-        assert write_count["n"] < 10
-        assert write_count["n"] < n_books / 10
-
-    def test_classify_proposal_progress_caps_items_and_flags_truncation(self, mock_bm, mock_cat, tmp_path, monkeypatch):
-        """중간 진행 보고는 items를 앞쪽 1000건까지만 싣고 items_truncated를 켠다.
-
-        1000건 미만이면 이 플래그를 켜지 않는다 — 대부분(중앙값 5건)의 카테고리는
-        이 상한에 전혀 걸리지 않는다.
-        """
-        import asyncio
-
-        mock_bm.path_prefix = tmp_path
-        mock_cat.get_all_mappings.return_value = {}
-        status_file = tmp_path / ".classify_proposal_book.json"
-        status_file.write_text(
-            json.dumps({"status": "running", "total_count": 0, "processed_count": 0, "items": [], "updated_at": time.time()}),
-            encoding="utf-8",
-        )
-
-        fake_clock = {"t": 0.0}
-        monkeypatch.setattr(main_module.time, "monotonic", lambda: fake_clock["t"])
-
-        seen: dict = {}
-
-        async def fake_propose(*args, on_progress=None, **kwargs):
-            items = [{"file_path": f"0_inbox/{i}.epub"} for i in range(1200)]
-            fake_clock["t"] += 3.0
-            on_progress({"total_count": 1200, "processed_count": 600, "items": items[:600]})
-            seen["under_cap"] = json.loads(status_file.read_text(encoding="utf-8"))
-            fake_clock["t"] += 3.0
-            on_progress({"total_count": 1200, "processed_count": 1200, "items": items})
-            seen["over_cap"] = json.loads(status_file.read_text(encoding="utf-8"))
-            return {
-                "content_type": "book",
-                "source_category": "0_inbox",
-                "total_count": 1200,
-                "processed_count": 1200,
-                "items": items,
-                "failures": [],
-            }, None
-
-        mock_bm.propose_category_changes.side_effect = fake_propose
-        router = main_module.create_item_router(mock_bm, content_type="book")
-        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal")
-        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
-        _run_proposal_job = freevars["_run_classify_proposal_job"]
-
-        asyncio.run(_run_proposal_job("0_inbox", True, True, 1.2))
-
-        # 600건 시점: 상한(1000) 아래라 그대로 실리고, 플래그가 켜지지 않는다.
-        assert len(seen["under_cap"]["items"]) == 600
-        assert seen["under_cap"].get("items_truncated", False) is False
-
-        # 1200건 시점: 앞 1000건까지만 싣고 플래그가 켜진다.
-        assert len(seen["over_cap"]["items"]) == 1000
-        assert seen["over_cap"]["items_truncated"] is True
-
-    def test_classify_proposal_final_write_is_complete_even_if_last_tick_was_throttled(self, mock_bm, mock_cat, tmp_path, monkeypatch):
-        """완료 시점의 쓰기는 상한도, 쓰로틀도 받지 않고 항상 items 전체를 싣는다.
-
-        직전 tick이 (시간이 안 흘러) 쓰로틀에 걸려 디스크에 반영되지 않았어도,
-        작업이 끝나면 그 tick이 만든 최신 결과가 그대로 완전하게 쓰여야 한다.
-        아니면 관리자가 잘린 제안을 승인 화면에서 보고 그대로 승인하는 사고로
-        이어진다 — 이게 가장 피해야 할 실패 모드다.
-        """
-        import asyncio
-
-        mock_bm.path_prefix = tmp_path
-        mock_cat.get_all_mappings.return_value = {}
-        status_file = tmp_path / ".classify_proposal_book.json"
-        status_file.write_text(
-            json.dumps({"status": "running", "total_count": 0, "processed_count": 0, "items": [], "updated_at": time.time()}),
-            encoding="utf-8",
-        )
-
-        fake_clock = {"t": 0.0}
-        monkeypatch.setattr(main_module.time, "monotonic", lambda: fake_clock["t"])
-
-        seen: dict = {}
-
-        async def fake_propose(*args, on_progress=None, **kwargs):
-            items = [{"file_path": f"0_inbox/{i}.epub"} for i in range(1200)]
-            fake_clock["t"] += 3.0
-            on_progress({"total_count": 1200, "processed_count": 600, "items": items[:600]})
-            # 시간을 흘리지 않고 곧바로 마지막 tick을 부른다 - 2초가 안 지났으니
-            # 이 tick은 쓰로틀에 걸려 디스크에 반영되지 않아야 한다.
-            on_progress({"total_count": 1200, "processed_count": 1200, "items": items})
-            seen["status_right_before_return"] = json.loads(status_file.read_text(encoding="utf-8"))
-            return {
-                "content_type": "book",
-                "source_category": "0_inbox",
-                "total_count": 1200,
-                "processed_count": 1200,
-                "items": items,
-                "failures": [],
-            }, None
-
-        mock_bm.propose_category_changes.side_effect = fake_propose
-        router = main_module.create_item_router(mock_bm, content_type="book")
-        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal")
-        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
-        _run_proposal_job = freevars["_run_classify_proposal_job"]
-
-        asyncio.run(_run_proposal_job("0_inbox", True, True, 1.2))
-
-        # 전제 확인: 마지막 tick이 정말로 쓰로틀에 걸려, 함수가 끝나기 직전까지도
-        # 디스크에는 600건짜리 옛 상태만 있었다.
-        assert len(seen["status_right_before_return"]["items"]) == 600
-
-        # 완료 후에는 항상 전체 1200건이 잘리지 않고 반영된다.
-        final = json.loads(status_file.read_text(encoding="utf-8"))
-        assert final["status"] == "ready"
-        assert len(final["items"]) == 1200
-        assert final.get("items_truncated", False) is False
 
     def test_index_file_success(self, client, mock_bm):
         mock_bm.index_single_file.return_value = (42, None)

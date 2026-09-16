@@ -440,14 +440,6 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     # 파일 1건 처리는 서점 조회 때문에 3초 남짓이라 5분이면 넉넉하다.
     CLASSIFY_PROPOSAL_STALE_SECONDS = 5 * 60
 
-    # 대분류 하나가 수만 건일 수 있어(예: 판타지 카테고리), 매 책마다 상태 파일을
-    # 다시 쓰면 총 쓰기 비용이 건수의 제곱에 비례해 커진다. 두 가지로 막는다:
-    # (1) 실제 디스크 쓰기는 최소 2초 간격으로만 하고, (2) 도는 중간에는 items를
-    # 앞쪽 1000건까지만 싣는다. 최종 결과는 이 제한을 받지 않고 항상 전체를 쓴다.
-    CLASSIFY_PROGRESS_WRITE_INTERVAL_SECONDS = 2.0
-    CLASSIFY_PROGRESS_ITEM_CAP = 1000
-    _progress_write_state: dict[str, float | None] = {"last_write_at": None}
-
     def _classify_proposal_path() -> Path | None:
         try:
             return Path(manager.path_prefix) / f".classify_proposal_{content_type}.json"
@@ -501,31 +493,13 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
 
     def _start_classify_proposal(category: str) -> None:
         """제안 시작 시 이전 상태를 지우고 진행 중 표시로 새로 시작한다."""
-        _progress_write_state["last_write_at"] = None
         _replace_classify_proposal({"status": "running", "content_type": content_type, "source_category": category, "total_count": 0, "processed_count": 0, "items": [], "failures": []})
 
     def _progress_classify_proposal(progress: dict[str, int]) -> None:
         """제안(running)과 적용(applying)이 status 필드를 공유해도, 진행률 갱신은
         status를 건드리지 않는다. 그러지 않으면 적용 중 진행률 콜백이 status를
-        running으로 되돌려 화면에 "적용 중"이 아니라 "제안 생성 중"으로 보인다.
-
-        도는 중간의 쓰기는 두 가지로 억제한다. 책 한 권마다 부르지만 디스크에는
-        최소 CLASSIFY_PROGRESS_WRITE_INTERVAL_SECONDS 간격으로만 반영하고
-        (건너뛴 tick도 호출자 쪽 카운터는 이미 갱신돼 있어 다음 쓰기에 그대로
-        실린다), items가 CLASSIFY_PROGRESS_ITEM_CAP을 넘으면 앞쪽만 잘라 싣는다.
-        이 함수는 중간 진행 보고 전용이라 상한을 걸어도 되지만, 완료 시점의 최종
-        쓰기는 이 함수를 거치지 않고 별도 경로로 전체를 그대로 쓴다."""
-        now = time.monotonic()
-        last_write_at = _progress_write_state["last_write_at"]
-        if last_write_at is not None and now - last_write_at < CLASSIFY_PROGRESS_WRITE_INTERVAL_SECONDS:
-            return
-        _progress_write_state["last_write_at"] = now
-        payload = dict(progress)
-        items = payload.get("items")
-        if isinstance(items, list) and len(items) > CLASSIFY_PROGRESS_ITEM_CAP:
-            payload["items"] = items[:CLASSIFY_PROGRESS_ITEM_CAP]
-            payload["items_truncated"] = True
-        _replace_classify_proposal({**_read_classify_proposal(), **payload})
+        running으로 되돌려 화면에 "적용 중"이 아니라 "제안 생성 중"으로 보인다."""
+        _replace_classify_proposal({**_read_classify_proposal(), **progress})
 
     async def _run_classify_proposal_job(category: str, use_bookstore: bool, use_content_meta: bool, delay: float) -> None:
         try:
@@ -536,11 +510,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "분류 제안에 실패했습니다."})
             return
         if error is None:
-            # 중간 tick이 쓰로틀에 걸려 방금 전 것이 씹혔더라도, 완료 시점의 이 쓰기는
-            # result 전체(잘리지 않은 items)를 무조건 반영한다. items_truncated는
-            # 중간에 켜졌을 수 있으므로 여기서 명시적으로 꺼서 관리자가 승인 화면에서
-            # "일부만 보임" 표시를 잘못 보지 않게 한다.
-            _replace_classify_proposal({**_read_classify_proposal(), **result, "status": "ready", "items_truncated": False})
+            _replace_classify_proposal({**_read_classify_proposal(), **result, "status": "ready"})
         else:
             _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
 
@@ -559,7 +529,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             for item in current.get("items") or []:
                 outcome = applied.get(item.get("file_path"))
                 merged_items.append({**item, **({"apply_status": outcome.get("apply_status"), "apply_error": outcome.get("apply_error")} if outcome else {})})
-            _replace_classify_proposal({**current, "items": merged_items, "status": "done", "applied_count": result.get("applied_count"), "failed_count": result.get("failed_count"), "items_truncated": False})
+            _replace_classify_proposal({**current, "items": merged_items, "status": "done", "applied_count": result.get("applied_count"), "failed_count": result.get("failed_count")})
         except Exception as e:
             LOGGER.error("classify apply error: %s", e)
             _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "분류 적용에 실패했습니다."})
@@ -778,7 +748,6 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         # 상태를 읽어 ready가 아님을 보고 거부된다. 선점을 뒤로 미루면(예: 백그라운드
         # 작업 안에서) 응답이 나간 뒤 실제로 상태가 바뀌기 전까지 창이 열려 있어, 그 사이
         # 두 번째 apply나 새 propose가 끼어들 수 있다.
-        _progress_write_state["last_write_at"] = None
         _replace_classify_proposal({**current, "status": "applying"})
         background_tasks.add_task(_run_classify_apply_job, items, allowed, body.clean_existing)
         return {"status": "success", "result": {"started": True, "total_count": len(items)}}
