@@ -511,6 +511,98 @@ class TestCategoryMismatchAdmin:
         asyncio.run(_run_apply_job([], set(), False))
         assert _read_status()["status"] == "failed"
 
+    def test_classify_proposal_applying_second_request_is_refused_while_claimed(self, mock_bm, tmp_path):
+        """두 번째 apply 요청이 첫 번째가 실제로 끝나기 전에 상태를 가로채지 못한다.
+
+        Finding 3: 핸들러가 응답을 돌려주기 전에 동기로 applying을 선점하므로,
+        백그라운드 작업이 아직 실행되지 않은 시점에도 두 번째 요청은 ready가
+        아님을 보고 거부돼야 한다.
+        """
+        import asyncio
+        from fastapi import BackgroundTasks
+
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(
+            json.dumps({"status": "ready", "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]}),
+            encoding="utf-8",
+        )
+
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal/apply")
+        body = main_module.ClassifyApplyModel(items=[main_module.ClassifyApplyItemModel(file_path="0_inbox/a.epub", target_category="3_SF")])
+
+        # BackgroundTasks 객체는 만들기만 하고 await 하지 않는다 - 실제 백그라운드
+        # 작업은 아직 실행되지 않은 채로 첫 요청의 응답만 받는 상태를 재현한다.
+        first = asyncio.run(endpoint(body=body, background_tasks=BackgroundTasks()))
+        assert first["status"] == "success"
+        assert first["result"]["started"] is True
+        assert json.loads(status_path.read_text(encoding="utf-8"))["status"] == "applying"
+
+        second = asyncio.run(endpoint(body=body, background_tasks=BackgroundTasks()))
+        assert second["status"] == "failure"
+        assert "제안" in second["error"]
+
+    def test_classify_proposal_apply_job_handles_missing_result_keys(self, mock_bm, mock_cat, tmp_path):
+        """Finding 2: apply_category_changes가 기대한 키 없이 결과를 줘도 applying에 묶이지 않는다."""
+        import asyncio
+
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(
+            json.dumps({"status": "applying", "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], "updated_at": time.time()}),
+            encoding="utf-8",
+        )
+
+        async def fake_apply_missing_results(items, allowed_file_paths, **kwargs):
+            # "results" 키가 없다 - 병합 블록이 try 밖에 있었다면 KeyError가 그대로 새어나갔다.
+            return {"total_count": 1, "applied_count": 1, "failed_count": 0}, None
+
+        mock_bm.apply_category_changes = fake_apply_missing_results
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal/apply")
+        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
+        _run_apply_job = freevars["_run_classify_apply_job"]
+
+        asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], {"0_inbox/a.epub"}, False))
+
+        done = json.loads(status_path.read_text(encoding="utf-8"))
+        assert done["status"] == "failed"
+
+    def test_classify_proposal_apply_progress_tick_does_not_revert_status(self, mock_bm, mock_cat, tmp_path):
+        """Finding 4: 적용 단계 진행률 콜백이 status를 running으로 되돌리지 않는다."""
+        import asyncio
+
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(
+            json.dumps({"status": "applying", "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], "updated_at": time.time()}),
+            encoding="utf-8",
+        )
+
+        seen = {}
+
+        async def fake_apply_with_progress(items, allowed_file_paths, on_progress=None, **kwargs):
+            if on_progress:
+                on_progress({"total_count": 1, "applied_count": 0, "failed_count": 0})
+            seen["status_after_tick"] = json.loads(status_path.read_text(encoding="utf-8"))["status"]
+            return {
+                "total_count": 1,
+                "applied_count": 1,
+                "failed_count": 0,
+                "results": [{"file_path": "0_inbox/a.epub", "apply_status": "moved", "apply_error": None}],
+            }, None
+
+        mock_bm.apply_category_changes = fake_apply_with_progress
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal/apply")
+        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
+        _run_apply_job = freevars["_run_classify_apply_job"]
+
+        asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], {"0_inbox/a.epub"}, False))
+
+        assert seen["status_after_tick"] == "applying"
+
     def test_index_file_success(self, client, mock_bm):
         mock_bm.index_single_file.return_value = (42, None)
         r = client.post("/category-mismatches/index-file", json={"file_path": "_epub/test.epub"})

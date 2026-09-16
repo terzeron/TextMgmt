@@ -94,7 +94,7 @@ _original_jsonable_encoder = jsonable_encoder
 
 
 def stale_running_status(status: dict[str, Any], stale_seconds: float, now: float | None = None) -> dict[str, Any] | None:
-    """갱신이 끊긴 running 상태를 failed 로 바꾼 사본. 멀쩡하면 None 을 돌려준다.
+    """갱신이 끊긴 running/applying 상태를 failed 로 바꾼 사본. 멀쩡하면 None 을 돌려준다.
 
     자동 분류는 pod 메모리 안의 백그라운드 태스크라 재배포·재시작이면 사라지는데,
     상태 파일은 볼륨에 남아 running 인 채로 굳는다. 그러면 POST 가 already_running
@@ -103,7 +103,7 @@ def stale_running_status(status: dict[str, Any], stale_seconds: float, now: floa
     총 소요 시간이 아니라 "최근에 살아있다는 신호"로 판정해야, 정상적으로 오래 걸리는
     작업과 죽어서 안 풀리는 상태를 구분할 수 있다.
     """
-    if status.get("status") != "running":
+    if status.get("status") not in ("running", "applying"):
         return None
     updated_at = status.get("updated_at")
     if isinstance(updated_at, (int, float)):
@@ -515,23 +515,24 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
 
     async def _run_classify_apply_job(items: list[dict[str, Any]], allowed: set[str], clean_existing: bool) -> None:
-        _replace_classify_proposal({**_read_classify_proposal(), "status": "applying"})
+        # applying 선점은 핸들러가 응답 전에 동기로 이미 해뒀다(TOCTOU 창을 없애려고). 여기서
+        # 다시 _read_classify_proposal() 로 읽어 "applying"을 또 쓰면, 그 사이 다른 요청이
+        # 상태를 바꿨어도 이 시점에 덮어써서 선점의 의미가 없어진다.
         try:
             result, error = await manager.apply_category_changes(items, allowed, content_type=content_type, clean_existing=clean_existing, on_progress=_progress_classify_proposal)
+            if error is not None:
+                _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
+                return
+            applied = {entry["file_path"]: entry for entry in result["results"]}
+            current = _read_classify_proposal()
+            merged_items = []
+            for item in current.get("items") or []:
+                outcome = applied.get(item.get("file_path"))
+                merged_items.append({**item, **({"apply_status": outcome.get("apply_status"), "apply_error": outcome.get("apply_error")} if outcome else {})})
+            _replace_classify_proposal({**current, "items": merged_items, "status": "done", "applied_count": result.get("applied_count"), "failed_count": result.get("failed_count")})
         except Exception as e:
             LOGGER.error("classify apply error: %s", e)
             _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "분류 적용에 실패했습니다."})
-            return
-        if error is not None:
-            _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
-            return
-        applied = {entry["file_path"]: entry for entry in result["results"]}
-        current = _read_classify_proposal()
-        merged_items = []
-        for item in current.get("items") or []:
-            outcome = applied.get(item.get("file_path"))
-            merged_items.append({**item, **({"apply_status": outcome["apply_status"], "apply_error": outcome["apply_error"]} if outcome else {})})
-        _replace_classify_proposal({**current, "items": merged_items, "status": "done", "applied_count": result["applied_count"], "failed_count": result["failed_count"]})
 
     @router.put("/books/{book_id}", dependencies=admin_dep)
     async def update_book(book_id: int, book_item: BookModel, force: bool = False) -> dict[str, Any]:
@@ -742,6 +743,12 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             return {"status": "failure", "error": "적용할 제안이 없습니다."}
         allowed = {item.get("file_path") for item in current.get("items") or [] if item.get("file_path")}
         items = [item.model_dump() for item in body.items]
+        # 백그라운드 작업이 시작되기 전, 응답을 돌려주기 전에 동기적으로 applying을 선점한다.
+        # await 지점 없이 여기까지 오므로 동시에 들어온 두 번째 apply 요청은 이 쓰기 뒤에야
+        # 상태를 읽어 ready가 아님을 보고 거부된다. 선점을 뒤로 미루면(예: 백그라운드
+        # 작업 안에서) 응답이 나간 뒤 실제로 상태가 바뀌기 전까지 창이 열려 있어, 그 사이
+        # 두 번째 apply나 새 propose가 끼어들 수 있다.
+        _replace_classify_proposal({**current, "status": "applying"})
         background_tasks.add_task(_run_classify_apply_job, items, allowed, body.clean_existing)
         return {"status": "success", "result": {"started": True, "total_count": len(items)}}
 

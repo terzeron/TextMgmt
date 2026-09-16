@@ -2234,6 +2234,28 @@ class TestStaleRunningStatus:
         for state in ("idle", "done", "failed"):
             assert stale_running_status({"status": state, "updated_at": 0.0}, self.STALE) is None
 
+    def test_stale_applying_becomes_failed(self):
+        """Finding 1: applying도 죽은 채 굳으면 자가치유돼야 한다.
+
+        POST 게이트가 already_running으로 막는 상태 목록에 applying도 들어가므로,
+        재배포로 적용 단계 백그라운드 작업이 사라지면 이 판정 없이는 DELETE 없이
+        영영 못 벗어난다.
+        """
+        from backend.main import stale_running_status
+
+        status = {"status": "applying", "updated_at": 1000.0, "applied_count": 1}
+        stale = stale_running_status(status, self.STALE, now=1000.0 + self.STALE + 1)
+
+        assert stale is not None
+        assert stale["status"] == "failed"
+        assert stale["applied_count"] == 1
+
+    def test_applying_with_recent_heartbeat_is_left_alone(self):
+        from backend.main import stale_running_status
+
+        status = {"status": "applying", "updated_at": 1000.0}
+        assert stale_running_status(status, self.STALE, now=1000.0 + self.STALE - 1) is None
+
 
 def test_stale_running_status_lets_the_button_work_again(backend_test_setup):
     """멈춘 상태 파일이 GET 한 번으로 풀려야 버튼을 다시 누를 수 있다.
