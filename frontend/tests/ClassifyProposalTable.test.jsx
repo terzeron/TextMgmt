@@ -87,4 +87,17 @@ describe("ClassifyProposalTable", () => {
     });
     expect(props.onTargetChange).toHaveBeenCalledWith("A/b.epub", "1_서양고전");
   });
+
+  it("선택된 행의 목적지를 비우면 선택도 함께 풀린다", () => {
+    const props = renderTable({
+      targets: { "A/c.epub": "1_서양고전" },
+      selection: new Set(["A/a.epub", "A/c.epub"]),
+    });
+    fireEvent.change(screen.getByLabelText("A/c.epub 목적지"), {
+      target: { value: "" },
+    });
+    expect(props.onSelectionChange).toHaveBeenCalled();
+    const next = props.onSelectionChange.mock.calls[0][0];
+    expect(next.has("A/c.epub")).toBe(false);
+  });
 });

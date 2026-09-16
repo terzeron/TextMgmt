@@ -39,6 +39,17 @@ export default function ClassifyProposalTable({
     onSelectionChange(next);
   };
 
+  // 목적지를 비우면 승인 근거가 사라진다. 이미 선택된 행이었다면 selection에서도
+  // 즉시 빼야, 부모가 selection만 훑어 승인 처리할 때 근거 없는 행이 끼어들지 않는다.
+  const handleTargetChange = (filePath, nextValue) => {
+    onTargetChange(filePath, nextValue);
+    if (!nextValue && selection.has(filePath)) {
+      const next = new Set(selection);
+      next.delete(filePath);
+      onSelectionChange(next);
+    }
+  };
+
   return (
     <Table size="sm" bordered hover responsive className="mt-2">
       <thead>
@@ -88,7 +99,7 @@ export default function ClassifyProposalTable({
                   aria-label={`${item.file_path} 목적지`}
                   value={target}
                   onChange={(event) =>
-                    onTargetChange(item.file_path, event.target.value)
+                    handleTargetChange(item.file_path, event.target.value)
                   }
                 >
                   <option value="">(선택 안 함)</option>
