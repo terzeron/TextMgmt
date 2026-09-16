@@ -304,9 +304,13 @@ class ESManager:
         return self._search(query, sort=sort, max_result_count=max_result_count)
 
     # 카테고리 목록의 전순서 정렬. 화면 표시 순서(제목)와 일치시켜야 페이지를
-    # 이어붙여도 순서가 어긋나지 않는다. file_path는 유일하므로 tie-breaker로
-    # 쓰여 search_after 커서가 항상 한 문서를 가리키도록 보장한다.
-    CATEGORY_SORT: list[dict[str, str]] = [{"title.keyword": "asc"}, {"file_path": "asc"}, {"_id": "asc"}]
+    # 이어붙여도 순서가 어긋나지 않는다. file_path를 tie-breaker로 써서 커서가 한
+    # 문서를 가리키게 한다.
+    #
+    # _id를 tie-breaker로 덧붙이면 안 된다. 이 클러스터는 indices.id_field_data가
+    # 꺼져 있어 "Fielddata access on the _id field is disallowed"로 질의가 통째로
+    # 실패하고, 상세 조회와 카테고리 책 목록이 빈 결과가 된다.
+    CATEGORY_SORT: list[dict[str, str]] = [{"title.keyword": "asc"}, {"file_path": "asc"}]
 
     def search_by_category_paged(self, category: str, size: int = 500, search_after: list[Any] | None = None) -> tuple[list[tuple[int, dict[str, Any], float]], int, list[Any] | None]:
         """카테고리 내 문서를 search_after 커서로 한 페이지 조회한다.

@@ -25,6 +25,7 @@ from bs4 import BeautifulSoup
 from backend.es_manager import ESManager
 from backend.book import Book
 from backend.book_classifier import BookClassifierService, clean_empty_parent_dirs
+from utils.corpus_layout import IGNORED_DIR_NAMES
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -103,7 +104,9 @@ class BookManager:
         ".svg": "image/svg+xml",
     }
     INDEXABLE_FILE_TYPES = frozenset({"txt", "epub", "pdf", "docx", "doc", "hwp", "rtf", "html", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg", "cbz"})
-    IGNORED_DIR_NAMES = frozenset({"page_images", "tesseract_text", "source_chapters", "OEBPS", "META-INF"})
+    # 코퍼스 레이아웃 상수는 utils/corpus_layout.py가 원본이다. 여기서는 기존 참조를
+    # 위해 이름만 이어준다.
+    IGNORED_DIR_NAMES = IGNORED_DIR_NAMES
 
     CACHE_MAX_AGE_SECONDS = 86400  # 1일
     # PdfReader 캐시는 "개수"가 아니라 "바이트"로 제한한다.
@@ -1256,8 +1259,16 @@ class BookManager:
             return False
 
     def _is_indexable_file_path(self, file_path: Path | str) -> bool:
-        """색인 대상 파일인지 판정한다. 확장자만 보고 끝나는 경우가 대부분이라 그 전에는
-        Path를 만들지 않는다. 전수 스캔에서 파일 42만 개마다 Path를 만들면 그것만 18초다."""
+        """색인 대상 파일인지 판정한다.
+
+        확장자만 보고 끝나는 경우가 대부분이라 그 전에는 Path를 만들지 않는다. 전수
+        스캔에서 파일 42만 개마다 Path를 만들면 그것만 18초다.
+
+        확장자로 판별 안 되는 파일은 내용을 읽는다. 로더가 매직바이트로 판별해 색인하므로
+        (utils/loader.py의 read_file) 여기서도 같은 규칙을 써야 한다. 확장자만 보면
+        `.bak`인 EPUB 같은 파일이 색인은 됐는데 요약에서는 없는 것으로 잡혀 고아 문서가
+        되고, 재적재를 누르면 지워진다.
+        """
         name = os.path.basename(str(file_path))
         if name.startswith("."):
             return False
@@ -1777,36 +1788,26 @@ class BookManager:
 
         디렉토리 하나씩 넘겨 호출자가 바로 비교하고 버리게 한다. 전체 경로를 한꺼번에
         들고 있으면 40만 건 규모에서 100MB를 더 쓴다.
-        병렬 처리를 통해 _is_indexable_file_path의 디스크 I/O 병목을 해소한다.
-        """
-        from concurrent.futures import ThreadPoolExecutor
-        import concurrent.futures
 
-        def scan_dir(dir_path: str, category: str) -> tuple[str, set[str], list[tuple[str, str]]]:
+        ThreadPoolExecutor로 병렬화하지 않는다. 실측에서 워커 20개가 직렬보다 2.6배
+        느렸다(3.1초 대 1.2초). 코퍼스가 회전 디스크에 있어 동시 접근이 탐색을
+        늘린다. 같은 이유로 로더 병렬화도 워커 8개에서 0.64배로 손해였다.
+        """
+        stack: list[tuple[str, str]] = [(str(self.path_prefix), "_root")]
+        while stack:
+            dir_path, category = stack.pop()
             paths: set[str] = set()
-            subdirs: list[tuple[str, str]] = []
             try:
                 with os.scandir(dir_path) as it:
                     for entry in it:
                         if entry.is_dir(follow_symlinks=False):
                             if not entry.name.startswith(".") and entry.name not in self.IGNORED_DIR_NAMES:
-                                subdirs.append((entry.path, entry.name if category == "_root" else f"{category}/{entry.name}"))
+                                stack.append((entry.path, entry.name if category == "_root" else f"{category}/{entry.name}"))
                         elif entry.is_file(follow_symlinks=False) and self._is_indexable_file_path(entry.path):
                             paths.add(entry.name if category == "_root" else f"{category}/{entry.name}")
             except (PermissionError, OSError):
-                pass
-            return category, paths, subdirs
-
-        with ThreadPoolExecutor() as executor:
-            futures = {executor.submit(scan_dir, str(self.path_prefix), "_root")}
-            while futures:
-                done, not_done = concurrent.futures.wait(futures, return_when=concurrent.futures.FIRST_COMPLETED)
-                futures = set(not_done)
-                for future in done:
-                    category, paths, subdirs = future.result()
-                    for subdir_path, subdir_cat in subdirs:
-                        futures.add(executor.submit(scan_dir, subdir_path, subdir_cat))
-                    yield category, paths
+                continue
+            yield category, paths
 
     def _scan_category_mismatches(self) -> dict[str, Any]:
         """ES 문서와 파일시스템 파일을 경로 단위로 비교해 카테고리별 이상 항목 수를 센다.

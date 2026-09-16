@@ -304,15 +304,16 @@ class TestBookManager:
             assert "category" in item
             assert "es_count" in item
             assert "fs_count" in item
-            assert "diff" in item
+            assert "anomaly_count" in item
             assert isinstance(item["category"], str)
             assert isinstance(item["es_count"], int)
             assert isinstance(item["fs_count"], int)
-            assert item["diff"] > 0
+            # diff(건수 차이)는 0일 수 있다. 경로가 서로 어긋나면 건수가 같아도 이상이다.
+            assert item["anomaly_count"] > 0
 
-        # mismatches가 diff 절대값 내림차순 정렬인지 검증
-        diffs = [abs(item["diff"]) for item in result["mismatches"]]
-        assert diffs == sorted(diffs, reverse=True)
+        # mismatches가 이상 항목 수 내림차순 정렬인지 검증
+        counts = [item["anomaly_count"] for item in result["mismatches"]]
+        assert counts == sorted(counts, reverse=True)
 
         # es_only 항목 구조 검증
         for item in result["es_only"]:
@@ -327,6 +328,25 @@ class TestBookManager:
             assert "fs_count" in item
             assert isinstance(item["category"], str)
             assert isinstance(item["fs_count"], int)
+
+    @pytest.mark.asyncio
+    async def test_search_by_category_paged_sort_works_on_real_es(self, book_manager_with_data):
+        """CATEGORY_SORT를 실제 ES가 거부하면 상세 조회와 카테고리 책 목록이 통째로 빈다.
+
+        search_by_category_paged는 예외를 삼키고 빈 결과를 돌려주므로 장애가 조용하다.
+        DummyES는 정렬을 흉내만 내서 이 회귀를 단위 테스트로 잡을 수 없다.
+        _id를 tie-breaker로 넣었다가 fielddata 금지로 전부 0건이 된 적이 있다.
+        """
+        bm = book_manager_with_data
+        categories, error = await bm.get_categories()
+        assert error is None
+        if not categories:
+            pytest.skip("테스트 인덱스에 문서가 없다")
+
+        category = next(iter(categories))
+        page, total, _next_cursor = bm.es_manager.search_by_category_paged(category, size=5)
+        assert total > 0
+        assert page
 
     @pytest.mark.asyncio
     async def test_delete_book(self, book_manager_with_data):
@@ -804,6 +824,22 @@ def test_category_mismatches_scan_deep_categories(tmp_path: Path):
 
     result = manager.get_category_mismatches()
     assert [(item["category"], item["anomaly_count"]) for item in result["fs_only"]] == [("A/B/C", 1)]
+
+
+def test_category_mismatches_skip_ignored_dirs(tmp_path: Path):
+    """FS 스캔이 건너뛰는 폴더는 ES 쪽에서도 빼야 한다.
+
+    한쪽만 빼면 이미 색인된 문서가 전부 "파일 없는 고아"로 잡힌다. 그 상태에서
+    재적재를 누르면 디스크에 멀쩡히 있는 파일의 문서를 지운다.
+    """
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    intermediate = tmp_path / "A" / "page_images"
+    intermediate.mkdir(parents=True)
+    (intermediate / "page_0001.png").write_text("x")
+    es.all_file_paths = [("A/page_images", "A/page_images/page_0001.png")]
+
+    assert manager._mismatch_categories(manager.get_category_mismatches()) == []
 
 
 def test_category_mismatches_skip_hidden_categories(tmp_path: Path):
