@@ -362,6 +362,52 @@ class TestCategoryMismatchAdmin:
         assert kwargs["use_content_meta"] is True
         assert callable(kwargs["on_progress"])
 
+    def test_classify_proposal_progress_tick_exposes_items_so_far(self, mock_bm, mock_cat, tmp_path):
+        """제안이 도는 도중 상태 파일을 읽으면 status: running과 지금까지의 items가 보인다.
+
+        관리자가 240건짜리 작업 중간에 페이지를 열었을 때, 숫자 카운터뿐 아니라
+        그 시점까지 만들어진 items도 함께 보여야 한다는 요구를 검증한다.
+        """
+        import asyncio
+
+        mock_bm.path_prefix = tmp_path
+        mock_cat.get_all_mappings.return_value = {}
+        status_file = tmp_path / ".classify_proposal_book.json"
+        # 직접 _run_classify_proposal_job을 호출하므로, POST 핸들러가 미리 해 두는
+        # _start_classify_proposal(status: running 선점)을 여기서 대신 재현한다.
+        status_file.write_text(json.dumps({"status": "running", "total_count": 0, "processed_count": 0, "items": [], "updated_at": time.time()}), encoding="utf-8")
+
+        seen: list[dict] = []
+        item_a = {"file_path": "0_inbox/a.epub", "target_category": "3_SF"}
+        item_b = {"file_path": "0_inbox/b.epub", "target_category": "3_SF"}
+
+        async def fake_propose(*args, on_progress=None, **kwargs):
+            on_progress({"total_count": 2, "processed_count": 1, "items": [item_a]})
+            seen.append(json.loads(status_file.read_text(encoding="utf-8")))
+            on_progress({"total_count": 2, "processed_count": 2, "items": [item_a, item_b]})
+            seen.append(json.loads(status_file.read_text(encoding="utf-8")))
+            return {
+                "content_type": "book",
+                "source_category": "0_inbox",
+                "total_count": 2,
+                "processed_count": 2,
+                "items": [item_a, item_b],
+                "failures": [],
+            }, None
+
+        mock_bm.propose_category_changes.side_effect = fake_propose
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal")
+        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
+        _run_proposal_job = freevars["_run_classify_proposal_job"]
+
+        asyncio.run(_run_proposal_job("0_inbox", True, True, 1.2))
+
+        assert seen[0]["status"] == "running"
+        assert seen[0]["items"] == [item_a]
+        assert seen[1]["status"] == "running"
+        assert seen[1]["items"] == [item_a, item_b]
+
     def test_classify_proposal_already_running_blocks_restart(self, client, mock_bm, tmp_path):
         mock_bm.path_prefix = tmp_path
         status_file = tmp_path / ".classify_proposal_book.json"

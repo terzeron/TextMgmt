@@ -1561,7 +1561,10 @@ class BookManager:
                 continue
             result["items"].append({"file_path": rel_path, "title": file_path.stem, "current_category": category, "apply_status": "pending", "apply_error": None, **proposal})
             if on_progress is not None:
-                on_progress({"total_count": result["total_count"], "processed_count": result["processed_count"]})
+                # 도는 중간에 페이지를 열어도 지금까지 분류된 책이 보이도록 items를 함께 싣는다.
+                # result["items"]는 이후에도 계속 append되므로, 같은 리스트를 그대로 넘기면
+                # 호출자가 들고 있는 스냅샷이 뒤에서 몰래 자라난다. list(...)로 복사해 끊는다.
+                on_progress({"total_count": result["total_count"], "processed_count": result["processed_count"], "items": list(result["items"])})
 
         return result, None
 
