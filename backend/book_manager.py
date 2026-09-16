@@ -1763,27 +1763,50 @@ class BookManager:
             entry["paths"].add(rel_path)
         return collected
 
+    def _is_scannable_category(self, category: str) -> bool:
+        """FS 스캔이 들어가지 않는 디렉토리는 ES 쪽에서도 빼야 한다.
+
+        한쪽만 빼면 이미 색인된 문서가 전부 "파일 없는 고아"로 잡힌다. 실측으로
+        page_images 같은 폴더의 문서 93,602건이 그렇게 잡혔고, 파일은 디스크에 그대로
+        있었다. 그 상태에서 재적재를 누르면 멀쩡한 문서를 지운다.
+        """
+        return not any(segment.startswith(".") or segment in self.IGNORED_DIR_NAMES for segment in category.split("/"))
+
     def _iter_fs_category_paths(self) -> Iterator[tuple[str, set[str]]]:
         """디렉토리마다 (카테고리, 색인 대상 파일의 상대 경로 집합)을 깊이 제한 없이 내준다.
 
         디렉토리 하나씩 넘겨 호출자가 바로 비교하고 버리게 한다. 전체 경로를 한꺼번에
         들고 있으면 40만 건 규모에서 100MB를 더 쓴다.
+        병렬 처리를 통해 _is_indexable_file_path의 디스크 I/O 병목을 해소한다.
         """
-        stack: list[tuple[str, str]] = [(str(self.path_prefix), "_root")]
-        while stack:
-            dir_path, category = stack.pop()
+        from concurrent.futures import ThreadPoolExecutor
+        import concurrent.futures
+
+        def scan_dir(dir_path: str, category: str) -> tuple[str, set[str], list[tuple[str, str]]]:
             paths: set[str] = set()
+            subdirs: list[tuple[str, str]] = []
             try:
                 with os.scandir(dir_path) as it:
                     for entry in it:
                         if entry.is_dir(follow_symlinks=False):
                             if not entry.name.startswith(".") and entry.name not in self.IGNORED_DIR_NAMES:
-                                stack.append((entry.path, entry.name if category == "_root" else f"{category}/{entry.name}"))
+                                subdirs.append((entry.path, entry.name if category == "_root" else f"{category}/{entry.name}"))
                         elif entry.is_file(follow_symlinks=False) and self._is_indexable_file_path(entry.path):
                             paths.add(entry.name if category == "_root" else f"{category}/{entry.name}")
             except (PermissionError, OSError):
-                continue
-            yield category, paths
+                pass
+            return category, paths, subdirs
+
+        with ThreadPoolExecutor() as executor:
+            futures = {executor.submit(scan_dir, str(self.path_prefix), "_root")}
+            while futures:
+                done, not_done = concurrent.futures.wait(futures, return_when=concurrent.futures.FIRST_COMPLETED)
+                futures = set(not_done)
+                for future in done:
+                    category, paths, subdirs = future.result()
+                    for subdir_path, subdir_cat in subdirs:
+                        futures.add(executor.submit(scan_dir, subdir_path, subdir_cat))
+                    yield category, paths
 
     def _scan_category_mismatches(self) -> dict[str, Any]:
         """ES 문서와 파일시스템 파일을 경로 단위로 비교해 카테고리별 이상 항목 수를 센다.
@@ -1804,9 +1827,8 @@ class BookManager:
             stats[category] = {"es_count": entry["doc_count"] if entry else 0, "fs_count": len(fs_paths), "es_only_count": len(es_paths - fs_paths), "fs_only_count": len(fs_paths - es_paths), "duplicate_count": len(entry["duplicate_paths"]) if entry else 0}
 
         # 디렉토리가 사라진 카테고리 — ES 문서 전부가 고아다.
-        # 숨김 디렉토리(.preview_cache 등)는 FS 스캔에서 건너뛰므로 여기서도 제외한다.
         for category, entry in es_entries.items():
-            if any(segment.startswith(".") for segment in category.split("/")):
+            if not self._is_scannable_category(category):
                 continue
             stats[category] = {"es_count": entry["doc_count"], "fs_count": 0, "es_only_count": len(entry["paths"]), "fs_only_count": 0, "duplicate_count": len(entry["duplicate_paths"])}
 
