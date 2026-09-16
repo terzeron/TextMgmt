@@ -1789,6 +1789,58 @@ export default function CategoryAdmin({
                     disabled={saving}
                     className="mb-2"
                   />
+                  {!isSubcategory && (
+                    <>
+                      <InputGroup className="mb-2">
+                        <Form.Control
+                          ref={keywordInputRef}
+                          type="text"
+                          placeholder="새 키워드 입력"
+                          value={newKeyword}
+                          onChange={(e) => setNewKeyword(e.target.value)}
+                          onKeyDown={handleKeyDown}
+                          disabled={saving}
+                        />
+                        <Button
+                          variant="outline-primary"
+                          onClick={handleAddKeyword}
+                          disabled={saving || !newKeyword.trim()}
+                        >
+                          <FontAwesomeIcon icon={faPlus} /> 추가
+                        </Button>
+                      </InputGroup>
+                      <div className="d-flex flex-wrap gap-1">
+                        {currentKeywords.map((keyword) => (
+                          <Badge
+                            key={keyword}
+                            bg="info"
+                            className="d-flex align-items-center gap-1"
+                            style={{
+                              fontSize: "0.85rem",
+                              padding: "0.4rem 0.6rem",
+                            }}
+                          >
+                            {keyword}
+                            <FontAwesomeIcon
+                              icon={faTrash}
+                              style={{
+                                cursor: saving ? "not-allowed" : "pointer",
+                                marginLeft: "4px",
+                              }}
+                              onClick={() =>
+                                !saving && handleRemoveKeyword(keyword)
+                              }
+                            />
+                          </Badge>
+                        ))}
+                        {currentKeywords.length === 0 && (
+                          <span className="text-muted">
+                            등록된 키워드가 없습니다.
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  )}
                   <div className="d-flex flex-wrap gap-1 mb-2">
                     <Button
                       variant="outline-secondary"
@@ -1884,58 +1936,6 @@ export default function CategoryAdmin({
                       )}
                     </Button>
                   </div>
-                  {!isSubcategory && (
-                    <>
-                      <InputGroup className="mb-2">
-                        <Form.Control
-                          ref={keywordInputRef}
-                          type="text"
-                          placeholder="새 키워드 입력"
-                          value={newKeyword}
-                          onChange={(e) => setNewKeyword(e.target.value)}
-                          onKeyDown={handleKeyDown}
-                          disabled={saving}
-                        />
-                        <Button
-                          variant="outline-primary"
-                          onClick={handleAddKeyword}
-                          disabled={saving || !newKeyword.trim()}
-                        >
-                          <FontAwesomeIcon icon={faPlus} /> 추가
-                        </Button>
-                      </InputGroup>
-                      <div className="d-flex flex-wrap gap-1">
-                        {currentKeywords.map((keyword) => (
-                          <Badge
-                            key={keyword}
-                            bg="info"
-                            className="d-flex align-items-center gap-1"
-                            style={{
-                              fontSize: "0.85rem",
-                              padding: "0.4rem 0.6rem",
-                            }}
-                          >
-                            {keyword}
-                            <FontAwesomeIcon
-                              icon={faTrash}
-                              style={{
-                                cursor: saving ? "not-allowed" : "pointer",
-                                marginLeft: "4px",
-                              }}
-                              onClick={() =>
-                                !saving && handleRemoveKeyword(keyword)
-                              }
-                            />
-                          </Badge>
-                        ))}
-                        {currentKeywords.length === 0 && (
-                          <span className="text-muted">
-                            등록된 키워드가 없습니다.
-                          </span>
-                        )}
-                      </div>
-                    </>
-                  )}
                 </Card.Body>
               </Card>
             )}

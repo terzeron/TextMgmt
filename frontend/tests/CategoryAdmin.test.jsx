@@ -304,6 +304,22 @@ describe("CategoryAdmin", () => {
     expect(mismatchReloadButton.textContent).not.toContain("잔여");
   });
 
+  it("버튼 그룹이 키워드 영역보다 아래에 온다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    await waitFor(() => expect(screen.getByText("1_fiction")).toBeTruthy());
+    fireEvent.click(screen.getByText("1_fiction"));
+
+    const keywordInput = await screen.findByPlaceholderText("새 키워드 입력");
+    const renameButton = screen.getByRole("button", { name: /이름 변경/ });
+
+    // 버튼이 키워드 영역보다 문서 뒤쪽에 있어야 한다
+    expect(
+      keywordInput.compareDocumentPosition(renameButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("건수 차이(diff)가 아니라 실제 이상 항목 수(anomaly_count)를 집계한다", async () => {
     // ES 10건과 FS 10건이라 차이는 0이지만, 경로가 서로 다른 항목이 4건 있다.
     const mismatchData = {
