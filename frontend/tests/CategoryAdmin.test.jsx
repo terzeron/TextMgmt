@@ -304,6 +304,60 @@ describe("CategoryAdmin", () => {
     expect(mismatchReloadButton.textContent).not.toContain("잔여");
   });
 
+  it("건수 차이(diff)가 아니라 실제 이상 항목 수(anomaly_count)를 집계한다", async () => {
+    // ES 10건과 FS 10건이라 차이는 0이지만, 경로가 서로 다른 항목이 4건 있다.
+    const mismatchData = {
+      mismatches: [
+        {
+          category: "1_fiction",
+          es_count: 10,
+          fs_count: 10,
+          diff: 0,
+          anomaly_count: 4,
+        },
+      ],
+      es_only: [],
+      fs_only: [],
+    };
+    setupMockResponses(CATEGORIES_RESPONSE, mismatchData);
+    render(<CategoryAdminBase />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리")).toBeTruthy();
+    });
+
+    const header = screen.getByText("디렉토리").closest(".card-header");
+    fireEvent.click(
+      within(header).getByRole("button", { name: /이상 항목 재적재/ }),
+    );
+
+    const modal = await screen.findByRole("dialog");
+    expect(
+      within(modal).getByText(/전체 이상 항목 4건을 ES에 재적재합니다/),
+    ).toBeTruthy();
+  });
+
+  it("자기 이상 항목이 없는 부모 디렉토리는 상세를 조회하지 않는다", async () => {
+    const categories = { parent: 10, "parent/child": 3 };
+    const mismatchData = {
+      mismatches: [],
+      es_only: [{ category: "parent/child", es_count: 3, anomaly_count: 3 }],
+      fs_only: [],
+    };
+    setupMockResponses(categories, mismatchData);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("parent")).toBeTruthy();
+    });
+
+    mockJsonGetReq.mockClear();
+    fireEvent.click(screen.getByText("parent"));
+
+    const detailCalls = mockJsonGetReq.mock.calls.filter(([url]) =>
+      url.startsWith("/category-mismatches/parent"),
+    );
+    expect(detailCalls).toEqual([]);
+  });
+
   it("기본값으로 이상 항목만 보기 토글이 켜져 있다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdminBase />);
@@ -661,7 +715,8 @@ describe("CategoryAdmin", () => {
     fireEvent.click(mismatchReloadButton);
 
     const modal = await screen.findByRole("dialog");
-    expect(within(modal).getByText(/12345건만 ES에 재적재합니다/)).toBeTruthy();
+    // 상세를 펼친 뒤에는 요약 건수(12345)가 아니라 실제로 받아온 항목 수를 대상으로 삼는다.
+    expect(within(modal).getByText(/1건만 ES에 재적재합니다/)).toBeTruthy();
 
     mockJsonPostReq.mockImplementation(
       (url, payload, resolve, _reject, done) => {

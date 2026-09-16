@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import time
 from collections import OrderedDict
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote, urlparse, unquote
@@ -41,6 +42,11 @@ MAX_CATEGORY_PAGE_SIZE = MAX_CATEGORY_RESULT_COUNT
 # 파일 1건씩 색인하면 이상 항목이 수천 건일 때 재적재가 수십 분~수 시간 걸린다.
 BULK_REINDEX_BATCH_SIZE = 200
 DUPLICATE_NAME_MAX_INDEX = 1000
+
+# 카테고리 불일치 요약 캐시의 유효 시간(초). 요약 스캔은 ES 문서 40만여 건을 훑어
+# 10초대가 걸린다. 값이 있으면 이 시간이 지났더라도 먼저 돌려주고 갱신은 뒤에서
+# 돌리므로, 이 값은 "언제 백그라운드 갱신을 깨울지"만 정한다.
+MISMATCH_CACHE_TTL_SECONDS = 600
 
 # 대량 재적재 배치의 파일 파싱 프로세스 강제 타임아웃(초).
 # Loader.read_file 내부 time_limit()의 SIGALRM 상한은 메인 스레드 전용이라
@@ -97,6 +103,7 @@ class BookManager:
         ".svg": "image/svg+xml",
     }
     INDEXABLE_FILE_TYPES = frozenset({"txt", "epub", "pdf", "docx", "doc", "hwp", "rtf", "html", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg", "cbz"})
+    IGNORED_DIR_NAMES = frozenset({"page_images", "tesseract_text", "source_chapters", "OEBPS", "META-INF"})
 
     CACHE_MAX_AGE_SECONDS = 86400  # 1일
     # PdfReader 캐시는 "개수"가 아니라 "바이트"로 제한한다.
@@ -493,6 +500,8 @@ class BookManager:
         self._backfill_created_time_if_enabled()
         self._mismatch_cache: dict[str, Any] | None = None
         self._mismatch_cache_time: float = 0.0
+        self._mismatch_state_lock = threading.Lock()
+        self._mismatch_scan_lock = threading.Lock()
 
     def __del__(self) -> None:
         if hasattr(self, "es_manager"):
@@ -1232,8 +1241,9 @@ class BookManager:
         return normalized
 
     def _clear_mismatch_cache(self) -> None:
-        self._mismatch_cache = None
-        self._mismatch_cache_time = 0.0
+        with self._mismatch_state_lock:
+            self._mismatch_cache = None
+            self._mismatch_cache_time = 0.0
 
     def _is_safe_category_name(self, category: str) -> bool:
         if category == "_root":
@@ -1245,16 +1255,19 @@ class BookManager:
         except OSError:
             return False
 
-    def _is_indexable_file_path(self, file_path: Path) -> bool:
-        if file_path.name.startswith("."):
+    def _is_indexable_file_path(self, file_path: Path | str) -> bool:
+        """색인 대상 파일인지 판정한다. 확장자만 보고 끝나는 경우가 대부분이라 그 전에는
+        Path를 만들지 않는다. 전수 스캔에서 파일 42만 개마다 Path를 만들면 그것만 18초다."""
+        name = os.path.basename(str(file_path))
+        if name.startswith("."):
             return False
-        declared_type = file_path.suffix[1:].lower()
+        declared_type = name.rsplit(".", 1)[-1].lower() if "." in name else ""
         if declared_type in self.INDEXABLE_FILE_TYPES:
             return True
 
         from utils.loader import Loader
 
-        detected_type = Loader.detect_file_type(file_path, declared_type)
+        detected_type = Loader.detect_file_type(Path(file_path), declared_type)
         return detected_type in self.INDEXABLE_FILE_TYPES
 
     @staticmethod
@@ -1693,14 +1706,16 @@ class BookManager:
 
     @staticmethod
     def _mismatch_item_count(mismatch_data: dict[str, Any]) -> int:
+        """요약 응답의 이상 항목 총 건수. anomaly_count가 없으면 건수 비교만 하던 옛 응답으로 본다."""
         total = 0
-        for item in mismatch_data.get("mismatches", []) or []:
-            total += abs(int(item.get("diff") or 0))
-        for item in mismatch_data.get("es_only", []) or []:
-            total += int(item.get("es_count") or 0)
-        for item in mismatch_data.get("fs_only", []) or []:
-            total += int(item.get("fs_count") or 0)
+        for key, legacy_field in (("mismatches", "diff"), ("es_only", "es_count"), ("fs_only", "fs_count")):
+            for item in mismatch_data.get(key, []) or []:
+                count = item.get("anomaly_count")
+                if count is None:
+                    count = item.get(legacy_field)
+                total += abs(int(count or 0))
         return total
+
 
     @staticmethod
     def _mismatch_categories(mismatch_data: dict[str, Any]) -> list[str]:
@@ -1729,90 +1744,128 @@ class BookManager:
                 return result
             search_after = next_search_after
 
-    def get_category_mismatches(self) -> dict[str, Any]:
-        """파일시스템의 1레벨 디렉토리 기준으로 ES와 파일 경로 불일치를 검출"""
-        import time as _time
-        import os as _os
-        from concurrent.futures import ThreadPoolExecutor
+    def _collect_es_category_paths(self) -> dict[str, dict[str, Any]]:
+        """카테고리별 ES 문서의 상대 경로 집합, 문서 수, 중복 경로를 모은다.
 
-        # TTL 캐시 (5분)
-        now = _time.monotonic()
-        if self._mismatch_cache is not None and (now - self._mismatch_cache_time) < 300:
-            return self._mismatch_cache
+        경로는 get_category_mismatch_details()와 같은 규칙으로 정규화해야 요약 건수와
+        상세 목록의 건수가 어긋나지 않는다.
+        """
+        collected: dict[str, dict[str, Any]] = {}
+        for category, file_path, doc_count in self.es_manager.iter_all_category_file_paths():
+            entry = collected.get(category)
+            if entry is None:
+                entry = collected[category] = {"paths": set(), "duplicate_paths": set(), "doc_count": 0}
+            entry["doc_count"] += doc_count
+            rel_path = self._normalize_stored_file_path(file_path)
+            # 같은 경로에 문서가 여럿이거나, 서로 다른 원본 경로가 같은 상대 경로로 정규화되면 중복이다.
+            if doc_count > 1 or rel_path in entry["paths"]:
+                entry["duplicate_paths"].add(rel_path)
+            entry["paths"].add(rel_path)
+        return collected
 
-        # 1. ES: terms aggregation으로 카테고리별 문서 수 조회 (scroll 대비 수십 배 빠름)
-        es_cats = self.es_manager.search_and_aggregate_by_category()
+    def _iter_fs_category_paths(self) -> Iterator[tuple[str, set[str]]]:
+        """디렉토리마다 (카테고리, 색인 대상 파일의 상대 경로 집합)을 깊이 제한 없이 내준다.
 
-        # 2. 파일시스템: 1레벨 디렉토리 + 그 하위 2레벨 스캔 (파일 수만 카운트)
-        base_str = str(self.path_prefix)
-        fs_cats: dict[str, int] = {}
-
-        def count_files(dir_path: str) -> int:
-            count = 0
+        디렉토리 하나씩 넘겨 호출자가 바로 비교하고 버리게 한다. 전체 경로를 한꺼번에
+        들고 있으면 40만 건 규모에서 100MB를 더 쓴다.
+        """
+        stack: list[tuple[str, str]] = [(str(self.path_prefix), "_root")]
+        while stack:
+            dir_path, category = stack.pop()
+            paths: set[str] = set()
             try:
-                with _os.scandir(dir_path) as it:
+                with os.scandir(dir_path) as it:
                     for entry in it:
-                        if entry.is_file(follow_symlinks=False) and self._is_indexable_file_path(Path(entry.path)):
-                            count += 1
+                        if entry.is_dir(follow_symlinks=False):
+                            if not entry.name.startswith(".") and entry.name not in self.IGNORED_DIR_NAMES:
+                                stack.append((entry.path, entry.name if category == "_root" else f"{category}/{entry.name}"))
+                        elif entry.is_file(follow_symlinks=False) and self._is_indexable_file_path(entry.path):
+                            paths.add(entry.name if category == "_root" else f"{category}/{entry.name}")
             except (PermissionError, OSError):
-                pass
-            return count
+                continue
+            yield category, paths
 
-        try:
-            # 최상위 디렉토리의 파일을 _root 카테고리로 카운트
-            root_count = count_files(base_str)
-            if root_count > 0:
-                fs_cats["_root"] = root_count
+    def _scan_category_mismatches(self) -> dict[str, Any]:
+        """ES 문서와 파일시스템 파일을 경로 단위로 비교해 카테고리별 이상 항목 수를 센다.
 
-            # L1/L2 디렉토리 목록 수집
-            scan_tasks: list[tuple[str, str]] = []  # (dir_path, category)
-            with _os.scandir(base_str) as l1_it:
-                for l1 in l1_it:
-                    if not l1.is_dir(follow_symlinks=False) or l1.name.startswith("."):
-                        continue
-                    rel1 = l1.name
-                    scan_tasks.append((l1.path, rel1))
-                    try:
-                        with _os.scandir(l1.path) as l2_it:
-                            for l2 in l2_it:
-                                if not l2.is_dir(follow_symlinks=False) or l2.name.startswith("."):
-                                    continue
-                                scan_tasks.append((l2.path, f"{rel1}/{l2.name}"))
-                    except (PermissionError, OSError):
-                        pass
+        건수만 비교하면 한 카테고리에서 고아 문서 1건과 미색인 파일 1건이 서로 상쇄돼
+        이상 항목이 0건으로 보인다. 그래서 경로 집합을 직접 비교한다. 카테고리 깊이도
+        제한하지 않는다. 2레벨까지만 보던 이전 구현은 3레벨 이하 문서 18만여 건을
+        검사 대상에서 통째로 빠뜨렸다.
+        """
+        es_entries = self._collect_es_category_paths()
+        stats: dict[str, dict[str, int]] = {}
 
-            # 병렬 FS 스캔
-            with ThreadPoolExecutor() as executor:
-                futures = {executor.submit(count_files, dp): cat for dp, cat in scan_tasks}
-                for future in futures:
-                    cat = futures[future]
-                    count = future.result()
-                    if count > 0:
-                        fs_cats[cat] = count
-        except (PermissionError, OSError):
-            pass
+        for category, fs_paths in self._iter_fs_category_paths():
+            entry = es_entries.pop(category, None)
+            if entry is None and not fs_paths:
+                continue
+            es_paths: set[str] = entry["paths"] if entry else set()
+            stats[category] = {"es_count": entry["doc_count"] if entry else 0, "fs_count": len(fs_paths), "es_only_count": len(es_paths - fs_paths), "fs_only_count": len(fs_paths - es_paths), "duplicate_count": len(entry["duplicate_paths"]) if entry else 0}
 
-        # 3. 비교 (건수 기반 비교 — 상세 경로 비교는 detail API에서 lazy 수행)
-        all_keys = sorted(set(list(fs_cats.keys()) + [k for k in es_cats if k.count("/") <= 1 and not k.startswith(".")]))
-        mismatches = []
-        es_only = []
-        fs_only = []
-        for key in all_keys:
-            es_count = es_cats.get(key)
-            fs_count = fs_cats.get(key)
-            if es_count is not None and fs_count is not None:
-                diff = abs(es_count - fs_count)
-                if diff > 0:
-                    mismatches.append({"category": key, "es_count": es_count, "fs_count": fs_count, "diff": diff})
-            elif es_count is not None:
-                es_only.append({"category": key, "es_count": es_count})
-            elif fs_count is not None:
-                fs_only.append({"category": key, "fs_count": fs_count})
+        # 디렉토리가 사라진 카테고리 — ES 문서 전부가 고아다.
+        # 숨김 디렉토리(.preview_cache 등)는 FS 스캔에서 건너뛰므로 여기서도 제외한다.
+        for category, entry in es_entries.items():
+            if any(segment.startswith(".") for segment in category.split("/")):
+                continue
+            stats[category] = {"es_count": entry["doc_count"], "fs_count": 0, "es_only_count": len(entry["paths"]), "fs_only_count": 0, "duplicate_count": len(entry["duplicate_paths"])}
 
-        result = {"mismatches": sorted(mismatches, key=lambda x: abs(x["diff"]), reverse=True), "es_only": es_only, "fs_only": fs_only}
-        self._mismatch_cache = result
-        self._mismatch_cache_time = now
+        mismatches: list[dict[str, Any]] = []
+        es_only: list[dict[str, Any]] = []
+        fs_only: list[dict[str, Any]] = []
+        for category in sorted(stats):
+            stat = stats[category]
+            anomaly_count = stat["es_only_count"] + stat["fs_only_count"] + stat["duplicate_count"]
+            if anomaly_count == 0:
+                continue
+            item = {"category": category, **stat, "anomaly_count": anomaly_count, "diff": abs(stat["es_count"] - stat["fs_count"])}
+            if stat["fs_count"] == 0:
+                es_only.append(item)
+            elif stat["es_count"] == 0:
+                fs_only.append(item)
+            else:
+                mismatches.append(item)
+
+        result = {"mismatches": sorted(mismatches, key=lambda x: x["anomaly_count"], reverse=True), "es_only": es_only, "fs_only": fs_only}
+        LOGGER.info("get_category_mismatches: 이상 카테고리 %d개, 이상 항목 %d건", len(mismatches) + len(es_only) + len(fs_only), self._mismatch_item_count(result))
         return result
+
+
+    def _mismatch_cache_is_fresh(self, now: float) -> bool:
+        """_mismatch_state_lock을 잡은 채로 호출해야 한다."""
+        return self._mismatch_cache is not None and (now - self._mismatch_cache_time) < MISMATCH_CACHE_TTL_SECONDS
+
+    def _refresh_mismatch_cache(self) -> dict[str, Any]:
+        """요약 스캔을 돌려 캐시를 갱신한다. 스캔은 동시에 하나만 돈다.
+
+        이미 도는 스캔이 있으면 그것이 끝나기를 기다렸다가 갱신된 값을 그대로 쓴다.
+        관리자 둘이 동시에 탭을 열었다고 ES를 두 번 훑을 이유가 없다.
+        """
+        with self._mismatch_scan_lock:
+            with self._mismatch_state_lock:
+                cached = self._mismatch_cache
+                if cached is not None and self._mismatch_cache_is_fresh(time.monotonic()):
+                    return cached
+            result = self._scan_category_mismatches()
+            with self._mismatch_state_lock:
+                self._mismatch_cache = result
+                self._mismatch_cache_time = time.monotonic()
+            return result
+
+    def get_category_mismatches(self, force_refresh: bool = False) -> dict[str, Any]:
+        """카테고리별 이상 항목 요약. TTL 안이면 캐시를 쓰고, 아니면 다시 센다.
+
+        force_refresh는 오래된 값을 쓰면 안 되는 호출자용이다. 일괄 재적재의 전후 건수를
+        오래된 값으로 재면 처리 결과를 잘못 보고한다.
+        """
+        if force_refresh:
+            self._clear_mismatch_cache()
+        else:
+            with self._mismatch_state_lock:
+                cached = self._mismatch_cache
+                if cached is not None and self._mismatch_cache_is_fresh(time.monotonic()):
+                    return cached
+        return self._refresh_mismatch_cache()
 
     def get_category_mismatch_details(self, category: str) -> dict[str, Any]:
         """특정 카테고리의 ES 문서와 파일시스템 파일을 비교하여 불일치 항목을 반환"""
@@ -2060,8 +2113,7 @@ class BookManager:
         """현재 카테고리 불일치 항목을 파일 단위로 ES에 재적재/정리한다."""
         LOGGER.info("reload_category_mismatches 시작: content_type='%s'", content_type)
 
-        self._clear_mismatch_cache()
-        before = await asyncio.to_thread(self.get_category_mismatches)
+        before = await asyncio.to_thread(self.get_category_mismatches, True)
         categories = self._mismatch_categories(before)
         result: dict[str, Any] = {"content_type": content_type, "category_count": len(categories), "before_count": self._mismatch_item_count(before), "after_count": 0, "indexed_count": 0, "deleted_count": 0, "failed_count": 0, "failures": [], "categories": []}
         if on_progress is not None:
@@ -2085,8 +2137,7 @@ class BookManager:
         except Exception as e:
             result["failures"].append({"error": f"ES refresh 실패: {e}"})
 
-        self._clear_mismatch_cache()
-        after = await asyncio.to_thread(self.get_category_mismatches)
+        after = await asyncio.to_thread(self.get_category_mismatches, True)
         result["after_count"] = self._mismatch_item_count(after)
 
         refresh_failure_count = len(result["failures"])

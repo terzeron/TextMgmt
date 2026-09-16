@@ -375,6 +375,8 @@ class DummyES:
         self.aggregate = {"A": 1}
         self.counts = {"A": 1, "B": 0}
         self.category_docs = []
+        # get_category_mismatches가 훑는 전체 문서의 (category, file_path)
+        self.all_file_paths: list[tuple[str, str]] = []
         self.doc = doc
         self.keyword = []
         self.similar = []
@@ -412,6 +414,13 @@ class DummyES:
 
     def search_and_aggregate_by_category(self):
         return self.aggregate
+
+    def iter_all_category_file_paths(self, batch_size: int = 10000):
+        # 실제 composite 집계처럼 (category, file_path) 조합별로 접어서 문서 수와 함께 준다.
+        counts: dict[tuple[str, str], int] = {}
+        for category, file_path in self.all_file_paths:
+            counts[(category, file_path)] = counts.get((category, file_path), 0) + 1
+        return iter([(category, file_path, count) for (category, file_path), count in counts.items()])
 
     def search_by_category(self, category: str, max_result_count: int):
         return self.category_docs
@@ -463,6 +472,8 @@ def make_manager(tmp_path: Path, es: DummyES | dict | None) -> BookManager:
         manager.es_manager = DummyES(es)
     manager._mismatch_cache = None
     manager._mismatch_cache_time = 0.0
+    manager._mismatch_state_lock = threading.Lock()
+    manager._mismatch_scan_lock = threading.Lock()
     manager.item_class = Book
     Book.path_prefix = tmp_path
     return manager
@@ -761,10 +772,114 @@ def test_category_mismatches_include_detected_indexable_files(tmp_path: Path):
         zf.writestr("META-INF/container.xml", "<container/>")
 
     result = manager.get_category_mismatches()
-    assert result["fs_only"] == [{"category": "A", "fs_count": 1}]
+    assert [(item["category"], item["fs_count"], item["anomaly_count"]) for item in result["fs_only"]] == [("A", 1, 1)]
     details = manager.get_category_mismatch_details("A")
     assert details["fs_count"] == 1
     assert details["fs_only"] == [{"file_name": "book.bak", "file_path": "A/book.bak"}]
+
+
+def test_category_mismatches_do_not_cancel_out(tmp_path: Path):
+    """고아 문서 1건과 미색인 파일 1건은 건수가 같아도 서로 상쇄되면 안 된다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "present.txt").write_text("x")
+    es.all_file_paths = [("A", "A/gone.txt")]
+
+    item = manager.get_category_mismatches()["mismatches"][0]
+    assert item["category"] == "A"
+    assert item["diff"] == 0
+    assert (item["es_only_count"], item["fs_only_count"]) == (1, 1)
+    assert item["anomaly_count"] == 2
+
+
+def test_category_mismatches_scan_deep_categories(tmp_path: Path):
+    """2레벨까지만 보던 이전 구현이 통째로 빠뜨리던 3레벨 이하 카테고리도 검사한다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    deep = tmp_path / "A" / "B" / "C"
+    deep.mkdir(parents=True)
+    (deep / "book.txt").write_text("x")
+    es.all_file_paths = []
+
+    result = manager.get_category_mismatches()
+    assert [(item["category"], item["anomaly_count"]) for item in result["fs_only"]] == [("A/B/C", 1)]
+
+
+def test_category_mismatches_skip_hidden_categories(tmp_path: Path):
+    """숨김 디렉토리는 FS 스캔에서 제외하므로 ES 문서만 남아도 이상으로 보고하지 않는다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    hidden = tmp_path / ".preview_cache"
+    hidden.mkdir()
+    (hidden / "cached.txt").write_text("x")
+    es.all_file_paths = [(".preview_cache", ".preview_cache/gone.txt")]
+
+    assert manager._mismatch_categories(manager.get_category_mismatches()) == []
+
+
+def test_category_mismatches_count_duplicate_docs(tmp_path: Path):
+    """같은 파일을 가리키는 ES 문서가 둘이면 경로 1건을 중복으로 센다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "book.txt").write_text("x")
+    es.all_file_paths = [("A", "A/book.txt"), ("A", "A/book.txt")]
+
+    item = manager.get_category_mismatches()["mismatches"][0]
+    assert (item["es_only_count"], item["fs_only_count"], item["duplicate_count"]) == (0, 0, 1)
+    assert item["anomaly_count"] == 1
+
+
+def _manager_with_one_anomaly(tmp_path: Path) -> BookManager:
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "one.txt").write_text("x")
+    return manager
+
+
+def test_mismatch_cache_reuses_result_until_invalidated(tmp_path: Path):
+    """TTL 안에서는 다시 세지 않고, 무효화하면 다시 센다."""
+    manager = _manager_with_one_anomaly(tmp_path)
+    assert manager._mismatch_item_count(manager.get_category_mismatches()) == 1
+
+    (tmp_path / "A" / "two.txt").write_text("y")
+    assert manager._mismatch_item_count(manager.get_category_mismatches()) == 1
+
+    manager._clear_mismatch_cache()
+    assert manager._mismatch_item_count(manager.get_category_mismatches()) == 2
+
+
+def test_mismatch_cache_force_refresh_rescans(tmp_path: Path):
+    """일괄 재적재의 전후 건수는 오래된 값을 쓰면 안 되므로 강제로 다시 센다."""
+    manager = _manager_with_one_anomaly(tmp_path)
+    manager.get_category_mismatches()
+    (tmp_path / "A" / "two.txt").write_text("y")
+
+    assert manager._mismatch_item_count(manager.get_category_mismatches()) == 1
+    assert manager._mismatch_item_count(manager.get_category_mismatches(force_refresh=True)) == 2
+
+
+def test_mismatch_cache_runs_one_scan_at_a_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """동시 조회가 겹쳐도 ES를 두 번 훑지 않는다."""
+    manager = _manager_with_one_anomaly(tmp_path)
+    scans: list[int] = []
+    original = manager._scan_category_mismatches
+
+    def counting_scan() -> dict:
+        scans.append(1)
+        time.sleep(0.2)
+        return original()
+
+    monkeypatch.setattr(manager, "_scan_category_mismatches", counting_scan)
+    threads = [threading.Thread(target=manager.get_category_mismatches) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+
+    assert scans == [1]
+
 
 
 def asyncio_runner(coro):
@@ -1672,7 +1787,7 @@ def test_reload_category_mismatches_indexes_missing_files_and_deletes_stale_docs
         "C": {"fs_only": [{"file_path": "C/new.txt"}], "es_only": [], "duplicates": []},
     }
 
-    def fake_summary():
+    def fake_summary(force_refresh: bool = False):
         return {"mismatches": [{"category": "A", "diff": 3}], "es_only": [{"category": "B", "es_count": 1}], "fs_only": [{"category": "C", "fs_count": 1}]}
 
     monkeypatch.setattr(manager, "get_category_mismatches", fake_summary)
@@ -1800,7 +1915,7 @@ def test_reload_category_mismatches_reports_progress_within_category(tmp_path: P
         return {book_id: make_doc(rel_path)}
 
     monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
-    monkeypatch.setattr(manager, "get_category_mismatches", lambda: {"mismatches": [], "es_only": [], "fs_only": [{"category": "A", "fs_count": len(rel_paths)}]})
+    monkeypatch.setattr(manager, "get_category_mismatches", lambda force_refresh=False: {"mismatches": [], "es_only": [], "fs_only": [{"category": "A", "fs_count": len(rel_paths)}]})
     monkeypatch.setattr(manager, "get_category_mismatch_details", lambda category: {"fs_only": [{"file_path": p} for p in rel_paths], "es_only": [], "duplicates": []})
 
     progress_updates: list[dict[str, int]] = []
@@ -4684,7 +4799,7 @@ def test_mismatch_and_reload_more_edge_cases(tmp_path: Path, monkeypatch):
             raise RuntimeError("refresh error")
 
     manager_ref_err = make_manager(tmp_path, RefreshErrES())
-    monkeypatch.setattr(manager_ref_err, "get_category_mismatches", lambda: {"mismatches": [{"category": "../unsafe"}]})
+    monkeypatch.setattr(manager_ref_err, "get_category_mismatches", lambda force_refresh=False: {"mismatches": [{"category": "../unsafe"}]})
     res_mismatches, _ = asyncio_runner(manager_ref_err.reload_category_mismatches())
     assert any("잘못된 카테고리 경로입니다" in str(f) for f in res_mismatches["failures"])
     assert any("ES refresh 실패" in str(f) for f in res_mismatches["failures"])

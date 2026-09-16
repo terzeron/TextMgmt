@@ -326,16 +326,21 @@ function storeAllReloadOwner(contentType, owner) {
   }
 }
 
+// 카테고리 하나의 이상 항목 수. 백엔드는 경로를 직접 비교해 anomaly_count를 준다.
+// 건수 차이(diff)만 주던 옛 응답은 실제 이상 항목보다 작게 나오지만, 응답을 받지 못하는
+// 것보다는 낫기 때문에 fallback으로 남긴다.
+function getMismatchItemCount(item) {
+  if (item.anomaly_count != null) return item.anomaly_count;
+  if (item.diff != null) return Math.abs(item.diff);
+  return item.es_count ?? item.fs_count ?? 0;
+}
+
 function buildMismatchCounts(mismatchData) {
   const counts = {};
-  for (const item of mismatchData.mismatches || []) {
-    counts[item.category] = Math.abs(item.diff);
-  }
-  for (const item of mismatchData.es_only || []) {
-    counts[item.category] = item.es_count;
-  }
-  for (const item of mismatchData.fs_only || []) {
-    counts[item.category] = item.fs_count;
+  for (const key of ["mismatches", "es_only", "fs_only"]) {
+    for (const item of mismatchData[key] || []) {
+      counts[item.category] = getMismatchItemCount(item);
+    }
   }
   return counts;
 }
@@ -355,9 +360,11 @@ function countLoadedMismatchEntries(folder) {
   );
 }
 
+// 재적재는 선택한 카테고리 하나만 처리하므로 하위 폴더 합계(count)가 아니라
+// 그 카테고리 자체의 건수를 대상으로 삼는다.
 function getMismatchReloadTargetCount(folder) {
-  const folderCount = Number(folder?.count || 0);
-  if (Number.isFinite(folderCount) && folderCount > 0) return folderCount;
+  const ownCount = Number(folder?.ownCount ?? folder?.count ?? 0);
+  if (Number.isFinite(ownCount) && ownCount > 0) return ownCount;
 
   return countLoadedMismatchEntries(folder);
 }
@@ -542,9 +549,10 @@ export default function CategoryAdmin({
           if (enriched.children) {
             enriched.children = enriched.children.map(enrichItem);
           }
-          // 불일치가 있는 leaf 카테고리에 placeholder child 추가 (확장 아이콘 표시용)
+          // 불일치가 있는 leaf 카테고리에 placeholder child 추가 (확장 아이콘 표시용).
+          // 하위 폴더 합계가 아니라 이 카테고리 자체의 건수로 판단한다.
           if (
-            enriched.count > 0 &&
+            enriched.ownCount > 0 &&
             !enriched.children?.length &&
             !enriched.isVirtualParent
           ) {
@@ -908,7 +916,9 @@ export default function CategoryAdmin({
         return;
       /* v8 ignore next -- virtual parent nodes are not expandable mismatch leaves. */
       if (selectedFolderData.isVirtualParent) return;
-      if (!selectedFolderData.count) return;
+      // 상세 조회는 이 카테고리 자체의 이상 항목만 가져온다. 하위 폴더 합계인 count로
+      // 판단하면 자기 항목이 없는 부모까지 빈 조회를 날린다.
+      if (!selectedFolderData.ownCount) return;
       if (selectedFolderData.booksLoaded) return;
 
       jsonGetReq(
@@ -971,9 +981,17 @@ export default function CategoryAdmin({
             const existingSubfolders = (folder.children || []).filter(
               (c) => c.fileType === "folder",
             );
+            // 요약 스캔 이후 파일이 바뀌었을 수 있으므로 배지를 실제로 받아온
+            // 항목 수로 맞춘다. 배지와 펼친 목록이 어긋나면 사용자가 판단할 수 없다.
+            const subfolderTotal = existingSubfolders.reduce(
+              (sum, c) => sum + Number(c.count || 0),
+              0,
+            );
             return {
               ...folder,
               booksLoaded: true,
+              ownCount: entries.length,
+              count: entries.length + subfolderTotal,
               children: [...existingSubfolders, ...entries],
             };
           });

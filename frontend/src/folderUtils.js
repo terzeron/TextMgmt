@@ -93,6 +93,7 @@ export function buildFolderHierarchy(
         fileType: "folder",
         booksLoaded: false,
         count: categoryCounts[group.parentCategoryId] || 0,
+        ownCount: categoryCounts[group.parentCategoryId] || 0,
       });
     } else {
       // 자식이 있는 경우
@@ -105,11 +106,14 @@ export function buildFolderHierarchy(
           fileType: "folder",
           booksLoaded: false,
           count: categoryCounts[catId] || 0,
+          ownCount: categoryCounts[catId] || 0,
         };
       });
 
       const childrenTotal = children.reduce((sum, c) => sum + c.count, 0);
 
+      // count는 하위까지 합친 값이라 한눈에 보기 좋지만, 이 폴더 자체를 대상으로 하는
+      // 조회·재적재에는 쓰면 안 된다. 그 용도의 건수는 ownCount로 따로 들고 간다.
       if (group.hasParentCategory) {
         // 부모 카테고리도 존재 → 실제 부모 폴더
         const ownCount = categoryCounts[group.parentCategoryId] || 0;
@@ -120,6 +124,7 @@ export function buildFolderHierarchy(
           isVirtualParent: false,
           booksLoaded: false,
           count: ownCount + childrenTotal,
+          ownCount: ownCount,
           children: children,
         });
       } else {
@@ -131,6 +136,7 @@ export function buildFolderHierarchy(
           isVirtualParent: true,
           booksLoaded: false,
           count: childrenTotal,
+          ownCount: 0,
           children: children,
         });
       }
