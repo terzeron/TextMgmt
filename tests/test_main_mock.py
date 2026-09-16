@@ -415,6 +415,197 @@ class TestCategoryMismatchAdmin:
             delay=2.0,
         )
 
+    def test_classify_proposal_success_polling(self, client, mock_bm, mock_cat, tmp_path):
+        """제안 시작은 202류 응답 대신 started 플래그를 주고, GET으로 완료 상태를 본다."""
+        mappings = {"3_SF": ["과학소설"]}
+        result = {
+            "content_type": "book",
+            "source_category": "0_inbox",
+            "total_count": 2,
+            "processed_count": 2,
+            "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}],
+            "failures": [],
+        }
+        mock_bm.path_prefix = tmp_path
+        mock_cat.get_all_mappings.return_value = mappings
+        # 상태 파일이 없으면 프로세스 내 메모리 폴백을 쓰는데, 이 폴백은 라우터가 앱과 함께
+        # 한 번만 만들어져 다른 테스트가 남긴 running 상태를 물려받을 수 있다. 파일을 미리
+        # idle로 채워 이 테스트가 그 잔여 상태에 기대지 않게 한다.
+        (tmp_path / ".classify_proposal_book.json").write_text(json.dumps({"status": "idle"}), encoding="utf-8")
+
+        async def fake_propose(*args, on_progress=None, **kwargs):
+            if on_progress:
+                on_progress({"total_count": 2, "processed_count": 1})
+            return result, None
+
+        mock_bm.propose_category_changes.side_effect = fake_propose
+
+        r = client.post("/categories/classify-proposal", json={"category": "0_inbox"})
+
+        assert r.status_code == 200
+        assert r.json()["result"]["started"] is True
+        status = client.get("/categories/classify-proposal")
+        assert status.status_code == 200
+        assert status.json()["result"]["status"] == "ready"
+        assert status.json()["result"]["items"] == result["items"]
+        status_file = tmp_path / ".classify_proposal_book.json"
+        assert status_file.exists()
+        mock_bm.propose_category_changes.assert_awaited_once()
+        _, kwargs = mock_bm.propose_category_changes.await_args
+        assert kwargs["content_type"] == "book"
+        assert kwargs["use_bookstore"] is True
+        assert kwargs["use_content_meta"] is True
+        assert callable(kwargs["on_progress"])
+
+    def test_classify_proposal_already_running_blocks_restart(self, client, mock_bm, tmp_path):
+        mock_bm.path_prefix = tmp_path
+        status_file = tmp_path / ".classify_proposal_book.json"
+        status_file.write_text(json.dumps({"status": "running", "source_category": "0_inbox", "updated_at": time.time()}), encoding="utf-8")
+
+        r = client.post("/categories/classify-proposal", json={"category": "0_inbox"})
+
+        assert r.status_code == 200
+        assert r.json()["result"]["already_running"] is True
+
+    def test_classify_proposal_apply_uses_server_side_allowed_paths(self, client, mock_bm, tmp_path):
+        """승인 요청의 목적지는 받되, 허용 경로는 서버 제안 상태에서 가져온다.
+
+        클라이언트가 보낸 file_path를 그대로 허용 집합으로 쓰면 apply_category_changes의
+        검증이 통째로 무의미해진다.
+        """
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(
+            json.dumps(
+                {
+                    "status": "ready",
+                    "source_category": "0_inbox",
+                    "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}],
+                    "updated_at": time.time(),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        captured = {}
+
+        async def fake_apply(items, allowed_file_paths, **kwargs):
+            captured["items"] = items
+            captured["allowed"] = allowed_file_paths
+            return {"total_count": len(items), "applied_count": len(items), "failed_count": 0, "results": []}, None
+
+        mock_bm.apply_category_changes = fake_apply
+
+        r = client.post(
+            "/categories/classify-proposal/apply",
+            json={
+                "items": [
+                    {"file_path": "0_inbox/a.epub", "target_category": "5_음악"},
+                    {"file_path": "0_inbox/침입.epub", "target_category": "5_음악"},
+                ]
+            },
+        )
+
+        assert r.status_code == 200
+        # 서버 제안에 있던 경로만 허용 집합에 들어간다. 클라이언트가 끼워넣은 경로는 빠진다
+        assert captured["allowed"] == {"0_inbox/a.epub"}
+        # 사용자가 화면에서 고친 목적지는 그대로 전달된다
+        assert captured["items"][0]["target_category"] == "5_음악"
+
+    def test_classify_proposal_apply_rejects_when_not_ready(self, client, mock_bm, tmp_path):
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(json.dumps({"status": "idle"}), encoding="utf-8")
+
+        r = client.post("/categories/classify-proposal/apply", json={"items": []})
+
+        assert r.status_code == 200
+        assert r.json()["status"] == "failure"
+        assert "제안" in r.json()["error"]
+
+    def test_classify_proposal_delete_clears_state(self, client, mock_bm, tmp_path):
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(json.dumps({"status": "ready", "items": [{"file_path": "a"}]}), encoding="utf-8")
+
+        r = client.delete("/categories/classify-proposal")
+
+        assert r.status_code == 200
+        assert r.json()["result"]["cleared"] is True
+        cleared = json.loads(status_path.read_text(encoding="utf-8"))
+        assert cleared["status"] == "idle"
+        assert cleared["items"] == []
+
+    def test_classify_proposal_apply_job_merges_apply_outcomes(self, mock_bm, mock_cat, tmp_path):
+        """적용 백그라운드 잡이 결과를 제안 items에 병합해 apply_status/apply_error를 남긴다."""
+        import asyncio
+
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(
+            json.dumps(
+                {
+                    "status": "ready",
+                    "items": [
+                        {"file_path": "0_inbox/a.epub", "target_category": "3_SF"},
+                        {"file_path": "0_inbox/b.epub", "target_category": "3_SF"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        async def fake_apply(items, allowed_file_paths, **kwargs):
+            return {
+                "total_count": 2,
+                "applied_count": 1,
+                "failed_count": 1,
+                "results": [
+                    {"file_path": "0_inbox/a.epub", "apply_status": "moved", "apply_error": None},
+                    {"file_path": "0_inbox/b.epub", "apply_status": "failed", "apply_error": "파일을 찾을 수 없습니다"},
+                ],
+            }, None
+
+        mock_bm.apply_category_changes = fake_apply
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal/apply")
+        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
+        _run_apply_job = freevars["_run_classify_apply_job"]
+
+        asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/b.epub", "target_category": "3_SF"}], {"0_inbox/a.epub", "0_inbox/b.epub"}, False))
+
+        done = json.loads(status_path.read_text(encoding="utf-8"))
+        assert done["status"] == "done"
+        assert done["applied_count"] == 1
+        assert done["failed_count"] == 1
+        assert done["items"][0]["apply_status"] == "moved"
+        assert done["items"][1]["apply_status"] == "failed"
+        assert done["items"][1]["apply_error"] == "파일을 찾을 수 없습니다"
+
+    def test_classify_proposal_job_handles_exceptions(self, mock_bm, mock_cat, tmp_path):
+        """제안/적용 잡이 예외를 던지면 상태를 failed로 굳혀 화면이 계속 회전하지 않게 한다."""
+        import asyncio
+
+        mock_bm.path_prefix = tmp_path
+        mock_cat.get_all_mappings.return_value = {}
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        propose_endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal")
+        freevars = dict(zip(propose_endpoint.__code__.co_freevars, [c.cell_contents for c in propose_endpoint.__closure__]))
+        _run_proposal_job = freevars["_run_classify_proposal_job"]
+        _read_status = freevars["_read_classify_proposal"]
+
+        mock_bm.propose_category_changes.side_effect = RuntimeError("boom")
+        asyncio.run(_run_proposal_job("0_inbox", True, True, 1.2))
+        assert _read_status()["status"] == "failed"
+
+        apply_endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal/apply")
+        apply_freevars = dict(zip(apply_endpoint.__code__.co_freevars, [c.cell_contents for c in apply_endpoint.__closure__]))
+        _run_apply_job = apply_freevars["_run_classify_apply_job"]
+        mock_bm.apply_category_changes = AsyncMock(side_effect=RuntimeError("boom"))
+        asyncio.run(_run_apply_job([], set(), False))
+        assert _read_status()["status"] == "failed"
+
     def test_index_file_success(self, client, mock_bm):
         mock_bm.index_single_file.return_value = (42, None)
         r = client.post("/category-mismatches/index-file", json={"file_path": "_epub/test.epub"})

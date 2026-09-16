@@ -422,6 +422,23 @@ class CategoryAutoClassifyModel(BaseModel):
     delay: float = 1.2
 
 
+class ClassifyProposalModel(BaseModel):
+    category: str
+    use_bookstore: bool = True
+    use_content_meta: bool = True
+    delay: float = 1.2
+
+
+class ClassifyApplyItemModel(BaseModel):
+    file_path: str
+    target_category: str
+
+
+class ClassifyApplyModel(BaseModel):
+    items: list[ClassifyApplyItemModel]
+    clean_existing: bool = False
+
+
 def create_item_router(manager, content_type: str = "book") -> APIRouter:
     """공통 CRUD 엔드포인트를 생성하는 라우터 팩토리"""
     admin_dep = [Depends(require_admin)]
@@ -549,6 +566,58 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         else:
             _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
             LOGGER.error("auto_classify_category async 응답: failure — %s", error)
+
+    def _start_classify_proposal(category: str) -> None:
+        """제안 시작 시 이전 상태를 지우고 진행 중 표시로 새로 시작한다."""
+        _replace_classify_proposal(
+            {
+                "status": "running",
+                "content_type": content_type,
+                "source_category": category,
+                "total_count": 0,
+                "processed_count": 0,
+                "items": [],
+                "failures": [],
+            }
+        )
+
+    def _progress_classify_proposal(progress: dict[str, int]) -> None:
+        """제안(running)과 적용(applying)이 status 필드를 공유해도, 진행률 갱신은
+        status를 건드리지 않는다. 그러지 않으면 적용 중 진행률 콜백이 status를
+        running으로 되돌려 화면에 "적용 중"이 아니라 "제안 생성 중"으로 보인다."""
+        _replace_classify_proposal({**_read_classify_proposal(), **progress})
+
+    async def _run_classify_proposal_job(category: str, use_bookstore: bool, use_content_meta: bool, delay: float) -> None:
+        try:
+            mappings = await asyncio.to_thread(category_mapping.get_all_mappings, content_type=content_type)
+            result, error = await manager.propose_category_changes(category, mappings, content_type=content_type, use_bookstore=use_bookstore, use_content_meta=use_content_meta, delay=delay, on_progress=_progress_classify_proposal)
+        except Exception as e:
+            LOGGER.error("classify proposal error: %s", e)
+            _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "분류 제안에 실패했습니다."})
+            return
+        if error is None:
+            _replace_classify_proposal({**_read_classify_proposal(), **result, "status": "ready"})
+        else:
+            _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
+
+    async def _run_classify_apply_job(items: list[dict[str, Any]], allowed: set[str], clean_existing: bool) -> None:
+        _replace_classify_proposal({**_read_classify_proposal(), "status": "applying"})
+        try:
+            result, error = await manager.apply_category_changes(items, allowed, content_type=content_type, clean_existing=clean_existing, on_progress=_progress_classify_proposal)
+        except Exception as e:
+            LOGGER.error("classify apply error: %s", e)
+            _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "분류 적용에 실패했습니다."})
+            return
+        if error is not None:
+            _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
+            return
+        applied = {entry["file_path"]: entry for entry in result["results"]}
+        current = _read_classify_proposal()
+        merged_items = []
+        for item in current.get("items") or []:
+            outcome = applied.get(item.get("file_path"))
+            merged_items.append({**item, **({"apply_status": outcome["apply_status"], "apply_error": outcome["apply_error"]} if outcome else {})})
+        _replace_classify_proposal({**current, "items": merged_items, "status": "done", "applied_count": result["applied_count"], "failed_count": result["failed_count"]})
 
     @router.put("/books/{book_id}", dependencies=admin_dep)
     async def update_book(book_id: int, book_item: BookModel, force: bool = False) -> dict[str, Any]:
@@ -783,6 +852,44 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     async def get_auto_classify_status() -> dict[str, Any]:
         """진행 중이거나 마지막으로 끝난 자동 분류 작업 상태 조회 (폴링용)"""
         return {"status": "success", "result": _read_classify_proposal()}
+
+    @router.post("/categories/classify-proposal", dependencies=admin_dep)
+    async def start_classify_proposal(body: ClassifyProposalModel, background_tasks: BackgroundTasks) -> dict[str, Any]:
+        """선택 카테고리의 분류 제안을 백그라운드로 만든다. 파일은 옮기지 않는다."""
+        current = _read_classify_proposal()
+        if current.get("status") in ("running", "applying"):
+            return {"status": "success", "result": {"already_running": True, **current}}
+        _start_classify_proposal(body.category)
+        background_tasks.add_task(_run_classify_proposal_job, body.category, body.use_bookstore, body.use_content_meta, body.delay)
+        return {"status": "success", "result": {"started": True, **_read_classify_proposal()}}
+
+    @router.get("/categories/classify-proposal", dependencies=admin_dep)
+    async def get_classify_proposal() -> dict[str, Any]:
+        """진행 중이거나 마지막으로 만든 분류 제안 상태 조회 (폴링용)"""
+        return {"status": "success", "result": _read_classify_proposal()}
+
+    @router.post("/categories/classify-proposal/apply", dependencies=admin_dep)
+    async def apply_classify_proposal(body: ClassifyApplyModel, background_tasks: BackgroundTasks) -> dict[str, Any]:
+        """승인된 항목만 적용한다.
+
+        허용 경로는 요청 본문(body.items)이 아니라 서버에 저장된 제안 상태에서만 가져온다.
+        브라우저가 보낸 file_path를 그대로 허용 집합으로 쓰면 apply_category_changes가
+        가진 "제안 목록에 없는 파일은 거부한다"는 검증이 통째로 무의미해져, 임의 경로를
+        옮기는 요청도 통과하게 된다.
+        """
+        current = _read_classify_proposal()
+        if current.get("status") != "ready":
+            return {"status": "failure", "error": "적용할 제안이 없습니다."}
+        allowed = {item.get("file_path") for item in current.get("items") or [] if item.get("file_path")}
+        items = [item.model_dump() for item in body.items]
+        background_tasks.add_task(_run_classify_apply_job, items, allowed, body.clean_existing)
+        return {"status": "success", "result": {"started": True, "total_count": len(items)}}
+
+    @router.delete("/categories/classify-proposal", dependencies=admin_dep)
+    async def delete_classify_proposal() -> dict[str, Any]:
+        """제안 상태를 지워 화면을 초기 상태로 되돌린다."""
+        _replace_classify_proposal({"status": "idle", "content_type": content_type, "items": []})
+        return {"status": "success", "result": {"cleared": True}}
 
     @router.get("/categories/{category:path}")
     async def get_books_in_category(category: str, limit: int = 0, cursor: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:
