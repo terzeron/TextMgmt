@@ -4975,7 +4975,7 @@ def test_match_category_by_keywords_skips_invalid_mapping_entries(tmp_path: Path
         "safe_target": [999, "  ", "dup", "dup", "sample"],  # 키워드가 문자열이 아니거나 비었거나 중복이면 건너뛴다
         "../unsafe": ["kw"],  # 안전하지 않은 카테고리 이름은 건너뛴다
     }
-    category, matched, reason = manager._match_category_by_keywords(test_file, "A", mappings)
+    category, matched, reason, _ranked = manager._match_category_by_keywords(test_file, "A", mappings)
     assert category == "safe_target"
     assert "sample" in matched
     assert reason is None
@@ -4986,7 +4986,7 @@ def test_match_category_by_keywords_rejects_control_char_category(tmp_path: Path
     file_path = tmp_path / "test.txt"
     file_path.write_text("hello")
 
-    category, matched, reason = manager._match_category_by_keywords(file_path, "0_inbox", {"unsafe\x00cat": ["test"]})
+    category, matched, reason, _ranked = manager._match_category_by_keywords(file_path, "0_inbox", {"unsafe\x00cat": ["test"]})
 
     assert category is None
     assert matched == []
@@ -5001,11 +5001,14 @@ def test_match_category_by_keywords_reports_tie(tmp_path: Path):
     target.write_text("x")
     mappings = {"3_SF": ["SF"], "5_음악": ["음악"]}
 
-    category, keywords, tie_reason = manager._match_category_by_keywords(target, "A", mappings)
+    category, keywords, tie_reason, ranked = manager._match_category_by_keywords(target, "A", mappings)
 
     assert category is None
     assert tie_reason is not None
     assert keywords
+    # 동점 상위 2개가 candidates 조립의 재료다(Task A) — 여기서도 같이 확인한다.
+    assert len(ranked) == 2
+    assert {cat for cat, _kw in ranked} == {"3_SF", "5_음악"}
 
 
 def test_match_category_by_keywords_picks_single_best(tmp_path: Path):
@@ -5016,11 +5019,13 @@ def test_match_category_by_keywords_picks_single_best(tmp_path: Path):
     target.write_text("x")
     mappings = {"3_SF": ["과학소설"], "5_음악": ["음악"]}
 
-    category, keywords, tie_reason = manager._match_category_by_keywords(target, "A", mappings)
+    category, keywords, tie_reason, ranked = manager._match_category_by_keywords(target, "A", mappings)
 
     assert category == "3_SF"
     assert keywords == ["과학소설"]
     assert tie_reason is None
+    # 순위 1위는 채택된 카테고리와 같아야 한다(Task A candidates 조립의 전제).
+    assert ranked[0] == ("3_SF", ["과학소설"])
 
 
 def test_iter_category_indexable_files_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -5173,10 +5178,18 @@ def test_delete_category_success(tmp_path: Path):
 
 
 class FakeClassifier:
-    """classify_file 결과를 고정해 등급 규칙만 검증한다."""
+    """classify_file 결과를 고정해 등급 규칙만 검증한다.
 
-    def __init__(self, target, method, reason, model_category, confidence, override_below=0.5):
-        self._result = (target, method, reason, {"confidence": confidence, "model_category": model_category})
+    bookstore_candidates는 기본값 None이면 entry에 아예 안 실어서, 이 필드를
+    모르는 기존 9(10)-케이스를 그대로 둔다(호출자가 .get() 기본값으로 방어한다는
+    전제를 같이 검증하는 셈이다).
+    """
+
+    def __init__(self, target, method, reason, model_category, confidence, override_below=0.5, bookstore_candidates=None):
+        entry = {"confidence": confidence, "model_category": model_category}
+        if bookstore_candidates is not None:
+            entry["bookstore_candidates"] = bookstore_candidates
+        self._result = (target, method, reason, entry)
 
         class Policy:
             def __init__(self, boundary):
@@ -5191,20 +5204,26 @@ class FakeClassifier:
         return self._result
 
 
+# 등급 판정 9(10)-케이스: candidates 추가가 target_category/grade를 바꾸지 않는지도
+# 이 목록을 그대로 재사용해서(test_propose_category_candidates_first_matches_target_when_decided)
+# 같이 검증한다. 두 값을 따로 유지하면 표류할 수 있어 리스트를 공유한다.
+PROPOSE_CATEGORY_GRADE_CASES = [
+    ({"3_SF": ["과학소설"]}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.9), "3_SF", "certain"),
+    ({"3_SF": ["과학소설"]}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.1), "3_SF", "unsure"),
+    ({"3_SF": ["과학소설"]}, FakeClassifier("5_음악", "model", "r", "5_음악", 0.9), "3_SF", "unsure"),
+    ({"3_SF": ["과학소설"], "5_음악": ["과학소설"]}, FakeClassifier(None, "not_found", "r", None, 0.1), None, "unknown"),
+    ({}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.9), "3_SF", "certain"),
+    ({}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.1), None, "unknown"),
+    ({}, FakeClassifier("3_SF", "bookstore_majority", "r", None, 0.1), "3_SF", "certain"),
+    ({}, FakeClassifier("3_SF", "bookstore_single", "r", None, 0.1), "3_SF", "unsure"),
+    ({}, FakeClassifier(None, "conflict", "r", "3_SF", 0.1), None, "unknown"),
+    ({}, FakeClassifier(None, "not_found", "r", None, 0.1), None, "unknown"),
+]
+
+
 @pytest.mark.parametrize(
     "mappings,fake,expected_target,expected_grade",
-    [
-        ({"3_SF": ["과학소설"]}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.9), "3_SF", "certain"),
-        ({"3_SF": ["과학소설"]}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.1), "3_SF", "unsure"),
-        ({"3_SF": ["과학소설"]}, FakeClassifier("5_음악", "model", "r", "5_음악", 0.9), "3_SF", "unsure"),
-        ({"3_SF": ["과학소설"], "5_음악": ["과학소설"]}, FakeClassifier(None, "not_found", "r", None, 0.1), None, "unknown"),
-        ({}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.9), "3_SF", "certain"),
-        ({}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.1), None, "unknown"),
-        ({}, FakeClassifier("3_SF", "bookstore_majority", "r", None, 0.1), "3_SF", "certain"),
-        ({}, FakeClassifier("3_SF", "bookstore_single", "r", None, 0.1), "3_SF", "unsure"),
-        ({}, FakeClassifier(None, "conflict", "r", "3_SF", 0.1), None, "unknown"),
-        ({}, FakeClassifier(None, "not_found", "r", None, 0.1), None, "unknown"),
-    ],
+    PROPOSE_CATEGORY_GRADE_CASES,
 )
 def test_propose_category_grades(tmp_path: Path, mappings, fake, expected_target, expected_grade):
     manager = make_manager(tmp_path, DummyES())
@@ -5217,6 +5236,116 @@ def test_propose_category_grades(tmp_path: Path, mappings, fake, expected_target
 
     assert proposal["target_category"] == expected_target
     assert proposal["grade"] == expected_grade
+
+
+@pytest.mark.parametrize(
+    "mappings,fake,expected_target,expected_grade",
+    PROPOSE_CATEGORY_GRADE_CASES,
+)
+def test_propose_category_candidates_first_matches_target_when_decided(tmp_path: Path, mappings, fake, expected_target, expected_grade):
+    """target_category가 None이 아닌 모든 등급에서 candidates[0]이 그 값과 같아야 한다.
+
+    후보를 더 보여주는 것이 등급 판정 결과(target_category)를 바꾸면 안 된다는
+    불변식을, 등급 판정 자체를 검증하는 목록을 그대로 재사용해서 확인한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "과학소설 모음.epub"
+    target.write_text("x")
+
+    proposal = manager._propose_category_for_file(target, "A", mappings, fake, True, True)
+
+    assert proposal["target_category"] == expected_target
+    if expected_target is not None:
+        assert proposal["candidates"]
+        assert proposal["candidates"][0]["category"] == expected_target
+
+
+def test_propose_category_candidates_keyword_top_with_runner_up(tmp_path: Path):
+    """키워드 단독 최고점이면 1위와 2위를 후보로 낸다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "과학소설 클래식 모음.epub"
+    target.write_text("x")
+    mappings = {"3_SF": ["과학소설"], "5_음악": ["클래식"]}
+    fake = FakeClassifier(None, "not_found", "r", None, None)
+
+    proposal = manager._propose_category_for_file(target, "A", mappings, fake, True, True)
+
+    assert proposal["target_category"] == "3_SF"
+    assert [c["category"] for c in proposal["candidates"]] == ["3_SF", "5_음악"]
+    assert proposal["candidates"][0]["category"] == proposal["target_category"]
+
+
+def test_propose_category_candidates_keyword_tie(tmp_path: Path):
+    """키워드가 동점으로 갈리면 후보 2개를 보여주되 target은 정하지 않는다.
+
+    체계가 못 정했다는 사실은 후보가 보여도 바뀌지 않는다 — 사람이 셀렉트박스로
+    골라야 체크박스가 켜진다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "SF음악.epub"
+    target.write_text("x")
+    mappings = {"3_SF": ["SF"], "5_음악": ["음악"]}
+    fake = FakeClassifier(None, "not_found", "r", None, None)
+
+    proposal = manager._propose_category_for_file(target, "A", mappings, fake, True, True)
+
+    assert proposal["target_category"] is None
+    assert proposal["grade"] == "unknown"
+    assert len(proposal["candidates"]) == 2
+    assert {c["category"] for c in proposal["candidates"]} == {"3_SF", "5_음악"}
+
+
+def test_propose_category_candidates_bookstore_conflict(tmp_path: Path):
+    """서점 판정이 갈리면 득표 상위 2개를 후보로 보여주되 target은 unknown으로 남긴다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "달빛조각사.epub"
+    target.write_text("x")
+    fake = FakeClassifier(None, "conflict", "r", None, None, bookstore_candidates=[("3_무협", 1), ("3_판타지", 1)])
+
+    proposal = manager._propose_category_for_file(target, "A", {}, fake, True, True)
+
+    assert proposal["target_category"] is None
+    assert proposal["grade"] == "unknown"
+    assert [c["category"] for c in proposal["candidates"]] == ["3_무협", "3_판타지"]
+
+
+def test_propose_category_candidates_model_only_has_length_one(tmp_path: Path):
+    """모델 단독 판정은 대안이 없으니 후보가 1개다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "book.epub"
+    target.write_text("x")
+    fake = FakeClassifier("3_SF", "model", "r", "3_SF", 0.9)
+
+    proposal = manager._propose_category_for_file(target, "A", {}, fake, True, True)
+
+    assert proposal["target_category"] == "3_SF"
+    assert len(proposal["candidates"]) == 1
+    assert proposal["candidates"][0]["category"] == "3_SF"
+
+
+def test_propose_category_candidates_capped_at_two_even_with_more_contenders(tmp_path: Path):
+    """경합이 3개 이상이어도 후보는 최대 2개만 보여준다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "과학 음악 역사.epub"
+    target.write_text("x")
+    mappings = {"3_SF": ["과학"], "5_음악": ["음악"], "7_역사": ["역사"]}
+    fake = FakeClassifier(None, "not_found", "r", None, None)
+
+    proposal = manager._propose_category_for_file(target, "A", mappings, fake, True, True)
+
+    assert len(proposal["candidates"]) <= 2
 
 
 def test_high_confidence_needs_a_calibrated_boundary(tmp_path: Path):

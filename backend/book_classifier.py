@@ -815,6 +815,11 @@ class BookClassifierService:
         한 서점이 후보를 여럿 낼 수 있다. DB 에서 한 키워드가 여러 카테고리에 붙는 것이
         정상이기 때문이다(`클래식` 은 `1_서양고전` 이자 `5_음악`). 그때는 후보를 모두 세고,
         다른 서점과 겹치는 카테고리가 이긴다. 겹치는 것이 없으면 판정하지 않는다.
+
+        갈리거나(conflict) 아예 못 찾았을 때도 득표를 entry["bookstore_candidates"]에
+        남긴다(Task A). 예전에는 여기서 버려서 화면에 빈 칸만 보였다. 반환 튜플 모양은
+        Task 1의 confidence와 같은 방식으로 건드리지 않는다 — 호출자가 이미 위치 인자로
+        언패킹하고 있어서 5번째 값을 추가하면 그쪽이 깨진다.
         """
         from collections import Counter
 
@@ -831,6 +836,8 @@ class BookClassifierService:
                 ambiguous += 1
             for cat in candidates:
                 votes[cat] += 1
+
+        entry["bookstore_candidates"] = [(category, count) for category, count in votes.most_common(2)]
 
         if not votes:
             return None, "not_found", "서점에서 못 찾음"

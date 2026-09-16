@@ -616,6 +616,30 @@ def test_decide_ignores_bookstore_hits_whose_title_does_not_match(tmp_path):
     assert method == "not_found"
 
 
+def test_decide_by_bookstore_records_top_two_votes_on_conflict(tmp_path):
+    """갈리면(target=None) 버리던 득표를 entry에 남겨야 화면이 후보 2개를 보여줄 수 있다."""
+    service = _service(tmp_path, RefusingClassifier())
+    entry = _entry(yes24={"mapped": "3_무협", "title": "달빛조각사"}, aladin={"mapped": "3_판타지", "title": "달빛조각사"})
+
+    cat, method, _ = service._decide_by_bookstore(entry)
+
+    assert cat is None
+    assert method == "conflict"
+    assert entry["bookstore_candidates"] == [("3_무협", 1), ("3_판타지", 1)]
+
+
+def test_decide_by_bookstore_records_empty_candidates_when_not_found(tmp_path):
+    """득표가 아예 없어도 키는 있어야 호출자가 .get() 없이 읽다가 깨지지 않는다."""
+    service = _service(tmp_path, RefusingClassifier())
+    entry = _entry()
+
+    cat, method, _ = service._decide_by_bookstore(entry)
+
+    assert cat is None
+    assert method == "not_found"
+    assert entry["bookstore_candidates"] == []
+
+
 def test_decide_survives_a_model_that_raises(tmp_path):
     class BrokenClassifier:
         def __bool__(self):
