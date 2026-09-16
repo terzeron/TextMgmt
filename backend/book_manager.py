@@ -1488,36 +1488,58 @@ class BookManager:
         안전한 이름인지 둘 다 다시 검증한다. 하나만 검사하면 임의 경로 이동을 막지 못한다.
         """
         result: dict[str, Any] = {"content_type": content_type, "total_count": len(items), "applied_count": 0, "failed_count": 0, "results": []}
+        root = self.path_prefix.resolve(strict=False)
 
         for item in items:
             file_path_value = item.get("file_path")
             target_category = item.get("target_category")
             entry: dict[str, Any] = {"file_path": file_path_value, "target_category": target_category, "apply_status": "failed", "apply_error": None}
 
-            if not isinstance(file_path_value, str) or file_path_value not in allowed_file_paths:
-                entry["apply_error"] = "제안 목록에 없는 파일입니다"
-            elif not isinstance(target_category, str) or not self._is_top_level_target_category(target_category) or not self._is_safe_category_name(target_category):
-                entry["apply_error"] = "옮길 수 없는 카테고리입니다"
-            else:
-                absolute_path = self.path_prefix / file_path_value
-                if not absolute_path.is_file():
-                    entry["apply_error"] = "파일을 찾을 수 없습니다"
+            try:
+                if not isinstance(file_path_value, str) or file_path_value not in allowed_file_paths:
+                    entry["apply_error"] = "제안 목록에 없는 파일입니다"
+                elif not isinstance(target_category, str) or not self._is_top_level_target_category(target_category) or not self._is_safe_category_name(target_category):
+                    entry["apply_error"] = "옮길 수 없는 카테고리입니다"
                 else:
-                    # 제안 시점의 카테고리를 그대로 source_category로 써서 빈 디렉토리 정리 대상을 맞춘다.
-                    source_category = file_path_value.rsplit("/", 1)[0] if "/" in file_path_value else "_root"
-                    file_result, error = await self._move_classified_file(
-                        absolute_path,
-                        target_category,
-                        item.get("matched_keywords") or [],
-                        content_type=content_type,
-                        dry_run=False,
-                        clean_existing=clean_existing,
-                        source_category=source_category,
-                    )
-                    if error is not None or file_result is None:
-                        entry["apply_error"] = error or "분류 적용에 실패했습니다"
+                    absolute_path = self.path_prefix / file_path_value
+                    # 제안을 만든 뒤 승인 전까지 시간차가 있어, 그 사이 경로가 corpus 밖을
+                    # 가리키는 심볼릭 링크로 바뀔 수 있다. is_file()은 링크를 따라가 True를
+                    # 주므로 링크 여부와 실제 위치를 목적지처럼 다시 확인해야 한다. 그러지
+                    # 않으면 옮기는 건 링크뿐이지만 재색인은 링크가 가리키는 파일을 읽어
+                    # corpus 밖 파일이 ES에 들어간다.
+                    if absolute_path.is_symlink():
+                        entry["apply_error"] = "심볼릭 링크는 옮길 수 없습니다"
+                    elif not absolute_path.is_file():
+                        entry["apply_error"] = "파일을 찾을 수 없습니다"
                     else:
-                        entry["apply_status"] = "moved"
+                        try:
+                            is_inside_root = absolute_path.resolve(strict=False).is_relative_to(root)
+                        except OSError:
+                            is_inside_root = False
+                        if not is_inside_root:
+                            entry["apply_error"] = "파일 경로가 corpus 밖입니다"
+                        else:
+                            # 제안 시점의 카테고리를 그대로 source_category로 써서 빈 디렉토리 정리 대상을 맞춘다.
+                            source_category = file_path_value.rsplit("/", 1)[0] if "/" in file_path_value else "_root"
+                            file_result, error = await self._move_classified_file(
+                                absolute_path,
+                                target_category,
+                                item.get("matched_keywords") or [],
+                                content_type=content_type,
+                                dry_run=False,
+                                clean_existing=clean_existing,
+                                source_category=source_category,
+                            )
+                            if error is not None or file_result is None:
+                                entry["apply_error"] = error or "분류 적용에 실패했습니다"
+                            else:
+                                entry["apply_status"] = "moved"
+            except Exception as e:
+                # 한 항목의 뜻밖의 오류(OSError 등)로 나머지 항목까지 못 옮기면 절반만
+                # 적용된 채로 끝나 상태가 애매해진다. propose_category_changes와 같은
+                # 방식으로 항목 단위 실패로 남기고 배치는 계속 진행한다.
+                LOGGER.error("분류 적용 실패: %s — %s", file_path_value, e)
+                entry["apply_error"] = "분류 적용 중 오류가 발생했습니다"
 
             if entry["apply_status"] == "moved":
                 result["applied_count"] += 1

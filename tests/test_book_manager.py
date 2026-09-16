@@ -5501,3 +5501,84 @@ def test_apply_category_changes_records_missing_file(tmp_path: Path):
 
     assert result["failed_count"] == 1
     assert "파일" in result["results"][0]["apply_error"]
+
+
+def test_apply_category_changes_rejects_top_level_but_unsafe_target(tmp_path: Path):
+    """".."는 슬래시가 없어 최상위 검사는 통과하지만 안전한 이름 검사에서 걸러야 한다.
+
+    기존 "../밖" 케이스는 슬래시가 있어 _is_top_level_target_category에서 이미
+    걸러지므로 _is_safe_category_name이 실제로 호출되는지 증명하지 못한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "book.epub").write_text("x")
+    allowed = {"A/book.epub"}
+
+    result, _error = asyncio_runner(
+        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": ".."}], allowed_file_paths=allowed)
+    )
+
+    assert result["applied_count"] == 0
+    assert "카테고리" in result["results"][0]["apply_error"]
+
+
+def test_apply_category_changes_rejects_symlinked_source(tmp_path: Path):
+    """제안 시점 이후 파일이 심볼릭 링크로 바뀌면 corpus 밖 파일 유출을 막는다.
+
+    allowed_file_paths에 있던 경로라도 실제 파일이 corpus 밖을 가리키는 링크로
+    치환됐을 수 있다. is_file()은 링크를 따라가 True를 주므로 별도로 걸러야 한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    outside = tmp_path.parent / "outside_secret.epub"
+    outside.write_text("secret")
+    link_path = tmp_path / "A" / "book.epub"
+    link_path.symlink_to(outside)
+    allowed = {"A/book.epub"}
+
+    result, _error = asyncio_runner(
+        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "3_SF"}], allowed_file_paths=allowed)
+    )
+
+    assert result["applied_count"] == 0
+    assert "링크" in result["results"][0]["apply_error"]
+    assert outside.is_file()
+    assert outside.read_text() == "secret"
+
+
+def test_apply_category_changes_continues_after_one_item_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """한 항목 처리 중 예외가 나도 배치 전체가 죽지 않고 나머지를 계속 처리한다."""
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "boom.epub").write_text("x")
+    (tmp_path / "A" / "ok.epub").write_text("x")
+    allowed = {"A/boom.epub", "A/ok.epub"}
+
+    original_is_safe = manager._is_safe_category_name
+    calls = {"count": 0}
+
+    def flaky_is_safe(category: str) -> bool:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OSError("예상치 못한 파일시스템 오류")
+        return original_is_safe(category)
+
+    monkeypatch.setattr(manager, "_is_safe_category_name", flaky_is_safe)
+
+    result, _error = asyncio_runner(
+        manager.apply_category_changes(
+            [
+                {"file_path": "A/boom.epub", "target_category": "5_음악"},
+                {"file_path": "A/ok.epub", "target_category": "5_음악"},
+            ],
+            allowed_file_paths=allowed,
+        )
+    )
+
+    assert result["total_count"] == 2
+    assert len(result["results"]) == 2
+    assert result["results"][0]["apply_status"] == "failed"
+    assert result["results"][1]["apply_status"] == "moved"
+    assert result["applied_count"] == 1
+    assert result["failed_count"] == 1
