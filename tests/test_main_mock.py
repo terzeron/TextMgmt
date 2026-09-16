@@ -262,75 +262,25 @@ class TestPdfPages:
 
 
 class TestCategoryMismatchAdmin:
-    def test_auto_classify_success(self, client, mock_bm, mock_cat):
-        mappings = {"2_science": ["과학"]}
-        result = {"source_category": "0_inbox", "moved_count": 1, "skipped_count": 0, "failed_count": 0}
+    def test_classify_proposal_comics_prefix_uses_comic_mapping(self, client, mock_cm, mock_cat, tmp_path):
+        """/comics 접두사로 마운트된 라우터도 같은 제안 엔드포인트를 쓰는지 본다."""
+        mappings = {"2_science": ["SF"]}
+        result = {"source_category": "0_inbox", "total_count": 1, "processed_count": 1, "items": [], "failures": []}
+        mock_cm.path_prefix = tmp_path
         mock_cat.get_all_mappings.return_value = mappings
-        mock_bm.auto_classify_category.return_value = (result, None)
+        mock_cm.propose_category_changes.return_value = (result, None)
 
-        r = client.post("/categories/auto-classify", json={"category": "0_inbox", "recursive": True})
+        r = client.post("/comics/categories/classify-proposal", json={"category": "0_inbox"})
 
         assert r.status_code == 200
-        assert r.json() == {"status": "success", "result": result}
-        mock_cat.get_all_mappings.assert_called_once_with(content_type="book")
-        mock_bm.auto_classify_category.assert_awaited_once_with(
-            "0_inbox",
-            mappings,
-            content_type="book",
-            recursive=True,
-            dry_run=False,
-        )
-
-    def test_auto_classify_async_mode_starts_background_job_and_exposes_status(self, client, mock_bm, mock_cat, tmp_path):
-        mappings = {"2_science": ["과학"]}
-        result = {
-            "source_category": "0_inbox",
-            "total_count": 3,
-            "processed_count": 3,
-            "remaining_count": 0,
-            "moved_count": 2,
-            "skipped_count": 1,
-            "failed_count": 0,
-        }
-        mock_bm.path_prefix = tmp_path
-        mock_cat.get_all_mappings.return_value = mappings
-
-        async def fake_auto_classify(*args, on_progress=None, **kwargs):
-            if on_progress:
-                on_progress(
-                    {
-                        "total_count": 3,
-                        "processed_count": 1,
-                        "remaining_count": 2,
-                    }
-                )
-            return result, None
-
-        mock_bm.auto_classify_category.side_effect = fake_auto_classify
-
-        r = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
-
-        assert r.status_code == 200
-        assert r.json()["status"] == "success"
         assert r.json()["result"]["started"] is True
-        status = client.get("/categories/auto-classify-status")
-        assert status.status_code == 200
-        assert status.json()["result"]["status"] == "done"
-        assert status.json()["result"]["remaining_count"] == 0
-        assert status.json()["result"]["moved_count"] == 2
-        status_file = tmp_path / ".classify_proposal_book.json"
-        assert status_file.exists()
-        shared_status = json.loads(status_file.read_text(encoding="utf-8"))
-        assert shared_status["status"] == "done"
-        assert shared_status["moved_count"] == 2
-        mock_bm.auto_classify_category.assert_awaited_once()
-        _, kwargs = mock_bm.auto_classify_category.await_args
-        assert kwargs["content_type"] == "book"
-        assert kwargs["recursive"] is False
-        assert kwargs["dry_run"] is False
-        assert callable(kwargs["on_progress"])
+        mock_cat.get_all_mappings.assert_called_once_with(content_type="comic")
+        mock_cm.propose_category_changes.assert_awaited_once()
+        _, kwargs = mock_cm.propose_category_changes.await_args
+        assert kwargs["content_type"] == "comic"
 
-    def test_auto_classify_status_reads_shared_status_file(self, client, mock_bm, tmp_path):
+    def test_classify_proposal_get_reads_shared_status_file(self, client, mock_bm, tmp_path):
+        """폴링용 GET이 상태 파일 내용을 그대로 돌려준다."""
         mock_bm.path_prefix = tmp_path
         status_file = tmp_path / ".classify_proposal_book.json"
         # updated_at 은 살아있다는 신호다. 없으면 죽은 작업으로 보고 failed 로 굳힌다.
@@ -341,79 +291,34 @@ class TestCategoryMismatchAdmin:
                     "source_category": "shared_file",
                     "total_count": 9,
                     "processed_count": 4,
-                    "remaining_count": 5,
                     "updated_at": time.time(),
                 }
             ),
             encoding="utf-8",
         )
 
-        status = client.get("/categories/auto-classify-status")
+        status = client.get("/categories/classify-proposal")
 
         assert status.status_code == 200
         assert status.json()["result"]["status"] == "running"
         assert status.json()["result"]["source_category"] == "shared_file"
-        assert status.json()["result"]["remaining_count"] == 5
+        assert status.json()["result"]["processed_count"] == 4
 
-    def test_auto_classify_failure(self, client, mock_bm, mock_cat):
-        mock_cat.get_all_mappings.return_value = {"2_science": ["과학"]}
-        mock_bm.auto_classify_category.return_value = ({}, "잘못된 카테고리 경로입니다")
+    def test_classify_proposal_passes_delay_option(self, client, mock_bm, mock_cat, tmp_path):
+        mock_bm.path_prefix = tmp_path
+        # 상태 파일이 없으면 프로세스 내 메모리 폴백을 쓰는데, 이 폴백은 라우터가 앱과 함께
+        # 한 번만 만들어져 다른 테스트가 남긴 running 상태를 물려받을 수 있다.
+        (tmp_path / ".classify_proposal_book.json").write_text(json.dumps({"status": "idle"}), encoding="utf-8")
+        mock_cat.get_all_mappings.return_value = {}
+        mock_bm.propose_category_changes.return_value = ({"source_category": "0_inbox", "total_count": 0, "processed_count": 0, "items": [], "failures": []}, None)
 
-        r = client.post("/categories/auto-classify", json={"category": "../bad"})
-
-        assert r.status_code == 200
-        assert r.json()["status"] == "failure"
-        assert r.json()["error"] == "잘못된 카테고리 경로입니다"
-
-    def test_auto_classify_comics_prefix_uses_comic_mapping(self, client, mock_cm, mock_cat):
-        mappings = {"2_science": ["SF"]}
-        result = {"source_category": "0_inbox", "moved_count": 2, "skipped_count": 0, "failed_count": 0}
-        mock_cat.get_all_mappings.return_value = mappings
-        mock_cm.auto_classify_category.return_value = (result, None)
-
-        r = client.post("/comics/categories/auto-classify", json={"category": "0_inbox"})
+        r = client.post("/categories/classify-proposal", json={"category": "0_inbox", "use_bookstore": False, "use_content_meta": True, "delay": 2.0})
 
         assert r.status_code == 200
-        assert r.json() == {"status": "success", "result": result}
-        mock_cat.get_all_mappings.assert_called_once_with(content_type="comic")
-        mock_cm.auto_classify_category.assert_awaited_once_with(
-            "0_inbox",
-            mappings,
-            content_type="comic",
-            recursive=False,
-            dry_run=False,
-        )
-
-    def test_auto_classify_with_deterministic_options(self, client, mock_bm, mock_cat):
-        mappings = {"1_general": ["상식"]}
-        result = {"source_category": "0_inbox", "moved_count": 1, "skipped_count": 0, "failed_count": 0}
-        mock_cat.get_all_mappings.return_value = mappings
-        mock_bm.auto_classify_category.return_value = (result, None)
-
-        r = client.post(
-            "/categories/auto-classify",
-            json={
-                "category": "0_inbox",
-                "clean_existing": True,
-                "use_bookstore": False,
-                "use_content_meta": True,
-                "delay": 2.0,
-            },
-        )
-
-        assert r.status_code == 200
-        assert r.json() == {"status": "success", "result": result}
-        mock_bm.auto_classify_category.assert_awaited_once_with(
-            "0_inbox",
-            mappings,
-            content_type="book",
-            recursive=False,
-            dry_run=False,
-            clean_existing=True,
-            use_bookstore=False,
-            use_content_meta=True,
-            delay=2.0,
-        )
+        _, kwargs = mock_bm.propose_category_changes.await_args
+        assert kwargs["use_bookstore"] is False
+        assert kwargs["use_content_meta"] is True
+        assert kwargs["delay"] == 2.0
 
     def test_classify_proposal_success_polling(self, client, mock_bm, mock_cat, tmp_path):
         """제안 시작은 202류 응답 대신 started 플래그를 주고, GET으로 완료 상태를 본다."""
@@ -1098,45 +1003,49 @@ def test_search_similar_books_filters_hidden_categories_for_viewer(client, mock_
 # ── Additional edge case tests to reach 100% coverage on backend/main.py ──
 
 
-def test_auto_classify_status_path_error(client, mock_bm):
-    # 413-414: TypeError when path_prefix is invalid type
+def test_classify_proposal_status_path_error(client, mock_bm):
+    # path_prefix가 이상한 타입이면 상태 파일 경로를 못 만든다. 그래도 폴링은 죽지 않는다.
     mock_bm.path_prefix = 12345
-    r = client.get("/categories/auto-classify-status")
+    r = client.get("/categories/classify-proposal")
     assert r.status_code == 200
     assert "status" in r.json()["result"]
 
 
-def test_auto_classify_status_read_corrupt_json(client, mock_bm, tmp_path):
-    # 423-425: corrupted JSON
+def test_classify_proposal_status_read_corrupt_json(client, mock_bm, tmp_path):
     mock_bm.path_prefix = tmp_path
     status_file = tmp_path / ".classify_proposal_book.json"
     status_file.write_text("{corrupt json", encoding="utf-8")
-    r = client.get("/categories/auto-classify-status")
+    r = client.get("/categories/classify-proposal")
     assert r.status_code == 200
     assert "status" in r.json()["result"]
 
 
-def test_auto_classify_status_read_non_dict_json(client, mock_bm, tmp_path):
-    # 427: non-dict JSON
+def test_classify_proposal_status_read_non_dict_json(client, mock_bm, tmp_path):
     mock_bm.path_prefix = tmp_path
     status_file = tmp_path / ".classify_proposal_book.json"
     status_file.write_text("[1, 2, 3]", encoding="utf-8")
-    r = client.get("/categories/auto-classify-status")
+    r = client.get("/categories/classify-proposal")
     assert r.status_code == 200
     assert "status" in r.json()["result"]
 
 
-def test_auto_classify_replace_status_parent_not_exists(client, mock_bm, tmp_path):
-    # 438: status_path.parent does not exist
+def test_classify_proposal_replace_status_parent_not_exists(client, mock_bm, tmp_path):
+    # 다른 테스트가 남긴 프로세스 내 메모리 상태(running/applying)를 물려받지 않도록,
+    # 실제 파일이 있는 경로에서 한 번 idle로 지운 뒤에 없는 폴더로 바꾼다.
+    mock_bm.path_prefix = tmp_path
+    client.delete("/categories/classify-proposal")
     mock_bm.path_prefix = tmp_path / "non_existent_folder"
-    r = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
+
+    r = client.post("/categories/classify-proposal", json={"category": "0_inbox"})
+
     assert r.status_code == 200
     assert r.json()["status"] == "success"
+    assert r.json()["result"]["started"] is True
 
 
-def test_auto_classify_replace_status_write_error(client, mock_bm, tmp_path, monkeypatch):
-    # 444-449: error during write to status file
+def test_classify_proposal_replace_status_write_error(client, mock_bm, tmp_path, monkeypatch):
     mock_bm.path_prefix = tmp_path
+    client.delete("/categories/classify-proposal")
     orig_open = Path.open
 
     def mock_open(self, mode="r", *args, **kwargs):
@@ -1145,100 +1054,10 @@ def test_auto_classify_replace_status_write_error(client, mock_bm, tmp_path, mon
         return orig_open(self, mode, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", mock_open)
-    r = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
+    r = client.post("/categories/classify-proposal", json={"category": "0_inbox"})
     assert r.status_code == 200
     assert r.json()["status"] == "success"
-
-
-def test_remaining_auto_classify_count_fallback(client, mock_bm, mock_cat, tmp_path):
-    # 455-459: on_progress callback with total_count/processed_count and no remaining_count
-    mock_bm.path_prefix = tmp_path
-    mock_cat.get_all_mappings.return_value = {}
-
-    async def fake_classify_1(*args, on_progress=None, **kwargs):
-        if on_progress:
-            on_progress({"total_count": 10, "processed_count": 3})
-        return {"source_category": "0_inbox", "moved_count": 0, "skipped_count": 0, "failed_count": 0}, None
-
-    mock_bm.auto_classify_category.side_effect = fake_classify_1
-    r1 = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
-    assert r1.status_code == 200
-
-    async def fake_classify_2(*args, on_progress=None, **kwargs):
-        if on_progress:
-            on_progress({"total_count": "invalid"})
-        return {"source_category": "0_inbox", "moved_count": 0, "skipped_count": 0, "failed_count": 0}, None
-
-    mock_bm.auto_classify_category.side_effect = fake_classify_2
-    r2 = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
-    assert r2.status_code == 200
-
-
-def test_auto_classify_job_and_pydantic_branches(mock_bm, mock_cat, tmp_path):
-    from fastapi import BackgroundTasks
-    import asyncio
-
-    mock_bm.path_prefix = tmp_path
-    router = main_module.create_item_router(mock_bm, content_type="book")
-    endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/auto-classify")
-    freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
-    _run_job = freevars["_run_auto_classify_job"]
-
-    # 1. 490, 492, 494, 496, 501-504: clean_existing, use_bookstore=False, use_content_meta=False, delay != 1.2, exception
-    mock_cat.get_all_mappings.return_value = {}
-    mock_bm.auto_classify_category.side_effect = RuntimeError("async crashed")
-    asyncio.run(_run_job("0_inbox", recursive=False, dry_run=False, clean_existing=True, use_bookstore=False, use_content_meta=False, delay=0.5))
-
-    # 2. 512-513: error is not None
-    mock_bm.auto_classify_category.side_effect = None
-    mock_bm.auto_classify_category.return_value = ({}, "something failed in classify")
-    asyncio.run(_run_job("0_inbox", recursive=False, dry_run=False))
-
-    # 3. 717: model_fields_set is None -> fallback to __fields_set__
-    #    730-733: sync auto_classify_category exception
-    mock_bm.auto_classify_category.side_effect = RuntimeError("sync error")
-
-    job_freevars = dict(zip(_run_job.__code__.co_freevars, [c.cell_contents for c in _run_job.__closure__]))
-
-    # 4. 455-459: _remaining_auto_classify_count fallback calculations
-    _remaining_count = job_freevars["_remaining_auto_classify_count"]
-    assert _remaining_count({"total_count": 10, "processed_count": 3}) == 7
-    assert _remaining_count({"total_count": "invalid"}) == 0
-
-    # 5. 438: status_path.parent does not exist
-    _replace_status = job_freevars["_replace_classify_proposal"]
-    mock_bm.path_prefix = tmp_path / "non_existent_subdir"
-    _replace_status({"status": "test"})
-
-    # 6. 444-449: status_path write error and unlink
-    mock_bm.path_prefix = tmp_path
-    orig_open = Path.open
-    def mock_open_err(self, mode="r", *args, **kwargs):
-        if "w" in mode and "classify_proposal" in str(self):
-            raise OSError("disk write error")
-        return orig_open(self, mode, *args, **kwargs)
-
-    try:
-        Path.open = mock_open_err
-        _replace_status({"status": "test_err"})
-    finally:
-        Path.open = orig_open
-
-    class FakeBody:
-        model_fields_set = None
-        __fields_set__ = {"clean_existing", "use_bookstore", "use_content_meta", "delay"}
-        category = "0_inbox"
-        async_mode = False
-        recursive = False
-        dry_run = False
-        clean_existing = True
-        use_bookstore = True
-        use_content_meta = True
-        delay = 1.0
-
-    res = asyncio.run(endpoint(body=FakeBody(), background_tasks=BackgroundTasks()))
-    assert res["status"] == "failure"
-    assert res["error"] == "자동 분류에 실패했습니다."
+    assert r.json()["result"]["started"] is True
 
 
 def test_get_latest_books_error(client, mock_bm, mock_cat):
@@ -1249,19 +1068,6 @@ def test_get_latest_books_error(client, mock_bm, mock_cat):
     assert r.status_code == 200
     assert r.json()["status"] == "failure"
     assert r.json()["error"] == "failed to get latest"
-
-
-def test_auto_classify_already_running(client, mock_bm, tmp_path):
-    # 705-707: already running
-    mock_bm.path_prefix = tmp_path
-    status_file = tmp_path / ".classify_proposal_book.json"
-    status_file.write_text(json.dumps({"status": "running", "source_category": "0_inbox", "updated_at": time.time()}), encoding="utf-8")
-
-    r = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
-    assert r.status_code == 200
-    assert r.json()["status"] == "success"
-    assert r.json()["result"]["already_running"] is True
-
 
 
 def test_reload_progress_flush_exception(client, mock_bm, mock_cat, monkeypatch):
@@ -1305,7 +1111,7 @@ def test_reload_locks_already_running(client, mock_cat):
 
 
 
-def test_auto_classify_restarts_when_the_previous_run_died(client, mock_bm, tmp_path):
+def test_classify_proposal_restarts_when_the_previous_run_died(client, mock_bm, tmp_path):
     """재배포로 죽은 작업은 새 실행을 막지 않아야 한다.
 
     상태 파일이 running 인 채로 굳으면 버튼을 눌러도 already_running 만 돌아와
@@ -1315,7 +1121,7 @@ def test_auto_classify_restarts_when_the_previous_run_died(client, mock_bm, tmp_
     status_file = tmp_path / ".classify_proposal_book.json"
     status_file.write_text(json.dumps({"status": "running", "source_category": "0_inbox", "updated_at": time.time() - 3600}), encoding="utf-8")
 
-    r = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
+    r = client.post("/categories/classify-proposal", json={"category": "0_inbox"})
 
     assert r.status_code == 200
     assert r.json()["result"].get("already_running") is None

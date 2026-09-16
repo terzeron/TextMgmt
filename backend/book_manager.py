@@ -1551,35 +1551,6 @@ class BookManager:
 
         return result, None
 
-    def _classify_file_to_top_category(
-        self,
-        file_path: Path,
-        source_category: str,
-        mappings: dict[str, list[str]],
-        classifier_service: BookClassifierService | None = None,
-        use_bookstore: bool = True,
-        use_content_meta: bool = True,
-    ) -> tuple[str | None, list[str], str | None]:
-        # 키워드 매칭은 _match_category_by_keywords로 위임한다: Task 5에서
-        # 이 함수가 통째로 사라질 때까지 기존 동작을 그대로 유지하기 위함.
-        matched_category, matched_keywords, tie_reason = self._match_category_by_keywords(file_path, source_category, mappings)
-        if matched_category is not None or tie_reason is not None:
-            return matched_category, matched_keywords, tie_reason
-
-        if classifier_service is not None:
-            source_dir = self._category_dir(source_category)
-            target_cat, method, reason, _ = classifier_service.classify_file(
-                file_path,
-                source_dir,
-                use_bookstore=use_bookstore,
-                use_content_meta=use_content_meta,
-            )
-            if target_cat and target_cat != source_category:
-                return target_cat, [f"deterministic:{method}"], None
-            return None, [], reason
-
-        return None, [], "매칭되는 키워드가 없습니다"
-
     def _iter_category_indexable_files(self, category: str, recursive: bool = False) -> list[Path]:
         category_dir = self._category_dir(category)
         iterator = category_dir.rglob("*") if recursive else category_dir.iterdir()
@@ -1722,7 +1693,7 @@ class BookManager:
             old_book_id = file_path.stat().st_ino
             old_doc = self.es_manager.search_by_id(old_book_id) or None
         except Exception as e:
-            LOGGER.warning("auto_classify_category: 기존 ES 문서 조회 실패 (%s): %s", old_rel_path, e)
+            LOGGER.warning("_move_classified_file: 기존 ES 문서 조회 실패 (%s): %s", old_rel_path, e)
 
         old_parent = file_path.parent
         try:
@@ -1786,151 +1757,6 @@ class BookManager:
             if rollback_messages:
                 message = f"{message}; {'; '.join(rollback_messages)}"
             return None, message
-
-    async def auto_classify_category(
-        self,
-        category: str,
-        mappings: dict[str, list[str]] | None = None,
-        content_type: str = "book",
-        recursive: bool = False,
-        dry_run: bool = False,
-        clean_existing: bool = False,
-        use_bookstore: bool = True,
-        use_content_meta: bool = True,
-        delay: float = 1.2,
-        on_progress: Callable[[dict[str, int]], None] | None = None,
-    ) -> tuple[dict[str, Any], str | None]:
-        """선택 카테고리의 파일을 키워드 매핑 및 결정론적 분류(서점 다수결/메타데이터)로 최상위 카테고리에 이동하고 ES를 교체한다."""
-        LOGGER.info(
-            "auto_classify_category 시작: category='%s', content_type='%s', recursive=%s, dry_run=%s, clean_existing=%s, use_bookstore=%s, use_content_meta=%s",
-            category,
-            content_type,
-            recursive,
-            dry_run,
-            clean_existing,
-            use_bookstore,
-            use_content_meta,
-        )
-
-        if not category:
-            return {}, "카테고리 이름이 비어있습니다"
-        if not self._is_safe_category_name(category):
-            return {}, "잘못된 카테고리 경로입니다"
-
-        source_dir = self._category_dir(category)
-        if not source_dir.is_dir():
-            return {}, f"디렉토리를 찾을 수 없습니다: {category}"
-
-        mappings = mappings or {}
-        classifier_service: BookClassifierService | None = None
-        if use_bookstore or use_content_meta:
-            classifier_service = BookClassifierService(library_root=self.path_prefix, delay=delay, es_manager=self.es_manager)
-
-        result: dict[str, Any] = {
-            "content_type": content_type,
-            "source_category": category,
-            "recursive": recursive,
-            "dry_run": dry_run,
-            "total_count": 0,
-            "remaining_count": 0,
-            "processed_count": 0,
-            "moved_count": 0,
-            "dry_run_count": 0,
-            "duplicate_cleaned_count": 0,
-            "indexed_count": 0,
-            "deleted_count": 0,
-            "skipped_count": 0,
-            "failed_count": 0,
-            "files": [],
-            "skipped": [],
-            "failures": [],
-        }
-
-        def emit_progress() -> None:
-            result["skipped_count"] = len(result["skipped"])
-            result["failed_count"] = len(result["failures"])
-            result["remaining_count"] = max(0, result["total_count"] - result["processed_count"])
-            if on_progress is not None:
-                on_progress(
-                    {
-                        "total_count": result["total_count"],
-                        "remaining_count": result["remaining_count"],
-                        "processed_count": result["processed_count"],
-                        "moved_count": result["moved_count"],
-                        "skipped_count": result["skipped_count"],
-                        "failed_count": result["failed_count"],
-                    }
-                )
-
-        file_paths = list(self._iter_category_indexable_files(category, recursive=recursive))
-        result["total_count"] = len(file_paths)
-        result["remaining_count"] = result["total_count"]
-        emit_progress()
-
-        for file_path in file_paths:
-            result["processed_count"] += 1
-            try:
-                rel_path = str(file_path.relative_to(self.path_prefix))
-            except ValueError:
-                result["failures"].append({"file_path": str(file_path), "error": "잘못된 파일 경로입니다"})
-                emit_progress()
-                continue
-
-            target_category, matched_keywords, reason = self._classify_file_to_top_category(
-                file_path,
-                category,
-                mappings,
-                classifier_service=classifier_service,
-                use_bookstore=use_bookstore,
-                use_content_meta=use_content_meta,
-            )
-            if target_category is None:
-                result["skipped"].append({"file_path": rel_path, "reason": reason or "분류 대상 카테고리를 찾을 수 없습니다", "matched_keywords": matched_keywords})
-                emit_progress()
-                continue
-
-            file_result, error = await self._move_classified_file(
-                file_path,
-                target_category,
-                matched_keywords,
-                content_type=content_type,
-                dry_run=dry_run,
-                clean_existing=clean_existing,
-                source_category=category,
-            )
-            if error is not None or file_result is None:
-                result["failures"].append({"file_path": rel_path, "target_category": target_category, "error": error or "자동 분류 실패", "matched_keywords": matched_keywords})
-                emit_progress()
-                continue
-
-            result["files"].append(file_result)
-            result["deleted_count"] += int(file_result.get("deleted_count") or 0)
-            if dry_run:
-                result["dry_run_count"] += 1
-            elif file_result.get("status") == "duplicate_cleaned":
-                result["duplicate_cleaned_count"] += 1
-            else:
-                result["moved_count"] += 1
-                result["indexed_count"] += 1
-            emit_progress()
-
-        result["skipped_count"] = len(result["skipped"])
-        result["failed_count"] = len(result["failures"])
-        result["remaining_count"] = max(0, result["total_count"] - result["processed_count"])
-        if result["moved_count"] or result["duplicate_cleaned_count"] or result["failed_count"]:
-            self._clear_mismatch_cache()
-
-        LOGGER.info(
-            "auto_classify_category 완료: content_type='%s', category='%s', processed=%d, moved=%d, duplicate_cleaned=%d, skipped=%d, failed=%d",
-            content_type,
-            category,
-            result["processed_count"],
-            result["moved_count"],
-            result["duplicate_cleaned_count"],
-            result["skipped_count"],
-            result["failed_count"],
-        )
-        return result, None
 
     @staticmethod
     def _mismatch_item_count(mismatch_data: dict[str, Any]) -> int:

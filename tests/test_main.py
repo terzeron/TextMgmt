@@ -2250,7 +2250,7 @@ def test_stale_running_status_lets_the_button_work_again(backend_test_setup):
     status_path.write_text(json.dumps(stuck), encoding="utf-8")
 
     try:
-        result = client.get("/categories/auto-classify-status").json()
+        result = client.get("/categories/classify-proposal").json()
         assert result["result"]["status"] == "failed"
         # 파일도 함께 굳어야 다음 POST 가 already_running 으로 막히지 않는다
         assert json.loads(status_path.read_text(encoding="utf-8"))["status"] == "failed"

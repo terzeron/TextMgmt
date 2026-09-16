@@ -411,17 +411,6 @@ class ReloadAllMismatchesModel(BaseModel):
     reload_source: Literal["bulk", "mismatch"] = "bulk"
 
 
-class CategoryAutoClassifyModel(BaseModel):
-    category: str
-    recursive: bool = False
-    dry_run: bool = False
-    async_mode: bool = False
-    clean_existing: bool = False
-    use_bookstore: bool = True
-    use_content_meta: bool = True
-    delay: float = 1.2
-
-
 class ClassifyProposalModel(BaseModel):
     category: str
     use_bookstore: bool = True
@@ -444,7 +433,6 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     admin_dep = [Depends(require_admin)]
     router = APIRouter()
     # 상태 파일 하나를 제안(propose)과 승인 적용(apply) 두 단계가 함께 쓴다.
-    # 이름은 classify_proposal 이지만 읽기/쓰기/하트비트 기계는 예전 auto_classify와 동일하다.
     classify_proposal_state: dict[str, Any] = {"status": "idle", "remaining_count": 0}
 
     # 갱신이 이만큼 끊기면 죽은 작업으로 본다. category_mapping 의
@@ -503,83 +491,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             except OSError:
                 pass
 
-    def _remaining_auto_classify_count(status: dict[str, Any]) -> int:
-        remaining = status.get("remaining_count")
-        if isinstance(remaining, int):
-            return max(0, remaining)
-        total = status.get("total_count")
-        processed = status.get("processed_count")
-        if isinstance(total, int):
-            return max(0, total - int(processed or 0))
-        return 0
-
-    def _start_auto_classify_status(category: str, recursive: bool, dry_run: bool, clean_existing: bool = False, use_bookstore: bool = True, use_content_meta: bool = True) -> None:
-        _replace_classify_proposal(
-            {
-                "status": "running",
-                "content_type": content_type,
-                "source_category": category,
-                "recursive": recursive,
-                "dry_run": dry_run,
-                "clean_existing": clean_existing,
-                "use_bookstore": use_bookstore,
-                "use_content_meta": use_content_meta,
-                "total_count": 0,
-                "remaining_count": 0,
-                "processed_count": 0,
-                "moved_count": 0,
-                "duplicate_cleaned_count": 0,
-                "skipped_count": 0,
-                "failed_count": 0,
-            }
-        )
-
-    def _on_auto_classify_progress(progress: dict[str, int]) -> None:
-        next_status = {**_read_classify_proposal(), **progress, "status": "running"}
-        next_status["remaining_count"] = _remaining_auto_classify_count(next_status)
-        _replace_classify_proposal(next_status)
-
-    async def _run_auto_classify_job(category: str, recursive: bool, dry_run: bool, clean_existing: bool = False, use_bookstore: bool = True, use_content_meta: bool = True, delay: float = 1.2) -> None:
-        classify_kwargs: dict[str, Any] = {"content_type": content_type, "recursive": recursive, "dry_run": dry_run}
-        if clean_existing:
-            classify_kwargs["clean_existing"] = True
-        if not use_bookstore:
-            classify_kwargs["use_bookstore"] = False
-        if not use_content_meta:
-            classify_kwargs["use_content_meta"] = False
-        if delay != 1.2:
-            classify_kwargs["delay"] = delay
-
-        try:
-            mappings = await asyncio.to_thread(category_mapping.get_all_mappings, content_type=content_type)
-            result, error = await manager.auto_classify_category(category, mappings, on_progress=_on_auto_classify_progress, **classify_kwargs)
-        except Exception as e:
-            LOGGER.error("auto_classify_category async error: %s", e)
-            _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "자동 분류에 실패했습니다."})
-            return
-
-        if error is None:
-            next_status = {**_read_classify_proposal(), **result, "status": "done"}
-            next_status["remaining_count"] = _remaining_auto_classify_count(next_status)
-            _replace_classify_proposal(next_status)
-            LOGGER.info("auto_classify_category async 응답: success — %s", result)
-        else:
-            _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
-            LOGGER.error("auto_classify_category async 응답: failure — %s", error)
-
     def _start_classify_proposal(category: str) -> None:
         """제안 시작 시 이전 상태를 지우고 진행 중 표시로 새로 시작한다."""
-        _replace_classify_proposal(
-            {
-                "status": "running",
-                "content_type": content_type,
-                "source_category": category,
-                "total_count": 0,
-                "processed_count": 0,
-                "items": [],
-                "failures": [],
-            }
-        )
+        _replace_classify_proposal({"status": "running", "content_type": content_type, "source_category": category, "total_count": 0, "processed_count": 0, "items": [], "failures": []})
 
     def _progress_classify_proposal(progress: dict[str, int]) -> None:
         """제안(running)과 적용(applying)이 status 필드를 공유해도, 진행률 갱신은
@@ -798,60 +712,6 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         else:
             response_object["error"] = error
         return response_object
-
-    @router.post("/categories/auto-classify", dependencies=admin_dep)
-    async def auto_classify_category(body: CategoryAutoClassifyModel, background_tasks: BackgroundTasks) -> dict[str, Any]:
-        """선택 카테고리 파일을 키워드 매핑 기반으로 최상위 카테고리에 자동 분류"""
-        LOGGER.info(
-            "auto_classify_category 요청: category='%s', content_type='%s', recursive=%s, dry_run=%s, async_mode=%s, clean_existing=%s, use_bookstore=%s, use_content_meta=%s", body.category, content_type, body.recursive, body.dry_run, body.async_mode, body.clean_existing, body.use_bookstore, body.use_content_meta
-        )
-        response_object: dict[str, Any] = {"status": "failure"}
-        if body.async_mode:
-            current_status = _read_classify_proposal()
-            if current_status.get("status") == "running":
-                response_object["status"] = "success"
-                response_object["result"] = {"already_running": True, **current_status}
-                return response_object
-            _start_auto_classify_status(body.category, body.recursive, body.dry_run, clean_existing=body.clean_existing, use_bookstore=body.use_bookstore, use_content_meta=body.use_content_meta)
-            background_tasks.add_task(_run_auto_classify_job, body.category, body.recursive, body.dry_run, clean_existing=body.clean_existing, use_bookstore=body.use_bookstore, use_content_meta=body.use_content_meta, delay=body.delay)
-            response_object["status"] = "success"
-            response_object["result"] = {"started": True, **_read_classify_proposal()}
-            return response_object
-
-        classify_kwargs: dict[str, Any] = {"content_type": content_type, "recursive": body.recursive, "dry_run": body.dry_run}
-        fields_set = getattr(body, "model_fields_set", None)
-        if fields_set is None:
-            fields_set = getattr(body, "__fields_set__", set())
-        if "clean_existing" in fields_set:
-            classify_kwargs["clean_existing"] = body.clean_existing
-        if "use_bookstore" in fields_set:
-            classify_kwargs["use_bookstore"] = body.use_bookstore
-        if "use_content_meta" in fields_set:
-            classify_kwargs["use_content_meta"] = body.use_content_meta
-        if "delay" in fields_set:
-            classify_kwargs["delay"] = body.delay
-
-        try:
-            mappings = await asyncio.to_thread(category_mapping.get_all_mappings, content_type=content_type)
-            result, error = await manager.auto_classify_category(body.category, mappings, **classify_kwargs)
-        except Exception as e:
-            LOGGER.error("auto_classify_category error: %s", e)
-            response_object["error"] = "자동 분류에 실패했습니다."
-            return response_object
-
-        if error is None:
-            response_object["status"] = "success"
-            response_object["result"] = result
-            LOGGER.info("auto_classify_category 응답: success — %s", result)
-        else:
-            response_object["error"] = error
-            LOGGER.error("auto_classify_category 응답: failure — %s", error)
-        return response_object
-
-    @router.get("/categories/auto-classify-status", dependencies=admin_dep)
-    async def get_auto_classify_status() -> dict[str, Any]:
-        """진행 중이거나 마지막으로 끝난 자동 분류 작업 상태 조회 (폴링용)"""
-        return {"status": "success", "result": _read_classify_proposal()}
 
     @router.post("/categories/classify-proposal", dependencies=admin_dep)
     async def start_classify_proposal(body: ClassifyProposalModel, background_tasks: BackgroundTasks) -> dict[str, Any]:
