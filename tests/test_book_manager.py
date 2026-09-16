@@ -5175,6 +5175,36 @@ def test_classify_file_to_top_category_branches(tmp_path: Path):
     assert reason == "매칭되는 키워드가 없습니다"
 
 
+def test_match_category_by_keywords_reports_tie(tmp_path: Path):
+    """동점이면 목적지를 고르지 않고 사유를 돌려준다."""
+    manager = make_manager(tmp_path, DummyES())
+    target = tmp_path / "A" / "SF음악.epub"
+    target.parent.mkdir()
+    target.write_text("x")
+    mappings = {"3_SF": ["SF"], "5_음악": ["음악"]}
+
+    category, keywords, tie_reason = manager._match_category_by_keywords(target, "A", mappings)
+
+    assert category is None
+    assert tie_reason is not None
+    assert keywords
+
+
+def test_match_category_by_keywords_picks_single_best(tmp_path: Path):
+    """단독 최고점이면 그 카테고리를 고른다."""
+    manager = make_manager(tmp_path, DummyES())
+    target = tmp_path / "A" / "과학소설 모음.epub"
+    target.parent.mkdir()
+    target.write_text("x")
+    mappings = {"3_SF": ["과학소설"], "5_음악": ["음악"]}
+
+    category, keywords, tie_reason = manager._match_category_by_keywords(target, "A", mappings)
+
+    assert category == "3_SF"
+    assert keywords == ["과학소설"]
+    assert tie_reason is None
+
+
 def test_iter_category_indexable_files_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # Lines 1350-1351, 1353, 1358, 1359-1360
     manager = make_manager(tmp_path, DummyES())

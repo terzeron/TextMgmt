@@ -1301,15 +1301,12 @@ class BookManager:
             parts.extend(file_path.parts[:-1])
         return self._normalize_classification_text(" ".join(str(part) for part in parts))
 
-    def _classify_file_to_top_category(
-        self,
-        file_path: Path,
-        source_category: str,
-        mappings: dict[str, list[str]],
-        classifier_service: BookClassifierService | None = None,
-        use_bookstore: bool = True,
-        use_content_meta: bool = True,
-    ) -> tuple[str | None, list[str], str | None]:
+    def _match_category_by_keywords(self, file_path: Path, source_category: str, mappings: dict[str, list[str]]) -> tuple[str | None, list[str], str | None]:
+        """등록된 키워드로 목적지를 고른다. 동점이면 고르지 않고 사유를 돌려준다.
+
+        제안 생성(Task 3)이 키워드 결과와 모델 결과를 따로 등급 매겨야 해서
+        기존 함수의 키워드 매칭 부분만 떼어냈다.
+        """
         haystack = self._classification_haystack(file_path)
         scored: list[tuple[int, int, str, list[str]]] = []
 
@@ -1341,13 +1338,30 @@ class BookManager:
                 score = sum(len(self._normalize_classification_text(keyword)) for keyword in matched_keywords)
                 scored.append((score, len(matched_keywords), target_category, matched_keywords))
 
-        if scored:
-            scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
-            best_score, best_match_count, best_category, best_keywords = scored[0]
-            tied_categories = [category for score, count, category, _keywords in scored if score == best_score and count == best_match_count]
-            if len(tied_categories) > 1:
-                return None, best_keywords, f"여러 카테고리가 동일 점수로 일치합니다: {', '.join(tied_categories[:3])}"
-            return best_category, best_keywords, None
+        if not scored:
+            return None, [], None
+
+        scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
+        best_score, best_match_count, best_category, best_keywords = scored[0]
+        tied = [category for score, count, category, _kw in scored if score == best_score and count == best_match_count]
+        if len(tied) > 1:
+            return None, best_keywords, f"여러 카테고리가 동일 점수로 일치합니다: {', '.join(tied[:3])}"
+        return best_category, best_keywords, None
+
+    def _classify_file_to_top_category(
+        self,
+        file_path: Path,
+        source_category: str,
+        mappings: dict[str, list[str]],
+        classifier_service: BookClassifierService | None = None,
+        use_bookstore: bool = True,
+        use_content_meta: bool = True,
+    ) -> tuple[str | None, list[str], str | None]:
+        # 키워드 매칭은 _match_category_by_keywords로 위임한다: Task 5에서
+        # 이 함수가 통째로 사라질 때까지 기존 동작을 그대로 유지하기 위함.
+        matched_category, matched_keywords, tie_reason = self._match_category_by_keywords(file_path, source_category, mappings)
+        if matched_category is not None or tie_reason is not None:
+            return matched_category, matched_keywords, tie_reason
 
         if classifier_service is not None:
             source_dir = self._category_dir(source_category)
