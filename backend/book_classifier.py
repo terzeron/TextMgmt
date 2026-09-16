@@ -739,8 +739,11 @@ class BookClassifierService:
             entry = {"filename": effective_fname, "rel_path": rel_path, "author": raw_author, "title": raw_title, "search_title": search_title, "yes24": y_entry, "aladin": a_entry, "kyobo": k_entry, "status": "pending", "target_category": None}
             self.cache[cache_key] = entry
 
-        target_cat, method, reason = self._decide(fpath if use_content_meta else None, effective_fname, entry, trust_single_match=trust_single_match)
+        target_cat, method, reason, model_cat, confidence = self._decide(fpath if use_content_meta else None, effective_fname, entry, trust_single_match=trust_single_match)
 
+        # 등급 판정에 쓰려면 모델 점수가 entry에 남아 있어야 한다
+        entry["confidence"] = confidence
+        entry["model_category"] = model_cat
         entry["target_category"] = target_cat
         entry["status"] = method if target_cat else ("conflict" if "conflict" in method else "not_found")
         return target_cat, method, reason, entry
@@ -751,7 +754,7 @@ class BookClassifierService:
 
     MIN_STORE_VOTES = 2
 
-    def _decide(self, fpath: Optional[Path], effective_fname: str, entry: Dict[str, Any], trust_single_match: bool = True) -> Tuple[Optional[str], str, str]:
+    def _decide(self, fpath: Optional[Path], effective_fname: str, entry: Dict[str, Any], trust_single_match: bool = True) -> Tuple[Optional[str], str, str, Optional[str], float]:
         """
         모델로 판정하고, 확신이 모자라면 서점 다수결로 되돌아간다.
 
@@ -762,6 +765,10 @@ class BookClassifierService:
         다만 모델 확신도가 낮은 구간에서는 서점이 더 나을 수 있다. 그 경계는
         `bookstore-policy` 가 구간별로 두 쪽 정답률을 재서 정한다. 규칙 파일이
         없거나 서점이 이긴 구간이 없으면 경계는 0 이고, 모델이 늘 먼저다.
+
+        모델 카테고리와 확신도를 함께 돌려준다. 확신도는 등급 판정에 필요하다.
+        모델이 진 경우에도 점수를 알아야 "점수가 낮아 서점을 썼다"를 화면에
+        설명할 수 있다.
         """
         model_cat, model_reason, confidence = self._decide_by_model(fpath, effective_fname)
 
@@ -777,15 +784,15 @@ class BookClassifierService:
         if self.bookstore_policy.prefers_bookstore(confidence):
             store_cat, store_method, store_reason = bookstore()
             if store_cat:
-                return store_cat, store_method, f"{store_reason} (확신도 {confidence:.3f} < 경계 {self.bookstore_policy.override_below:.3f} 이라 서점 우선; 모델: {model_reason})"
+                return store_cat, store_method, f"{store_reason} (확신도 {confidence:.3f} < 경계 {self.bookstore_policy.override_below:.3f} 이라 서점 우선; 모델: {model_reason})", model_cat, confidence
 
         if model_cat:
-            return model_cat, "model", model_reason
+            return model_cat, "model", model_reason, model_cat, confidence
 
         store_cat, store_method, store_reason = bookstore()
         if store_cat:
-            return store_cat, store_method, f"{store_reason} (모델: {model_reason})"
-        return None, store_method, f"{model_reason}; {store_reason}"
+            return store_cat, store_method, f"{store_reason} (모델: {model_reason})", model_cat, confidence
+        return None, store_method, f"{model_reason}; {store_reason}", model_cat, confidence
 
     def _decide_by_model(self, fpath: Optional[Path], effective_fname: str) -> Tuple[Optional[str], str, float]:
         """판정 결과와 함께 확신도를 돌려준다. 확신도가 있어야 서점 결합 구간을 가른다."""

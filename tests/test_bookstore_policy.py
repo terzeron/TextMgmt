@@ -190,7 +190,7 @@ def test_bookstore_wins_below_the_measured_boundary(tmp_path):
     model_answered = StubClassifier(StubPrediction("3_판타지", 0.05))
     service = _service(tmp_path, model_answered, BookstorePolicy(override_below=0.08))
 
-    cat, method, reason = service._decide(None, "달빛조각사.txt", _entry())
+    cat, method, reason, *_ = service._decide(None, "달빛조각사.txt", _entry())
     assert cat == "3_무협"
     assert method == "bookstore_majority"
     assert "서점 우선" in reason
@@ -200,7 +200,7 @@ def test_model_wins_above_the_boundary(tmp_path):
     model_answered = StubClassifier(StubPrediction("3_판타지", 0.20))
     service = _service(tmp_path, model_answered, BookstorePolicy(override_below=0.08))
 
-    cat, method, _ = service._decide(None, "달빛조각사.txt", _entry())
+    cat, method, _, *_ = service._decide(None, "달빛조각사.txt", _entry())
     assert cat == "3_판타지"
     assert method == "model"
 
@@ -210,7 +210,7 @@ def test_bookstore_still_fills_the_gap_when_the_model_refuses(tmp_path):
     model_refused = StubClassifier(StubPrediction(None, 0.03, "확신도 부족"))
     service = _service(tmp_path, model_refused, BookstorePolicy(override_below=0.0))
 
-    cat, method, _ = service._decide(None, "달빛조각사.txt", _entry())
+    cat, method, _, *_ = service._decide(None, "달빛조각사.txt", _entry())
     assert cat == "3_무협"
     assert method == "bookstore_majority"
 
@@ -279,7 +279,7 @@ def test_overlapping_candidate_wins_the_vote(tmp_path):
         "aladin": {"candidates": ["5_음악"], "title": "사계"},
         "kyobo": {},
     }
-    cat, method, _ = service._decide(None, "사계.epub", entry)
+    cat, method, _, *_ = service._decide(None, "사계.epub", entry)
     assert cat == "5_음악"
     assert method == "bookstore_majority"
 
@@ -290,7 +290,7 @@ def test_single_store_with_two_candidates_refuses(tmp_path):
     service = _service(tmp_path, model_refused, BookstorePolicy())
 
     entry = {"search_title": "사계", "yes24": {"candidates": ["1_서양고전", "5_음악"], "title": "사계"}, "aladin": {}, "kyobo": {}}
-    cat, method, _ = service._decide(None, "사계.epub", entry, trust_single_match=True)
+    cat, method, _, *_ = service._decide(None, "사계.epub", entry, trust_single_match=True)
     assert cat is None
     assert method == "conflict"
 

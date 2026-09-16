@@ -573,7 +573,7 @@ def _entry(**stores):
 def test_decide_prefers_the_model_over_bookstores(tmp_path):
     service = _service(tmp_path, StubClassifier("3_판타지"))
     entry = _entry(yes24={"mapped": "2_소설외국", "title": "달빛조각사"}, aladin={"mapped": "2_소설외국", "title": "달빛조각사"})
-    cat, method, reason = service._decide(None, "달빛조각사.txt", entry)
+    cat, method, reason, *_ = service._decide(None, "달빛조각사.txt", entry)
     assert (cat, method) == ("3_판타지", "model")
     assert "모델 확신도" in reason
 
@@ -581,7 +581,7 @@ def test_decide_prefers_the_model_over_bookstores(tmp_path):
 def test_decide_falls_back_to_bookstore_majority_when_the_model_refuses(tmp_path):
     service = _service(tmp_path, RefusingClassifier())
     entry = _entry(yes24={"mapped": "2_소설외국", "title": "달빛조각사"}, aladin={"mapped": "2_소설외국", "title": "달빛조각사"}, kyobo={"mapped": "3_판타지", "title": "달빛조각사"})
-    cat, method, reason = service._decide(None, "달빛조각사.txt", entry)
+    cat, method, reason, *_ = service._decide(None, "달빛조각사.txt", entry)
     assert (cat, method) == ("2_소설외국", "bookstore_majority")
     # 모델이 왜 못 했는지도 근거에 남아야 한다
     assert "확신도" in reason
@@ -591,10 +591,10 @@ def test_decide_takes_a_single_bookstore_only_when_trusted(tmp_path):
     service = _service(tmp_path, RefusingClassifier())
     entry = _entry(yes24={"mapped": "3_무협", "title": "달빛조각사"})
 
-    cat, method, _ = service._decide(None, "달빛조각사.txt", entry, trust_single_match=True)
+    cat, method, _, *_ = service._decide(None, "달빛조각사.txt", entry, trust_single_match=True)
     assert (cat, method) == ("3_무협", "bookstore_single")
 
-    cat, method, _ = service._decide(None, "달빛조각사.txt", entry, trust_single_match=False)
+    cat, method, _, *_ = service._decide(None, "달빛조각사.txt", entry, trust_single_match=False)
     assert cat is None
     assert method == "conflict"
 
@@ -602,7 +602,7 @@ def test_decide_takes_a_single_bookstore_only_when_trusted(tmp_path):
 def test_decide_reports_conflict_when_two_bookstores_disagree(tmp_path):
     service = _service(tmp_path, RefusingClassifier())
     entry = _entry(yes24={"mapped": "3_무협", "title": "달빛조각사"}, aladin={"mapped": "3_판타지", "title": "달빛조각사"})
-    cat, method, reason = service._decide(None, "달빛조각사.txt", entry, trust_single_match=True)
+    cat, method, reason, *_ = service._decide(None, "달빛조각사.txt", entry, trust_single_match=True)
     assert cat is None
     assert method == "conflict"
     assert "갈림" in reason
@@ -611,7 +611,7 @@ def test_decide_reports_conflict_when_two_bookstores_disagree(tmp_path):
 def test_decide_ignores_bookstore_hits_whose_title_does_not_match(tmp_path):
     service = _service(tmp_path, RefusingClassifier())
     entry = _entry(yes24={"mapped": "3_무협", "title": "전혀 다른 책 제목"}, aladin={"mapped": "3_무협", "title": "또 다른 책"})
-    cat, method, _ = service._decide(None, "달빛조각사.txt", entry)
+    cat, method, _, *_ = service._decide(None, "달빛조각사.txt", entry)
     assert cat is None
     assert method == "not_found"
 
@@ -629,7 +629,7 @@ def test_decide_survives_a_model_that_raises(tmp_path):
 
     service = _service(tmp_path, BrokenClassifier())
     entry = _entry(yes24={"mapped": "3_무협", "title": "달빛조각사"}, aladin={"mapped": "3_무협", "title": "달빛조각사"})
-    cat, method, reason = service._decide(None, "달빛조각사.txt", entry)
+    cat, method, reason, *_ = service._decide(None, "달빛조각사.txt", entry)
     # 모델이 터져도 서점 경로로 답한다
     assert (cat, method) == ("3_무협", "bookstore_majority")
     assert "모델 판정 실패" in reason
@@ -637,7 +637,35 @@ def test_decide_survives_a_model_that_raises(tmp_path):
 
 def test_decide_returns_nothing_when_there_is_no_model_and_no_bookstore(tmp_path):
     service = _service(tmp_path, BookCategoryClassifier(model=None))
-    cat, method, reason = service._decide(None, "달빛조각사.txt", _entry())
+    cat, method, reason, *_ = service._decide(None, "달빛조각사.txt", _entry())
     assert cat is None
     assert method == "not_found"
     assert "모델 파일이 없어" in reason
+
+
+def test_classify_file_exposes_model_confidence(tmp_path, monkeypatch):
+    """등급을 매기려면 모델 점수가 밖으로 나와야 한다."""
+    from backend.book_classifier import BookClassifierService
+
+    service = BookClassifierService.__new__(BookClassifierService)
+    service.cache = {}
+    service.title_cache = {}
+    service.library_root = tmp_path
+    monkeypatch.setattr(service, "query_bookstores", lambda *a, **k: ({}, {}, {}))
+    monkeypatch.setattr(service, "_decide_by_model", lambda *a, **k: ("3_SF", "모델 판정", 0.87))
+    monkeypatch.setattr(service, "_decide_by_bookstore", lambda *a, **k: (None, "not_found", "서점에서 못 찾음"))
+
+    class Policy:
+        override_below = 0.5
+
+        def prefers_bookstore(self, confidence):
+            return confidence < self.override_below
+
+    service.bookstore_policy = Policy()
+    target = tmp_path / "[저자] 제목.epub"
+    target.write_text("x")
+
+    _cat, _method, _reason, entry = service.classify_file(target, tmp_path)
+
+    assert entry["confidence"] == 0.87
+    assert entry["model_category"] == "3_SF"
