@@ -5348,6 +5348,26 @@ def test_propose_category_candidates_capped_at_two_even_with_more_contenders(tmp
     assert len(proposal["candidates"]) <= 2
 
 
+def test_propose_category_candidates_bookstore_majority_without_vote_data_does_not_understate_the_count(tmp_path: Path):
+    """bookstore_candidates가 비어 있어도(오래된 캐시 등) certain 등급에 "서점 1곳"이라는
+    자기모순적인 근거를 달면 안 된다. MIN_STORE_VOTES(book_classifier.py)는 2라서
+    bookstore_majority는 실제로 1표일 수 없는데, 근거 문구가 1곳이라고 하면 관리자가
+    "겨우 한 곳"이라는 약한 근거로 착각한 채 사전 체크된 행을 그대로 승인할 수 있다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "book.epub"
+    target.write_text("x")
+    fake = FakeClassifier("3_SF", "bookstore_majority", "r", None, 0.1)
+
+    proposal = manager._propose_category_for_file(target, "A", {}, fake, True, True)
+
+    assert proposal["target_category"] == "3_SF"
+    assert proposal["grade"] == "certain"
+    assert "1곳" not in proposal["candidates"][0]["detail"]
+
+
 def test_high_confidence_needs_a_calibrated_boundary(tmp_path: Path):
     """정책 파일이 없으면 경계가 0이라 모든 점수가 높음이 된다. 그러면 전부 자동 체크된다."""
     manager = make_manager(tmp_path, DummyES())

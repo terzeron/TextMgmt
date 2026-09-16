@@ -1405,7 +1405,7 @@ class BookManager:
         """
         if target:
             if method == "bookstore_majority":
-                candidates = [self._bookstore_candidate(target, self._vote_count_for(target, bookstore_candidates))]
+                candidates = [self._bookstore_majority_candidate(target, bookstore_candidates)]
                 for category, count in bookstore_candidates:
                     if category != target:
                         candidates.append(self._bookstore_candidate(category, count))
@@ -1424,6 +1424,21 @@ class BookManager:
             # 있으면 후보 1개로 보여준다. 없으면 정말 아무 근거도 없는 것이다.
             return [self._model_candidate(model_category)]
         return []
+
+    def _bookstore_majority_candidate(self, target: str, bookstore_candidates: list[tuple[str, int]]) -> dict[str, Any]:
+        """다수결 1위 후보를 만든다.
+
+        bookstore_candidates가 비어 있으면(오래된 캐시 항목, 또는 이 값을 안 실어 주는
+        호출자) 실제 득표수를 모른다. 그렇다고 _vote_count_for처럼 1로 기본값을
+        두면 "서점 1곳 일치"가 되는데, MIN_STORE_VOTES=2인 이상 bookstore_majority는
+        절대 1표일 수 없다 — 근거 문구가 등급보다 약하게 보이는 자기모순이라
+        리뷰에서 지적됐다(Fix round 1). 모르는 숫자를 지어내는 대신 숫자를 아예
+        빼서, 있는 그대로("다수결로 일치") 이상은 주장하지 않는다.
+        """
+        for category, count in bookstore_candidates:
+            if category == target:
+                return self._bookstore_candidate(target, count)
+        return {"category": target, "source": "bookstore", "detail": "서점 다수결로 일치"}
 
     @staticmethod
     def _vote_count_for(category: str, bookstore_candidates: list[tuple[str, int]]) -> int:
