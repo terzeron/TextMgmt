@@ -5365,3 +5365,78 @@ def test_delete_category_success(tmp_path: Path):
     assert res["category"] == "test_cat"
 
 
+# ---- Task 3: 등급 판정과 제안 생성 ----
+
+
+class FakeClassifier:
+    """classify_file 결과를 고정해 등급 규칙만 검증한다."""
+
+    def __init__(self, target, method, reason, model_category, confidence, override_below=0.5):
+        self._result = (target, method, reason, {"confidence": confidence, "model_category": model_category})
+
+        class Policy:
+            def __init__(self, boundary):
+                self.override_below = boundary
+
+            def prefers_bookstore(self, value):
+                return self.override_below > 0.0 and value < self.override_below
+
+        self.bookstore_policy = Policy(override_below)
+
+    def classify_file(self, *args, **kwargs):
+        return self._result
+
+
+@pytest.mark.parametrize(
+    "mappings,fake,expected_target,expected_grade",
+    [
+        ({"3_SF": ["과학소설"]}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.9), "3_SF", "certain"),
+        ({"3_SF": ["과학소설"]}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.1), "3_SF", "unsure"),
+        ({"3_SF": ["과학소설"]}, FakeClassifier("5_음악", "model", "r", "5_음악", 0.9), "3_SF", "unsure"),
+        ({"3_SF": ["과학소설"], "5_음악": ["과학소설"]}, FakeClassifier(None, "not_found", "r", None, 0.1), None, "unknown"),
+        ({}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.9), "3_SF", "certain"),
+        ({}, FakeClassifier("3_SF", "bookstore_majority", "r", None, 0.1), "3_SF", "certain"),
+        ({}, FakeClassifier("3_SF", "bookstore_single", "r", None, 0.1), "3_SF", "unsure"),
+        ({}, FakeClassifier(None, "conflict", "r", "3_SF", 0.1), None, "unknown"),
+        ({}, FakeClassifier(None, "not_found", "r", None, 0.1), None, "unknown"),
+    ],
+)
+def test_propose_category_grades(tmp_path: Path, mappings, fake, expected_target, expected_grade):
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "과학소설 모음.epub"
+    target.write_text("x")
+
+    proposal = manager._propose_category_for_file(target, "A", mappings, fake, True, True)
+
+    assert proposal["target_category"] == expected_target
+    assert proposal["grade"] == expected_grade
+
+
+def test_high_confidence_needs_a_calibrated_boundary(tmp_path: Path):
+    """정책 파일이 없으면 경계가 0이라 모든 점수가 높음이 된다. 그러면 전부 자동 체크된다."""
+    manager = make_manager(tmp_path, DummyES())
+    fake = FakeClassifier("3_SF", "model", "r", "3_SF", 0.9, override_below=0.0)
+
+    assert manager._is_high_confidence(fake, 0.9) is False
+
+
+def manager_propose(manager, category, mappings):
+    return asyncio_runner(manager.propose_category_changes(category, mappings, use_bookstore=False, use_content_meta=False))
+
+
+def test_propose_category_changes_lists_items_without_moving(tmp_path: Path):
+    """제안만 만들고 파일은 그대로 둔다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    book = source / "과학소설 모음.epub"
+    book.write_text("x")
+
+    result, error = manager_propose(manager, "A", {"3_SF": ["과학소설"]})
+
+    assert error is None
+    assert result["total_count"] == 1
+    assert result["items"][0]["file_path"] == "A/과학소설 모음.epub"
+    assert book.is_file()

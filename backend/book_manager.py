@@ -1348,6 +1348,129 @@ class BookManager:
             return None, best_keywords, f"여러 카테고리가 동일 점수로 일치합니다: {', '.join(tied[:3])}"
         return best_category, best_keywords, None
 
+    GRADE_CERTAIN = "certain"
+    GRADE_UNSURE = "unsure"
+    GRADE_UNKNOWN = "unknown"
+
+    @staticmethod
+    def _is_high_confidence(classifier_service: Any, confidence: float | None) -> bool:
+        """모델 점수가 '높음'인가.
+
+        경계는 서점 정책이 구간별 정답률로 보정한 값이다. 정책 파일이 없으면
+        override_below 가 0 이고 prefers_bookstore 가 늘 False 를 돌려준다. 그 값을
+        그대로 믿으면 점수와 무관하게 전부 '확실'이 되어 자동 체크된다. 근거가
+        없으면 낮음으로 본다.
+        """
+        if confidence is None:
+            return False
+        policy = getattr(classifier_service, "bookstore_policy", None)
+        if policy is None or getattr(policy, "override_below", 0.0) <= 0.0:
+            return False
+        return not policy.prefers_bookstore(confidence)
+
+    def _propose_category_for_file(
+        self,
+        file_path: Path,
+        source_category: str,
+        mappings: dict[str, list[str]],
+        classifier_service: Any,
+        use_bookstore: bool,
+        use_content_meta: bool,
+    ) -> dict[str, Any]:
+        """한 파일의 제안 목적지와 등급을 만든다. 파일을 옮기지 않는다."""
+        keyword_category, matched_keywords, tie_reason = self._match_category_by_keywords(file_path, source_category, mappings)
+
+        model_category = None
+        confidence = None
+        classified_category = None
+        method = "not_found"
+        reason = tie_reason or ""
+        if classifier_service is not None:
+            classified_category, method, classifier_reason, entry = classifier_service.classify_file(
+                file_path, self._category_dir(source_category), use_bookstore=use_bookstore, use_content_meta=use_content_meta
+            )
+            model_category = (entry or {}).get("model_category")
+            confidence = (entry or {}).get("confidence")
+            reason = reason or classifier_reason or ""
+
+        high = self._is_high_confidence(classifier_service, confidence)
+
+        if keyword_category:
+            # 키워드가 목적지를 하나로 정했어도, 모델이 다른 곳을 자신 있게 가리키면
+            # 그 불일치를 근거로 남기고 등급은 '불확실'로 낮춘다.
+            grade = self.GRADE_CERTAIN if (high and model_category == keyword_category) else self.GRADE_UNSURE
+            return {
+                "target_category": keyword_category,
+                "grade": grade,
+                "confidence": confidence,
+                "source": "keyword",
+                "matched_keywords": matched_keywords,
+                "model_category": model_category if model_category != keyword_category else None,
+                "reason": reason,
+            }
+
+        if tie_reason:
+            return {"target_category": None, "grade": self.GRADE_UNKNOWN, "confidence": confidence, "source": "keyword", "matched_keywords": matched_keywords, "model_category": model_category, "reason": tie_reason}
+
+        if method == "model" and high and classified_category:
+            grade, target = self.GRADE_CERTAIN, classified_category
+        elif method == "bookstore_majority" and classified_category:
+            grade, target = self.GRADE_CERTAIN, classified_category
+        elif method == "bookstore_single" and classified_category:
+            grade, target = self.GRADE_UNSURE, classified_category
+        else:
+            # 점수가 낮은 모델 답은 목적지로 쓰지 않는다. 근거에만 남긴다.
+            grade, target = self.GRADE_UNKNOWN, None
+
+        return {"target_category": target, "grade": grade, "confidence": confidence, "source": method, "matched_keywords": matched_keywords, "model_category": model_category, "reason": reason}
+
+    async def propose_category_changes(
+        self,
+        category: str,
+        mappings: dict[str, list[str]] | None = None,
+        *,
+        content_type: str = "book",
+        use_bookstore: bool = True,
+        use_content_meta: bool = True,
+        delay: float = 1.2,
+        on_progress: Callable[[dict[str, int]], None] | None = None,
+    ) -> tuple[dict[str, Any], str | None]:
+        """선택 카테고리 직하위 파일의 분류 제안을 만든다. 파일을 옮기지 않는다."""
+        if not category:
+            return {}, "카테고리 이름이 비어있습니다"
+        if not self._is_safe_category_name(category):
+            return {}, "잘못된 카테고리 경로입니다"
+        source_dir = self._category_dir(category)
+        if not source_dir.is_dir():
+            return {}, f"디렉토리를 찾을 수 없습니다: {category}"
+
+        mappings = mappings or {}
+        classifier_service: BookClassifierService | None = None
+        if use_bookstore or use_content_meta:
+            classifier_service = BookClassifierService(library_root=self.path_prefix, delay=delay, es_manager=self.es_manager)
+
+        file_paths = self._iter_category_indexable_files(category, recursive=False)
+        result: dict[str, Any] = {"content_type": content_type, "source_category": category, "total_count": len(file_paths), "processed_count": 0, "items": [], "failures": []}
+
+        for file_path in file_paths:
+            result["processed_count"] += 1
+            try:
+                rel_path = str(file_path.relative_to(self.path_prefix))
+            except ValueError:
+                result["failures"].append({"file_path": str(file_path), "error": "잘못된 파일 경로입니다"})
+                continue
+            try:
+                proposal = self._propose_category_for_file(file_path, category, mappings, classifier_service, use_bookstore, use_content_meta)
+            except Exception as e:
+                LOGGER.error("분류 제안 실패: %s — %s", rel_path, e)
+                result["failures"].append({"file_path": rel_path, "error": "분류 제안에 실패했습니다"})
+                continue
+            result["items"].append({"file_path": rel_path, "title": file_path.stem, "current_category": category, "apply_status": "pending", "apply_error": None, **proposal})
+            if on_progress is not None:
+                on_progress({"total_count": result["total_count"], "processed_count": result["processed_count"]})
+
+        return result, None
+
     def _classify_file_to_top_category(
         self,
         file_path: Path,
