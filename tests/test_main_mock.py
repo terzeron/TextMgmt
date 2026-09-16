@@ -318,7 +318,7 @@ class TestCategoryMismatchAdmin:
         assert status.json()["result"]["status"] == "done"
         assert status.json()["result"]["remaining_count"] == 0
         assert status.json()["result"]["moved_count"] == 2
-        status_file = tmp_path / ".auto_classify_status_book.json"
+        status_file = tmp_path / ".classify_proposal_book.json"
         assert status_file.exists()
         shared_status = json.loads(status_file.read_text(encoding="utf-8"))
         assert shared_status["status"] == "done"
@@ -332,7 +332,7 @@ class TestCategoryMismatchAdmin:
 
     def test_auto_classify_status_reads_shared_status_file(self, client, mock_bm, tmp_path):
         mock_bm.path_prefix = tmp_path
-        status_file = tmp_path / ".auto_classify_status_book.json"
+        status_file = tmp_path / ".classify_proposal_book.json"
         # updated_at 은 살아있다는 신호다. 없으면 죽은 작업으로 보고 failed 로 굳힌다.
         status_file.write_text(
             json.dumps(
@@ -918,7 +918,7 @@ def test_auto_classify_status_path_error(client, mock_bm):
 def test_auto_classify_status_read_corrupt_json(client, mock_bm, tmp_path):
     # 423-425: corrupted JSON
     mock_bm.path_prefix = tmp_path
-    status_file = tmp_path / ".auto_classify_status_book.json"
+    status_file = tmp_path / ".classify_proposal_book.json"
     status_file.write_text("{corrupt json", encoding="utf-8")
     r = client.get("/categories/auto-classify-status")
     assert r.status_code == 200
@@ -928,7 +928,7 @@ def test_auto_classify_status_read_corrupt_json(client, mock_bm, tmp_path):
 def test_auto_classify_status_read_non_dict_json(client, mock_bm, tmp_path):
     # 427: non-dict JSON
     mock_bm.path_prefix = tmp_path
-    status_file = tmp_path / ".auto_classify_status_book.json"
+    status_file = tmp_path / ".classify_proposal_book.json"
     status_file.write_text("[1, 2, 3]", encoding="utf-8")
     r = client.get("/categories/auto-classify-status")
     assert r.status_code == 200
@@ -949,7 +949,7 @@ def test_auto_classify_replace_status_write_error(client, mock_bm, tmp_path, mon
     orig_open = Path.open
 
     def mock_open(self, mode="r", *args, **kwargs):
-        if "w" in mode and "auto_classify_status" in str(self):
+        if "w" in mode and "classify_proposal" in str(self):
             raise OSError("disk write error")
         return orig_open(self, mode, *args, **kwargs)
 
@@ -1015,7 +1015,7 @@ def test_auto_classify_job_and_pydantic_branches(mock_bm, mock_cat, tmp_path):
     assert _remaining_count({"total_count": "invalid"}) == 0
 
     # 5. 438: status_path.parent does not exist
-    _replace_status = job_freevars["_replace_auto_classify_status"]
+    _replace_status = job_freevars["_replace_classify_proposal"]
     mock_bm.path_prefix = tmp_path / "non_existent_subdir"
     _replace_status({"status": "test"})
 
@@ -1023,7 +1023,7 @@ def test_auto_classify_job_and_pydantic_branches(mock_bm, mock_cat, tmp_path):
     mock_bm.path_prefix = tmp_path
     orig_open = Path.open
     def mock_open_err(self, mode="r", *args, **kwargs):
-        if "w" in mode and "auto_classify_status" in str(self):
+        if "w" in mode and "classify_proposal" in str(self):
             raise OSError("disk write error")
         return orig_open(self, mode, *args, **kwargs)
 
@@ -1063,7 +1063,7 @@ def test_get_latest_books_error(client, mock_bm, mock_cat):
 def test_auto_classify_already_running(client, mock_bm, tmp_path):
     # 705-707: already running
     mock_bm.path_prefix = tmp_path
-    status_file = tmp_path / ".auto_classify_status_book.json"
+    status_file = tmp_path / ".classify_proposal_book.json"
     status_file.write_text(json.dumps({"status": "running", "source_category": "0_inbox", "updated_at": time.time()}), encoding="utf-8")
 
     r = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})
@@ -1121,7 +1121,7 @@ def test_auto_classify_restarts_when_the_previous_run_died(client, mock_bm, tmp_
     화면이 계속 회전했다. 갱신이 끊긴 상태는 죽은 것으로 본다.
     """
     mock_bm.path_prefix = tmp_path
-    status_file = tmp_path / ".auto_classify_status_book.json"
+    status_file = tmp_path / ".classify_proposal_book.json"
     status_file.write_text(json.dumps({"status": "running", "source_category": "0_inbox", "updated_at": time.time() - 3600}), encoding="utf-8")
 
     r = client.post("/categories/auto-classify", json={"category": "0_inbox", "async_mode": True})

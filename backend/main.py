@@ -93,7 +93,7 @@ class CustomJSONResponse(JSONResponse):
 _original_jsonable_encoder = jsonable_encoder
 
 
-def stale_auto_classify_status(status: dict[str, Any], stale_seconds: float, now: float | None = None) -> dict[str, Any] | None:
+def stale_running_status(status: dict[str, Any], stale_seconds: float, now: float | None = None) -> dict[str, Any] | None:
     """갱신이 끊긴 running 상태를 failed 로 바꾼 사본. 멀쩡하면 None 을 돌려준다.
 
     자동 분류는 pod 메모리 안의 백그라운드 태스크라 재배포·재시작이면 사라지는데,
@@ -426,50 +426,52 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     """공통 CRUD 엔드포인트를 생성하는 라우터 팩토리"""
     admin_dep = [Depends(require_admin)]
     router = APIRouter()
-    auto_classify_status: dict[str, Any] = {"status": "idle", "remaining_count": 0}
+    # 상태 파일 하나를 제안(propose)과 승인 적용(apply) 두 단계가 함께 쓴다.
+    # 이름은 classify_proposal 이지만 읽기/쓰기/하트비트 기계는 예전 auto_classify와 동일하다.
+    classify_proposal_state: dict[str, Any] = {"status": "idle", "remaining_count": 0}
 
     # 갱신이 이만큼 끊기면 죽은 작업으로 본다. category_mapping 의
     # RELOAD_LOCK_HEARTBEAT_STALE_SECONDS 와 같은 방식이다.
     # 파일 1건 처리는 서점 조회 때문에 3초 남짓이라 5분이면 넉넉하다.
-    AUTO_CLASSIFY_HEARTBEAT_STALE_SECONDS = 5 * 60
+    CLASSIFY_PROPOSAL_STALE_SECONDS = 5 * 60
 
-    def _auto_classify_status_path() -> Path | None:
+    def _classify_proposal_path() -> Path | None:
         try:
-            return Path(manager.path_prefix) / f".auto_classify_status_{content_type}.json"
+            return Path(manager.path_prefix) / f".classify_proposal_{content_type}.json"
         except (TypeError, ValueError):
             return None
 
-    def _read_auto_classify_status() -> dict[str, Any]:
-        status_path = _auto_classify_status_path()
+    def _read_classify_proposal() -> dict[str, Any]:
+        status_path = _classify_proposal_path()
         if status_path is None or not status_path.exists():
-            return dict(auto_classify_status)
+            return dict(classify_proposal_state)
         try:
             with status_path.open("r", encoding="utf-8") as status_file:
                 status = json.load(status_file)
         except Exception as e:
-            LOGGER.warning("auto_classify_status 파일 읽기 실패: %s", e)
-            return dict(auto_classify_status)
+            LOGGER.warning("classify_proposal 파일 읽기 실패: %s", e)
+            return dict(classify_proposal_state)
         if not isinstance(status, dict):
-            return dict(auto_classify_status)
+            return dict(classify_proposal_state)
         status = _fail_if_stale(status)
-        auto_classify_status.clear()
-        auto_classify_status.update(status)
-        return dict(auto_classify_status)
+        classify_proposal_state.clear()
+        classify_proposal_state.update(status)
+        return dict(classify_proposal_state)
 
     def _fail_if_stale(status: dict[str, Any]) -> dict[str, Any]:
         """죽은 작업이 화면과 재실행을 막지 않도록, 갱신이 끊긴 running 을 failed 로 굳힌다."""
-        stale = stale_auto_classify_status(status, AUTO_CLASSIFY_HEARTBEAT_STALE_SECONDS)
+        stale = stale_running_status(status, CLASSIFY_PROPOSAL_STALE_SECONDS)
         if stale is None:
             return status
-        LOGGER.warning("자동 분류 상태가 %.0f초 넘게 갱신되지 않아 중단된 작업으로 본다", AUTO_CLASSIFY_HEARTBEAT_STALE_SECONDS)
-        _replace_auto_classify_status(stale)
+        LOGGER.warning("분류 작업 상태가 %.0f초 넘게 갱신되지 않아 중단된 작업으로 본다", CLASSIFY_PROPOSAL_STALE_SECONDS)
+        _replace_classify_proposal(stale)
         return stale
 
-    def _replace_auto_classify_status(next_status: dict[str, Any]) -> None:
+    def _replace_classify_proposal(next_status: dict[str, Any]) -> None:
         next_status = {**next_status, "updated_at": time.time()}
-        auto_classify_status.clear()
-        auto_classify_status.update(next_status)
-        status_path = _auto_classify_status_path()
+        classify_proposal_state.clear()
+        classify_proposal_state.update(next_status)
+        status_path = _classify_proposal_path()
         if status_path is None or not status_path.parent.exists():
             return
         tmp_path = status_path.with_name(f"{status_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
@@ -478,7 +480,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
                 json.dump(next_status, status_file, ensure_ascii=False, separators=(",", ":"))
             tmp_path.replace(status_path)
         except Exception as e:
-            LOGGER.warning("auto_classify_status 파일 쓰기 실패: %s", e)
+            LOGGER.warning("classify_proposal 파일 쓰기 실패: %s", e)
             try:
                 tmp_path.unlink(missing_ok=True)
             except OSError:
@@ -495,7 +497,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return 0
 
     def _start_auto_classify_status(category: str, recursive: bool, dry_run: bool, clean_existing: bool = False, use_bookstore: bool = True, use_content_meta: bool = True) -> None:
-        _replace_auto_classify_status(
+        _replace_classify_proposal(
             {
                 "status": "running",
                 "content_type": content_type,
@@ -516,9 +518,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         )
 
     def _on_auto_classify_progress(progress: dict[str, int]) -> None:
-        next_status = {**_read_auto_classify_status(), **progress, "status": "running"}
+        next_status = {**_read_classify_proposal(), **progress, "status": "running"}
         next_status["remaining_count"] = _remaining_auto_classify_count(next_status)
-        _replace_auto_classify_status(next_status)
+        _replace_classify_proposal(next_status)
 
     async def _run_auto_classify_job(category: str, recursive: bool, dry_run: bool, clean_existing: bool = False, use_bookstore: bool = True, use_content_meta: bool = True, delay: float = 1.2) -> None:
         classify_kwargs: dict[str, Any] = {"content_type": content_type, "recursive": recursive, "dry_run": dry_run}
@@ -536,16 +538,16 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             result, error = await manager.auto_classify_category(category, mappings, on_progress=_on_auto_classify_progress, **classify_kwargs)
         except Exception as e:
             LOGGER.error("auto_classify_category async error: %s", e)
-            _replace_auto_classify_status({**_read_auto_classify_status(), "status": "failed", "error": "자동 분류에 실패했습니다."})
+            _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "자동 분류에 실패했습니다."})
             return
 
         if error is None:
-            next_status = {**_read_auto_classify_status(), **result, "status": "done"}
+            next_status = {**_read_classify_proposal(), **result, "status": "done"}
             next_status["remaining_count"] = _remaining_auto_classify_count(next_status)
-            _replace_auto_classify_status(next_status)
+            _replace_classify_proposal(next_status)
             LOGGER.info("auto_classify_category async 응답: success — %s", result)
         else:
-            _replace_auto_classify_status({**_read_auto_classify_status(), "status": "failed", "error": error})
+            _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
             LOGGER.error("auto_classify_category async 응답: failure — %s", error)
 
     @router.put("/books/{book_id}", dependencies=admin_dep)
@@ -736,7 +738,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         )
         response_object: dict[str, Any] = {"status": "failure"}
         if body.async_mode:
-            current_status = _read_auto_classify_status()
+            current_status = _read_classify_proposal()
             if current_status.get("status") == "running":
                 response_object["status"] = "success"
                 response_object["result"] = {"already_running": True, **current_status}
@@ -744,7 +746,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             _start_auto_classify_status(body.category, body.recursive, body.dry_run, clean_existing=body.clean_existing, use_bookstore=body.use_bookstore, use_content_meta=body.use_content_meta)
             background_tasks.add_task(_run_auto_classify_job, body.category, body.recursive, body.dry_run, clean_existing=body.clean_existing, use_bookstore=body.use_bookstore, use_content_meta=body.use_content_meta, delay=body.delay)
             response_object["status"] = "success"
-            response_object["result"] = {"started": True, **_read_auto_classify_status()}
+            response_object["result"] = {"started": True, **_read_classify_proposal()}
             return response_object
 
         classify_kwargs: dict[str, Any] = {"content_type": content_type, "recursive": body.recursive, "dry_run": body.dry_run}
@@ -780,7 +782,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     @router.get("/categories/auto-classify-status", dependencies=admin_dep)
     async def get_auto_classify_status() -> dict[str, Any]:
         """진행 중이거나 마지막으로 끝난 자동 분류 작업 상태 조회 (폴링용)"""
-        return {"status": "success", "result": _read_auto_classify_status()}
+        return {"status": "success", "result": _read_classify_proposal()}
 
     @router.get("/categories/{category:path}")
     async def get_books_in_category(category: str, limit: int = 0, cursor: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:
