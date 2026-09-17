@@ -111,7 +111,10 @@ def stale_running_status(status: dict[str, Any], stale_seconds: float, now: floa
         if age <= stale_seconds:
             return None
     # updated_at 이 없거나 꼴이 틀린 상태 파일은 살아있다고 볼 근거가 없다.
-    return {**status, "status": "failed", "error": "백엔드가 다시 시작되어 자동 분류가 중단되었습니다. 다시 실행해 주세요."}
+    # "다시 실행"을 권하면 안 된다 — 분류 제안을 다시 누르면 지금까지 쌓인 pending/failed
+    # 행이 전부 지워진다. 재개 설계가 지키려는 바로 그 데이터를 이 메시지가 스스로
+    # 버리라고 안내하는 셈이라, 무엇을 다시 눌러야 하는지 말하지 않고 상황만 알린다.
+    return {**status, "status": "failed", "error": "백엔드가 다시 시작되어 진행 중이던 작업이 중단되었습니다. 남은 항목을 확인한 뒤 진행하세요."}
 
 
 def custom_jsonable_encoder(obj, **kwargs):

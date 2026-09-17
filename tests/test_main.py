@@ -2210,7 +2210,10 @@ class TestStaleRunningStatus:
 
         assert stale is not None
         assert stale["status"] == "failed"
-        assert "다시 실행" in stale["error"]
+        assert "중단" in stale["error"]
+        # 재실행(분류 제안을 다시 누르는 것)은 남은 pending/failed 행을 지운다 —
+        # 이 메시지가 그 파괴적인 행동을 권하면 안 된다.
+        assert "다시 실행" not in stale["error"]
         # 진행 수치는 남겨 둔다. 어디까지 갔는지 보여야 한다
         assert stale["remaining_count"] == 19
 
