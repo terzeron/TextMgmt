@@ -105,8 +105,6 @@ function setupMockResponses(
       }
     } else if (url === apiPrefix + "/category-mismatches/reload-status") {
       resolve({ status: "idle" });
-    } else if (url === apiPrefix + "/categories/auto-classify-status") {
-      resolve({ status: "idle" });
     } else if (url.startsWith("/category-mappings")) {
       resolve(mappingsResult);
     } else if (url.startsWith("/hidden-categories")) {
@@ -4105,8 +4103,6 @@ describe("CategoryAdmin 분류 제안", () => {
       else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
       else if (url.startsWith("/category-mismatches/reload-status"))
         resolve({ status: "idle" });
-      else if (url === "/categories/auto-classify-status")
-        resolve({ status: "idle" });
       else if (url === "/categories/classify-proposal")
         resolve(resultRef.current);
       else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
@@ -5712,14 +5708,11 @@ describe("CategoryAdmin 재적재 충돌 및 폴링 방어 처리", () => {
   function setupWithHeldReloadStatus({
     mismatchResult = MISMATCH_RESPONSE_WITH_DATA,
     detailResult = null,
-    autoClassifyStatus = { status: "idle" },
   } = {}) {
     mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
       if (url === "/categories") resolve(CATEGORIES_RESPONSE);
       else if (url === "/category-mismatches") resolve(mismatchResult);
       else if (url.startsWith("/category-mismatches/reload-status")) return;
-      else if (url === "/categories/auto-classify-status")
-        resolve(autoClassifyStatus);
       else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
       else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
       else if (url.startsWith("/latest-excluded-categories"))
@@ -5944,8 +5937,6 @@ describe("CategoryAdmin 재적재 충돌 및 폴링 방어 처리", () => {
         reject("status error");
       else if (url.startsWith("/category-mismatches/reload-status"))
         resolve({ status: "idle" });
-      else if (url === "/categories/auto-classify-status")
-        resolve({ status: "idle" });
       else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
       else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
       else if (url.startsWith("/latest-excluded-categories"))
@@ -5962,33 +5953,12 @@ describe("CategoryAdmin 재적재 충돌 및 폴링 방어 처리", () => {
     });
   });
 
-  it("자동 분류 상태 조회가 실패해도 화면을 유지한다", async () => {
-    mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
-      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
-      else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
-      else if (url.startsWith("/category-mismatches/reload-status"))
-        resolve({ status: "idle" });
-      else if (url === "/categories/auto-classify-status")
-        reject("auto classify status error");
-      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
-      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
-      else if (url.startsWith("/latest-excluded-categories"))
-        resolve(LATEST_EXCLUDED_RESPONSE);
-    });
-    render(<CategoryAdmin />);
-    await waitFor(() => {
-      expect(screen.getByText("1_fiction")).toBeTruthy();
-    });
-  });
-
   it("분류 제안 폴링 요청이 실패해도 진행 표시를 유지한다", async () => {
     let failPoll = false;
     mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
       if (url === "/categories") resolve(CATEGORIES_RESPONSE);
       else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
       else if (url.startsWith("/category-mismatches/reload-status"))
-        resolve({ status: "idle" });
-      else if (url === "/categories/auto-classify-status")
         resolve({ status: "idle" });
       else if (url === "/categories/classify-proposal") {
         if (failPoll) reject("poll error");
@@ -6028,8 +5998,6 @@ describe("CategoryAdmin 재적재 충돌 및 폴링 방어 처리", () => {
       if (url === "/categories") resolve(CATEGORIES_RESPONSE);
       else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
       else if (url.startsWith("/category-mismatches/reload-status"))
-        resolve({ status: "idle" });
-      else if (url === "/categories/auto-classify-status")
         resolve({ status: "idle" });
       else if (url === "/categories/classify-proposal")
         heldResolvers.push(resolve);
@@ -6078,8 +6046,6 @@ describe("CategoryAdmin 재적재 충돌 및 폴링 방어 처리", () => {
       else if (url.endsWith("/category-mismatches"))
         resolve(MISMATCH_RESPONSE_EMPTY);
       else if (url.includes("/category-mismatches/reload-status"))
-        resolve({ status: "idle" });
-      else if (url.includes("/categories/auto-classify-status"))
         resolve({ status: "idle" });
       else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
       else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
@@ -6260,8 +6226,6 @@ describe("CategoryAdmin 직전 작업 상태 잔상 처리", () => {
         resolve(MISMATCH_RESPONSE_WITH_DATA);
       else if (url.startsWith("/category-mismatches/reload-status"))
         resolve(status);
-      else if (url === "/categories/auto-classify-status")
-        resolve({ status: "idle" });
       else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
       else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
       else if (url.startsWith("/latest-excluded-categories"))
@@ -6352,8 +6316,6 @@ describe("CategoryAdmin 재적재 중 버튼 비활성 일관성", () => {
         resolve(MISMATCH_RESPONSE_WITH_DATA);
       else if (url.startsWith("/category-mismatches/reload-status"))
         resolve(runningStatus);
-      else if (url === "/categories/auto-classify-status")
-        resolve({ status: "idle" });
       else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
       else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
       else if (url.startsWith("/latest-excluded-categories"))

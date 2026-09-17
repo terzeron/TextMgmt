@@ -4324,7 +4324,7 @@ def test_move_classified_file_keeps_both_when_content_differs(tmp_path: Path):
     existing.parent.mkdir(parents=True)
     existing.write_text("기존 파일 내용은 다르다", encoding="utf-8")
 
-    result, err = asyncio_runner(manager._move_classified_file(src, "B", ["kw"], "book", clean_existing=True))
+    result, err = asyncio_runner(manager._move_classified_file(src, "B", "book", clean_existing=True))
 
     assert err is None
     assert result["to"] == "B/book (1).txt"
@@ -4343,7 +4343,7 @@ def test_move_classified_file_numbers_up_when_bracket_name_taken(tmp_path: Path)
     (tmp_path / "B" / "book.txt").write_text("첫 번째", encoding="utf-8")
     (tmp_path / "B" / "book (1).txt").write_text("두 번째", encoding="utf-8")
 
-    result, err = asyncio_runner(manager._move_classified_file(src, "B", ["kw"], "book"))
+    result, err = asyncio_runner(manager._move_classified_file(src, "B", "book"))
 
     assert err is None
     assert result["to"] == "B/book (2).txt"
@@ -4359,7 +4359,7 @@ def test_move_classified_file_same_size_different_content_keeps_both(tmp_path: P
     (tmp_path / "B").mkdir()
     (tmp_path / "B" / "book.txt").write_text("BBBB", encoding="utf-8")
 
-    result, err = asyncio_runner(manager._move_classified_file(src, "B", ["kw"], "book", clean_existing=True))
+    result, err = asyncio_runner(manager._move_classified_file(src, "B", "book", clean_existing=True))
 
     assert err is None
     assert result["to"] == "B/book (1).txt"
@@ -4372,7 +4372,7 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
 
     # 1. 1379-1380: old_rel_path ValueError
     outside_file = Path("/tmp/outside/file.txt")
-    res, err = asyncio_runner(manager._move_classified_file(outside_file, "B", ["kw"], "book"))
+    res, err = asyncio_runner(manager._move_classified_file(outside_file, "B", "book"))
     assert res is None
     assert err == "잘못된 파일 경로입니다"
 
@@ -4388,7 +4388,7 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
         return orig_resolve(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "resolve", mock_resolve_err)
-    res2, err2 = asyncio_runner(manager._move_classified_file(f1, "bad_target", ["kw"], "book"))
+    res2, err2 = asyncio_runner(manager._move_classified_file(f1, "bad_target", "book"))
     assert res2 is None
     assert err2 == "잘못된 대상 경로입니다"
     monkeypatch.setattr(Path, "resolve", orig_resolve)
@@ -4402,7 +4402,7 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
         raise OSError("samefile failed")
 
     monkeypatch.setattr(Path, "samefile", mock_samefile_err)
-    res3, err3 = asyncio_runner(manager._move_classified_file(f1, "B", ["kw"], "book", dry_run=True, clean_existing=True))
+    res3, err3 = asyncio_runner(manager._move_classified_file(f1, "B", "book", dry_run=True, clean_existing=True))
     assert res3["action"] == "duplicate_clean"
     assert res3["status"] == "dry_run"
     assert err3 is None
@@ -4414,7 +4414,7 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
         raise OSError("delete duplicate failed")
 
     monkeypatch.setattr(Path, "unlink", mock_unlink_err)
-    res4, err4 = asyncio_runner(manager._move_classified_file(f1, "B", ["kw"], "book", dry_run=False, clean_existing=True))
+    res4, err4 = asyncio_runner(manager._move_classified_file(f1, "B", "book", dry_run=False, clean_existing=True))
     assert res4 is None
     assert "중복 파일 정리 실패" in err4
     monkeypatch.setattr(Path, "unlink", orig_unlink)
@@ -4434,7 +4434,7 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
         raise OSError("cross-device link failed")
 
     monkeypatch.setattr(shutil, "move", mock_move_err)
-    res5, err5 = asyncio_runner(manager_err._move_classified_file(f1, "B", ["kw"], "book"))
+    res5, err5 = asyncio_runner(manager_err._move_classified_file(f1, "B", "book"))
     assert res5 is None
     assert "파일 이동 실패" in err5
     monkeypatch.setattr(shutil, "move", orig_move)
@@ -4465,7 +4465,7 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(shutil, "move", mock_rollback_move_err)
 
-    res6, err6 = asyncio_runner(manager_add_err._move_classified_file(f2, "B", ["kw"], "book"))
+    res6, err6 = asyncio_runner(manager_add_err._move_classified_file(f2, "B", "book"))
     assert res6 is None
     assert "ES add error" in err6
     assert "파일 롤백 실패" in err6
@@ -4487,7 +4487,7 @@ def test_move_classified_file_is_a_noop_when_already_in_target_category(tmp_path
     es.deleted_paths = []
     es.delete_by_file_paths = lambda paths, exclude_ids=None: es.deleted_paths.extend(paths) or 0
 
-    result, err = asyncio_runner(manager._move_classified_file(book, "2_science", ["kw"], "book"))
+    result, err = asyncio_runner(manager._move_classified_file(book, "2_science", "book"))
 
     assert err is None
     assert result["status"] == "moved"
@@ -4513,7 +4513,7 @@ def test_move_classified_file_does_not_orphan_a_hardlink(tmp_path: Path):
     target_dir.mkdir()
     os.link(source, target_dir / source.name)
 
-    result, err = asyncio_runner(manager._move_classified_file(source, "2_science", ["kw"], "book", clean_existing=False))
+    result, err = asyncio_runner(manager._move_classified_file(source, "2_science", "book", clean_existing=False))
 
     assert result is None
     assert "대상 경로에 파일이 이미 존재합니다" in err
@@ -4534,7 +4534,7 @@ def test_move_classified_file_rejects_existing_duplicate_without_clean(tmp_path:
     target_dir.mkdir()
     (target_dir / conflict.name).write_text("같은 내용", encoding="utf-8")
 
-    result, err = asyncio_runner(manager._move_classified_file(conflict, "2_science", ["kw"], "book", clean_existing=False))
+    result, err = asyncio_runner(manager._move_classified_file(conflict, "2_science", "book", clean_existing=False))
 
     assert result is None
     assert "대상 경로에 파일이 이미 존재합니다" in err
@@ -4556,7 +4556,7 @@ def test_move_classified_file_preserves_existing_es_metadata(tmp_path: Path, mon
 
     monkeypatch.setattr("utils.loader.Loader.read_file", fail_read_file)
 
-    result, err = asyncio_runner(manager._move_classified_file(source_file, "2_science", ["kw"], "book"))
+    result, err = asyncio_runner(manager._move_classified_file(source_file, "2_science", "book"))
 
     assert err is None
     assert result["status"] == "moved"
@@ -5064,7 +5064,7 @@ def test_move_classified_file_target_traversal_and_restore_err(tmp_path: Path, m
     f.write_text("data")
 
     # 1. Line 1385: target_path not relative to root
-    res1, err1 = asyncio_runner(manager._move_classified_file(f, "../outside", ["k"], "txt"))
+    res1, err1 = asyncio_runner(manager._move_classified_file(f, "../outside", "txt"))
     assert err1 == "잘못된 대상 경로입니다"
 
     # 2. Lines 1498-1499: ES reindex fails, rollback add_book raises exception
@@ -5081,7 +5081,7 @@ def test_move_classified_file_target_traversal_and_restore_err(tmp_path: Path, m
 
     monkeypatch.setattr(manager, "add_book", mock_add_book_raise)
     (tmp_path / "target").mkdir(parents=True, exist_ok=True)
-    res2, err2 = asyncio_runner(manager._move_classified_file(f, "target", ["k"], "txt"))
+    res2, err2 = asyncio_runner(manager._move_classified_file(f, "target", "txt"))
     assert err2 is not None
     assert "기존 ES 문서 복구 실패" in err2
 
@@ -5254,6 +5254,29 @@ def test_propose_category_candidates_keyword_top_with_runner_up(tmp_path: Path):
     assert proposal["target_category"] == "3_SF"
     assert [c["category"] for c in proposal["candidates"]] == ["3_SF", "5_음악"]
     assert proposal["candidates"][0]["category"] == proposal["target_category"]
+
+
+def test_propose_category_item_always_carries_matched_keywords(tmp_path: Path):
+    """제안 항목은 어느 경로로 나오든 matched_keywords 키를 달고 나온다.
+
+    화면이 '왜 이 카테고리인가'를 설명할 때 쓰는 근거다. 이 키가 조용히 빠져도
+    다른 테스트는 전부 통과하므로(실제로 한 번 그렇게 빠뜨렸다) 여기서 직접 잠근다.
+    키워드가 맞은 경로는 맞은 키워드가 담기고, 아무것도 못 맞힌 경로는 빈 배열이다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    matched = source / "과학소설 모음.epub"
+    matched.write_text("x")
+    unmatched = source / "제목 없음.epub"
+    unmatched.write_text("x")
+    fake = FakeClassifier(None, "not_found", "r", None, None)
+
+    hit = manager._propose_category_for_file(matched, "A", {"3_SF": ["과학소설"]}, fake, True, True)
+    miss = manager._propose_category_for_file(unmatched, "A", {"3_SF": ["과학소설"]}, fake, True, True)
+
+    assert hit["matched_keywords"] == ["과학소설"]
+    assert miss["matched_keywords"] == []
 
 
 def test_propose_category_candidates_keyword_tie(tmp_path: Path):
