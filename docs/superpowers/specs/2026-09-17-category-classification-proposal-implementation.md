@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS classify_proposal_status (
 ### `_is_high_confidence` — 실패 시 닫히게(fail closed)
 
 ```python
-if confidence is None:
+if confidence is None or confidence < BookManager.MODEL_CERTAIN_MIN_CONFIDENCE:
     return False
 policy = getattr(classifier_service, "bookstore_policy", None)
 if policy is None or getattr(policy, "override_below", 0.0) <= 0.0:
@@ -164,7 +164,25 @@ if policy is None or getattr(policy, "override_below", 0.0) <= 0.0:
 return not policy.prefers_bookstore(confidence)
 ```
 
-**리뷰 포인트.** `prefers_bookstore`는 서점 정책 파일이 없으면 `override_below == 0`이라 **모든 점수에 대해 False**를 돌려준다. `not prefers_bookstore(...)`를 그대로 쓰면 점수와 무관하게 전부 `certain`이 되어 자동 체크된다. 정책이 없으면 근거가 없는 것이므로 '낮음'으로 본다. 이 성질은 `test_high_confidence_needs_a_calibrated_boundary`가 잠근다.
+두 가지를 모두 넘어야 한다.
+
+**1. 정책 파일이 있어야 한다.** `prefers_bookstore`는 서점 정책 파일이 없으면 `override_below == 0`이라 **모든 점수에 대해 False**를 돌려준다. `not prefers_bookstore(...)`를 그대로 쓰면 점수와 무관하게 전부 `certain`이 되어 자동 체크된다. 정책이 없으면 근거가 없는 것이므로 '낮음'으로 본다.
+
+**2. `MODEL_CERTAIN_MIN_CONFIDENCE = 0.10`을 넘어야 한다.** 1번만으로는 한참 모자랐다. 서점 경계(`override_below`)는 "모델과 서점 중 누구를 믿을까"를 가르려고 잰 값이지 "확실한가"를 가르려고 잰 값이 아니다. 이 코퍼스에서 그 값은 **0.056**이라, 제안의 **88%**가 모델 단독 판정으로 미리 체크됐다.
+
+752건을 실측했다(파일이 현재 들어있는 카테고리를 정답으로 간주).
+
+| 확신도 | 표본 | 일치 |
+| --- | --- | --- |
+| 0.056~0.07 | 23 | 52.2% |
+| 0.07~0.08 | 12 | 50.0% |
+| 0.08~0.10 | 24 | 58.3% |
+| 0.10~0.12 | 361 | 97.5% |
+| 0.12~ | 332 | 97.9% |
+
+**0.10에 절벽이 있다.** 그 아래는 동전 던지기라 사람이 봐야 한다. 실제로 성인 웹소설이 확신도 0.069~0.088로 `2_수필서간일기`에 미리 체크되던 사례 4건 중 3건이 이 경계로 걸러진다. 남은 1건(0.112)은 97.5% 구간의 오답, 즉 진짜 모델 오류다.
+
+이 성질은 `test_high_confidence_needs_more_than_the_bookstore_boundary`와 `test_low_confidence_model_answer_is_not_pre_checked`가 잠근다. 위 측정은 모델이 이 코퍼스로 학습됐을 가능성 때문에 높은 구간이 부풀려져 있을 수 있다 — 낮은 구간의 53%는 같은 편향 아래서도 낮으므로 절벽의 존재는 유효하다.
 
 ### 후보(`candidates`) 조립
 
@@ -179,6 +197,8 @@ return not policy.prefers_bookstore(confidence)
 | 서점 1곳           | 1개                                              |
 | 서점 갈림          | 득표 상위 2개                                    |
 | 정보 없음          | 낮은 확신도 모델 답이 있으면 1개, 없으면 빈 배열 |
+
+**2순위가 비면 모델이 낸 답으로 채운다.** 키워드가 목적지를 정하면 모델 답은 통째로 버려졌다. 키워드가 하나만 맞는 흔한 경우에 추천 2 칸이 늘 비어, 관리자가 "이건 아닌데" 싶어도 2,000개가 넘는 드롭다운 말고는 길이 없었다. 모델은 2순위를 이미 계산해 두고도 버리고 있었으므로, `entry["model_candidates"]`에 남겨(서점 `votes`와 같은 방식) 빈 자리를 메운다. 후보 상한 2개와 `candidates[0]["category"] == target_category` 불변식은 그대로다.
 
 **후보가 2개 있어도 `unknown`은 `unknown`이다.** 시스템이 못 정했다는 사실은 후보를 더 보여준다고 바뀌지 않는다. 사람이 셀렉트박스로 골라야 체크할 수 있다.
 
