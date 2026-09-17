@@ -4130,10 +4130,17 @@ describe("CategoryAdmin 분류 제안", () => {
     render(<CategoryAdmin />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("1_fiction/a.epub 선택").checked).toBe(true);
+      expect(
+        screen.getByLabelText("1_fiction/a.epub 추천 1 선택").checked,
+      ).toBe(true);
     });
-    expect(screen.getByLabelText("1_fiction/b.epub 선택").checked).toBe(false);
-    expect(screen.getByLabelText("1_fiction/c.epub 선택").disabled).toBe(true);
+    expect(screen.getByLabelText("1_fiction/b.epub 추천 1 선택").checked).toBe(
+      false,
+    );
+    // 이미 옮긴 행은 목적지를 다시 고를 수 없다.
+    expect(screen.getByLabelText("1_fiction/c.epub 목적지").disabled).toBe(
+      true,
+    );
   });
 
   it("상태가 failed면 에러 메시지를 보여준다 (I2)", async () => {
@@ -4321,6 +4328,49 @@ describe("CategoryAdmin 분류 제안", () => {
     );
   });
 
+  it("분류가 도는 동안 분류 제안 버튼은 계속 돌고 진행 수를 보여준다", async () => {
+    // 시작 요청이 끝나면 스피너를 내리던 예전 동작은, 정작 오래 걸리는 분류 자체가
+    // 도는 동안 버튼이 멈춘 것처럼 보이게 했다. 작업이 끝날 때까지 돌아야 한다.
+    const resultRef = {
+      current: {
+        status: "running",
+        source_category: "1_fiction",
+        total_count: 5,
+        processed_count: 2,
+        items: [PROPOSAL_ITEM_CERTAIN],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    const button = await screen.findByTitle("분류 제안");
+    await waitFor(() => {
+      expect(button.querySelector(".spinner-border")).toBeTruthy();
+    });
+    expect(button.textContent).toContain("2/5");
+    expect(button.disabled).toBe(true);
+  });
+
+  it("분류가 끝나면 분류 제안 버튼의 스피너가 멈춘다", async () => {
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 5,
+        processed_count: 5,
+        items: [PROPOSAL_ITEM_CERTAIN],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    const button = await screen.findByTitle("분류 제안");
+    await waitFor(() => {
+      expect(screen.getByText("확실한 책")).toBeTruthy();
+    });
+    expect(button.querySelector(".spinner-border")).toBeNull();
+  });
+
   it("승인 요청 payload에 선택된 행만, 사용자가 고친 목적지로 담긴다", async () => {
     const resultRef = {
       current: {
@@ -4335,19 +4385,23 @@ describe("CategoryAdmin 분류 제안", () => {
     render(<CategoryAdmin />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("1_fiction/a.epub 선택").checked).toBe(true);
+      expect(
+        screen.getByLabelText("1_fiction/a.epub 추천 1 선택").checked,
+      ).toBe(true);
     });
 
-    // 애매한 책은 기본 선택되지 않으므로, 목적지를 고른 뒤 직접 체크한다.
+    // 애매한 책은 기본 선택되지 않으므로 직접 선택으로 목적지를 준다.
     fireEvent.change(screen.getByLabelText("1_fiction/b.epub 목적지"), {
       target: { value: "2_science" },
     });
-    fireEvent.click(screen.getByLabelText("1_fiction/b.epub 선택"));
 
-    // 확실한 책은 목적지를 사용자가 다른 곳으로 고친다.
+    // 확실한 책은 목적지를 사용자가 다른 곳으로 고친다 — 추천 체크는 꺼진다.
     fireEvent.change(screen.getByLabelText("1_fiction/a.epub 목적지"), {
       target: { value: "3_history" },
     });
+    expect(screen.getByLabelText("1_fiction/a.epub 추천 1 선택").checked).toBe(
+      false,
+    );
 
     mockJsonPostReq.mockImplementation(
       (url, payload, resolve, _reject, final) => {
@@ -4390,15 +4444,15 @@ describe("CategoryAdmin 분류 제안", () => {
     render(<CategoryAdmin />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("1_fiction/a.epub 선택").checked).toBe(true);
+      expect(
+        screen.getByLabelText("1_fiction/a.epub 추천 1 선택").checked,
+      ).toBe(true);
     });
 
-    // 목적지를 지우면 표(1차 방어)가 즉시 선택에서 뺀다. 승인 버튼은 대상이
-    // 0건이 되어 비활성화된다 — CategoryAdmin의 proposalApplyItems가
-    // isSelectable로 한 번 더 거른 결과(2차 방어)와 항상 일치해야 한다.
-    fireEvent.change(screen.getByLabelText("1_fiction/a.epub 목적지"), {
-      target: { value: "" },
-    });
+    // 추천 체크를 풀면 그 행에는 목적지가 없다. 승인 버튼은 대상이 0건이 되어
+    // 비활성화된다 — CategoryAdmin의 proposalApplyItems가 isSelectable로 거른
+    // 결과와 화면이 항상 일치해야 한다.
+    fireEvent.click(screen.getByLabelText("1_fiction/a.epub 추천 1 선택"));
 
     const approveButton = screen.getByRole("button", { name: /분류 승인/ });
     expect(approveButton.textContent).toContain("분류 승인 (0건)");

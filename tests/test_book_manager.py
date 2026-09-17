@@ -5413,11 +5413,38 @@ def test_propose_category_changes_progress_reports_new_items_only(tmp_path: Path
     result, error = asyncio_runner(manager.propose_category_changes("A", {"3_SF": ["과학소설"]}, use_bookstore=False, use_content_meta=False, on_progress=progress.append))
 
     assert error is None
-    assert len(progress) == 2
-    assert all(len(call["new_items"]) == 1 for call in progress)
-    assert "items" not in progress[0]
-    assert "items" not in progress[1]
-    assert [call["new_items"][0]["file_path"] for call in progress] == [item["file_path"] for item in result["items"]]
+    # 첫 보고는 대상 파일 전체의 자리(이름만)를 한 번에 깔고, 이후 보고는 분류가 끝난
+    # 항목만 하나씩 채운다. 어느 쪽도 누적 목록을 통째로 싣지 않는다.
+    assert all("items" not in call for call in progress)
+    updates = [call for call in progress if "updated_items" in call]
+    assert len(updates) == 2
+    assert all(len(call["updated_items"]) == 1 for call in updates)
+    assert [call["updated_items"][0]["file_path"] for call in updates] == [item["file_path"] for item in result["items"]]
+
+
+def test_propose_category_changes_lists_every_target_before_classifying(tmp_path: Path):
+    """분류를 시작하기 전에 대상 파일 전체가 이름만이라도 먼저 보고된다.
+
+    한 권에 서점 조회까지 하면 수 초가 든다. 다 끝난 뒤에 목록을 주면 관리자는 그동안
+    무엇이 대상인지조차 알 수 없다. 첫 보고에 전체 목록이 실려야 화면이 이름부터
+    채우고 분류 결과를 뒤이어 메울 수 있다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    (source / "가.epub").write_text("x")
+    (source / "나.epub").write_text("x")
+
+    progress: list[dict] = []
+    asyncio_runner(manager.propose_category_changes("A", {}, use_bookstore=False, use_content_meta=False, on_progress=progress.append))
+
+    first = progress[0]
+    assert first["processed_count"] == 0, "분류가 시작되기 전에 나와야 한다"
+    assert first["total_count"] == 2
+    assert sorted(item["file_path"] for item in first["new_items"]) == ["A/가.epub", "A/나.epub"]
+    # 아직 분류 전이라 등급도 목적지도 없다. 화면은 이것으로 "분류 중"을 구분한다.
+    assert all(item["grade"] is None and item["target_category"] is None for item in first["new_items"])
+    assert all(item["title"] for item in first["new_items"])
 
 
 def test_propose_category_changes_result_items_still_has_everything(tmp_path: Path):

@@ -684,6 +684,21 @@ class CategoryMapping:
             items.append(item)
         return items
 
+    def update_classify_proposal_item_payloads(self, items: list[dict[str, Any]], content_type: str = "book") -> None:
+        """분류가 끝난 항목의 payload를 덮어쓴다. 여러 건을 executemany 한 번으로 보낸다.
+
+        제안 시작 시 이름만 담은 행을 먼저 넣어두고(add_classify_proposal_items),
+        분류가 끝나는 대로 이 메서드로 그 행을 채운다. apply_status는 건드리지 않는다 —
+        승인 작업이 쓰는 컬럼이라 제안 갱신이 덮으면 이동 기록이 사라진다.
+        """
+        if not items:
+            return
+        rows = [(json.dumps(item, ensure_ascii=False), content_type, item.get("file_path")) for item in items]
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.executemany("UPDATE classify_proposal_items SET payload = %s WHERE content_type = %s AND file_path = %s", rows)
+            conn.commit()
+
     def update_classify_proposal_item_status(self, file_path: str, apply_status: str, apply_error: str | None = None, content_type: str = "book") -> None:
         """파일 하나를 옮긴 직후 그 행 하나만 바로 기록한다.
 

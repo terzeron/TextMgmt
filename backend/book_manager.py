@@ -1355,6 +1355,9 @@ class BookManager:
             return None, best_keywords, f"여러 카테고리가 동일 점수로 일치합니다: {', '.join(tied[:3])}", ranked
         return best_category, best_keywords, None, ranked
 
+    # 제안 시작 시 이름만 담은 행을 미리 넣을 때 한 번에 보내는 개수.
+    PROPOSAL_PLACEHOLDER_CHUNK = 500
+
     GRADE_CERTAIN = "certain"
     GRADE_UNSURE = "unsure"
     GRADE_UNKNOWN = "unknown"
@@ -1514,6 +1517,31 @@ class BookManager:
         file_paths = self._iter_category_indexable_files(category, recursive=False)
         result: dict[str, Any] = {"content_type": content_type, "source_category": category, "total_count": len(file_paths), "processed_count": 0, "items": [], "failures": []}
 
+        async def _report(payload: dict[str, Any]) -> None:
+            if on_progress is None:
+                return
+            # 콜백이 동기 함수(None 반환)일 수도, main.py처럼 블로킹 DB 호출을
+            # asyncio.to_thread로 넘기는 코루틴일 수도 있다 — apply_category_changes의
+            # on_item_done과 같은 방식으로, awaitable이면 여기서 대신 기다려준다.
+            outcome = on_progress({"total_count": result["total_count"], "processed_count": result["processed_count"], **payload})
+            if inspect.isawaitable(outcome):
+                await outcome
+
+        # 분류를 시작하기 전에 대상 파일의 이름만 담은 행을 먼저 만들어 둔다. 한 권에
+        # 서점 조회까지 하면 수 초가 들어, 다 끝난 뒤에 목록을 보여주면 관리자는 그동안
+        # 무엇이 대상인지조차 알 수 없다. 이름이 먼저 깔리고 분류 결과가 채워지는 편이
+        # 진행 상황을 읽기 쉽다. 목록 순서도 완료 순서가 아니라 파일 순서로 고정된다.
+        placeholders: list[dict[str, Any]] = []
+        for file_path in file_paths:
+            try:
+                rel_path = str(file_path.relative_to(self.path_prefix))
+            except ValueError:
+                continue
+            placeholders.append({"file_path": rel_path, "title": file_path.stem, "current_category": category, "target_category": None, "grade": None, "confidence": None, "source": None, "matched_keywords": [], "model_category": None, "reason": "", "candidates": [], "apply_status": "pending", "apply_error": None})
+        # 한 번에 다 보내면 카테고리가 클 때(최대 79,589권) 패킷 하나가 지나치게 커진다.
+        for start in range(0, len(placeholders), self.PROPOSAL_PLACEHOLDER_CHUNK):
+            await _report({"new_items": placeholders[start : start + self.PROPOSAL_PLACEHOLDER_CHUNK]})
+
         for file_path in file_paths:
             result["processed_count"] += 1
             try:
@@ -1529,18 +1557,12 @@ class BookManager:
                 continue
             new_item = {"file_path": rel_path, "title": file_path.stem, "current_category": category, "apply_status": "pending", "apply_error": None, **proposal}
             result["items"].append(new_item)
-            if on_progress is not None:
-                # 진행 보고에는 이번 틱에서 새로 생긴 항목(new_items)만 싣는다. 누적 목록을
-                # 매번 통째로 실으면 책 한 권 보고할 때마다 지금까지의 전체 목록을 다시
-                # 실어 보내는 셈이라, 보고 비용이 책 수의 제곱으로 늘어난다(과거 JSON 상태
-                # 파일 방식에서 실측된 문제). 누적 목록(result["items"])은 함수가 끝날 때
-                # 호출자에게 그대로 돌려주고, 그 저장은 호출자 책임으로 둔다.
-                # 콜백이 동기 함수(None 반환)일 수도, main.py처럼 블로킹 DB 호출을
-                # asyncio.to_thread로 넘기는 코루틴일 수도 있다 — apply_category_changes의
-                # on_item_done과 같은 방식으로, awaitable이면 여기서 대신 기다려준다.
-                outcome = on_progress({"total_count": result["total_count"], "processed_count": result["processed_count"], "new_items": [new_item]})
-                if inspect.isawaitable(outcome):
-                    await outcome
+            # 진행 보고에는 이번 틱에서 분류가 끝난 항목(updated_items)만 싣는다. 누적
+            # 목록을 매번 통째로 실으면 책 한 권 보고할 때마다 지금까지의 전체 목록을 다시
+            # 실어 보내는 셈이라, 보고 비용이 책 수의 제곱으로 늘어난다(과거 JSON 상태
+            # 파일 방식에서 실측된 문제). 누적 목록(result["items"])은 함수가 끝날 때
+            # 호출자에게 그대로 돌려주고, 그 저장은 호출자 책임으로 둔다.
+            await _report({"updated_items": [new_item]})
 
         return result, None
 

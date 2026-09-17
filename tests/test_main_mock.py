@@ -467,6 +467,75 @@ class TestCategoryMismatchAdmin:
         flattened = [item for call in add_calls for item in call.args[0]]
         assert flattened == all_items
 
+    def test_classify_proposal_job_stores_names_first_then_fills_them_in(self, mock_bm, mock_cat, tmp_path):
+        """대상 파일의 이름을 먼저 저장하고, 분류가 끝난 항목은 그 행을 채운다.
+
+        이름이 먼저 깔려야 관리자가 작업 도중에 들어와도 무엇이 대상인지 볼 수 있다.
+        채우는 쪽이 INSERT면 같은 책이 두 줄로 보이므로 UPDATE여야 한다.
+        """
+        import asyncio
+
+        mock_bm.path_prefix = tmp_path
+        mock_cat.get_all_mappings.return_value = {}
+        install_classify_status_store(mock_cat, {"status": "running", "total_count": 0, "processed_count": 0})
+
+        placeholders = [{"file_path": f"0_inbox/{i}.epub", "title": f"{i}", "grade": None, "target_category": None} for i in range(3)]
+        classified = [{**item, "grade": "certain", "target_category": "3_SF"} for item in placeholders]
+
+        async def fake_propose(*args, on_progress=None, **kwargs):
+            outcome = on_progress({"total_count": 3, "processed_count": 0, "new_items": placeholders})
+            if outcome is not None:
+                await outcome
+            for i, item in enumerate(classified, start=1):
+                outcome = on_progress({"total_count": 3, "processed_count": i, "updated_items": [item]})
+                if outcome is not None:
+                    await outcome
+            return {"content_type": "book", "source_category": "0_inbox", "total_count": 3, "processed_count": 3, "items": classified, "failures": []}, None
+
+        mock_bm.propose_category_changes.side_effect = fake_propose
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal")
+        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
+        _run_proposal_job = freevars["_run_classify_proposal_job"]
+
+        asyncio.run(_run_proposal_job("0_inbox", True, True, 1.2))
+
+        inserted = [item for call in mock_cat.add_classify_proposal_items.call_args_list for item in call.args[0]]
+        assert inserted == placeholders, "이름 행이 먼저 들어가야 한다"
+        updated = [item for call in mock_cat.update_classify_proposal_item_payloads.call_args_list for item in call.args[0]]
+        assert updated == classified, "분류 결과는 기존 행을 채워야 한다"
+
+    def test_classify_proposal_job_flushes_the_update_tail(self, mock_bm, mock_cat, tmp_path):
+        """10의 배수가 아닌 갱신 꼬리도 반드시 넘긴다.
+
+        꼬리가 누락되면 목록 끝의 책들이 영원히 '분류 중'으로 남아, 다 끝났는데도
+        승인할 수 없는 행이 생긴다.
+        """
+        import asyncio
+
+        mock_bm.path_prefix = tmp_path
+        mock_cat.get_all_mappings.return_value = {}
+        install_classify_status_store(mock_cat, {"status": "running", "total_count": 0, "processed_count": 0})
+        classified = [{"file_path": f"0_inbox/{i}.epub", "grade": "certain"} for i in range(25)]
+
+        async def fake_propose(*args, on_progress=None, **kwargs):
+            for i, item in enumerate(classified, start=1):
+                outcome = on_progress({"total_count": 25, "processed_count": i, "updated_items": [item]})
+                if outcome is not None:
+                    await outcome
+            return {"content_type": "book", "source_category": "0_inbox", "total_count": 25, "processed_count": 25, "items": classified, "failures": []}, None
+
+        mock_bm.propose_category_changes.side_effect = fake_propose
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal")
+        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
+        _run_proposal_job = freevars["_run_classify_proposal_job"]
+
+        asyncio.run(_run_proposal_job("0_inbox", True, True, 1.2))
+
+        batch_sizes = [len(call.args[0]) for call in mock_cat.update_classify_proposal_item_payloads.call_args_list]
+        assert batch_sizes == [10, 10, 5]
+
     def test_classify_proposal_job_batch_size_10_makes_small_categories_visible_before_job_ends(self, mock_bm, mock_cat, tmp_path):
         """배치 크기가 10이어야, 100건 미만인 대부분의 카테고리(이 저장소 카테고리
         중앙값 5권)도 작업이 끝나기 전에 DB에서 이미 진행 상황을 볼 수 있다.

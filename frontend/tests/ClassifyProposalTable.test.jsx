@@ -7,7 +7,10 @@ import {
   cleanup,
   within,
 } from "@testing-library/react";
-import ClassifyProposalTable from "../src/ClassifyProposalTable";
+import ClassifyProposalTable, {
+  resolveTarget,
+  isSelectable,
+} from "../src/ClassifyProposalTable";
 
 // vitest globals(afterEach)가 꺼져 있어 testing-library 자동 cleanup이 동작하지
 // 않는다(CategoryAdmin.test.jsx와 동일 관례). render()가 남긴 DOM을 직접 치운다.
@@ -39,6 +42,7 @@ const ITEMS = [
     reason: "서점 한 곳",
     candidates: [
       { category: "5_음악", source: "bookstore", detail: "서점 1곳 일치" },
+      { category: "1_서양고전", source: "bookstore", detail: "서점 1곳 일치" },
     ],
     apply_status: "pending",
   },
@@ -60,14 +64,17 @@ const ITEMS = [
 ];
 const CATEGORIES = ["3_SF", "5_음악", "1_서양고전"];
 
+// 확실한 행은 부모가 추천 1을 미리 체크해 넘긴다.
+const FIRST_CHECKED = {
+  "A/a.epub": { source: "candidate", index: 0, category: "3_SF" },
+};
+
 function renderTable(overrides = {}) {
   const props = {
     items: ITEMS,
     categories: CATEGORIES,
-    selection: new Set(["A/a.epub"]),
-    targets: {},
-    onSelectionChange: vi.fn(),
-    onTargetChange: vi.fn(),
+    choices: FIRST_CHECKED,
+    onChoicesChange: vi.fn(),
     ...overrides,
   };
   render(<ClassifyProposalTable {...props} />);
@@ -75,70 +82,144 @@ function renderTable(overrides = {}) {
 }
 
 describe("ClassifyProposalTable", () => {
-  it("등급에 따라 체크박스 초기 상태가 다르다", () => {
+  it("체크박스가 추천 1·추천 2 열 안에 있고, 맨 앞 선택 열은 없다", () => {
     renderTable();
-    expect(screen.getByLabelText("A/a.epub 선택").checked).toBe(true);
-    expect(screen.getByLabelText("A/b.epub 선택").checked).toBe(false);
-    expect(screen.getByLabelText("A/c.epub 선택").disabled).toBe(true);
+    const row = screen.getByText("확실한 책").closest("tr");
+    const cells = within(row).getAllByRole("cell");
+    // 열 순서: 책, 현재, 추천1, 추천2, 직접 선택, 점수, 이동 상태
+    expect(cells).toHaveLength(7);
+    expect(cells[0].textContent).toBe("확실한 책");
+    expect(
+      within(cells[2]).getByLabelText("A/a.epub 추천 1 선택"),
+    ).toBeTruthy();
   });
 
-  it("불확실 행도 목적지를 고르면 체크할 수 있다", () => {
-    const props = renderTable({ targets: { "A/c.epub": "1_서양고전" } });
-    expect(screen.getByLabelText("A/c.epub 선택").disabled).toBe(false);
-    fireEvent.click(screen.getByLabelText("A/c.epub 선택"));
-    expect(props.onSelectionChange).toHaveBeenCalled();
+  it("등급에 따라 추천 체크 상태가 다르다", () => {
+    renderTable();
+    expect(screen.getByLabelText("A/a.epub 추천 1 선택").checked).toBe(true);
+    expect(screen.getByLabelText("A/b.epub 추천 1 선택").checked).toBe(false);
+    expect(screen.getByLabelText("A/b.epub 추천 1 선택").disabled).toBe(false);
+    // 불확실은 시스템이 목적지를 고르지 못한 행이라 추천을 그대로 승인할 수 없다.
+    expect(screen.getByLabelText("A/c.epub 추천 1 선택").disabled).toBe(true);
+    expect(screen.getByLabelText("A/c.epub 추천 2 선택").disabled).toBe(true);
   });
 
-  it("전체 선택은 비활성 행을 건너뛴다", () => {
-    const props = renderTable();
-    fireEvent.click(screen.getByLabelText("전체 선택"));
-    const next = props.onSelectionChange.mock.calls[0][0];
-    expect(next.has("A/c.epub")).toBe(false);
-    expect(next.has("A/b.epub")).toBe(true);
-  });
-
-  it("목적지를 바꾸면 알린다", () => {
-    const props = renderTable();
-    fireEvent.change(screen.getByLabelText("A/b.epub 목적지"), {
-      target: { value: "1_서양고전" },
-    });
-    expect(props.onTargetChange).toHaveBeenCalledWith("A/b.epub", "1_서양고전");
-  });
-
-  it("선택된 행의 목적지를 비우면 선택도 함께 풀린다", () => {
+  it("추천 2를 체크하면 목적지가 후보 2가 되고 추천 1은 풀린다", () => {
     const props = renderTable({
-      targets: { "A/c.epub": "1_서양고전" },
-      selection: new Set(["A/a.epub", "A/c.epub"]),
+      choices: {
+        "A/b.epub": { source: "candidate", index: 0, category: "5_음악" },
+      },
+    });
+    expect(screen.getByLabelText("A/b.epub 추천 1 선택").checked).toBe(true);
+
+    fireEvent.click(screen.getByLabelText("A/b.epub 추천 2 선택"));
+
+    const next = props.onChoicesChange.mock.calls[0][0];
+    expect(next["A/b.epub"]).toEqual({
+      source: "candidate",
+      index: 1,
+      category: "1_서양고전",
+    });
+
+    // 한 행의 목적지는 하나다 — 바뀐 상태를 렌더하면 추천 1은 꺼져 있어야 한다.
+    cleanup();
+    renderTable({ choices: next });
+    expect(screen.getByLabelText("A/b.epub 추천 1 선택").checked).toBe(false);
+    expect(screen.getByLabelText("A/b.epub 추천 2 선택").checked).toBe(true);
+  });
+
+  it("후보가 하나뿐인 행에는 추천 2 체크박스가 없다", () => {
+    renderTable();
+    expect(screen.queryByLabelText("A/a.epub 추천 2 선택")).toBeNull();
+  });
+
+  it("체크된 추천을 다시 누르면 그 행의 목적지가 사라진다", () => {
+    const props = renderTable();
+    fireEvent.click(screen.getByLabelText("A/a.epub 추천 1 선택"));
+    const next = props.onChoicesChange.mock.calls[0][0];
+    expect(next["A/a.epub"]).toBeUndefined();
+  });
+
+  it("직접 선택을 바꾸면 추천 체크가 모두 풀린다", () => {
+    const props = renderTable();
+    fireEvent.change(screen.getByLabelText("A/a.epub 목적지"), {
+      target: { value: "5_음악" },
+    });
+    const next = props.onChoicesChange.mock.calls[0][0];
+    expect(next["A/a.epub"]).toEqual({ source: "manual", category: "5_음악" });
+
+    // 바뀐 상태를 그대로 렌더하면 추천 체크는 꺼져 있어야 한다.
+    cleanup();
+    renderTable({ choices: next });
+    expect(screen.getByLabelText("A/a.epub 추천 1 선택").checked).toBe(false);
+    expect(screen.getByLabelText("A/a.epub 목적지").value).toBe("5_음악");
+  });
+
+  it("추천을 체크한 행의 직접 선택 칸은 비어 있다", () => {
+    // 추천 카테고리를 셀렉트에도 채우면 사용자가 직접 지정한 것처럼 보인다.
+    renderTable();
+    expect(screen.getByLabelText("A/a.epub 목적지").value).toBe("");
+  });
+
+  it("직접 선택을 비우면 그 행은 승인 대상에서 빠진다", () => {
+    const props = renderTable({
+      choices: { "A/c.epub": { source: "manual", category: "1_서양고전" } },
     });
     fireEvent.change(screen.getByLabelText("A/c.epub 목적지"), {
       target: { value: "" },
     });
-    expect(props.onSelectionChange).toHaveBeenCalled();
-    const next = props.onSelectionChange.mock.calls[0][0];
-    expect(next.has("A/c.epub")).toBe(false);
+    const next = props.onChoicesChange.mock.calls[0][0];
+    expect(next["A/c.epub"]).toBeUndefined();
+  });
+
+  it("불확실 행도 직접 선택으로 목적지를 주면 승인 대상이 된다", () => {
+    const choices = {
+      "A/c.epub": { source: "manual", category: "1_서양고전" },
+    };
+    expect(isSelectable(ITEMS[2], choices)).toBe(true);
+    expect(resolveTarget(ITEMS[2], choices)).toBe("1_서양고전");
+  });
+
+  it("추천 1 전체 선택은 불확실 행과 직접 선택한 행을 건드리지 않는다", () => {
+    const props = renderTable({
+      choices: { "A/b.epub": { source: "manual", category: "1_서양고전" } },
+    });
+    fireEvent.click(screen.getByLabelText("추천 1 전체 선택"));
+    const next = props.onChoicesChange.mock.calls[0][0];
+    expect(next["A/a.epub"]).toEqual({
+      source: "candidate",
+      index: 0,
+      category: "3_SF",
+    });
+    // 직접 선택으로 정한 목적지는 사용자가 손으로 한 판단이라 덮지 않는다.
+    expect(next["A/b.epub"]).toEqual({
+      source: "manual",
+      category: "1_서양고전",
+    });
+    expect(next["A/c.epub"]).toBeUndefined();
   });
 
   it("추천 후보 2개가 각 열에 나오고, 1개면 두 번째 열은 -", () => {
-    renderTable();
+    const items = [ITEMS[0], ITEMS[2]];
+    renderTable({ items });
     const row = screen.getByText("확실한 책").closest("tr");
-    const [, , , recommend1] = within(row).getAllByRole("cell");
-    expect(within(recommend1).getByText("3_SF")).toBeTruthy();
-    expect(within(recommend1).getByText("모델 판정")).toBeTruthy();
+    const cells = within(row).getAllByRole("cell");
+    expect(within(cells[2]).getByText("3_SF")).toBeTruthy();
+    expect(within(cells[2]).getByText("모델 판정")).toBeTruthy();
+    expect(cells[3].textContent).toBe("-");
 
-    const singleCandidateRow = screen.getByText("애매한 책").closest("tr");
-    const cells = within(singleCandidateRow).getAllByRole("cell");
-    // 열 순서: 체크박스, 책, 현재, 추천1, 추천2, 직접 선택, 점수, 이동 상태
-    expect(cells[4].textContent).toBe("-");
+    const tieRow = screen.getByText("불확실한 책").closest("tr");
+    const tieCells = within(tieRow).getAllByRole("cell");
+    expect(within(tieCells[3]).getByText("1_서양고전")).toBeTruthy();
   });
 
   it("서점 판정이 갈린 행은 두 추천이 다른 답임을 배지로 드러낸다", () => {
     renderTable();
     const row = screen.getByText("불확실한 책").closest("tr");
     const cells = within(row).getAllByRole("cell");
-    const [, , , recommend1, recommend2] = cells;
-    expect(within(recommend1).getByText("후보 동률")).toBeTruthy();
-    expect(within(recommend1).getByText("5_음악")).toBeTruthy();
-    expect(within(recommend2).getByText("1_서양고전")).toBeTruthy();
+    expect(within(cells[2]).getByText("후보 동률")).toBeTruthy();
+    expect(within(cells[2]).getByText("5_음악")).toBeTruthy();
+    expect(within(cells[3]).getByText("1_서양고전")).toBeTruthy();
   });
 
   it("키워드 점수가 동점인 행도 같은 배지로 동률임을 드러낸다", () => {
@@ -165,21 +246,41 @@ describe("ClassifyProposalTable", () => {
     renderTable({ items });
     const row = screen.getByText("키워드 동점 책").closest("tr");
     const cells = within(row).getAllByRole("cell");
-    const [, , , recommend1, recommend2] = cells;
-    expect(within(recommend1).getByText("후보 동률")).toBeTruthy();
-    expect(within(recommend1).getByText("3_SF")).toBeTruthy();
-    expect(within(recommend2).getByText("5_음악")).toBeTruthy();
+    expect(within(cells[2]).getByText("후보 동률")).toBeTruthy();
+    expect(within(cells[2]).getByText("3_SF")).toBeTruthy();
+    expect(within(cells[3]).getByText("5_음악")).toBeTruthy();
+  });
+
+  it("아직 분류 안 된 행도 이름이 보이고 '분류 중'으로 구분된다", () => {
+    // 제안이 시작되면 대상 파일의 이름 행이 먼저 깔리고 분류 결과가 뒤이어 채워진다.
+    // 그 사이 행을 "-"로만 두면 "후보가 없다"와 구분되지 않는다.
+    const items = [
+      {
+        file_path: "A/z.epub",
+        title: "아직 분류 안 된 책",
+        current_category: "A",
+        target_category: null,
+        grade: null,
+        confidence: null,
+        candidates: [],
+        apply_status: "pending",
+      },
+    ];
+    renderTable({ items, choices: {} });
+
+    expect(screen.getByText("아직 분류 안 된 책")).toBeTruthy();
+    const row = screen.getByText("아직 분류 안 된 책").closest("tr");
+    const cells = within(row).getAllByRole("cell");
+    expect(within(cells[2]).getByText("분류 중…")).toBeTruthy();
+    expect(cells[3].textContent).toBe("-");
+    expect(screen.queryByLabelText("A/z.epub 추천 1 선택")).toBeNull();
   });
 
   it("이동 상태가 대기/이동 중(중단됨)/이동 완료/실패:사유로 나온다", () => {
     const items = [
       { ...ITEMS[0], apply_status: "pending" },
       { ...ITEMS[1], apply_status: "moving" },
-      {
-        ...ITEMS[2],
-        target_category: "5_음악",
-        apply_status: "moved",
-      },
+      { ...ITEMS[2], target_category: "5_음악", apply_status: "moved" },
       {
         file_path: "A/d.epub",
         title: "실패한 책",
@@ -200,17 +301,18 @@ describe("ClassifyProposalTable", () => {
     expect(screen.getByText("실패: 대상 폴더 없음")).toBeTruthy();
   });
 
-  it("apply_status가 moved인 행만 체크박스가 비활성이고, moving은 재시도할 수 있다", () => {
-    // I4: moving(서버가 죽어 결과를 모름)은 사람이 재확인할 수 있어야 하므로 목적지가
-    // 있으면 체크박스가 켜진다. moved만 재이동 대상에서 빠진다.
+  it("apply_status가 moved인 행만 잠기고, moving은 재시도할 수 있다", () => {
+    // I4: moving(서버가 죽어 결과를 모름)은 사람이 재확인할 수 있어야 하므로 추천을
+    // 다시 체크할 수 있다. moved만 재이동 대상에서 빠진다.
     const items = [
       { ...ITEMS[0], apply_status: "moving" },
       { ...ITEMS[1], apply_status: "moved" },
     ];
-    renderTable({ items, selection: new Set(["A/a.epub", "A/b.epub"]) });
+    renderTable({ items });
 
-    expect(screen.getByLabelText("A/a.epub 선택").disabled).toBe(false);
-    expect(screen.getByLabelText("A/b.epub 선택").disabled).toBe(true);
+    expect(screen.getByLabelText("A/a.epub 추천 1 선택").disabled).toBe(false);
+    expect(screen.getByLabelText("A/b.epub 추천 1 선택").disabled).toBe(true);
+    expect(screen.getByLabelText("A/b.epub 목적지").disabled).toBe(true);
 
     const movingBadge = screen.getByText("이동 중(중단됨)");
     const movedBadge = screen.getByText("이동 완료");
@@ -218,14 +320,14 @@ describe("ClassifyProposalTable", () => {
     expect(movingBadge.className).not.toBe(movedBadge.className);
   });
 
-  it("failed 행도 목적지가 있으면 체크박스가 켜져 재시도할 수 있다", () => {
+  it("failed 행도 추천을 다시 체크해 재시도할 수 있다", () => {
     // C1: 실패한(거부/오류) 행을 다시 체크해 승인을 누를 수 있어야 재시도가 된다.
     const items = [
       { ...ITEMS[0], apply_status: "failed", apply_error: "대상 폴더 없음" },
     ];
-    renderTable({ items, selection: new Set() });
+    renderTable({ items, choices: {} });
 
-    expect(screen.getByLabelText("A/a.epub 선택").disabled).toBe(false);
+    expect(screen.getByLabelText("A/a.epub 추천 1 선택").disabled).toBe(false);
   });
 
   it("모델과 목적지가 다르면 점수 칸에 모델 카테고리를 함께 보여준다", () => {
@@ -261,12 +363,15 @@ describe("ClassifyProposalTable", () => {
     expect(within(row).queryByText(/모델:/)).toBeNull();
   });
 
-  it("목적지가 categories 목록에 없어도 셀렉트 옵션으로 끼워 넣는다", () => {
+  it("직접 지정한 목적지가 categories 목록에 없어도 셀렉트 옵션으로 끼워 넣는다", () => {
     // Minor B: ES 문서가 0건이라 카테고리 목록에서 빠진 목적지도 선택된 값으로
     // 보여야 한다 — 그러지 않으면 화면은 "(선택 안 함)"인데 실제 상태는 그
-    // 목적지를 들고 있어, 체크한 행이 안 보이는 곳으로 승인될 수 있다.
-    const items = [{ ...ITEMS[0], target_category: "9_없는카테고리" }];
-    renderTable({ items });
+    // 목적지를 들고 있어, 화면에 안 보이는 곳으로 승인될 수 있다.
+    renderTable({
+      choices: {
+        "A/a.epub": { source: "manual", category: "9_없는카테고리" },
+      },
+    });
 
     const select = screen.getByLabelText("A/a.epub 목적지");
     expect(select.value).toBe("9_없는카테고리");

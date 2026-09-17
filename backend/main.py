@@ -487,6 +487,17 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             pending.clear()
             await asyncio.to_thread(category_mapping.add_classify_proposal_items, batch, category, content_type=content_type)
 
+        # 분류가 끝난 항목은 이미 있는 행(이름만 담긴 자리)을 채우는 것이라 INSERT가
+        # 아니라 UPDATE다. 새로 넣는 것과 같은 리듬으로 모아 보낸다.
+        updated: list[dict[str, Any]] = []
+
+        async def _flush_updated() -> None:
+            if not updated:
+                return
+            batch = list(updated)
+            updated.clear()
+            await asyncio.to_thread(category_mapping.update_classify_proposal_item_payloads, batch, content_type=content_type)
+
         async def _on_progress(progress: dict[str, Any]) -> None:
             # book_manager가 이번 틱에서 새로 만든 항목만 new_items로 보낸다. 상태
             # 파일에는 카운트만 남기고(items를 넣으면 다시 파일 하나에 전체 목록을
@@ -499,6 +510,11 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
                 pending.extend(new_items)
                 if len(pending) >= CLASSIFY_PROPOSAL_ITEMS_BATCH_SIZE:
                     await _flush_pending()
+            updated_items = progress.pop("updated_items", None)
+            if updated_items:
+                updated.extend(updated_items)
+                if len(updated) >= CLASSIFY_PROPOSAL_ITEMS_BATCH_SIZE:
+                    await _flush_updated()
             await _progress_classify_proposal(progress)
 
         try:
@@ -510,11 +526,13 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             # 예외로 중단되더라도, 그때까지 모아둔 항목은 버리지 않고 DB에 남겨
             # 화면에서 어디까지 진행됐는지 볼 수 있게 한다.
             await _flush_pending()
+            await _flush_updated()
             await _replace_classify_proposal({**(await _read_classify_proposal()), "status": "failed", "error": "분류 제안에 실패했습니다."})
             return
         # 100의 배수가 아닌 꼬리를 반드시 비운다. 누락되면 관리자가 목록 끝의 책들을
         # 못 보고 승인하게 된다.
         await _flush_pending()
+        await _flush_updated()
         if error is None:
             result_counts = {k: v for k, v in result.items() if k != "items"}
             await _replace_classify_proposal({**(await _read_classify_proposal()), **result_counts, "status": "ready"})

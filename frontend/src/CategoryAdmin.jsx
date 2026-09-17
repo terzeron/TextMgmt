@@ -437,8 +437,9 @@ export default function CategoryAdmin({
   const [mismatchRemainingCount, setMismatchRemainingCount] = useState(null);
   // 분류 제안(propose → 검토 → 승인) 흐름 상태. 파일은 승인 전까지 옮기지 않는다.
   const [proposal, setProposal] = useState(null);
-  const [proposalSelection, setProposalSelection] = useState(new Set());
-  const [proposalTargets, setProposalTargets] = useState({});
+  // 행마다 목적지를 하나만 들고 있는다: 추천 체크에서 왔는지(candidate) 사용자가
+  // 직접 고른 것인지(manual)를 함께 담아, 둘이 동시에 켜지는 상태를 만들지 않는다.
+  const [proposalChoices, setProposalChoices] = useState({});
   const [proposalPolling, setProposalPolling] = useState(false);
   const [proposalStarting, setProposalStarting] = useState(false);
   const [showProposalApplyModal, setShowProposalApplyModal] = useState(false);
@@ -831,18 +832,24 @@ export default function CategoryAdmin({
     setProposal(data);
     if (["ready", "done", "failed"].includes(data.status)) {
       const items = data.items || [];
-      setProposalSelection(
-        new Set(
-          items
-            .filter(
-              (item) =>
-                item.grade === "certain" &&
-                item.target_category &&
-                item.apply_status !== "moved",
-            )
-            .map((item) => item.file_path),
-        ),
-      );
+      // 확실한 행만 추천 1을 미리 체크해 둔다. target_category는 candidates[0]과
+      // 같다는 것이 백엔드의 불변식이라, 체크 표시와 실제 목적지가 어긋나지 않는다.
+      const defaults = {};
+      for (const item of items) {
+        const first = (item.candidates || [])[0];
+        if (
+          item.grade === "certain" &&
+          first?.category &&
+          item.apply_status !== "moved"
+        ) {
+          defaults[item.file_path] = {
+            source: "candidate",
+            index: 0,
+            category: first.category,
+          };
+        }
+      }
+      setProposalChoices(defaults);
     }
     setProposalPolling(data.status === "running" || data.status === "applying");
   }, []);
@@ -855,7 +862,9 @@ export default function CategoryAdmin({
       null,
       (data) => {
         applyProposalStatus(data);
-        if (data?.status === "ready" && data.source_category) {
+        // ready뿐 아니라 도는 중(running/applying)에도 되돌린다. 그래야 페이지를
+        // 떠났다 돌아왔을 때 표와 함께 버튼의 진행 표시도 다시 보인다.
+        if (data?.status && data.status !== "idle" && data.source_category) {
           setSelectedCategory(data.source_category);
         }
       },
@@ -1244,8 +1253,7 @@ export default function CategoryAdmin({
   const handleStartClassifyProposal = useCallback(() => {
     if (!selectedCategory) return;
     const category = selectedCategory;
-    setProposalSelection(new Set());
-    setProposalTargets({});
+    setProposalChoices({});
     setProposalStarting(true);
     setMessage("");
     jsonPostReq(
@@ -1269,6 +1277,11 @@ export default function CategoryAdmin({
   // 서버도 새 제안을 만들며 이전 항목을 지운다). 잃을 게 있을 때만 확인을 거친다.
   const hasReviewedProposal = (proposal?.items || []).length > 0;
 
+  // 시작 요청이 도는 동안과 분류 작업이 도는 동안 모두 버튼이 돌아야 한다.
+  // 시작 요청은 백그라운드 작업을 띄우고 곧바로 끝나므로, 그것만 보면 스피너가
+  // 깜빡이고 만다.
+  const proposalRunning = proposalStarting || proposal?.status === "running";
+
   const handleClickProposeButton = useCallback(() => {
     if (hasReviewedProposal) {
       setShowProposalRestartModal(true);
@@ -1289,14 +1302,12 @@ export default function CategoryAdmin({
   const proposalApplyItems = useMemo(() => {
     const items = proposal?.items || [];
     return items
-      .filter((item) => proposalSelection.has(item.file_path))
-      .filter((item) => isSelectable(item, proposalTargets))
+      .filter((item) => isSelectable(item, proposalChoices))
       .map((item) => ({
         file_path: item.file_path,
-        target_category:
-          proposalTargets[item.file_path] ?? item.target_category,
+        target_category: proposalChoices[item.file_path].category,
       }));
-  }, [proposal, proposalSelection, proposalTargets]);
+  }, [proposal, proposalChoices]);
 
   const handleApplyClassifyProposal = useCallback(() => {
     setShowProposalApplyModal(false);
@@ -1992,8 +2003,20 @@ export default function CategoryAdmin({
                       onClick={handleClickProposeButton}
                       title="분류 제안"
                     >
-                      {proposalStarting ? (
-                        <Spinner animation="border" size="sm" />
+                      {/* 시작 요청이 끝나면 스피너를 내리던 예전 동작은, 정작 오래
+                          걸리는 분류 자체가 도는 동안 버튼이 멈춘 것처럼 보이게 했다.
+                          책 한 권에 서점 조회까지 하면 수 초가 들어 카테고리 전체로는
+                          한참이다. 작업이 끝날 때까지 돌리고 진행 수를 같이 보여준다. */}
+                      {proposalRunning ? (
+                        <span className="d-flex align-items-center gap-1">
+                          <Spinner animation="border" size="sm" />
+                          {proposal?.total_count > 0 && (
+                            <small style={{ fontSize: "0.7rem" }}>
+                              {proposal.processed_count ?? 0}/
+                              {proposal.total_count}
+                            </small>
+                          )}
+                        </span>
                       ) : (
                         <>
                           분류 제안 <FontAwesomeIcon icon={faRotate} />
@@ -2046,15 +2069,8 @@ export default function CategoryAdmin({
                   <ClassifyProposalTable
                     items={proposal.items || []}
                     categories={topLevelCategoryNames}
-                    selection={proposalSelection}
-                    targets={proposalTargets}
-                    onSelectionChange={setProposalSelection}
-                    onTargetChange={(filePath, value) =>
-                      setProposalTargets((prev) => ({
-                        ...prev,
-                        [filePath]: value,
-                      }))
-                    }
+                    choices={proposalChoices}
+                    onChoicesChange={setProposalChoices}
                   />
                   <div className="d-flex gap-2 mt-2">
                     <Button

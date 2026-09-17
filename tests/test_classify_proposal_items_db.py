@@ -133,6 +133,33 @@ def test_get_returns_apply_status_and_apply_error_from_columns(cm):
     assert item["apply_error"] == "파일을 찾을 수 없습니다"
 
 
+def test_update_payload_fills_the_row_without_touching_apply_status(cm):
+    """분류가 끝난 항목이 기존 행의 payload만 채우고 apply_status는 건드리지 않는다.
+
+    제안 시작 시 이름만 담은 행을 먼저 넣고 나중에 채우는 구조라, 채우는 쪽이
+    INSERT면 같은 책이 두 줄로 보인다. 그리고 apply_status까지 덮으면 이미 옮긴
+    책의 이동 기록이 사라진다.
+    """
+    cm.add_classify_proposal_items([{"file_path": "A/a.epub", "title": "가", "grade": None}, {"file_path": "A/b.epub", "title": "나", "grade": None}], "A")
+    cm.update_classify_proposal_item_status("A/a.epub", "moved")
+
+    cm.update_classify_proposal_item_payloads([{"file_path": "A/a.epub", "title": "가", "grade": "certain", "target_category": "3_SF"}])
+
+    items = {item["file_path"]: item for item in cm.get_classify_proposal_items()}
+    assert len(items) == 2, "행이 늘어났다 — 채우기가 INSERT로 동작한다"
+    assert items["A/a.epub"]["grade"] == "certain"
+    assert items["A/a.epub"]["target_category"] == "3_SF"
+    assert items["A/a.epub"]["apply_status"] == "moved", "이동 기록을 덮어썼다"
+    assert items["A/b.epub"]["grade"] is None
+
+
+def test_update_payload_ignores_an_empty_batch(cm):
+    """비어 있는 갱신 묶음은 DB에 가지 않는다(꼬리가 없을 때 매번 왕복하지 않는다)."""
+    cm.add_classify_proposal_items([{"file_path": "A/a.epub", "grade": None}], "A")
+    cm.update_classify_proposal_item_payloads([])
+    assert cm.get_classify_proposal_items()[0]["grade"] is None
+
+
 def test_update_status_changes_only_target_row(cm):
     """update가 file_path + content_type으로 지정한 행만 바꾸고 다른 행은 그대로 둔다."""
     cm.add_classify_proposal_items([{"file_path": "a.epub"}, {"file_path": "b.epub"}], "0_inbox")
