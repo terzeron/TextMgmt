@@ -1389,13 +1389,7 @@ class BookManager:
     def _model_candidate(category: str) -> dict[str, Any]:
         return {"category": category, "source": "model", "detail": "모델 판정"}
 
-    def _build_candidates(
-        self,
-        target: str | None,
-        method: str,
-        model_category: str | None,
-        bookstore_candidates: list[tuple[str, int]],
-    ) -> list[dict[str, Any]]:
+    def _build_candidates(self, target: str | None, method: str, model_category: str | None, bookstore_candidates: list[tuple[str, int]]) -> list[dict[str, Any]]:
         """키워드가 정하지 못했을 때(target=None인 tie 경로는 호출자가 직접 조립한다)
         candidates를 만든다.
 
@@ -1448,15 +1442,7 @@ class BookManager:
                 return count
         return 1
 
-    def _propose_category_for_file(
-        self,
-        file_path: Path,
-        source_category: str,
-        mappings: dict[str, list[str]],
-        classifier_service: Any,
-        use_bookstore: bool,
-        use_content_meta: bool,
-    ) -> dict[str, Any]:
+    def _propose_category_for_file(self, file_path: Path, source_category: str, mappings: dict[str, list[str]], classifier_service: Any, use_bookstore: bool, use_content_meta: bool) -> dict[str, Any]:
         """한 파일의 제안 목적지와 등급을 만든다. 파일을 옮기지 않는다."""
         keyword_category, matched_keywords, tie_reason, keyword_ranked = self._match_category_by_keywords(file_path, source_category, mappings)
 
@@ -1467,9 +1453,7 @@ class BookManager:
         reason = tie_reason or ""
         bookstore_candidates: list[tuple[str, int]] = []
         if classifier_service is not None:
-            classified_category, method, classifier_reason, entry = classifier_service.classify_file(
-                file_path, self._category_dir(source_category), use_bookstore=use_bookstore, use_content_meta=use_content_meta
-            )
+            classified_category, method, classifier_reason, entry = classifier_service.classify_file(file_path, self._category_dir(source_category), use_bookstore=use_bookstore, use_content_meta=use_content_meta)
             model_category = (entry or {}).get("model_category")
             confidence = (entry or {}).get("confidence")
             # 오래된 캐시 항목이나 대역(FakeClassifier)에는 이 키가 없을 수 있어 기본값을 둔다.
@@ -1489,16 +1473,7 @@ class BookManager:
                 if category != keyword_category:
                     candidates.append(self._keyword_candidate(category, keywords))
                     break
-            return {
-                "target_category": keyword_category,
-                "grade": grade,
-                "confidence": confidence,
-                "source": "keyword",
-                "matched_keywords": matched_keywords,
-                "model_category": model_category if model_category != keyword_category else None,
-                "reason": reason,
-                "candidates": candidates,
-            }
+            return {"target_category": keyword_category, "grade": grade, "confidence": confidence, "source": "keyword", "matched_keywords": matched_keywords, "model_category": model_category if model_category != keyword_category else None, "reason": reason, "candidates": candidates}
 
         if tie_reason:
             # 동점이면 등급은 unknown 그대로다 — 후보 2개를 보여줘도 시스템이 못 정했다는
@@ -1520,15 +1495,7 @@ class BookManager:
         return {"target_category": target, "grade": grade, "confidence": confidence, "source": method, "matched_keywords": matched_keywords, "model_category": model_category, "reason": reason, "candidates": candidates}
 
     async def propose_category_changes(
-        self,
-        category: str,
-        mappings: dict[str, list[str]] | None = None,
-        *,
-        content_type: str = "book",
-        use_bookstore: bool = True,
-        use_content_meta: bool = True,
-        delay: float = 1.2,
-        on_progress: Callable[[dict[str, Any]], None | Awaitable[None]] | None = None,
+        self, category: str, mappings: dict[str, list[str]] | None = None, *, content_type: str = "book", use_bookstore: bool = True, use_content_meta: bool = True, delay: float = 1.2, on_progress: Callable[[dict[str, Any]], None | Awaitable[None]] | None = None
     ) -> tuple[dict[str, Any], str | None]:
         """선택 카테고리 직하위 파일의 분류 제안을 만든다. 파일을 옮기지 않는다."""
         if not category:
@@ -1651,15 +1618,7 @@ class BookManager:
                             # pending으로 남으면 재개 시 다시 시도하다가 이미 옮겨진 원본을
                             # 못 찾아 moved인 책을 failed로 잘못 기록하게 된다.
                             await _notify_item_done({"file_path": file_path_value, "apply_status": "moving", "apply_error": None})
-                            file_result, error = await self._move_classified_file(
-                                absolute_path,
-                                target_category,
-                                item.get("matched_keywords") or [],
-                                content_type=content_type,
-                                dry_run=False,
-                                clean_existing=clean_existing,
-                                source_category=source_category,
-                            )
+                            file_result, error = await self._move_classified_file(absolute_path, target_category, item.get("matched_keywords") or [], content_type=content_type, dry_run=False, clean_existing=clean_existing, source_category=source_category)
                             if error is not None or file_result is None:
                                 entry["apply_error"] = error or "분류 적용에 실패했습니다"
                             else:
@@ -1749,16 +1708,7 @@ class BookManager:
                 return candidate
         return None
 
-    async def _move_classified_file(
-        self,
-        file_path: Path,
-        target_category: str,
-        matched_keywords: list[str],
-        content_type: str,
-        dry_run: bool = False,
-        clean_existing: bool = False,
-        source_category: str | None = None,
-    ) -> tuple[dict[str, Any] | None, str | None]:
+    async def _move_classified_file(self, file_path: Path, target_category: str, matched_keywords: list[str], content_type: str, dry_run: bool = False, clean_existing: bool = False, source_category: str | None = None) -> tuple[dict[str, Any] | None, str | None]:
         root = self.path_prefix.resolve(strict=False)
         try:
             old_rel_path = str(file_path.relative_to(self.path_prefix))
@@ -1778,6 +1728,12 @@ class BookManager:
                 is_same_file = file_path.samefile(target_path)
             except OSError:
                 is_same_file = False
+            if is_same_file and old_rel_path == target_rel_path:
+                # 이미 목적지에 있다. 관리자가 드롭다운에서 지금 카테고리를 그대로 고르면
+                # 여기로 온다. 그냥 두면 os.rename 이 같은 경로에 대해 아무 일도 하지 않고
+                # 성공하므로(실측) 예외는 안 나지만, 그 뒤 ES 문서를 지웠다가 같은 내용으로
+                # 다시 넣는 헛수고를 한다. 옮길 것이 없다고 답하고 끝낸다.
+                return {"status": "dry_run" if dry_run else "moved", "action": "noop", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "matched_keywords": matched_keywords, "deleted_count": 0}, None
             if not is_same_file and not self._is_duplicate_content(file_path, target_path):
                 # 이름만 겹치고 내용이 다르면 서로 다른 책이다. 어느 쪽도 지우지 않고
                 # 새 파일에 '파일이름 (1).확장자'처럼 번호를 붙여 둘 다 남긴다.
@@ -1786,45 +1742,26 @@ class BookManager:
                     return None, f"대상 경로에 같은 이름의 파일이 너무 많습니다: {target_rel_path}"
                 target_path = numbered_path
                 target_rel_path = str(target_path.relative_to(self.path_prefix))
-            elif not is_same_file:
+            else:
+                # 여기 남는 경우는 둘이다: 내용이 같은 별개의 파일, 그리고 경로는 다른데
+                # 같은 실체인 하드링크. 하드링크를 이동으로 처리하면 os.rename 이 원본
+                # 링크를 지우지 않은 채 성공해(실측), 파일은 남았는데 ES 문서만 사라진
+                # 고아가 생긴다. 둘 다 "대상에 이미 있다"로 보고 같은 길로 보낸다.
                 if clean_existing:
                     if dry_run:
-                        return {
-                            "status": "dry_run",
-                            "action": "duplicate_clean",
-                            "from": old_rel_path,
-                            "to": target_rel_path,
-                            "target_category": target_category,
-                            "matched_keywords": matched_keywords,
-                            "deleted_count": 0,
-                        }, None
+                        return {"status": "dry_run", "action": "duplicate_clean", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "matched_keywords": matched_keywords, "deleted_count": 0}, None
                     try:
                         file_path.unlink()
                         if source_category:
                             clean_empty_parent_dirs(file_path.parent, self._category_dir(source_category))
                         deleted_count = self.es_manager.delete_by_file_paths([old_rel_path])
-                        return {
-                            "status": "duplicate_cleaned",
-                            "from": old_rel_path,
-                            "to": target_rel_path,
-                            "target_category": target_category,
-                            "matched_keywords": matched_keywords,
-                            "deleted_count": deleted_count,
-                        }, None
+                        return {"status": "duplicate_cleaned", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "matched_keywords": matched_keywords, "deleted_count": deleted_count}, None
                     except Exception as e:
                         return None, f"중복 파일 정리 실패: {e}"
                 return None, f"대상 경로에 파일이 이미 존재합니다: {target_rel_path}"
 
         if dry_run:
-            return {
-                "status": "dry_run",
-                "action": "move",
-                "from": old_rel_path,
-                "to": target_rel_path,
-                "target_category": target_category,
-                "matched_keywords": matched_keywords,
-                "deleted_count": 0,
-            }, None
+            return {"status": "dry_run", "action": "move", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "matched_keywords": matched_keywords, "deleted_count": 0}, None
 
         old_book_id: int | None = None
         old_doc: dict[str, Any] | None = None
@@ -1866,15 +1803,7 @@ class BookManager:
             if inserted_book_id != new_book_id or add_error is not None:
                 raise RuntimeError(add_error or "ES 적재 실패")
 
-            return {
-                "status": "moved",
-                "from": old_rel_path,
-                "to": target_rel_path,
-                "book_id": new_book_id,
-                "target_category": target_category,
-                "matched_keywords": matched_keywords,
-                "deleted_count": deleted_count,
-            }, None
+            return {"status": "moved", "from": old_rel_path, "to": target_rel_path, "book_id": new_book_id, "target_category": target_category, "matched_keywords": matched_keywords, "deleted_count": deleted_count}, None
         except Exception as e:
             rollback_messages: list[str] = []
             try:
@@ -1908,7 +1837,6 @@ class BookManager:
                     count = item.get(legacy_field)
                 total += abs(int(count or 0))
         return total
-
 
     @staticmethod
     def _mismatch_categories(mismatch_data: dict[str, Any]) -> list[str]:
@@ -2034,7 +1962,6 @@ class BookManager:
         result = {"mismatches": sorted(mismatches, key=lambda x: x["anomaly_count"], reverse=True), "es_only": es_only, "fs_only": fs_only}
         LOGGER.info("get_category_mismatches: 이상 카테고리 %d개, 이상 항목 %d건", len(mismatches) + len(es_only) + len(fs_only), self._mismatch_item_count(result))
         return result
-
 
     def _mismatch_cache_is_fresh(self, now: float) -> bool:
         """_mismatch_state_lock을 잡은 채로 호출해야 한다."""

@@ -917,7 +917,6 @@ def test_mismatch_cache_runs_one_scan_at_a_time(tmp_path: Path, monkeypatch: pyt
     assert scans == [1]
 
 
-
 def asyncio_runner(coro):
     import asyncio
 
@@ -1896,10 +1895,7 @@ def test_reload_category_mismatch_files_reports_progress_during_run(tmp_path: Pa
     """
     es = DummyES()
     manager = make_manager(tmp_path, es)
-    details = [
-        {"fs_only": [{"file_path": "A/f1.txt"}, {"file_path": "A/f2.txt"}, {"file_path": "A/f3.txt"}], "es_only": [{"book_id": 10}], "duplicates": []},
-        {"fs_only": [], "es_only": [], "duplicates": []},
-    ]
+    details = [{"fs_only": [{"file_path": "A/f1.txt"}, {"file_path": "A/f2.txt"}, {"file_path": "A/f3.txt"}], "es_only": [{"book_id": 10}], "duplicates": []}, {"fs_only": [], "es_only": [], "duplicates": []}]
 
     abs_to_relpath = {}
     for i, rel_path in enumerate(["A/f1.txt", "A/f2.txt", "A/f3.txt"], start=1):
@@ -1984,31 +1980,12 @@ def test_propose_then_apply_moves_file_and_reindexes(tmp_path: Path, monkeypatch
     def fake_read_file(abs_path, stat_result=None, skip_text=False, path_prefix=None):
         assert path_prefix == tmp_path
         rel_path = str(abs_path.relative_to(tmp_path))
-        return {
-            abs_path.stat().st_ino: {
-                **make_doc(rel_path, "txt"),
-                "category": rel_path.split("/", 1)[0],
-                "file_path": rel_path,
-            }
-        }
+        return {abs_path.stat().st_ino: {**make_doc(rel_path, "txt"), "category": rel_path.split("/", 1)[0], "file_path": rel_path}}
 
     monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
 
     propose_progress: list[dict[str, int]] = []
-    propose_result, propose_err = asyncio_runner(
-        manager.propose_category_changes(
-            "0_inbox",
-            {
-                "0_inbox": ["미분류"],
-                "1_fiction": ["소설"],
-                "2_science": ["과학"],
-                "2_science/physics": ["물리"],
-            },
-            use_bookstore=False,
-            use_content_meta=False,
-            on_progress=propose_progress.append,
-        )
-    )
+    propose_result, propose_err = asyncio_runner(manager.propose_category_changes("0_inbox", {"0_inbox": ["미분류"], "1_fiction": ["소설"], "2_science": ["과학"], "2_science/physics": ["물리"]}, use_bookstore=False, use_content_meta=False, on_progress=propose_progress.append))
 
     assert propose_err is None
     assert propose_result["total_count"] == 1
@@ -2020,9 +1997,7 @@ def test_propose_then_apply_moves_file_and_reindexes(tmp_path: Path, monkeypatch
 
     allowed = {item["file_path"] for item in propose_result["items"]}
     apply_progress: list[dict[str, int]] = []
-    apply_result, apply_err = asyncio_runner(
-        manager.apply_category_changes(propose_result["items"], allowed, on_progress=apply_progress.append)
-    )
+    apply_result, apply_err = asyncio_runner(manager.apply_category_changes(propose_result["items"], allowed, on_progress=apply_progress.append))
 
     target_file = tmp_path / "2_science" / "쉬운 과학 이야기.txt"
     assert apply_err is None
@@ -2053,11 +2028,7 @@ def test_propose_category_changes_records_value_error(tmp_path: Path, monkeypatc
     """스캔된 경로가 corpus 밖이면(ValueError) 그 항목만 실패로 남기고 계속한다."""
     manager = make_manager(tmp_path, DummyES())
     (tmp_path / "0_inbox").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(
-        manager,
-        "_iter_category_indexable_files",
-        lambda cat, recursive=False: [Path("/outside/book.txt")],
-    )
+    monkeypatch.setattr(manager, "_iter_category_indexable_files", lambda cat, recursive=False: [Path("/outside/book.txt")])
     result, err = asyncio_runner(manager.propose_category_changes("0_inbox"))
     assert err is None
     assert any("잘못된 파일 경로" in f.get("error", "") for f in result["failures"])
@@ -2094,14 +2065,7 @@ def test_propose_category_changes_uses_the_supervised_model(tmp_path: Path, monk
     fake_doc = {"title": "황녀님이 너무해", "author": "작가", "category": "0_inbox", "file_path": str(rofan_book.relative_to(tmp_path))}
     monkeypatch.setattr("utils.loader.Loader.read_file", lambda *args, **kwargs: {12345: fake_doc})
 
-    result, err = asyncio_runner(
-        manager.propose_category_changes(
-            "0_inbox",
-            mappings={},
-            use_bookstore=False,
-            use_content_meta=True,
-        )
-    )
+    result, err = asyncio_runner(manager.propose_category_changes("0_inbox", mappings={}, use_bookstore=False, use_content_meta=True))
 
     assert err is None
     assert rofan_book.exists()  # 제안 단계는 파일을 옮기지 않는다
@@ -4190,14 +4154,8 @@ def test_in_names_empty_path(tmp_path: Path, monkeypatch):
     epub_path = tmp_path / "empty_path.epub"
     with zipfile.ZipFile(str(epub_path), "w") as z:
         z.writestr("mimetype", "application/epub+zip")
-        z.writestr(
-            "META-INF/container.xml",
-            '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
-        )
-        z.writestr(
-            "content.opf",
-            '<?xml version="1.0"?><package version="2.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId"><manifest><item id="item1" href="c.html" media-type="text/html"/></manifest><spine toc="ncx"><itemref idref="item1"/></spine></package>',
-        )
+        z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+        z.writestr("content.opf", '<?xml version="1.0"?><package version="2.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId"><manifest><item id="item1" href="c.html" media-type="text/html"/></manifest><spine toc="ncx"><itemref idref="item1"/></spine></package>')
     monkeypatch.setattr("posixpath.normpath", lambda p: "")
     valid, msg = BookManager._validate_preview_epub(epub_path)
     assert not valid
@@ -4513,6 +4471,55 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
     assert "파일 롤백 실패" in err6
 
 
+def test_move_classified_file_is_a_noop_when_already_in_target_category(tmp_path: Path):
+    """지금 있는 카테고리를 목적지로 고르면 아무것도 하지 않고 성공으로 끝낸다.
+
+    관리자가 표의 드롭다운에서 현재 카테고리를 그대로 고르면 원본과 대상 경로가 같아진다.
+    이 분기가 없으면 os.rename 이 같은 경로에 대해 조용히 성공한 뒤 ES 문서를 지웠다가
+    같은 내용으로 다시 넣는다. 파일도 문서도 그대로여야 하고, ES 를 건드리지 않아야 한다.
+    """
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    category_dir = tmp_path / "2_science"
+    category_dir.mkdir(parents=True)
+    book = category_dir / "제자리 도서.txt"
+    book.write_text("내용", encoding="utf-8")
+    es.deleted_paths = []
+    es.delete_by_file_paths = lambda paths, exclude_ids=None: es.deleted_paths.extend(paths) or 0
+
+    result, err = asyncio_runner(manager._move_classified_file(book, "2_science", ["kw"], "book"))
+
+    assert err is None
+    assert result["status"] == "moved"
+    assert result["action"] == "noop"
+    assert result["from"] == result["to"] == "2_science/제자리 도서.txt"
+    assert book.exists()
+    assert es.deleted_paths == [], "제자리인데 ES 문서를 지웠다"
+
+
+def test_move_classified_file_does_not_orphan_a_hardlink(tmp_path: Path):
+    """대상에 같은 실체(하드링크)가 이미 있으면 옮기지 않고 거부한다.
+
+    하드링크는 경로가 달라도 samefile 이 참이다. 이동으로 처리하면 os.rename 이 원본
+    링크를 지우지 않은 채 성공해(실측), 디스크에는 파일이 남았는데 ES 문서만 사라진
+    고아가 만들어진다. 그 고아는 '이상 항목'으로만 드러나고 왜 생겼는지 알 수 없다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source_dir = tmp_path / "0_inbox"
+    source_dir.mkdir(parents=True)
+    source = source_dir / "링크 도서.txt"
+    source.write_text("내용", encoding="utf-8")
+    target_dir = tmp_path / "2_science"
+    target_dir.mkdir()
+    os.link(source, target_dir / source.name)
+
+    result, err = asyncio_runner(manager._move_classified_file(source, "2_science", ["kw"], "book", clean_existing=False))
+
+    assert result is None
+    assert "대상 경로에 파일이 이미 존재합니다" in err
+    assert source.exists(), "원본 링크가 남았는데 옮긴 것으로 처리했다"
+
+
 def test_move_classified_file_rejects_existing_duplicate_without_clean(tmp_path: Path):
     """내용까지 같은 파일이 이미 있고 clean_existing이 꺼져 있으면 옮기지 않고 실패로 남긴다.
 
@@ -4540,13 +4547,7 @@ def test_move_classified_file_preserves_existing_es_metadata(tmp_path: Path, mon
     source_dir.mkdir(parents=True)
     source_file = source_dir / "수정 과학.txt"
     source_file.write_text("hello")
-    old_doc = {
-        **make_doc("0_inbox/수정 과학.txt", "txt"),
-        "category": "0_inbox",
-        "title": "관리자가 수정한 제목",
-        "author": "관리자가 수정한 저자",
-        "summary": "관리자가 유지하려는 요약",
-    }
+    old_doc = {**make_doc("0_inbox/수정 과학.txt", "txt"), "category": "0_inbox", "title": "관리자가 수정한 제목", "author": "관리자가 수정한 저자", "summary": "관리자가 유지하려는 요약"}
     es = DummyES(doc=old_doc)
     manager = make_manager(tmp_path, es)
 
@@ -4859,24 +4860,18 @@ def test_get_books_in_category_paged(tmp_path: Path):
     es.category_docs = [(1, doc, 1.0), (2, doc, 1.0)]
 
     # 1. Invalid cursor (line 524)
-    books, total, next_cur, err = asyncio_runner(
-        manager.get_books_in_category_paged("A", cursor="bad_cursor!!!")
-    )
+    books, total, next_cur, err = asyncio_runner(manager.get_books_in_category_paged("A", cursor="bad_cursor!!!"))
     assert err == "invalid cursor"
     assert books == []
 
     # 2. Success first page with next cursor (lines 525-528)
-    books, total, next_cur, err = asyncio_runner(
-        manager.get_books_in_category_paged("A", size=1)
-    )
+    books, total, next_cur, err = asyncio_runner(manager.get_books_in_category_paged("A", size=1))
     assert err is None
     assert len(books) == 1
     assert next_cur is not None
 
     # 3. Next page using cursor
-    books2, total2, next_cur2, err2 = asyncio_runner(
-        manager.get_books_in_category_paged("A", size=1, cursor=next_cur)
-    )
+    books2, total2, next_cur2, err2 = asyncio_runner(manager.get_books_in_category_paged("A", size=1, cursor=next_cur))
     assert err2 is None
     assert len(books2) == 1
 
@@ -5069,9 +5064,7 @@ def test_move_classified_file_target_traversal_and_restore_err(tmp_path: Path, m
     f.write_text("data")
 
     # 1. Line 1385: target_path not relative to root
-    res1, err1 = asyncio_runner(
-        manager._move_classified_file(f, "../outside", ["k"], "txt")
-    )
+    res1, err1 = asyncio_runner(manager._move_classified_file(f, "../outside", ["k"], "txt"))
     assert err1 == "잘못된 대상 경로입니다"
 
     # 2. Lines 1498-1499: ES reindex fails, rollback add_book raises exception
@@ -5088,9 +5081,7 @@ def test_move_classified_file_target_traversal_and_restore_err(tmp_path: Path, m
 
     monkeypatch.setattr(manager, "add_book", mock_add_book_raise)
     (tmp_path / "target").mkdir(parents=True, exist_ok=True)
-    res2, err2 = asyncio_runner(
-        manager._move_classified_file(f, "target", ["k"], "txt")
-    )
+    res2, err2 = asyncio_runner(manager._move_classified_file(f, "target", ["k"], "txt"))
     assert err2 is not None
     assert "기존 ES 문서 복구 실패" in err2
 
@@ -5110,15 +5101,7 @@ def test_reload_category_mismatch_files_non_int_book_id(tmp_path: Path, monkeypa
     es = DummyES()
     manager = make_manager(tmp_path, es)
     (tmp_path / "cat").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(
-        manager,
-        "get_category_mismatch_details",
-        lambda cat: {
-            "duplicates": [{"file_path": "cat/dup.txt", "docs": [{"book_id": "bad_id"}]}],
-            "fs_only": [],
-            "es_only": [],
-        },
-    )
+    monkeypatch.setattr(manager, "get_category_mismatch_details", lambda cat: {"duplicates": [{"file_path": "cat/dup.txt", "docs": [{"book_id": "bad_id"}]}], "fs_only": [], "es_only": []})
     result, err = asyncio_runner(manager.reload_category_mismatch_files("cat"))
     assert err is None
 
@@ -5221,10 +5204,7 @@ PROPOSE_CATEGORY_GRADE_CASES = [
 ]
 
 
-@pytest.mark.parametrize(
-    "mappings,fake,expected_target,expected_grade",
-    PROPOSE_CATEGORY_GRADE_CASES,
-)
+@pytest.mark.parametrize("mappings,fake,expected_target,expected_grade", PROPOSE_CATEGORY_GRADE_CASES)
 def test_propose_category_grades(tmp_path: Path, mappings, fake, expected_target, expected_grade):
     manager = make_manager(tmp_path, DummyES())
     source = tmp_path / "A"
@@ -5238,10 +5218,7 @@ def test_propose_category_grades(tmp_path: Path, mappings, fake, expected_target
     assert proposal["grade"] == expected_grade
 
 
-@pytest.mark.parametrize(
-    "mappings,fake,expected_target,expected_grade",
-    PROPOSE_CATEGORY_GRADE_CASES,
-)
+@pytest.mark.parametrize("mappings,fake,expected_target,expected_grade", PROPOSE_CATEGORY_GRADE_CASES)
 def test_propose_category_candidates_first_matches_target_when_decided(tmp_path: Path, mappings, fake, expected_target, expected_grade):
     """target_category가 None이 아닌 모든 등급에서 candidates[0]이 그 값과 같아야 한다.
 
@@ -5410,9 +5387,7 @@ def test_propose_category_changes_progress_reports_new_items_only(tmp_path: Path
     (source / "나.epub").write_text("x")
 
     progress: list[dict] = []
-    result, error = asyncio_runner(
-        manager.propose_category_changes("A", {"3_SF": ["과학소설"]}, use_bookstore=False, use_content_meta=False, on_progress=progress.append)
-    )
+    result, error = asyncio_runner(manager.propose_category_changes("A", {"3_SF": ["과학소설"]}, use_bookstore=False, use_content_meta=False, on_progress=progress.append))
 
     assert error is None
     assert len(progress) == 2
@@ -5446,9 +5421,7 @@ def test_apply_category_changes_rejects_unknown_file(tmp_path: Path):
     (tmp_path / "A").mkdir()
     (tmp_path / "A" / "book.epub").write_text("x")
 
-    result, error = asyncio_runner(
-        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "3_SF"}], allowed_file_paths=set())
-    )
+    result, error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "3_SF"}], allowed_file_paths=set()))
 
     assert error is None
     assert result["applied_count"] == 0
@@ -5462,9 +5435,7 @@ def test_apply_category_changes_rejects_unsafe_target(tmp_path: Path):
     (tmp_path / "A" / "book.epub").write_text("x")
     allowed = {"A/book.epub"}
 
-    result, _error = asyncio_runner(
-        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "../밖"}], allowed_file_paths=allowed)
-    )
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "../밖"}], allowed_file_paths=allowed))
 
     assert result["applied_count"] == 0
     assert "카테고리" in result["results"][0]["apply_error"]
@@ -5478,9 +5449,7 @@ def test_apply_category_changes_uses_user_chosen_target(tmp_path: Path):
     (tmp_path / "A" / "book.epub").write_text("x")
     allowed = {"A/book.epub"}
 
-    result, _error = asyncio_runner(
-        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths=allowed)
-    )
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths=allowed))
 
     assert result["applied_count"] == 1
     assert (tmp_path / "5_음악" / "book.epub").is_file()
@@ -5492,16 +5461,14 @@ def test_apply_category_changes_records_missing_file(tmp_path: Path):
     (tmp_path / "A").mkdir()
     allowed = {"A/사라진책.epub"}
 
-    result, _error = asyncio_runner(
-        manager.apply_category_changes([{"file_path": "A/사라진책.epub", "target_category": "3_SF"}], allowed_file_paths=allowed)
-    )
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/사라진책.epub", "target_category": "3_SF"}], allowed_file_paths=allowed))
 
     assert result["failed_count"] == 1
     assert "파일" in result["results"][0]["apply_error"]
 
 
 def test_apply_category_changes_rejects_top_level_but_unsafe_target(tmp_path: Path):
-    """".."는 슬래시가 없어 최상위 검사는 통과하지만 안전한 이름 검사에서 걸러야 한다.
+    """ ".."는 슬래시가 없어 최상위 검사는 통과하지만 안전한 이름 검사에서 걸러야 한다.
 
     기존 "../밖" 케이스는 슬래시가 있어 _is_top_level_target_category에서 이미
     걸러지므로 _is_safe_category_name이 실제로 호출되는지 증명하지 못한다.
@@ -5511,9 +5478,7 @@ def test_apply_category_changes_rejects_top_level_but_unsafe_target(tmp_path: Pa
     (tmp_path / "A" / "book.epub").write_text("x")
     allowed = {"A/book.epub"}
 
-    result, _error = asyncio_runner(
-        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": ".."}], allowed_file_paths=allowed)
-    )
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": ".."}], allowed_file_paths=allowed))
 
     assert result["applied_count"] == 0
     assert "카테고리" in result["results"][0]["apply_error"]
@@ -5533,9 +5498,7 @@ def test_apply_category_changes_rejects_symlinked_source(tmp_path: Path):
     link_path.symlink_to(outside)
     allowed = {"A/book.epub"}
 
-    result, _error = asyncio_runner(
-        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "3_SF"}], allowed_file_paths=allowed)
-    )
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "3_SF"}], allowed_file_paths=allowed))
 
     assert result["applied_count"] == 0
     assert "링크" in result["results"][0]["apply_error"]
@@ -5556,16 +5519,7 @@ def test_apply_category_changes_calls_on_item_done_per_item(tmp_path: Path):
     allowed = {"A/ok.epub", "A/missing.epub"}
     done_calls: list[dict] = []
 
-    result, _error = asyncio_runner(
-        manager.apply_category_changes(
-            [
-                {"file_path": "A/ok.epub", "target_category": "5_음악"},
-                {"file_path": "A/missing.epub", "target_category": "5_음악"},
-            ],
-            allowed_file_paths=allowed,
-            on_item_done=done_calls.append,
-        )
-    )
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/ok.epub", "target_category": "5_음악"}, {"file_path": "A/missing.epub", "target_category": "5_음악"}], allowed_file_paths=allowed, on_item_done=done_calls.append))
 
     assert result["applied_count"] == 1
     assert result["failed_count"] == 1
@@ -5598,16 +5552,7 @@ def test_apply_category_changes_stops_before_next_item_when_should_continue_is_f
         calls["count"] += 1
         return calls["count"] <= 1  # 첫 항목 앞에서만 True, 두 번째 항목 앞에서 False
 
-    result, _error = asyncio_runner(
-        manager.apply_category_changes(
-            [
-                {"file_path": "A/first.epub", "target_category": "5_음악"},
-                {"file_path": "A/second.epub", "target_category": "5_음악"},
-            ],
-            allowed_file_paths=allowed,
-            should_continue=should_continue,
-        )
-    )
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/first.epub", "target_category": "5_음악"}, {"file_path": "A/second.epub", "target_category": "5_음악"}], allowed_file_paths=allowed, should_continue=should_continue))
 
     assert result["total_count"] == 2
     assert len(result["results"]) == 1
@@ -5643,16 +5588,7 @@ def test_apply_category_changes_on_item_done_already_called_for_items_before_exc
     monkeypatch.setattr(manager, "_is_safe_category_name", flaky_is_safe)
     done_calls: list[dict] = []
 
-    result, _error = asyncio_runner(
-        manager.apply_category_changes(
-            [
-                {"file_path": "A/boom.epub", "target_category": "5_음악"},
-                {"file_path": "A/ok.epub", "target_category": "5_음악"},
-            ],
-            allowed_file_paths=allowed,
-            on_item_done=done_calls.append,
-        )
-    )
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/boom.epub", "target_category": "5_음악"}, {"file_path": "A/ok.epub", "target_category": "5_음악"}], allowed_file_paths=allowed, on_item_done=done_calls.append))
 
     assert result["applied_count"] == 1
     assert result["failed_count"] == 1
@@ -5685,15 +5621,7 @@ def test_apply_category_changes_continues_after_one_item_raises(tmp_path: Path, 
 
     monkeypatch.setattr(manager, "_is_safe_category_name", flaky_is_safe)
 
-    result, _error = asyncio_runner(
-        manager.apply_category_changes(
-            [
-                {"file_path": "A/boom.epub", "target_category": "5_음악"},
-                {"file_path": "A/ok.epub", "target_category": "5_음악"},
-            ],
-            allowed_file_paths=allowed,
-        )
-    )
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/boom.epub", "target_category": "5_음악"}, {"file_path": "A/ok.epub", "target_category": "5_음악"}], allowed_file_paths=allowed))
 
     assert result["total_count"] == 2
     assert len(result["results"]) == 2
@@ -5718,17 +5646,13 @@ def test_apply_category_changes_retry_of_failed_row_succeeds(tmp_path: Path):
     (tmp_path / "A" / "book.epub").write_text("x")
 
     # 1차 시도: allowed에 없어 거부된다(버그가 있던 상태를 재현).
-    first, _ = asyncio_runner(
-        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths=set())
-    )
+    first, _ = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths=set()))
     assert first["results"][0]["apply_status"] == "failed"
     assert first["results"][0]["apply_error"] == "제안 목록에 없는 파일입니다"
     assert (tmp_path / "A" / "book.epub").is_file()
 
     # 재시도: failed 행이 allowed에 다시 담기면(고친 뒤 동작) 실제로 이동한다.
-    second, _ = asyncio_runner(
-        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths={"A/book.epub"})
-    )
+    second, _ = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths={"A/book.epub"}))
     assert second["results"][0]["apply_status"] == "moved"
     assert not (tmp_path / "A" / "book.epub").exists()
     assert (tmp_path / "5_음악" / "book.epub").is_file()
@@ -5747,9 +5671,7 @@ def test_apply_category_changes_retrying_moving_row_when_file_already_moved(tmp_
     # 원본은 이미 없고(실제로는 이동이 끝남), 목적지에만 파일이 있다.
     (tmp_path / "5_음악" / "book.epub").write_text("x")
 
-    result, _ = asyncio_runner(
-        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths={"A/book.epub"})
-    )
+    result, _ = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths={"A/book.epub"}))
 
     assert result["results"][0]["apply_status"] == "failed"
     assert "파일을 찾을 수 없습니다" in result["results"][0]["apply_error"]
@@ -5766,9 +5688,7 @@ def test_apply_category_changes_retrying_moving_row_when_move_never_happened(tmp
     (tmp_path / "5_음악").mkdir()
     (tmp_path / "A" / "book.epub").write_text("x")
 
-    result, _ = asyncio_runner(
-        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths={"A/book.epub"})
-    )
+    result, _ = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths={"A/book.epub"}))
 
     assert result["results"][0]["apply_status"] == "moved"
     assert not (tmp_path / "A" / "book.epub").exists()
