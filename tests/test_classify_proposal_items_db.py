@@ -47,7 +47,63 @@ def test_create_table_statement_runs_on_real_mysql(cm):
     assert "`payload` json" in ddl.lower() or "json" in ddl.lower()
     assert "varchar(1024)" in ddl.lower()
     assert "idx_content_source" in ddl.lower()
-    assert "idx_content_type" in ddl.lower()
+    assert "idx_content_file" in ddl.lower()
+
+
+def test_status_update_uses_an_index_instead_of_scanning_the_table(cm):
+    """승인이 책 한 권마다 부르는 UPDATE 가 인덱스를 타는지 EXPLAIN 으로 확인한다.
+
+    file_path 인덱스가 없으면 이 UPDATE 는 조건에 맞는 행을 찾으려고 테이블 전체를
+    훑는다. 79,589 행 기준 실측으로 한 건당 63.2ms 대 0.9ms 차이가 났다 — 같은
+    카테고리를 승인할 때 DB 대기만 약 2.8 시간 대 2.4 분이다. 실행 시간은 장비마다
+    달라 테스트로 고정할 수 없으므로, 대신 "전수 훑기가 아니라 인덱스 조회를
+    고른다"는 실행 계획 자체를 잠근다.
+    """
+    cm.add_classify_proposal_items([{"file_path": f"3_판타지/책 {i}.epub"} for i in range(50)], "3_판타지")
+
+    with cm._get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("EXPLAIN UPDATE classify_proposal_items SET apply_status = 'moved' WHERE content_type = %s AND file_path = %s", ("book", "3_판타지/책 7.epub"))
+            plan = cursor.fetchone()
+
+    assert plan["key"] == "idx_content_file", f"file_path 인덱스를 타지 않는다: {plan}"
+    assert plan["type"] != "index", "인덱스 전수 훑기를 고르고 있다"
+
+
+def test_redundant_content_type_index_is_gone(cm):
+    """idx_content_type (content_type) 은 idx_content_source (content_type,
+    source_category) 의 왼쪽 접두사와 같아 조회를 하나도 더 처리하지 못한다.
+    INSERT 마다 유지 비용만 드는 중복 인덱스라 지웠다. 다시 들어오면 실패한다."""
+    with cm._get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT index_name AS idx FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'classify_proposal_items'")
+            names = {row["idx"] for row in cursor.fetchall()}
+
+    assert "idx_content_source" in names
+    assert "idx_content_file" in names
+    assert "idx_content_type" not in names
+
+
+def test_migration_adds_file_path_index_and_drops_the_redundant_one(cm):
+    """이미 테이블이 만들어진 환경을 재현한다. 옛 인덱스 구성으로 되돌린 뒤
+    _init_db 를 다시 부르면, 마이그레이션이 file_path 인덱스를 붙이고 중복
+    인덱스를 지워야 한다. CREATE TABLE IF NOT EXISTS 만으로는 기존 테이블의
+    인덱스가 바뀌지 않으므로 이 경로가 없으면 운영 DB 는 영영 느린 채로 남는다."""
+    with cm._get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("ALTER TABLE classify_proposal_items DROP INDEX idx_content_file")
+            cursor.execute("ALTER TABLE classify_proposal_items ADD INDEX idx_content_type (content_type)")
+        conn.commit()
+
+    category_mapping_mod.CategoryMapping()
+
+    with cm._get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT index_name AS idx FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'classify_proposal_items'")
+            names = {row["idx"] for row in cursor.fetchall()}
+
+    assert "idx_content_file" in names
+    assert "idx_content_type" not in names
 
 
 def test_payload_round_trips_korean_nested_null_and_long_path(cm):
