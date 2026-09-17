@@ -391,13 +391,13 @@ class TestCategoryMismatchAdmin:
         assert status.json()["result"]["items"] == db_items_so_far
         mock_cat.get_classify_proposal_items.assert_called_once_with(content_type="book")
 
-    def test_classify_proposal_job_flushes_new_items_in_batches_of_100_and_flushes_tail(self, mock_bm, mock_cat, tmp_path):
-        """새 항목을 100건 단위로 모아 DB에 넘기고, 100의 배수가 아닌 꼬리도 끝에
+    def test_classify_proposal_job_flushes_new_items_in_batches_of_10_and_flushes_tail(self, mock_bm, mock_cat, tmp_path):
+        """새 항목을 10건 단위로 모아 DB에 넘기고, 10의 배수가 아닌 꼬리도 끝에
         반드시 넘긴다.
 
-        250권을 처리하면 add_classify_proposal_items가 100+100+50건으로 세 번
-        호출돼야 한다. 마지막 50건(꼬리)이 누락되면 관리자가 목록 끝의 책들을
-        못 보고 승인하게 된다.
+        255권을 처리하면 add_classify_proposal_items가 10건씩 25번 + 5건 1번,
+        총 26번 호출돼야 한다. 마지막 5건(꼬리)이 누락되면 관리자가 목록 끝의
+        책들을 못 보고 승인하게 된다.
         """
         import asyncio
 
@@ -406,12 +406,12 @@ class TestCategoryMismatchAdmin:
         status_file = tmp_path / ".classify_proposal_book.json"
         status_file.write_text(json.dumps({"status": "running", "total_count": 0, "processed_count": 0, "updated_at": time.time()}), encoding="utf-8")
 
-        all_items = [{"file_path": f"0_inbox/{i}.epub", "target_category": "3_SF"} for i in range(250)]
+        all_items = [{"file_path": f"0_inbox/{i}.epub", "target_category": "3_SF"} for i in range(255)]
 
         async def fake_propose(*args, on_progress=None, **kwargs):
             for i, item in enumerate(all_items, start=1):
-                on_progress({"total_count": 250, "processed_count": i, "new_items": [item]})
-            return {"content_type": "book", "source_category": "0_inbox", "total_count": 250, "processed_count": 250, "items": all_items, "failures": []}, None
+                on_progress({"total_count": 255, "processed_count": i, "new_items": [item]})
+            return {"content_type": "book", "source_category": "0_inbox", "total_count": 255, "processed_count": 255, "items": all_items, "failures": []}, None
 
         mock_bm.propose_category_changes.side_effect = fake_propose
         router = main_module.create_item_router(mock_bm, content_type="book")
@@ -424,10 +424,48 @@ class TestCategoryMismatchAdmin:
         mock_cat.clear_classify_proposal_items.assert_called_once_with(content_type="book")
         add_calls = mock_cat.add_classify_proposal_items.call_args_list
         batch_sizes = [len(call.args[0]) for call in add_calls]
-        assert batch_sizes == [100, 100, 50]
-        assert sum(batch_sizes) == 250
+        assert batch_sizes == [10] * 25 + [5]
+        assert sum(batch_sizes) == 255
         flattened = [item for call in add_calls for item in call.args[0]]
         assert flattened == all_items
+
+    def test_classify_proposal_job_batch_size_10_makes_small_categories_visible_before_job_ends(self, mock_bm, mock_cat, tmp_path):
+        """배치 크기가 10이어야, 100건 미만인 대부분의 카테고리(이 저장소 카테고리
+        중앙값 5권)도 작업이 끝나기 전에 DB에서 이미 진행 상황을 볼 수 있다.
+
+        25건을 처리하면 10+10+5로 나뉘어 flush돼야 하고, 그중 첫 flush는 11번째
+        항목을 처리하는 시점(=작업이 끝나기 전)에 이미 일어나 있어야 한다. 배치
+        크기가 100이면 25건 전부가 끝난 뒤 한 번에만 flush되므로 이 검증에서
+        실패한다.
+        """
+        import asyncio
+
+        mock_bm.path_prefix = tmp_path
+        mock_cat.get_all_mappings.return_value = {}
+        status_file = tmp_path / ".classify_proposal_book.json"
+        status_file.write_text(json.dumps({"status": "running", "total_count": 0, "processed_count": 0, "updated_at": time.time()}), encoding="utf-8")
+
+        all_items = [{"file_path": f"0_inbox/{i}.epub", "target_category": "3_SF"} for i in range(25)]
+        flush_count_mid_job = {"value": None}
+
+        async def fake_propose(*args, on_progress=None, **kwargs):
+            for i, item in enumerate(all_items, start=1):
+                on_progress({"total_count": 25, "processed_count": i, "new_items": [item]})
+                if i == 11:
+                    flush_count_mid_job["value"] = mock_cat.add_classify_proposal_items.call_count
+            return {"content_type": "book", "source_category": "0_inbox", "total_count": 25, "processed_count": 25, "items": all_items, "failures": []}, None
+
+        mock_bm.propose_category_changes.side_effect = fake_propose
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal")
+        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
+        _run_proposal_job = freevars["_run_classify_proposal_job"]
+
+        asyncio.run(_run_proposal_job("0_inbox", True, True, 1.2))
+
+        assert flush_count_mid_job["value"] == 1
+        batch_sizes = [len(call.args[0]) for call in mock_cat.add_classify_proposal_items.call_args_list]
+        assert batch_sizes == [10, 10, 5]
 
     def test_classify_proposal_already_running_blocks_restart(self, client, mock_bm, tmp_path):
         mock_bm.path_prefix = tmp_path

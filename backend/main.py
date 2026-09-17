@@ -510,7 +510,11 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         # COMMIT을 하면 왕복 비용이 책 수만큼 생기므로, 여기서 모았다가
         # add_classify_proposal_items(executemany 한 번 + commit 한 번)로 넘긴다.
         pending: list[dict[str, Any]] = []
-        CLASSIFY_PROPOSAL_ITEMS_BATCH_SIZE = 100
+        # 100건 기준이면 100권 미만 카테고리(이 저장소 카테고리 중앙값 5권)는 분류가 끝날
+        # 때까지 화면이 빈다 — "중간에 들어와서 진행 상황 보기"가 정작 흔한 경우에서 안
+        # 된다. 10건으로 낮춰도 가장 큰 카테고리(79,589권) 기준 왕복 7,959번, 20초 남짓이라
+        # 비용은 문제가 안 된다.
+        CLASSIFY_PROPOSAL_ITEMS_BATCH_SIZE = 10
 
         def _flush_pending() -> None:
             if not pending:
