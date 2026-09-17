@@ -55,12 +55,19 @@
 
 ### 상태를 어디에 두나
 
-| 무엇                                                 | 어디                                     | 왜                                                               |
-| ---------------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------- |
-| 작업 상태(`status`, 카운트, 하트비트, `apply_token`) | JSON 파일 `.classify_proposal_book.json` | 작고, 자주 안 바뀌고, 하트비트 만료 처리가 이미 파일에 묶여 있다 |
-| 제안 항목 목록                                       | MySQL `classify_proposal_items`          | 책 수만큼 늘어난다. 파일에 담으면 비용이 제곱이 된다             |
+| 무엇                                                 | 어디                             | 왜                                                                 |
+| ---------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------ |
+| 작업 상태(`status`, 카운트, 하트비트, `apply_token`) | MySQL `classify_proposal_status` | 여러 프로세스가 잠금을 걸고 판단해야 한다. 파일로는 둘 다 안 된다  |
+| 제안 항목 목록                                       | MySQL `classify_proposal_items`  | 책 수만큼 늘어난다. 파일에 담으면 비용이 제곱이 된다               |
 
-**이 분리는 실측에 근거한다.** 처음에는 항목도 JSON 파일에 담았다. 한 권 기록할 때마다 지금까지의 전체 목록을 다시 직렬화하므로 항목당 0.038ms, 240번째 항목에서 9.2ms가 들었다. 이 코퍼스 최대 카테고리인 `3_판타지`(79,589권)로 환산하면 기록에만 약 **33시간**이다. 간격 제한과 개수 상한으로 덮는 방법을 한 번 커밋했다가(`bfc1822`) 되돌리고(`8360399`), 행 단위 적재로 원인을 없앴다(`210de5c`).
+**작업 상태를 파일에 두지 않는 이유.** 처음에는 `develop`의 자동 분류 상태 파일을 이름만 바꿔 물려받았다. 그때 "작고 자주 안 바뀌니 파일로 충분하다"고 판단했는데, 배포가 몇 프로세스인지 확인하지 않은 가정이었다. 실제로는 `backend/Dockerfile`이 `--workers 2`, `k8s/tm-deployment.yml`이 `replicas: 2`라 **프로세스가 4개**다. 파일로는 두 가지가 안 된다.
+
+- **잠금.** "도는 작업이 있는가"를 읽고 판단한 뒤 따로 쓰는 사이에 다른 프로세스가 끼어든다. 두 승인 작업이 같은 파일을 옮기려 들면 한쪽은 "파일을 찾을 수 없습니다"로 실패 기록을 남겨, 실제로는 옮겨진 책이 `failed`로 굳는다.
+- **공유.** 노드가 늘면 파일은 아예 공유되지 않는다. 지금은 corpus PVC에 있어 공유되지만, 그 성질에 기대는 설계다.
+
+이 저장소는 이미 같은 문제를 `reload_locks`(행 + `SELECT ... FOR UPDATE` + 하트비트)로 풀고 있다. 분류 제안만 파일로 남아 있던 것을 그 방식에 맞췄다.
+
+**항목 목록을 파일에 두지 않는 이유는 실측에 근거한다.** 처음에는 항목도 JSON 파일에 담았다. 한 권 기록할 때마다 지금까지의 전체 목록을 다시 직렬화하므로 항목당 0.038ms, 240번째 항목에서 9.2ms가 들었다. 이 코퍼스 최대 카테고리인 `3_판타지`(79,589권)로 환산하면 기록에만 약 **33시간**이다. 간격 제한과 개수 상한으로 덮는 방법을 한 번 커밋했다가(`bfc1822`) 되돌리고(`8360399`), 행 단위 적재로 원인을 없앴다(`210de5c`).
 
 ---
 
@@ -77,7 +84,7 @@ CREATE TABLE IF NOT EXISTS classify_proposal_items (
   apply_error   TEXT          NULL,
   created_at    TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_content_source (content_type, source_category),
-  INDEX idx_content_type   (content_type),
+  INDEX idx_content_file   (content_type, file_path(255)),
   INDEX idx_apply_status   (content_type, apply_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ```
@@ -87,9 +94,25 @@ CREATE TABLE IF NOT EXISTS classify_proposal_items (
 - **`file_path`에 UNIQUE를 걸지 않았다.** 1024자라 InnoDB 인덱스 길이 제한에 걸린다. 중복은 새 제안 시작 시 `clear_classify_proposal_items`로 관리한다.
 - **항목 본문은 `payload` JSON 한 덩어리.** 필드가 여럿이고(`candidates` 배열 등) 앞으로 늘 수 있어, 스키마를 고치지 않고 확장할 수 있게 했다.
 - **`apply_status`만 컬럼으로 뺐다.** `DELETE ... WHERE apply_status = 'moved'`가 되어야 해서 JSON 안에 두면 안 된다.
+- **`file_path`에 인덱스가 필요하다.** 승인은 책 한 권마다 `WHERE content_type = %s AND file_path = %s`로 상태를 갱신한다. 인덱스가 없으면 매번 테이블을 전수로 훑는다. 79,589행으로 실측하면 UPDATE 한 건이 **63.2ms 대 0.9ms**이고, 한 카테고리를 승인할 때 DB 대기만 **약 2.8시간 대 2.4분**이다. 길이 제한 때문에 앞 255자만 쓰지만 실제 경로는 그보다 짧아 사실상 완전 일치다. EXPLAIN으로 실행 계획을 테스트가 잠근다.
+- **`idx_content_type`은 지웠다.** `idx_content_source (content_type, source_category)`의 왼쪽 접두사와 같아 조회를 하나도 더 처리하지 못하면서 INSERT마다 유지 비용만 든다.
 - **기존 환경 마이그레이션.** `CREATE TABLE IF NOT EXISTS`만으로는 이미 만들어진 테이블에 컬럼이 안 생긴다. `_migrate_add_apply_status`가 `information_schema`를 보고 없으면 `ALTER TABLE` 한다. 저장소의 기존 `_migrate_add_content_type` 방식을 그대로 따랐다.
 
 **⚠️ 이 변경은 스키마 변경을 포함한다.** 새 테이블 1개 + 기존 테이블 대상 마이그레이션 1개.
+
+### 작업 상태 테이블
+
+```sql
+CREATE TABLE IF NOT EXISTS classify_proposal_status (
+  content_type VARCHAR(10)  NOT NULL PRIMARY KEY,
+  status       VARCHAR(20)  NOT NULL DEFAULT 'idle',
+  payload      JSON         NOT NULL,
+  updated_at   TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+```
+
+- **`status`만 컬럼으로 뺐다.** 선점 판단이 `SELECT ... FOR UPDATE` 뒤에 이 값을 봐야 한다. 나머지(카운트, 에러, `apply_token`, 실패 목록)는 `payload`에 담아 스키마를 고치지 않고 늘릴 수 있게 했다.
+- **`updated_at`이 하트비트다.** `ON UPDATE CURRENT_TIMESTAMP`를 쓰지 않고 매 쓰기에서 `NOW(3)`으로 직접 갱신한다. 값이 안 바뀌는 갱신도 하트비트는 찍혀야 한다.
 
 ### DB 메서드
 
@@ -100,6 +123,11 @@ CREATE TABLE IF NOT EXISTS classify_proposal_items (
 | `get_classify_proposal_items(content_type)`                                                | `id ASC`로 읽어 `payload` + `apply_status` + `apply_error` 반환 |
 | `update_classify_proposal_item_status(file_path, apply_status, apply_error, content_type)` | 한 건 갱신                                                      |
 | `delete_applied_classify_proposal_items(content_type)`                                     | `apply_status='moved'`만 삭제, 삭제 건수 반환                   |
+| `get_classify_proposal_status(content_type, stale_seconds)` | 상태 조회. 갱신이 끊긴 작업은 결과에서만 `failed` |
+| `set_classify_proposal_status(status, content_type)` | 상태를 통째로 교체(작업의 시작·끝) |
+| `merge_classify_proposal_status(fields, content_type)` | `JSON_MERGE_PATCH`로 일부 필드만. `status`는 제외 |
+| `try_start_classify_proposal(status, content_type, stale_seconds)` | 도는 작업이 없을 때만 시작. `(시작했는가, 현재 상태)` |
+| `try_begin_classify_apply(apply_token, content_type, stale_seconds)` | 승인 가능할 때만 선점하고 토큰 발급 |
 
 ---
 
@@ -185,12 +213,16 @@ idle ──POST propose──> running ──완료──> ready ──POST appl
                                        └──POST apply(재시도)──> applying
 ```
 
-- **하트비트 만료:** 상태가 `CLASSIFY_PROPOSAL_STALE_SECONDS = 5분` 넘게 갱신되지 않으면 `stale_running_status`가 중단된 작업으로 보고 `failed`로 굳힌다.
+- **하트비트 만료:** `updated_at`이 `CLASSIFY_PROPOSAL_STALE_SECONDS = 5분` 넘게 갱신되지 않으면 죽은 작업으로 본다. **행을 고치지는 않는다** — 조회 결과에서만 `failed`로 보이고, 실제로 자리를 넘기는 일은 다음 작업이 시작될 때 `try_*`가 한다. GET이 쓰기를 하면 여러 클라이언트가 폴링할 때 서로의 쓰기와 경합한다. `get_reload_status`와 같은 방식이다.
+
+  나이는 파이썬이 아니라 SQL이 센다(`TIMESTAMPDIFF(SECOND, updated_at, NOW(3))`). 앱 컨테이너의 지역 시간과 DB 서버의 시계는 다를 수 있고, 다르면 그 차이만큼 모든 행이 낡아 보인다(로컬 개발에서 9시간 차이로 실측).
 - **승인 수락 조건:** `status ∈ {ready, done, failed}`. `running`/`applying`은 다른 작업이 도는 중이라 거절, `idle`은 승인할 제안이 없다.
 
   **이 조건이 왜 넓은가 (리뷰 포인트).** 원래는 `ready`일 때만 받았다. 그러면 승인 도중 pod가 죽었을 때 상태가 `applying` → 하트비트 만료 → `failed`로 굳고, 남은 `pending` 행을 다시 승인하려 해도 거절된다. 관리자는 파일이 반쯤 옮겨진 채로 아무것도 할 수 없다. 사용자 승인을 받아 조건을 넓혔다.
 
-- **`applying` 선점 시점:** 엔드포인트가 응답을 돌려주기 **전에** 동기적으로 `applying`을 쓴다. `await` 지점 없이 거기까지 도달하므로, 동시에 들어온 두 번째 apply는 이 쓰기 뒤에 상태를 읽어 거부된다. 선점을 백그라운드 작업 안으로 미루면 응답 반환과 상태 변경 사이에 창이 열린다.
+- **선점은 DB 트랜잭션이 한다.** 시작(`try_start_classify_proposal`)과 승인 선점(`try_begin_classify_apply`)은 `SELECT ... FOR UPDATE`로 행을 잠근 뒤 같은 트랜잭션 안에서 판단하고 쓴다. 읽기와 쓰기 사이에 창이 없으므로 프로세스가 몇 개든 둘이 동시에 통과하지 못한다. 스레드 두 개로 실제 경합을 만들어 확인하며, `FOR UPDATE`를 빼면 그 테스트가 깨진다.
+
+  잠글 행을 만드는 `INSERT IGNORE`는 반드시 **그 트랜잭션 밖**에서 먼저 커밋해야 한다. 안에 두면 두 프로세스가 서로 공유 잠금을 쥔 채 배타 잠금으로 올리려 해 InnoDB가 데드락으로 한쪽을 끊는다(실측).
 
 - **`apply_token` (uuid):** 하트비트 만료로 `failed`가 됐는데 원래 작업이 아직 살아 있을 수 있다. 그 상태에서 두 번째 apply가 들어오면 새 토큰을 받은 쪽이 유일한 주인이 되고, 먼저 돌던 작업은 `should_continue`에서 토큰 불일치를 보고 멈춘다. 이게 없으면 진 쪽이 이긴 쪽이 방금 기록한 행을 덮어써 망가뜨린다.
 
@@ -302,8 +334,8 @@ const items = (proposal?.items || [])
 
 | 대상                            | 결과                     |
 | ------------------------------- | ------------------------ |
-| `pytest tests/`                 | **2057 passed** (64.85s) |
-| `cd frontend && npx vitest run` | **1432 passed**          |
+| `pytest tests/`                 | **2074 passed** (76s)  |
+| `cd frontend && npx vitest run` | **1431 passed**        |
 | lint                            | clean                    |
 
 ### DB 테스트 방침
@@ -320,26 +352,51 @@ const items = (proposal?.items || [])
 
 ---
 
-## 12. 알려진 한계 — 리뷰에서 봐주면 좋을 곳
+## 12. 알려진 한계
 
 1. **`moving` 행의 종착지.** 파일이 이미 옮겨진 `moving` 행을 재승인하면 원본이 없어 `failed`가 된다. `failed`는 `완료 기록 삭제` 대상이 아니므로, 그 행을 정리하려면 제안을 새로 만들어야 한다. 의도한 동작이지만(실패를 조용히 지우지 않는다) 관리자 입장에서 막다른 길로 느껴질 수 있다.
 
-2. **`_token_still_valid`가 이벤트 루프에서 파일을 동기로 읽는다.** 항목마다 `_read_classify_proposal()`을 호출한다. 상태 파일은 작지만 `asyncio.to_thread` 밖이다. 항목당 수백 ms가 드는 파일 이동에 비하면 무시할 수준이나, 구조적으로는 일관되지 않다.
+2. **건별 DB 기록이 실패하면 작업 전체가 멈춘다.** 마지막 `on_item_done`은 `try` 밖에 있어, DB 장애로 예외가 나면 승인 작업이 `failed`로 끝난다. `moving` 행이 대량으로 쌓이지는 않지만(그 자리에서 멈춘다), 그때 처리 중이던 한 건은 `moving`으로 남아 관리자 확인이 필요하다.
 
-3. **`matched_keywords`가 승인 요청에서 빠진다.** `ClassifyApplyItemModel`은 `file_path`와 `target_category`만 받는다(보안상 의도적으로 최소화). `apply_category_changes`가 `item.get("matched_keywords") or []`로 읽으므로 승인 시에는 항상 빈 배열이다. `_move_classified_file`이 이 값을 반환 dict에만 싣고 ES나 메타데이터에는 쓰지 않아 기능 영향은 없으나, 죽은 인자다.
+3. **`DELETE /categories/classify-proposal`에 화면 호출자가 없다.** 엔드포인트와 테스트는 있지만 UI에 "제안 폐기" 버튼을 붙이지 않았다. 새 제안을 시작하면 `clear`가 먼저 돌아 같은 효과가 나기 때문이다. 도는 중에는 거절하므로 노출해도 안전하다.
 
-4. **`remaining_count` 시드가 남아 있다.** `classify_proposal_state` 초기값(`backend/main.py:439`)에 있으나 제안 흐름에서는 아무도 읽지 않는다. 같은 이름을 읽는 `categoryAdminUtils.getReloadRemainingCount`는 재적재 상태 전용이고 제안 상태에는 쓰이지 않는다. 상태 파일이 없을 때만 GET 응답에 `remaining_count: 0`이 섞여 나간다.
+4. **동점 후보의 순서는 결정적이지 않다.** `Counter.most_common(2)`의 동점 순서는 삽입 순서에 의존한다. 동점이 3개 이상이면 어느 2개가 보일지 파일 순회 순서에 따라 달라진다. 등급이 `unknown`이라 사람이 직접 고르게 되어 있어 기능 영향은 없다.
 
-5. **`DELETE /categories/classify-proposal`에 화면 호출자가 없다.** 엔드포인트와 테스트는 있지만 UI에 "제안 폐기" 버튼을 붙이지 않았다. 새 제안을 시작하면 `clear`가 먼저 돌아 같은 효과가 나기 때문이다.
+5. **프론트엔드 테스트가 부하 상황에서 한 번 흔들렸다.** 다른 작업과 동시에 돌렸을 때 1건 실패를 관측했고, 단독으로는 반복해서 모두 통과했다. 원인은 **미확인**이다.
 
-6. **프론트엔드 테스트가 부하 상황에서 한 번 흔들렸다.** 다른 작업과 동시에 돌렸을 때 1건 실패를 관측했고, 단독으로 4회 연속 돌렸을 때는 모두 통과했다. 원인은 확인하지 못했다. 부하 하 타임아웃으로 추정하나 **미확인**이다.
+6. **분류 정확도 자체는 이 변경 범위 밖이다.** 등급 규칙과 모델·서점 판정은 기존 로직 그대로다. 오답의 주된 원인은 카테고리 체계의 중복이며 이번 변경은 그것을 건드리지 않는다.
 
-7. **분류 정확도 자체는 이 변경 범위 밖이다.** 등급 규칙과 모델·서점 판정은 기존 로직 그대로다. 오답의 주된 원인은 카테고리 체계의 중복이며(별도 기록됨) 이번 변경은 그것을 건드리지 않는다.
+7. **이 변경 밖의 잠재 결함 하나.** `acquire_reload_lock`과 `get_reload_status`는 하트비트 나이를 `datetime.now()`(앱 지역 시간)와 DB의 `updated_at`을 빼서 센다. 운영은 앱·MySQL 둘 다 TZ를 설정하지 않아 UTC로 같으므로 **지금은 문제가 없다.** 한쪽에 `TZ`를 넣는 순간 모든 락이 만료된 것처럼 보여 재적재 동시 실행이 막히지 않는다. 이번 변경에서 분류 제안 쪽은 SQL로 세도록 고쳤고, 재적재 쪽은 범위 밖이라 손대지 않았다.
 
 ---
 
 ## 13. 배포 시 주의
 
-- **스키마 변경 포함.** 새 테이블 `classify_proposal_items`가 생기고, 이미 그 테이블이 있는 환경에는 `apply_status` / `apply_error` 컬럼과 `idx_apply_status` 인덱스가 추가된다. `_init_database`가 기동 시 수행한다.
+- **스키마 변경 포함.** 새 테이블 두 개(`classify_proposal_items`, `classify_proposal_status`)가 생긴다. 이미 `classify_proposal_items`가 있는 환경에는 `apply_status` / `apply_error` 컬럼, `idx_apply_status`, `idx_content_file` 인덱스가 추가되고 중복 인덱스 `idx_content_type`이 제거된다. `_init_db`가 기동 시 수행한다.
 - **API 제거.** `/categories/auto-classify`와 `/categories/auto-classify-status`가 없어졌다. 이 브랜치의 프론트엔드와 백엔드는 함께 배포해야 한다.
-- **상태 파일 이름이 바뀌었다.** `.classify_proposal_{content_type}.json`. 이전 자동 분류 상태 파일은 더 이상 읽지 않는다.
+- **상태 파일을 더 이상 쓰지 않는다.** corpus 디렉토리의 `.auto_classify_status_*.json`과 `.classify_proposal_*.json`은 아무도 읽지 않는다. 남아 있어도 동작에 영향은 없으므로 정리는 선택이다.
+- **여러 프로세스를 전제로 한다.** 워커 수나 replica 수를 바꿔도 동작이 달라지지 않는다. 단일 프로세스 전제는 코드에서 걷어냈다.
+
+---
+
+## 14. 외부 리뷰 대응
+
+2026-09-17 외부 에이전트 리뷰 12건을 항목별로 코드에서 확인하고 처리했다. 두 건은 확인 결과 사실과 달랐고, 한 건은 리뷰의 판단보다 심각했다.
+
+| ID  | 리뷰 주장                                     | 확인 결과                                                                                                                                            | 처리                     |
+| --- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| C-1 | `file_path` 인덱스 부재로 UPDATE 풀 스캔      | 사실. 79,589행 실측 63.2ms → 0.9ms                                                                                                                   | 인덱스 추가 (§3)         |
+| C-2 | 같은 경로 재적용 시 `shutil.move`가 예외      | **원인 진단 오류.** 동일 경로 `os.rename`은 무동작 성공이라 예외가 없다. 다만 ES 문서를 지웠다 다시 넣는 헛수고가 있고, 하드링크는 고아 파일을 만든다 | 제안한 수정은 채택 (§8)  |
+| I-1 | 단일 워커 전제라 멀티 워커에서 위험           | **전제 자체가 거짓.** 운영이 이미 프로세스 4개                                                                                                        | 상태를 DB로 이전 (§2)    |
+| I-2 | 콜백 실패 시 `moving` 대량 축적               | 부분. 마지막 콜백이 `try` 밖이라 작업이 그 자리에서 멈춘다. 쌓이지 않는다                                                                             | 한계로 기록 (§12-2)      |
+| I-3 | `DELETE`가 도는 작업을 안 멈춘다              | 사실. 더 나쁘다 — `idle`이 되면 새 제안이 통과해 작업이 두 개 돈다                                                                                    | 도는 중 거절 (§6)        |
+| I-4 | GET이 상태 파일을 쓴다                        | 사실                                                                                                                                                  | 조회에서만 계산 (§6)     |
+| I-5 | `idx_content_type` 중복                       | 사실                                                                                                                                                  | 제거 (§3)                |
+| I-6 | `on_progress` 예외를 warning+continue로 삼킴  | **사실이 아니다.** 지목한 위치는 PDF 리더 캐시 코드이고, `on_progress`는 `try`로 감싸지 않아 예외가 작업을 `failed`로 만든다                          | 변경 없음                |
+| M-1 | `matched_keywords`가 죽은 인자                | 사실                                                                                                                                                  | 인자와 결과 키 제거      |
+| M-2 | `remaining_count` 시드                        | 사실                                                                                                                                                  | 제거                     |
+| M-3 | 동점 후보 순서가 비결정적                     | 사실. 기능 영향 없음                                                                                                                                  | 한계로 기록 (§12-4)      |
+| M-4 | 테스트에 `auto-classify` mock 잔재            | 사실 (12곳)                                                                                                                                           | 제거                     |
+| M-5 | `_token_still_valid`가 루프에서 동기 파일 읽기 | 사실                                                                                                                                                  | `to_thread`로 이동 (§6)  |
+
+리뷰가 제시한 근거를 그대로 옮기지 않고 매번 코드나 실측으로 다시 확인했다. C-2와 I-6이 그래서 갈렸고, I-1은 그래서 심각도가 올라갔다.
