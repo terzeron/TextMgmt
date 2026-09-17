@@ -340,8 +340,13 @@ class TestCategoryMismatchAdmin:
         (tmp_path / ".classify_proposal_book.json").write_text(json.dumps({"status": "idle"}), encoding="utf-8")
 
         async def fake_propose(*args, on_progress=None, **kwargs):
+            # 실제 book_manager처럼, on_progress가 코루틴(awaitable)을 돌려주면
+            # await한다 — main.py의 _on_progress는 이제 DB flush를 asyncio.to_thread로
+            # 넘기는 async 콜백이라 await하지 않으면 아무 일도 안 일어난다.
             if on_progress:
-                on_progress({"total_count": 2, "processed_count": 1})
+                outcome = on_progress({"total_count": 2, "processed_count": 1})
+                if outcome is not None:
+                    await outcome
             return result, None
 
         mock_bm.propose_category_changes.side_effect = fake_propose
@@ -410,7 +415,9 @@ class TestCategoryMismatchAdmin:
 
         async def fake_propose(*args, on_progress=None, **kwargs):
             for i, item in enumerate(all_items, start=1):
-                on_progress({"total_count": 255, "processed_count": i, "new_items": [item]})
+                outcome = on_progress({"total_count": 255, "processed_count": i, "new_items": [item]})
+                if outcome is not None:
+                    await outcome
             return {"content_type": "book", "source_category": "0_inbox", "total_count": 255, "processed_count": 255, "items": all_items, "failures": []}, None
 
         mock_bm.propose_category_changes.side_effect = fake_propose
@@ -450,7 +457,9 @@ class TestCategoryMismatchAdmin:
 
         async def fake_propose(*args, on_progress=None, **kwargs):
             for i, item in enumerate(all_items, start=1):
-                on_progress({"total_count": 25, "processed_count": i, "new_items": [item]})
+                outcome = on_progress({"total_count": 25, "processed_count": i, "new_items": [item]})
+                if outcome is not None:
+                    await outcome
                 if i == 11:
                     flush_count_mid_job["value"] = mock_cat.add_classify_proposal_items.call_count
             return {"content_type": "book", "source_category": "0_inbox", "total_count": 25, "processed_count": 25, "items": all_items, "failures": []}, None
@@ -466,6 +475,50 @@ class TestCategoryMismatchAdmin:
         assert flush_count_mid_job["value"] == 1
         batch_sizes = [len(call.args[0]) for call in mock_cat.add_classify_proposal_items.call_args_list]
         assert batch_sizes == [10, 10, 5]
+
+    def test_classify_proposal_flush_routes_db_write_through_to_thread(self, mock_bm, mock_cat, tmp_path, monkeypatch):
+        """I5: 제안 진행 중 DB flush(add_classify_proposal_items)가 asyncio.to_thread를
+        거쳐 실행된다.
+
+        pymysql.connect + executemany + commit은 블로킹 호출이다. 이걸 이벤트 루프
+        위에서 직접 부르면(과거 버그) 단일 uvicorn 워커가 매 10건마다 통째로 멈춰
+        다른 API 요청까지 막힌다. apply 경로는 이미 to_thread로 옮겨졌는데 propose
+        경로만 남아 있던 것을 여기서 확인한다.
+        """
+        import asyncio
+
+        mock_bm.path_prefix = tmp_path
+        mock_cat.get_all_mappings.return_value = {}
+        status_file = tmp_path / ".classify_proposal_book.json"
+        status_file.write_text(json.dumps({"status": "running", "total_count": 0, "processed_count": 0, "updated_at": time.time()}), encoding="utf-8")
+
+        to_thread_funcs = []
+        real_to_thread = asyncio.to_thread
+
+        async def spy_to_thread(func, *args, **kwargs):
+            to_thread_funcs.append(func)
+            return await real_to_thread(func, *args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "to_thread", spy_to_thread)
+
+        all_items = [{"file_path": f"0_inbox/{i}.epub", "target_category": "3_SF"} for i in range(10)]
+
+        async def fake_propose(*args, on_progress=None, **kwargs):
+            for i, item in enumerate(all_items, start=1):
+                outcome = on_progress({"total_count": 10, "processed_count": i, "new_items": [item]})
+                if outcome is not None:
+                    await outcome
+            return {"content_type": "book", "source_category": "0_inbox", "total_count": 10, "processed_count": 10, "items": all_items, "failures": []}, None
+
+        mock_bm.propose_category_changes.side_effect = fake_propose
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal")
+        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
+        _run_proposal_job = freevars["_run_classify_proposal_job"]
+
+        asyncio.run(_run_proposal_job("0_inbox", True, True, 1.2))
+
+        assert mock_cat.add_classify_proposal_items in to_thread_funcs
 
     def test_classify_proposal_already_running_blocks_restart(self, client, mock_bm, tmp_path):
         mock_bm.path_prefix = tmp_path

@@ -1528,7 +1528,7 @@ class BookManager:
         use_bookstore: bool = True,
         use_content_meta: bool = True,
         delay: float = 1.2,
-        on_progress: Callable[[dict[str, int]], None] | None = None,
+        on_progress: Callable[[dict[str, Any]], None | Awaitable[None]] | None = None,
     ) -> tuple[dict[str, Any], str | None]:
         """선택 카테고리 직하위 파일의 분류 제안을 만든다. 파일을 옮기지 않는다."""
         if not category:
@@ -1568,7 +1568,12 @@ class BookManager:
                 # 실어 보내는 셈이라, 보고 비용이 책 수의 제곱으로 늘어난다(과거 JSON 상태
                 # 파일 방식에서 실측된 문제). 누적 목록(result["items"])은 함수가 끝날 때
                 # 호출자에게 그대로 돌려주고, 그 저장은 호출자 책임으로 둔다.
-                on_progress({"total_count": result["total_count"], "processed_count": result["processed_count"], "new_items": [new_item]})
+                # 콜백이 동기 함수(None 반환)일 수도, main.py처럼 블로킹 DB 호출을
+                # asyncio.to_thread로 넘기는 코루틴일 수도 있다 — apply_category_changes의
+                # on_item_done과 같은 방식으로, awaitable이면 여기서 대신 기다려준다.
+                outcome = on_progress({"total_count": result["total_count"], "processed_count": result["processed_count"], "new_items": [new_item]})
+                if inspect.isawaitable(outcome):
+                    await outcome
 
         return result, None
 

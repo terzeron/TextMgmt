@@ -519,21 +519,30 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         # 비용은 문제가 안 된다.
         CLASSIFY_PROPOSAL_ITEMS_BATCH_SIZE = 10
 
-        def _flush_pending() -> None:
+        async def _flush_pending() -> None:
             if not pending:
                 return
-            category_mapping.add_classify_proposal_items(list(pending), category, content_type=content_type)
+            # 스냅샷을 먼저 떼어내고 비운 뒤에 스레드로 넘긴다 — pymysql.connect +
+            # executemany + commit은 블로킹 호출이라, 이걸 그대로 asyncio 루프 위에서
+            # 부르면 단일 uvicorn 워커의 이벤트 루프가 매 10건마다 통째로 멈춘다(그 사이
+            # 다른 API 요청도 전부 막힌다). apply 경로는 이미 to_thread로 옮겨졌는데
+            # propose 경로만 남아 있던 것을 여기서 맞춘다.
+            batch = list(pending)
             pending.clear()
+            await asyncio.to_thread(category_mapping.add_classify_proposal_items, batch, category, content_type=content_type)
 
-        def _on_progress(progress: dict[str, Any]) -> None:
+        async def _on_progress(progress: dict[str, Any]) -> None:
             # book_manager가 이번 틱에서 새로 만든 항목만 new_items로 보낸다. 상태
             # 파일에는 카운트만 남기고(items를 넣으면 다시 파일 하나에 전체 목록을
             # 담는 옛 방식으로 되돌아간다), 항목은 버퍼에 모았다가 100건마다 DB로 넘긴다.
+            # 여기서 flush를 await하므로(propose_category_changes가 각 tick을 순서대로
+            # await한다) 다음 tick이 오기 전에 이번 flush가 끝나 순서가 뒤섞이거나
+            # 겹치지 않는다.
             new_items = progress.pop("new_items", None)
             if new_items:
                 pending.extend(new_items)
                 if len(pending) >= CLASSIFY_PROPOSAL_ITEMS_BATCH_SIZE:
-                    _flush_pending()
+                    await _flush_pending()
             _progress_classify_proposal(progress)
 
         try:
@@ -544,12 +553,12 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             LOGGER.error("classify proposal error: %s", e)
             # 예외로 중단되더라도, 그때까지 모아둔 항목은 버리지 않고 DB에 남겨
             # 화면에서 어디까지 진행됐는지 볼 수 있게 한다.
-            _flush_pending()
+            await _flush_pending()
             _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "분류 제안에 실패했습니다."})
             return
         # 100의 배수가 아닌 꼬리를 반드시 비운다. 누락되면 관리자가 목록 끝의 책들을
         # 못 보고 승인하게 된다.
-        _flush_pending()
+        await _flush_pending()
         if error is None:
             result_counts = {k: v for k, v in result.items() if k != "items"}
             _replace_classify_proposal({**_read_classify_proposal(), **result_counts, "status": "ready"})
