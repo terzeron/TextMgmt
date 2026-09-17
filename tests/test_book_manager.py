@@ -5569,11 +5569,54 @@ def test_apply_category_changes_calls_on_item_done_per_item(tmp_path: Path):
 
     assert result["applied_count"] == 1
     assert result["failed_count"] == 1
-    assert len(done_calls) == 2
-    assert done_calls[0] == {"file_path": "A/ok.epub", "apply_status": "moved", "apply_error": None}
-    assert done_calls[1]["file_path"] == "A/missing.epub"
-    assert done_calls[1]["apply_status"] == "failed"
-    assert "파일" in done_calls[1]["apply_error"]
+    # ok.epub은 실제 이동 직전에 "moving"으로 한 번 더 불린 뒤 "moved"로 마무리된다.
+    # missing.epub은 파일이 없어 이동을 시도조차 못 하므로 moving 없이 failed 한 번뿐이다.
+    assert len(done_calls) == 3
+    assert done_calls[0] == {"file_path": "A/ok.epub", "apply_status": "moving", "apply_error": None}
+    assert done_calls[1] == {"file_path": "A/ok.epub", "apply_status": "moved", "apply_error": None}
+    assert done_calls[2]["file_path"] == "A/missing.epub"
+    assert done_calls[2]["apply_status"] == "failed"
+    assert "파일" in done_calls[2]["apply_error"]
+
+
+def test_apply_category_changes_stops_before_next_item_when_should_continue_is_false(tmp_path: Path):
+    """should_continue가 False를 돌려주는 순간 그 이후 항목은 아예 손대지 않는다.
+
+    다른 승인 작업이 이 작업을 토큰으로 대체했을 때, 진 쪽이 계속 파일을 옮기며
+    행을 덮어쓰지 못하게 막는 장치다. 첫 항목은 정상 처리되고, 두 번째 항목
+    "앞"에서 중단되어 파일도 옮겨지지 않고 결과에도 없어야 한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "first.epub").write_text("x")
+    (tmp_path / "A" / "second.epub").write_text("x")
+    allowed = {"A/first.epub", "A/second.epub"}
+    calls = {"count": 0}
+
+    def should_continue() -> bool:
+        calls["count"] += 1
+        return calls["count"] <= 1  # 첫 항목 앞에서만 True, 두 번째 항목 앞에서 False
+
+    result, _error = asyncio_runner(
+        manager.apply_category_changes(
+            [
+                {"file_path": "A/first.epub", "target_category": "5_음악"},
+                {"file_path": "A/second.epub", "target_category": "5_음악"},
+            ],
+            allowed_file_paths=allowed,
+            should_continue=should_continue,
+        )
+    )
+
+    assert result["total_count"] == 2
+    assert len(result["results"]) == 1
+    assert result["results"][0]["file_path"] == "A/first.epub"
+    assert result["applied_count"] == 1
+    assert (tmp_path / "5_음악" / "first.epub").is_file()
+    # 두 번째는 손대지 않았다 - 여전히 원래 자리에 그대로 있다
+    assert (tmp_path / "A" / "second.epub").is_file()
+    assert calls["count"] == 2
 
 
 def test_apply_category_changes_on_item_done_already_called_for_items_before_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -5613,11 +5656,13 @@ def test_apply_category_changes_on_item_done_already_called_for_items_before_exc
 
     assert result["applied_count"] == 1
     assert result["failed_count"] == 1
-    assert len(done_calls) == 2
+    # boom.epub은 카테고리 검증 단계에서 예외가 나 이동을 시도조차 못 하므로 failed
+    # 한 번뿐이다. ok.epub은 이동 직전 "moving"이 한 번 더 불린 뒤 "moved"로 끝난다.
+    assert len(done_calls) == 3
     assert done_calls[0]["file_path"] == "A/boom.epub"
     assert done_calls[0]["apply_status"] == "failed"
-    assert done_calls[1]["file_path"] == "A/ok.epub"
-    assert done_calls[1]["apply_status"] == "moved"
+    assert done_calls[1] == {"file_path": "A/ok.epub", "apply_status": "moving", "apply_error": None}
+    assert done_calls[2] == {"file_path": "A/ok.epub", "apply_status": "moved", "apply_error": None}
 
 
 def test_apply_category_changes_continues_after_one_item_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

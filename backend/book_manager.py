@@ -7,6 +7,7 @@ import re
 import sys
 import os
 import io
+import inspect
 import posixpath
 import threading
 
@@ -16,7 +17,7 @@ import subprocess
 import tempfile
 import time
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Awaitable, Iterator
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote, urlparse, unquote
@@ -1579,7 +1580,8 @@ class BookManager:
         content_type: str = "book",
         clean_existing: bool = False,
         on_progress: Callable[[dict[str, int]], None] | None = None,
-        on_item_done: Callable[[dict[str, Any]], None] | None = None,
+        on_item_done: Callable[[dict[str, Any]], None | Awaitable[None]] | None = None,
+        should_continue: Callable[[], bool] | None = None,
     ) -> tuple[dict[str, Any], str | None]:
         """승인된 항목만 실제로 옮긴다.
 
@@ -1591,7 +1593,23 @@ class BookManager:
         result: dict[str, Any] = {"content_type": content_type, "total_count": len(items), "applied_count": 0, "failed_count": 0, "results": []}
         root = self.path_prefix.resolve(strict=False)
 
+        async def _notify_item_done(payload: dict[str, Any]) -> None:
+            # on_item_done은 동기 콜백일 수도, 코루틴을 돌려주는 콜백일 수도 있다. main.py는
+            # DB 쓰기를 asyncio.to_thread로 넘기려고 async 콜백을 쓰므로, 반환값이
+            # awaitable이면 여기서 대신 기다려준다 — book_manager는 여전히 DB를 모른다.
+            if on_item_done is None:
+                return
+            outcome = on_item_done(payload)
+            if inspect.isawaitable(outcome):
+                await outcome
+
         for item in items:
+            # 다른 승인 작업이 이 작업을 대체했으면(토큰 불일치) 여기서 즉시 멈춘다.
+            # 계속 진행하면 진 쪽이 이긴 쪽이 방금 기록한 행을 덮어써 망가뜨릴 수 있다.
+            if should_continue is not None and not should_continue():
+                LOGGER.warning("분류 적용 중단: 다른 작업이 이 작업을 대체했다")
+                break
+
             file_path_value = item.get("file_path")
             target_category = item.get("target_category")
             entry: dict[str, Any] = {"file_path": file_path_value, "target_category": target_category, "apply_status": "failed", "apply_error": None}
@@ -1622,6 +1640,12 @@ class BookManager:
                         else:
                             # 제안 시점의 카테고리를 그대로 source_category로 써서 빈 디렉토리 정리 대상을 맞춘다.
                             source_category = file_path_value.rsplit("/", 1)[0] if "/" in file_path_value else "_root"
+                            # 실제 이동 직전에 "moving"을 기록한다. 파일 이동과 ES 갱신이 끝난
+                            # 뒤 이 행을 "moved"로 바꾸기 전에 pod가 죽으면, 행이 pending으로
+                            # 남는 게 아니라 moving으로 남아 "시도는 했다"를 정직하게 남긴다.
+                            # pending으로 남으면 재개 시 다시 시도하다가 이미 옮겨진 원본을
+                            # 못 찾아 moved인 책을 failed로 잘못 기록하게 된다.
+                            await _notify_item_done({"file_path": file_path_value, "apply_status": "moving", "apply_error": None})
                             file_result, error = await self._move_classified_file(
                                 absolute_path,
                                 target_category,
@@ -1647,10 +1671,9 @@ class BookManager:
             else:
                 result["failed_count"] += 1
             result["results"].append(entry)
-            if on_item_done is not None:
-                # 한 권 처리 직후 바로 알려, 호출자(main.py)가 이 한 건만 DB에 기록할 수
-                # 있게 한다. book_manager는 DB를 모르므로 직접 쓰지 않고 콜백으로 넘긴다.
-                on_item_done({"file_path": entry["file_path"], "apply_status": entry["apply_status"], "apply_error": entry["apply_error"]})
+            # 한 권 처리 직후 바로 알려, 호출자(main.py)가 이 한 건만 DB에 기록할 수 있게
+            # 한다. book_manager는 DB를 모르므로 직접 쓰지 않고 콜백으로 넘긴다.
+            await _notify_item_done({"file_path": entry["file_path"], "apply_status": entry["apply_status"], "apply_error": entry["apply_error"]})
             if on_progress is not None:
                 on_progress({"total_count": result["total_count"], "applied_count": result["applied_count"], "failed_count": result["failed_count"]})
 
