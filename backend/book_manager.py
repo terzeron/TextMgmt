@@ -1675,7 +1675,13 @@ class BookManager:
             # 한다. book_manager는 DB를 모르므로 직접 쓰지 않고 콜백으로 넘긴다.
             await _notify_item_done({"file_path": entry["file_path"], "apply_status": entry["apply_status"], "apply_error": entry["apply_error"]})
             if on_progress is not None:
-                on_progress({"total_count": result["total_count"], "applied_count": result["applied_count"], "failed_count": result["failed_count"]})
+                # main.py는 propose와 apply의 진행률 콜백을 같은 상태 파일에
+                # {**current, **progress}로 얕게 병합한다. 여기서 "total_count"를 그대로
+                # 쓰면 승인 건수(approved 개수)가 제안 단계의 전체 처리 대상 수를 덮어써,
+                # 화면 헤더가 "1200 / 50"처럼 뒤바뀐 숫자를 보여준다(제안 카운터가 승인
+                # 카운터로 영구히 대체됨). apply 전용 키로 분리해 서로 다른 두 숫자가
+                # 같은 이름을 공유하지 않게 한다.
+                on_progress({"apply_total_count": result["total_count"], "applied_count": result["applied_count"], "failed_count": result["failed_count"]})
 
         return result, None
 

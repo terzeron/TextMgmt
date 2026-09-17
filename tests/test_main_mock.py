@@ -721,6 +721,53 @@ class TestCategoryMismatchAdmin:
 
         assert seen["status_after_tick"] == "applying"
 
+    def test_classify_proposal_apply_progress_does_not_clobber_propose_counters(self, mock_bm, mock_cat, tmp_path):
+        """I1: 적용 단계 진행률이 제안 단계의 total_count/processed_count를 덮어쓰지 않는다.
+
+        제안 1,200권 중 50건만 승인해 적용하면, 예전에는 apply의 on_progress가 같은
+        "total_count" 키로 상태 파일에 병합돼 헤더가 "1200 / 50"처럼 뒤바뀌었다.
+        book_manager가 이제 apply 전용 키(apply_total_count)로 보고하므로, 제안
+        단계가 남긴 total_count/processed_count는 적용이 끝난 뒤에도 그대로다.
+        """
+        import asyncio
+
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(
+            json.dumps(
+                {
+                    "status": "ready",
+                    "apply_token": "test-token",
+                    "source_category": "0_inbox",
+                    "total_count": 1200,
+                    "processed_count": 1200,
+                    "updated_at": time.time(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        items = [{"file_path": f"0_inbox/{i}.epub", "target_category": "3_SF"} for i in range(50)]
+
+        async def fake_apply_with_progress(items, allowed_file_paths, on_progress=None, **kwargs):
+            if on_progress:
+                on_progress({"apply_total_count": len(items), "applied_count": 10, "failed_count": 0})
+            return {"total_count": len(items), "applied_count": len(items), "failed_count": 0, "results": []}, None
+
+        mock_bm.apply_category_changes = fake_apply_with_progress
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal/apply")
+        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
+        _run_apply_job = freevars["_run_classify_apply_job"]
+
+        asyncio.run(_run_apply_job(items, {item["file_path"] for item in items}, False, "test-token"))
+
+        done = json.loads(status_path.read_text(encoding="utf-8"))
+        # 제안 단계 카운터는 그대로 살아있다 — 승인 50건이 1200을 덮어쓰지 않는다.
+        assert done["total_count"] == 1200
+        assert done["processed_count"] == 1200
+        assert done["apply_total_count"] == 50
+        assert done["status"] == "done"
+
     def test_classify_proposal_apply_accepted_when_status_is_failed(self, client, mock_bm, mock_cat, tmp_path):
         """상태가 failed(중단 후 굳음)인 제안에도 승인 요청이 받아들여진다.
 
