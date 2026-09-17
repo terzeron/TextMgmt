@@ -79,11 +79,16 @@ class CategoryMapping:
                 # 걸면 인덱스 길이 제한에 걸리므로 걸지 않는다 — 중복은 clear로 관리한다.
                 # 항목 필드가 앞으로 늘 수 있어(candidates 배열 등) payload 하나에 JSON으로
                 # 담아, 항목 스키마가 바뀌어도 테이블을 안 고쳐도 되게 한다.
+                # apply_status/apply_error: 파일 이동 상태를 건별로 기록한다. payload JSON
+                # 안에 두면 "이동 완료된 행만 지운다"가 DELETE ... WHERE payload->>'...'
+                # 같은 JSON 경로 조회가 되어 인덱스를 못 타므로, 컬럼으로 분리해 인덱스를 건다.
                 cursor.execute(
-                    "CREATE TABLE IF NOT EXISTS classify_proposal_items (id INT AUTO_INCREMENT PRIMARY KEY, content_type VARCHAR(10) NOT NULL DEFAULT 'book', source_category VARCHAR(255) NOT NULL, file_path VARCHAR(1024) NOT NULL, payload JSON NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX idx_content_source (content_type, source_category), INDEX idx_content_type (content_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+                    "CREATE TABLE IF NOT EXISTS classify_proposal_items (id INT AUTO_INCREMENT PRIMARY KEY, content_type VARCHAR(10) NOT NULL DEFAULT 'book', source_category VARCHAR(255) NOT NULL, file_path VARCHAR(1024) NOT NULL, payload JSON NOT NULL, apply_status VARCHAR(20) NOT NULL DEFAULT 'pending', apply_error TEXT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX idx_content_source (content_type, source_category), INDEX idx_content_type (content_type), INDEX idx_apply_status (content_type, apply_status)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
                 )
                 # 기존 테이블 마이그레이션: content_type 컬럼이 없으면 추가
                 self._migrate_add_content_type(cursor)
+                # 기존 테이블 마이그레이션: apply_status/apply_error 컬럼이 없으면 추가
+                self._migrate_add_apply_status(cursor)
                 # reload_locks를 진행 상황까지 담는 공유 작업 상태 테이블로 확장
                 self._migrate_reload_locks(cursor)
                 # reload_locks를 content_type 단일 락에서 (content_type, lock_key) 복합 락으로 확장
@@ -112,6 +117,20 @@ class CategoryMapping:
                     except Exception as e:
                         LOGGER.debug("Index category not found, skipping: %s", e)
                     cursor.execute(f"ALTER TABLE {table} ADD UNIQUE KEY {table_unique_indexes[table]} (category, content_type)")
+
+    def _migrate_add_apply_status(self, cursor) -> None:
+        """기존 classify_proposal_items 테이블에 apply_status/apply_error 컬럼과 인덱스를 추가한다.
+
+        _migrate_add_content_type과 같은 방식: 이미 테이블이 만들어진 환경이 있으므로
+        information_schema로 컬럼 존재 여부를 먼저 확인하고 없을 때만 ALTER한다.
+        """
+        cursor.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = %s AND table_name = 'classify_proposal_items' AND column_name = 'apply_status'", (self.database,))
+        row = cursor.fetchone()
+        if row and row["cnt"] == 0:
+            LOGGER.info("Migrating table classify_proposal_items: adding apply_status/apply_error columns")
+            cursor.execute("ALTER TABLE classify_proposal_items ADD COLUMN apply_status VARCHAR(20) NOT NULL DEFAULT 'pending'")
+            cursor.execute("ALTER TABLE classify_proposal_items ADD COLUMN apply_error TEXT NULL")
+            cursor.execute("ALTER TABLE classify_proposal_items ADD INDEX idx_apply_status (content_type, apply_status)")
 
     def _migrate_reload_locks(self, cursor) -> None:
         """reload_locks를 진행 상황(heartbeat·카운트)까지 담는 공유 작업 상태 테이블로 확장"""
@@ -615,11 +634,41 @@ class CategoryMapping:
         """제안 항목을 분류가 끝난 순서(id 오름차순) 그대로 돌려준다.
 
         화면에 보이는 순서가 분류 완료 순서와 같아야 관리자가 진행 상황을
-        직관적으로 따라갈 수 있다.
+        직관적으로 따라갈 수 있다. apply_status/apply_error는 payload가 아니라
+        컬럼에 있으므로 payload를 푼 뒤 덮어써 함께 실어준다.
         """
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT payload FROM classify_proposal_items WHERE content_type = %s ORDER BY id ASC", (content_type,))
+                cursor.execute("SELECT payload, apply_status, apply_error FROM classify_proposal_items WHERE content_type = %s ORDER BY id ASC", (content_type,))
                 rows = cursor.fetchall()
-        return [json.loads(row["payload"]) for row in rows]
+        items = []
+        for row in rows:
+            item = json.loads(row["payload"])
+            item["apply_status"] = row["apply_status"]
+            item["apply_error"] = row["apply_error"]
+            items.append(item)
+        return items
+
+    def update_classify_proposal_item_status(self, file_path: str, apply_status: str, apply_error: str | None = None, content_type: str = "book") -> None:
+        """파일 하나를 옮긴 직후 그 행 하나만 바로 기록한다.
+
+        승인 작업을 끝까지 돈 뒤 한꺼번에 기록하면, 도중에 중단됐을 때 무엇이
+        옮겨졌는지 알 수 없다. 건별로 바로 기록해야 중단 후 재개가 가능하다.
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("UPDATE classify_proposal_items SET apply_status = %s, apply_error = %s WHERE content_type = %s AND file_path = %s", (apply_status, apply_error, content_type, file_path))
+            conn.commit()
+
+    def delete_applied_classify_proposal_items(self, content_type: str = "book") -> int:
+        """이동이 끝난(apply_status = 'moved') 행만 지우고, 지운 개수를 돌려준다.
+
+        대기·실패 행은 남겨야 관리자가 재시도하거나 목적지를 고쳐 다시 승인할 수 있다.
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM classify_proposal_items WHERE content_type = %s AND apply_status = 'moved'", (content_type,))
+                deleted_count = cursor.rowcount
+            conn.commit()
+        return deleted_count
 

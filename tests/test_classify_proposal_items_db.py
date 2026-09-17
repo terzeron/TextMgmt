@@ -67,7 +67,85 @@ def test_payload_round_trips_korean_nested_null_and_long_path(cm):
     fetched = cm.get_classify_proposal_items()
 
     assert len(fetched) == 1
-    assert fetched[0] == item
+    # apply_status/apply_error는 payload가 아니라 컬럼에서 실려온다. 새로 넣은
+    # 행은 아직 아무것도 이동하지 않았으므로 기본값 pending/None이어야 한다.
+    assert fetched[0] == {**item, "apply_status": "pending", "apply_error": None}
+
+
+def test_get_returns_apply_status_and_apply_error_from_columns(cm):
+    """get이 payload뿐 아니라 apply_status/apply_error 컬럼 값도 항목에 실어 돌려준다."""
+    cm.add_classify_proposal_items([{"file_path": "a.epub"}], "0_inbox")
+
+    cm.update_classify_proposal_item_status("a.epub", "failed", "파일을 찾을 수 없습니다")
+    item = cm.get_classify_proposal_items()[0]
+
+    assert item["apply_status"] == "failed"
+    assert item["apply_error"] == "파일을 찾을 수 없습니다"
+
+
+def test_update_status_changes_only_target_row(cm):
+    """update가 file_path + content_type으로 지정한 행만 바꾸고 다른 행은 그대로 둔다."""
+    cm.add_classify_proposal_items([{"file_path": "a.epub"}, {"file_path": "b.epub"}], "0_inbox")
+
+    cm.update_classify_proposal_item_status("a.epub", "moved")
+
+    items = {item["file_path"]: item for item in cm.get_classify_proposal_items()}
+    assert items["a.epub"]["apply_status"] == "moved"
+    assert items["a.epub"]["apply_error"] is None
+    assert items["b.epub"]["apply_status"] == "pending"
+
+
+def test_update_status_is_scoped_by_content_type(cm):
+    """같은 file_path라도 content_type이 다르면 건드리지 않는다."""
+    cm.add_classify_proposal_items([{"file_path": "same.epub"}], "0_inbox", content_type="book")
+    cm.add_classify_proposal_items([{"file_path": "same.epub"}], "0_inbox", content_type="comic")
+
+    cm.update_classify_proposal_item_status("same.epub", "moved", content_type="book")
+
+    assert cm.get_classify_proposal_items(content_type="book")[0]["apply_status"] == "moved"
+    assert cm.get_classify_proposal_items(content_type="comic")[0]["apply_status"] == "pending"
+
+    # 다음 테스트를 위해 comic도 정리한다 (컨테이너는 세션 스코프로 공유된다)
+    cm.clear_classify_proposal_items(content_type="comic")
+
+
+def test_delete_applied_removes_only_moved_rows_and_returns_count(cm):
+    """delete_applied는 apply_status='moved'인 행만 지우고, 지운 개수를 돌려준다."""
+    cm.add_classify_proposal_items([{"file_path": "a.epub"}, {"file_path": "b.epub"}, {"file_path": "c.epub"}], "0_inbox")
+    cm.update_classify_proposal_item_status("a.epub", "moved")
+    cm.update_classify_proposal_item_status("b.epub", "failed", "실패")
+    # c.epub은 pending으로 남겨둔다
+
+    deleted_count = cm.delete_applied_classify_proposal_items()
+
+    assert deleted_count == 1
+    remaining = {item["file_path"] for item in cm.get_classify_proposal_items()}
+    assert remaining == {"b.epub", "c.epub"}
+
+
+def test_migration_adds_apply_status_columns_to_legacy_table(cm):
+    """apply_status/apply_error 컬럼 없는 기존 테이블을 열어도 마이그레이션이 컬럼을 추가한다.
+
+    tests/test_refresh_token_store.py의 test_mysql_migration_adds_columns_to_legacy_table과
+    같은 패턴이다: 컬럼 없는 옛 스키마로 테이블을 다시 만들고, 새 인스턴스를 생성해
+    _init_db가 마이그레이션을 수행하게 한 뒤 컬럼이 실제로 동작하는지 확인한다.
+    """
+    with cm._get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("DROP TABLE IF EXISTS classify_proposal_items")
+            cursor.execute(
+                "CREATE TABLE classify_proposal_items (id INT AUTO_INCREMENT PRIMARY KEY, content_type VARCHAR(10) NOT NULL DEFAULT 'book', source_category VARCHAR(255) NOT NULL, file_path VARCHAR(1024) NOT NULL, payload JSON NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX idx_content_source (content_type, source_category), INDEX idx_content_type (content_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+            )
+            cursor.execute("INSERT INTO classify_proposal_items (content_type, source_category, file_path, payload) VALUES ('book', '0_inbox', 'a.epub', '{}')")
+        conn.commit()
+
+    migrated = category_mapping_mod.CategoryMapping()  # _init_db가 마이그레이션을 수행한다
+
+    items = migrated.get_classify_proposal_items()
+    assert items[0]["apply_status"] == "pending"
+    assert items[0]["apply_error"] is None
+    migrated.update_classify_proposal_item_status("a.epub", "moved")
+    assert migrated.get_classify_proposal_items()[0]["apply_status"] == "moved"
 
 
 def test_batch_of_250_across_three_adds_keeps_full_tail_in_order(cm):

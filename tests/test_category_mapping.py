@@ -388,14 +388,14 @@ class TestCategoryMapping(unittest.TestCase):
         assert conn.committed is True
 
     def test_migrate_skips_when_content_type_already_exists(self):
-        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 14)
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 15)
         cm_mod, cm = build_cm(cursor)
         alter_queries = [sql for sql, _ in cursor.executed if "ALTER TABLE" in str(sql)]
         assert cm is not None
         assert alter_queries == []
 
     def test_migrate_reload_locks_adds_reload_source(self):
-        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 12 + [{"cnt": 0}, {"cnt": 1}])
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 13 + [{"cnt": 0}, {"cnt": 1}])
         cm_mod, cm = build_cm(cursor)
         executed_sql = [sql for sql, _ in cursor.executed]
         assert any("ADD COLUMN reload_source" in s for s in executed_sql)
@@ -403,7 +403,7 @@ class TestCategoryMapping(unittest.TestCase):
         assert cm is not None
 
     def test_migrate_reload_locks_adds_lock_key_and_switches_primary_key(self):
-        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 13 + [{"cnt": 0}])
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 14 + [{"cnt": 0}])
         cm_mod, cm = build_cm(cursor)
         executed_sql = [sql for sql, _ in cursor.executed]
         assert any("ADD COLUMN lock_key" in s for s in executed_sql)
@@ -712,9 +712,9 @@ class _ClassifyItemsFakeCursor:
         if sql.startswith("DELETE FROM classify_proposal_items"):
             (content_type,) = params
             self.store[:] = [row for row in self.store if row[0] != content_type]
-        elif sql.startswith("SELECT payload FROM classify_proposal_items"):
+        elif sql.startswith("SELECT payload, apply_status, apply_error FROM classify_proposal_items"):
             (content_type,) = params
-            self._result = [{"payload": row[3]} for row in self.store if row[0] == content_type]
+            self._result = [{"payload": row[3], "apply_status": "pending", "apply_error": None} for row in self.store if row[0] == content_type]
         else:
             raise AssertionError(f"unexpected SQL: {sql}")
 
@@ -783,7 +783,7 @@ class TestClassifyProposalItems(unittest.TestCase):
             ("book", "0_inbox", "b.epub", json.dumps(items[1], ensure_ascii=False)),
         ]
 
-        cursor_get = FakeCursor(rows=[{"payload": json.dumps(items[0], ensure_ascii=False)}, {"payload": json.dumps(items[1], ensure_ascii=False)}])
+        cursor_get = FakeCursor(rows=[{"payload": json.dumps(items[0], ensure_ascii=False), "apply_status": "pending", "apply_error": None}, {"payload": json.dumps(items[1], ensure_ascii=False), "apply_status": "pending", "apply_error": None}])
 
         @contextlib.contextmanager
         def _conn_get():
