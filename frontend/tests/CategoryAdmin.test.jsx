@@ -1771,231 +1771,72 @@ describe("CategoryAdmin", () => {
     });
   });
 
-  it("자동 분류 버튼 클릭 시 선택 카테고리 파일을 non-recursive로 자동 분류한다", async () => {
+  it("분류 제안 버튼 클릭 시 선택 카테고리로 분류 제안을 시작한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
-    const originalGetImpl = mockJsonGetReq.getMockImplementation();
-    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
-      if (url === "/categories/auto-classify-status") {
-        resolve({
-          status: "done",
-          source_category: "1_fiction",
-          moved_count: 2,
-          skipped_count: 1,
-          failed_count: 0,
-          remaining_count: 0,
-        });
-        return;
-      }
-      originalGetImpl(url, payload, resolve, reject);
-    });
     render(<CategoryAdmin />);
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
 
     fireEvent.click(screen.getByText("1_fiction"));
-    fireEvent.click(screen.getByTitle("자동 분류"));
-
-    const modal = await screen.findByRole("dialog");
-    expect(
-      within(modal).getByText("자동 분류", { selector: ".modal-title" }),
-    ).toBeTruthy();
-    expect(
-      within(modal).getByText(/카테고리 '1_fiction'의 바로 아래 파일을/),
-    ).toBeTruthy();
-    expect(within(modal).queryByLabelText("하위 디렉토리 포함")).toBeNull();
-
     mockJsonPostReq.mockImplementation(
       (url, payload, resolve, _reject, final) => {
-        resolve({ started: true });
+        resolve({
+          started: true,
+          status: "running",
+          source_category: "1_fiction",
+          total_count: 0,
+          processed_count: 0,
+        });
         if (final) final();
       },
     );
 
-    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
+    fireEvent.click(screen.getByTitle("분류 제안"));
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
-        "/categories/auto-classify",
-        { category: "1_fiction", recursive: false, async_mode: true },
+        "/categories/classify-proposal",
+        { category: "1_fiction" },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
       );
     });
-    // 완료 배너는 표시하지 않는다. 완료 신호는 선택 해제와 목록 갱신이다.
-    await waitFor(() => {
-      expect(screen.getByText("왼쪽에서 디렉토리를 선택하세요.")).toBeTruthy();
-    });
-    expect(screen.queryByText(/자동 분류 완료/)).toBeNull();
   });
 
-  it("자동 분류 진행 중에는 버튼에 잔여 건 수를 표시한다", async () => {
+  it("분류 제안 시작 응답이 already_running이면 진행 상태를 즉시 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
-    const originalGetImpl = mockJsonGetReq.getMockImplementation();
-    let autoStatusCalls = 0;
-    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
-      if (url === "/categories/auto-classify-status") {
-        autoStatusCalls += 1;
-        if (autoStatusCalls === 1) {
-          resolve({ status: "idle" });
-          return;
-        }
-        resolve({
-          status: "running",
-          source_category: "1_fiction",
-          total_count: 8,
-          processed_count: 3,
-          remaining_count: 5,
-          moved_count: 2,
-          skipped_count: 1,
-          failed_count: 0,
-        });
-        return;
-      }
-      originalGetImpl(url, payload, resolve, reject);
-    });
     render(<CategoryAdmin />);
     await waitFor(() => {
       expect(screen.getByText("1_fiction")).toBeTruthy();
     });
 
     fireEvent.click(screen.getByText("1_fiction"));
-    fireEvent.click(screen.getByTitle("자동 분류"));
-    const modal = await screen.findByRole("dialog");
-
-    mockJsonPostReq.mockImplementation(
-      (url, payload, resolve, _reject, final) => {
-        resolve({ started: true });
-        if (final) final();
-      },
-    );
-
-    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
-
-    await waitFor(() => {
-      expect(
-        within(screen.getByTitle("자동 분류")).getByText("잔여 5건"),
-      ).toBeTruthy();
-    });
-  });
-
-  it("자동 분류 완료 상태에 카운트와 source_category가 없어도 선택만 해제한다", async () => {
-    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
-    const originalGetImpl = mockJsonGetReq.getMockImplementation();
-    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
-      if (url === "/categories/auto-classify-status") {
-        resolve({ status: "done" });
-        return;
-      }
-      originalGetImpl(url, payload, resolve, reject);
-    });
-    render(<CategoryAdmin />);
-    await waitFor(() => {
-      expect(screen.getByText("1_fiction")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText("1_fiction"));
-    fireEvent.click(screen.getByTitle("자동 분류"));
-    const modal = await screen.findByRole("dialog");
-    mockJsonPostReq.mockImplementation(
-      (url, payload, resolve, _reject, final) => {
-        resolve({ started: true });
-        if (final) final();
-      },
-    );
-
-    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("왼쪽에서 디렉토리를 선택하세요.")).toBeTruthy();
-    });
-    expect(screen.queryByText(/자동 분류 완료/)).toBeNull();
-  });
-
-  it("자동 분류 작업이 실패 상태로 끝나면 에러 메시지를 표시한다", async () => {
-    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
-    const originalGetImpl = mockJsonGetReq.getMockImplementation();
-    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
-      if (url === "/categories/auto-classify-status") {
-        resolve({ status: "failed", error: "자동 분류 실패" });
-        return;
-      }
-      originalGetImpl(url, payload, resolve, reject);
-    });
-    render(<CategoryAdmin />);
-    await waitFor(() => {
-      expect(screen.getByText("1_fiction")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText("1_fiction"));
-    fireEvent.click(screen.getByTitle("자동 분류"));
-    const modal = await screen.findByRole("dialog");
-    mockJsonPostReq.mockImplementation(
-      (url, payload, resolve, _reject, final) => {
-        resolve({ started: true });
-        if (final) final();
-      },
-    );
-
-    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("자동 분류 실패")).toBeTruthy();
-    });
-  });
-
-  it("자동 분류 시작 응답이 already_running이면 진행 상태를 즉시 표시한다", async () => {
-    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
-    const originalGetImpl = mockJsonGetReq.getMockImplementation();
-    let autoStatusCalls = 0;
-    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
-      if (url === "/categories/auto-classify-status") {
-        autoStatusCalls += 1;
-        if (autoStatusCalls === 1) {
-          resolve({ status: "idle" });
-          return;
-        }
-        resolve({
-          status: "running",
-          total_count: 7,
-          processed_count: 2,
-          remaining_count: 5,
-        });
-        return;
-      }
-      originalGetImpl(url, payload, resolve, reject);
-    });
-    render(<CategoryAdmin />);
-    await waitFor(() => {
-      expect(screen.getByText("1_fiction")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText("1_fiction"));
-    fireEvent.click(screen.getByTitle("자동 분류"));
-    const modal = await screen.findByRole("dialog");
     mockJsonPostReq.mockImplementation(
       (url, payload, resolve, _reject, final) => {
         resolve({
           already_running: true,
           status: "running",
-          total_count: 7,
-          processed_count: 2,
-          remaining_count: 5,
+          source_category: "1_fiction",
+          total_count: 4,
+          processed_count: 1,
+          items: [],
         });
         if (final) final();
       },
     );
 
-    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
+    fireEvent.click(screen.getByTitle("분류 제안"));
 
     await waitFor(() => {
-      expect(
-        within(screen.getByTitle("자동 분류")).getByText("잔여 5건"),
-      ).toBeTruthy();
+      expect(screen.getByText("분류 제안: 1_fiction")).toBeTruthy();
+      expect(screen.getByText("1 / 4")).toBeTruthy();
     });
+    // 진행 중에는 분류 제안 버튼도 다시 누를 수 없다.
+    expect(screen.getByTitle("분류 제안").disabled).toBe(true);
   });
 
-  it("자동 분류 시작 요청이 실패하면 버튼을 원래 상태로 돌리고 에러 메시지를 표시한다", async () => {
+  it("분류 제안 시작 요청이 실패하면 버튼을 원래 상태로 돌리고 에러 메시지를 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
     await waitFor(() => {
@@ -2003,8 +1844,6 @@ describe("CategoryAdmin", () => {
     });
 
     fireEvent.click(screen.getByText("1_fiction"));
-    fireEvent.click(screen.getByTitle("자동 분류"));
-    const modal = await screen.findByRole("dialog");
     mockJsonPostReq.mockImplementation(
       (url, payload, _resolve, reject, final) => {
         reject(null);
@@ -2012,17 +1851,17 @@ describe("CategoryAdmin", () => {
       },
     );
 
-    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
+    fireEvent.click(screen.getByTitle("분류 제안"));
 
     await waitFor(() => {
-      const autoClassifyButton = screen.getByTitle("자동 분류");
-      expect(autoClassifyButton.textContent).toContain("자동 분류");
-      expect(autoClassifyButton.querySelector(".spinner-border")).toBeNull();
-      expect(screen.getByText("자동 분류에 실패했습니다.")).toBeTruthy();
+      const proposalButton = screen.getByTitle("분류 제안");
+      expect(proposalButton.textContent).toContain("분류 제안");
+      expect(proposalButton.querySelector(".spinner-border")).toBeNull();
+      expect(screen.getByText("분류 제안에 실패했습니다.")).toBeTruthy();
     });
   });
 
-  it("선택 카테고리 버튼 그룹에는 이상 항목 재적재 다음으로 자동 분류 버튼을 표시한다", async () => {
+  it("선택 카테고리 버튼 그룹에는 이상 항목 재적재 다음으로 분류 제안 버튼을 표시한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
     await waitFor(() => {
@@ -2032,7 +1871,7 @@ describe("CategoryAdmin", () => {
     fireEvent.click(screen.getByText("1_fiction"));
     const actionGroup = screen.getByTitle("이름 변경").closest(".d-flex");
 
-    expect(within(actionGroup).getByTitle("자동 분류")).toBeTruthy();
+    expect(within(actionGroup).getByTitle("분류 제안")).toBeTruthy();
     expect(
       Array.from(actionGroup.querySelectorAll("button")).map(
         (button) => button.title,
@@ -2042,11 +1881,11 @@ describe("CategoryAdmin", () => {
       "카테고리 삭제",
       "ES 재적재",
       "이상 항목만 ES 재적재",
-      "자동 분류",
+      "분류 제안",
     ]);
   });
 
-  it("만화 카테고리 자동 분류는 /comics prefix와 non-recursive 옵션을 사용한다", async () => {
+  it("만화 카테고리 분류 제안은 /comics prefix를 사용한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, {
       apiPrefix: "/comics",
     });
@@ -2056,23 +1895,18 @@ describe("CategoryAdmin", () => {
     });
 
     fireEvent.click(screen.getByText("1_fiction"));
-    fireEvent.click(screen.getByTitle("자동 분류"));
-
-    const modal = await screen.findByRole("dialog");
-    expect(within(modal).queryByLabelText("하위 디렉토리 포함")).toBeNull();
-
     mockJsonPostReq.mockImplementation(
       (url, payload, resolve, _reject, final) => {
-        resolve({ started: true });
+        resolve({ started: true, status: "running" });
         if (final) final();
       },
     );
 
-    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
+    fireEvent.click(screen.getByTitle("분류 제안"));
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
-        "/comics/categories/auto-classify",
-        { category: "1_fiction", recursive: false, async_mode: true },
+        "/comics/categories/classify-proposal",
+        { category: "1_fiction" },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
@@ -4261,121 +4095,341 @@ describe("CategoryAdmin 성공 메시지 자동 소멸", () => {
   });
 });
 
-// ── 자동 분류 진행 상태 폴링 ──
+// ── 분류 제안 검토 · 승인 ──
 
-describe("CategoryAdmin 자동 분류 진행 상태 폴링", () => {
+describe("CategoryAdmin 분류 제안", () => {
   beforeEach(() => {
     mockJsonGetReq.mockReset();
     mockJsonDeleteReq.mockReset();
     mockJsonPostReq.mockReset();
     mockJsonPutReq.mockReset();
-    vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 
-  afterEach(() => {
-    vi.runOnlyPendingTimers();
-    vi.useRealTimers();
-  });
-
-  const renderAndSelect = async (category = "1_fiction") => {
-    render(<CategoryAdmin />);
-    await waitFor(() => {
-      expect(screen.getByText(category)).toBeTruthy();
-    });
-    fireEvent.click(screen.getByText(category));
+  const PROPOSAL_ITEM_CERTAIN = {
+    file_path: "1_fiction/a.epub",
+    title: "확실한 책",
+    current_category: "1_fiction",
+    target_category: "2_science",
+    grade: "certain",
+    confidence: 0.9,
+    candidates: [
+      { category: "2_science", source: "model", detail: "모델 판정" },
+    ],
+    apply_status: "pending",
+    apply_error: null,
+  };
+  const PROPOSAL_ITEM_UNSURE = {
+    file_path: "1_fiction/b.epub",
+    title: "애매한 책",
+    current_category: "1_fiction",
+    target_category: "3_history",
+    grade: "unsure",
+    confidence: 0.3,
+    candidates: [
+      { category: "3_history", source: "bookstore", detail: "서점 1곳 일치" },
+    ],
+    apply_status: "pending",
+    apply_error: null,
+  };
+  const PROPOSAL_ITEM_MOVED = {
+    file_path: "1_fiction/c.epub",
+    title: "이미 옮긴 책",
+    current_category: "1_fiction",
+    target_category: "2_science",
+    grade: "certain",
+    confidence: 0.95,
+    candidates: [],
+    apply_status: "moved",
+    apply_error: null,
   };
 
-  it("마운트 시 자동 분류가 진행 중이면 버튼에 잔여 건수를 표시한다", async () => {
-    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
-    const originalGetImpl = mockJsonGetReq.getMockImplementation();
-    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
-      if (url === "/categories/auto-classify-status") {
-        resolve({
-          status: "running",
-          source_category: "1_fiction",
-          total_count: 8,
-          processed_count: 3,
-          remaining_count: 5,
-        });
-        return;
-      }
-      originalGetImpl(url, payload, resolve, reject);
+  // resultRef.current를 매 GET 호출 시점에 다시 읽어, 테스트 중간에 다음 폴링
+  // 응답을 바꿔치기할 수 있게 한다.
+  function mockClassifyProposalGet(resultRef) {
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
+      else if (url.startsWith("/category-mismatches/reload-status"))
+        resolve({ status: "idle" });
+      else if (url === "/categories/auto-classify-status")
+        resolve({ status: "idle" });
+      else if (url === "/categories/classify-proposal")
+        resolve(resultRef.current);
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        resolve(LATEST_EXCLUDED_RESPONSE);
     });
+  }
 
-    await renderAndSelect();
+  it("상태가 ready면 표가 보이고 certain 항목이 기본 선택된다", async () => {
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 3,
+        processed_count: 3,
+        items: [PROPOSAL_ITEM_CERTAIN, PROPOSAL_ITEM_UNSURE, PROPOSAL_ITEM_MOVED],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
 
     await waitFor(() => {
-      const autoClassifyButton = screen.getByTitle("자동 분류");
-      expect(
-        autoClassifyButton.querySelector(".spinner-border"),
-      ).not.toBeNull();
-      expect(within(autoClassifyButton).getByText("잔여 5건")).toBeTruthy();
+      expect(screen.getByLabelText("1_fiction/a.epub 선택").checked).toBe(
+        true,
+      );
     });
+    expect(screen.getByLabelText("1_fiction/b.epub 선택").checked).toBe(false);
+    expect(screen.getByLabelText("1_fiction/c.epub 선택").disabled).toBe(true);
   });
 
-  it("자동 분류 시작 직후 idle 응답이 와도 진행 표시를 유지하고 이후 잔여 건수를 표시한다", async () => {
-    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
-    const originalGetImpl = mockJsonGetReq.getMockImplementation();
-    const autoStatusResolvers = [];
-    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
-      if (url === "/categories/auto-classify-status") {
-        autoStatusResolvers.push(resolve);
-        return;
-      }
-      originalGetImpl(url, payload, resolve, reject);
-    });
-
-    await renderAndSelect();
-    const initialStatusCallCount = autoStatusResolvers.length;
-    fireEvent.click(screen.getByTitle("자동 분류"));
-    const modal = await screen.findByRole("dialog");
-    mockJsonPostReq.mockImplementation(
-      (url, payload, resolve, _reject, done) => {
-        resolve({ started: true });
-        if (done) done();
+  it("상태가 running이면 지금까지의 항목이 표에 보이고 승인 버튼이 비활성이다", async () => {
+    const resultRef = {
+      current: {
+        status: "running",
+        source_category: "1_fiction",
+        total_count: 5,
+        processed_count: 1,
+        items: [PROPOSAL_ITEM_CERTAIN],
       },
-    );
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
 
-    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
     await waitFor(() => {
-      expect(autoStatusResolvers.length).toBeGreaterThan(
-        initialStatusCallCount,
+      expect(screen.getByText("확실한 책")).toBeTruthy();
+    });
+    expect(
+      screen.getByRole("button", { name: /분류 승인/ }).disabled,
+    ).toBe(true);
+  });
+
+  it("승인 요청 payload에 선택된 행만, 사용자가 고친 목적지로 담긴다", async () => {
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 2,
+        processed_count: 2,
+        items: [PROPOSAL_ITEM_CERTAIN, PROPOSAL_ITEM_UNSURE],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("1_fiction/a.epub 선택").checked).toBe(
+        true,
       );
     });
 
-    act(() => {
-      autoStatusResolvers[autoStatusResolvers.length - 1]({ status: "idle" });
+    // 애매한 책은 기본 선택되지 않으므로, 목적지를 고른 뒤 직접 체크한다.
+    fireEvent.change(screen.getByLabelText("1_fiction/b.epub 목적지"), {
+      target: { value: "2_science" },
     });
-    await waitFor(() => {
-      const autoClassifyButton = screen.getByTitle("자동 분류");
-      expect(
-        autoClassifyButton.querySelector(".spinner-border"),
-      ).not.toBeNull();
-      expect(within(autoClassifyButton).getByText("분류 중")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("1_fiction/b.epub 선택"));
+
+    // 확실한 책은 목적지를 사용자가 다른 곳으로 고친다.
+    fireEvent.change(screen.getByLabelText("1_fiction/a.epub 목적지"), {
+      target: { value: "3_history" },
     });
 
-    const callsAfterIdle = autoStatusResolvers.length;
-    await act(async () => {
-      vi.advanceTimersByTime(3000);
-    });
-    await waitFor(() => {
-      expect(autoStatusResolvers.length).toBeGreaterThan(callsAfterIdle);
-    });
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, _reject, final) => {
+        resolve({ started: true, total_count: 2 });
+        if (final) final();
+      },
+    );
 
-    act(() => {
-      autoStatusResolvers[autoStatusResolvers.length - 1]({
-        status: "running",
+    fireEvent.click(screen.getByRole("button", { name: /분류 승인/ }));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "승인" }));
+
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/categories/classify-proposal/apply",
+        {
+          items: [
+            { file_path: "1_fiction/a.epub", target_category: "3_history" },
+            { file_path: "1_fiction/b.epub", target_category: "2_science" },
+          ],
+        },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
+  it("목적지 없는 항목은 선택돼 있어도 승인 payload에 안 들어간다 (2차 방어)", async () => {
+    const resultRef = {
+      current: {
+        status: "ready",
         source_category: "1_fiction",
-        total_count: 8,
-        processed_count: 3,
-        remaining_count: 5,
-      });
-    });
+        total_count: 1,
+        processed_count: 1,
+        items: [PROPOSAL_ITEM_CERTAIN],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
     await waitFor(() => {
-      expect(
-        within(screen.getByTitle("자동 분류")).getByText("잔여 5건"),
-      ).toBeTruthy();
+      expect(screen.getByLabelText("1_fiction/a.epub 선택").checked).toBe(
+        true,
+      );
     });
+
+    // 목적지를 지우면 표(1차 방어)가 즉시 선택에서 뺀다. 승인 버튼은 대상이
+    // 0건이 되어 비활성화된다 — CategoryAdmin의 proposalApplyItems가
+    // isSelectable로 한 번 더 거른 결과(2차 방어)와 항상 일치해야 한다.
+    fireEvent.change(screen.getByLabelText("1_fiction/a.epub 목적지"), {
+      target: { value: "" },
+    });
+
+    const approveButton = screen.getByRole("button", { name: /분류 승인/ });
+    expect(approveButton.textContent).toContain("분류 승인 (0건)");
+    expect(approveButton.disabled).toBe(true);
+  });
+
+  it("완료 기록 삭제는 moved 행이 없으면 비활성이다", async () => {
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 1,
+        processed_count: 1,
+        items: [PROPOSAL_ITEM_UNSURE],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    await waitFor(() => {
+      expect(screen.getByText("애매한 책")).toBeTruthy();
+    });
+    expect(
+      screen.getByRole("button", { name: "완료 기록 삭제" }).disabled,
+    ).toBe(true);
+  });
+
+  it("완료 기록 삭제는 moved 행이 있으면 활성이고 DELETE를 부른다", async () => {
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 2,
+        processed_count: 2,
+        items: [PROPOSAL_ITEM_UNSURE, PROPOSAL_ITEM_MOVED],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    mockJsonDeleteReq.mockImplementation(
+      (url, _payload, resolve, _reject, final) => {
+        resolve({ deleted_count: 1 });
+        if (final) final();
+      },
+    );
+    render(<CategoryAdmin />);
+
+    await waitFor(() => {
+      expect(screen.getByText("이미 옮긴 책")).toBeTruthy();
+    });
+
+    const clearButton = screen.getByRole("button", { name: "완료 기록 삭제" });
+    expect(clearButton.disabled).toBe(false);
+    fireEvent.click(clearButton);
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "삭제" }));
+
+    await waitFor(() => {
+      expect(mockJsonDeleteReq).toHaveBeenCalledWith(
+        "/categories/classify-proposal/applied",
+        null,
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
+  it("마운트 시 상태가 ready면 source_category가 선택된다", async () => {
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 1,
+        processed_count: 1,
+        items: [PROPOSAL_ITEM_CERTAIN],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    // 카테고리 상세 카드(분류 제안 버튼 포함)는 selectedCategory가 있어야
+    // 보인다 — source_category로 복원됐는지는 이 카드의 노출로 확인한다.
+    await waitFor(() => {
+      expect(screen.getByTitle("분류 제안")).toBeTruthy();
+    });
+    expect(
+      screen.queryByText("왼쪽에서 디렉토리를 선택하세요."),
+    ).toBeNull();
+  });
+
+  it("상태가 applying이면 폴링하고, 종료 상태가 되면 멈춘다", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const resultRef = {
+        current: {
+          status: "applying",
+          source_category: "1_fiction",
+          total_count: 1,
+          processed_count: 1,
+          items: [{ ...PROPOSAL_ITEM_CERTAIN, apply_status: "pending" }],
+        },
+      };
+      mockClassifyProposalGet(resultRef);
+      render(<CategoryAdmin />);
+
+      await waitFor(() => {
+        expect(screen.getByText("확실한 책")).toBeTruthy();
+      });
+      const getCallsAtApplying = mockJsonGetReq.mock.calls.filter(
+        ([url]) => url === "/categories/classify-proposal",
+      ).length;
+
+      // 3초 뒤 다음 폴링에서 이동 완료로 응답한다 — 종료 상태이므로 이 뒤로는
+      // 더 이상 폴링하지 않아야 한다.
+      resultRef.current = {
+        ...resultRef.current,
+        status: "done",
+        items: [{ ...PROPOSAL_ITEM_CERTAIN, apply_status: "moved" }],
+      };
+      await act(async () => {
+        vi.advanceTimersByTime(3000);
+      });
+      await waitFor(() => {
+        expect(screen.getByText("이동 완료")).toBeTruthy();
+      });
+
+      const getCallsAtDone = mockJsonGetReq.mock.calls.filter(
+        ([url]) => url === "/categories/classify-proposal",
+      ).length;
+      expect(getCallsAtDone).toBeGreaterThan(getCallsAtApplying);
+
+      const callsRightAfterDone = getCallsAtDone;
+      await act(async () => {
+        vi.advanceTimersByTime(6000);
+      });
+      const getCallsLater = mockJsonGetReq.mock.calls.filter(
+        ([url]) => url === "/categories/classify-proposal",
+      ).length;
+      expect(getCallsLater).toBe(callsRightAfterDone);
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -5765,122 +5819,6 @@ describe("CategoryAdmin 재적재 충돌 및 폴링 방어 처리", () => {
     expect(screen.queryByText(/ES 재적재 완료/)).toBeNull();
   });
 
-  // ── 자동 분류 상태/모달 ──
-
-  it("자동 분류 상태가 idle로 돌아오면 진행 표시를 끈다", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      let autoStatus = { status: "idle" };
-      mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
-        if (url === "/categories") resolve(CATEGORIES_RESPONSE);
-        else if (url === "/category-mismatches")
-          resolve(MISMATCH_RESPONSE_EMPTY);
-        else if (url.startsWith("/category-mismatches/reload-status"))
-          resolve({ status: "idle" });
-        else if (url === "/categories/auto-classify-status")
-          resolve(autoStatus);
-        else if (url.startsWith("/category-mappings"))
-          resolve(MAPPINGS_RESPONSE);
-        else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
-        else if (url.startsWith("/latest-excluded-categories"))
-          resolve(LATEST_EXCLUDED_RESPONSE);
-      });
-      render(<CategoryAdmin />);
-      await waitFor(() => {
-        expect(screen.getByText("1_fiction")).toBeTruthy();
-      });
-
-      fireEvent.click(screen.getByText("1_fiction"));
-      fireEvent.click(screen.getByTitle("자동 분류"));
-      const modal = await screen.findByRole("dialog");
-      autoStatus = { status: "running", remaining_count: 5 };
-      resolvePost({ started: true });
-      fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
-
-      await waitFor(() => {
-        expect(
-          within(screen.getByTitle("자동 분류")).getByText("잔여 5건"),
-        ).toBeTruthy();
-      });
-
-      autoStatus = { status: "idle" };
-      await act(async () => {
-        vi.advanceTimersByTime(3000);
-      });
-
-      await waitFor(() => {
-        expect(
-          screen.getByTitle("자동 분류").querySelector(".spinner-border"),
-        ).toBeNull();
-      });
-    } finally {
-      vi.runOnlyPendingTimers();
-      vi.useRealTimers();
-    }
-  });
-
-  it("자동 분류 확인 중 선택이 해제되면 요청 없이 모달만 닫는다", async () => {
-    const detailResult = {
-      es_only: [
-        {
-          book_id: 101,
-          title: "Missing File",
-          file_type: "pdf",
-          file_path: "1_fiction/missing.pdf",
-        },
-      ],
-      fs_only: [],
-      duplicates: [],
-    };
-    setupWithHeldReloadStatus({ detailResult });
-    render(<CategoryAdmin />);
-    await waitFor(() => {
-      expect(screen.getByText("1_fiction")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText("1_fiction"));
-    await waitFor(() => {
-      expect(screen.getByText("Missing File.pdf")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByTitle("자동 분류"));
-    const modal = await screen.findByRole("dialog");
-
-    // 모달이 열린 뒤 이상 항목을 선택하면 카테고리 선택이 해제된다.
-    fireEvent.click(screen.getByText("Missing File.pdf"));
-    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
-
-    await waitFor(() => {
-      expect(screen.queryByRole("dialog")).toBeNull();
-    });
-    expect(mockJsonPostReq).not.toHaveBeenCalled();
-  });
-
-  it("자동 분류 확인 모달을 X 버튼과 취소 버튼으로 각각 닫을 수 있다", async () => {
-    setupWithHeldReloadStatus();
-    render(<CategoryAdmin />);
-    await waitFor(() => {
-      expect(screen.getByText("1_fiction")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText("1_fiction"));
-
-    fireEvent.click(screen.getByTitle("자동 분류"));
-    let modal = await screen.findByRole("dialog");
-    fireEvent.click(modal.querySelector(".btn-close"));
-    await waitFor(() => {
-      expect(screen.queryByRole("dialog")).toBeNull();
-    });
-
-    fireEvent.click(screen.getByTitle("자동 분류"));
-    modal = await screen.findByRole("dialog");
-    fireEvent.click(within(modal).getByRole("button", { name: "취소" }));
-    await waitFor(() => {
-      expect(screen.queryByRole("dialog")).toBeNull();
-    });
-    expect(mockJsonPostReq).not.toHaveBeenCalled();
-  });
-
   // ── 폴링 실패 및 stale 응답 ──
 
   it("카테고리별 재적재 상태 폴링이 실패해도 선택 화면을 유지한다", async () => {
@@ -5929,15 +5867,17 @@ describe("CategoryAdmin 재적재 충돌 및 폴링 방어 처리", () => {
     });
   });
 
-  it("자동 분류 폴링 요청이 실패해도 진행 표시를 유지한다", async () => {
-    let failAutoStatus = false;
+  it("분류 제안 폴링 요청이 실패해도 진행 표시를 유지한다", async () => {
+    let failPoll = false;
     mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
       if (url === "/categories") resolve(CATEGORIES_RESPONSE);
       else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
       else if (url.startsWith("/category-mismatches/reload-status"))
         resolve({ status: "idle" });
-      else if (url === "/categories/auto-classify-status") {
-        if (failAutoStatus) reject("poll error");
+      else if (url === "/categories/auto-classify-status")
+        resolve({ status: "idle" });
+      else if (url === "/categories/classify-proposal") {
+        if (failPoll) reject("poll error");
         else resolve({ status: "idle" });
       } else if (url.startsWith("/category-mappings"))
         resolve(MAPPINGS_RESPONSE);
@@ -5951,28 +5891,34 @@ describe("CategoryAdmin 재적재 충돌 및 폴링 방어 처리", () => {
     });
 
     fireEvent.click(screen.getByText("1_fiction"));
-    fireEvent.click(screen.getByTitle("자동 분류"));
-    const modal = await screen.findByRole("dialog");
-    failAutoStatus = true;
-    resolvePost({ started: true });
-    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
+    failPoll = true;
+    resolvePost({
+      started: true,
+      status: "running",
+      source_category: "1_fiction",
+      total_count: 1,
+      processed_count: 0,
+      items: [],
+    });
+    fireEvent.click(screen.getByTitle("분류 제안"));
 
+    // 폴링(GET)이 실패해도 진행 중 표시(버튼 비활성)는 그대로 유지돼야 한다.
     await waitFor(() => {
-      expect(
-        screen.getByTitle("자동 분류").querySelector(".spinner-border"),
-      ).toBeTruthy();
+      expect(screen.getByTitle("분류 제안").disabled).toBe(true);
     });
   });
 
-  it("언마운트 뒤 도착한 자동 분류 폴링 응답은 무시한다", async () => {
-    const heldAutoStatusResolvers = [];
+  it("언마운트 뒤 도착한 분류 제안 폴링 응답은 무시한다", async () => {
+    const heldResolvers = [];
     mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
       if (url === "/categories") resolve(CATEGORIES_RESPONSE);
       else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
       else if (url.startsWith("/category-mismatches/reload-status"))
         resolve({ status: "idle" });
       else if (url === "/categories/auto-classify-status")
-        heldAutoStatusResolvers.push(resolve);
+        resolve({ status: "idle" });
+      else if (url === "/categories/classify-proposal")
+        heldResolvers.push(resolve);
       else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
       else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
       else if (url.startsWith("/latest-excluded-categories"))
@@ -5984,20 +5930,30 @@ describe("CategoryAdmin 재적재 충돌 및 폴링 방어 처리", () => {
     });
 
     fireEvent.click(screen.getByText("1_fiction"));
-    fireEvent.click(screen.getByTitle("자동 분류"));
-    const modal = await screen.findByRole("dialog");
-    resolvePost({ started: true });
-    fireEvent.click(within(modal).getByRole("button", { name: "자동 분류" }));
+    resolvePost({
+      started: true,
+      status: "running",
+      source_category: "1_fiction",
+      total_count: 1,
+      processed_count: 0,
+      items: [],
+    });
+    fireEvent.click(screen.getByTitle("분류 제안"));
 
     await waitFor(() => {
-      expect(heldAutoStatusResolvers.length).toBeGreaterThan(1);
+      expect(heldResolvers.length).toBeGreaterThan(1);
     });
 
-    const lastResolve =
-      heldAutoStatusResolvers[heldAutoStatusResolvers.length - 1];
+    const lastResolve = heldResolvers[heldResolvers.length - 1];
     unmount();
     expect(() =>
-      lastResolve({ status: "running", remaining_count: 9 }),
+      lastResolve({
+        status: "running",
+        source_category: "1_fiction",
+        total_count: 1,
+        processed_count: 1,
+        items: [],
+      }),
     ).not.toThrow();
   });
 
