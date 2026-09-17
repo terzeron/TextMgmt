@@ -774,6 +774,35 @@ class TestCategoryMismatchAdmin:
         assert r.status_code == 200
         assert captured["allowed"] == {"0_inbox/still_pending.epub"}
 
+    def test_delete_applied_removes_moved_only_and_returns_count(self, client, mock_bm, mock_cat, tmp_path):
+        """DELETE .../applied가 완료(moved) 행만 지우고 지운 개수를 돌려준다."""
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(json.dumps({"status": "done"}), encoding="utf-8")
+        mock_cat.delete_applied_classify_proposal_items.return_value = 3
+
+        r = client.delete("/categories/classify-proposal/applied")
+
+        assert r.status_code == 200
+        assert r.json()["status"] == "success"
+        assert r.json()["result"]["deleted_count"] == 3
+        mock_cat.delete_applied_classify_proposal_items.assert_called_once_with(content_type="book")
+
+    def test_delete_applied_rejected_while_job_is_running(self, client, mock_bm, mock_cat, tmp_path):
+        """작업이 도는 중에는 DELETE .../applied가 거절된다.
+
+        도는 중에 지우면 방금 건별로 기록한 행을 진행 중인 작업 밑에서 지울 수 있다.
+        """
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(json.dumps({"status": "applying", "updated_at": time.time()}), encoding="utf-8")
+
+        r = client.delete("/categories/classify-proposal/applied")
+
+        assert r.status_code == 200
+        assert r.json()["status"] == "failure"
+        mock_cat.delete_applied_classify_proposal_items.assert_not_called()
+
     def test_index_file_success(self, client, mock_bm):
         mock_bm.index_single_file.return_value = (42, None)
         r = client.post("/category-mismatches/index-file", json={"file_path": "_epub/test.epub"})

@@ -816,6 +816,19 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         _replace_classify_proposal({"status": "idle", "content_type": content_type})
         return {"status": "success", "result": {"cleared": True}}
 
+    @router.delete("/categories/classify-proposal/applied", dependencies=admin_dep)
+    async def delete_applied_classify_proposal_items_route() -> dict[str, Any]:
+        """이동이 끝난(apply_status = 'moved') 행만 지운다. 대기·실패 행은 남겨 재시도할 수 있게 한다.
+
+        작업이 도는 중에 지우면, 건별 기록이 방금 찍은 행을 그 작업 밑에서 지울 수
+        있으므로 running/applying 동안은 거절한다.
+        """
+        current = _read_classify_proposal()
+        if current.get("status") in ("running", "applying"):
+            return {"status": "failure", "error": "작업이 진행 중입니다."}
+        deleted_count = await asyncio.to_thread(category_mapping.delete_applied_classify_proposal_items, content_type=content_type)
+        return {"status": "success", "result": {"deleted_count": deleted_count}}
+
     @router.get("/categories/{category:path}")
     async def get_books_in_category(category: str, limit: int = 0, cursor: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:
         LOGGER.debug("# get_books_in_category(category='%s', limit=%d, cursor='%s')", category, limit, cursor)
