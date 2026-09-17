@@ -1733,6 +1733,32 @@ export default function CategoryAdmin({
   return (
     <>
       {message && <div className="alert alert-danger py-1 mb-2">{message}</div>}
+      {/* 카테고리 목록·불일치·키워드 네 요청이 다 끝나야 아래 화면이 그려진다.
+          그중 불일치 스캔이 몇 초 걸려, 도는 중에 페이지를 다시 열면 그 몇 초 동안
+          "아무 일도 없는" 화면이 보였다. 제안 상태는 자기 요청 하나로 곧바로 오므로
+          먼저 그려 준다 — 진행 중이라는 사실과 대상 목록을 그만큼 일찍 볼 수 있다. */}
+      {loading && proposal && proposal.status !== "idle" && (
+        <Card className="mb-2">
+          <Card.Header className="py-1 d-flex align-items-center gap-2">
+            {proposal.status === "running" && (
+              <Spinner animation="border" size="sm" />
+            )}
+            <strong>{proposal.source_category}</strong>
+            <span className="text-muted">
+              분류 제안 {proposal.processed_count ?? 0}/
+              {proposal.total_count ?? 0}
+            </span>
+          </Card.Header>
+          <Card.Body className="py-2">
+            <ClassifyProposalTable
+              items={proposal.items || []}
+              categories={topLevelCategoryNames}
+              choices={proposalChoices}
+              onChoicesChange={setProposalChoices}
+            />
+          </Card.Body>
+        </Card>
+      )}
       {loading ? (
         <div className="text-center p-4">
           <Spinner animation="border" />

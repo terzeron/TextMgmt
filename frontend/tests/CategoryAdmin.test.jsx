@@ -4328,6 +4328,42 @@ describe("CategoryAdmin 분류 제안", () => {
     );
   });
 
+  it("카테고리 목록이 아직 안 왔어도 제안 진행 상황과 표를 먼저 보여준다", async () => {
+    // 불일치 스캔이 몇 초 걸려, 그동안 "아무 일도 없는" 화면이 보였다. 제안 상태는
+    // 자기 요청 하나로 곧바로 오므로 나머지를 기다리지 않고 먼저 그려야 한다.
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      // 불일치 스캔은 응답하지 않는다 — 나머지 화면은 계속 로딩 중이다.
+      else if (url === "/category-mismatches") return;
+      else if (url.startsWith("/category-mismatches/reload-status"))
+        resolve({ status: "idle" });
+      else if (url === "/categories/classify-proposal")
+        resolve({
+          status: "running",
+          source_category: "1_fiction",
+          total_count: 5,
+          processed_count: 2,
+          items: [PROPOSAL_ITEM_CERTAIN],
+        });
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        resolve(LATEST_EXCLUDED_RESPONSE);
+    });
+    render(<CategoryAdmin />);
+
+    // 표의 책 이름과 진행 수가 로딩이 끝나기 전에 보인다.
+    await waitFor(() => {
+      expect(screen.getByText("확실한 책")).toBeTruthy();
+    });
+    // 카드 헤더의 카테고리명과 행의 "현재" 칸이 같은 이름이라 여러 개가 잡힌다.
+    expect(screen.getAllByText("1_fiction").length).toBeGreaterThan(0);
+    expect(screen.getByText(/분류 제안 2\//)).toBeTruthy();
+    expect(document.querySelector(".spinner-border")).toBeTruthy();
+    // 나머지 화면은 아직 로딩 중이다 — 이 표가 그보다 먼저 나왔다는 뜻이다.
+    expect(screen.getByText("로딩 중...")).toBeTruthy();
+  });
+
   it("다른 디렉토리를 선택하면 그 제안 표는 보이지 않는다", async () => {
     // 제안은 한 번에 하나만 있고 만들어진 카테고리에 속한다. 다른 디렉토리로 옮겼는데
     // 표가 남아 있으면 지금 보는 디렉토리의 책이 그렇게 분류된 것으로 읽히고,
@@ -4595,6 +4631,48 @@ describe("CategoryAdmin 분류 제안", () => {
       expect(screen.getByTitle("분류 제안")).toBeTruthy();
     });
     expect(screen.queryByText("왼쪽에서 디렉토리를 선택하세요.")).toBeNull();
+  });
+
+  it("분류가 도는 동안 새로 분류된 책이 새로고침 없이 표에 나타난다", async () => {
+    // 표는 3초 간격 폴링으로 갱신된다. 페이지를 다시 열거나 새로고침해야 보인다면
+    // 진행 상황을 지켜보라고 만든 화면이 제 역할을 못 한다.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const resultRef = {
+        current: {
+          status: "running",
+          source_category: "1_fiction",
+          total_count: 2,
+          processed_count: 1,
+          items: [PROPOSAL_ITEM_CERTAIN],
+        },
+      };
+      mockClassifyProposalGet(resultRef);
+      render(<CategoryAdmin />);
+
+      await waitFor(() => {
+        expect(screen.getByText("확실한 책")).toBeTruthy();
+      });
+      expect(screen.queryByText("애매한 책")).toBeNull();
+
+      // 다음 폴링에서 한 권이 더 분류돼 돌아온다.
+      resultRef.current = {
+        ...resultRef.current,
+        processed_count: 2,
+        items: [PROPOSAL_ITEM_CERTAIN, PROPOSAL_ITEM_UNSURE],
+      };
+      await act(async () => {
+        vi.advanceTimersByTime(3000);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("애매한 책")).toBeTruthy();
+      });
+      expect(screen.getByTitle("분류 제안").textContent).toContain("2/2");
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
   });
 
   it("상태가 applying이면 폴링하고, 종료 상태가 되면 멈춘다", async () => {
