@@ -10,10 +10,11 @@ export function resolveTarget(item, targets) {
 }
 
 export function isSelectable(item, targets) {
-  // 이미 옮겼거나(moved) 옮기던 중 서버가 죽어 결과를 모르는(moving) 행은 다시
-  // 승인 대상이 될 이유가 없다 — 사람이 moving을 직접 확인하기 전에는 재이동
-  // 대상에서 빠져 있어야 한다.
-  if (item.apply_status === "moved" || item.apply_status === "moving") {
+  // 이미 옮긴(moved) 행만 재이동 대상에서 뺀다. moving(서버가 죽어 결과를 모름)과
+  // failed(거부·실패)는 재시도할 수 있어야 한다 — apply_category_changes가 이동
+  // 직전 원본 존재를 다시 확인하므로, 이미 끝난 이동을 moving으로 재시도해도
+  // 이중 이동 없이 안전하게 failed로 남는다.
+  if (item.apply_status === "moved") {
     return false;
   }
   return Boolean(resolveTarget(item, targets));
@@ -177,6 +178,13 @@ export default function ClassifyProposalTable({
                   }
                 >
                   <option value="">(선택 안 함)</option>
+                  {/* target이 ES 문서 0건 카테고리라 categories(전체 목록)에 없을 수 있다.
+                      그 경우 빠뜨리면 셀렉트가 "(선택 안 함)"으로 보이면서도 실제 상태값은
+                      여전히 그 목적지를 들고 있어, 체크한 행이 화면에 안 보인 곳으로
+                      승인될 수 있다 — 항상 옵션으로 끼워 넣는다. */}
+                  {target && !categories.includes(target) && (
+                    <option value={target}>{target}</option>
+                  )}
                   {categories.map((category) => (
                     <option key={category} value={category}>
                       {category}
@@ -187,6 +195,18 @@ export default function ClassifyProposalTable({
               </td>
               <td>
                 {item.confidence == null ? "-" : item.confidence.toFixed(2)}
+                {/* 키워드가 목적지를 정했는데 모델이 다른 카테고리를 자신 있게 가리키면,
+                    이 점수는 모델의 확신도이지 위 추천1(키워드 목적지)의 점수가 아니다.
+                    구분 없이 보여주면 "0.91"이 화면에 보이는 카테고리의 확신도로
+                    잘못 읽힌다. */}
+                {item.model_category &&
+                  item.model_category !== item.target_category && (
+                    <div>
+                      <Badge bg="info" style={{ fontSize: "0.65rem" }}>
+                        모델: {item.model_category}
+                      </Badge>
+                    </div>
+                  )}
               </td>
               <td>
                 <ApplyStatusBadge item={item} />

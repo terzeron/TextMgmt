@@ -200,19 +200,78 @@ describe("ClassifyProposalTable", () => {
     expect(screen.getByText("실패: 대상 폴더 없음")).toBeTruthy();
   });
 
-  it("apply_status가 moved나 moving인 행은 체크박스가 비활성이고, moving은 구분되게 표시된다", () => {
+  it("apply_status가 moved인 행만 체크박스가 비활성이고, moving은 재시도할 수 있다", () => {
+    // I4: moving(서버가 죽어 결과를 모름)은 사람이 재확인할 수 있어야 하므로 목적지가
+    // 있으면 체크박스가 켜진다. moved만 재이동 대상에서 빠진다.
     const items = [
       { ...ITEMS[0], apply_status: "moving" },
       { ...ITEMS[1], apply_status: "moved" },
     ];
     renderTable({ items, selection: new Set(["A/a.epub", "A/b.epub"]) });
 
-    expect(screen.getByLabelText("A/a.epub 선택").disabled).toBe(true);
+    expect(screen.getByLabelText("A/a.epub 선택").disabled).toBe(false);
     expect(screen.getByLabelText("A/b.epub 선택").disabled).toBe(true);
 
     const movingBadge = screen.getByText("이동 중(중단됨)");
     const movedBadge = screen.getByText("이동 완료");
     // 같은 상태 배지 클래스를 공유하지 않아야 moving이 moved/대기와 섞여 보이지 않는다.
     expect(movingBadge.className).not.toBe(movedBadge.className);
+  });
+
+  it("failed 행도 목적지가 있으면 체크박스가 켜져 재시도할 수 있다", () => {
+    // C1: 실패한(거부/오류) 행을 다시 체크해 승인을 누를 수 있어야 재시도가 된다.
+    const items = [
+      { ...ITEMS[0], apply_status: "failed", apply_error: "대상 폴더 없음" },
+    ];
+    renderTable({ items, selection: new Set() });
+
+    expect(screen.getByLabelText("A/a.epub 선택").disabled).toBe(false);
+  });
+
+  it("모델과 목적지가 다르면 점수 칸에 모델 카테고리를 함께 보여준다", () => {
+    // I3: 키워드가 고른 목적지와 모델이 자신 있게 가리킨 카테고리가 다르면, 점수가
+    // 어느 카테고리의 확신도인지 화면에서 구분돼야 한다.
+    const items = [
+      {
+        ...ITEMS[1],
+        target_category: "5_음악",
+        model_category: "3_SF",
+        confidence: 0.91,
+      },
+    ];
+    renderTable({ items });
+
+    const row = screen.getByText("애매한 책").closest("tr");
+    expect(within(row).getByText("0.91")).toBeTruthy();
+    expect(within(row).getByText(/모델: 3_SF/)).toBeTruthy();
+  });
+
+  it("모델과 목적지가 같으면 점수 칸에 모델 배지를 따로 보여주지 않는다", () => {
+    const items = [
+      {
+        ...ITEMS[0],
+        target_category: "3_SF",
+        model_category: "3_SF",
+        confidence: 0.91,
+      },
+    ];
+    renderTable({ items });
+
+    const row = screen.getByText("확실한 책").closest("tr");
+    expect(within(row).queryByText(/모델:/)).toBeNull();
+  });
+
+  it("목적지가 categories 목록에 없어도 셀렉트 옵션으로 끼워 넣는다", () => {
+    // Minor B: ES 문서가 0건이라 카테고리 목록에서 빠진 목적지도 선택된 값으로
+    // 보여야 한다 — 그러지 않으면 화면은 "(선택 안 함)"인데 실제 상태는 그
+    // 목적지를 들고 있어, 체크한 행이 안 보이는 곳으로 승인될 수 있다.
+    const items = [{ ...ITEMS[0], target_category: "9_없는카테고리" }];
+    renderTable({ items });
+
+    const select = screen.getByLabelText("A/a.epub 목적지");
+    expect(select.value).toBe("9_없는카테고리");
+    expect(
+      within(select).getByRole("option", { name: "9_없는카테고리" }),
+    ).toBeTruthy();
   });
 });
