@@ -86,12 +86,14 @@ describe("ClassifyProposalTable", () => {
     renderTable();
     const row = screen.getByText("확실한 책").closest("tr");
     const cells = within(row).getAllByRole("cell");
-    // 열 순서: 책, 현재, 추천1, 추천2, 직접 선택, 점수, 이동 상태
-    expect(cells).toHaveLength(7);
+    // 열 순서: 책, 추천1, 추천2, 직접 선택, 점수, 이동 상태
+    expect(cells).toHaveLength(6);
     expect(cells[0].textContent).toBe("확실한 책");
     expect(
-      within(cells[2]).getByLabelText("A/a.epub 추천 1 선택"),
+      within(cells[1]).getByLabelText("A/a.epub 추천 1 선택"),
     ).toBeTruthy();
+    // "현재" 열은 없다 — 표가 한 디렉토리로 한정돼 모든 행이 같은 값이다.
+    expect(screen.queryByRole("columnheader", { name: "현재" })).toBeNull();
   });
 
   it("등급에 따라 추천 체크 상태가 다르다", () => {
@@ -234,22 +236,22 @@ describe("ClassifyProposalTable", () => {
     renderTable({ items });
     const row = screen.getByText("확실한 책").closest("tr");
     const cells = within(row).getAllByRole("cell");
-    expect(within(cells[2]).getByText("3_SF")).toBeTruthy();
-    expect(within(cells[2]).getByText("모델 판정")).toBeTruthy();
-    expect(cells[3].textContent).toBe("-");
+    expect(within(cells[1]).getByText("3_SF")).toBeTruthy();
+    expect(within(cells[1]).getByText("모델 판정")).toBeTruthy();
+    expect(cells[2].textContent).toBe("-");
 
     const tieRow = screen.getByText("불확실한 책").closest("tr");
     const tieCells = within(tieRow).getAllByRole("cell");
-    expect(within(tieCells[3]).getByText("1_서양고전")).toBeTruthy();
+    expect(within(tieCells[2]).getByText("1_서양고전")).toBeTruthy();
   });
 
   it("서점 판정이 갈린 행은 두 추천이 다른 답임을 배지로 드러낸다", () => {
     renderTable();
     const row = screen.getByText("불확실한 책").closest("tr");
     const cells = within(row).getAllByRole("cell");
-    expect(within(cells[2]).getByText("후보 동률")).toBeTruthy();
-    expect(within(cells[2]).getByText("5_음악")).toBeTruthy();
-    expect(within(cells[3]).getByText("1_서양고전")).toBeTruthy();
+    expect(within(cells[1]).getByText("후보 동률")).toBeTruthy();
+    expect(within(cells[1]).getByText("5_음악")).toBeTruthy();
+    expect(within(cells[2]).getByText("1_서양고전")).toBeTruthy();
   });
 
   it("키워드 점수가 동점인 행도 같은 배지로 동률임을 드러낸다", () => {
@@ -276,9 +278,9 @@ describe("ClassifyProposalTable", () => {
     renderTable({ items });
     const row = screen.getByText("키워드 동점 책").closest("tr");
     const cells = within(row).getAllByRole("cell");
-    expect(within(cells[2]).getByText("후보 동률")).toBeTruthy();
-    expect(within(cells[2]).getByText("3_SF")).toBeTruthy();
-    expect(within(cells[3]).getByText("5_음악")).toBeTruthy();
+    expect(within(cells[1]).getByText("후보 동률")).toBeTruthy();
+    expect(within(cells[1]).getByText("3_SF")).toBeTruthy();
+    expect(within(cells[2]).getByText("5_음악")).toBeTruthy();
   });
 
   it("아직 분류 안 된 행도 이름이 보이고 '분류 중'으로 구분된다", () => {
@@ -301,8 +303,8 @@ describe("ClassifyProposalTable", () => {
     expect(screen.getByText("아직 분류 안 된 책")).toBeTruthy();
     const row = screen.getByText("아직 분류 안 된 책").closest("tr");
     const cells = within(row).getAllByRole("cell");
-    expect(within(cells[2]).getByText("분류 중…")).toBeTruthy();
-    expect(cells[3].textContent).toBe("-");
+    expect(within(cells[1]).getByText("분류 중…")).toBeTruthy();
+    expect(cells[2].textContent).toBe("-");
     expect(screen.queryByLabelText("A/z.epub 추천 1 선택")).toBeNull();
   });
 

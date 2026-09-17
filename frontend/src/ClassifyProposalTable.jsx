@@ -191,8 +191,9 @@ export default function ClassifyProposalTable({
     <Table size="sm" bordered hover responsive className="mt-2">
       <thead>
         <tr>
+          {/* "현재" 열은 두지 않는다. 표가 선택한 디렉토리 하나로 한정돼 있어
+              모든 행이 같은 값이고, 그 디렉토리 이름은 카드 머리에 이미 있다. */}
           <th>책</th>
-          <th>현재</th>
           <th>
             <div className="d-flex gap-2 align-items-center">
               <Form.Check
@@ -229,7 +230,6 @@ export default function ClassifyProposalTable({
               }
             >
               <td>{item.title || item.file_path}</td>
-              <td>{item.current_category}</td>
               <td>
                 {isTie && (
                   <Badge
