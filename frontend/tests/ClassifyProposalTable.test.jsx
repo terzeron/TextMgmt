@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  cleanup,
+  within,
+} from "@testing-library/react";
 import ClassifyProposalTable from "../src/ClassifyProposalTable";
 
 // vitest globals(afterEach)가 꺼져 있어 testing-library 자동 cleanup이 동작하지
@@ -19,6 +25,8 @@ const ITEMS = [
     confidence: 0.91,
     source: "model",
     reason: "모델 판정",
+    candidates: [{ category: "3_SF", source: "model", detail: "모델 판정" }],
+    apply_status: "pending",
   },
   {
     file_path: "A/b.epub",
@@ -29,6 +37,10 @@ const ITEMS = [
     confidence: 0.2,
     source: "bookstore_single",
     reason: "서점 한 곳",
+    candidates: [
+      { category: "5_음악", source: "bookstore", detail: "서점 1곳 일치" },
+    ],
+    apply_status: "pending",
   },
   {
     file_path: "A/c.epub",
@@ -39,6 +51,11 @@ const ITEMS = [
     confidence: null,
     source: "conflict",
     reason: "서점 판정이 갈림",
+    candidates: [
+      { category: "5_음악", source: "bookstore", detail: "서점 2곳 일치" },
+      { category: "1_서양고전", source: "bookstore", detail: "서점 2곳 일치" },
+    ],
+    apply_status: "pending",
   },
 ];
 const CATEGORIES = ["3_SF", "5_음악", "1_서양고전"];
@@ -99,5 +116,73 @@ describe("ClassifyProposalTable", () => {
     expect(props.onSelectionChange).toHaveBeenCalled();
     const next = props.onSelectionChange.mock.calls[0][0];
     expect(next.has("A/c.epub")).toBe(false);
+  });
+
+  it("추천 후보 2개가 각 열에 나오고, 1개면 두 번째 열은 -", () => {
+    renderTable();
+    const row = screen.getByText("확실한 책").closest("tr");
+    const [, , , recommend1] = within(row).getAllByRole("cell");
+    expect(within(recommend1).getByText("3_SF")).toBeTruthy();
+    expect(within(recommend1).getByText("모델 판정")).toBeTruthy();
+
+    const singleCandidateRow = screen.getByText("애매한 책").closest("tr");
+    const cells = within(singleCandidateRow).getAllByRole("cell");
+    // 열 순서: 체크박스, 책, 현재, 추천1, 추천2, 직접 선택, 점수, 이동 상태
+    expect(cells[4].textContent).toBe("-");
+  });
+
+  it("서점 판정이 갈린 행은 두 추천이 다른 답임을 배지로 드러낸다", () => {
+    renderTable();
+    const row = screen.getByText("불확실한 책").closest("tr");
+    const cells = within(row).getAllByRole("cell");
+    const [, , , recommend1, recommend2] = cells;
+    expect(within(recommend1).getByText("서점 판정 갈림")).toBeTruthy();
+    expect(within(recommend1).getByText("5_음악")).toBeTruthy();
+    expect(within(recommend2).getByText("1_서양고전")).toBeTruthy();
+  });
+
+  it("이동 상태가 대기/이동 중(중단됨)/이동 완료/실패:사유로 나온다", () => {
+    const items = [
+      { ...ITEMS[0], apply_status: "pending" },
+      { ...ITEMS[1], apply_status: "moving" },
+      {
+        ...ITEMS[2],
+        target_category: "5_음악",
+        apply_status: "moved",
+      },
+      {
+        file_path: "A/d.epub",
+        title: "실패한 책",
+        current_category: "A",
+        target_category: "3_SF",
+        grade: "certain",
+        confidence: 0.9,
+        source: "model",
+        candidates: [],
+        apply_status: "failed",
+        apply_error: "대상 폴더 없음",
+      },
+    ];
+    renderTable({ items });
+    expect(screen.getByText("대기")).toBeTruthy();
+    expect(screen.getByText("이동 중(중단됨)")).toBeTruthy();
+    expect(screen.getByText("이동 완료")).toBeTruthy();
+    expect(screen.getByText("실패: 대상 폴더 없음")).toBeTruthy();
+  });
+
+  it("apply_status가 moved나 moving인 행은 체크박스가 비활성이고, moving은 구분되게 표시된다", () => {
+    const items = [
+      { ...ITEMS[0], apply_status: "moving" },
+      { ...ITEMS[1], apply_status: "moved" },
+    ];
+    renderTable({ items, selection: new Set(["A/a.epub", "A/b.epub"]) });
+
+    expect(screen.getByLabelText("A/a.epub 선택").disabled).toBe(true);
+    expect(screen.getByLabelText("A/b.epub 선택").disabled).toBe(true);
+
+    const movingBadge = screen.getByText("이동 중(중단됨)");
+    const movedBadge = screen.getByText("이동 완료");
+    // 같은 상태 배지 클래스를 공유하지 않아야 moving이 moved/대기와 섞여 보이지 않는다.
+    expect(movingBadge.className).not.toBe(movedBadge.className);
   });
 });
