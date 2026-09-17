@@ -1559,12 +1559,15 @@ class BookManager:
                 LOGGER.error("분류 제안 실패: %s — %s", rel_path, e)
                 result["failures"].append({"file_path": rel_path, "error": "분류 제안에 실패했습니다"})
                 continue
-            result["items"].append({"file_path": rel_path, "title": file_path.stem, "current_category": category, "apply_status": "pending", "apply_error": None, **proposal})
+            new_item = {"file_path": rel_path, "title": file_path.stem, "current_category": category, "apply_status": "pending", "apply_error": None, **proposal}
+            result["items"].append(new_item)
             if on_progress is not None:
-                # 도는 중간에 페이지를 열어도 지금까지 분류된 책이 보이도록 items를 함께 싣는다.
-                # result["items"]는 이후에도 계속 append되므로, 같은 리스트를 그대로 넘기면
-                # 호출자가 들고 있는 스냅샷이 뒤에서 몰래 자라난다. list(...)로 복사해 끊는다.
-                on_progress({"total_count": result["total_count"], "processed_count": result["processed_count"], "items": list(result["items"])})
+                # 진행 보고에는 이번 틱에서 새로 생긴 항목(new_items)만 싣는다. 누적 목록을
+                # 매번 통째로 실으면 책 한 권 보고할 때마다 지금까지의 전체 목록을 다시
+                # 실어 보내는 셈이라, 보고 비용이 책 수의 제곱으로 늘어난다(과거 JSON 상태
+                # 파일 방식에서 실측된 문제). 누적 목록(result["items"])은 함수가 끝날 때
+                # 호출자에게 그대로 돌려주고, 그 저장은 호출자 책임으로 둔다.
+                on_progress({"total_count": result["total_count"], "processed_count": result["processed_count"], "new_items": [new_item]})
 
         return result, None
 

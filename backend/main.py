@@ -492,8 +492,12 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
                 pass
 
     def _start_classify_proposal(category: str) -> None:
-        """제안 시작 시 이전 상태를 지우고 진행 중 표시로 새로 시작한다."""
-        _replace_classify_proposal({"status": "running", "content_type": content_type, "source_category": category, "total_count": 0, "processed_count": 0, "items": [], "failures": []})
+        """제안 시작 시 이전 상태를 지우고 진행 중 표시로 새로 시작한다.
+
+        항목 목록(items)은 DB(classify_proposal_items)에 있으므로 상태 파일에는
+        카운트와 상태만 둔다 — 실제 클리어는 _run_classify_proposal_job이 한다.
+        """
+        _replace_classify_proposal({"status": "running", "content_type": content_type, "source_category": category, "total_count": 0, "processed_count": 0, "failures": []})
 
     def _progress_classify_proposal(progress: dict[str, int]) -> None:
         """제안(running)과 적용(applying)이 status 필드를 공유해도, 진행률 갱신은
@@ -502,15 +506,46 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         _replace_classify_proposal({**_read_classify_proposal(), **progress})
 
     async def _run_classify_proposal_job(category: str, use_bookstore: bool, use_content_meta: bool, delay: float) -> None:
+        # 새로 분류된 항목을 100건 단위로 모아 DB에 적재한다. 책 한 권마다 INSERT +
+        # COMMIT을 하면 왕복 비용이 책 수만큼 생기므로, 여기서 모았다가
+        # add_classify_proposal_items(executemany 한 번 + commit 한 번)로 넘긴다.
+        pending: list[dict[str, Any]] = []
+        CLASSIFY_PROPOSAL_ITEMS_BATCH_SIZE = 100
+
+        def _flush_pending() -> None:
+            if not pending:
+                return
+            category_mapping.add_classify_proposal_items(list(pending), category, content_type=content_type)
+            pending.clear()
+
+        def _on_progress(progress: dict[str, Any]) -> None:
+            # book_manager가 이번 틱에서 새로 만든 항목만 new_items로 보낸다. 상태
+            # 파일에는 카운트만 남기고(items를 넣으면 다시 파일 하나에 전체 목록을
+            # 담는 옛 방식으로 되돌아간다), 항목은 버퍼에 모았다가 100건마다 DB로 넘긴다.
+            new_items = progress.pop("new_items", None)
+            if new_items:
+                pending.extend(new_items)
+                if len(pending) >= CLASSIFY_PROPOSAL_ITEMS_BATCH_SIZE:
+                    _flush_pending()
+            _progress_classify_proposal(progress)
+
         try:
+            await asyncio.to_thread(category_mapping.clear_classify_proposal_items, content_type=content_type)
             mappings = await asyncio.to_thread(category_mapping.get_all_mappings, content_type=content_type)
-            result, error = await manager.propose_category_changes(category, mappings, content_type=content_type, use_bookstore=use_bookstore, use_content_meta=use_content_meta, delay=delay, on_progress=_progress_classify_proposal)
+            result, error = await manager.propose_category_changes(category, mappings, content_type=content_type, use_bookstore=use_bookstore, use_content_meta=use_content_meta, delay=delay, on_progress=_on_progress)
         except Exception as e:
             LOGGER.error("classify proposal error: %s", e)
+            # 예외로 중단되더라도, 그때까지 모아둔 항목은 버리지 않고 DB에 남겨
+            # 화면에서 어디까지 진행됐는지 볼 수 있게 한다.
+            _flush_pending()
             _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "분류 제안에 실패했습니다."})
             return
+        # 100의 배수가 아닌 꼬리를 반드시 비운다. 누락되면 관리자가 목록 끝의 책들을
+        # 못 보고 승인하게 된다.
+        _flush_pending()
         if error is None:
-            _replace_classify_proposal({**_read_classify_proposal(), **result, "status": "ready"})
+            result_counts = {k: v for k, v in result.items() if k != "items"}
+            _replace_classify_proposal({**_read_classify_proposal(), **result_counts, "status": "ready"})
         else:
             _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
 
@@ -525,11 +560,17 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
                 return
             applied = {entry["file_path"]: entry for entry in result["results"]}
             current = _read_classify_proposal()
+            proposal_items = await asyncio.to_thread(category_mapping.get_classify_proposal_items, content_type=content_type)
             merged_items = []
-            for item in current.get("items") or []:
+            for item in proposal_items:
                 outcome = applied.get(item.get("file_path"))
                 merged_items.append({**item, **({"apply_status": outcome.get("apply_status"), "apply_error": outcome.get("apply_error")} if outcome else {})})
-            _replace_classify_proposal({**current, "items": merged_items, "status": "done", "applied_count": result.get("applied_count"), "failed_count": result.get("failed_count")})
+            # 승인 결과(apply_status/apply_error)를 DB 항목에 반영한다. 항목 단위 UPDATE API가
+            # 없으므로 지우고 다시 넣는 것으로 병합한다 — add_classify_proposal_items가 어차피
+            # executemany 한 번 + commit 한 번으로 처리하므로 추가 왕복 비용은 없다.
+            await asyncio.to_thread(category_mapping.clear_classify_proposal_items, content_type=content_type)
+            await asyncio.to_thread(category_mapping.add_classify_proposal_items, merged_items, current.get("source_category") or "", content_type=content_type)
+            _replace_classify_proposal({**current, "status": "done", "applied_count": result.get("applied_count"), "failed_count": result.get("failed_count")})
         except Exception as e:
             LOGGER.error("classify apply error: %s", e)
             _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "분류 적용에 실패했습니다."})
@@ -726,22 +767,29 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
 
     @router.get("/categories/classify-proposal", dependencies=admin_dep)
     async def get_classify_proposal() -> dict[str, Any]:
-        """진행 중이거나 마지막으로 만든 분류 제안 상태 조회 (폴링용)"""
-        return {"status": "success", "result": _read_classify_proposal()}
+        """진행 중이거나 마지막으로 만든 분류 제안 상태 조회 (폴링용).
+
+        항목 목록(items)은 상태 파일이 아니라 DB(classify_proposal_items)에서 읽어
+        합친다. 화면은 지금처럼 items 키를 그대로 읽으므로 응답 모양은 바뀌지 않는다.
+        """
+        status = _read_classify_proposal()
+        items = await asyncio.to_thread(category_mapping.get_classify_proposal_items, content_type=content_type)
+        return {"status": "success", "result": {**status, "items": items}}
 
     @router.post("/categories/classify-proposal/apply", dependencies=admin_dep)
     async def apply_classify_proposal(body: ClassifyApplyModel, background_tasks: BackgroundTasks) -> dict[str, Any]:
         """승인된 항목만 적용한다.
 
-        허용 경로는 요청 본문(body.items)이 아니라 서버에 저장된 제안 상태에서만 가져온다.
-        브라우저가 보낸 file_path를 그대로 허용 집합으로 쓰면 apply_category_changes가
-        가진 "제안 목록에 없는 파일은 거부한다"는 검증이 통째로 무의미해져, 임의 경로를
-        옮기는 요청도 통과하게 된다.
+        허용 경로는 요청 본문(body.items)이 아니라 DB에 저장된 제안 항목(서버가 만든
+        classify_proposal_items)에서만 가져온다. 브라우저가 보낸 file_path를 그대로
+        허용 집합으로 쓰면 apply_category_changes가 가진 "제안 목록에 없는 파일은
+        거부한다"는 검증이 통째로 무의미해져, 임의 경로를 옮기는 요청도 통과하게 된다.
         """
         current = _read_classify_proposal()
         if current.get("status") != "ready":
             return {"status": "failure", "error": "적용할 제안이 없습니다."}
-        allowed = {item.get("file_path") for item in current.get("items") or [] if item.get("file_path")}
+        proposal_items = await asyncio.to_thread(category_mapping.get_classify_proposal_items, content_type=content_type)
+        allowed = {item.get("file_path") for item in proposal_items if item.get("file_path")}
         items = [item.model_dump() for item in body.items]
         # 백그라운드 작업이 시작되기 전, 응답을 돌려주기 전에 동기적으로 applying을 선점한다.
         # await 지점 없이 여기까지 오므로 동시에 들어온 두 번째 apply 요청은 이 쓰기 뒤에야
@@ -754,8 +802,13 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
 
     @router.delete("/categories/classify-proposal", dependencies=admin_dep)
     async def delete_classify_proposal() -> dict[str, Any]:
-        """제안 상태를 지워 화면을 초기 상태로 되돌린다."""
-        _replace_classify_proposal({"status": "idle", "content_type": content_type, "items": []})
+        """제안 상태를 지워 화면을 초기 상태로 되돌린다. DB에 남은 제안 항목도 함께 지운다.
+
+        지우지 않으면 폐기한 제안의 항목이 DB에 남아, 다음 GET이 idle 상태인데도
+        옛 항목을 보여주는 모순이 생긴다.
+        """
+        await asyncio.to_thread(category_mapping.clear_classify_proposal_items, content_type=content_type)
+        _replace_classify_proposal({"status": "idle", "content_type": content_type})
         return {"status": "success", "result": {"cleared": True}}
 
     @router.get("/categories/{category:path}")

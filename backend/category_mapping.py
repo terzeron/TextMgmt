@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+import json
 import logging.config
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -71,6 +72,16 @@ class CategoryMapping:
                     "CREATE TABLE IF NOT EXISTS latest_excluded_categories (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(255) NOT NULL, content_type VARCHAR(10) NOT NULL DEFAULT 'book', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY unique_latest_excluded_category_content_type (category, content_type), INDEX idx_category (category), INDEX idx_content_type (content_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
                 )
                 cursor.execute("CREATE TABLE IF NOT EXISTS reload_locks (content_type VARCHAR(10) NOT NULL PRIMARY KEY, started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+                # 분류 제안 항목을 담는 테이블. 항목을 JSON 상태 파일 하나에 담으면 책 한 권
+                # 기록할 때마다 지금까지의 목록 전체를 다시 직렬화해야 해서 비용이 책 수의
+                # 제곱으로 늘어난다(실측: 79,589권 카테고리에서 기록만 약 33시간). 행 단위로
+                # 쌓으면 이 문제가 원천적으로 사라진다. file_path는 1024자까지라 UNIQUE로
+                # 걸면 인덱스 길이 제한에 걸리므로 걸지 않는다 — 중복은 clear로 관리한다.
+                # 항목 필드가 앞으로 늘 수 있어(candidates 배열 등) payload 하나에 JSON으로
+                # 담아, 항목 스키마가 바뀌어도 테이블을 안 고쳐도 되게 한다.
+                cursor.execute(
+                    "CREATE TABLE IF NOT EXISTS classify_proposal_items (id INT AUTO_INCREMENT PRIMARY KEY, content_type VARCHAR(10) NOT NULL DEFAULT 'book', source_category VARCHAR(255) NOT NULL, file_path VARCHAR(1024) NOT NULL, payload JSON NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX idx_content_source (content_type, source_category), INDEX idx_content_type (content_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+                )
                 # 기존 테이블 마이그레이션: content_type 컬럼이 없으면 추가
                 self._migrate_add_content_type(cursor)
                 # reload_locks를 진행 상황까지 담는 공유 작업 상태 테이블로 확장
@@ -573,3 +584,42 @@ class CategoryMapping:
             with conn.cursor() as cursor:
                 cursor.execute("DELETE FROM reload_locks WHERE content_type = %s AND lock_key = %s", (content_type, lock_key))
                 conn.commit()
+
+    def clear_classify_proposal_items(self, content_type: str = "book") -> None:
+        """새 분류 제안을 시작할 때 이 content_type의 기존 제안 항목을 전부 지운다.
+
+        지우지 않으면 이전 제안의 행이 새 제안의 행과 뒤섞여, 관리자가 이미 끝난
+        이전 작업의 책까지 새 제안으로 착각하고 승인할 수 있다.
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM classify_proposal_items WHERE content_type = %s", (content_type,))
+                conn.commit()
+
+    def add_classify_proposal_items(self, items: list[dict[str, Any]], source_category: str, content_type: str = "book") -> None:
+        """분류된 항목들을 한 번에 적재한다.
+
+        책 한 권마다 INSERT + COMMIT을 하면 커넥션 왕복과 트랜잭션 커밋이 책 수만큼
+        생긴다. 호출자가 여러 건을 모아 한 번에 넘기면, 여기서는 executemany 한 번과
+        commit 한 번으로 끝나 왕복 비용이 호출 횟수만큼만 생긴다.
+        """
+        if not items:
+            return
+        rows = [(content_type, source_category, item.get("file_path"), json.dumps(item, ensure_ascii=False)) for item in items]
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.executemany("INSERT INTO classify_proposal_items (content_type, source_category, file_path, payload) VALUES (%s, %s, %s, %s)", rows)
+                conn.commit()
+
+    def get_classify_proposal_items(self, content_type: str = "book") -> list[dict[str, Any]]:
+        """제안 항목을 분류가 끝난 순서(id 오름차순) 그대로 돌려준다.
+
+        화면에 보이는 순서가 분류 완료 순서와 같아야 관리자가 진행 상황을
+        직관적으로 따라갈 수 있다.
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT payload FROM classify_proposal_items WHERE content_type = %s ORDER BY id ASC", (content_type,))
+                rows = cursor.fetchall()
+        return [json.loads(row["payload"]) for row in rows]
+

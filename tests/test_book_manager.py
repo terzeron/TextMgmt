@@ -5396,11 +5396,12 @@ def test_propose_category_changes_lists_items_without_moving(tmp_path: Path):
     assert book.is_file()
 
 
-def test_propose_category_changes_progress_carries_items_so_far(tmp_path: Path):
-    """진행 보고마다 지금까지 만든 items가 함께 실려, 길이가 processed_count와 같다.
+def test_propose_category_changes_progress_reports_new_items_only(tmp_path: Path):
+    """진행 보고의 new_items는 이번 틱에서 새로 생긴 항목만 담는다(누적이 아니다).
 
-    화면이 도는 중간에 어떤 책이 어디로 분류됐는지 보려면, 숫자뿐 아니라 그 시점까지의
-    items도 매 호출에 들어 있어야 한다.
+    누적 목록(items)을 매번 통째로 실으면 보고 크기가 책 수의 제곱으로 커진다(과거
+    JSON 상태 파일 방식에서 실측된 문제 — 79,589권 카테고리에서 기록만 약 33시간).
+    new_items로 이번 틱의 델타만 보내야 한 틱의 비용이 책 수와 무관해진다.
     """
     manager = make_manager(tmp_path, DummyES())
     source = tmp_path / "A"
@@ -5415,34 +5416,28 @@ def test_propose_category_changes_progress_carries_items_so_far(tmp_path: Path):
 
     assert error is None
     assert len(progress) == 2
-    for call in progress:
-        assert len(call["items"]) == call["processed_count"]
+    assert all(len(call["new_items"]) == 1 for call in progress)
+    assert "items" not in progress[0]
+    assert "items" not in progress[1]
+    assert [call["new_items"][0]["file_path"] for call in progress] == [item["file_path"] for item in result["items"]]
 
 
-def test_propose_category_changes_progress_items_is_a_copy(tmp_path: Path):
-    """콜백이 첫 호출의 items를 들고 있어도, 이후 진행 보고가 그 리스트를 늘리지 않는다.
+def test_propose_category_changes_result_items_still_has_everything(tmp_path: Path):
+    """함수 반환값 result["items"]는 진행 보고와 무관하게 여전히 전체 항목을 담는다.
 
-    result["items"]는 함수가 끝날 때까지 계속 append된다. 같은 리스트 객체를 콜백에
-    넘기면 호출자가 보관한 목록이 뒤에서 몰래 자라난다. list(...)로 복사해서 넘겨야
-    호출 시점의 스냅샷이 그대로 유지된다.
+    진행 보고는 델타(new_items)만 실어도, 최종 저장은 호출자가 반환값을 보고 하므로
+    반환값 자체는 지금처럼 전체 목록이어야 한다.
     """
     manager = make_manager(tmp_path, DummyES())
     source = tmp_path / "A"
     source.mkdir()
-    (source / "가.epub").write_text("x")
-    (source / "나.epub").write_text("x")
+    for i in range(3):
+        (source / f"책{i}.epub").write_text("x")
 
-    kept: dict = {}
-
-    def on_progress(progress: dict) -> None:
-        kept.setdefault("first", progress["items"])
-
-    result, error = asyncio_runner(
-        manager.propose_category_changes("A", {"3_SF": ["과학소설"]}, use_bookstore=False, use_content_meta=False, on_progress=on_progress)
-    )
+    result, error = asyncio_runner(manager.propose_category_changes("A", {"3_SF": ["과학소설"]}, use_bookstore=False, use_content_meta=False))
 
     assert error is None
-    assert len(kept["first"]) == 1
+    assert len(result["items"]) == 3
 
 
 def test_apply_category_changes_rejects_unknown_file(tmp_path: Path):

@@ -1,4 +1,5 @@
 import contextlib
+import json
 import sys
 import unittest
 from datetime import datetime, timedelta
@@ -693,3 +694,170 @@ class TestCategoryMapping(unittest.TestCase):
         status = cm.get_reload_status("book")
         assert status["status"] == "failed"
         assert status["error"]
+
+
+class _ClassifyItemsFakeCursor:
+    """classify_proposal_items에 대해 INSERT(executemany)/DELETE/SELECT를 흉내내는
+    인메모리 저장소. 공용 FakeCursor는 고정된 rows만 돌려줘, "여러 번 나눠 넣어도
+    get이 전체를 순서대로 돌려준다"는 시나리오(테일 플러시 검증 포함)를 표현할 수
+    없어서 별도로 둔다.
+    """
+
+    def __init__(self, store: list[tuple]):
+        self.store = store
+        self.rowcount = 0
+        self._result: list[dict] = []
+
+    def execute(self, sql, params=None):
+        if sql.startswith("DELETE FROM classify_proposal_items"):
+            (content_type,) = params
+            self.store[:] = [row for row in self.store if row[0] != content_type]
+        elif sql.startswith("SELECT payload FROM classify_proposal_items"):
+            (content_type,) = params
+            self._result = [{"payload": row[3]} for row in self.store if row[0] == content_type]
+        else:
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    def executemany(self, sql, seq):
+        self.store.extend(seq)
+
+    def fetchall(self):
+        return self._result
+
+    def fetchone(self):
+        return {"cnt": 0}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _ClassifyItemsFakeConn:
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self.committed = False
+
+    def cursor(self):
+        return self._cursor
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        return None
+
+
+class TestClassifyProposalItems(unittest.TestCase):
+    """제안 항목을 JSON 상태 파일 대신 담는 classify_proposal_items 테이블 메서드."""
+
+    def test_init_creates_classify_proposal_items_table(self):
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 0}] * 14)
+        cm_mod, cm = build_cm(cursor)
+        assert cm is not None
+        assert any("CREATE TABLE IF NOT EXISTS classify_proposal_items" in str(sql) for sql, _ in cursor.executed)
+
+    def test_add_then_get_returns_items_in_insertion_order(self):
+        cursor = FakeCursor()
+        cm_mod, cm = build_cm(cursor)
+        conn = FakeConn(cursor)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield conn
+
+        cm._get_connection = _conn
+        items = [{"file_path": "a.epub", "target_category": "3_SF"}, {"file_path": "b.epub", "target_category": "3_SF"}]
+        cm.add_classify_proposal_items(items, "0_inbox")
+
+        assert conn.committed is True
+        assert len(cursor.executed_many) == 1
+        sql, rows = cursor.executed_many[0]
+        assert "INSERT INTO classify_proposal_items" in sql
+        assert rows == [
+            ("book", "0_inbox", "a.epub", json.dumps(items[0], ensure_ascii=False)),
+            ("book", "0_inbox", "b.epub", json.dumps(items[1], ensure_ascii=False)),
+        ]
+
+        cursor_get = FakeCursor(rows=[{"payload": json.dumps(items[0], ensure_ascii=False)}, {"payload": json.dumps(items[1], ensure_ascii=False)}])
+
+        @contextlib.contextmanager
+        def _conn_get():
+            yield FakeConn(cursor_get)
+
+        cm._get_connection = _conn_get
+        fetched = cm.get_classify_proposal_items()
+        assert [i["file_path"] for i in fetched] == ["a.epub", "b.epub"]
+        assert any("ORDER BY id ASC" in str(sql) for sql, _ in cursor_get.executed)
+
+    def test_add_empty_items_is_noop(self):
+        cursor = FakeCursor()
+        cm_mod, cm = build_cm(cursor)
+        conn = FakeConn(cursor)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield conn
+
+        cm._get_connection = _conn
+        cm.add_classify_proposal_items([], "0_inbox")
+        assert cursor.executed_many == []
+        assert conn.committed is False
+
+    def test_clear_scopes_delete_to_given_content_type(self):
+        cursor = FakeCursor()
+        cm_mod, cm = build_cm(cursor)
+        conn = FakeConn(cursor)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield conn
+
+        cm._get_connection = _conn
+        cm.clear_classify_proposal_items(content_type="comic")
+
+        assert conn.committed is True
+        sql, params = cursor.executed[-1]
+        assert "DELETE FROM classify_proposal_items WHERE content_type = %s" in sql
+        assert params == ("comic",)
+
+    def test_clear_only_removes_matching_content_type(self):
+        """다른 content_type의 행은 clear 뒤에도 남아 있어야 한다."""
+        cm_mod, cm = build_cm(FakeCursor())
+        store = [("book", "0_inbox", "a.epub", "{}"), ("comic", "0_inbox", "b.epub", "{}")]
+        cursor = _ClassifyItemsFakeCursor(store)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield _ClassifyItemsFakeConn(cursor)
+
+        cm._get_connection = _conn
+        cm.clear_classify_proposal_items(content_type="book")
+
+        assert [row[0] for row in store] == ["comic"]
+
+    def test_add_across_multiple_calls_then_get_returns_all_in_order_no_tail_dropped(self):
+        """100건 단위로 나눠 add를 여러 번 불러도(100+100+50), get은 250건 전체를
+        순서대로 돌려준다. 마지막 잔여분(꼬리)이 누락되면 관리자가 목록 끝의 책들을
+        못 보고 승인하게 되므로, 이 테일 플러시를 DB 계층에서 직접 확인한다.
+        """
+        cm_mod, cm = build_cm(FakeCursor())
+        store: list[tuple] = []
+        cursor = _ClassifyItemsFakeCursor(store)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield _ClassifyItemsFakeConn(cursor)
+
+        cm._get_connection = _conn
+        cm.add_classify_proposal_items([{"file_path": f"{i}.epub"} for i in range(0, 100)], "0_inbox")
+        cm.add_classify_proposal_items([{"file_path": f"{i}.epub"} for i in range(100, 200)], "0_inbox")
+        cm.add_classify_proposal_items([{"file_path": f"{i}.epub"} for i in range(200, 250)], "0_inbox")
+
+        items = cm.get_classify_proposal_items()
+        assert len(items) == 250
+        assert [item["file_path"] for item in items] == [f"{i}.epub" for i in range(250)]
