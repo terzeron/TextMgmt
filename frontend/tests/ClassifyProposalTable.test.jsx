@@ -99,9 +99,39 @@ describe("ClassifyProposalTable", () => {
     expect(screen.getByLabelText("A/a.epub 추천 1 선택").checked).toBe(true);
     expect(screen.getByLabelText("A/b.epub 추천 1 선택").checked).toBe(false);
     expect(screen.getByLabelText("A/b.epub 추천 1 선택").disabled).toBe(false);
-    // 불확실은 시스템이 목적지를 고르지 못한 행이라 추천을 그대로 승인할 수 없다.
-    expect(screen.getByLabelText("A/c.epub 추천 1 선택").disabled).toBe(true);
-    expect(screen.getByLabelText("A/c.epub 추천 2 선택").disabled).toBe(true);
+    // 불확실 행은 미리 체크되지 않는다 — 시스템이 못 정한 것이 저절로 승인되면 안 된다.
+    expect(screen.getByLabelText("A/c.epub 추천 1 선택").checked).toBe(false);
+    expect(screen.getByLabelText("A/c.epub 추천 2 선택").checked).toBe(false);
+  });
+
+  it("후보 동률 행도 추천 중 하나를 눌러 고를 수 있다", () => {
+    // 동률은 "시스템이 둘 중 하나를 못 골랐다"는 뜻이지 후보가 틀렸다는 뜻이 아니다.
+    // 둘 다 잠그면 답이 바로 옆 칸에 보이는데도 2,000개짜리 드롭다운에서 같은 이름을
+    // 다시 찾아야 한다. 못 고른 판단을 사람이 대신 내리는 것이 이 체크박스의 용도다.
+    const props = renderTable();
+    expect(screen.getByLabelText("A/c.epub 추천 1 선택").disabled).toBe(false);
+    expect(screen.getByLabelText("A/c.epub 추천 2 선택").disabled).toBe(false);
+
+    fireEvent.click(screen.getByLabelText("A/c.epub 추천 2 선택"));
+
+    const next = props.onChoicesChange.mock.calls[0][0];
+    expect(next["A/c.epub"]).toEqual({
+      source: "candidate",
+      index: 1,
+      category: "1_서양고전",
+    });
+    expect(isSelectable(ITEMS[2], next)).toBe(true);
+  });
+
+  it("직접 선택 목록이 가나다순으로 정렬된다", () => {
+    // /categories 응답은 문서 수 내림차순이라 그대로 쓰면 이름으로 찾을 수 없다.
+    renderTable({ categories: ["3_SF", "5_음악", "1_서양고전"] });
+    const select = screen.getByLabelText("A/a.epub 목적지");
+    const names = within(select)
+      .getAllByRole("option")
+      .map((option) => option.textContent)
+      .filter((name) => name !== "(선택 안 함)");
+    expect(names).toEqual(["1_서양고전", "3_SF", "5_음악"]);
   });
 
   it("추천 2를 체크하면 목적지가 후보 2가 되고 추천 1은 풀린다", () => {

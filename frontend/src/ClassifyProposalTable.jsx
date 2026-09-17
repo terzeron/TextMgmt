@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components --
    resolveTarget/isSelectable 등은 부모와 테스트가 재사용하는 순수 헬퍼라
    컴포넌트와 co-located. HMR 힌트일 뿐 런타임 영향 없음. */
+import { useMemo } from "react";
 import PropTypes from "prop-types";
 import { Table, Form, Badge } from "react-bootstrap";
 
@@ -40,14 +41,18 @@ export function manualValue(item, choices) {
   return choice?.source === "manual" ? choice.category : "";
 }
 
-// 추천 체크박스를 누를 수 있는가. 불확실(unknown)은 시스템이 목적지를 고르지
-// 못했다는 뜻이라 추천을 그대로 승인할 수 없다 — 직접 선택으로만 목적지를 준다.
+// 추천 체크박스를 누를 수 있는가. 후보가 있고 아직 안 옮긴 행이면 누를 수 있다.
+//
+// 등급은 여기서 보지 않는다. 불확실(unknown)은 "시스템이 둘 중 하나를 못 골랐다"는
+// 뜻이지 "후보가 틀렸다"는 뜻이 아니다. 후보 동률 행에서 둘 다 잠가 버리면, 답이
+// 바로 옆 칸에 보이는데도 2,000개가 넘는 드롭다운에서 같은 이름을 다시 찾아야 한다.
+// 못 고른 판단을 사람이 대신 내리는 것이 이 체크박스의 용도다.
+//
+// "시스템이 못 정한 것이 저절로 승인되면 안 된다"는 원래 의도는 기본값으로 지킨다:
+// 미리 체크되는 것은 확실(certain) 행의 추천 1뿐이고, 불확실 행은 사람이 직접
+// 누르지 않으면 승인 대상에 들어가지 않는다. 일괄 선택에서도 빠진다.
 export function canCheckCandidate(item, candidate) {
-  return Boolean(
-    candidate?.category &&
-    item.grade !== "unknown" &&
-    item.apply_status !== "moved",
-  );
+  return Boolean(candidate?.category && item.apply_status !== "moved");
 }
 
 // apply_status -> 화면 표시. moving은 백엔드가 일부러 자동 판정하지 않고 남긴,
@@ -119,6 +124,14 @@ export default function ClassifyProposalTable({
   choices,
   onChoicesChange,
 }) {
+  // /categories 응답은 문서 수 내림차순이라 그대로 쓰면 드롭다운이 "3_판타지,
+  // 3_무협, 3_여성향..." 순으로 뜬다. 2,000개가 넘는 목록에서 이름으로 찾으려면
+  // 가나다순이어야 한다. 부르는 쪽 순서에 기대지 않도록 여기서 정렬한다.
+  const sortedCategories = useMemo(
+    () => [...categories].sort((a, b) => a.localeCompare(b, "ko")),
+    [categories],
+  );
+
   const setChoice = (filePath, choice) => {
     const next = { ...choices };
     if (choice) next[filePath] = choice;
@@ -146,11 +159,14 @@ export default function ClassifyProposalTable({
     );
   };
 
-  // 헤더의 일괄 체크는 추천 1만 건드린다. 직접 선택으로 이미 목적지를 정한 행은
-  // 사용자가 손으로 한 판단이라 일괄 조작으로 덮지 않는다.
+  // 헤더의 일괄 체크는 추천 1만 건드린다. 두 가지는 건너뛴다:
+  // 직접 선택으로 이미 목적지를 정한 행(사용자가 손으로 한 판단을 덮지 않는다),
+  // 그리고 불확실 행(시스템이 못 고른 것을 일괄 조작으로 승인해 버리면 안 된다 —
+  // 그 행은 사람이 추천 1·2 중 하나를 직접 눌러야 한다).
   const bulkTargets = items.filter(
     (item) =>
       canCheckCandidate(item, (item.candidates || [])[0]) &&
+      item.grade !== "unknown" &&
       choices[item.file_path]?.source !== "manual",
   );
   const allFirstChecked =
@@ -254,10 +270,10 @@ export default function ClassifyProposalTable({
                       없을 수 있다. 그 경우 빠뜨리면 셀렉트가 "(선택 안 함)"으로 보이면서도
                       실제 상태값은 여전히 그 목적지를 들고 있어, 화면에 안 보인 곳으로
                       승인될 수 있다 — 항상 옵션으로 끼워 넣는다. */}
-                  {manual && !categories.includes(manual) && (
+                  {manual && !sortedCategories.includes(manual) && (
                     <option value={manual}>{manual}</option>
                   )}
-                  {categories.map((category) => (
+                  {sortedCategories.map((category) => (
                     <option key={category} value={category}>
                       {category}
                     </option>

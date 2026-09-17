@@ -1620,7 +1620,7 @@ describe("CategoryAdmin", () => {
       expect(screen.getByText("2_science")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByText("2_science"));
+    fireEvent.click(screen.getAllByText("2_science")[0]);
     await waitFor(() => {
       expect(screen.getByLabelText("최신 자료 검색 제외").checked).toBe(true);
     });
@@ -4326,6 +4326,62 @@ describe("CategoryAdmin 분류 제안", () => {
     expect(screen.getByRole("button", { name: /분류 승인/ }).disabled).toBe(
       true,
     );
+  });
+
+  it("다른 디렉토리를 선택하면 그 제안 표는 보이지 않는다", async () => {
+    // 제안은 한 번에 하나만 있고 만들어진 카테고리에 속한다. 다른 디렉토리로 옮겼는데
+    // 표가 남아 있으면 지금 보는 디렉토리의 책이 그렇게 분류된 것으로 읽히고,
+    // 그대로 승인하면 엉뚱한 책이 옮겨진다.
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 1,
+        processed_count: 1,
+        items: [PROPOSAL_ITEM_CERTAIN],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    await waitFor(() => {
+      expect(screen.getByText("확실한 책")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getAllByText("2_science")[0]);
+
+    await waitFor(() => {
+      expect(screen.queryByText("확실한 책")).toBeNull();
+    });
+    expect(screen.queryByRole("button", { name: /분류 승인/ })).toBeNull();
+  });
+
+  it("다시 그 디렉토리로 돌아오면 제안 표가 다시 보인다", async () => {
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 1,
+        processed_count: 1,
+        items: [PROPOSAL_ITEM_CERTAIN],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    await waitFor(() => {
+      expect(screen.getByText("확실한 책")).toBeTruthy();
+    });
+    fireEvent.click(screen.getAllByText("2_science")[0]);
+    await waitFor(() => {
+      expect(screen.queryByText("확실한 책")).toBeNull();
+    });
+
+    fireEvent.click(screen.getAllByText("1_fiction")[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText("확실한 책")).toBeTruthy();
+    });
   });
 
   it("분류가 도는 동안 분류 제안 버튼은 계속 돌고 진행 수를 보여준다", async () => {

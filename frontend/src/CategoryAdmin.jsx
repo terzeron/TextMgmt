@@ -1280,7 +1280,19 @@ export default function CategoryAdmin({
   // 시작 요청이 도는 동안과 분류 작업이 도는 동안 모두 버튼이 돌아야 한다.
   // 시작 요청은 백그라운드 작업을 띄우고 곧바로 끝나므로, 그것만 보면 스피너가
   // 깜빡이고 만다.
-  const proposalRunning = proposalStarting || proposal?.status === "running";
+  // 제안은 한 번에 하나만 존재하고 그것이 만들어진 카테고리에 속한다. 다른
+  // 디렉토리를 선택했는데도 그 표가 남아 있으면, 지금 보는 디렉토리의 책이 그렇게
+  // 분류된 것으로 읽힌다 — 잘못 승인하면 엉뚱한 책이 옮겨진다.
+  const proposalIsForSelection =
+    Boolean(proposal?.source_category) &&
+    proposal.source_category === selectedCategory;
+  const proposalRunning =
+    proposalStarting ||
+    (proposal?.status === "running" && proposalIsForSelection);
+  // 다른 카테고리의 작업이 도는 중이라 시작할 수 없을 때는, 버튼이 왜 잠겼는지
+  // 알려준다. 그러지 않으면 눌러도 아무 일이 없는 것처럼 보인다.
+  const proposalBlockedBy =
+    proposalPolling && !proposalIsForSelection ? proposal?.source_category : null;
 
   const handleClickProposeButton = useCallback(() => {
     if (hasReviewedProposal) {
@@ -2001,7 +2013,11 @@ export default function CategoryAdmin({
                       size="sm"
                       disabled={saving || proposalStarting || proposalPolling}
                       onClick={handleClickProposeButton}
-                      title="분류 제안"
+                      title={
+                        proposalBlockedBy
+                          ? `${proposalBlockedBy} 분류 작업이 끝나야 시작할 수 있습니다`
+                          : "분류 제안"
+                      }
                     >
                       {/* 시작 요청이 끝나면 스피너를 내리던 예전 동작은, 정작 오래
                           걸리는 분류 자체가 도는 동안 버튼이 멈춘 것처럼 보이게 했다.
@@ -2029,7 +2045,7 @@ export default function CategoryAdmin({
             )}
 
             {/* 분류 제안 검토 · 승인 */}
-            {proposal && proposal.status !== "idle" && (
+            {proposal && proposal.status !== "idle" && proposalIsForSelection && (
               <Card className="mt-2">
                 <Card.Header className="py-1 d-flex justify-content-between align-items-center">
                   <strong>분류 제안: {proposal.source_category}</strong>
