@@ -405,14 +405,18 @@ class TestCategoryMapping(unittest.TestCase):
         assert conn.committed is True
 
     def test_migrate_skips_when_content_type_already_exists(self):
-        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 15)
+        # information_schema 조회 순서: 1~3 content_type 컬럼, 4 apply_status,
+        # 5 idx_content_file, 6 idx_content_type, 7~16 reload_locks 컬럼, 17 lock_key.
+        # 6번만 0(없음)이라 지울 중복 인덱스가 없고, 나머지는 이미 있어 손댈 게 없다.
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 5 + [{"cnt": 0}] + [{"cnt": 1}] * 11)
         cm_mod, cm = build_cm(cursor)
         alter_queries = [sql for sql, _ in cursor.executed if "ALTER TABLE" in str(sql)]
         assert cm is not None
         assert alter_queries == []
 
     def test_migrate_reload_locks_adds_reload_source(self):
-        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 13 + [{"cnt": 0}, {"cnt": 1}])
+        # 16번째 조회가 reload_source 컬럼 존재 여부다(위 테스트의 순서 주석 참고).
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 15 + [{"cnt": 0}, {"cnt": 1}])
         cm_mod, cm = build_cm(cursor)
         executed_sql = [sql for sql, _ in cursor.executed]
         assert any("ADD COLUMN reload_source" in s for s in executed_sql)

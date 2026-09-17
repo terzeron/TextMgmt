@@ -89,6 +89,13 @@ class CategoryMapping:
                 self._migrate_add_content_type(cursor)
                 # 기존 테이블 마이그레이션: apply_status/apply_error 컬럼이 없으면 추가
                 self._migrate_add_apply_status(cursor)
+                # 분류 제안 작업의 상태. 예전에는 corpus 디렉토리의 JSON 파일이었는데,
+                # 여러 프로세스가 잠금 없이 같이 쓰고 노드가 늘면 공유도 안 되어 DB로 옮겼다.
+                # payload에 카운트·에러·토큰을 담고, status는 FOR UPDATE로 판단해야 하므로
+                # 컬럼으로 뺀다. updated_at은 하트비트다 — 갱신이 끊기면 죽은 작업으로 본다.
+                cursor.execute(
+                    "CREATE TABLE IF NOT EXISTS classify_proposal_status (content_type VARCHAR(10) NOT NULL PRIMARY KEY, status VARCHAR(20) NOT NULL DEFAULT 'idle', payload JSON NOT NULL, updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+                )
                 # 기존 테이블 마이그레이션: file_path 인덱스 추가 + 중복 인덱스 제거
                 self._migrate_classify_proposal_item_indexes(cursor)
                 # reload_locks를 진행 상황까지 담는 공유 작업 상태 테이블로 확장
@@ -699,3 +706,131 @@ class CategoryMapping:
                 deleted_count = cursor.rowcount
             conn.commit()
         return deleted_count
+
+    # ── 분류 제안 작업 상태 ──────────────────────────────────────────────────
+    #
+    # 이 상태는 원래 corpus 디렉토리의 JSON 파일 하나였다. 파일로는 두 가지가 안 된다.
+    # 첫째, 여러 프로세스가 같이 쓰면 "읽고-판단하고-쓰기" 사이에 잠금을 걸 수 없어
+    # 두 승인 작업이 동시에 시작될 수 있다. 이 서비스는 uvicorn --workers 2 에
+    # replicas 2 라 실제로 프로세스가 4개다. 둘째, 노드가 늘면 파일은 아예 공유되지
+    # 않는다. reload_locks 가 이미 같은 문제를 DB 행 + SELECT ... FOR UPDATE 로
+    # 풀고 있어 그 방식을 그대로 따른다.
+
+    @staticmethod
+    def _classify_proposal_effective_status(row: dict[str, Any], stale_seconds: int) -> dict[str, Any]:
+        """저장된 상태에 '갱신이 끊겼는가'를 반영해 돌려준다. 행은 고치지 않는다.
+
+        get_reload_status 와 같은 방식이다. 조회하면서 행을 고치면 GET 요청이 쓰기를
+        하게 되고, 여러 클라이언트가 동시에 폴링할 때 서로의 쓰기와 경합한다. 죽은
+        작업을 실제로 치우는 일은 다음 작업이 시작될 때 try_* 가 한다.
+
+        '얼마나 낡았는가'는 파이썬이 아니라 SQL 이 센다(TIMESTAMPDIFF ... NOW(3)).
+        파이썬의 datetime.now() 는 앱 컨테이너의 지역 시간이고 updated_at 은 DB 서버의
+        시계라, 둘의 시간대가 다르면(이 저장소는 앱 KST, MySQL UTC) 그 차이만큼
+        모든 행이 낡아 보인다. 같은 시계끼리 빼면 시간대와 무관해진다.
+        """
+        payload = dict(row["payload"] or {})
+        payload["status"] = row["status"]
+        if row["status"] in ("running", "applying") and (row["age_seconds"] or 0) > stale_seconds:
+            payload["status"] = "failed"
+            payload["error"] = payload.get("error") or "응답 없이 중단된 것으로 보입니다."
+        return payload
+
+    def _read_classify_proposal_status_row(self, cursor, content_type: str) -> dict[str, Any] | None:
+        cursor.execute("SELECT status, payload, TIMESTAMPDIFF(SECOND, updated_at, NOW(3)) AS age_seconds FROM classify_proposal_status WHERE content_type = %s", (content_type,))
+        row = cursor.fetchone()
+        if row and isinstance(row["payload"], str):
+            row["payload"] = json.loads(row["payload"])
+        return row
+
+    def get_classify_proposal_status(self, content_type: str = "book", stale_seconds: int = 300) -> dict[str, Any]:
+        """분류 제안 작업의 현재 상태. 아직 아무 작업도 없으면 idle 을 돌려준다."""
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                row = self._read_classify_proposal_status_row(cursor, content_type)
+        if not row:
+            return {"status": "idle", "content_type": content_type}
+        return self._classify_proposal_effective_status(row, stale_seconds)
+
+    def set_classify_proposal_status(self, status: dict[str, Any], content_type: str = "book") -> None:
+        """상태를 통째로 바꾼다. status 컬럼과 payload 안의 status 를 함께 맞춘다."""
+        payload = {**status, "content_type": content_type}
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO classify_proposal_status (content_type, status, payload, updated_at) VALUES (%s, %s, %s, NOW(3)) ON DUPLICATE KEY UPDATE status = VALUES(status), payload = VALUES(payload), updated_at = NOW(3)", (content_type, payload.get("status", "idle"), json.dumps(payload, ensure_ascii=False))
+                )
+            conn.commit()
+
+    def merge_classify_proposal_status(self, fields: dict[str, Any], content_type: str = "book") -> None:
+        """진행률처럼 일부 필드만 갱신한다. status 는 절대 바꾸지 않는다.
+
+        제안(running)과 적용(applying)이 같은 행을 쓰므로, 진행률 갱신이 status 를
+        건드리면 적용 중인 작업이 화면에 '제안 생성 중'으로 보인다. 예전에는 호출자가
+        읽어서 합친 뒤 통째로 쓰는 방식이라 그 사이 다른 프로세스의 갱신을 덮어썼다.
+        여기서는 서버가 JSON_MERGE_PATCH 로 합치므로 읽기-쓰기 창 자체가 없다.
+        """
+        fields = {key: value for key, value in fields.items() if key != "status"}
+        if not fields:
+            return
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("UPDATE classify_proposal_status SET payload = JSON_MERGE_PATCH(payload, %s), updated_at = NOW(3) WHERE content_type = %s", (json.dumps(fields, ensure_ascii=False), content_type))
+            conn.commit()
+
+    def try_start_classify_proposal(self, status: dict[str, Any], content_type: str = "book", stale_seconds: int = 300) -> tuple[bool, dict[str, Any]]:
+        """이미 도는 작업이 없을 때만 새 제안 작업을 시작 상태로 만든다.
+
+        (시작했는가, 현재 상태) 를 돌려준다. 실패하면 현재 상태는 이미 도는 작업의
+        것이다. 판단과 쓰기가 한 트랜잭션 안에서 FOR UPDATE 로 묶여 있어, 프로세스가
+        몇 개든 둘이 동시에 시작하지 못한다.
+        """
+        return self._try_transition_classify_proposal(lambda current: None if current in ("running", "applying") else {**status, "content_type": content_type}, content_type, stale_seconds)
+
+    def try_begin_classify_apply(self, apply_token: str, content_type: str = "book", stale_seconds: int = 300) -> tuple[bool, dict[str, Any]]:
+        """승인할 제안이 있을 때만 적용 중 상태를 선점하고 토큰을 발급한다.
+
+        ready 뿐 아니라 done 과 failed 에서도 받는다 — 승인 도중 중단되면 상태가
+        failed 로 굳는데, 그때도 남은 pending 행을 이어서 승인할 수 있어야 한다.
+        """
+
+        def _next(current: str) -> dict[str, Any] | None:
+            if current not in ("ready", "done", "failed"):
+                return None
+            return {"status": "applying", "apply_token": apply_token}
+
+        return self._try_transition_classify_proposal(_next, content_type, stale_seconds, merge_into_current=True)
+
+    def _ensure_classify_proposal_status_row(self, content_type: str) -> None:
+        """잠그기 전에 잠글 행을 만들어 둔다. 반드시 별도 트랜잭션이어야 한다.
+
+        같은 트랜잭션 안에서 INSERT IGNORE 로 자리를 만들고 곧바로 SELECT ... FOR UPDATE
+        를 하면, 두 프로세스가 동시에 들어올 때 서로 공유 잠금을 쥔 채 배타 잠금으로
+        올리려 해 InnoDB 가 데드락으로 한쪽을 끊는다(실측). 자리 만들기를 먼저 커밋해
+        두면 잠금 트랜잭션은 SELECT FOR UPDATE 와 UPDATE 만 하게 되어 이 경합이 없다.
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("INSERT IGNORE INTO classify_proposal_status (content_type, status, payload) VALUES (%s, 'idle', %s)", (content_type, json.dumps({"status": "idle", "content_type": content_type}, ensure_ascii=False)))
+            conn.commit()
+
+    def _try_transition_classify_proposal(self, next_status, content_type: str, stale_seconds: int, merge_into_current: bool = False) -> tuple[bool, dict[str, Any]]:
+        self._ensure_classify_proposal_status_row(content_type)
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT status, payload, TIMESTAMPDIFF(SECOND, updated_at, NOW(3)) AS age_seconds FROM classify_proposal_status WHERE content_type = %s FOR UPDATE", (content_type,))
+                row = cursor.fetchone()
+                if row and isinstance(row["payload"], str):
+                    row["payload"] = json.loads(row["payload"])
+                current = self._classify_proposal_effective_status(row, stale_seconds)
+
+                decided = next_status(current["status"])
+                if decided is None:
+                    conn.commit()
+                    return False, current
+
+                payload = {**current, **decided} if merge_into_current else dict(decided)
+                payload["content_type"] = content_type
+                cursor.execute("UPDATE classify_proposal_status SET status = %s, payload = %s, updated_at = NOW(3) WHERE content_type = %s", (payload.get("status", "idle"), json.dumps(payload, ensure_ascii=False), content_type))
+            conn.commit()
+        return True, payload
