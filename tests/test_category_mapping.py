@@ -81,11 +81,15 @@ def build_cm(fake_cursor):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import backend.category_mapping as cm_mod
 
-    with mock.patch.dict(sys.modules, {"pymysql": fake_pymysql, "pymysql.cursors": fake_cursors}):
-        importlib.reload(cm_mod)
-        cm = cm_mod.CategoryMapping(host="h", port=1, database="d", user="u", password="p")
-
-    importlib.reload(cm_mod)  # 원상 복구: 모듈 전역 pymysql을 다시 진짜 pymysql로 되돌린다
+    try:
+        with mock.patch.dict(sys.modules, {"pymysql": fake_pymysql, "pymysql.cursors": fake_cursors}):
+            importlib.reload(cm_mod)
+            cm = cm_mod.CategoryMapping(host="h", port=1, database="d", user="u", password="p")
+    finally:
+        # try 안에서 무엇이 터지든(reload 실패, 생성자 예외 등) 원상 복구는 반드시 돈다.
+        # finally가 없으면 예외가 난 호출 한 번이 이후 세션 전체를 오염시킨다 — 방금
+        # 고친 것과 같은 조용한 실패 모드다.
+        importlib.reload(cm_mod)  # 원상 복구: 모듈 전역 pymysql을 다시 진짜 pymysql로 되돌린다
     return cm_mod, cm
 
 
