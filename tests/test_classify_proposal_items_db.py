@@ -7,8 +7,6 @@ tests/test_category_mapping.py의 fake-cursor 테스트는 "어떤 SQL 문자열
 real MySQL(testcontainers)로 확인한다.
 """
 
-import importlib
-
 import pytest
 
 import backend.category_mapping as category_mapping_mod
@@ -22,16 +20,12 @@ def cm(mysql_container):
     mysql_store fixture와 같은 패턴이다: 생성자가 _init_db()로 테이블을 만들게 하고,
     본문 실행 전에 TRUNCATE로 이전 테스트의 잔여물을 지운다.
 
-    tests/test_category_mapping.py의 build_cm()은 mock.patch.dict(sys.modules, ...) 블록
-    "안"에서 importlib.reload(cm_mod)를 실행한다. 이 reload가 backend.category_mapping
-    모듈의 공유 __dict__ 안 전역 이름 pymysql을 fake 객체로 바꿔놓는데, 모듈 __dict__는
-    patch.dict가 끝나도 되돌아가지 않는다. 그래서 그 파일이 먼저 실행되면(알파벳 순서상
-    이 파일보다 앞) 이후 이 파일에서 만드는 CategoryMapping도 실제 서버 대신 fake cursor에
-    조용히 연결된다 — 실측: 이 오염 때문에 아래 5개 테스트가 단독 실행에서는 통과하고
-    전체 스위트(tests/ -q)에서만 실패했다. 매번 진짜 pymysql로 다시 reload해서 오염을
-    걷어낸 뒤 진행한다.
+    예전에는 tests/test_category_mapping.py의 build_cm()이 patch.dict(sys.modules, ...)
+    블록 "안"에서 reload해 backend.category_mapping의 전역 pymysql을 fake로 오염시킨 채
+    블록을 빠져나가, 알파벳 순서상 뒤에 오는 이 파일이 세션 전체 실행에서만 가짜 커서에
+    붙어 조용히 통과하는 결함이 있었다. build_cm()이 블록을 벗어난 뒤 한 번 더
+    reload해 원상 복구하도록 고쳐 이 fixture는 더 이상 방어용 reload가 필요 없다.
     """
-    importlib.reload(category_mapping_mod)
     mapping = category_mapping_mod.CategoryMapping()
     with mapping._get_connection() as conn:
         with conn.cursor() as cursor:

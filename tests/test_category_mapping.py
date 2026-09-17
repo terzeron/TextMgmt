@@ -64,16 +64,29 @@ class FakeConn:
 
 
 def build_cm(fake_cursor):
+    """가짜 pymysql로 CategoryMapping을 만든다.
+
+    patch.dict(sys.modules, ...)는 블록을 나올 때 sys.modules만 원래대로 되돌리고,
+    블록 안에서 importlib.reload(cm_mod)가 이미 backend.category_mapping 모듈
+    __dict__에 박아 넣은 전역 이름 pymysql은 되돌리지 않는다. 그대로 두면 이 파일이
+    먼저 실행된 뒤로는 backend.category_mapping.pymysql이 세션이 끝날 때까지 가짜로
+    고정돼, 알파벳 순서상 뒤에 오는 실제 MySQL 테스트 파일이 자기도 모르게 가짜
+    커서에 붙어 아무것도 검증하지 못한 채 조용히 통과한다. patch.dict 블록을 벗어난
+    뒤 진짜 pymysql이 sys.modules에 복귀한 상태에서 한 번 더 reload해 모듈 전역을
+    원상 복구한다.
+    """
     fake_pymysql = types.SimpleNamespace(IntegrityError=type("IntegrityError", (Exception,), {}), connect=lambda **kwargs: FakeConn(fake_cursor))
     fake_cursors = types.SimpleNamespace(DictCursor=object)
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    with mock.patch.dict(sys.modules, {"pymysql": fake_pymysql, "pymysql.cursors": fake_cursors}):
-        import backend.category_mapping as cm_mod
+    import backend.category_mapping as cm_mod
 
+    with mock.patch.dict(sys.modules, {"pymysql": fake_pymysql, "pymysql.cursors": fake_cursors}):
         importlib.reload(cm_mod)
         cm = cm_mod.CategoryMapping(host="h", port=1, database="d", user="u", password="p")
-        return cm_mod, cm
+
+    importlib.reload(cm_mod)  # 원상 복구: 모듈 전역 pymysql을 다시 진짜 pymysql로 되돌린다
+    return cm_mod, cm
 
 
 class TestCategoryMapping(unittest.TestCase):
