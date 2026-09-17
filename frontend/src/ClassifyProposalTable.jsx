@@ -127,10 +127,13 @@ export default function ClassifyProposalTable({
           const changed =
             target && item.target_category && target !== item.target_category;
           const candidates = item.candidates || [];
-          // 서점 판정이 표끼리 갈렸을 때(source === "conflict")는 두 후보가 서로
-          // 다른 답이라는 사실 자체가 근거다. 득표수만 나열하면 "서로 달랐다"가
-          // 안 보이므로 배지로 명시한다.
-          const isConflict = item.source === "conflict";
+          // grade가 unknown이면서 후보가 2개면, 시스템이 둘 중 하나를 고르지
+          // 못하고 동점으로 남겨 뒀다는 뜻이다 — 키워드 점수 동점(source: "keyword",
+          // 근거: "여러 카테고리가 동일 점수로 일치합니다")과 서점 표 갈림(source:
+          // "conflict", 근거: "서점 판정이 갈림")이 여기 해당한다. 후보 칸에 득표/점수만
+          // 나열하면 "동률이라 못 골랐다"는 사실 자체가 안 보이므로 배지로 명시한다.
+          // "서점"으로 못 박지 않는 이유는 두 원인 모두를 가리켜야 하기 때문이다.
+          const isTie = item.grade === "unknown" && candidates.length === 2;
           return (
             <tr
               key={item.file_path}
@@ -150,13 +153,13 @@ export default function ClassifyProposalTable({
               <td>{item.title || item.file_path}</td>
               <td>{item.current_category}</td>
               <td>
-                {isConflict && (
+                {isTie && (
                   <Badge
                     bg="info"
                     className="d-block mb-1"
                     style={{ width: "fit-content" }}
                   >
-                    서점 판정 갈림
+                    후보 동률
                   </Badge>
                 )}
                 <CandidateCell candidate={candidates[0]} />

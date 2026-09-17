@@ -442,6 +442,8 @@ export default function CategoryAdmin({
   const [proposalStarting, setProposalStarting] = useState(false);
   const [showProposalApplyModal, setShowProposalApplyModal] = useState(false);
   const [showProposalClearModal, setShowProposalClearModal] = useState(false);
+  const [showProposalRestartModal, setShowProposalRestartModal] =
+    useState(false);
   const proposalStatusRequestIdRef = useRef(0);
   // 시작 요청(POST)이 서버에 반영되기 전에 폴링(GET)이 먼저 도착해 아직 "idle"인 상태를
   // 읽어버릴 수 있다. 그 사이에는 idle 응답을 무시하고 스피너를 유지한다. 각 작업은
@@ -1261,6 +1263,24 @@ export default function CategoryAdmin({
     );
   }, [selectedCategory, apiPrefix, applyProposalStatus]);
 
+  // 이미 만들어진 제안에 항목이 있으면, 다시 누르는 순간 관리자가 읽고 체크하고
+  // 목적지를 고친 검토 결과가 통째로 사라진다(선택/오버라이드는 즉시 비워지고,
+  // 서버도 새 제안을 만들며 이전 항목을 지운다). 잃을 게 있을 때만 확인을 거친다.
+  const hasReviewedProposal = (proposal?.items || []).length > 0;
+
+  const handleClickProposeButton = useCallback(() => {
+    if (hasReviewedProposal) {
+      setShowProposalRestartModal(true);
+      return;
+    }
+    handleStartClassifyProposal();
+  }, [hasReviewedProposal, handleStartClassifyProposal]);
+
+  const handleConfirmRestartProposal = useCallback(() => {
+    setShowProposalRestartModal(false);
+    handleStartClassifyProposal();
+  }, [handleStartClassifyProposal]);
+
   // 승인 대상: 선택된 행 중에서도 목적지가 있는 행만 최종적으로 담는다.
   // isSelectable 필터는 2차 방어다 — 표 컴포넌트가 목적지를 지울 때 선택에서
   // 빼주지만, 제출 직전에 한 번 더 걸러 목적지 없는 항목이 승인 요청에
@@ -1312,7 +1332,18 @@ export default function CategoryAdmin({
           apiPrefix + "/categories/classify-proposal",
           null,
           applyProposalStatus,
-          () => {},
+          (error) => {
+            // 삭제(DELETE) 자체는 성공했다. 이 재조회만 실패하면 표가 갱신되지
+            // 않아 관리자가 삭제 여부를 알 길이 없으므로, 다른 핸들러와 같은
+            // 방식으로 실패를 드러낸다.
+            setMessage(
+              formatErrorMessage(
+                error,
+                "완료 기록은 삭제했지만 표를 다시 불러오지 못했습니다.",
+              ),
+            );
+            setTimeout(() => setMessage(""), 5000);
+          },
         );
       },
       (error) => {
@@ -1957,7 +1988,7 @@ export default function CategoryAdmin({
                       variant="outline-primary"
                       size="sm"
                       disabled={saving || proposalStarting || proposalPolling}
-                      onClick={handleStartClassifyProposal}
+                      onClick={handleClickProposeButton}
                       title="분류 제안"
                     >
                       {proposalStarting ? (
@@ -2341,6 +2372,35 @@ export default function CategoryAdmin({
             disabled={saving}
           >
             {saving ? <Spinner animation="border" size="sm" /> : "삭제"}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* 분류 제안 다시 시작 확인 모달 */}
+      <Modal
+        show={showProposalRestartModal}
+        onHide={() => setShowProposalRestartModal(false)}
+        centered
+      >
+        <Modal.Header closeButton>
+          <Modal.Title>분류 제안 다시 시작</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="fw-bold">
+            지금 표에 남아 있는 선택과 직접 고친 목적지가 모두 사라지고,{" "}
+            {selectedCategory}로 새 제안을 처음부터 다시 만듭니다.
+          </p>
+          <p className="text-muted">되돌릴 수 없습니다.</p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button
+            variant="secondary"
+            onClick={() => setShowProposalRestartModal(false)}
+          >
+            취소
+          </Button>
+          <Button variant="danger" onClick={handleConfirmRestartProposal}>
+            다시 시작
           </Button>
         </Modal.Footer>
       </Modal>

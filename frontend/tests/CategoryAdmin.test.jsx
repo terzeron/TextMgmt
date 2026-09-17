@@ -4140,6 +4140,100 @@ describe("CategoryAdmin 분류 제안", () => {
     expect(screen.getByLabelText("1_fiction/c.epub 선택").disabled).toBe(true);
   });
 
+  it("이미 검토한 제안이 있으면 분류 제안 버튼은 확인 모달을 거친 뒤에만 다시 시작한다", async () => {
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 1,
+        processed_count: 1,
+        items: [PROPOSAL_ITEM_CERTAIN],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    await waitFor(() => {
+      expect(screen.getByTitle("분류 제안")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTitle("분류 제안"));
+    // 모달을 거치지 않고는 재요청이 나가면 안 된다 — 검토 결과를 잃기 전에
+    // 반드시 확인을 받아야 한다.
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+
+    const modal = await screen.findByRole("dialog");
+    expect(
+      within(modal).getByText("분류 제안 다시 시작", {
+        selector: ".modal-title",
+      }),
+    ).toBeTruthy();
+
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, _reject, final) => {
+        resolve({
+          started: true,
+          status: "running",
+          source_category: "1_fiction",
+          total_count: 0,
+          processed_count: 0,
+        });
+        if (final) final();
+      },
+    );
+
+    fireEvent.click(within(modal).getByRole("button", { name: "다시 시작" }));
+
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/categories/classify-proposal",
+        { category: "1_fiction" },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("기존 제안이 없으면 분류 제안 버튼은 확인 모달 없이 바로 시작한다", async () => {
+    const resultRef = { current: { status: "idle" } };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("1_fiction"));
+
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, _reject, final) => {
+        resolve({
+          started: true,
+          status: "running",
+          source_category: "1_fiction",
+          total_count: 0,
+          processed_count: 0,
+        });
+        if (final) final();
+      },
+    );
+
+    fireEvent.click(screen.getByTitle("분류 제안"));
+
+    // 잃을 게 없으니 모달 없이 곧바로 요청이 나간다.
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/categories/classify-proposal",
+        { category: "1_fiction" },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
   it("상태가 running이면 지금까지의 항목이 표에 보이고 승인 버튼이 비활성이다", async () => {
     const resultRef = {
       current: {

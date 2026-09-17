@@ -136,9 +136,39 @@ describe("ClassifyProposalTable", () => {
     const row = screen.getByText("불확실한 책").closest("tr");
     const cells = within(row).getAllByRole("cell");
     const [, , , recommend1, recommend2] = cells;
-    expect(within(recommend1).getByText("서점 판정 갈림")).toBeTruthy();
+    expect(within(recommend1).getByText("후보 동률")).toBeTruthy();
     expect(within(recommend1).getByText("5_음악")).toBeTruthy();
     expect(within(recommend2).getByText("1_서양고전")).toBeTruthy();
+  });
+
+  it("키워드 점수가 동점인 행도 같은 배지로 동률임을 드러낸다", () => {
+    const items = [
+      {
+        file_path: "A/d.epub",
+        title: "키워드 동점 책",
+        current_category: "A",
+        target_category: null,
+        grade: "unknown",
+        confidence: null,
+        source: "keyword",
+        reason: "여러 카테고리가 동일 점수로 일치합니다: 3_SF, 5_음악",
+        candidates: [
+          { category: "3_SF", source: "keyword", detail: "키워드 'SF' 일치" },
+          {
+            category: "5_음악",
+            source: "keyword",
+            detail: "키워드 '음악' 일치",
+          },
+        ],
+      },
+    ];
+    renderTable({ items });
+    const row = screen.getByText("키워드 동점 책").closest("tr");
+    const cells = within(row).getAllByRole("cell");
+    const [, , , recommend1, recommend2] = cells;
+    expect(within(recommend1).getByText("후보 동률")).toBeTruthy();
+    expect(within(recommend1).getByText("3_SF")).toBeTruthy();
+    expect(within(recommend2).getByText("5_음악")).toBeTruthy();
   });
 
   it("이동 상태가 대기/이동 중(중단됨)/이동 완료/실패:사유로 나온다", () => {
