@@ -565,13 +565,19 @@ class TestCategoryMismatchAdmin:
 
         mock_bm.path_prefix = tmp_path
         status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(json.dumps({"status": "ready", "source_category": "0_inbox"}), encoding="utf-8")
+        status_path.write_text(json.dumps({"status": "ready", "source_category": "0_inbox", "apply_token": "test-token"}), encoding="utf-8")
 
         async def fake_apply(items, allowed_file_paths, on_item_done=None, **kwargs):
-            # 실제 book_manager처럼 항목을 처리하는 그 순간 on_item_done을 부른다.
+            # 실제 book_manager처럼 항목을 처리하는 그 순간 on_item_done을 부른다. 반환값이
+            # awaitable일 수 있으므로(asyncio.to_thread로 감싼 async 콜백) book_manager와
+            # 똑같이 await한다.
             if on_item_done:
-                on_item_done({"file_path": "0_inbox/a.epub", "apply_status": "moved", "apply_error": None})
-                on_item_done({"file_path": "0_inbox/b.epub", "apply_status": "failed", "apply_error": "파일을 찾을 수 없습니다"})
+                outcome = on_item_done({"file_path": "0_inbox/a.epub", "apply_status": "moved", "apply_error": None})
+                if outcome is not None:
+                    await outcome
+                outcome = on_item_done({"file_path": "0_inbox/b.epub", "apply_status": "failed", "apply_error": "파일을 찾을 수 없습니다"})
+                if outcome is not None:
+                    await outcome
             return {"total_count": 2, "applied_count": 1, "failed_count": 1, "results": []}, None
 
         mock_bm.apply_category_changes = fake_apply
@@ -580,7 +586,7 @@ class TestCategoryMismatchAdmin:
         freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
         _run_apply_job = freevars["_run_classify_apply_job"]
 
-        asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/b.epub", "target_category": "3_SF"}], {"0_inbox/a.epub", "0_inbox/b.epub"}, False))
+        asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/b.epub", "target_category": "3_SF"}], {"0_inbox/a.epub", "0_inbox/b.epub"}, False, "test-token"))
 
         done = json.loads(status_path.read_text(encoding="utf-8"))
         assert done["status"] == "done"
@@ -617,7 +623,7 @@ class TestCategoryMismatchAdmin:
         apply_freevars = dict(zip(apply_endpoint.__code__.co_freevars, [c.cell_contents for c in apply_endpoint.__closure__]))
         _run_apply_job = apply_freevars["_run_classify_apply_job"]
         mock_bm.apply_category_changes = AsyncMock(side_effect=RuntimeError("boom"))
-        asyncio.run(_run_apply_job([], set(), False))
+        asyncio.run(_run_apply_job([], set(), False, None))
         assert _read_status()["status"] == "failed"
 
     def test_classify_proposal_applying_second_request_is_refused_while_claimed(self, mock_bm, mock_cat, tmp_path):
@@ -662,7 +668,7 @@ class TestCategoryMismatchAdmin:
         mock_bm.path_prefix = tmp_path
         status_path = tmp_path / ".classify_proposal_book.json"
         status_path.write_text(
-            json.dumps({"status": "applying", "updated_at": time.time()}),
+            json.dumps({"status": "applying", "apply_token": "test-token", "updated_at": time.time()}),
             encoding="utf-8",
         )
 
@@ -676,7 +682,7 @@ class TestCategoryMismatchAdmin:
         freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
         _run_apply_job = freevars["_run_classify_apply_job"]
 
-        asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], {"0_inbox/a.epub"}, False))
+        asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], {"0_inbox/a.epub"}, False, "test-token"))
 
         done = json.loads(status_path.read_text(encoding="utf-8"))
         assert done["status"] == "done"
@@ -688,7 +694,7 @@ class TestCategoryMismatchAdmin:
         mock_bm.path_prefix = tmp_path
         status_path = tmp_path / ".classify_proposal_book.json"
         status_path.write_text(
-            json.dumps({"status": "applying", "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], "updated_at": time.time()}),
+            json.dumps({"status": "applying", "apply_token": "test-token", "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], "updated_at": time.time()}),
             encoding="utf-8",
         )
 
@@ -711,7 +717,7 @@ class TestCategoryMismatchAdmin:
         freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
         _run_apply_job = freevars["_run_classify_apply_job"]
 
-        asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], {"0_inbox/a.epub"}, False))
+        asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], {"0_inbox/a.epub"}, False, "test-token"))
 
         assert seen["status_after_tick"] == "applying"
 
@@ -773,6 +779,128 @@ class TestCategoryMismatchAdmin:
 
         assert r.status_code == 200
         assert captured["allowed"] == {"0_inbox/still_pending.epub"}
+
+    def test_classify_proposal_apply_allowed_set_excludes_moving_rows(self, client, mock_bm, mock_cat, tmp_path):
+        """중단으로 moving 상태에 남은 행은 pending이 아니므로 허용 집합에 들어가지 않는다.
+
+        moving은 "시도는 했으나 결과를 확인 못 함"이라는 별도 상태다. pending과
+        똑같이 취급해 조용히 다시 옮기면, 이미 끝났을 수도 있는 이동을 또 시도하다가
+        원본을 못 찾아 실제로는 끝난 이동을 failed로 잘못 기록할 위험이 있다. 사람이
+        보고 판단하도록 남겨야 한다(표 노출은 다음 작업 몫).
+        """
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(json.dumps({"status": "failed", "source_category": "0_inbox"}), encoding="utf-8")
+        mock_cat.get_classify_proposal_items.return_value = [
+            {"file_path": "0_inbox/interrupted.epub", "target_category": "3_SF", "apply_status": "moving"},
+            {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF", "apply_status": "pending"},
+        ]
+
+        captured = {}
+
+        async def fake_apply(items, allowed_file_paths, **kwargs):
+            captured["allowed"] = allowed_file_paths
+            return {"total_count": len(items), "applied_count": 0, "failed_count": 0, "results": []}, None
+
+        mock_bm.apply_category_changes = fake_apply
+
+        r = client.post(
+            "/categories/classify-proposal/apply",
+            json={"items": [{"file_path": "0_inbox/interrupted.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF"}]},
+        )
+
+        assert r.status_code == 200
+        assert captured["allowed"] == {"0_inbox/still_pending.epub"}
+
+    def test_classify_proposal_apply_job_never_overwrites_rows_outside_this_runs_allowed_set(self, mock_bm, mock_cat, tmp_path):
+        """이미 moved인 행이 클라이언트가 보낸 목록에 여전히 남아 있어도 그 기록을
+        덮어쓰지 않는다.
+
+        재현: 200권 중 80권을 옮긴 뒤 중단. 화면은 GET으로 받은 목록(200권 전부)을
+        그대로 들고 있다가 재승인을 누른다. book_manager는 allowed에 없는(이미
+        moved인) 1~80번 항목도 "제안 목록에 없는 파일입니다"로 on_item_done을
+        부른다 — 이 콜백이 file_path로만 매칭해 덮어쓰면 moved였던 행이 failed로
+        둔갑해 다시는 지우거나 재승인할 수 없는 유령 실패가 된다.
+        """
+        import asyncio
+
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(json.dumps({"status": "failed", "apply_token": "test-token"}), encoding="utf-8")
+
+        async def fake_apply(items, allowed_file_paths, on_item_done=None, **kwargs):
+            if on_item_done:
+                # 이미 moved라 이번 실행의 allowed에는 없는 행 — book_manager는 여전히
+                # on_item_done을 부르지만 여기서 걸러져야 한다.
+                outcome = on_item_done({"file_path": "0_inbox/already_moved.epub", "apply_status": "failed", "apply_error": "제안 목록에 없는 파일입니다"})
+                if outcome is not None:
+                    await outcome
+                # 이번 실행이 실제로 허용한 행
+                outcome = on_item_done({"file_path": "0_inbox/still_pending.epub", "apply_status": "moved", "apply_error": None})
+                if outcome is not None:
+                    await outcome
+            return {"total_count": 2, "applied_count": 1, "failed_count": 1, "results": []}, None
+
+        mock_bm.apply_category_changes = fake_apply
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal/apply")
+        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
+        _run_apply_job = freevars["_run_classify_apply_job"]
+
+        # 이번 실행의 allowed에는 still_pending만 있다 — already_moved는 이미 moved라 빠졌다
+        asyncio.run(
+            _run_apply_job(
+                [
+                    {"file_path": "0_inbox/already_moved.epub", "target_category": "3_SF"},
+                    {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF"},
+                ],
+                {"0_inbox/still_pending.epub"},
+                False,
+                "test-token",
+            )
+        )
+
+        updated_paths = [call.args[0] for call in mock_cat.update_classify_proposal_item_status.call_args_list]
+        assert "0_inbox/already_moved.epub" not in updated_paths
+        assert "0_inbox/still_pending.epub" in updated_paths
+
+    def test_classify_proposal_apply_job_stops_writing_when_token_no_longer_matches(self, mock_bm, mock_cat, tmp_path):
+        """다른 승인 작업이 상태 파일의 apply_token을 바꾸면, 이 작업은 더 이상 처리하지
+        않고 물러난다.
+
+        하트비트 만료로 상태가 failed로 굳은 뒤에도 원래 작업이 실제로는 계속 돌고
+        있었다면, 두 번째 apply가 새 토큰으로 시작한 뒤 원래 작업이 계속 행을 써서
+        새 작업의 결과를 덮어쓸 수 있다. 토큰이 바뀌면 진 쪽은 should_continue에서
+        멈추고, 최종 상태(status/token)도 건드리지 않아야 한다.
+        """
+        import asyncio
+
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(json.dumps({"status": "applying", "apply_token": "token-A", "updated_at": time.time()}), encoding="utf-8")
+
+        async def fake_apply(items, allowed_file_paths, on_item_done=None, should_continue=None, **kwargs):
+            if on_item_done:
+                outcome = on_item_done({"file_path": "0_inbox/a.epub", "apply_status": "moved", "apply_error": None})
+                if outcome is not None:
+                    await outcome
+            # 다른 요청이 이 작업을 대체해 토큰을 바꿨다고 가정한다.
+            status_path.write_text(json.dumps({"status": "applying", "apply_token": "token-B", "updated_at": time.time()}), encoding="utf-8")
+            assert should_continue is not None and should_continue() is False
+            return {"total_count": 1, "applied_count": 1, "failed_count": 0, "results": []}, None
+
+        mock_bm.apply_category_changes = fake_apply
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal/apply")
+        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
+        _run_apply_job = freevars["_run_classify_apply_job"]
+
+        asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], {"0_inbox/a.epub"}, False, "token-A"))
+
+        # 대체된 뒤에는 이 작업이 상태를 더 이상 덮어쓰지 않는다 - "applying"/"token-B" 그대로여야 한다
+        final_status = json.loads(status_path.read_text(encoding="utf-8"))
+        assert final_status["status"] == "applying"
+        assert final_status["apply_token"] == "token-B"
 
     def test_delete_applied_removes_moved_only_and_returns_count(self, client, mock_bm, mock_cat, tmp_path):
         """DELETE .../applied가 완료(moved) 행만 지우고 지운 개수를 돌려준다."""

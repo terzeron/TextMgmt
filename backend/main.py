@@ -553,18 +553,36 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         else:
             _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
 
-    async def _run_classify_apply_job(items: list[dict[str, Any]], allowed: set[str], clean_existing: bool) -> None:
+    async def _run_classify_apply_job(items: list[dict[str, Any]], allowed: set[str], clean_existing: bool, apply_token: str) -> None:
         # applying 선점은 핸들러가 응답 전에 동기로 이미 해뒀다(TOCTOU 창을 없애려고). 여기서
         # 다시 _read_classify_proposal() 로 읽어 "applying"을 또 쓰면, 그 사이 다른 요청이
         # 상태를 바꿨어도 이 시점에 덮어써서 선점의 의미가 없어진다.
-        def _on_item_done(entry: dict[str, Any]) -> None:
+        def _token_still_valid() -> bool:
+            # 하트비트 만료로 상태가 failed로 굳은 뒤 두 번째 apply가 새 토큰으로 다시
+            # 선점하면, 이 작업(먼저 돈 쪽)은 더 이상 이 승인의 주인이 아니다. 계속
+            # 진행하면 두 작업이 같은 행에 경쟁적으로 써서 moved를 failed로 덮어쓸 수 있다.
+            return _read_classify_proposal().get("apply_token") == apply_token
+
+        async def _on_item_done(entry: dict[str, Any]) -> None:
+            if entry["file_path"] not in allowed:
+                # book_manager는 "제안 목록에 없는 파일입니다" 같은 거절 항목도 on_item_done으로
+                # 알려준다. 이 작업이 애초에 허용하지 않은 파일(예: 재승인 때 클라이언트가
+                # 여전히 들고 있는 이미 moved인 항목)의 행을 건드리면 moved가 failed로
+                # 덮어써진다 — 그 행은 이 작업의 소관이 아니므로 손대지 않는다.
+                return
             # 파일 이동/실패 직후 그 행 하나만 바로 기록한다. 끝나고 한꺼번에 병합하면
             # 도중에 pod가 죽었을 때 무엇이 옮겨졌는지 알 수 없다 — book_manager는 DB를
-            # 모르므로 이 콜백에서 여기(main.py)가 직접 쓴다.
-            category_mapping.update_classify_proposal_item_status(entry["file_path"], entry["apply_status"], entry.get("apply_error"), content_type=content_type)
+            # 모르므로 이 콜백에서 여기(main.py)가 직접 쓴다. pymysql은 블로킹 호출이라
+            # 단일 워커의 이벤트 루프를 막지 않도록 다른 DB 호출들처럼 스레드로 넘긴다.
+            await asyncio.to_thread(category_mapping.update_classify_proposal_item_status, entry["file_path"], entry["apply_status"], entry.get("apply_error"), content_type=content_type)
 
         try:
-            result, error = await manager.apply_category_changes(items, allowed, content_type=content_type, clean_existing=clean_existing, on_progress=_progress_classify_proposal, on_item_done=_on_item_done)
+            result, error = await manager.apply_category_changes(items, allowed, content_type=content_type, clean_existing=clean_existing, on_progress=_progress_classify_proposal, on_item_done=_on_item_done, should_continue=_token_still_valid)
+            if not _token_still_valid():
+                # 다른 승인 작업이 이미 이 작업을 대체했다 — 상태 파일을 더 건드리면 그
+                # 새 작업의 진행 상황을 덮어쓰게 되므로 아무것도 쓰지 않고 물러난다.
+                LOGGER.warning("classify apply job stopped: apply_token mismatch (다른 승인 작업이 선점함)")
+                return
             if error is not None:
                 _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
                 return
@@ -572,7 +590,8 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             _replace_classify_proposal({**current, "status": "done", "applied_count": result.get("applied_count"), "failed_count": result.get("failed_count")})
         except Exception as e:
             LOGGER.error("classify apply error: %s", e)
-            _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "분류 적용에 실패했습니다."})
+            if _token_still_valid():
+                _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "분류 적용에 실패했습니다."})
 
     @router.put("/books/{book_id}", dependencies=admin_dep)
     async def update_book(book_id: int, book_item: BookModel, force: bool = False) -> dict[str, Any]:
@@ -801,8 +820,12 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         # 상태를 읽어 ready가 아님을 보고 거부된다. 선점을 뒤로 미루면(예: 백그라운드
         # 작업 안에서) 응답이 나간 뒤 실제로 상태가 바뀌기 전까지 창이 열려 있어, 그 사이
         # 두 번째 apply나 새 propose가 끼어들 수 있다.
-        _replace_classify_proposal({**current, "status": "applying"})
-        background_tasks.add_task(_run_classify_apply_job, items, allowed, body.clean_existing)
+        # 각 승인 작업에 고유 토큰을 발급한다. 하트비트 만료로 상태가 failed로 굳은 뒤
+        # 원래 작업이 아직 살아있는 채로 두 번째 apply가 들어오면, 새 토큰을 쓴 이 작업이
+        # 유일한 주인이 되고 먼저 돈 작업은 should_continue에서 토큰 불일치를 보고 멈춘다.
+        apply_token = uuid.uuid4().hex
+        _replace_classify_proposal({**current, "status": "applying", "apply_token": apply_token})
+        background_tasks.add_task(_run_classify_apply_job, items, allowed, body.clean_existing, apply_token)
         return {"status": "success", "result": {"started": True, "total_count": len(items)}}
 
     @router.delete("/categories/classify-proposal", dependencies=admin_dep)
