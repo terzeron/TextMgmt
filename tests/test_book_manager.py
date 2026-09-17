@@ -5168,10 +5168,12 @@ class FakeClassifier:
     전제를 같이 검증하는 셈이다).
     """
 
-    def __init__(self, target, method, reason, model_category, confidence, override_below=0.5, bookstore_candidates=None):
+    def __init__(self, target, method, reason, model_category, confidence, override_below=0.5, bookstore_candidates=None, model_candidates=None):
         entry = {"confidence": confidence, "model_category": model_category}
         if bookstore_candidates is not None:
             entry["bookstore_candidates"] = bookstore_candidates
+        if model_candidates is not None:
+            entry["model_candidates"] = model_candidates
         self._result = (target, method, reason, entry)
 
         class Policy:
@@ -5411,6 +5413,72 @@ def test_low_confidence_model_answer_is_not_pre_checked(tmp_path: Path):
     assert proposal["target_category"] is None, "점수가 낮은 답을 목적지로 썼다"
     # 모델이 뭐라고 했는지는 후보로 남는다 — 사람이 보고 그걸 고를 수도 있어야 한다.
     assert [c["category"] for c in proposal["candidates"]] == ["2_수필서간일기"]
+
+
+def test_single_keyword_match_still_offers_a_second_choice(tmp_path: Path):
+    """키워드가 하나만 맞아도 추천 2 칸이 비지 않는다.
+
+    실제로 겪은 사례다. 파일명의 '에세이' 하나가 2_수필서간일기를 정하자 모델이 낸
+    답은 통째로 버려지고 추천 2가 비었다. 키워드가 틀렸다고 느낀 관리자에게는
+    2,000개짜리 드롭다운 말고는 길이 없었다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "9_어린이육아"
+    source.mkdir()
+    book = source / "고생을 위한 철학에세이.txt"
+    book.write_text("x")
+    fake = FakeClassifier("9_어린이육아", "model", "r", "9_어린이육아", 0.116, model_candidates=[("9_어린이육아", 0.116), ("4_철학윤리", 0.04)])
+
+    proposal = manager._propose_category_for_file(book, "9_어린이육아", {"2_수필서간일기": ["에세이"]}, fake, True, True)
+
+    assert proposal["target_category"] == "2_수필서간일기"
+    categories = [c["category"] for c in proposal["candidates"]]
+    assert categories == ["2_수필서간일기", "9_어린이육아"]
+    assert proposal["candidates"][0]["category"] == proposal["target_category"]
+
+
+def test_model_path_offers_its_runner_up_as_the_second_choice(tmp_path: Path):
+    """모델 판정 경로는 모델이 이미 매긴 2순위를 추천 2로 보여준다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    book = source / "제목.txt"
+    book.write_text("x")
+    fake = FakeClassifier("3_SF", "model", "r", "3_SF", 0.3, model_candidates=[("3_SF", 0.3), ("5_음악", 0.08)])
+
+    proposal = manager._propose_category_for_file(book, "A", {}, fake, True, True)
+
+    assert [c["category"] for c in proposal["candidates"]] == ["3_SF", "5_음악"]
+
+
+def test_model_alternative_is_not_added_when_two_candidates_already_exist(tmp_path: Path):
+    """이미 후보가 2개면 모델 대안을 덧붙이지 않는다. 2개가 상한이다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    book = source / "과학소설 클래식 모음.txt"
+    book.write_text("x")
+    fake = FakeClassifier(None, "not_found", "r", None, None, model_candidates=[("9_성인", 0.2)])
+
+    proposal = manager._propose_category_for_file(book, "A", {"3_SF": ["과학소설"], "5_음악": ["클래식"]}, fake, True, True)
+
+    categories = [c["category"] for c in proposal["candidates"]]
+    assert len(categories) == 2
+    assert "9_성인" not in categories
+
+
+def test_model_alternative_never_repeats_the_destination(tmp_path: Path):
+    """모델 1순위가 이미 목적지면 같은 카테고리를 두 번 보여주지 않는다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    book = source / "과학소설 모음.txt"
+    book.write_text("x")
+    fake = FakeClassifier("3_SF", "model", "r", "3_SF", 0.3, model_candidates=[("3_SF", 0.3)])
+
+    proposal = manager._propose_category_for_file(book, "A", {"3_SF": ["과학소설"]}, fake, True, True)
+
+    assert [c["category"] for c in proposal["candidates"]] == ["3_SF"]
 
 
 def manager_propose(manager, category, mappings):

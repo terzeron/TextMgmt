@@ -1412,7 +1412,28 @@ class BookManager:
     def _model_candidate(category: str) -> dict[str, Any]:
         return {"category": category, "source": "model", "detail": "모델 판정"}
 
-    def _build_candidates(self, target: str | None, method: str, model_category: str | None, bookstore_candidates: list[tuple[str, int]]) -> list[dict[str, Any]]:
+    @staticmethod
+    def _model_alternative_candidate(category: str, score: float) -> dict[str, Any]:
+        return {"category": category, "source": "model", "detail": f"모델 대안 {score:.3f}"}
+
+    def _fill_second_with_model(self, candidates: list[dict[str, Any]], model_candidates: list[tuple[str, float]]) -> list[dict[str, Any]]:
+        """2순위가 빈 채로 나가지 않도록 모델이 매긴 다음 후보를 붙인다.
+
+        키워드가 목적지를 정하면 모델 답은 통째로 버려졌다. 키워드가 하나만 맞은
+        흔한 경우에 추천 2 칸이 늘 비어, 관리자가 "이건 아닌데" 싶어도 2,000개짜리
+        드롭다운으로 갈 수밖에 없었다. 모델이 이미 계산해 둔 답을 대안으로 보여준다.
+        모델 판정 경로에서는 같은 자리에 모델의 2순위가 들어간다.
+        """
+        if len(candidates) >= 2:
+            return candidates
+        taken = {candidate["category"] for candidate in candidates}
+        for category, score in model_candidates:
+            if category not in taken:
+                candidates.append(self._model_alternative_candidate(category, score))
+                break
+        return candidates
+
+    def _build_candidates(self, target: str | None, method: str, model_category: str | None, bookstore_candidates: list[tuple[str, int]], model_candidates: list[tuple[str, float]] | None = None) -> list[dict[str, Any]]:
         """키워드가 정하지 못했을 때(target=None인 tie 경로는 호출자가 직접 조립한다)
         candidates를 만든다.
 
@@ -1421,6 +1442,7 @@ class BookManager:
         안 바뀐다. 2위는 method별로 구할 수 있을 때만 덧붙인다: 서점 다수결이면
         차점 서점 득표, 모델·서점 단독 판정은 대안이 없어 1개로 끝난다.
         """
+        model_candidates = model_candidates or []
         if target:
             if method == "bookstore_majority":
                 candidates = [self._bookstore_majority_candidate(target, bookstore_candidates)]
@@ -1428,10 +1450,10 @@ class BookManager:
                     if category != target:
                         candidates.append(self._bookstore_candidate(category, count))
                         break
-                return candidates
+                return self._fill_second_with_model(candidates, model_candidates)
             if method == "bookstore_single":
-                return [self._bookstore_candidate(target, self._vote_count_for(target, bookstore_candidates))]
-            return [self._model_candidate(target)]
+                return self._fill_second_with_model([self._bookstore_candidate(target, self._vote_count_for(target, bookstore_candidates))], model_candidates)
+            return self._fill_second_with_model([self._model_candidate(target)], model_candidates)
 
         if method == "conflict":
             # 갈렸을 때 버리던 득표 상위 2개를 그대로 보여준다. target은 여전히 None이다.
@@ -1439,8 +1461,8 @@ class BookManager:
 
         if model_category:
             # not_found거나 모델 확신도가 낮아 목적지로 못 쓴 경우, 낮은 확신도 답이라도
-            # 있으면 후보 1개로 보여준다. 없으면 정말 아무 근거도 없는 것이다.
-            return [self._model_candidate(model_category)]
+            # 있으면 후보로 보여준다. 없으면 정말 아무 근거도 없는 것이다.
+            return self._fill_second_with_model([self._model_candidate(model_category)], model_candidates)
         return []
 
     def _bookstore_majority_candidate(self, target: str, bookstore_candidates: list[tuple[str, int]]) -> dict[str, Any]:
@@ -1475,12 +1497,14 @@ class BookManager:
         method = "not_found"
         reason = tie_reason or ""
         bookstore_candidates: list[tuple[str, int]] = []
+        model_candidates: list[tuple[str, float]] = []
         if classifier_service is not None:
             classified_category, method, classifier_reason, entry = classifier_service.classify_file(file_path, self._category_dir(source_category), use_bookstore=use_bookstore, use_content_meta=use_content_meta)
             model_category = (entry or {}).get("model_category")
             confidence = (entry or {}).get("confidence")
             # 오래된 캐시 항목이나 대역(FakeClassifier)에는 이 키가 없을 수 있어 기본값을 둔다.
             bookstore_candidates = (entry or {}).get("bookstore_candidates", [])
+            model_candidates = (entry or {}).get("model_candidates", [])
             reason = reason or classifier_reason or ""
 
         high = self._is_high_confidence(classifier_service, confidence)
@@ -1496,12 +1520,15 @@ class BookManager:
                 if category != keyword_category:
                     candidates.append(self._keyword_candidate(category, keywords))
                     break
+            # 키워드가 하나만 맞으면 2순위가 빈다. 모델이 이미 낸 답을 대안으로 붙인다 —
+            # 키워드가 정한 목적지가 틀렸을 때 관리자가 바로 고를 것이 생긴다.
+            candidates = self._fill_second_with_model(candidates, model_candidates)
             return {"target_category": keyword_category, "grade": grade, "confidence": confidence, "source": "keyword", "matched_keywords": matched_keywords, "model_category": model_category if model_category != keyword_category else None, "reason": reason, "candidates": candidates}
 
         if tie_reason:
             # 동점이면 등급은 unknown 그대로다 — 후보 2개를 보여줘도 시스템이 못 정했다는
             # 사실은 바뀌지 않는다. 사람이 셀렉트박스로 골라야 체크박스가 켜진다.
-            candidates = [self._keyword_candidate(category, keywords) for category, keywords in keyword_ranked[:2]]
+            candidates = self._fill_second_with_model([self._keyword_candidate(category, keywords) for category, keywords in keyword_ranked[:2]], model_candidates)
             return {"target_category": None, "grade": self.GRADE_UNKNOWN, "confidence": confidence, "source": "keyword", "matched_keywords": matched_keywords, "model_category": model_category, "reason": tie_reason, "candidates": candidates}
 
         if method == "model" and high and classified_category:
@@ -1514,7 +1541,7 @@ class BookManager:
             # 점수가 낮은 모델 답은 목적지로 쓰지 않는다. 근거에만 남긴다.
             grade, target = self.GRADE_UNKNOWN, None
 
-        candidates = self._build_candidates(target, method, model_category, bookstore_candidates)
+        candidates = self._build_candidates(target, method, model_category, bookstore_candidates, model_candidates)
         return {"target_category": target, "grade": grade, "confidence": confidence, "source": method, "matched_keywords": matched_keywords, "model_category": model_category, "reason": reason, "candidates": candidates}
 
     async def propose_category_changes(

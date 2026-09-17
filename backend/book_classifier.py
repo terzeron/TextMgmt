@@ -770,7 +770,7 @@ class BookClassifierService:
         모델이 진 경우에도 점수를 알아야 "점수가 낮아 서점을 썼다"를 화면에
         설명할 수 있다.
         """
-        model_cat, model_reason, confidence = self._decide_by_model(fpath, effective_fname)
+        model_cat, model_reason, confidence = self._decide_by_model(fpath, effective_fname, entry)
 
         store: Optional[Tuple[Optional[str], str, str]] = None
 
@@ -794,8 +794,15 @@ class BookClassifierService:
             return store_cat, store_method, f"{store_reason} (모델: {model_reason})", model_cat, confidence
         return None, store_method, f"{model_reason}; {store_reason}", model_cat, confidence
 
-    def _decide_by_model(self, fpath: Optional[Path], effective_fname: str) -> Tuple[Optional[str], str, float]:
-        """판정 결과와 함께 확신도를 돌려준다. 확신도가 있어야 서점 결합 구간을 가른다."""
+    def _decide_by_model(self, fpath: Optional[Path], effective_fname: str, entry: Optional[Dict[str, Any]] = None) -> Tuple[Optional[str], str, float]:
+        """판정 결과와 함께 확신도를 돌려준다. 확신도가 있어야 서점 결합 구간을 가른다.
+
+        모델이 매긴 상위 후보는 entry["model_candidates"]에 (카테고리, 점수)로 남긴다.
+        화면의 추천 2순위가 비는 일이 많은데, 모델은 2순위를 이미 계산해 놓고도 버리고
+        있었다. _decide_by_bookstore가 votes를 entry에 남기는 것과 같은 방식이다.
+        """
+        if entry is not None:
+            entry.setdefault("model_candidates", [])
         if not self.classifier:
             return None, "모델 파일이 없어 판정하지 않음", 0.0
         try:
@@ -807,6 +814,8 @@ class BookClassifierService:
         except Exception as e:
             logger.warning("모델 판정에 실패했다 (%s): %s", effective_fname, e)
             return None, f"모델 판정 실패: {e}", 0.0
+        if entry is not None:
+            entry["model_candidates"] = [(str(category), float(score)) for category, score in (getattr(pred, "ranked", None) or [])[:3]]
         return pred.category, pred.reason, float(getattr(pred, "confidence", 0.0) or 0.0)
 
     def _decide_by_bookstore(self, entry: Dict[str, Any], trust_single_match: bool = True) -> Tuple[Optional[str], str, str]:
