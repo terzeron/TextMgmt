@@ -814,9 +814,12 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         if current.get("status") not in ("ready", "done", "failed"):
             return {"status": "failure", "error": "적용할 제안이 없습니다."}
         proposal_items = await asyncio.to_thread(category_mapping.get_classify_proposal_items, content_type=content_type)
-        # 이미 옮겨진(moved) 행은 allowed에 들어가도 apply_category_changes가 파일 없음으로
-        # 걸러 이중 이동은 안 일어나지만, 불필요하므로 애초에 pending 행만 담는다.
-        allowed = {item.get("file_path") for item in proposal_items if item.get("file_path") and item.get("apply_status") == "pending"}
+        # pending은 물론 failed(재시도)와 moving(중단된 이동 재확인)도 허용한다.
+        # 그러지 않으면 실패하거나 중단된 행은 화면에서 다시 체크해 승인을 눌러도
+        # "제안 목록에 없는 파일입니다"로 거부되어 영영 재시도할 방법이 없다. moved만
+        # 뺀다 — apply_category_changes가 파일 없음으로 걸러 이중 이동은 안 일어나지만,
+        # 불필요한 재시도이므로 애초에 담지 않는다.
+        allowed = {item.get("file_path") for item in proposal_items if item.get("file_path") and item.get("apply_status") in ("pending", "failed", "moving")}
         items = [item.model_dump() for item in body.items]
         # 백그라운드 작업이 시작되기 전, 응답을 돌려주기 전에 동기적으로 applying을 선점한다.
         # await 지점 없이 여기까지 오므로 동시에 들어온 두 번째 apply 요청은 이 쓰기 뒤에야

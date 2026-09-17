@@ -5701,3 +5701,75 @@ def test_apply_category_changes_continues_after_one_item_raises(tmp_path: Path, 
     assert result["results"][1]["apply_status"] == "moved"
     assert result["applied_count"] == 1
     assert result["failed_count"] == 1
+
+
+def test_apply_category_changes_retry_of_failed_row_succeeds(tmp_path: Path):
+    """C1: 첫 시도에서 allowed 밖이라 거부된 행도, 재시도 때 allowed에 다시 담기면
+    실제로 이동에 성공한다.
+
+    main.py의 허용 집합 계산이 apply_status == "pending"만 담던 버그를 재현한다 —
+    거부됐던(failed) 행을 재시도해도 허용 집합에 안 들어가면 여기(book_manager)까지
+    오지도 못하고 "제안 목록에 없는 파일입니다"만 영원히 반복된다. 이 테스트는 그
+    행이 다시 allowed에 담기기만 하면 재시도가 실제로 동작함을 보인다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "book.epub").write_text("x")
+
+    # 1차 시도: allowed에 없어 거부된다(버그가 있던 상태를 재현).
+    first, _ = asyncio_runner(
+        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths=set())
+    )
+    assert first["results"][0]["apply_status"] == "failed"
+    assert first["results"][0]["apply_error"] == "제안 목록에 없는 파일입니다"
+    assert (tmp_path / "A" / "book.epub").is_file()
+
+    # 재시도: failed 행이 allowed에 다시 담기면(고친 뒤 동작) 실제로 이동한다.
+    second, _ = asyncio_runner(
+        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths={"A/book.epub"})
+    )
+    assert second["results"][0]["apply_status"] == "moved"
+    assert not (tmp_path / "A" / "book.epub").exists()
+    assert (tmp_path / "5_음악" / "book.epub").is_file()
+
+
+def test_apply_category_changes_retrying_moving_row_when_file_already_moved(tmp_path: Path):
+    """I4 outcome 1: moving으로 남았지만 실제로는 이미 옮겨져 있던 행을 재시도하면,
+    원본을 못 찾아 이중 이동 없이 안전하게 failed로 기록된다.
+
+    apply_category_changes가 이동 직전 반드시 source 파일 존재를 다시 확인하므로,
+    moving을 pending과 똑같이 취급해도 이미 끝난 이동을 또 옮기는 사고는 안 난다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    # 원본은 이미 없고(실제로는 이동이 끝남), 목적지에만 파일이 있다.
+    (tmp_path / "5_음악" / "book.epub").write_text("x")
+
+    result, _ = asyncio_runner(
+        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths={"A/book.epub"})
+    )
+
+    assert result["results"][0]["apply_status"] == "failed"
+    assert "파일을 찾을 수 없습니다" in result["results"][0]["apply_error"]
+    # 이미 옮겨져 있던 목적지 파일은 건드리지 않는다 — 덮어쓰거나 지우지 않는다.
+    assert (tmp_path / "5_음악" / "book.epub").is_file()
+
+
+def test_apply_category_changes_retrying_moving_row_when_move_never_happened(tmp_path: Path):
+    """I4 outcome 2: moving으로 남았지만 실제로는 이동이 시작되지 않았던(원본이
+    그대로인) 행을 재시도하면, 이번에는 정상적으로 이동이 완료된다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "book.epub").write_text("x")
+
+    result, _ = asyncio_runner(
+        manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths={"A/book.epub"})
+    )
+
+    assert result["results"][0]["apply_status"] == "moved"
+    assert not (tmp_path / "A" / "book.epub").exists()
+    assert (tmp_path / "5_음악" / "book.epub").is_file()

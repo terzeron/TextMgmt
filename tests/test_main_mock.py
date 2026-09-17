@@ -780,20 +780,23 @@ class TestCategoryMismatchAdmin:
         assert r.status_code == 200
         assert captured["allowed"] == {"0_inbox/still_pending.epub"}
 
-    def test_classify_proposal_apply_allowed_set_excludes_moving_rows(self, client, mock_bm, mock_cat, tmp_path):
-        """중단으로 moving 상태에 남은 행은 pending이 아니므로 허용 집합에 들어가지 않는다.
+    def test_classify_proposal_apply_allowed_set_includes_failed_and_moving_rows(self, client, mock_bm, mock_cat, tmp_path):
+        """failed(재시도)와 moving(중단된 이동 재확인) 행 모두 허용 집합에 들어간다.
 
-        moving은 "시도는 했으나 결과를 확인 못 함"이라는 별도 상태다. pending과
-        똑같이 취급해 조용히 다시 옮기면, 이미 끝났을 수도 있는 이동을 또 시도하다가
-        원본을 못 찾아 실제로는 끝난 이동을 failed로 잘못 기록할 위험이 있다. 사람이
-        보고 판단하도록 남겨야 한다(표 노출은 다음 작업 몫).
+        C1: failed 행을 재시도하지 못하면 관리자는 "제안 목록에 없는 파일입니다"만
+        영원히 다시 보게 된다. I4: moving 행도 마찬가지로 재시도할 방법이 있어야
+        한다 — apply_category_changes가 이동 직전 파일 존재를 다시 확인하므로,
+        이미 끝난 이동은 이중으로 옮겨지지 않고 "파일을 찾을 수 없습니다"로
+        안전하게 failed 처리된다. moved만 재시도 대상에서 빠진다.
         """
         mock_bm.path_prefix = tmp_path
         status_path = tmp_path / ".classify_proposal_book.json"
         status_path.write_text(json.dumps({"status": "failed", "source_category": "0_inbox"}), encoding="utf-8")
         mock_cat.get_classify_proposal_items.return_value = [
             {"file_path": "0_inbox/interrupted.epub", "target_category": "3_SF", "apply_status": "moving"},
+            {"file_path": "0_inbox/rejected.epub", "target_category": "3_SF", "apply_status": "failed"},
             {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF", "apply_status": "pending"},
+            {"file_path": "0_inbox/already_moved.epub", "target_category": "3_SF", "apply_status": "moved"},
         ]
 
         captured = {}
@@ -806,11 +809,18 @@ class TestCategoryMismatchAdmin:
 
         r = client.post(
             "/categories/classify-proposal/apply",
-            json={"items": [{"file_path": "0_inbox/interrupted.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF"}]},
+            json={
+                "items": [
+                    {"file_path": "0_inbox/interrupted.epub", "target_category": "3_SF"},
+                    {"file_path": "0_inbox/rejected.epub", "target_category": "3_SF"},
+                    {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF"},
+                    {"file_path": "0_inbox/already_moved.epub", "target_category": "3_SF"},
+                ]
+            },
         )
 
         assert r.status_code == 200
-        assert captured["allowed"] == {"0_inbox/still_pending.epub"}
+        assert captured["allowed"] == {"0_inbox/interrupted.epub", "0_inbox/rejected.epub", "0_inbox/still_pending.epub"}
 
     def test_classify_proposal_apply_job_never_overwrites_rows_outside_this_runs_allowed_set(self, mock_bm, mock_cat, tmp_path):
         """이미 moved인 행이 클라이언트가 보낸 목록에 여전히 남아 있어도 그 기록을
