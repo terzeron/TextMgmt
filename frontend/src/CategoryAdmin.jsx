@@ -1069,15 +1069,23 @@ export default function CategoryAdmin({
     jsonPostReq(
       `/category-mappings/${encodeURIComponent(selectedCategory)}/keywords?content_type=${contentType}`,
       { keyword },
-      () => {
+      (payload) => {
+        // 서버가 돌려준 목록을 그대로 쓴다. 직접 append 하면 이미 있는 키워드를 다시
+        // 등록했을 때(다른 관리자가 먼저 넣은 경우 등) 같은 배지가 두 번 보인다.
+        const serverKeywords = Array.isArray(payload) ? payload : payload?.result;
         setMappings((prev) => {
           const updated = { ...prev };
-          if (!updated[selectedCategory]) updated[selectedCategory] = [];
-          updated[selectedCategory] = [...updated[selectedCategory], keyword];
+          updated[selectedCategory] = Array.isArray(serverKeywords)
+            ? serverKeywords
+            : [...(prev[selectedCategory] || []), keyword];
           updateCachedMappings(contentType, updated);
           return updated;
         });
         setNewKeyword("");
+        if (payload?.warning) {
+          setMessage(payload.warning);
+          setTimeout(() => setMessage(""), 3000);
+        }
         setTimeout(() => keywordInputRef.current?.focus(), 0);
       },
       (error) => {
@@ -1632,7 +1640,10 @@ export default function CategoryAdmin({
 
   const handleKeyDown = useCallback(
     (e) => {
-      if (e.key === "Enter") {
+      // 한글 입력 중의 Enter는 조합을 확정하는 키다. 그걸 등록으로 받으면 확정 Enter와
+      // 전송 Enter가 각각 요청을 만들어 같은 키워드가 두 번 나간다(실제로 그렇게 나갔다).
+      // BookInfoView가 같은 이유로 이미 조합 상태를 본다.
+      if (e.key === "Enter" && !e.nativeEvent?.isComposing) {
         e.preventDefault();
         handleAddKeyword();
       }

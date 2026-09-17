@@ -2023,6 +2023,53 @@ describe("CategoryAdmin", () => {
     });
   });
 
+  it("한글 조합 중의 Enter는 키워드를 등록하지 않는다", async () => {
+    // 한글 입력에서 Enter는 먼저 조합을 확정한다. 그걸 등록으로 받으면 확정 Enter와
+    // 전송 Enter가 각각 요청을 만들어 같은 키워드가 두 번 나간다. 두 번째는 중복이라
+    // 예전에는 화면에 실패 창이 떴다 — 등록은 되어 있는데도.
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("1_fiction"));
+    const input = screen.getByPlaceholderText("새 키워드 입력");
+    fireEvent.change(input, { target: { value: "중학생" } });
+    mockJsonPostReq.mockImplementation((url, payload, resolve) => resolve([]));
+
+    // 조합을 확정하는 Enter
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+
+    // 조합이 끝난 뒤의 Enter만 등록한다
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("이미 등록된 키워드를 다시 넣어도 목록이 서버 기준으로 유지된다", async () => {
+    // 서버가 돌려준 목록을 그대로 쓴다. 직접 append 하면 같은 배지가 두 번 보인다.
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("1_fiction"));
+    const input = screen.getByPlaceholderText("새 키워드 입력");
+    fireEvent.change(input, { target: { value: "중학생" } });
+    mockJsonPostReq.mockImplementation((url, payload, resolve) =>
+      resolve({ result: ["중학생"], warning: "이미 등록된 키워드입니다." }),
+    );
+
+    fireEvent.click(screen.getByText("추가"));
+
+    await waitFor(() => {
+      expect(screen.getByText("이미 등록된 키워드입니다.")).toBeTruthy();
+    });
+    expect(screen.getAllByText("중학생")).toHaveLength(1);
+  });
+
   it("키워드 삭제 시 DELETE API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);

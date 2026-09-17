@@ -1051,8 +1051,11 @@ def test_category_mapping_endpoints(client, monkeypatch: pytest.MonkeyPatch):
     resp = client.post("/category-mappings/A/keywords", json={"keyword": ""})
     assert resp.status_code == 400
 
+    # 이미 있는 키워드는 실패가 아니다 — "등록해 달라"는 요청이 이미 충족돼 있다.
+    # 대신 아무 일도 안 일어났다는 사실을 경고로 알린다.
     resp = client.post("/category-mappings/A/keywords", json={"keyword": "dup"})
-    assert resp.json()["status"] == "duplicate"
+    assert resp.json()["status"] == "success"
+    assert resp.json()["warning"]
 
     resp = client.post("/category-mappings/A/keywords", json={"keyword": "new"})
     assert resp.json()["status"] == "success"

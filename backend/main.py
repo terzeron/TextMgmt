@@ -1442,10 +1442,14 @@ async def add_category_keyword(category: str, body: dict[str, str], content_type
         raise HTTPException(status_code=400, detail="Keyword is required")
     try:
         success = await asyncio.to_thread(category_mapping.add_keyword, category, keyword, content_type=content_type)
+        keywords = await asyncio.to_thread(category_mapping.get_keywords, category, content_type=content_type)
         if success:
-            return {"status": "success", "result": await asyncio.to_thread(category_mapping.get_keywords, category, content_type=content_type)}
-        else:
-            return {"status": "duplicate", "message": "Keyword already exists", "result": await asyncio.to_thread(category_mapping.get_keywords, category, content_type=content_type)}
+            return {"status": "success", "result": keywords}
+        # 이미 있는 키워드는 실패가 아니다. "이 키워드를 등록해 달라"는 요청은 이미
+        # 충족돼 있다. 예전에는 status를 "duplicate"로 돌려줬는데, 공용 응답 처리기가
+        # success가 아닌 것을 전부 오류로 보고 error 키까지 없어서, 화면에는 이유가
+        # 안 적힌 실패 창이 떴다(등록은 되어 있는데도).
+        return {"status": "success", "warning": "이미 등록된 키워드입니다.", "result": keywords}
     except Exception as e:
         LOGGER.error("add_category_keyword error: %s", e)
         raise HTTPException(status_code=500, detail=GENERIC_MAPPING_ERROR_DETAIL)

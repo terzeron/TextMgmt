@@ -1367,12 +1367,22 @@ class TestCategoryMappings:
         assert data["status"] == "success"
         assert "sci-fi" in data["result"]
 
-    def test_add_keyword_duplicate(self, client, mock_cat):
+    def test_add_keyword_duplicate_is_not_a_failure(self, client, mock_cat):
+        """이미 있는 키워드는 실패가 아니다 — "등록해 달라"는 요청이 이미 충족돼 있다.
+
+        예전에는 status를 "duplicate"로 돌려줬다. 공용 응답 처리기가 success가 아닌 것을
+        전부 오류로 보내는데 error 키까지 없어서, 화면에는 이유가 안 적힌 실패 창이
+        떴다 — 등록은 되어 있는데도. 실제로 관리자가 그 창을 봤다.
+        """
         mock_cat.add_keyword.return_value = False
         mock_cat.get_keywords.return_value = ["fantasy"]
         r = client.post("/category-mappings/소설/keywords", json={"keyword": "fantasy"})
         assert r.status_code == 200
-        assert r.json()["status"] == "duplicate"
+        body = r.json()
+        assert body["status"] == "success"
+        assert body["result"] == ["fantasy"]
+        # 아무 일도 안 일어났다는 사실은 경고로 알린다.
+        assert body["warning"]
 
     def test_remove_keyword_success(self, client, mock_cat):
         mock_cat.remove_keyword.return_value = True
