@@ -41,7 +41,6 @@ import { ThemeProvider, createTheme } from "@mui/material/styles";
 
 import {
   formatErrorMessage,
-  getAutoClassifyRemainingCount,
   getReloadRemainingCount,
 } from "../src/categoryAdminUtils";
 import CategoryAdminBase from "../src/CategoryAdmin";
@@ -3983,51 +3982,6 @@ describe("CategoryAdmin 성공 메시지 자동 소멸", () => {
       expect(getReloadRemainingCount({ status: "done" }, 2)).toBe(2);
       expect(getReloadRemainingCount({ status: "done" })).toBe(0);
     });
-
-    it("자동 분류 status 형태별 잔여 건수를 계산한다", () => {
-      expect(getAutoClassifyRemainingCount(null)).toBeNull();
-      expect(
-        getAutoClassifyRemainingCount({
-          status: "idle",
-          remaining_count: 5,
-        }),
-      ).toBeNull();
-      expect(
-        getAutoClassifyRemainingCount({
-          status: "running",
-          total_count: 0,
-          processed_count: 0,
-          remaining_count: 0,
-        }),
-      ).toBeNull();
-      expect(
-        getAutoClassifyRemainingCount({
-          status: "running",
-          remaining_count: 5,
-          total_count: 8,
-          processed_count: 3,
-        }),
-      ).toBe(5);
-      expect(
-        getAutoClassifyRemainingCount({
-          status: "running",
-          total_count: 8,
-          processed_count: 3,
-        }),
-      ).toBe(5);
-      expect(
-        getAutoClassifyRemainingCount({
-          status: "running",
-          total_count: 8,
-        }),
-      ).toBe(8);
-      expect(
-        getAutoClassifyRemainingCount({
-          status: "running",
-          processed_count: 3,
-        }),
-      ).toBeNull();
-    });
   });
 
   describe("formatErrorMessage & 에러 객체 핸들링", () => {
@@ -4169,16 +4123,18 @@ describe("CategoryAdmin 분류 제안", () => {
         source_category: "1_fiction",
         total_count: 3,
         processed_count: 3,
-        items: [PROPOSAL_ITEM_CERTAIN, PROPOSAL_ITEM_UNSURE, PROPOSAL_ITEM_MOVED],
+        items: [
+          PROPOSAL_ITEM_CERTAIN,
+          PROPOSAL_ITEM_UNSURE,
+          PROPOSAL_ITEM_MOVED,
+        ],
       },
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("1_fiction/a.epub 선택").checked).toBe(
-        true,
-      );
+      expect(screen.getByLabelText("1_fiction/a.epub 선택").checked).toBe(true);
     });
     expect(screen.getByLabelText("1_fiction/b.epub 선택").checked).toBe(false);
     expect(screen.getByLabelText("1_fiction/c.epub 선택").disabled).toBe(true);
@@ -4200,9 +4156,9 @@ describe("CategoryAdmin 분류 제안", () => {
     await waitFor(() => {
       expect(screen.getByText("확실한 책")).toBeTruthy();
     });
-    expect(
-      screen.getByRole("button", { name: /분류 승인/ }).disabled,
-    ).toBe(true);
+    expect(screen.getByRole("button", { name: /분류 승인/ }).disabled).toBe(
+      true,
+    );
   });
 
   it("승인 요청 payload에 선택된 행만, 사용자가 고친 목적지로 담긴다", async () => {
@@ -4219,9 +4175,7 @@ describe("CategoryAdmin 분류 제안", () => {
     render(<CategoryAdmin />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("1_fiction/a.epub 선택").checked).toBe(
-        true,
-      );
+      expect(screen.getByLabelText("1_fiction/a.epub 선택").checked).toBe(true);
     });
 
     // 애매한 책은 기본 선택되지 않으므로, 목적지를 고른 뒤 직접 체크한다.
@@ -4276,9 +4230,7 @@ describe("CategoryAdmin 분류 제안", () => {
     render(<CategoryAdmin />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("1_fiction/a.epub 선택").checked).toBe(
-        true,
-      );
+      expect(screen.getByLabelText("1_fiction/a.epub 선택").checked).toBe(true);
     });
 
     // 목적지를 지우면 표(1차 방어)가 즉시 선택에서 뺀다. 승인 버튼은 대상이
@@ -4372,9 +4324,7 @@ describe("CategoryAdmin 분류 제안", () => {
     await waitFor(() => {
       expect(screen.getByTitle("분류 제안")).toBeTruthy();
     });
-    expect(
-      screen.queryByText("왼쪽에서 디렉토리를 선택하세요."),
-    ).toBeNull();
+    expect(screen.queryByText("왼쪽에서 디렉토리를 선택하세요.")).toBeNull();
   });
 
   it("상태가 applying이면 폴링하고, 종료 상태가 되면 멈춘다", async () => {

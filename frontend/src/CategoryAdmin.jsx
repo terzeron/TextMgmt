@@ -429,7 +429,6 @@ export default function CategoryAdmin({
   const [allReloadOwner, setAllReloadOwner] = useState(() =>
     getStoredAllReloadOwner(contentType),
   );
-  const [autoClassifyPolling, setAutoClassifyPolling] = useState(false);
   // 일괄(전체) 재적재 락(__all__)의 잔여 건수. 이 상태는 "일괄" 버튼만 반영한다.
   const [bulkRemainingCount, setBulkRemainingCount] = useState(null);
   // 이상 항목 버튼이 시작한 작업의 잔여 건수. 선택 카테고리 전용 작업뿐 아니라
@@ -453,10 +452,8 @@ export default function CategoryAdmin({
   // 돌려주는 직전 작업의 done/error를 새 완료로 오인한다.
   const allReloadTrackingRef = useRef(false);
   const mismatchTrackingRef = useRef(false);
-  const autoClassifyStartPendingRef = useRef(false);
   const bulkStatusRequestIdRef = useRef(0);
   const mismatchStatusRequestIdRef = useRef(0);
-  const autoClassifyStatusRequestIdRef = useRef(0);
   const [indexingFile, setIndexingFile] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
 
@@ -822,88 +819,6 @@ export default function CategoryAdmin({
     apiPrefix,
     applyReloadStatus,
   ]);
-
-  const applyAutoClassifyStatus = useCallback(
-    (status) => {
-      if (!status || status.status === "idle") {
-        if (autoClassifyStartPendingRef.current) return true;
-        setAutoClassifyPolling(false);
-        return false;
-      }
-      if (status.status === "running") {
-        autoClassifyStartPendingRef.current = false;
-        setAutoClassifyPolling(true);
-        return true;
-      }
-
-      autoClassifyStartPendingRef.current = false;
-      setAutoClassifyPolling(false);
-      if (status.status === "done") {
-        setSelectedCategory("");
-        loadData();
-      } else {
-        setMessage(
-          formatErrorMessage(status.error, "자동 분류에 실패했습니다."),
-        );
-        setTimeout(() => setMessage(""), 5000);
-      }
-      return false;
-    },
-    [loadData],
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    const requestId = autoClassifyStatusRequestIdRef.current + 1;
-    autoClassifyStatusRequestIdRef.current = requestId;
-    jsonGetReq(
-      apiPrefix + "/categories/auto-classify-status",
-      null,
-      (result) => {
-        if (
-          !cancelled &&
-          requestId === autoClassifyStatusRequestIdRef.current &&
-          !autoClassifyStartPendingRef.current &&
-          result?.status === "running"
-        ) {
-          applyAutoClassifyStatus(result);
-        }
-      },
-      () => {},
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [apiPrefix, applyAutoClassifyStatus]);
-
-  useEffect(() => {
-    if (!autoClassifyPolling) return undefined;
-
-    let cancelled = false;
-    const pollStatus = () => {
-      const requestId = autoClassifyStatusRequestIdRef.current + 1;
-      autoClassifyStatusRequestIdRef.current = requestId;
-      jsonGetReq(
-        apiPrefix + "/categories/auto-classify-status",
-        null,
-        (result) => {
-          if (
-            !cancelled &&
-            requestId === autoClassifyStatusRequestIdRef.current
-          )
-            applyAutoClassifyStatus(result);
-        },
-        () => {},
-      );
-    };
-
-    pollStatus();
-    const intervalId = setInterval(pollStatus, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(intervalId);
-    };
-  }, [autoClassifyPolling, apiPrefix, applyAutoClassifyStatus]);
 
   // 분류 제안 상태를 반영한다. ready/done/failed(검토 가능한 종료 상태)에 새로
   // 진입할 때만 기본 선택을 다시 채운다 — 이 상태들은 폴링이 멈추는 지점이라
