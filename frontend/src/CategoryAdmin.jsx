@@ -4,6 +4,7 @@ import PropTypes from "prop-types";
 
 import "bootstrap/dist/css/bootstrap.min.css";
 import {
+  Alert,
   Button,
   Card,
   Form,
@@ -2015,6 +2016,33 @@ export default function CategoryAdmin({
                   </span>
                 </Card.Header>
                 <Card.Body>
+                  {proposal.status === "failed" && (
+                    // I2: error는 지금까지 상태 파일에만 쌓이고 화면 어디서도 읽지 않았다.
+                    // 제안이 중간에 죽으면(예: 1,200권 중 34권) 스피너만 멈추고 아무 신호가
+                    // 없어, 분류 승인이 (C1/I4가 재시도할 수 있어야 하므로) 계속 켜진 채로
+                    // 관리자가 미완성 제안을 완성됐다고 착각해 승인하기 쉽다. 실패라고
+                    // 막지는 않되(그러면 재시도를 못 한다), 중단됐다는 사실과 어디까지
+                    // 처리됐는지는 분명히 보여준다.
+                    <Alert
+                      variant="danger"
+                      className="py-2 px-3 mb-2"
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      <strong>작업이 중단됐습니다.</strong>{" "}
+                      {proposal.error || "원인을 알 수 없습니다."}
+                      {typeof proposal.total_count === "number" &&
+                        typeof proposal.processed_count === "number" &&
+                        proposal.processed_count < proposal.total_count && (
+                          <>
+                            {" "}
+                            전체 {proposal.total_count}건 중{" "}
+                            {proposal.processed_count}건까지만 처리됐습니다. 이
+                            제안은 아직 끝나지 않았습니다 — 승인 전에
+                            확인하세요.
+                          </>
+                        )}
+                    </Alert>
+                  )}
                   <ClassifyProposalTable
                     items={proposal.items || []}
                     categories={topLevelCategoryNames}

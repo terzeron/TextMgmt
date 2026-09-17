@@ -4140,6 +4140,76 @@ describe("CategoryAdmin 분류 제안", () => {
     expect(screen.getByLabelText("1_fiction/c.epub 선택").disabled).toBe(true);
   });
 
+  it("상태가 failed면 에러 메시지를 보여준다 (I2)", async () => {
+    const resultRef = {
+      current: {
+        status: "failed",
+        source_category: "1_fiction",
+        total_count: 1200,
+        processed_count: 34,
+        error: "분류 제안에 실패했습니다.",
+        items: [PROPOSAL_ITEM_CERTAIN],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    // 배너 텍스트가 <strong>과 형제 텍스트 노드로 나뉘어 있어 getByText의 기본
+    // 정확 일치로는 못 찾는다 — 정규식으로 부분 일치를 확인한다.
+    await waitFor(() => {
+      expect(screen.getByText(/분류 제안에 실패했습니다/)).toBeTruthy();
+    });
+    // 34/1200처럼 처리량이 전체에 못 미치면, 이 제안이 끝나지 않았다는 사실도
+    // 명시해야 한다 — 그러지 않으면 관리자가 미완성 제안을 완성됐다고 착각한다.
+    expect(screen.getByText(/1200건 중 34건까지만/)).toBeTruthy();
+    // failed에서도 승인은 계속 켜져 있어야 한다 — C1/I4가 재시도할 수 있어야 한다.
+    expect(screen.getByRole("button", { name: /분류 승인/ }).disabled).toBe(
+      false,
+    );
+  });
+
+  it("failed여도 전체를 다 처리했으면 미완성 문구를 보여주지 않는다", async () => {
+    const resultRef = {
+      current: {
+        status: "failed",
+        source_category: "1_fiction",
+        total_count: 1,
+        processed_count: 1,
+        error:
+          "백엔드가 다시 시작되어 진행 중이던 작업이 중단되었습니다. 남은 항목을 확인한 뒤 진행하세요.",
+        items: [PROPOSAL_ITEM_CERTAIN],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/진행 중이던 작업이 중단되었습니다/),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByText(/까지만 처리됐습니다/)).toBeNull();
+  });
+
+  it("상태가 ready면 에러 배너를 보여주지 않는다", async () => {
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 1,
+        processed_count: 1,
+        items: [PROPOSAL_ITEM_CERTAIN],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    await waitFor(() => {
+      expect(screen.getByText("확실한 책")).toBeTruthy();
+    });
+    expect(screen.queryByText("작업이 중단됐습니다.")).toBeNull();
+  });
+
   it("이미 검토한 제안이 있으면 분류 제안 버튼은 확인 모달을 거친 뒤에만 다시 시작한다", async () => {
     const resultRef = {
       current: {
