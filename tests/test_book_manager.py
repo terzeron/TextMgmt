@@ -5543,6 +5543,83 @@ def test_apply_category_changes_rejects_symlinked_source(tmp_path: Path):
     assert outside.read_text() == "secret"
 
 
+def test_apply_category_changes_calls_on_item_done_per_item(tmp_path: Path):
+    """항목마다 on_item_done이 file_path/apply_status/apply_error와 함께 불린다.
+
+    성공(moved)/실패(파일 없음) 양쪽 다 확인한다. book_manager는 DB를 모르므로
+    이 콜백을 통해서만 호출자(main.py)가 건별로 기록할 수 있다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "ok.epub").write_text("x")
+    allowed = {"A/ok.epub", "A/missing.epub"}
+    done_calls: list[dict] = []
+
+    result, _error = asyncio_runner(
+        manager.apply_category_changes(
+            [
+                {"file_path": "A/ok.epub", "target_category": "5_음악"},
+                {"file_path": "A/missing.epub", "target_category": "5_음악"},
+            ],
+            allowed_file_paths=allowed,
+            on_item_done=done_calls.append,
+        )
+    )
+
+    assert result["applied_count"] == 1
+    assert result["failed_count"] == 1
+    assert len(done_calls) == 2
+    assert done_calls[0] == {"file_path": "A/ok.epub", "apply_status": "moved", "apply_error": None}
+    assert done_calls[1]["file_path"] == "A/missing.epub"
+    assert done_calls[1]["apply_status"] == "failed"
+    assert "파일" in done_calls[1]["apply_error"]
+
+
+def test_apply_category_changes_on_item_done_already_called_for_items_before_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """한 항목에서 예외가 나도, 그 항목까지의 on_item_done 호출은 이미 일어난 채로
+    다음 항목 처리를 계속한다 — 중단되면 그때까지 처리한 결과가 이미 기록된
+    것과 같은 상태를 재현한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "boom.epub").write_text("x")
+    (tmp_path / "A" / "ok.epub").write_text("x")
+    allowed = {"A/boom.epub", "A/ok.epub"}
+
+    original_is_safe = manager._is_safe_category_name
+    calls = {"count": 0}
+
+    def flaky_is_safe(category: str) -> bool:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OSError("예상치 못한 파일시스템 오류")
+        return original_is_safe(category)
+
+    monkeypatch.setattr(manager, "_is_safe_category_name", flaky_is_safe)
+    done_calls: list[dict] = []
+
+    result, _error = asyncio_runner(
+        manager.apply_category_changes(
+            [
+                {"file_path": "A/boom.epub", "target_category": "5_음악"},
+                {"file_path": "A/ok.epub", "target_category": "5_음악"},
+            ],
+            allowed_file_paths=allowed,
+            on_item_done=done_calls.append,
+        )
+    )
+
+    assert result["applied_count"] == 1
+    assert result["failed_count"] == 1
+    assert len(done_calls) == 2
+    assert done_calls[0]["file_path"] == "A/boom.epub"
+    assert done_calls[0]["apply_status"] == "failed"
+    assert done_calls[1]["file_path"] == "A/ok.epub"
+    assert done_calls[1]["apply_status"] == "moved"
+
+
 def test_apply_category_changes_continues_after_one_item_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """한 항목 처리 중 예외가 나도 배치 전체가 죽지 않고 나머지를 계속 처리한다."""
     manager = make_manager(tmp_path, DummyES())

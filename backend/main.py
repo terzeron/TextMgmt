@@ -557,23 +557,18 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         # applying 선점은 핸들러가 응답 전에 동기로 이미 해뒀다(TOCTOU 창을 없애려고). 여기서
         # 다시 _read_classify_proposal() 로 읽어 "applying"을 또 쓰면, 그 사이 다른 요청이
         # 상태를 바꿨어도 이 시점에 덮어써서 선점의 의미가 없어진다.
+        def _on_item_done(entry: dict[str, Any]) -> None:
+            # 파일 이동/실패 직후 그 행 하나만 바로 기록한다. 끝나고 한꺼번에 병합하면
+            # 도중에 pod가 죽었을 때 무엇이 옮겨졌는지 알 수 없다 — book_manager는 DB를
+            # 모르므로 이 콜백에서 여기(main.py)가 직접 쓴다.
+            category_mapping.update_classify_proposal_item_status(entry["file_path"], entry["apply_status"], entry.get("apply_error"), content_type=content_type)
+
         try:
-            result, error = await manager.apply_category_changes(items, allowed, content_type=content_type, clean_existing=clean_existing, on_progress=_progress_classify_proposal)
+            result, error = await manager.apply_category_changes(items, allowed, content_type=content_type, clean_existing=clean_existing, on_progress=_progress_classify_proposal, on_item_done=_on_item_done)
             if error is not None:
                 _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
                 return
-            applied = {entry["file_path"]: entry for entry in result["results"]}
             current = _read_classify_proposal()
-            proposal_items = await asyncio.to_thread(category_mapping.get_classify_proposal_items, content_type=content_type)
-            merged_items = []
-            for item in proposal_items:
-                outcome = applied.get(item.get("file_path"))
-                merged_items.append({**item, **({"apply_status": outcome.get("apply_status"), "apply_error": outcome.get("apply_error")} if outcome else {})})
-            # 승인 결과(apply_status/apply_error)를 DB 항목에 반영한다. 항목 단위 UPDATE API가
-            # 없으므로 지우고 다시 넣는 것으로 병합한다 — add_classify_proposal_items가 어차피
-            # executemany 한 번 + commit 한 번으로 처리하므로 추가 왕복 비용은 없다.
-            await asyncio.to_thread(category_mapping.clear_classify_proposal_items, content_type=content_type)
-            await asyncio.to_thread(category_mapping.add_classify_proposal_items, merged_items, current.get("source_category") or "", content_type=content_type)
             _replace_classify_proposal({**current, "status": "done", "applied_count": result.get("applied_count"), "failed_count": result.get("failed_count")})
         except Exception as e:
             LOGGER.error("classify apply error: %s", e)
@@ -790,10 +785,16 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         거부한다"는 검증이 통째로 무의미해져, 임의 경로를 옮기는 요청도 통과하게 된다.
         """
         current = _read_classify_proposal()
-        if current.get("status") != "ready":
+        # running/applying은 이미 다른 작업이 도는 중이라 거절한다. idle은 애초에 승인할
+        # 제안이 없다. ready/done/failed는 모두 받는다 — 승인 도중 중단되면 하트비트
+        # 만료로 failed까지 굳는데, 그때도 남은 pending 행을 다시 승인해 이어갈 수
+        # 있어야 한다. 그러지 않으면 관리자는 파일이 반쯤 옮겨진 채로 아무것도 못 한다.
+        if current.get("status") not in ("ready", "done", "failed"):
             return {"status": "failure", "error": "적용할 제안이 없습니다."}
         proposal_items = await asyncio.to_thread(category_mapping.get_classify_proposal_items, content_type=content_type)
-        allowed = {item.get("file_path") for item in proposal_items if item.get("file_path")}
+        # 이미 옮겨진(moved) 행은 allowed에 들어가도 apply_category_changes가 파일 없음으로
+        # 걸러 이중 이동은 안 일어나지만, 불필요하므로 애초에 pending 행만 담는다.
+        allowed = {item.get("file_path") for item in proposal_items if item.get("file_path") and item.get("apply_status") == "pending"}
         items = [item.model_dump() for item in body.items]
         # 백그라운드 작업이 시작되기 전, 응답을 돌려주기 전에 동기적으로 applying을 선점한다.
         # await 지점 없이 여기까지 오므로 동시에 들어온 두 번째 apply 요청은 이 쓰기 뒤에야

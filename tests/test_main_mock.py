@@ -497,7 +497,7 @@ class TestCategoryMismatchAdmin:
             ),
             encoding="utf-8",
         )
-        mock_cat.get_classify_proposal_items.return_value = [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]
+        mock_cat.get_classify_proposal_items.return_value = [{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]
 
         captured = {}
 
@@ -553,32 +553,26 @@ class TestCategoryMismatchAdmin:
         assert "items" not in cleared
         mock_cat.clear_classify_proposal_items.assert_called_once_with(content_type="book")
 
-    def test_classify_proposal_apply_job_merges_apply_outcomes(self, mock_bm, mock_cat, tmp_path):
-        """적용 백그라운드 잡이 결과를 DB의 제안 항목에 병합해 apply_status/apply_error를 남긴다.
+    def test_classify_proposal_apply_job_updates_item_status_per_item_in_db(self, mock_bm, mock_cat, tmp_path):
+        """적용 백그라운드 잡이 book_manager의 on_item_done 콜백을 받아 항목마다 바로
+        DB 상태를 갱신한다.
 
-        항목별 UPDATE API가 없으므로 clear + add로 다시 써서 병합하는데, 그 다시 쓰는
-        내용에 apply_status/apply_error가 반영됐는지를 add 호출 인자로 확인한다.
+        예전에는 다 끝난 뒤 clear+add로 한꺼번에 병합했다 — 중간에 중단되면 무엇이
+        옮겨졌는지 알 수 없었다. 이제는 book_manager가 항목 하나를 처리할 때마다
+        on_item_done을 불러 update_classify_proposal_item_status가 그 즉시 실행된다.
         """
         import asyncio
 
         mock_bm.path_prefix = tmp_path
         status_path = tmp_path / ".classify_proposal_book.json"
         status_path.write_text(json.dumps({"status": "ready", "source_category": "0_inbox"}), encoding="utf-8")
-        mock_cat.get_classify_proposal_items.return_value = [
-            {"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending", "apply_error": None},
-            {"file_path": "0_inbox/b.epub", "target_category": "3_SF", "apply_status": "pending", "apply_error": None},
-        ]
 
-        async def fake_apply(items, allowed_file_paths, **kwargs):
-            return {
-                "total_count": 2,
-                "applied_count": 1,
-                "failed_count": 1,
-                "results": [
-                    {"file_path": "0_inbox/a.epub", "apply_status": "moved", "apply_error": None},
-                    {"file_path": "0_inbox/b.epub", "apply_status": "failed", "apply_error": "파일을 찾을 수 없습니다"},
-                ],
-            }, None
+        async def fake_apply(items, allowed_file_paths, on_item_done=None, **kwargs):
+            # 실제 book_manager처럼 항목을 처리하는 그 순간 on_item_done을 부른다.
+            if on_item_done:
+                on_item_done({"file_path": "0_inbox/a.epub", "apply_status": "moved", "apply_error": None})
+                on_item_done({"file_path": "0_inbox/b.epub", "apply_status": "failed", "apply_error": "파일을 찾을 수 없습니다"})
+            return {"total_count": 2, "applied_count": 1, "failed_count": 1, "results": []}, None
 
         mock_bm.apply_category_changes = fake_apply
         router = main_module.create_item_router(mock_bm, content_type="book")
@@ -594,13 +588,14 @@ class TestCategoryMismatchAdmin:
         assert done["failed_count"] == 1
         assert "items" not in done
 
-        mock_cat.clear_classify_proposal_items.assert_called_with(content_type="book")
-        add_calls = mock_cat.add_classify_proposal_items.call_args_list
-        merged_items = add_calls[-1].args[0]
-        by_path = {item["file_path"]: item for item in merged_items}
-        assert by_path["0_inbox/a.epub"]["apply_status"] == "moved"
-        assert by_path["0_inbox/b.epub"]["apply_status"] == "failed"
-        assert by_path["0_inbox/b.epub"]["apply_error"] == "파일을 찾을 수 없습니다"
+        # 병합용 clear/add는 더 이상 쓰지 않는다 — 건별 update가 그 일을 대신한다.
+        mock_cat.clear_classify_proposal_items.assert_not_called()
+        mock_cat.add_classify_proposal_items.assert_not_called()
+        update_calls = mock_cat.update_classify_proposal_item_status.call_args_list
+        assert update_calls[0].args == ("0_inbox/a.epub", "moved", None)
+        assert update_calls[0].kwargs == {"content_type": "book"}
+        assert update_calls[1].args == ("0_inbox/b.epub", "failed", "파일을 찾을 수 없습니다")
+        assert update_calls[1].kwargs == {"content_type": "book"}
 
     def test_classify_proposal_job_handles_exceptions(self, mock_bm, mock_cat, tmp_path):
         """제안/적용 잡이 예외를 던지면 상태를 failed로 굳혀 화면이 계속 회전하지 않게 한다."""
@@ -655,19 +650,24 @@ class TestCategoryMismatchAdmin:
         assert second["status"] == "failure"
         assert "제안" in second["error"]
 
-    def test_classify_proposal_apply_job_handles_missing_result_keys(self, mock_bm, mock_cat, tmp_path):
-        """Finding 2: apply_category_changes가 기대한 키 없이 결과를 줘도 applying에 묶이지 않는다."""
+    def test_classify_proposal_apply_job_no_longer_depends_on_results_key(self, mock_bm, mock_cat, tmp_path):
+        """건별 콜백으로 바뀐 뒤에는 "results" 키가 없어도 잡이 정상적으로 끝난다.
+
+        이전에는 끝나고 result["results"]를 병합에 썼기 때문에 이 키가 없으면
+        KeyError로 실패 처리됐다. on_item_done 콜백 방식은 이 키를 아예 읽지
+        않으므로 더는 여기서 실패할 이유가 없다.
+        """
         import asyncio
 
         mock_bm.path_prefix = tmp_path
         status_path = tmp_path / ".classify_proposal_book.json"
         status_path.write_text(
-            json.dumps({"status": "applying", "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], "updated_at": time.time()}),
+            json.dumps({"status": "applying", "updated_at": time.time()}),
             encoding="utf-8",
         )
 
         async def fake_apply_missing_results(items, allowed_file_paths, **kwargs):
-            # "results" 키가 없다 - 병합 블록이 try 밖에 있었다면 KeyError가 그대로 새어나갔다.
+            # "results" 키가 없다 — 더 이상 이 키를 읽지 않으므로 문제가 안 된다.
             return {"total_count": 1, "applied_count": 1, "failed_count": 0}, None
 
         mock_bm.apply_category_changes = fake_apply_missing_results
@@ -679,7 +679,7 @@ class TestCategoryMismatchAdmin:
         asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], {"0_inbox/a.epub"}, False))
 
         done = json.loads(status_path.read_text(encoding="utf-8"))
-        assert done["status"] == "failed"
+        assert done["status"] == "done"
 
     def test_classify_proposal_apply_progress_tick_does_not_revert_status(self, mock_bm, mock_cat, tmp_path):
         """Finding 4: 적용 단계 진행률 콜백이 status를 running으로 되돌리지 않는다."""
@@ -714,6 +714,65 @@ class TestCategoryMismatchAdmin:
         asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], {"0_inbox/a.epub"}, False))
 
         assert seen["status_after_tick"] == "applying"
+
+    def test_classify_proposal_apply_accepted_when_status_is_failed(self, client, mock_bm, mock_cat, tmp_path):
+        """상태가 failed(중단 후 굳음)인 제안에도 승인 요청이 받아들여진다.
+
+        승인 도중 중단되면 상태가 applying -> (하트비트 만료) failed로 굳는다. 이때도
+        남은 pending 행을 다시 승인해 이어갈 수 있어야 한다 — 그러지 않으면 관리자는
+        파일이 반쯤 옮겨진 채로 아무것도 할 수 없다.
+        """
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(json.dumps({"status": "failed", "source_category": "0_inbox", "error": "백엔드가 다시 시작되어 자동 분류가 중단되었습니다. 다시 실행해 주세요."}), encoding="utf-8")
+        mock_cat.get_classify_proposal_items.return_value = [{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]
+
+        r = client.post("/categories/classify-proposal/apply", json={"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})
+
+        assert r.status_code == 200
+        assert r.json()["status"] == "success"
+        assert r.json()["result"]["started"] is True
+
+    def test_classify_proposal_apply_rejected_while_applying(self, client, mock_bm, tmp_path):
+        """작업이 이미 도는(applying) 동안에는 새 승인 요청을 거절한다."""
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(json.dumps({"status": "applying", "updated_at": time.time()}), encoding="utf-8")
+
+        r = client.post("/categories/classify-proposal/apply", json={"items": []})
+
+        assert r.status_code == 200
+        assert r.json()["status"] == "failure"
+
+    def test_classify_proposal_apply_allowed_set_excludes_moved_rows(self, client, mock_bm, mock_cat, tmp_path):
+        """이미 moved인 행은 허용 경로 집합에 들어가지 않는다.
+
+        moved 행이 allowed에 들어가도 apply_category_changes가 파일 없음으로 걸러
+        이중 이동은 안 일어나지만, 불필요하므로 애초에 pending 행만 담는다.
+        """
+        mock_bm.path_prefix = tmp_path
+        status_path = tmp_path / ".classify_proposal_book.json"
+        status_path.write_text(json.dumps({"status": "ready", "source_category": "0_inbox"}), encoding="utf-8")
+        mock_cat.get_classify_proposal_items.return_value = [
+            {"file_path": "0_inbox/already_moved.epub", "target_category": "3_SF", "apply_status": "moved"},
+            {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF", "apply_status": "pending"},
+        ]
+
+        captured = {}
+
+        async def fake_apply(items, allowed_file_paths, **kwargs):
+            captured["allowed"] = allowed_file_paths
+            return {"total_count": len(items), "applied_count": 0, "failed_count": 0, "results": []}, None
+
+        mock_bm.apply_category_changes = fake_apply
+
+        r = client.post(
+            "/categories/classify-proposal/apply",
+            json={"items": [{"file_path": "0_inbox/already_moved.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF"}]},
+        )
+
+        assert r.status_code == 200
+        assert captured["allowed"] == {"0_inbox/still_pending.epub"}
 
     def test_index_file_success(self, client, mock_bm):
         mock_bm.index_single_file.return_value = (42, None)

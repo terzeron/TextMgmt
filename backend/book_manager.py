@@ -1579,6 +1579,7 @@ class BookManager:
         content_type: str = "book",
         clean_existing: bool = False,
         on_progress: Callable[[dict[str, int]], None] | None = None,
+        on_item_done: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[dict[str, Any], str | None]:
         """승인된 항목만 실제로 옮긴다.
 
@@ -1646,6 +1647,10 @@ class BookManager:
             else:
                 result["failed_count"] += 1
             result["results"].append(entry)
+            if on_item_done is not None:
+                # 한 권 처리 직후 바로 알려, 호출자(main.py)가 이 한 건만 DB에 기록할 수
+                # 있게 한다. book_manager는 DB를 모르므로 직접 쓰지 않고 콜백으로 넘긴다.
+                on_item_done({"file_path": entry["file_path"], "apply_status": entry["apply_status"], "apply_error": entry["apply_error"]})
             if on_progress is not None:
                 on_progress({"total_count": result["total_count"], "applied_count": result["applied_count"], "failed_count": result["failed_count"]})
 
