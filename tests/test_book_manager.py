@@ -5376,6 +5376,43 @@ def test_high_confidence_needs_a_calibrated_boundary(tmp_path: Path):
     assert manager._is_high_confidence(fake, 0.9) is False
 
 
+def test_high_confidence_needs_more_than_the_bookstore_boundary(tmp_path: Path):
+    """서점 경계만 넘은 낮은 점수는 '확실'이 아니다.
+
+    서점 경계(override_below)는 "모델과 서점 중 누구를 믿을까"를 가르려고 잰 값이지
+    "확실한가"를 가르려고 잰 값이 아니다. 이 코퍼스에서 그 값은 0.056인데, 752건을
+    실측하니 0.10 아래 구간의 정답률은 약 53%(동전 던지기)이고 0.10 위는 약 97.7%다.
+    경계를 그대로 쓰던 시절에는 제안의 88%가 그 상태로 미리 체크됐다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    fake = FakeClassifier("3_SF", "model", "r", "3_SF", 0.07, override_below=0.056)
+
+    # 서점 경계(0.056)는 넘지만 확실 경계(0.10)는 못 넘는다.
+    assert manager._is_high_confidence(fake, 0.07) is False
+    assert manager._is_high_confidence(fake, 0.12) is True
+
+
+def test_low_confidence_model_answer_is_not_pre_checked(tmp_path: Path):
+    """0.10 아래 모델 판정은 '애매'로 내려가 체크가 꺼진 채 사람에게 간다.
+
+    실제로 겪은 사례다. 성인 웹소설이 확신도 0.069~0.088로 2_수필서간일기로 판정돼
+    '확실'로 미리 체크됐다. 그 점수대의 정답률은 절반 수준이라 사람이 봐야 한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "9_성인"
+    source.mkdir()
+    book = source / "어떤 웹소설.epub"
+    book.write_text("x")
+    fake = FakeClassifier("2_수필서간일기", "model", "모델 판정", "2_수필서간일기", 0.076, override_below=0.056)
+
+    proposal = manager._propose_category_for_file(book, "9_성인", {}, fake, True, True)
+
+    assert proposal["grade"] == manager.GRADE_UNKNOWN, "동전 던지기 점수가 미리 체크됐다"
+    assert proposal["target_category"] is None, "점수가 낮은 답을 목적지로 썼다"
+    # 모델이 뭐라고 했는지는 후보로 남는다 — 사람이 보고 그걸 고를 수도 있어야 한다.
+    assert [c["category"] for c in proposal["candidates"]] == ["2_수필서간일기"]
+
+
 def manager_propose(manager, category, mappings):
     return asyncio_runner(manager.propose_category_changes(category, mappings, use_bookstore=False, use_content_meta=False))
 

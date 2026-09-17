@@ -1358,20 +1358,40 @@ class BookManager:
     # 제안 시작 시 이름만 담은 행을 미리 넣을 때 한 번에 보내는 개수.
     PROPOSAL_PLACEHOLDER_CHUNK = 500
 
+    # 모델 단독 판정을 '확실'(미리 체크됨)로 볼 최소 확신도.
+    #
+    # 예전에는 서점 정책의 경계(override_below, 이 코퍼스에서 0.056)만 넘으면
+    # '확실'이었다. 그 값은 "모델과 서점 중 누구를 믿을까"를 가르려고 잰 것이지
+    # "확실한가"를 가르려고 잰 것이 아니다. 그대로 쓰니 제안의 88%가 미리 체크됐고,
+    # 그 안에 정답률이 동전 던지기인 구간이 그대로 섞여 있었다.
+    #
+    # 이 코퍼스 752건 실측(파일이 현재 들어있는 카테고리를 정답으로 간주):
+    #   0.056~0.07  n= 23   52.2%
+    #   0.07 ~0.08  n= 12   50.0%
+    #   0.08 ~0.10  n= 24   58.3%
+    #   0.10 ~0.12  n=361   97.5%
+    #   0.12 ~      n=332   97.9%
+    # 0.10 에 절벽이 있다. 그 아래는 사람이 봐야 하므로 '애매'로 내린다.
+    MODEL_CERTAIN_MIN_CONFIDENCE = 0.10
+
     GRADE_CERTAIN = "certain"
     GRADE_UNSURE = "unsure"
     GRADE_UNKNOWN = "unknown"
 
     @staticmethod
     def _is_high_confidence(classifier_service: Any, confidence: float | None) -> bool:
-        """모델 점수가 '높음'인가.
+        """모델 점수가 '확실'이라고 부를 만큼 높은가.
 
-        경계는 서점 정책이 구간별 정답률로 보정한 값이다. 정책 파일이 없으면
-        override_below 가 0 이고 prefers_bookstore 가 늘 False 를 돌려준다. 그 값을
-        그대로 믿으면 점수와 무관하게 전부 '확실'이 되어 자동 체크된다. 근거가
-        없으면 낮음으로 본다.
+        두 가지를 모두 넘어야 한다.
+
+        1. 서점 정책의 경계. 정책 파일이 없으면 override_below 가 0 이고
+           prefers_bookstore 가 늘 False 를 돌려준다. 그 값을 그대로 믿으면 점수와
+           무관하게 전부 '확실'이 되므로, 근거가 없으면 낮음으로 본다.
+        2. MODEL_CERTAIN_MIN_CONFIDENCE. 1번만으로는 한참 모자란다 — 서점 경계는
+           "모델과 서점 중 누구를 믿을까"를 가르는 값이지 "확실한가"를 가르는 값이
+           아니다.
         """
-        if confidence is None:
+        if confidence is None or confidence < BookManager.MODEL_CERTAIN_MIN_CONFIDENCE:
             return False
         policy = getattr(classifier_service, "bookstore_policy", None)
         if policy is None or getattr(policy, "override_below", 0.0) <= 0.0:
