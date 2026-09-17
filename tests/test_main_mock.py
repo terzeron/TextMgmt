@@ -1,9 +1,7 @@
 """Route-level mock tests for backend/main.py — no ES/MySQL required."""
 
 import importlib
-import json
 import time
-from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.responses import Response
@@ -68,10 +66,69 @@ def mock_cm():
     object.__setattr__(main_module.comics_manager, "_instance", prev)
 
 
+def install_classify_status_store(mock_cat, initial: dict | None = None) -> dict:
+    """분류 제안 작업 상태를 메모리로 흉내 내어 mock_cat 에 붙인다.
+
+    이 상태는 corpus 디렉토리의 JSON 파일에서 MySQL 행으로 옮겨갔다. 그래서 테스트가
+    상태를 준비하는 방법도 '파일 쓰기'에서 '이 저장소 설정'으로 바뀌었다.
+
+    단순히 return_value 를 박지 않고 전이 규칙을 흉내 내는 이유는, "도는 중에는 새
+    제안을 거절한다" 같은 성질이 main.py 와 DB 계층에 나뉘어 있어서다. 여기서는
+    main.py 가 규칙을 제대로 태우는지만 본다. 잠금이 실제로 동시 요청을 막는지는
+    tests/test_classify_proposal_status_db.py 가 실제 MySQL 로 확인한다.
+
+    항목에 _age_seconds 를 넣으면 '갱신이 그만큼 끊긴 작업'이 된다. 죽은 작업을
+    이어받는 경로를 검증할 때 쓴다.
+    """
+    store: dict[str, dict] = {"book": {"status": "idle", "content_type": "book"}, "comic": {"status": "idle", "content_type": "comic"}}
+    if initial is not None:
+        store["book"] = {**initial, "content_type": initial.get("content_type", "book")}
+
+    def _effective(content_type: str, stale_seconds: int) -> dict:
+        current = dict(store.get(content_type) or {"status": "idle", "content_type": content_type})
+        if current.get("status") in ("running", "applying") and current.pop("_age_seconds", 0) > stale_seconds:
+            current["status"] = "failed"
+            current["error"] = current.get("error") or "응답 없이 중단된 것으로 보입니다."
+        current.pop("_age_seconds", None)
+        return current
+
+    def _get(content_type: str = "book", stale_seconds: int = 300) -> dict:
+        return _effective(content_type, stale_seconds)
+
+    def _set(status: dict, content_type: str = "book") -> None:
+        store[content_type] = {**status, "content_type": content_type}
+
+    def _merge(fields: dict, content_type: str = "book") -> None:
+        store.setdefault(content_type, {"status": "idle", "content_type": content_type}).update({key: value for key, value in fields.items() if key != "status"})
+
+    def _try_start(status: dict, content_type: str = "book", stale_seconds: int = 300) -> tuple[bool, dict]:
+        current = _effective(content_type, stale_seconds)
+        if current.get("status") in ("running", "applying"):
+            return False, current
+        _set(status, content_type)
+        return True, _effective(content_type, stale_seconds)
+
+    def _try_begin_apply(apply_token: str, content_type: str = "book", stale_seconds: int = 300) -> tuple[bool, dict]:
+        current = _effective(content_type, stale_seconds)
+        if current.get("status") not in ("ready", "done", "failed"):
+            return False, current
+        _set({**current, "status": "applying", "apply_token": apply_token}, content_type)
+        return True, _effective(content_type, stale_seconds)
+
+    mock_cat.get_classify_proposal_status.side_effect = _get
+    mock_cat.set_classify_proposal_status.side_effect = _set
+    mock_cat.merge_classify_proposal_status.side_effect = _merge
+    mock_cat.try_start_classify_proposal.side_effect = _try_start
+    mock_cat.try_begin_classify_apply.side_effect = _try_begin_apply
+    mock_cat.classify_status_store = store
+    return store
+
+
 @pytest.fixture
 def mock_cat():
     """Inject a MagicMock into the category_mapping _LazyProxy (all methods are sync via to_thread)."""
     m = MagicMock()
+    install_classify_status_store(m)
     prev = main_module.category_mapping._instance
     object.__setattr__(main_module.category_mapping, "_instance", m)
     yield m
@@ -283,20 +340,7 @@ class TestCategoryMismatchAdmin:
         """폴링용 GET이 상태 파일 내용을 그대로 돌려준다."""
         mock_bm.path_prefix = tmp_path
         mock_cat.get_classify_proposal_items.return_value = []
-        status_file = tmp_path / ".classify_proposal_book.json"
-        # updated_at 은 살아있다는 신호다. 없으면 죽은 작업으로 보고 failed 로 굳힌다.
-        status_file.write_text(
-            json.dumps(
-                {
-                    "status": "running",
-                    "source_category": "shared_file",
-                    "total_count": 9,
-                    "processed_count": 4,
-                    "updated_at": time.time(),
-                }
-            ),
-            encoding="utf-8",
-        )
+        install_classify_status_store(mock_cat, {"status": "running", "source_category": "shared_file", "total_count": 9, "processed_count": 4})
 
         status = client.get("/categories/classify-proposal")
 
@@ -309,7 +353,7 @@ class TestCategoryMismatchAdmin:
         mock_bm.path_prefix = tmp_path
         # 상태 파일이 없으면 프로세스 내 메모리 폴백을 쓰는데, 이 폴백은 라우터가 앱과 함께
         # 한 번만 만들어져 다른 테스트가 남긴 running 상태를 물려받을 수 있다.
-        (tmp_path / ".classify_proposal_book.json").write_text(json.dumps({"status": "idle"}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "idle"})
         mock_cat.get_all_mappings.return_value = {}
         mock_bm.propose_category_changes.return_value = ({"source_category": "0_inbox", "total_count": 0, "processed_count": 0, "items": [], "failures": []}, None)
 
@@ -324,20 +368,13 @@ class TestCategoryMismatchAdmin:
     def test_classify_proposal_success_polling(self, client, mock_bm, mock_cat, tmp_path):
         """제안 시작은 202류 응답 대신 started 플래그를 주고, GET으로 완료 상태를 본다."""
         mappings = {"3_SF": ["과학소설"]}
-        result = {
-            "content_type": "book",
-            "source_category": "0_inbox",
-            "total_count": 2,
-            "processed_count": 2,
-            "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}],
-            "failures": [],
-        }
+        result = {"content_type": "book", "source_category": "0_inbox", "total_count": 2, "processed_count": 2, "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], "failures": []}
         mock_bm.path_prefix = tmp_path
         mock_cat.get_all_mappings.return_value = mappings
         # 상태 파일이 없으면 프로세스 내 메모리 폴백을 쓰는데, 이 폴백은 라우터가 앱과 함께
         # 한 번만 만들어져 다른 테스트가 남긴 running 상태를 물려받을 수 있다. 파일을 미리
         # idle로 채워 이 테스트가 그 잔여 상태에 기대지 않게 한다.
-        (tmp_path / ".classify_proposal_book.json").write_text(json.dumps({"status": "idle"}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "idle"})
 
         async def fake_propose(*args, on_progress=None, **kwargs):
             # 실제 book_manager처럼, on_progress가 코루틴(awaitable)을 돌려주면
@@ -363,8 +400,7 @@ class TestCategoryMismatchAdmin:
         assert status.status_code == 200
         assert status.json()["result"]["status"] == "ready"
         assert status.json()["result"]["items"] == result["items"]
-        status_file = tmp_path / ".classify_proposal_book.json"
-        assert status_file.exists()
+        assert mock_cat.classify_status_store["book"]["status"] == "ready"
         mock_bm.propose_category_changes.assert_awaited_once()
         _, kwargs = mock_bm.propose_category_changes.await_args
         assert kwargs["content_type"] == "book"
@@ -381,11 +417,7 @@ class TestCategoryMismatchAdmin:
         항목을 합쳐 돌려주는지로 검증한다.
         """
         mock_bm.path_prefix = tmp_path
-        status_file = tmp_path / ".classify_proposal_book.json"
-        status_file.write_text(
-            json.dumps({"status": "running", "source_category": "0_inbox", "total_count": 2, "processed_count": 1, "updated_at": time.time()}),
-            encoding="utf-8",
-        )
+        install_classify_status_store(mock_cat, {"status": "running", "source_category": "0_inbox", "total_count": 2, "processed_count": 1})
         db_items_so_far = [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]
         mock_cat.get_classify_proposal_items.return_value = db_items_so_far
 
@@ -408,8 +440,7 @@ class TestCategoryMismatchAdmin:
 
         mock_bm.path_prefix = tmp_path
         mock_cat.get_all_mappings.return_value = {}
-        status_file = tmp_path / ".classify_proposal_book.json"
-        status_file.write_text(json.dumps({"status": "running", "total_count": 0, "processed_count": 0, "updated_at": time.time()}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "running", "total_count": 0, "processed_count": 0})
 
         all_items = [{"file_path": f"0_inbox/{i}.epub", "target_category": "3_SF"} for i in range(255)]
 
@@ -449,8 +480,7 @@ class TestCategoryMismatchAdmin:
 
         mock_bm.path_prefix = tmp_path
         mock_cat.get_all_mappings.return_value = {}
-        status_file = tmp_path / ".classify_proposal_book.json"
-        status_file.write_text(json.dumps({"status": "running", "total_count": 0, "processed_count": 0, "updated_at": time.time()}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "running", "total_count": 0, "processed_count": 0})
 
         all_items = [{"file_path": f"0_inbox/{i}.epub", "target_category": "3_SF"} for i in range(25)]
         flush_count_mid_job = {"value": None}
@@ -489,8 +519,7 @@ class TestCategoryMismatchAdmin:
 
         mock_bm.path_prefix = tmp_path
         mock_cat.get_all_mappings.return_value = {}
-        status_file = tmp_path / ".classify_proposal_book.json"
-        status_file.write_text(json.dumps({"status": "running", "total_count": 0, "processed_count": 0, "updated_at": time.time()}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "running", "total_count": 0, "processed_count": 0})
 
         to_thread_funcs = []
         real_to_thread = asyncio.to_thread
@@ -520,10 +549,9 @@ class TestCategoryMismatchAdmin:
 
         assert mock_cat.add_classify_proposal_items in to_thread_funcs
 
-    def test_classify_proposal_already_running_blocks_restart(self, client, mock_bm, tmp_path):
+    def test_classify_proposal_already_running_blocks_restart(self, client, mock_bm, mock_cat, tmp_path):
         mock_bm.path_prefix = tmp_path
-        status_file = tmp_path / ".classify_proposal_book.json"
-        status_file.write_text(json.dumps({"status": "running", "source_category": "0_inbox", "updated_at": time.time()}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "running", "source_category": "0_inbox"})
 
         r = client.post("/categories/classify-proposal", json={"category": "0_inbox"})
 
@@ -538,18 +566,7 @@ class TestCategoryMismatchAdmin:
         옮겨갔으므로, 이 보안 불변식도 DB 기준으로 확인해야 한다.
         """
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(
-            json.dumps(
-                {
-                    "status": "ready",
-                    "source_category": "0_inbox",
-                    "updated_at": time.time(),
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
+        install_classify_status_store(mock_cat, {"status": "ready", "source_category": "0_inbox"})
         mock_cat.get_classify_proposal_items.return_value = [{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]
 
         captured = {}
@@ -561,15 +578,7 @@ class TestCategoryMismatchAdmin:
 
         mock_bm.apply_category_changes = fake_apply
 
-        r = client.post(
-            "/categories/classify-proposal/apply",
-            json={
-                "items": [
-                    {"file_path": "0_inbox/a.epub", "target_category": "5_음악"},
-                    {"file_path": "0_inbox/침입.epub", "target_category": "5_음악"},
-                ]
-            },
-        )
+        r = client.post("/categories/classify-proposal/apply", json={"items": [{"file_path": "0_inbox/a.epub", "target_category": "5_음악"}, {"file_path": "0_inbox/침입.epub", "target_category": "5_음악"}]})
 
         assert r.status_code == 200
         # 서버 제안(DB)에 있던 경로만 허용 집합에 들어간다. 클라이언트가 끼워넣은 경로는 빠진다
@@ -580,10 +589,9 @@ class TestCategoryMismatchAdmin:
         # (백그라운드 잡의 병합 단계도 같은 메서드를 한 번 더 부르므로 any_call로 본다.)
         mock_cat.get_classify_proposal_items.assert_any_call(content_type="book")
 
-    def test_classify_proposal_apply_rejects_when_not_ready(self, client, mock_bm, tmp_path):
+    def test_classify_proposal_apply_rejects_when_not_ready(self, client, mock_bm, mock_cat, tmp_path):
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(json.dumps({"status": "idle"}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "idle"})
 
         r = client.post("/categories/classify-proposal/apply", json={"items": []})
 
@@ -593,14 +601,13 @@ class TestCategoryMismatchAdmin:
 
     def test_classify_proposal_delete_clears_state(self, client, mock_bm, mock_cat, tmp_path):
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(json.dumps({"status": "ready"}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "ready"})
 
         r = client.delete("/categories/classify-proposal")
 
         assert r.status_code == 200
         assert r.json()["result"]["cleared"] is True
-        cleared = json.loads(status_path.read_text(encoding="utf-8"))
+        cleared = mock_cat.classify_status_store["book"]
         assert cleared["status"] == "idle"
         # items는 더 이상 상태 파일에 담지 않는다 — DB(classify_proposal_items)를 지운다
         assert "items" not in cleared
@@ -617,8 +624,7 @@ class TestCategoryMismatchAdmin:
         import asyncio
 
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(json.dumps({"status": "ready", "source_category": "0_inbox", "apply_token": "test-token"}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "ready", "source_category": "0_inbox", "apply_token": "test-token"})
 
         async def fake_apply(items, allowed_file_paths, on_item_done=None, **kwargs):
             # 실제 book_manager처럼 항목을 처리하는 그 순간 on_item_done을 부른다. 반환값이
@@ -641,7 +647,7 @@ class TestCategoryMismatchAdmin:
 
         asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/b.epub", "target_category": "3_SF"}], {"0_inbox/a.epub", "0_inbox/b.epub"}, False, "test-token"))
 
-        done = json.loads(status_path.read_text(encoding="utf-8"))
+        done = mock_cat.classify_status_store["book"]
         assert done["status"] == "done"
         assert done["applied_count"] == 1
         assert done["failed_count"] == 1
@@ -666,18 +672,17 @@ class TestCategoryMismatchAdmin:
         propose_endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal")
         freevars = dict(zip(propose_endpoint.__code__.co_freevars, [c.cell_contents for c in propose_endpoint.__closure__]))
         _run_proposal_job = freevars["_run_classify_proposal_job"]
-        _read_status = freevars["_read_classify_proposal"]
 
         mock_bm.propose_category_changes.side_effect = RuntimeError("boom")
         asyncio.run(_run_proposal_job("0_inbox", True, True, 1.2))
-        assert _read_status()["status"] == "failed"
+        assert mock_cat.classify_status_store["book"]["status"] == "failed"
 
         apply_endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal/apply")
         apply_freevars = dict(zip(apply_endpoint.__code__.co_freevars, [c.cell_contents for c in apply_endpoint.__closure__]))
         _run_apply_job = apply_freevars["_run_classify_apply_job"]
         mock_bm.apply_category_changes = AsyncMock(side_effect=RuntimeError("boom"))
         asyncio.run(_run_apply_job([], set(), False, None))
-        assert _read_status()["status"] == "failed"
+        assert mock_cat.classify_status_store["book"]["status"] == "failed"
 
     def test_classify_proposal_applying_second_request_is_refused_while_claimed(self, mock_bm, mock_cat, tmp_path):
         """두 번째 apply 요청이 첫 번째가 실제로 끝나기 전에 상태를 가로채지 못한다.
@@ -690,8 +695,7 @@ class TestCategoryMismatchAdmin:
         from fastapi import BackgroundTasks
 
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(json.dumps({"status": "ready"}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "ready"})
         mock_cat.get_classify_proposal_items.return_value = [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]
 
         router = main_module.create_item_router(mock_bm, content_type="book")
@@ -703,7 +707,7 @@ class TestCategoryMismatchAdmin:
         first = asyncio.run(endpoint(body=body, background_tasks=BackgroundTasks()))
         assert first["status"] == "success"
         assert first["result"]["started"] is True
-        assert json.loads(status_path.read_text(encoding="utf-8"))["status"] == "applying"
+        assert mock_cat.classify_status_store["book"]["status"] == "applying"
 
         second = asyncio.run(endpoint(body=body, background_tasks=BackgroundTasks()))
         assert second["status"] == "failure"
@@ -719,11 +723,7 @@ class TestCategoryMismatchAdmin:
         import asyncio
 
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(
-            json.dumps({"status": "applying", "apply_token": "test-token", "updated_at": time.time()}),
-            encoding="utf-8",
-        )
+        install_classify_status_store(mock_cat, {"status": "applying", "apply_token": "test-token"})
 
         async def fake_apply_missing_results(items, allowed_file_paths, **kwargs):
             # "results" 키가 없다 — 더 이상 이 키를 읽지 않으므로 문제가 안 된다.
@@ -737,7 +737,7 @@ class TestCategoryMismatchAdmin:
 
         asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], {"0_inbox/a.epub"}, False, "test-token"))
 
-        done = json.loads(status_path.read_text(encoding="utf-8"))
+        done = mock_cat.classify_status_store["book"]
         assert done["status"] == "done"
 
     def test_classify_proposal_apply_progress_tick_does_not_revert_status(self, mock_bm, mock_cat, tmp_path):
@@ -745,24 +745,15 @@ class TestCategoryMismatchAdmin:
         import asyncio
 
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(
-            json.dumps({"status": "applying", "apply_token": "test-token", "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], "updated_at": time.time()}),
-            encoding="utf-8",
-        )
+        install_classify_status_store(mock_cat, {"status": "applying", "apply_token": "test-token", "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})
 
         seen = {}
 
         async def fake_apply_with_progress(items, allowed_file_paths, on_progress=None, **kwargs):
             if on_progress:
                 on_progress({"total_count": 1, "applied_count": 0, "failed_count": 0})
-            seen["status_after_tick"] = json.loads(status_path.read_text(encoding="utf-8"))["status"]
-            return {
-                "total_count": 1,
-                "applied_count": 1,
-                "failed_count": 0,
-                "results": [{"file_path": "0_inbox/a.epub", "apply_status": "moved", "apply_error": None}],
-            }, None
+            seen["status_after_tick"] = mock_cat.classify_status_store["book"]["status"]
+            return {"total_count": 1, "applied_count": 1, "failed_count": 0, "results": [{"file_path": "0_inbox/a.epub", "apply_status": "moved", "apply_error": None}]}, None
 
         mock_bm.apply_category_changes = fake_apply_with_progress
         router = main_module.create_item_router(mock_bm, content_type="book")
@@ -785,25 +776,15 @@ class TestCategoryMismatchAdmin:
         import asyncio
 
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(
-            json.dumps(
-                {
-                    "status": "ready",
-                    "apply_token": "test-token",
-                    "source_category": "0_inbox",
-                    "total_count": 1200,
-                    "processed_count": 1200,
-                    "updated_at": time.time(),
-                }
-            ),
-            encoding="utf-8",
-        )
+        install_classify_status_store(mock_cat, {"status": "ready", "apply_token": "test-token", "source_category": "0_inbox", "total_count": 1200, "processed_count": 1200})
         items = [{"file_path": f"0_inbox/{i}.epub", "target_category": "3_SF"} for i in range(50)]
 
         async def fake_apply_with_progress(items, allowed_file_paths, on_progress=None, **kwargs):
             if on_progress:
-                on_progress({"apply_total_count": len(items), "applied_count": 10, "failed_count": 0})
+                # 실제 book_manager 처럼, 진행률 콜백이 코루틴을 돌려주면 await 한다.
+                outcome = on_progress({"apply_total_count": len(items), "applied_count": 10, "failed_count": 0})
+                if outcome is not None:
+                    await outcome
             return {"total_count": len(items), "applied_count": len(items), "failed_count": 0, "results": []}, None
 
         mock_bm.apply_category_changes = fake_apply_with_progress
@@ -814,7 +795,7 @@ class TestCategoryMismatchAdmin:
 
         asyncio.run(_run_apply_job(items, {item["file_path"] for item in items}, False, "test-token"))
 
-        done = json.loads(status_path.read_text(encoding="utf-8"))
+        done = mock_cat.classify_status_store["book"]
         # 제안 단계 카운터는 그대로 살아있다 — 승인 50건이 1200을 덮어쓰지 않는다.
         assert done["total_count"] == 1200
         assert done["processed_count"] == 1200
@@ -829,8 +810,7 @@ class TestCategoryMismatchAdmin:
         파일이 반쯤 옮겨진 채로 아무것도 할 수 없다.
         """
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(json.dumps({"status": "failed", "source_category": "0_inbox", "error": "백엔드가 다시 시작되어 자동 분류가 중단되었습니다. 다시 실행해 주세요."}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "failed", "source_category": "0_inbox", "error": "백엔드가 다시 시작되어 자동 분류가 중단되었습니다. 다시 실행해 주세요."})
         mock_cat.get_classify_proposal_items.return_value = [{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]
 
         r = client.post("/categories/classify-proposal/apply", json={"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})
@@ -839,11 +819,10 @@ class TestCategoryMismatchAdmin:
         assert r.json()["status"] == "success"
         assert r.json()["result"]["started"] is True
 
-    def test_classify_proposal_apply_rejected_while_applying(self, client, mock_bm, tmp_path):
+    def test_classify_proposal_apply_rejected_while_applying(self, client, mock_bm, mock_cat, tmp_path):
         """작업이 이미 도는(applying) 동안에는 새 승인 요청을 거절한다."""
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(json.dumps({"status": "applying", "updated_at": time.time()}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "applying"})
 
         r = client.post("/categories/classify-proposal/apply", json={"items": []})
 
@@ -857,12 +836,8 @@ class TestCategoryMismatchAdmin:
         이중 이동은 안 일어나지만, 불필요하므로 애초에 pending 행만 담는다.
         """
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(json.dumps({"status": "ready", "source_category": "0_inbox"}), encoding="utf-8")
-        mock_cat.get_classify_proposal_items.return_value = [
-            {"file_path": "0_inbox/already_moved.epub", "target_category": "3_SF", "apply_status": "moved"},
-            {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF", "apply_status": "pending"},
-        ]
+        install_classify_status_store(mock_cat, {"status": "ready", "source_category": "0_inbox"})
+        mock_cat.get_classify_proposal_items.return_value = [{"file_path": "0_inbox/already_moved.epub", "target_category": "3_SF", "apply_status": "moved"}, {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF", "apply_status": "pending"}]
 
         captured = {}
 
@@ -872,10 +847,7 @@ class TestCategoryMismatchAdmin:
 
         mock_bm.apply_category_changes = fake_apply
 
-        r = client.post(
-            "/categories/classify-proposal/apply",
-            json={"items": [{"file_path": "0_inbox/already_moved.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF"}]},
-        )
+        r = client.post("/categories/classify-proposal/apply", json={"items": [{"file_path": "0_inbox/already_moved.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF"}]})
 
         assert r.status_code == 200
         assert captured["allowed"] == {"0_inbox/still_pending.epub"}
@@ -890,8 +862,7 @@ class TestCategoryMismatchAdmin:
         안전하게 failed 처리된다. moved만 재시도 대상에서 빠진다.
         """
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(json.dumps({"status": "failed", "source_category": "0_inbox"}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "failed", "source_category": "0_inbox"})
         mock_cat.get_classify_proposal_items.return_value = [
             {"file_path": "0_inbox/interrupted.epub", "target_category": "3_SF", "apply_status": "moving"},
             {"file_path": "0_inbox/rejected.epub", "target_category": "3_SF", "apply_status": "failed"},
@@ -909,14 +880,7 @@ class TestCategoryMismatchAdmin:
 
         r = client.post(
             "/categories/classify-proposal/apply",
-            json={
-                "items": [
-                    {"file_path": "0_inbox/interrupted.epub", "target_category": "3_SF"},
-                    {"file_path": "0_inbox/rejected.epub", "target_category": "3_SF"},
-                    {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF"},
-                    {"file_path": "0_inbox/already_moved.epub", "target_category": "3_SF"},
-                ]
-            },
+            json={"items": [{"file_path": "0_inbox/interrupted.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/rejected.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/already_moved.epub", "target_category": "3_SF"}]},
         )
 
         assert r.status_code == 200
@@ -935,8 +899,7 @@ class TestCategoryMismatchAdmin:
         import asyncio
 
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(json.dumps({"status": "failed", "apply_token": "test-token"}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "failed", "apply_token": "test-token"})
 
         async def fake_apply(items, allowed_file_paths, on_item_done=None, **kwargs):
             if on_item_done:
@@ -958,17 +921,7 @@ class TestCategoryMismatchAdmin:
         _run_apply_job = freevars["_run_classify_apply_job"]
 
         # 이번 실행의 allowed에는 still_pending만 있다 — already_moved는 이미 moved라 빠졌다
-        asyncio.run(
-            _run_apply_job(
-                [
-                    {"file_path": "0_inbox/already_moved.epub", "target_category": "3_SF"},
-                    {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF"},
-                ],
-                {"0_inbox/still_pending.epub"},
-                False,
-                "test-token",
-            )
-        )
+        asyncio.run(_run_apply_job([{"file_path": "0_inbox/already_moved.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/still_pending.epub", "target_category": "3_SF"}], {"0_inbox/still_pending.epub"}, False, "test-token"))
 
         updated_paths = [call.args[0] for call in mock_cat.update_classify_proposal_item_status.call_args_list]
         assert "0_inbox/already_moved.epub" not in updated_paths
@@ -986,8 +939,7 @@ class TestCategoryMismatchAdmin:
         import asyncio
 
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(json.dumps({"status": "applying", "apply_token": "token-A", "updated_at": time.time()}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "applying", "apply_token": "token-A"})
 
         async def fake_apply(items, allowed_file_paths, on_item_done=None, should_continue=None, **kwargs):
             if on_item_done:
@@ -995,8 +947,10 @@ class TestCategoryMismatchAdmin:
                 if outcome is not None:
                     await outcome
             # 다른 요청이 이 작업을 대체해 토큰을 바꿨다고 가정한다.
-            status_path.write_text(json.dumps({"status": "applying", "apply_token": "token-B", "updated_at": time.time()}), encoding="utf-8")
-            assert should_continue is not None and should_continue() is False
+            mock_cat.classify_status_store["book"] = {"status": "applying", "apply_token": "token-B", "content_type": "book"}
+            # 상태가 DB로 옮겨가면서 should_continue 는 코루틴을 돌려준다. 실제
+            # book_manager 처럼 여기서 await 해야 판단 결과를 볼 수 있다.
+            assert should_continue is not None and (await should_continue()) is False
             return {"total_count": 1, "applied_count": 1, "failed_count": 0, "results": []}, None
 
         mock_bm.apply_category_changes = fake_apply
@@ -1008,15 +962,14 @@ class TestCategoryMismatchAdmin:
         asyncio.run(_run_apply_job([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], {"0_inbox/a.epub"}, False, "token-A"))
 
         # 대체된 뒤에는 이 작업이 상태를 더 이상 덮어쓰지 않는다 - "applying"/"token-B" 그대로여야 한다
-        final_status = json.loads(status_path.read_text(encoding="utf-8"))
+        final_status = mock_cat.classify_status_store["book"]
         assert final_status["status"] == "applying"
         assert final_status["apply_token"] == "token-B"
 
     def test_delete_applied_removes_moved_only_and_returns_count(self, client, mock_bm, mock_cat, tmp_path):
         """DELETE .../applied가 완료(moved) 행만 지우고 지운 개수를 돌려준다."""
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(json.dumps({"status": "done"}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "done"})
         mock_cat.delete_applied_classify_proposal_items.return_value = 3
 
         r = client.delete("/categories/classify-proposal/applied")
@@ -1032,8 +985,7 @@ class TestCategoryMismatchAdmin:
         도는 중에 지우면 방금 건별로 기록한 행을 진행 중인 작업 밑에서 지울 수 있다.
         """
         mock_bm.path_prefix = tmp_path
-        status_path = tmp_path / ".classify_proposal_book.json"
-        status_path.write_text(json.dumps({"status": "applying", "updated_at": time.time()}), encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "applying"})
 
         r = client.delete("/categories/classify-proposal/applied")
 
@@ -1533,64 +1485,9 @@ def test_search_similar_books_filters_hidden_categories_for_viewer(client, mock_
 # ── Additional edge case tests to reach 100% coverage on backend/main.py ──
 
 
-def test_classify_proposal_status_path_error(client, mock_bm, mock_cat):
-    # path_prefix가 이상한 타입이면 상태 파일 경로를 못 만든다. 그래도 폴링은 죽지 않는다.
-    mock_bm.path_prefix = 12345
-    mock_cat.get_classify_proposal_items.return_value = []
-    r = client.get("/categories/classify-proposal")
-    assert r.status_code == 200
-    assert "status" in r.json()["result"]
 
 
-def test_classify_proposal_status_read_corrupt_json(client, mock_bm, mock_cat, tmp_path):
-    mock_bm.path_prefix = tmp_path
-    mock_cat.get_classify_proposal_items.return_value = []
-    status_file = tmp_path / ".classify_proposal_book.json"
-    status_file.write_text("{corrupt json", encoding="utf-8")
-    r = client.get("/categories/classify-proposal")
-    assert r.status_code == 200
-    assert "status" in r.json()["result"]
 
-
-def test_classify_proposal_status_read_non_dict_json(client, mock_bm, mock_cat, tmp_path):
-    mock_bm.path_prefix = tmp_path
-    mock_cat.get_classify_proposal_items.return_value = []
-    status_file = tmp_path / ".classify_proposal_book.json"
-    status_file.write_text("[1, 2, 3]", encoding="utf-8")
-    r = client.get("/categories/classify-proposal")
-    assert r.status_code == 200
-    assert "status" in r.json()["result"]
-
-
-def test_classify_proposal_replace_status_parent_not_exists(client, mock_bm, mock_cat, tmp_path):
-    # 다른 테스트가 남긴 프로세스 내 메모리 상태(running/applying)를 물려받지 않도록,
-    # 실제 파일이 있는 경로에서 한 번 idle로 지운 뒤에 없는 폴더로 바꾼다.
-    mock_bm.path_prefix = tmp_path
-    client.delete("/categories/classify-proposal")
-    mock_bm.path_prefix = tmp_path / "non_existent_folder"
-
-    r = client.post("/categories/classify-proposal", json={"category": "0_inbox"})
-
-    assert r.status_code == 200
-    assert r.json()["status"] == "success"
-    assert r.json()["result"]["started"] is True
-
-
-def test_classify_proposal_replace_status_write_error(client, mock_bm, mock_cat, tmp_path, monkeypatch):
-    mock_bm.path_prefix = tmp_path
-    client.delete("/categories/classify-proposal")
-    orig_open = Path.open
-
-    def mock_open(self, mode="r", *args, **kwargs):
-        if "w" in mode and "classify_proposal" in str(self):
-            raise OSError("disk write error")
-        return orig_open(self, mode, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "open", mock_open)
-    r = client.post("/categories/classify-proposal", json={"category": "0_inbox"})
-    assert r.status_code == 200
-    assert r.json()["status"] == "success"
-    assert r.json()["result"]["started"] is True
 
 
 def test_get_latest_books_error(client, mock_bm, mock_cat):
@@ -1643,7 +1540,6 @@ def test_reload_locks_already_running(client, mock_cat):
     assert r2.json()["result"]["already_running"] is True
 
 
-
 def test_classify_proposal_restarts_when_the_previous_run_died(client, mock_bm, mock_cat, tmp_path):
     """재배포로 죽은 작업은 새 실행을 막지 않아야 한다.
 
@@ -1651,8 +1547,7 @@ def test_classify_proposal_restarts_when_the_previous_run_died(client, mock_bm, 
     화면이 계속 회전했다. 갱신이 끊긴 상태는 죽은 것으로 본다.
     """
     mock_bm.path_prefix = tmp_path
-    status_file = tmp_path / ".classify_proposal_book.json"
-    status_file.write_text(json.dumps({"status": "running", "source_category": "0_inbox", "updated_at": time.time() - 3600}), encoding="utf-8")
+    install_classify_status_store(mock_cat, {"status": "running", "source_category": "0_inbox", "_age_seconds": 3600})
 
     r = client.post("/categories/classify-proposal", json={"category": "0_inbox"})
 

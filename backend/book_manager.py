@@ -1551,9 +1551,9 @@ class BookManager:
         *,
         content_type: str = "book",
         clean_existing: bool = False,
-        on_progress: Callable[[dict[str, int]], None] | None = None,
+        on_progress: Callable[[dict[str, int]], None | Awaitable[None]] | None = None,
         on_item_done: Callable[[dict[str, Any]], None | Awaitable[None]] | None = None,
-        should_continue: Callable[[], bool] | None = None,
+        should_continue: Callable[[], bool | Awaitable[bool]] | None = None,
     ) -> tuple[dict[str, Any], str | None]:
         """승인된 항목만 실제로 옮긴다.
 
@@ -1564,6 +1564,24 @@ class BookManager:
         """
         result: dict[str, Any] = {"content_type": content_type, "total_count": len(items), "applied_count": 0, "failed_count": 0, "results": []}
         root = self.path_prefix.resolve(strict=False)
+
+        async def _still_ours() -> bool:
+            """should_continue 가 코루틴을 돌려주면 대신 기다린다.
+
+            main.py 는 이 판단에 DB 를 읽어야 해서(작업 상태가 파일이 아니라 MySQL 에
+            있다) asyncio.to_thread 로 넘기는 async 콜백을 쓴다. 동기 콜백도 그대로 받는다.
+            """
+            outcome = should_continue()
+            if inspect.isawaitable(outcome):
+                return bool(await outcome)
+            return bool(outcome)
+
+        async def _report_progress(payload: dict[str, Any]) -> None:
+            if on_progress is None:
+                return
+            outcome = on_progress(payload)
+            if inspect.isawaitable(outcome):
+                await outcome
 
         async def _notify_item_done(payload: dict[str, Any]) -> None:
             # on_item_done은 동기 콜백일 수도, 코루틴을 돌려주는 콜백일 수도 있다. main.py는
@@ -1578,7 +1596,7 @@ class BookManager:
         for item in items:
             # 다른 승인 작업이 이 작업을 대체했으면(토큰 불일치) 여기서 즉시 멈춘다.
             # 계속 진행하면 진 쪽이 이긴 쪽이 방금 기록한 행을 덮어써 망가뜨릴 수 있다.
-            if should_continue is not None and not should_continue():
+            if should_continue is not None and not await _still_ours():
                 LOGGER.warning("분류 적용 중단: 다른 작업이 이 작업을 대체했다")
                 break
 
@@ -1645,7 +1663,7 @@ class BookManager:
                 # 화면 헤더가 "1200 / 50"처럼 뒤바뀐 숫자를 보여준다(제안 카운터가 승인
                 # 카운터로 영구히 대체됨). apply 전용 키로 분리해 서로 다른 두 숫자가
                 # 같은 이름을 공유하지 않게 한다.
-                on_progress({"apply_total_count": result["total_count"], "applied_count": result["applied_count"], "failed_count": result["failed_count"]})
+                await _report_progress({"apply_total_count": result["total_count"], "applied_count": result["applied_count"], "failed_count": result["failed_count"]})
 
         return result, None
 

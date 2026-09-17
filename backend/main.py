@@ -435,78 +435,34 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     """공통 CRUD 엔드포인트를 생성하는 라우터 팩토리"""
     admin_dep = [Depends(require_admin)]
     router = APIRouter()
-    # 상태 파일 하나를 제안(propose)과 승인 적용(apply) 두 단계가 함께 쓴다.
-    classify_proposal_state: dict[str, Any] = {"status": "idle", "remaining_count": 0}
+    # 분류 제안 작업 상태는 MySQL 의 classify_proposal_status 한 행에 있다(제안과 승인
+    # 적용이 같은 행을 쓴다). 예전에는 corpus 디렉토리의 JSON 파일이었는데, 프로세스가
+    # 여럿(uvicorn --workers 2 x replicas 2)이라 '읽고-판단하고-쓰기' 사이에 잠금을 걸 수
+    # 없어 두 작업이 동시에 시작할 수 있었고, 노드가 늘면 파일은 공유조차 되지 않는다.
+    # 시작과 승인 선점은 category_mapping 의 try_* 가 한 트랜잭션 안에서 판단까지 끝낸다.
 
     # 갱신이 이만큼 끊기면 죽은 작업으로 본다. category_mapping 의
     # RELOAD_LOCK_HEARTBEAT_STALE_SECONDS 와 같은 방식이다.
     # 파일 1건 처리는 서점 조회 때문에 3초 남짓이라 5분이면 넉넉하다.
     CLASSIFY_PROPOSAL_STALE_SECONDS = 5 * 60
 
-    def _classify_proposal_path() -> Path | None:
-        try:
-            return Path(manager.path_prefix) / f".classify_proposal_{content_type}.json"
-        except (TypeError, ValueError):
-            return None
+    async def _read_classify_proposal() -> dict[str, Any]:
+        """현재 작업 상태. 갱신이 끊긴 작업은 DB 조회 단계에서 failed 로 보인다."""
+        return await asyncio.to_thread(category_mapping.get_classify_proposal_status, content_type, CLASSIFY_PROPOSAL_STALE_SECONDS)
 
-    def _read_classify_proposal() -> dict[str, Any]:
-        status_path = _classify_proposal_path()
-        if status_path is None or not status_path.exists():
-            return dict(classify_proposal_state)
-        try:
-            with status_path.open("r", encoding="utf-8") as status_file:
-                status = json.load(status_file)
-        except Exception as e:
-            LOGGER.warning("classify_proposal 파일 읽기 실패: %s", e)
-            return dict(classify_proposal_state)
-        if not isinstance(status, dict):
-            return dict(classify_proposal_state)
-        status = _fail_if_stale(status)
-        classify_proposal_state.clear()
-        classify_proposal_state.update(status)
-        return dict(classify_proposal_state)
+    async def _replace_classify_proposal(next_status: dict[str, Any]) -> None:
+        """상태를 통째로 바꾼다. 작업의 시작과 끝처럼 status 가 실제로 바뀔 때만 쓴다."""
+        await asyncio.to_thread(category_mapping.set_classify_proposal_status, next_status, content_type)
 
-    def _fail_if_stale(status: dict[str, Any]) -> dict[str, Any]:
-        """죽은 작업이 화면과 재실행을 막지 않도록, 갱신이 끊긴 running 을 failed 로 굳힌다."""
-        stale = stale_running_status(status, CLASSIFY_PROPOSAL_STALE_SECONDS)
-        if stale is None:
-            return status
-        LOGGER.warning("분류 작업 상태가 %.0f초 넘게 갱신되지 않아 중단된 작업으로 본다", CLASSIFY_PROPOSAL_STALE_SECONDS)
-        _replace_classify_proposal(stale)
-        return stale
+    async def _progress_classify_proposal(progress: dict[str, Any]) -> None:
+        """진행률만 합친다.
 
-    def _replace_classify_proposal(next_status: dict[str, Any]) -> None:
-        next_status = {**next_status, "updated_at": time.time()}
-        classify_proposal_state.clear()
-        classify_proposal_state.update(next_status)
-        status_path = _classify_proposal_path()
-        if status_path is None or not status_path.parent.exists():
-            return
-        tmp_path = status_path.with_name(f"{status_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-        try:
-            with tmp_path.open("w", encoding="utf-8") as status_file:
-                json.dump(next_status, status_file, ensure_ascii=False, separators=(",", ":"))
-            tmp_path.replace(status_path)
-        except Exception as e:
-            LOGGER.warning("classify_proposal 파일 쓰기 실패: %s", e)
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-    def _start_classify_proposal(category: str) -> None:
-        """제안 시작 시 이전 상태를 지우고 진행 중 표시로 새로 시작한다.
-
-        항목 목록(items)은 DB(classify_proposal_items)에 있으므로 상태 파일에는
-        카운트와 상태만 둔다 — 실제 클리어는 _run_classify_proposal_job이 한다.
+        제안(running)과 적용(applying)이 같은 행을 쓰므로 진행률이 status 를 되돌리면
+        화면이 '적용 중'을 '제안 생성 중'으로 보여준다. status 를 빼는 일은 DB 쪽
+        merge 가 하므로 호출자는 신경 쓰지 않아도 된다. 읽어서 합친 뒤 통째로 쓰지
+        않기 때문에, 그 사이 다른 프로세스가 쓴 값을 덮어쓰는 일도 없다.
         """
-        _replace_classify_proposal({"status": "running", "content_type": content_type, "source_category": category, "total_count": 0, "processed_count": 0, "failures": []})
-
-    def _progress_classify_proposal(progress: dict[str, int]) -> None:
-        """제안(running)과 적용(applying)이 status 필드를 공유해도, 진행률 갱신은
-        status를 건드리지 않는다. 그러지 않으면 적용 중 진행률 콜백이 status를
-        running으로 되돌려 화면에 "적용 중"이 아니라 "제안 생성 중"으로 보인다."""
-        _replace_classify_proposal({**_read_classify_proposal(), **progress})
+        await asyncio.to_thread(category_mapping.merge_classify_proposal_status, progress, content_type)
 
     async def _run_classify_proposal_job(category: str, use_bookstore: bool, use_content_meta: bool, delay: float) -> None:
         # 새로 분류된 항목을 100건 단위로 모아 DB에 적재한다. 책 한 권마다 INSERT +
@@ -543,7 +499,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
                 pending.extend(new_items)
                 if len(pending) >= CLASSIFY_PROPOSAL_ITEMS_BATCH_SIZE:
                     await _flush_pending()
-            _progress_classify_proposal(progress)
+            await _progress_classify_proposal(progress)
 
         try:
             await asyncio.to_thread(category_mapping.clear_classify_proposal_items, content_type=content_type)
@@ -554,26 +510,26 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             # 예외로 중단되더라도, 그때까지 모아둔 항목은 버리지 않고 DB에 남겨
             # 화면에서 어디까지 진행됐는지 볼 수 있게 한다.
             await _flush_pending()
-            _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "분류 제안에 실패했습니다."})
+            await _replace_classify_proposal({**(await _read_classify_proposal()), "status": "failed", "error": "분류 제안에 실패했습니다."})
             return
         # 100의 배수가 아닌 꼬리를 반드시 비운다. 누락되면 관리자가 목록 끝의 책들을
         # 못 보고 승인하게 된다.
         await _flush_pending()
         if error is None:
             result_counts = {k: v for k, v in result.items() if k != "items"}
-            _replace_classify_proposal({**_read_classify_proposal(), **result_counts, "status": "ready"})
+            await _replace_classify_proposal({**(await _read_classify_proposal()), **result_counts, "status": "ready"})
         else:
-            _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
+            await _replace_classify_proposal({**(await _read_classify_proposal()), "status": "failed", "error": error})
 
     async def _run_classify_apply_job(items: list[dict[str, Any]], allowed: set[str], clean_existing: bool, apply_token: str) -> None:
         # applying 선점은 핸들러가 응답 전에 동기로 이미 해뒀다(TOCTOU 창을 없애려고). 여기서
         # 다시 _read_classify_proposal() 로 읽어 "applying"을 또 쓰면, 그 사이 다른 요청이
         # 상태를 바꿨어도 이 시점에 덮어써서 선점의 의미가 없어진다.
-        def _token_still_valid() -> bool:
+        async def _token_still_valid() -> bool:
             # 하트비트 만료로 상태가 failed로 굳은 뒤 두 번째 apply가 새 토큰으로 다시
             # 선점하면, 이 작업(먼저 돈 쪽)은 더 이상 이 승인의 주인이 아니다. 계속
             # 진행하면 두 작업이 같은 행에 경쟁적으로 써서 moved를 failed로 덮어쓸 수 있다.
-            return _read_classify_proposal().get("apply_token") == apply_token
+            return (await _read_classify_proposal()).get("apply_token") == apply_token
 
         async def _on_item_done(entry: dict[str, Any]) -> None:
             if entry["file_path"] not in allowed:
@@ -590,20 +546,20 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
 
         try:
             result, error = await manager.apply_category_changes(items, allowed, content_type=content_type, clean_existing=clean_existing, on_progress=_progress_classify_proposal, on_item_done=_on_item_done, should_continue=_token_still_valid)
-            if not _token_still_valid():
+            if not await _token_still_valid():
                 # 다른 승인 작업이 이미 이 작업을 대체했다 — 상태 파일을 더 건드리면 그
                 # 새 작업의 진행 상황을 덮어쓰게 되므로 아무것도 쓰지 않고 물러난다.
                 LOGGER.warning("classify apply job stopped: apply_token mismatch (다른 승인 작업이 선점함)")
                 return
             if error is not None:
-                _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": error})
+                await _replace_classify_proposal({**(await _read_classify_proposal()), "status": "failed", "error": error})
                 return
-            current = _read_classify_proposal()
-            _replace_classify_proposal({**current, "status": "done", "applied_count": result.get("applied_count"), "failed_count": result.get("failed_count")})
+            current = await _read_classify_proposal()
+            await _replace_classify_proposal({**current, "status": "done", "applied_count": result.get("applied_count"), "failed_count": result.get("failed_count")})
         except Exception as e:
             LOGGER.error("classify apply error: %s", e)
-            if _token_still_valid():
-                _replace_classify_proposal({**_read_classify_proposal(), "status": "failed", "error": "분류 적용에 실패했습니다."})
+            if await _token_still_valid():
+                await _replace_classify_proposal({**(await _read_classify_proposal()), "status": "failed", "error": "분류 적용에 실패했습니다."})
 
     @router.put("/books/{book_id}", dependencies=admin_dep)
     async def update_book(book_id: int, book_item: BookModel, force: bool = False) -> dict[str, Any]:
@@ -787,13 +743,23 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
 
     @router.post("/categories/classify-proposal", dependencies=admin_dep)
     async def start_classify_proposal(body: ClassifyProposalModel, background_tasks: BackgroundTasks) -> dict[str, Any]:
-        """선택 카테고리의 분류 제안을 백그라운드로 만든다. 파일은 옮기지 않는다."""
-        current = _read_classify_proposal()
-        if current.get("status") in ("running", "applying"):
+        """선택 카테고리의 분류 제안을 백그라운드로 만든다. 파일은 옮기지 않는다.
+
+        "도는 작업이 있는가"를 읽어서 판단한 뒤 따로 쓰면, 그 사이에 들어온 두 번째
+        요청도 같은 답을 보고 통과해 제안 작업이 두 개 돌 수 있다. 프로세스가 여럿이라
+        이 창은 실제로 열린다. 판단과 선점을 DB 트랜잭션 하나로 묶어 닫는다.
+        항목 목록은 _run_classify_proposal_job 이 시작하면서 지운다.
+        """
+        started, current = await asyncio.to_thread(
+            category_mapping.try_start_classify_proposal,
+            {"status": "running", "source_category": body.category, "total_count": 0, "processed_count": 0, "failures": []},
+            content_type,
+            CLASSIFY_PROPOSAL_STALE_SECONDS,
+        )
+        if not started:
             return {"status": "success", "result": {"already_running": True, **current}}
-        _start_classify_proposal(body.category)
         background_tasks.add_task(_run_classify_proposal_job, body.category, body.use_bookstore, body.use_content_meta, body.delay)
-        return {"status": "success", "result": {"started": True, **_read_classify_proposal()}}
+        return {"status": "success", "result": {"started": True, **current}}
 
     @router.get("/categories/classify-proposal", dependencies=admin_dep)
     async def get_classify_proposal() -> dict[str, Any]:
@@ -802,7 +768,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         항목 목록(items)은 상태 파일이 아니라 DB(classify_proposal_items)에서 읽어
         합친다. 화면은 지금처럼 items 키를 그대로 읽으므로 응답 모양은 바뀌지 않는다.
         """
-        status = _read_classify_proposal()
+        status = await _read_classify_proposal()
         items = await asyncio.to_thread(category_mapping.get_classify_proposal_items, content_type=content_type)
         return {"status": "success", "result": {**status, "items": items}}
 
@@ -815,12 +781,18 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         허용 집합으로 쓰면 apply_category_changes가 가진 "제안 목록에 없는 파일은
         거부한다"는 검증이 통째로 무의미해져, 임의 경로를 옮기는 요청도 통과하게 된다.
         """
-        current = _read_classify_proposal()
-        # running/applying은 이미 다른 작업이 도는 중이라 거절한다. idle은 애초에 승인할
-        # 제안이 없다. ready/done/failed는 모두 받는다 — 승인 도중 중단되면 하트비트
-        # 만료로 failed까지 굳는데, 그때도 남은 pending 행을 다시 승인해 이어갈 수
-        # 있어야 한다. 그러지 않으면 관리자는 파일이 반쯤 옮겨진 채로 아무것도 못 한다.
-        if current.get("status") not in ("ready", "done", "failed"):
+        # 각 승인 작업에 고유 토큰을 발급하고, 상태 판단과 applying 선점을 DB 트랜잭션
+        # 하나로 묶는다. running/applying이면 이미 다른 작업이 도는 중이라 거절하고,
+        # idle이면 애초에 승인할 제안이 없다. ready/done/failed는 모두 받는다 — 승인
+        # 도중 중단되면 하트비트 만료로 failed까지 굳는데, 그때도 남은 pending 행을
+        # 다시 승인해 이어갈 수 있어야 한다. 그러지 않으면 관리자는 파일이 반쯤 옮겨진
+        # 채로 아무것도 못 한다.
+        # 토큰은 2차 방어다. 하트비트 만료로 failed가 된 뒤 원래 작업이 아직 살아있는
+        # 채로 두 번째 apply가 들어오면, 새 토큰을 쓴 이 작업이 유일한 주인이 되고 먼저
+        # 돈 작업은 should_continue에서 토큰 불일치를 보고 멈춘다.
+        apply_token = uuid.uuid4().hex
+        begun, _current = await asyncio.to_thread(category_mapping.try_begin_classify_apply, apply_token, content_type, CLASSIFY_PROPOSAL_STALE_SECONDS)
+        if not begun:
             return {"status": "failure", "error": "적용할 제안이 없습니다."}
         proposal_items = await asyncio.to_thread(category_mapping.get_classify_proposal_items, content_type=content_type)
         # pending은 물론 failed(재시도)와 moving(중단된 이동 재확인)도 허용한다.
@@ -830,16 +802,6 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         # 불필요한 재시도이므로 애초에 담지 않는다.
         allowed = {item.get("file_path") for item in proposal_items if item.get("file_path") and item.get("apply_status") in ("pending", "failed", "moving")}
         items = [item.model_dump() for item in body.items]
-        # 백그라운드 작업이 시작되기 전, 응답을 돌려주기 전에 동기적으로 applying을 선점한다.
-        # await 지점 없이 여기까지 오므로 동시에 들어온 두 번째 apply 요청은 이 쓰기 뒤에야
-        # 상태를 읽어 ready가 아님을 보고 거부된다. 선점을 뒤로 미루면(예: 백그라운드
-        # 작업 안에서) 응답이 나간 뒤 실제로 상태가 바뀌기 전까지 창이 열려 있어, 그 사이
-        # 두 번째 apply나 새 propose가 끼어들 수 있다.
-        # 각 승인 작업에 고유 토큰을 발급한다. 하트비트 만료로 상태가 failed로 굳은 뒤
-        # 원래 작업이 아직 살아있는 채로 두 번째 apply가 들어오면, 새 토큰을 쓴 이 작업이
-        # 유일한 주인이 되고 먼저 돈 작업은 should_continue에서 토큰 불일치를 보고 멈춘다.
-        apply_token = uuid.uuid4().hex
-        _replace_classify_proposal({**current, "status": "applying", "apply_token": apply_token})
         background_tasks.add_task(_run_classify_apply_job, items, allowed, body.clean_existing, apply_token)
         return {"status": "success", "result": {"started": True, "total_count": len(items)}}
 
@@ -850,8 +812,14 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         지우지 않으면 폐기한 제안의 항목이 DB에 남아, 다음 GET이 idle 상태인데도
         옛 항목을 보여주는 모순이 생긴다.
         """
+        current = await _read_classify_proposal()
+        # 도는 중에 지우면 그 작업은 멈추지 않은 채 계속 항목을 쌓고, 끝나면 상태를
+        # ready로 되돌린다. 폐기한 제안이 되살아난다. 게다가 상태가 idle이 되는 순간
+        # 새 제안 요청이 통과해 제안 작업이 두 개 돌게 된다.
+        if current.get("status") in ("running", "applying"):
+            return {"status": "failure", "error": "작업이 진행 중입니다."}
         await asyncio.to_thread(category_mapping.clear_classify_proposal_items, content_type=content_type)
-        _replace_classify_proposal({"status": "idle", "content_type": content_type})
+        await _replace_classify_proposal({"status": "idle", "content_type": content_type})
         return {"status": "success", "result": {"cleared": True}}
 
     @router.delete("/categories/classify-proposal/applied", dependencies=admin_dep)
@@ -861,7 +829,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         작업이 도는 중에 지우면, 건별 기록이 방금 찍은 행을 그 작업 밑에서 지울 수
         있으므로 running/applying 동안은 거절한다.
         """
-        current = _read_classify_proposal()
+        current = await _read_classify_proposal()
         if current.get("status") in ("running", "applying"):
             return {"status": "failure", "error": "작업이 진행 중입니다."}
         deleted_count = await asyncio.to_thread(category_mapping.delete_applied_classify_proposal_items, content_type=content_type)

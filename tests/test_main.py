@@ -2261,23 +2261,30 @@ class TestStaleRunningStatus:
 
 
 def test_stale_running_status_lets_the_button_work_again(backend_test_setup):
-    """멈춘 상태 파일이 GET 한 번으로 풀려야 버튼을 다시 누를 수 있다.
+    """멈춘 작업이 버튼을 영영 막지 않아야 한다.
 
-    순수 함수만 검증하면 배선이 빠져도 통과한다. 상태 파일부터 응답까지 확인한다.
+    순수 함수만 검증하면 배선이 빠져도 통과한다. DB 행부터 응답까지, 그리고 실제로
+    새 요청이 받아들여지는지까지 확인한다.
     """
-    import json
-    import time
+    from backend.category_mapping import CategoryMapping
 
-    bm = backend_test_setup["bm"]
     client = backend_test_setup["client"]
-    status_path = bm.path_prefix / ".classify_proposal_book.json"
-    stuck = {"status": "running", "remaining_count": 19, "updated_at": time.time() - 3600}
-    status_path.write_text(json.dumps(stuck), encoding="utf-8")
+    mapping = CategoryMapping()
+    mapping.set_classify_proposal_status({"status": "running", "source_category": CATEGORY})
+    # 하트비트를 DB 서버 시계로 과거로 민다. 파이썬 지역 시간을 쓰면 앱과 DB 의
+    # 시간대 차이가 섞여 의도한 나이가 만들어지지 않는다.
+    with mapping._get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE classify_proposal_status SET updated_at = DATE_SUB(NOW(3), INTERVAL 3600 SECOND) WHERE content_type = 'book'")
+        conn.commit()
 
     try:
         result = client.get("/categories/classify-proposal").json()
         assert result["result"]["status"] == "failed"
-        # 파일도 함께 굳어야 다음 POST 가 already_running 으로 막히지 않는다
-        assert json.loads(status_path.read_text(encoding="utf-8"))["status"] == "failed"
+        # 여기서 멈추면 "조회만 되고 버튼은 여전히 막힌" 상태를 놓친다. 없는 카테고리로
+        # 요청해 백그라운드 작업이 곧바로 끝나게 하고, 선점이 풀렸는지만 본다.
+        started = client.post("/categories/classify-proposal", json={"category": "__no_such_category__"}).json()
+        assert started["result"].get("already_running") is None
+        assert started["result"]["started"] is True
     finally:
-        status_path.unlink(missing_ok=True)
+        mapping.set_classify_proposal_status({"status": "idle"})
