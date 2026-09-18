@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+import json
 import logging.config
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -71,8 +72,32 @@ class CategoryMapping:
                     "CREATE TABLE IF NOT EXISTS latest_excluded_categories (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(255) NOT NULL, content_type VARCHAR(10) NOT NULL DEFAULT 'book', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY unique_latest_excluded_category_content_type (category, content_type), INDEX idx_category (category), INDEX idx_content_type (content_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
                 )
                 cursor.execute("CREATE TABLE IF NOT EXISTS reload_locks (content_type VARCHAR(10) NOT NULL PRIMARY KEY, started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+                # 분류 제안 항목을 담는 테이블. 항목을 JSON 상태 파일 하나에 담으면 책 한 권
+                # 기록할 때마다 지금까지의 목록 전체를 다시 직렬화해야 해서 비용이 책 수의
+                # 제곱으로 늘어난다(실측: 79,589권 카테고리에서 기록만 약 33시간). 행 단위로
+                # 쌓으면 이 문제가 원천적으로 사라진다. file_path는 1024자까지라 UNIQUE로
+                # 걸면 인덱스 길이 제한에 걸리므로 걸지 않는다 — 중복은 clear로 관리한다.
+                # 항목 필드가 앞으로 늘 수 있어(candidates 배열 등) payload 하나에 JSON으로
+                # 담아, 항목 스키마가 바뀌어도 테이블을 안 고쳐도 되게 한다.
+                # apply_status/apply_error: 파일 이동 상태를 건별로 기록한다. payload JSON
+                # 안에 두면 "이동 완료된 행만 지운다"가 DELETE ... WHERE payload->>'...'
+                # 같은 JSON 경로 조회가 되어 인덱스를 못 타므로, 컬럼으로 분리해 인덱스를 건다.
+                cursor.execute(
+                    "CREATE TABLE IF NOT EXISTS classify_proposal_items (id INT AUTO_INCREMENT PRIMARY KEY, content_type VARCHAR(10) NOT NULL DEFAULT 'book', source_category VARCHAR(255) NOT NULL, file_path VARCHAR(1024) NOT NULL, payload JSON NOT NULL, apply_status VARCHAR(20) NOT NULL DEFAULT 'pending', apply_error TEXT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX idx_content_source (content_type, source_category), INDEX idx_content_file (content_type, file_path(255)), INDEX idx_apply_status (content_type, apply_status)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+                )
                 # 기존 테이블 마이그레이션: content_type 컬럼이 없으면 추가
                 self._migrate_add_content_type(cursor)
+                # 기존 테이블 마이그레이션: apply_status/apply_error 컬럼이 없으면 추가
+                self._migrate_add_apply_status(cursor)
+                # 분류 제안 작업의 상태. 예전에는 corpus 디렉토리의 JSON 파일이었는데,
+                # 여러 프로세스가 잠금 없이 같이 쓰고 노드가 늘면 공유도 안 되어 DB로 옮겼다.
+                # payload에 카운트·에러·토큰을 담고, status는 FOR UPDATE로 판단해야 하므로
+                # 컬럼으로 뺀다. updated_at은 하트비트다 — 갱신이 끊기면 죽은 작업으로 본다.
+                cursor.execute(
+                    "CREATE TABLE IF NOT EXISTS classify_proposal_status (content_type VARCHAR(10) NOT NULL PRIMARY KEY, status VARCHAR(20) NOT NULL DEFAULT 'idle', payload JSON NOT NULL, updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+                )
+                # 기존 테이블 마이그레이션: file_path 인덱스 추가 + 중복 인덱스 제거
+                self._migrate_classify_proposal_item_indexes(cursor)
                 # reload_locks를 진행 상황까지 담는 공유 작업 상태 테이블로 확장
                 self._migrate_reload_locks(cursor)
                 # reload_locks를 content_type 단일 락에서 (content_type, lock_key) 복합 락으로 확장
@@ -101,6 +126,46 @@ class CategoryMapping:
                     except Exception as e:
                         LOGGER.debug("Index category not found, skipping: %s", e)
                     cursor.execute(f"ALTER TABLE {table} ADD UNIQUE KEY {table_unique_indexes[table]} (category, content_type)")
+
+    def _migrate_add_apply_status(self, cursor) -> None:
+        """기존 classify_proposal_items 테이블에 apply_status/apply_error 컬럼과 인덱스를 추가한다.
+
+        _migrate_add_content_type과 같은 방식: 이미 테이블이 만들어진 환경이 있으므로
+        information_schema로 컬럼 존재 여부를 먼저 확인하고 없을 때만 ALTER한다.
+        """
+        cursor.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = %s AND table_name = 'classify_proposal_items' AND column_name = 'apply_status'", (self.database,))
+        row = cursor.fetchone()
+        if row and row["cnt"] == 0:
+            LOGGER.info("Migrating table classify_proposal_items: adding apply_status/apply_error columns")
+            cursor.execute("ALTER TABLE classify_proposal_items ADD COLUMN apply_status VARCHAR(20) NOT NULL DEFAULT 'pending'")
+            cursor.execute("ALTER TABLE classify_proposal_items ADD COLUMN apply_error TEXT NULL")
+            cursor.execute("ALTER TABLE classify_proposal_items ADD INDEX idx_apply_status (content_type, apply_status)")
+
+    def _migrate_classify_proposal_item_indexes(self, cursor) -> None:
+        """classify_proposal_items 의 인덱스를 (content_type, file_path) 기준으로 맞춘다.
+
+        승인 작업은 책 한 권마다 `WHERE content_type = %s AND file_path = %s` 로 상태를
+        갱신한다. file_path 에 인덱스가 없으면 그 조건을 만족하는 행을 찾으려고 매번
+        테이블 전체를 훑는다. 79,589 행을 넣고 실측하면 UPDATE 한 건이 63.2ms (전수 훑기)
+        이고, 이 인덱스를 붙이면 0.9ms (한 행 조회) 다. 같은 카테고리를 승인할 때 DB 대기만
+        약 2.8 시간에서 2.4 분으로 줄어든다. file_path 는 1024 자라 인덱스 길이 제한에
+        걸리므로 앞 255 자만 쓴다 — 실제 경로는 그보다 훨씬 짧아 사실상 완전 일치다.
+
+        idx_content_type (content_type) 은 idx_content_source (content_type,
+        source_category) 의 왼쪽 접두사와 같아 조회를 하나도 더 처리하지 못하면서 INSERT
+        마다 유지 비용만 든다. 함께 지운다.
+        """
+        cursor.execute("SELECT COUNT(*) AS cnt FROM information_schema.statistics WHERE table_schema = %s AND table_name = 'classify_proposal_items' AND index_name = 'idx_content_file'", (self.database,))
+        row = cursor.fetchone()
+        if row and row["cnt"] == 0:
+            LOGGER.info("Migrating table classify_proposal_items: adding idx_content_file")
+            cursor.execute("ALTER TABLE classify_proposal_items ADD INDEX idx_content_file (content_type, file_path(255))")
+
+        cursor.execute("SELECT COUNT(*) AS cnt FROM information_schema.statistics WHERE table_schema = %s AND table_name = 'classify_proposal_items' AND index_name = 'idx_content_type'", (self.database,))
+        row = cursor.fetchone()
+        if row and row["cnt"] > 0:
+            LOGGER.info("Migrating table classify_proposal_items: dropping redundant idx_content_type")
+            cursor.execute("ALTER TABLE classify_proposal_items DROP INDEX idx_content_type")
 
     def _migrate_reload_locks(self, cursor) -> None:
         """reload_locks를 진행 상황(heartbeat·카운트)까지 담는 공유 작업 상태 테이블로 확장"""
@@ -573,3 +638,214 @@ class CategoryMapping:
             with conn.cursor() as cursor:
                 cursor.execute("DELETE FROM reload_locks WHERE content_type = %s AND lock_key = %s", (content_type, lock_key))
                 conn.commit()
+
+    def clear_classify_proposal_items(self, content_type: str = "book") -> None:
+        """새 분류 제안을 시작할 때 이 content_type의 기존 제안 항목을 전부 지운다.
+
+        지우지 않으면 이전 제안의 행이 새 제안의 행과 뒤섞여, 관리자가 이미 끝난
+        이전 작업의 책까지 새 제안으로 착각하고 승인할 수 있다.
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM classify_proposal_items WHERE content_type = %s", (content_type,))
+                conn.commit()
+
+    def add_classify_proposal_items(self, items: list[dict[str, Any]], source_category: str, content_type: str = "book") -> None:
+        """분류된 항목들을 한 번에 적재한다.
+
+        책 한 권마다 INSERT + COMMIT을 하면 커넥션 왕복과 트랜잭션 커밋이 책 수만큼
+        생긴다. 호출자가 여러 건을 모아 한 번에 넘기면, 여기서는 executemany 한 번과
+        commit 한 번으로 끝나 왕복 비용이 호출 횟수만큼만 생긴다.
+        """
+        if not items:
+            return
+        rows = [(content_type, source_category, item.get("file_path"), json.dumps(item, ensure_ascii=False)) for item in items]
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.executemany("INSERT INTO classify_proposal_items (content_type, source_category, file_path, payload) VALUES (%s, %s, %s, %s)", rows)
+                conn.commit()
+
+    def get_classify_proposal_items(self, content_type: str = "book") -> list[dict[str, Any]]:
+        """제안 항목을 분류가 끝난 순서(id 오름차순) 그대로 돌려준다.
+
+        화면에 보이는 순서가 분류 완료 순서와 같아야 관리자가 진행 상황을
+        직관적으로 따라갈 수 있다. apply_status/apply_error는 payload가 아니라
+        컬럼에 있으므로 payload를 푼 뒤 덮어써 함께 실어준다.
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT payload, apply_status, apply_error FROM classify_proposal_items WHERE content_type = %s ORDER BY id ASC", (content_type,))
+                rows = cursor.fetchall()
+        items = []
+        for row in rows:
+            item = json.loads(row["payload"])
+            item["apply_status"] = row["apply_status"]
+            item["apply_error"] = row["apply_error"]
+            items.append(item)
+        return items
+
+    def update_classify_proposal_item_payloads(self, items: list[dict[str, Any]], content_type: str = "book") -> None:
+        """분류가 끝난 항목의 payload를 덮어쓴다. 여러 건을 executemany 한 번으로 보낸다.
+
+        제안 시작 시 이름만 담은 행을 먼저 넣어두고(add_classify_proposal_items),
+        분류가 끝나는 대로 이 메서드로 그 행을 채운다. apply_status는 건드리지 않는다 —
+        승인 작업이 쓰는 컬럼이라 제안 갱신이 덮으면 이동 기록이 사라진다.
+        """
+        if not items:
+            return
+        rows = [(json.dumps(item, ensure_ascii=False), content_type, item.get("file_path")) for item in items]
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.executemany("UPDATE classify_proposal_items SET payload = %s WHERE content_type = %s AND file_path = %s", rows)
+            conn.commit()
+
+    def update_classify_proposal_item_status(self, file_path: str, apply_status: str, apply_error: str | None = None, content_type: str = "book") -> None:
+        """파일 하나를 옮긴 직후 그 행 하나만 바로 기록한다.
+
+        승인 작업을 끝까지 돈 뒤 한꺼번에 기록하면, 도중에 중단됐을 때 무엇이
+        옮겨졌는지 알 수 없다. 건별로 바로 기록해야 중단 후 재개가 가능하다.
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("UPDATE classify_proposal_items SET apply_status = %s, apply_error = %s WHERE content_type = %s AND file_path = %s", (apply_status, apply_error, content_type, file_path))
+            conn.commit()
+
+    def delete_applied_classify_proposal_items(self, content_type: str = "book") -> int:
+        """이동이 끝난(apply_status = 'moved') 행만 지우고, 지운 개수를 돌려준다.
+
+        대기·실패 행은 남겨야 관리자가 재시도하거나 목적지를 고쳐 다시 승인할 수 있다.
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM classify_proposal_items WHERE content_type = %s AND apply_status = 'moved'", (content_type,))
+                deleted_count = cursor.rowcount
+            conn.commit()
+        return deleted_count
+
+    # ── 분류 제안 작업 상태 ──────────────────────────────────────────────────
+    #
+    # 이 상태는 원래 corpus 디렉토리의 JSON 파일 하나였다. 파일로는 두 가지가 안 된다.
+    # 첫째, 여러 프로세스가 같이 쓰면 "읽고-판단하고-쓰기" 사이에 잠금을 걸 수 없어
+    # 두 승인 작업이 동시에 시작될 수 있다. 이 서비스는 uvicorn --workers 2 에
+    # replicas 2 라 실제로 프로세스가 4개다. 둘째, 노드가 늘면 파일은 아예 공유되지
+    # 않는다. reload_locks 가 이미 같은 문제를 DB 행 + SELECT ... FOR UPDATE 로
+    # 풀고 있어 그 방식을 그대로 따른다.
+
+    @staticmethod
+    def _classify_proposal_effective_status(row: dict[str, Any], stale_seconds: int) -> dict[str, Any]:
+        """저장된 상태에 '갱신이 끊겼는가'를 반영해 돌려준다. 행은 고치지 않는다.
+
+        get_reload_status 와 같은 방식이다. 조회하면서 행을 고치면 GET 요청이 쓰기를
+        하게 되고, 여러 클라이언트가 동시에 폴링할 때 서로의 쓰기와 경합한다. 죽은
+        작업을 실제로 치우는 일은 다음 작업이 시작될 때 try_* 가 한다.
+
+        '얼마나 낡았는가'는 파이썬이 아니라 SQL 이 센다(TIMESTAMPDIFF ... NOW(3)).
+        파이썬의 datetime.now() 는 앱 컨테이너의 지역 시간이고 updated_at 은 DB 서버의
+        시계라, 둘의 시간대가 다르면(이 저장소는 앱 KST, MySQL UTC) 그 차이만큼
+        모든 행이 낡아 보인다. 같은 시계끼리 빼면 시간대와 무관해진다.
+        """
+        payload = dict(row["payload"] or {})
+        payload["status"] = row["status"]
+        if row["status"] in ("running", "applying") and (row["age_seconds"] or 0) > stale_seconds:
+            payload["status"] = "failed"
+            payload["error"] = payload.get("error") or "응답 없이 중단된 것으로 보입니다."
+        return payload
+
+    def _read_classify_proposal_status_row(self, cursor, content_type: str) -> dict[str, Any] | None:
+        cursor.execute("SELECT status, payload, TIMESTAMPDIFF(SECOND, updated_at, NOW(3)) AS age_seconds FROM classify_proposal_status WHERE content_type = %s", (content_type,))
+        row = cursor.fetchone()
+        if row and isinstance(row["payload"], str):
+            row["payload"] = json.loads(row["payload"])
+        return row
+
+    def get_classify_proposal_status(self, content_type: str = "book", stale_seconds: int = 300) -> dict[str, Any]:
+        """분류 제안 작업의 현재 상태. 아직 아무 작업도 없으면 idle 을 돌려준다."""
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                row = self._read_classify_proposal_status_row(cursor, content_type)
+        if not row:
+            return {"status": "idle", "content_type": content_type}
+        return self._classify_proposal_effective_status(row, stale_seconds)
+
+    def set_classify_proposal_status(self, status: dict[str, Any], content_type: str = "book") -> None:
+        """상태를 통째로 바꾼다. status 컬럼과 payload 안의 status 를 함께 맞춘다."""
+        payload = {**status, "content_type": content_type}
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO classify_proposal_status (content_type, status, payload, updated_at) VALUES (%s, %s, %s, NOW(3)) ON DUPLICATE KEY UPDATE status = VALUES(status), payload = VALUES(payload), updated_at = NOW(3)", (content_type, payload.get("status", "idle"), json.dumps(payload, ensure_ascii=False))
+                )
+            conn.commit()
+
+    def merge_classify_proposal_status(self, fields: dict[str, Any], content_type: str = "book") -> None:
+        """진행률처럼 일부 필드만 갱신한다. status 는 절대 바꾸지 않는다.
+
+        제안(running)과 적용(applying)이 같은 행을 쓰므로, 진행률 갱신이 status 를
+        건드리면 적용 중인 작업이 화면에 '제안 생성 중'으로 보인다. 예전에는 호출자가
+        읽어서 합친 뒤 통째로 쓰는 방식이라 그 사이 다른 프로세스의 갱신을 덮어썼다.
+        여기서는 서버가 JSON_MERGE_PATCH 로 합치므로 읽기-쓰기 창 자체가 없다.
+        """
+        fields = {key: value for key, value in fields.items() if key != "status"}
+        if not fields:
+            return
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("UPDATE classify_proposal_status SET payload = JSON_MERGE_PATCH(payload, %s), updated_at = NOW(3) WHERE content_type = %s", (json.dumps(fields, ensure_ascii=False), content_type))
+            conn.commit()
+
+    def try_start_classify_proposal(self, status: dict[str, Any], content_type: str = "book", stale_seconds: int = 300) -> tuple[bool, dict[str, Any]]:
+        """이미 도는 작업이 없을 때만 새 제안 작업을 시작 상태로 만든다.
+
+        (시작했는가, 현재 상태) 를 돌려준다. 실패하면 현재 상태는 이미 도는 작업의
+        것이다. 판단과 쓰기가 한 트랜잭션 안에서 FOR UPDATE 로 묶여 있어, 프로세스가
+        몇 개든 둘이 동시에 시작하지 못한다.
+        """
+        return self._try_transition_classify_proposal(lambda current: None if current in ("running", "applying") else {**status, "content_type": content_type}, content_type, stale_seconds)
+
+    def try_begin_classify_apply(self, apply_token: str, content_type: str = "book", stale_seconds: int = 300) -> tuple[bool, dict[str, Any]]:
+        """승인할 제안이 있을 때만 적용 중 상태를 선점하고 토큰을 발급한다.
+
+        ready 뿐 아니라 done 과 failed 에서도 받는다 — 승인 도중 중단되면 상태가
+        failed 로 굳는데, 그때도 남은 pending 행을 이어서 승인할 수 있어야 한다.
+        """
+
+        def _next(current: str) -> dict[str, Any] | None:
+            if current not in ("ready", "done", "failed"):
+                return None
+            return {"status": "applying", "apply_token": apply_token}
+
+        return self._try_transition_classify_proposal(_next, content_type, stale_seconds, merge_into_current=True)
+
+    def _ensure_classify_proposal_status_row(self, content_type: str) -> None:
+        """잠그기 전에 잠글 행을 만들어 둔다. 반드시 별도 트랜잭션이어야 한다.
+
+        같은 트랜잭션 안에서 INSERT IGNORE 로 자리를 만들고 곧바로 SELECT ... FOR UPDATE
+        를 하면, 두 프로세스가 동시에 들어올 때 서로 공유 잠금을 쥔 채 배타 잠금으로
+        올리려 해 InnoDB 가 데드락으로 한쪽을 끊는다(실측). 자리 만들기를 먼저 커밋해
+        두면 잠금 트랜잭션은 SELECT FOR UPDATE 와 UPDATE 만 하게 되어 이 경합이 없다.
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("INSERT IGNORE INTO classify_proposal_status (content_type, status, payload) VALUES (%s, 'idle', %s)", (content_type, json.dumps({"status": "idle", "content_type": content_type}, ensure_ascii=False)))
+            conn.commit()
+
+    def _try_transition_classify_proposal(self, next_status, content_type: str, stale_seconds: int, merge_into_current: bool = False) -> tuple[bool, dict[str, Any]]:
+        self._ensure_classify_proposal_status_row(content_type)
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT status, payload, TIMESTAMPDIFF(SECOND, updated_at, NOW(3)) AS age_seconds FROM classify_proposal_status WHERE content_type = %s FOR UPDATE", (content_type,))
+                row = cursor.fetchone()
+                if row and isinstance(row["payload"], str):
+                    row["payload"] = json.loads(row["payload"])
+                current = self._classify_proposal_effective_status(row, stale_seconds)
+
+                decided = next_status(current["status"])
+                if decided is None:
+                    conn.commit()
+                    return False, current
+
+                payload = {**current, **decided} if merge_into_current else dict(decided)
+                payload["content_type"] = content_type
+                cursor.execute("UPDATE classify_proposal_status SET status = %s, payload = %s, updated_at = NOW(3) WHERE content_type = %s", (payload.get("status", "idle"), json.dumps(payload, ensure_ascii=False), content_type))
+            conn.commit()
+        return True, payload

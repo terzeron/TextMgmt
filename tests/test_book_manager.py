@@ -304,15 +304,16 @@ class TestBookManager:
             assert "category" in item
             assert "es_count" in item
             assert "fs_count" in item
-            assert "diff" in item
+            assert "anomaly_count" in item
             assert isinstance(item["category"], str)
             assert isinstance(item["es_count"], int)
             assert isinstance(item["fs_count"], int)
-            assert item["diff"] > 0
+            # diff(건수 차이)는 0일 수 있다. 경로가 서로 어긋나면 건수가 같아도 이상이다.
+            assert item["anomaly_count"] > 0
 
-        # mismatches가 diff 절대값 내림차순 정렬인지 검증
-        diffs = [abs(item["diff"]) for item in result["mismatches"]]
-        assert diffs == sorted(diffs, reverse=True)
+        # mismatches가 이상 항목 수 내림차순 정렬인지 검증
+        counts = [item["anomaly_count"] for item in result["mismatches"]]
+        assert counts == sorted(counts, reverse=True)
 
         # es_only 항목 구조 검증
         for item in result["es_only"]:
@@ -327,6 +328,25 @@ class TestBookManager:
             assert "fs_count" in item
             assert isinstance(item["category"], str)
             assert isinstance(item["fs_count"], int)
+
+    @pytest.mark.asyncio
+    async def test_search_by_category_paged_sort_works_on_real_es(self, book_manager_with_data):
+        """CATEGORY_SORT를 실제 ES가 거부하면 상세 조회와 카테고리 책 목록이 통째로 빈다.
+
+        search_by_category_paged는 예외를 삼키고 빈 결과를 돌려주므로 장애가 조용하다.
+        DummyES는 정렬을 흉내만 내서 이 회귀를 단위 테스트로 잡을 수 없다.
+        _id를 tie-breaker로 넣었다가 fielddata 금지로 전부 0건이 된 적이 있다.
+        """
+        bm = book_manager_with_data
+        categories, error = await bm.get_categories()
+        assert error is None
+        if not categories:
+            pytest.skip("테스트 인덱스에 문서가 없다")
+
+        category = next(iter(categories))
+        page, total, _next_cursor = bm.es_manager.search_by_category_paged(category, size=5)
+        assert total > 0
+        assert page
 
     @pytest.mark.asyncio
     async def test_delete_book(self, book_manager_with_data):
@@ -375,6 +395,8 @@ class DummyES:
         self.aggregate = {"A": 1}
         self.counts = {"A": 1, "B": 0}
         self.category_docs = []
+        # get_category_mismatches가 훑는 전체 문서의 (category, file_path)
+        self.all_file_paths: list[tuple[str, str]] = []
         self.doc = doc
         self.keyword = []
         self.similar = []
@@ -412,6 +434,13 @@ class DummyES:
 
     def search_and_aggregate_by_category(self):
         return self.aggregate
+
+    def iter_all_category_file_paths(self, batch_size: int = 10000):
+        # 실제 composite 집계처럼 (category, file_path) 조합별로 접어서 문서 수와 함께 준다.
+        counts: dict[tuple[str, str], int] = {}
+        for category, file_path in self.all_file_paths:
+            counts[(category, file_path)] = counts.get((category, file_path), 0) + 1
+        return iter([(category, file_path, count) for (category, file_path), count in counts.items()])
 
     def search_by_category(self, category: str, max_result_count: int):
         return self.category_docs
@@ -463,6 +492,8 @@ def make_manager(tmp_path: Path, es: DummyES | dict | None) -> BookManager:
         manager.es_manager = DummyES(es)
     manager._mismatch_cache = None
     manager._mismatch_cache_time = 0.0
+    manager._mismatch_state_lock = threading.Lock()
+    manager._mismatch_scan_lock = threading.Lock()
     manager.item_class = Book
     Book.path_prefix = tmp_path
     return manager
@@ -761,10 +792,129 @@ def test_category_mismatches_include_detected_indexable_files(tmp_path: Path):
         zf.writestr("META-INF/container.xml", "<container/>")
 
     result = manager.get_category_mismatches()
-    assert result["fs_only"] == [{"category": "A", "fs_count": 1}]
+    assert [(item["category"], item["fs_count"], item["anomaly_count"]) for item in result["fs_only"]] == [("A", 1, 1)]
     details = manager.get_category_mismatch_details("A")
     assert details["fs_count"] == 1
     assert details["fs_only"] == [{"file_name": "book.bak", "file_path": "A/book.bak"}]
+
+
+def test_category_mismatches_do_not_cancel_out(tmp_path: Path):
+    """고아 문서 1건과 미색인 파일 1건은 건수가 같아도 서로 상쇄되면 안 된다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "present.txt").write_text("x")
+    es.all_file_paths = [("A", "A/gone.txt")]
+
+    item = manager.get_category_mismatches()["mismatches"][0]
+    assert item["category"] == "A"
+    assert item["diff"] == 0
+    assert (item["es_only_count"], item["fs_only_count"]) == (1, 1)
+    assert item["anomaly_count"] == 2
+
+
+def test_category_mismatches_scan_deep_categories(tmp_path: Path):
+    """2레벨까지만 보던 이전 구현이 통째로 빠뜨리던 3레벨 이하 카테고리도 검사한다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    deep = tmp_path / "A" / "B" / "C"
+    deep.mkdir(parents=True)
+    (deep / "book.txt").write_text("x")
+    es.all_file_paths = []
+
+    result = manager.get_category_mismatches()
+    assert [(item["category"], item["anomaly_count"]) for item in result["fs_only"]] == [("A/B/C", 1)]
+
+
+def test_category_mismatches_skip_ignored_dirs(tmp_path: Path):
+    """FS 스캔이 건너뛰는 폴더는 ES 쪽에서도 빼야 한다.
+
+    한쪽만 빼면 이미 색인된 문서가 전부 "파일 없는 고아"로 잡힌다. 그 상태에서
+    재적재를 누르면 디스크에 멀쩡히 있는 파일의 문서를 지운다.
+    """
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    intermediate = tmp_path / "A" / "page_images"
+    intermediate.mkdir(parents=True)
+    (intermediate / "page_0001.png").write_text("x")
+    es.all_file_paths = [("A/page_images", "A/page_images/page_0001.png")]
+
+    assert manager._mismatch_categories(manager.get_category_mismatches()) == []
+
+
+def test_category_mismatches_skip_hidden_categories(tmp_path: Path):
+    """숨김 디렉토리는 FS 스캔에서 제외하므로 ES 문서만 남아도 이상으로 보고하지 않는다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    hidden = tmp_path / ".preview_cache"
+    hidden.mkdir()
+    (hidden / "cached.txt").write_text("x")
+    es.all_file_paths = [(".preview_cache", ".preview_cache/gone.txt")]
+
+    assert manager._mismatch_categories(manager.get_category_mismatches()) == []
+
+
+def test_category_mismatches_count_duplicate_docs(tmp_path: Path):
+    """같은 파일을 가리키는 ES 문서가 둘이면 경로 1건을 중복으로 센다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "book.txt").write_text("x")
+    es.all_file_paths = [("A", "A/book.txt"), ("A", "A/book.txt")]
+
+    item = manager.get_category_mismatches()["mismatches"][0]
+    assert (item["es_only_count"], item["fs_only_count"], item["duplicate_count"]) == (0, 0, 1)
+    assert item["anomaly_count"] == 1
+
+
+def _manager_with_one_anomaly(tmp_path: Path) -> BookManager:
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "one.txt").write_text("x")
+    return manager
+
+
+def test_mismatch_cache_reuses_result_until_invalidated(tmp_path: Path):
+    """TTL 안에서는 다시 세지 않고, 무효화하면 다시 센다."""
+    manager = _manager_with_one_anomaly(tmp_path)
+    assert manager._mismatch_item_count(manager.get_category_mismatches()) == 1
+
+    (tmp_path / "A" / "two.txt").write_text("y")
+    assert manager._mismatch_item_count(manager.get_category_mismatches()) == 1
+
+    manager._clear_mismatch_cache()
+    assert manager._mismatch_item_count(manager.get_category_mismatches()) == 2
+
+
+def test_mismatch_cache_force_refresh_rescans(tmp_path: Path):
+    """일괄 재적재의 전후 건수는 오래된 값을 쓰면 안 되므로 강제로 다시 센다."""
+    manager = _manager_with_one_anomaly(tmp_path)
+    manager.get_category_mismatches()
+    (tmp_path / "A" / "two.txt").write_text("y")
+
+    assert manager._mismatch_item_count(manager.get_category_mismatches()) == 1
+    assert manager._mismatch_item_count(manager.get_category_mismatches(force_refresh=True)) == 2
+
+
+def test_mismatch_cache_runs_one_scan_at_a_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """동시 조회가 겹쳐도 ES를 두 번 훑지 않는다."""
+    manager = _manager_with_one_anomaly(tmp_path)
+    scans: list[int] = []
+    original = manager._scan_category_mismatches
+
+    def counting_scan() -> dict:
+        scans.append(1)
+        time.sleep(0.2)
+        return original()
+
+    monkeypatch.setattr(manager, "_scan_category_mismatches", counting_scan)
+    threads = [threading.Thread(target=manager.get_category_mismatches) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+
+    assert scans == [1]
 
 
 def asyncio_runner(coro):
@@ -1672,7 +1822,7 @@ def test_reload_category_mismatches_indexes_missing_files_and_deletes_stale_docs
         "C": {"fs_only": [{"file_path": "C/new.txt"}], "es_only": [], "duplicates": []},
     }
 
-    def fake_summary():
+    def fake_summary(force_refresh: bool = False):
         return {"mismatches": [{"category": "A", "diff": 3}], "es_only": [{"category": "B", "es_count": 1}], "fs_only": [{"category": "C", "fs_count": 1}]}
 
     monkeypatch.setattr(manager, "get_category_mismatches", fake_summary)
@@ -1745,10 +1895,7 @@ def test_reload_category_mismatch_files_reports_progress_during_run(tmp_path: Pa
     """
     es = DummyES()
     manager = make_manager(tmp_path, es)
-    details = [
-        {"fs_only": [{"file_path": "A/f1.txt"}, {"file_path": "A/f2.txt"}, {"file_path": "A/f3.txt"}], "es_only": [{"book_id": 10}], "duplicates": []},
-        {"fs_only": [], "es_only": [], "duplicates": []},
-    ]
+    details = [{"fs_only": [{"file_path": "A/f1.txt"}, {"file_path": "A/f2.txt"}, {"file_path": "A/f3.txt"}], "es_only": [{"book_id": 10}], "duplicates": []}, {"fs_only": [], "es_only": [], "duplicates": []}]
 
     abs_to_relpath = {}
     for i, rel_path in enumerate(["A/f1.txt", "A/f2.txt", "A/f3.txt"], start=1):
@@ -1800,7 +1947,7 @@ def test_reload_category_mismatches_reports_progress_within_category(tmp_path: P
         return {book_id: make_doc(rel_path)}
 
     monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
-    monkeypatch.setattr(manager, "get_category_mismatches", lambda: {"mismatches": [], "es_only": [], "fs_only": [{"category": "A", "fs_count": len(rel_paths)}]})
+    monkeypatch.setattr(manager, "get_category_mismatches", lambda force_refresh=False: {"mismatches": [], "es_only": [], "fs_only": [{"category": "A", "fs_count": len(rel_paths)}]})
     monkeypatch.setattr(manager, "get_category_mismatch_details", lambda category: {"fs_only": [{"file_path": p} for p in rel_paths], "es_only": [], "duplicates": []})
 
     progress_updates: list[dict[str, int]] = []
@@ -1816,7 +1963,13 @@ def test_reload_category_mismatches_reports_progress_within_category(tmp_path: P
     assert len(indexed_series) >= 4
 
 
-def test_auto_classify_category_moves_matching_file_and_reindexes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_propose_then_apply_moves_file_and_reindexes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """propose로 만든 제안을 그대로 apply에 넣으면 실제 auto-classify와 같은 결과(이동+재색인)가 나온다.
+
+    Task 5에서 auto_classify_category가 사라지면서, 예전에 이 한 메서드가 하던
+    "스캔 -> 분류 -> 이동 -> 재색인 -> 진행률 보고"를 propose/apply 두 메서드로 나눴다.
+    이 테스트는 그 나눈 두 메서드를 이어 붙여도 예전과 같은 결과가 나오는지 본다.
+    """
     es = DummyES()
     manager = make_manager(tmp_path, es)
     source_dir = tmp_path / "0_inbox"
@@ -1827,295 +1980,62 @@ def test_auto_classify_category_moves_matching_file_and_reindexes(tmp_path: Path
     def fake_read_file(abs_path, stat_result=None, skip_text=False, path_prefix=None):
         assert path_prefix == tmp_path
         rel_path = str(abs_path.relative_to(tmp_path))
-        return {
-            abs_path.stat().st_ino: {
-                **make_doc(rel_path, "txt"),
-                "category": rel_path.split("/", 1)[0],
-                "file_path": rel_path,
-            }
-        }
+        return {abs_path.stat().st_ino: {**make_doc(rel_path, "txt"), "category": rel_path.split("/", 1)[0], "file_path": rel_path}}
 
     monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
 
-    result, err = asyncio_runner(
-        manager.auto_classify_category(
-            "0_inbox",
-            {
-                "0_inbox": ["미분류"],
-                "1_fiction": ["소설"],
-                "2_science": ["과학"],
-                "2_science/physics": ["물리"],
-            },
-        )
-    )
+    propose_progress: list[dict[str, int]] = []
+    propose_result, propose_err = asyncio_runner(manager.propose_category_changes("0_inbox", {"0_inbox": ["미분류"], "1_fiction": ["소설"], "2_science": ["과학"], "2_science/physics": ["물리"]}, use_bookstore=False, use_content_meta=False, on_progress=propose_progress.append))
+
+    assert propose_err is None
+    assert propose_result["total_count"] == 1
+    assert propose_progress[-1]["processed_count"] == 1
+    assert propose_result["items"][0]["file_path"] == "0_inbox/쉬운 과학 이야기.txt"
+    assert propose_result["items"][0]["target_category"] == "2_science"
+    # 제안 단계는 파일을 옮기지 않는다
+    assert source_file.exists()
+
+    allowed = {item["file_path"] for item in propose_result["items"]}
+    apply_progress: list[dict[str, int]] = []
+    apply_result, apply_err = asyncio_runner(manager.apply_category_changes(propose_result["items"], allowed, on_progress=apply_progress.append))
 
     target_file = tmp_path / "2_science" / "쉬운 과학 이야기.txt"
-    assert err is None
+    assert apply_err is None
     assert not source_file.exists()
     assert target_file.exists()
-    assert result["processed_count"] == 1
-    assert result["moved_count"] == 1
-    assert result["indexed_count"] == 1
-    assert result["failed_count"] == 0
-    assert result["files"][0]["from"] == "0_inbox/쉬운 과학 이야기.txt"
-    assert result["files"][0]["to"] == "2_science/쉬운 과학 이야기.txt"
+    assert apply_result["applied_count"] == 1
+    assert apply_result["failed_count"] == 0
+    assert apply_progress[-1]["applied_count"] == 1
     assert es.deleted_file_paths[0] == (["0_inbox/쉬운 과학 이야기.txt"], [])
-    assert es.inserted[0]
     indexed_doc = next(iter(es.inserted[0].values()))
     assert indexed_doc["category"] == "2_science"
     assert indexed_doc["file_path"] == "2_science/쉬운 과학 이야기.txt"
 
 
-def test_auto_classify_category_reports_remaining_progress(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    es = DummyES()
-    manager = make_manager(tmp_path, es)
-    source_dir = tmp_path / "0_inbox"
-    source_dir.mkdir(parents=True)
-    source_file = source_dir / "쉬운 과학 이야기.txt"
-    source_file.write_text("hello")
-
-    def fake_read_file(abs_path, stat_result=None, skip_text=False, path_prefix=None):
-        rel_path = str(abs_path.relative_to(tmp_path))
-        return {
-            abs_path.stat().st_ino: {
-                **make_doc(rel_path, "txt"),
-                "category": rel_path.split("/", 1)[0],
-                "file_path": rel_path,
-            }
-        }
-
-    monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
-    progress_updates: list[dict[str, int]] = []
-
-    result, err = asyncio_runner(
-        manager.auto_classify_category(
-            "0_inbox",
-            {"2_science": ["과학"]},
-            on_progress=progress_updates.append,
-        )
-    )
-
-    assert err is None
-    assert result["total_count"] == 1
-    assert result["remaining_count"] == 0
-    assert progress_updates[0]["total_count"] == 1
-    assert progress_updates[0]["remaining_count"] == 1
-    assert progress_updates[-1]["processed_count"] == 1
-    assert progress_updates[-1]["moved_count"] == 1
-    assert progress_updates[-1]["remaining_count"] == 0
-
-
-def test_auto_classify_root_category_non_recursive_moves_only_top_level_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    es = DummyES()
-    manager = make_manager(tmp_path, es)
-    source_file = tmp_path / "쉬운 과학 이야기.txt"
-    source_file.write_text("root")
-    nested_dir = tmp_path / "0_inbox"
-    nested_dir.mkdir()
-    nested_file = nested_dir / "깊은 과학 이야기.txt"
-    nested_file.write_text("nested")
-
-    def fake_read_file(abs_path, stat_result=None, skip_text=False, path_prefix=None):
-        assert path_prefix == tmp_path
-        rel_path = str(abs_path.relative_to(tmp_path))
-        return {
-            abs_path.stat().st_ino: {
-                **make_doc(rel_path, "txt"),
-                "category": rel_path.split("/", 1)[0] if "/" in rel_path else "_root",
-                "file_path": rel_path,
-            }
-        }
-
-    monkeypatch.setattr("utils.loader.Loader.read_file", fake_read_file)
-
-    result, err = asyncio_runner(
-        manager.auto_classify_category(
-            "_root",
-            {
-                "2_science": ["과학"],
-            },
-            recursive=False,
-        )
-    )
-
-    target_file = tmp_path / "2_science" / "쉬운 과학 이야기.txt"
-    assert err is None
-    assert not source_file.exists()
-    assert target_file.exists()
-    assert nested_file.exists()
-    assert not (tmp_path / "2_science" / "깊은 과학 이야기.txt").exists()
-    assert result["source_category"] == "_root"
-    assert result["recursive"] is False
-    assert result["processed_count"] == 1
-    assert result["moved_count"] == 1
-    assert result["files"][0]["from"] == "쉬운 과학 이야기.txt"
-    assert result["files"][0]["to"] == "2_science/쉬운 과학 이야기.txt"
-    assert es.deleted_file_paths[0] == (["쉬운 과학 이야기.txt"], [])
-
-
-def test_auto_classify_category_preserves_existing_es_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    source_dir = tmp_path / "0_inbox"
-    source_dir.mkdir(parents=True)
-    source_file = source_dir / "수정 과학.txt"
-    source_file.write_text("hello")
-    old_doc = {
-        **make_doc("0_inbox/수정 과학.txt", "txt"),
-        "category": "0_inbox",
-        "title": "관리자가 수정한 제목",
-        "author": "관리자가 수정한 저자",
-        "summary": "관리자가 유지하려는 요약",
-    }
-    es = DummyES(doc=old_doc)
-    manager = make_manager(tmp_path, es)
-
-    def fail_read_file(*args, **kwargs):
-        raise AssertionError("existing ES metadata should be reused")
-
-    monkeypatch.setattr("utils.loader.Loader.read_file", fail_read_file)
-
-    result, err = asyncio_runner(
-        manager.auto_classify_category(
-            "0_inbox",
-            {
-                "2_science": ["과학"],
-            },
-        )
-    )
-
-    assert err is None
-    assert result["moved_count"] == 1
-    indexed_doc = next(iter(es.inserted[0].values()))
-    assert indexed_doc["category"] == "2_science"
-    assert indexed_doc["file_path"] == "2_science/수정 과학.txt"
-    assert indexed_doc["title"] == "관리자가 수정한 제목"
-    assert indexed_doc["author"] == "관리자가 수정한 저자"
-    assert indexed_doc["summary"] == "관리자가 유지하려는 요약"
-
-
-def test_auto_classify_category_skips_ambiguous_and_existing_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    es = DummyES()
-    manager = make_manager(tmp_path, es)
-    source_dir = tmp_path / "0_inbox"
-    source_dir.mkdir(parents=True)
-    ambiguous = source_dir / "과학 역사 입문.txt"
-    conflict = source_dir / "새 과학.txt"
-    ambiguous.write_text("ambiguous")
-    conflict.write_text("conflict")
-    target_dir = tmp_path / "2_science"
-    target_dir.mkdir()
-    # 내용까지 같아야 중복으로 보고 실패시킨다. 내용이 다르면 번호를 붙여 둘 다 남긴다.
-    (target_dir / conflict.name).write_text("conflict")
-
-    monkeypatch.setattr("utils.loader.Loader.read_file", lambda *args, **kwargs: {})
-
-    result, err = asyncio_runner(
-        manager.auto_classify_category(
-            "0_inbox",
-            {
-                "2_science": ["과학"],
-                "3_history": ["역사"],
-            },
-        )
-    )
-
-    assert err is None
-    assert ambiguous.exists()
-    assert conflict.exists()
-    assert result["moved_count"] == 0
-    assert result["skipped_count"] == 1
-    assert result["failed_count"] == 1
-    assert "여러 카테고리" in result["skipped"][0]["reason"]
-    assert "대상 경로에 파일이 이미 존재합니다" in result["failures"][0]["error"]
-
-
-def test_auto_classify_category_rolls_back_file_when_reindex_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    es = DummyES()
-    manager = make_manager(tmp_path, es)
-    source_dir = tmp_path / "0_inbox"
-    source_dir.mkdir(parents=True)
-    source_file = source_dir / "과학 실패.txt"
-    source_file.write_text("hello")
-
-    monkeypatch.setattr("utils.loader.Loader.read_file", lambda *args, **kwargs: {})
-
-    result, err = asyncio_runner(
-        manager.auto_classify_category(
-            "0_inbox",
-            {
-                "2_science": ["과학"],
-            },
-        )
-    )
-
-    assert err is None
-    assert source_file.exists()
-    assert not (tmp_path / "2_science" / source_file.name).exists()
-    assert result["moved_count"] == 0
-    assert result["failed_count"] == 1
-    assert "지원하지 않는 파일 형식입니다" in result["failures"][0]["error"]
-
-
-def test_auto_classify_category_rejects_invalid_category(tmp_path: Path):
+def test_propose_category_changes_rejects_invalid_category(tmp_path: Path):
+    """propose_category_changes도 auto_classify_category와 같은 카테고리 이름 검증을 한다."""
     manager = make_manager(tmp_path, DummyES())
-    result, err = asyncio_runner(manager.auto_classify_category("../bad", {"A": ["x"]}))
-    assert result == {}
-    assert err == "잘못된 카테고리 경로입니다"
+    result1, err1 = asyncio_runner(manager.propose_category_changes(""))
+    assert result1 == {}
+    assert err1 == "카테고리 이름이 비어있습니다"
+
+    result2, err2 = asyncio_runner(manager.propose_category_changes("non_existent_dir"))
+    assert result2 == {}
+    assert "디렉토리를 찾을 수 없습니다" in err2
 
 
-def test_auto_classify_category_cleans_existing_duplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    es = DummyES()
-    manager = make_manager(tmp_path, es)
-    source_dir = tmp_path / "0_inbox"
-    source_dir.mkdir(parents=True)
-    conflict = source_dir / "중복 도서.txt"
-    conflict.write_text("conflict duplicate")
-    target_dir = tmp_path / "2_science"
-    target_dir.mkdir()
-    (target_dir / conflict.name).write_text("conflict duplicate")
-
-    result, err = asyncio_runner(
-        manager.auto_classify_category(
-            "0_inbox",
-            {"2_science": ["중복"]},
-            clean_existing=True,
-        )
-    )
-
+def test_propose_category_changes_records_value_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """스캔된 경로가 corpus 밖이면(ValueError) 그 항목만 실패로 남기고 계속한다."""
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "0_inbox").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(manager, "_iter_category_indexable_files", lambda cat, recursive=False: [Path("/outside/book.txt")])
+    result, err = asyncio_runner(manager.propose_category_changes("0_inbox"))
     assert err is None
-    assert not conflict.exists()
-    assert (target_dir / conflict.name).read_text() == "conflict duplicate"
-    assert result["moved_count"] == 0
-    assert result["duplicate_cleaned_count"] == 1
-    assert result["failed_count"] == 0
+    assert any("잘못된 파일 경로" in f.get("error", "") for f in result["failures"])
 
 
-def test_auto_classify_category_numbers_conflicting_different_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """이름만 겹치고 내용이 다르면 실패가 아니라 번호를 붙인 이동으로 처리한다."""
-    es = DummyES()
-    manager = make_manager(tmp_path, es)
-    source_dir = tmp_path / "0_inbox"
-    source_dir.mkdir(parents=True)
-    conflict = source_dir / "중복 도서.txt"
-    conflict.write_text("원본과 다른 내용", encoding="utf-8")
-    target_dir = tmp_path / "2_science"
-    target_dir.mkdir()
-    (target_dir / conflict.name).write_text("기존 파일", encoding="utf-8")
-
-    result, err = asyncio_runner(
-        manager.auto_classify_category("0_inbox", {"2_science": ["중복"]}, clean_existing=True)
-    )
-
-    assert err is None
-    assert result["moved_count"] == 1
-    assert result["failed_count"] == 0
-    assert result["duplicate_cleaned_count"] == 0
-    assert (target_dir / "중복 도서.txt").read_text(encoding="utf-8") == "기존 파일"
-    assert (target_dir / "중복 도서 (1).txt").read_text(encoding="utf-8") == "원본과 다른 내용"
-    assert not conflict.exists()
-
-
-def test_auto_classify_category_uses_the_supervised_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """자동분류 호출부가 학습된 모델의 판정을 그대로 따르는지 본다."""
+def test_propose_category_changes_uses_the_supervised_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """제안 생성이 학습된 모델의 판정을 그대로 제안에 담는지 본다. 파일은 옮기지 않는다."""
     from backend.classifier.model import Prediction
 
     es = DummyES()
@@ -2124,9 +2044,6 @@ def test_auto_classify_category_uses_the_supervised_model(tmp_path: Path, monkey
     source_dir.mkdir(parents=True)
     rofan_book = source_dir / "[로판] 황녀님이 너무해.txt"
     rofan_book.write_text("황녀님과 기사단장 이야기")
-
-    target_dir = tmp_path / "3_fiction" / "로판"
-    target_dir.mkdir(parents=True)
 
     class StubClassifier:
         def __bool__(self):
@@ -2139,24 +2056,22 @@ def test_auto_classify_category_uses_the_supervised_model(tmp_path: Path, monkey
             return self.classify_path(None)
 
     monkeypatch.setattr("backend.book_classifier.BookCategoryClassifier", lambda **kwargs: StubClassifier())
+    # 신뢰도 보정 경계는 정책 파일에서 오는데(_is_high_confidence), 테스트 환경엔 정책 파일이
+    # 없어 늘 "낮음"으로 본다. 그 경계값 자체는 test_high_confidence_needs_a_calibrated_boundary가
+    # 따로 검증하므로, 여기서는 실제 배선(BookClassifierService -> classify_file -> 모델)이
+    # 제안까지 이어지는지만 본다.
+    monkeypatch.setattr(BookManager, "_is_high_confidence", staticmethod(lambda classifier_service, confidence: True))
 
     fake_doc = {"title": "황녀님이 너무해", "author": "작가", "category": "0_inbox", "file_path": str(rofan_book.relative_to(tmp_path))}
     monkeypatch.setattr("utils.loader.Loader.read_file", lambda *args, **kwargs: {12345: fake_doc})
 
-    result, err = asyncio_runner(
-        manager.auto_classify_category(
-            "0_inbox",
-            mappings={},
-            use_bookstore=False,
-            use_content_meta=True,
-        )
-    )
+    result, err = asyncio_runner(manager.propose_category_changes("0_inbox", mappings={}, use_bookstore=False, use_content_meta=True))
 
     assert err is None
-    assert not rofan_book.exists()
-    assert (tmp_path / "3_여성향" / rofan_book.name).exists()
-    assert result["moved_count"] == 1
-    assert result["failed_count"] == 0
+    assert rofan_book.exists()  # 제안 단계는 파일을 옮기지 않는다
+    assert result["items"][0]["target_category"] == "3_여성향"
+    assert result["items"][0]["source"] == "model"
+    assert result["items"][0]["grade"] == "certain"
 
 
 def test_rename_category_target_dir_exists(tmp_path: Path):
@@ -4239,14 +4154,8 @@ def test_in_names_empty_path(tmp_path: Path, monkeypatch):
     epub_path = tmp_path / "empty_path.epub"
     with zipfile.ZipFile(str(epub_path), "w") as z:
         z.writestr("mimetype", "application/epub+zip")
-        z.writestr(
-            "META-INF/container.xml",
-            '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
-        )
-        z.writestr(
-            "content.opf",
-            '<?xml version="1.0"?><package version="2.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId"><manifest><item id="item1" href="c.html" media-type="text/html"/></manifest><spine toc="ncx"><itemref idref="item1"/></spine></package>',
-        )
+        z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+        z.writestr("content.opf", '<?xml version="1.0"?><package version="2.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId"><manifest><item id="item1" href="c.html" media-type="text/html"/></manifest><spine toc="ncx"><itemref idref="item1"/></spine></package>')
     monkeypatch.setattr("posixpath.normpath", lambda p: "")
     valid, msg = BookManager._validate_preview_epub(epub_path)
     assert not valid
@@ -4355,31 +4264,6 @@ def test_classification_haystack_relative_to_error(tmp_path: Path):
     assert "book" in haystack
 
 
-def test_classify_file_to_top_category_validation_branches(tmp_path: Path):
-    # Lines 1293, 1300, 1306, 1310, 1337-1339
-    manager = make_manager(tmp_path, DummyES())
-    test_file = tmp_path / "A" / "sample.txt"
-    test_file.parent.mkdir(parents=True, exist_ok=True)
-    test_file.write_text("content")
-
-    mappings = {
-        123: ["kw"],  # 1293: not str
-        "safe_target": [999, "  ", "dup", "dup", "sample"],  # 1306: not str, 1310: empty & seen
-        "../unsafe": ["kw"],  # 1300: unsafe category
-    }
-    cat, matched, reason = manager._classify_file_to_top_category(test_file, "A", mappings, use_bookstore=False, use_content_meta=False)
-    assert cat == "safe_target"
-    assert "sample" in matched
-
-    # 1337-1339: classifier service returns source category
-    class FakeClassifier:
-        def classify_file(self, *args, **kwargs):
-            return "A", "deterministic:rule", "already in A", {}  # target_cat == source_category -> returns None, [], reason
-
-    cat2, _, reason2 = manager._classify_file_to_top_category(test_file, "A", {}, classifier_service=FakeClassifier(), use_bookstore=False, use_content_meta=False)
-    assert cat2 is None
-
-
 def test_iter_category_indexable_files_branches(tmp_path: Path, monkeypatch):
     # Lines 1350-1353, 1359-1360
     manager = make_manager(tmp_path, DummyES())
@@ -4440,7 +4324,7 @@ def test_move_classified_file_keeps_both_when_content_differs(tmp_path: Path):
     existing.parent.mkdir(parents=True)
     existing.write_text("기존 파일 내용은 다르다", encoding="utf-8")
 
-    result, err = asyncio_runner(manager._move_classified_file(src, "B", ["kw"], "book", clean_existing=True))
+    result, err = asyncio_runner(manager._move_classified_file(src, "B", "book", clean_existing=True))
 
     assert err is None
     assert result["to"] == "B/book (1).txt"
@@ -4459,7 +4343,7 @@ def test_move_classified_file_numbers_up_when_bracket_name_taken(tmp_path: Path)
     (tmp_path / "B" / "book.txt").write_text("첫 번째", encoding="utf-8")
     (tmp_path / "B" / "book (1).txt").write_text("두 번째", encoding="utf-8")
 
-    result, err = asyncio_runner(manager._move_classified_file(src, "B", ["kw"], "book"))
+    result, err = asyncio_runner(manager._move_classified_file(src, "B", "book"))
 
     assert err is None
     assert result["to"] == "B/book (2).txt"
@@ -4475,7 +4359,7 @@ def test_move_classified_file_same_size_different_content_keeps_both(tmp_path: P
     (tmp_path / "B").mkdir()
     (tmp_path / "B" / "book.txt").write_text("BBBB", encoding="utf-8")
 
-    result, err = asyncio_runner(manager._move_classified_file(src, "B", ["kw"], "book", clean_existing=True))
+    result, err = asyncio_runner(manager._move_classified_file(src, "B", "book", clean_existing=True))
 
     assert err is None
     assert result["to"] == "B/book (1).txt"
@@ -4488,7 +4372,7 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
 
     # 1. 1379-1380: old_rel_path ValueError
     outside_file = Path("/tmp/outside/file.txt")
-    res, err = asyncio_runner(manager._move_classified_file(outside_file, "B", ["kw"], "book"))
+    res, err = asyncio_runner(manager._move_classified_file(outside_file, "B", "book"))
     assert res is None
     assert err == "잘못된 파일 경로입니다"
 
@@ -4504,7 +4388,7 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
         return orig_resolve(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "resolve", mock_resolve_err)
-    res2, err2 = asyncio_runner(manager._move_classified_file(f1, "bad_target", ["kw"], "book"))
+    res2, err2 = asyncio_runner(manager._move_classified_file(f1, "bad_target", "book"))
     assert res2 is None
     assert err2 == "잘못된 대상 경로입니다"
     monkeypatch.setattr(Path, "resolve", orig_resolve)
@@ -4518,7 +4402,7 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
         raise OSError("samefile failed")
 
     monkeypatch.setattr(Path, "samefile", mock_samefile_err)
-    res3, err3 = asyncio_runner(manager._move_classified_file(f1, "B", ["kw"], "book", dry_run=True, clean_existing=True))
+    res3, err3 = asyncio_runner(manager._move_classified_file(f1, "B", "book", dry_run=True, clean_existing=True))
     assert res3["action"] == "duplicate_clean"
     assert res3["status"] == "dry_run"
     assert err3 is None
@@ -4530,7 +4414,7 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
         raise OSError("delete duplicate failed")
 
     monkeypatch.setattr(Path, "unlink", mock_unlink_err)
-    res4, err4 = asyncio_runner(manager._move_classified_file(f1, "B", ["kw"], "book", dry_run=False, clean_existing=True))
+    res4, err4 = asyncio_runner(manager._move_classified_file(f1, "B", "book", dry_run=False, clean_existing=True))
     assert res4 is None
     assert "중복 파일 정리 실패" in err4
     monkeypatch.setattr(Path, "unlink", orig_unlink)
@@ -4550,7 +4434,7 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
         raise OSError("cross-device link failed")
 
     monkeypatch.setattr(shutil, "move", mock_move_err)
-    res5, err5 = asyncio_runner(manager_err._move_classified_file(f1, "B", ["kw"], "book"))
+    res5, err5 = asyncio_runner(manager_err._move_classified_file(f1, "B", "book"))
     assert res5 is None
     assert "파일 이동 실패" in err5
     monkeypatch.setattr(shutil, "move", orig_move)
@@ -4581,34 +4465,107 @@ def test_move_classified_file_edge_cases(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(shutil, "move", mock_rollback_move_err)
 
-    res6, err6 = asyncio_runner(manager_add_err._move_classified_file(f2, "B", ["kw"], "book"))
+    res6, err6 = asyncio_runner(manager_add_err._move_classified_file(f2, "B", "book"))
     assert res6 is None
     assert "ES add error" in err6
     assert "파일 롤백 실패" in err6
 
 
-def test_auto_classify_category_argument_validation(tmp_path: Path):
-    # Lines 1532, 1538: empty category and non-existent category
-    manager = make_manager(tmp_path, DummyES())
-    res1, err1 = asyncio_runner(manager.auto_classify_category(""))
-    assert err1 == "카테고리 이름이 비어있습니다"
+def test_move_classified_file_is_a_noop_when_already_in_target_category(tmp_path: Path):
+    """지금 있는 카테고리를 목적지로 고르면 아무것도 하지 않고 성공으로 끝낸다.
 
-    res2, err2 = asyncio_runner(manager.auto_classify_category("non_existent_dir"))
-    assert "디렉토리를 찾을 수 없습니다" in err2
+    관리자가 표의 드롭다운에서 현재 카테고리를 그대로 고르면 원본과 대상 경로가 같아진다.
+    이 분기가 없으면 os.rename 이 같은 경로에 대해 조용히 성공한 뒤 ES 문서를 지웠다가
+    같은 내용으로 다시 넣는다. 파일도 문서도 그대로여야 하고, ES 를 건드리지 않아야 한다.
+    """
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    category_dir = tmp_path / "2_science"
+    category_dir.mkdir(parents=True)
+    book = category_dir / "제자리 도서.txt"
+    book.write_text("내용", encoding="utf-8")
+    es.deleted_paths = []
+    es.delete_by_file_paths = lambda paths, exclude_ids=None: es.deleted_paths.extend(paths) or 0
 
+    result, err = asyncio_runner(manager._move_classified_file(book, "2_science", "book"))
 
-def test_auto_classify_category_dry_run_count(tmp_path: Path):
-    # Line 1625: dry_run_count increment
-    manager = make_manager(tmp_path, DummyES())
-    cat_dir = tmp_path / "A"
-    cat_dir.mkdir(parents=True, exist_ok=True)
-    file_path = cat_dir / "target_novel.txt"
-    file_path.write_text("test")
-
-    mappings = {"3_fantasy": ["novel"]}
-    res, err = asyncio_runner(manager.auto_classify_category("A", mappings=mappings, dry_run=True, use_bookstore=False, use_content_meta=False))
     assert err is None
-    assert res["dry_run_count"] == 1
+    assert result["status"] == "moved"
+    assert result["action"] == "noop"
+    assert result["from"] == result["to"] == "2_science/제자리 도서.txt"
+    assert book.exists()
+    assert es.deleted_paths == [], "제자리인데 ES 문서를 지웠다"
+
+
+def test_move_classified_file_does_not_orphan_a_hardlink(tmp_path: Path):
+    """대상에 같은 실체(하드링크)가 이미 있으면 옮기지 않고 거부한다.
+
+    하드링크는 경로가 달라도 samefile 이 참이다. 이동으로 처리하면 os.rename 이 원본
+    링크를 지우지 않은 채 성공해(실측), 디스크에는 파일이 남았는데 ES 문서만 사라진
+    고아가 만들어진다. 그 고아는 '이상 항목'으로만 드러나고 왜 생겼는지 알 수 없다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source_dir = tmp_path / "0_inbox"
+    source_dir.mkdir(parents=True)
+    source = source_dir / "링크 도서.txt"
+    source.write_text("내용", encoding="utf-8")
+    target_dir = tmp_path / "2_science"
+    target_dir.mkdir()
+    os.link(source, target_dir / source.name)
+
+    result, err = asyncio_runner(manager._move_classified_file(source, "2_science", "book", clean_existing=False))
+
+    assert result is None
+    assert "대상 경로에 파일이 이미 존재합니다" in err
+    assert source.exists(), "원본 링크가 남았는데 옮긴 것으로 처리했다"
+
+
+def test_move_classified_file_rejects_existing_duplicate_without_clean(tmp_path: Path):
+    """내용까지 같은 파일이 이미 있고 clean_existing이 꺼져 있으면 옮기지 않고 실패로 남긴다.
+
+    apply_category_changes가 clean_existing=False로 이 메서드를 부를 때 거치는 경로다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source_dir = tmp_path / "0_inbox"
+    source_dir.mkdir(parents=True)
+    conflict = source_dir / "중복 도서.txt"
+    conflict.write_text("같은 내용", encoding="utf-8")
+    target_dir = tmp_path / "2_science"
+    target_dir.mkdir()
+    (target_dir / conflict.name).write_text("같은 내용", encoding="utf-8")
+
+    result, err = asyncio_runner(manager._move_classified_file(conflict, "2_science", "book", clean_existing=False))
+
+    assert result is None
+    assert "대상 경로에 파일이 이미 존재합니다" in err
+    assert conflict.exists()
+
+
+def test_move_classified_file_preserves_existing_es_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """관리자가 ES에서 고친 제목/저자/요약은 재색인 때도 유지된다."""
+    source_dir = tmp_path / "0_inbox"
+    source_dir.mkdir(parents=True)
+    source_file = source_dir / "수정 과학.txt"
+    source_file.write_text("hello")
+    old_doc = {**make_doc("0_inbox/수정 과학.txt", "txt"), "category": "0_inbox", "title": "관리자가 수정한 제목", "author": "관리자가 수정한 저자", "summary": "관리자가 유지하려는 요약"}
+    es = DummyES(doc=old_doc)
+    manager = make_manager(tmp_path, es)
+
+    def fail_read_file(*args, **kwargs):
+        raise AssertionError("existing ES metadata should be reused")
+
+    monkeypatch.setattr("utils.loader.Loader.read_file", fail_read_file)
+
+    result, err = asyncio_runner(manager._move_classified_file(source_file, "2_science", "book"))
+
+    assert err is None
+    assert result["status"] == "moved"
+    indexed_doc = next(iter(es.inserted[0].values()))
+    assert indexed_doc["category"] == "2_science"
+    assert indexed_doc["file_path"] == "2_science/수정 과학.txt"
+    assert indexed_doc["title"] == "관리자가 수정한 제목"
+    assert indexed_doc["author"] == "관리자가 수정한 저자"
+    assert indexed_doc["summary"] == "관리자가 유지하려는 요약"
 
 
 def test_mismatch_and_reload_more_edge_cases(tmp_path: Path, monkeypatch):
@@ -4684,7 +4641,7 @@ def test_mismatch_and_reload_more_edge_cases(tmp_path: Path, monkeypatch):
             raise RuntimeError("refresh error")
 
     manager_ref_err = make_manager(tmp_path, RefreshErrES())
-    monkeypatch.setattr(manager_ref_err, "get_category_mismatches", lambda: {"mismatches": [{"category": "../unsafe"}]})
+    monkeypatch.setattr(manager_ref_err, "get_category_mismatches", lambda force_refresh=False: {"mismatches": [{"category": "../unsafe"}]})
     res_mismatches, _ = asyncio_runner(manager_ref_err.reload_category_mismatches())
     assert any("잘못된 카테고리 경로입니다" in str(f) for f in res_mismatches["failures"])
     assert any("ES refresh 실패" in str(f) for f in res_mismatches["failures"])
@@ -4903,24 +4860,18 @@ def test_get_books_in_category_paged(tmp_path: Path):
     es.category_docs = [(1, doc, 1.0), (2, doc, 1.0)]
 
     # 1. Invalid cursor (line 524)
-    books, total, next_cur, err = asyncio_runner(
-        manager.get_books_in_category_paged("A", cursor="bad_cursor!!!")
-    )
+    books, total, next_cur, err = asyncio_runner(manager.get_books_in_category_paged("A", cursor="bad_cursor!!!"))
     assert err == "invalid cursor"
     assert books == []
 
     # 2. Success first page with next cursor (lines 525-528)
-    books, total, next_cur, err = asyncio_runner(
-        manager.get_books_in_category_paged("A", size=1)
-    )
+    books, total, next_cur, err = asyncio_runner(manager.get_books_in_category_paged("A", size=1))
     assert err is None
     assert len(books) == 1
     assert next_cur is not None
 
     # 3. Next page using cursor
-    books2, total2, next_cur2, err2 = asyncio_runner(
-        manager.get_books_in_category_paged("A", size=1, cursor=next_cur)
-    )
+    books2, total2, next_cur2, err2 = asyncio_runner(manager.get_books_in_category_paged("A", size=1, cursor=next_cur))
     assert err2 is None
     assert len(books2) == 1
 
@@ -5006,22 +4957,70 @@ def test_normalize_stored_file_path_dot_slash(tmp_path: Path):
     assert manager._normalize_stored_file_path("./foo/bar.txt") == "foo/bar.txt"
 
 
-def test_classify_file_to_top_category_branches(tmp_path: Path):
-    # Lines 1300, 1339
+def test_match_category_by_keywords_skips_invalid_mapping_entries(tmp_path: Path):
+    """_classify_file_to_top_category가 사라진 뒤에도 이 검증 분기들은 _match_category_by_keywords에
+    그대로 남아 있다: 문자열이 아닌 카테고리/키워드, 안전하지 않은 카테고리 이름, 빈/중복 키워드."""
+    manager = make_manager(tmp_path, DummyES())
+    test_file = tmp_path / "A" / "sample.txt"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text("content")
+
+    mappings = {
+        123: ["kw"],  # 카테고리가 문자열이 아니면 건너뛴다
+        "safe_target": [999, "  ", "dup", "dup", "sample"],  # 키워드가 문자열이 아니거나 비었거나 중복이면 건너뛴다
+        "../unsafe": ["kw"],  # 안전하지 않은 카테고리 이름은 건너뛴다
+    }
+    category, matched, reason, _ranked = manager._match_category_by_keywords(test_file, "A", mappings)
+    assert category == "safe_target"
+    assert "sample" in matched
+    assert reason is None
+
+
+def test_match_category_by_keywords_rejects_control_char_category(tmp_path: Path):
     manager = make_manager(tmp_path, DummyES())
     file_path = tmp_path / "test.txt"
     file_path.write_text("hello")
 
-    # 1. Line 1300: unsafe category name in mappings (passes _is_top_level_target_category but fails _is_safe_category_name)
-    cat, kw, reason = manager._classify_file_to_top_category(
-        file_path,
-        "0_inbox",
-        mappings={"unsafe\x00cat": ["test"]},
-        classifier_service=None,
-    )
-    assert cat is None
-    # 2. Line 1339: classifier_service is None and no keywords matched
-    assert reason == "매칭되는 키워드가 없습니다"
+    category, matched, reason, _ranked = manager._match_category_by_keywords(file_path, "0_inbox", {"unsafe\x00cat": ["test"]})
+
+    assert category is None
+    assert matched == []
+    assert reason is None
+
+
+def test_match_category_by_keywords_reports_tie(tmp_path: Path):
+    """동점이면 목적지를 고르지 않고 사유를 돌려준다."""
+    manager = make_manager(tmp_path, DummyES())
+    target = tmp_path / "A" / "SF음악.epub"
+    target.parent.mkdir()
+    target.write_text("x")
+    mappings = {"3_SF": ["SF"], "5_음악": ["음악"]}
+
+    category, keywords, tie_reason, ranked = manager._match_category_by_keywords(target, "A", mappings)
+
+    assert category is None
+    assert tie_reason is not None
+    assert keywords
+    # 동점 상위 2개가 candidates 조립의 재료다(Task A) — 여기서도 같이 확인한다.
+    assert len(ranked) == 2
+    assert {cat for cat, _kw in ranked} == {"3_SF", "5_음악"}
+
+
+def test_match_category_by_keywords_picks_single_best(tmp_path: Path):
+    """단독 최고점이면 그 카테고리를 고른다."""
+    manager = make_manager(tmp_path, DummyES())
+    target = tmp_path / "A" / "과학소설 모음.epub"
+    target.parent.mkdir()
+    target.write_text("x")
+    mappings = {"3_SF": ["과학소설"], "5_음악": ["음악"]}
+
+    category, keywords, tie_reason, ranked = manager._match_category_by_keywords(target, "A", mappings)
+
+    assert category == "3_SF"
+    assert keywords == ["과학소설"]
+    assert tie_reason is None
+    # 순위 1위는 채택된 카테고리와 같아야 한다(Task A candidates 조립의 전제).
+    assert ranked[0] == ("3_SF", ["과학소설"])
 
 
 def test_iter_category_indexable_files_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -5065,9 +5064,7 @@ def test_move_classified_file_target_traversal_and_restore_err(tmp_path: Path, m
     f.write_text("data")
 
     # 1. Line 1385: target_path not relative to root
-    res1, err1 = asyncio_runner(
-        manager._move_classified_file(f, "../outside", ["k"], "txt")
-    )
+    res1, err1 = asyncio_runner(manager._move_classified_file(f, "../outside", "txt"))
     assert err1 == "잘못된 대상 경로입니다"
 
     # 2. Lines 1498-1499: ES reindex fails, rollback add_book raises exception
@@ -5084,25 +5081,9 @@ def test_move_classified_file_target_traversal_and_restore_err(tmp_path: Path, m
 
     monkeypatch.setattr(manager, "add_book", mock_add_book_raise)
     (tmp_path / "target").mkdir(parents=True, exist_ok=True)
-    res2, err2 = asyncio_runner(
-        manager._move_classified_file(f, "target", ["k"], "txt")
-    )
+    res2, err2 = asyncio_runner(manager._move_classified_file(f, "target", "txt"))
     assert err2 is not None
     assert "기존 ES 문서 복구 실패" in err2
-
-
-def test_auto_classify_category_value_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    # Lines 1590-1593
-    manager = make_manager(tmp_path, DummyES())
-    (tmp_path / "0_inbox").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(
-        manager,
-        "_iter_category_indexable_files",
-        lambda cat, recursive=False: [Path("/outside/book.txt")],
-    )
-    result, err = asyncio_runner(manager.auto_classify_category("0_inbox"))
-    assert err is None
-    assert any("잘못된 파일 경로" in f.get("error", "") for f in result["failures"])
 
 
 def test_get_category_mismatches_root_file(tmp_path: Path):
@@ -5120,15 +5101,7 @@ def test_reload_category_mismatch_files_non_int_book_id(tmp_path: Path, monkeypa
     es = DummyES()
     manager = make_manager(tmp_path, es)
     (tmp_path / "cat").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(
-        manager,
-        "get_category_mismatch_details",
-        lambda cat: {
-            "duplicates": [{"file_path": "cat/dup.txt", "docs": [{"book_id": "bad_id"}]}],
-            "fs_only": [],
-            "es_only": [],
-        },
-    )
+    monkeypatch.setattr(manager, "get_category_mismatch_details", lambda cat: {"duplicates": [{"file_path": "cat/dup.txt", "docs": [{"book_id": "bad_id"}]}], "fs_only": [], "es_only": []})
     result, err = asyncio_runner(manager.reload_category_mismatch_files("cat"))
     assert err is None
 
@@ -5184,3 +5157,694 @@ def test_delete_category_success(tmp_path: Path):
     assert res["category"] == "test_cat"
 
 
+# ---- Task 3: 등급 판정과 제안 생성 ----
+
+
+class FakeClassifier:
+    """classify_file 결과를 고정해 등급 규칙만 검증한다.
+
+    bookstore_candidates는 기본값 None이면 entry에 아예 안 실어서, 이 필드를
+    모르는 기존 9(10)-케이스를 그대로 둔다(호출자가 .get() 기본값으로 방어한다는
+    전제를 같이 검증하는 셈이다).
+    """
+
+    def __init__(self, target, method, reason, model_category, confidence, override_below=0.5, bookstore_candidates=None, model_candidates=None):
+        entry = {"confidence": confidence, "model_category": model_category}
+        if bookstore_candidates is not None:
+            entry["bookstore_candidates"] = bookstore_candidates
+        if model_candidates is not None:
+            entry["model_candidates"] = model_candidates
+        self._result = (target, method, reason, entry)
+
+        class Policy:
+            def __init__(self, boundary):
+                self.override_below = boundary
+
+            def prefers_bookstore(self, value):
+                return self.override_below > 0.0 and value < self.override_below
+
+        self.bookstore_policy = Policy(override_below)
+
+    def classify_file(self, *args, **kwargs):
+        return self._result
+
+
+# 등급 판정 9(10)-케이스: candidates 추가가 target_category/grade를 바꾸지 않는지도
+# 이 목록을 그대로 재사용해서(test_propose_category_candidates_first_matches_target_when_decided)
+# 같이 검증한다. 두 값을 따로 유지하면 표류할 수 있어 리스트를 공유한다.
+PROPOSE_CATEGORY_GRADE_CASES = [
+    ({"3_SF": ["과학소설"]}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.9), "3_SF", "certain"),
+    ({"3_SF": ["과학소설"]}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.1), "3_SF", "unsure"),
+    ({"3_SF": ["과학소설"]}, FakeClassifier("5_음악", "model", "r", "5_음악", 0.9), "3_SF", "unsure"),
+    ({"3_SF": ["과학소설"], "5_음악": ["과학소설"]}, FakeClassifier(None, "not_found", "r", None, 0.1), None, "unknown"),
+    ({}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.9), "3_SF", "certain"),
+    ({}, FakeClassifier("3_SF", "model", "r", "3_SF", 0.1), None, "unknown"),
+    ({}, FakeClassifier("3_SF", "bookstore_majority", "r", None, 0.1), "3_SF", "certain"),
+    ({}, FakeClassifier("3_SF", "bookstore_single", "r", None, 0.1), "3_SF", "unsure"),
+    ({}, FakeClassifier(None, "conflict", "r", "3_SF", 0.1), None, "unknown"),
+    ({}, FakeClassifier(None, "not_found", "r", None, 0.1), None, "unknown"),
+]
+
+
+@pytest.mark.parametrize("mappings,fake,expected_target,expected_grade", PROPOSE_CATEGORY_GRADE_CASES)
+def test_propose_category_grades(tmp_path: Path, mappings, fake, expected_target, expected_grade):
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "과학소설 모음.epub"
+    target.write_text("x")
+
+    proposal = manager._propose_category_for_file(target, "A", mappings, fake, True, True)
+
+    assert proposal["target_category"] == expected_target
+    assert proposal["grade"] == expected_grade
+
+
+@pytest.mark.parametrize("mappings,fake,expected_target,expected_grade", PROPOSE_CATEGORY_GRADE_CASES)
+def test_propose_category_candidates_first_matches_target_when_decided(tmp_path: Path, mappings, fake, expected_target, expected_grade):
+    """target_category가 None이 아닌 모든 등급에서 candidates[0]이 그 값과 같아야 한다.
+
+    후보를 더 보여주는 것이 등급 판정 결과(target_category)를 바꾸면 안 된다는
+    불변식을, 등급 판정 자체를 검증하는 목록을 그대로 재사용해서 확인한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "과학소설 모음.epub"
+    target.write_text("x")
+
+    proposal = manager._propose_category_for_file(target, "A", mappings, fake, True, True)
+
+    assert proposal["target_category"] == expected_target
+    if expected_target is not None:
+        assert proposal["candidates"]
+        assert proposal["candidates"][0]["category"] == expected_target
+
+
+def test_propose_category_candidates_keyword_top_with_runner_up(tmp_path: Path):
+    """키워드 단독 최고점이면 1위와 2위를 후보로 낸다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "과학소설 클래식 모음.epub"
+    target.write_text("x")
+    mappings = {"3_SF": ["과학소설"], "5_음악": ["클래식"]}
+    fake = FakeClassifier(None, "not_found", "r", None, None)
+
+    proposal = manager._propose_category_for_file(target, "A", mappings, fake, True, True)
+
+    assert proposal["target_category"] == "3_SF"
+    assert [c["category"] for c in proposal["candidates"]] == ["3_SF", "5_음악"]
+    assert proposal["candidates"][0]["category"] == proposal["target_category"]
+
+
+def test_propose_category_item_always_carries_matched_keywords(tmp_path: Path):
+    """제안 항목은 어느 경로로 나오든 matched_keywords 키를 달고 나온다.
+
+    화면이 '왜 이 카테고리인가'를 설명할 때 쓰는 근거다. 이 키가 조용히 빠져도
+    다른 테스트는 전부 통과하므로(실제로 한 번 그렇게 빠뜨렸다) 여기서 직접 잠근다.
+    키워드가 맞은 경로는 맞은 키워드가 담기고, 아무것도 못 맞힌 경로는 빈 배열이다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    matched = source / "과학소설 모음.epub"
+    matched.write_text("x")
+    unmatched = source / "제목 없음.epub"
+    unmatched.write_text("x")
+    fake = FakeClassifier(None, "not_found", "r", None, None)
+
+    hit = manager._propose_category_for_file(matched, "A", {"3_SF": ["과학소설"]}, fake, True, True)
+    miss = manager._propose_category_for_file(unmatched, "A", {"3_SF": ["과학소설"]}, fake, True, True)
+
+    assert hit["matched_keywords"] == ["과학소설"]
+    assert miss["matched_keywords"] == []
+
+
+def test_propose_category_candidates_keyword_tie(tmp_path: Path):
+    """키워드가 동점으로 갈리면 후보 2개를 보여주되 target은 정하지 않는다.
+
+    체계가 못 정했다는 사실은 후보가 보여도 바뀌지 않는다 — 사람이 셀렉트박스로
+    골라야 체크박스가 켜진다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "SF음악.epub"
+    target.write_text("x")
+    mappings = {"3_SF": ["SF"], "5_음악": ["음악"]}
+    fake = FakeClassifier(None, "not_found", "r", None, None)
+
+    proposal = manager._propose_category_for_file(target, "A", mappings, fake, True, True)
+
+    assert proposal["target_category"] is None
+    assert proposal["grade"] == "unknown"
+    assert len(proposal["candidates"]) == 2
+    assert {c["category"] for c in proposal["candidates"]} == {"3_SF", "5_음악"}
+
+
+def test_propose_category_candidates_bookstore_conflict(tmp_path: Path):
+    """서점 판정이 갈리면 득표 상위 2개를 후보로 보여주되 target은 unknown으로 남긴다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "달빛조각사.epub"
+    target.write_text("x")
+    fake = FakeClassifier(None, "conflict", "r", None, None, bookstore_candidates=[("3_무협", 1), ("3_판타지", 1)])
+
+    proposal = manager._propose_category_for_file(target, "A", {}, fake, True, True)
+
+    assert proposal["target_category"] is None
+    assert proposal["grade"] == "unknown"
+    assert [c["category"] for c in proposal["candidates"]] == ["3_무협", "3_판타지"]
+
+
+def test_propose_category_candidates_model_only_has_length_one(tmp_path: Path):
+    """모델 단독 판정은 대안이 없으니 후보가 1개다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "book.epub"
+    target.write_text("x")
+    fake = FakeClassifier("3_SF", "model", "r", "3_SF", 0.9)
+
+    proposal = manager._propose_category_for_file(target, "A", {}, fake, True, True)
+
+    assert proposal["target_category"] == "3_SF"
+    assert len(proposal["candidates"]) == 1
+    assert proposal["candidates"][0]["category"] == "3_SF"
+
+
+def test_propose_category_candidates_capped_at_two_even_with_more_contenders(tmp_path: Path):
+    """경합이 3개 이상이어도 후보는 최대 2개만 보여준다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "과학 음악 역사.epub"
+    target.write_text("x")
+    mappings = {"3_SF": ["과학"], "5_음악": ["음악"], "7_역사": ["역사"]}
+    fake = FakeClassifier(None, "not_found", "r", None, None)
+
+    proposal = manager._propose_category_for_file(target, "A", mappings, fake, True, True)
+
+    assert len(proposal["candidates"]) <= 2
+
+
+def test_propose_category_candidates_bookstore_majority_without_vote_data_does_not_understate_the_count(tmp_path: Path):
+    """bookstore_candidates가 비어 있어도(오래된 캐시 등) certain 등급에 "서점 1곳"이라는
+    자기모순적인 근거를 달면 안 된다. MIN_STORE_VOTES(book_classifier.py)는 2라서
+    bookstore_majority는 실제로 1표일 수 없는데, 근거 문구가 1곳이라고 하면 관리자가
+    "겨우 한 곳"이라는 약한 근거로 착각한 채 사전 체크된 행을 그대로 승인할 수 있다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    target = source / "book.epub"
+    target.write_text("x")
+    fake = FakeClassifier("3_SF", "bookstore_majority", "r", None, 0.1)
+
+    proposal = manager._propose_category_for_file(target, "A", {}, fake, True, True)
+
+    assert proposal["target_category"] == "3_SF"
+    assert proposal["grade"] == "certain"
+    assert "1곳" not in proposal["candidates"][0]["detail"]
+
+
+def test_high_confidence_needs_a_calibrated_boundary(tmp_path: Path):
+    """정책 파일이 없으면 경계가 0이라 모든 점수가 높음이 된다. 그러면 전부 자동 체크된다."""
+    manager = make_manager(tmp_path, DummyES())
+    fake = FakeClassifier("3_SF", "model", "r", "3_SF", 0.9, override_below=0.0)
+
+    assert manager._is_high_confidence(fake, 0.9) is False
+
+
+def test_high_confidence_needs_more_than_the_bookstore_boundary(tmp_path: Path):
+    """서점 경계만 넘은 낮은 점수는 '확실'이 아니다.
+
+    서점 경계(override_below)는 "모델과 서점 중 누구를 믿을까"를 가르려고 잰 값이지
+    "확실한가"를 가르려고 잰 값이 아니다. 이 코퍼스에서 그 값은 0.056인데, 752건을
+    실측하니 0.10 아래 구간의 정답률은 약 53%(동전 던지기)이고 0.10 위는 약 97.7%다.
+    경계를 그대로 쓰던 시절에는 제안의 88%가 그 상태로 미리 체크됐다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    fake = FakeClassifier("3_SF", "model", "r", "3_SF", 0.07, override_below=0.056)
+
+    # 서점 경계(0.056)는 넘지만 확실 경계(0.10)는 못 넘는다.
+    assert manager._is_high_confidence(fake, 0.07) is False
+    assert manager._is_high_confidence(fake, 0.12) is True
+
+
+def test_low_confidence_model_answer_is_not_pre_checked(tmp_path: Path):
+    """0.10 아래 모델 판정은 '애매'로 내려가 체크가 꺼진 채 사람에게 간다.
+
+    실제로 겪은 사례다. 성인 웹소설이 확신도 0.069~0.088로 2_수필서간일기로 판정돼
+    '확실'로 미리 체크됐다. 그 점수대의 정답률은 절반 수준이라 사람이 봐야 한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "9_성인"
+    source.mkdir()
+    book = source / "어떤 웹소설.epub"
+    book.write_text("x")
+    fake = FakeClassifier("2_수필서간일기", "model", "모델 판정", "2_수필서간일기", 0.076, override_below=0.056)
+
+    proposal = manager._propose_category_for_file(book, "9_성인", {}, fake, True, True)
+
+    assert proposal["grade"] == manager.GRADE_UNKNOWN, "동전 던지기 점수가 미리 체크됐다"
+    assert proposal["target_category"] is None, "점수가 낮은 답을 목적지로 썼다"
+    # 모델이 뭐라고 했는지는 후보로 남는다 — 사람이 보고 그걸 고를 수도 있어야 한다.
+    assert [c["category"] for c in proposal["candidates"]] == ["2_수필서간일기"]
+
+
+def test_single_keyword_match_still_offers_a_second_choice(tmp_path: Path):
+    """키워드가 하나만 맞아도 추천 2 칸이 비지 않는다.
+
+    실제로 겪은 사례다. 파일명의 '에세이' 하나가 2_수필서간일기를 정하자 모델이 낸
+    답은 통째로 버려지고 추천 2가 비었다. 키워드가 틀렸다고 느낀 관리자에게는
+    2,000개짜리 드롭다운 말고는 길이 없었다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "9_어린이육아"
+    source.mkdir()
+    book = source / "고생을 위한 철학에세이.txt"
+    book.write_text("x")
+    fake = FakeClassifier("9_어린이육아", "model", "r", "9_어린이육아", 0.116, model_candidates=[("9_어린이육아", 0.116), ("4_철학윤리", 0.04)])
+
+    proposal = manager._propose_category_for_file(book, "9_어린이육아", {"2_수필서간일기": ["에세이"]}, fake, True, True)
+
+    assert proposal["target_category"] == "2_수필서간일기"
+    categories = [c["category"] for c in proposal["candidates"]]
+    assert categories == ["2_수필서간일기", "9_어린이육아"]
+    assert proposal["candidates"][0]["category"] == proposal["target_category"]
+
+
+def test_model_path_offers_its_runner_up_as_the_second_choice(tmp_path: Path):
+    """모델 판정 경로는 모델이 이미 매긴 2순위를 추천 2로 보여준다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    book = source / "제목.txt"
+    book.write_text("x")
+    fake = FakeClassifier("3_SF", "model", "r", "3_SF", 0.3, model_candidates=[("3_SF", 0.3), ("5_음악", 0.08)])
+
+    proposal = manager._propose_category_for_file(book, "A", {}, fake, True, True)
+
+    assert [c["category"] for c in proposal["candidates"]] == ["3_SF", "5_음악"]
+
+
+def test_model_alternative_is_not_added_when_two_candidates_already_exist(tmp_path: Path):
+    """이미 후보가 2개면 모델 대안을 덧붙이지 않는다. 2개가 상한이다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    book = source / "과학소설 클래식 모음.txt"
+    book.write_text("x")
+    fake = FakeClassifier(None, "not_found", "r", None, None, model_candidates=[("9_성인", 0.2)])
+
+    proposal = manager._propose_category_for_file(book, "A", {"3_SF": ["과학소설"], "5_음악": ["클래식"]}, fake, True, True)
+
+    categories = [c["category"] for c in proposal["candidates"]]
+    assert len(categories) == 2
+    assert "9_성인" not in categories
+
+
+def test_model_alternative_never_repeats_the_destination(tmp_path: Path):
+    """모델 1순위가 이미 목적지면 같은 카테고리를 두 번 보여주지 않는다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    book = source / "과학소설 모음.txt"
+    book.write_text("x")
+    fake = FakeClassifier("3_SF", "model", "r", "3_SF", 0.3, model_candidates=[("3_SF", 0.3)])
+
+    proposal = manager._propose_category_for_file(book, "A", {"3_SF": ["과학소설"]}, fake, True, True)
+
+    assert [c["category"] for c in proposal["candidates"]] == ["3_SF"]
+
+
+def manager_propose(manager, category, mappings):
+    return asyncio_runner(manager.propose_category_changes(category, mappings, use_bookstore=False, use_content_meta=False))
+
+
+def test_propose_category_changes_lists_items_without_moving(tmp_path: Path):
+    """제안만 만들고 파일은 그대로 둔다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    book = source / "과학소설 모음.epub"
+    book.write_text("x")
+
+    result, error = manager_propose(manager, "A", {"3_SF": ["과학소설"]})
+
+    assert error is None
+    assert result["total_count"] == 1
+    assert result["items"][0]["file_path"] == "A/과학소설 모음.epub"
+    assert book.is_file()
+
+
+def test_propose_category_changes_progress_reports_new_items_only(tmp_path: Path):
+    """진행 보고의 new_items는 이번 틱에서 새로 생긴 항목만 담는다(누적이 아니다).
+
+    누적 목록(items)을 매번 통째로 실으면 보고 크기가 책 수의 제곱으로 커진다(과거
+    JSON 상태 파일 방식에서 실측된 문제 — 79,589권 카테고리에서 기록만 약 33시간).
+    new_items로 이번 틱의 델타만 보내야 한 틱의 비용이 책 수와 무관해진다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    (source / "가.epub").write_text("x")
+    (source / "나.epub").write_text("x")
+
+    progress: list[dict] = []
+    result, error = asyncio_runner(manager.propose_category_changes("A", {"3_SF": ["과학소설"]}, use_bookstore=False, use_content_meta=False, on_progress=progress.append))
+
+    assert error is None
+    # 첫 보고는 대상 파일 전체의 자리(이름만)를 한 번에 깔고, 이후 보고는 분류가 끝난
+    # 항목만 하나씩 채운다. 어느 쪽도 누적 목록을 통째로 싣지 않는다.
+    assert all("items" not in call for call in progress)
+    updates = [call for call in progress if "updated_items" in call]
+    assert len(updates) == 2
+    assert all(len(call["updated_items"]) == 1 for call in updates)
+    assert [call["updated_items"][0]["file_path"] for call in updates] == [item["file_path"] for item in result["items"]]
+
+
+def test_propose_category_changes_lists_every_target_before_classifying(tmp_path: Path):
+    """분류를 시작하기 전에 대상 파일 전체가 이름만이라도 먼저 보고된다.
+
+    한 권에 서점 조회까지 하면 수 초가 든다. 다 끝난 뒤에 목록을 주면 관리자는 그동안
+    무엇이 대상인지조차 알 수 없다. 첫 보고에 전체 목록이 실려야 화면이 이름부터
+    채우고 분류 결과를 뒤이어 메울 수 있다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    (source / "가.epub").write_text("x")
+    (source / "나.epub").write_text("x")
+
+    progress: list[dict] = []
+    asyncio_runner(manager.propose_category_changes("A", {}, use_bookstore=False, use_content_meta=False, on_progress=progress.append))
+
+    first = progress[0]
+    assert first["processed_count"] == 0, "분류가 시작되기 전에 나와야 한다"
+    assert first["total_count"] == 2
+    assert sorted(item["file_path"] for item in first["new_items"]) == ["A/가.epub", "A/나.epub"]
+    # 아직 분류 전이라 등급도 목적지도 없다. 화면은 이것으로 "분류 중"을 구분한다.
+    assert all(item["grade"] is None and item["target_category"] is None for item in first["new_items"])
+    assert all(item["title"] for item in first["new_items"])
+
+
+def test_propose_category_changes_result_items_still_has_everything(tmp_path: Path):
+    """함수 반환값 result["items"]는 진행 보고와 무관하게 여전히 전체 항목을 담는다.
+
+    진행 보고는 델타(new_items)만 실어도, 최종 저장은 호출자가 반환값을 보고 하므로
+    반환값 자체는 지금처럼 전체 목록이어야 한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    for i in range(3):
+        (source / f"책{i}.epub").write_text("x")
+
+    result, error = asyncio_runner(manager.propose_category_changes("A", {"3_SF": ["과학소설"]}, use_bookstore=False, use_content_meta=False))
+
+    assert error is None
+    assert len(result["items"]) == 3
+
+
+def test_apply_category_changes_rejects_unknown_file(tmp_path: Path):
+    """제안에 없던 파일은 옮기지 않는다. 화면이 보낸 경로를 그대로 믿으면 안 된다."""
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "book.epub").write_text("x")
+
+    result, error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "3_SF"}], allowed_file_paths=set()))
+
+    assert error is None
+    assert result["applied_count"] == 0
+    assert result["results"][0]["apply_error"] == "제안 목록에 없는 파일입니다"
+
+
+def test_apply_category_changes_rejects_unsafe_target(tmp_path: Path):
+    """사용자가 고른 목적지도 검증한다."""
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "book.epub").write_text("x")
+    allowed = {"A/book.epub"}
+
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "../밖"}], allowed_file_paths=allowed))
+
+    assert result["applied_count"] == 0
+    assert "카테고리" in result["results"][0]["apply_error"]
+
+
+def test_apply_category_changes_uses_user_chosen_target(tmp_path: Path):
+    """사용자가 제안과 다른 목적지를 고르면 그쪽으로 옮긴다."""
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "book.epub").write_text("x")
+    allowed = {"A/book.epub"}
+
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths=allowed))
+
+    assert result["applied_count"] == 1
+    assert (tmp_path / "5_음악" / "book.epub").is_file()
+
+
+def test_apply_category_changes_records_missing_file(tmp_path: Path):
+    """제안을 만든 뒤 파일이 사라졌으면 실패로 남기고 나머지를 계속 처리한다."""
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    allowed = {"A/사라진책.epub"}
+
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/사라진책.epub", "target_category": "3_SF"}], allowed_file_paths=allowed))
+
+    assert result["failed_count"] == 1
+    assert "파일" in result["results"][0]["apply_error"]
+
+
+def test_apply_category_changes_rejects_top_level_but_unsafe_target(tmp_path: Path):
+    """ ".."는 슬래시가 없어 최상위 검사는 통과하지만 안전한 이름 검사에서 걸러야 한다.
+
+    기존 "../밖" 케이스는 슬래시가 있어 _is_top_level_target_category에서 이미
+    걸러지므로 _is_safe_category_name이 실제로 호출되는지 증명하지 못한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "book.epub").write_text("x")
+    allowed = {"A/book.epub"}
+
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": ".."}], allowed_file_paths=allowed))
+
+    assert result["applied_count"] == 0
+    assert "카테고리" in result["results"][0]["apply_error"]
+
+
+def test_apply_category_changes_rejects_symlinked_source(tmp_path: Path):
+    """제안 시점 이후 파일이 심볼릭 링크로 바뀌면 corpus 밖 파일 유출을 막는다.
+
+    allowed_file_paths에 있던 경로라도 실제 파일이 corpus 밖을 가리키는 링크로
+    치환됐을 수 있다. is_file()은 링크를 따라가 True를 주므로 별도로 걸러야 한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    outside = tmp_path.parent / "outside_secret.epub"
+    outside.write_text("secret")
+    link_path = tmp_path / "A" / "book.epub"
+    link_path.symlink_to(outside)
+    allowed = {"A/book.epub"}
+
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "3_SF"}], allowed_file_paths=allowed))
+
+    assert result["applied_count"] == 0
+    assert "링크" in result["results"][0]["apply_error"]
+    assert outside.is_file()
+    assert outside.read_text() == "secret"
+
+
+def test_apply_category_changes_calls_on_item_done_per_item(tmp_path: Path):
+    """항목마다 on_item_done이 file_path/apply_status/apply_error와 함께 불린다.
+
+    성공(moved)/실패(파일 없음) 양쪽 다 확인한다. book_manager는 DB를 모르므로
+    이 콜백을 통해서만 호출자(main.py)가 건별로 기록할 수 있다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "ok.epub").write_text("x")
+    allowed = {"A/ok.epub", "A/missing.epub"}
+    done_calls: list[dict] = []
+
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/ok.epub", "target_category": "5_음악"}, {"file_path": "A/missing.epub", "target_category": "5_음악"}], allowed_file_paths=allowed, on_item_done=done_calls.append))
+
+    assert result["applied_count"] == 1
+    assert result["failed_count"] == 1
+    # ok.epub은 실제 이동 직전에 "moving"으로 한 번 더 불린 뒤 "moved"로 마무리된다.
+    # missing.epub은 파일이 없어 이동을 시도조차 못 하므로 moving 없이 failed 한 번뿐이다.
+    assert len(done_calls) == 3
+    assert done_calls[0] == {"file_path": "A/ok.epub", "apply_status": "moving", "apply_error": None}
+    assert done_calls[1] == {"file_path": "A/ok.epub", "apply_status": "moved", "apply_error": None}
+    assert done_calls[2]["file_path"] == "A/missing.epub"
+    assert done_calls[2]["apply_status"] == "failed"
+    assert "파일" in done_calls[2]["apply_error"]
+
+
+def test_apply_category_changes_stops_before_next_item_when_should_continue_is_false(tmp_path: Path):
+    """should_continue가 False를 돌려주는 순간 그 이후 항목은 아예 손대지 않는다.
+
+    다른 승인 작업이 이 작업을 토큰으로 대체했을 때, 진 쪽이 계속 파일을 옮기며
+    행을 덮어쓰지 못하게 막는 장치다. 첫 항목은 정상 처리되고, 두 번째 항목
+    "앞"에서 중단되어 파일도 옮겨지지 않고 결과에도 없어야 한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "first.epub").write_text("x")
+    (tmp_path / "A" / "second.epub").write_text("x")
+    allowed = {"A/first.epub", "A/second.epub"}
+    calls = {"count": 0}
+
+    def should_continue() -> bool:
+        calls["count"] += 1
+        return calls["count"] <= 1  # 첫 항목 앞에서만 True, 두 번째 항목 앞에서 False
+
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/first.epub", "target_category": "5_음악"}, {"file_path": "A/second.epub", "target_category": "5_음악"}], allowed_file_paths=allowed, should_continue=should_continue))
+
+    assert result["total_count"] == 2
+    assert len(result["results"]) == 1
+    assert result["results"][0]["file_path"] == "A/first.epub"
+    assert result["applied_count"] == 1
+    assert (tmp_path / "5_음악" / "first.epub").is_file()
+    # 두 번째는 손대지 않았다 - 여전히 원래 자리에 그대로 있다
+    assert (tmp_path / "A" / "second.epub").is_file()
+    assert calls["count"] == 2
+
+
+def test_apply_category_changes_on_item_done_already_called_for_items_before_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """한 항목에서 예외가 나도, 그 항목까지의 on_item_done 호출은 이미 일어난 채로
+    다음 항목 처리를 계속한다 — 중단되면 그때까지 처리한 결과가 이미 기록된
+    것과 같은 상태를 재현한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "boom.epub").write_text("x")
+    (tmp_path / "A" / "ok.epub").write_text("x")
+    allowed = {"A/boom.epub", "A/ok.epub"}
+
+    original_is_safe = manager._is_safe_category_name
+    calls = {"count": 0}
+
+    def flaky_is_safe(category: str) -> bool:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OSError("예상치 못한 파일시스템 오류")
+        return original_is_safe(category)
+
+    monkeypatch.setattr(manager, "_is_safe_category_name", flaky_is_safe)
+    done_calls: list[dict] = []
+
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/boom.epub", "target_category": "5_음악"}, {"file_path": "A/ok.epub", "target_category": "5_음악"}], allowed_file_paths=allowed, on_item_done=done_calls.append))
+
+    assert result["applied_count"] == 1
+    assert result["failed_count"] == 1
+    # boom.epub은 카테고리 검증 단계에서 예외가 나 이동을 시도조차 못 하므로 failed
+    # 한 번뿐이다. ok.epub은 이동 직전 "moving"이 한 번 더 불린 뒤 "moved"로 끝난다.
+    assert len(done_calls) == 3
+    assert done_calls[0]["file_path"] == "A/boom.epub"
+    assert done_calls[0]["apply_status"] == "failed"
+    assert done_calls[1] == {"file_path": "A/ok.epub", "apply_status": "moving", "apply_error": None}
+    assert done_calls[2] == {"file_path": "A/ok.epub", "apply_status": "moved", "apply_error": None}
+
+
+def test_apply_category_changes_continues_after_one_item_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """한 항목 처리 중 예외가 나도 배치 전체가 죽지 않고 나머지를 계속 처리한다."""
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "boom.epub").write_text("x")
+    (tmp_path / "A" / "ok.epub").write_text("x")
+    allowed = {"A/boom.epub", "A/ok.epub"}
+
+    original_is_safe = manager._is_safe_category_name
+    calls = {"count": 0}
+
+    def flaky_is_safe(category: str) -> bool:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OSError("예상치 못한 파일시스템 오류")
+        return original_is_safe(category)
+
+    monkeypatch.setattr(manager, "_is_safe_category_name", flaky_is_safe)
+
+    result, _error = asyncio_runner(manager.apply_category_changes([{"file_path": "A/boom.epub", "target_category": "5_음악"}, {"file_path": "A/ok.epub", "target_category": "5_음악"}], allowed_file_paths=allowed))
+
+    assert result["total_count"] == 2
+    assert len(result["results"]) == 2
+    assert result["results"][0]["apply_status"] == "failed"
+    assert result["results"][1]["apply_status"] == "moved"
+    assert result["applied_count"] == 1
+    assert result["failed_count"] == 1
+
+
+def test_apply_category_changes_retry_of_failed_row_succeeds(tmp_path: Path):
+    """C1: 첫 시도에서 allowed 밖이라 거부된 행도, 재시도 때 allowed에 다시 담기면
+    실제로 이동에 성공한다.
+
+    main.py의 허용 집합 계산이 apply_status == "pending"만 담던 버그를 재현한다 —
+    거부됐던(failed) 행을 재시도해도 허용 집합에 안 들어가면 여기(book_manager)까지
+    오지도 못하고 "제안 목록에 없는 파일입니다"만 영원히 반복된다. 이 테스트는 그
+    행이 다시 allowed에 담기기만 하면 재시도가 실제로 동작함을 보인다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "book.epub").write_text("x")
+
+    # 1차 시도: allowed에 없어 거부된다(버그가 있던 상태를 재현).
+    first, _ = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths=set()))
+    assert first["results"][0]["apply_status"] == "failed"
+    assert first["results"][0]["apply_error"] == "제안 목록에 없는 파일입니다"
+    assert (tmp_path / "A" / "book.epub").is_file()
+
+    # 재시도: failed 행이 allowed에 다시 담기면(고친 뒤 동작) 실제로 이동한다.
+    second, _ = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths={"A/book.epub"}))
+    assert second["results"][0]["apply_status"] == "moved"
+    assert not (tmp_path / "A" / "book.epub").exists()
+    assert (tmp_path / "5_음악" / "book.epub").is_file()
+
+
+def test_apply_category_changes_retrying_moving_row_when_file_already_moved(tmp_path: Path):
+    """I4 outcome 1: moving으로 남았지만 실제로는 이미 옮겨져 있던 행을 재시도하면,
+    원본을 못 찾아 이중 이동 없이 안전하게 failed로 기록된다.
+
+    apply_category_changes가 이동 직전 반드시 source 파일 존재를 다시 확인하므로,
+    moving을 pending과 똑같이 취급해도 이미 끝난 이동을 또 옮기는 사고는 안 난다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    # 원본은 이미 없고(실제로는 이동이 끝남), 목적지에만 파일이 있다.
+    (tmp_path / "5_음악" / "book.epub").write_text("x")
+
+    result, _ = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths={"A/book.epub"}))
+
+    assert result["results"][0]["apply_status"] == "failed"
+    assert "파일을 찾을 수 없습니다" in result["results"][0]["apply_error"]
+    # 이미 옮겨져 있던 목적지 파일은 건드리지 않는다 — 덮어쓰거나 지우지 않는다.
+    assert (tmp_path / "5_음악" / "book.epub").is_file()
+
+
+def test_apply_category_changes_retrying_moving_row_when_move_never_happened(tmp_path: Path):
+    """I4 outcome 2: moving으로 남았지만 실제로는 이동이 시작되지 않았던(원본이
+    그대로인) 행을 재시도하면, 이번에는 정상적으로 이동이 완료된다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "A").mkdir()
+    (tmp_path / "5_음악").mkdir()
+    (tmp_path / "A" / "book.epub").write_text("x")
+
+    result, _ = asyncio_runner(manager.apply_category_changes([{"file_path": "A/book.epub", "target_category": "5_음악"}], allowed_file_paths={"A/book.epub"}))
+
+    assert result["results"][0]["apply_status"] == "moved"
+    assert not (tmp_path / "A" / "book.epub").exists()
+    assert (tmp_path / "5_음악" / "book.epub").is_file()

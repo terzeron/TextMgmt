@@ -1051,8 +1051,11 @@ def test_category_mapping_endpoints(client, monkeypatch: pytest.MonkeyPatch):
     resp = client.post("/category-mappings/A/keywords", json={"keyword": ""})
     assert resp.status_code == 400
 
+    # 이미 있는 키워드는 실패가 아니다 — "등록해 달라"는 요청이 이미 충족돼 있다.
+    # 대신 아무 일도 안 일어났다는 사실을 경고로 알린다.
     resp = client.post("/category-mappings/A/keywords", json={"keyword": "dup"})
-    assert resp.json()["status"] == "duplicate"
+    assert resp.json()["status"] == "success"
+    assert resp.json()["warning"]
 
     resp = client.post("/category-mappings/A/keywords", json={"keyword": "new"})
     assert resp.json()["status"] == "success"
@@ -2193,8 +2196,8 @@ def test_main_requires_frontend_url():
             os.environ["TM_FRONTEND_URL"] = prev
 
 
-class TestStaleAutoClassifyStatus:
-    """재배포로 죽은 자동 분류 작업이 화면과 재실행을 막지 않아야 한다.
+class TestStaleRunningStatus:
+    """재배포로 죽은 백그라운드 작업이 화면과 재실행을 막지 않아야 한다.
 
     실제로 겪은 일이다. 재배포로 백그라운드 태스크가 사라졌는데 상태 파일은 running
     으로 남아, POST 가 already_running 으로 막고 화면은 6분째 회전했다.
@@ -2203,56 +2206,88 @@ class TestStaleAutoClassifyStatus:
     STALE = 5 * 60
 
     def test_running_without_recent_heartbeat_becomes_failed(self):
-        from backend.main import stale_auto_classify_status
+        from backend.main import stale_running_status
 
         status = {"status": "running", "updated_at": 1000.0, "remaining_count": 19}
-        stale = stale_auto_classify_status(status, self.STALE, now=1000.0 + self.STALE + 1)
+        stale = stale_running_status(status, self.STALE, now=1000.0 + self.STALE + 1)
 
         assert stale is not None
         assert stale["status"] == "failed"
-        assert "다시 실행" in stale["error"]
+        assert "중단" in stale["error"]
+        # 재실행(분류 제안을 다시 누르는 것)은 남은 pending/failed 행을 지운다 —
+        # 이 메시지가 그 파괴적인 행동을 권하면 안 된다.
+        assert "다시 실행" not in stale["error"]
         # 진행 수치는 남겨 둔다. 어디까지 갔는지 보여야 한다
         assert stale["remaining_count"] == 19
 
     def test_running_with_recent_heartbeat_is_left_alone(self):
         """오래 걸리는 정상 작업을 죽었다고 판정하면 안 된다."""
-        from backend.main import stale_auto_classify_status
+        from backend.main import stale_running_status
 
         status = {"status": "running", "updated_at": 1000.0}
-        assert stale_auto_classify_status(status, self.STALE, now=1000.0 + self.STALE - 1) is None
+        assert stale_running_status(status, self.STALE, now=1000.0 + self.STALE - 1) is None
 
     def test_status_without_heartbeat_is_treated_as_dead(self):
         """updated_at 이 없으면 살아있다고 볼 근거가 없다."""
-        from backend.main import stale_auto_classify_status
+        from backend.main import stale_running_status
 
-        assert stale_auto_classify_status({"status": "running"}, self.STALE) is not None
-        assert stale_auto_classify_status({"status": "running", "updated_at": "어제"}, self.STALE) is not None
+        assert stale_running_status({"status": "running"}, self.STALE) is not None
+        assert stale_running_status({"status": "running", "updated_at": "어제"}, self.STALE) is not None
 
     def test_other_statuses_are_untouched(self):
-        from backend.main import stale_auto_classify_status
+        from backend.main import stale_running_status
 
         for state in ("idle", "done", "failed"):
-            assert stale_auto_classify_status({"status": state, "updated_at": 0.0}, self.STALE) is None
+            assert stale_running_status({"status": state, "updated_at": 0.0}, self.STALE) is None
+
+    def test_stale_applying_becomes_failed(self):
+        """Finding 1: applying도 죽은 채 굳으면 자가치유돼야 한다.
+
+        POST 게이트가 already_running으로 막는 상태 목록에 applying도 들어가므로,
+        재배포로 적용 단계 백그라운드 작업이 사라지면 이 판정 없이는 DELETE 없이
+        영영 못 벗어난다.
+        """
+        from backend.main import stale_running_status
+
+        status = {"status": "applying", "updated_at": 1000.0, "applied_count": 1}
+        stale = stale_running_status(status, self.STALE, now=1000.0 + self.STALE + 1)
+
+        assert stale is not None
+        assert stale["status"] == "failed"
+        assert stale["applied_count"] == 1
+
+    def test_applying_with_recent_heartbeat_is_left_alone(self):
+        from backend.main import stale_running_status
+
+        status = {"status": "applying", "updated_at": 1000.0}
+        assert stale_running_status(status, self.STALE, now=1000.0 + self.STALE - 1) is None
 
 
 def test_stale_running_status_lets_the_button_work_again(backend_test_setup):
-    """멈춘 상태 파일이 GET 한 번으로 풀려야 버튼을 다시 누를 수 있다.
+    """멈춘 작업이 버튼을 영영 막지 않아야 한다.
 
-    순수 함수만 검증하면 배선이 빠져도 통과한다. 상태 파일부터 응답까지 확인한다.
+    순수 함수만 검증하면 배선이 빠져도 통과한다. DB 행부터 응답까지, 그리고 실제로
+    새 요청이 받아들여지는지까지 확인한다.
     """
-    import json
-    import time
+    from backend.category_mapping import CategoryMapping
 
-    bm = backend_test_setup["bm"]
     client = backend_test_setup["client"]
-    status_path = bm.path_prefix / ".auto_classify_status_book.json"
-    stuck = {"status": "running", "remaining_count": 19, "updated_at": time.time() - 3600}
-    status_path.write_text(json.dumps(stuck), encoding="utf-8")
+    mapping = CategoryMapping()
+    mapping.set_classify_proposal_status({"status": "running", "source_category": CATEGORY})
+    # 하트비트를 DB 서버 시계로 과거로 민다. 파이썬 지역 시간을 쓰면 앱과 DB 의
+    # 시간대 차이가 섞여 의도한 나이가 만들어지지 않는다.
+    with mapping._get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE classify_proposal_status SET updated_at = DATE_SUB(NOW(3), INTERVAL 3600 SECOND) WHERE content_type = 'book'")
+        conn.commit()
 
     try:
-        result = client.get("/categories/auto-classify-status").json()
+        result = client.get("/categories/classify-proposal").json()
         assert result["result"]["status"] == "failed"
-        # 파일도 함께 굳어야 다음 POST 가 already_running 으로 막히지 않는다
-        assert json.loads(status_path.read_text(encoding="utf-8"))["status"] == "failed"
+        # 여기서 멈추면 "조회만 되고 버튼은 여전히 막힌" 상태를 놓친다. 없는 카테고리로
+        # 요청해 백그라운드 작업이 곧바로 끝나게 하고, 선점이 풀렸는지만 본다.
+        started = client.post("/categories/classify-proposal", json={"category": "__no_such_category__"}).json()
+        assert started["result"].get("already_running") is None
+        assert started["result"]["started"] is True
     finally:
-        status_path.unlink(missing_ok=True)
+        mapping.set_classify_proposal_status({"status": "idle"})

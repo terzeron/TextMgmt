@@ -303,6 +303,21 @@ describe('buildFolderHierarchy', () => {
         expect(result[0].count).toBe(10);
         expect(result[1].count).toBe(5);
     });
+
+    it('ownCount는 하위 폴더 합계를 포함하지 않는다', () => {
+        const counts = { '소설': 2, '소설/SF': 3 };
+        const result = buildFolderHierarchy(['소설', '소설/SF'], '', counts);
+        expect(result[0].count).toBe(5);
+        expect(result[0].ownCount).toBe(2);
+        expect(result[0].children[0].ownCount).toBe(3);
+    });
+
+    it('가상 부모 폴더의 ownCount는 0이다', () => {
+        const result = buildFolderHierarchy(['소설/SF'], '', { '소설/SF': 3 });
+        expect(result[0].isVirtualParent).toBe(true);
+        expect(result[0].count).toBe(3);
+        expect(result[0].ownCount).toBe(0);
+    });
 });
 
 // ── findFolderInTree ──

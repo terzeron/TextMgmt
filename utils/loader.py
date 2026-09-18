@@ -30,6 +30,7 @@ import chardet
 
 from backend.classifier.reader import read_epub_publisher
 from backend.es_manager import ESManager
+from utils.corpus_layout import IGNORED_DIR_NAMES
 from utils.file_time import path_created_time_with_source
 from utils.stat import Stat
 from utils.isbn import extract as extract_isbn
@@ -1647,7 +1648,7 @@ def main() -> int:
                 print("  파일 적재 실패 (지원하지 않는 형식일 수 있음)")
         elif do_recursive:
             # 전체 파일 등록 (generator 사용으로 메모리 효율화, hidden directory 제외)
-            file_iter = (p for p in target_path.rglob("*") if p.is_file() and not any(part.startswith(".") for part in p.relative_to(target_path).parts))
+            file_iter = (p for p in target_path.rglob("*") if p.is_file() and not any(part.startswith(".") or part in IGNORED_DIR_NAMES for part in p.relative_to(target_path).parts))
             skip_check = do_reload
             # --reload 시 이번 실행에서 본 live inode를 수집하여 orphan 삭제에 사용
             seen_inodes: set[int] | None = set() if do_reload else None
@@ -1678,7 +1679,7 @@ def main() -> int:
                 print("  [1단계] 하위 디렉토리별 샘플 파일 등록")
                 sample_files: list[tuple[str, Path]] = []  # (subdir_name, file_path)
                 for subdir in target_path.iterdir():
-                    if subdir.is_dir() and not subdir.name.startswith("."):
+                    if subdir.is_dir() and not subdir.name.startswith(".") and subdir.name not in IGNORED_DIR_NAMES:
                         # 첫 번째 파일만 가져옴 (정렬 불필요, iterator 사용)
                         first_file = next((p for p in subdir.iterdir() if p.is_file() and not p.name.startswith(".")), None)
                         if first_file:

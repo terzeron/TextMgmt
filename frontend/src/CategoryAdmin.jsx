@@ -4,6 +4,7 @@ import PropTypes from "prop-types";
 
 import "bootstrap/dist/css/bootstrap.min.css";
 import {
+  Alert,
   Button,
   Card,
   Form,
@@ -43,7 +44,6 @@ import clsx from "clsx";
 import { jsonGetReq, jsonPostReq, jsonPutReq, jsonDeleteReq } from "./Common";
 import {
   formatErrorMessage,
-  getAutoClassifyRemainingCount,
   getReloadRemainingCount,
 } from "./categoryAdminUtils";
 import { updateCachedMappings } from "./categoryMappingCache";
@@ -54,6 +54,7 @@ import {
   updateFolderInTree,
 } from "./folderUtils";
 import { TreeNodeIcon } from "./fileTypeIcons";
+import ClassifyProposalTable, { isSelectable } from "./ClassifyProposalTable";
 import "./Folder.css";
 import "./CategoryAdmin.css";
 
@@ -326,16 +327,21 @@ function storeAllReloadOwner(contentType, owner) {
   }
 }
 
+// 카테고리 하나의 이상 항목 수. 백엔드는 경로를 직접 비교해 anomaly_count를 준다.
+// 건수 차이(diff)만 주던 옛 응답은 실제 이상 항목보다 작게 나오지만, 응답을 받지 못하는
+// 것보다는 낫기 때문에 fallback으로 남긴다.
+function getMismatchItemCount(item) {
+  if (item.anomaly_count != null) return item.anomaly_count;
+  if (item.diff != null) return Math.abs(item.diff);
+  return item.es_count ?? item.fs_count ?? 0;
+}
+
 function buildMismatchCounts(mismatchData) {
   const counts = {};
-  for (const item of mismatchData.mismatches || []) {
-    counts[item.category] = Math.abs(item.diff);
-  }
-  for (const item of mismatchData.es_only || []) {
-    counts[item.category] = item.es_count;
-  }
-  for (const item of mismatchData.fs_only || []) {
-    counts[item.category] = item.fs_count;
+  for (const key of ["mismatches", "es_only", "fs_only"]) {
+    for (const item of mismatchData[key] || []) {
+      counts[item.category] = getMismatchItemCount(item);
+    }
   }
   return counts;
 }
@@ -355,9 +361,11 @@ function countLoadedMismatchEntries(folder) {
   );
 }
 
+// 재적재는 선택한 카테고리 하나만 처리하므로 하위 폴더 합계(count)가 아니라
+// 그 카테고리 자체의 건수를 대상으로 삼는다.
 function getMismatchReloadTargetCount(folder) {
-  const folderCount = Number(folder?.count || 0);
-  if (Number.isFinite(folderCount) && folderCount > 0) return folderCount;
+  const ownCount = Number(folder?.ownCount ?? folder?.count ?? 0);
+  if (Number.isFinite(ownCount) && ownCount > 0) return ownCount;
 
   return countLoadedMismatchEntries(folder);
 }
@@ -416,22 +424,29 @@ export default function CategoryAdmin({
   const [showMismatchReloadModal, setShowMismatchReloadModal] = useState(false);
   const [showBulkReloadModal, setShowBulkReloadModal] = useState(false);
   const [showDeleteFileModal, setShowDeleteFileModal] = useState(false);
-  const [showAutoClassifyModal, setShowAutoClassifyModal] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [mismatchReloading, setMismatchReloading] = useState(false);
   const [bulkReloading, setBulkReloading] = useState(false);
   const [allReloadOwner, setAllReloadOwner] = useState(() =>
     getStoredAllReloadOwner(contentType),
   );
-  const [autoClassifying, setAutoClassifying] = useState(false);
-  const [autoClassifyPolling, setAutoClassifyPolling] = useState(false);
   // 일괄(전체) 재적재 락(__all__)의 잔여 건수. 이 상태는 "일괄" 버튼만 반영한다.
   const [bulkRemainingCount, setBulkRemainingCount] = useState(null);
   // 이상 항목 버튼이 시작한 작업의 잔여 건수. 선택 카테고리 전용 작업뿐 아니라
   // 미선택 상태에서 시작한 전체 이상 항목 작업도 이 상태로 표시한다.
   const [mismatchRemainingCount, setMismatchRemainingCount] = useState(null);
-  const [autoClassifyRemainingCount, setAutoClassifyRemainingCount] =
-    useState(null);
+  // 분류 제안(propose → 검토 → 승인) 흐름 상태. 파일은 승인 전까지 옮기지 않는다.
+  const [proposal, setProposal] = useState(null);
+  // 행마다 목적지를 하나만 들고 있는다: 추천 체크에서 왔는지(candidate) 사용자가
+  // 직접 고른 것인지(manual)를 함께 담아, 둘이 동시에 켜지는 상태를 만들지 않는다.
+  const [proposalChoices, setProposalChoices] = useState({});
+  const [proposalPolling, setProposalPolling] = useState(false);
+  const [proposalStarting, setProposalStarting] = useState(false);
+  const [showProposalApplyModal, setShowProposalApplyModal] = useState(false);
+  const [showProposalClearModal, setShowProposalClearModal] = useState(false);
+  const [showProposalRestartModal, setShowProposalRestartModal] =
+    useState(false);
+  const proposalStatusRequestIdRef = useRef(0);
   // 시작 요청(POST)이 서버에 반영되기 전에 폴링(GET)이 먼저 도착해 아직 "idle"인 상태를
   // 읽어버릴 수 있다. 그 사이에는 idle 응답을 무시하고 스피너를 유지한다. 각 작업은
   // 독립적으로 시작될 수 있으므로 각자의 ref로 관리한다.
@@ -441,10 +456,8 @@ export default function CategoryAdmin({
   // 돌려주는 직전 작업의 done/error를 새 완료로 오인한다.
   const allReloadTrackingRef = useRef(false);
   const mismatchTrackingRef = useRef(false);
-  const autoClassifyStartPendingRef = useRef(false);
   const bulkStatusRequestIdRef = useRef(0);
   const mismatchStatusRequestIdRef = useRef(0);
-  const autoClassifyStatusRequestIdRef = useRef(0);
   const [indexingFile, setIndexingFile] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
 
@@ -542,9 +555,10 @@ export default function CategoryAdmin({
           if (enriched.children) {
             enriched.children = enriched.children.map(enrichItem);
           }
-          // 불일치가 있는 leaf 카테고리에 placeholder child 추가 (확장 아이콘 표시용)
+          // 불일치가 있는 leaf 카테고리에 placeholder child 추가 (확장 아이콘 표시용).
+          // 하위 폴더 합계가 아니라 이 카테고리 자체의 건수로 판단한다.
           if (
-            enriched.count > 0 &&
+            enriched.ownCount > 0 &&
             !enriched.children?.length &&
             !enriched.isVirtualParent
           ) {
@@ -810,93 +824,84 @@ export default function CategoryAdmin({
     applyReloadStatus,
   ]);
 
-  const applyAutoClassifyStatus = useCallback(
-    (status) => {
-      if (!status || status.status === "idle") {
-        if (autoClassifyStartPendingRef.current) return true;
-        setAutoClassifying(false);
-        setAutoClassifyPolling(false);
-        setAutoClassifyRemainingCount(null);
-        return false;
-      }
-      if (status.status === "running") {
-        autoClassifyStartPendingRef.current = false;
-        setAutoClassifying(true);
-        setAutoClassifyPolling(true);
-        setAutoClassifyRemainingCount(getAutoClassifyRemainingCount(status));
-        return true;
-      }
-
-      autoClassifyStartPendingRef.current = false;
-      setAutoClassifying(false);
-      setAutoClassifyPolling(false);
-      setAutoClassifyRemainingCount(null);
-      if (status.status === "done") {
-        setSelectedCategory("");
-        loadData();
-      } else {
-        setMessage(
-          formatErrorMessage(status.error, "자동 분류에 실패했습니다."),
-        );
-        setTimeout(() => setMessage(""), 5000);
-      }
-      return false;
-    },
-    [loadData],
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    const requestId = autoClassifyStatusRequestIdRef.current + 1;
-    autoClassifyStatusRequestIdRef.current = requestId;
-    jsonGetReq(
-      apiPrefix + "/categories/auto-classify-status",
-      null,
-      (result) => {
+  // 분류 제안 상태를 반영한다. ready/done/failed(검토 가능한 종료 상태)에 새로
+  // 진입할 때만 기본 선택을 다시 채운다 — 이 상태들은 폴링이 멈추는 지점이라
+  // 이후 사용자가 직접 고친 체크 상태를 덮어쓸 일이 없다.
+  const applyProposalStatus = useCallback((data) => {
+    if (!data) return;
+    setProposal(data);
+    if (["ready", "done", "failed"].includes(data.status)) {
+      const items = data.items || [];
+      // 확실한 행만 추천 1을 미리 체크해 둔다. target_category는 candidates[0]과
+      // 같다는 것이 백엔드의 불변식이라, 체크 표시와 실제 목적지가 어긋나지 않는다.
+      const defaults = {};
+      for (const item of items) {
+        const first = (item.candidates || [])[0];
         if (
-          !cancelled &&
-          requestId === autoClassifyStatusRequestIdRef.current &&
-          !autoClassifyStartPendingRef.current &&
-          result?.status === "running"
+          item.grade === "certain" &&
+          first?.category &&
+          item.apply_status !== "moved"
         ) {
-          applyAutoClassifyStatus(result);
+          defaults[item.file_path] = {
+            source: "candidate",
+            index: 0,
+            category: first.category,
+          };
+        }
+      }
+      setProposalChoices(defaults);
+    }
+    setProposalPolling(data.status === "running" || data.status === "applying");
+  }, []);
+
+  // 마운트 시 지난 제안 상태를 한 번 복원한다. ready였다면 표를 바로 볼 수 있게
+  // 그 제안을 만들었던 카테고리를 선택 상태로 되돌린다.
+  useEffect(() => {
+    jsonGetReq(
+      apiPrefix + "/categories/classify-proposal",
+      null,
+      (data) => {
+        applyProposalStatus(data);
+        // ready뿐 아니라 도는 중(running/applying)에도 되돌린다. 그래야 페이지를
+        // 떠났다 돌아왔을 때 표와 함께 버튼의 진행 표시도 다시 보인다.
+        if (data?.status && data.status !== "idle" && data.source_category) {
+          setSelectedCategory(data.source_category);
         }
       },
       () => {},
     );
-    return () => {
-      cancelled = true;
-    };
-  }, [apiPrefix, applyAutoClassifyStatus]);
+    // 마운트 시 1회만 복원한다. apiPrefix(컨텐츠 타입)는 이 컴포넌트 수명 동안
+    // 바뀌지 않으므로 의존성에서 빠져도 안전하다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  // 진행 중(running/applying)일 때만 3초 간격으로 폴링하고, 종료 상태가 되면 멈춘다.
   useEffect(() => {
-    if (!autoClassifyPolling) return undefined;
+    if (!proposalPolling) return undefined;
 
     let cancelled = false;
-    const pollStatus = () => {
-      const requestId = autoClassifyStatusRequestIdRef.current + 1;
-      autoClassifyStatusRequestIdRef.current = requestId;
+    const pollProposal = () => {
+      const requestId = proposalStatusRequestIdRef.current + 1;
+      proposalStatusRequestIdRef.current = requestId;
       jsonGetReq(
-        apiPrefix + "/categories/auto-classify-status",
+        apiPrefix + "/categories/classify-proposal",
         null,
-        (result) => {
-          if (
-            !cancelled &&
-            requestId === autoClassifyStatusRequestIdRef.current
-          )
-            applyAutoClassifyStatus(result);
+        (data) => {
+          if (!cancelled && requestId === proposalStatusRequestIdRef.current) {
+            applyProposalStatus(data);
+          }
         },
         () => {},
       );
     };
 
-    pollStatus();
-    const intervalId = setInterval(pollStatus, 3000);
+    pollProposal();
+    const intervalId = setInterval(pollProposal, 3000);
     return () => {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [autoClassifyPolling, apiPrefix, applyAutoClassifyStatus]);
+  }, [proposalPolling, apiPrefix, applyProposalStatus]);
 
   // ── 폴더 클릭 → 불일치 detail lazy-load ──
 
@@ -908,7 +913,9 @@ export default function CategoryAdmin({
         return;
       /* v8 ignore next -- virtual parent nodes are not expandable mismatch leaves. */
       if (selectedFolderData.isVirtualParent) return;
-      if (!selectedFolderData.count) return;
+      // 상세 조회는 이 카테고리 자체의 이상 항목만 가져온다. 하위 폴더 합계인 count로
+      // 판단하면 자기 항목이 없는 부모까지 빈 조회를 날린다.
+      if (!selectedFolderData.ownCount) return;
       if (selectedFolderData.booksLoaded) return;
 
       jsonGetReq(
@@ -971,9 +978,17 @@ export default function CategoryAdmin({
             const existingSubfolders = (folder.children || []).filter(
               (c) => c.fileType === "folder",
             );
+            // 요약 스캔 이후 파일이 바뀌었을 수 있으므로 배지를 실제로 받아온
+            // 항목 수로 맞춘다. 배지와 펼친 목록이 어긋나면 사용자가 판단할 수 없다.
+            const subfolderTotal = existingSubfolders.reduce(
+              (sum, c) => sum + Number(c.count || 0),
+              0,
+            );
             return {
               ...folder,
               booksLoaded: true,
+              ownCount: entries.length,
+              count: entries.length + subfolderTotal,
               children: [...existingSubfolders, ...entries],
             };
           });
@@ -1054,15 +1069,23 @@ export default function CategoryAdmin({
     jsonPostReq(
       `/category-mappings/${encodeURIComponent(selectedCategory)}/keywords?content_type=${contentType}`,
       { keyword },
-      () => {
+      (payload) => {
+        // 서버가 돌려준 목록을 그대로 쓴다. 직접 append 하면 이미 있는 키워드를 다시
+        // 등록했을 때(다른 관리자가 먼저 넣은 경우 등) 같은 배지가 두 번 보인다.
+        const serverKeywords = Array.isArray(payload) ? payload : payload?.result;
         setMappings((prev) => {
           const updated = { ...prev };
-          if (!updated[selectedCategory]) updated[selectedCategory] = [];
-          updated[selectedCategory] = [...updated[selectedCategory], keyword];
+          updated[selectedCategory] = Array.isArray(serverKeywords)
+            ? serverKeywords
+            : [...(prev[selectedCategory] || []), keyword];
           updateCachedMappings(contentType, updated);
           return updated;
         });
         setNewKeyword("");
+        if (payload?.warning) {
+          setMessage(payload.warning);
+          setTimeout(() => setMessage(""), 3000);
+        }
         setTimeout(() => keywordInputRef.current?.focus(), 0);
       },
       (error) => {
@@ -1233,41 +1256,137 @@ export default function CategoryAdmin({
     );
   }, [selectedCategory, apiPrefix]);
 
-  const handleAutoClassifyCategory = useCallback(() => {
-    if (!selectedCategory) {
-      setShowAutoClassifyModal(false);
+  // 분류 제안 시작. 더 이상 파일을 바로 옮기지 않는다 — 제안만 만들고, 실제
+  // 이동은 관리자가 표를 검토하고 승인해야 일어난다.
+  const handleStartClassifyProposal = useCallback(() => {
+    if (!selectedCategory) return;
+    const category = selectedCategory;
+    setProposalChoices({});
+    setProposalStarting(true);
+    setMessage("");
+    jsonPostReq(
+      `${apiPrefix}/categories/classify-proposal`,
+      { category },
+      (result) => {
+        applyProposalStatus(result);
+      },
+      (error) => {
+        setMessage(formatErrorMessage(error, "분류 제안에 실패했습니다."));
+        setTimeout(() => setMessage(""), 5000);
+      },
+      () => {
+        setProposalStarting(false);
+      },
+    );
+  }, [selectedCategory, apiPrefix, applyProposalStatus]);
+
+  // 이미 만들어진 제안에 항목이 있으면, 다시 누르는 순간 관리자가 읽고 체크하고
+  // 목적지를 고친 검토 결과가 통째로 사라진다(선택/오버라이드는 즉시 비워지고,
+  // 서버도 새 제안을 만들며 이전 항목을 지운다). 잃을 게 있을 때만 확인을 거친다.
+  const hasReviewedProposal = (proposal?.items || []).length > 0;
+
+  // 시작 요청이 도는 동안과 분류 작업이 도는 동안 모두 버튼이 돌아야 한다.
+  // 시작 요청은 백그라운드 작업을 띄우고 곧바로 끝나므로, 그것만 보면 스피너가
+  // 깜빡이고 만다.
+  // 제안은 한 번에 하나만 존재하고 그것이 만들어진 카테고리에 속한다. 다른
+  // 디렉토리를 선택했는데도 그 표가 남아 있으면, 지금 보는 디렉토리의 책이 그렇게
+  // 분류된 것으로 읽힌다 — 잘못 승인하면 엉뚱한 책이 옮겨진다.
+  const proposalIsForSelection =
+    Boolean(proposal?.source_category) &&
+    proposal.source_category === selectedCategory;
+  const proposalRunning =
+    proposalStarting ||
+    (proposal?.status === "running" && proposalIsForSelection);
+  // 다른 카테고리의 작업이 도는 중이라 시작할 수 없을 때는, 버튼이 왜 잠겼는지
+  // 알려준다. 그러지 않으면 눌러도 아무 일이 없는 것처럼 보인다.
+  const proposalBlockedBy =
+    proposalPolling && !proposalIsForSelection ? proposal?.source_category : null;
+
+  const handleClickProposeButton = useCallback(() => {
+    if (hasReviewedProposal) {
+      setShowProposalRestartModal(true);
       return;
     }
-    const category = selectedCategory;
-    setShowAutoClassifyModal(false);
-    autoClassifyStartPendingRef.current = true;
-    setAutoClassifying(true);
-    setAutoClassifyPolling(false);
-    setAutoClassifyRemainingCount(null);
+    handleStartClassifyProposal();
+  }, [hasReviewedProposal, handleStartClassifyProposal]);
+
+  const handleConfirmRestartProposal = useCallback(() => {
+    setShowProposalRestartModal(false);
+    handleStartClassifyProposal();
+  }, [handleStartClassifyProposal]);
+
+  // 승인 대상: 선택된 행 중에서도 목적지가 있는 행만 최종적으로 담는다.
+  // isSelectable 필터는 2차 방어다 — 표 컴포넌트가 목적지를 지울 때 선택에서
+  // 빼주지만, 제출 직전에 한 번 더 걸러 목적지 없는 항목이 승인 요청에
+  // 실리는 것을 막는다.
+  const proposalApplyItems = useMemo(() => {
+    const items = proposal?.items || [];
+    return items
+      .filter((item) => isSelectable(item, proposalChoices))
+      .map((item) => ({
+        file_path: item.file_path,
+        target_category: proposalChoices[item.file_path].category,
+      }));
+  }, [proposal, proposalChoices]);
+
+  const handleApplyClassifyProposal = useCallback(() => {
+    setShowProposalApplyModal(false);
     setSaving(true);
     setMessage("");
     jsonPostReq(
-      `${apiPrefix}/categories/auto-classify`,
-      { category, recursive: false, async_mode: true },
-      (result) => {
-        if (result?.already_running) {
-          applyAutoClassifyStatus(result);
-        }
-        setAutoClassifyPolling(true);
+      `${apiPrefix}/categories/classify-proposal/apply`,
+      { items: proposalApplyItems },
+      () => {
+        // 서버가 응답 전에 이미 상태를 applying으로 선점해 두므로, 다음 폴링이
+        // 실제 진행 상황(이동 상태별 항목)을 곧바로 읽어온다.
+        setProposal((prev) => (prev ? { ...prev, status: "applying" } : prev));
+        setProposalPolling(true);
       },
       (error) => {
-        autoClassifyStartPendingRef.current = false;
-        setAutoClassifying(false);
-        setAutoClassifyPolling(false);
-        setAutoClassifyRemainingCount(null);
-        setMessage(formatErrorMessage(error, "자동 분류에 실패했습니다."));
+        setMessage(formatErrorMessage(error, "분류 승인에 실패했습니다."));
         setTimeout(() => setMessage(""), 5000);
       },
       () => {
         setSaving(false);
       },
     );
-  }, [selectedCategory, apiPrefix, applyAutoClassifyStatus]);
+  }, [apiPrefix, proposalApplyItems]);
+
+  const handleClearAppliedProposalItems = useCallback(() => {
+    setShowProposalClearModal(false);
+    setSaving(true);
+    setMessage("");
+    jsonDeleteReq(
+      `${apiPrefix}/categories/classify-proposal/applied`,
+      null,
+      () => {
+        jsonGetReq(
+          apiPrefix + "/categories/classify-proposal",
+          null,
+          applyProposalStatus,
+          (error) => {
+            // 삭제(DELETE) 자체는 성공했다. 이 재조회만 실패하면 표가 갱신되지
+            // 않아 관리자가 삭제 여부를 알 길이 없으므로, 다른 핸들러와 같은
+            // 방식으로 실패를 드러낸다.
+            setMessage(
+              formatErrorMessage(
+                error,
+                "완료 기록은 삭제했지만 표를 다시 불러오지 못했습니다.",
+              ),
+            );
+            setTimeout(() => setMessage(""), 5000);
+          },
+        );
+      },
+      (error) => {
+        setMessage(formatErrorMessage(error, "완료 기록 삭제에 실패했습니다."));
+        setTimeout(() => setMessage(""), 5000);
+      },
+      () => {
+        setSaving(false);
+      },
+    );
+  }, [apiPrefix, applyProposalStatus]);
 
   // 재적재는 서버에서 백그라운드로 돈다. 여기서는 시작만 확인하고, 완료/실패 메시지는
   // 위쪽 상태 폴링(applyReloadStatus)이 처리한다. 카테고리별 락과 전체(일괄) 락은 서로
@@ -1521,7 +1640,10 @@ export default function CategoryAdmin({
 
   const handleKeyDown = useCallback(
     (e) => {
-      if (e.key === "Enter") {
+      // 한글 입력 중의 Enter는 조합을 확정하는 키다. 그걸 등록으로 받으면 확정 Enter와
+      // 전송 Enter가 각각 요청을 만들어 같은 키워드가 두 번 나간다(실제로 그렇게 나갔다).
+      // BookInfoView가 같은 이유로 이미 조합 상태를 본다.
+      if (e.key === "Enter" && !e.nativeEvent?.isComposing) {
         e.preventDefault();
         handleAddKeyword();
       }
@@ -1546,9 +1668,11 @@ export default function CategoryAdmin({
   const currentKeywords = selectedCategory
     ? mappings[selectedCategory] || []
     : [];
-  const autoClassifyTargetLabel = selectedCategory
-    ? getCategoryTargetLabel(selectedCategory)
-    : getCategoryTargetLabel("_root");
+  // apply_category_changes는 target_category로 최상위 카테고리만 받는다. 하위
+  // 카테고리를 고르게 두면 서버가 어차피 거부하므로 애초에 고를 수 없게 한다.
+  const topLevelCategoryNames = Object.keys(esDocCounts).filter(
+    (name) => name !== "_root" && !name.includes("/"),
+  );
 
   const displayedFolderData = useMemo(() => {
     if (!showOnlyAbnormal) return folderData;
@@ -1620,6 +1744,32 @@ export default function CategoryAdmin({
   return (
     <>
       {message && <div className="alert alert-danger py-1 mb-2">{message}</div>}
+      {/* 카테고리 목록·불일치·키워드 네 요청이 다 끝나야 아래 화면이 그려진다.
+          그중 불일치 스캔이 몇 초 걸려, 도는 중에 페이지를 다시 열면 그 몇 초 동안
+          "아무 일도 없는" 화면이 보였다. 제안 상태는 자기 요청 하나로 곧바로 오므로
+          먼저 그려 준다 — 진행 중이라는 사실과 대상 목록을 그만큼 일찍 볼 수 있다. */}
+      {loading && proposal && proposal.status !== "idle" && (
+        <Card className="mb-2">
+          <Card.Header className="py-1 d-flex align-items-center gap-2">
+            {proposal.status === "running" && (
+              <Spinner animation="border" size="sm" />
+            )}
+            <strong>{proposal.source_category}</strong>
+            <span className="text-muted">
+              분류 제안 {proposal.processed_count ?? 0}/
+              {proposal.total_count ?? 0}
+            </span>
+          </Card.Header>
+          <Card.Body className="py-2">
+            <ClassifyProposalTable
+              items={proposal.items || []}
+              categories={topLevelCategoryNames}
+              choices={proposalChoices}
+              onChoicesChange={setProposalChoices}
+            />
+          </Card.Body>
+        </Card>
+      )}
       {loading ? (
         <div className="text-center p-4">
           <Spinner animation="border" />
@@ -1771,6 +1921,58 @@ export default function CategoryAdmin({
                     disabled={saving}
                     className="mb-2"
                   />
+                  {!isSubcategory && (
+                    <>
+                      <InputGroup className="mb-2">
+                        <Form.Control
+                          ref={keywordInputRef}
+                          type="text"
+                          placeholder="새 키워드 입력"
+                          value={newKeyword}
+                          onChange={(e) => setNewKeyword(e.target.value)}
+                          onKeyDown={handleKeyDown}
+                          disabled={saving}
+                        />
+                        <Button
+                          variant="outline-primary"
+                          onClick={handleAddKeyword}
+                          disabled={saving || !newKeyword.trim()}
+                        >
+                          <FontAwesomeIcon icon={faPlus} /> 추가
+                        </Button>
+                      </InputGroup>
+                      <div className="d-flex flex-wrap gap-1">
+                        {currentKeywords.map((keyword) => (
+                          <Badge
+                            key={keyword}
+                            bg="info"
+                            className="d-flex align-items-center gap-1"
+                            style={{
+                              fontSize: "0.85rem",
+                              padding: "0.4rem 0.6rem",
+                            }}
+                          >
+                            {keyword}
+                            <FontAwesomeIcon
+                              icon={faTrash}
+                              style={{
+                                cursor: saving ? "not-allowed" : "pointer",
+                                marginLeft: "4px",
+                              }}
+                              onClick={() =>
+                                !saving && handleRemoveKeyword(keyword)
+                              }
+                            />
+                          </Badge>
+                        ))}
+                        {currentKeywords.length === 0 && (
+                          <span className="text-muted">
+                            등록된 키워드가 없습니다.
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  )}
                   <div className="d-flex flex-wrap gap-1 mb-2">
                     <Button
                       variant="outline-secondary"
@@ -1846,78 +2048,114 @@ export default function CategoryAdmin({
                     <Button
                       variant="outline-primary"
                       size="sm"
-                      disabled={saving || autoClassifying}
-                      onClick={() => setShowAutoClassifyModal(true)}
-                      title="자동 분류"
+                      disabled={saving || proposalStarting || proposalPolling}
+                      onClick={handleClickProposeButton}
+                      title={
+                        proposalBlockedBy
+                          ? `${proposalBlockedBy} 분류 작업이 끝나야 시작할 수 있습니다`
+                          : "분류 제안"
+                      }
                     >
-                      {autoClassifying ? (
+                      {/* 시작 요청이 끝나면 스피너를 내리던 예전 동작은, 정작 오래
+                          걸리는 분류 자체가 도는 동안 버튼이 멈춘 것처럼 보이게 했다.
+                          책 한 권에 서점 조회까지 하면 수 초가 들어 카테고리 전체로는
+                          한참이다. 작업이 끝날 때까지 돌리고 진행 수를 같이 보여준다. */}
+                      {proposalRunning ? (
                         <span className="d-flex align-items-center gap-1">
                           <Spinner animation="border" size="sm" />
-                          <small style={{ fontSize: "0.7rem" }}>
-                            {autoClassifyRemainingCount !== null
-                              ? `잔여 ${autoClassifyRemainingCount}건`
-                              : "분류 중"}
-                          </small>
+                          {proposal?.total_count > 0 && (
+                            <small style={{ fontSize: "0.7rem" }}>
+                              {proposal.processed_count ?? 0}/
+                              {proposal.total_count}
+                            </small>
+                          )}
                         </span>
                       ) : (
                         <>
-                          자동 분류 <FontAwesomeIcon icon={faRotate} />
+                          분류 제안 <FontAwesomeIcon icon={faRotate} />
                         </>
                       )}
                     </Button>
                   </div>
-                  {!isSubcategory && (
-                    <>
-                      <InputGroup className="mb-2">
-                        <Form.Control
-                          ref={keywordInputRef}
-                          type="text"
-                          placeholder="새 키워드 입력"
-                          value={newKeyword}
-                          onChange={(e) => setNewKeyword(e.target.value)}
-                          onKeyDown={handleKeyDown}
-                          disabled={saving}
-                        />
-                        <Button
-                          variant="outline-primary"
-                          onClick={handleAddKeyword}
-                          disabled={saving || !newKeyword.trim()}
-                        >
-                          <FontAwesomeIcon icon={faPlus} /> 추가
-                        </Button>
-                      </InputGroup>
-                      <div className="d-flex flex-wrap gap-1">
-                        {currentKeywords.map((keyword) => (
-                          <Badge
-                            key={keyword}
-                            bg="info"
-                            className="d-flex align-items-center gap-1"
-                            style={{
-                              fontSize: "0.85rem",
-                              padding: "0.4rem 0.6rem",
-                            }}
-                          >
-                            {keyword}
-                            <FontAwesomeIcon
-                              icon={faTrash}
-                              style={{
-                                cursor: saving ? "not-allowed" : "pointer",
-                                marginLeft: "4px",
-                              }}
-                              onClick={() =>
-                                !saving && handleRemoveKeyword(keyword)
-                              }
-                            />
-                          </Badge>
-                        ))}
-                        {currentKeywords.length === 0 && (
-                          <span className="text-muted">
-                            등록된 키워드가 없습니다.
-                          </span>
+                </Card.Body>
+              </Card>
+            )}
+
+            {/* 분류 제안 검토 · 승인 */}
+            {proposal && proposal.status !== "idle" && proposalIsForSelection && (
+              <Card className="mt-2">
+                <Card.Header className="py-1 d-flex justify-content-between align-items-center">
+                  <strong>분류 제안: {proposal.source_category}</strong>
+                  <span className="text-muted" style={{ fontSize: "0.8rem" }}>
+                    {proposal.processed_count ?? 0} /{" "}
+                    {proposal.total_count ?? 0}
+                  </span>
+                </Card.Header>
+                <Card.Body>
+                  {proposal.status === "failed" && (
+                    // I2: error는 지금까지 상태 파일에만 쌓이고 화면 어디서도 읽지 않았다.
+                    // 제안이 중간에 죽으면(예: 1,200권 중 34권) 스피너만 멈추고 아무 신호가
+                    // 없어, 분류 승인이 (C1/I4가 재시도할 수 있어야 하므로) 계속 켜진 채로
+                    // 관리자가 미완성 제안을 완성됐다고 착각해 승인하기 쉽다. 실패라고
+                    // 막지는 않되(그러면 재시도를 못 한다), 중단됐다는 사실과 어디까지
+                    // 처리됐는지는 분명히 보여준다.
+                    <Alert
+                      variant="danger"
+                      className="py-2 px-3 mb-2"
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      <strong>작업이 중단됐습니다.</strong>{" "}
+                      {proposal.error || "원인을 알 수 없습니다."}
+                      {typeof proposal.total_count === "number" &&
+                        typeof proposal.processed_count === "number" &&
+                        proposal.processed_count < proposal.total_count && (
+                          <>
+                            {" "}
+                            전체 {proposal.total_count}건 중{" "}
+                            {proposal.processed_count}건까지만 처리됐습니다. 이
+                            제안은 아직 끝나지 않았습니다 — 승인 전에
+                            확인하세요.
+                          </>
                         )}
-                      </div>
-                    </>
+                    </Alert>
                   )}
+                  <ClassifyProposalTable
+                    items={proposal.items || []}
+                    categories={topLevelCategoryNames}
+                    choices={proposalChoices}
+                    onChoicesChange={setProposalChoices}
+                  />
+                  <div className="d-flex gap-2 mt-2">
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={
+                        saving ||
+                        !["ready", "done", "failed"].includes(
+                          proposal.status,
+                        ) ||
+                        proposalApplyItems.length === 0
+                      }
+                      onClick={() => setShowProposalApplyModal(true)}
+                    >
+                      분류 승인 ({proposalApplyItems.length}건)
+                    </Button>
+                    <Button
+                      variant="outline-secondary"
+                      size="sm"
+                      disabled={
+                        saving ||
+                        proposal.status === "running" ||
+                        proposal.status === "applying" ||
+                        !(proposal.items || []).some(
+                          (item) => item.apply_status === "moved",
+                        )
+                      }
+                      onClick={() => setShowProposalClearModal(true)}
+                    >
+                      완료 기록 삭제
+                    </Button>
+                  </div>
                 </Card.Body>
               </Card>
             )}
@@ -2235,48 +2473,94 @@ export default function CategoryAdmin({
         </Modal.Footer>
       </Modal>
 
-      {/* 자동 분류 확인 모달 */}
+      {/* 분류 제안 다시 시작 확인 모달 */}
       <Modal
-        show={showAutoClassifyModal}
-        onHide={() => setShowAutoClassifyModal(false)}
+        show={showProposalRestartModal}
+        onHide={() => setShowProposalRestartModal(false)}
         centered
       >
         <Modal.Header closeButton>
-          <Modal.Title>자동 분류</Modal.Title>
+          <Modal.Title>분류 제안 다시 시작</Modal.Title>
         </Modal.Header>
         <Modal.Body>
           <p className="fw-bold">
-            {autoClassifyTargetLabel}의 바로 아래 파일을 키워드 매핑에 따라
-            최상위 카테고리로 이동합니다.
+            지금 표에 남아 있는 선택과 직접 고친 목적지가 모두 사라지고,{" "}
+            {selectedCategory}로 새 제안을 처음부터 다시 만듭니다.
+          </p>
+          <p className="text-muted">되돌릴 수 없습니다.</p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button
+            variant="secondary"
+            onClick={() => setShowProposalRestartModal(false)}
+          >
+            취소
+          </Button>
+          <Button variant="danger" onClick={handleConfirmRestartProposal}>
+            다시 시작
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* 분류 승인 확인 모달 */}
+      <Modal
+        show={showProposalApplyModal}
+        onHide={() => setShowProposalApplyModal(false)}
+        centered
+      >
+        <Modal.Header closeButton>
+          <Modal.Title>분류 승인</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="fw-bold">
+            선택한 {proposalApplyItems.length}건을 실제로 이동하고 ES 문서를 새
+            카테고리로 다시 적재합니다.
           </p>
           <p className="text-muted">
-            하위 디렉토리는 포함하지 않습니다. 기존 ES 엔트리는 이전 경로
-            기준으로 삭제하고, 이동된 새 위치에서 다시 ES에 적재합니다. 분류가
-            모호하거나 대상 파일이 이미 있으면 건너뜁니다.
+            목적지가 없는 항목은 선택했어도 이 요청에 포함되지 않습니다.
           </p>
         </Modal.Body>
         <Modal.Footer>
           <Button
             variant="secondary"
-            onClick={() => setShowAutoClassifyModal(false)}
+            onClick={() => setShowProposalApplyModal(false)}
           >
             취소
           </Button>
           <Button
             variant="primary"
-            onClick={handleAutoClassifyCategory}
-            disabled={saving || autoClassifying}
+            onClick={handleApplyClassifyProposal}
+            disabled={saving || proposalApplyItems.length === 0}
           >
-            {autoClassifying ? (
-              <span className="d-flex align-items-center gap-1">
-                <Spinner animation="border" size="sm" />
-                {autoClassifyRemainingCount !== null
-                  ? `잔여 ${autoClassifyRemainingCount}건`
-                  : "분류 중"}
-              </span>
-            ) : (
-              "자동 분류"
-            )}
+            승인
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* 완료 기록 삭제 확인 모달 */}
+      <Modal
+        show={showProposalClearModal}
+        onHide={() => setShowProposalClearModal(false)}
+        centered
+      >
+        <Modal.Header closeButton>
+          <Modal.Title>완료 기록 삭제</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="fw-bold">이동이 끝난(완료) 행만 표에서 지웁니다.</p>
+          <p className="text-muted">
+            대기·실패 행은 남아 나중에 다시 승인할 수 있습니다.
+          </p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button
+            variant="secondary"
+            onClick={() => setShowProposalClearModal(false)}
+          >
+            취소
+          </Button>
+          <Button variant="danger" onClick={handleClearAppliedProposalItems}>
+            삭제
           </Button>
         </Modal.Footer>
       </Modal>

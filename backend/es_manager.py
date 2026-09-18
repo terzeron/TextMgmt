@@ -6,6 +6,7 @@ import math
 import logging.config
 from pathlib import Path
 from typing import Any, cast
+from collections.abc import Iterator
 from itertools import islice
 import time
 from elasticsearch import Elasticsearch
@@ -303,8 +304,12 @@ class ESManager:
         return self._search(query, sort=sort, max_result_count=max_result_count)
 
     # 카테고리 목록의 전순서 정렬. 화면 표시 순서(제목)와 일치시켜야 페이지를
-    # 이어붙여도 순서가 어긋나지 않는다. file_path는 유일하므로 tie-breaker로
-    # 쓰여 search_after 커서가 항상 한 문서를 가리키도록 보장한다.
+    # 이어붙여도 순서가 어긋나지 않는다. file_path를 tie-breaker로 써서 커서가 한
+    # 문서를 가리키게 한다.
+    #
+    # _id를 tie-breaker로 덧붙이면 안 된다. 이 클러스터는 indices.id_field_data가
+    # 꺼져 있어 "Fielddata access on the _id field is disallowed"로 질의가 통째로
+    # 실패하고, 상세 조회와 카테고리 책 목록이 빈 결과가 된다.
     CATEGORY_SORT: list[dict[str, str]] = [{"title.keyword": "asc"}, {"file_path": "asc"}]
 
     def search_by_category_paged(self, category: str, size: int = 500, search_after: list[Any] | None = None) -> tuple[list[tuple[int, dict[str, Any], float]], int, list[Any] | None]:
@@ -531,6 +536,42 @@ class ESManager:
         body = {"size": 1, "aggs": {"unique_values": {"terms": {"field": field_name, "size": size}}}}
         result = self.es.search(index=self.index_name, body=body)
         return {bucket["key"]: bucket["doc_count"] for bucket in result["aggregations"]["unique_values"]["buckets"]}
+
+    def iter_all_category_file_paths(self, batch_size: int = 10000) -> Iterator[tuple[str, str, int]]:
+        """전체 문서를 (category, file_path, 문서 수)로 훑는다.
+
+        검색이 아니라 열거다. 질의도 순위도 필요 없고 모든 문서의 경로만 있으면 된다.
+        scroll은 히트 41만 개를 한 건씩 만들어 내보내느라 필드를 하나도 안 받아도 13초가
+        걸린다. composite 집계는 doc_values를 그대로 접어 같은 일을 3초에 끝낸다.
+
+        버킷은 (category, file_path) 조합별로 하나씩 나오고 doc_count가 그 조합의 문서
+        수다. 즉 같은 경로를 가리키는 중복 문서도 이 값으로 그대로 센다. 버킷은 source
+        순서대로 정렬돼 나오므로 카테고리별로 뭉쳐서 도착한다.
+        """
+        LOGGER.debug("iter_all_category_file_paths(batch_size=%d)", batch_size)
+        after: dict[str, Any] | None = None
+        while True:
+            composite: dict[str, Any] = {
+                "size": batch_size,
+                # missing_bucket을 켜야 category나 file_path가 빠진 문서가 조용히 사라지지 않는다.
+                "sources": [
+                    {"category": {"terms": {"field": "category", "missing_bucket": True}}},
+                    {"file_path": {"terms": {"field": "file_path", "missing_bucket": True}}},
+                ],
+            }
+            if after:
+                composite["after"] = after
+            response = self.es.search(index=self.index_name, size=0, aggs={"paths": {"composite": composite}})
+            aggregation = response["aggregations"]["paths"]
+            buckets = aggregation["buckets"]
+            if not buckets:
+                return
+            for bucket in buckets:
+                key = bucket["key"]
+                yield key.get("category") or "", key.get("file_path") or "", bucket["doc_count"]
+            after = aggregation.get("after_key")
+            if not after:
+                return
 
     def delete_by_file_paths(self, file_paths: list[str], exclude_ids: list[int] | None = None) -> int:
         """주어진 file_path 목록에 해당하는 기존 문서를 삭제 (중복 방지용).
