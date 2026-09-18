@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components --
    resolveTarget/isSelectable 등은 부모와 테스트가 재사용하는 순수 헬퍼라
    컴포넌트와 co-located. HMR 힌트일 뿐 런타임 영향 없음. */
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import { Table, Form, Badge } from "react-bootstrap";
 
@@ -50,7 +50,7 @@ export function manualValue(item, choices) {
 //
 // "시스템이 못 정한 것이 저절로 승인되면 안 된다"는 원래 의도는 기본값으로 지킨다:
 // 미리 체크되는 것은 확실(certain) 행의 추천 1뿐이고, 불확실 행은 사람이 직접
-// 누르지 않으면 승인 대상에 들어가지 않는다. 일괄 선택에서도 빠진다.
+// 누르지 않으면 승인 대상에 들어가지 않는다.
 export function canCheckCandidate(item, candidate) {
   return Boolean(candidate?.category && item.apply_status !== "moved");
 }
@@ -77,6 +77,134 @@ function ApplyStatusBadge({ item }) {
 
 ApplyStatusBadge.propTypes = {
   item: PropTypes.object.isRequired,
+};
+
+// ── 정렬 ──
+//
+// 정렬과 필터는 화면 표시에만 쓴다. 승인 대상은 부모가 원본 items와 choices로
+// 계산하므로, 여기서 순서를 바꾸거나 행을 숨겨도 무엇이 승인되는지는 안 변한다.
+
+// 이동 상태는 문자열을 그대로 정렬하면 "failed, moved, moving, pending"이라는
+// 뜻 없는 순서가 된다. 사람이 읽는 진행 순서(대기 → 이동 중 → 완료 → 실패)로
+// 등급을 매긴다. 실패를 끝에 두는 이유는 정렬 한 번으로 손봐야 할 행을 모으기
+// 위해서다.
+const APPLY_STATUS_ORDER = {
+  pending: 0,
+  moving: 1,
+  moved: 2,
+  failed: 3,
+};
+
+// 정렬 키 -> 그 열이 비교할 값. 값이 없으면 null을 준다.
+export const SORT_COLUMNS = {
+  title: (item) => item.title || item.file_path,
+  candidate0: (item) => (item.candidates || [])[0]?.category ?? null,
+  candidate1: (item) => (item.candidates || [])[1]?.category ?? null,
+  confidence: (item) => item.confidence ?? null,
+  applyStatus: (item) => APPLY_STATUS_ORDER[item.apply_status] ?? 0,
+};
+
+function compareValues(a, b) {
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  // 카테고리와 제목은 한글이라 코드포인트 순서로는 가나다순이 안 나온다.
+  return String(a).localeCompare(String(b), "ko");
+}
+
+export function sortItems(items, sort) {
+  const read = sort?.key ? SORT_COLUMNS[sort.key] : null;
+  if (!read) return items;
+  const sign = sort.dir === "desc" ? -1 : 1;
+  return [...items].sort((left, right) => {
+    const a = read(left);
+    const b = read(right);
+    // 빈 칸은 오름·내림 어느 쪽이든 뒤로 보낸다. 방향을 뒤집을 때 결과를 통째로
+    // 뒤집으면 빈 칸이 맨 위에 몰려, 정렬을 눌러도 보려던 값이 화면 밖으로 밀린다.
+    if (a == null || b == null) {
+      if (a == null && b == null) return 0;
+      return a == null ? 1 : -1;
+    }
+    return sign * compareValues(a, b);
+  });
+}
+
+// ── 필터 ──
+//
+// 필터 값은 3단계다: null이면 거르지 않고, true면 그 열이 체크된 행만, false면
+// 체크가 안 된 행만 남긴다. 체크박스 하나로 세 상태를 다 쓰려고 indeterminate를
+// "거르지 않음"에 대응시킨다 — 2단계뿐이면 전체 행을 한 번에 보는 상태가 없다.
+
+// 헤더 체크박스가 말하는 "이 열이 체크된 행"의 정의.
+export const FILTER_COLUMNS = {
+  candidate0: (item, choices) => isCandidateChecked(item, choices, 0),
+  candidate1: (item, choices) => isCandidateChecked(item, choices, 1),
+  manual: (item, choices) => Boolean(manualValue(item, choices)),
+};
+
+export function filterItems(items, choices, filters) {
+  const active = Object.entries(FILTER_COLUMNS).filter(
+    ([key]) => filters[key] != null,
+  );
+  if (active.length === 0) return items;
+  return items.filter((item) =>
+    active.every(
+      ([key, isChecked]) => isChecked(item, choices) === filters[key],
+    ),
+  );
+}
+
+// 다음 필터 상태. 체크박스를 누를 때마다 전체 → 체크된 행만 → 체크 안 된 행만
+// 순으로 돌고 전체로 돌아온다.
+export function nextFilterValue(value) {
+  if (value == null) return true;
+  if (value === true) return false;
+  return null;
+}
+
+// 헤더의 정렬 버튼. 아직 이 열로 정렬하지 않았으면 위아래 화살표를 같이 보여
+// 눌러서 정렬할 수 있다는 것만 알리고, 정렬한 뒤에는 방향 하나만 남긴다.
+function SortButton({ label, active, dir, onClick }) {
+  const arrow = !active ? "↕" : dir === "asc" ? "↑" : "↓";
+  return (
+    <button
+      type="button"
+      className="btn btn-link btn-sm p-0 text-decoration-none"
+      aria-label={`${label} 정렬`}
+      onClick={onClick}
+    >
+      <span aria-hidden="true">{arrow}</span>
+    </button>
+  );
+}
+
+SortButton.propTypes = {
+  label: PropTypes.string.isRequired,
+  active: PropTypes.bool.isRequired,
+  dir: PropTypes.string.isRequired,
+  onClick: PropTypes.func.isRequired,
+};
+
+// 헤더의 필터 체크박스. indeterminate는 DOM 속성이라 JSX로는 못 주고 ref로만
+// 설정할 수 있다 — Form.Check는 ref를 감싸는 div가 아니라 input에 그대로 넘긴다.
+function FilterCheckbox({ label, value, onCycle }) {
+  const inputRef = useRef(null);
+  useEffect(() => {
+    if (inputRef.current) inputRef.current.indeterminate = value == null;
+  }, [value]);
+  return (
+    <Form.Check
+      ref={inputRef}
+      type="checkbox"
+      aria-label={label}
+      checked={value === true}
+      onChange={onCycle}
+    />
+  );
+}
+
+FilterCheckbox.propTypes = {
+  label: PropTypes.string.isRequired,
+  value: PropTypes.bool,
+  onCycle: PropTypes.func.isRequired,
 };
 
 // 추천 후보 한 칸: 체크박스 + 카테고리 + 근거. 후보가 없으면 "-".
@@ -159,33 +287,41 @@ export default function ClassifyProposalTable({
     );
   };
 
-  // 헤더의 일괄 체크는 추천 1만 건드린다. 두 가지는 건너뛴다:
-  // 직접 선택으로 이미 목적지를 정한 행(사용자가 손으로 한 판단을 덮지 않는다),
-  // 그리고 불확실 행(시스템이 못 고른 것을 일괄 조작으로 승인해 버리면 안 된다 —
-  // 그 행은 사람이 추천 1·2 중 하나를 직접 눌러야 한다).
-  const bulkTargets = items.filter(
-    (item) =>
-      canCheckCandidate(item, (item.candidates || [])[0]) &&
-      item.grade !== "unknown" &&
-      choices[item.file_path]?.source !== "manual",
-  );
-  const allFirstChecked =
-    bulkTargets.length > 0 &&
-    bulkTargets.every((item) => isCandidateChecked(item, choices, 0));
+  // 정렬을 누르기 전에는 부모가 준 순서를 그대로 쓴다. 제안이 도착한 순서가
+  // 곧 분류가 끝난 순서라, 아무 열도 안 누른 상태에서 순서를 바꾸면 방금 채워진
+  // 행이 어디로 갔는지 알 수 없다.
+  const [sort, setSort] = useState({ key: null, dir: "asc" });
+  const [filters, setFilters] = useState({
+    candidate0: null,
+    candidate1: null,
+    manual: null,
+  });
 
-  const toggleAllFirst = () => {
-    const next = { ...choices };
-    for (const item of bulkTargets) {
-      if (allFirstChecked) delete next[item.file_path];
-      else
-        next[item.file_path] = {
-          source: "candidate",
-          index: 0,
-          category: item.candidates[0].category,
-        };
-    }
-    onChoicesChange(next);
+  const toggleSort = (key) => {
+    setSort((prev) =>
+      prev.key === key
+        ? { key, dir: prev.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: "asc" },
+    );
   };
+
+  const cycleFilter = (key) => {
+    setFilters((prev) => ({ ...prev, [key]: nextFilterValue(prev[key]) }));
+  };
+
+  const visibleItems = useMemo(
+    () => sortItems(filterItems(items, choices, filters), sort),
+    [items, choices, filters, sort],
+  );
+
+  // aria-sort는 지금 정렬 중인 열에만 방향을 붙인다. 모든 열에 "none"을 달면
+  // 화면 낭독기가 정렬 안 된 열까지 정렬 상태로 읽는다.
+  const ariaSort = (key) =>
+    sort.key === key
+      ? sort.dir === "asc"
+        ? "ascending"
+        : "descending"
+      : undefined;
 
   return (
     <Table size="sm" bordered hover responsive className="mt-2">
@@ -193,26 +329,95 @@ export default function ClassifyProposalTable({
         <tr>
           {/* "현재" 열은 두지 않는다. 표가 선택한 디렉토리 하나로 한정돼 있어
               모든 행이 같은 값이고, 그 디렉토리 이름은 카드 머리에 이미 있다. */}
-          <th>책</th>
-          <th>
+          <th aria-sort={ariaSort("title")}>
             <div className="d-flex gap-2 align-items-center">
-              <Form.Check
-                type="checkbox"
-                aria-label="추천 1 전체 선택"
-                checked={allFirstChecked}
-                onChange={toggleAllFirst}
+              책
+              <SortButton
+                label="책"
+                active={sort.key === "title"}
+                dir={sort.dir}
+                onClick={() => toggleSort("title")}
               />
-              추천 1
             </div>
           </th>
-          <th>추천 2</th>
-          <th>직접 선택</th>
-          <th>점수</th>
-          <th>이동 상태</th>
+          <th aria-sort={ariaSort("candidate0")}>
+            <div className="d-flex gap-2 align-items-center">
+              <FilterCheckbox
+                label="추천 1 필터"
+                value={filters.candidate0}
+                onCycle={() => cycleFilter("candidate0")}
+              />
+              추천 1
+              <SortButton
+                label="추천 1"
+                active={sort.key === "candidate0"}
+                dir={sort.dir}
+                onClick={() => toggleSort("candidate0")}
+              />
+            </div>
+          </th>
+          <th aria-sort={ariaSort("candidate1")}>
+            <div className="d-flex gap-2 align-items-center">
+              <FilterCheckbox
+                label="추천 2 필터"
+                value={filters.candidate1}
+                onCycle={() => cycleFilter("candidate1")}
+              />
+              추천 2
+              <SortButton
+                label="추천 2"
+                active={sort.key === "candidate1"}
+                dir={sort.dir}
+                onClick={() => toggleSort("candidate1")}
+              />
+            </div>
+          </th>
+          {/* 직접 선택은 정렬 대상이 아니다 — 주문한 정렬 열에 없다. */}
+          <th>
+            <div className="d-flex gap-2 align-items-center">
+              <FilterCheckbox
+                label="직접 선택 필터"
+                value={filters.manual}
+                onCycle={() => cycleFilter("manual")}
+              />
+              직접 선택
+            </div>
+          </th>
+          <th aria-sort={ariaSort("confidence")}>
+            <div className="d-flex gap-2 align-items-center">
+              점수
+              <SortButton
+                label="점수"
+                active={sort.key === "confidence"}
+                dir={sort.dir}
+                onClick={() => toggleSort("confidence")}
+              />
+            </div>
+          </th>
+          <th aria-sort={ariaSort("applyStatus")}>
+            <div className="d-flex gap-2 align-items-center">
+              이동 상태
+              <SortButton
+                label="이동 상태"
+                active={sort.key === "applyStatus"}
+                dir={sort.dir}
+                onClick={() => toggleSort("applyStatus")}
+              />
+            </div>
+          </th>
         </tr>
       </thead>
       <tbody>
-        {items.map((item) => {
+        {/* 필터를 걸어 남은 행이 없으면 빈 표만 보인다. 제안이 없는 것인지
+            필터에 걸린 것인지 구분되게 한 줄로 알린다. */}
+        {items.length > 0 && visibleItems.length === 0 && (
+          <tr>
+            <td colSpan={6} className="text-center text-muted">
+              필터 조건에 맞는 행이 없습니다.
+            </td>
+          </tr>
+        )}
+        {visibleItems.map((item) => {
           const manual = manualValue(item, choices);
           const candidates = item.candidates || [];
           // grade가 unknown이면서 후보가 2개면, 시스템이 둘 중 하나를 고르지

@@ -212,23 +212,12 @@ describe("ClassifyProposalTable", () => {
     expect(resolveTarget(ITEMS[2], choices)).toBe("1_서양고전");
   });
 
-  it("추천 1 전체 선택은 불확실 행과 직접 선택한 행을 건드리지 않는다", () => {
-    const props = renderTable({
-      choices: { "A/b.epub": { source: "manual", category: "1_서양고전" } },
-    });
-    fireEvent.click(screen.getByLabelText("추천 1 전체 선택"));
-    const next = props.onChoicesChange.mock.calls[0][0];
-    expect(next["A/a.epub"]).toEqual({
-      source: "candidate",
-      index: 0,
-      category: "3_SF",
-    });
-    // 직접 선택으로 정한 목적지는 사용자가 손으로 한 판단이라 덮지 않는다.
-    expect(next["A/b.epub"]).toEqual({
-      source: "manual",
-      category: "1_서양고전",
-    });
-    expect(next["A/c.epub"]).toBeUndefined();
+  it("추천 1 헤더 체크박스는 일괄 선택이 아니라 필터다", () => {
+    // 헤더 체크박스를 눌러도 선택 상태(choices)는 안 바뀐다. 이 칸의 역할은
+    // 행을 고르는 것이 아니라 보여 줄 행을 거르는 것이다.
+    const props = renderTable();
+    fireEvent.click(screen.getByLabelText("추천 1 필터"));
+    expect(props.onChoicesChange).not.toHaveBeenCalled();
   });
 
   it("추천 후보 2개가 각 열에 나오고, 1개면 두 번째 열은 -", () => {
@@ -410,5 +399,142 @@ describe("ClassifyProposalTable", () => {
     expect(
       within(select).getByRole("option", { name: "9_없는카테고리" }),
     ).toBeTruthy();
+  });
+
+  // ── 정렬 ──
+
+  function titleOrder() {
+    return screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => within(row).getAllByRole("cell")[0].textContent);
+  }
+
+  it("책·추천1·추천2·점수·이동 상태에 정렬 버튼이 있고 직접 선택에는 없다", () => {
+    renderTable();
+    for (const label of ["책", "추천 1", "추천 2", "점수", "이동 상태"]) {
+      expect(screen.getByLabelText(`${label} 정렬`)).toBeTruthy();
+    }
+    expect(screen.queryByLabelText("직접 선택 정렬")).toBeNull();
+  });
+
+  it("정렬 전에는 부모가 준 순서를 그대로 쓴다", () => {
+    // 제안이 도착한 순서가 곧 분류가 끝난 순서다. 안 누른 상태에서 순서를 바꾸면
+    // 방금 채워진 행이 어디로 갔는지 알 수 없다.
+    renderTable();
+    expect(titleOrder()).toEqual(["확실한 책", "애매한 책", "불확실한 책"]);
+  });
+
+  it("책 정렬 버튼이 오름차순과 내림차순을 번갈아 적용한다", () => {
+    renderTable();
+    const button = screen.getByLabelText("책 정렬");
+
+    // 가나다순은 불 → 애 → 확이다.
+    fireEvent.click(button);
+    expect(titleOrder()).toEqual(["불확실한 책", "애매한 책", "확실한 책"]);
+    fireEvent.click(button);
+    expect(titleOrder()).toEqual(["확실한 책", "애매한 책", "불확실한 책"]);
+  });
+
+  it("정렬 중인 열에만 aria-sort와 방향 화살표를 붙인다", () => {
+    renderTable();
+    const header = () => screen.getByRole("columnheader", { name: /^책/ });
+    expect(header().getAttribute("aria-sort")).toBeNull();
+    expect(screen.getByLabelText("책 정렬").textContent).toBe("↕");
+
+    fireEvent.click(screen.getByLabelText("책 정렬"));
+    expect(header().getAttribute("aria-sort")).toBe("ascending");
+    expect(screen.getByLabelText("책 정렬").textContent).toBe("↑");
+
+    fireEvent.click(screen.getByLabelText("책 정렬"));
+    expect(header().getAttribute("aria-sort")).toBe("descending");
+    expect(screen.getByLabelText("책 정렬").textContent).toBe("↓");
+  });
+
+  it("점수가 없는 행은 오름차순·내림차순 모두 뒤로 간다", () => {
+    // 빈 칸이 맨 위에 몰리면 정렬을 눌러도 보려던 값이 화면 밖으로 밀린다.
+    renderTable();
+    const button = screen.getByLabelText("점수 정렬");
+
+    fireEvent.click(button);
+    expect(titleOrder()).toEqual(["애매한 책", "확실한 책", "불확실한 책"]);
+    fireEvent.click(button);
+    expect(titleOrder()).toEqual(["확실한 책", "애매한 책", "불확실한 책"]);
+  });
+
+  it("이동 상태는 문자열이 아니라 진행 순서로 정렬한다", () => {
+    const items = [
+      { ...ITEMS[0], apply_status: "failed" },
+      { ...ITEMS[1], apply_status: "pending" },
+      { ...ITEMS[2], apply_status: "moved" },
+    ];
+    renderTable({ items });
+
+    fireEvent.click(screen.getByLabelText("이동 상태 정렬"));
+    expect(titleOrder()).toEqual(["애매한 책", "불확실한 책", "확실한 책"]);
+  });
+
+  // ── 필터 ──
+
+  it("처음에는 세 필터가 모두 중간 상태라 전체 행이 보인다", () => {
+    renderTable();
+    for (const label of ["추천 1 필터", "추천 2 필터", "직접 선택 필터"]) {
+      const box = screen.getByLabelText(label);
+      expect(box.indeterminate).toBe(true);
+      expect(box.checked).toBe(false);
+    }
+    expect(titleOrder()).toHaveLength(3);
+  });
+
+  it("추천 1 필터가 전체 → 체크된 행만 → 체크 안 된 행만 → 전체로 돈다", () => {
+    renderTable();
+    const box = screen.getByLabelText("추천 1 필터");
+
+    fireEvent.click(box);
+    expect(box.indeterminate).toBe(false);
+    expect(box.checked).toBe(true);
+    expect(titleOrder()).toEqual(["확실한 책"]);
+
+    fireEvent.click(box);
+    expect(box.indeterminate).toBe(false);
+    expect(box.checked).toBe(false);
+    expect(titleOrder()).toEqual(["애매한 책", "불확실한 책"]);
+
+    fireEvent.click(box);
+    expect(box.indeterminate).toBe(true);
+    expect(titleOrder()).toEqual(["확실한 책", "애매한 책", "불확실한 책"]);
+  });
+
+  it("직접 선택 필터는 목적지를 직접 지정한 행을 가린다", () => {
+    renderTable({
+      choices: { "A/b.epub": { source: "manual", category: "1_서양고전" } },
+    });
+    const box = screen.getByLabelText("직접 선택 필터");
+
+    fireEvent.click(box);
+    expect(titleOrder()).toEqual(["애매한 책"]);
+  });
+
+  it("필터 두 개를 동시에 체크하면 한 행의 목적지는 하나뿐이라 빈 표가 된다", () => {
+    renderTable();
+    fireEvent.click(screen.getByLabelText("추천 1 필터"));
+    fireEvent.click(screen.getByLabelText("추천 2 필터"));
+
+    expect(screen.getByText("필터 조건에 맞는 행이 없습니다.")).toBeTruthy();
+  });
+
+  it("제안이 아예 없으면 필터 안내 문구를 띄우지 않는다", () => {
+    // 행이 0개인 것과 필터에 다 걸린 것은 다른 상황이다.
+    renderTable({ items: [] });
+    expect(screen.queryByText("필터 조건에 맞는 행이 없습니다.")).toBeNull();
+  });
+
+  it("필터와 정렬을 함께 걸면 거른 뒤 정렬한다", () => {
+    renderTable();
+    fireEvent.click(screen.getByLabelText("추천 1 필터"));
+    fireEvent.click(screen.getByLabelText("추천 1 필터"));
+    fireEvent.click(screen.getByLabelText("책 정렬"));
+
+    expect(titleOrder()).toEqual(["불확실한 책", "애매한 책"]);
   });
 });
