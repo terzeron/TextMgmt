@@ -7,6 +7,7 @@ import re
 import sys
 import os
 import io
+import inspect
 import posixpath
 import threading
 
@@ -16,7 +17,7 @@ import subprocess
 import tempfile
 import time
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Awaitable, Iterator
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote, urlparse, unquote
@@ -1301,15 +1302,17 @@ class BookManager:
             parts.extend(file_path.parts[:-1])
         return self._normalize_classification_text(" ".join(str(part) for part in parts))
 
-    def _classify_file_to_top_category(
-        self,
-        file_path: Path,
-        source_category: str,
-        mappings: dict[str, list[str]],
-        classifier_service: BookClassifierService | None = None,
-        use_bookstore: bool = True,
-        use_content_meta: bool = True,
-    ) -> tuple[str | None, list[str], str | None]:
+    def _match_category_by_keywords(self, file_path: Path, source_category: str, mappings: dict[str, list[str]]) -> tuple[str | None, list[str], str | None, list[tuple[str, list[str]]]]:
+        """등록된 키워드로 목적지를 고른다. 동점이면 고르지 않고 사유를 돌려준다.
+
+        제안 생성(Task 3)이 키워드 결과와 모델 결과를 따로 등급 매겨야 해서
+        기존 함수의 키워드 매칭 부분만 떼어냈다.
+
+        4번째 반환값(순위 목록)은 Task A에서 추가했다: 관리자가 화면에서 볼 후보를
+        최대 2개까지 보여주려면 1등만으로는 부족해서, 이미 만들어 둔 scored를
+        점수 내림차순으로 상위 2개만 잘라 함께 돌려준다. 등급 판정(1~3번째 반환값)은
+        그대로 둔다 — 후보를 더 보여주는 것이 목적지 판정을 바꾸면 안 된다.
+        """
         haystack = self._classification_haystack(file_path)
         scored: list[tuple[int, int, str, list[str]]] = []
 
@@ -1341,27 +1344,397 @@ class BookManager:
                 score = sum(len(self._normalize_classification_text(keyword)) for keyword in matched_keywords)
                 scored.append((score, len(matched_keywords), target_category, matched_keywords))
 
-        if scored:
-            scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
-            best_score, best_match_count, best_category, best_keywords = scored[0]
-            tied_categories = [category for score, count, category, _keywords in scored if score == best_score and count == best_match_count]
-            if len(tied_categories) > 1:
-                return None, best_keywords, f"여러 카테고리가 동일 점수로 일치합니다: {', '.join(tied_categories[:3])}"
-            return best_category, best_keywords, None
+        if not scored:
+            return None, [], None, []
 
+        scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
+        ranked = [(category, keywords) for _score, _count, category, keywords in scored[:2]]
+        best_score, best_match_count, best_category, best_keywords = scored[0]
+        tied = [category for score, count, category, _kw in scored if score == best_score and count == best_match_count]
+        if len(tied) > 1:
+            return None, best_keywords, f"여러 카테고리가 동일 점수로 일치합니다: {', '.join(tied[:3])}", ranked
+        return best_category, best_keywords, None, ranked
+
+    # 제안 시작 시 이름만 담은 행을 미리 넣을 때 한 번에 보내는 개수.
+    PROPOSAL_PLACEHOLDER_CHUNK = 500
+
+    # 모델 단독 판정을 '확실'(미리 체크됨)로 볼 최소 확신도.
+    #
+    # 예전에는 서점 정책의 경계(override_below, 이 코퍼스에서 0.056)만 넘으면
+    # '확실'이었다. 그 값은 "모델과 서점 중 누구를 믿을까"를 가르려고 잰 것이지
+    # "확실한가"를 가르려고 잰 것이 아니다. 그대로 쓰니 제안의 88%가 미리 체크됐고,
+    # 그 안에 정답률이 동전 던지기인 구간이 그대로 섞여 있었다.
+    #
+    # 이 코퍼스 752건 실측(파일이 현재 들어있는 카테고리를 정답으로 간주):
+    #   0.056~0.07  n= 23   52.2%
+    #   0.07 ~0.08  n= 12   50.0%
+    #   0.08 ~0.10  n= 24   58.3%
+    #   0.10 ~0.12  n=361   97.5%
+    #   0.12 ~      n=332   97.9%
+    # 0.10 에 절벽이 있다. 그 아래는 사람이 봐야 하므로 '애매'로 내린다.
+    MODEL_CERTAIN_MIN_CONFIDENCE = 0.10
+
+    GRADE_CERTAIN = "certain"
+    GRADE_UNSURE = "unsure"
+    GRADE_UNKNOWN = "unknown"
+
+    @staticmethod
+    def _is_high_confidence(classifier_service: Any, confidence: float | None) -> bool:
+        """모델 점수가 '확실'이라고 부를 만큼 높은가.
+
+        두 가지를 모두 넘어야 한다.
+
+        1. 서점 정책의 경계. 정책 파일이 없으면 override_below 가 0 이고
+           prefers_bookstore 가 늘 False 를 돌려준다. 그 값을 그대로 믿으면 점수와
+           무관하게 전부 '확실'이 되므로, 근거가 없으면 낮음으로 본다.
+        2. MODEL_CERTAIN_MIN_CONFIDENCE. 1번만으로는 한참 모자란다 — 서점 경계는
+           "모델과 서점 중 누구를 믿을까"를 가르는 값이지 "확실한가"를 가르는 값이
+           아니다.
+        """
+        if confidence is None or confidence < BookManager.MODEL_CERTAIN_MIN_CONFIDENCE:
+            return False
+        policy = getattr(classifier_service, "bookstore_policy", None)
+        if policy is None or getattr(policy, "override_below", 0.0) <= 0.0:
+            return False
+        return not policy.prefers_bookstore(confidence)
+
+    @staticmethod
+    def _keyword_candidate(category: str, keywords: list[str]) -> dict[str, Any]:
+        quoted = ", ".join(f"'{keyword}'" for keyword in keywords)
+        detail = f"키워드 {quoted} 일치" if quoted else "키워드 일치"
+        return {"category": category, "source": "keyword", "detail": detail}
+
+    @staticmethod
+    def _bookstore_candidate(category: str, count: int) -> dict[str, Any]:
+        return {"category": category, "source": "bookstore", "detail": f"서점 {count}곳 일치"}
+
+    @staticmethod
+    def _model_candidate(category: str) -> dict[str, Any]:
+        return {"category": category, "source": "model", "detail": "모델 판정"}
+
+    @staticmethod
+    def _model_alternative_candidate(category: str, score: float) -> dict[str, Any]:
+        return {"category": category, "source": "model", "detail": f"모델 대안 {score:.3f}"}
+
+    def _fill_second_with_model(self, candidates: list[dict[str, Any]], model_candidates: list[tuple[str, float]]) -> list[dict[str, Any]]:
+        """2순위가 빈 채로 나가지 않도록 모델이 매긴 다음 후보를 붙인다.
+
+        키워드가 목적지를 정하면 모델 답은 통째로 버려졌다. 키워드가 하나만 맞은
+        흔한 경우에 추천 2 칸이 늘 비어, 관리자가 "이건 아닌데" 싶어도 2,000개짜리
+        드롭다운으로 갈 수밖에 없었다. 모델이 이미 계산해 둔 답을 대안으로 보여준다.
+        모델 판정 경로에서는 같은 자리에 모델의 2순위가 들어간다.
+        """
+        if len(candidates) >= 2:
+            return candidates
+        taken = {candidate["category"] for candidate in candidates}
+        for category, score in model_candidates:
+            if category not in taken:
+                candidates.append(self._model_alternative_candidate(category, score))
+                break
+        return candidates
+
+    def _build_candidates(self, target: str | None, method: str, model_category: str | None, bookstore_candidates: list[tuple[str, int]], model_candidates: list[tuple[str, float]] | None = None) -> list[dict[str, Any]]:
+        """키워드가 정하지 못했을 때(target=None인 tie 경로는 호출자가 직접 조립한다)
+        candidates를 만든다.
+
+        1위는 항상 이미 정해진 target을 그대로 앵커링한다 — candidates에서 target을
+        역산하지 않는다. 그래야 후보를 더 보여줘도 등급 판정이 정한 값이 절대
+        안 바뀐다. 2위는 method별로 구할 수 있을 때만 덧붙인다: 서점 다수결이면
+        차점 서점 득표, 모델·서점 단독 판정은 대안이 없어 1개로 끝난다.
+        """
+        model_candidates = model_candidates or []
+        if target:
+            if method == "bookstore_majority":
+                candidates = [self._bookstore_majority_candidate(target, bookstore_candidates)]
+                for category, count in bookstore_candidates:
+                    if category != target:
+                        candidates.append(self._bookstore_candidate(category, count))
+                        break
+                return self._fill_second_with_model(candidates, model_candidates)
+            if method == "bookstore_single":
+                return self._fill_second_with_model([self._bookstore_candidate(target, self._vote_count_for(target, bookstore_candidates))], model_candidates)
+            return self._fill_second_with_model([self._model_candidate(target)], model_candidates)
+
+        if method == "conflict":
+            # 갈렸을 때 버리던 득표 상위 2개를 그대로 보여준다. target은 여전히 None이다.
+            return [self._bookstore_candidate(category, count) for category, count in bookstore_candidates[:2]]
+
+        if model_category:
+            # not_found거나 모델 확신도가 낮아 목적지로 못 쓴 경우, 낮은 확신도 답이라도
+            # 있으면 후보로 보여준다. 없으면 정말 아무 근거도 없는 것이다.
+            return self._fill_second_with_model([self._model_candidate(model_category)], model_candidates)
+        return []
+
+    def _bookstore_majority_candidate(self, target: str, bookstore_candidates: list[tuple[str, int]]) -> dict[str, Any]:
+        """다수결 1위 후보를 만든다.
+
+        bookstore_candidates가 비어 있으면(오래된 캐시 항목, 또는 이 값을 안 실어 주는
+        호출자) 실제 득표수를 모른다. 그렇다고 _vote_count_for처럼 1로 기본값을
+        두면 "서점 1곳 일치"가 되는데, MIN_STORE_VOTES=2인 이상 bookstore_majority는
+        절대 1표일 수 없다 — 근거 문구가 등급보다 약하게 보이는 자기모순이라
+        리뷰에서 지적됐다(Fix round 1). 모르는 숫자를 지어내는 대신 숫자를 아예
+        빼서, 있는 그대로("다수결로 일치") 이상은 주장하지 않는다.
+        """
+        for category, count in bookstore_candidates:
+            if category == target:
+                return self._bookstore_candidate(target, count)
+        return {"category": target, "source": "bookstore", "detail": "서점 다수결로 일치"}
+
+    @staticmethod
+    def _vote_count_for(category: str, bookstore_candidates: list[tuple[str, int]]) -> int:
+        for cat, count in bookstore_candidates:
+            if cat == category:
+                return count
+        return 1
+
+    def _propose_category_for_file(self, file_path: Path, source_category: str, mappings: dict[str, list[str]], classifier_service: Any, use_bookstore: bool, use_content_meta: bool) -> dict[str, Any]:
+        """한 파일의 제안 목적지와 등급을 만든다. 파일을 옮기지 않는다."""
+        keyword_category, matched_keywords, tie_reason, keyword_ranked = self._match_category_by_keywords(file_path, source_category, mappings)
+
+        model_category = None
+        confidence = None
+        classified_category = None
+        method = "not_found"
+        reason = tie_reason or ""
+        bookstore_candidates: list[tuple[str, int]] = []
+        model_candidates: list[tuple[str, float]] = []
         if classifier_service is not None:
-            source_dir = self._category_dir(source_category)
-            target_cat, method, reason, _ = classifier_service.classify_file(
-                file_path,
-                source_dir,
-                use_bookstore=use_bookstore,
-                use_content_meta=use_content_meta,
-            )
-            if target_cat and target_cat != source_category:
-                return target_cat, [f"deterministic:{method}"], None
-            return None, [], reason
+            classified_category, method, classifier_reason, entry = classifier_service.classify_file(file_path, self._category_dir(source_category), use_bookstore=use_bookstore, use_content_meta=use_content_meta)
+            model_category = (entry or {}).get("model_category")
+            confidence = (entry or {}).get("confidence")
+            # 오래된 캐시 항목이나 대역(FakeClassifier)에는 이 키가 없을 수 있어 기본값을 둔다.
+            bookstore_candidates = (entry or {}).get("bookstore_candidates", [])
+            model_candidates = (entry or {}).get("model_candidates", [])
+            reason = reason or classifier_reason or ""
 
-        return None, [], "매칭되는 키워드가 없습니다"
+        high = self._is_high_confidence(classifier_service, confidence)
+
+        if keyword_category:
+            # 키워드가 목적지를 하나로 정했어도, 모델이 다른 곳을 자신 있게 가리키면
+            # 그 불일치를 근거로 남기고 등급은 '불확실'로 낮춘다.
+            grade = self.GRADE_CERTAIN if (high and model_category == keyword_category) else self.GRADE_UNSURE
+            # 1위는 채택된 keyword_category로 앵커링하고, 순위 목록에서 다른 카테고리를
+            # 하나만 더 찾아 2위로 붙인다.
+            candidates = [self._keyword_candidate(keyword_category, matched_keywords)]
+            for category, keywords in keyword_ranked:
+                if category != keyword_category:
+                    candidates.append(self._keyword_candidate(category, keywords))
+                    break
+            # 키워드가 하나만 맞으면 2순위가 빈다. 모델이 이미 낸 답을 대안으로 붙인다 —
+            # 키워드가 정한 목적지가 틀렸을 때 관리자가 바로 고를 것이 생긴다.
+            candidates = self._fill_second_with_model(candidates, model_candidates)
+            return {"target_category": keyword_category, "grade": grade, "confidence": confidence, "source": "keyword", "matched_keywords": matched_keywords, "model_category": model_category if model_category != keyword_category else None, "reason": reason, "candidates": candidates}
+
+        if tie_reason:
+            # 동점이면 등급은 unknown 그대로다 — 후보 2개를 보여줘도 시스템이 못 정했다는
+            # 사실은 바뀌지 않는다. 사람이 셀렉트박스로 골라야 체크박스가 켜진다.
+            candidates = self._fill_second_with_model([self._keyword_candidate(category, keywords) for category, keywords in keyword_ranked[:2]], model_candidates)
+            return {"target_category": None, "grade": self.GRADE_UNKNOWN, "confidence": confidence, "source": "keyword", "matched_keywords": matched_keywords, "model_category": model_category, "reason": tie_reason, "candidates": candidates}
+
+        if method == "model" and high and classified_category:
+            grade, target = self.GRADE_CERTAIN, classified_category
+        elif method == "bookstore_majority" and classified_category:
+            grade, target = self.GRADE_CERTAIN, classified_category
+        elif method == "bookstore_single" and classified_category:
+            grade, target = self.GRADE_UNSURE, classified_category
+        else:
+            # 점수가 낮은 모델 답은 목적지로 쓰지 않는다. 근거에만 남긴다.
+            grade, target = self.GRADE_UNKNOWN, None
+
+        candidates = self._build_candidates(target, method, model_category, bookstore_candidates, model_candidates)
+        return {"target_category": target, "grade": grade, "confidence": confidence, "source": method, "matched_keywords": matched_keywords, "model_category": model_category, "reason": reason, "candidates": candidates}
+
+    async def propose_category_changes(
+        self, category: str, mappings: dict[str, list[str]] | None = None, *, content_type: str = "book", use_bookstore: bool = True, use_content_meta: bool = True, delay: float = 1.2, on_progress: Callable[[dict[str, Any]], None | Awaitable[None]] | None = None
+    ) -> tuple[dict[str, Any], str | None]:
+        """선택 카테고리 직하위 파일의 분류 제안을 만든다. 파일을 옮기지 않는다."""
+        if not category:
+            return {}, "카테고리 이름이 비어있습니다"
+        if not self._is_safe_category_name(category):
+            return {}, "잘못된 카테고리 경로입니다"
+        source_dir = self._category_dir(category)
+        if not source_dir.is_dir():
+            return {}, f"디렉토리를 찾을 수 없습니다: {category}"
+
+        mappings = mappings or {}
+        classifier_service: BookClassifierService | None = None
+        if use_bookstore or use_content_meta:
+            classifier_service = BookClassifierService(library_root=self.path_prefix, delay=delay, es_manager=self.es_manager)
+
+        file_paths = self._iter_category_indexable_files(category, recursive=False)
+        result: dict[str, Any] = {"content_type": content_type, "source_category": category, "total_count": len(file_paths), "processed_count": 0, "items": [], "failures": []}
+
+        async def _report(payload: dict[str, Any]) -> None:
+            if on_progress is None:
+                return
+            # 콜백이 동기 함수(None 반환)일 수도, main.py처럼 블로킹 DB 호출을
+            # asyncio.to_thread로 넘기는 코루틴일 수도 있다 — apply_category_changes의
+            # on_item_done과 같은 방식으로, awaitable이면 여기서 대신 기다려준다.
+            outcome = on_progress({"total_count": result["total_count"], "processed_count": result["processed_count"], **payload})
+            if inspect.isawaitable(outcome):
+                await outcome
+
+        # 분류를 시작하기 전에 대상 파일의 이름만 담은 행을 먼저 만들어 둔다. 한 권에
+        # 서점 조회까지 하면 수 초가 들어, 다 끝난 뒤에 목록을 보여주면 관리자는 그동안
+        # 무엇이 대상인지조차 알 수 없다. 이름이 먼저 깔리고 분류 결과가 채워지는 편이
+        # 진행 상황을 읽기 쉽다. 목록 순서도 완료 순서가 아니라 파일 순서로 고정된다.
+        placeholders: list[dict[str, Any]] = []
+        for file_path in file_paths:
+            try:
+                rel_path = str(file_path.relative_to(self.path_prefix))
+            except ValueError:
+                continue
+            placeholders.append({"file_path": rel_path, "title": file_path.stem, "current_category": category, "target_category": None, "grade": None, "confidence": None, "source": None, "matched_keywords": [], "model_category": None, "reason": "", "candidates": [], "apply_status": "pending", "apply_error": None})
+        # 한 번에 다 보내면 카테고리가 클 때(최대 79,589권) 패킷 하나가 지나치게 커진다.
+        for start in range(0, len(placeholders), self.PROPOSAL_PLACEHOLDER_CHUNK):
+            await _report({"new_items": placeholders[start : start + self.PROPOSAL_PLACEHOLDER_CHUNK]})
+
+        for file_path in file_paths:
+            result["processed_count"] += 1
+            try:
+                rel_path = str(file_path.relative_to(self.path_prefix))
+            except ValueError:
+                result["failures"].append({"file_path": str(file_path), "error": "잘못된 파일 경로입니다"})
+                continue
+            try:
+                proposal = self._propose_category_for_file(file_path, category, mappings, classifier_service, use_bookstore, use_content_meta)
+            except Exception as e:
+                LOGGER.error("분류 제안 실패: %s — %s", rel_path, e)
+                result["failures"].append({"file_path": rel_path, "error": "분류 제안에 실패했습니다"})
+                continue
+            new_item = {"file_path": rel_path, "title": file_path.stem, "current_category": category, "apply_status": "pending", "apply_error": None, **proposal}
+            result["items"].append(new_item)
+            # 진행 보고에는 이번 틱에서 분류가 끝난 항목(updated_items)만 싣는다. 누적
+            # 목록을 매번 통째로 실으면 책 한 권 보고할 때마다 지금까지의 전체 목록을 다시
+            # 실어 보내는 셈이라, 보고 비용이 책 수의 제곱으로 늘어난다(과거 JSON 상태
+            # 파일 방식에서 실측된 문제). 누적 목록(result["items"])은 함수가 끝날 때
+            # 호출자에게 그대로 돌려주고, 그 저장은 호출자 책임으로 둔다.
+            await _report({"updated_items": [new_item]})
+
+        return result, None
+
+    async def apply_category_changes(
+        self,
+        items: list[dict[str, Any]],
+        allowed_file_paths: set[str],
+        *,
+        content_type: str = "book",
+        clean_existing: bool = False,
+        on_progress: Callable[[dict[str, int]], None | Awaitable[None]] | None = None,
+        on_item_done: Callable[[dict[str, Any]], None | Awaitable[None]] | None = None,
+        should_continue: Callable[[], bool | Awaitable[bool]] | None = None,
+    ) -> tuple[dict[str, Any], str | None]:
+        """승인된 항목만 실제로 옮긴다.
+
+        목적지(target_category)는 화면에서 관리자가 드롭다운으로 고쳐서 보낼 수 있어
+        브라우저가 준 값을 그대로 믿을 수 없다. file_path는 제안 목록(allowed_file_paths)에
+        있던 경로인지, target_category는 최상위 카테고리이면서 corpus 밖으로 못 나가는
+        안전한 이름인지 둘 다 다시 검증한다. 하나만 검사하면 임의 경로 이동을 막지 못한다.
+        """
+        result: dict[str, Any] = {"content_type": content_type, "total_count": len(items), "applied_count": 0, "failed_count": 0, "results": []}
+        root = self.path_prefix.resolve(strict=False)
+
+        async def _still_ours() -> bool:
+            """should_continue 가 코루틴을 돌려주면 대신 기다린다.
+
+            main.py 는 이 판단에 DB 를 읽어야 해서(작업 상태가 파일이 아니라 MySQL 에
+            있다) asyncio.to_thread 로 넘기는 async 콜백을 쓴다. 동기 콜백도 그대로 받는다.
+            """
+            outcome = should_continue()
+            if inspect.isawaitable(outcome):
+                return bool(await outcome)
+            return bool(outcome)
+
+        async def _report_progress(payload: dict[str, Any]) -> None:
+            if on_progress is None:
+                return
+            outcome = on_progress(payload)
+            if inspect.isawaitable(outcome):
+                await outcome
+
+        async def _notify_item_done(payload: dict[str, Any]) -> None:
+            # on_item_done은 동기 콜백일 수도, 코루틴을 돌려주는 콜백일 수도 있다. main.py는
+            # DB 쓰기를 asyncio.to_thread로 넘기려고 async 콜백을 쓰므로, 반환값이
+            # awaitable이면 여기서 대신 기다려준다 — book_manager는 여전히 DB를 모른다.
+            if on_item_done is None:
+                return
+            outcome = on_item_done(payload)
+            if inspect.isawaitable(outcome):
+                await outcome
+
+        for item in items:
+            # 다른 승인 작업이 이 작업을 대체했으면(토큰 불일치) 여기서 즉시 멈춘다.
+            # 계속 진행하면 진 쪽이 이긴 쪽이 방금 기록한 행을 덮어써 망가뜨릴 수 있다.
+            if should_continue is not None and not await _still_ours():
+                LOGGER.warning("분류 적용 중단: 다른 작업이 이 작업을 대체했다")
+                break
+
+            file_path_value = item.get("file_path")
+            target_category = item.get("target_category")
+            entry: dict[str, Any] = {"file_path": file_path_value, "target_category": target_category, "apply_status": "failed", "apply_error": None}
+
+            try:
+                if not isinstance(file_path_value, str) or file_path_value not in allowed_file_paths:
+                    entry["apply_error"] = "제안 목록에 없는 파일입니다"
+                elif not isinstance(target_category, str) or not self._is_top_level_target_category(target_category) or not self._is_safe_category_name(target_category):
+                    entry["apply_error"] = "옮길 수 없는 카테고리입니다"
+                else:
+                    absolute_path = self.path_prefix / file_path_value
+                    # 제안을 만든 뒤 승인 전까지 시간차가 있어, 그 사이 경로가 corpus 밖을
+                    # 가리키는 심볼릭 링크로 바뀔 수 있다. is_file()은 링크를 따라가 True를
+                    # 주므로 링크 여부와 실제 위치를 목적지처럼 다시 확인해야 한다. 그러지
+                    # 않으면 옮기는 건 링크뿐이지만 재색인은 링크가 가리키는 파일을 읽어
+                    # corpus 밖 파일이 ES에 들어간다.
+                    if absolute_path.is_symlink():
+                        entry["apply_error"] = "심볼릭 링크는 옮길 수 없습니다"
+                    elif not absolute_path.is_file():
+                        entry["apply_error"] = "파일을 찾을 수 없습니다"
+                    else:
+                        try:
+                            is_inside_root = absolute_path.resolve(strict=False).is_relative_to(root)
+                        except OSError:
+                            is_inside_root = False
+                        if not is_inside_root:
+                            entry["apply_error"] = "파일 경로가 corpus 밖입니다"
+                        else:
+                            # 제안 시점의 카테고리를 그대로 source_category로 써서 빈 디렉토리 정리 대상을 맞춘다.
+                            source_category = file_path_value.rsplit("/", 1)[0] if "/" in file_path_value else "_root"
+                            # 실제 이동 직전에 "moving"을 기록한다. 파일 이동과 ES 갱신이 끝난
+                            # 뒤 이 행을 "moved"로 바꾸기 전에 pod가 죽으면, 행이 pending으로
+                            # 남는 게 아니라 moving으로 남아 "시도는 했다"를 정직하게 남긴다.
+                            # pending으로 남으면 재개 시 다시 시도하다가 이미 옮겨진 원본을
+                            # 못 찾아 moved인 책을 failed로 잘못 기록하게 된다.
+                            await _notify_item_done({"file_path": file_path_value, "apply_status": "moving", "apply_error": None})
+                            file_result, error = await self._move_classified_file(absolute_path, target_category, content_type=content_type, dry_run=False, clean_existing=clean_existing, source_category=source_category)
+                            if error is not None or file_result is None:
+                                entry["apply_error"] = error or "분류 적용에 실패했습니다"
+                            else:
+                                entry["apply_status"] = "moved"
+            except Exception as e:
+                # 한 항목의 뜻밖의 오류(OSError 등)로 나머지 항목까지 못 옮기면 절반만
+                # 적용된 채로 끝나 상태가 애매해진다. propose_category_changes와 같은
+                # 방식으로 항목 단위 실패로 남기고 배치는 계속 진행한다.
+                LOGGER.error("분류 적용 실패: %s — %s", file_path_value, e)
+                entry["apply_error"] = "분류 적용 중 오류가 발생했습니다"
+
+            if entry["apply_status"] == "moved":
+                result["applied_count"] += 1
+            else:
+                result["failed_count"] += 1
+            result["results"].append(entry)
+            # 한 권 처리 직후 바로 알려, 호출자(main.py)가 이 한 건만 DB에 기록할 수 있게
+            # 한다. book_manager는 DB를 모르므로 직접 쓰지 않고 콜백으로 넘긴다.
+            await _notify_item_done({"file_path": entry["file_path"], "apply_status": entry["apply_status"], "apply_error": entry["apply_error"]})
+            if on_progress is not None:
+                # main.py는 propose와 apply의 진행률 콜백을 같은 상태 파일에
+                # {**current, **progress}로 얕게 병합한다. 여기서 "total_count"를 그대로
+                # 쓰면 승인 건수(approved 개수)가 제안 단계의 전체 처리 대상 수를 덮어써,
+                # 화면 헤더가 "1200 / 50"처럼 뒤바뀐 숫자를 보여준다(제안 카운터가 승인
+                # 카운터로 영구히 대체됨). apply 전용 키로 분리해 서로 다른 두 숫자가
+                # 같은 이름을 공유하지 않게 한다.
+                await _report_progress({"apply_total_count": result["total_count"], "applied_count": result["applied_count"], "failed_count": result["failed_count"]})
+
+        return result, None
 
     def _iter_category_indexable_files(self, category: str, recursive: bool = False) -> list[Path]:
         category_dir = self._category_dir(category)
@@ -1422,16 +1795,7 @@ class BookManager:
                 return candidate
         return None
 
-    async def _move_classified_file(
-        self,
-        file_path: Path,
-        target_category: str,
-        matched_keywords: list[str],
-        content_type: str,
-        dry_run: bool = False,
-        clean_existing: bool = False,
-        source_category: str | None = None,
-    ) -> tuple[dict[str, Any] | None, str | None]:
+    async def _move_classified_file(self, file_path: Path, target_category: str, content_type: str, dry_run: bool = False, clean_existing: bool = False, source_category: str | None = None) -> tuple[dict[str, Any] | None, str | None]:
         root = self.path_prefix.resolve(strict=False)
         try:
             old_rel_path = str(file_path.relative_to(self.path_prefix))
@@ -1451,6 +1815,12 @@ class BookManager:
                 is_same_file = file_path.samefile(target_path)
             except OSError:
                 is_same_file = False
+            if is_same_file and old_rel_path == target_rel_path:
+                # 이미 목적지에 있다. 관리자가 드롭다운에서 지금 카테고리를 그대로 고르면
+                # 여기로 온다. 그냥 두면 os.rename 이 같은 경로에 대해 아무 일도 하지 않고
+                # 성공하므로(실측) 예외는 안 나지만, 그 뒤 ES 문서를 지웠다가 같은 내용으로
+                # 다시 넣는 헛수고를 한다. 옮길 것이 없다고 답하고 끝낸다.
+                return {"status": "dry_run" if dry_run else "moved", "action": "noop", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0}, None
             if not is_same_file and not self._is_duplicate_content(file_path, target_path):
                 # 이름만 겹치고 내용이 다르면 서로 다른 책이다. 어느 쪽도 지우지 않고
                 # 새 파일에 '파일이름 (1).확장자'처럼 번호를 붙여 둘 다 남긴다.
@@ -1459,45 +1829,26 @@ class BookManager:
                     return None, f"대상 경로에 같은 이름의 파일이 너무 많습니다: {target_rel_path}"
                 target_path = numbered_path
                 target_rel_path = str(target_path.relative_to(self.path_prefix))
-            elif not is_same_file:
+            else:
+                # 여기 남는 경우는 둘이다: 내용이 같은 별개의 파일, 그리고 경로는 다른데
+                # 같은 실체인 하드링크. 하드링크를 이동으로 처리하면 os.rename 이 원본
+                # 링크를 지우지 않은 채 성공해(실측), 파일은 남았는데 ES 문서만 사라진
+                # 고아가 생긴다. 둘 다 "대상에 이미 있다"로 보고 같은 길로 보낸다.
                 if clean_existing:
                     if dry_run:
-                        return {
-                            "status": "dry_run",
-                            "action": "duplicate_clean",
-                            "from": old_rel_path,
-                            "to": target_rel_path,
-                            "target_category": target_category,
-                            "matched_keywords": matched_keywords,
-                            "deleted_count": 0,
-                        }, None
+                        return {"status": "dry_run", "action": "duplicate_clean", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0}, None
                     try:
                         file_path.unlink()
                         if source_category:
                             clean_empty_parent_dirs(file_path.parent, self._category_dir(source_category))
                         deleted_count = self.es_manager.delete_by_file_paths([old_rel_path])
-                        return {
-                            "status": "duplicate_cleaned",
-                            "from": old_rel_path,
-                            "to": target_rel_path,
-                            "target_category": target_category,
-                            "matched_keywords": matched_keywords,
-                            "deleted_count": deleted_count,
-                        }, None
+                        return {"status": "duplicate_cleaned", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": deleted_count}, None
                     except Exception as e:
                         return None, f"중복 파일 정리 실패: {e}"
                 return None, f"대상 경로에 파일이 이미 존재합니다: {target_rel_path}"
 
         if dry_run:
-            return {
-                "status": "dry_run",
-                "action": "move",
-                "from": old_rel_path,
-                "to": target_rel_path,
-                "target_category": target_category,
-                "matched_keywords": matched_keywords,
-                "deleted_count": 0,
-            }, None
+            return {"status": "dry_run", "action": "move", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0}, None
 
         old_book_id: int | None = None
         old_doc: dict[str, Any] | None = None
@@ -1505,7 +1856,7 @@ class BookManager:
             old_book_id = file_path.stat().st_ino
             old_doc = self.es_manager.search_by_id(old_book_id) or None
         except Exception as e:
-            LOGGER.warning("auto_classify_category: 기존 ES 문서 조회 실패 (%s): %s", old_rel_path, e)
+            LOGGER.warning("_move_classified_file: 기존 ES 문서 조회 실패 (%s): %s", old_rel_path, e)
 
         old_parent = file_path.parent
         try:
@@ -1539,15 +1890,7 @@ class BookManager:
             if inserted_book_id != new_book_id or add_error is not None:
                 raise RuntimeError(add_error or "ES 적재 실패")
 
-            return {
-                "status": "moved",
-                "from": old_rel_path,
-                "to": target_rel_path,
-                "book_id": new_book_id,
-                "target_category": target_category,
-                "matched_keywords": matched_keywords,
-                "deleted_count": deleted_count,
-            }, None
+            return {"status": "moved", "from": old_rel_path, "to": target_rel_path, "book_id": new_book_id, "target_category": target_category, "deleted_count": deleted_count}, None
         except Exception as e:
             rollback_messages: list[str] = []
             try:
@@ -1570,151 +1913,6 @@ class BookManager:
                 message = f"{message}; {'; '.join(rollback_messages)}"
             return None, message
 
-    async def auto_classify_category(
-        self,
-        category: str,
-        mappings: dict[str, list[str]] | None = None,
-        content_type: str = "book",
-        recursive: bool = False,
-        dry_run: bool = False,
-        clean_existing: bool = False,
-        use_bookstore: bool = True,
-        use_content_meta: bool = True,
-        delay: float = 1.2,
-        on_progress: Callable[[dict[str, int]], None] | None = None,
-    ) -> tuple[dict[str, Any], str | None]:
-        """선택 카테고리의 파일을 키워드 매핑 및 결정론적 분류(서점 다수결/메타데이터)로 최상위 카테고리에 이동하고 ES를 교체한다."""
-        LOGGER.info(
-            "auto_classify_category 시작: category='%s', content_type='%s', recursive=%s, dry_run=%s, clean_existing=%s, use_bookstore=%s, use_content_meta=%s",
-            category,
-            content_type,
-            recursive,
-            dry_run,
-            clean_existing,
-            use_bookstore,
-            use_content_meta,
-        )
-
-        if not category:
-            return {}, "카테고리 이름이 비어있습니다"
-        if not self._is_safe_category_name(category):
-            return {}, "잘못된 카테고리 경로입니다"
-
-        source_dir = self._category_dir(category)
-        if not source_dir.is_dir():
-            return {}, f"디렉토리를 찾을 수 없습니다: {category}"
-
-        mappings = mappings or {}
-        classifier_service: BookClassifierService | None = None
-        if use_bookstore or use_content_meta:
-            classifier_service = BookClassifierService(library_root=self.path_prefix, delay=delay, es_manager=self.es_manager)
-
-        result: dict[str, Any] = {
-            "content_type": content_type,
-            "source_category": category,
-            "recursive": recursive,
-            "dry_run": dry_run,
-            "total_count": 0,
-            "remaining_count": 0,
-            "processed_count": 0,
-            "moved_count": 0,
-            "dry_run_count": 0,
-            "duplicate_cleaned_count": 0,
-            "indexed_count": 0,
-            "deleted_count": 0,
-            "skipped_count": 0,
-            "failed_count": 0,
-            "files": [],
-            "skipped": [],
-            "failures": [],
-        }
-
-        def emit_progress() -> None:
-            result["skipped_count"] = len(result["skipped"])
-            result["failed_count"] = len(result["failures"])
-            result["remaining_count"] = max(0, result["total_count"] - result["processed_count"])
-            if on_progress is not None:
-                on_progress(
-                    {
-                        "total_count": result["total_count"],
-                        "remaining_count": result["remaining_count"],
-                        "processed_count": result["processed_count"],
-                        "moved_count": result["moved_count"],
-                        "skipped_count": result["skipped_count"],
-                        "failed_count": result["failed_count"],
-                    }
-                )
-
-        file_paths = list(self._iter_category_indexable_files(category, recursive=recursive))
-        result["total_count"] = len(file_paths)
-        result["remaining_count"] = result["total_count"]
-        emit_progress()
-
-        for file_path in file_paths:
-            result["processed_count"] += 1
-            try:
-                rel_path = str(file_path.relative_to(self.path_prefix))
-            except ValueError:
-                result["failures"].append({"file_path": str(file_path), "error": "잘못된 파일 경로입니다"})
-                emit_progress()
-                continue
-
-            target_category, matched_keywords, reason = self._classify_file_to_top_category(
-                file_path,
-                category,
-                mappings,
-                classifier_service=classifier_service,
-                use_bookstore=use_bookstore,
-                use_content_meta=use_content_meta,
-            )
-            if target_category is None:
-                result["skipped"].append({"file_path": rel_path, "reason": reason or "분류 대상 카테고리를 찾을 수 없습니다", "matched_keywords": matched_keywords})
-                emit_progress()
-                continue
-
-            file_result, error = await self._move_classified_file(
-                file_path,
-                target_category,
-                matched_keywords,
-                content_type=content_type,
-                dry_run=dry_run,
-                clean_existing=clean_existing,
-                source_category=category,
-            )
-            if error is not None or file_result is None:
-                result["failures"].append({"file_path": rel_path, "target_category": target_category, "error": error or "자동 분류 실패", "matched_keywords": matched_keywords})
-                emit_progress()
-                continue
-
-            result["files"].append(file_result)
-            result["deleted_count"] += int(file_result.get("deleted_count") or 0)
-            if dry_run:
-                result["dry_run_count"] += 1
-            elif file_result.get("status") == "duplicate_cleaned":
-                result["duplicate_cleaned_count"] += 1
-            else:
-                result["moved_count"] += 1
-                result["indexed_count"] += 1
-            emit_progress()
-
-        result["skipped_count"] = len(result["skipped"])
-        result["failed_count"] = len(result["failures"])
-        result["remaining_count"] = max(0, result["total_count"] - result["processed_count"])
-        if result["moved_count"] or result["duplicate_cleaned_count"] or result["failed_count"]:
-            self._clear_mismatch_cache()
-
-        LOGGER.info(
-            "auto_classify_category 완료: content_type='%s', category='%s', processed=%d, moved=%d, duplicate_cleaned=%d, skipped=%d, failed=%d",
-            content_type,
-            category,
-            result["processed_count"],
-            result["moved_count"],
-            result["duplicate_cleaned_count"],
-            result["skipped_count"],
-            result["failed_count"],
-        )
-        return result, None
-
     @staticmethod
     def _mismatch_item_count(mismatch_data: dict[str, Any]) -> int:
         """요약 응답의 이상 항목 총 건수. anomaly_count가 없으면 건수 비교만 하던 옛 응답으로 본다."""
@@ -1726,7 +1924,6 @@ class BookManager:
                     count = item.get(legacy_field)
                 total += abs(int(count or 0))
         return total
-
 
     @staticmethod
     def _mismatch_categories(mismatch_data: dict[str, Any]) -> list[str]:
@@ -1852,7 +2049,6 @@ class BookManager:
         result = {"mismatches": sorted(mismatches, key=lambda x: x["anomaly_count"], reverse=True), "es_only": es_only, "fs_only": fs_only}
         LOGGER.info("get_category_mismatches: 이상 카테고리 %d개, 이상 항목 %d건", len(mismatches) + len(es_only) + len(fs_only), self._mismatch_item_count(result))
         return result
-
 
     def _mismatch_cache_is_fresh(self, now: float) -> bool:
         """_mismatch_state_lock을 잡은 채로 호출해야 한다."""

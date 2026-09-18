@@ -93,8 +93,8 @@ class CustomJSONResponse(JSONResponse):
 _original_jsonable_encoder = jsonable_encoder
 
 
-def stale_auto_classify_status(status: dict[str, Any], stale_seconds: float, now: float | None = None) -> dict[str, Any] | None:
-    """갱신이 끊긴 running 상태를 failed 로 바꾼 사본. 멀쩡하면 None 을 돌려준다.
+def stale_running_status(status: dict[str, Any], stale_seconds: float, now: float | None = None) -> dict[str, Any] | None:
+    """갱신이 끊긴 running/applying 상태를 failed 로 바꾼 사본. 멀쩡하면 None 을 돌려준다.
 
     자동 분류는 pod 메모리 안의 백그라운드 태스크라 재배포·재시작이면 사라지는데,
     상태 파일은 볼륨에 남아 running 인 채로 굳는다. 그러면 POST 가 already_running
@@ -103,7 +103,7 @@ def stale_auto_classify_status(status: dict[str, Any], stale_seconds: float, now
     총 소요 시간이 아니라 "최근에 살아있다는 신호"로 판정해야, 정상적으로 오래 걸리는
     작업과 죽어서 안 풀리는 상태를 구분할 수 있다.
     """
-    if status.get("status") != "running":
+    if status.get("status") not in ("running", "applying"):
         return None
     updated_at = status.get("updated_at")
     if isinstance(updated_at, (int, float)):
@@ -111,7 +111,10 @@ def stale_auto_classify_status(status: dict[str, Any], stale_seconds: float, now
         if age <= stale_seconds:
             return None
     # updated_at 이 없거나 꼴이 틀린 상태 파일은 살아있다고 볼 근거가 없다.
-    return {**status, "status": "failed", "error": "백엔드가 다시 시작되어 자동 분류가 중단되었습니다. 다시 실행해 주세요."}
+    # "다시 실행"을 권하면 안 된다 — 분류 제안을 다시 누르면 지금까지 쌓인 pending/failed
+    # 행이 전부 지워진다. 재개 설계가 지키려는 바로 그 데이터를 이 메시지가 스스로
+    # 버리라고 안내하는 셈이라, 무엇을 다시 눌러야 하는지 말하지 않고 상황만 알린다.
+    return {**status, "status": "failed", "error": "백엔드가 다시 시작되어 진행 중이던 작업이 중단되었습니다. 남은 항목을 확인한 뒤 진행하세요."}
 
 
 def custom_jsonable_encoder(obj, **kwargs):
@@ -411,142 +414,170 @@ class ReloadAllMismatchesModel(BaseModel):
     reload_source: Literal["bulk", "mismatch"] = "bulk"
 
 
-class CategoryAutoClassifyModel(BaseModel):
+class ClassifyProposalModel(BaseModel):
     category: str
-    recursive: bool = False
-    dry_run: bool = False
-    async_mode: bool = False
-    clean_existing: bool = False
     use_bookstore: bool = True
     use_content_meta: bool = True
     delay: float = 1.2
+
+
+class ClassifyApplyItemModel(BaseModel):
+    file_path: str
+    target_category: str
+
+
+class ClassifyApplyModel(BaseModel):
+    items: list[ClassifyApplyItemModel]
+    clean_existing: bool = False
 
 
 def create_item_router(manager, content_type: str = "book") -> APIRouter:
     """공통 CRUD 엔드포인트를 생성하는 라우터 팩토리"""
     admin_dep = [Depends(require_admin)]
     router = APIRouter()
-    auto_classify_status: dict[str, Any] = {"status": "idle", "remaining_count": 0}
+    # 분류 제안 작업 상태는 MySQL 의 classify_proposal_status 한 행에 있다(제안과 승인
+    # 적용이 같은 행을 쓴다). 예전에는 corpus 디렉토리의 JSON 파일이었는데, 프로세스가
+    # 여럿(uvicorn --workers 2 x replicas 2)이라 '읽고-판단하고-쓰기' 사이에 잠금을 걸 수
+    # 없어 두 작업이 동시에 시작할 수 있었고, 노드가 늘면 파일은 공유조차 되지 않는다.
+    # 시작과 승인 선점은 category_mapping 의 try_* 가 한 트랜잭션 안에서 판단까지 끝낸다.
 
     # 갱신이 이만큼 끊기면 죽은 작업으로 본다. category_mapping 의
     # RELOAD_LOCK_HEARTBEAT_STALE_SECONDS 와 같은 방식이다.
     # 파일 1건 처리는 서점 조회 때문에 3초 남짓이라 5분이면 넉넉하다.
-    AUTO_CLASSIFY_HEARTBEAT_STALE_SECONDS = 5 * 60
+    CLASSIFY_PROPOSAL_STALE_SECONDS = 5 * 60
 
-    def _auto_classify_status_path() -> Path | None:
-        try:
-            return Path(manager.path_prefix) / f".auto_classify_status_{content_type}.json"
-        except (TypeError, ValueError):
-            return None
+    async def _read_classify_proposal() -> dict[str, Any]:
+        """현재 작업 상태. 갱신이 끊긴 작업은 DB 조회 단계에서 failed 로 보인다."""
+        return await asyncio.to_thread(category_mapping.get_classify_proposal_status, content_type, CLASSIFY_PROPOSAL_STALE_SECONDS)
 
-    def _read_auto_classify_status() -> dict[str, Any]:
-        status_path = _auto_classify_status_path()
-        if status_path is None or not status_path.exists():
-            return dict(auto_classify_status)
-        try:
-            with status_path.open("r", encoding="utf-8") as status_file:
-                status = json.load(status_file)
-        except Exception as e:
-            LOGGER.warning("auto_classify_status 파일 읽기 실패: %s", e)
-            return dict(auto_classify_status)
-        if not isinstance(status, dict):
-            return dict(auto_classify_status)
-        status = _fail_if_stale(status)
-        auto_classify_status.clear()
-        auto_classify_status.update(status)
-        return dict(auto_classify_status)
+    async def _replace_classify_proposal(next_status: dict[str, Any]) -> None:
+        """상태를 통째로 바꾼다. 작업의 시작과 끝처럼 status 가 실제로 바뀔 때만 쓴다."""
+        await asyncio.to_thread(category_mapping.set_classify_proposal_status, next_status, content_type)
 
-    def _fail_if_stale(status: dict[str, Any]) -> dict[str, Any]:
-        """죽은 작업이 화면과 재실행을 막지 않도록, 갱신이 끊긴 running 을 failed 로 굳힌다."""
-        stale = stale_auto_classify_status(status, AUTO_CLASSIFY_HEARTBEAT_STALE_SECONDS)
-        if stale is None:
-            return status
-        LOGGER.warning("자동 분류 상태가 %.0f초 넘게 갱신되지 않아 중단된 작업으로 본다", AUTO_CLASSIFY_HEARTBEAT_STALE_SECONDS)
-        _replace_auto_classify_status(stale)
-        return stale
+    async def _progress_classify_proposal(progress: dict[str, Any]) -> None:
+        """진행률만 합친다.
 
-    def _replace_auto_classify_status(next_status: dict[str, Any]) -> None:
-        next_status = {**next_status, "updated_at": time.time()}
-        auto_classify_status.clear()
-        auto_classify_status.update(next_status)
-        status_path = _auto_classify_status_path()
-        if status_path is None or not status_path.parent.exists():
-            return
-        tmp_path = status_path.with_name(f"{status_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-        try:
-            with tmp_path.open("w", encoding="utf-8") as status_file:
-                json.dump(next_status, status_file, ensure_ascii=False, separators=(",", ":"))
-            tmp_path.replace(status_path)
-        except Exception as e:
-            LOGGER.warning("auto_classify_status 파일 쓰기 실패: %s", e)
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        제안(running)과 적용(applying)이 같은 행을 쓰므로 진행률이 status 를 되돌리면
+        화면이 '적용 중'을 '제안 생성 중'으로 보여준다. status 를 빼는 일은 DB 쪽
+        merge 가 하므로 호출자는 신경 쓰지 않아도 된다. 읽어서 합친 뒤 통째로 쓰지
+        않기 때문에, 그 사이 다른 프로세스가 쓴 값을 덮어쓰는 일도 없다.
+        """
+        await asyncio.to_thread(category_mapping.merge_classify_proposal_status, progress, content_type)
 
-    def _remaining_auto_classify_count(status: dict[str, Any]) -> int:
-        remaining = status.get("remaining_count")
-        if isinstance(remaining, int):
-            return max(0, remaining)
-        total = status.get("total_count")
-        processed = status.get("processed_count")
-        if isinstance(total, int):
-            return max(0, total - int(processed or 0))
-        return 0
+    async def _run_classify_proposal_job(category: str, use_bookstore: bool, use_content_meta: bool, delay: float) -> None:
+        # 새로 분류된 항목을 100건 단위로 모아 DB에 적재한다. 책 한 권마다 INSERT +
+        # COMMIT을 하면 왕복 비용이 책 수만큼 생기므로, 여기서 모았다가
+        # add_classify_proposal_items(executemany 한 번 + commit 한 번)로 넘긴다.
+        pending: list[dict[str, Any]] = []
+        # 100건 기준이면 100권 미만 카테고리(이 저장소 카테고리 중앙값 5권)는 분류가 끝날
+        # 때까지 화면이 빈다 — "중간에 들어와서 진행 상황 보기"가 정작 흔한 경우에서 안
+        # 된다. 10건으로 낮춰도 가장 큰 카테고리(79,589권) 기준 왕복 7,959번, 20초 남짓이라
+        # 비용은 문제가 안 된다.
+        CLASSIFY_PROPOSAL_ITEMS_BATCH_SIZE = 10
 
-    def _start_auto_classify_status(category: str, recursive: bool, dry_run: bool, clean_existing: bool = False, use_bookstore: bool = True, use_content_meta: bool = True) -> None:
-        _replace_auto_classify_status(
-            {
-                "status": "running",
-                "content_type": content_type,
-                "source_category": category,
-                "recursive": recursive,
-                "dry_run": dry_run,
-                "clean_existing": clean_existing,
-                "use_bookstore": use_bookstore,
-                "use_content_meta": use_content_meta,
-                "total_count": 0,
-                "remaining_count": 0,
-                "processed_count": 0,
-                "moved_count": 0,
-                "duplicate_cleaned_count": 0,
-                "skipped_count": 0,
-                "failed_count": 0,
-            }
-        )
+        async def _flush_pending() -> None:
+            if not pending:
+                return
+            # 스냅샷을 먼저 떼어내고 비운 뒤에 스레드로 넘긴다 — pymysql.connect +
+            # executemany + commit은 블로킹 호출이라, 이걸 그대로 asyncio 루프 위에서
+            # 부르면 단일 uvicorn 워커의 이벤트 루프가 매 10건마다 통째로 멈춘다(그 사이
+            # 다른 API 요청도 전부 막힌다). apply 경로는 이미 to_thread로 옮겨졌는데
+            # propose 경로만 남아 있던 것을 여기서 맞춘다.
+            batch = list(pending)
+            pending.clear()
+            await asyncio.to_thread(category_mapping.add_classify_proposal_items, batch, category, content_type=content_type)
 
-    def _on_auto_classify_progress(progress: dict[str, int]) -> None:
-        next_status = {**_read_auto_classify_status(), **progress, "status": "running"}
-        next_status["remaining_count"] = _remaining_auto_classify_count(next_status)
-        _replace_auto_classify_status(next_status)
+        # 분류가 끝난 항목은 이미 있는 행(이름만 담긴 자리)을 채우는 것이라 INSERT가
+        # 아니라 UPDATE다. 새로 넣는 것과 같은 리듬으로 모아 보낸다.
+        updated: list[dict[str, Any]] = []
 
-    async def _run_auto_classify_job(category: str, recursive: bool, dry_run: bool, clean_existing: bool = False, use_bookstore: bool = True, use_content_meta: bool = True, delay: float = 1.2) -> None:
-        classify_kwargs: dict[str, Any] = {"content_type": content_type, "recursive": recursive, "dry_run": dry_run}
-        if clean_existing:
-            classify_kwargs["clean_existing"] = True
-        if not use_bookstore:
-            classify_kwargs["use_bookstore"] = False
-        if not use_content_meta:
-            classify_kwargs["use_content_meta"] = False
-        if delay != 1.2:
-            classify_kwargs["delay"] = delay
+        async def _flush_updated() -> None:
+            if not updated:
+                return
+            batch = list(updated)
+            updated.clear()
+            await asyncio.to_thread(category_mapping.update_classify_proposal_item_payloads, batch, content_type=content_type)
+
+        async def _on_progress(progress: dict[str, Any]) -> None:
+            # book_manager가 이번 틱에서 새로 만든 항목만 new_items로 보낸다. 상태
+            # 파일에는 카운트만 남기고(items를 넣으면 다시 파일 하나에 전체 목록을
+            # 담는 옛 방식으로 되돌아간다), 항목은 버퍼에 모았다가 100건마다 DB로 넘긴다.
+            # 여기서 flush를 await하므로(propose_category_changes가 각 tick을 순서대로
+            # await한다) 다음 tick이 오기 전에 이번 flush가 끝나 순서가 뒤섞이거나
+            # 겹치지 않는다.
+            new_items = progress.pop("new_items", None)
+            if new_items:
+                pending.extend(new_items)
+                if len(pending) >= CLASSIFY_PROPOSAL_ITEMS_BATCH_SIZE:
+                    await _flush_pending()
+            updated_items = progress.pop("updated_items", None)
+            if updated_items:
+                updated.extend(updated_items)
+                if len(updated) >= CLASSIFY_PROPOSAL_ITEMS_BATCH_SIZE:
+                    await _flush_updated()
+            await _progress_classify_proposal(progress)
 
         try:
+            await asyncio.to_thread(category_mapping.clear_classify_proposal_items, content_type=content_type)
             mappings = await asyncio.to_thread(category_mapping.get_all_mappings, content_type=content_type)
-            result, error = await manager.auto_classify_category(category, mappings, on_progress=_on_auto_classify_progress, **classify_kwargs)
+            result, error = await manager.propose_category_changes(category, mappings, content_type=content_type, use_bookstore=use_bookstore, use_content_meta=use_content_meta, delay=delay, on_progress=_on_progress)
         except Exception as e:
-            LOGGER.error("auto_classify_category async error: %s", e)
-            _replace_auto_classify_status({**_read_auto_classify_status(), "status": "failed", "error": "자동 분류에 실패했습니다."})
+            LOGGER.error("classify proposal error: %s", e)
+            # 예외로 중단되더라도, 그때까지 모아둔 항목은 버리지 않고 DB에 남겨
+            # 화면에서 어디까지 진행됐는지 볼 수 있게 한다.
+            await _flush_pending()
+            await _flush_updated()
+            await _replace_classify_proposal({**(await _read_classify_proposal()), "status": "failed", "error": "분류 제안에 실패했습니다."})
             return
-
+        # 100의 배수가 아닌 꼬리를 반드시 비운다. 누락되면 관리자가 목록 끝의 책들을
+        # 못 보고 승인하게 된다.
+        await _flush_pending()
+        await _flush_updated()
         if error is None:
-            next_status = {**_read_auto_classify_status(), **result, "status": "done"}
-            next_status["remaining_count"] = _remaining_auto_classify_count(next_status)
-            _replace_auto_classify_status(next_status)
-            LOGGER.info("auto_classify_category async 응답: success — %s", result)
+            result_counts = {k: v for k, v in result.items() if k != "items"}
+            await _replace_classify_proposal({**(await _read_classify_proposal()), **result_counts, "status": "ready"})
         else:
-            _replace_auto_classify_status({**_read_auto_classify_status(), "status": "failed", "error": error})
-            LOGGER.error("auto_classify_category async 응답: failure — %s", error)
+            await _replace_classify_proposal({**(await _read_classify_proposal()), "status": "failed", "error": error})
+
+    async def _run_classify_apply_job(items: list[dict[str, Any]], allowed: set[str], clean_existing: bool, apply_token: str) -> None:
+        # applying 선점은 핸들러가 응답 전에 동기로 이미 해뒀다(TOCTOU 창을 없애려고). 여기서
+        # 다시 _read_classify_proposal() 로 읽어 "applying"을 또 쓰면, 그 사이 다른 요청이
+        # 상태를 바꿨어도 이 시점에 덮어써서 선점의 의미가 없어진다.
+        async def _token_still_valid() -> bool:
+            # 하트비트 만료로 상태가 failed로 굳은 뒤 두 번째 apply가 새 토큰으로 다시
+            # 선점하면, 이 작업(먼저 돈 쪽)은 더 이상 이 승인의 주인이 아니다. 계속
+            # 진행하면 두 작업이 같은 행에 경쟁적으로 써서 moved를 failed로 덮어쓸 수 있다.
+            return (await _read_classify_proposal()).get("apply_token") == apply_token
+
+        async def _on_item_done(entry: dict[str, Any]) -> None:
+            if entry["file_path"] not in allowed:
+                # book_manager는 "제안 목록에 없는 파일입니다" 같은 거절 항목도 on_item_done으로
+                # 알려준다. 이 작업이 애초에 허용하지 않은 파일(예: 재승인 때 클라이언트가
+                # 여전히 들고 있는 이미 moved인 항목)의 행을 건드리면 moved가 failed로
+                # 덮어써진다 — 그 행은 이 작업의 소관이 아니므로 손대지 않는다.
+                return
+            # 파일 이동/실패 직후 그 행 하나만 바로 기록한다. 끝나고 한꺼번에 병합하면
+            # 도중에 pod가 죽었을 때 무엇이 옮겨졌는지 알 수 없다 — book_manager는 DB를
+            # 모르므로 이 콜백에서 여기(main.py)가 직접 쓴다. pymysql은 블로킹 호출이라
+            # 단일 워커의 이벤트 루프를 막지 않도록 다른 DB 호출들처럼 스레드로 넘긴다.
+            await asyncio.to_thread(category_mapping.update_classify_proposal_item_status, entry["file_path"], entry["apply_status"], entry.get("apply_error"), content_type=content_type)
+
+        try:
+            result, error = await manager.apply_category_changes(items, allowed, content_type=content_type, clean_existing=clean_existing, on_progress=_progress_classify_proposal, on_item_done=_on_item_done, should_continue=_token_still_valid)
+            if not await _token_still_valid():
+                # 다른 승인 작업이 이미 이 작업을 대체했다 — 상태 파일을 더 건드리면 그
+                # 새 작업의 진행 상황을 덮어쓰게 되므로 아무것도 쓰지 않고 물러난다.
+                LOGGER.warning("classify apply job stopped: apply_token mismatch (다른 승인 작업이 선점함)")
+                return
+            if error is not None:
+                await _replace_classify_proposal({**(await _read_classify_proposal()), "status": "failed", "error": error})
+                return
+            current = await _read_classify_proposal()
+            await _replace_classify_proposal({**current, "status": "done", "applied_count": result.get("applied_count"), "failed_count": result.get("failed_count")})
+        except Exception as e:
+            LOGGER.error("classify apply error: %s", e)
+            if await _token_still_valid():
+                await _replace_classify_proposal({**(await _read_classify_proposal()), "status": "failed", "error": "분류 적용에 실패했습니다."})
 
     @router.put("/books/{book_id}", dependencies=admin_dep)
     async def update_book(book_id: int, book_item: BookModel, force: bool = False) -> dict[str, Any]:
@@ -728,59 +759,99 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
-    @router.post("/categories/auto-classify", dependencies=admin_dep)
-    async def auto_classify_category(body: CategoryAutoClassifyModel, background_tasks: BackgroundTasks) -> dict[str, Any]:
-        """선택 카테고리 파일을 키워드 매핑 기반으로 최상위 카테고리에 자동 분류"""
-        LOGGER.info(
-            "auto_classify_category 요청: category='%s', content_type='%s', recursive=%s, dry_run=%s, async_mode=%s, clean_existing=%s, use_bookstore=%s, use_content_meta=%s", body.category, content_type, body.recursive, body.dry_run, body.async_mode, body.clean_existing, body.use_bookstore, body.use_content_meta
+    @router.post("/categories/classify-proposal", dependencies=admin_dep)
+    async def start_classify_proposal(body: ClassifyProposalModel, background_tasks: BackgroundTasks) -> dict[str, Any]:
+        """선택 카테고리의 분류 제안을 백그라운드로 만든다. 파일은 옮기지 않는다.
+
+        "도는 작업이 있는가"를 읽어서 판단한 뒤 따로 쓰면, 그 사이에 들어온 두 번째
+        요청도 같은 답을 보고 통과해 제안 작업이 두 개 돌 수 있다. 프로세스가 여럿이라
+        이 창은 실제로 열린다. 판단과 선점을 DB 트랜잭션 하나로 묶어 닫는다.
+        항목 목록은 _run_classify_proposal_job 이 시작하면서 지운다.
+        """
+        started, current = await asyncio.to_thread(
+            category_mapping.try_start_classify_proposal,
+            {"status": "running", "source_category": body.category, "total_count": 0, "processed_count": 0, "failures": []},
+            content_type,
+            CLASSIFY_PROPOSAL_STALE_SECONDS,
         )
-        response_object: dict[str, Any] = {"status": "failure"}
-        if body.async_mode:
-            current_status = _read_auto_classify_status()
-            if current_status.get("status") == "running":
-                response_object["status"] = "success"
-                response_object["result"] = {"already_running": True, **current_status}
-                return response_object
-            _start_auto_classify_status(body.category, body.recursive, body.dry_run, clean_existing=body.clean_existing, use_bookstore=body.use_bookstore, use_content_meta=body.use_content_meta)
-            background_tasks.add_task(_run_auto_classify_job, body.category, body.recursive, body.dry_run, clean_existing=body.clean_existing, use_bookstore=body.use_bookstore, use_content_meta=body.use_content_meta, delay=body.delay)
-            response_object["status"] = "success"
-            response_object["result"] = {"started": True, **_read_auto_classify_status()}
-            return response_object
+        if not started:
+            return {"status": "success", "result": {"already_running": True, **current}}
+        background_tasks.add_task(_run_classify_proposal_job, body.category, body.use_bookstore, body.use_content_meta, body.delay)
+        return {"status": "success", "result": {"started": True, **current}}
 
-        classify_kwargs: dict[str, Any] = {"content_type": content_type, "recursive": body.recursive, "dry_run": body.dry_run}
-        fields_set = getattr(body, "model_fields_set", None)
-        if fields_set is None:
-            fields_set = getattr(body, "__fields_set__", set())
-        if "clean_existing" in fields_set:
-            classify_kwargs["clean_existing"] = body.clean_existing
-        if "use_bookstore" in fields_set:
-            classify_kwargs["use_bookstore"] = body.use_bookstore
-        if "use_content_meta" in fields_set:
-            classify_kwargs["use_content_meta"] = body.use_content_meta
-        if "delay" in fields_set:
-            classify_kwargs["delay"] = body.delay
+    @router.get("/categories/classify-proposal", dependencies=admin_dep)
+    async def get_classify_proposal() -> dict[str, Any]:
+        """진행 중이거나 마지막으로 만든 분류 제안 상태 조회 (폴링용).
 
-        try:
-            mappings = await asyncio.to_thread(category_mapping.get_all_mappings, content_type=content_type)
-            result, error = await manager.auto_classify_category(body.category, mappings, **classify_kwargs)
-        except Exception as e:
-            LOGGER.error("auto_classify_category error: %s", e)
-            response_object["error"] = "자동 분류에 실패했습니다."
-            return response_object
+        항목 목록(items)은 상태 파일이 아니라 DB(classify_proposal_items)에서 읽어
+        합친다. 화면은 지금처럼 items 키를 그대로 읽으므로 응답 모양은 바뀌지 않는다.
+        """
+        status = await _read_classify_proposal()
+        items = await asyncio.to_thread(category_mapping.get_classify_proposal_items, content_type=content_type)
+        return {"status": "success", "result": {**status, "items": items}}
 
-        if error is None:
-            response_object["status"] = "success"
-            response_object["result"] = result
-            LOGGER.info("auto_classify_category 응답: success — %s", result)
-        else:
-            response_object["error"] = error
-            LOGGER.error("auto_classify_category 응답: failure — %s", error)
-        return response_object
+    @router.post("/categories/classify-proposal/apply", dependencies=admin_dep)
+    async def apply_classify_proposal(body: ClassifyApplyModel, background_tasks: BackgroundTasks) -> dict[str, Any]:
+        """승인된 항목만 적용한다.
 
-    @router.get("/categories/auto-classify-status", dependencies=admin_dep)
-    async def get_auto_classify_status() -> dict[str, Any]:
-        """진행 중이거나 마지막으로 끝난 자동 분류 작업 상태 조회 (폴링용)"""
-        return {"status": "success", "result": _read_auto_classify_status()}
+        허용 경로는 요청 본문(body.items)이 아니라 DB에 저장된 제안 항목(서버가 만든
+        classify_proposal_items)에서만 가져온다. 브라우저가 보낸 file_path를 그대로
+        허용 집합으로 쓰면 apply_category_changes가 가진 "제안 목록에 없는 파일은
+        거부한다"는 검증이 통째로 무의미해져, 임의 경로를 옮기는 요청도 통과하게 된다.
+        """
+        # 각 승인 작업에 고유 토큰을 발급하고, 상태 판단과 applying 선점을 DB 트랜잭션
+        # 하나로 묶는다. running/applying이면 이미 다른 작업이 도는 중이라 거절하고,
+        # idle이면 애초에 승인할 제안이 없다. ready/done/failed는 모두 받는다 — 승인
+        # 도중 중단되면 하트비트 만료로 failed까지 굳는데, 그때도 남은 pending 행을
+        # 다시 승인해 이어갈 수 있어야 한다. 그러지 않으면 관리자는 파일이 반쯤 옮겨진
+        # 채로 아무것도 못 한다.
+        # 토큰은 2차 방어다. 하트비트 만료로 failed가 된 뒤 원래 작업이 아직 살아있는
+        # 채로 두 번째 apply가 들어오면, 새 토큰을 쓴 이 작업이 유일한 주인이 되고 먼저
+        # 돈 작업은 should_continue에서 토큰 불일치를 보고 멈춘다.
+        apply_token = uuid.uuid4().hex
+        begun, _current = await asyncio.to_thread(category_mapping.try_begin_classify_apply, apply_token, content_type, CLASSIFY_PROPOSAL_STALE_SECONDS)
+        if not begun:
+            return {"status": "failure", "error": "적용할 제안이 없습니다."}
+        proposal_items = await asyncio.to_thread(category_mapping.get_classify_proposal_items, content_type=content_type)
+        # pending은 물론 failed(재시도)와 moving(중단된 이동 재확인)도 허용한다.
+        # 그러지 않으면 실패하거나 중단된 행은 화면에서 다시 체크해 승인을 눌러도
+        # "제안 목록에 없는 파일입니다"로 거부되어 영영 재시도할 방법이 없다. moved만
+        # 뺀다 — apply_category_changes가 파일 없음으로 걸러 이중 이동은 안 일어나지만,
+        # 불필요한 재시도이므로 애초에 담지 않는다.
+        allowed = {item.get("file_path") for item in proposal_items if item.get("file_path") and item.get("apply_status") in ("pending", "failed", "moving")}
+        items = [item.model_dump() for item in body.items]
+        background_tasks.add_task(_run_classify_apply_job, items, allowed, body.clean_existing, apply_token)
+        return {"status": "success", "result": {"started": True, "total_count": len(items)}}
+
+    @router.delete("/categories/classify-proposal", dependencies=admin_dep)
+    async def delete_classify_proposal() -> dict[str, Any]:
+        """제안 상태를 지워 화면을 초기 상태로 되돌린다. DB에 남은 제안 항목도 함께 지운다.
+
+        지우지 않으면 폐기한 제안의 항목이 DB에 남아, 다음 GET이 idle 상태인데도
+        옛 항목을 보여주는 모순이 생긴다.
+        """
+        current = await _read_classify_proposal()
+        # 도는 중에 지우면 그 작업은 멈추지 않은 채 계속 항목을 쌓고, 끝나면 상태를
+        # ready로 되돌린다. 폐기한 제안이 되살아난다. 게다가 상태가 idle이 되는 순간
+        # 새 제안 요청이 통과해 제안 작업이 두 개 돌게 된다.
+        if current.get("status") in ("running", "applying"):
+            return {"status": "failure", "error": "작업이 진행 중입니다."}
+        await asyncio.to_thread(category_mapping.clear_classify_proposal_items, content_type=content_type)
+        await _replace_classify_proposal({"status": "idle", "content_type": content_type})
+        return {"status": "success", "result": {"cleared": True}}
+
+    @router.delete("/categories/classify-proposal/applied", dependencies=admin_dep)
+    async def delete_applied_classify_proposal_items_route() -> dict[str, Any]:
+        """이동이 끝난(apply_status = 'moved') 행만 지운다. 대기·실패 행은 남겨 재시도할 수 있게 한다.
+
+        작업이 도는 중에 지우면, 건별 기록이 방금 찍은 행을 그 작업 밑에서 지울 수
+        있으므로 running/applying 동안은 거절한다.
+        """
+        current = await _read_classify_proposal()
+        if current.get("status") in ("running", "applying"):
+            return {"status": "failure", "error": "작업이 진행 중입니다."}
+        deleted_count = await asyncio.to_thread(category_mapping.delete_applied_classify_proposal_items, content_type=content_type)
+        return {"status": "success", "result": {"deleted_count": deleted_count}}
 
     @router.get("/categories/{category:path}")
     async def get_books_in_category(category: str, limit: int = 0, cursor: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:
@@ -1371,10 +1442,14 @@ async def add_category_keyword(category: str, body: dict[str, str], content_type
         raise HTTPException(status_code=400, detail="Keyword is required")
     try:
         success = await asyncio.to_thread(category_mapping.add_keyword, category, keyword, content_type=content_type)
+        keywords = await asyncio.to_thread(category_mapping.get_keywords, category, content_type=content_type)
         if success:
-            return {"status": "success", "result": await asyncio.to_thread(category_mapping.get_keywords, category, content_type=content_type)}
-        else:
-            return {"status": "duplicate", "message": "Keyword already exists", "result": await asyncio.to_thread(category_mapping.get_keywords, category, content_type=content_type)}
+            return {"status": "success", "result": keywords}
+        # 이미 있는 키워드는 실패가 아니다. "이 키워드를 등록해 달라"는 요청은 이미
+        # 충족돼 있다. 예전에는 status를 "duplicate"로 돌려줬는데, 공용 응답 처리기가
+        # success가 아닌 것을 전부 오류로 보고 error 키까지 없어서, 화면에는 이유가
+        # 안 적힌 실패 창이 떴다(등록은 되어 있는데도).
+        return {"status": "success", "warning": "이미 등록된 키워드입니다.", "result": keywords}
     except Exception as e:
         LOGGER.error("add_category_keyword error: %s", e)
         raise HTTPException(status_code=500, detail=GENERIC_MAPPING_ERROR_DETAIL)

@@ -1,4 +1,5 @@
 import contextlib
+import json
 import sys
 import unittest
 from datetime import datetime, timedelta
@@ -63,16 +64,33 @@ class FakeConn:
 
 
 def build_cm(fake_cursor):
+    """가짜 pymysql로 CategoryMapping을 만든다.
+
+    patch.dict(sys.modules, ...)는 블록을 나올 때 sys.modules만 원래대로 되돌리고,
+    블록 안에서 importlib.reload(cm_mod)가 이미 backend.category_mapping 모듈
+    __dict__에 박아 넣은 전역 이름 pymysql은 되돌리지 않는다. 그대로 두면 이 파일이
+    먼저 실행된 뒤로는 backend.category_mapping.pymysql이 세션이 끝날 때까지 가짜로
+    고정돼, 알파벳 순서상 뒤에 오는 실제 MySQL 테스트 파일이 자기도 모르게 가짜
+    커서에 붙어 아무것도 검증하지 못한 채 조용히 통과한다. patch.dict 블록을 벗어난
+    뒤 진짜 pymysql이 sys.modules에 복귀한 상태에서 한 번 더 reload해 모듈 전역을
+    원상 복구한다.
+    """
     fake_pymysql = types.SimpleNamespace(IntegrityError=type("IntegrityError", (Exception,), {}), connect=lambda **kwargs: FakeConn(fake_cursor))
     fake_cursors = types.SimpleNamespace(DictCursor=object)
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    with mock.patch.dict(sys.modules, {"pymysql": fake_pymysql, "pymysql.cursors": fake_cursors}):
-        import backend.category_mapping as cm_mod
+    import backend.category_mapping as cm_mod
 
-        importlib.reload(cm_mod)
-        cm = cm_mod.CategoryMapping(host="h", port=1, database="d", user="u", password="p")
-        return cm_mod, cm
+    try:
+        with mock.patch.dict(sys.modules, {"pymysql": fake_pymysql, "pymysql.cursors": fake_cursors}):
+            importlib.reload(cm_mod)
+            cm = cm_mod.CategoryMapping(host="h", port=1, database="d", user="u", password="p")
+    finally:
+        # try 안에서 무엇이 터지든(reload 실패, 생성자 예외 등) 원상 복구는 반드시 돈다.
+        # finally가 없으면 예외가 난 호출 한 번이 이후 세션 전체를 오염시킨다 — 방금
+        # 고친 것과 같은 조용한 실패 모드다.
+        importlib.reload(cm_mod)  # 원상 복구: 모듈 전역 pymysql을 다시 진짜 pymysql로 되돌린다
+    return cm_mod, cm
 
 
 class TestCategoryMapping(unittest.TestCase):
@@ -387,14 +405,18 @@ class TestCategoryMapping(unittest.TestCase):
         assert conn.committed is True
 
     def test_migrate_skips_when_content_type_already_exists(self):
-        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 14)
+        # information_schema 조회 순서: 1~3 content_type 컬럼, 4 apply_status,
+        # 5 idx_content_file, 6 idx_content_type, 7~16 reload_locks 컬럼, 17 lock_key.
+        # 6번만 0(없음)이라 지울 중복 인덱스가 없고, 나머지는 이미 있어 손댈 게 없다.
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 5 + [{"cnt": 0}] + [{"cnt": 1}] * 11)
         cm_mod, cm = build_cm(cursor)
         alter_queries = [sql for sql, _ in cursor.executed if "ALTER TABLE" in str(sql)]
         assert cm is not None
         assert alter_queries == []
 
     def test_migrate_reload_locks_adds_reload_source(self):
-        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 12 + [{"cnt": 0}, {"cnt": 1}])
+        # 16번째 조회가 reload_source 컬럼 존재 여부다(위 테스트의 순서 주석 참고).
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 15 + [{"cnt": 0}, {"cnt": 1}])
         cm_mod, cm = build_cm(cursor)
         executed_sql = [sql for sql, _ in cursor.executed]
         assert any("ADD COLUMN reload_source" in s for s in executed_sql)
@@ -402,7 +424,7 @@ class TestCategoryMapping(unittest.TestCase):
         assert cm is not None
 
     def test_migrate_reload_locks_adds_lock_key_and_switches_primary_key(self):
-        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 13 + [{"cnt": 0}])
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 1}] * 14 + [{"cnt": 0}])
         cm_mod, cm = build_cm(cursor)
         executed_sql = [sql for sql, _ in cursor.executed]
         assert any("ADD COLUMN lock_key" in s for s in executed_sql)
@@ -693,3 +715,170 @@ class TestCategoryMapping(unittest.TestCase):
         status = cm.get_reload_status("book")
         assert status["status"] == "failed"
         assert status["error"]
+
+
+class _ClassifyItemsFakeCursor:
+    """classify_proposal_items에 대해 INSERT(executemany)/DELETE/SELECT를 흉내내는
+    인메모리 저장소. 공용 FakeCursor는 고정된 rows만 돌려줘, "여러 번 나눠 넣어도
+    get이 전체를 순서대로 돌려준다"는 시나리오(테일 플러시 검증 포함)를 표현할 수
+    없어서 별도로 둔다.
+    """
+
+    def __init__(self, store: list[tuple]):
+        self.store = store
+        self.rowcount = 0
+        self._result: list[dict] = []
+
+    def execute(self, sql, params=None):
+        if sql.startswith("DELETE FROM classify_proposal_items"):
+            (content_type,) = params
+            self.store[:] = [row for row in self.store if row[0] != content_type]
+        elif sql.startswith("SELECT payload, apply_status, apply_error FROM classify_proposal_items"):
+            (content_type,) = params
+            self._result = [{"payload": row[3], "apply_status": "pending", "apply_error": None} for row in self.store if row[0] == content_type]
+        else:
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    def executemany(self, sql, seq):
+        self.store.extend(seq)
+
+    def fetchall(self):
+        return self._result
+
+    def fetchone(self):
+        return {"cnt": 0}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _ClassifyItemsFakeConn:
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self.committed = False
+
+    def cursor(self):
+        return self._cursor
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        return None
+
+
+class TestClassifyProposalItems(unittest.TestCase):
+    """제안 항목을 JSON 상태 파일 대신 담는 classify_proposal_items 테이블 메서드."""
+
+    def test_init_creates_classify_proposal_items_table(self):
+        cursor = FakeCursor(fetchone_rows=[{"cnt": 0}] * 14)
+        cm_mod, cm = build_cm(cursor)
+        assert cm is not None
+        assert any("CREATE TABLE IF NOT EXISTS classify_proposal_items" in str(sql) for sql, _ in cursor.executed)
+
+    def test_add_then_get_returns_items_in_insertion_order(self):
+        cursor = FakeCursor()
+        cm_mod, cm = build_cm(cursor)
+        conn = FakeConn(cursor)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield conn
+
+        cm._get_connection = _conn
+        items = [{"file_path": "a.epub", "target_category": "3_SF"}, {"file_path": "b.epub", "target_category": "3_SF"}]
+        cm.add_classify_proposal_items(items, "0_inbox")
+
+        assert conn.committed is True
+        assert len(cursor.executed_many) == 1
+        sql, rows = cursor.executed_many[0]
+        assert "INSERT INTO classify_proposal_items" in sql
+        assert rows == [
+            ("book", "0_inbox", "a.epub", json.dumps(items[0], ensure_ascii=False)),
+            ("book", "0_inbox", "b.epub", json.dumps(items[1], ensure_ascii=False)),
+        ]
+
+        cursor_get = FakeCursor(rows=[{"payload": json.dumps(items[0], ensure_ascii=False), "apply_status": "pending", "apply_error": None}, {"payload": json.dumps(items[1], ensure_ascii=False), "apply_status": "pending", "apply_error": None}])
+
+        @contextlib.contextmanager
+        def _conn_get():
+            yield FakeConn(cursor_get)
+
+        cm._get_connection = _conn_get
+        fetched = cm.get_classify_proposal_items()
+        assert [i["file_path"] for i in fetched] == ["a.epub", "b.epub"]
+        assert any("ORDER BY id ASC" in str(sql) for sql, _ in cursor_get.executed)
+
+    def test_add_empty_items_is_noop(self):
+        cursor = FakeCursor()
+        cm_mod, cm = build_cm(cursor)
+        conn = FakeConn(cursor)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield conn
+
+        cm._get_connection = _conn
+        cm.add_classify_proposal_items([], "0_inbox")
+        assert cursor.executed_many == []
+        assert conn.committed is False
+
+    def test_clear_scopes_delete_to_given_content_type(self):
+        cursor = FakeCursor()
+        cm_mod, cm = build_cm(cursor)
+        conn = FakeConn(cursor)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield conn
+
+        cm._get_connection = _conn
+        cm.clear_classify_proposal_items(content_type="comic")
+
+        assert conn.committed is True
+        sql, params = cursor.executed[-1]
+        assert "DELETE FROM classify_proposal_items WHERE content_type = %s" in sql
+        assert params == ("comic",)
+
+    def test_clear_only_removes_matching_content_type(self):
+        """다른 content_type의 행은 clear 뒤에도 남아 있어야 한다."""
+        cm_mod, cm = build_cm(FakeCursor())
+        store = [("book", "0_inbox", "a.epub", "{}"), ("comic", "0_inbox", "b.epub", "{}")]
+        cursor = _ClassifyItemsFakeCursor(store)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield _ClassifyItemsFakeConn(cursor)
+
+        cm._get_connection = _conn
+        cm.clear_classify_proposal_items(content_type="book")
+
+        assert [row[0] for row in store] == ["comic"]
+
+    def test_add_across_multiple_calls_then_get_returns_all_in_order_no_tail_dropped(self):
+        """100건 단위로 나눠 add를 여러 번 불러도(100+100+50), get은 250건 전체를
+        순서대로 돌려준다. 마지막 잔여분(꼬리)이 누락되면 관리자가 목록 끝의 책들을
+        못 보고 승인하게 되므로, 이 테일 플러시를 DB 계층에서 직접 확인한다.
+        """
+        cm_mod, cm = build_cm(FakeCursor())
+        store: list[tuple] = []
+        cursor = _ClassifyItemsFakeCursor(store)
+
+        @contextlib.contextmanager
+        def _conn():
+            yield _ClassifyItemsFakeConn(cursor)
+
+        cm._get_connection = _conn
+        cm.add_classify_proposal_items([{"file_path": f"{i}.epub"} for i in range(0, 100)], "0_inbox")
+        cm.add_classify_proposal_items([{"file_path": f"{i}.epub"} for i in range(100, 200)], "0_inbox")
+        cm.add_classify_proposal_items([{"file_path": f"{i}.epub"} for i in range(200, 250)], "0_inbox")
+
+        items = cm.get_classify_proposal_items()
+        assert len(items) == 250
+        assert [item["file_path"] for item in items] == [f"{i}.epub" for i in range(250)]
