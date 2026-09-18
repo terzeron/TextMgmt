@@ -1544,6 +1544,38 @@ class BookManager:
         candidates = self._build_candidates(target, method, model_category, bookstore_candidates, model_candidates)
         return {"target_category": target, "grade": grade, "confidence": confidence, "source": method, "matched_keywords": matched_keywords, "model_category": model_category, "reason": reason, "candidates": candidates}
 
+    @classmethod
+    def fill_missing_book_ids(cls, items: list[dict[str, Any]], path_prefix: Path) -> list[dict[str, Any]]:
+        """book_id 가 없는 제안 항목에 inode 를 채운다.
+
+        book_id 는 제안을 만들 때 payload 에 싣지만, 그 전에 만든 제안에는 없다.
+        없으면 표의 편집·삭제 버튼이 아예 안 그려져 옛 제안을 다시 만들어야 한다.
+        읽을 때 채워서 그럴 필요를 없앤다. 이미 있는 항목은 stat 하지 않는다.
+
+        인스턴스 상태를 안 쓰므로 classmethod 로 둔다 — 조회 경로에서 매니저 인스턴스에
+        메서드를 하나 더 매달지 않아도 된다.
+        """
+        for item in items:
+            if item.get("book_id") is not None:
+                continue
+            rel_path = item.get("file_path")
+            if not rel_path:
+                continue
+            item["book_id"] = cls._book_id_for_path(path_prefix / rel_path)
+        return items
+
+    @staticmethod
+    def _book_id_for_path(file_path: Path) -> int | None:
+        """편집 화면으로 보낼 book_id. 이 저장소에서 book_id 는 파일의 inode 번호다.
+
+        ES 를 거치지 않고 stat 한 번으로 얻는다. 제안을 만드는 동안 파일이 사라질 수
+        있으므로 실패하면 None 을 준다 — 링크만 안 보이고 제안 자체는 계속 만든다.
+        """
+        try:
+            return file_path.stat().st_ino
+        except OSError:
+            return None
+
     async def propose_category_changes(
         self, category: str, mappings: dict[str, list[str]] | None = None, *, content_type: str = "book", use_bookstore: bool = True, use_content_meta: bool = True, delay: float = 1.2, on_progress: Callable[[dict[str, Any]], None | Awaitable[None]] | None = None
     ) -> tuple[dict[str, Any], str | None]:
@@ -1584,7 +1616,7 @@ class BookManager:
                 rel_path = str(file_path.relative_to(self.path_prefix))
             except ValueError:
                 continue
-            placeholders.append({"file_path": rel_path, "title": file_path.stem, "current_category": category, "target_category": None, "grade": None, "confidence": None, "source": None, "matched_keywords": [], "model_category": None, "reason": "", "candidates": [], "apply_status": "pending", "apply_error": None})
+            placeholders.append({"file_path": rel_path, "book_id": self._book_id_for_path(file_path), "title": file_path.stem, "current_category": category, "target_category": None, "grade": None, "confidence": None, "source": None, "matched_keywords": [], "model_category": None, "reason": "", "candidates": [], "apply_status": "pending", "apply_error": None})
         # 한 번에 다 보내면 카테고리가 클 때(최대 79,589권) 패킷 하나가 지나치게 커진다.
         for start in range(0, len(placeholders), self.PROPOSAL_PLACEHOLDER_CHUNK):
             await _report({"new_items": placeholders[start : start + self.PROPOSAL_PLACEHOLDER_CHUNK]})
@@ -1602,7 +1634,7 @@ class BookManager:
                 LOGGER.error("분류 제안 실패: %s — %s", rel_path, e)
                 result["failures"].append({"file_path": rel_path, "error": "분류 제안에 실패했습니다"})
                 continue
-            new_item = {"file_path": rel_path, "title": file_path.stem, "current_category": category, "apply_status": "pending", "apply_error": None, **proposal}
+            new_item = {"file_path": rel_path, "book_id": self._book_id_for_path(file_path), "title": file_path.stem, "current_category": category, "apply_status": "pending", "apply_error": None, **proposal}
             result["items"].append(new_item)
             # 진행 보고에는 이번 틱에서 분류가 끝난 항목(updated_items)만 싣는다. 누적
             # 목록을 매번 통째로 실으면 책 한 권 보고할 때마다 지금까지의 전체 목록을 다시

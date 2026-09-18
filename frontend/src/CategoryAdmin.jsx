@@ -443,6 +443,8 @@ export default function CategoryAdmin({
   // 직접 고른 것인지(manual)를 함께 담아, 둘이 동시에 켜지는 상태를 만들지 않는다.
   const [proposalChoices, setProposalChoices] = useState({});
   const [proposalPolling, setProposalPolling] = useState(false);
+  // 삭제 중인 행의 file_path. 한 건씩만 돌리고 그동안 다른 행의 버튼도 잠근다.
+  const [deletingProposalPath, setDeletingProposalPath] = useState(null);
   const [proposalStarting, setProposalStarting] = useState(false);
   const [showProposalApplyModal, setShowProposalApplyModal] = useState(false);
   const [showProposalClearModal, setShowProposalClearModal] = useState(false);
@@ -464,6 +466,8 @@ export default function CategoryAdmin({
   const [newCategoryName, setNewCategoryName] = useState("");
 
   const apiPrefix = contentType === "comic" ? "/comics" : "";
+  // 제안 표의 편집 링크가 쓸 경로. apiPrefix 와 달리 화면 라우트라 따로 둔다.
+  const editBasePath = contentType === "comic" ? "/comics-edit" : "/book-edit";
   const contentLabel = contentType === "comic" ? "만화" : "책";
   const isRootCategory = selectedCategory === "_root";
   const mismatchReloadTargetCategory =
@@ -1343,6 +1347,71 @@ export default function CategoryAdmin({
     handleStartClassifyProposal();
   }, [handleStartClassifyProposal]);
 
+  // 표에서 책을 지운다. 파일과 ES 문서를 지우는 일(/books/{id})과 제안 행을 없애는
+  // 일(/classify-proposal/item)은 각각 다른 자원이라 두 번 부른다. 앞이 성공해야
+  // 뒤를 부른다 — 파일이 남았는데 행만 사라지면 표에서 다시 손댈 길이 없어진다.
+  const handleDeleteProposalBook = useCallback(
+    (item) => {
+      if (deletingProposalPath !== null) return;
+      const label = item.title || item.file_path;
+      if (!window.confirm(`"${label}"을(를) 삭제하시겠습니까?`)) return;
+
+      setDeletingProposalPath(item.file_path);
+      const dropRow = () => {
+        setProposal((prev) =>
+          prev
+            ? {
+                ...prev,
+                items: (prev.items || []).filter(
+                  (row) => row.file_path !== item.file_path,
+                ),
+              }
+            : prev,
+        );
+        // 지운 책의 선택이 남으면 승인 대상에 그대로 실린다.
+        setProposalChoices((prev) => {
+          const next = { ...prev };
+          delete next[item.file_path];
+          return next;
+        });
+      };
+
+      jsonDeleteReq(
+        `${apiPrefix}/books/${item.book_id}`,
+        null,
+        () => {
+          jsonDeleteReq(
+            `${apiPrefix}/categories/classify-proposal/item?file_path=${encodeURIComponent(item.file_path)}`,
+            null,
+            () => {
+              dropRow();
+              setDeletingProposalPath(null);
+            },
+            (error) => {
+              // 책은 지워졌다. 행만 남은 상태를 알리고 표에서도 치운다 —
+              // 다음 조회에서 없는 파일을 가리키는 행으로 되살아난다.
+              dropRow();
+              setDeletingProposalPath(null);
+              setMessage(
+                formatErrorMessage(
+                  error,
+                  "책은 지웠지만 제안 목록에서 지우지 못했습니다.",
+                ),
+              );
+              setTimeout(() => setMessage(""), 5000);
+            },
+          );
+        },
+        (error) => {
+          setDeletingProposalPath(null);
+          setMessage(formatErrorMessage(error, "책 삭제에 실패했습니다."));
+          setTimeout(() => setMessage(""), 5000);
+        },
+      );
+    },
+    [apiPrefix, deletingProposalPath],
+  );
+
   // 승인 대상: 선택된 행 중에서도 목적지가 있는 행만 최종적으로 담는다.
   // isSelectable 필터는 2차 방어다 — 표 컴포넌트가 목적지를 지울 때 선택에서
   // 빼주지만, 제출 직전에 한 번 더 걸러 목적지 없는 항목이 승인 요청에
@@ -2142,6 +2211,9 @@ export default function CategoryAdmin({
                       categories={topLevelCategoryNames}
                       choices={proposalChoices}
                       onChoicesChange={setProposalChoices}
+                      editBasePath={editBasePath}
+                      onDeleteBook={handleDeleteProposalBook}
+                      deletingFilePath={deletingProposalPath}
                     />
                     <div className="d-flex gap-2 mt-2">
                       <Button

@@ -722,6 +722,19 @@ class CategoryMapping:
             conn.commit()
         return deleted_count
 
+    def delete_classify_proposal_item(self, file_path: str, content_type: str = "book") -> int:
+        """제안 항목 한 건을 지우고, 지운 개수를 돌려준다.
+
+        표에서 책을 지우면 그 행도 같이 없애야 한다. 남겨 두면 다음 조회에서 이미
+        없는 파일을 가리키는 행이 되살아난다.
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM classify_proposal_items WHERE content_type = %s AND file_path = %s", (content_type, file_path))
+                deleted_count = cursor.rowcount
+            conn.commit()
+        return deleted_count
+
     # ── 분류 제안 작업 상태 ──────────────────────────────────────────────────
     #
     # 이 상태는 원래 corpus 디렉토리의 JSON 파일 하나였다. 파일로는 두 가지가 안 된다.

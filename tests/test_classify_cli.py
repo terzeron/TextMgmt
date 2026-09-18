@@ -172,3 +172,265 @@ def test_bookstore_policy_saves_rows_for_rebanding(model_file, monkeypatch, tmp_
     saved = json.loads(out.read_text(encoding="utf-8"))
     assert len(saved["rows"]) == 10
     assert {"confidence", "model_ok", "store_ok", "store_answered"} <= set(saved["rows"][0])
+
+
+# ---------------------------------------------------------------------------
+# 입력 검증
+# ---------------------------------------------------------------------------
+
+
+def test_load_model_stops_with_a_next_step(tmp_path):
+    from utils.classify_cli import _load_model
+
+    with pytest.raises(SystemExit) as e:
+        _load_model(tmp_path / "없는모델.joblib")
+    # 다음에 무엇을 해야 하는지 알려야 한다.
+    assert "collect" in str(e.value) and "train" in str(e.value)
+
+
+def test_load_corpus_stops_when_missing_or_empty(tmp_path):
+    from utils.classify_cli import _load_corpus
+
+    with pytest.raises(SystemExit) as e:
+        _load_corpus(tmp_path / "없는코퍼스.jsonl")
+    assert "collect" in str(e.value)
+
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        _load_corpus(empty)
+    assert "비었다" in str(e.value)
+
+
+def test_publisher_cache_path_sits_next_to_the_corpus(tmp_path):
+    from utils.classify_cli import _publisher_cache_path
+
+    assert _publisher_cache_path(tmp_path / "corpus.jsonl").name == "corpus.jsonl.publisher.json"
+
+
+def test_es_manager_passes_the_index_name(monkeypatch):
+    import backend.es_manager as es_mod
+    from utils.classify_cli import _es_manager
+
+    seen = {}
+    monkeypatch.setattr(es_mod, "ESManager", lambda index_name="": seen.setdefault("index", index_name))
+
+    _es_manager("books_v2")
+    assert seen["index"] == "books_v2"
+    seen.clear()
+    _es_manager()
+    # 인덱스를 안 주면 빈 문자열을 넘겨 ESManager 가 환경변수를 쓰게 한다.
+    assert seen["index"] == ""
+
+
+def test_overrides_only_carries_values_given_on_the_cli():
+    import argparse
+
+    from utils.classify_cli import _overrides
+
+    empty = argparse.Namespace()
+    assert _overrides(empty) == {}
+
+    args = argparse.Namespace(min_per_category=7, C=2.0, n_jobs=1, max_iter=500, holdout=0.3, class_weight="balanced", body_max_features=100, body_min_df=2, char_ngram=1)
+    over = _overrides(args)
+    assert over["corpus"]["min_per_category"] == 7
+    assert over["model"]["class_weight"] == "balanced"
+    assert over["fields"]["body_char"]["enabled"] is True
+    assert over["holdout"] == 0.3
+
+    # 현재 동작을 그대로 고정한다: `--class-weight none` 은 덮어쓰기를 만들지 않는다.
+    # put() 이 None 값을 건너뛰기 때문이다. 결과적으로 config.json 의 값이 그대로 남는다.
+    assert _overrides(argparse.Namespace(class_weight="none")) == {}
+    assert _overrides(argparse.Namespace(char_ngram=0))["fields"]["body_char"]["enabled"] is False
+
+
+# ---------------------------------------------------------------------------
+# collect / train / classify
+# ---------------------------------------------------------------------------
+
+
+def test_collect_writes_corpus_and_prints_top_categories(tmp_path, monkeypatch, capsys):
+    import utils.classify_cli as cli
+
+    docs = make_docs()
+
+    def fake_collect(es, out_path, **kwargs):
+        write_jsonl(docs, out_path)
+        per = {}
+        for d in docs:
+            per[d["cat"]] = per.get(d["cat"], 0) + 1
+        return {"kept": len(docs), "skipped": 3, "categories": len(per), "per_category": per}
+
+    monkeypatch.setattr("backend.classifier.corpus.collect", fake_collect)
+    monkeypatch.setattr(cli, "_es_manager", lambda index=None: object())
+
+    out = tmp_path / "corpus.jsonl"
+    assert main(["collect", "--out", str(out)]) == 0
+
+    printed = capsys.readouterr().out
+    assert f"수집 {len(docs):,}건" in printed
+    assert "상위 10개 카테고리" in printed
+    assert out.exists()
+
+
+def test_collect_with_publisher_backfills_and_rewrites(tmp_path, monkeypatch, capsys):
+    import utils.classify_cli as cli
+
+    docs = make_docs()
+
+    def fake_collect(es, out_path, **kwargs):
+        write_jsonl(docs, out_path)
+        return {"kept": len(docs), "skipped": 0, "categories": 1, "per_category": {"3_무협": len(docs)}}
+
+    def fake_attach(docs_arg, cache_path, library_root, workers=2):
+        for d in docs_arg:
+            d["publisher"] = "민음사"
+        return {"read": 2, "cached": 2, "with_publisher": len(docs_arg)}
+
+    monkeypatch.setattr("backend.classifier.corpus.collect", fake_collect)
+    monkeypatch.setattr("backend.classifier.corpus.attach_publishers", fake_attach)
+    monkeypatch.setattr(cli, "_es_manager", lambda index=None: object())
+
+    out = tmp_path / "corpus.jsonl"
+    assert main(["collect", "--out", str(out), "--with-publisher", "--library-root", str(tmp_path)]) == 0
+
+    assert "publisher: 새로 읽음 2건" in capsys.readouterr().out
+    from backend.classifier.corpus import read_jsonl
+
+    assert all(d["publisher"] == "민음사" for d in read_jsonl(out))
+
+
+def test_train_writes_a_model_and_reports_blocks(tmp_path, monkeypatch, capsys):
+    import utils.classify_cli as cli
+
+    corpus = tmp_path / "corpus.jsonl"
+    write_jsonl(make_docs(), corpus)
+    monkeypatch.setattr(cli, "load_config", lambda path=None: TEST_CONFIG)
+
+    out = tmp_path / "model.joblib"
+    assert main(["train", "--corpus", str(corpus), "--out", str(out)]) == 0
+
+    printed = capsys.readouterr().out
+    assert "모델 저장" in printed
+    assert out.exists()
+
+
+def test_train_warns_when_corpus_has_no_publisher(tmp_path, monkeypatch, caplog):
+    import utils.classify_cli as cli
+
+    corpus = tmp_path / "corpus.jsonl"
+    docs = [{**d, "publisher": ""} for d in make_docs()]
+    write_jsonl(docs, corpus)
+    monkeypatch.setattr(cli, "load_config", lambda path=None: TEST_CONFIG)
+
+    with caplog.at_level("WARNING", logger="classify_cli"):
+        main(["train", "--corpus", str(corpus), "--out", str(tmp_path / "m.joblib")])
+
+    # publisher 가 없으면 전집 판정이 나빠진다. 조용히 넘어가면 안 된다.
+    assert any("publisher" in r.getMessage() for r in caplog.records)
+
+
+def test_classify_prints_the_verdict_and_missing_files(model_file, tmp_path, capsys):
+    path, _ = model_file
+    book = tmp_path / "무림맹_장문인.txt"
+    book.write_text(" ".join([VOCAB["3_무협"]] * 3), encoding="utf-8")
+    missing = tmp_path / "없는파일.txt"
+
+    assert main(["classify", str(book), str(missing), "--model", str(path), "--no-es", "--min-confidence", "0.0"]) == 0
+
+    printed = capsys.readouterr().out
+    assert "특징 출처: 파일" in printed
+    assert "판정:" in printed
+    # 한 건이 없어도 나머지는 계속 판정한다.
+    assert "없는파일.txt: 파일이 없다" in printed
+
+
+def test_reclassify_apply_moves_files(model_file, tmp_path, capsys):
+    path, _ = model_file
+    library = tmp_path / "library"
+    source = library / "0_inbox"
+    source.mkdir(parents=True)
+    book = source / "무림맹_장문인.txt"
+    book.write_text(" ".join([VOCAB["3_무협"]] * 3), encoding="utf-8")
+
+    assert main(["reclassify", "0_inbox", "--model", str(path), "--library-root", str(library), "--no-es", "--min-confidence", "0.0", "--apply"]) == 0
+
+    assert not book.exists()
+    assert "실제로 파일을 옮긴다" in capsys.readouterr().out
+
+
+def test_reclassify_skips_when_destination_already_has_the_file(model_file, tmp_path, capsys):
+    path, _ = model_file
+    library = tmp_path / "library"
+    source = library / "0_inbox"
+    source.mkdir(parents=True)
+    name = "무림맹_장문인.txt"
+    (source / name).write_text(" ".join([VOCAB["3_무협"]] * 3), encoding="utf-8")
+    dest_dir = library / "3_무협"
+    dest_dir.mkdir(parents=True)
+    (dest_dir / name).write_text("이미 있는 파일", encoding="utf-8")
+
+    assert main(["reclassify", "0_inbox", "--model", str(path), "--library-root", str(library), "--no-es", "--min-confidence", "0.0", "--apply"]) == 0
+
+    # 덮어쓰지 않는다. 원본도 그대로 둔다.
+    assert (source / name).exists()
+    assert "옮김 0건" in capsys.readouterr().out
+
+
+def test_reclassify_stops_when_directory_is_missing(model_file, tmp_path):
+    path, _ = model_file
+    with pytest.raises(SystemExit) as e:
+        main(["reclassify", "없는카테고리", "--model", str(path), "--library-root", str(tmp_path), "--no-es"])
+    assert "디렉토리가 없다" in str(e.value)
+
+
+# ---------------------------------------------------------------------------
+# reband
+# ---------------------------------------------------------------------------
+
+
+def _policy_rows():
+    rows = []
+    for i in range(20):
+        conf = i / 20
+        rows.append({"confidence": conf, "model_ok": conf > 0.5, "store_ok": True, "store_answered": True})
+    return rows
+
+
+def test_reband_rebuilds_bands_without_querying_bookstores(tmp_path, capsys):
+    saved = tmp_path / "policy.json"
+    saved.write_text(json.dumps({"rows": _policy_rows(), "sample_from": "refused"}, ensure_ascii=False), encoding="utf-8")
+
+    assert main(["bookstore-policy", "--reband", str(saved), "--bands", "4"]) == 0
+
+    out = json.loads(saved.read_text(encoding="utf-8"))
+    assert out["sample_from"] == "refused"
+    assert len(out["bands"]) >= 1
+    # 경계는 실제로 잰 범위를 넘으면 안 된다.
+    assert out["bookstore_override_below"] <= out["measured_max_confidence"]
+    assert "서점으로 갈아탈 확신도 상한" in capsys.readouterr().out
+
+
+def test_reband_writes_to_a_separate_file_when_asked(tmp_path):
+    saved = tmp_path / "policy.json"
+    saved.write_text(json.dumps({"rows": _policy_rows()}, ensure_ascii=False), encoding="utf-8")
+    dest = tmp_path / "reband.json"
+
+    assert main(["bookstore-policy", "--reband", str(saved), "--bands", "3", "--out", str(dest)]) == 0
+    assert dest.exists()
+    assert json.loads(dest.read_text(encoding="utf-8"))["sample_from"] == "unknown"
+
+
+def test_reband_stops_when_the_file_is_missing(tmp_path):
+    with pytest.raises(SystemExit) as e:
+        main(["bookstore-policy", "--reband", str(tmp_path / "없는파일.json")])
+    assert "측정 결과 파일이 없다" in str(e.value)
+
+
+def test_reband_stops_when_there_are_no_rows(tmp_path):
+    saved = tmp_path / "policy.json"
+    saved.write_text(json.dumps({"bands": []}), encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        main(["bookstore-policy", "--reband", str(saved)])
+    # 서점 조회부터 다시 해야 한다는 것을 알려야 한다.
+    assert "서점 조회부터" in str(e.value)

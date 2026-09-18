@@ -788,6 +788,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         """
         status = await _read_classify_proposal()
         items = await asyncio.to_thread(category_mapping.get_classify_proposal_items, content_type=content_type)
+        # book_id 를 payload 에 싣기 전에 만든 제안에는 그 값이 없다. 표의 편집·삭제
+        # 버튼이 book_id 로만 동작하므로, 다시 제안하지 않아도 되도록 여기서 채운다.
+        items = await asyncio.to_thread(BookManager.fill_missing_book_ids, items, manager.path_prefix)
         return {"status": "success", "result": {**status, "items": items}}
 
     @router.post("/categories/classify-proposal/apply", dependencies=admin_dep)
@@ -839,6 +842,19 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         await asyncio.to_thread(category_mapping.clear_classify_proposal_items, content_type=content_type)
         await _replace_classify_proposal({"status": "idle", "content_type": content_type})
         return {"status": "success", "result": {"cleared": True}}
+
+    @router.delete("/categories/classify-proposal/item", dependencies=admin_dep)
+    async def delete_classify_proposal_item_route(file_path: str) -> dict[str, Any]:
+        """제안 항목 한 건만 지운다. 표에서 책을 지운 뒤 그 행을 없애는 데 쓴다.
+
+        파일은 건드리지 않는다 — 책 삭제는 DELETE /books/{book_id} 가 한다.
+        도는 중에 지우면 그 작업이 방금 찍은 행을 밑에서 없앨 수 있어 거절한다.
+        """
+        current = await _read_classify_proposal()
+        if current.get("status") in ("running", "applying"):
+            return {"status": "failure", "error": "작업이 진행 중입니다."}
+        deleted_count = await asyncio.to_thread(category_mapping.delete_classify_proposal_item, file_path, content_type=content_type)
+        return {"status": "success", "result": {"deleted_count": deleted_count}}
 
     @router.delete("/categories/classify-proposal/applied", dependencies=admin_dep)
     async def delete_applied_classify_proposal_items_route() -> dict[str, Any]:

@@ -3,7 +3,9 @@
    컴포넌트와 co-located. HMR 힌트일 뿐 런타임 영향 없음. */
 import { useEffect, useMemo, useRef, useState } from "react";
 import PropTypes from "prop-types";
-import { Table, Form, Badge } from "react-bootstrap";
+import { Table, Form, Badge, Button } from "react-bootstrap";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faPencil, faTrash, faSpinner } from "@fortawesome/free-solid-svg-icons";
 
 // 한 행의 목적지는 하나다. 그래서 선택 상태를 "체크된 행 집합 + 목적지 맵" 두 개로
 // 나누지 않고, 행마다 {어디서 왔는가, 어느 카테고리인가} 하나만 들고 있는다.
@@ -31,7 +33,12 @@ export function isSelectable(item, choices) {
 
 export function isCandidateChecked(item, choices, index) {
   const choice = choices[item.file_path];
-  return choice?.source === "candidate" && choice.index === index;
+  if (choice?.source !== "candidate" || choice.index !== index) return false;
+  // 그 자리에 후보가 실제로 있어야 "체크됨"이다. 선택은 file_path로만 기억하는데
+  // 후보 목록은 제안이 갱신되면 바뀐다. 후보가 사라진 뒤에도 남은 옛 선택을
+  // 체크로 세면, 추천 칸이 "-"라 체크박스조차 없는 행이 그 열의 필터에 걸려
+  // 결과에 섞인다 — 화면에서 보이는 것과 필터가 세는 것이 어긋난다.
+  return Boolean((item.candidates || [])[index]?.category);
 }
 
 // 직접 선택 셀렉트박스가 보여줄 값. 추천을 체크한 행은 비어 있어야 한다 —
@@ -77,6 +84,68 @@ function ApplyStatusBadge({ item }) {
 
 ApplyStatusBadge.propTypes = {
   item: PropTypes.object.isRequired,
+};
+
+// 이동 상태 칸의 편집 링크. 제안을 보다가 "이 책이 왜 여기로 가지?" 싶을 때
+// 표를 떠나지 않고 원본을 확인할 수 있어야 한다 — 그래서 새 창으로 연다.
+// book_id 는 파일의 inode 번호다. 옛 제안 레코드에는 없을 수 있어 그때는 링크를
+// 아예 안 그린다(깨진 링크를 보여 주는 것보다 없는 편이 낫다).
+function EditLink({ item, editBasePath }) {
+  if (item.book_id == null) return null;
+  const label = item.title || item.file_path;
+  const category = item.current_category || "";
+  return (
+    <Button
+      variant="outline-warning"
+      size="sm"
+      className="ms-2"
+      aria-label={`${label} 편집`}
+      title="편집"
+      onClick={() =>
+        window.open(
+          `${editBasePath}/${item.book_id}?category=${encodeURIComponent(category)}`,
+          "_blank",
+          "noopener",
+        )
+      }
+    >
+      <FontAwesomeIcon icon={faPencil} />
+    </Button>
+  );
+}
+
+EditLink.propTypes = {
+  item: PropTypes.object.isRequired,
+  editBasePath: PropTypes.string.isRequired,
+};
+
+// 이동 상태 칸의 삭제 버튼. 옮길 가치가 없는 책을 표에서 바로 치울 수 있게 한다.
+// 되돌릴 수 없는 작업이라 confirm 을 거치고, 도는 동안에는 스피너로 바꾼다.
+// 다른 행의 버튼까지 함께 잠가 두 건이 겹쳐 도는 것을 막는다.
+function DeleteButton({ item, deleting, busy, onDelete }) {
+  if (item.book_id == null) return null;
+  const label = item.title || item.file_path;
+  return (
+    <Button
+      variant="outline-danger"
+      size="sm"
+      className="ms-2"
+      disabled={busy}
+      aria-busy={deleting}
+      aria-label={`${label} 삭제`}
+      title={deleting ? "삭제 중..." : "삭제"}
+      onClick={() => onDelete(item)}
+    >
+      <FontAwesomeIcon icon={deleting ? faSpinner : faTrash} spin={deleting} />
+    </Button>
+  );
+}
+
+DeleteButton.propTypes = {
+  item: PropTypes.object.isRequired,
+  deleting: PropTypes.bool.isRequired,
+  busy: PropTypes.bool.isRequired,
+  onDelete: PropTypes.func.isRequired,
 };
 
 // ── 정렬 ──
@@ -154,6 +223,9 @@ export function filterItems(items, choices, filters) {
 
 // 다음 필터 상태. 체크박스를 누를 때마다 전체 → 체크된 행만 → 체크 안 된 행만
 // 순으로 돌고 전체로 돌아온다.
+// 아무 열도 거르지 않는 초기 상태.
+const EMPTY_FILTERS = { candidate0: null, candidate1: null, manual: null };
+
 export function nextFilterValue(value) {
   if (value == null) return true;
   if (value === true) return false;
@@ -251,6 +323,9 @@ export default function ClassifyProposalTable({
   categories,
   choices,
   onChoicesChange,
+  editBasePath = "/book-edit",
+  onDeleteBook,
+  deletingFilePath = null,
 }) {
   // /categories 응답은 문서 수 내림차순이라 그대로 쓰면 드롭다운이 "3_판타지,
   // 3_무협, 3_여성향..." 순으로 뜬다. 2,000개가 넘는 목록에서 이름으로 찾으려면
@@ -291,11 +366,7 @@ export default function ClassifyProposalTable({
   // 곧 분류가 끝난 순서라, 아무 열도 안 누른 상태에서 순서를 바꾸면 방금 채워진
   // 행이 어디로 갔는지 알 수 없다.
   const [sort, setSort] = useState({ key: null, dir: "asc" });
-  const [filters, setFilters] = useState({
-    candidate0: null,
-    candidate1: null,
-    manual: null,
-  });
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
 
   const toggleSort = (key) => {
     setSort((prev) =>
@@ -305,8 +376,14 @@ export default function ClassifyProposalTable({
     );
   };
 
+  // 필터는 한 번에 하나만 건다. 다른 열을 누르면 나머지는 초기 상태로 돌아간다.
+  // 세 열을 겹쳐 걸 수 있게 두면, 한 행의 목적지는 하나뿐이라 대부분의 조합이
+  // 빈 표가 된다 — 거르려다 아무것도 못 보는 상태에 쉽게 빠진다.
   const cycleFilter = (key) => {
-    setFilters((prev) => ({ ...prev, [key]: nextFilterValue(prev[key]) }));
+    setFilters((prev) => ({
+      ...EMPTY_FILTERS,
+      [key]: nextFilterValue(prev[key]),
+    }));
   };
 
   const visibleItems = useMemo(
@@ -504,7 +581,18 @@ export default function ClassifyProposalTable({
                   )}
               </td>
               <td>
-                <ApplyStatusBadge item={item} />
+                <div className="d-flex align-items-center">
+                  <ApplyStatusBadge item={item} />
+                  <EditLink item={item} editBasePath={editBasePath} />
+                  {onDeleteBook && (
+                    <DeleteButton
+                      item={item}
+                      deleting={deletingFilePath === item.file_path}
+                      busy={deletingFilePath !== null}
+                      onDelete={onDeleteBook}
+                    />
+                  )}
+                </div>
               </td>
             </tr>
           );
@@ -519,4 +607,7 @@ ClassifyProposalTable.propTypes = {
   categories: PropTypes.array.isRequired,
   choices: PropTypes.object.isRequired,
   onChoicesChange: PropTypes.func.isRequired,
+  editBasePath: PropTypes.string,
+  onDeleteBook: PropTypes.func,
+  deletingFilePath: PropTypes.string,
 };

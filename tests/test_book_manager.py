@@ -2012,6 +2012,62 @@ def test_propose_then_apply_moves_file_and_reindexes(tmp_path: Path, monkeypatch
     assert indexed_doc["file_path"] == "2_science/쉬운 과학 이야기.txt"
 
 
+def test_propose_category_changes_carries_book_id(tmp_path: Path):
+    """제안 항목에 book_id(파일 inode)를 싣는다.
+
+    편집 화면은 /book-edit/{book_id} 로만 열 수 있다. 제안 표에서 원본을 확인하려면
+    행마다 book_id 가 있어야 한다 — file_path 만으로는 링크를 만들 수 없다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "0_inbox"
+    source.mkdir(parents=True, exist_ok=True)
+    book = source / "어떤 책.txt"
+    book.write_text("본문", encoding="utf-8")
+
+    progress: list[dict] = []
+    result, err = asyncio_runner(manager.propose_category_changes("0_inbox", {}, use_bookstore=False, use_content_meta=False, on_progress=progress.append))
+    assert err is None
+
+    expected = book.stat().st_ino
+    assert [item["book_id"] for item in result["items"]] == [expected]
+    # 분류가 끝나기 전에 먼저 깔리는 자리표시자 행에도 실어야, 진행 중에도 링크가 보인다.
+    placeholders = [item for report in progress for item in report.get("new_items", [])]
+    assert [item["book_id"] for item in placeholders] == [expected]
+
+
+def test_fill_missing_book_ids(tmp_path: Path):
+    """book_id 없이 저장된 옛 제안 항목은 읽을 때 채운다.
+
+    없으면 표의 편집·삭제 버튼이 안 그려져, 옛 제안을 쓰려면 통째로 다시 만들어야 한다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    (tmp_path / "0_inbox").mkdir(parents=True, exist_ok=True)
+    book = tmp_path / "0_inbox" / "있는 책.txt"
+    book.write_text("본문", encoding="utf-8")
+
+    items = [
+        {"file_path": "0_inbox/있는 책.txt"},
+        {"file_path": "0_inbox/없는 책.txt"},
+        {"file_path": "0_inbox/이미 있는 값.txt", "book_id": 123},
+        {"file_path": ""},
+    ]
+    filled = manager.fill_missing_book_ids(items, manager.path_prefix)
+
+    assert filled[0]["book_id"] == book.stat().st_ino
+    # 파일이 사라졌어도 그 행만 링크가 없을 뿐, 나머지는 그대로 쓴다.
+    assert filled[1]["book_id"] is None
+    # 이미 값이 있으면 stat 하지 않고 그대로 둔다.
+    assert filled[2]["book_id"] == 123
+    assert "book_id" not in filled[3]
+
+
+def test_book_id_for_path_returns_none_when_file_is_gone(tmp_path: Path):
+    """제안을 만드는 동안 파일이 사라져도 제안 자체는 계속 만든다."""
+    from backend.book_manager import BookManager
+
+    assert BookManager._book_id_for_path(tmp_path / "없는파일.txt") is None
+
+
 def test_propose_category_changes_rejects_invalid_category(tmp_path: Path):
     """propose_category_changes도 auto_classify_category와 같은 카테고리 이름 검증을 한다."""
     manager = make_manager(tmp_path, DummyES())

@@ -1308,6 +1308,49 @@ describe("CategoryAdmin", () => {
     expect(screen.getAllByText("orphan.txt").length).toBeGreaterThan(0);
   });
 
+  it("파일 삭제 모달은 닫기(X)로도 닫힌다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByRole("tree")).toBeTruthy();
+    });
+
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches")
+        resolve(MISMATCH_RESPONSE_WITH_DATA);
+      else if (
+        url.startsWith("/category-mismatches/") &&
+        !url.startsWith("/category-mismatches/reload-status")
+      ) {
+        resolve({
+          es_only: [],
+          fs_only: [
+            { file_name: "orphan.txt", file_path: "1_fiction/orphan.txt" },
+          ],
+        });
+      } else if (url.startsWith("/category-mappings"))
+        resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByText("orphan.txt")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("orphan.txt"));
+
+    mockJsonPostReq.mockClear();
+    fireEvent.click(await screen.findByRole("button", { name: "파일 삭제" }));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "Close" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+  });
+
   it("파일 삭제 버튼 클릭 시 POST /category-mismatches/delete-file API를 호출한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
     render(<CategoryAdmin />);
@@ -4159,6 +4202,154 @@ describe("CategoryAdmin 분류 제안", () => {
     });
   }
 
+  const PROPOSAL_ITEM_WITH_ID = {
+    ...PROPOSAL_ITEM_CERTAIN,
+    file_path: "1_fiction/d.epub",
+    title: "지울 책",
+    book_id: 909,
+  };
+
+  async function renderReadyProposalWithDeletableItem() {
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 2,
+        processed_count: 2,
+        items: [PROPOSAL_ITEM_CERTAIN, PROPOSAL_ITEM_WITH_ID],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("지울 책")).toBeTruthy();
+    });
+  }
+
+  it("삭제를 취소하면 아무 요청도 나가지 않는다", async () => {
+    await renderReadyProposalWithDeletableItem();
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      mockJsonDeleteReq.mockClear();
+      fireEvent.click(screen.getByLabelText("지울 책 삭제"));
+      // 되돌릴 수 없는 작업이라 확인 전에는 파일을 건드리면 안 된다.
+      expect(mockJsonDeleteReq.mock.calls.map((c) => c[0])).toEqual([]);
+      expect(screen.getByText("지울 책")).toBeTruthy();
+    } finally {
+      window.confirm.mockRestore();
+    }
+  });
+
+  it("삭제를 확인하면 책과 제안 행을 지우고 표에서 없앤다", async () => {
+    await renderReadyProposalWithDeletableItem();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      mockJsonDeleteReq.mockClear();
+      mockJsonDeleteReq.mockImplementation((url, _payload, resolve) => resolve({}));
+      fireEvent.click(screen.getByLabelText("지울 책 삭제"));
+
+      await waitFor(() => {
+        expect(screen.queryByText("지울 책")).toBeNull();
+      });
+      const urls = mockJsonDeleteReq.mock.calls.map(([url]) => url);
+      // 파일·ES 문서를 지우는 일과 제안 행을 없애는 일은 다른 자원이라 두 번 부른다.
+      expect(urls[0]).toBe("/books/909");
+      expect(urls[1]).toBe(
+        "/categories/classify-proposal/item?file_path=1_fiction%2Fd.epub",
+      );
+      // 다른 행은 그대로 남는다.
+      expect(screen.getByText("확실한 책")).toBeTruthy();
+    } finally {
+      window.confirm.mockRestore();
+    }
+  });
+
+  it("책 삭제가 실패하면 행을 남기고 제안 행도 건드리지 않는다", async () => {
+    await renderReadyProposalWithDeletableItem();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      mockJsonDeleteReq.mockClear();
+      mockJsonDeleteReq.mockImplementation((url, _payload, _resolve, reject) =>
+        reject("서버 오류"),
+      );
+      fireEvent.click(screen.getByLabelText("지울 책 삭제"));
+
+      await waitFor(() => {
+        expect(screen.getByText("서버 오류")).toBeTruthy();
+      });
+      // 파일이 남았는데 행만 사라지면 표에서 다시 손댈 길이 없어진다.
+      expect(screen.getByText("지울 책")).toBeTruthy();
+      // 제안 행 삭제까지 가면 안 된다 — 파일이 남았는데 행만 사라진다.
+      expect(mockJsonDeleteReq.mock.calls).toHaveLength(1);
+    } finally {
+      window.confirm.mockRestore();
+    }
+  });
+
+  it("책은 지웠는데 제안 행 삭제가 실패하면 표에서는 치우고 알린다", async () => {
+    // 행을 남기면 다음 조회에서 없는 파일을 가리키는 행으로 되살아난다.
+    await renderReadyProposalWithDeletableItem();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      mockJsonDeleteReq.mockClear();
+      mockJsonDeleteReq.mockImplementation((url, _payload, resolve, reject) => {
+        if (url.startsWith("/books/")) resolve({});
+        else reject("행 삭제 실패");
+      });
+      fireEvent.click(screen.getByLabelText("지울 책 삭제"));
+
+      await waitFor(() => {
+        expect(screen.getByText("행 삭제 실패")).toBeTruthy();
+      });
+      expect(screen.queryByText("지울 책")).toBeNull();
+      expect(screen.getByText("확실한 책")).toBeTruthy();
+    } finally {
+      window.confirm.mockRestore();
+    }
+  });
+
+  it("삭제가 도는 동안 같은 버튼을 다시 눌러도 요청이 겹치지 않는다", async () => {
+    await renderReadyProposalWithDeletableItem();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      mockJsonDeleteReq.mockClear();
+      // 응답을 주지 않아 삭제가 도는 상태로 묶어 둔다.
+      mockJsonDeleteReq.mockImplementation(() => {});
+      const button = screen.getByLabelText("지울 책 삭제");
+      fireEvent.click(button);
+      fireEvent.click(button);
+
+      expect(mockJsonDeleteReq.mock.calls).toHaveLength(1);
+    } finally {
+      window.confirm.mockRestore();
+    }
+  });
+
+  it("제목이 없는 행은 파일 경로로 확인 문구를 만든다", async () => {
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 1,
+        processed_count: 1,
+        items: [{ ...PROPOSAL_ITEM_WITH_ID, title: "" }],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByLabelText("1_fiction/d.epub 삭제")).toBeTruthy();
+    });
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      fireEvent.click(screen.getByLabelText("1_fiction/d.epub 삭제"));
+      expect(confirmSpy.mock.calls[0][0]).toContain("1_fiction/d.epub");
+    } finally {
+      window.confirm.mockRestore();
+    }
+  });
+
   it("상태가 ready면 표가 보이고 certain 항목이 기본 선택된다", async () => {
     const resultRef = {
       current: {
@@ -4702,6 +4893,155 @@ describe("CategoryAdmin 분류 제안", () => {
         expect.any(Function),
       );
     });
+  });
+
+  async function renderReadyProposal(items) {
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: items.length,
+        processed_count: items.length,
+        items,
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /분류 승인/ })).toBeTruthy();
+    });
+  }
+
+  it("분류 승인 모달은 취소와 닫기로 모두 닫힌다", async () => {
+    await renderReadyProposal([PROPOSAL_ITEM_CERTAIN]);
+
+    fireEvent.click(screen.getByRole("button", { name: /분류 승인/ }));
+    let modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "취소" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /분류 승인/ }));
+    modal = await screen.findByRole("dialog");
+    // 헤더의 닫기(X)는 onHide 로 들어온다.
+    fireEvent.click(within(modal).getByRole("button", { name: "Close" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+  });
+
+  it("분류 승인이 실패하면 메시지를 보여준다", async () => {
+    await renderReadyProposal([PROPOSAL_ITEM_CERTAIN]);
+
+    mockJsonPostReq.mockImplementation(
+      (url, payload, _resolve, reject, final) => {
+        reject("승인 서버 오류");
+        if (final) final();
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /분류 승인/ }));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "승인" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("승인 서버 오류")).toBeTruthy();
+    });
+  });
+
+  it("완료 기록 삭제 모달은 취소와 닫기로 모두 닫힌다", async () => {
+    await renderReadyProposal([PROPOSAL_ITEM_UNSURE, PROPOSAL_ITEM_MOVED]);
+    const clearButton = screen.getByRole("button", { name: "완료 기록 삭제" });
+
+    fireEvent.click(clearButton);
+    let modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "취소" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    fireEvent.click(clearButton);
+    modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "Close" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(mockJsonDeleteReq).not.toHaveBeenCalled();
+  });
+
+  it("완료 기록 삭제가 실패하면 메시지를 보여준다", async () => {
+    await renderReadyProposal([PROPOSAL_ITEM_UNSURE, PROPOSAL_ITEM_MOVED]);
+
+    mockJsonDeleteReq.mockImplementation(
+      (url, _payload, _resolve, reject, final) => {
+        reject("기록 삭제 오류");
+        if (final) final();
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "완료 기록 삭제" }));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "삭제" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("기록 삭제 오류")).toBeTruthy();
+    });
+  });
+
+  it("완료 기록은 지웠는데 표를 다시 못 불러오면 그 사실을 알린다", async () => {
+    // DELETE 는 성공했다. 재조회만 실패하면 표가 그대로라 삭제 여부를 알 길이 없다.
+    await renderReadyProposal([PROPOSAL_ITEM_UNSURE, PROPOSAL_ITEM_MOVED]);
+
+    mockJsonDeleteReq.mockImplementation(
+      (url, _payload, resolve, _reject, final) => {
+        resolve({ deleted_count: 1 });
+        if (final) final();
+      },
+    );
+    mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
+      if (url === "/categories/classify-proposal") reject("재조회 오류");
+      else if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
+      else if (url.startsWith("/category-mismatches/reload-status"))
+        resolve({ status: "idle" });
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        resolve(LATEST_EXCLUDED_RESPONSE);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "완료 기록 삭제" }));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "삭제" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("재조회 오류")).toBeTruthy();
+    });
+  });
+
+  it("분류 제안 다시 시작 모달은 닫기(X)로도 닫힌다", async () => {
+    await renderReadyProposal([PROPOSAL_ITEM_CERTAIN]);
+
+    fireEvent.click(screen.getByTitle("분류 제안"));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "Close" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+  });
+
+  it("분류 제안 다시 시작 모달은 취소로도 닫힌다", async () => {
+    await renderReadyProposal([PROPOSAL_ITEM_CERTAIN]);
+
+    fireEvent.click(screen.getByTitle("분류 제안"));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "취소" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
   });
 
   it("마운트 시 상태가 ready면 source_category가 선택된다", async () => {
