@@ -1598,6 +1598,45 @@ describe("View", () => {
     expect(screen.getByTestId("view-single").dataset.viewUrl).toContain("api=");
   });
 
+  it("딥링크로 책을 열면 디렉토리를 접은 상태로 시작한다", async () => {
+    mockRouteState.wildcard = "42";
+    mockRouteState.searchParams = "category=소설";
+
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve({ 소설: 1 });
+      else if (url === "/categories/소설")
+        resolve([
+          {
+            book_id: 42,
+            title: "딥링크소설",
+            file_type: "epub",
+            file_path: "/deep.epub",
+            category: "소설",
+          },
+        ]);
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder")).toBeTruthy();
+    });
+    expect(screen.getByTestId("folder").dataset.open).toBe("false");
+  });
+
+  it("책 없이 들어오면 디렉토리를 펼친 상태로 시작한다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve({ 소설: 10 });
+    });
+
+    render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder")).toBeTruthy();
+    });
+    expect(screen.getByTestId("folder").dataset.open).toBe("true");
+  });
+
   it("폴더를 접으면 접힌 Folder 를 렌더링한다", async () => {
     mockJsonGetReq.mockImplementation((url, payload, resolve) => {
       if (url === "/categories") resolve({ 소설: 10 });

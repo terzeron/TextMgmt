@@ -48,19 +48,25 @@ const collectStoreCategories = (storeData, storeKey, categories) => {
 };
 
 // 카테고리 유사도 판정에 참여하는 서점 목록
-const CATEGORY_STORES = ["yes24", "aladin", "naver"];
+// 교보는 "국내도서 > 소설 > 한국소설" 처럼 다른 두 곳과 같은 모양의 분류 경로를 준다.
+const CATEGORY_STORES = ["yes24", "aladin", "kyobo", "naver"];
 
 // 자동 검색 대상 서점 목록 (카테고리 판정 서점 + 추가 자동 검색 서점)
-const AUTO_SEARCH_STORES = ["yes24", "aladin", "naver", "ridi"];
+// CATEGORY_STORES 는 이 목록의 부분집합이어야 한다. 여기서 빠진 서점은 결과가 없어
+// 카테고리 수집이 조용히 건너뛴다.
+const AUTO_SEARCH_STORES = ["yes24", "aladin", "kyobo", "naver", "ridi"];
 
 // 서점 탭 정의 (supportsIsbn: ISBN 검색 지원 여부)
 const STORES = [
   { key: "yes24", label: "Yes24", supportsIsbn: true },
   { key: "aladin", label: "알라딘", supportsIsbn: true },
+  { key: "kyobo", label: "교보문고", supportsIsbn: true },
   { key: "naver", label: "네이버쇼핑", supportsIsbn: false },
   { key: "ridi", label: "RIDI", supportsIsbn: false },
   { key: "munpia", label: "문피아", supportsIsbn: false },
   { key: "naverseries", label: "시리즈", supportsIsbn: false },
+  // 조아라는 웹소설 연재처라 ISBN 이 없다. 제목으로만 찾는다.
+  { key: "joara", label: "조아라", supportsIsbn: false },
 ];
 
 export default function Bookstore(props) {

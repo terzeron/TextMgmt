@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from backend.auth import require_auth, require_admin, optional_auth, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, observation_hash, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
 from backend.book_manager import BookManager, MAX_LATEST_BOOK_COUNT
 from backend.comics_manager import ComicsManager
-from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
+from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore, JoaraBookstore
 from backend.category_mapping import CategoryMapping
 from backend.refresh_token_store import create_refresh_token_store
 from backend.view_history_store import MAX_RECENT_VIEWS, create_view_history_store
@@ -788,6 +788,9 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         """
         status = await _read_classify_proposal()
         items = await asyncio.to_thread(category_mapping.get_classify_proposal_items, content_type=content_type)
+        # book_id 를 payload 에 싣기 전에 만든 제안에는 그 값이 없다. 표의 편집·삭제
+        # 버튼이 book_id 로만 동작하므로, 다시 제안하지 않아도 되도록 여기서 채운다.
+        items = await asyncio.to_thread(BookManager.fill_missing_book_ids, items, manager.path_prefix)
         return {"status": "success", "result": {**status, "items": items}}
 
     @router.post("/categories/classify-proposal/apply", dependencies=admin_dep)
@@ -839,6 +842,19 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         await asyncio.to_thread(category_mapping.clear_classify_proposal_items, content_type=content_type)
         await _replace_classify_proposal({"status": "idle", "content_type": content_type})
         return {"status": "success", "result": {"cleared": True}}
+
+    @router.delete("/categories/classify-proposal/item", dependencies=admin_dep)
+    async def delete_classify_proposal_item_route(file_path: str) -> dict[str, Any]:
+        """제안 항목 한 건만 지운다. 표에서 책을 지운 뒤 그 행을 없애는 데 쓴다.
+
+        파일은 건드리지 않는다 — 책 삭제는 DELETE /books/{book_id} 가 한다.
+        도는 중에 지우면 그 작업이 방금 찍은 행을 밑에서 없앨 수 있어 거절한다.
+        """
+        current = await _read_classify_proposal()
+        if current.get("status") in ("running", "applying"):
+            return {"status": "failure", "error": "작업이 진행 중입니다."}
+        deleted_count = await asyncio.to_thread(category_mapping.delete_classify_proposal_item, file_path, content_type=content_type)
+        return {"status": "success", "result": {"deleted_count": deleted_count}}
 
     @router.delete("/categories/classify-proposal/applied", dependencies=admin_dep)
     async def delete_applied_classify_proposal_items_route() -> dict[str, Any]:
@@ -1165,11 +1181,13 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
     지정된 온라인 서점에서 책을 검색하여 상위 결과의 메타데이터를 반환합니다.
     검색 우선순위: ISBN > 제목+저자 > 제목 > 저자
     """
-    store_class = None
+    store_class: type[AbstractBookstore] | None = None
     if store_name.lower() == "yes24":
         store_class = Yes24Bookstore
     elif store_name.lower() == "aladin":
         store_class = AladinBookstore
+    elif store_name.lower() == "kyobo":
+        store_class = KyoboBookstore
     elif store_name.lower() == "ridi":
         store_class = RidibooksBookstore
     elif store_name.lower() == "naver":
@@ -1178,6 +1196,8 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
         store_class = NaverSeriesBookstore
     elif store_name.lower() == "munpia":
         store_class = MunpiaBookstore
+    elif store_name.lower() == "joara":
+        store_class = JoaraBookstore
     else:
         raise HTTPException(status_code=404, detail="Bookstore not found")
 

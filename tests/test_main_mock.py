@@ -1035,6 +1035,51 @@ class TestCategoryMismatchAdmin:
         assert final_status["status"] == "applying"
         assert final_status["apply_token"] == "token-B"
 
+    def test_delete_proposal_item_removes_one_row(self, client, mock_bm, mock_cat, tmp_path):
+        """DELETE .../item이 파일 경로 한 건의 제안 행만 지운다.
+
+        표에서 책을 지운 뒤 그 행을 없애는 데 쓴다. 남겨 두면 다음 조회에서 이미
+        없는 파일을 가리키는 행이 되살아난다.
+        """
+        mock_bm.path_prefix = tmp_path
+        install_classify_status_store(mock_cat, {"status": "ready"})
+        mock_cat.delete_classify_proposal_item.return_value = 1
+
+        r = client.delete("/categories/classify-proposal/item", params={"file_path": "1_fiction/a.epub"})
+
+        assert r.status_code == 200
+        assert r.json()["status"] == "success"
+        assert r.json()["result"]["deleted_count"] == 1
+        mock_cat.delete_classify_proposal_item.assert_called_once_with("1_fiction/a.epub", content_type="book")
+
+    def test_delete_proposal_item_rejected_while_job_is_running(self, client, mock_bm, mock_cat, tmp_path):
+        """도는 중에 지우면 그 작업이 방금 찍은 행을 밑에서 없앨 수 있다."""
+        mock_bm.path_prefix = tmp_path
+        install_classify_status_store(mock_cat, {"status": "running"})
+
+        r = client.delete("/categories/classify-proposal/item", params={"file_path": "1_fiction/a.epub"})
+
+        assert r.status_code == 200
+        assert r.json()["status"] == "failure"
+        mock_cat.delete_classify_proposal_item.assert_not_called()
+
+    def test_classify_proposal_get_fills_missing_book_id(self, client, mock_bm, mock_cat, tmp_path):
+        """book_id 없이 저장된 옛 항목은 조회할 때 채워 준다.
+
+        없으면 표의 편집·삭제 버튼이 안 그려져, 옛 제안을 쓰려면 통째로 다시 만들어야 한다.
+        """
+        mock_bm.path_prefix = tmp_path
+        book = tmp_path / "1_fiction" / "a.epub"
+        book.parent.mkdir(parents=True, exist_ok=True)
+        book.write_text("x", encoding="utf-8")
+        install_classify_status_store(mock_cat, {"status": "ready"})
+        mock_cat.get_classify_proposal_items.return_value = [{"file_path": "1_fiction/a.epub"}]
+
+        r = client.get("/categories/classify-proposal")
+
+        assert r.status_code == 200
+        assert r.json()["result"]["items"][0]["book_id"] == book.stat().st_ino
+
     def test_delete_applied_removes_moved_only_and_returns_count(self, client, mock_bm, mock_cat, tmp_path):
         """DELETE .../applied가 완료(moved) 행만 지우고 지운 개수를 돌려준다."""
         mock_bm.path_prefix = tmp_path
@@ -1183,7 +1228,7 @@ class TestSearchBookstore:
         assert r.status_code == 200
         assert "isbn" not in r.json()["result"][0]
 
-    @pytest.mark.parametrize("store,cls", [("ridi", "RidibooksBookstore"), ("naver", "NaverShoppingBookstore"), ("naverseries", "NaverSeriesBookstore"), ("munpia", "MunpiaBookstore")])
+    @pytest.mark.parametrize("store,cls", [("ridi", "RidibooksBookstore"), ("naver", "NaverShoppingBookstore"), ("naverseries", "NaverSeriesBookstore"), ("munpia", "MunpiaBookstore"), ("kyobo", "KyoboBookstore"), ("joara", "JoaraBookstore")])
     def test_other_stores(self, client, store, cls):
         fake_store = MagicMock()
         fake_store.search.return_value = ([], "q", "title")

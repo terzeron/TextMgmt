@@ -1320,3 +1320,146 @@ def test_kyobo_urls_and_fallback_links_and_title():
     info = store.extract_book_info(soup_title)
     assert info["title"] == "교보문고 상세 도서"
     assert info["author"] == "김작가"
+
+
+def test_kyobo_nextjs_detail_page_category_and_title():
+    """신형 종이책 상세(Next.js)에서 제목과 카테고리를 뽑는다.
+
+    교보 종이책 상세가 Next.js 로 바뀌면서 prod_title/breadcrumb_list 같은 시맨틱
+    클래스가 사라졌다. 옛 셀렉터만 두면 카테고리가 빈 문자열이 되고, 자동분류에서
+    교보가 표를 못 던져 다수결이 사실상 2곳으로 줄어든다.
+    """
+    from backend.bookstore import KyoboBookstore
+
+    store = KyoboBookstore(verbose=False)
+    detail_html = """
+    <html>
+      <head><title>채식주의자 - 교보문고</title></head>
+      <body>
+        <h1 class="text-xl font-bold">채식주의자</h1>
+        <div class="flex items-center gap-1">
+          <a href="https://store.kyobobook.co.kr/category/domestic">국내도서</a>
+          <a href="https://store.kyobobook.co.kr/category/domestic/01">소설</a>
+          <a href="https://store.kyobobook.co.kr/category/domestic/0101">한국소설</a>
+          <a href="https://store.kyobobook.co.kr/category/domestic/010101">한국소설일반</a>
+        </div>
+        <span>ISBN</span>
+      </body>
+    </html>
+    """
+    info = store.extract_book_info(BeautifulSoup(detail_html, "html.parser"))
+    assert info["title"] == "채식주의자"
+    # "국내도서"는 모든 책에 붙어 변별력이 없어 걸러낸다.
+    assert info["category"] == "소설 > 한국소설 > 한국소설일반"
+
+
+def test_kyobo_title_fallback_strips_only_store_suffix():
+    """<title> fallback 은 서점 이름만 떼고 제목 속 하이픈은 남긴다."""
+    from backend.bookstore import KyoboBookstore
+
+    store = KyoboBookstore(verbose=False)
+    html = "<html><head><title>데미안 - 소년의 기록 - 교보문고</title></head><body></body></html>"
+    info = store.extract_book_info(BeautifulSoup(html, "html.parser"))
+    assert info["title"] == "데미안 - 소년의 기록"
+
+
+def test_joara_search_url_and_author_is_ignored(monkeypatch: pytest.MonkeyPatch):
+    """조아라는 제목(target=subject)만 검색한다. 저자를 붙이면 늘 0건이다."""
+    from backend.bookstore import JoaraBookstore
+
+    store = JoaraBookstore(verbose=False)
+    url = store.build_search_url("데미안")
+    assert url.startswith("https://www.joara.com/search?target=subject&word=")
+    assert "%EB%8D%B0%EB%AF%B8%EC%95%88" in url
+
+    seen: list[str] = []
+
+    def fake_search_by_keyword(keyword: str):
+        seen.append(keyword)
+        return [("데미안", "세리엔II", "퓨전", "https://www.joara.com/book/45402", url, "")]
+
+    monkeypatch.setattr(store, "search_by_keyword", fake_search_by_keyword)
+    # ISBN 과 저자를 넘겨도 제목만으로 한 번 부른다.
+    results, keyword, method = store.search(isbn="9788934900011", title="데미안", author="헤르만 헤세")
+    assert seen == ["데미안"]
+    assert keyword == "데미안"
+    assert method == "title"
+    assert results[0][0] == "데미안"
+
+
+def test_joara_search_by_keyword_success():
+    from backend.bookstore import JoaraBookstore
+
+    store = JoaraBookstore(verbose=True)
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "status": 1,
+                "total_cnt": 2,
+                "data": {
+                    "list": [
+                        {"book_code": 45402, "subject": "데미안", "member_name": "세리엔II", "category_name": "퓨전"},
+                        {"book_code": 10546, "subject": "데미안", "member_name": "Demian", "category_name": "판타지"},
+                    ]
+                },
+            }
+
+    store.session.get = lambda *a, **k: Resp()
+    search_url = store.build_search_url("데미안")
+    assert store.search_by_keyword("데미안") == [
+        ("데미안", "세리엔II", "퓨전", "https://www.joara.com/book/45402", search_url, ""),
+        ("데미안", "Demian", "판타지", "https://www.joara.com/book/10546", search_url, ""),
+    ]
+
+
+def test_joara_search_by_keyword_failure_paths(monkeypatch: pytest.MonkeyPatch):
+    """조아라는 파라미터가 빠져도 HTTP 200 에 status=0 을 준다. 본문을 봐야 실패를 안다."""
+    from backend.bookstore import JoaraBookstore
+
+    store = JoaraBookstore(verbose=True)
+
+    class BadStatus:
+        status_code = 200
+
+        def json(self):
+            return {"status": 0, "message": '필수 파라메타값이 정의되지 않았습니다.["deviceuid"]'}
+
+    store.session.get = lambda *a, **k: BadStatus()
+    assert store.search_by_keyword("데미안") == []
+
+    class EmptyList:
+        status_code = 200
+
+        def json(self):
+            return {"status": 1, "data": {"list": []}}
+
+    store.session.get = lambda *a, **k: EmptyList()
+    assert store.search_by_keyword("데미안") == []
+
+    class ServerError:
+        status_code = 500
+
+        def json(self):
+            return {}
+
+    store.session.get = lambda *a, **k: ServerError()
+    assert store.search_by_keyword("데미안") == []
+
+    def raise_get(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(store.session, "get", raise_get)
+    assert store.search_by_keyword("데미안") == []
+
+
+def test_joara_unused_html_hooks_are_inert():
+    """조아라는 API 를 직접 부르므로 HTML 훅은 호출되지 않는다."""
+    from backend.bookstore import JoaraBookstore
+
+    store = JoaraBookstore(verbose=False)
+    soup = BeautifulSoup("<html><body><a href='/book/1'>x</a></body></html>", "html.parser")
+    assert store.extract_search_links(soup) == []
+    assert store.extract_book_info(soup) == {"title": "", "author": "", "category": "", "isbn": ""}

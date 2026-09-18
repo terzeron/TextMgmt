@@ -4,6 +4,7 @@
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -188,3 +189,149 @@ def test_clean_file_has_no_reason(tmp_path):
     p = tmp_path / "clean.txt"
     p.write_text(CLEAN_KOREAN * 4, encoding="utf-8")
     assert inspect_file(str(p))["reason"] == ""
+
+
+# ---------------------------------------------------------------------------
+# 요약 출력과 CLI
+# ---------------------------------------------------------------------------
+
+
+def _report(**overrides):
+    base = {
+        "scanned_at": "2026-09-18T00:00:00+00:00",
+        "root": "/mnt/data/text",
+        "threshold": MOJIBAKE_LIKENESS_THRESHOLD,
+        "total": 4,
+        "counts": {VERDICT_CLEAN: 2, VERDICT_CORRUPTED: 1, VERDICT_UNDETERMINED: 1},
+        "elapsed_sec": 120.0,
+        "per_category": {
+            "3_판타지": {VERDICT_CLEAN: 1, VERDICT_CORRUPTED: 1},
+            "9_격언명언": {VERDICT_CLEAN: 1},
+        },
+        "corrupted": [],
+        "unreadable": [],
+        "undetermined": [],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_print_summary_lists_categories_with_damage(capsys):
+    from utils.detect_mojibake import print_summary
+
+    print_summary(_report())
+    out = capsys.readouterr().out
+
+    assert "검사 4건" in out
+    assert "손상이 있는 카테고리 1개" in out
+    # 손상이 0건인 카테고리는 표에 넣지 않는다. 눈으로 훑을 목록만 남긴다.
+    assert "3_판타지" in out
+    assert "9_격언명언" not in out
+
+
+def test_print_summary_without_damage_skips_the_table(capsys):
+    from utils.detect_mojibake import print_summary
+
+    print_summary(_report(counts={VERDICT_CLEAN: 4}, per_category={"3_판타지": {VERDICT_CLEAN: 4}}))
+    out = capsys.readouterr().out
+
+    assert "손상이 있는 카테고리" not in out
+
+
+def test_print_summary_survives_zero_total(capsys):
+    from utils.detect_mojibake import print_summary
+
+    print_summary(_report(total=0, counts={}, per_category={}))
+    # 0으로 나누지 않는다.
+    assert "검사 0건" in capsys.readouterr().out
+
+
+def run_cli(monkeypatch, *argv):
+    from utils.detect_mojibake import main
+
+    monkeypatch.setattr("sys.argv", ["detect_mojibake.py", *argv])
+    return main()
+
+
+def test_cli_check_prints_one_json_line_per_file(tmp_path, monkeypatch, capsys):
+    clean = tmp_path / "clean.txt"
+    clean.write_text(CLEAN_KOREAN, encoding="utf-8")
+    broken = tmp_path / "broken.txt"
+    broken.write_text(CORRUPTED, encoding="utf-8")
+
+    assert run_cli(monkeypatch, "check", "--file", str(clean), "--file", str(broken)) == 0
+
+    lines = [json.loads(ln) for ln in capsys.readouterr().out.strip().splitlines()]
+    assert [r["verdict"] for r in lines] == [VERDICT_CLEAN, VERDICT_CORRUPTED]
+
+
+def test_cli_check_without_file_is_an_error(monkeypatch):
+    # 대상을 안 주면 전수 검사로 오해할 수 있다. 조용히 넘어가지 않는다.
+    assert run_cli(monkeypatch, "check") == 1
+
+
+def test_cli_scan_writes_report_and_summary(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "text"
+    (root / "3_판타지").mkdir(parents=True)
+    (root / "3_판타지" / "clean.txt").write_text(CLEAN_KOREAN, encoding="utf-8")
+    (root / "3_판타지" / "broken.txt").write_text(CORRUPTED, encoding="utf-8")
+    report_path = tmp_path / "out" / "report.json"
+
+    assert run_cli(monkeypatch, "scan", "--root", str(root), "--workers", "1", "--report", str(report_path)) == 0
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["total"] == 2
+    assert report["counts"][VERDICT_CORRUPTED] == 1
+    assert [Path(r["path"]).name for r in report["corrupted"]] == ["broken.txt"]
+    assert "리포트:" in capsys.readouterr().out
+
+
+def test_scan_respects_limit_and_logs_progress(tmp_path, caplog):
+    root = tmp_path / "text"
+    (root / "3_판타지").mkdir(parents=True)
+    for i in range(3):
+        (root / "3_판타지" / f"{i}.txt").write_text(CLEAN_KOREAN, encoding="utf-8")
+
+    with caplog.at_level("INFO", logger="detect_mojibake"):
+        report = scan(root, workers=1, limit=2, progress_every=1)
+
+    assert report["total"] == 2
+    assert any("1/2" in r.getMessage() for r in caplog.records)
+
+
+def test_scan_groups_files_outside_the_default_root_as_other(tmp_path):
+    root = tmp_path / "text"
+    (root / "3_판타지").mkdir(parents=True)
+    (root / "3_판타지" / "a.txt").write_text(CLEAN_KOREAN, encoding="utf-8")
+
+    report = scan(root, workers=1)
+    # DEFAULT_LIBRARY_ROOT 밖이면 카테고리를 못 읽어 (기타)로 모은다.
+    assert list(report["per_category"]) == ["(기타)"]
+
+
+def test_classify_text_is_undetermined_when_hangul_is_too_sparse_to_measure():
+    # 한글 비율(10%)은 넘지만 음절 수가 모자라 비율을 못 재는 구간.
+    # 표지·판권지만 뽑힌 표본이 여기 해당한다.
+    text = "가나다라마바사아자차" * 4 + "x" * 300
+    assert len(text) >= 200
+    hangul = sum(1 for ch in text if "가" <= ch <= "힣")
+    assert hangul / len(text) >= 0.10
+    assert hangul < MIN_SYLLABLES_FOR_LIKENESS
+
+    verdict, likeness = classify_text(text)
+    assert verdict == VERDICT_UNDETERMINED
+    assert likeness is None
+
+
+def test_list_library_files_skips_hidden_files_and_tool_caches(tmp_path):
+    root = tmp_path / "text"
+    (root / "3_판타지").mkdir(parents=True)
+    (root / "3_판타지" / "a.txt").write_text("x", encoding="utf-8")
+    (root / "3_판타지" / ".숨김.txt").write_text("x", encoding="utf-8")
+    (root / "3_판타지" / "b.pdf").write_text("x", encoding="utf-8")
+    cache = root / ".preview_cache"
+    cache.mkdir()
+    (cache / "c.txt").write_text("x", encoding="utf-8")
+
+    names = [p.name for p in list_library_files(root)]
+    assert names == ["a.txt"]
