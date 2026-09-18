@@ -10,12 +10,14 @@ import {
 
 afterEach(cleanup);
 
-const { mockRawJsonGetReq } = vi.hoisted(() => ({
+const { mockRawJsonGetReq, mockJsonDeleteReq } = vi.hoisted(() => ({
   mockRawJsonGetReq: vi.fn(),
+  mockJsonDeleteReq: vi.fn(),
 }));
 
 vi.mock("../src/Common", () => ({
   rawJsonGetReq: mockRawJsonGetReq,
+  jsonDeleteReq: mockJsonDeleteReq,
   getApiUrlPrefix: () => "http://localhost:8000",
 }));
 
@@ -42,6 +44,7 @@ const mockBooks = (books) => {
 describe("SimilarBooks", () => {
   beforeEach(() => {
     mockRawJsonGetReq.mockReset();
+    mockJsonDeleteReq.mockReset();
   });
 
   // ── 점수 배지 표시 ──
@@ -152,7 +155,7 @@ describe("SimilarBooks", () => {
 
     await waitFor(() => {
       // 책 항목은 렌더링됨
-      expect(screen.getByText("편집")).toBeTruthy();
+      expect(screen.getByRole("button", { name: /\s편집$/ })).toBeTruthy();
     });
 
     // 점수 0은 배지로 표시되지 않아야 함
@@ -191,7 +194,7 @@ describe("SimilarBooks", () => {
     render(<SimilarBooks bookId={1} />);
 
     // 접힌 상태이므로 책 목록이 보이지 않아야 함
-    expect(screen.queryByText("편집")).toBeNull();
+    expect(screen.queryByRole("button", { name: /\s편집$/ })).toBeNull();
   });
 
   it("정확히 90점이면 자동으로 펼쳐진다 (경계값)", async () => {
@@ -209,7 +212,7 @@ describe("SimilarBooks", () => {
 
     render(<SimilarBooks bookId={1} />);
 
-    expect(screen.queryByText("편집")).toBeNull();
+    expect(screen.queryByRole("button", { name: /\s편집$/ })).toBeNull();
   });
 
   it("bookId 변경 시 자동 펼침 상태가 초기화된다", async () => {
@@ -240,7 +243,7 @@ describe("SimilarBooks", () => {
     });
     // 90점 미만이므로 접힌 상태
     expect(screen.queryByText("50")).toBeNull();
-    expect(screen.queryByText("편집")).toBeNull();
+    expect(screen.queryByRole("button", { name: /\s편집$/ })).toBeNull();
   });
 
   it("자동 펼침 후 헤더 클릭으로 닫을 수 있다", async () => {
@@ -314,17 +317,17 @@ describe("SimilarBooks", () => {
     render(<SimilarBooks bookId={1} />);
 
     // 닫힌 상태에서는 책 목록이 보이지 않음
-    expect(screen.queryByText("편집")).toBeNull();
+    expect(screen.queryByRole("button", { name: /\s편집$/ })).toBeNull();
 
     // 열기
     fireEvent.click(screen.getByText("유사한 책 목록"));
     await waitFor(() => {
-      expect(screen.getByText("편집")).toBeTruthy();
+      expect(screen.getByRole("button", { name: /\s편집$/ })).toBeTruthy();
     });
 
     // 닫기
     fireEvent.click(screen.getByText("유사한 책 목록"));
-    expect(screen.queryByText("편집")).toBeNull();
+    expect(screen.queryByRole("button", { name: /\s편집$/ })).toBeNull();
   });
 
   it("유사한 책이 없으면 안내 메시지를 표시한다", async () => {
@@ -563,7 +566,7 @@ describe("SimilarBooks", () => {
       expect(screen.getByText(/Book 42\.pdf/)).toBeTruthy();
     });
 
-    const editBtns = screen.getAllByText("편집");
+    const editBtns = screen.getAllByRole("button", { name: /\s편집$/ });
     fireEvent.click(editBtns[0]);
     expect(openSpy).toHaveBeenCalledWith(
       expect.stringContaining("/book-edit/42"),
@@ -661,7 +664,7 @@ describe("SimilarBooks", () => {
       expect(screen.getByText(/Book 42\.pdf/)).toBeTruthy();
     });
 
-    const editBtns = screen.getAllByText("편집");
+    const editBtns = screen.getAllByRole("button", { name: /\s편집$/ });
     fireEvent.click(editBtns[0]);
     expect(openSpy).toHaveBeenCalledWith(
       expect.stringContaining("/book-edit/42"),
@@ -669,7 +672,7 @@ describe("SimilarBooks", () => {
       "noopener",
     );
 
-    const viewBtns = screen.getAllByText("조회");
+    const viewBtns = screen.getAllByRole("button", { name: /\s조회$/ });
     fireEvent.click(viewBtns[0]);
     expect(openSpy).toHaveBeenCalledWith(
       expect.stringContaining("/book-view/42"),
@@ -728,7 +731,7 @@ describe("SimilarBooks", () => {
       expect(screen.getByText(/Book 42\.pdf/)).toBeTruthy();
     });
 
-    const editBtns = screen.getAllByText("편집");
+    const editBtns = screen.getAllByRole("button", { name: /\s편집$/ });
     fireEvent.click(editBtns[0]);
     expect(openSpy).toHaveBeenCalledWith(
       expect.stringContaining("/comics-edit/42"),
@@ -748,7 +751,7 @@ describe("SimilarBooks", () => {
       expect(screen.getByText(/Book 42\.pdf/)).toBeTruthy();
     });
 
-    const viewBtns = screen.getAllByText("조회");
+    const viewBtns = screen.getAllByRole("button", { name: /\s조회$/ });
     fireEvent.click(viewBtns[0]);
     expect(openSpy).toHaveBeenCalledWith(
       expect.stringContaining("/comics-view/42"),
@@ -861,7 +864,7 @@ describe("SimilarBooks", () => {
       expect(screen.getByText("더 보기")).toBeTruthy();
     });
     // 추가된 항목 없음 → 여전히 1개만
-    expect(screen.getAllByText("편집")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /\s편집$/ })).toHaveLength(1);
   });
 
   it('"더 보기" 응답 total이 없으면 0으로 처리한다', async () => {
@@ -973,6 +976,230 @@ describe("SimilarBooks", () => {
     resolvers[0]({ status: "success", result: [makeBook(2, 80)], total: 3 });
     await waitFor(() => {
       expect(screen.getByText("80")).toBeTruthy();
+    });
+  });
+  // ── 삭제 버튼 ──
+
+  describe("삭제 버튼", () => {
+    let confirmSpy;
+    let alertSpy;
+    let errorSpy;
+
+    beforeEach(() => {
+      confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+      alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+      errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      confirmSpy.mockRestore();
+      alertSpy.mockRestore();
+      errorSpy.mockRestore();
+    });
+
+    const deleteButtons = () =>
+      screen.getAllByRole("button", { name: /\s삭제$/ });
+
+    const openList = async () => {
+      render(<SimilarBooks bookId={1} apiPrefix="/comics" />);
+      fireEvent.click(screen.getByText("유사한 책 목록"));
+      await waitFor(() => {
+        expect(deleteButtons().length).toBeGreaterThan(0);
+      });
+    };
+
+    it("confirm을 취소하면 삭제 API를 호출하지 않는다", async () => {
+      mockBooks([makeBook(1, 50)]);
+      confirmSpy.mockReturnValue(false);
+
+      await openList();
+      fireEvent.click(deleteButtons()[0]);
+
+      expect(confirmSpy).toHaveBeenCalledWith(
+        '"test_category/Book 1.pdf"을(를) 삭제하시겠습니까?',
+      );
+      expect(mockJsonDeleteReq).not.toHaveBeenCalled();
+    });
+
+    it("확인하면 apiPrefix가 붙은 삭제 API를 호출하고 목록에서 제거한다", async () => {
+      mockBooks([makeBook(1, 50), makeBook(2, 40)]);
+      mockJsonDeleteReq.mockImplementation((url, payload, resolve) => {
+        resolve(null);
+      });
+
+      await openList();
+      fireEvent.click(deleteButtons()[0]);
+
+      expect(mockJsonDeleteReq.mock.calls[0][0]).toBe("/comics/books/1");
+      await waitFor(() => {
+        expect(screen.queryByText("test_category/Book 1.pdf")).toBeNull();
+      });
+      expect(screen.getByText("test_category/Book 2.pdf")).toBeTruthy();
+    });
+
+    it("삭제에 실패하면 알림을 띄우고 목록을 유지한다", async () => {
+      mockBooks([makeBook(1, 50)]);
+      mockJsonDeleteReq.mockImplementation((url, payload, resolve, reject) => {
+        reject("permission denied");
+      });
+
+      await openList();
+      fireEvent.click(deleteButtons()[0]);
+
+      await waitFor(() => {
+        expect(alertSpy).toHaveBeenCalledWith(
+          "책 삭제에 실패했습니다. permission denied",
+        );
+      });
+      expect(screen.getByText("test_category/Book 1.pdf")).toBeTruthy();
+    });
+
+    it("삭제 진행 중에는 중복 요청을 막고 해당 버튼만 스피너를 돌린다", async () => {
+      mockBooks([makeBook(1, 50), makeBook(2, 40)]);
+      const resolvers = [];
+      mockJsonDeleteReq.mockImplementation((url, payload, resolve) => {
+        resolvers.push(resolve);
+      });
+
+      await openList();
+      fireEvent.click(deleteButtons()[0]);
+      fireEvent.click(deleteButtons()[1]);
+
+      expect(mockJsonDeleteReq).toHaveBeenCalledTimes(1);
+
+      await waitFor(() => {
+        expect(deleteButtons()[0].getAttribute("aria-busy")).toBe("true");
+      });
+      expect(deleteButtons()[0].querySelector(".fa-spin")).toBeTruthy();
+      expect(deleteButtons()[1].getAttribute("aria-busy")).toBe("false");
+      expect(deleteButtons()[1].querySelector(".fa-spin")).toBeNull();
+      expect(deleteButtons()[1].disabled).toBe(true);
+
+      resolvers[0](null);
+      await waitFor(() => {
+        expect(screen.queryByText("test_category/Book 1.pdf")).toBeNull();
+      });
+      expect(deleteButtons()[0].getAttribute("aria-busy")).toBe("false");
+      expect(deleteButtons()[0].disabled).toBe(false);
+    });
+  });
+  // ── 새로고침 버튼 ──
+
+  describe("새로고침 버튼", () => {
+    const refreshButton = () =>
+      screen.getByLabelText("유사한 책 목록 새로고침");
+
+    it("클릭하면 첫 페이지를 다시 요청하고 목록을 교체한다", async () => {
+      let callCount = 0;
+      mockRawJsonGetReq.mockImplementation((url, resolve) => {
+        callCount++;
+        resolve(
+          callCount === 1
+            ? { status: "success", result: [makeBook(1, 50)], total: 1 }
+            : { status: "success", result: [makeBook(2, 60)], total: 1 },
+        );
+      });
+
+      render(<SimilarBooks bookId={1} apiPrefix="/comics" />);
+      fireEvent.click(screen.getByText("유사한 책 목록"));
+      await waitFor(() => {
+        expect(screen.getByText("test_category/Book 1.pdf")).toBeTruthy();
+      });
+
+      fireEvent.click(refreshButton());
+
+      expect(mockRawJsonGetReq.mock.calls[1][0]).toBe(
+        "/comics/similar/1?offset=0&limit=10",
+      );
+      await waitFor(() => {
+        expect(screen.getByText("test_category/Book 2.pdf")).toBeTruthy();
+      });
+      expect(screen.queryByText("test_category/Book 1.pdf")).toBeNull();
+    });
+
+    it("접힌 상태에서 클릭하면 목록을 펼치고 헤더 토글은 일어나지 않는다", async () => {
+      mockBooks([makeBook(1, 50)]);
+
+      render(<SimilarBooks bookId={1} />);
+      expect(screen.queryByText("test_category/Book 1.pdf")).toBeNull();
+
+      fireEvent.click(refreshButton());
+
+      await waitFor(() => {
+        expect(screen.getByText("test_category/Book 1.pdf")).toBeTruthy();
+      });
+    });
+
+    it("요청 중에는 스피너를 돌리고 중복 요청을 막는다", async () => {
+      const resolvers = [];
+      let callCount = 0;
+      mockRawJsonGetReq.mockImplementation((url, resolve) => {
+        callCount++;
+        if (callCount === 1) {
+          resolve({ status: "success", result: [makeBook(1, 50)], total: 1 });
+        } else {
+          resolvers.push(resolve);
+        }
+      });
+
+      render(<SimilarBooks bookId={1} />);
+      fireEvent.click(screen.getByText("유사한 책 목록"));
+      await waitFor(() => {
+        expect(screen.getByText("test_category/Book 1.pdf")).toBeTruthy();
+      });
+
+      fireEvent.click(refreshButton());
+      await waitFor(() => {
+        expect(refreshButton().getAttribute("aria-busy")).toBe("true");
+      });
+      expect(refreshButton().querySelector(".fa-spin")).toBeTruthy();
+      expect(refreshButton().disabled).toBe(true);
+
+      fireEvent.click(refreshButton());
+      expect(callCount).toBe(2);
+
+      resolvers[0]({ status: "success", result: [makeBook(2, 60)], total: 1 });
+      await waitFor(() => {
+        expect(refreshButton().getAttribute("aria-busy")).toBe("false");
+      });
+      expect(refreshButton().querySelector(".fa-spin")).toBeNull();
+    });
+
+    it("bookId가 없으면 새로고침 요청을 보내지 않는다", () => {
+      mockBooks([]);
+
+      render(<SimilarBooks />);
+      fireEvent.click(refreshButton());
+
+      expect(mockRawJsonGetReq).not.toHaveBeenCalled();
+    });
+
+    it("새로고침 요청이 실패하면 스피너를 멈추고 목록을 유지한다", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      let callCount = 0;
+      mockRawJsonGetReq.mockImplementation((url, resolve, reject) => {
+        callCount++;
+        if (callCount === 1) {
+          resolve({ status: "success", result: [makeBook(1, 50)], total: 1 });
+        } else {
+          reject("network error");
+        }
+      });
+
+      render(<SimilarBooks bookId={1} />);
+      fireEvent.click(screen.getByText("유사한 책 목록"));
+      await waitFor(() => {
+        expect(screen.getByText("test_category/Book 1.pdf")).toBeTruthy();
+      });
+
+      fireEvent.click(refreshButton());
+
+      await waitFor(() => {
+        expect(refreshButton().getAttribute("aria-busy")).toBe("false");
+      });
+      expect(screen.getByText("test_category/Book 1.pdf")).toBeTruthy();
+      expect(errorSpy).toHaveBeenCalledWith("network error");
+      errorSpy.mockRestore();
     });
   });
 });

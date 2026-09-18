@@ -4,13 +4,18 @@ import "bootstrap/dist/css/bootstrap.min.css";
 
 import { useEffect, useState, useCallback } from "react";
 import PropTypes from "prop-types";
-import { rawJsonGetReq } from "./Common";
+import { jsonDeleteReq, rawJsonGetReq } from "./Common";
 
 import { Card, Button } from "react-bootstrap";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
+  faArrowsRotate,
   faChevronDown,
   faChevronRight,
+  faEye,
+  faPencil,
+  faSpinner,
+  faTrash,
 } from "@fortawesome/free-solid-svg-icons";
 
 const formatFileSize = (bytes) => {
@@ -33,9 +38,11 @@ export default function SimilarBooks({
   const [similarBooks, setSimilarBooks] = useState([]);
   const [total, setTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    if (bookId) {
+  const loadFirstPage = useCallback(
+    (onLoaded, onFinish) => {
       rawJsonGetReq(
         `${apiPrefix}/similar/${bookId}?offset=0&limit=10`,
         (data) => {
@@ -43,22 +50,43 @@ export default function SimilarBooks({
             const books = data.result || [];
             setSimilarBooks(books);
             setTotal(data.total || 0);
-            if (books.some((b) => b.score >= 90)) {
-              setIsOpen(true);
-            }
+            onLoaded(books);
           }
+          if (onFinish) onFinish();
         },
         (error) => {
           console.error(error);
+          if (onFinish) onFinish();
         },
       );
+    },
+    [bookId, apiPrefix],
+  );
+
+  useEffect(() => {
+    if (bookId) {
+      loadFirstPage((books) => {
+        if (books.some((b) => b.score >= 90)) {
+          setIsOpen(true);
+        }
+      });
     }
     return () => {
       setSimilarBooks([]);
       setTotal(0);
       setIsOpen(false);
     };
-  }, [bookId, apiPrefix]);
+  }, [bookId, loadFirstPage]);
+
+  const handleRefresh = useCallback(() => {
+    if (refreshing || !bookId) return;
+    setRefreshing(true);
+    setIsOpen(true);
+    loadFirstPage(
+      () => {},
+      () => setRefreshing(false),
+    );
+  }, [bookId, loadFirstPage, refreshing]);
 
   const handleLoadMore = useCallback(() => {
     /* v8 ignore next -- load-more control is disabled while a request is active. */
@@ -81,6 +109,32 @@ export default function SimilarBooks({
     );
   }, [bookId, similarBooks.length, loadingMore, apiPrefix]);
 
+  const handleDelete = useCallback(
+    (targetBookId, displayName) => {
+      /* v8 ignore next -- delete buttons are disabled while a request is active. */
+      if (deletingId !== null) return;
+      if (!window.confirm(`"${displayName}"을(를) 삭제하시겠습니까?`)) return;
+      setDeletingId(targetBookId);
+      jsonDeleteReq(
+        `${apiPrefix}/books/${targetBookId}`,
+        null,
+        () => {
+          setSimilarBooks((prev) =>
+            prev.filter((b) => b.book_id !== targetBookId),
+          );
+          setTotal((prev) => Math.max(prev - 1, 0));
+          setDeletingId(null);
+        },
+        (error) => {
+          console.error(error);
+          window.alert(`책 삭제에 실패했습니다. ${error}`);
+          setDeletingId(null);
+        },
+      );
+    },
+    [apiPrefix, deletingId],
+  );
+
   const hasMore = similarBooks.length < total;
 
   return (
@@ -88,13 +142,27 @@ export default function SimilarBooks({
       <Card.Header
         onClick={() => setIsOpen(!isOpen)}
         style={{ cursor: "pointer", userSelect: "none" }}
-        className="py-2"
+        className="py-2 d-flex align-items-center"
       >
         <FontAwesomeIcon
           icon={isOpen ? faChevronDown : faChevronRight}
           className="me-2"
         />
         유사한 책 목록
+        <Button
+          variant="outline-secondary"
+          className="btn-xs ms-auto"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleRefresh();
+          }}
+          disabled={refreshing}
+          aria-busy={refreshing}
+          aria-label="유사한 책 목록 새로고침"
+          title="새로고침"
+        >
+          <FontAwesomeIcon icon={faArrowsRotate} spin={refreshing} />
+        </Button>
       </Card.Header>
       {isOpen && (
         <Card.Body>
@@ -108,6 +176,7 @@ export default function SimilarBooks({
                 const categoryParam = encodeURIComponent(category);
                 const displayName = (!category || category === '_root') ? filename : `${category}/${filename}`;
                 const fileSizeLabel = formatFileSize(book.file_size);
+                const isDeleting = deletingId === book.book_id;
                 return (
                 <div
                   key={book.book_id}
@@ -169,9 +238,11 @@ export default function SimilarBooks({
                           "noopener",
                         )
                       }
+                      aria-label={`${displayName} 편집`}
+                      title="편집"
                       style={{ marginRight: "4px" }}
                     >
-                      편집
+                      <FontAwesomeIcon icon={faPencil} />
                     </Button>
                     <Button
                       variant="outline-primary"
@@ -183,9 +254,26 @@ export default function SimilarBooks({
                           "noopener",
                         )
                       }
+                      aria-label={`${displayName} 조회`}
+                      title="조회"
                       style={{ marginRight: "4px" }}
                     >
-                      조회
+                      <FontAwesomeIcon icon={faEye} />
+                    </Button>
+                    <Button
+                      variant="outline-danger"
+                      className="btn-xs"
+                      onClick={() => handleDelete(book.book_id, displayName)}
+                      disabled={deletingId !== null}
+                      aria-busy={isDeleting}
+                      aria-label={`${displayName} 삭제`}
+                      title={isDeleting ? "삭제 중..." : "삭제"}
+                      style={{ marginRight: "4px" }}
+                    >
+                      <FontAwesomeIcon
+                        icon={isDeleting ? faSpinner : faTrash}
+                        spin={isDeleting}
+                      />
                     </Button>
                   </div>
                 </div>
