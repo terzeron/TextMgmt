@@ -4381,6 +4381,40 @@ describe("CategoryAdmin 분류 제안", () => {
     );
   });
 
+  it("추천 1이 현재 디렉토리와 같으면 certain이라도 기본 선택하지 않는다", async () => {
+    // 제자리 이동이라 옮길 것이 없다. 자동으로 승인 목록에 들어가면 실제로
+    // 옮겨야 할 행이 몇 개인지 숫자로 안 보인다.
+    const sameCategoryItem = {
+      ...PROPOSAL_ITEM_CERTAIN,
+      file_path: "1_fiction/same.epub",
+      title: "제자리 책",
+      target_category: "1_fiction",
+      candidates: [
+        { category: "1_fiction", source: "model", detail: "모델 판정" },
+      ],
+    };
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 2,
+        processed_count: 2,
+        items: [PROPOSAL_ITEM_CERTAIN, sameCategoryItem],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText("1_fiction/a.epub 추천 1 선택").checked,
+      ).toBe(true);
+    });
+    expect(
+      screen.getByLabelText("1_fiction/same.epub 추천 1 선택").checked,
+    ).toBe(false);
+  });
+
   it("상태가 failed면 에러 메시지를 보여준다 (I2)", async () => {
     const resultRef = {
       current: {

@@ -54,7 +54,10 @@ import {
   updateFolderInTree,
 } from "./folderUtils";
 import { TreeNodeIcon } from "./fileTypeIcons";
-import ClassifyProposalTable, { isSelectable } from "./ClassifyProposalTable";
+import ClassifyProposalTable, {
+  isSelectable,
+  isAlreadyInCurrentCategory,
+} from "./ClassifyProposalTable";
 import "./Folder.css";
 import "./CategoryAdmin.css";
 
@@ -865,10 +868,12 @@ export default function CategoryAdmin({
       const defaults = {};
       for (const item of items) {
         const first = (item.candidates || [])[0];
+        // 추천 1이 이미 있는 디렉토리와 같으면 제자리 이동이라 체크하지 않는다.
         if (
           item.grade === "certain" &&
           first?.category &&
-          item.apply_status !== "moved"
+          item.apply_status !== "moved" &&
+          !isAlreadyInCurrentCategory(item)
         ) {
           defaults[item.file_path] = {
             source: "candidate",

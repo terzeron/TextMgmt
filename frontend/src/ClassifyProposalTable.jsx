@@ -41,6 +41,15 @@ export function isCandidateChecked(item, choices, index) {
   return Boolean((item.candidates || [])[index]?.category);
 }
 
+// 추천 1이 지금 있는 디렉토리와 같은 행. 옮길 것이 없다는 뜻이라 미리 체크하지
+// 않는다 — 자동으로 승인 목록에 들어가면 제자리 이동이 섞여, 실제로 옮겨야 할
+// 행이 몇 개인지 숫자로 안 보인다. 대신 행 배경을 밝은 회색으로 깔아 손볼 행과
+// 눈으로 구분한다. 사람이 직접 체크하는 것까지 막지는 않는다.
+export function isAlreadyInCurrentCategory(item) {
+  const first = (item.candidates || [])[0]?.category;
+  return Boolean(first) && first === item.current_category;
+}
+
 // 직접 선택 셀렉트박스가 보여줄 값. 추천을 체크한 행은 비어 있어야 한다 —
 // 추천 카테고리를 여기에도 채워 넣으면 사용자가 직접 지정한 것처럼 보인다.
 export function manualValue(item, choices) {
@@ -508,7 +517,11 @@ export default function ClassifyProposalTable({
             <tr
               key={item.file_path}
               className={
-                item.apply_status === "failed" ? "table-danger" : undefined
+                item.apply_status === "failed"
+                  ? "table-danger"
+                  : isAlreadyInCurrentCategory(item)
+                    ? "table-secondary"
+                    : undefined
               }
             >
               <td>{item.title || item.file_path}</td>

@@ -10,6 +10,7 @@ import {
 import ClassifyProposalTable, {
   resolveTarget,
   isSelectable,
+  isAlreadyInCurrentCategory,
 } from "../src/ClassifyProposalTable";
 
 // vitest globals(afterEach)가 꺼져 있어 testing-library 자동 cleanup이 동작하지
@@ -814,5 +815,50 @@ describe("ClassifyProposalTable", () => {
     fireEvent.click(screen.getByLabelText("책 정렬"));
 
     expect(titleOrder()).toEqual(["불확실한 책", "애매한 책"]);
+  });
+});
+
+describe("제자리 제안 표시", () => {
+  const SAME = {
+    file_path: "A/same.epub",
+    title: "제자리 책",
+    current_category: "A",
+    target_category: "A",
+    grade: "certain",
+    confidence: 0.95,
+    source: "model",
+    reason: "모델 판정",
+    candidates: [{ category: "A", source: "model", detail: "모델 판정" }],
+    apply_status: "pending",
+  };
+
+  it("추천 1이 현재 디렉토리와 같으면 제자리 행으로 본다", () => {
+    expect(isAlreadyInCurrentCategory(SAME)).toBe(true);
+    expect(isAlreadyInCurrentCategory(ITEMS[0])).toBe(false);
+    // 후보가 아직 없는 행은 제자리 행이 아니다 — 분류가 안 끝났을 뿐이다.
+    expect(
+      isAlreadyInCurrentCategory({ current_category: "A", candidates: [] }),
+    ).toBe(false);
+  });
+
+  it("제자리 행에만 밝은 회색 배경을 깐다", () => {
+    renderTable({ items: [...ITEMS, SAME], choices: {} });
+    expect(screen.getByText("제자리 책").closest("tr").className).toContain(
+      "table-secondary",
+    );
+    expect(screen.getByText("확실한 책").closest("tr").className).not.toContain(
+      "table-secondary",
+    );
+  });
+
+  it("실패 행은 제자리라도 실패 색을 유지한다", () => {
+    // 손봐야 할 행을 회색에 묻으면 안 된다.
+    renderTable({
+      items: [{ ...SAME, apply_status: "failed", apply_error: "권한 없음" }],
+      choices: {},
+    });
+    const row = screen.getByText("제자리 책").closest("tr");
+    expect(row.className).toContain("table-danger");
+    expect(row.className).not.toContain("table-secondary");
   });
 });
