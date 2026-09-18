@@ -386,6 +386,8 @@ export default function CategoryAdmin({
 }) {
   // 공통 상태
   const [loading, setLoading] = useState(false);
+  // 이상 항목 스캔만 따로 기다린다. 트리는 이 값이 true인 동안에도 이미 보인다.
+  const [mismatchLoading, setMismatchLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [showOnlyAbnormal, setShowOnlyAbnormal] = useState(
@@ -493,6 +495,7 @@ export default function CategoryAdmin({
 
   const loadData = useCallback(() => {
     setLoading(true);
+    setMismatchLoading(true);
     setMessage("");
     setLatestExcludedCategories(new Set());
     const latestExcludedRequestId = latestExcludedRequestIdRef.current + 1;
@@ -502,32 +505,20 @@ export default function CategoryAdmin({
     let mismatchResult = null;
     let mappingsResult = null;
     let hiddenResult = null;
-    let completed = 0;
-    let hasError = false;
-    const total = 4;
+    let treeCompleted = 0;
+    let treeReady = false;
+    let treeFailed = false;
+    const treeTotal = 3;
 
-    const tryBuild = () => {
-      completed++;
-      if (completed < total || hasError) return;
-
-      // 매핑 캐시 갱신
-      setMappings(mappingsResult || {});
-      updateCachedMappings(contentType, mappingsResult || {});
-
-      // 비노출 카테고리 설정
-      setHiddenCategories(new Set(hiddenResult || []));
-
-      // ES 문서 수 저장
-      /* v8 ignore next -- categories endpoint success payload is always an object. */
-      setEsDocCounts(categoriesResult || {});
-
+    const buildTree = (mismatchData) => {
       // 불일치 건수
-      const mismatchCounts = buildMismatchCounts(mismatchResult);
-      setMismatchStats(buildMismatchStats(mismatchResult));
+      const mismatchCounts = mismatchData
+        ? buildMismatchCounts(mismatchData)
+        : {};
 
       // 모든 카테고리 목록
       const esCategories = Object.keys(categoriesResult);
-      const fsOnlyCategories = (mismatchResult.fs_only || []).map(
+      const fsOnlyCategories = (mismatchData?.fs_only || []).map(
         (item) => item.category,
       );
       const allCategories = [
@@ -549,7 +540,7 @@ export default function CategoryAdmin({
 
       // 비노출 카테고리에 isHidden 플래그 설정 + 불일치 있는 leaf에 placeholder child
       const hiddenSet = new Set(hiddenResult || []);
-      const enriched = data.map((item) => {
+      return data.map((item) => {
         const enrichItem = (node) => {
           const enriched = { ...node, isHidden: hiddenSet.has(node.id) };
           if (enriched.children) {
@@ -574,10 +565,42 @@ export default function CategoryAdmin({
         };
         return enrichItem(item);
       });
+    };
 
-      setFolderData(enriched);
+    // 이상 항목 스캔(/category-mismatches)만 파일시스템을 훑어 몇 초 걸린다. 나머지
+    // 세 요청은 곧바로 오므로, 먼저 왼쪽 디렉토리를 그려 두고 스캔 결과는 도착한 뒤
+    // 건수로 얹는다. 네 요청을 함께 기다리던 예전 동작에서는 그 몇 초 동안 디렉토리가
+    // 아예 없고 분류 제안만 보였다.
+    const buildTreeWithoutMismatches = () => {
+      treeCompleted++;
+      if (treeCompleted < treeTotal || treeFailed) return;
+
+      // 매핑 캐시 갱신
+      setMappings(mappingsResult || {});
+      updateCachedMappings(contentType, mappingsResult || {});
+
+      // 비노출 카테고리 설정
+      setHiddenCategories(new Set(hiddenResult || []));
+
+      // ES 문서 수 저장
+      /* v8 ignore next -- categories endpoint success payload is always an object. */
+      setEsDocCounts(categoriesResult || {});
+
+      setFolderData(buildTree(null));
       setExpandedItems([]);
       setLoading(false);
+      treeReady = true;
+      applyMismatches();
+    };
+
+    // 스캔 결과가 오면 건수와 fs_only 카테고리를 반영해 트리를 다시 만든다. 노드 id는
+    // 그대로이므로 기다리는 동안 펼쳐 둔 디렉토리는 펼친 채로 남는다.
+    const applyMismatches = () => {
+      if (!treeReady || !mismatchResult) return;
+
+      setMismatchStats(buildMismatchStats(mismatchResult));
+      setFolderData(buildTree(mismatchResult));
+      setMismatchLoading(false);
     };
 
     // 1) 카테고리 목록
@@ -586,12 +609,13 @@ export default function CategoryAdmin({
       null,
       (result) => {
         categoriesResult = result;
-        tryBuild();
+        buildTreeWithoutMismatches();
       },
       (err) => {
-        hasError = true;
+        treeFailed = true;
         setMessage(`카테고리 목록을 불러올 수 없습니다. ${err}`);
         setLoading(false);
+        setMismatchLoading(false);
       },
     );
 
@@ -601,12 +625,12 @@ export default function CategoryAdmin({
       null,
       (result) => {
         mismatchResult = result;
-        tryBuild();
+        applyMismatches();
       },
       (err) => {
-        hasError = true;
+        // 트리는 이미 그려져 있다. 이상 항목 건수만 비운 채로 두고 원인을 알린다.
         setMessage(`불일치 데이터를 불러올 수 없습니다. ${err}`);
-        setLoading(false);
+        setMismatchLoading(false);
       },
     );
 
@@ -616,11 +640,11 @@ export default function CategoryAdmin({
       null,
       (result) => {
         mappingsResult = result;
-        tryBuild();
+        buildTreeWithoutMismatches();
       },
       () => {
         mappingsResult = {};
-        tryBuild();
+        buildTreeWithoutMismatches();
       },
     );
 
@@ -630,11 +654,11 @@ export default function CategoryAdmin({
       null,
       (result) => {
         hiddenResult = result;
-        tryBuild();
+        buildTreeWithoutMismatches();
       },
       () => {
         hiddenResult = [];
-        tryBuild();
+        buildTreeWithoutMismatches();
       },
     );
 
@@ -1072,7 +1096,9 @@ export default function CategoryAdmin({
       (payload) => {
         // 서버가 돌려준 목록을 그대로 쓴다. 직접 append 하면 이미 있는 키워드를 다시
         // 등록했을 때(다른 관리자가 먼저 넣은 경우 등) 같은 배지가 두 번 보인다.
-        const serverKeywords = Array.isArray(payload) ? payload : payload?.result;
+        const serverKeywords = Array.isArray(payload)
+          ? payload
+          : payload?.result;
         setMappings((prev) => {
           const updated = { ...prev };
           updated[selectedCategory] = Array.isArray(serverKeywords)
@@ -1300,7 +1326,9 @@ export default function CategoryAdmin({
   // 다른 카테고리의 작업이 도는 중이라 시작할 수 없을 때는, 버튼이 왜 잠겼는지
   // 알려준다. 그러지 않으면 눌러도 아무 일이 없는 것처럼 보인다.
   const proposalBlockedBy =
-    proposalPolling && !proposalIsForSelection ? proposal?.source_category : null;
+    proposalPolling && !proposalIsForSelection
+      ? proposal?.source_category
+      : null;
 
   const handleClickProposeButton = useCallback(() => {
     if (hasReviewedProposal) {
@@ -1675,7 +1703,9 @@ export default function CategoryAdmin({
   );
 
   const displayedFolderData = useMemo(() => {
-    if (!showOnlyAbnormal) return folderData;
+    // 스캔이 아직 안 끝났으면 건수가 모두 0이다. 그대로 걸러내면 빈 트리가 되므로
+    // 건수가 들어올 때까지는 전체를 보여 준다.
+    if (!showOnlyAbnormal || mismatchLoading) return folderData;
 
     const filterAbnormalItems = (items) =>
       items.flatMap((item) => {
@@ -1698,7 +1728,7 @@ export default function CategoryAdmin({
       });
 
     return filterAbnormalItems(folderData);
-  }, [folderData, showOnlyAbnormal]);
+  }, [folderData, mismatchLoading, showOnlyAbnormal]);
 
   const displayedTreeMeta = useMemo(() => {
     const ids = [];
@@ -1744,32 +1774,9 @@ export default function CategoryAdmin({
   return (
     <>
       {message && <div className="alert alert-danger py-1 mb-2">{message}</div>}
-      {/* 카테고리 목록·불일치·키워드 네 요청이 다 끝나야 아래 화면이 그려진다.
-          그중 불일치 스캔이 몇 초 걸려, 도는 중에 페이지를 다시 열면 그 몇 초 동안
-          "아무 일도 없는" 화면이 보였다. 제안 상태는 자기 요청 하나로 곧바로 오므로
-          먼저 그려 준다 — 진행 중이라는 사실과 대상 목록을 그만큼 일찍 볼 수 있다. */}
-      {loading && proposal && proposal.status !== "idle" && (
-        <Card className="mb-2">
-          <Card.Header className="py-1 d-flex align-items-center gap-2">
-            {proposal.status === "running" && (
-              <Spinner animation="border" size="sm" />
-            )}
-            <strong>{proposal.source_category}</strong>
-            <span className="text-muted">
-              분류 제안 {proposal.processed_count ?? 0}/
-              {proposal.total_count ?? 0}
-            </span>
-          </Card.Header>
-          <Card.Body className="py-2">
-            <ClassifyProposalTable
-              items={proposal.items || []}
-              categories={topLevelCategoryNames}
-              choices={proposalChoices}
-              onChoicesChange={setProposalChoices}
-            />
-          </Card.Body>
-        </Card>
-      )}
+      {/* 로딩 중에 제안 표를 따로 먼저 그리던 카드는 없앴다. 이제 트리가 카테고리
+          목록·키워드·비노출 세 요청만으로 곧바로 나오므로, 왼쪽 디렉토리보다 제안
+          표가 먼저 뜨지 않는다. 제안 표는 오른쪽 칼럼 한 곳에서만 그린다. */}
       {loading ? (
         <div className="text-center p-4">
           <Spinner animation="border" />
@@ -1783,6 +1790,15 @@ export default function CategoryAdmin({
             <Card className="h-100">
               <Card.Header className="py-1 d-flex flex-wrap align-items-center gap-2">
                 <span className="me-auto">디렉토리</span>
+                {/* 스캔이 끝날 때까지는 이상 항목 건수가 없다. 필터도 아직
+                    못 걸므로 집계 중이라는 사실을 여기서 알린다. */}
+                {mismatchLoading && (
+                  <Spinner
+                    animation="border"
+                    size="sm"
+                    aria-label="이상 항목 집계 중"
+                  />
+                )}
                 <Form.Check
                   type="switch"
                   id={`show-only-abnormal-${contentType}`}
@@ -2082,83 +2098,85 @@ export default function CategoryAdmin({
             )}
 
             {/* 분류 제안 검토 · 승인 */}
-            {proposal && proposal.status !== "idle" && proposalIsForSelection && (
-              <Card className="mt-2">
-                <Card.Header className="py-1 d-flex justify-content-between align-items-center">
-                  <strong>분류 제안: {proposal.source_category}</strong>
-                  <span className="text-muted" style={{ fontSize: "0.8rem" }}>
-                    {proposal.processed_count ?? 0} /{" "}
-                    {proposal.total_count ?? 0}
-                  </span>
-                </Card.Header>
-                <Card.Body>
-                  {proposal.status === "failed" && (
-                    // I2: error는 지금까지 상태 파일에만 쌓이고 화면 어디서도 읽지 않았다.
-                    // 제안이 중간에 죽으면(예: 1,200권 중 34권) 스피너만 멈추고 아무 신호가
-                    // 없어, 분류 승인이 (C1/I4가 재시도할 수 있어야 하므로) 계속 켜진 채로
-                    // 관리자가 미완성 제안을 완성됐다고 착각해 승인하기 쉽다. 실패라고
-                    // 막지는 않되(그러면 재시도를 못 한다), 중단됐다는 사실과 어디까지
-                    // 처리됐는지는 분명히 보여준다.
-                    <Alert
-                      variant="danger"
-                      className="py-2 px-3 mb-2"
-                      style={{ fontSize: "0.85rem" }}
-                    >
-                      <strong>작업이 중단됐습니다.</strong>{" "}
-                      {proposal.error || "원인을 알 수 없습니다."}
-                      {typeof proposal.total_count === "number" &&
-                        typeof proposal.processed_count === "number" &&
-                        proposal.processed_count < proposal.total_count && (
-                          <>
-                            {" "}
-                            전체 {proposal.total_count}건 중{" "}
-                            {proposal.processed_count}건까지만 처리됐습니다. 이
-                            제안은 아직 끝나지 않았습니다 — 승인 전에
-                            확인하세요.
-                          </>
-                        )}
-                    </Alert>
-                  )}
-                  <ClassifyProposalTable
-                    items={proposal.items || []}
-                    categories={topLevelCategoryNames}
-                    choices={proposalChoices}
-                    onChoicesChange={setProposalChoices}
-                  />
-                  <div className="d-flex gap-2 mt-2">
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      disabled={
-                        saving ||
-                        !["ready", "done", "failed"].includes(
-                          proposal.status,
-                        ) ||
-                        proposalApplyItems.length === 0
-                      }
-                      onClick={() => setShowProposalApplyModal(true)}
-                    >
-                      분류 승인 ({proposalApplyItems.length}건)
-                    </Button>
-                    <Button
-                      variant="outline-secondary"
-                      size="sm"
-                      disabled={
-                        saving ||
-                        proposal.status === "running" ||
-                        proposal.status === "applying" ||
-                        !(proposal.items || []).some(
-                          (item) => item.apply_status === "moved",
-                        )
-                      }
-                      onClick={() => setShowProposalClearModal(true)}
-                    >
-                      완료 기록 삭제
-                    </Button>
-                  </div>
-                </Card.Body>
-              </Card>
-            )}
+            {proposal &&
+              proposal.status !== "idle" &&
+              proposalIsForSelection && (
+                <Card className="mt-2">
+                  <Card.Header className="py-1 d-flex justify-content-between align-items-center">
+                    <strong>분류 제안: {proposal.source_category}</strong>
+                    <span className="text-muted" style={{ fontSize: "0.8rem" }}>
+                      {proposal.processed_count ?? 0} /{" "}
+                      {proposal.total_count ?? 0}
+                    </span>
+                  </Card.Header>
+                  <Card.Body>
+                    {proposal.status === "failed" && (
+                      // I2: error는 지금까지 상태 파일에만 쌓이고 화면 어디서도 읽지 않았다.
+                      // 제안이 중간에 죽으면(예: 1,200권 중 34권) 스피너만 멈추고 아무 신호가
+                      // 없어, 분류 승인이 (C1/I4가 재시도할 수 있어야 하므로) 계속 켜진 채로
+                      // 관리자가 미완성 제안을 완성됐다고 착각해 승인하기 쉽다. 실패라고
+                      // 막지는 않되(그러면 재시도를 못 한다), 중단됐다는 사실과 어디까지
+                      // 처리됐는지는 분명히 보여준다.
+                      <Alert
+                        variant="danger"
+                        className="py-2 px-3 mb-2"
+                        style={{ fontSize: "0.85rem" }}
+                      >
+                        <strong>작업이 중단됐습니다.</strong>{" "}
+                        {proposal.error || "원인을 알 수 없습니다."}
+                        {typeof proposal.total_count === "number" &&
+                          typeof proposal.processed_count === "number" &&
+                          proposal.processed_count < proposal.total_count && (
+                            <>
+                              {" "}
+                              전체 {proposal.total_count}건 중{" "}
+                              {proposal.processed_count}건까지만 처리됐습니다.
+                              이 제안은 아직 끝나지 않았습니다 — 승인 전에
+                              확인하세요.
+                            </>
+                          )}
+                      </Alert>
+                    )}
+                    <ClassifyProposalTable
+                      items={proposal.items || []}
+                      categories={topLevelCategoryNames}
+                      choices={proposalChoices}
+                      onChoicesChange={setProposalChoices}
+                    />
+                    <div className="d-flex gap-2 mt-2">
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={
+                          saving ||
+                          !["ready", "done", "failed"].includes(
+                            proposal.status,
+                          ) ||
+                          proposalApplyItems.length === 0
+                        }
+                        onClick={() => setShowProposalApplyModal(true)}
+                      >
+                        분류 승인 ({proposalApplyItems.length}건)
+                      </Button>
+                      <Button
+                        variant="outline-secondary"
+                        size="sm"
+                        disabled={
+                          saving ||
+                          proposal.status === "running" ||
+                          proposal.status === "applying" ||
+                          !(proposal.items || []).some(
+                            (item) => item.apply_status === "moved",
+                          )
+                        }
+                        onClick={() => setShowProposalClearModal(true)}
+                      >
+                        완료 기록 삭제
+                      </Button>
+                    </div>
+                  </Card.Body>
+                </Card>
+              )}
 
             {/* 불일치 항목 선택 시 */}
             {selectedMismatch && (

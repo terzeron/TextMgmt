@@ -4375,12 +4375,12 @@ describe("CategoryAdmin 분류 제안", () => {
     );
   });
 
-  it("카테고리 목록이 아직 안 왔어도 제안 진행 상황과 표를 먼저 보여준다", async () => {
-    // 불일치 스캔이 몇 초 걸려, 그동안 "아무 일도 없는" 화면이 보였다. 제안 상태는
-    // 자기 요청 하나로 곧바로 오므로 나머지를 기다리지 않고 먼저 그려야 한다.
+  it("이상 항목 스캔이 안 끝나도 디렉토리를 먼저 그리고 제안 표도 함께 보여준다", async () => {
+    // 이상 항목 스캔만 몇 초 걸린다. 그 몇 초 동안 왼쪽 디렉토리가 아예 없고 제안
+    // 표만 보였다. 이제 디렉토리를 먼저 그리고, 스캔 결과는 나중에 건수로 얹는다.
     mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
       if (url === "/categories") resolve(CATEGORIES_RESPONSE);
-      // 불일치 스캔은 응답하지 않는다 — 나머지 화면은 계속 로딩 중이다.
+      // 불일치 스캔은 응답하지 않는다 — 그래도 디렉토리는 나와야 한다.
       else if (url === "/category-mismatches") return;
       else if (url.startsWith("/category-mismatches/reload-status"))
         resolve({ status: "idle" });
@@ -4399,16 +4399,57 @@ describe("CategoryAdmin 분류 제안", () => {
     });
     render(<CategoryAdmin />);
 
-    // 표의 책 이름과 진행 수가 로딩이 끝나기 전에 보인다.
+    // 왼쪽 디렉토리가 스캔을 기다리지 않고 나온다.
     await waitFor(() => {
-      expect(screen.getByText("확실한 책")).toBeTruthy();
+      expect(screen.getByText("디렉토리")).toBeTruthy();
     });
-    // 카드 헤더의 카테고리명과 행의 "현재" 칸이 같은 이름이라 여러 개가 잡힌다.
-    expect(screen.getAllByText("1_fiction").length).toBeGreaterThan(0);
-    expect(screen.getByText(/분류 제안 2\//)).toBeTruthy();
-    expect(document.querySelector(".spinner-border")).toBeTruthy();
-    // 나머지 화면은 아직 로딩 중이다 — 이 표가 그보다 먼저 나왔다는 뜻이다.
-    expect(screen.getByText("로딩 중...")).toBeTruthy();
+    // 제안 표의 목적지 select에도 같은 이름이 있으므로 트리 안에서만 확인한다.
+    expect(
+      within(screen.getByRole("tree")).getByText("3_history"),
+    ).toBeTruthy();
+    // 스캔이 도는 동안은 이상 항목 집계 중임을 헤더에서 알린다.
+    expect(screen.getByLabelText("이상 항목 집계 중")).toBeTruthy();
+    // 복원된 선택 카테고리의 제안 표와 진행 수도 같이 보인다.
+    expect(screen.getByText("확실한 책")).toBeTruthy();
+    expect(screen.getByText("분류 제안: 1_fiction")).toBeTruthy();
+    expect(screen.getByText(/2 \/ 5/)).toBeTruthy();
+  });
+
+  it("이상 항목 스캔이 오면 건수와 이상 항목만 필터를 적용한다", async () => {
+    // 스캔 전에는 건수가 없어 필터를 걸 수 없다. 그대로 걸러내면 빈 트리가 되므로
+    // 그때까지는 전체를 보여주고, 스캔이 오면 이상 항목만 남긴다.
+    let resolveMismatches = null;
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches") resolveMismatches = resolve;
+      else if (url.startsWith("/category-mismatches/reload-status"))
+        resolve({ status: "idle" });
+      else if (url === "/categories/classify-proposal")
+        resolve({ status: "idle" });
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        resolve(LATEST_EXCLUDED_RESPONSE);
+    });
+    render(<CategoryAdminBase />);
+
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리")).toBeTruthy();
+    });
+    // 토글은 켜져 있지만 건수가 없어 아직 아무것도 숨기지 않는다.
+    expect(screen.getByLabelText("이상 항목만 보기").checked).toBe(true);
+    expect(screen.getByText("3_history")).toBeTruthy();
+
+    await act(async () => {
+      resolveMismatches(MISMATCH_RESPONSE_WITH_DATA);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("3_history")).toBeNull();
+    });
+    expect(screen.getByText("1_fiction")).toBeTruthy();
+    expect(screen.getByText("4_fs_only_cat")).toBeTruthy();
+    expect(screen.queryByLabelText("이상 항목 집계 중")).toBeNull();
   });
 
   it("다른 디렉토리를 선택하면 그 제안 표는 보이지 않는다", async () => {
