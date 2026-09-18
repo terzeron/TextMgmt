@@ -4313,7 +4313,11 @@ describe("CategoryAdmin 분류 제안", () => {
         expect.any(Function),
       );
     });
-    expect(screen.queryByRole("dialog")).toBeNull();
+    // 모달은 react-bootstrap fade 전환이 끝나야 DOM 에서 빠진다. POST 가 나간
+    // 직후에 동기로 보면 아직 남아 있어 간헐적으로 실패한다.
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
   });
 
   it("기존 제안이 없으면 분류 제안 버튼은 확인 모달 없이 바로 시작한다", async () => {
