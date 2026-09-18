@@ -1654,9 +1654,11 @@ def test_search_bookstore_api_branches(dummy_client, monkeypatch):
     monkeypatch.setattr(main_mod.NaverShoppingBookstore, "search", fake_search)
     monkeypatch.setattr(main_mod.NaverSeriesBookstore, "search", fake_search)
     monkeypatch.setattr(main_mod.MunpiaBookstore, "search", fake_search)
+    monkeypatch.setattr(main_mod.KyoboBookstore, "search", fake_search)
 
     assert dummy_client.get("/search/bookstore/yes24?title=t").json()["status"] == "not_found"
     assert dummy_client.get("/search/bookstore/aladin?title=t").json()["status"] == "not_found"
+    assert dummy_client.get("/search/bookstore/kyobo?title=t").json()["status"] == "not_found"
     assert dummy_client.get("/search/bookstore/ridi?title=t").json()["status"] == "not_found"
     assert dummy_client.get("/search/bookstore/naver?title=t").json()["status"] == "not_found"
     assert dummy_client.get("/search/bookstore/naverseries?title=t").json()["status"] == "not_found"

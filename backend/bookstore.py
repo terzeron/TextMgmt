@@ -897,11 +897,14 @@ class KyoboBookstore(AbstractBookstore):
     def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
         info: BookInfo = {"title": "", "author": "", "category": "", "isbn": ""}
         # 제목 추출
-        title_el = soup.select_one("h1.prod_title, .prod_info_title, h2.gd_name")
+        # 종이책 상세는 Next.js 로 바뀌면서 시맨틱 클래스가 사라졌다. 남은 단서가 h1 뿐이라
+        # 옛 셀렉터 뒤에 h1 을 둔다(옛 eBook 페이지는 앞쪽 셀렉터가 여전히 맞는다).
+        title_el = soup.select_one("h1.prod_title, .prod_info_title, h2.gd_name, h1")
         if title_el:
             info["title"] = title_el.get_text(strip=True)
         elif soup.title and soup.title.string:
-            info["title"] = soup.title.string.split("|")[0].strip()
+            # <title> 은 "제목 - 교보문고" 형태다. 서점 이름만 떼고 제목은 자르지 않는다.
+            info["title"] = re.sub(r"\s*[-|]\s*교보문고\s*$", "", soup.title.string).strip()
 
         # 저자 추출
         author_el = soup.select_one(".author.rep, .author a, span.gd_auth a")
@@ -909,7 +912,9 @@ class KyoboBookstore(AbstractBookstore):
             info["author"] = author_el.get_text(strip=True)
 
         # 카테고리 추출
-        cat_els = soup.select("ol.breadcrumb_list > li > a, .breadcrumb a, .btn_sub_depth, .box_detail_category a")
+        # 첫 셀렉터가 신형 종이책 상세(Next.js)의 breadcrumb 이다. 클래스가 없어 카테고리
+        # 링크의 href 로 잡는다. 뒤의 셀렉터들은 구형 마크업을 쓰는 eBook 상세용이다.
+        cat_els = soup.select('a[href*="store.kyobobook.co.kr/category/"], ol.breadcrumb_list > li > a, .breadcrumb a, .btn_sub_depth, .box_detail_category a')
         labels = [el.get_text(strip=True) for el in cat_els if el.get_text(strip=True) not in ["홈", "국내도서", "eBook", "외국도서", "sam"]]
         if labels:
             info["category"] = " > ".join(labels)

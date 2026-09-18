@@ -127,7 +127,7 @@ describe("Bookstore 카테고리 수집", () => {
     });
   };
 
-  it("자동 검색 시 yes24, aladin, naver 세 서점의 카테고리를 수집한다", async () => {
+  it("자동 검색 시 yes24, aladin, kyobo, naver 네 서점의 카테고리를 수집한다", async () => {
     const onCategoriesFound = vi.fn();
 
     mockSearchResponses({
@@ -153,6 +153,17 @@ describe("Bookstore 카테고리 수집", () => {
           },
         ],
       },
+      "/search/bookstore/kyobo": {
+        status: "success",
+        result: [
+          {
+            title: "T",
+            author: "A",
+            category: "소설 > 한국소설 > 한국소설일반",
+            book_url: "u3",
+          },
+        ],
+      },
       "/search/bookstore/naver": {
         status: "success",
         result: [
@@ -160,7 +171,7 @@ describe("Bookstore 카테고리 수집", () => {
             title: "T",
             author: "A",
             category: "도서 > 소설 > 추리/미스터리",
-            book_url: "u3",
+            book_url: "u4",
           },
         ],
       },
@@ -192,8 +203,12 @@ describe("Bookstore 카테고리 수집", () => {
     expect(Object.values(lastCall)).toContain("소설 한국소설");
     // aladin 카테고리
     expect(Object.values(lastCall)).toContain("문학 한국문학");
+    // kyobo 카테고리
+    expect(Object.values(lastCall)).toContain("한국소설 한국소설일반");
     // naver 카테고리
     expect(Object.values(lastCall)).toContain("소설 추리/미스터리");
+    // 교보 결과가 자기 키로 실린다. 자동 검색 목록에서 빠지면 조용히 사라진다.
+    expect(Object.keys(lastCall).some((k) => k.startsWith("kyobo_"))).toBe(true);
   });
 
   it("네이버쇼핑 다중 경로가 개별 키로 분리되어 수집된다", async () => {
@@ -429,10 +444,25 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
     const tabTexts = tabs.map((t) => t.textContent);
     expect(tabTexts).toContain("Yes24");
     expect(tabTexts).toContain("알라딘");
+    expect(tabTexts).toContain("교보문고");
     expect(tabTexts).toContain("네이버쇼핑");
     expect(tabTexts).toContain("RIDI");
     expect(tabTexts).toContain("문피아");
     expect(tabTexts).toContain("시리즈");
+  });
+
+  it("교보문고는 알라딘 바로 뒤 탭이다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />,
+      );
+    });
+    // 탭이 중복 렌더링될 수 있어 첫 등장 순서만 본다.
+    const seen = [];
+    for (const t of screen.getAllByRole("tab")) {
+      if (!seen.includes(t.textContent)) seen.push(t.textContent);
+    }
+    expect(seen.indexOf("교보문고")).toBe(seen.indexOf("알라딘") + 1);
   });
 
   it("ISBN/저자+제목 검색 버튼이 렌더링된다", async () => {

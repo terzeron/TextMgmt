@@ -1183,7 +1183,7 @@ class TestSearchBookstore:
         assert r.status_code == 200
         assert "isbn" not in r.json()["result"][0]
 
-    @pytest.mark.parametrize("store,cls", [("ridi", "RidibooksBookstore"), ("naver", "NaverShoppingBookstore"), ("naverseries", "NaverSeriesBookstore"), ("munpia", "MunpiaBookstore")])
+    @pytest.mark.parametrize("store,cls", [("ridi", "RidibooksBookstore"), ("naver", "NaverShoppingBookstore"), ("naverseries", "NaverSeriesBookstore"), ("munpia", "MunpiaBookstore"), ("kyobo", "KyoboBookstore")])
     def test_other_stores(self, client, store, cls):
         fake_store = MagicMock()
         fake_store.search.return_value = ([], "q", "title")

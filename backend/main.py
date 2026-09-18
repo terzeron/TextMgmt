@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from backend.auth import require_auth, require_admin, optional_auth, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, observation_hash, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
 from backend.book_manager import BookManager, MAX_LATEST_BOOK_COUNT
 from backend.comics_manager import ComicsManager
-from backend.bookstore import Yes24Bookstore, AladinBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
+from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
 from backend.category_mapping import CategoryMapping
 from backend.refresh_token_store import create_refresh_token_store
 from backend.view_history_store import MAX_RECENT_VIEWS, create_view_history_store
@@ -1165,11 +1165,13 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
     지정된 온라인 서점에서 책을 검색하여 상위 결과의 메타데이터를 반환합니다.
     검색 우선순위: ISBN > 제목+저자 > 제목 > 저자
     """
-    store_class = None
+    store_class: type[AbstractBookstore] | None = None
     if store_name.lower() == "yes24":
         store_class = Yes24Bookstore
     elif store_name.lower() == "aladin":
         store_class = AladinBookstore
+    elif store_name.lower() == "kyobo":
+        store_class = KyoboBookstore
     elif store_name.lower() == "ridi":
         store_class = RidibooksBookstore
     elif store_name.lower() == "naver":
