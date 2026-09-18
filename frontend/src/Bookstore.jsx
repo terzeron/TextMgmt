@@ -65,6 +65,8 @@ const STORES = [
   { key: "ridi", label: "RIDI", supportsIsbn: false },
   { key: "munpia", label: "문피아", supportsIsbn: false },
   { key: "naverseries", label: "시리즈", supportsIsbn: false },
+  // 조아라는 웹소설 연재처라 ISBN 이 없다. 제목으로만 찾는다.
+  { key: "joara", label: "조아라", supportsIsbn: false },
 ];
 
 export default function Bookstore(props) {

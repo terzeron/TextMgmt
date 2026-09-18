@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from backend.auth import require_auth, require_admin, optional_auth, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, observation_hash, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
 from backend.book_manager import BookManager, MAX_LATEST_BOOK_COUNT
 from backend.comics_manager import ComicsManager
-from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore
+from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore, JoaraBookstore
 from backend.category_mapping import CategoryMapping
 from backend.refresh_token_store import create_refresh_token_store
 from backend.view_history_store import MAX_RECENT_VIEWS, create_view_history_store
@@ -1180,6 +1180,8 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
         store_class = NaverSeriesBookstore
     elif store_name.lower() == "munpia":
         store_class = MunpiaBookstore
+    elif store_name.lower() == "joara":
+        store_class = JoaraBookstore
     else:
         raise HTTPException(status_code=404, detail="Bookstore not found")
 

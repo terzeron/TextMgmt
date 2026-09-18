@@ -934,6 +934,96 @@ class KyoboBookstore(AbstractBookstore):
         return info
 
 
+class JoaraBookstore(AbstractBookstore):
+    """조아라 웹소설 검색 구현.
+
+    조아라 웹은 검색 결과를 서버에서 그리지 않는다. `/search` 는 빈 SPA 셸이고 목록은
+    브라우저가 api.joara.com 의 JSON 을 받아 그린다. 그래서 HTML 을 긁지 않고 RIDI 와
+    같은 방식으로 API 를 직접 부른다.
+    """
+
+    BASE_URL = "https://www.joara.com"
+    API_URL = "https://api.joara.com/v2/search/query"
+    # 웹 클라이언트가 쓰는 공개 키다. 번들(main.*.chunk.js)에 그대로 박혀 있다.
+    API_KEY = "mw_8ba234e7801ba288554ca07ae44c7"
+    SUPPORTS_ISBN_SEARCH = False  # 조아라 연재물에는 ISBN 이 없다
+
+    def build_search_url(self, keyword: str) -> str:
+        """사용자가 눌러 볼 수 있는 조아라 검색 결과 페이지 URL"""
+        return f"{self.BASE_URL}/search?target=subject&word={quote(keyword)}&search="
+
+    def search(self, isbn: str = "", title: str = "", author: str = "") -> tuple[list[tuple[str, str, str, str, str, str]], str, str]:
+        # 조아라 검색은 target=subject(제목)만 본다. 저자를 붙이면 늘 0건이라 제목만 넘긴다.
+        # 조아라의 저자는 필명이라 제목과 한 문자열로 묶이는 일도 없다.
+        return super().search(isbn="", title=title, author="")
+
+    def search_by_keyword(self, keyword: str) -> list[tuple[str, str, str, str, str, str]]:
+        """조아라 검색 API 직접 호출"""
+        search_url = self.build_search_url(keyword)
+        params = {
+            "api_key": self.API_KEY,
+            "device": "mw",
+            "devicetoken": "mw",
+            # API 가 필수로 요구하지만 값은 검증하지 않는다. 호출마다 새로 만든다.
+            "deviceuid": uuid.uuid4().hex,
+            "query": keyword,
+            "target": "subject",
+            "page": "1",
+            "offset": str(self.MAX_RESULTS),
+            "store": "all",
+            "orderby": "score",
+        }
+
+        try:
+            resp = self.session.get(self.API_URL, params=params, timeout=10, verify=True)
+
+            if resp.status_code != 200:
+                if self.verbose:
+                    logger.warning(f"조아라 API 응답 실패: {resp.status_code}")
+                return []
+
+            data = resp.json()
+            # 조아라는 파라미터가 빠져도 HTTP 200 을 주고 status 로만 실패를 알린다.
+            if data.get("status") != 1:
+                if self.verbose:
+                    logger.warning(f"조아라 API 오류: {data.get('message', '')}")
+                return []
+
+            books = (data.get("data") or {}).get("list") or []
+            if not books:
+                if self.verbose:
+                    logger.info("조아라 검색 결과가 없습니다")
+                return []
+
+            results: list[tuple[str, str, str, str, str, str]] = []
+            for book in books[: self.MAX_RESULTS]:
+                book_code = str(book.get("book_code") or "")
+                title = book.get("subject") or ""
+                author = book.get("member_name") or ""
+                category = book.get("category_name") or ""
+                detail_url = f"{self.BASE_URL}/book/{book_code}" if book_code else ""
+
+                if title and detail_url:
+                    results.append((title, author, category, detail_url, search_url, ""))
+
+            if self.verbose:
+                logger.info(f"조아라에서 {len(results)}개의 검색 결과를 찾았습니다")
+            return results
+
+        except Exception as e:
+            if self.verbose:
+                logger.error(f"조아라 검색 실패: {e}")
+            return []
+
+    def extract_search_links(self, soup: BeautifulSoup) -> list[str]:
+        """조아라는 search_by_keyword를 오버라이드하므로 이 메서드는 사용되지 않음"""
+        return []
+
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
+        """조아라는 search_by_keyword를 오버라이드하므로 이 메서드는 사용되지 않음"""
+        return {"title": "", "author": "", "category": "", "isbn": ""}
+
+
 # 공개 API
 __all__ = [
     "AbstractBookstore",
@@ -944,4 +1034,5 @@ __all__ = [
     "NaverShoppingBookstore",
     "MunpiaBookstore",
     "NaverSeriesBookstore",
+    "JoaraBookstore",
 ]
