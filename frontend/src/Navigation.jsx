@@ -269,7 +269,16 @@ export default function Navigation() {
 
   const renderContent = () => {
     if (sessionLoading) {
-      return null;
+      return (
+        <div
+          className="d-flex justify-content-center align-items-center gap-2 py-5 text-muted"
+          role="status"
+          aria-live="polite"
+        >
+          <FontAwesomeIcon icon={faSpinner} spin />
+          <span>로그인 상태를 확인하는 중입니다.</span>
+        </div>
+      );
     }
 
     if (!login) {
