@@ -1616,6 +1616,7 @@ describe("Edit", () => {
     });
 
     render(<Edit />);
+    expect(screen.getByTestId("folder-closed")).toBeTruthy();
     // 카테고리 책 로드 후 1_fiction/101이 선택되어 책 정보 표시
     await waitFor(() => {
       expect(screen.getByTestId("book-title").textContent).toBe("소설1");
