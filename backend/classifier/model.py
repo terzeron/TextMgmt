@@ -87,6 +87,38 @@ class CategoryModel:
         logger.warning("임계값을 못 정했다. 설정에 min_confidence 를 넣거나 다시 학습할 것")
         return 1.0
 
+    def expected_accuracy(self, confidence: Optional[float]) -> Optional[float]:
+        """확신도를 '이 점수대의 실측 정답률' 로 옮긴다. 보정이 없는 모델이면 None.
+
+        확신도 자체는 79개 클래스 softmax 라 눈금이 사람 기준과 안 맞는다. 0.076 이
+        좋은 점수인지 나쁜 점수인지 화면에서 읽을 수가 없다. 보정을 거치면 0~1 의
+        정답률로 읽힌다.
+        """
+        from backend.classifier.calibration import expected_accuracy
+
+        return expected_accuracy(self.confidence_calibration, confidence)
+
+    @property
+    def confidence_calibration(self) -> Optional[Dict[str, Any]]:
+        """표시용 눈금. 학습이 넣어 둔 것을 먼저 쓰고, 없으면 홀드아웃 곡선에서 만든다.
+
+        옛 모델에는 isotonic 보정이 없다. 그렇다고 지금 다시 잴 수는 없다 - 코퍼스가
+        바뀌어 학습 때의 홀드아웃을 되살릴 수 없고, 억지로 되살리면 학습 문서가 섞여
+        정답률이 부풀려진다. 대신 학습 때 기록해 둔 판정률-정답률 곡선을 쓴다.
+        그 숫자는 진짜 홀드아웃에서 잰 것이라 지금도 유효하다.
+        """
+        from backend.classifier.calibration import from_coverage_report
+
+        cached = self.meta.get("confidence_calibration")
+        if cached:
+            return cached
+        derived = self.meta.get("_derived_calibration")
+        if derived is None:
+            derived = from_coverage_report(self.meta.get("holdout")) or {}
+            # 곡선은 안 바뀐다. 한 번만 만들고 들고 있는다.
+            self.meta["_derived_calibration"] = derived
+        return derived or None
+
     def scores(self, docs: Sequence[Dict[str, Any]]) -> np.ndarray:
         X = self.feature_space.transform(docs)
         d = self.classifier.decision_function(X)

@@ -1372,7 +1372,11 @@ class BookManager:
     #   0.10 ~0.12  n=361   97.5%
     #   0.12 ~      n=332   97.9%
     # 0.10 에 절벽이 있다. 그 아래는 사람이 봐야 하므로 '애매'로 내린다.
-    MODEL_CERTAIN_MIN_CONFIDENCE = 0.10
+    #
+    # 판정 쪽(`BookClassifierService.MODEL_TRUST_MIN_CONFIDENCE`)과 같은 값을 쓴다.
+    # 두 값이 갈라지면 그 사이 구간이 사각지대가 된다: 판정은 모델을 믿어 서점을
+    # 건너뛰는데 화면은 그 답을 인정하지 않아 목적지가 빈다.
+    MODEL_CERTAIN_MIN_CONFIDENCE = BookClassifierService.MODEL_TRUST_MIN_CONFIDENCE
 
     GRADE_CERTAIN = "certain"
     GRADE_UNSURE = "unsure"
@@ -1416,44 +1420,95 @@ class BookManager:
     def _model_alternative_candidate(category: str, score: float) -> dict[str, Any]:
         return {"category": category, "source": "model", "detail": f"모델 대안 {score:.3f}"}
 
-    def _fill_second_with_model(self, candidates: list[dict[str, Any]], model_candidates: list[tuple[str, float]]) -> list[dict[str, Any]]:
+    @staticmethod
+    def _model_decision_floor(classifier_service: Any) -> float:
+        """모델이 '이 점수 미만이면 판정하지 않는다'고 정한 값.
+
+        읽지 못하면 0 을 돌려준다. 게이트가 조용히 모든 대안을 지우는 것보다,
+        게이트가 없던 예전 동작으로 남는 편이 덜 놀랍다.
+        """
+        floor = getattr(getattr(classifier_service, "classifier", None), "min_confidence", None)
+        try:
+            return float(floor) if floor is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _expected_accuracy(classifier_service: Any, confidence: float | None) -> float | None:
+        """확신도를 예상 정답률로 옮긴다. 모델에 보정이 없으면 None.
+
+        보정이 없는 옛 모델에서 억지로 숫자를 만들지 않는다. 화면은 None 을 받으면
+        예전처럼 확신도만 보여준다.
+        """
+        fn = getattr(getattr(classifier_service, "classifier", None), "expected_accuracy", None)
+        if not callable(fn):
+            return None
+        try:
+            value = fn(confidence)
+        except Exception:
+            return None
+        return float(value) if value is not None else None
+
+    def _fill_second_with_model(self, candidates: list[dict[str, Any]], model_candidates: list[tuple[str, float]], min_score: float = 0.0) -> list[dict[str, Any]]:
         """2순위가 빈 채로 나가지 않도록 모델이 매긴 다음 후보를 붙인다.
 
         키워드가 목적지를 정하면 모델 답은 통째로 버려졌다. 키워드가 하나만 맞은
         흔한 경우에 추천 2 칸이 늘 비어, 관리자가 "이건 아닌데" 싶어도 2,000개짜리
         드롭다운으로 갈 수밖에 없었다. 모델이 이미 계산해 둔 답을 대안으로 보여준다.
         모델 판정 경로에서는 같은 자리에 모델의 2순위가 들어간다.
+
+        단 `min_score`(모델의 판정 임계값) 미만은 붙이지 않는다. 그 점수는 모델이
+        같은 턴에 "확신도가 모자라 판정하지 않음"으로 이미 버린 값이다. 버린 답을
+        추천 칸에 올리면 관리자가 근거 있는 추천으로 읽는다. 서점 3곳이 한목소리로
+        말한 행 옆에 0.046 짜리 카테고리가 나란히 서던 것이 이 경우다.
         """
         if len(candidates) >= 2:
             return candidates
         taken = {candidate["category"] for candidate in candidates}
         for category, score in model_candidates:
+            if category in taken:
+                continue
+            if score < min_score:
+                break
+            candidates.append(self._model_alternative_candidate(category, score))
+            break
+        return candidates
+
+    def _fill_second_with_bookstore(self, candidates: list[dict[str, Any]], bookstore_candidates: list[tuple[str, int]]) -> list[dict[str, Any]]:
+        """2순위를 서점 득표로 채운다. 이미 나온 카테고리는 건너뛴다.
+
+        서점 득표는 모델 대안보다 먼저다. 득표는 세 곳이 실제로 그렇게 진열한다는
+        사실이고, 모델 대안은 임계값을 못 넘긴 추측이다.
+        """
+        if len(candidates) >= 2:
+            return candidates
+        taken = {candidate["category"] for candidate in candidates}
+        for category, count in bookstore_candidates:
             if category not in taken:
-                candidates.append(self._model_alternative_candidate(category, score))
+                candidates.append(self._bookstore_candidate(category, count))
                 break
         return candidates
 
-    def _build_candidates(self, target: str | None, method: str, model_category: str | None, bookstore_candidates: list[tuple[str, int]], model_candidates: list[tuple[str, float]] | None = None) -> list[dict[str, Any]]:
+    def _build_candidates(self, target: str | None, method: str, model_category: str | None, bookstore_candidates: list[tuple[str, int]], model_candidates: list[tuple[str, float]] | None = None, min_score: float = 0.0) -> list[dict[str, Any]]:
         """키워드가 정하지 못했을 때(target=None인 tie 경로는 호출자가 직접 조립한다)
         candidates를 만든다.
 
         1위는 항상 이미 정해진 target을 그대로 앵커링한다 — candidates에서 target을
         역산하지 않는다. 그래야 후보를 더 보여줘도 등급 판정이 정한 값이 절대
-        안 바뀐다. 2위는 method별로 구할 수 있을 때만 덧붙인다: 서점 다수결이면
-        차점 서점 득표, 모델·서점 단독 판정은 대안이 없어 1개로 끝난다.
+        안 바뀐다. 2위는 서점 득표를 먼저 보고, 없을 때만 모델 대안으로 채운다.
         """
         model_candidates = model_candidates or []
         if target:
             if method == "bookstore_majority":
                 candidates = [self._bookstore_majority_candidate(target, bookstore_candidates)]
-                for category, count in bookstore_candidates:
-                    if category != target:
-                        candidates.append(self._bookstore_candidate(category, count))
-                        break
-                return self._fill_second_with_model(candidates, model_candidates)
+                candidates = self._fill_second_with_bookstore(candidates, bookstore_candidates)
+                return self._fill_second_with_model(candidates, model_candidates, min_score)
             if method == "bookstore_single":
-                return self._fill_second_with_model([self._bookstore_candidate(target, self._vote_count_for(target, bookstore_candidates))], model_candidates)
-            return self._fill_second_with_model([self._model_candidate(target)], model_candidates)
+                candidates = [self._bookstore_candidate(target, self._vote_count_for(target, bookstore_candidates))]
+                candidates = self._fill_second_with_bookstore(candidates, bookstore_candidates)
+                return self._fill_second_with_model(candidates, model_candidates, min_score)
+            candidates = self._fill_second_with_bookstore([self._model_candidate(target)], bookstore_candidates)
+            return self._fill_second_with_model(candidates, model_candidates, min_score)
 
         if method == "conflict":
             # 갈렸을 때 버리던 득표 상위 2개를 그대로 보여준다. target은 여전히 None이다.
@@ -1462,7 +1517,11 @@ class BookManager:
         if model_category:
             # not_found거나 모델 확신도가 낮아 목적지로 못 쓴 경우, 낮은 확신도 답이라도
             # 있으면 후보로 보여준다. 없으면 정말 아무 근거도 없는 것이다.
-            return self._fill_second_with_model([self._model_candidate(model_category)], model_candidates)
+            candidates = self._fill_second_with_bookstore([self._model_candidate(model_category)], bookstore_candidates)
+            return self._fill_second_with_model(candidates, model_candidates, min_score)
+        if bookstore_candidates:
+            # 모델도 답을 안 했다. 그래도 서점이 남긴 득표가 있으면 그것이 유일한 근거다.
+            return [self._bookstore_candidate(category, count) for category, count in bookstore_candidates[:2]]
         return []
 
     def _bookstore_majority_candidate(self, target: str, bookstore_candidates: list[tuple[str, int]]) -> dict[str, Any]:
@@ -1508,6 +1567,11 @@ class BookManager:
             reason = reason or classifier_reason or ""
 
         high = self._is_high_confidence(classifier_service, confidence)
+        # 모델이 스스로 버린 점수를 추천 칸에 올리지 않기 위한 하한.
+        min_score = self._model_decision_floor(classifier_service)
+        # 확신도는 79개 클래스 softmax 라 0.05 와 0.07 의 차이를 화면에서 읽을 수 없다.
+        # 홀드아웃으로 학습한 계단을 거쳐 0~1 의 예상 정답률로 바꿔 함께 보낸다.
+        accuracy = self._expected_accuracy(classifier_service, confidence)
 
         if keyword_category:
             # 키워드가 목적지를 하나로 정했어도, 모델이 다른 곳을 자신 있게 가리키면
@@ -1522,14 +1586,14 @@ class BookManager:
                     break
             # 키워드가 하나만 맞으면 2순위가 빈다. 모델이 이미 낸 답을 대안으로 붙인다 —
             # 키워드가 정한 목적지가 틀렸을 때 관리자가 바로 고를 것이 생긴다.
-            candidates = self._fill_second_with_model(candidates, model_candidates)
-            return {"target_category": keyword_category, "grade": grade, "confidence": confidence, "source": "keyword", "matched_keywords": matched_keywords, "model_category": model_category if model_category != keyword_category else None, "reason": reason, "candidates": candidates}
+            candidates = self._fill_second_with_model(candidates, model_candidates, min_score)
+            return {"target_category": keyword_category, "grade": grade, "confidence": confidence, "expected_accuracy": accuracy, "source": "keyword", "matched_keywords": matched_keywords, "model_category": model_category if model_category != keyword_category else None, "reason": reason, "candidates": candidates}
 
         if tie_reason:
             # 동점이면 등급은 unknown 그대로다 — 후보 2개를 보여줘도 시스템이 못 정했다는
             # 사실은 바뀌지 않는다. 사람이 셀렉트박스로 골라야 체크박스가 켜진다.
-            candidates = self._fill_second_with_model([self._keyword_candidate(category, keywords) for category, keywords in keyword_ranked[:2]], model_candidates)
-            return {"target_category": None, "grade": self.GRADE_UNKNOWN, "confidence": confidence, "source": "keyword", "matched_keywords": matched_keywords, "model_category": model_category, "reason": tie_reason, "candidates": candidates}
+            candidates = self._fill_second_with_model([self._keyword_candidate(category, keywords) for category, keywords in keyword_ranked[:2]], model_candidates, min_score)
+            return {"target_category": None, "grade": self.GRADE_UNKNOWN, "confidence": confidence, "expected_accuracy": accuracy, "source": "keyword", "matched_keywords": matched_keywords, "model_category": model_category, "reason": tie_reason, "candidates": candidates}
 
         if method == "model" and high and classified_category:
             grade, target = self.GRADE_CERTAIN, classified_category
@@ -1541,8 +1605,8 @@ class BookManager:
             # 점수가 낮은 모델 답은 목적지로 쓰지 않는다. 근거에만 남긴다.
             grade, target = self.GRADE_UNKNOWN, None
 
-        candidates = self._build_candidates(target, method, model_category, bookstore_candidates, model_candidates)
-        return {"target_category": target, "grade": grade, "confidence": confidence, "source": method, "matched_keywords": matched_keywords, "model_category": model_category, "reason": reason, "candidates": candidates}
+        candidates = self._build_candidates(target, method, model_category, bookstore_candidates, model_candidates, min_score)
+        return {"target_category": target, "grade": grade, "confidence": confidence, "expected_accuracy": accuracy, "source": method, "matched_keywords": matched_keywords, "model_category": model_category, "reason": reason, "candidates": candidates}
 
     @classmethod
     def fill_missing_book_ids(cls, items: list[dict[str, Any]], path_prefix: Path) -> list[dict[str, Any]]:
@@ -1616,7 +1680,25 @@ class BookManager:
                 rel_path = str(file_path.relative_to(self.path_prefix))
             except ValueError:
                 continue
-            placeholders.append({"file_path": rel_path, "book_id": self._book_id_for_path(file_path), "title": file_path.stem, "current_category": category, "target_category": None, "grade": None, "confidence": None, "source": None, "matched_keywords": [], "model_category": None, "reason": "", "candidates": [], "apply_status": "pending", "apply_error": None})
+            placeholders.append(
+                {
+                    "file_path": rel_path,
+                    "book_id": self._book_id_for_path(file_path),
+                    "title": file_path.stem,
+                    "current_category": category,
+                    "target_category": None,
+                    "grade": None,
+                    "confidence": None,
+                    "expected_accuracy": None,
+                    "source": None,
+                    "matched_keywords": [],
+                    "model_category": None,
+                    "reason": "",
+                    "candidates": [],
+                    "apply_status": "pending",
+                    "apply_error": None,
+                }
+            )
         # 한 번에 다 보내면 카테고리가 클 때(최대 79,589권) 패킷 하나가 지나치게 커진다.
         for start in range(0, len(placeholders), self.PROPOSAL_PLACEHOLDER_CHUNK):
             await _report({"new_items": placeholders[start : start + self.PROPOSAL_PLACEHOLDER_CHUNK]})

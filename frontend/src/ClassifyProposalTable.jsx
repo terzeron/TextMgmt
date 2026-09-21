@@ -16,6 +16,33 @@ import { faPencil, faTrash, faSpinner } from "@fortawesome/free-solid-svg-icons"
 // 이렇게 두면 "추천 1 체크"와 "직접 선택"이 동시에 켜지는 상태가 아예 만들어지지
 // 않는다. 직접 선택을 바꾸면 source가 manual로 덮이므로 추천 체크는 저절로 꺼진다.
 
+// 점수 열에 무엇을 보여줄 것인가.
+//
+// 확신도(item.confidence)는 79개 카테고리에 softmax를 씌운 값이라 눈금이 사람
+// 기준과 안 맞는다. 바닥이 1/79 = 0.013이고 판정 임계값이 0.056, 위쪽이 0.13쯤이다.
+// 소수 둘째 자리로 자르면 거의 모든 행이 0.05·0.06·0.07 세 값으로 뭉개진다.
+//
+// 그래서 모델이 홀드아웃에서 학습한 보정(expected_accuracy)이 있으면 그것을 쓴다.
+// 0~1의 예상 정답률이라 0.93이 "대체로 맞다"로 그대로 읽힌다. 보정이 없는 옛
+// 모델에서는 확신도를 그대로 보여주되 셋째 자리까지 남겨 행끼리 구분되게 한다.
+export function scoreValue(item) {
+  return item?.expected_accuracy ?? item?.confidence ?? null;
+}
+
+export function formatScore(item) {
+  if (item?.expected_accuracy != null) return item.expected_accuracy.toFixed(2);
+  if (item?.confidence != null) return item.confidence.toFixed(3);
+  return "-";
+}
+
+export function scoreTitle(item) {
+  if (item?.confidence == null) return "점수 없음";
+  if (item?.expected_accuracy == null) {
+    return `모델 확신도 ${item.confidence.toFixed(3)} (보정 없음)`;
+  }
+  return `예상 정답률 ${item.expected_accuracy.toFixed(2)} · 모델 확신도 ${item.confidence.toFixed(3)}`;
+}
+
 export function resolveTarget(item, choices) {
   return choices[item.file_path]?.category ?? "";
 }
@@ -178,7 +205,7 @@ export const SORT_COLUMNS = {
   title: (item) => item.title || item.file_path,
   candidate0: (item) => (item.candidates || [])[0]?.category ?? null,
   candidate1: (item) => (item.candidates || [])[1]?.category ?? null,
-  confidence: (item) => item.confidence ?? null,
+  confidence: (item) => scoreValue(item),
   applyStatus: (item) => APPLY_STATUS_ORDER[item.apply_status] ?? 0,
 };
 
@@ -471,9 +498,9 @@ export default function ClassifyProposalTable({
           </th>
           <th aria-sort={ariaSort("confidence")}>
             <div className="d-flex gap-2 align-items-center">
-              점수
+              예상 정답률
               <SortButton
-                label="점수"
+                label="예상 정답률"
                 active={sort.key === "confidence"}
                 dir={sort.dir}
                 onClick={() => toggleSort("confidence")}
@@ -579,7 +606,7 @@ export default function ClassifyProposalTable({
                 )}
               </td>
               <td>
-                {item.confidence == null ? "-" : item.confidence.toFixed(2)}
+                <span title={scoreTitle(item)}>{formatScore(item)}</span>
                 {/* 키워드가 목적지를 정했는데 모델이 다른 카테고리를 자신 있게 가리키면,
                     이 점수는 모델의 확신도이지 위 추천1(키워드 목적지)의 점수가 아니다.
                     구분 없이 보여주면 "0.91"이 화면에 보이는 카테고리의 확신도로
