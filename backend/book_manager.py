@@ -128,6 +128,16 @@ class BookManager:
     _page_count_cache: "OrderedDict[tuple[str, float], int]" = OrderedDict()
     HTML_VIEWER_RESOURCE_EXTENSIONS = {".css", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".tiff", ".ico", ".avif", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".ogg", ".wav", ".mp4", ".webm"}
     HTML_VIEWER_CSP = "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' blob:;"
+    # XHTML 에서는 <title/> 이 유효하지만 HTML 파서는 title/script/style/textarea 의
+    # 자기닫힘 표기를 인정하지 않는다. epub.js 는 챕터를 iframe.srcdoc 에 넣어 HTML 로
+    # 파싱시키므로, 닫는 태그가 나올 때까지인 문서 끝까지가 그 요소의 텍스트로 삼켜져
+    # body 가 비고 화면이 백지가 된다. 원본은 두고 프리뷰 산출물에서만 쌍으로 편다.
+    SELF_CLOSING_RCDATA_PATTERN = re.compile(rb"<(title|script|style|textarea)(\s[^<>]*?)?\s*/>", re.IGNORECASE)
+    XHTML_SUFFIXES = (".xhtml", ".html", ".htm")
+
+    @staticmethod
+    def _expand_self_closing_rcdata(data: bytes) -> bytes:
+        return BookManager.SELF_CLOSING_RCDATA_PATTERN.sub(rb"<\1\2></\1>", data)
 
     @classmethod
     def _html_security_headers(cls) -> dict[str, str]:
@@ -997,6 +1007,8 @@ class BookManager:
 
                                         css_text = font_face_pattern.sub(_strip_missing_font, css_text)
                                         data = css_text.encode("utf-8")
+                                    elif zp.lower().endswith(BookManager.XHTML_SUFFIXES):
+                                        data = BookManager._expand_self_closing_rcdata(data)
                                     zout.writestr(zp, data)
                                 except KeyError:
                                     LOGGER.warning("EPUB preview: missing file in archive: %s", zp)
