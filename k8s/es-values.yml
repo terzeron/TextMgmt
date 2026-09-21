@@ -16,7 +16,17 @@ eck-elasticsearch:
     - name: default
       count: 1
       config:
-        node.store.allow_mmap: false
+        # node.store.allow_mmap 은 두지 않는다(기본값 true).
+        # false 로 두면 ES 가 mmapfs 대신 niofs 로 떨어져 세그먼트 읽기가 전부
+        # syscall + 버퍼 복사가 된다. 실제로 ES 프로세스의 mmap 이 675개뿐이었다
+        # (2026-09-21 실측). 이 설정은 vm.max_map_count 가 기본값(65530)인 노드에서
+        # ES 가 기동하지 못하는 것을 피하려는 우회책인데, 이 노드는
+        # /usr/lib/sysctl.d/55-map-count.conf 가 1048576 으로 영구 설정해 둬서
+        # 우회할 이유가 없다.
+        #
+        # 주의: 노드를 옮기거나 위 sysctl 파일이 사라지면 ES 가 bootstrap check 에서
+        # 기동을 거부한다. 그때는 이 값을 되살리지 말고 sysctl 을 먼저 확인한다.
+        #
         # cpu limit(2코어)은 컨테이너 안에서 nproc으로 보면 호스트의 16코어 그대로 보여서
         # 스레드풀(search=25, write=16, get=25 등)이 16코어 기준으로 과대산정되고,
         # 실제 CFS 쿼터(2코어)를 넘는 순간 커널이 쓰로틀링해 간헐적 지연을 일으켰다
