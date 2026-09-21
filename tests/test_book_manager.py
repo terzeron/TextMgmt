@@ -5904,3 +5904,55 @@ def test_apply_category_changes_retrying_moving_row_when_move_never_happened(tmp
     assert result["results"][0]["apply_status"] == "moved"
     assert not (tmp_path / "A" / "book.epub").exists()
     assert (tmp_path / "5_음악" / "book.epub").is_file()
+
+
+class ThreadRecordingES(DummyES):
+    """ES 호출이 어느 스레드에서 실행됐는지 기록한다."""
+
+    def __init__(self, doc: dict | None = None):
+        super().__init__(doc)
+        self.call_threads: dict[str, int] = {}
+
+    def _record(self, name: str):
+        self.call_threads[name] = threading.get_ident()
+
+    def search_and_aggregate_by_category(self):
+        self._record("search_and_aggregate_by_category")
+        return self.aggregate
+
+    def search_by_id(self, book_id: int):
+        self._record("search_by_id")
+        return super().search_by_id(book_id)
+
+    def search_by_category_paged(self, category: str, size: int = 500, search_after=None):
+        self._record("search_by_category_paged")
+        return super().search_by_category_paged(category, size=size, search_after=search_after)
+
+    def search_latest_docs(self, max_result_count: int = 100, exclude_categories=None):
+        self._record("search_latest_docs")
+        return [], 0
+
+    def search_by_keyword_paged(self, *args, **kwargs):
+        self._record("search_by_keyword_paged")
+        return self.keyword_paged
+
+
+class TestEsReadsDoNotBlockEventLoop:
+    """동기 elasticsearch 클라이언트를 이벤트 루프에서 직접 부르면 그 왕복 동안
+    같은 워커의 다른 요청이 전부 멈춘다. 읽기 경로는 워커 스레드로 넘겨야 한다."""
+
+    @pytest.mark.asyncio
+    async def test_read_paths_run_off_the_event_loop_thread(self, tmp_path):
+        es = ThreadRecordingES()
+        manager = make_manager(tmp_path, es)
+        loop_thread = threading.get_ident()
+
+        await manager.get_categories()
+        await manager.get_book(1)
+        await manager.get_books_in_category_paged("A", size=10)
+        await manager.get_latest_books(size=10)
+        await manager.search_by_keyword_paged("k", size=10)
+
+        assert set(es.call_threads) == {"search_and_aggregate_by_category", "search_by_id", "search_by_category_paged", "search_latest_docs", "search_by_keyword_paged"}
+        blocking = [name for name, tid in es.call_threads.items() if tid == loop_thread]
+        assert blocking == [], f"이벤트 루프 스레드에서 실행된 ES 호출: {blocking}"

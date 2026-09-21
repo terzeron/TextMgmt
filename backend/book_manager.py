@@ -513,11 +513,11 @@ class BookManager:
 
     async def get_categories(self) -> tuple[dict[str, int], str | None]:
         LOGGER.debug("# get_categories()")
-        categories = self.es_manager.search_and_aggregate_by_category()
+        categories = await asyncio.to_thread(self.es_manager.search_and_aggregate_by_category)
         return categories, None
 
     async def get_books_in_category(self, category: str) -> tuple[list[Book], str | None]:
-        doc_list = self.es_manager.search_by_category(category, max_result_count=MAX_CATEGORY_RESULT_COUNT)
+        doc_list = await asyncio.to_thread(self.es_manager.search_by_category, category, max_result_count=MAX_CATEGORY_RESULT_COUNT)
         if len(doc_list) >= MAX_CATEGORY_RESULT_COUNT:
             LOGGER.warning("get_books_in_category: category '%s' 결과가 상한(%d)에 도달하여 잘렸습니다.", category, MAX_CATEGORY_RESULT_COUNT)
         if doc_list and len(doc_list) > 0:
@@ -536,14 +536,14 @@ class BookManager:
         search_after = decode_category_cursor(cursor) if cursor else None
         if cursor and search_after is None:
             return [], 0, None, "invalid cursor"
-        doc_list, total, next_search_after = self.es_manager.search_by_category_paged(category, size=size, search_after=search_after)
+        doc_list, total, next_search_after = await asyncio.to_thread(self.es_manager.search_by_category_paged, category, size=size, search_after=search_after)
         books = [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in doc_list]
         next_cursor = encode_category_cursor(next_search_after) if next_search_after else None
         return books, total, next_cursor, None
 
     async def get_book(self, book_id: int) -> tuple[Book | None, str | None]:
         LOGGER.debug("# get_book(book_id=%d)", book_id)
-        doc = self.es_manager.search_by_id(book_id)
+        doc = await asyncio.to_thread(self.es_manager.search_by_id, book_id)
         if doc:
             return self.item_class(book_id=book_id, info=doc), None
         return None, f"No book found by '{book_id}'"
@@ -551,7 +551,7 @@ class BookManager:
     async def get_latest_books(self, size: int = MAX_LATEST_BOOK_COUNT, exclude_categories: list[str] | None = None) -> tuple[list[Book], int, str | None]:
         LOGGER.debug("# get_latest_books(size=%d, exclude_categories=%s)", size, exclude_categories)
         size = max(1, min(size, MAX_LATEST_BOOK_COUNT))
-        result_list, total = self.es_manager.search_latest_docs(max_result_count=size, exclude_categories=exclude_categories)
+        result_list, total = await asyncio.to_thread(self.es_manager.search_latest_docs, max_result_count=size, exclude_categories=exclude_categories)
         return [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in result_list], total, None
 
     def _backfill_created_time_if_enabled(self) -> None:
@@ -1088,34 +1088,34 @@ class BookManager:
 
     async def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> tuple[list[Book], str | None]:
         LOGGER.debug("# search_by_keyword(keyword='%s')", keyword)
-        result_list = self.es_manager.search_by_keyword(keyword, max_result_count=max_result_count)
+        result_list = await asyncio.to_thread(self.es_manager.search_by_keyword, keyword, max_result_count=max_result_count)
         if result_list and len(result_list) > 0:
             return [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in result_list], None
         return [], "No books found"
 
     async def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: list[str] | None = None) -> tuple[list[Book], int, str | None]:
         LOGGER.debug("# search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s)", keyword, size, offset, exclude_categories)
-        result_list, total = self.es_manager.search_by_keyword_paged(keyword, size=size, offset=offset, exclude_categories=exclude_categories)
+        result_list, total = await asyncio.to_thread(self.es_manager.search_by_keyword_paged, keyword, size=size, offset=offset, exclude_categories=exclude_categories)
         if result_list:
             return ([self.item_class(book_id=bid, info=doc) for bid, doc, _ in result_list], total, None)
         return [], total, None
 
     async def search_similar_books(self, book_id: int, max_result_count: int = -1) -> tuple[list[Book], str | None]:
         LOGGER.debug("# search_similar_books(book_id=%d)", book_id)
-        doc = self.es_manager.search_by_id(book_id)
+        doc = await asyncio.to_thread(self.es_manager.search_by_id, book_id)
         if not doc:
             return [], f"No book found with id '{book_id}'"
-        result_list = self.es_manager.search_similar_docs(doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], exclude_id=book_id, max_result_count=max_result_count)
+        result_list = await asyncio.to_thread(self.es_manager.search_similar_docs, doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], exclude_id=book_id, max_result_count=max_result_count)
         if result_list and len(result_list) > 0:
             return [self.item_class(book_id=doc_id, info=similar_doc) for doc_id, similar_doc, _score in result_list], None
         return [], "No similar books found"
 
     async def search_similar_books_paged(self, book_id: int, size: int = 10, offset: int = 0) -> tuple[list[Book], int, str | None]:
         LOGGER.debug("# search_similar_books_paged(book_id=%d, size=%d, offset=%d)", book_id, size, offset)
-        doc = self.es_manager.search_by_id(book_id)
+        doc = await asyncio.to_thread(self.es_manager.search_by_id, book_id)
         if not doc:
             return [], 0, f"No book found with id '{book_id}'"
-        result_list, total = self.es_manager.search_similar_docs_paged(doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], exclude_id=book_id, size=size, offset=offset)
+        result_list, total = await asyncio.to_thread(self.es_manager.search_similar_docs_paged, doc["category"], doc["title"], doc["author"], doc["file_type"], doc["file_size"], doc["summary"][:3500], exclude_id=book_id, size=size, offset=offset)
         if result_list:
             return ([self.item_class(book_id=did, info=sdoc, score=score) for did, sdoc, score in result_list], total, None)
         return [], total, "No similar books found"

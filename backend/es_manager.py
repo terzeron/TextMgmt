@@ -22,6 +22,15 @@ logging.getLogger("elasticsearch").setLevel(logging.CRITICAL)
 class ESManager:
     DEFAULT_MAX_RESULT_COUNT = 10
 
+    # 목록 응답(Book.dict()/Comics.dict())에 summary 가 없는데도 _source 를 통째로
+    # 받아오면 500건 페이지가 3.67MB 가 되고 그 97.7%가 파싱 직후 버려지는 summary 다.
+    # 여기 필드만 받으면 같은 페이지가 83KB 다 (2026-09-21 실측, 44배).
+    #
+    # summary 가 필요한 경로는 search_by_id(단건 get)뿐이므로 거기에는 적용하지 않는다.
+    # 분류기(backend/classifier/corpus.py)는 self.es 를 직접 쓰고 자체 SOURCE_FIELDS 를
+    # 넘기므로 이 상수의 영향을 받지 않는다.
+    LIST_SOURCE_FIELDS = ["category", "title", "author", "file_path", "file_type", "file_size", "line_count", "page_count", "isbn", "created_time", "updated_time"]
+
     def __init__(self, index_name: str = "") -> None:
         for env in ["TM_ES_BOOK_INDEX", "TM_ES_URL", "TM_ES_USER", "TM_ES_PASSWORD"]:
             if env not in os.environ:
@@ -211,7 +220,7 @@ class ESManager:
         if self.do_exist_index():
             self.es.indices.delete(index=self.index_name)
 
-    def _search(self, query: dict[str, Any], sort: list[str] | str | None = None, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
+    def _search(self, query: dict[str, Any], sort: list[str] | str | None = None, max_result_count: int = -1, source_fields: list[str] | None = None) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
 
@@ -222,7 +231,7 @@ class ESManager:
 
         # 10,000개 이하면 scroll 없이 단순 검색 (scroll 컨텍스트 오버헤드 회피)
         if max_result_count <= 10000:
-            response = self.es.search(index=self.index_name, query=query, sort=sort, size=size, track_scores=True)
+            response = self.es.search(index=self.index_name, query=query, sort=sort, size=size, track_scores=True, source=source_fields)
             max_score = response["hits"].get("max_score")
             if max_score is None:
                 return []
@@ -271,12 +280,12 @@ class ESManager:
                 except Exception as e:
                     LOGGER.debug("Failed to clear scroll: %s", e)
 
-    def _search_paged(self, query: dict[str, Any], sort: list[str] | str | None = None, size: int = 10, offset: int = 0, ref_score: float = 0.0) -> tuple[list[tuple[int, dict[str, Any], float]], int]:
+    def _search_paged(self, query: dict[str, Any], sort: list[str] | str | None = None, size: int = 10, offset: int = 0, ref_score: float = 0.0, source_fields: list[str] | None = None) -> tuple[list[tuple[int, dict[str, Any], float]], int]:
         """(results, total_count) 튜플을 반환하는 페이지네이션 검색
         ref_score: 정규화 기준 점수. 0이면 결과 내 max_score를 사용."""
         size = min(size, 10000)
         LOGGER.debug("_search_paged(size=%d, offset=%d, query='%s')", size, offset, query)
-        response = self.es.search(index=self.index_name, query=query, sort=sort, from_=offset, size=size, track_scores=True, track_total_hits=True)
+        response = self.es.search(index=self.index_name, query=query, sort=sort, from_=offset, size=size, track_scores=True, track_total_hits=True, source=source_fields)
         total = response["hits"]["total"]["value"]
         base_score = ref_score if ref_score > 0 else (response["hits"]["max_score"] or 0)
         if base_score <= 0:
@@ -292,7 +301,7 @@ class ESManager:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_title(max_result_count=%d, title='%s', file_type='%s', file_size=%d)", max_result_count, title, file_type, file_size)
         query = {"bool": {"should": [{"match": {"title": {"query": title, "boost": 1.2 + math.log2(len(title.split(" ")))}}}, {"match": {"file_type": {"query": file_type, "boost": 1}}}, {"match": {"file_size": {"query": file_size, "boost": 1}}}]}}
-        return self._search(query, max_result_count=max_result_count)
+        return self._search(query, max_result_count=max_result_count, source_fields=self.LIST_SOURCE_FIELDS)
 
     def search_by_category(self, category: str, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
@@ -301,7 +310,7 @@ class ESManager:
         query = {"term": {"category": category}}
         sort = ["author.keyword", "title.keyword"]
 
-        return self._search(query, sort=sort, max_result_count=max_result_count)
+        return self._search(query, sort=sort, max_result_count=max_result_count, source_fields=self.LIST_SOURCE_FIELDS)
 
     # 카테고리 목록의 전순서 정렬. 화면 표시 순서(제목)와 일치시켜야 페이지를
     # 이어붙여도 순서가 어긋나지 않는다. file_path를 tie-breaker로 써서 커서가 한
@@ -320,7 +329,7 @@ class ESManager:
         반환: (문서 목록, 전체 건수, 다음 커서 | None)
         """
         LOGGER.debug("search_by_category_paged(category='%s', size=%d, search_after=%s)", category, size, search_after)
-        kwargs: dict[str, Any] = {"index": self.index_name, "query": {"term": {"category": category}}, "sort": self.CATEGORY_SORT, "size": size, "track_total_hits": True}
+        kwargs: dict[str, Any] = {"index": self.index_name, "query": {"term": {"category": category}}, "sort": self.CATEGORY_SORT, "size": size, "track_total_hits": True, "source": self.LIST_SOURCE_FIELDS}
         if search_after:
             kwargs["search_after"] = search_after
         try:
@@ -340,7 +349,7 @@ class ESManager:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_by_keyword(keyword='%s', max_result_count=%d)", keyword, max_result_count)
         query = {"bool": {"should": [{"match": {"title": {"query": keyword, "boost": 10}}}, {"match": {"author": {"query": keyword, "boost": 5}}}, {"match": {"category.nori": {"query": keyword, "boost": 3}}}, {"match": {"summary": {"query": keyword, "boost": 1}}}], "minimum_should_match": 1}}
-        return self._search(query, max_result_count=max_result_count)
+        return self._search(query, max_result_count=max_result_count, source_fields=self.LIST_SOURCE_FIELDS)
 
     def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: list[str] | None = None) -> tuple[list[tuple[int, dict[str, Any], float]], int]:
         LOGGER.debug("search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s)", keyword, size, offset, exclude_categories)
@@ -349,7 +358,7 @@ class ESManager:
         }
         if exclude_categories:
             query["bool"]["must_not"] = [{"prefix": {"category": cat}} for cat in exclude_categories]
-        return self._search_paged(query, size=size, offset=offset)
+        return self._search_paged(query, size=size, offset=offset, source_fields=self.LIST_SOURCE_FIELDS)
 
     LATEST_SORT: list[dict[str, Any]] = [{"created_time": {"order": "desc", "missing": "_last"}}, {"updated_time": {"order": "desc", "missing": "_last"}}, {"file_path": {"order": "asc"}}]
 
@@ -372,7 +381,7 @@ class ESManager:
         if excluded:
             query = {"bool": {"must": [{"match_all": {}}], "must_not": excluded}}
         try:
-            response = self.es.search(index=self.index_name, query=query, sort=self.LATEST_SORT, size=size, track_total_hits=True)
+            response = self.es.search(index=self.index_name, query=query, sort=self.LATEST_SORT, size=size, track_total_hits=True, source=self.LIST_SOURCE_FIELDS)
         except Exception as e:
             LOGGER.error("search_latest_docs error: %s", e)
             return [], 0
@@ -460,18 +469,38 @@ class ESManager:
         LOGGER.info("backfill_created_time(index=%s) done: %s", self.index_name, result)
         return result
 
+    # summary 원문(최대 3,500자)을 match 쿼리에 그대로 넣으면 nori 가 토큰 1,073개로
+    # 쪼개고, 그 OR 쿼리가 417,776건 중 324,049건(78%)을 스코어링해 한 번에 3.5초가
+    # 걸렸다. more_like_this 는 TF-IDF 상위 max_query_terms 개만 남겨 유사도 의미를
+    # 유지하면서 249ms 로 줄인다 (2026-09-21 실측, 3502ms → 249ms).
+    #
+    # max_query_terms 를 50 으로 올리면 424ms 로 다시 느려진다. min_doc_freq 3 은
+    # 한두 문서에만 나오는 오탈자·OCR 노이즈를 유사도 근거에서 뺀다.
+    SIMILAR_SUMMARY_MAX_QUERY_TERMS = 25
+    SIMILAR_SUMMARY_MIN_DOC_FREQ = 3
+
+    @classmethod
+    def _similar_should_clauses(cls, title: str, author: str, file_size: int, summary: str) -> list[dict[str, Any]]:
+        """유사 문서 검색의 should 절. search_similar_docs 와 _paged 가 공유한다."""
+        return [
+            {"match": {"title": {"query": title, "boost": 20}}},
+            {"match": {"author": {"query": author, "boost": 15}}},
+            {"more_like_this": {"fields": ["summary"], "like": summary, "max_query_terms": cls.SIMILAR_SUMMARY_MAX_QUERY_TERMS, "min_term_freq": 1, "min_doc_freq": cls.SIMILAR_SUMMARY_MIN_DOC_FREQ, "boost": 3}},
+            {"range": {"file_size": {"gte": file_size * 0.9, "lte": file_size * 1.1, "boost": 1}}},
+        ]
+
     def search_similar_docs(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", max_result_count: int = -1, exclude_id: int | None = None) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
         LOGGER.debug("search_similar_docs(category='%s', title='%s', author='%s', type='%s', size=%d, summary='%s', max_result_count=%d)", category, title, author, file_type, file_size, summary, max_result_count)
-        query = {"bool": {"should": [{"match": {"title": {"query": title, "boost": 20}}}, {"match": {"author": {"query": author, "boost": 15}}}, {"match": {"summary": {"query": summary, "boost": 3}}}, {"range": {"file_size": {"gte": file_size * 0.9, "lte": file_size * 1.1, "boost": 1}}}], "minimum_should_match": 1}}
+        query = {"bool": {"should": self._similar_should_clauses(title, author, file_size, summary), "minimum_should_match": 1}}
         if exclude_id is not None:
             query["bool"]["must_not"] = [{"term": {"_id": str(exclude_id)}}]
-        return self._search(query, max_result_count=max_result_count)
+        return self._search(query, max_result_count=max_result_count, source_fields=self.LIST_SOURCE_FIELDS)
 
     def search_similar_docs_paged(self, category: str = "", title: str = "", author: str = "", file_type: str = "", file_size: int = 0, summary: str = "", exclude_id: int | None = None, size: int = 10, offset: int = 0) -> tuple[list[tuple[int, dict[str, Any], float]], int]:
         LOGGER.debug("search_similar_docs_paged(category='%s', title='%s', author='%s', type='%s', size=%d, offset=%d)", category, title, author, file_type, size, offset)
-        should_clauses = [{"match": {"title": {"query": title, "boost": 20}}}, {"match": {"author": {"query": author, "boost": 15}}}, {"match": {"summary": {"query": summary, "boost": 3}}}, {"range": {"file_size": {"gte": file_size * 0.9, "lte": file_size * 1.1, "boost": 1}}}]
+        should_clauses = self._similar_should_clauses(title, author, file_size, summary)
 
         # exclude_id가 있으면 msearch로 self-score + 본 검색을 1 roundtrip으로 실행
         if exclude_id is not None:
@@ -491,7 +520,8 @@ class ESManager:
         # 본 검색 쿼리: 원본 제외
         search_query = {"bool": {"should": should_clauses, "minimum_should_match": 1, "must_not": [{"term": {"_id": str(exclude_id)}}]}}
 
-        searches: list[dict[str, Any]] = [{"index": self.index_name}, {"size": 1, "query": self_score_query}, {"index": self.index_name}, {"size": size, "from": offset, "query": search_query, "track_scores": True, "track_total_hits": True}]
+        # self-score 쿼리는 점수만 쓰고 본문을 버리므로 _source 를 통째로 끈다.
+        searches: list[dict[str, Any]] = [{"index": self.index_name}, {"size": 1, "query": self_score_query, "_source": False}, {"index": self.index_name}, {"size": size, "from": offset, "query": search_query, "track_scores": True, "track_total_hits": True, "_source": self.LIST_SOURCE_FIELDS}]
         response = self.es.msearch(searches=searches)
         responses = response["responses"]
 
@@ -554,10 +584,7 @@ class ESManager:
             composite: dict[str, Any] = {
                 "size": batch_size,
                 # missing_bucket을 켜야 category나 file_path가 빠진 문서가 조용히 사라지지 않는다.
-                "sources": [
-                    {"category": {"terms": {"field": "category", "missing_bucket": True}}},
-                    {"file_path": {"terms": {"field": "file_path", "missing_bucket": True}}},
-                ],
+                "sources": [{"category": {"terms": {"field": "category", "missing_bucket": True}}}, {"file_path": {"terms": {"field": "file_path", "missing_bucket": True}}}],
             }
             if after:
                 composite["after"] = after
