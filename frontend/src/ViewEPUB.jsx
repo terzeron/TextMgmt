@@ -184,6 +184,25 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
       locationsReadyRef.current = false;
       setLocationsReady(false);
 
+      // .html 챕터를 XHTML 로 읽기: epub.js 는 확장자로 파서를 고르므로 .html 은
+      // text/html 로 파싱된다. XHTML 에서 유효한 <title/> 같은 자기닫힘 표기를
+      // HTML 파서는 인정하지 않아, 뒤 내용이 전부 그 요소의 텍스트로 삼켜지고
+      // 본문이 빈 화면이 된다. XML 파싱에 실패하는 책은 원래 방식으로 되돌린다.
+      const archive = rendition.book.archive;
+      if (archive && !archive.__xhtmlForced) {
+        archive.__xhtmlForced = true;
+        const archiveRequest = archive.request.bind(archive);
+        archive.request = async (url, type) => {
+          if (type || !/\.html?$/i.test(String(url).split("?")[0])) {
+            return archiveRequest(url, type);
+          }
+          const doc = await archiveRequest(url, "xhtml");
+          return doc?.querySelector?.("parsererror")
+            ? archiveRequest(url, type)
+            : doc;
+        };
+      }
+
       // spine.get() 폴백: 누락된 항목 접근 시 첫 챕터로 이동
       const spine_get = rendition.book.spine.get.bind(rendition.book.spine);
       rendition.book.spine.get = function (target) {
@@ -360,6 +379,7 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
             url={epubData}
             title={!preview ? bookTitle : undefined}
             getRendition={getRendition}
+            epubOptions={{ allowScriptedContent: true }}
           />
         )}
       </Suspense>
