@@ -83,7 +83,7 @@ describe("SimilarBooks", () => {
       badges.indexOf(scoreBadge),
     );
     expect(fileSizeBadge.style.padding).toBe("2px 6px");
-    expect(fileSizeBadge.style.fontSize).toBe("0.45rem");
+    expect(fileSizeBadge.style.fontSize).toBe("0.6rem");
     expect(fileSizeBadge.style.lineHeight).toBe("1");
     expect(fileSizeBadge.style.transform).toBe("scale(0.75)");
   });
@@ -1152,7 +1152,8 @@ describe("SimilarBooks", () => {
       await waitFor(() => {
         expect(refreshButton().getAttribute("aria-busy")).toBe("true");
       });
-      expect(refreshButton().querySelector(".fa-spin")).toBeTruthy();
+      const spinner = refreshButton().querySelector(".spinner-border");
+      expect(spinner).toBeTruthy();
       expect(refreshButton().disabled).toBe(true);
 
       fireEvent.click(refreshButton());
@@ -1162,7 +1163,21 @@ describe("SimilarBooks", () => {
       await waitFor(() => {
         expect(refreshButton().getAttribute("aria-busy")).toBe("false");
       });
-      expect(refreshButton().querySelector(".fa-spin")).toBeNull();
+      expect(refreshButton().querySelector(".spinner-border")).toBeNull();
+    });
+
+    it("응답이 즉시 끝나도 스피너 상태를 화면에 표시한다", async () => {
+      mockBooks([makeBook(1, 50)]);
+
+      render(<SimilarBooks bookId={1} />);
+      await waitFor(() => {
+        expect(mockRawJsonGetReq).toHaveBeenCalledTimes(1);
+      });
+
+      fireEvent.click(refreshButton());
+
+      expect(refreshButton().querySelector(".spinner-border")).toBeTruthy();
+      expect(refreshButton().getAttribute("aria-busy")).toBe("true");
     });
 
     it("bookId가 없으면 새로고침 요청을 보내지 않는다", () => {

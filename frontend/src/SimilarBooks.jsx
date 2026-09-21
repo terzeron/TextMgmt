@@ -2,11 +2,11 @@ import "./Edit.css";
 import "./SearchResult.css";
 import "bootstrap/dist/css/bootstrap.min.css";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import PropTypes from "prop-types";
 import { jsonDeleteReq, rawJsonGetReq } from "./Common";
 
-import { Card, Button } from "react-bootstrap";
+import { Card, Button, Spinner } from "react-bootstrap";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArrowsRotate,
@@ -17,6 +17,8 @@ import {
   faSpinner,
   faTrash,
 } from "@fortawesome/free-solid-svg-icons";
+
+const MIN_REFRESH_SPIN_MS = 400;
 
 const formatFileSize = (bytes) => {
   if (bytes === null || bytes === undefined) return "";
@@ -40,6 +42,7 @@ export default function SimilarBooks({
   const [loadingMore, setLoadingMore] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const refreshTimerRef = useRef(null);
 
   const loadFirstPage = useCallback(
     (onLoaded, onFinish) => {
@@ -72,6 +75,10 @@ export default function SimilarBooks({
       });
     }
     return () => {
+      if (refreshTimerRef.current !== null) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
       setSimilarBooks([]);
       setTotal(0);
       setIsOpen(false);
@@ -80,11 +87,21 @@ export default function SimilarBooks({
 
   const handleRefresh = useCallback(() => {
     if (refreshing || !bookId) return;
+    const startedAt = Date.now();
     setRefreshing(true);
     setIsOpen(true);
     loadFirstPage(
       () => {},
-      () => setRefreshing(false),
+      () => {
+        const remaining = Math.max(
+          0,
+          MIN_REFRESH_SPIN_MS - (Date.now() - startedAt),
+        );
+        refreshTimerRef.current = setTimeout(() => {
+          setRefreshing(false);
+          refreshTimerRef.current = null;
+        }, remaining);
+      },
     );
   }, [bookId, loadFirstPage, refreshing]);
 
@@ -161,7 +178,11 @@ export default function SimilarBooks({
           aria-label="유사한 책 목록 새로고침"
           title="새로고침"
         >
-          <FontAwesomeIcon icon={faArrowsRotate} spin={refreshing} />
+          {refreshing ? (
+            <Spinner animation="border" size="sm" aria-hidden="true" />
+          ) : (
+            <FontAwesomeIcon icon={faArrowsRotate} />
+          )}
         </Button>
       </Card.Header>
       {isOpen && (
@@ -201,7 +222,7 @@ export default function SimilarBooks({
                           border: "1px solid #000",
                           borderRadius: "4px",
                           padding: "2px 6px",
-                          fontSize: "0.45rem",
+                          fontSize: "0.6rem",
                           lineHeight: 1,
                           transform: "scale(0.75)",
                           transformOrigin: "right center",

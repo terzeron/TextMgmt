@@ -58,7 +58,9 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
     handleLoadMore,
     searchLoading,
   } = useOutletContext();
-  const [isFolderOpen, setIsFolderOpen] = useState(true);
+  // URL로 책을 바로 열면 편집 영역에 집중하도록 디렉토리를 접은 채 시작한다.
+  // 책 없이 들어오면 디렉토리가 유일한 탐색 수단이므로 펼친 채로 둔다.
+  const [isFolderOpen, setIsFolderOpen] = useState(() => !routeBookId);
   const [expandedItems, setExpandedItems] = useState([]);
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
