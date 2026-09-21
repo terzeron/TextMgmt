@@ -360,6 +360,7 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
             url={epubData}
             title={!preview ? bookTitle : undefined}
             getRendition={getRendition}
+            epubOptions={{ allowScriptedContent: true }}
           />
         )}
       </Suspense>

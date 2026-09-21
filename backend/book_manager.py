@@ -957,6 +957,8 @@ class BookManager:
                     with zipfile.ZipFile(str(cache_file), "w", zipfile.ZIP_DEFLATED) as zout:
                         zout.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
                         for zp in files_to_include:
+                            if zp == "mimetype":
+                                continue
                             if zp == opf_path:
                                 zout.writestr(zp, modified_opf)
                             elif zp == ncx_zp and not is_full_view:
