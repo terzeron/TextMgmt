@@ -693,3 +693,57 @@ def test_classify_file_exposes_model_confidence(tmp_path, monkeypatch):
 
     assert entry["confidence"] == 0.87
     assert entry["model_category"] == "3_SF"
+
+
+# ---------------------------------------------------------------------------
+# 확신도 사각지대 — 모델이 답은 했지만 '확실'이라 부를 만큼은 아닌 구간
+# ---------------------------------------------------------------------------
+
+
+def test_decide_takes_bookstore_majority_when_the_model_is_not_confident_enough(tmp_path):
+    """확신도가 신뢰 기준 미만이면 서점 다수결이 이긴다.
+
+    예전에는 이 구간에서 서점을 세지도 않고 모델 답을 돌려줬다. 그런데 화면은
+    그 답을 '확실'로 인정하지 않아 목적지가 빈 채로 나갔다. 서점 3곳이 한목소리로
+    말해도 반영되지 않았다.
+    """
+    service = _service(tmp_path, StubClassifier("2_수필서간일기", confidence=0.076))
+    entry = _entry(
+        yes24={"mapped": "2_소설외국", "title": "달빛조각사"},
+        aladin={"mapped": "2_소설외국", "title": "달빛조각사"},
+        kyobo={"mapped": "2_소설외국", "title": "달빛조각사"},
+    )
+
+    cat, method, reason, model_cat, confidence = service._decide(None, "달빛조각사.txt", entry)
+
+    assert (cat, method) == ("2_소설외국", "bookstore_majority")
+    assert entry["bookstore_candidates"] == [("2_소설외국", 3)]
+    # 모델 답도 근거에 남아야 관리자가 왜 갈렸는지 안다
+    assert model_cat == "2_수필서간일기"
+    assert confidence == 0.076
+
+
+def test_decide_records_bookstore_votes_even_when_they_lose(tmp_path):
+    """다수결이 안 서도 득표는 남긴다. 화면이 후보로 보여줄 수 있어야 한다."""
+    service = _service(tmp_path, StubClassifier("2_수필서간일기", confidence=0.076))
+    entry = _entry(yes24={"mapped": "2_소설외국", "title": "달빛조각사"})
+
+    cat, method, _reason, *_ = service._decide(None, "달빛조각사.txt", entry)
+
+    # 한 곳뿐이라 다수결이 아니다. 모델 답이 그대로 남는다.
+    assert (cat, method) == ("2_수필서간일기", "model")
+    assert entry["bookstore_candidates"] == [("2_소설외국", 1)]
+
+
+def test_decide_keeps_a_confident_model_without_consulting_bookstores(tmp_path):
+    """신뢰 기준을 넘긴 모델은 예전대로 먼저다. 서점을 세는 비용도 안 낸다."""
+    service = _service(tmp_path, StubClassifier("3_판타지", confidence=0.97))
+    entry = _entry(
+        yes24={"mapped": "2_소설외국", "title": "달빛조각사"},
+        aladin={"mapped": "2_소설외국", "title": "달빛조각사"},
+    )
+
+    cat, method, _reason, *_ = service._decide(None, "달빛조각사.txt", entry)
+
+    assert (cat, method) == ("3_판타지", "model")
+    assert "bookstore_candidates" not in entry

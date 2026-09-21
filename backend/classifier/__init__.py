@@ -133,6 +133,12 @@ class BookCategoryClassifier:
         floor = self.min_confidence if min_confidence is None else float(min_confidence)
         return self.model.predict_one(doc, min_confidence=floor)
 
+    def expected_accuracy(self, confidence: Optional[float]) -> Optional[float]:
+        """확신도를 예상 정답률(0~1)로 옮긴다. 보정이 없는 모델이면 None."""
+        if self.model is None:
+            return None
+        return self.model.expected_accuracy(confidence)
+
     def classify_documents(self, docs: Sequence[Dict[str, Any]], min_confidence: Optional[float] = None) -> List[Prediction]:
         if self.model is None:
             return [Prediction(None, 0.0, [], "모델 파일이 없어 판정하지 않음") for _ in docs]

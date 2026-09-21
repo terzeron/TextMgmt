@@ -47,7 +47,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "fields": {
         "body_word": {"enabled": True, "source": "text", "weight": 1.0, "analyzer": "word", "ngram": [1, 1], "min_df": 10, "max_features": 300000, "max_chars": 0},
-        "body_char": {"enabled": True, "source": "text", "weight": 1.0, "analyzer": "char_wb", "ngram": [2, 4], "min_df": 20, "max_features": 300000, "max_chars": 1500},
+        # `max_chars` 를 1500 에서 1000 으로 내렸다. 이 필드가 학습에서 메모리를 가장 많이
+        # 쓰고, 그 양이 글자 수에 거의 그대로 비례한다. 1500 이면 이 필드 하나가 23만 건에서
+        # 9.7GB 를 쓰고(실측 20,000건 1.41GB / 40,000건 2.48GB 외삽), 여유 10GB 기계에서
+        # 학습이 죽는다.
+        #
+        # 성적은 안 깎였다. 2.5만 건 표본 A/B:
+        #   1500  top-1 79.1%  정답률 90% 유지 판정률 72.8%  피크 1.70GB
+        #   1000  top-1 79.2%  정답률 90% 유지 판정률 72.6%  피크 1.40GB
+        # 차이는 실행마다 흔들리는 폭 안이다(LinearSVC 에 random_state 가 없다).
+        # 본문 전체는 body_word 가 이미 읽는다. 이 필드는 앞부분 문체 신호라 길이를
+        # 줄여도 책의 범위가 줄지 않는다.
+        "body_char": {"enabled": True, "source": "text", "weight": 1.0, "analyzer": "char_wb", "ngram": [2, 4], "min_df": 20, "max_features": 300000, "max_chars": 1000},
         "filename": {"enabled": True, "source": "name", "weight": 1.0, "analyzer": "char_wb", "ngram": [2, 4], "min_df": 3, "max_features": 200000, "max_chars": 0},
         "title": {"enabled": True, "source": "title", "weight": 1.0, "analyzer": "char_wb", "ngram": [2, 4], "min_df": 3, "max_features": 100000, "max_chars": 0},
         # 한국 저자명은 동명이인이 많아 카테고리 근거로 약하다.
