@@ -11,7 +11,7 @@ import pytest
 from backend.classifier import BookCategoryClassifier
 from backend.classifier.config import DEFAULT_CONFIG, SERIES_TO_PARENT, config_hash, enabled_fields, load_config, merge_config, resolve_parent, save_config
 from backend.classifier.corpus import _document, absolute_path, attach_publishers, is_trainable, read_jsonl, write_jsonl
-from backend.classifier.features import FeatureSpace, field_text, make_vectorizer
+from backend.classifier.features import FeatureSpace, field_text, make_vectorizer, shrink_sources
 from backend.classifier.model import DEFAULT_MODEL_PATH, MODEL_ENV, CategoryModel, Prediction, model_path, softmax_confidence
 from backend.classifier.reader import read_epub_publisher
 from backend.classifier.training import coverage_curve, evaluate, filter_by_size, format_report, max_coverage_at, train
@@ -564,3 +564,219 @@ def test_save_and_load_use_the_environment_path(tmp_path, monkeypatch, trained):
     assert model.save() == dest
     assert dest.exists()
     assert CategoryModel.load() is not None
+
+
+# ---------------------------------------------------------------------------
+# 홀드아웃 분할 — 코퍼스가 바뀌어도 소속이 안 바뀐다
+# ---------------------------------------------------------------------------
+
+
+def _docs(n: int, cat: str = "3_SF", start: int = 0):
+    return [{"id": str(i), "cat": cat, "text": "x", "name": f"{i}.txt"} for i in range(start, start + n)]
+
+
+def test_split_holdout_keeps_the_requested_ratio():
+    from backend.classifier.training import split_holdout
+
+    train, hold = split_holdout(_docs(1000), 0.2, 20260914)
+
+    assert len(hold) == 200
+    assert len(train) == 800
+    assert {d["id"] for d in train} & {d["id"] for d in hold} == set()
+
+
+def test_split_holdout_is_stable_when_documents_disappear():
+    """코퍼스가 줄어도 남은 문서의 소속은 그대로여야 한다.
+
+    예전 위치 인덱스 분할은 문서 142건이 빠지자 홀드아웃이 통째로 뒤바뀌었다.
+    그래서 재현한 홀드아웃의 80%가 학습 문서였고 정답률이 86.5% -> 93.8% 로 떴다.
+    """
+    from backend.classifier.training import split_holdout
+
+    docs = _docs(1000)
+    _, before = split_holdout(docs, 0.2, 20260914)
+    survivors = [d for d in docs if int(d["id"]) % 7 != 0]
+    _, after = split_holdout(survivors, 0.2, 20260914)
+
+    before_ids = {d["id"] for d in before if int(d["id"]) % 7 != 0}
+    after_ids = {d["id"] for d in after}
+    # 비율을 맞추느라 경계 몇 건은 움직인다. 대부분은 그대로여야 한다.
+    kept_ratio = len(before_ids & after_ids) / len(before_ids)
+    assert kept_ratio > 0.95
+
+
+def test_split_holdout_is_stable_when_documents_are_added():
+    from backend.classifier.training import split_holdout
+
+    _, before = split_holdout(_docs(1000), 0.2, 20260914)
+    _, after = split_holdout(_docs(1200), 0.2, 20260914)
+
+    before_ids = {d["id"] for d in before}
+    after_ids = {d["id"] for d in after}
+    assert len(before_ids & after_ids) / len(before_ids) > 0.95
+
+
+def test_split_holdout_keeps_every_category_represented():
+    """카테고리 크기가 78,520 대 30 까지 벌어진다. 작은 쪽이 통째로 빠지면 안 된다."""
+    from backend.classifier.training import split_holdout
+
+    docs = _docs(5000, "2_소설한국") + _docs(30, "1_문헌서지", start=90000)
+    train, hold = split_holdout(docs, 0.2, 20260914)
+
+    assert {d["cat"] for d in hold} == {"2_소설한국", "1_문헌서지"}
+    assert {d["cat"] for d in train} == {"2_소설한국", "1_문헌서지"}
+
+
+def test_split_holdout_never_empties_either_side_for_tiny_categories():
+    from backend.classifier.training import split_holdout
+
+    train, hold = split_holdout(_docs(2), 0.2, 20260914)
+
+    assert len(hold) == 1
+    assert len(train) == 1
+
+
+def test_split_holdout_changes_with_the_seed():
+    from backend.classifier.training import split_holdout
+
+    _, a = split_holdout(_docs(1000), 0.2, 1)
+    _, b = split_holdout(_docs(1000), 0.2, 2)
+
+    assert {d["id"] for d in a} != {d["id"] for d in b}
+
+
+def _spill_fields():
+    """가중치, analyzer, 빈 필드가 섞여야 합치는 순서와 열 오프셋이 검증된다.
+
+    `text` 를 보는 필드를 셋 두되 뒤로 갈수록 요구 길이를 늘렸다. 원문을 줄일 때
+    '남은 필드 중 가장 긴 요구'가 아니라 '바로 다음 필드'만 보면 여기서 깨진다.
+    """
+    return {
+        "body_word": {"source": "text", "weight": 1.0, "analyzer": "word", "ngram": [1, 1], "min_df": 1, "max_features": 50, "max_chars": 0},
+        "body_char": {"source": "text", "weight": 0.3, "analyzer": "char_wb", "ngram": [2, 3], "min_df": 1, "max_features": 80, "max_chars": 8},
+        "body_tail": {"source": "text", "weight": 1.0, "analyzer": "char_wb", "ngram": [2, 2], "min_df": 1, "max_features": 60, "max_chars": 18},
+        "title": {"source": "title", "weight": 3.0, "analyzer": "char_wb", "ngram": [2, 2], "min_df": 1, "max_features": 40, "max_chars": 0},
+        "publisher": {"source": "publisher", "weight": 1.0, "analyzer": "word", "ngram": [1, 1], "min_df": 1, "max_features": 10, "max_chars": 0},
+    }
+
+
+def _spill_docs():
+    return [
+        {"text": "무협 강호 절세 고수", "title": "천룡팔부", "publisher": ""},
+        {"text": "마법 던전 용사 모험", "title": "던전 일지", "publisher": ""},
+        {"text": "", "title": "빈 본문", "publisher": ""},
+        {"text": "무협 마법 혼합 세계", "title": "혼합", "publisher": ""},
+    ]
+
+
+def test_feature_space_spill_matches_in_memory_matrix(tmp_path):
+    """디스크로 흘려보내고 다시 합친 행렬은 한 번에 만든 것과 같아야 한다.
+
+    합치기를 직접 구현했다. 열 오프셋이나 행 경계가 한 칸만 어긋나도 모델이
+    조용히 엉뚱한 특징을 학습한다. 같은 자리 같은 값인지 값으로 못 박는다.
+    """
+    fields, docs = _spill_fields(), _spill_docs()
+    plain = FeatureSpace(fields).fit_transform(docs, dtype=np.float64)
+    spilled = FeatureSpace(fields).fit_transform(docs, spill_dir=tmp_path, dtype=np.float64)
+
+    assert spilled.shape == plain.shape
+    assert spilled.dtype == np.float64
+    assert spilled.nnz == plain.nnz
+    assert np.array_equal(spilled.toarray(), plain.toarray())
+
+
+def test_feature_space_spill_keeps_same_block_layout(tmp_path):
+    """스필 경로도 벡터라이저와 블록 크기를 똑같이 남겨야 판정 때 transform 이 맞는다."""
+    fields, docs = _spill_fields(), _spill_docs()
+    plain, spilled = FeatureSpace(fields), FeatureSpace(fields)
+    plain.fit_transform(docs)
+    spilled.fit_transform(docs, spill_dir=tmp_path)
+
+    assert list(spilled.vectorizers) == list(plain.vectorizers)
+    assert spilled.block_sizes == plain.block_sizes
+    # publisher 는 전부 빈 문자열이라 양쪽 모두에서 빠져야 한다.
+    assert "publisher" not in spilled.vectorizers
+
+
+def test_feature_space_spill_raises_when_no_field_yields_features(tmp_path):
+    fields = {"publisher": {"source": "publisher", "weight": 1.0, "analyzer": "word", "ngram": [1, 1], "min_df": 1, "max_features": 100, "max_chars": 0}}
+    with pytest.raises(ValueError):
+        FeatureSpace(fields).fit_transform([{"publisher": ""}, {"publisher": ""}], spill_dir=tmp_path)
+
+
+def _spill_train_config():
+    return merge_config(
+        DEFAULT_CONFIG,
+        {"corpus": {"min_per_category": 5}, "model": {"n_jobs": 1}, "fields": {"body_word": {"min_df": 1, "max_features": 5000}, "body_char": {"min_df": 1, "max_features": 5000}, "filename": {"min_df": 1}, "title": {"min_df": 1}, "author": {"min_df": 1}, "publisher": {"min_df": 1}, "file_type": {"min_df": 1}}, "holdout": 0.25},
+    )
+
+
+def test_train_with_spill_gives_the_same_model_as_without(tmp_path):
+    """스필은 메모리를 아끼는 길일 뿐, 성적이 달라지면 안 된다.
+
+    분할이 문서 키 해시라 두 번 돌려도 같은 홀드아웃이 나온다. 그래서 같은 문서를
+    같은 수만큼 재고, 정답률도 같아야 한다.
+
+    임계값까지 소수점 끝자리로 비교하지는 않는다. `LinearSVC` 는 `random_state` 가
+    없어 dual 좌표하강의 셔플이 실행마다 달라진다. 스필 없이 두 번 돌려도 임계값
+    끝자리는 어긋난다(실측 0.7830560 대 0.7830587). 행렬이 같은지는
+    `test_feature_space_spill_matches_in_memory_matrix` 가 값으로 못 박는다.
+    """
+    config = _spill_train_config()
+    _, plain = train(make_docs(), config, accept_parent=SERIES_TO_PARENT)
+    _, spilled = train(make_docs(), config, accept_parent=SERIES_TO_PARENT, spill_dir=tmp_path / "spill")
+
+    assert spilled["n"] == plain["n"]
+    assert spilled["top1_accuracy"] == plain["top1_accuracy"]
+    for got, want in zip(spilled["curve"], plain["curve"]):
+        assert got["coverage"] == want["coverage"]
+        assert got["precision"] == want["precision"]
+        assert got["threshold"] == pytest.approx(want["threshold"], rel=1e-3)
+    assert spilled["at_precision_90"]["coverage"] == plain["at_precision_90"]["coverage"]
+
+
+def test_train_with_spill_releases_train_text_but_keeps_the_holdout(tmp_path):
+    """원문 해제가 홀드아웃까지 건드리면 평가가 조용히 빈 문서로 돌아간다."""
+    docs = make_docs()
+    model, report = train(docs, _spill_train_config(), accept_parent=SERIES_TO_PARENT, spill_dir=tmp_path / "spill")
+
+    with_text = [d for d in docs if d.get("text")]
+    assert len(with_text) == report["n"], "본문이 남은 문서 수는 홀드아웃 크기와 같아야 한다"
+    assert all(d.get("cat") for d in docs), "레이블은 해제하면 안 된다"
+    # 해제 뒤에도 홀드아웃 평가가 성립했는지 값으로 확인한다.
+    assert report["top1_accuracy"] > 0.9
+    assert model.meta["documents"] == len(docs)
+
+
+def test_train_without_spill_leaves_the_documents_untouched():
+    docs = make_docs()
+    train(docs, _spill_train_config(), accept_parent=SERIES_TO_PARENT)
+    assert all(d.get("text") for d in docs)
+
+
+def test_shrink_sources_keeps_the_longest_remaining_need():
+    """남은 필드 중 가장 긴 요구만큼은 남겨야 한다. 짧은 쪽에 맞추면 특징이 사라진다."""
+    docs = [{"text": "가나다라마바사아자차카타파하", "title": "제목", "cat": "3_무협"}]
+    remaining = [
+        ("body_char", {"source": "text", "max_chars": 5}),
+        ("body_tail", {"source": "text", "max_chars": 9}),
+        ("title", {"source": "title", "max_chars": 0}),
+    ]
+    shrink_sources(docs, ["text", "title"], remaining)
+    assert docs[0]["text"] == "가나다라마바사아자"
+    assert docs[0]["title"] == "제목", "max_chars 0 은 전부 필요하다는 뜻이다"
+    assert docs[0]["cat"] == "3_무협", "원문이 아닌 키는 건드리면 안 된다"
+
+
+def test_shrink_sources_drops_a_source_no_field_reads_any_more():
+    docs = [{"text": "본문", "title": "제목", "cat": "3_무협"}]
+    shrink_sources(docs, ["text", "title"], [("title", {"source": "title", "max_chars": 0})])
+    assert "text" not in docs[0]
+    assert docs[0]["title"] == "제목"
+
+
+def test_shrink_sources_leaves_the_filename_alone():
+    """`field_text` 는 숫자를 지운 뒤에 자른다. 먼저 자르면 결과가 달라진다."""
+    docs = [{"name": "무협 1234 강호 5678 협객.epub"}]
+    shrink_sources(docs, ["name"], [("filename", {"source": "name", "max_chars": 5})])
+    assert docs[0]["name"] == "무협 1234 강호 5678 협객.epub"
