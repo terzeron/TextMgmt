@@ -93,6 +93,67 @@ def test_inspect_epub_metadata_returns_empty_metadata_without_opf_or_on_error(tm
     assert inspect_epub_metadata(no_opf) == empty_meta
     assert inspect_epub_metadata(broken) == empty_meta
 
+# --- 악성 EPUB 방어 (CWE-611, CWE-776, CWE-409) ---
+
+
+def test_inspect_epub_metadata_does_not_expand_entity_bomb(tmp_path):
+    """중첩 엔티티(billion laughs)를 확장하지 않아야 한다."""
+    decls = ['<!ENTITY a0 "AAAAAAAAAA">'] + [
+        '<!ENTITY a%d "%s">' % (i, "".join("&a%d;" % (i - 1) for _ in range(10))) for i in range(1, 9)
+    ]
+    bomb = '<?xml version="1.0"?><!DOCTYPE p [%s]><package><title>&a8;</title></package>' % "".join(decls)
+
+    epub_path = tmp_path / "bomb.epub"
+    with zipfile.ZipFile(epub_path, "w") as z:
+        z.writestr("content.opf", bomb)
+
+    # 539 바이트가 확장되면 약 100GB 다. 빈 meta 로 끝나야 한다.
+    assert inspect_epub_metadata(epub_path) == {"title": "", "author": "", "subject": "", "description": ""}
+
+
+def test_inspect_epub_metadata_does_not_resolve_external_entity(tmp_path):
+    """외부 엔티티(file://)로 로컬 파일을 읽어오지 않아야 한다."""
+    secret = tmp_path / "canary.txt"
+    secret.write_text("XXE_CANARY_VALUE", encoding="utf-8")
+    xxe = '<?xml version="1.0"?><!DOCTYPE p [<!ENTITY x SYSTEM "file://%s">]><package><title>&x;</title></package>' % secret
+
+    epub_path = tmp_path / "xxe.epub"
+    with zipfile.ZipFile(epub_path, "w") as z:
+        z.writestr("content.opf", xxe)
+
+    assert "XXE_CANARY_VALUE" not in str(inspect_epub_metadata(epub_path))
+
+
+def test_inspect_epub_metadata_skips_oversized_opf(tmp_path):
+    """압축을 풀면 거대한 OPF 는 읽기 전에 건너뛴다."""
+    from backend.book_classifier import MAX_OPF_BYTES
+
+    epub_path = tmp_path / "big.epub"
+    with zipfile.ZipFile(epub_path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("content.opf", "<package>" + "x" * (MAX_OPF_BYTES + 1) + "</package>")
+
+    assert epub_path.stat().st_size < 100 * 1024  # 압축본은 작다
+    assert inspect_epub_metadata(epub_path) == {"title": "", "author": "", "subject": "", "description": ""}
+
+
+def test_inspect_epub_metadata_reads_opf_with_comments(tmp_path):
+    """주석과 처리명령이 섞여도 메타데이터를 읽어야 한다(lxml iter 회귀 방지)."""
+    opf = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<package xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        "<!-- 주석 --><?pi 처리명령?>"
+        "<metadata><dc:title>주석있음</dc:title><dc:creator>작가</dc:creator></metadata>"
+        "</package>"
+    )
+    epub_path = tmp_path / "comment.epub"
+    with zipfile.ZipFile(epub_path, "w") as z:
+        z.writestr("content.opf", opf)
+
+    meta = inspect_epub_metadata(epub_path)
+    assert meta["title"] == "주석있음"
+    assert meta["author"] == "작가"
+
+
 def test_inspect_txt_content_extracts_snippet_and_hashtags(tmp_path):
     txt_path = tmp_path / "sample.txt"
     txt_path.write_text("#무협 #강호\n" + "문파와 마교의 대결\n" * 45, encoding="utf-8")
@@ -693,3 +754,57 @@ def test_classify_file_exposes_model_confidence(tmp_path, monkeypatch):
 
     assert entry["confidence"] == 0.87
     assert entry["model_category"] == "3_SF"
+
+
+# ---------------------------------------------------------------------------
+# 확신도 사각지대 — 모델이 답은 했지만 '확실'이라 부를 만큼은 아닌 구간
+# ---------------------------------------------------------------------------
+
+
+def test_decide_takes_bookstore_majority_when_the_model_is_not_confident_enough(tmp_path):
+    """확신도가 신뢰 기준 미만이면 서점 다수결이 이긴다.
+
+    예전에는 이 구간에서 서점을 세지도 않고 모델 답을 돌려줬다. 그런데 화면은
+    그 답을 '확실'로 인정하지 않아 목적지가 빈 채로 나갔다. 서점 3곳이 한목소리로
+    말해도 반영되지 않았다.
+    """
+    service = _service(tmp_path, StubClassifier("2_수필서간일기", confidence=0.076))
+    entry = _entry(
+        yes24={"mapped": "2_소설외국", "title": "달빛조각사"},
+        aladin={"mapped": "2_소설외국", "title": "달빛조각사"},
+        kyobo={"mapped": "2_소설외국", "title": "달빛조각사"},
+    )
+
+    cat, method, reason, model_cat, confidence = service._decide(None, "달빛조각사.txt", entry)
+
+    assert (cat, method) == ("2_소설외국", "bookstore_majority")
+    assert entry["bookstore_candidates"] == [("2_소설외국", 3)]
+    # 모델 답도 근거에 남아야 관리자가 왜 갈렸는지 안다
+    assert model_cat == "2_수필서간일기"
+    assert confidence == 0.076
+
+
+def test_decide_records_bookstore_votes_even_when_they_lose(tmp_path):
+    """다수결이 안 서도 득표는 남긴다. 화면이 후보로 보여줄 수 있어야 한다."""
+    service = _service(tmp_path, StubClassifier("2_수필서간일기", confidence=0.076))
+    entry = _entry(yes24={"mapped": "2_소설외국", "title": "달빛조각사"})
+
+    cat, method, _reason, *_ = service._decide(None, "달빛조각사.txt", entry)
+
+    # 한 곳뿐이라 다수결이 아니다. 모델 답이 그대로 남는다.
+    assert (cat, method) == ("2_수필서간일기", "model")
+    assert entry["bookstore_candidates"] == [("2_소설외국", 1)]
+
+
+def test_decide_keeps_a_confident_model_without_consulting_bookstores(tmp_path):
+    """신뢰 기준을 넘긴 모델은 예전대로 먼저다. 서점을 세는 비용도 안 낸다."""
+    service = _service(tmp_path, StubClassifier("3_판타지", confidence=0.97))
+    entry = _entry(
+        yes24={"mapped": "2_소설외국", "title": "달빛조각사"},
+        aladin={"mapped": "2_소설외국", "title": "달빛조각사"},
+    )
+
+    cat, method, _reason, *_ = service._decide(None, "달빛조각사.txt", entry)
+
+    assert (cat, method) == ("3_판타지", "model")
+    assert "bookstore_candidates" not in entry

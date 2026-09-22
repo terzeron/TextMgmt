@@ -119,14 +119,26 @@ def test_reclassify_uses_the_model_threshold_when_none_is_given(model_file, tmp_
     같은 파일을 classify 로 돌리면 판정됐다. 확신도 척도는 데이터마다 달라서
     CLI 가 숫자를 정해 두면 안 된다.
     """
+    from backend.classifier.model import CategoryModel
+
     path, _ = model_file
     library = tmp_path / "library"
     source = library / "3_무협"
     source.mkdir(parents=True)
     (source / "무림맹_장문인.txt").write_text(" ".join([VOCAB["3_무협"]] * 3), encoding="utf-8")
 
+    # 임계값을 안 주고 돌린 결과와, 모델이 고른 값을 직접 준 결과가 같아야 한다.
+    # 결과 문자열 자체를 못 박으면 시험용 모델의 임계값이 조금만 달라져도 깨진다.
+    # 여기서 볼 것은 "CLI 가 숫자를 정해 두지 않는다" 하나다.
     assert main(["reclassify", "3_무협", "--model", str(path), "--library-root", str(library), "--no-es"]) == 0
-    assert "판정 안 함 0건" in capsys.readouterr().out
+    default_out = capsys.readouterr().out
+
+    model = CategoryModel.load(path)
+    assert main(["reclassify", "3_무협", "--model", str(path), "--library-root", str(library), "--no-es", "--min-confidence", str(model.min_confidence)]) == 0
+    assert capsys.readouterr().out == default_out
+
+    # 0.90 이 박혀 있던 시절의 동작과는 달라야 한다 - 그때는 전부 거부됐다.
+    assert model.min_confidence != 0.90
 
 
 def test_reclassify_preview_does_not_move_files(model_file, tmp_path, capsys):

@@ -9,6 +9,7 @@
 import argparse
 import json
 import logging
+import shutil
 import sys
 import textwrap
 import time
@@ -81,6 +82,19 @@ EVALUATE_DESC = """\
 저장된 모델을 홀드아웃으로 다시 재고 판정률-정답률 곡선을 출력한다.
 
 학습 없이 곡선만 보고 싶을 때, 또는 임계값을 어디에 둘지 고를 때 쓴다.
+"""
+
+SCORE_CALIBRATION_DESC = """\
+화면에 쓸 점수 눈금을 만든다. 모델은 다시 학습하지 않는다.
+
+확신도는 79개 클래스 softmax 라 실제 범위가 0.013~0.13 이다. 화면에서 0.05 와
+0.07 중 어느 쪽이 얼마나 나은지 읽을 수가 없다. 홀드아웃에서 (확신도 -> 정답률)
+계단을 isotonic 회귀로 재서 모델 파일의 meta 에 넣는다. 그러면 0.076 을
+'예상 정답률 0.93' 으로 옮길 수 있다.
+
+판정은 안 바뀐다. 임계값(min_confidence)과 서점 경계는 원래 확신도 눈금 위에
+그대로 있고, 이 계단은 표시에만 쓴다. train 은 같은 일을 학습 끝에 자동으로 한다.
+이 명령은 이미 학습해 둔 모델에 눈금만 덧붙일 때 쓴다.
 """
 
 BOOKSTORE_POLICY_DESC = """\
@@ -178,6 +192,18 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS, metavar="PATH", help=f"학습 데이터 파일 (기본: {DEFAULT_CORPUS})")
     t.add_argument("--out", type=Path, default=MODEL_PATH, metavar="PATH", help=f"저장할 모델 파일 (기본: {MODEL_PATH})")
     t.add_argument(
+        "--spill-dir",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=_help("""\
+            벡터화 블록을 이 디렉토리로 흘려보낸다 (기본: 안 함)
+              메모리가 좁은 기계에서 쓴다. 필드 블록을 만드는 즉시 디스크에 쓰고
+              메모리에서 지운 뒤, 마지막에 한 블록씩 다시 읽어 합친다.
+              기준 없이 쓰면 23만 건에서 피크가 9.7GB 라 여유 10GB 기계에서
+              죽는다. 대신 디스크를 약 4GB 쓰고 합치는 시간이 더 걸린다."""),
+    )
+    t.add_argument(
         "--min-per-category",
         type=int,
         default=None,
@@ -200,6 +226,19 @@ def build_parser() -> argparse.ArgumentParser:
               높이면: 드문 단어까지 써서 정답률이 조금 오른다. 메모리와 시간이 는다.
                       500000 이상은 메모리 9GB 환경에서 스왑이 발생한다.
               낮추면: 빠르고 가볍지만 변별력이 떨어진다."""),
+    )
+    t.add_argument(
+        "--body-char-max-chars",
+        type=int,
+        default=None,
+        metavar="N",
+        help=_help("""\
+            본문 문자 n-gram 이 앞 몇 글자까지 볼 것인가
+              기본 1000 / 범위 200~5000
+              이 필드가 학습에서 메모리를 가장 많이 쓴다. 글자 수에 비례한다.
+              실측(23만 건): 1500 이면 피크 9.7GB 라 여유 10GB 기계에서 죽는다.
+              높이면: 본문을 더 넓게 보지만 메모리와 시간이 그만큼 는다.
+              낮추면: 가볍지만 뒷부분에만 나오는 단서를 놓친다."""),
     )
     t.add_argument(
         "--body-min-df",
@@ -287,6 +326,12 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("evaluate", help="저장된 모델의 판정률-정답률 곡선을 본다", description=_fmt(EVALUATE_DESC), formatter_class=argparse.RawTextHelpFormatter)
     e.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS, metavar="PATH", help=f"평가 데이터 (기본: {DEFAULT_CORPUS})")
     e.add_argument("--model", type=Path, default=MODEL_PATH, metavar="PATH", help="모델 파일")
+
+    # -- score-calibration --------------------------------------------------
+    sc = sub.add_parser("score-calibration", help="화면에 쓸 예상 정답률 눈금을 모델에 넣는다", description=_fmt(SCORE_CALIBRATION_DESC), formatter_class=argparse.RawTextHelpFormatter)
+    sc.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS, metavar="PATH", help=f"홀드아웃을 뽑을 데이터 (기본: {DEFAULT_CORPUS})")
+    sc.add_argument("--model", type=Path, default=MODEL_PATH, metavar="PATH", help="모델 파일")
+    sc.add_argument("--dry-run", action="store_true", help="계단만 보여주고 모델 파일은 건드리지 않는다")
 
     # -- bookstore-policy ---------------------------------------------------
     cal = sub.add_parser("bookstore-policy", help="서점 신호를 언제 믿을지 정하는 규칙을 만든다", description=_fmt(BOOKSTORE_POLICY_DESC), formatter_class=argparse.RawTextHelpFormatter)
@@ -465,22 +510,24 @@ def _overrides(args: argparse.Namespace) -> Dict[str, Any]:
     for field in ("body_word", "body_char"):
         put(["fields", field, "max_features"], getattr(args, "body_max_features", None))
         put(["fields", field, "min_df"], getattr(args, "body_min_df", None))
+    put(["fields", "body_char", "max_chars"], getattr(args, "body_char_max_chars", None))
     if getattr(args, "char_ngram", None) is not None:
         put(["fields", "body_char", "enabled"], bool(args.char_ngram))
     return over
 
 
 def _holdout_docs(docs: List[Dict[str, Any]], config: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """학습 때와 같은 난수 씨앗과 비율로 홀드아웃을 다시 떼어낸다."""
-    import numpy as np
-    from sklearn.model_selection import train_test_split
+    """학습 때와 같은 규칙으로 홀드아웃을 다시 떼어낸다.
 
-    from backend.classifier.training import filter_by_size
+    문서 키의 해시로 나누므로, 코퍼스에 문서가 들고 나도 각 문서의 소속은 안 바뀐다.
+    예전처럼 위치 인덱스로 나누면 한 건만 바뀌어도 전혀 다른 집합이 떨어져,
+    학습에 쓴 문서가 홀드아웃에 섞이고 정답률이 부풀려진다.
+    """
+    from backend.classifier.training import filter_by_size, split_holdout
 
     kept, _ = filter_by_size(docs, config["corpus"]["min_per_category"])
-    y = np.array([d["cat"] for d in kept])
-    _, te = train_test_split(np.arange(len(kept)), test_size=config["holdout"], random_state=config["seed"], stratify=y)
-    return [kept[i] for i in te]
+    _, hold = split_holdout(kept, float(config["holdout"]), int(config["seed"]))
+    return hold
 
 
 def _iter_files(root: Path) -> List[Path]:
@@ -530,9 +577,12 @@ def cmd_train(args: argparse.Namespace) -> int:
     if not any(d.get("publisher") for d in docs):
         logger.warning("학습 데이터에 publisher 가 하나도 없다. 'collect --with-publisher' 로 다시 모으면 전집 판정이 좋아진다.")
 
-    model, report = train(docs, cfg, accept_parent=SERIES_TO_PARENT)
+    model, report = train(docs, cfg, accept_parent=SERIES_TO_PARENT, spill_dir=args.spill_dir)
     path = model.save(args.out)
     size_mb = path.stat().st_size / 1024 / 1024
+    if args.spill_dir:
+        # 합쳐 둔 행렬은 5GB 를 넘는다. 모델을 저장한 뒤에는 쓸 데가 없다.
+        shutil.rmtree(args.spill_dir, ignore_errors=True)
 
     print(format_report(report))
     print()
@@ -552,6 +602,41 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     docs = _load_corpus(args.corpus)
     hold = _holdout_docs(docs, model.config)
     print(format_report(evaluate(model, hold, accept_parent=SERIES_TO_PARENT)))
+    return 0
+
+
+def cmd_score_calibration(args: argparse.Namespace) -> int:
+    """이미 학습한 모델에 '확신도 -> 예상 정답률' 눈금을 넣는다.
+
+    재학습이 아니다. 판정만 다시 돌려 계단을 재고 meta 에 붙인 뒤 같은 경로에 저장한다.
+    """
+    from backend.classifier.calibration import expected_accuracy
+    from backend.classifier.config import SERIES_TO_PARENT
+    from backend.classifier.training import fit_confidence_calibration
+
+    model = _load_model(args.model)
+    docs = _load_corpus(args.corpus)
+    hold = _holdout_docs(docs, model.config)
+    print(f"홀드아웃 {len(hold):,}건으로 눈금을 잰다")
+
+    calibration = fit_confidence_calibration(model, hold, accept_parent=SERIES_TO_PARENT)
+    if calibration is None:
+        print("표본이 모자라 눈금을 만들지 못했다")
+        return 1
+
+    print(f"  계단 {len(calibration['x'])}칸, 표본 {calibration['n']:,}건")
+    print("  확신도   예상 정답률")
+    for point in (0.02, 0.04, 0.056, 0.076, 0.10, 0.13):
+        value = expected_accuracy(calibration, point)
+        print(f"  {point:>6.3f}   {value:.3f}")
+
+    if args.dry_run:
+        print("--dry-run 이라 모델 파일은 그대로 둔다")
+        return 0
+
+    model.meta["confidence_calibration"] = calibration
+    model.save(args.model)
+    print(f"모델에 눈금을 넣었다: {args.model}")
     return 0
 
 
@@ -811,7 +896,7 @@ def cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
-COMMANDS = {"collect": cmd_collect, "train": cmd_train, "evaluate": cmd_evaluate, "bookstore-policy": cmd_bookstore_policy, "classify": cmd_classify, "reclassify": cmd_reclassify, "info": cmd_info}
+COMMANDS = {"collect": cmd_collect, "train": cmd_train, "evaluate": cmd_evaluate, "score-calibration": cmd_score_calibration, "bookstore-policy": cmd_bookstore_policy, "classify": cmd_classify, "reclassify": cmd_reclassify, "info": cmd_info}
 
 
 def main(argv: Optional[List[str]] = None) -> int:

@@ -2644,5 +2644,85 @@ async def test_epub_unquoted_href_and_full_view(tmp_path):
             epub_file.unlink()
 
 
+class TestSelfClosingRcdata:
+    """XHTML 자기닫힘 <title/> 등이 HTML 파서에서 본문을 삼키지 않게 펴는지 검증."""
+
+    def test_expands_self_closing_rcdata_tags(self):
+        from backend.book_manager import BookManager
+
+        assert BookManager._expand_self_closing_rcdata(b"<title/>") == b"<title></title>"
+        assert BookManager._expand_self_closing_rcdata(b"<TITLE />") == b"<TITLE ></TITLE>"
+        assert BookManager._expand_self_closing_rcdata(b'<script src="a.js"/>') == b'<script src="a.js"></script>'
+        assert BookManager._expand_self_closing_rcdata(b"<style/><textarea/>") == b"<style></style><textarea></textarea>"
+
+    def test_keeps_paired_and_unrelated_tags(self):
+        from backend.book_manager import BookManager
+
+        for data in (b"<title>keep</title>", b"<br/>", b"<img src=\"a.jpg\"/>", b"<titlebar/>"):
+            assert BookManager._expand_self_closing_rcdata(data) == data
+
+
+@pytest.mark.asyncio
+async def test_preview_expands_self_closing_title(tmp_path):
+    """<title/>을 쓴 EPUB의 프리뷰 산출물에서 본문이 살아남는지 검증."""
+    from unittest.mock import MagicMock
+    from backend.book_manager import BookManager
+    from backend.book import Book
+
+    epub_file = Book.path_prefix / "self_closing_title.epub"
+    epub_file.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(epub_file, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+        zf.writestr("META-INF/container.xml", CONTAINER_XML)
+        zf.writestr(
+            "OEBPS/content.opf",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Self Closing Title</dc:title>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.html" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>""",
+        )
+        zf.writestr(
+            "OEBPS/ch1.html",
+            """<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title/></head>
+<body><p>본문이 보여야 한다</p></body>
+</html>""",
+        )
+
+    bm = BookManager()
+    bm.path_prefix = tmp_path
+    bm.es_manager = MagicMock()
+    bm.es_manager.search_by_id = MagicMock(return_value={"category": "test", "title": "Self Closing Title", "author": "Author", "file_path": "self_closing_title.epub", "file_type": "epub", "file_size": 1000, "updated_time": "2026-01-01T00:00:00.000000"})
+
+    try:
+        resp = await bm.get_book_preview(book_id=2, chapters=0)
+        assert resp.status_code == 200
+
+        cache_file = tmp_path / ".preview_cache" / "2_ch1.epub"
+        with zipfile.ZipFile(cache_file, "r") as zout:
+            chapter = zout.read("OEBPS/ch1.html").decode("utf-8")
+
+        assert "<title></title>" in chapter
+        assert "<title/>" not in chapter
+        # HTML 파서로 읽어도 본문이 title 안으로 삼켜지지 않는다
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(chapter, "html.parser")
+        assert soup.body is not None
+        assert "본문이 보여야 한다" in soup.body.get_text()
+    finally:
+        if epub_file.exists():
+            epub_file.unlink()
+
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

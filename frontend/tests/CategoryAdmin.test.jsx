@@ -4381,6 +4381,40 @@ describe("CategoryAdmin 분류 제안", () => {
     );
   });
 
+  it("추천 1이 현재 디렉토리와 같으면 certain이라도 기본 선택하지 않는다", async () => {
+    // 제자리 이동이라 옮길 것이 없다. 자동으로 승인 목록에 들어가면 실제로
+    // 옮겨야 할 행이 몇 개인지 숫자로 안 보인다.
+    const sameCategoryItem = {
+      ...PROPOSAL_ITEM_CERTAIN,
+      file_path: "1_fiction/same.epub",
+      title: "제자리 책",
+      target_category: "1_fiction",
+      candidates: [
+        { category: "1_fiction", source: "model", detail: "모델 판정" },
+      ],
+    };
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 2,
+        processed_count: 2,
+        items: [PROPOSAL_ITEM_CERTAIN, sameCategoryItem],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText("1_fiction/a.epub 추천 1 선택").checked,
+      ).toBe(true);
+    });
+    expect(
+      screen.getByLabelText("1_fiction/same.epub 추천 1 선택").checked,
+    ).toBe(false);
+  });
+
   it("상태가 failed면 에러 메시지를 보여준다 (I2)", async () => {
     const resultRef = {
       current: {
@@ -6978,5 +7012,499 @@ describe("CategoryAdmin 재적재 중 버튼 비활성 일관성", () => {
       expect(screen.getByTitle("ES 재적재").disabled).toBe(true);
     });
     expect(screen.getByTitle("이상 항목만 ES 재적재").disabled).toBe(true);
+  });
+});
+
+// ── 재적재 완료 후 재조회 범위와 화면 유지 ──
+// 재적재는 백그라운드 작업이다. 완료를 반영할 때 화면 전체를 "로딩 중..."으로 덮거나
+// 코퍼스 전수 요약 스캔(/category-mismatches)을 다시 돌리면, 사용자는 버튼 하나를
+// 눌렀는데 서브탭에 다시 들어온 것과 같은 대기를 겪는다.
+
+describe("CategoryAdmin 재적재 완료 반영", () => {
+  const DETAIL_WITH_ANOMALIES = {
+    es_only: [
+      {
+        book_id: 101,
+        title: "Book A",
+        file_type: "pdf",
+        file_path: "1_fiction/a.pdf",
+      },
+    ],
+    fs_only: [{ file_name: "orphan.txt", file_path: "1_fiction/orphan.txt" }],
+    duplicates: [],
+    fs_count: 8,
+  };
+
+  const IDLE = { status: "idle" };
+
+  beforeEach(() => {
+    mockJsonGetReq.mockReset();
+    mockJsonDeleteReq.mockReset();
+    mockJsonPostReq.mockReset();
+    mockJsonPutReq.mockReset();
+  });
+
+  // 백엔드는 카테고리별 락과 전체(일괄) 락을 따로 들고 있다. reload-status는
+  // category 쿼리가 있으면 그 카테고리 락을, 없으면 전체 락을 돌려준다. 두 락을 같은
+  // 값으로 흉내내면 한 작업의 상태가 다른 쪽 버튼까지 움직여 검사가 무의미해진다.
+  function mockServer({ categoryStatusRef, bulkStatusRef, detailRef }) {
+    const counts = { summaryScan: 0, detail: 0, categories: 0 };
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") {
+        counts.categories++;
+        resolve(CATEGORIES_RESPONSE);
+      } else if (url === "/category-mismatches") {
+        counts.summaryScan++;
+        resolve(MISMATCH_RESPONSE_WITH_DATA);
+      } else if (url === "/category-mismatches/reload-status") {
+        resolve(bulkStatusRef.current);
+      } else if (url.startsWith("/category-mismatches/reload-status?")) {
+        resolve(categoryStatusRef.current);
+      } else if (url.startsWith("/category-mismatches/")) {
+        counts.detail++;
+        resolve(detailRef.current);
+      } else if (url.startsWith("/category-mappings")) {
+        resolve(MAPPINGS_RESPONSE);
+      } else if (url.startsWith("/hidden-categories")) {
+        resolve(HIDDEN_RESPONSE);
+      } else if (url.startsWith("/latest-excluded-categories")) {
+        resolve(LATEST_EXCLUDED_RESPONSE);
+      }
+    });
+    return counts;
+  }
+
+  function findTreeItemByText(text) {
+    return screen
+      .getAllByRole("treeitem")
+      .find((item) => item.textContent.includes(text));
+  }
+
+  function mockStartedPost(statusRef, nextStatus) {
+    mockJsonPostReq.mockImplementation(
+      (url, payload, resolve, _reject, done) => {
+        statusRef.current = nextStatus;
+        resolve({ started: true, category: payload?.category ?? null });
+        if (done) done();
+      },
+    );
+  }
+
+  async function selectFictionAndStartCategoryReload(categoryStatusRef) {
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("1_fiction"));
+    await waitFor(() => {
+      expect(screen.getByTitle("이상 항목만 ES 재적재").disabled).toBe(false);
+    });
+
+    mockStartedPost(categoryStatusRef, {
+      status: "running",
+      category: "1_fiction",
+      before_count: 2,
+      indexed_count: 0,
+      deleted_count: 0,
+    });
+    fireEvent.click(screen.getByTitle("이상 항목만 ES 재적재"));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+    );
+    await waitFor(() => {
+      expect(screen.getAllByText(/잔여/).length).toBeGreaterThan(0);
+    });
+  }
+
+  it("카테고리 재적재가 진행 중이면 전체 락이 비어 있어도 진행 표시를 유지한다", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const categoryStatusRef = { current: IDLE };
+      const bulkStatusRef = { current: IDLE };
+      const detailRef = { current: DETAIL_WITH_ANOMALIES };
+      mockServer({ categoryStatusRef, bulkStatusRef, detailRef });
+      render(<CategoryAdmin />);
+      await selectFictionAndStartCategoryReload(categoryStatusRef);
+
+      // 전체 락을 여러 번 폴링해도 카테고리 작업의 스피너를 끄지 않아야 한다.
+      await act(async () => {
+        vi.advanceTimersByTime(20000);
+      });
+      expect(screen.getAllByText(/잔여/).length).toBeGreaterThan(0);
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("카테고리 재적재가 완료되면 전체 요약 스캔을 다시 돌리지 않고 그 카테고리만 다시 센다", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const categoryStatusRef = { current: IDLE };
+      const bulkStatusRef = { current: IDLE };
+      const detailRef = { current: DETAIL_WITH_ANOMALIES };
+      const counts = mockServer({ categoryStatusRef, bulkStatusRef, detailRef });
+      render(<CategoryAdmin />);
+      await selectFictionAndStartCategoryReload(categoryStatusRef);
+
+      const scansBeforeCompletion = counts.summaryScan;
+      const detailsBeforeCompletion = counts.detail;
+
+      detailRef.current = { ...DETAIL_WITH_ANOMALIES, es_only: [], fs_only: [] };
+      categoryStatusRef.current = {
+        status: "done",
+        category: "1_fiction",
+        indexed_count: 2,
+        deleted_count: 0,
+        after_count: 0,
+        failed_count: 0,
+      };
+      await act(async () => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      await waitFor(() => {
+        expect(counts.detail).toBeGreaterThan(detailsBeforeCompletion);
+      });
+      expect(counts.summaryScan).toBe(scansBeforeCompletion);
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("카테고리 재적재가 완료돼도 펼친 디렉토리와 선택이 유지된다", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const categoryStatusRef = { current: IDLE };
+      const bulkStatusRef = { current: IDLE };
+      const detailRef = { current: DETAIL_WITH_ANOMALIES };
+      mockServer({ categoryStatusRef, bulkStatusRef, detailRef });
+      render(<CategoryAdmin />);
+      await selectFictionAndStartCategoryReload(categoryStatusRef);
+      await waitFor(() => {
+        expect(screen.getByText("Book A.pdf")).toBeTruthy();
+      });
+
+      // 두 건 중 한 건만 해소된 상태. 남은 항목은 그대로 펼쳐져 있어야 한다.
+      detailRef.current = { ...DETAIL_WITH_ANOMALIES, fs_only: [] };
+      categoryStatusRef.current = {
+        status: "done",
+        category: "1_fiction",
+        after_count: 1,
+        failed_count: 0,
+      };
+      await act(async () => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      // 전체 재조회가 돌면 expandedItems가 비워지고 트리가 처음부터 다시 만들어진다.
+      await waitFor(() => {
+        expect(screen.queryByText("orphan.txt")).toBeNull();
+      });
+      expect(
+        findTreeItemByText("1_fiction")?.getAttribute("aria-expanded"),
+      ).toBe("true");
+      expect(screen.getByText("Book A.pdf")).toBeTruthy();
+      expect(screen.getByTitle("이상 항목만 ES 재적재")).toBeTruthy();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("카테고리 재적재가 완료되면 그 카테고리의 이상 항목 건수를 전체 집계에서도 뺀다", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const categoryStatusRef = { current: IDLE };
+      const bulkStatusRef = { current: IDLE };
+      const detailRef = { current: DETAIL_WITH_ANOMALIES };
+      mockServer({ categoryStatusRef, bulkStatusRef, detailRef });
+      render(<CategoryAdmin />);
+      await selectFictionAndStartCategoryReload(categoryStatusRef);
+
+      // 요약 스캔의 전체 이상 항목은 1_fiction 2건 + 2_science 8건 + 4_fs_only_cat 9건.
+      detailRef.current = { ...DETAIL_WITH_ANOMALIES, es_only: [], fs_only: [] };
+      categoryStatusRef.current = {
+        status: "done",
+        category: "1_fiction",
+        after_count: 0,
+        failed_count: 0,
+      };
+      await act(async () => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /일괄 재적재/ }));
+      const modal = await screen.findByRole("dialog");
+      await waitFor(() => {
+        expect(modal.textContent).toContain("이상 항목 17건");
+      });
+      expect(modal.textContent).toContain("불일치 카테고리 2개");
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("일괄 재적재가 완료되면 요약 스캔은 다시 돌리지만 펼친 디렉토리는 유지한다", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const categoryStatusRef = { current: IDLE };
+      const bulkStatusRef = { current: IDLE };
+      const detailRef = { current: DETAIL_WITH_ANOMALIES };
+      const counts = mockServer({ categoryStatusRef, bulkStatusRef, detailRef });
+      render(<CategoryAdmin />);
+      await waitFor(() => {
+        expect(screen.getByText("1_fiction")).toBeTruthy();
+      });
+      fireEvent.click(screen.getByText("1_fiction"));
+      await waitFor(() => {
+        expect(screen.getByText("Book A.pdf")).toBeTruthy();
+      });
+
+      mockStartedPost(bulkStatusRef, {
+        status: "running",
+        category: null,
+        reload_source: "bulk",
+        before_count: 4,
+      });
+      fireEvent.click(screen.getByRole("button", { name: /일괄 재적재/ }));
+      const modal = await screen.findByRole("dialog");
+      fireEvent.click(
+        within(modal).getByRole("button", { name: "일괄 재적재" }),
+      );
+      await waitFor(() => {
+        expect(screen.getAllByText(/잔여/).length).toBeGreaterThan(0);
+      });
+
+      const scansBeforeCompletion = counts.summaryScan;
+      bulkStatusRef.current = {
+        status: "done",
+        category: null,
+        reload_source: "bulk",
+        after_count: 0,
+        failed_count: 0,
+      };
+      await act(async () => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      await waitFor(() => {
+        expect(counts.summaryScan).toBeGreaterThan(scansBeforeCompletion);
+      });
+      expect(screen.getByText("디렉토리")).toBeTruthy();
+      expect(
+        findTreeItemByText("1_fiction")?.getAttribute("aria-expanded"),
+      ).toBe("true");
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("하위 카테고리를 다시 세면 부모의 합계 배지도 같이 맞춘다", async () => {
+    const categories = { parent: 10, "parent/child": 3 };
+    const mismatchData = {
+      mismatches: [],
+      es_only: [
+        { category: "parent", es_count: 10, anomaly_count: 2 },
+        { category: "parent/child", es_count: 3, anomaly_count: 3 },
+      ],
+      fs_only: [],
+    };
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(categories);
+      else if (url === "/category-mismatches") resolve(mismatchData);
+      else if (url.startsWith("/category-mismatches/reload-status"))
+        resolve({ status: "idle" });
+      else if (url === "/category-mismatches/parent")
+        resolve({
+          es_only: [
+            {
+              book_id: 1,
+              title: "P1",
+              file_type: "pdf",
+              file_path: "parent/p1.pdf",
+            },
+            {
+              book_id: 2,
+              title: "P2",
+              file_type: "pdf",
+              file_path: "parent/p2.pdf",
+            },
+          ],
+          fs_only: [],
+          duplicates: [],
+          fs_count: 10,
+        });
+      else if (url === "/category-mismatches/parent/child")
+        resolve({
+          es_only: [
+            {
+              book_id: 3,
+              title: "C1",
+              file_type: "pdf",
+              file_path: "parent/child/c1.pdf",
+            },
+          ],
+          fs_only: [],
+          duplicates: [],
+          fs_count: 3,
+        });
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve([]);
+      else if (url.startsWith("/latest-excluded-categories")) resolve([]);
+    });
+
+    render(<CategoryAdmin />);
+    const treeLabel = (text) =>
+      within(screen.getByRole("tree")).getByText(text).parentElement
+        .textContent;
+
+    await waitFor(() => {
+      expect(screen.getByRole("tree")).toBeTruthy();
+    });
+
+    // 요약 스캔 기준 부모 배지는 자기 2건 + 하위 3건 = 5건.
+    fireEvent.click(within(screen.getByRole("tree")).getByText("parent"));
+    await waitFor(() => {
+      expect(treeLabel("parent")).toBe("parent5");
+    });
+
+    // 하위를 실제로 세니 3건이 아니라 1건이다. 부모 배지도 3건으로 내려가야 한다.
+    fireEvent.click(within(screen.getByRole("tree")).getByText("child"));
+    await waitFor(() => {
+      expect(treeLabel("child")).toBe("child1");
+    });
+    expect(treeLabel("parent")).toBe("parent3");
+  });
+
+  it("가상 부모 아래 하위 카테고리를 다시 세도 합계 배지를 맞춘다", async () => {
+    // 부모 카테고리가 ES에 없으면 트리는 가상 부모를 만든다. 가상 부모는 자체 건수가
+    // 0이라 합계가 하위 건수만으로 정해진다.
+    // 공통 접두어가 생기지 않게 다른 최상위 카테고리를 하나 같이 둔다.
+    const categories = { "a/x": 3, b: 2 };
+    const mismatchData = {
+      mismatches: [],
+      es_only: [{ category: "a/x", es_count: 3, anomaly_count: 3 }],
+      fs_only: [],
+    };
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(categories);
+      else if (url === "/category-mismatches") resolve(mismatchData);
+      else if (url.startsWith("/category-mismatches/reload-status"))
+        resolve({ status: "idle" });
+      else if (url === "/category-mismatches/a/x")
+        resolve({
+          es_only: [
+            {
+              book_id: 7,
+              title: "X1",
+              file_type: "pdf",
+              file_path: "a/x/x1.pdf",
+            },
+          ],
+          fs_only: [],
+          duplicates: [],
+          fs_count: 3,
+        });
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve([]);
+      else if (url.startsWith("/latest-excluded-categories")) resolve([]);
+    });
+
+    render(<CategoryAdmin />);
+    const treeLabel = (text) =>
+      within(screen.getByRole("tree")).getByText(text).parentElement
+        .textContent;
+    await waitFor(() => {
+      expect(treeLabel("a")).toBe("a3");
+    });
+
+    fireEvent.click(within(screen.getByRole("tree")).getByText("a"));
+    fireEvent.click(within(screen.getByRole("tree")).getByText("x"));
+    await waitFor(() => {
+      expect(treeLabel("x")).toBe("x1");
+    });
+    expect(treeLabel("a")).toBe("a1");
+  });
+
+  it("전에 남은 전체 재적재 소유자 기록은 전체 락이 비어 있으면 지운다", async () => {
+    window.sessionStorage.setItem("CategoryAdmin.allReloadOwner.book", "bulk");
+    const categoryStatusRef = { current: IDLE };
+    const bulkStatusRef = { current: IDLE };
+    const detailRef = { current: DETAIL_WITH_ANOMALIES };
+    mockServer({ categoryStatusRef, bulkStatusRef, detailRef });
+
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(
+        window.sessionStorage.getItem("CategoryAdmin.allReloadOwner.book"),
+      ).toBeNull();
+    });
+  });
+
+  it("시작 요청 응답 전에 도착한 직전 작업의 done 상태를 내 작업 완료로 보지 않는다", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // 직전 작업이 남긴 done. 백엔드는 새 락을 잡기 전까지 이 상태를 계속 돌려준다.
+      const categoryStatusRef = {
+        current: {
+          status: "done",
+          category: "1_fiction",
+          after_count: 0,
+          failed_count: 0,
+        },
+      };
+      const bulkStatusRef = { current: IDLE };
+      const detailRef = { current: DETAIL_WITH_ANOMALIES };
+      const counts = mockServer({ categoryStatusRef, bulkStatusRef, detailRef });
+      render(<CategoryAdmin />);
+      await waitFor(() => {
+        expect(screen.getByText("1_fiction")).toBeTruthy();
+      });
+      fireEvent.click(screen.getByText("1_fiction"));
+      await waitFor(() => {
+        expect(screen.getByTitle("이상 항목만 ES 재적재").disabled).toBe(false);
+      });
+
+      const scansBeforeClick = counts.summaryScan;
+      const detailsBeforeClick = counts.detail;
+
+      // POST 응답을 보류한다. 그 사이에 폴링이 stale done을 읽는다.
+      let releasePost = null;
+      mockJsonPostReq.mockImplementation(
+        (url, payload, resolve, _reject, done) => {
+          releasePost = () => {
+            resolve({ started: true, category: payload?.category ?? null });
+            if (done) done();
+          };
+        },
+      );
+
+      fireEvent.click(screen.getByTitle("이상 항목만 ES 재적재"));
+      const modal = await screen.findByRole("dialog");
+      fireEvent.click(
+        within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // stale done을 완료로 오인하면 여기서 재조회가 돌고 스피너가 꺼진다.
+      expect(counts.summaryScan).toBe(scansBeforeClick);
+      expect(counts.detail).toBe(detailsBeforeClick);
+      expect(screen.getAllByText(/잔여/).length).toBeGreaterThan(0);
+
+      releasePost();
+      await act(async () => {
+        await Promise.resolve();
+      });
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
   });
 });

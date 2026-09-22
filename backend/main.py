@@ -20,7 +20,7 @@ from fastapi.encoders import jsonable_encoder
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from backend.auth import require_auth, require_admin, optional_auth, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, observation_hash, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
 from backend.book_manager import BookManager, MAX_LATEST_BOOK_COUNT
 from backend.comics_manager import ComicsManager
@@ -1599,6 +1599,23 @@ async def set_latest_excluded_category(category: str, body: LatestExcludedCatego
         raise HTTPException(status_code=500, detail=GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL)
 
 
+# /logs/client-error 는 인증 없이 받으므로 본문 크기를 서버가 직접 묶는다.
+# 상한은 프론트의 clientLogger.js 가 이미 자르는 값과 맞췄고(message 2000,
+# stack·component_stack 5000), 나머지는 실측에 여유를 뒀다: 관측된 url 은 91 자,
+# 코퍼스에서 만들 수 있는 최장 카테고리 URL 이 약 422 자다.
+CLIENT_ERROR_FIELD_LIMITS = {
+    "message": 2000,
+    "stack": 5000,
+    "component_stack": 5000,
+    "url": 2048,
+    "user_agent": 512,
+    "timestamp": 64,
+}
+
+# 한 줄로 기록하는 필드. 개행이 들어가면 가짜 로그 줄을 심을 수 있다(CWE-117).
+CLIENT_ERROR_SINGLE_LINE_FIELDS = ("message", "url", "user_agent", "timestamp")
+
+
 class ClientErrorLogModel(BaseModel):
     error_type: Literal["REACT_RENDER_ERROR", "WINDOW_ERROR", "UNHANDLED_PROMISE", "CUSTOM_ERROR"]
     message: str
@@ -1607,6 +1624,19 @@ class ClientErrorLogModel(BaseModel):
     url: str
     user_agent: str | None = None
     timestamp: str | None = None
+
+    @field_validator("message", "stack", "component_stack", "url", "user_agent", "timestamp")
+    @classmethod
+    def _bound_and_sanitize(cls, value: str | None, info) -> str | None:
+        """거부하지 않고 자른다. 에러 보고는 앞부분이 쓸모 있어서 버리면 손해다."""
+        if value is None:
+            return None
+        if info.field_name in CLIENT_ERROR_SINGLE_LINE_FIELDS:
+            # stack 계열은 여러 줄이 의미를 가지므로 건드리지 않는다.
+            # 개행은 지우지 않고 공백으로 바꾼다. 지우면 앞뒤 단어가 붙어 읽기 어렵다.
+            value = value.replace("\r", " ").replace("\n", " ")
+            value = "".join(ch for ch in value if ch == "\t" or ch >= " ")
+        return value[: CLIENT_ERROR_FIELD_LIMITS[info.field_name]]
 
 
 @app.post("/logs/client-error")

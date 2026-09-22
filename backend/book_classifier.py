@@ -18,12 +18,12 @@ import shutil
 import logging
 import zipfile
 import urllib.parse
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore
 from backend.classifier import BookCategoryClassifier
+from backend.bookstore_cache import BookstoreResponseCache
 from backend.classifier.bookstore_policy import BookstorePolicy, map_bookstore_candidates
 
 logger = logging.getLogger(__name__)
@@ -145,6 +145,28 @@ def extract_explicit_genre(filename: str) -> Optional[str]:
     return None
 
 
+# 정상 EPUB 의 OPF 는 수십 KB 다. 이 상한은 압축을 풀었을 때의 크기로 재며,
+# 작게 압축된 거대 파일(zip bomb)이 메모리를 먹는 것을 읽기 전에 끊는다.
+MAX_OPF_BYTES = 8 * 1024 * 1024
+
+
+def _parse_opf_safely(opf_bytes: bytes) -> Any:
+    """엔티티를 확장하지 않는 파서로 OPF 를 읽는다 (CWE-611, CWE-776).
+
+    표준 ElementTree 는 외부 엔티티는 확장하지 않지만 내부 엔티티는 확장한다.
+    중첩 엔티티 몇 백 바이트로 메모리를 수십 GB 까지 부풀릴 수 있다
+    (billion laughs). lxml 은 확장 자체를 하지 않고 증폭 상한도 갖고 있다.
+
+    book_manager._safe_xml_parser 와 같은 설정이지만 직접 만든다.
+    book_manager 가 이 모듈을 import 하므로 역방향 import 는 순환이 된다.
+    str 이 아니라 bytes 를 받는 이유는 OPF 에 인코딩 선언이 붙어 있어서다.
+    """
+    from lxml import etree  # type: ignore[attr-defined]
+
+    parser = etree.XMLParser(recover=True, resolve_entities=False, no_network=True, load_dtd=False)
+    return etree.fromstring(opf_bytes, parser)
+
+
 def inspect_epub_metadata(fpath: Path) -> Dict[str, str]:
     """EPUB 파일 내부의 .opf 메타데이터(title, author, subject, description) 추출"""
     meta = {"title": "", "author": "", "subject": "", "description": ""}
@@ -153,9 +175,19 @@ def inspect_epub_metadata(fpath: Path) -> Dict[str, str]:
             opf_files = [n for n in z.namelist() if n.endswith(".opf")]
             if not opf_files:
                 return meta
-            opf_content = z.read(opf_files[0]).decode("utf-8", errors="ignore")
-            root = ET.fromstring(opf_content)
+            opf_name = opf_files[0]
+            opf_size = z.getinfo(opf_name).file_size
+            if opf_size > MAX_OPF_BYTES:
+                logger.warning("OPF too large, skipping metadata: %s (%d bytes)", fpath, opf_size)
+                return meta
+            root = _parse_opf_safely(z.read(opf_name))
+            if root is None:
+                return meta
             for elem in root.iter():
+                # lxml 은 ElementTree 와 달리 주석과 처리명령 노드도 내놓는다.
+                # 그 노드의 tag 는 문자열이 아니라 함수라서 걸러내야 한다.
+                if not isinstance(elem.tag, str):
+                    continue
                 tag = elem.tag.split("}")[-1].lower()
                 if tag == "title" and elem.text and not meta["title"]:
                     meta["title"] = elem.text.strip()
@@ -613,7 +645,7 @@ class BookClassifierService:
     - 캐시 영구화 및 중복 정리/안전 이동
     """
 
-    def __init__(self, library_root: Path | str = "/mnt/data/text", cache_file: Optional[Path | str] = None, delay: float = 1.2, verbose: bool = False, es_manager: Any = None, classifier: Optional[BookCategoryClassifier] = None, bookstore_policy: Optional["BookstorePolicy"] = None):
+    def __init__(self, library_root: Path | str = "/mnt/data/text", cache_file: Optional[Path | str] = None, delay: float = 1.2, verbose: bool = False, es_manager: Any = None, classifier: Optional[BookCategoryClassifier] = None, bookstore_policy: Optional["BookstorePolicy"] = None, bookstore_cache_file: Optional[Path | str] = None):
         self.library_root = Path(library_root)
         self.delay = delay
         self.verbose = verbose
@@ -632,6 +664,10 @@ class BookClassifierService:
         self.cache: Dict[str, Dict[str, Any]] = {}
         self.title_cache: Dict[str, Dict[str, Any]] = {}
         self.load_cache()
+
+        # 서점 응답만 따로 모으는 캐시. 분류 캐시는 파일 경로로 묶여 있어 같은 책이
+        # 다른 파일명으로 오면 서점을 다시 부른다. 이쪽은 ISBN·제목으로 찾는다.
+        self.bookstore_cache = BookstoreResponseCache(bookstore_cache_file if bookstore_cache_file else self.cache_file.with_name("bookstore_cache.jsonl"))
 
         self.yes24 = Yes24Bookstore(verbose=verbose)
         self.aladin = AladinBookstore(verbose=verbose)
@@ -666,15 +702,23 @@ class BookClassifierService:
                 if st not in self.title_cache or v.get("status") in ["moved", "already_exists_cleaned", "matched"]:
                     self.title_cache[st] = v
 
-    def query_bookstores(self, search_title: str, raw_author: str, raw_title: str) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    def query_bookstores(self, search_title: str, raw_author: str, raw_title: str, isbn: str = "") -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+        """서점 3곳에 묻는다. 같은 책을 이미 물었으면 캐시에서 꺼낸다.
+
+        캐시가 맞으면 조회 3회와 간격 3회를 통째로 건너뛴다. 한 건에 3.6초다.
+        """
         import time
 
+        cached = self.bookstore_cache.get(isbn=isbn, title=search_title)
+        if cached is not None:
+            return cached.get("yes24", {}), cached.get("aladin", {}), cached.get("kyobo", {})
+
         def _do_query(store: AbstractBookstore) -> Dict[str, Any]:
-            res = {"title": "", "author": "", "cat": "", "mapped": None, "url": ""}
+            res = {"title": "", "author": "", "cat": "", "mapped": None, "url": "", "isbn": ""}
             try:
-                results, _, _ = store.search(title=search_title, author=raw_author)
+                results, _, _ = store.search(isbn=isbn, title=search_title, author=raw_author)
                 if results and len(results) > 0:
-                    found_title, found_author, cat_str, detail_url, _, _ = results[0]
+                    found_title, found_author, cat_str, detail_url, _, found_isbn = results[0]
                     res["title"] = found_title
                     res["author"] = found_author
                     res["cat"] = cat_str
@@ -684,6 +728,8 @@ class BookClassifierService:
                     res["mapped"] = candidates[0] if len(candidates) == 1 else None
                     res["candidates"] = candidates
                     res["url"] = detail_url
+                    # 캐시를 ISBN 으로도 찾으려면 서점이 준 ISBN 을 버리지 않아야 한다.
+                    res["isbn"] = found_isbn or ""
             except Exception as e:
                 logger.debug("Store query failed: %s", e)
             return res
@@ -695,6 +741,7 @@ class BookClassifierService:
         k_entry = _do_query(self.kyobo)
         time.sleep(self.delay)
 
+        self.bookstore_cache.put({"yes24": y_entry, "aladin": a_entry, "kyobo": k_entry}, isbn=isbn, title=search_title)
         return y_entry, a_entry, k_entry
 
     def classify_file(self, fpath: Path, source_dir: Path, trust_single_match: bool = True, use_bookstore: bool = True, use_content_meta: bool = True, cache_only: bool = False) -> Tuple[Optional[str], str, str, Dict[str, Any]]:
@@ -754,6 +801,14 @@ class BookClassifierService:
 
     MIN_STORE_VOTES = 2
 
+    # 이 확신도 미만이면 모델 답을 '확실'로 치지 않는다. 화면의 등급 판정
+    # (`BookManager.MODEL_CERTAIN_MIN_CONFIDENCE`)이 쓰는 기준과 같은 값이어야 한다.
+    #
+    # 두 기준이 갈라져 있을 때 사각지대가 생겼다. 서점 경계(0.056)와 이 값 사이에
+    # 떨어진 건은 서점을 세지도 않고 모델 답을 들고 나갔는데, 화면은 그 답을 목적지로
+    # 인정하지 않아 결국 빈칸이 됐다. 홀드아웃 곡선 기준으로 전체의 약 22% 다.
+    MODEL_TRUST_MIN_CONFIDENCE = 0.10
+
     def _decide(self, fpath: Optional[Path], effective_fname: str, entry: Dict[str, Any], trust_single_match: bool = True) -> Tuple[Optional[str], str, str, Optional[str], float]:
         """
         모델로 판정하고, 확신이 모자라면 서점 다수결로 되돌아간다.
@@ -785,6 +840,17 @@ class BookClassifierService:
             store_cat, store_method, store_reason = bookstore()
             if store_cat:
                 return store_cat, store_method, f"{store_reason} (확신도 {confidence:.3f} < 경계 {self.bookstore_policy.override_below:.3f} 이라 서점 우선; 모델: {model_reason})", model_cat, confidence
+
+        if model_cat and confidence < self.MODEL_TRUST_MIN_CONFIDENCE:
+            # 모델이 답은 했지만 화면이 '확실'로 인정할 만큼은 아니다. 서점을 세어 본다.
+            # 다수결이 서면 그쪽이 낫다 - 홀드아웃에서 서점 정답률은 85.8% 였고, 이 구간의
+            # 모델은 판정을 거부하는 쪽에 가깝다.
+            #
+            # 다수결이 안 서도 득표는 entry 에 남는다. 한 곳만 맞거나 갈린 경우에도
+            # 화면이 그 사실을 후보로 보여줄 수 있어야 한다.
+            store_cat, store_method, store_reason = bookstore()
+            if store_cat and store_method == "bookstore_majority":
+                return store_cat, store_method, f"{store_reason} (확신도 {confidence:.3f} < 신뢰 기준 {self.MODEL_TRUST_MIN_CONFIDENCE:.2f} 이라 서점 다수결 우선; 모델: {model_reason})", model_cat, confidence
 
         if model_cat:
             return model_cat, "model", model_reason, model_cat, confidence

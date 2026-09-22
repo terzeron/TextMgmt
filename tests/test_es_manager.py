@@ -81,7 +81,7 @@ class DummyES:
             raise ConnectionError("boom")
         return {"errors": False}
 
-    def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None):
+    def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None, source=None):
         self.search_calls += 1
         if body is not None and body.get("aggs"):
             return {"aggregations": {"unique_values": {"buckets": [{"key": "A", "doc_count": 2}]}}}
@@ -328,7 +328,7 @@ def test_search_by_keyword_paged_with_exclude_categories():
 
     called = {}
 
-    def fake_search_paged(query, size=10, offset=0, sort=None, ref_score=0.0):
+    def fake_search_paged(query, size=10, offset=0, sort=None, ref_score=0.0, source_fields=None):
         called["query"] = query
         return ([(1, {"a": 1}, 10.0)], 1)
 
@@ -345,7 +345,7 @@ def test_search_similar_docs_paged_without_exclude():
     es = DummyES()
     manager = make_manager(es)
 
-    def fake_search_paged(query, size=10, offset=0, sort=None, ref_score=0.0):
+    def fake_search_paged(query, size=10, offset=0, sort=None, ref_score=0.0, source_fields=None):
         return ([(1, {"a": 1}, 10.0)], 2)
 
     manager._search_paged = fake_search_paged
@@ -359,7 +359,7 @@ def test_search_builders_delegate_to__search():
     manager = make_manager(es)
     captured = []
 
-    def fake_search(query, sort=None, max_result_count=-1):
+    def fake_search(query, sort=None, max_result_count=-1, source_fields=None):
         captured.append((query, sort, max_result_count))
         return [(1, {"ok": True}, 100.0)]
 
@@ -408,7 +408,7 @@ def test_update_returns_true_when_no_failed_shards():
 
 def test_search_max_score_none_returns_empty():
     class ESNoScore(DummyES):
-        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None):
+        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None, source=None):
             return {"hits": {"max_score": None, "hits": []}}
 
     manager = make_manager(ESNoScore())
@@ -417,7 +417,7 @@ def test_search_max_score_none_returns_empty():
 
 def test_search_paged_base_score_zero():
     class ESZeroScore(DummyES):
-        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None):
+        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None, source=None):
             return {"hits": {"total": {"value": 3}, "max_score": 0.0, "hits": []}}
 
     manager = make_manager(ESZeroScore())
@@ -488,7 +488,7 @@ def test_delete_by_file_paths_with_exclude_ids():
 
 def test_search_scroll_max_score_none():
     class ESScroll(DummyES):
-        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None):
+        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None, source=None):
             return {"_scroll_id": "scroll1", "hits": {"max_score": 1.0, "hits": [{"_id": "1", "_source": {"a": 1}, "_score": 1.0}]}}
 
         def scroll(self, scroll_id: str, scroll: str):
@@ -501,7 +501,7 @@ def test_search_scroll_max_score_none():
 
 def test_search_scroll_clear_scroll_error():
     class ESScroll(DummyES):
-        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None):
+        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None, source=None):
             return {"_scroll_id": "scroll1", "hits": {"max_score": 1.0, "hits": []}}
 
         def clear_scroll(self, scroll_id: str):
@@ -524,7 +524,7 @@ def test_search_paged_with_zero_score():
     manager = make_manager(es)
 
     class DummyZeroScoreES(DummyES):
-        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None):
+        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None, source=None):
             return {"hits": {"total": {"value": 1}, "max_score": 0, "hits": [{"_id": "1", "_source": {"a": 1}, "_score": 0}]}}
 
     manager.es = DummyZeroScoreES()
@@ -607,7 +607,7 @@ def test_search_scroll_early_exit_on_max():
             super().__init__()
             self._call = 0
 
-        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None):
+        def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None, source=None):
             if scroll:
                 hits = [{"_id": str(i), "_source": {"a": i}, "_score": 2.0} for i in range(5)]
                 return {"_scroll_id": "s1", "hits": {"max_score": 2.0, "hits": hits}}
@@ -654,7 +654,7 @@ def test_search_similar_docs_negative_max():
     es = DummyES()
     manager = make_manager(es)
 
-    def fake_search(query, sort=None, max_result_count=-1):
+    def fake_search(query, sort=None, max_result_count=-1, source_fields=None):
         return [(1, {"a": 1}, 100.0)]
 
     manager._search = fake_search
@@ -922,10 +922,10 @@ def test_search_scroll_initial_max_score_none():
     """Line 248: initial scroll response has max_score=None (requires max_result_count > 10000)"""
 
     class ScrollNullES(DummyES):
-        def search(self, index, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None):
+        def search(self, index, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None, source=None):
             if scroll is not None:
                 return {"_scroll_id": "s1", "hits": {"max_score": None, "hits": [{"_id": "1", "_source": {}, "_score": 0}]}}
-            return super().search(index=index, query=query, sort=sort, size=size, track_scores=track_scores, track_total_hits=track_total_hits, from_=from_, body=body, scroll=scroll)
+            return super().search(index=index, query=query, sort=sort, size=size, track_scores=track_scores, track_total_hits=track_total_hits, from_=from_, body=body, scroll=scroll, source=source)
 
     es = ScrollNullES()
     manager = make_manager(es)
@@ -938,11 +938,11 @@ def test_search_scroll_early_exit_first_batch():
     """Line 255: result_count >= max_result_count in first scroll batch"""
 
     class ScrollBigBatchES(DummyES):
-        def search(self, index, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None):
+        def search(self, index, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None, source=None):
             if scroll is not None:
                 hits = [{"_id": str(i), "_source": {"a": i}, "_score": 5.0} for i in range(10)]
                 return {"_scroll_id": "s1", "hits": {"max_score": 5.0, "hits": hits}}
-            return super().search(index=index, query=query, sort=sort, size=size, track_scores=track_scores, track_total_hits=track_total_hits, from_=from_, body=body, scroll=scroll)
+            return super().search(index=index, query=query, sort=sort, size=size, track_scores=track_scores, track_total_hits=track_total_hits, from_=from_, body=body, scroll=scroll, source=source)
 
     es = ScrollBigBatchES()
     manager = make_manager(es)
@@ -1467,3 +1467,82 @@ def test_search_by_id_success():
     source = manager.search_by_id(42)
     assert source == {"title": "found_book"}
 
+
+
+class RecordingES(DummyES):
+    """search/msearch 에 넘어간 인자를 그대로 보관해 쿼리 모양을 검증한다."""
+
+    def __init__(self):
+        super().__init__()
+        self.last_search_kwargs: dict[str, Any] = {}
+        self.last_msearch: list[dict[str, Any]] = []
+
+    def search(self, index: str, query=None, sort=None, size=10, track_scores=True, track_total_hits=False, from_=0, body=None, scroll=None, source=None):
+        self.last_search_kwargs = {"query": query, "sort": sort, "size": size, "from_": from_, "source": source, "track_total_hits": track_total_hits}
+        return super().search(index=index, query=query, sort=sort, size=size, track_scores=track_scores, track_total_hits=track_total_hits, from_=from_, body=body, scroll=scroll, source=source)
+
+    def msearch(self, searches: list[dict[str, Any]]):
+        self.last_msearch = searches
+        return super().msearch(searches)
+
+
+def _summary_clause(should_clauses: list[dict[str, Any]]) -> dict[str, Any]:
+    """should 절에서 summary 를 대상으로 하는 절 하나를 찾아 돌려준다."""
+    for clause in should_clauses:
+        if "more_like_this" in clause and clause["more_like_this"]["fields"] == ["summary"]:
+            return clause
+        if "match" in clause and "summary" in clause["match"]:
+            return clause
+    raise AssertionError(f"summary 절을 찾지 못했다: {should_clauses}")
+
+
+def test_list_source_fields_excludes_summary():
+    """목록 응답에 summary 가 없으므로 ES 에서도 받아오지 않는다."""
+    assert "summary" not in ESManager.LIST_SOURCE_FIELDS
+    # Book/Comics 가 생성자에서 읽는 필수 필드는 빠지면 안 된다.
+    for required in ("category", "title", "author", "file_path", "file_type", "file_size", "updated_time"):
+        assert required in ESManager.LIST_SOURCE_FIELDS
+
+
+def test_category_paged_requests_only_list_source_fields():
+    es = RecordingES()
+    manager = make_manager(es)
+    manager.search_by_category_paged("A", size=2)
+    assert es.last_search_kwargs["source"] == ESManager.LIST_SOURCE_FIELDS
+
+
+def test_keyword_paged_requests_only_list_source_fields():
+    es = RecordingES()
+    manager = make_manager(es)
+    manager.search_by_keyword_paged("k", size=2)
+    assert es.last_search_kwargs["source"] == ESManager.LIST_SOURCE_FIELDS
+
+
+def test_latest_docs_requests_only_list_source_fields():
+    es = RecordingES()
+    manager = make_manager(es)
+    manager.search_latest_docs(max_result_count=2)
+    assert es.last_search_kwargs["source"] == ESManager.LIST_SOURCE_FIELDS
+
+
+def test_similar_docs_uses_more_like_this_not_raw_match():
+    """summary 원문을 match 로 넣으면 nori 토큰 1,000여 개 OR 쿼리가 되어 3.5초 걸린다."""
+    es = RecordingES()
+    manager = make_manager(es)
+    manager.search_similar_docs(title="t", author="a", file_size=100, summary="본문 " * 500)
+    should = es.last_search_kwargs["query"]["bool"]["should"]
+    clause = _summary_clause(should)
+    assert "more_like_this" in clause, "summary 절이 match 로 되돌아갔다"
+    assert clause["more_like_this"]["max_query_terms"] == ESManager.SIMILAR_SUMMARY_MAX_QUERY_TERMS
+
+
+def test_similar_docs_paged_msearch_limits_source():
+    es = RecordingES()
+    manager = make_manager(es)
+    manager.search_similar_docs_paged(title="t", author="a", file_size=100, summary="본문 " * 500, exclude_id=7, size=5)
+    self_score_body, main_body = es.last_msearch[1], es.last_msearch[3]
+    # self-score 는 점수만 쓰므로 _source 가 통째로 꺼져 있어야 한다.
+    assert self_score_body["_source"] is False
+    assert main_body["_source"] == ESManager.LIST_SOURCE_FIELDS
+    clause = _summary_clause(main_body["query"]["bool"]["should"])
+    assert "more_like_this" in clause

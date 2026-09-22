@@ -54,7 +54,10 @@ import {
   updateFolderInTree,
 } from "./folderUtils";
 import { TreeNodeIcon } from "./fileTypeIcons";
-import ClassifyProposalTable, { isSelectable } from "./ClassifyProposalTable";
+import ClassifyProposalTable, {
+  isSelectable,
+  isAlreadyInCurrentCategory,
+} from "./ClassifyProposalTable";
 import "./Folder.css";
 import "./CategoryAdmin.css";
 
@@ -370,6 +373,47 @@ function getMismatchReloadTargetCount(folder) {
   return countLoadedMismatchEntries(folder);
 }
 
+function sumChildCounts(nodes) {
+  return nodes.reduce((sum, node) => sum + Number(node.count || 0), 0);
+}
+
+// 2단계 트리에서 한 카테고리의 이상 항목 목록을 갈아끼운다. 그 노드의 자체 건수
+// (ownCount)와 합계 배지(count)를 받아온 항목 수로 맞추고, 자식 노드였으면 부모의
+// 합계 배지도 같이 맞춘다. updateFolderInTree는 대상 노드만 바꾸므로 부모 배지가
+// 옛 값으로 남는다.
+function replaceCategoryMismatchEntries(folderData, categoryId, entries) {
+  // 요약 스캔 이후 파일이 바뀌었을 수 있으므로 배지를 실제로 받아온 항목 수로
+  // 맞춘다. 배지와 펼친 목록이 어긋나면 사용자가 판단할 수 없다.
+  const applyEntries = (node) => {
+    /* v8 ignore next -- 항목을 갈아끼우는 노드는 항상 children 배열을 들고 있다. */
+    const subfolders = (node.children || []).filter(
+      (child) => child.fileType === "folder",
+    );
+    return {
+      ...node,
+      booksLoaded: true,
+      ownCount: entries.length,
+      count: entries.length + sumChildCounts(subfolders),
+      children: [...subfolders, ...entries],
+    };
+  };
+
+  return folderData.map((item) => {
+    if (item.id === categoryId) return applyEntries(item);
+    const childIndex = (item.children || []).findIndex(
+      (child) => child.id === categoryId,
+    );
+    if (childIndex === -1) return item;
+    const children = [...item.children];
+    children[childIndex] = applyEntries(children[childIndex]);
+    return {
+      ...item,
+      children,
+      count: Number(item.ownCount || 0) + sumChildCounts(children),
+    };
+  });
+}
+
 function encodeCategoryPath(category) {
   return category.split("/").map(encodeURIComponent).join("/");
 }
@@ -396,6 +440,9 @@ export default function CategoryAdmin({
 
   // 카테고리 트리
   const [folderData, setFolderData] = useState([]);
+  // 폴링 콜백에서 최신 트리를 읽기 위한 거울. folderData를 콜백 의존성에 넣으면
+  // 트리가 바뀔 때마다 재적재 상태 폴링 effect가 재시작된다.
+  const folderDataRef = useRef([]);
   const [expandedItems, setExpandedItems] = useState([]);
   const [hiddenCategories, setHiddenCategories] = useState(new Set());
   const [latestExcludedCategories, setLatestExcludedCategories] = useState(
@@ -497,11 +544,15 @@ export default function CategoryAdmin({
 
   // ── 데이터 로드 ──
 
-  const loadData = useCallback(() => {
-    setLoading(true);
+  // options.silent: 화면 전체를 "로딩 중..."으로 덮지 않고, 펼친 디렉토리와 지금
+  // 그려진 트리를 그대로 둔 채 요약 스캔 결과만 나중에 얹는다. 백그라운드 재적재가
+  // 끝났을 때처럼 사용자가 화면을 보고 있는 중의 재조회에 쓴다.
+  const loadData = useCallback((options = {}) => {
+    const silent = options.silent === true;
+    if (!silent) setLoading(true);
     setMismatchLoading(true);
     setMessage("");
-    setLatestExcludedCategories(new Set());
+    if (!silent) setLatestExcludedCategories(new Set());
     const latestExcludedRequestId = latestExcludedRequestIdRef.current + 1;
     latestExcludedRequestIdRef.current = latestExcludedRequestId;
 
@@ -590,8 +641,13 @@ export default function CategoryAdmin({
       /* v8 ignore next -- categories endpoint success payload is always an object. */
       setEsDocCounts(categoriesResult || {});
 
-      setFolderData(buildTree(null));
-      setExpandedItems([]);
+      // silent 재조회에서는 건수 없는 트리를 먼저 그리지 않는다. 그걸 그리면 배지가
+      // 사라졌다 돌아오고 펼쳐 둔 목록도 placeholder로 되돌아간다. 스캔 결과가
+      // 도착하면 applyMismatches가 한 번만 그린다.
+      if (!silent) {
+        setFolderData(buildTree(null));
+        setExpandedItems([]);
+      }
       setLoading(false);
       treeReady = true;
       applyMismatches();
@@ -686,16 +742,137 @@ export default function CategoryAdmin({
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    folderDataRef.current = folderData;
+  }, [folderData]);
+
+  // ── 카테고리 하나만 다시 세는 재조회 ──
+
+  // 카테고리별 ES 문서 수만 다시 받는다. terms 집계 한 번이라 요약 스캔과 달리 싸다.
+  const refreshEsDocCounts = useCallback(() => {
+    jsonGetReq(
+      apiPrefix + "/categories",
+      null,
+      /* v8 ignore next -- categories endpoint success payload is always an object. */
+      (result) => setEsDocCounts(result || {}),
+      () => {},
+    );
+  }, [apiPrefix]);
+
+  // 트리 노드를 펼칠 때의 lazy-load와, 그 카테고리 재적재가 끝난 뒤의 재조회가 같은
+  // 일을 한다. folderData를 의존성에 넣지 않으려고 setFolderData의 함수형 갱신과
+  // folderDataRef를 쓴다. 이 콜백은 재적재 상태 폴링 effect의 의존성에 실려 있어서,
+  // 트리가 바뀔 때마다 새로 만들어지면 폴링이 재시작된다.
+  // syncStats: 요약 스캔을 다시 돌리지 않는 경로에서 전체 집계를 직접 맞춘다.
+  const loadCategoryMismatchDetails = useCallback(
+    (category, { syncStats = false } = {}) => {
+      jsonGetReq(
+        apiPrefix + "/category-mismatches/" + category,
+        null,
+        (result) => {
+          const entries = [];
+
+          for (const item of result.es_only || []) {
+            entries.push({
+              id: category + "/es_" + item.book_id.toString(),
+              label: item.title + "." + item.file_type,
+              fileType: item.file_type,
+              children: [],
+              mismatchType: "es_only",
+              bookId: item.book_id,
+              category: category,
+              filePath: item.file_path,
+            });
+          }
+
+          for (const item of result.fs_only || []) {
+            entries.push({
+              id: category + "/fs_" + item.file_name,
+              label: item.file_name,
+              fileType: "unknown",
+              children: [],
+              mismatchType: "fs_only",
+              category: category,
+              filePath: item.file_path,
+            });
+          }
+
+          for (const item of result.duplicates || []) {
+            const ids = item.docs.map((d) => d.book_id);
+            const fileName = item.file_path.split("/").pop();
+            entries.push({
+              id: category + "/dup_" + ids.join("_"),
+              label: `[중복] ${fileName} (${item.docs.length}건)`,
+              fileType: item.docs[0]?.file_type || "unknown",
+              children: [],
+              mismatchType: "duplicate",
+              dupDocs: item.docs,
+              fileExists: item.file_exists,
+              category: category,
+              filePath: item.file_path,
+            });
+          }
+
+          // FS 파일 수 저장
+          if (result.fs_count != null) {
+            setFsFileCounts((prev) => ({
+              ...prev,
+              [category]: result.fs_count,
+            }));
+          }
+
+          if (syncStats) {
+            // 전체 집계는 요약 스캔이 준 값이다. 그 스캔을 다시 돌리지 않으므로 이
+            // 카테고리에서 실제로 확인한 건수만큼 직접 덜어낸다. 그러지 않으면 일괄
+            // 재적재 모달과 버튼이 이미 해소된 건수를 계속 보여 준다.
+            /* v8 ignore next 3 -- 재적재를 시작한 카테고리는 트리에 있다. */
+            const previousOwnCount = Number(
+              findFolderInTree(folderDataRef.current, category)?.ownCount ?? 0,
+            );
+            const nextOwnCount = entries.length;
+            setMismatchStats((prev) => ({
+              // 이 카테고리는 이상 항목이 있어서 재적재를 시작할 수 있었다. 지금
+              // 0건이면 불일치 카테고리 수에서도 하나 빠진다.
+              categoryCount:
+                nextOwnCount > 0
+                  ? prev.categoryCount
+                  : Math.max(0, prev.categoryCount - 1),
+              itemCount: Math.max(
+                0,
+                prev.itemCount + nextOwnCount - previousOwnCount,
+              ),
+            }));
+          }
+
+          setFolderData((prev) =>
+            replaceCategoryMismatchEntries(prev, category, entries),
+          );
+        },
+        (error) => {
+          setMessage(
+            formatErrorMessage(error, "불일치 상세 조회에 실패했습니다."),
+          );
+          setTimeout(() => setMessage(""), 5000);
+        },
+      );
+    },
+    [apiPrefix],
+  );
+
   // ── 재적재 작업 상태 반영 ──
   // 백엔드는 카테고리별 락과 전체(일괄) 락을 독립적으로 추적하므로, 두 락을 각각 폴링해
   // 서로 다른 카테고리(또는 카테고리 vs 일괄)의 진행 상태가 뒤섞이지 않게 한다.
 
   const applyReloadStatus = useCallback(
     (status, setRunning, setRemaining, startPendingRef, trackingRef) => {
+      // 시작 요청(POST)이 아직 응답하지 않았으면, 지금 보이는 상태는 내 작업의 것이
+      // 아니다. 백엔드는 새 락을 잡기 전까지 직전 작업의 done/error를 계속 돌려주므로
+      // (get_reload_status) idle뿐 아니라 done/error도 잔상으로 봐야 한다. 이걸 내
+      // 작업의 완료로 오인하면 클릭 직후에 전체 재조회가 돌아 화면이 껌뻑인다.
+      // 시작 대기는 POST 응답이 락 획득을 확인해 줄 때 풀린다.
+      if (startPendingRef.current && status?.status !== "running") return true;
+
       if (!status || status.status === "idle") {
-        // 시작 요청(POST)이 서버에 반영되기 전에 이 폴링이 먼저 도착해 stale한 idle을
-        // 읽은 것일 수 있다. 그 경우 스피너를 끄지 않고 유지한다.
-        if (startPendingRef.current) return true;
         trackingRef.current = false;
         setRunning(false);
         setRemaining(null);
@@ -713,13 +890,22 @@ export default function CategoryAdmin({
       // 이 컴포넌트가 그 작업을 추적하고 있지 않았다면(마운트 직후, 디렉토리 선택 변경
       // 직후의 첫 폴링) 과거 작업의 잔상이므로 완료로 처리하지 않는다. 그러지 않으면
       // 디렉토리를 클릭할 때마다 같은 완료/실패 안내와 loadData()가 되풀이된다.
-      const wasTracking = startPendingRef.current || trackingRef.current;
-      startPendingRef.current = false;
+      const wasTracking = trackingRef.current;
       trackingRef.current = false;
       setRunning(false);
       setRemaining(null);
       if (!wasTracking) return false;
-      loadData();
+      if (status.category) {
+        // 카테고리 하나만 돈 작업이다. 코퍼스 전수 요약 스캔(/category-mismatches)을
+        // 다시 돌릴 이유가 없다. 재적재가 그 스캔의 캐시를 비우므로 다시 돌리면 매번
+        // 콜드로 돌아 수십 초가 걸린다.
+        loadCategoryMismatchDetails(status.category, { syncStats: true });
+        refreshEsDocCounts();
+      } else {
+        // 전체 작업은 모든 카테고리를 건드렸으니 요약을 다시 받아야 한다. 그래도
+        // 화면을 "로딩 중..."으로 덮지는 않는다.
+        loadData({ silent: true });
+      }
       if (status.status !== "done") {
         setMessage(
           formatErrorMessage(
@@ -731,7 +917,7 @@ export default function CategoryAdmin({
       }
       return false;
     },
-    [loadData],
+    [loadData, loadCategoryMismatchDetails, refreshEsDocCounts],
   );
 
   const clearNonOwnerAllReloadState = useCallback((owner) => {
@@ -746,6 +932,18 @@ export default function CategoryAdmin({
 
   const applyAllReloadStatus = useCallback(
     (status, fallbackOwner = allReloadOwner) => {
+      // mismatchReloading은 "이상 항목" 버튼이 시작한 전체 작업과 카테고리 전용
+      // 작업이 함께 쓰는 상태다. 그래서 전체 락에 반영할 것이 없을 때 여기서 표시를
+      // 끄면, 돌고 있는 카테고리 전용 작업의 스피너까지 꺼진다. 추적 중인 전체 작업도
+      // 없고 지금 도는 전체 작업도 없으면 두 버튼을 건드리지 않고 나간다. 직전 전체
+      // 작업이 남긴 done도 여기서 걸러진다.
+      const trackingAllReload =
+        bulkStartPendingRef.current || allReloadTrackingRef.current;
+      if (!trackingAllReload && status?.status !== "running") {
+        if (allReloadOwner) updateAllReloadOwner(null);
+        return false;
+      }
+
       const statusOwner = getAllReloadStatusOwner(status, fallbackOwner);
       const isMismatchOwner = statusOwner === "mismatch";
       clearNonOwnerAllReloadState(statusOwner);
@@ -865,10 +1063,12 @@ export default function CategoryAdmin({
       const defaults = {};
       for (const item of items) {
         const first = (item.candidates || [])[0];
+        // 추천 1이 이미 있는 디렉토리와 같으면 제자리 이동이라 체크하지 않는다.
         if (
           item.grade === "certain" &&
           first?.category &&
-          item.apply_status !== "moved"
+          item.apply_status !== "moved" &&
+          !isAlreadyInCurrentCategory(item)
         ) {
           defaults[item.file_path] = {
             source: "candidate",
@@ -946,91 +1146,9 @@ export default function CategoryAdmin({
       if (!selectedFolderData.ownCount) return;
       if (selectedFolderData.booksLoaded) return;
 
-      jsonGetReq(
-        apiPrefix + "/category-mismatches/" + selectedId,
-        null,
-        (result) => {
-          const entries = [];
-
-          for (const item of result.es_only || []) {
-            entries.push({
-              id: selectedId + "/es_" + item.book_id.toString(),
-              label: item.title + "." + item.file_type,
-              fileType: item.file_type,
-              children: [],
-              mismatchType: "es_only",
-              bookId: item.book_id,
-              category: selectedId,
-              filePath: item.file_path,
-            });
-          }
-
-          for (const item of result.fs_only || []) {
-            entries.push({
-              id: selectedId + "/fs_" + item.file_name,
-              label: item.file_name,
-              fileType: "unknown",
-              children: [],
-              mismatchType: "fs_only",
-              category: selectedId,
-              filePath: item.file_path,
-            });
-          }
-
-          for (const item of result.duplicates || []) {
-            const ids = item.docs.map((d) => d.book_id);
-            const fileName = item.file_path.split("/").pop();
-            entries.push({
-              id: selectedId + "/dup_" + ids.join("_"),
-              label: `[중복] ${fileName} (${item.docs.length}건)`,
-              fileType: item.docs[0]?.file_type || "unknown",
-              children: [],
-              mismatchType: "duplicate",
-              dupDocs: item.docs,
-              fileExists: item.file_exists,
-              category: selectedId,
-              filePath: item.file_path,
-            });
-          }
-
-          // FS 파일 수 저장
-          if (result.fs_count != null) {
-            setFsFileCounts((prev) => ({
-              ...prev,
-              [selectedId]: result.fs_count,
-            }));
-          }
-
-          const data = updateFolderInTree(folderData, selectedId, (folder) => {
-            /* v8 ignore next -- mismatch folders always carry a children array. */
-            const existingSubfolders = (folder.children || []).filter(
-              (c) => c.fileType === "folder",
-            );
-            // 요약 스캔 이후 파일이 바뀌었을 수 있으므로 배지를 실제로 받아온
-            // 항목 수로 맞춘다. 배지와 펼친 목록이 어긋나면 사용자가 판단할 수 없다.
-            const subfolderTotal = existingSubfolders.reduce(
-              (sum, c) => sum + Number(c.count || 0),
-              0,
-            );
-            return {
-              ...folder,
-              booksLoaded: true,
-              ownCount: entries.length,
-              count: entries.length + subfolderTotal,
-              children: [...existingSubfolders, ...entries],
-            };
-          });
-          setFolderData(data);
-        },
-        (error) => {
-          setMessage(
-            formatErrorMessage(error, "불일치 상세 조회에 실패했습니다."),
-          );
-          setTimeout(() => setMessage(""), 5000);
-        },
-      );
+      loadCategoryMismatchDetails(selectedId);
     },
-    [folderData, apiPrefix],
+    [folderData, loadCategoryMismatchDetails],
   );
 
   // ── 트리 아이템 클릭 핸들러 ──
@@ -1522,8 +1640,15 @@ export default function CategoryAdmin({
             );
             setTimeout(() => setMessage(""), 5000);
           } else if (result && result.already_running) {
+            // 진행 중인 작업에 붙는다. 서버 상태를 확인했으니 시작 대기를 푼다.
+            bulkStartPendingRef.current = false;
+            allReloadTrackingRef.current = true;
             applyAllReloadStatus(result, owner);
           } else {
+            // 락을 잡은 것이 확인됐다. 이 뒤의 폴링 상태는 이 작업의 것이다.
+            bulkStatusRequestIdRef.current += 1;
+            bulkStartPendingRef.current = false;
+            allReloadTrackingRef.current = true;
             const responseOwner =
               normalizeAllReloadOwner(result?.reload_source) || owner;
             if (responseOwner !== owner) {
@@ -1571,6 +1696,8 @@ export default function CategoryAdmin({
       return;
     }
 
+    // 진행 중인 폴링 응답은 직전 작업의 상태를 담고 있으므로 버린다.
+    mismatchStatusRequestIdRef.current += 1;
     mismatchStartPendingRef.current = true;
     setMismatchReloading(true);
     setMismatchRemainingCount(selectedMismatchCount);
@@ -1597,6 +1724,9 @@ export default function CategoryAdmin({
           );
           setTimeout(() => setMessage(""), 5000);
         } else if (result && result.already_running) {
+          // 같은 카테고리의 작업에 붙는다. 서버 상태를 확인했으니 시작 대기를 푼다.
+          mismatchStartPendingRef.current = false;
+          mismatchTrackingRef.current = true;
           applyReloadStatus(
             result,
             setMismatchReloading,
@@ -1604,6 +1734,12 @@ export default function CategoryAdmin({
             mismatchStartPendingRef,
             mismatchTrackingRef,
           );
+        } else {
+          // 락을 잡은 것이 확인됐다. 이 뒤에 새로 떠나는 폴링이 보는 상태는 이
+          // 작업의 것이므로 완료로 받아도 된다. 아직 떠 있는 응답은 버린다.
+          mismatchStatusRequestIdRef.current += 1;
+          mismatchStartPendingRef.current = false;
+          mismatchTrackingRef.current = true;
         }
       },
       (error) => {

@@ -19,6 +19,12 @@ metadata:
   namespace: textmanager
 spec:
   replicas: 1
+  # 데이터 디렉터리를 쓰는 인스턴스는 항상 하나여야 한다. 기본 RollingUpdate 는
+  # replicas 1 에서도 새 pod 를 먼저 띄우므로 두 mysqld 가 같은 RWO PVC 를 동시에
+  # 열고, InnoDB 가 dblwr 잠금 경합을 일으킨다(2026-09-22 롤아웃에서 관측).
+  # 동시접속이 낮은 서비스라 교체 중 잠깐의 중단보다 데이터 안전이 우선이다.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: tm-mysql-app
@@ -33,12 +39,18 @@ spec:
           type: RuntimeDefault
       containers:
         - name: mysql
-          image: mysql:8.0
+          # 8.0 은 롤링 태그라 8.0.46, 8.0.47 로 조용히 올라간다. MySQL 은 기동 시
+          # 데이터 디렉터리를 새 포맷으로 올리고 다운그레이드가 불가능하므로
+          # 패치 버전까지 고정한다. 올릴 때는 이 값을 직접 바꾼다.
+          image: mysql:8.0.45
           # mysql:8.0 entrypoint는 root로 시작해 chown 후 gosu로 mysql 유저로 강등하므로
-          # runAsNonRoot / drop:[ALL] / readOnlyRootFilesystem는 기동을 깨뜨린다.
-          # no_new_privs(권한 상승 차단)만 추가로 안전하게 적용한다.
+          # runAsNonRoot 와 drop:[ALL] 은 기동을 깨뜨린다. 그 둘은 적용하지 않는다.
+          # readOnlyRootFilesystem 은 쓰기가 필요한 두 경로(/tmp, /run/mysqld)를
+          # emptyDir 로 내주면 정상 기동한다. mysql:8.0 로컬 기동으로 확인했다:
+          # 초기화 완료, CREATE/INSERT/SELECT 성공, 에러 로그 없음.
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
           ports:
             - containerPort: 3306
           env:
@@ -64,6 +76,12 @@ spec:
               mountPath: /var/lib/mysql
             - name: mysql-initdb
               mountPath: /docker-entrypoint-initdb.d
+            # readOnlyRootFilesystem 아래에서 쓰기가 필요한 경로.
+            # /var/run 은 /run 심볼릭 링크라 /run/mysqld 로 잡는다.
+            - name: mysql-tmp
+              mountPath: /tmp
+            - name: mysql-run
+              mountPath: /run/mysqld
           # QoS Guaranteed(oom_score_adj -997)를 위해 requests == limits.
           # 이전 256Mi/512Mi는 Burstable(adj 991)이라 호스트 메모리 고갈 시 초기 희생양이었고,
           # 10일 관측 peak 401MiB가 512Mi limit의 78%까지 차서 컨테이너 OOM 위험도 있었다.
@@ -82,6 +100,10 @@ spec:
         - name: mysql-initdb
           configMap:
             name: mysql-initdb-config
+        - name: mysql-tmp
+          emptyDir: {}
+        - name: mysql-run
+          emptyDir: {}
 
 ---
 apiVersion: v1

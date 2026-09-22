@@ -5904,3 +5904,166 @@ def test_apply_category_changes_retrying_moving_row_when_move_never_happened(tmp
     assert result["results"][0]["apply_status"] == "moved"
     assert not (tmp_path / "A" / "book.epub").exists()
     assert (tmp_path / "5_음악" / "book.epub").is_file()
+
+
+class ThreadRecordingES(DummyES):
+    """ES 호출이 어느 스레드에서 실행됐는지 기록한다."""
+
+    def __init__(self, doc: dict | None = None):
+        super().__init__(doc)
+        self.call_threads: dict[str, int] = {}
+
+    def _record(self, name: str):
+        self.call_threads[name] = threading.get_ident()
+
+    def search_and_aggregate_by_category(self):
+        self._record("search_and_aggregate_by_category")
+        return self.aggregate
+
+    def search_by_id(self, book_id: int):
+        self._record("search_by_id")
+        return super().search_by_id(book_id)
+
+    def search_by_category_paged(self, category: str, size: int = 500, search_after=None):
+        self._record("search_by_category_paged")
+        return super().search_by_category_paged(category, size=size, search_after=search_after)
+
+    def search_latest_docs(self, max_result_count: int = 100, exclude_categories=None):
+        self._record("search_latest_docs")
+        return [], 0
+
+    def search_by_keyword_paged(self, *args, **kwargs):
+        self._record("search_by_keyword_paged")
+        return self.keyword_paged
+
+
+class TestEsReadsDoNotBlockEventLoop:
+    """동기 elasticsearch 클라이언트를 이벤트 루프에서 직접 부르면 그 왕복 동안
+    같은 워커의 다른 요청이 전부 멈춘다. 읽기 경로는 워커 스레드로 넘겨야 한다."""
+
+    @pytest.mark.asyncio
+    async def test_read_paths_run_off_the_event_loop_thread(self, tmp_path):
+        es = ThreadRecordingES()
+        manager = make_manager(tmp_path, es)
+        loop_thread = threading.get_ident()
+
+        await manager.get_categories()
+        await manager.get_book(1)
+        await manager.get_books_in_category_paged("A", size=10)
+        await manager.get_latest_books(size=10)
+        await manager.search_by_keyword_paged("k", size=10)
+
+        assert set(es.call_threads) == {"search_and_aggregate_by_category", "search_by_id", "search_by_category_paged", "search_latest_docs", "search_by_keyword_paged"}
+        blocking = [name for name, tid in es.call_threads.items() if tid == loop_thread]
+        assert blocking == [], f"이벤트 루프 스레드에서 실행된 ES 호출: {blocking}"
+# ---------------------------------------------------------------------------
+# 추천 2 — 모델이 스스로 버린 답을 대안으로 내밀지 않는다
+# ---------------------------------------------------------------------------
+
+
+class FakeClassifierWithFloor(FakeClassifier):
+    """판정 임계값을 가진 모델 대역. 실제 서비스처럼 classifier.min_confidence 를 노출한다."""
+
+    def __init__(self, *args, min_confidence=0.056, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        class Model:
+            pass
+
+        model = Model()
+        model.min_confidence = min_confidence
+        self.classifier = model
+
+
+def test_model_alternative_below_the_decision_floor_is_not_offered(tmp_path: Path):
+    """임계값 미만 점수는 모델이 같은 턴에 '판정하지 않음'으로 버린 값이다.
+
+    그것을 추천 칸에 올리면, 시스템이 근거 없다고 판단한 카테고리를 관리자가
+    근거 있는 추천으로 읽는다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    book = source / "제목.txt"
+    book.write_text("x")
+    fake = FakeClassifierWithFloor("2_소설외국", "bookstore_majority", "r", None, 0.076, bookstore_candidates=[("2_소설외국", 3)], model_candidates=[("2_소설외국", 0.076), ("2_수필서간일기", 0.046)])
+
+    proposal = manager._propose_category_for_file(book, "A", {}, fake, True, True)
+
+    assert [c["category"] for c in proposal["candidates"]] == ["2_소설외국"]
+
+
+def test_model_alternative_at_or_above_the_decision_floor_is_offered(tmp_path: Path):
+    """임계값을 넘긴 대안은 그대로 보여준다. 게이트가 2순위를 통째로 죽이면 안 된다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    book = source / "제목.txt"
+    book.write_text("x")
+    fake = FakeClassifierWithFloor("2_소설외국", "bookstore_majority", "r", None, 0.2, bookstore_candidates=[("2_소설외국", 3)], model_candidates=[("2_소설외국", 0.2), ("3_스릴러", 0.09)])
+
+    proposal = manager._propose_category_for_file(book, "A", {}, fake, True, True)
+
+    assert [c["category"] for c in proposal["candidates"]] == ["2_소설외국", "3_스릴러"]
+
+
+def test_bookstore_votes_beat_a_model_alternative_when_no_destination_was_chosen(tmp_path: Path):
+    """목적지를 못 정했어도 서점 득표가 있으면 그것을 추천 2로 보여준다.
+
+    모델 확신도가 '확실' 기준에 못 미치면 목적지가 빈다. 그때 화면이 모델의
+    저점수 대안만 늘어놓으면, 정작 서점이 남긴 근거가 안 보인다.
+    """
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    book = source / "제목.txt"
+    book.write_text("x")
+    fake = FakeClassifierWithFloor(None, "model", "r", "2_소설외국", 0.076, bookstore_candidates=[("8_건강일반", 1)], model_candidates=[("2_소설외국", 0.076), ("2_수필서간일기", 0.046)])
+
+    proposal = manager._propose_category_for_file(book, "A", {}, fake, True, True)
+
+    assert proposal["target_category"] is None
+    assert [c["category"] for c in proposal["candidates"]] == ["2_소설외국", "8_건강일반"]
+    assert proposal["candidates"][1]["source"] == "bookstore"
+
+
+# ---------------------------------------------------------------------------
+# 점수 표기 — 확신도 대신 예상 정답률
+# ---------------------------------------------------------------------------
+
+
+class FakeClassifierWithCalibration(FakeClassifierWithFloor):
+    """확신도를 예상 정답률로 옮길 줄 아는 모델 대역."""
+
+    def __init__(self, *args, accuracy=0.93, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.classifier.expected_accuracy = lambda confidence: None if confidence is None else accuracy
+
+
+def test_proposal_carries_expected_accuracy(tmp_path: Path):
+    """0.076 은 좋은 점수인지 화면에서 읽을 수 없다. 보정한 정답률을 함께 보낸다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    book = source / "제목.txt"
+    book.write_text("x")
+    fake = FakeClassifierWithCalibration("2_소설외국", "bookstore_majority", "r", None, 0.076, accuracy=0.93, bookstore_candidates=[("2_소설외국", 3)])
+
+    proposal = manager._propose_category_for_file(book, "A", {}, fake, True, True)
+
+    assert proposal["confidence"] == 0.076
+    assert proposal["expected_accuracy"] == 0.93
+
+
+def test_proposal_expected_accuracy_is_none_without_calibration(tmp_path: Path):
+    """보정이 없는 옛 모델에서는 아무 값도 주장하지 않는다."""
+    manager = make_manager(tmp_path, DummyES())
+    source = tmp_path / "A"
+    source.mkdir()
+    book = source / "제목.txt"
+    book.write_text("x")
+    fake = FakeClassifierWithFloor("2_소설외국", "bookstore_majority", "r", None, 0.076, bookstore_candidates=[("2_소설외국", 3)])
+
+    proposal = manager._propose_category_for_file(book, "A", {}, fake, True, True)
+
+    assert proposal["expected_accuracy"] is None

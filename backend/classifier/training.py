@@ -8,15 +8,16 @@
 봐야 운영 지점을 고를 수 있다.
 """
 
+import gc
 import logging
 import time
 from collections import Counter
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from joblib import parallel_backend
-from sklearn.model_selection import train_test_split
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.svm import LinearSVC
 
@@ -27,6 +28,28 @@ from backend.classifier.model import CategoryModel, softmax_confidence
 logger = logging.getLogger(__name__)
 
 
+def rss_note() -> str:
+    """지금 이 프로세스가 쥐고 있는 메모리. 어느 단계가 피크인지 로그로 남긴다.
+
+    두 번 죽은 뒤에 넣었다. 죽고 나서 보면 어느 단계였는지 알 길이 없었다.
+
+    익명(anon)과 파일을 나눠 찍는다. 행렬을 파일로 두고 mmap 으로 넘기면 그만큼이
+    파일 쪽으로 옮겨간다. 모자랄 때 커널이 회수하는 것은 파일 쪽뿐이라,
+    `systemd-oomd` 나 OOM 킬러가 보는 숫자는 익명 쪽이다.
+    """
+    try:
+        fields = {}
+        with open("/proc/self/status", encoding="ascii") as f:
+            for line in f:
+                key = line.split(":", 1)[0]
+                if key in ("VmHWM", "VmRSS", "RssAnon", "RssFile"):
+                    fields[key] = int(line.split()[1])
+        gb = lambda k: fields.get(k, 0) / 1024**2  # noqa: E731
+        return f"[익명 {gb('RssAnon'):.1f}GB + 파일 {gb('RssFile'):.1f}GB = {gb('VmRSS'):.1f}GB, 최대 {gb('VmHWM'):.1f}GB]"
+    except (OSError, ValueError):
+        return ""
+
+
 def filter_by_size(docs: Sequence[Dict[str, Any]], min_per_category: int) -> Tuple[List[Dict[str, Any]], List[str]]:
     """표본이 너무 적은 카테고리를 뺀다. 층화 분할이 성립하려면 최소 2건은 있어야 한다."""
     counts = Counter(d["cat"] for d in docs)
@@ -34,6 +57,45 @@ def filter_by_size(docs: Sequence[Dict[str, Any]], min_per_category: int) -> Tup
     dropped = sorted(c for c, n in counts.items() if n < floor)
     kept = [d for d in docs if counts[d["cat"]] >= floor]
     return kept, dropped
+
+
+def document_key(doc: Dict[str, Any]) -> str:
+    """분할에 쓸 문서의 고유 키. ES 의 _id(inode)가 없으면 경로를 쓴다."""
+    return str(doc.get("id") or doc.get("path") or doc.get("name") or "")
+
+
+def split_holdout(docs: Sequence[Dict[str, Any]], ratio: float, seed: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """문서 키의 해시로 홀드아웃을 뗀다. 카테고리별로 비율을 맞춘다.
+
+    위치 인덱스로 나누면(`train_test_split(np.arange(n), random_state=seed)`) 코퍼스가
+    한 건만 바뀌어도 전혀 다른 집합이 떨어진다. 그러면 나중에 같은 홀드아웃을
+    되살릴 수 없다 - 되살렸다고 믿고 재면 학습 문서가 섞여 정답률이 부풀려진다.
+    실측에서 문서 142건이 줄자 top-1 정답률이 86.5% 에서 93.8% 로 뛰었다.
+
+    해시로 나누면 문서 하나의 소속이 그 문서의 키에만 달린다. 다른 문서가 들어오고
+    나가도 안 바뀐다. 그래서 몇 달 뒤에도 같은 홀드아웃을 다시 뗄 수 있다.
+
+    카테고리별로 따로 자르는 이유는 층화를 유지하기 위해서다. 카테고리 크기가
+    78,520 대 30 까지 벌어져서, 전체를 한 번에 자르면 작은 카테고리가 통째로
+    한쪽에 몰릴 수 있다.
+    """
+    import hashlib
+
+    key = str(seed).encode()
+    buckets: Dict[str, List[Tuple[bytes, Dict[str, Any]]]] = {}
+    for doc in docs:
+        digest = hashlib.blake2b(document_key(doc).encode("utf-8"), digest_size=8, key=key).digest()
+        buckets.setdefault(doc["cat"], []).append((digest, doc))
+
+    train_docs: List[Dict[str, Any]] = []
+    hold_docs: List[Dict[str, Any]] = []
+    for _cat, rows in buckets.items():
+        rows.sort(key=lambda r: r[0])
+        # 최소 1건은 홀드아웃에 남긴다. 학습 쪽도 최소 1건은 남아야 한다.
+        n_hold = min(max(int(round(len(rows) * ratio)), 1), len(rows) - 1) if len(rows) > 1 else 0
+        hold_docs.extend(doc for _d, doc in rows[:n_hold])
+        train_docs.extend(doc for _d, doc in rows[n_hold:])
+    return train_docs, hold_docs
 
 
 def coverage_curve(correct: np.ndarray, confidence: np.ndarray, points: Sequence[float] = (0.5, 0.7, 0.8, 0.9, 0.95, 1.0)) -> List[Dict[str, float]]:
@@ -76,8 +138,32 @@ def evaluate(model: CategoryModel, docs: Sequence[Dict[str, Any]], accept_parent
     return {"n": len(docs), "top1_accuracy": float(correct.mean()), "curve": coverage_curve(correct, conf), "at_precision_90": max_coverage_at(correct, conf, 0.90), "at_precision_95": max_coverage_at(correct, conf, 0.95)}
 
 
-def train(docs: Sequence[Dict[str, Any]], config: Dict[str, Any], accept_parent: Optional[Dict[str, str]] = None) -> Tuple[CategoryModel, Dict[str, Any]]:
-    """학습하고 홀드아웃 성적을 함께 돌려준다."""
+def fit_confidence_calibration(model: CategoryModel, docs: Sequence[Dict[str, Any]], accept_parent: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
+    """홀드아웃에서 (확신도 -> 정답률) 계단을 학습한다.
+
+    `evaluate` 와 같은 정오 기준을 쓴다. 정답률 곡선과 화면의 예상 정답률이 서로
+    다른 계산으로 갈리면, 같은 모델을 두고 두 숫자가 어긋난다.
+    """
+    from backend.classifier.calibration import fit_expected_accuracy
+
+    parent = accept_parent or {}
+    d = model.scores(docs)
+    prob = softmax_confidence(d, model.temperature)
+    best = np.argmax(d, axis=1)
+    pred = model.classes[best]
+    conf = prob[np.arange(len(docs)), best]
+    truth = np.array([x["cat"] for x in docs])
+    correct = np.fromiter((p == t or parent.get(p, p) == parent.get(t, t) for p, t in zip(pred, truth)), bool, len(truth))
+    return fit_expected_accuracy(conf, correct)
+
+
+def train(docs: Sequence[Dict[str, Any]], config: Dict[str, Any], accept_parent: Optional[Dict[str, str]] = None, spill_dir: Optional[Path] = None) -> Tuple[CategoryModel, Dict[str, Any]]:
+    """학습하고 홀드아웃 성적을 함께 돌려준다.
+
+    `spill_dir` 을 주면 벡터화 블록을 그 디렉토리로 흘려보내 피크 메모리를 낮춘다.
+    23만 건 실측에서 블록을 다 안고 `hstack` 하는 순간이 피크였고, 여유 10GB 기계에서
+    `systemd-oomd` 가 학습을 죽였다. 대신 본문을 놓아주므로 `docs` 가 제자리에서 바뀐다.
+    """
     kept, dropped = filter_by_size(docs, config["corpus"]["min_per_category"])
     if not kept:
         raise ValueError("학습할 문서가 없다. min_per_category 를 낮추거나 collect 를 다시 하라")
@@ -85,22 +171,33 @@ def train(docs: Sequence[Dict[str, Any]], config: Dict[str, Any], accept_parent:
         logger.info("표본 부족으로 제외한 카테고리 %d개: %s", len(dropped), ", ".join(dropped[:10]) + (" ..." if len(dropped) > 10 else ""))
 
     y = np.array([d["cat"] for d in kept])
-    idx = np.arange(len(kept))
-    tr, te = train_test_split(idx, test_size=config["holdout"], random_state=config["seed"], stratify=y)
-    train_docs = [kept[i] for i in tr]
-    hold_docs = [kept[i] for i in te]
-    logger.info("문서 %d건, 카테고리 %d개, 학습 %d / 홀드아웃 %d", len(kept), len(set(y)), len(tr), len(te))
+    train_docs, hold_docs = split_holdout(kept, float(config["holdout"]), int(config["seed"]))
+    logger.info("문서 %d건, 카테고리 %d개, 학습 %d / 홀드아웃 %d", len(kept), len(set(y)), len(train_docs), len(hold_docs))
+
+    # 레이블은 본문을 놓아주기 전에 뽑아 둔다.
+    y_train = np.array([d["cat"] for d in train_docs])
+
+    def release_source_text() -> None:
+        """벡터화가 끝난 학습 문서의 원문을 놓아준다.
+
+        합치는 단계가 피크다. 그 직전에 부른다. 홀드아웃은 evaluate 가 다시 읽으므로
+        건드리지 않는다. `docs` 를 제자리에서 바꾸는 것이라 스필을 켰을 때만 한다.
+        """
+        held = {id(d) for d in hold_docs}
+        for d in train_docs:
+            if id(d) not in held:
+                for key in ("text", "name", "title", "author", "publisher"):
+                    d.pop(key, None)
+        gc.collect()
+        logger.info("학습 문서의 원문을 놓아줬다 %s", rss_note())
 
     t0 = time.time()
     space = FeatureSpace(enabled_fields(config))
-    X = space.fit_transform(train_docs)
-    logger.info("특징 %d개, 벡터화 %.0f초", X.shape[1], time.time() - t0)
-
-    # liblinear 은 float64 만 받는다. 미리 한 번 바꿔 두면 클래스마다 변환 사본이 생기지 않는다.
-    # 이미 float64 면 건드리지 않는다. 그냥 astype 을 부르면 5GB 짜리 사본이 하나 더 생긴다.
-    if X.dtype != np.float64:
-        X = X.astype(np.float64)
-    logger.info("행렬 %.1fGB (%d x %d, 비영요소 %d개)", (X.data.nbytes + X.indices.nbytes + X.indptr.nbytes) / 1024**3, X.shape[0], X.shape[1], X.nnz)
+    # liblinear 은 float64 만 받는다. 합칠 때 바로 float64 로 만든다. float32 로 합친 뒤
+    # astype 을 부르면 5GB 짜리 사본이 하나 더 생긴다.
+    X = space.fit_transform(train_docs, spill_dir=spill_dir, dtype=np.float64, after_blocks=release_source_text if spill_dir is not None else None)
+    logger.info("특징 %d개, 벡터화 %.0f초 %s", X.shape[1], time.time() - t0, rss_note())
+    logger.info("행렬 %.1fGB (%d x %d, 비영요소 %d개) %s", (X.data.nbytes + X.indices.nbytes + X.indptr.nbytes) / 1024**3, X.shape[0], X.shape[1], X.nnz, rss_note())
 
     t0 = time.time()
     mcfg = config["model"]
@@ -117,9 +214,9 @@ def train(docs: Sequence[Dict[str, Any]], config: Dict[str, Any], accept_parent:
     #
     # 워커를 8에서 2로 줄여도 fit 은 2.2배밖에 안 느리다. 메모리는 3.7배 적게 쓴다.
     with parallel_backend("threading", n_jobs=int(mcfg.get("n_jobs", 8))):
-        clf.fit(X, y[tr])
+        clf.fit(X, y_train)
     elapsed = time.time() - t0
-    logger.info("학습 %.0f초", elapsed)
+    logger.info("학습 %.0f초 %s", elapsed, rss_note())
 
     model = CategoryModel(
         {
@@ -139,6 +236,10 @@ def train(docs: Sequence[Dict[str, Any]], config: Dict[str, Any], accept_parent:
     model.meta["calibrated_threshold"] = picked["threshold"]
     model.meta["calibrated_target"] = target
     logger.info("임계값 %.3f 선택 (정답률 %.1f%% 목표, 그때 판정률 %.1f%%)", picked["threshold"], target * 100, picked["coverage"] * 100)
+
+    # 화면에 쓸 눈금. 확신도 0.076 을 "예상 정답률 0.93" 으로 옮기는 계단이다.
+    # 판정에는 안 쓴다 - 임계값과 서점 경계는 원래 확신도 눈금 위에 있다.
+    model.meta["confidence_calibration"] = fit_confidence_calibration(model, hold_docs, accept_parent=accept_parent)
 
     return model, report
 

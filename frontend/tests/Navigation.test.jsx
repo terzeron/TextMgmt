@@ -1028,8 +1028,8 @@ describe("Navigation Component", () => {
     });
   });
 
-  // Regression: sessionLoading guard prevents UI flash after login
-  it("renders nothing while session check is pending", async () => {
+  // Regression: session 확인이 늦어져도 빈 화면으로 보이지 않아야 한다.
+  it("shows a loading state while session check is pending", async () => {
     let resolveSessionFetch;
     fetch.mockReturnValueOnce(
       new Promise((resolve) => {
@@ -1041,9 +1041,12 @@ describe("Navigation Component", () => {
         <Navigation />
       </MemoryRouter>,
     );
-    // While fetch is in-flight, nothing should render
+    // 관리자 화면을 먼저 노출하지 않고 진행 상태를 알린다.
     expect(screen.queryByTestId("google-login")).toBeNull();
     expect(screen.queryByText("책")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain(
+      "로그인 상태를 확인하는 중입니다.",
+    );
     // Resolve with a failed session
     resolveSessionFetch({ ok: false, status: 401 });
     await waitFor(() => {

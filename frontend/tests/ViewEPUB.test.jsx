@@ -140,6 +140,9 @@ function createMockRendition({
       handlers[event] = handler;
     }),
     book: {
+      archive: {
+        request: vi.fn(() => Promise.resolve(document.implementation.createDocument(null, "html"))),
+      },
       spine: {
         get: vi.fn((target) => target || null),
       },
@@ -1887,6 +1890,73 @@ describe("ViewEPUB", () => {
 
     warnSpy.mockRestore();
     errorSpy.mockRestore();
+  });
+
+  // ── .html 챕터 XHTML 강제 파싱 ──
+
+  it("archive.request가 .html 챕터를 xhtml 타입으로 읽는다", async () => {
+    autoLoad = true;
+    render(<ViewEPUB bookId={42} />);
+    await waitFor(() => {
+      expect(capturedGetRendition).not.toBeNull();
+    });
+
+    const rendition = createMockRendition();
+    const original = rendition.book.archive.request;
+
+    await act(async () => {
+      capturedGetRendition(rendition);
+    });
+
+    await rendition.book.archive.request("OPF/ch1.html");
+    expect(original).toHaveBeenCalledWith("OPF/ch1.html", "xhtml");
+  });
+
+  it("xhtml 파싱이 실패하면 원래 타입으로 재요청한다", async () => {
+    autoLoad = true;
+    render(<ViewEPUB bookId={42} />);
+    await waitFor(() => {
+      expect(capturedGetRendition).not.toBeNull();
+    });
+
+    const rendition = createMockRendition();
+    const broken = document.implementation.createHTMLDocument("");
+    broken.body.appendChild(broken.createElement("parsererror"));
+    const good = document.implementation.createHTMLDocument("ok");
+    const original = vi.fn((_url, type) =>
+      Promise.resolve(type === "xhtml" ? broken : good),
+    );
+    rendition.book.archive.request = original;
+
+    await act(async () => {
+      capturedGetRendition(rendition);
+    });
+
+    const result = await rendition.book.archive.request("OPF/ch1.html");
+    expect(original).toHaveBeenCalledWith("OPF/ch1.html", "xhtml");
+    expect(original).toHaveBeenCalledWith("OPF/ch1.html", undefined);
+    expect(result).toBe(good);
+  });
+
+  it("html 이 아닌 자원과 타입이 지정된 요청은 그대로 통과시킨다", async () => {
+    autoLoad = true;
+    render(<ViewEPUB bookId={42} />);
+    await waitFor(() => {
+      expect(capturedGetRendition).not.toBeNull();
+    });
+
+    const rendition = createMockRendition();
+    const original = rendition.book.archive.request;
+
+    await act(async () => {
+      capturedGetRendition(rendition);
+    });
+
+    await rendition.book.archive.request("OPF/style.css");
+    expect(original).toHaveBeenCalledWith("OPF/style.css", undefined);
+
+    await rendition.book.archive.request("OPF/ch1.html", "text");
+    expect(original).toHaveBeenCalledWith("OPF/ch1.html", "text");
   });
 
   // ── spine.get() 폴백 오버라이드 ──
