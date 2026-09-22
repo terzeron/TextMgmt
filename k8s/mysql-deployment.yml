@@ -19,6 +19,12 @@ metadata:
   namespace: textmanager
 spec:
   replicas: 1
+  # 데이터 디렉터리를 쓰는 인스턴스는 항상 하나여야 한다. 기본 RollingUpdate 는
+  # replicas 1 에서도 새 pod 를 먼저 띄우므로 두 mysqld 가 같은 RWO PVC 를 동시에
+  # 열고, InnoDB 가 dblwr 잠금 경합을 일으킨다(2026-09-22 롤아웃에서 관측).
+  # 동시접속이 낮은 서비스라 교체 중 잠깐의 중단보다 데이터 안전이 우선이다.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: tm-mysql-app
@@ -33,7 +39,10 @@ spec:
           type: RuntimeDefault
       containers:
         - name: mysql
-          image: mysql:8.0
+          # 8.0 은 롤링 태그라 8.0.46, 8.0.47 로 조용히 올라간다. MySQL 은 기동 시
+          # 데이터 디렉터리를 새 포맷으로 올리고 다운그레이드가 불가능하므로
+          # 패치 버전까지 고정한다. 올릴 때는 이 값을 직접 바꾼다.
+          image: mysql:8.0.45
           # mysql:8.0 entrypoint는 root로 시작해 chown 후 gosu로 mysql 유저로 강등하므로
           # runAsNonRoot 와 drop:[ALL] 은 기동을 깨뜨린다. 그 둘은 적용하지 않는다.
           # readOnlyRootFilesystem 은 쓰기가 필요한 두 경로(/tmp, /run/mysqld)를
