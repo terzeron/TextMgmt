@@ -1,0 +1,15 @@
+# 내부 전용 서비스(elasticsearch)를 LAN 출발지로만 제한한다.
+# httproute.yaml 의 ExtensionRef filter가 참조한다.
+# 외부 클라이언트는 공인 IP로 도달하므로 RFC1918 대역만 허용하면 차단된다.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: internal-only
+  namespace: textmanager
+spec:
+  ipAllowList:
+    sourceRange:
+      - 127.0.0.1/32
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
