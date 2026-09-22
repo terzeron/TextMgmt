@@ -18,7 +18,6 @@ import shutil
 import logging
 import zipfile
 import urllib.parse
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -146,6 +145,28 @@ def extract_explicit_genre(filename: str) -> Optional[str]:
     return None
 
 
+# 정상 EPUB 의 OPF 는 수십 KB 다. 이 상한은 압축을 풀었을 때의 크기로 재며,
+# 작게 압축된 거대 파일(zip bomb)이 메모리를 먹는 것을 읽기 전에 끊는다.
+MAX_OPF_BYTES = 8 * 1024 * 1024
+
+
+def _parse_opf_safely(opf_bytes: bytes) -> Any:
+    """엔티티를 확장하지 않는 파서로 OPF 를 읽는다 (CWE-611, CWE-776).
+
+    표준 ElementTree 는 외부 엔티티는 확장하지 않지만 내부 엔티티는 확장한다.
+    중첩 엔티티 몇 백 바이트로 메모리를 수십 GB 까지 부풀릴 수 있다
+    (billion laughs). lxml 은 확장 자체를 하지 않고 증폭 상한도 갖고 있다.
+
+    book_manager._safe_xml_parser 와 같은 설정이지만 직접 만든다.
+    book_manager 가 이 모듈을 import 하므로 역방향 import 는 순환이 된다.
+    str 이 아니라 bytes 를 받는 이유는 OPF 에 인코딩 선언이 붙어 있어서다.
+    """
+    from lxml import etree  # type: ignore[attr-defined]
+
+    parser = etree.XMLParser(recover=True, resolve_entities=False, no_network=True, load_dtd=False)
+    return etree.fromstring(opf_bytes, parser)
+
+
 def inspect_epub_metadata(fpath: Path) -> Dict[str, str]:
     """EPUB 파일 내부의 .opf 메타데이터(title, author, subject, description) 추출"""
     meta = {"title": "", "author": "", "subject": "", "description": ""}
@@ -154,9 +175,19 @@ def inspect_epub_metadata(fpath: Path) -> Dict[str, str]:
             opf_files = [n for n in z.namelist() if n.endswith(".opf")]
             if not opf_files:
                 return meta
-            opf_content = z.read(opf_files[0]).decode("utf-8", errors="ignore")
-            root = ET.fromstring(opf_content)
+            opf_name = opf_files[0]
+            opf_size = z.getinfo(opf_name).file_size
+            if opf_size > MAX_OPF_BYTES:
+                logger.warning("OPF too large, skipping metadata: %s (%d bytes)", fpath, opf_size)
+                return meta
+            root = _parse_opf_safely(z.read(opf_name))
+            if root is None:
+                return meta
             for elem in root.iter():
+                # lxml 은 ElementTree 와 달리 주석과 처리명령 노드도 내놓는다.
+                # 그 노드의 tag 는 문자열이 아니라 함수라서 걸러내야 한다.
+                if not isinstance(elem.tag, str):
+                    continue
                 tag = elem.tag.split("}")[-1].lower()
                 if tag == "title" and elem.text and not meta["title"]:
                     meta["title"] = elem.text.strip()

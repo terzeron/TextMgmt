@@ -93,6 +93,67 @@ def test_inspect_epub_metadata_returns_empty_metadata_without_opf_or_on_error(tm
     assert inspect_epub_metadata(no_opf) == empty_meta
     assert inspect_epub_metadata(broken) == empty_meta
 
+# --- 악성 EPUB 방어 (CWE-611, CWE-776, CWE-409) ---
+
+
+def test_inspect_epub_metadata_does_not_expand_entity_bomb(tmp_path):
+    """중첩 엔티티(billion laughs)를 확장하지 않아야 한다."""
+    decls = ['<!ENTITY a0 "AAAAAAAAAA">'] + [
+        '<!ENTITY a%d "%s">' % (i, "".join("&a%d;" % (i - 1) for _ in range(10))) for i in range(1, 9)
+    ]
+    bomb = '<?xml version="1.0"?><!DOCTYPE p [%s]><package><title>&a8;</title></package>' % "".join(decls)
+
+    epub_path = tmp_path / "bomb.epub"
+    with zipfile.ZipFile(epub_path, "w") as z:
+        z.writestr("content.opf", bomb)
+
+    # 539 바이트가 확장되면 약 100GB 다. 빈 meta 로 끝나야 한다.
+    assert inspect_epub_metadata(epub_path) == {"title": "", "author": "", "subject": "", "description": ""}
+
+
+def test_inspect_epub_metadata_does_not_resolve_external_entity(tmp_path):
+    """외부 엔티티(file://)로 로컬 파일을 읽어오지 않아야 한다."""
+    secret = tmp_path / "canary.txt"
+    secret.write_text("XXE_CANARY_VALUE", encoding="utf-8")
+    xxe = '<?xml version="1.0"?><!DOCTYPE p [<!ENTITY x SYSTEM "file://%s">]><package><title>&x;</title></package>' % secret
+
+    epub_path = tmp_path / "xxe.epub"
+    with zipfile.ZipFile(epub_path, "w") as z:
+        z.writestr("content.opf", xxe)
+
+    assert "XXE_CANARY_VALUE" not in str(inspect_epub_metadata(epub_path))
+
+
+def test_inspect_epub_metadata_skips_oversized_opf(tmp_path):
+    """압축을 풀면 거대한 OPF 는 읽기 전에 건너뛴다."""
+    from backend.book_classifier import MAX_OPF_BYTES
+
+    epub_path = tmp_path / "big.epub"
+    with zipfile.ZipFile(epub_path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("content.opf", "<package>" + "x" * (MAX_OPF_BYTES + 1) + "</package>")
+
+    assert epub_path.stat().st_size < 100 * 1024  # 압축본은 작다
+    assert inspect_epub_metadata(epub_path) == {"title": "", "author": "", "subject": "", "description": ""}
+
+
+def test_inspect_epub_metadata_reads_opf_with_comments(tmp_path):
+    """주석과 처리명령이 섞여도 메타데이터를 읽어야 한다(lxml iter 회귀 방지)."""
+    opf = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<package xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        "<!-- 주석 --><?pi 처리명령?>"
+        "<metadata><dc:title>주석있음</dc:title><dc:creator>작가</dc:creator></metadata>"
+        "</package>"
+    )
+    epub_path = tmp_path / "comment.epub"
+    with zipfile.ZipFile(epub_path, "w") as z:
+        z.writestr("content.opf", opf)
+
+    meta = inspect_epub_metadata(epub_path)
+    assert meta["title"] == "주석있음"
+    assert meta["author"] == "작가"
+
+
 def test_inspect_txt_content_extracts_snippet_and_hashtags(tmp_path):
     txt_path = tmp_path / "sample.txt"
     txt_path.write_text("#무협 #강호\n" + "문파와 마교의 대결\n" * 45, encoding="utf-8")
