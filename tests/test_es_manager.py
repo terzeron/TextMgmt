@@ -341,6 +341,22 @@ def test_search_by_keyword_paged_with_exclude_categories():
     assert {"prefix": {"category": "B"}} in must_not
 
 
+def test_search_by_keyword_paged_filters_exact_category():
+    es = DummyES()
+    manager = make_manager(es)
+    called = {}
+
+    def fake_search_paged(query, size=10, offset=0, sort=None, ref_score=0.0, source_fields=None):
+        called["query"] = query
+        return ([(1, {"a": 1}, 10.0)], 1)
+
+    manager._search_paged = fake_search_paged
+
+    manager.search_by_keyword_paged("kw", category="과학")
+
+    assert called["query"]["bool"]["filter"] == [{"term": {"category": "과학"}}]
+
+
 def test_search_similar_docs_paged_without_exclude():
     es = DummyES()
     manager = make_manager(es)

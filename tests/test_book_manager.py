@@ -1296,6 +1296,22 @@ def test_search_by_keyword_paged(tmp_path: Path):
     assert total == 0
 
 
+def test_search_by_keyword_paged_forwards_category(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    called = {}
+
+    def search_by_keyword_paged(keyword, size=10, offset=0, exclude_categories=None, category=None):
+        called.update(keyword=keyword, size=size, offset=offset, exclude_categories=exclude_categories, category=category)
+        return [], 0
+
+    es.search_by_keyword_paged = search_by_keyword_paged
+
+    asyncio_runner(manager.search_by_keyword_paged("k", size=20, offset=10, category="과학"))
+
+    assert called == {"keyword": "k", "size": 20, "offset": 10, "exclude_categories": None, "category": "과학"}
+
+
 def test_delete_book_when_missing_doc(tmp_path: Path):
     es = DummyES()
     manager = make_manager(tmp_path, es)

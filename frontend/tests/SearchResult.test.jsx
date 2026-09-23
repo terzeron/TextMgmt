@@ -28,6 +28,58 @@ describe("SearchResult", () => {
     expect(screen.getByText("역사/ancient.pdf")).toBeTruthy();
   });
 
+  it("검색 결과에 없는 항목도 전체 카테고리 목록에서 표시한다", () => {
+    render(
+      <SearchResult
+        results={sampleResults}
+        categories={["과학", "소설", "역사"]}
+        selectedCategory=""
+        onCategoryChange={vi.fn()}
+      />,
+    );
+
+    const categorySelect = screen.getByRole("combobox", { name: "카테고리" });
+    expect(screen.getByRole("option", { name: "전체 카테고리" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "과학" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "소설" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "역사" })).toBeTruthy();
+    expect(categorySelect.value).toBe("");
+  });
+
+  it("카테고리를 선택하면 server 재검색 callback을 호출한다", () => {
+    const onCategoryChange = vi.fn();
+    render(
+      <SearchResult
+        results={sampleResults}
+        categories={["소설", "역사"]}
+        selectedCategory=""
+        onCategoryChange={onCategoryChange}
+      />,
+    );
+
+    const categorySelect = screen.getByRole("combobox", { name: "카테고리" });
+    fireEvent.change(categorySelect, { target: { value: "소설" } });
+
+    expect(onCategoryChange).toHaveBeenCalledWith("소설");
+    expect(screen.getByText("소설/novel1.epub")).toBeTruthy();
+    expect(screen.getByText("역사/ancient.pdf")).toBeTruthy();
+  });
+
+  it("카테고리 선택 항목을 클릭해도 검색 결과를 접지 않는다", () => {
+    render(
+      <SearchResult
+        results={sampleResults}
+        categories={["소설", "역사"]}
+        selectedCategory=""
+        onCategoryChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("combobox", { name: "카테고리" }));
+
+    expect(screen.getByText("소설/novel1.epub")).toBeTruthy();
+  });
+
   it("_root 카테고리인 경우 접두어를 제외하고 파일명만 표시한다", () => {
     const rootResults = [
       {

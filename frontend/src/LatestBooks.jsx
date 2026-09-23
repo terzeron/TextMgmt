@@ -66,6 +66,10 @@ export default function LatestBooks({ contentType = "book" }) {
     searchTotal = 0,
     handleLoadMore,
     searchLoading = false,
+    searchCategories = [],
+    selectedSearchCategory = "",
+    handleSearchCategoryChange,
+    searchInProgress = false,
   } = useOutletContext() || {};
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -119,6 +123,10 @@ export default function LatestBooks({ contentType = "book" }) {
           hasMore={searchResults.length < searchTotal}
           loading={searchLoading}
           basePath={config.basePath}
+          categories={searchCategories}
+          selectedCategory={selectedSearchCategory}
+          onCategoryChange={handleSearchCategoryChange}
+          categoryLoading={searchInProgress}
         />
       )}
       <SearchResult

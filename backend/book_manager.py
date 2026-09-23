@@ -1112,9 +1112,12 @@ class BookManager:
             return [self.item_class(book_id=book_id, info=doc) for book_id, doc, _score in result_list], None
         return [], "No books found"
 
-    async def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: list[str] | None = None) -> tuple[list[Book], int, str | None]:
-        LOGGER.debug("# search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s)", keyword, size, offset, exclude_categories)
-        result_list, total = await asyncio.to_thread(self.es_manager.search_by_keyword_paged, keyword, size=size, offset=offset, exclude_categories=exclude_categories)
+    async def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: list[str] | None = None, category: str | None = None) -> tuple[list[Book], int, str | None]:
+        LOGGER.debug("# search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s, category=%s)", keyword, size, offset, exclude_categories, category)
+        search_kwargs: dict[str, Any] = {"size": size, "offset": offset, "exclude_categories": exclude_categories}
+        if category:
+            search_kwargs["category"] = category
+        result_list, total = await asyncio.to_thread(self.es_manager.search_by_keyword_paged, keyword, **search_kwargs)
         if result_list:
             return ([self.item_class(book_id=bid, info=doc) for bid, doc, _ in result_list], total, None)
         return [], total, None
