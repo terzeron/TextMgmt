@@ -1,0 +1,59 @@
+/* 최소 카드 폭만 정하고 화면 폭 안에서 순서대로 흘려 배치한다. 기기별 열 수를 정하지 않는다.
+   줄마다 남는 폭은 카드들이 나눠 가져서 한쪽에만 빈 여백이 생기지 않는다. */
+.cover-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 12px 8px;
+}
+
+.cover-grid-card {
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.cover-grid-card:hover .cover-grid-cover {
+  border-color: #0d6efd;
+}
+
+.cover-grid-cover {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #f8f9fa;
+}
+
+.cover-grid-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.cover-grid-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6c757d;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.cover-grid-title {
+  margin-top: 4px;
+  font-size: 0.8rem;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.cover-grid-sentinel {
+  height: 1px;
+}

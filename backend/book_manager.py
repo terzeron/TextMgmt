@@ -133,6 +133,11 @@ class BookManager:
     # 파싱시키므로, 닫는 태그가 나올 때까지인 문서 끝까지가 그 요소의 텍스트로 삼켜져
     # body 가 비고 화면이 백지가 된다. 원본은 두고 프리뷰 산출물에서만 쌍으로 편다.
     SELF_CLOSING_RCDATA_PATTERN = re.compile(rb"<(title|script|style|textarea)(\s[^<>]*?)?\s*/>", re.IGNORECASE)
+    # 커버 뷰 썸네일. 최신 목록은 한 화면에 수십 장을 받으므로 원본 대신 작게 줄여 보낸다.
+    COVER_THUMBNAIL_WIDTH = 300
+    COVER_JPEG_QUALITY = 85
+    # pypdfium2 는 스레드에서 동시에 부르면 전역 상태가 깨진다. to_thread 로 넘기는 렌더링을 직렬화한다.
+    _cover_render_lock = threading.Lock()
     XHTML_SUFFIXES = (".xhtml", ".html", ".htm")
 
     @staticmethod
@@ -2693,6 +2698,121 @@ class BookManager:
         except Exception as e:
             LOGGER.error("PDF pages extraction failed for book_id=%d: %s", book_id, e)
             return Response(status_code=500, content=f"PDF pages extraction failed ({type(e).__name__}): {e}")
+
+    @staticmethod
+    def _find_epub_cover_member(zin) -> str | None:
+        """EPUB ZIP 안에서 커버 이미지 멤버 경로를 찾는다.
+
+        EPUB3 properties="cover-image" → EPUB2 <meta name="cover"> → id/href 에 'cover' 가 든 이미지 순으로 본다.
+        """
+        from lxml import etree  # type: ignore[attr-defined]
+        from posixpath import normpath, join as pjoin, dirname
+
+        opf_path = BookManager._find_opf_path(zin)
+        if not opf_path:
+            return None
+        try:
+            opf = etree.fromstring(zin.read(opf_path), _safe_xml_parser(recover=True))
+        except KeyError:
+            return None
+        if opf is None:
+            return None
+
+        # opf: 프리픽스 유무와 무관하게 찾도록 localname 으로 비교한다.
+        image_items = []
+        meta_cover_id = ""
+        for el in opf.iter():
+            if not isinstance(el.tag, str):
+                continue
+            name = etree.QName(el).localname
+            if name == "item" and el.get("media-type", "").startswith("image/"):
+                image_items.append(el)
+            elif name == "meta" and el.get("name") == "cover":
+                meta_cover_id = el.get("content", "")
+
+        chosen = next((el for el in image_items if "cover-image" in (el.get("properties") or "").split()), None)
+        if chosen is None and meta_cover_id:
+            chosen = next((el for el in image_items if el.get("id") == meta_cover_id), None)
+        if chosen is None:
+            chosen = next((el for el in image_items if "cover" in f"{el.get('id', '')} {el.get('href', '')}".lower()), None)
+        if chosen is None:
+            return None
+
+        href = unquote(chosen.get("href", "")).split("#")[0].split("?")[0]
+        opf_dir = dirname(opf_path)
+        return normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+
+    @staticmethod
+    def _extract_cover_thumbnail(file_path: Path, file_type: str) -> bytes | None:
+        """EPUB 커버 이미지나 PDF 첫 페이지를 JPEG 썸네일 바이트로 만든다. 커버가 없으면 None."""
+        from PIL import Image
+
+        if file_type == "epub":
+            import zipfile
+
+            with zipfile.ZipFile(str(file_path), "r") as zin:
+                member = BookManager._find_epub_cover_member(zin)
+                if not member:
+                    return None
+                img = Image.open(io.BytesIO(zin.read(member)))
+                img.load()
+        elif file_type == "pdf":
+            import pypdfium2
+
+            # 경로를 넘기면 로드 실패 시 pdfium 이 fd 를 놓지 않으므로 파일 객체를 직접 소유한다.
+            with BookManager._cover_render_lock, open(file_path, "rb") as fp:
+                pdf = pypdfium2.PdfDocument(fp)
+                try:
+                    page = pdf[0]
+                    scale = BookManager.COVER_THUMBNAIL_WIDTH / page.get_width()
+                    img = page.render(scale=scale).to_pil()
+                finally:
+                    pdf.close()
+        else:
+            return None
+
+        img = img.convert("RGB")
+        width = BookManager.COVER_THUMBNAIL_WIDTH
+        img.thumbnail((width, width * 10))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=BookManager.COVER_JPEG_QUALITY)
+        return buf.getvalue()
+
+    async def get_cover(self, book_id: int) -> Response:
+        """EPUB 커버나 PDF 첫 페이지를 JPEG 썸네일로 반환한다. 커버가 없거나 만들 수 없으면 404."""
+        LOGGER.debug("# get_cover(book_id=%d)", book_id)
+        doc = self.es_manager.search_by_id(book_id)
+        if not doc:
+            return Response(status_code=404, content=f"Book not found: {book_id}")
+        book = self.item_class(book_id=book_id, info=doc)
+        if book.file_type not in ("epub", "pdf"):
+            return Response(status_code=404, content=f"Cover not supported for type: {book.file_type}")
+        try:
+            if not book.file_path.is_file():
+                return Response(status_code=404, content=f"File not found: {book.file_path}")
+            original_mtime = book.file_path.stat().st_mtime
+        except OSError as e:
+            LOGGER.error("Cover file access failed for book_id=%d (%s): %s", book_id, book.file_path, e)
+            return Response(status_code=503, content=f"Storage access error ({e.strerror}): {book.file_path}")
+
+        headers = {"Cache-Control": "private, max-age=86400"}
+        cache_dir = self.path_prefix / ".cover_cache"
+        cache_file = cache_dir / f"{book_id}.jpg"
+        if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
+            return Response(content=cache_file.read_bytes(), media_type="image/jpeg", headers=headers)
+
+        try:
+            data = await asyncio.to_thread(self._extract_cover_thumbnail, book.file_path, book.file_type)
+        except Exception as e:
+            # 손상 파일, 읽을 수 없는 이미지 포맷(SVG 등) 모두 여기로 온다. 화면은 포맷명 박스로 대체한다.
+            LOGGER.warning("Cover extraction failed for book_id=%d (%s): %s: %s", book_id, book.file_path, type(e).__name__, e)
+            data = None
+        if data is None:
+            return Response(status_code=404, content=f"Cover not found: {book_id}")
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file.write_bytes(data)
+        return Response(content=data, media_type="image/jpeg", headers=headers)
 
     async def rename_category(self, old_category: str, new_category: str) -> tuple[dict[str, Any], str | None]:
         """카테고리 이름을 일괄 변경 (FS + ES, 실패 시 FS 롤백)

@@ -407,3 +407,28 @@ describe("SearchResult", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("SearchResult 커버 뷰", () => {
+  it("viewMode=cover면 목록 대신 커버 카드를 그린다", () => {
+    render(
+      <SearchResult results={sampleResults} basePath="/book-view" viewMode="cover" />,
+    );
+    expect(screen.queryByText("조회")).toBeNull();
+    expect(screen.getAllByRole("link")).toHaveLength(2);
+    expect(screen.getByText("novel1.epub")).toBeTruthy();
+  });
+
+  it("headerActions 클릭은 카드를 접지 않는다", () => {
+    render(
+      <SearchResult
+        results={sampleResults}
+        headerActions={<button type="button">토글</button>}
+      />,
+    );
+    fireEvent.click(screen.getByText("토글"));
+    expect(screen.getByText("소설/novel1.epub")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("검색 결과"));
+    expect(screen.queryByText("소설/novel1.epub")).toBeNull();
+  });
+});

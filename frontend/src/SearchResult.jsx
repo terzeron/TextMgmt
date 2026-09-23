@@ -9,7 +9,9 @@ import {Card, Button} from 'react-bootstrap';
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {faChevronDown, faChevronRight} from "@fortawesome/free-solid-svg-icons";
 
-export default function SearchResult({results, role, showEditButton, onLoadMore, hasMore = false, loading = false, basePath = '/book-edit', title = '검색 결과', emptyMessage = '검색 결과가 없습니다.'}) {
+import CoverGrid from './CoverGrid';
+
+export default function SearchResult({results, role, showEditButton, onLoadMore, hasMore = false, loading = false, basePath = '/book-edit', title = '검색 결과', emptyMessage = '검색 결과가 없습니다.', viewMode = 'list', headerActions = null}) {
     const [isOpen, setIsOpen] = useState(true);
     const canEdit = showEditButton !== undefined ? showEditButton : (role === 'admin');
 
@@ -24,16 +26,24 @@ export default function SearchResult({results, role, showEditButton, onLoadMore,
             <Card.Header
                 onClick={() => setIsOpen(!isOpen)}
                 style={{cursor: 'pointer', userSelect: 'none'}}
-                className="py-2">
+                className="py-2 d-flex align-items-center">
                 <FontAwesomeIcon icon={isOpen ? faChevronDown : faChevronRight} className="me-2"/>
                 {title}
+                {headerActions && (
+                    // 헤더 클릭은 접기/펼치기다. 헤더 안 조작 요소의 클릭이 거기로 번지지 않게 막는다.
+                    <div className="ms-auto" onClick={(e) => e.stopPropagation()}>
+                        {headerActions}
+                    </div>
+                )}
             </Card.Header>
             {isOpen && (
             <Suspense fallback={<div className="loading">로딩 중...</div>}>
                 <Card.Body>
                     {results && results.length > 0 ? (
                         <>
-                            {results.map((book) => {
+                            {viewMode === 'cover' ? (
+                                <CoverGrid results={results} basePath={basePath || '/book-edit'}/>
+                            ) : results.map((book) => {
                                 const filename = (book.file_path || '').split('/').pop() || book.title || 'Unknown';
                                 const category = book.category || '_root';
                                 const safeBasePath = basePath || '/book-edit';
@@ -111,6 +121,8 @@ SearchResult.propTypes = {
     basePath: PropTypes.string,
     title: PropTypes.string,
     emptyMessage: PropTypes.string,
+    viewMode: PropTypes.oneOf(['list', 'cover']),
+    headerActions: PropTypes.node,
 };
 
 SearchResult.defaultProps = {

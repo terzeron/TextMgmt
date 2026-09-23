@@ -633,6 +633,12 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         await _ensure_viewer_book_allowed(manager, book_id, payload, content_type)
         return await manager.get_pdf_pages(book_id=book_id, start=start, end=end)
 
+    @router.get("/cover/{book_id}", response_model=None)
+    async def get_cover(book_id: int, payload: dict = Depends(require_auth)) -> Response:
+        LOGGER.debug("# get_cover(book_id=%d)", book_id)
+        await _ensure_viewer_book_allowed(manager, book_id, payload, content_type)
+        return await manager.get_cover(book_id=book_id)
+
     @router.get("/validate/{book_id}")
     async def validate_book(book_id: int, payload: dict = Depends(require_auth)) -> dict[str, Any]:
         LOGGER.debug("# validate_book(book_id=%d)", book_id)
