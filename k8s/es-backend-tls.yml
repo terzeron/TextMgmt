@@ -3,7 +3,7 @@
 # 이게 없으면 Traefik이 평문 HTTP로 연결 → 백엔드 실패 → 500 Internal Server Error.
 #
 # CA는 ECK가 생성한 자체서명 CA(secret elasticsearch-es-http-certs-public의 ca.crt)를
-# ConfigMap으로 복사한 것. ECK CA 회전(약 1년 주기, 현재 cert notAfter=2026-09-23) 시 재동기화 필요:
+# ConfigMap으로 복사한 것. ECK CA 회전(약 1년 주기, 현재 CA notAfter=2027-09-22, 2026-09-22 회전 반영) 시 재동기화 필요:
 #   kubectl get secret elasticsearch-es-http-certs-public -n textmanager \
 #     -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/ca.crt
 #   kubectl create configmap elasticsearch-es-ca -n textmanager \
@@ -16,9 +16,9 @@ metadata:
 data:
   ca.crt: |
     -----BEGIN CERTIFICATE-----
-    MIIDVTCCAj2gAwIBAgIQd5CLHKI/AUWF1eARxAFv2TANBgkqhkiG9w0BAQsFADA1
+    MIIDVTCCAj2gAwIBAgIQfK6dqnEO3m8ggOR0ABxk6zANBgkqhkiG9w0BAQsFADA1
     MRYwFAYDVQQLEw1lbGFzdGljc2VhcmNoMRswGQYDVQQDExJlbGFzdGljc2VhcmNo
-    LWh0dHAwHhcNMjUwOTIzMDAzMTMwWhcNMjYwOTIzMDA0MTMwWjA1MRYwFAYDVQQL
+    LWh0dHAwHhcNMjYwOTIyMDAzMTMxWhcNMjcwOTIyMDA0MTMxWjA1MRYwFAYDVQQL
     Ew1lbGFzdGljc2VhcmNoMRswGQYDVQQDExJlbGFzdGljc2VhcmNoLWh0dHAwggEi
     MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC8DXegM650P3AELPi0TxxzvT8Q
     /YBP03Rf8CswuNpVd+wv7/ERMi5UU/mgXhWl4B60Ayit44rUFkSjrwix6al6ZrIn
@@ -28,12 +28,12 @@ data:
     WQ7dVuseLsgfDLRmTuIuCFqZ5MjKZWpkTxdTKWOSPTwxRwBs/0YW1vcCWMeTAgMB
     AAGjYTBfMA4GA1UdDwEB/wQEAwIChDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYB
     BQUHAwIwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUTlrWhQIgBs2Rbs/32ZSe
-    g7CGfbswDQYJKoZIhvcNAQELBQADggEBAGTOqtZPN+NF5Vm3aX5h2w4/zBeSHjzk
-    ixW8roxI8hCi7BB5974xqK9600BVD7moZgClZ+cV1tQWcTblUzzmQ+EvdUhS/BkK
-    N8tkuIyzVPnmC0a3oAvCnLuxFCvt/W7OEM6sa67daaogSyKxDn88LS6itFAzJ0jv
-    IKTeLUR3Q/8WaEXkhba8kEfM1xeomLcG3ueAJtl20BVxVwsq+2AzXsrynYKdQw7C
-    40Zr9D35lP/2dZGgBUiFi6jFvGn5X34Edw9eVOh7pW50UUMBCARoAMcCRk57Odpx
-    YJCf9uNTnx+so2cUqEV5btJBVdJef9MFHqhMtGXIKQkReNTBIIOMf6E=
+    g7CGfbswDQYJKoZIhvcNAQELBQADggEBAIp/fXizIvFSYKmwKpaddoLUm/utGaT2
+    EV6UcqAucApS/t8lF/sk9wMz+o4xvs8ZX1jWJESGR3vnj7OICkL+gH2Av73F4rfX
+    l8uDRV4NI8OVvqr4qJ9kbkZERPgCgsFOgj/STXgsd96EZi+qpSjHmZaziu7z7vUj
+    ZL42KzIXTHMlRBXHzRyCVmiTISKJsqiOzWr0ZNR8yegLXnslLLWVwpAH+9IVu40r
+    no8UcaYZaKy+sHeaf8pd1LulUSPiPCi5ZGp6OlqdazP1IveDshKeSog8NZrglpfc
+    mEWmHFdgGcMqvNnNWB0oWOKxHzqhR9d2jPkPl1bbHUtn8c+ZhcTQ1yI=
     -----END CERTIFICATE-----
 ---
 apiVersion: gateway.networking.k8s.io/v1
