@@ -74,6 +74,11 @@ def test_comics_manager_init(monkeypatch, tmp_path: Path):
     assert manager.es_manager.created is True
     assert manager._mismatch_cache is None
     assert manager._mismatch_cache_time == 0.0
+    # 부모 __init__을 부르지 않으므로 불일치 캐시 lock도 직접 만들어야 한다.
+    # 빠지면 만화 카테고리 관리의 /comics/category-mismatches가 AttributeError로 실패한다.
+    manager._mismatch_cache = {"stale": True}
+    manager._clear_mismatch_cache()
+    assert manager._mismatch_cache is None
 
 
 # ---- merged from test_comics_env_guard.py ----
