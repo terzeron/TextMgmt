@@ -278,6 +278,16 @@ class TestViewerHiddenAccess:
         assert r.status_code == 200
         mock_bm.search_by_keyword_paged.assert_called_once_with("test", size=10, offset=0, exclude_categories=["public", "secret", "secret/sub"])
 
+    def test_search_forwards_category_and_pagination(self, client, mock_bm):
+        mock_bm.search_by_keyword_paged.return_value = ([], 0, None)
+
+        response = client.get("/search/test?category=과학&offset=10&limit=20")
+
+        assert response.status_code == 200
+        mock_bm.search_by_keyword_paged.assert_called_once_with(
+            "test", size=20, offset=10, exclude_categories=None, category="과학"
+        )
+
     def test_latest_uses_latest_excluded_categories(self, client, mock_bm, mock_cat):
         mock_cat.get_latest_excluded_categories.return_value = ["no_latest"]
         mock_bm.get_latest_books.return_value = ([], 0, None)

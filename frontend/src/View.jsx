@@ -41,6 +41,10 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
     searchTotal,
     handleLoadMore,
     searchLoading,
+    searchCategories,
+    selectedSearchCategory,
+    handleSearchCategoryChange,
+    searchInProgress,
   } = useOutletContext();
   // URL로 책을 바로 열면 본문에 집중하도록 디렉토리를 접은 채 시작한다.
   // 책 없이 들어오면 디렉토리가 유일한 내용이므로 펼친 채로 둔다.
@@ -355,6 +359,10 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
               hasMore={searchResults.length < searchTotal}
               loading={searchLoading}
               basePath={basePath}
+              categories={searchCategories}
+              selectedCategory={selectedSearchCategory}
+              onCategoryChange={handleSearchCategoryChange}
+              categoryLoading={searchInProgress}
             />
           )}
           {!hasSearched && !bookInfo["book_id"] && bookLoadError && (

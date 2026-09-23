@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+import threading
 import logging.config
 from pathlib import Path
 
@@ -26,3 +27,5 @@ class ComicsManager(BookManager):
         self._backfill_created_time_if_enabled()
         self._mismatch_cache = None
         self._mismatch_cache_time: float = 0.0
+        self._mismatch_state_lock = threading.Lock()
+        self._mismatch_scan_lock = threading.Lock()

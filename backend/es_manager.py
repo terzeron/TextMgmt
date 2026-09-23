@@ -351,13 +351,15 @@ class ESManager:
         query = {"bool": {"should": [{"match": {"title": {"query": keyword, "boost": 10}}}, {"match": {"author": {"query": keyword, "boost": 5}}}, {"match": {"category.nori": {"query": keyword, "boost": 3}}}, {"match": {"summary": {"query": keyword, "boost": 1}}}], "minimum_should_match": 1}}
         return self._search(query, max_result_count=max_result_count, source_fields=self.LIST_SOURCE_FIELDS)
 
-    def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: list[str] | None = None) -> tuple[list[tuple[int, dict[str, Any], float]], int]:
-        LOGGER.debug("search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s)", keyword, size, offset, exclude_categories)
+    def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: list[str] | None = None, category: str | None = None) -> tuple[list[tuple[int, dict[str, Any], float]], int]:
+        LOGGER.debug("search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s, category=%s)", keyword, size, offset, exclude_categories, category)
         query: dict[str, Any] = {
             "bool": {"must": [{"bool": {"should": [{"match": {"title": {"query": keyword, "boost": 10}}}, {"match": {"author": {"query": keyword, "boost": 5}}}, {"match": {"category.nori": {"query": keyword, "boost": 3}}}, {"match": {"summary": {"query": keyword, "boost": 1}}}], "minimum_should_match": 1}}]}
         }
         if exclude_categories:
             query["bool"]["must_not"] = [{"prefix": {"category": cat}} for cat in exclude_categories]
+        if category:
+            query["bool"]["filter"] = [{"term": {"category": category}}]
         return self._search_paged(query, size=size, offset=offset, source_fields=self.LIST_SOURCE_FIELDS)
 
     LATEST_SORT: list[dict[str, Any]] = [{"created_time": {"order": "desc", "missing": "_last"}}, {"updated_time": {"order": "desc", "missing": "_last"}}, {"file_path": {"order": "asc"}}]

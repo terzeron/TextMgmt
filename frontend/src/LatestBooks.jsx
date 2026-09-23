@@ -3,12 +3,40 @@ import { useOutletContext } from "react-router-dom";
 import PropTypes from "prop-types";
 
 import "bootstrap/dist/css/bootstrap.min.css";
-import { Alert, Container } from "react-bootstrap";
+import {
+  Alert,
+  Container,
+  ToggleButton,
+  ToggleButtonGroup,
+} from "react-bootstrap";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faList, faTableCellsLarge } from "@fortawesome/free-solid-svg-icons";
 
 import { rawJsonGetReq } from "./Common.js";
 import SearchResult from "./SearchResult";
 
 const LATEST_ITEM_LIMIT = 100;
+const VIEW_MODE_STORAGE_KEY_PREFIX = "tm_latest_view_mode_";
+
+// 뷰 모드는 탭별 편의 설정이다. 저장소를 쓸 수 없으면 목록 뷰로 돌아간다.
+function readViewMode(contentType) {
+  try {
+    return localStorage.getItem(VIEW_MODE_STORAGE_KEY_PREFIX + contentType) ===
+      "cover"
+      ? "cover"
+      : "list";
+  } catch {
+    return "list";
+  }
+}
+
+function writeViewMode(contentType, viewMode) {
+  try {
+    localStorage.setItem(VIEW_MODE_STORAGE_KEY_PREFIX + contentType, viewMode);
+  } catch {
+    // 저장하지 못해도 현재 화면의 전환은 그대로 유지한다.
+  }
+}
 
 const LATEST_CONFIG = {
   book: {
@@ -38,10 +66,25 @@ export default function LatestBooks({ contentType = "book" }) {
     searchTotal = 0,
     handleLoadMore,
     searchLoading = false,
+    searchCategories = [],
+    selectedSearchCategory = "",
+    handleSearchCategoryChange,
+    searchInProgress = false,
   } = useOutletContext() || {};
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
+  const [viewMode, setViewMode] = useState(() => readViewMode(contentType));
+
+  // 책↔만화 탭 이동 때 같은 컴포넌트 인스턴스가 재사용될 수 있으므로 탭별 값을 다시 읽는다.
+  useEffect(() => {
+    setViewMode(readViewMode(contentType));
+  }, [contentType]);
+
+  const handleViewModeChange = (nextViewMode) => {
+    setViewMode(nextViewMode);
+    writeViewMode(contentType, nextViewMode);
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -80,6 +123,10 @@ export default function LatestBooks({ contentType = "book" }) {
           hasMore={searchResults.length < searchTotal}
           loading={searchLoading}
           basePath={config.basePath}
+          categories={searchCategories}
+          selectedCategory={selectedSearchCategory}
+          onCategoryChange={handleSearchCategoryChange}
+          categoryLoading={searchInProgress}
         />
       )}
       <SearchResult
@@ -89,6 +136,35 @@ export default function LatestBooks({ contentType = "book" }) {
         basePath={config.basePath}
         title={config.title}
         emptyMessage={loading ? "로딩 중..." : config.emptyMessage}
+        viewMode={viewMode}
+        headerActions={
+          <ToggleButtonGroup
+            type="radio"
+            name={`${config.containerId}-view-mode`}
+            size="sm"
+            value={viewMode}
+            onChange={handleViewModeChange}
+          >
+            <ToggleButton
+              id={`${config.containerId}-view-list`}
+              value="list"
+              variant="outline-secondary"
+              title="목록 보기"
+            >
+              <FontAwesomeIcon icon={faList} />
+              <span className="visually-hidden">목록 보기</span>
+            </ToggleButton>
+            <ToggleButton
+              id={`${config.containerId}-view-cover`}
+              value="cover"
+              variant="outline-secondary"
+              title="커버 보기"
+            >
+              <FontAwesomeIcon icon={faTableCellsLarge} />
+              <span className="visually-hidden">커버 보기</span>
+            </ToggleButton>
+          </ToggleButtonGroup>
+        }
       />
     </Container>
   );

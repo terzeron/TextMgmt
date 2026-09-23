@@ -60,6 +60,8 @@ export default function Navigation() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchInProgress, setSearchInProgress] = useState(false);
   const [hiddenCategories, setHiddenCategories] = useState([]);
+  const [searchCategories, setSearchCategories] = useState([]);
+  const [selectedSearchCategory, setSelectedSearchCategory] = useState("");
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -89,16 +91,43 @@ export default function Navigation() {
     }
   }, [role, isComicsContext]);
 
-  const buildSearchUrl = (keyword, offset, limit) => {
+  useEffect(() => {
+    if (!role) {
+      setSearchCategories([]);
+      return;
+    }
+    setSearchCategories([]);
+    rawJsonGetReq(
+      `${searchPrefix}/categories`,
+      (data) => {
+        if (data.status !== "success") {
+          setSearchCategories([]);
+          return;
+        }
+        const nextCategories = Object.keys(data.result || {})
+          .filter((category) => !category.includes("/"))
+          .sort((left, right) => left.localeCompare(right, "ko"));
+        setSearchCategories(nextCategories);
+        setSelectedSearchCategory((category) =>
+          category && !nextCategories.includes(category) ? "" : category,
+        );
+      },
+      () => setSearchCategories([]),
+    );
+  }, [role, searchPrefix]);
+
+  const buildSearchUrl = (keyword, offset, limit, category = selectedSearchCategory) => {
     let url = `${searchPrefix}/search/${encodeURIComponent(keyword)}?offset=${offset}&limit=${limit}`;
+    if (category) {
+      url += `&category=${encodeURIComponent(category)}`;
+    }
     if (hiddenCategories.length > 0) {
       url += `&exclude_categories=${encodeURIComponent(hiddenCategories.join(","))}`;
     }
     return url;
   };
 
-  // 검색 실행 로직을 함수로 추출
-  const handleSearch = () => {
+  const executeSearch = (category) => {
     if (searchKeyword) {
       // 홈 화면에서 검색 시 책 조회 페이지로 이동
       if (location.pathname === "/") {
@@ -107,7 +136,7 @@ export default function Navigation() {
       setHasSearched(true);
       setSearchInProgress(true);
       rawJsonGetReq(
-        buildSearchUrl(searchKeyword, 0, 10),
+        buildSearchUrl(searchKeyword, 0, 10, category),
         (data) => {
           if (data.status === "success") {
             setSearchResults(data.result || []);
@@ -126,6 +155,13 @@ export default function Navigation() {
         },
       );
     }
+  };
+
+  const handleSearch = () => executeSearch(selectedSearchCategory);
+
+  const handleSearchCategoryChange = (category) => {
+    setSelectedSearchCategory(category);
+    executeSearch(category);
   };
 
   const handleLoadMore = useCallback(() => {
@@ -153,6 +189,7 @@ export default function Navigation() {
     searchLoading,
     hiddenCategories,
     searchPrefix,
+    selectedSearchCategory,
   ]);
 
   useEffect(() => {
@@ -324,6 +361,10 @@ export default function Navigation() {
           searchTotal,
           handleLoadMore,
           searchLoading,
+          searchCategories,
+          selectedSearchCategory,
+          handleSearchCategoryChange,
+          searchInProgress,
         }}
       />
     );

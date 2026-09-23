@@ -7,7 +7,12 @@ import {
   waitFor,
   cleanup,
 } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useOutletContext,
+} from "react-router-dom";
 /* eslint-disable react/prop-types -- 테스트 mock 컴포넌트는 throwaway라 PropTypes 검증 불필요 */
 import Navigation from "../src/Navigation";
 import * as Common from "../src/Common";
@@ -241,6 +246,107 @@ describe("Navigation Component", () => {
         expect.any(Function),
         expect.any(Function),
       );
+    });
+  });
+
+  it("전체 카테고리로 재검색하고 더 보기에도 카테고리를 유지한다", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: "success", result: { role: "admin" } }),
+    });
+
+    const page = Array.from({ length: 10 }, (_, index) => ({
+      book_id: index + 1,
+      title: `책 ${index + 1}`,
+      category: "과학",
+    }));
+    Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url === "/categories") {
+        resolve({
+          status: "success",
+          result: {
+            _root: 1,
+            과학: 20,
+            "과학/천문": 5,
+            소설: 30,
+            "소설/판타지": 4,
+          },
+        });
+      }
+      if (url.includes("/search/")) {
+        resolve({ status: "success", result: page, total: 20 });
+      }
+    });
+
+    function SearchHarness() {
+      const context = useOutletContext();
+      return (
+        <>
+          <select
+            aria-label="테스트 카테고리"
+            value={context.selectedSearchCategory}
+            onChange={(event) =>
+              context.handleSearchCategoryChange(event.target.value)
+            }
+          >
+            <option value="">전체 카테고리</option>
+            {context.searchCategories.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+          <button type="button" onClick={context.handleLoadMore}>
+            더 보기
+          </button>
+        </>
+      );
+    }
+
+    render(
+      <MemoryRouter initialEntries={["/book-view"]}>
+        <Routes>
+          <Route element={<Navigation />}>
+            <Route path="/book-view" element={<SearchHarness />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const input = await screen.findByPlaceholderText(/키워드/i);
+    fireEvent.change(input, { target: { value: "우주" } });
+    fireEvent.click(screen.getByRole("button", { name: /검색/i }));
+
+    const categorySelect = await screen.findByRole("combobox", {
+      name: "테스트 카테고리",
+    });
+    expect(screen.getByRole("option", { name: "소설" })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "과학/천문" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "소설/판타지" })).toBeNull();
+    fireEvent.change(categorySelect, { target: { value: "과학" } });
+
+    await waitFor(() => {
+      const categoryCall = Common.rawJsonGetReq.mock.calls.find(
+        ([url]) =>
+          url.includes("/search/") &&
+          url.includes("category=%EA%B3%BC%ED%95%99") &&
+          url.includes("offset=0") &&
+          url.includes("limit=10"),
+      );
+      expect(categoryCall).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "더 보기" }));
+
+    await waitFor(() => {
+      const loadMoreCall = Common.rawJsonGetReq.mock.calls.find(
+        ([url]) =>
+          url.includes("/search/") &&
+          url.includes("category=%EA%B3%BC%ED%95%99") &&
+          url.includes("offset=10") &&
+          url.includes("limit=10"),
+      );
+      expect(loadMoreCall).toBeTruthy();
     });
   });
 

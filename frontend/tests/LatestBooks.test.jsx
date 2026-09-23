@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  cleanup,
+  fireEvent,
+} from "@testing-library/react";
 
 const { mockRawJsonGetReq, mockUseOutletContext } = vi.hoisted(() => ({
   mockRawJsonGetReq: vi.fn(),
@@ -20,17 +26,29 @@ vi.mock("../src/Common.js", () => ({
 }));
 
 vi.mock("../src/SearchResult", () => ({
-  default: ({ results, title, showEditButton, basePath, emptyMessage }) => (
-    <div
-      data-testid="search-result"
-      data-title={title}
-      data-show-edit={String(showEditButton)}
-      data-base-path={basePath}
-    >
-      {results.length
-        ? results.map((book) => book.title).join(",")
-        : emptyMessage}
-    </div>
+  default: ({
+    results,
+    title,
+    showEditButton,
+    basePath,
+    emptyMessage,
+    viewMode,
+    headerActions,
+  }) => (
+    <>
+      {headerActions}
+      <div
+        data-testid="search-result"
+        data-title={title}
+        data-show-edit={String(showEditButton)}
+        data-base-path={basePath}
+        data-view-mode={viewMode}
+      >
+        {results.length
+          ? results.map((book) => book.title).join(",")
+          : emptyMessage}
+      </div>
+    </>
   ),
 }));
 
@@ -39,6 +57,7 @@ import LatestBooks from "../src/LatestBooks";
 describe("LatestBooks", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
   });
 
   afterEach(cleanup);
@@ -359,5 +378,99 @@ describe("LatestBooks", () => {
     expect(results[0].dataset.basePath).toBe("/comics-view");
     expect(results[0].textContent).toContain("검색된 만화");
     expect(results[1].textContent).toContain("최신 만화 1");
+  });
+
+  describe("뷰 모드 토글", () => {
+    beforeEach(() => {
+      mockUseOutletContext.mockReturnValue({ role: "viewer" });
+    });
+
+    const resolveEmpty = (_url, resolve, _reject, final) => {
+      resolve({ status: "success", result: [], total: 0 });
+      final();
+    };
+
+    it("기본은 목록 뷰다", async () => {
+      mockRawJsonGetReq.mockImplementation(resolveEmpty);
+      render(<LatestBooks />);
+      await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
+      const list = screen.getByTestId("search-result");
+      expect(list.dataset.viewMode).toBe("list");
+      expect(
+        screen.getByLabelText("목록 보기", { selector: "input" }).checked,
+      ).toBe(true);
+    });
+
+    it("커버 보기를 누르면 커버 뷰로 바뀌고 탭별로 저장한다", async () => {
+      mockRawJsonGetReq.mockImplementation(resolveEmpty);
+      render(<LatestBooks />);
+      await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
+
+      fireEvent.click(
+        screen.getByLabelText("커버 보기", { selector: "input" }),
+      );
+
+      expect(screen.getByTestId("search-result").dataset.viewMode).toBe(
+        "cover",
+      );
+      expect(localStorage.getItem("tm_latest_view_mode_book")).toBe("cover");
+      expect(localStorage.getItem("tm_latest_view_mode_comic")).toBeNull();
+    });
+
+    it("저장된 커버 뷰를 복원한다", async () => {
+      localStorage.setItem("tm_latest_view_mode_comic", "cover");
+      mockRawJsonGetReq.mockImplementation(resolveEmpty);
+      render(<LatestBooks contentType="comic" />);
+      await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
+      expect(screen.getByTestId("search-result").dataset.viewMode).toBe(
+        "cover",
+      );
+    });
+
+    it("탭이 바뀌면 그 탭의 저장값을 다시 읽는다", async () => {
+      localStorage.setItem("tm_latest_view_mode_comic", "cover");
+      mockRawJsonGetReq.mockImplementation(resolveEmpty);
+      const { rerender } = render(<LatestBooks />);
+      await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
+      expect(screen.getByTestId("search-result").dataset.viewMode).toBe("list");
+
+      rerender(<LatestBooks contentType="comic" />);
+      await waitFor(() =>
+        expect(screen.getByTestId("search-result").dataset.viewMode).toBe(
+          "cover",
+        ),
+      );
+    });
+
+    it("localStorage를 쓸 수 없어도 목록 뷰로 동작하고 전환된다", async () => {
+      const getSpy = vi
+        .spyOn(Storage.prototype, "getItem")
+        .mockImplementation(() => {
+          throw new Error("blocked");
+        });
+      const setSpy = vi
+        .spyOn(Storage.prototype, "setItem")
+        .mockImplementation(() => {
+          throw new Error("blocked");
+        });
+      try {
+        mockRawJsonGetReq.mockImplementation(resolveEmpty);
+        render(<LatestBooks />);
+        await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
+        expect(screen.getByTestId("search-result").dataset.viewMode).toBe(
+          "list",
+        );
+
+        fireEvent.click(
+          screen.getByLabelText("커버 보기", { selector: "input" }),
+        );
+        expect(screen.getByTestId("search-result").dataset.viewMode).toBe(
+          "cover",
+        );
+      } finally {
+        getSpy.mockRestore();
+        setSpy.mockRestore();
+      }
+    });
   });
 });

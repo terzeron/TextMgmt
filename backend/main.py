@@ -633,6 +633,12 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         await _ensure_viewer_book_allowed(manager, book_id, payload, content_type)
         return await manager.get_pdf_pages(book_id=book_id, start=start, end=end)
 
+    @router.get("/cover/{book_id}", response_model=None)
+    async def get_cover(book_id: int, payload: dict = Depends(require_auth)) -> Response:
+        LOGGER.debug("# get_cover(book_id=%d)", book_id)
+        await _ensure_viewer_book_allowed(manager, book_id, payload, content_type)
+        return await manager.get_cover(book_id=book_id)
+
     @router.get("/validate/{book_id}")
     async def validate_book(book_id: int, payload: dict = Depends(require_auth)) -> dict[str, Any]:
         LOGGER.debug("# validate_book(book_id=%d)", book_id)
@@ -933,14 +939,17 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.get("/search/{keyword}")
-    async def search_by_keyword(keyword: str, offset: int = 0, limit: int = 10, exclude_categories: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:
-        LOGGER.debug("# search(keyword=%s, offset=%d, limit=%d, exclude_categories=%s)", keyword, offset, limit, exclude_categories)
+    async def search_by_keyword(keyword: str, offset: int = 0, limit: int = 10, exclude_categories: str = "", category: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:
+        LOGGER.debug("# search(keyword=%s, offset=%d, limit=%d, exclude_categories=%s, category=%s)", keyword, offset, limit, exclude_categories, category)
         response_object: dict[str, Any] = {"status": "failure"}
         excluded = [c.strip() for c in exclude_categories.split(",") if c.strip()] if exclude_categories else None
         hidden_categories = await _get_viewer_hidden_categories(payload, content_type)
         if hidden_categories:
             excluded = list(dict.fromkeys((excluded or []) + hidden_categories))
-        result, total, error = await manager.search_by_keyword_paged(keyword, size=limit, offset=offset, exclude_categories=excluded)
+        search_kwargs: dict[str, Any] = {"size": limit, "offset": offset, "exclude_categories": excluded}
+        if category:
+            search_kwargs["category"] = category
+        result, total, error = await manager.search_by_keyword_paged(keyword, **search_kwargs)
         if error is None:
             response_object["status"] = "success"
             response_object["result"] = [BookModel(**book.dict()) for book in result]
