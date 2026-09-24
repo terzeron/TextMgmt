@@ -38,6 +38,14 @@ const mockReactReader = vi.fn(
 
 vi.mock("react-reader", () => ({
   ReactReader: (props) => mockReactReader(props),
+  ReactReaderStyle: {
+    container: {},
+    reader: { bottom: 20 },
+  },
+  EpubViewStyle: {
+    viewHolder: {},
+    view: {},
+  },
 }));
 
 vi.mock("../src/Common", () => ({
@@ -105,6 +113,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 import ViewEPUB from "../src/ViewEPUB";
@@ -139,6 +148,11 @@ function createMockRendition({
     on: vi.fn((event, handler) => {
       handlers[event] = handler;
     }),
+    hooks: {
+      content: {
+        register: vi.fn(),
+      },
+    },
     book: {
       archive: {
         request: vi.fn(() => Promise.resolve(document.implementation.createDocument(null, "html"))),
@@ -309,16 +323,218 @@ describe("ViewEPUB", () => {
 
   // ── 컨테이너 높이 ──
 
-  it("preview=true이면 컨테이너 높이가 60vh이다", () => {
+  it("preview=true인 embedded viewer는 viewport의 남은 높이를 채운다", () => {
+    vi.stubGlobal("innerHeight", 900);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      top: 240,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      x: 0,
+      y: 240,
+      toJSON: () => ({}),
+    });
     const { container } = render(<ViewEPUB bookId={1} preview={true} />);
     const div = container.firstChild;
-    expect(div.style.height).toBe("60vh");
+    expect(div.style.height).toBe("660px");
   });
 
-  it("preview=false이면 컨테이너 높이가 100dvh이다", () => {
+  it("embedded viewer이면 전체 EPUB도 viewport의 남은 높이를 채운다", () => {
+    vi.stubGlobal("innerHeight", 800);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      top: 200,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      x: 0,
+      y: 200,
+      toJSON: () => ({}),
+    });
     const { container } = render(<ViewEPUB bookId={1} />);
     const div = container.firstChild;
-    expect(div.style.height).toBe("100dvh");
+    expect(div.style.height).toBe("600px");
+  });
+
+  it("embedded viewer는 visual viewport의 offset을 포함한 하단까지 채운다", () => {
+    vi.stubGlobal("visualViewport", {
+      height: 700,
+      offsetTop: 80,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      top: 200,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      x: 0,
+      y: 200,
+      toJSON: () => ({}),
+    });
+
+    const { container } = render(<ViewEPUB bookId={1} />);
+
+    expect(container.firstChild.style.height).toBe("580px");
+  });
+
+  it("embedded viewer가 만든 문서 초과 높이만큼 컨테이너를 줄인다", () => {
+    vi.stubGlobal("innerHeight", 800);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      top: 200,
+      left: 0,
+      right: 0,
+      bottom: 800,
+      width: 0,
+      height: 600,
+      x: 0,
+      y: 200,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(document.documentElement, "scrollHeight", "get").mockReturnValue(
+      803,
+    );
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+
+    const { container } = render(<ViewEPUB bookId={1} />);
+
+    expect(container.firstChild.style.height).toBe("597px");
+  });
+
+  it("EPUB rendering 후 생긴 문서 초과 높이도 다시 제거한다", async () => {
+    autoLoad = false;
+    vi.stubGlobal("innerHeight", 800);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      top: 200,
+      left: 0,
+      right: 0,
+      bottom: 800,
+      width: 0,
+      height: 600,
+      x: 0,
+      y: 200,
+      toJSON: () => ({}),
+    });
+    let documentHeight = 800;
+    vi.spyOn(document.documentElement, "scrollHeight", "get").mockImplementation(
+      () => documentHeight,
+    );
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    const { container } = render(<ViewEPUB bookId={1} />);
+    await waitFor(() => expect(mockReactReader).toHaveBeenCalled());
+    expect(container.firstChild.style.height).toBe("600px");
+
+    documentHeight = 803;
+    await act(async () => {
+      mockReactReader.mock.calls.at(-1)[0].locationChanged("epubcfi(/1)");
+    });
+
+    expect(container.firstChild.style.height).toBe("597px");
+  });
+
+  it("standalone viewer이면 부모의 남은 높이를 채운다", () => {
+    const { container } = render(<ViewEPUB bookId={1} standalone={true} />);
+    const div = container.firstChild;
+    expect(div.style.height).toBe("100%");
+    expect(div.classList.contains("epub-viewer")).toBe(true);
+  });
+
+  it("EPUB을 좌우 페이지 방식으로 렌더링한다", async () => {
+    render(<ViewEPUB bookId={1} />);
+
+    await waitFor(() => expect(mockReactReader).toHaveBeenCalled());
+    expect(mockReactReader.mock.calls.at(-1)[0].epubOptions).toMatchObject({
+      manager: "default",
+      flow: "paginated",
+      overflow: "hidden",
+    });
+  });
+
+  it("EPUB 본문 CSS가 지정한 수직 스크롤을 강제로 숨긴다", async () => {
+    render(<ViewEPUB bookId={1} standalone={true} />);
+    await waitFor(() => expect(capturedGetRendition).not.toBeNull());
+
+    const rendition = createMockRendition();
+    await act(async () => capturedGetRendition(rendition));
+    const contentHook = rendition.hooks.content.register.mock.calls[0][0];
+    const contentDocument = document.implementation.createHTMLDocument();
+    contentDocument.documentElement.style.setProperty(
+      "overflow-y",
+      "scroll",
+      "important",
+    );
+
+    contentHook({ document: contentDocument });
+
+    expect(contentDocument.documentElement.style.overflowY).toBe("hidden");
+    expect(
+      contentDocument.documentElement.style.getPropertyPriority("overflow-y"),
+    ).toBe("important");
+    expect(contentDocument.body.style.overflowY).toBe("hidden");
+    expect(
+      contentDocument.head.querySelector("style[data-epub-scrollbar-lock]"),
+    ).toBeTruthy();
+  });
+
+  it("챕터 rendering 이후 iframe과 EPUB 본문 overflow를 다시 숨긴다", async () => {
+    render(<ViewEPUB bookId={1} standalone={true} />);
+    await waitFor(() => expect(capturedGetRendition).not.toBeNull());
+
+    const rendition = createMockRendition();
+    await act(async () => capturedGetRendition(rendition));
+    const contentDocument = document.implementation.createHTMLDocument();
+    const view = {
+      contents: { document: contentDocument },
+      element: document.createElement("div"),
+      iframe: document.createElement("iframe"),
+    };
+    view.element.style.overflow = "scroll";
+    view.iframe.style.overflow = "scroll";
+
+    rendition._handlers.rendered(null, view);
+
+    expect(contentDocument.documentElement.style.overflowY).toBe("hidden");
+    expect(view.element.style.overflow).toBe("hidden");
+    expect(view.iframe.style.overflow).toBe("hidden");
+    expect(view.iframe.getAttribute("scrolling")).toBe("no");
+  });
+
+  it("ReactReader의 모든 wrapper에서 overflow를 숨긴다", async () => {
+    render(<ViewEPUB bookId={1} standalone={true} />);
+    await waitFor(() => expect(mockReactReader).toHaveBeenCalled());
+
+    const props = mockReactReader.mock.calls.at(-1)[0];
+    expect(props.readerStyles.container.overflow).toBe("hidden");
+    expect(props.readerStyles.reader.overflow).toBe("hidden");
+    expect(props.epubViewStyles.viewHolder.overflow).toBe("hidden");
+    expect(props.epubViewStyles.view.overflow).toBe("hidden");
+  });
+
+  it("embedded viewer는 ReactReader의 하단 예약 공간을 제거한다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await waitFor(() => expect(mockReactReader).toHaveBeenCalled());
+
+    const props = mockReactReader.mock.calls.at(-1)[0];
+    expect(props.readerStyles.reader.bottom).toBe(0);
+  });
+
+  it("standalone viewer는 기존 ReactReader 하단 간격을 유지한다", async () => {
+    render(<ViewEPUB bookId={1} standalone={true} />);
+    await waitFor(() => expect(mockReactReader).toHaveBeenCalled());
+
+    const props = mockReactReader.mock.calls.at(-1)[0];
+    expect(props.readerStyles.reader.bottom).toBe(20);
   });
 
   // ── 로딩 상태 ──

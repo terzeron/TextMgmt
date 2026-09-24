@@ -1,3 +1,16 @@
+.epub-viewer,
+.epub-viewer * {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.epub-viewer::-webkit-scrollbar,
+.epub-viewer *::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+}
+
 .epub-toolbar {
     position: absolute;
     top: 0;

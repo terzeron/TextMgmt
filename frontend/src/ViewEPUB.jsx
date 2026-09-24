@@ -1,7 +1,18 @@
-import { useEffect, useRef, useState, useCallback, Suspense } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useCallback,
+  Suspense,
+} from "react";
 import PropTypes from "prop-types";
 import { getApiUrlPrefix } from "./Common";
-import { ReactReader } from "react-reader";
+import {
+  EpubViewStyle,
+  ReactReader,
+  ReactReaderStyle,
+} from "react-reader";
 import "./ViewEPUB.css";
 
 const CHAPTERS_PREVIEW = 10;
@@ -18,13 +29,66 @@ const FONT_FAMILIES = [
   { label: "Sans-serif", value: "sans-serif" },
 ];
 
-export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
+const HIDDEN_READER_STYLES = {
+  ...ReactReaderStyle,
+  container: { ...ReactReaderStyle.container, overflow: "hidden" },
+  reader: { ...ReactReaderStyle.reader, overflow: "hidden" },
+};
+
+const EMBEDDED_READER_STYLES = {
+  ...HIDDEN_READER_STYLES,
+  reader: { ...HIDDEN_READER_STYLES.reader, bottom: 0 },
+};
+
+const HIDDEN_EPUB_VIEW_STYLES = {
+  ...EpubViewStyle,
+  viewHolder: { ...EpubViewStyle.viewHolder, overflow: "hidden" },
+  view: { ...EpubViewStyle.view, overflow: "hidden" },
+};
+
+const hideContentOverflow = (contents) => {
+  const contentDocument = contents?.document;
+  for (const element of [
+    contentDocument?.documentElement,
+    contentDocument?.body,
+  ]) {
+    element?.style.setProperty("overflow-y", "hidden", "important");
+  }
+  if (
+    contentDocument?.head &&
+    !contentDocument.head.querySelector("style[data-epub-scrollbar-lock]")
+  ) {
+    const style = contentDocument.createElement("style");
+    style.setAttribute("data-epub-scrollbar-lock", "");
+    style.textContent = `
+      html, body, * {
+        scrollbar-width: none !important;
+        -ms-overflow-style: none !important;
+      }
+      *::-webkit-scrollbar {
+        display: none !important;
+        width: 0 !important;
+        height: 0 !important;
+      }
+    `;
+    contentDocument.head.appendChild(style);
+  }
+};
+
+export default function ViewEPUB({
+  bookId,
+  preview = false,
+  apiPrefix = "",
+  standalone = false,
+}) {
   const renditionRef = useRef(null);
+  const containerRef = useRef(null);
   const timeoutRef = useRef(null);
   const locationRef = useRef("");
   const savedLocationRef = useRef(null);
   const firstRenderRef = useRef(false);
   const locationsReadyRef = useRef(false);
+  const updateHeightRef = useRef(() => {});
 
   const [epubData, setEpubData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -43,6 +107,57 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
   });
   const [pageInfo, setPageInfo] = useState({ page: 0, total: 0 });
   const [locationsReady, setLocationsReady] = useState(false);
+  const [containerHeight, setContainerHeight] = useState(
+    standalone ? "100%" : "60dvh",
+  );
+
+  useLayoutEffect(() => {
+    if (standalone) {
+      setContainerHeight("100%");
+      return;
+    }
+
+    let frameId;
+    const updateHeight = () => {
+      if (!containerRef.current) return;
+      const viewport = window.visualViewport;
+      const viewportHeight = viewport?.height ?? window.innerHeight;
+      const viewportBottom = (viewport?.offsetTop ?? 0) + viewportHeight;
+      const top = Math.max(containerRef.current.getBoundingClientRect().top, 0);
+      const availableHeight = Math.max(
+        Math.floor(viewportBottom - top),
+        0,
+      );
+      setContainerHeight(`${availableHeight}px`);
+      cancelAnimationFrame(frameId);
+      frameId = requestAnimationFrame(() => {
+        const documentHeight = Math.max(
+          document.documentElement.scrollHeight,
+          document.body.scrollHeight,
+        );
+        const overflow = Math.max(
+          Math.ceil(documentHeight - viewportBottom),
+          0,
+        );
+        if (overflow > 0) {
+          setContainerHeight(`${Math.max(availableHeight - overflow, 0)}px`);
+        }
+      });
+    };
+
+    updateHeightRef.current = updateHeight;
+    updateHeight();
+    window.addEventListener("resize", updateHeight);
+    window.visualViewport?.addEventListener("resize", updateHeight);
+    window.visualViewport?.addEventListener("scroll", updateHeight);
+    return () => {
+      updateHeightRef.current = () => {};
+      cancelAnimationFrame(frameId);
+      window.removeEventListener("resize", updateHeight);
+      window.visualViewport?.removeEventListener("resize", updateHeight);
+      window.visualViewport?.removeEventListener("scroll", updateHeight);
+    };
+  }, [standalone, bookId]);
 
   // EPUB 로딩: 전체보기는 원본 파일(chapters=0), 미리보기는 부분 챕터
   useEffect(() => {
@@ -118,6 +233,7 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
   // 페이지 변경 핸들러
   const handleLocationChanged = useCallback(
     (epubcfi) => {
+      updateHeightRef.current();
       locationRef.current = epubcfi;
       setIsLoading(false);
       setErrorMessage(null);
@@ -183,6 +299,14 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
       renditionRef.current = rendition;
       locationsReadyRef.current = false;
       setLocationsReady(false);
+
+      rendition.hooks.content.register(hideContentOverflow);
+      rendition.on("rendered", (_section, view) => {
+        hideContentOverflow(view?.contents);
+        view?.element?.style.setProperty("overflow", "hidden", "important");
+        view?.iframe?.style.setProperty("overflow", "hidden", "important");
+        view?.iframe?.setAttribute("scrolling", "no");
+      });
 
       // .html 챕터를 XHTML 로 읽기: epub.js 는 확장자로 파서를 고르므로 .html 은
       // text/html 로 파싱된다. XHTML 에서 유효한 <title/> 같은 자기닫힘 표기를
@@ -318,11 +442,12 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
     [preview, bookId],
   );
 
-  const containerHeight = preview ? "60vh" : "100dvh";
   const readerKey = `${bookId}-${preview ? "preview" : "full"}`;
 
   return (
     <div
+      ref={containerRef}
+      className="epub-viewer"
       style={{
         height: containerHeight,
         textAlign: "center",
@@ -379,7 +504,16 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
             url={epubData}
             title={!preview ? bookTitle : undefined}
             getRendition={getRendition}
-            epubOptions={{ allowScriptedContent: true }}
+            readerStyles={
+              standalone ? HIDDEN_READER_STYLES : EMBEDDED_READER_STYLES
+            }
+            epubViewStyles={HIDDEN_EPUB_VIEW_STYLES}
+            epubOptions={{
+              allowScriptedContent: true,
+              manager: "default",
+              flow: "paginated",
+              overflow: "hidden",
+            }}
           />
         )}
       </Suspense>
@@ -400,4 +534,5 @@ ViewEPUB.propTypes = {
   bookId: PropTypes.number.isRequired,
   preview: PropTypes.bool,
   apiPrefix: PropTypes.string,
+  standalone: PropTypes.bool,
 };
