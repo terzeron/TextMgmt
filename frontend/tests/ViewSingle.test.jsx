@@ -38,8 +38,8 @@ vi.mock("../src/ViewPDF", () => ({
   ),
 }));
 vi.mock("../src/ViewEPUB", () => ({
-  default: ({ bookId, preview, apiPrefix }) => (
-    <div data-testid="view-epub">
+  default: ({ bookId, preview, apiPrefix, standalone }) => (
+    <div data-testid="view-epub" data-standalone={String(!!standalone)}>
       EPUB:{bookId}:preview={String(!!preview)}:ap={apiPrefix || ""}
     </div>
   ),
@@ -149,6 +149,76 @@ describe("ViewSingle", () => {
 
     unmount();
     expect(document.documentElement.style.overflow).toBe("");
+  });
+
+  it("standalone viewer를 남은 높이 전용 영역에 배치한다", async () => {
+    mockUseParams.mockReturnValue({ entryId: "10", fileType: "epub" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("path=/test.epub&category=_root"),
+    ]);
+
+    const { container } = render(<ViewSingle />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-epub")).toBeTruthy();
+    });
+    expect(container.querySelector(".standalone-epub-content")).toBeTruthy();
+  });
+
+  it("standalone viewer를 visual viewport 경계에 맞춘다", async () => {
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+    vi.stubGlobal("visualViewport", {
+      height: 700,
+      offsetTop: 80,
+      addEventListener,
+      removeEventListener,
+    });
+    mockUseParams.mockReturnValue({ entryId: "10", fileType: "epub" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("path=/test.epub&category=_root"),
+    ]);
+
+    const { container, unmount } = render(<ViewSingle />);
+    const viewer = container.querySelector(".standalone-viewer");
+
+    expect(viewer.style.top).toBe("80px");
+    expect(viewer.style.height).toBe("700px");
+    expect(addEventListener).toHaveBeenCalledWith(
+      "resize",
+      expect.any(Function),
+    );
+    expect(addEventListener).toHaveBeenCalledWith(
+      "scroll",
+      expect.any(Function),
+    );
+
+    unmount();
+    expect(removeEventListener).toHaveBeenCalledWith(
+      "resize",
+      expect.any(Function),
+    );
+    expect(removeEventListener).toHaveBeenCalledWith(
+      "scroll",
+      expect.any(Function),
+    );
+  });
+
+  it("EPUB viewer에 standalone 여부를 전달한다", async () => {
+    const { unmount } = render(
+      <ViewSingle bookId={1} fileType="epub" filePath="/test.epub" />,
+    );
+    expect(screen.getByTestId("view-epub").dataset.standalone).toBe("false");
+    unmount();
+
+    mockUseParams.mockReturnValue({ entryId: "10", fileType: "epub" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("path=/test.epub"),
+    ]);
+    render(<ViewSingle />);
+    await waitFor(() => {
+      expect(screen.getByTestId("view-epub").dataset.standalone).toBe("true");
+    });
   });
 
   it("standalone 모드에서 카테고리 정보를 로드하고 네비게이션을 처리한다", async () => {
@@ -398,5 +468,31 @@ describe("ViewSingle", () => {
     await waitFor(() => {
       expect(screen.getByText("편집")).toBeTruthy();
     });
+  });
+
+  it("embedded 책 이동과 관리 버튼을 하나의 header에 표시한다", () => {
+    render(
+      <ViewSingle
+        bookId={1}
+        fileType="epub"
+        filePath="/test.epub"
+        role="admin"
+        editUrl="/edit/1"
+        downloadUrl="/download/1"
+        viewUrl="/viewer/epub/1"
+        onPrevBook={vi.fn()}
+        onNextBook={vi.fn()}
+        hasPrevBook={true}
+        hasNextBook={true}
+      />,
+    );
+
+    const header = screen.getByText(/이전 책으로/).closest(".card-header");
+    expect(header).toBeTruthy();
+    expect(header.textContent).toContain("편집");
+    expect(header.textContent).toContain("다운로드");
+    expect(header.textContent).toContain("전체보기");
+    expect(header.textContent).toContain("다음 책으로");
+    expect(document.querySelector(".standalone-nav")).toBeNull();
   });
 });

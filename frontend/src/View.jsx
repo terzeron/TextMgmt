@@ -6,11 +6,12 @@ import { getApiUrlPrefix, recordBookView } from "./Common";
 
 import "./View.css";
 import "bootstrap/dist/css/bootstrap.min.css";
-import { Container, Row, Col, Card, Alert } from "react-bootstrap";
+import { Container, Row, Col, Alert } from "react-bootstrap";
 
 import Folder from "./Folder.jsx";
 import ViewSingle from "./ViewSingle.jsx";
 import BookInfoView from "./BookInfoView.jsx";
+import SimilarBooks from "./SimilarBooks.jsx";
 import BookLoadError from "./BookLoadError.jsx";
 import SearchResult from "./SearchResult";
 import {
@@ -21,11 +22,9 @@ import {
   determinePrevEntryId,
   MORE_ENTRY_SUFFIX,
 } from "./folderUtils";
-import useIsMobile from "./useIsMobile";
 import { useCategoryTree } from "./useCategoryTree";
 
 export default function View({ basePath = "/book-view", apiPrefix = "" }) {
-  const isMobile = useIsMobile();
   // get optional route params for deep link
   const params = useParams();
   const [searchParams] = useSearchParams();
@@ -46,12 +45,9 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
     handleSearchCategoryChange,
     searchInProgress,
   } = useOutletContext();
-  // URL로 책을 바로 열면 본문에 집중하도록 디렉토리를 접은 채 시작한다.
-  // 책 없이 들어오면 디렉토리가 유일한 내용이므로 펼친 채로 둔다.
-  const [isFolderOpen, setIsFolderOpen] = useState(() => !routeBookId);
+  const [isFolderOpen, setIsFolderOpen] = useState(false);
   const [expandedItems, setExpandedItems] = useState([]);
   const [errorMessage, setErrorMessage] = useState("");
-  const [successMessage, setSuccessMessage] = useState("");
   const [selectedEntryId, setSelectedEntryId] = useState("");
   const [nextEntryId, setNextEntryId] = useState("");
   const [prevEntryId, setPrevEntryId] = useState("");
@@ -78,7 +74,6 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
   useEffect(() => {
     return () => {
       setErrorMessage("");
-      setSuccessMessage("");
       setSelectedEntryId("");
       setNextEntryId("");
       setBookInfo({});
@@ -283,141 +278,101 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
     ? `${editBasePath}/${bookInfo["book_id"]}?category=${encodeURIComponent(bookInfo["category"] || "_root")}`
     : "";
 
-  // 모바일에서는 directory-menu 클래스를 제거하여 고정 높이 스타일 방지
-  const directoryClassName = isMobile
-    ? "ps-0 pe-0"
-    : "ps-0 pe-0 section directory-menu";
-  /* v8 ignore next 2 -- responsive column matrix is covered by browser layout, not unit branches. */
-  const contentColumnMd = isMobile ? 12 : isFolderOpen ? 7 : 12;
-  const contentColumnLg = isMobile ? 12 : isFolderOpen ? 8 : 12;
-
-  /* v8 ignore start -- collapsed sidebar is reachable only through interactive Folder toggle. */
-  const collapsedFolderPanel = !isFolderOpen ? (
-    <Suspense fallback={<div className="loading">로딩 중...</div>}>
-      <Folder
-        folderData={folderData}
-        expandedItems={expandedItems}
-        onExpandedItemsChange={setExpandedItems}
-        isOpen={false}
-        onToggle={setIsFolderOpen}
-        onClickHandler={entryClicked}
-      />
-    </Suspense>
-  ) : null;
-  /* v8 ignore stop */
-
-  /* v8 ignore start -- result alerts depend on manual navigation guard messages. */
-  const resultAlerts = (
-    <>
-      {errorMessage && (
-        <Alert variant="danger" className="mb-0">
-          {errorMessage}
-        </Alert>
-      )}
-      {successMessage && (
-        <Alert variant="success" className="mb-0">
-          {successMessage}
-        </Alert>
-      )}
-    </>
-  );
-  /* v8 ignore stop */
-
   return (
     <Container id="view">
-      <Row fluid="true">
-        {isFolderOpen && (
-          <Col
-            md={isMobile ? 12 : 5}
-            lg={isMobile ? 12 : 4}
-            className={directoryClassName}
-          >
-            <Suspense fallback={<div className="loading">로딩 중...</div>}>
-              <Folder
-                folderData={folderData}
-                expandedItems={expandedItems}
-                onExpandedItemsChange={setExpandedItems}
-                isOpen={true}
-                onToggle={setIsFolderOpen}
-                onClickHandler={entryClicked}
-              />
-            </Suspense>
+      <Row className="view-tools-row g-0 align-items-start">
+        <Col xs={12} md={3} className="view-directory-panel">
+          <Suspense fallback={<div className="loading">로딩 중...</div>}>
+            <Folder
+              folderData={folderData}
+              expandedItems={expandedItems}
+              onExpandedItemsChange={setExpandedItems}
+              isOpen={isFolderOpen}
+              onToggle={setIsFolderOpen}
+              onClickHandler={entryClicked}
+            />
+          </Suspense>
+        </Col>
+        {bookInfo["book_id"] && (
+          <Col xs={12} md={9} className="view-similar-books-panel">
+            <SimilarBooks
+              bookId={bookInfo["book_id"]}
+              onSelect={entryClicked}
+              apiPrefix={apiPrefix}
+              basePath={basePath.replace("-view", "-edit")}
+              autoOpenHighScore={false}
+              canEdit={role === "admin"}
+            />
           </Col>
         )}
-
-        <Col
-          md={contentColumnMd}
-          lg={contentColumnLg}
-          className={isMobile ? "ps-0 pe-0" : "section"}
-        >
-          {collapsedFolderPanel}
-          {hasSearched && (
-            <SearchResult
-              results={searchResults}
-              role={role}
-              onLoadMore={handleLoadMore}
-              hasMore={searchResults.length < searchTotal}
-              loading={searchLoading}
-              basePath={basePath}
-              categories={searchCategories}
-              selectedCategory={selectedSearchCategory}
-              onCategoryChange={handleSearchCategoryChange}
-              categoryLoading={searchInProgress}
-            />
-          )}
-          {!hasSearched && !bookInfo["book_id"] && bookLoadError && (
-            <Row id="top_panel">
-              <Col lg="12" className="ps-0 pe-0 me-0 ">
-                <BookLoadError
-                  bookId={routeBookId}
-                  category={routeCategory}
-                  error={bookLoadError}
-                  role={role}
-                  apiPrefix={apiPrefix}
-                />
-              </Col>
-            </Row>
-          )}
-          {bookInfo["book_id"] && (
-            <>
-              <Row id="top_panel">
-                <Col lg="12" className="ps-0 pe-0 me-0 ">
-                  <BookInfoView bookInfo={bookInfo} isEditEnabled={false} />
-                </Col>
-
-                <Card>
-                  <Card.Header>실행 결과</Card.Header>
-                  <Card.Body>{resultAlerts}</Card.Body>
-                </Card>
-              </Row>
-
-              <Row id="bottom_panel">
-                <Col id="right_panel" className="ps-0 pe-0">
-                  {bookInfo["book_id"] && (
-                    <ViewSingle
-                      key={bookInfo["book_id"]}
-                      bookId={bookInfo["book_id"]}
-                      filePath={bookInfo["file_path"]}
-                      fileType={bookInfo["file_type"]}
-                      viewUrl={viewUrl}
-                      downloadUrl={downloadUrl}
-                      lineCount={100}
-                      pageCount={10}
-                      apiPrefix={apiPrefix}
-                      editUrl={editUrl}
-                      onNextBook={toNextEntryButtonClicked}
-                      hasNextBook={!!nextEntryId}
-                      onPrevBook={toPrevEntryButtonClicked}
-                      hasPrevBook={!!prevEntryId}
-                      role={role}
-                    />
-                  )}
-                </Col>
-              </Row>
-            </>
-          )}
-        </Col>
       </Row>
+      {hasSearched && (
+        <SearchResult
+          results={searchResults}
+          role={role}
+          onLoadMore={handleLoadMore}
+          hasMore={searchResults.length < searchTotal}
+          loading={searchLoading}
+          basePath={basePath}
+          categories={searchCategories}
+          selectedCategory={selectedSearchCategory}
+          onCategoryChange={handleSearchCategoryChange}
+          categoryLoading={searchInProgress}
+        />
+      )}
+      {!hasSearched && !bookInfo["book_id"] && bookLoadError && (
+        <Row id="top_panel">
+          <Col lg="12" className="ps-0 pe-0 me-0 ">
+            <BookLoadError
+              bookId={routeBookId}
+              category={routeCategory}
+              error={bookLoadError}
+              role={role}
+              apiPrefix={apiPrefix}
+            />
+          </Col>
+        </Row>
+      )}
+      {bookInfo["book_id"] && (
+        <>
+          <Row id="top_panel">
+            <Col lg="12" className="ps-0 pe-0 me-0 ">
+              <BookInfoView
+                bookInfo={bookInfo}
+                isEditEnabled={false}
+                showDetails={false}
+              />
+              {errorMessage && (
+                <Alert variant="danger" className="mb-0">
+                  {errorMessage}
+                </Alert>
+              )}
+            </Col>
+          </Row>
+
+          <Row id="bottom_panel">
+            <Col id="right_panel" className="ps-0 pe-0">
+              <ViewSingle
+                key={bookInfo["book_id"]}
+                bookId={bookInfo["book_id"]}
+                filePath={bookInfo["file_path"]}
+                fileType={bookInfo["file_type"]}
+                viewUrl={viewUrl}
+                downloadUrl={downloadUrl}
+                lineCount={100}
+                pageCount={10}
+                apiPrefix={apiPrefix}
+                editUrl={editUrl}
+                onNextBook={toNextEntryButtonClicked}
+                hasNextBook={!!nextEntryId}
+                onPrevBook={toPrevEntryButtonClicked}
+                hasPrevBook={!!prevEntryId}
+                role={role}
+              />
+            </Col>
+          </Row>
+        </>
+      )}
     </Container>
   );
 }

@@ -35,6 +35,8 @@ export default function SimilarBooks({
   onSelect,
   apiPrefix = "",
   basePath = "/book-edit",
+  autoOpenHighScore = true,
+  canEdit = true,
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [similarBooks, setSimilarBooks] = useState([]);
@@ -69,7 +71,7 @@ export default function SimilarBooks({
   useEffect(() => {
     if (bookId) {
       loadFirstPage((books) => {
-        if (books.some((b) => b.score >= 90)) {
+        if (autoOpenHighScore && books.some((b) => b.score >= 90)) {
           setIsOpen(true);
         }
       });
@@ -83,7 +85,7 @@ export default function SimilarBooks({
       setTotal(0);
       setIsOpen(false);
     };
-  }, [bookId, loadFirstPage]);
+  }, [bookId, loadFirstPage, autoOpenHighScore]);
 
   const handleRefresh = useCallback(() => {
     if (refreshing || !bookId) return;
@@ -249,22 +251,24 @@ export default function SimilarBooks({
                         {Math.round(book.score)}
                       </span>
                     )}
-                    <Button
-                      variant="outline-warning"
-                      className="btn-xs"
-                      onClick={() =>
-                        window.open(
-                          `${safeBasePath}/${book.book_id}?category=${categoryParam}`,
-                          "_blank",
-                          "noopener",
-                        )
-                      }
-                      aria-label={`${displayName} 편집`}
-                      title="편집"
-                      style={{ marginRight: "4px" }}
-                    >
-                      <FontAwesomeIcon icon={faPencil} />
-                    </Button>
+                    {canEdit && (
+                      <Button
+                        variant="outline-warning"
+                        className="btn-xs"
+                        onClick={() =>
+                          window.open(
+                            `${safeBasePath}/${book.book_id}?category=${categoryParam}`,
+                            "_blank",
+                            "noopener",
+                          )
+                        }
+                        aria-label={`${displayName} 편집`}
+                        title="편집"
+                        style={{ marginRight: "4px" }}
+                      >
+                        <FontAwesomeIcon icon={faPencil} />
+                      </Button>
+                    )}
                     <Button
                       variant="outline-primary"
                       className="btn-xs"
@@ -281,21 +285,23 @@ export default function SimilarBooks({
                     >
                       <FontAwesomeIcon icon={faEye} />
                     </Button>
-                    <Button
-                      variant="outline-danger"
-                      className="btn-xs"
-                      onClick={() => handleDelete(book.book_id, displayName)}
-                      disabled={deletingId !== null}
-                      aria-busy={isDeleting}
-                      aria-label={`${displayName} 삭제`}
-                      title={isDeleting ? "삭제 중..." : "삭제"}
-                      style={{ marginRight: "4px" }}
-                    >
-                      <FontAwesomeIcon
-                        icon={isDeleting ? faSpinner : faTrash}
-                        spin={isDeleting}
-                      />
-                    </Button>
+                    {canEdit && (
+                      <Button
+                        variant="outline-danger"
+                        className="btn-xs"
+                        onClick={() => handleDelete(book.book_id, displayName)}
+                        disabled={deletingId !== null}
+                        aria-busy={isDeleting}
+                        aria-label={`${displayName} 삭제`}
+                        title={isDeleting ? "삭제 중..." : "삭제"}
+                        style={{ marginRight: "4px" }}
+                      >
+                        <FontAwesomeIcon
+                          icon={isDeleting ? faSpinner : faTrash}
+                          spin={isDeleting}
+                        />
+                      </Button>
+                    )}
                   </div>
                 </div>
                 );
@@ -332,4 +338,6 @@ SimilarBooks.propTypes = {
   onSelect: PropTypes.func,
   apiPrefix: PropTypes.string,
   basePath: PropTypes.string,
+  autoOpenHighScore: PropTypes.bool,
+  canEdit: PropTypes.bool,
 };
