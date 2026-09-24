@@ -73,6 +73,7 @@ export default function CoverGrid({ results, basePath }) {
         {results.slice(0, visibleCount).map((book) => {
           const filename =
             (book.file_path || "").split("/").pop() || book.title || "Unknown";
+          const displayTitle = book.title || filename;
           const category = book.category || "_root";
           const fileType = book.file_type || "";
           const coverSrc = COVER_FILE_TYPES.has(fileType)
@@ -85,12 +86,12 @@ export default function CoverGrid({ results, basePath }) {
               href={`${viewBasePath}/${book.book_id}?category=${encodeURIComponent(category)}`}
               target="_blank"
               rel="noopener noreferrer"
-              title={filename}
+              title={displayTitle}
             >
               <div className="cover-grid-cover">
                 <CoverImage src={coverSrc} fileType={fileType} />
               </div>
-              <div className="cover-grid-title">{filename}</div>
+              <div className="cover-grid-title">{displayTitle}</div>
             </a>
           );
         })}

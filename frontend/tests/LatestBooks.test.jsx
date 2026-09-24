@@ -390,59 +390,59 @@ describe("LatestBooks", () => {
       final();
     };
 
-    it("기본은 목록 뷰다", async () => {
+    it("기본은 커버 뷰다", async () => {
       mockRawJsonGetReq.mockImplementation(resolveEmpty);
       render(<LatestBooks />);
       await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
       const list = screen.getByTestId("search-result");
-      expect(list.dataset.viewMode).toBe("list");
+      expect(list.dataset.viewMode).toBe("cover");
       expect(
-        screen.getByLabelText("목록 보기", { selector: "input" }).checked,
+        screen.getByLabelText("커버 보기", { selector: "input" }).checked,
       ).toBe(true);
     });
 
-    it("커버 보기를 누르면 커버 뷰로 바뀌고 탭별로 저장한다", async () => {
+    it("목록 보기를 누르면 목록 뷰로 바뀌고 탭별로 저장한다", async () => {
       mockRawJsonGetReq.mockImplementation(resolveEmpty);
       render(<LatestBooks />);
       await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
 
       fireEvent.click(
-        screen.getByLabelText("커버 보기", { selector: "input" }),
+        screen.getByLabelText("목록 보기", { selector: "input" }),
       );
 
       expect(screen.getByTestId("search-result").dataset.viewMode).toBe(
-        "cover",
+        "list",
       );
-      expect(localStorage.getItem("tm_latest_view_mode_book")).toBe("cover");
+      expect(localStorage.getItem("tm_latest_view_mode_book")).toBe("list");
       expect(localStorage.getItem("tm_latest_view_mode_comic")).toBeNull();
     });
 
-    it("저장된 커버 뷰를 복원한다", async () => {
-      localStorage.setItem("tm_latest_view_mode_comic", "cover");
+    it("저장된 목록 뷰를 복원한다", async () => {
+      localStorage.setItem("tm_latest_view_mode_comic", "list");
       mockRawJsonGetReq.mockImplementation(resolveEmpty);
       render(<LatestBooks contentType="comic" />);
+      await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
+      expect(screen.getByTestId("search-result").dataset.viewMode).toBe("list");
+    });
+
+    it("탭이 바뀌면 그 탭의 저장값을 다시 읽는다", async () => {
+      localStorage.setItem("tm_latest_view_mode_comic", "list");
+      mockRawJsonGetReq.mockImplementation(resolveEmpty);
+      const { rerender } = render(<LatestBooks />);
       await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
       expect(screen.getByTestId("search-result").dataset.viewMode).toBe(
         "cover",
       );
-    });
-
-    it("탭이 바뀌면 그 탭의 저장값을 다시 읽는다", async () => {
-      localStorage.setItem("tm_latest_view_mode_comic", "cover");
-      mockRawJsonGetReq.mockImplementation(resolveEmpty);
-      const { rerender } = render(<LatestBooks />);
-      await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
-      expect(screen.getByTestId("search-result").dataset.viewMode).toBe("list");
 
       rerender(<LatestBooks contentType="comic" />);
       await waitFor(() =>
         expect(screen.getByTestId("search-result").dataset.viewMode).toBe(
-          "cover",
+          "list",
         ),
       );
     });
 
-    it("localStorage를 쓸 수 없어도 목록 뷰로 동작하고 전환된다", async () => {
+    it("localStorage를 쓸 수 없어도 커버 뷰로 동작하고 전환된다", async () => {
       const getSpy = vi
         .spyOn(Storage.prototype, "getItem")
         .mockImplementation(() => {
@@ -458,14 +458,14 @@ describe("LatestBooks", () => {
         render(<LatestBooks />);
         await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
         expect(screen.getByTestId("search-result").dataset.viewMode).toBe(
-          "list",
+          "cover",
         );
 
         fireEvent.click(
-          screen.getByLabelText("커버 보기", { selector: "input" }),
+          screen.getByLabelText("목록 보기", { selector: "input" }),
         );
         expect(screen.getByTestId("search-result").dataset.viewMode).toBe(
-          "cover",
+          "list",
         );
       } finally {
         getSpy.mockRestore();
