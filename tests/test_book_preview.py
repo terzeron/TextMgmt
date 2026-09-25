@@ -656,11 +656,17 @@ class TestBookPreview:
     @pytest.mark.asyncio
     async def test_preview_caches_result(self, test_book):
         """두 번째 요청 시 동일 응답 (캐시 히트)."""
+        from backend.book_manager import BookManager
+
         client = test_book["client"]
         book_id = test_book["book_id"]
         bm = test_book["bm"]
 
-        cache_file = bm.path_prefix / ".preview_cache" / f"{book_id}_ch3.epub"
+        cache_file = (
+            bm.path_prefix
+            / ".preview_cache"
+            / f"{book_id}_ch3_v{BookManager.EPUB_IMAGE_POLICY_VERSION}.epub"
+        )
         cache_file.unlink(missing_ok=True)
 
         resp1 = client.get(f"/preview/{book_id}?chapters=3")
@@ -2630,7 +2636,11 @@ async def test_epub_unquoted_href_and_full_view(tmp_path):
         resp = await bm.get_book_preview(book_id=1, chapters=0)
         assert resp.status_code == 200
 
-        cache_file = tmp_path / ".preview_cache" / "1_ch1.epub"
+        from backend.book_manager import BookManager as _BM
+
+        cache_file = tmp_path / ".preview_cache" / (
+            f"1_ch1_v{_BM.EPUB_IMAGE_POLICY_VERSION}.epub"
+        )
         assert cache_file.exists()
 
         with zipfile.ZipFile(cache_file, "r") as zout:
@@ -2706,7 +2716,11 @@ async def test_preview_expands_self_closing_title(tmp_path):
         resp = await bm.get_book_preview(book_id=2, chapters=0)
         assert resp.status_code == 200
 
-        cache_file = tmp_path / ".preview_cache" / "2_ch1.epub"
+        from backend.book_manager import BookManager as _BM
+
+        cache_file = tmp_path / ".preview_cache" / (
+            f"2_ch1_v{_BM.EPUB_IMAGE_POLICY_VERSION}.epub"
+        )
         with zipfile.ZipFile(cache_file, "r") as zout:
             chapter = zout.read("OEBPS/ch1.html").decode("utf-8")
 

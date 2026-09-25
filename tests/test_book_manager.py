@@ -965,6 +965,61 @@ def test_get_epub_total_chapters(tmp_path: Path):
     assert BookManager._get_epub_total_chapters(epub) == 2
 
 
+def test_downscale_epub_image_shrinks_large_jpeg():
+    """EPUB_IMAGE_MAX_EDGE보다 큰 이미지는 줄어들고 형식은 유지된다."""
+    import io
+
+    from PIL import Image
+
+    img = Image.new("RGB", (4000, 3000), (200, 30, 30))
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=95)
+    original = buf.getvalue()
+
+    resized = BookManager._downscale_epub_image(original)
+
+    out = Image.open(io.BytesIO(resized))
+    assert out.format == "JPEG"
+    assert max(out.size) <= BookManager.EPUB_IMAGE_MAX_EDGE
+    assert len(resized) < len(original)
+
+
+def test_downscale_epub_image_keeps_small_image():
+    """이미 충분히 작은 이미지는 바이트를 그대로 둔다."""
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (800, 600), (10, 10, 10)).save(buf, "JPEG")
+    original = buf.getvalue()
+
+    assert BookManager._downscale_epub_image(original) == original
+
+
+def test_downscale_epub_image_invalid_bytes_passthrough():
+    """깨진 이미지 바이트는 원본 그대로 돌려준다(뷰어 동작 유지)."""
+    broken = b"not-an-image"
+    assert BookManager._downscale_epub_image(broken) == broken
+
+
+def test_downscale_epub_image_png_stays_png():
+    import io
+
+    from PIL import Image
+
+    img = Image.new("RGB", (3000, 2000), (0, 128, 0))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    original = buf.getvalue()
+
+    resized = BookManager._downscale_epub_image(original)
+
+    out = Image.open(io.BytesIO(resized))
+    assert out.format == "PNG"
+    assert max(out.size) <= BookManager.EPUB_IMAGE_MAX_EDGE
+
+
 def test_convert_with_libreoffice_success_and_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     fake_bin = tmp_path / "libreoffice"
     fake_bin.write_text("")
@@ -3111,7 +3166,9 @@ def test_get_book_preview_epub_cache_hit(tmp_path: Path):
     cache_dir = tmp_path / ".preview_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     BookManager._get_epub_total_chapters(epub)
-    cache_file = cache_dir / "1_ch3.epub"
+    cache_file = cache_dir / (
+        f"1_ch3_v{BookManager.EPUB_IMAGE_POLICY_VERSION}.epub"
+    )
     _make_minimal_epub(cache_file)
 
     import os
