@@ -165,7 +165,7 @@ describe("ViewSingle", () => {
     expect(container.querySelector(".standalone-epub-content")).toBeTruthy();
   });
 
-  it("standalone viewer를 visual viewport 경계에 맞춘다", async () => {
+  it("standalone viewer는 visual viewport listener 없이 레이아웃 높이를 쓴다", async () => {
     const addEventListener = vi.fn();
     const removeEventListener = vi.fn();
     vi.stubGlobal("visualViewport", {
@@ -182,26 +182,13 @@ describe("ViewSingle", () => {
     const { container, unmount } = render(<ViewSingle />);
     const viewer = container.querySelector(".standalone-viewer");
 
-    expect(viewer.style.top).toBe("80px");
-    expect(viewer.style.height).toBe("700px");
-    expect(addEventListener).toHaveBeenCalledWith(
-      "resize",
-      expect.any(Function),
-    );
-    expect(addEventListener).toHaveBeenCalledWith(
-      "scroll",
-      expect.any(Function),
-    );
+    // visualViewport 추적을 제거해 읽는 중 재렌더/깜빡임을 없앤다.
+    expect(viewer.style.top).toBe("");
+    expect(viewer.style.height).toBe("");
+    expect(addEventListener).not.toHaveBeenCalled();
 
     unmount();
-    expect(removeEventListener).toHaveBeenCalledWith(
-      "resize",
-      expect.any(Function),
-    );
-    expect(removeEventListener).toHaveBeenCalledWith(
-      "scroll",
-      expect.any(Function),
-    );
+    expect(removeEventListener).not.toHaveBeenCalled();
   });
 
   it("EPUB viewer에 standalone 여부를 전달한다", async () => {

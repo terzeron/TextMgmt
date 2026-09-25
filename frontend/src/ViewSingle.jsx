@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useLayoutEffect,
   useState,
   useCallback,
   lazy,
@@ -37,7 +36,6 @@ export default function ViewSingle(props) {
   const [pageCount, setPageCount] = useState(0);
   const [prevBook, setPrevBook] = useState(null);
   const [nextBook, setNextBook] = useState(null);
-  const [standaloneViewport, setStandaloneViewport] = useState(null);
 
   useEffect(() => {
     if (entryId && paramFileType && paramFilePath) {
@@ -90,28 +88,6 @@ export default function ViewSingle(props) {
       body.style.height = saved.bodyHeight;
       body.style.position = saved.bodyPosition;
       body.style.width = saved.bodyWidth;
-    };
-  }, [standalone]);
-
-  useLayoutEffect(() => {
-    if (!standalone) return;
-
-    const viewport = window.visualViewport;
-    const updateViewport = () => {
-      setStandaloneViewport({
-        top: `${viewport?.offsetTop ?? 0}px`,
-        height: `${viewport?.height ?? window.innerHeight}px`,
-      });
-    };
-
-    updateViewport();
-    window.addEventListener("resize", updateViewport);
-    viewport?.addEventListener("resize", updateViewport);
-    viewport?.addEventListener("scroll", updateViewport);
-    return () => {
-      window.removeEventListener("resize", updateViewport);
-      viewport?.removeEventListener("resize", updateViewport);
-      viewport?.removeEventListener("scroll", updateViewport);
     };
   }, [standalone]);
 
@@ -217,10 +193,7 @@ export default function ViewSingle(props) {
     props.editUrl || props.downloadUrl || props.viewUrl;
 
   return (
-    <Card
-      className={standalone ? "standalone-viewer" : ""}
-      style={standalone ? standaloneViewport || undefined : undefined}
-    >
+    <Card className={standalone ? "standalone-viewer" : ""}>
       {!standalone && (
         <Card.Header className="book-viewer-header">
           <span className="book-viewer-nav-slot book-viewer-prev">
