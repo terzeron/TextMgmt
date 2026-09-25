@@ -13,8 +13,9 @@ rm -rf */{nohup.out*,run.log*,.mypy_cache,__pycache__,.idea,.git}
 # 이미지 태그를 커밋 SHA로 고정한다. :latest만 쓰면 클러스터에 어느 빌드가 떠 있는지
 # 추적할 수 없다(trivy KSV013). 배포 자체는 아래에서 digest로 고정한다.
 # 정리 작업 뒤에 계산해야 잔여 파일 때문에 -dirty가 붙지 않는다.
+# dirty build는 분 단위 tag를 써서 변경된 web bundle을 새 image로 받는다.
 TAG="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD)"
-[[ -z "$(git -C "$SCRIPT_DIR" status --porcelain)" ]] || TAG="${TAG}-dirty"
+[[ -z "$(git -C "$SCRIPT_DIR" status --porcelain)" ]] || TAG="${TAG}-dirty-$(date +%H%M)"
 
 # --pull: FROM을 로컬 캐시에 고정하지 않고 base image 갱신분을 받는다.
 # APT_REFRESH: Dockerfile의 apt-get upgrade 레이어 캐시 키(ISO 연-주). 이게 없으면

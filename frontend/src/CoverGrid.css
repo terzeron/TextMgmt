@@ -2,7 +2,7 @@
    줄마다 남는 폭은 카드들이 나눠 가져서 한쪽에만 빈 여백이 생기지 않는다. */
 .cover-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 12px 8px;
 }
 
@@ -48,7 +48,7 @@
   font-size: 0.8rem;
   line-height: 1.3;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
   overflow-wrap: anywhere;

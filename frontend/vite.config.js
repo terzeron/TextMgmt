@@ -44,6 +44,13 @@ function pdfWasmPlugin() {
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  // 사용자가 첫 화면 하단에서 배포 상태를 직접 확인할 수 있도록 빌드 ID를 박는다.
+  // APP_BUILD_ID(이미지 빌드 시 주입 가능)가 없으면 빌드 시각을 쓴다.
+  define: {
+    __APP_BUILD_ID__: JSON.stringify(
+      process.env.APP_BUILD_ID || new Date().toISOString(),
+    ),
+  },
   server: {
     https: true,
     proxy: {

@@ -48,42 +48,44 @@ export default function BookInfoView(props) {
         </Col>
       </Row>
 
-      <Row>
-        <Col xs="2">
-          <InputGroup size="sm">
-            <InputGroup.Text>종류</InputGroup.Text>
-            <Form.Control value={fileType} readOnly disabled />
-          </InputGroup>
-        </Col>
-        <Col xs="4">
-          <InputGroup size="sm">
-            <InputGroup.Text>ISBN</InputGroup.Text>
-            <Form.Control value={isbn || "-"} readOnly disabled />
-          </InputGroup>
-        </Col>
-        <Col xs="3">
-          <InputGroup size="sm">
-            <InputGroup.Text>크기</InputGroup.Text>
-            <Form.Control value={fileSize.toLocaleString()} readOnly disabled />
-          </InputGroup>
-        </Col>
-        <Col xs="3">
-          <InputGroup size="sm">
-            <InputGroup.Text>분량</InputGroup.Text>
-            <Form.Control
-              value={
-                pageCount > 0
-                  ? `${pageCount.toLocaleString()}쪽`
-                  : lineCount > 0
-                    ? `${lineCount.toLocaleString()}행`
-                    : "-"
-              }
-              readOnly
-              disabled
-            />
-          </InputGroup>
-        </Col>
-      </Row>
+      {props.showDetails !== false && (
+        <Row>
+          <Col xs="2">
+            <InputGroup size="sm">
+              <InputGroup.Text>종류</InputGroup.Text>
+              <Form.Control value={fileType} readOnly disabled />
+            </InputGroup>
+          </Col>
+          <Col xs="4">
+            <InputGroup size="sm">
+              <InputGroup.Text>ISBN</InputGroup.Text>
+              <Form.Control value={isbn || "-"} readOnly disabled />
+            </InputGroup>
+          </Col>
+          <Col xs="3">
+            <InputGroup size="sm">
+              <InputGroup.Text>크기</InputGroup.Text>
+              <Form.Control value={fileSize.toLocaleString()} readOnly disabled />
+            </InputGroup>
+          </Col>
+          <Col xs="3">
+            <InputGroup size="sm">
+              <InputGroup.Text>분량</InputGroup.Text>
+              <Form.Control
+                value={
+                  pageCount > 0
+                    ? `${pageCount.toLocaleString()}쪽`
+                    : lineCount > 0
+                      ? `${lineCount.toLocaleString()}행`
+                      : "-"
+                }
+                readOnly
+                disabled
+              />
+            </InputGroup>
+          </Col>
+        </Row>
+      )}
 
       {isEditEnabled && (
         <Row>
@@ -179,6 +181,7 @@ export default function BookInfoView(props) {
 BookInfoView.propTypes = {
   bookInfo: PropTypes.object.isRequired,
   isEditEnabled: PropTypes.bool,
+  showDetails: PropTypes.bool,
   onTitleChange: PropTypes.func,
   onAuthorChange: PropTypes.func,
   onCutTitleButtonClick: PropTypes.func,

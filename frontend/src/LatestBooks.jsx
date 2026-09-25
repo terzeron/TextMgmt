@@ -18,15 +18,15 @@ import SearchResult from "./SearchResult";
 const LATEST_ITEM_LIMIT = 100;
 const VIEW_MODE_STORAGE_KEY_PREFIX = "tm_latest_view_mode_";
 
-// 뷰 모드는 탭별 편의 설정이다. 저장소를 쓸 수 없으면 목록 뷰로 돌아간다.
+// 뷰 모드는 탭별 편의 설정이다. 저장소를 쓸 수 없으면 커버 뷰를 사용한다.
 function readViewMode(contentType) {
   try {
     return localStorage.getItem(VIEW_MODE_STORAGE_KEY_PREFIX + contentType) ===
-      "cover"
-      ? "cover"
-      : "list";
+      "list"
+      ? "list"
+      : "cover";
   } catch {
-    return "list";
+    return "cover";
   }
 }
 

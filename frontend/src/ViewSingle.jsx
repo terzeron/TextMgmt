@@ -1,4 +1,10 @@
-import { useEffect, useState, useCallback, lazy, Suspense } from "react";
+import {
+  useEffect,
+  useState,
+  useCallback,
+  lazy,
+  Suspense,
+} from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import PropTypes from "prop-types";
 import { jsonGetReq } from "./Common";
@@ -151,7 +157,14 @@ export default function ViewSingle(props) {
         apiPrefix={ap}
       />
     ),
-    epub: <ViewEPUB bookId={bookId} preview={preview} apiPrefix={ap} />,
+    epub: (
+      <ViewEPUB
+        bookId={bookId}
+        preview={preview}
+        apiPrefix={ap}
+        standalone={standalone}
+      />
+    ),
     doc: <ViewDOC bookId={bookId} fileType="doc" apiPrefix={ap} />,
     docx: (
       <ViewDOC
@@ -171,22 +184,34 @@ export default function ViewSingle(props) {
   };
   const normalizedFileType = (fileType || "").toLowerCase();
   const renderComponent = componentMap[normalizedFileType];
+  const viewerContent = bookId ? (
+    <Suspense fallback={<div>로딩 중...</div>}>{renderComponent}</Suspense>
+  ) : (
+    <div>책이 선택되지 않았습니다.</div>
+  );
+  const hasHeaderActions =
+    props.editUrl || props.downloadUrl || props.viewUrl;
 
   return (
     <Card className={standalone ? "standalone-viewer" : ""}>
       {!standalone && (
-        <Card.Header>
-          책 보기
-          <span>
-            {props.viewUrl && (
-              <a href={props.viewUrl} target="_blank" rel="noreferrer">
-                <Button
-                  variant="outline-primary"
-                  disabled={!props.viewUrl}
-                  size="sm"
-                  className="float-end"
-                >
-                  전체보기
+        <Card.Header className="book-viewer-header">
+          <span className="book-viewer-nav-slot book-viewer-prev">
+            {showBookNav && (
+              <button
+                className="standalone-nav-btn"
+                onClick={navPrevClick}
+                disabled={navPrevDisabled}
+              >
+                ◀ 이전 책으로
+              </button>
+            )}
+          </span>
+          <span className="book-viewer-actions">
+            {props.role === "admin" && props.editUrl && (
+              <a href={props.editUrl}>
+                <Button variant="outline-secondary" size="sm">
+                  편집
                 </Button>
               </a>
             )}
@@ -196,28 +221,39 @@ export default function ViewSingle(props) {
                   variant="outline-primary"
                   disabled={!props.downloadUrl}
                   size="sm"
-                  className="float-end"
                 >
                   다운로드
                 </Button>
               </a>
             )}
-            {props.role === "admin" && props.editUrl && (
-              <a href={props.editUrl}>
+            {props.viewUrl && (
+              <a href={props.viewUrl} target="_blank" rel="noreferrer">
                 <Button
-                  variant="outline-secondary"
+                  variant="outline-primary"
+                  disabled={!props.viewUrl}
                   size="sm"
-                  className="float-end"
                 >
-                  편집
+                  전체보기
                 </Button>
               </a>
+            )}
+            {!hasHeaderActions && "책 보기"}
+          </span>
+          <span className="book-viewer-nav-slot book-viewer-next">
+            {showBookNav && (
+              <button
+                className="standalone-nav-btn"
+                onClick={navNextClick}
+                disabled={navNextDisabled}
+              >
+                다음 책으로 ▶
+              </button>
             )}
           </span>
         </Card.Header>
       )}
       <Card.Body>
-        {showBookNav && (
+        {standalone && showBookNav && (
           <div className="standalone-nav">
             <button
               className="standalone-nav-btn"
@@ -235,12 +271,14 @@ export default function ViewSingle(props) {
             </button>
           </div>
         )}
-        {bookId ? (
-          <Suspense fallback={<div>로딩 중...</div>}>
-            {renderComponent}
-          </Suspense>
+        {standalone ? (
+          <div
+            className={`standalone-viewer-content${normalizedFileType === "epub" ? " standalone-epub-content" : ""}`}
+          >
+            {viewerContent}
+          </div>
         ) : (
-          <div>책이 선택되지 않았습니다.</div>
+          viewerContent
         )}
       </Card.Body>
     </Card>

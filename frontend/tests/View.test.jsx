@@ -133,8 +133,28 @@ vi.mock("../src/ViewSingle.jsx", () => ({
 }));
 
 vi.mock("../src/BookInfoView.jsx", () => ({
-  default: ({ bookInfo }) => (
-    <div data-testid="book-info-view">BookInfo: {bookInfo.title}</div>
+  default: ({ bookInfo, showDetails }) => (
+    <div
+      data-testid="book-info-view"
+      data-show-details={String(showDetails !== false)}
+    >
+      BookInfo: {bookInfo.title}
+    </div>
+  ),
+}));
+
+vi.mock("../src/SimilarBooks.jsx", () => ({
+  default: ({ bookId, autoOpenHighScore, canEdit, apiPrefix, basePath }) => (
+    <div
+      data-testid="similar-books"
+      data-book-id={bookId}
+      data-auto-open={String(autoOpenHighScore !== false)}
+      data-can-edit={String(!!canEdit)}
+      data-api-prefix={apiPrefix}
+      data-base-path={basePath}
+    >
+      SimilarBooks
+    </div>
   ),
 }));
 
@@ -194,6 +214,7 @@ describe("View", () => {
     await waitFor(() => {
       expect(screen.getByTestId("folder")).toBeTruthy();
     });
+    expect(screen.getByTestId("folder").dataset.open).toBe("false");
   });
 
   it("카테고리 로드 실패 시 에러 메시지를 표시하지 않고 빈 폴더를 표시한다", async () => {
@@ -381,6 +402,30 @@ describe("View", () => {
       expect(screen.getByTestId("book-info-view")).toBeTruthy();
       expect(screen.getByTestId("view-single")).toBeTruthy();
     });
+    expect(screen.getByTestId("book-info-view").dataset.showDetails).toBe(
+      "false",
+    );
+    expect(screen.queryByText("실행 결과")).toBeNull();
+    expect(screen.getByTestId("similar-books").dataset.autoOpen).toBe("false");
+    expect(screen.getByTestId("similar-books").dataset.canEdit).toBe("true");
+    expect(screen.getByTestId("similar-books").dataset.basePath).toBe(
+      "/book-edit",
+    );
+    const toolsRow = screen
+      .getByTestId("folder")
+      .closest(".view-tools-row");
+    expect(toolsRow).toBeTruthy();
+    expect(screen.getByTestId("folder").closest(".col-md-3")).toBeTruthy();
+    expect(
+      screen.getByTestId("similar-books").closest(".col-md-9"),
+    ).toBeTruthy();
+    expect(toolsRow.contains(screen.getByTestId("book-info-view"))).toBe(
+      false,
+    );
+    expect(
+      toolsRow.compareDocumentPosition(screen.getByTestId("book-info-view")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("책을 열면 조회 이력을 1건 기록한다", async () => {
@@ -1444,6 +1489,7 @@ describe("View", () => {
     await waitFor(() => {
       expect(screen.getByTestId("book-info-view")).toBeTruthy();
     });
+    expect(screen.getByTestId("similar-books").dataset.canEdit).toBe("false");
     expect(screen.queryByTestId("book-load-error")).toBeNull();
   });
 
@@ -1624,7 +1670,7 @@ describe("View", () => {
     expect(screen.getByTestId("folder").dataset.open).toBe("false");
   });
 
-  it("책 없이 들어오면 디렉토리를 펼친 상태로 시작한다", async () => {
+  it("책 없이 들어와도 디렉토리를 접은 상태로 시작한다", async () => {
     mockJsonGetReq.mockImplementation((url, payload, resolve) => {
       if (url === "/categories") resolve({ 소설: 10 });
     });
@@ -1634,10 +1680,10 @@ describe("View", () => {
     await waitFor(() => {
       expect(screen.getByTestId("folder")).toBeTruthy();
     });
-    expect(screen.getByTestId("folder").dataset.open).toBe("true");
+    expect(screen.getByTestId("folder").dataset.open).toBe("false");
   });
 
-  it("폴더를 접으면 접힌 Folder 를 렌더링한다", async () => {
+  it("접힌 디렉토리를 누르면 펼친 Folder를 렌더링한다", async () => {
     mockJsonGetReq.mockImplementation((url, payload, resolve) => {
       if (url === "/categories") resolve({ 소설: 10 });
     });
@@ -1647,25 +1693,18 @@ describe("View", () => {
     await waitFor(() => {
       expect(screen.getByTestId("folder")).toBeTruthy();
     });
-    expect(screen.getByTestId("folder").dataset.open).toBe("true");
+    expect(screen.getByTestId("folder").dataset.open).toBe("false");
 
     await act(async () => {
       screen.getByTestId("folder-toggle").click();
     });
 
     await waitFor(() => {
-      expect(screen.getByTestId("folder").dataset.open).toBe("false");
+      expect(screen.getByTestId("folder").dataset.open).toBe("true");
     });
   });
 
-  it("모바일 폭에서는 열 너비를 12로 렌더링한다", async () => {
-    const originalWidth = window.innerWidth;
-    Object.defineProperty(window, "innerWidth", {
-      writable: true,
-      configurable: true,
-      value: 500,
-    });
-
+  it("디렉토리는 mobile 12칸, desktop 3칸으로 렌더링한다", async () => {
     mockJsonGetReq.mockImplementation((url, payload, resolve) => {
       if (url === "/categories") resolve({ 소설: 10 });
     });
@@ -1675,12 +1714,8 @@ describe("View", () => {
     await waitFor(() => {
       expect(screen.getByTestId("folder")).toBeTruthy();
     });
-    expect(document.querySelector(".col-md-12")).toBeTruthy();
-
-    Object.defineProperty(window, "innerWidth", {
-      writable: true,
-      configurable: true,
-      value: originalWidth,
-    });
+    const column = screen.getByTestId("folder").closest(".col-12");
+    expect(column).toBeTruthy();
+    expect(column.classList.contains("col-md-3")).toBe(true);
   });
 });

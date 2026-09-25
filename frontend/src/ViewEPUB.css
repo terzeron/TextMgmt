@@ -40,6 +40,37 @@
     background: #fff;
 }
 
+.epub-page-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 10;
+    border: none;
+    background: rgba(255, 255, 255, 0.85);
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    color: #555;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+    padding: 0;
+}
+
+.epub-page-btn:hover {
+    background: #fff;
+    color: #111;
+}
+
+.epub-page-btn.epub-page-prev {
+    left: 8px;
+}
+
+.epub-page-btn.epub-page-next {
+    right: 8px;
+}
+
 .epub-page-info {
     position: absolute;
     bottom: 4px;

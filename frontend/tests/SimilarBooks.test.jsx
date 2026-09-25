@@ -188,6 +188,31 @@ describe("SimilarBooks", () => {
     });
   });
 
+  it("autoOpenHighScore=false이면 90점 이상인 책이 있어도 접힌 채로 유지한다", async () => {
+    mockBooks([makeBook(1, 91)]);
+
+    render(<SimilarBooks bookId={1} autoOpenHighScore={false} />);
+
+    await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
+    expect(screen.queryByText("91")).toBeNull();
+
+    fireEvent.click(screen.getByText("유사한 책 목록"));
+    expect(await screen.findByText("91")).toBeTruthy();
+  });
+
+  it("canEdit=false이면 편집과 삭제 동작을 숨긴다", async () => {
+    mockBooks([makeBook(1, 70)]);
+
+    render(<SimilarBooks bookId={1} canEdit={false} />);
+    fireEvent.click(screen.getByText("유사한 책 목록"));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /\s조회$/ })).toBeTruthy();
+    });
+    expect(screen.queryByRole("button", { name: /\s편집$/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /\s삭제$/ })).toBeNull();
+  });
+
   it("90점 미만이면 접힌 상태를 유지한다", async () => {
     mockBooks([makeBook(1, 89), makeBook(2, 50)]);
 

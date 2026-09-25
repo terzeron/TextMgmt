@@ -136,6 +136,16 @@ class BookManager:
     # 커버 뷰 썸네일. 최신 목록은 한 화면에 수십 장을 받으므로 원본 대신 작게 줄여 보낸다.
     COVER_THUMBNAIL_WIDTH = 300
     COVER_JPEG_QUALITY = 85
+    # EPUB 뷰어용 이미지 축소 정책. epub.js는 책 전체를 브라우저 메모리에
+    # 올리므로 이미지 수십 장(각 수 MB)이면 탭이 죽거나 일부 페이지만
+    # 렌더링된다. 뷰어 산출물에서만 줄이고 원본은 건드리지 않는다.
+    EPUB_IMAGE_MAX_EDGE = 1600
+    EPUB_IMAGE_MIN_BYTES = 400 * 1024
+    EPUB_IMAGE_JPEG_QUALITY = 80
+    # 이미지 축소 정책 버전. 캐시 파일명에 붙여 정책이 바뀌면 옛 산출물이
+    # 계속 서빙되지 않게 한다.
+    EPUB_IMAGE_POLICY_VERSION = 2
+    EPUB_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png")
     # pypdfium2 는 스레드에서 동시에 부르면 전역 상태가 깨진다. to_thread 로 넘기는 렌더링을 직렬화한다.
     _cover_render_lock = threading.Lock()
     XHTML_SUFFIXES = (".xhtml", ".html", ".htm")
@@ -143,6 +153,44 @@ class BookManager:
     @staticmethod
     def _expand_self_closing_rcdata(data: bytes) -> bytes:
         return BookManager.SELF_CLOSING_RCDATA_PATTERN.sub(rb"<\1\2></\1>", data)
+
+    @staticmethod
+    def _downscale_epub_image(data: bytes) -> bytes:
+        """뷰어가 그릴 크기보다 큰 이미지를 줄여 재압축한다.
+
+        실패하면 원본 바이트를 그대로 돌려준다(뷰어는 예전처럼 큰 이미지를
+        받는다). 형식은 유지한다: JPEG은 JPEG으로, PNG는 PNG로만 줄인다.
+        ZIP 안 파일 확장자와 실제 바이트 형식이 어긋나지 않게 하기 위해서다.
+        """
+        from io import BytesIO
+
+        from PIL import Image
+
+        try:
+            img = Image.open(BytesIO(data))
+            fmt = (img.format or "").upper()
+            if fmt not in ("JPEG", "PNG"):
+                return data
+            width, height = img.size
+            max_edge = max(width, height)
+            if max_edge <= BookManager.EPUB_IMAGE_MAX_EDGE:
+                return data
+            scale = BookManager.EPUB_IMAGE_MAX_EDGE / max_edge
+            img = img.resize(
+                (max(1, round(width * scale)), max(1, round(height * scale))),
+                Image.LANCZOS,
+            )
+            out = BytesIO()
+            if fmt == "PNG":
+                img.save(out, "PNG", optimize=True)
+            else:
+                img.convert("RGB").save(
+                    out, "JPEG", quality=BookManager.EPUB_IMAGE_JPEG_QUALITY, optimize=True,
+                )
+            resized = out.getvalue()
+            return resized if len(resized) < len(data) else data
+        except Exception:
+            return data
 
     @classmethod
     def _html_security_headers(cls) -> dict[str, str]:
@@ -768,11 +816,17 @@ class BookManager:
         elif suffix == ".epub":
             total_chapters = BookManager._get_epub_total_chapters(book.file_path)
             req_chapters = chapters
-            # chapters<=0: 전체 챕터 포함 (대용량 폰트만 제거)
+            # chapters<=0: 전체 챕터 포함 (대용량 폰트 제거, 대형 이미지 축소)
             if chapters <= 0:
                 chapters = total_chapters
-            cache_file = cache_dir / f"{book_id}_ch{chapters}.epub"
-            # 구 형식 캐시 정리 (book_id.epub, book_id.html)
+            cache_file = cache_dir / (
+                f"{book_id}_ch{chapters}"
+                f"_v{BookManager.EPUB_IMAGE_POLICY_VERSION}.epub"
+            )
+            # 구 형식 캐시 정리 (book_id.epub, book_id.html, 정책 버전 없는 ch 캐시)
+            for old_cache in cache_dir.glob(f"{book_id}_ch*.epub"):
+                if old_cache.name != cache_file.name:
+                    old_cache.unlink()
             for old_name in [f"{book_id}.epub", f"{book_id}.html"]:
                 old_cache = cache_dir / old_name
                 if old_cache.exists():
@@ -1014,6 +1068,11 @@ class BookManager:
                                         data = css_text.encode("utf-8")
                                     elif zp.lower().endswith(BookManager.XHTML_SUFFIXES):
                                         data = BookManager._expand_self_closing_rcdata(data)
+                                    elif (
+                                        zp.lower().endswith(BookManager.EPUB_IMAGE_SUFFIXES)
+                                        and len(data) > BookManager.EPUB_IMAGE_MIN_BYTES
+                                    ):
+                                        data = BookManager._downscale_epub_image(data)
                                     zout.writestr(zp, data)
                                 except KeyError:
                                     LOGGER.warning("EPUB preview: missing file in archive: %s", zp)

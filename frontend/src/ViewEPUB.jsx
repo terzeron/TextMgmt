@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, Suspense } from "react";
 import PropTypes from "prop-types";
+import ePub from "epubjs";
 import { getApiUrlPrefix } from "./Common";
-import { ReactReader } from "react-reader";
 import "./ViewEPUB.css";
 
 const CHAPTERS_PREVIEW = 10;
@@ -18,55 +18,118 @@ const FONT_FAMILIES = [
   { label: "Sans-serif", value: "sans-serif" },
 ];
 
-export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
+const RENDER_TIMEOUT_MS = 30_000;
+const SAVE_THROTTLE_MS = 200;
+
+const readFontSize = () => {
+  const saved = localStorage.getItem("epub_fontSize");
+  return saved ? parseInt(saved, 10) : 100;
+};
+const readFontFamily = () => localStorage.getItem("epub_fontFamily") || "";
+
+const readSavedLocation = (bookId) => {
+  try {
+    return localStorage.getItem(`epub_location_${bookId}`) || null;
+  } catch {
+    return null;
+  }
+};
+const writeSavedLocation = (bookId, cfi) => {
+  try {
+    if (cfi) localStorage.setItem(`epub_location_${bookId}`, cfi);
+  } catch {
+    /* 저장 공간 부족 등: 무시 */
+  }
+};
+
+// 좌우 페이지 넘김(paginated)에서 본문은 다중 컬럼으로 쪼개진다. epub.js는
+// 본문에 overflow-y: hidden만 걸어 CSS 규칙상 overflow-x가 auto로 계산되고,
+// 모바일(사파리)에서 터치 팬이 본문 컬럼을 네이티브로 직접 밀어 버린다. 버튼은
+// 컨테이너 scrollLeft를 움직이므로 두 스크롤 상태가 어긋나 빈 페이지와
+// 건너뜀이 생긴다.
+//
+// 주의: 팬 차단을 overflow: hidden(양축)으로 하면 안 된다. 본문의 넘치는
+// 컬럼은 본문 박스 밖으로 뻗는데 overflow: hidden은 본문 자체 클리핑이라
+// WebKit(사파리)에서 그 컬럼들이 아예 그려지지 않는다(레이아웃은 되지만
+// 픽셀이 비었다 — 실측 확인). touch-action: pan-y는 가로 터치 팬만 막고
+// 그리기에는 영향이 없다.
+const lockContentOverflow = (contents) => {
+  const contentDocument = contents?.document;
+  for (const element of [
+    contentDocument?.documentElement,
+    contentDocument?.body,
+  ]) {
+    element?.style.setProperty("touch-action", "pan-y", "important");
+  }
+};
+
+// 각 섹션은 표시 순간에만 크기를 측정한다. 글자 크기 변경이나 늦은 폰트·이미지
+// 로드로 본문이 다시 쪼개지면 뷰가 낡은 폭에 머물러 잘린 컬럼(건너뜀)과
+// iframe 끝 너머 빈 페이지가 생긴다. 크기가 바뀌는 신호마다 다시 측정한다.
+const reexpandView = (view) => {
+  try {
+    view.expand?.();
+  } catch {
+    /* ignore */
+  }
+};
+
+const installReexpand = (view) => {
+  const doc = view?.contents?.document;
+  if (!doc?.body) return;
+  reexpandView(view);
+  if (typeof ResizeObserver !== "undefined") {
+    const observer = new ResizeObserver(() => reexpandView(view));
+    observer.observe(doc.body);
+  }
+  doc.fonts?.ready?.then(() => reexpandView(view));
+  for (const img of doc.images || []) {
+    if (!img.complete) {
+      img.addEventListener("load", () => reexpandView(view), { once: true });
+    }
+  }
+  setTimeout(() => reexpandView(view), 800);
+  setTimeout(() => reexpandView(view), 2500);
+};
+
+export default function ViewEPUB({
+  bookId,
+  preview = false,
+  apiPrefix = "",
+  standalone = false,
+}) {
+  const hostRef = useRef(null);
   const renditionRef = useRef(null);
+  const bookRef = useRef(null);
   const timeoutRef = useRef(null);
-  const locationRef = useRef("");
-  const savedLocationRef = useRef(null);
-  const firstRenderRef = useRef(false);
-  const locationsReadyRef = useRef(false);
+  const saveTimerRef = useRef(null);
+  const cfiRef = useRef("");
 
   const [epubData, setEpubData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState(null);
-
-  // 전체보기 전용 상태
-  const [bookTitle, setBookTitle] = useState("");
-  const [fontSize, setFontSize] = useState(() => {
-    if (preview) return 100;
-    const saved = localStorage.getItem("epub_fontSize");
-    return saved ? parseInt(saved, 10) : 100;
-  });
-  const [fontFamily, setFontFamily] = useState(() => {
-    if (preview) return "";
-    return localStorage.getItem("epub_fontFamily") || "";
-  });
   const [pageInfo, setPageInfo] = useState({ page: 0, total: 0 });
-  const [locationsReady, setLocationsReady] = useState(false);
+  const [fontSize, setFontSize] = useState(() =>
+    preview ? 100 : readFontSize(),
+  );
+  const [fontFamily, setFontFamily] = useState(() =>
+    preview ? "" : readFontFamily(),
+  );
 
-  // EPUB 로딩: 전체보기는 원본 파일(chapters=0), 미리보기는 부분 챕터
+  // 뷰어 높이는 상수로 둔다(측정·재계산 기계는 텍스트 잘림의 원인이었다).
+  const containerHeight = standalone ? "100%" : preview ? "60vh" : "100dvh";
+
+  // 책 파일 로드
   useEffect(() => {
     if (!bookId) {
       setErrorMessage("유효한 bookId가 제공되지 않았습니다.");
       setIsLoading(false);
       return;
     }
-
     setIsLoading(true);
     setErrorMessage(null);
     setEpubData(null);
-    setPageInfo({ page: 0, total: 0 });
-    setLocationsReady(false);
-    locationsReadyRef.current = false;
-    firstRenderRef.current = false;
-
-    // 저장된 읽기 위치를 별도 보관 (초기 렌더링 후 복원)
-    // 초기 location prop으로 전달하면 epub.js가 무효 CFI에서 조용히 실패하므로
-    // 첫 렌더링은 항상 처음부터 시작하고, 성공 후 저장된 위치로 이동
-    savedLocationRef.current = !preview
-      ? localStorage.getItem(`epub_location_${bookId}`) || null
-      : null;
-    locationRef.current = "";
+    cfiRef.current = "";
 
     const chapters = preview ? CHAPTERS_PREVIEW : 0;
     const controller = new AbortController();
@@ -80,74 +143,176 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
         }
         return res.arrayBuffer();
       })
-      .then((buf) => {
-        setEpubData(buf);
-      })
+      .then((buf) => setEpubData(buf))
       .catch((err) => {
         if (err.name !== "AbortError") {
           setErrorMessage(`EPUB 로딩 실패: ${err.message}`);
           setIsLoading(false);
         }
       });
-
-    return () => {
-      controller.abort();
-      if (renditionRef.current) {
-        try {
-          renditionRef.current.destroy();
-        } catch (_) {
-          /* ignore */
-        }
-        renditionRef.current = null;
-      }
-      setEpubData(null);
-    };
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix는 mount 시 고정이라 의도적으로 deps에서 제외
   }, [bookId, preview]);
 
-  // 렌더링 타임아웃 (30초)
+  // 책 렌더링
   useEffect(() => {
-    if (!epubData || !isLoading) return;
+    if (!epubData || !hostRef.current) return;
+
+    const book = ePub(epubData);
+    bookRef.current = book;
+    const rendition = book.renderTo(hostRef.current, {
+      flow: "paginated",
+      manager: "default",
+      width: "100%",
+      height: "100%",
+      allowScriptedContent: true,
+    });
+    renditionRef.current = rendition;
+
+    // 텍스트 읽기 전용 기본 스타일
+    rendition.themes.default({
+      "html, body": { margin: 0, padding: 0 },
+      "img, svg": { "max-width": "100%", height: "auto" },
+    });
+    if (fontSize !== 100) rendition.themes.fontSize(`${fontSize}%`);
+    if (fontFamily) rendition.themes.font(fontFamily);
+
     timeoutRef.current = setTimeout(() => {
       setIsLoading(false);
       setErrorMessage(`EPUB 렌더링 시간이 초과되었습니다. (book_id=${bookId})`);
-    }, 30000);
-    return () => clearTimeout(timeoutRef.current);
-  }, [epubData, isLoading, bookId]);
+    }, RENDER_TIMEOUT_MS);
 
-  // 페이지 변경 핸들러
-  const handleLocationChanged = useCallback(
-    (epubcfi) => {
-      locationRef.current = epubcfi;
+    // 본문 스크롤 잠금(터치 팬 차단) + 늦은 크기 변화 재측정
+    rendition.hooks.content.register(lockContentOverflow);
+    rendition.on("rendered", (section, view) => {
+      lockContentOverflow(view?.contents);
+      installReexpand(view);
+    });
+
+    const syncPageInfo = (location) => {
+      const displayed = location?.start?.displayed;
+      if (displayed?.total > 0) {
+        setPageInfo({ page: displayed.page, total: displayed.total });
+      }
+    };
+
+    rendition.on("displayed", () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
       setIsLoading(false);
       setErrorMessage(null);
-      /* v8 ignore next -- render timeout exists only while first display is pending. */
+    });
+    rendition.on("displayerror", (err) => {
+      setErrorMessage(`EPUB 렌더링 오류: ${err?.message || String(err)}`);
+      setIsLoading(false);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    });
+    rendition.on("error", (err) => {
+      setErrorMessage(`EPUB 파싱 오류: ${err?.message || String(err)}`);
+      setIsLoading(false);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    });
 
-      // 첫 렌더링 성공 후 저장된 위치로 이동 시도
-      if (!firstRenderRef.current) {
-        firstRenderRef.current = true;
-        if (savedLocationRef.current && renditionRef.current) {
-          const loc = savedLocationRef.current;
-          savedLocationRef.current = null;
-          renditionRef.current.display(loc).catch(() => {
-            console.warn("[epub.js] 저장된 위치 복원 실패, 현재 위치 유지");
-            /* v8 ignore next -- persisted EPUB locations are keyed only when bookId exists. */
-            if (bookId) localStorage.removeItem(`epub_location_${bookId}`);
-          });
-          return;
+    // 위치 이동(버튼·스크롤 모두)마다 페이지 정보와 읽기 위치를 갱신한다.
+    rendition.on("relocated", (location) => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      setIsLoading(false);
+      setErrorMessage(null);
+      syncPageInfo(location);
+      if (location?.start?.cfi) {
+        cfiRef.current = location.start.cfi;
+      }
+      if (preview || !bookId) return;
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => {
+        writeSavedLocation(bookId, cfiRef.current);
+      }, SAVE_THROTTLE_MS);
+    });
+
+    (async () => {
+      try {
+        await book.ready;
+        const saved = !preview ? readSavedLocation(bookId) : null;
+        if (preview || !saved) {
+          await rendition.display();
+        } else {
+          try {
+            await rendition.display(saved);
+          } catch {
+            // 저장된 위치가 무효하면 지우고 책 맨 앞부터
+            localStorage.removeItem(`epub_location_${bookId}`);
+            await rendition.display();
+          }
+        }
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      } catch {
+        localStorage.removeItem(`epub_location_${bookId}`);
+        try {
+          await rendition.display();
+        } catch (fallbackErr) {
+          setErrorMessage(
+            `EPUB 표시 실패: ${fallbackErr?.message || String(fallbackErr)}`,
+          );
+          setIsLoading(false);
+          if (timeoutRef.current) clearTimeout(timeoutRef.current);
         }
       }
+    })();
 
-      // 전체보기: 읽기 위치 저장
-      if (!preview && bookId) {
-        localStorage.setItem(`epub_location_${bookId}`, epubcfi);
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      try {
+        rendition.destroy();
+      } catch {
+        /* ignore */
       }
-    },
-    [preview, bookId],
-  );
+      try {
+        book.destroy();
+      } catch {
+        /* ignore */
+      }
+      renditionRef.current = null;
+      bookRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fontSize/fontFamily는 별도 effect로 적용한다
+  }, [epubData, bookId, preview]);
 
-  // 글자 크기 변경
+  // 글자 크기·글꼴 변경: reflow 뒤 뷰가 낡은 폭에 머물지 않게 다시 측정한다.
+  useEffect(() => {
+    const rendition = renditionRef.current;
+    if (!rendition) return;
+    rendition.themes.fontSize(`${fontSize}%`);
+    if (fontFamily) rendition.themes.font(fontFamily);
+    const views = rendition.manager?.views?.all?.() || [];
+    for (const view of views) {
+      reexpandView(view);
+    }
+  }, [fontSize, fontFamily]);
+
+  const goNext = useCallback(() => {
+    renditionRef.current?.next();
+  }, []);
+
+  const goPrev = useCallback(() => {
+    renditionRef.current?.prev();
+  }, []);
+
+  // 키보드 방향키: 문서와 iframe 내부(rendition keyup) 둘 다 받는다.
+  useEffect(() => {
+    const rendition = renditionRef.current;
+    if (!rendition) return;
+    const onKey = (event) => {
+      if (event.key === "ArrowRight") goNext();
+      else if (event.key === "ArrowLeft") goPrev();
+    };
+    document.addEventListener("keydown", onKey);
+    rendition.on("keyup", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      rendition.off("keyup", onKey);
+    };
+  }, [epubData, goNext, goPrev]);
+
   const handleFontSizeChange = useCallback((delta) => {
     setFontSize((prev) => {
       const next = Math.max(
@@ -155,180 +320,23 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
         Math.min(FONT_SIZE_MAX, prev + delta),
       );
       localStorage.setItem("epub_fontSize", String(next));
-      if (renditionRef.current) {
-        renditionRef.current.themes.fontSize(`${next}%`);
-      }
       return next;
     });
   }, []);
 
-  // 글꼴 변경
   const handleFontFamilyChange = useCallback((family) => {
     setFontFamily(family);
     localStorage.setItem("epub_fontFamily", family);
-    if (renditionRef.current) {
-      renditionRef.current.themes.font(family);
-    }
   }, []);
-
-  const getRendition = useCallback(
-    (rendition) => {
-      if (renditionRef.current && renditionRef.current !== rendition) {
-        try {
-          renditionRef.current.destroy();
-        } catch (_) {
-          /* ignore */
-        }
-      }
-      renditionRef.current = rendition;
-      locationsReadyRef.current = false;
-      setLocationsReady(false);
-
-      // .html 챕터를 XHTML 로 읽기: epub.js 는 확장자로 파서를 고르므로 .html 은
-      // text/html 로 파싱된다. XHTML 에서 유효한 <title/> 같은 자기닫힘 표기를
-      // HTML 파서는 인정하지 않아, 뒤 내용이 전부 그 요소의 텍스트로 삼켜지고
-      // 본문이 빈 화면이 된다. XML 파싱에 실패하는 책은 원래 방식으로 되돌린다.
-      const archive = rendition.book.archive;
-      if (archive && !archive.__xhtmlForced) {
-        archive.__xhtmlForced = true;
-        const archiveRequest = archive.request.bind(archive);
-        archive.request = async (url, type) => {
-          if (type || !/\.html?$/i.test(String(url).split("?")[0])) {
-            return archiveRequest(url, type);
-          }
-          const doc = await archiveRequest(url, "xhtml");
-          return doc?.querySelector?.("parsererror")
-            ? archiveRequest(url, type)
-            : doc;
-        };
-      }
-
-      // spine.get() 폴백: 누락된 항목 접근 시 첫 챕터로 이동
-      const spine_get = rendition.book.spine.get.bind(rendition.book.spine);
-      rendition.book.spine.get = function (target) {
-        let t = spine_get(target);
-        if (!t) t = spine_get(undefined);
-        return t;
-      };
-
-      // epub.js display 에러 핸들링
-      rendition.on("displayerror", (err) => {
-        console.error("[epub.js] display error:", err);
-        setErrorMessage(`EPUB 렌더링 오류: ${err?.message || String(err)}`);
-        setIsLoading(false);
-        /* v8 ignore next -- display errors can occur after the first-render timeout cleared. */
-        if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      });
-
-      rendition.book.ready.catch((err) => {
-        console.error("[epub.js] book load error:", err);
-        setErrorMessage(`EPUB 파싱 오류: ${err?.message || String(err)}`);
-        setIsLoading(false);
-        /* v8 ignore next -- book-ready errors can occur after the first-render timeout cleared. */
-        if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      });
-
-      // display() 실패 시 저장된 위치 삭제 후 첫 페이지로 폴백
-      if (typeof rendition.display === "function") {
-        const origDisplay = rendition.display.bind(rendition);
-        rendition.display = function (target) {
-          return origDisplay(target).catch((err) => {
-            console.error("[epub.js] display() rejected:", err);
-            if (target) {
-              console.warn("[epub.js] 저장된 위치 이동 실패, 첫 페이지로 이동");
-              /* v8 ignore next -- saved-location recovery is keyed only when bookId exists. */
-              if (bookId) localStorage.removeItem(`epub_location_${bookId}`);
-              locationRef.current = "";
-              return origDisplay().catch((fallbackErr) => {
-                setErrorMessage(
-                  `EPUB 표시 실패: ${fallbackErr?.message || String(fallbackErr)}`,
-                );
-                setIsLoading(false);
-                /* v8 ignore next -- fallback display errors can occur after timeout cleanup. */
-                if (timeoutRef.current) clearTimeout(timeoutRef.current);
-                throw fallbackErr;
-              });
-            }
-            setErrorMessage(`EPUB 표시 실패: ${err?.message || String(err)}`);
-            setIsLoading(false);
-            /* v8 ignore next -- display errors can occur after timeout cleanup. */
-            if (timeoutRef.current) clearTimeout(timeoutRef.current);
-            throw err;
-          });
-        };
-      }
-
-      // 전체보기 전용 초기화
-      if (!preview) {
-        rendition.book.loaded.metadata.then((meta) => {
-          if (meta?.title) setBookTitle(meta.title);
-        });
-
-        const savedSize = localStorage.getItem("epub_fontSize");
-        if (savedSize) rendition.themes.fontSize(`${savedSize}%`);
-
-        const savedFont = localStorage.getItem("epub_fontFamily");
-        if (savedFont) rendition.themes.font(savedFont);
-
-        // 페이지 위치 인덱스 생성
-        const currentRendition = rendition;
-        rendition.book.ready
-          .then(() => {
-            if (renditionRef.current !== currentRendition) return null;
-            return rendition.book.locations.generate(1024);
-          })
-          .then((locations) => {
-            if (!locations || renditionRef.current !== currentRendition) return;
-            locationsReadyRef.current = true;
-            setLocationsReady(true);
-            if (locationRef.current) {
-              try {
-                const idx = rendition.book.locations.locationFromCfi(
-                  locationRef.current,
-                );
-                const totalPages = rendition.book.locations.total + 1;
-                if (idx >= 0 && totalPages > 0) {
-                  setPageInfo({ page: idx + 1, total: totalPages });
-                }
-              } catch (_) {
-                /* ignore */
-              }
-            }
-          })
-          .catch((err) => console.warn("[epub.js] locations error:", err));
-
-        // 페이지 이동 시 페이지 번호 업데이트
-        rendition.on("relocated", (location) => {
-          if (location?.start?.cfi && locationsReadyRef.current) {
-            try {
-              const idx = renditionRef.current.book.locations.locationFromCfi(
-                location.start.cfi,
-              );
-              const totalPages = renditionRef.current.book.locations.total + 1;
-              if (idx >= 0 && totalPages > 0) {
-                setPageInfo({ page: idx + 1, total: totalPages });
-              }
-            } catch (_) {
-              /* ignore */
-            }
-          }
-        });
-      }
-    },
-    [preview, bookId],
-  );
-
-  const containerHeight = preview ? "60vh" : "100dvh";
-  const readerKey = `${bookId}-${preview ? "preview" : "full"}`;
 
   return (
     <div
+      className="epub-viewer"
       style={{
         height: containerHeight,
         textAlign: "center",
         position: "relative",
         overflow: "hidden",
-        overscrollBehavior: "none",
       }}
     >
       {isLoading && (
@@ -339,7 +347,6 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
       )}
       {errorMessage && <div className="error-message">{errorMessage}</div>}
 
-      {/* 전체보기 전용 툴바 */}
       {!preview && !isLoading && epubData && (
         <div className="epub-toolbar" data-testid="epub-toolbar">
           <button
@@ -371,23 +378,37 @@ export default function ViewEPUB({ bookId, preview = false, apiPrefix = "" }) {
       )}
 
       <Suspense fallback={<div className="loading">로딩 중...</div>}>
-        {epubData && (
-          <ReactReader
-            key={readerKey}
-            locationChanged={handleLocationChanged}
-            location={preview ? 0 : undefined}
-            url={epubData}
-            title={!preview ? bookTitle : undefined}
-            getRendition={getRendition}
-            epubOptions={{ allowScriptedContent: true }}
-          />
-        )}
+        <div
+          ref={hostRef}
+          data-testid="epub-host"
+          style={{ height: "100%", width: "100%", textAlign: "left" }}
+        />
       </Suspense>
 
-      {/* 전체보기 전용 페이지 정보 */}
+      {!isLoading && !errorMessage && epubData && (
+        <>
+          <button
+            type="button"
+            className="epub-page-btn epub-page-prev"
+            onClick={goPrev}
+            aria-label="이전 페이지"
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            className="epub-page-btn epub-page-next"
+            onClick={goNext}
+            aria-label="다음 페이지"
+          >
+            ›
+          </button>
+        </>
+      )}
+
       {!preview && !isLoading && epubData && (
         <div className="epub-page-info" data-testid="epub-page-info">
-          {locationsReady && pageInfo.total > 0
+          {pageInfo.total > 0
             ? `${pageInfo.page} / ${pageInfo.total}`
             : "페이지 계산 중..."}
         </div>
@@ -400,4 +421,5 @@ ViewEPUB.propTypes = {
   bookId: PropTypes.number.isRequired,
   preview: PropTypes.bool,
   apiPrefix: PropTypes.string,
+  standalone: PropTypes.bool,
 };

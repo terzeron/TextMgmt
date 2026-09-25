@@ -65,6 +65,18 @@ describe("BookInfoView", () => {
     expect(screen.queryByText("제목")).toBeNull();
   });
 
+  it("showDetails=false이면 종류, ISBN, 크기, 분량을 숨긴다", () => {
+    render(
+      <BookInfoView bookInfo={defaultBookInfo} showDetails={false} />,
+    );
+
+    expect(screen.getByDisplayValue("/books/test.pdf")).toBeTruthy();
+    expect(screen.queryByText("종류")).toBeNull();
+    expect(screen.queryByText("ISBN")).toBeNull();
+    expect(screen.queryByText("크기")).toBeNull();
+    expect(screen.queryByText("분량")).toBeNull();
+  });
+
   it("isEditEnabled=true일 때 저자/제목 입력 필드를 표시한다", () => {
     render(
       <BookInfoView

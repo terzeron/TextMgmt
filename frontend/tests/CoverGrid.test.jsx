@@ -94,6 +94,30 @@ describe("CoverGrid", () => {
     expect(screen.getByText("book1.epub")).toBeTruthy();
   });
 
+  it("커버 아래에는 파일명 대신 제목을 표시하고 저자명은 숨긴다", () => {
+    const { container } = render(
+      <CoverGrid
+        results={[
+          {
+            book_id: 1,
+            category: "소설",
+            title: "표시할 책 제목",
+            author: "숨길 저자",
+            file_path: "소설/[숨길 저자] 원본 파일.epub",
+            file_type: "epub",
+          },
+        ]}
+        basePath="/book-view"
+      />,
+    );
+
+    expect(screen.getByText("표시할 책 제목")).toBeTruthy();
+    expect(container.textContent).not.toContain("숨길 저자");
+    expect(screen.getByRole("link").getAttribute("title")).toBe(
+      "표시할 책 제목",
+    );
+  });
+
   it(`처음에는 ${COVER_BATCH_SIZE}개만 그리고 끝에 닿으면 더 그린다`, () => {
     render(<CoverGrid results={makeBooks(45, "txt")} basePath="/book-view" />);
     expect(screen.getAllByRole("link")).toHaveLength(20);

@@ -7,11 +7,30 @@
     font-size: small;
 }
 
-#view .directory-menu {
-    height: calc(100vh - 80px);
-    overflow-y: auto;
-    position: sticky;
-    top: 0;
+#view .btn-xs {
+    padding: 0.05rem 0.15rem;
+    font-size: 0.6rem;
+    line-height: 1;
+}
+
+.view-tools-row {
+    margin-bottom: 8px;
+}
+
+.view-directory-panel {
+    padding-right: 4px;
+}
+
+.view-similar-books-panel {
+    padding-left: 4px;
+}
+
+@media (max-width: 767.98px) {
+    .view-directory-panel,
+    .view-similar-books-panel {
+        padding-left: 0;
+        padding-right: 0;
+    }
 }
 
 .loading-container {

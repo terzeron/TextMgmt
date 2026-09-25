@@ -125,6 +125,14 @@ let _unhandledRejectionHandler = null;
 /**
  * 전역 window error 및 unhandledrejection 리스너 등록
  */
+// 브라우저가 벅적이지만 무해한 공지로 발생시키는 메시지. 이들은 오류가
+// 아니며(특히 ResizeObserver는 어떤 페이지에서든 발화한다) 백엔드 로그를
+// 채우기만 한다. 전송에서 걸러낸다.
+const BENIGN_ERRORS = [
+  "ResizeObserver loop completed with undelivered notifications",
+  "ResizeObserver loop limit exceeded",
+];
+
 export function initGlobalErrorLogging() {
   if (typeof window === "undefined" || _isGlobalLoggingInitialized) {
     return () => {};
@@ -132,12 +140,16 @@ export function initGlobalErrorLogging() {
 
   _errorHandler = (event) => {
     try {
+      const message =
+        event.message ||
+        (event.error && event.error.message) ||
+        String(event);
+      if (BENIGN_ERRORS.some((m) => message.includes(m))) {
+        return;
+      }
       reportClientError({
         errorType: "WINDOW_ERROR",
-        message:
-          event.message ||
-          (event.error && event.error.message) ||
-          String(event),
+        message,
         stack: event.error?.stack,
         url: event.filename || (window.location ? window.location.href : ""),
       });
@@ -149,11 +161,15 @@ export function initGlobalErrorLogging() {
   _unhandledRejectionHandler = (event) => {
     try {
       const reason = event.reason;
+      const message =
+        reason?.message ||
+        (typeof reason === "string" ? reason : "Unhandled Promise Rejection");
+      if (BENIGN_ERRORS.some((m) => message.includes(m))) {
+        return;
+      }
       reportClientError({
         errorType: "UNHANDLED_PROMISE",
-        message:
-          reason?.message ||
-          (typeof reason === "string" ? reason : "Unhandled Promise Rejection"),
+        message,
         stack: reason?.stack,
       });
     } catch {
