@@ -20,6 +20,9 @@ const FONT_FAMILIES = [
 
 const RENDER_TIMEOUT_MS = 30_000;
 const SAVE_THROTTLE_MS = 200;
+const ORIENTATION_QUERY = "(orientation: landscape)";
+
+const isLandscapeNow = () => window.matchMedia(ORIENTATION_QUERY).matches;
 
 const readFontSize = () => {
   const saved = localStorage.getItem("epub_fontSize");
@@ -169,6 +172,23 @@ export default function ViewEPUB({
     });
     renditionRef.current = rendition;
 
+    // 세로모드 1열, 가로모드 2열. epub.js 기본(minSpreadWidth 800)은 가로폭
+    // 800px 이상에서만 2열이라 기기별 세로·가로 기준과 어긋난다.
+    // orientation 쿼리로 spread를 직접 강제한다(landscape: 항상 2열,
+    // portrait: 항상 1열). rendition.spread()는 내부 updateLayout으로 기존
+    // 뷰를 새 컬럼 수로 다시 쪼개고, 회전 시 epub.js 자체 resize 처리가
+    // 현재 위치를 다시 표시한다.
+    const orientationMq = window.matchMedia(ORIENTATION_QUERY);
+    const applySpread = (landscape) => {
+      rendition.spread(
+        landscape ? "always" : "none",
+        landscape ? 1 : undefined,
+      );
+    };
+    const onOrientationChange = () => applySpread(orientationMq.matches);
+    orientationMq.addEventListener("change", onOrientationChange);
+    applySpread(isLandscapeNow());
+
     // 텍스트 읽기 전용 기본 스타일
     rendition.themes.default({
       "html, body": { margin: 0, padding: 0 },
@@ -259,6 +279,7 @@ export default function ViewEPUB({
     })();
 
     return () => {
+      orientationMq.removeEventListener("change", onOrientationChange);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       try {

@@ -83,6 +83,7 @@ function createMockRendition() {
     }),
     next: vi.fn(() => Promise.resolve()),
     prev: vi.fn(() => Promise.resolve()),
+    spread: vi.fn(),
     destroy: vi.fn(),
     themes: {
       default: vi.fn(),
@@ -164,6 +165,30 @@ Object.defineProperty(window, "localStorage", {
   writable: true,
 });
 
+// matchMedia mock: 방향(orientation) 테스트를 위해 matches를 바꿀 수 있게 둔다.
+// 같은 쿼리는 실제 MediaQueryList처럼 동일 인스턴스를 반환한다.
+let mqMock = null;
+let mqListeners = [];
+
+Object.defineProperty(window, "matchMedia", {
+  writable: true,
+  value: vi.fn((query) => {
+    if (!mqMock) {
+      mqMock = {
+        matches: false,
+        media: query,
+        addEventListener: vi.fn((_, handler) => mqListeners.push(handler)),
+        removeEventListener: vi.fn((_, handler) => {
+          mqListeners = mqListeners.filter((h) => h !== handler);
+        }),
+        addListener: vi.fn((handler) => mqListeners.push(handler)),
+        removeListener: vi.fn(),
+      };
+    }
+    return mqMock;
+  }),
+});
+
 import ViewEPUB from "../src/ViewEPUB";
 
 // 책이 "표시된" 상태로 만든다. fetch→render→display 는 모두 microtask이므로
@@ -207,6 +232,8 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     localStorageMock.setItem.mockClear();
     globalThis.fetch.mockClear();
     containerMetrics = { scrollTop: 0, scrollHeight: 2000, clientHeight: 500 };
+    mqMock = null;
+    mqListeners = [];
   });
 
   it("bookId가 없으면 에러를 표시한다", () => {
@@ -513,6 +540,38 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
   it("내장 전체보기는 100dvh 높이다", () => {
     const { container } = render(<ViewEPUB bookId={1} />);
     expect(container.firstChild.style.height).toBe("100dvh");
+  });
+
+  it("세로모드(portrait)에서는 spread를 none으로 강제한다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await waitFor(() => expect(lastRendition).not.toBeNull());
+    expect(lastRendition.spread).toHaveBeenCalledWith("none", undefined);
+  });
+
+  it("가로모드(landscape)에서는 spread를 always(minSpreadWidth 1)로 강제한다", async () => {
+    window.matchMedia("(orientation: landscape)").matches = true;
+    render(<ViewEPUB bookId={1} />);
+    await waitFor(() => expect(lastRendition).not.toBeNull());
+    expect(lastRendition.spread).toHaveBeenCalledWith("always", 1);
+  });
+
+  it("방향 전환 시 spread를 다시 강제한다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    lastRendition.spread.mockClear();
+    mqMock.matches = true;
+    await act(async () => {
+      mqListeners.forEach((h) => h());
+    });
+    expect(lastRendition.spread).toHaveBeenCalledWith("always", 1);
+  });
+
+  it("matchMedia change 리스너는 언마운트 시 정리한다", async () => {
+    const { unmount } = render(<ViewEPUB bookId={1} />);
+    await waitFor(() => expect(lastRendition).not.toBeNull());
+    expect(mqMock.removeEventListener).not.toHaveBeenCalled();
+    unmount();
+    expect(mqMock.removeEventListener).toHaveBeenCalled();
   });
 
 });
