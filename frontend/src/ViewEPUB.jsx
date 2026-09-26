@@ -18,6 +18,77 @@ const FONT_FAMILIES = [
   { label: "Sans-serif", value: "sans-serif" },
 ];
 
+const FONT_FAMILY_STYLE_ID = "epub-font-family-override";
+const FONT_FACE_STYLE_ID = "epub-font-face-override";
+
+// 나눔고딕/나눔명조 웹폰트를 콘텐츠 문서에 주입한다. iPad 등 시스템 폰트가
+// 없는 환경에서도 글꼴 변경이 동작하게 한다. 파일은 frontend/public/fonts에
+// 번들한 fontsource korean·latin 서브셋이다. epub.js가 콘텐츠 문서에 책 리소스
+// 경로의 <base>를 넣으므로 폰트 URL은 절대 경로여야 한다. korean·latin 규칙이
+// 같은 family·weight로 겹치면 나중에 선언된 쪽이 이기므로 latin을 나중에 둔다.
+const FONT_FACE_FAMILIES = [
+  { family: "Nanum Gothic", file: "nanum-gothic" },
+  { family: "Nanum Myeongjo", file: "nanum-myeongjo" },
+];
+const FONT_FACE_WEIGHTS = [400, 700];
+const KOREAN_UNICODE_RANGE =
+  "U+AC00-D7AF, U+1100-11FF, U+3130-318F, U+A960-A97F, U+D7B0-D7FF, " +
+  "U+3000-303F, U+FF00-FFEF, U+25A0-25FF, U+203B, U+327E-327F";
+const LATIN_UNICODE_RANGE =
+  "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, " +
+  "U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, " +
+  "U+2212, U+2215, U+FEFF, U+FFFD";
+
+const buildFontFaceCss = () => {
+  const base = `${window.location.origin}/fonts/`;
+  const face = (family, file, weight, subset, range) =>
+    `@font-face { font-family: '${family}'; font-style: normal; ` +
+    `font-weight: ${weight}; font-display: swap; ` +
+    `src: url(${base}${file}-${subset}-${weight}.woff2) format('woff2'); ` +
+    `unicode-range: ${range}; }`;
+  const rules = [];
+  for (const { family, file } of FONT_FACE_FAMILIES) {
+    for (const weight of FONT_FACE_WEIGHTS) {
+      rules.push(face(family, file, weight, "korean", KOREAN_UNICODE_RANGE));
+      rules.push(face(family, file, weight, "latin", LATIN_UNICODE_RANGE));
+    }
+  }
+  return rules.join("\n");
+};
+
+// epub.js themes.font()는 iframe body에만 inline font-family를 건다. 책 자체
+// CSS가 p, div 등 본문 요소에 font-family를 선언하면 상속이 깨져 글꼴 변경이
+// 무시된다. 텍스트 요소 전반에 !important 규칙을 직접 주입하고, 기본 글꼴로
+// 돌아가면 제거한다.
+const FONT_FAMILY_SELECTOR =
+  "html, body, p, div, span, li, ul, ol, h1, h2, h3, h4, h5, h6, " +
+  "blockquote, td, th, a, section, article, aside, figure, figcaption, " +
+  "dd, dt, pre";
+
+const applyFontFamilyToContents = (contents, family) => {
+  const doc = contents?.document;
+  if (!doc?.head) return;
+  // 웹폰트 @font-face는 항상 주입한다. 브라우저는 쓰일 때만 파일을 받는다.
+  let faceEl = doc.getElementById(FONT_FACE_STYLE_ID);
+  if (!faceEl) {
+    faceEl = doc.createElement("style");
+    faceEl.id = FONT_FACE_STYLE_ID;
+    doc.head.appendChild(faceEl);
+  }
+  faceEl.textContent = buildFontFaceCss();
+  let styleEl = doc.getElementById(FONT_FAMILY_STYLE_ID);
+  if (!family) {
+    styleEl?.remove();
+    return;
+  }
+  if (!styleEl) {
+    styleEl = doc.createElement("style");
+    styleEl.id = FONT_FAMILY_STYLE_ID;
+    doc.head.appendChild(styleEl);
+  }
+  styleEl.textContent = `${FONT_FAMILY_SELECTOR} { font-family: ${family} !important; }`;
+};
+
 const RENDER_TIMEOUT_MS = 30_000;
 const SAVE_THROTTLE_MS = 200;
 const ORIENTATION_QUERY = "(orientation: landscape)";
@@ -118,6 +189,7 @@ export default function ViewEPUB({
   const [fontFamily, setFontFamily] = useState(() =>
     preview ? "" : readFontFamily(),
   );
+  const fontFamilyRef = useRef(fontFamily);
 
   // 뷰어 높이는 상수로 둔다(측정·재계산 기계는 텍스트 잘림의 원인이었다).
   const containerHeight = standalone ? "100%" : preview ? "60vh" : "100dvh";
@@ -195,7 +267,6 @@ export default function ViewEPUB({
       "img, svg": { "max-width": "100%", height: "auto" },
     });
     if (fontSize !== 100) rendition.themes.fontSize(`${fontSize}%`);
-    if (fontFamily) rendition.themes.font(fontFamily);
 
     timeoutRef.current = setTimeout(() => {
       setIsLoading(false);
@@ -204,6 +275,10 @@ export default function ViewEPUB({
 
     // 본문 스크롤 잠금(터치 팬 차단) + 늦은 크기 변화 재측정
     rendition.hooks.content.register(lockContentOverflow);
+    // 새로 로드되는 섹션에도 글꼴 규칙을 적용한다
+    rendition.hooks.content.register((contents) =>
+      applyFontFamilyToContents(contents, fontFamilyRef.current),
+    );
     rendition.on("rendered", (section, view) => {
       lockContentOverflow(view?.contents);
       installReexpand(view);
@@ -299,13 +374,15 @@ export default function ViewEPUB({
   }, [epubData, bookId, preview]);
 
   // 글자 크기·글꼴 변경: reflow 뒤 뷰가 낡은 폭에 머물지 않게 다시 측정한다.
+  // 글꼴 규칙은 이미 표시된 뷰에 즉시 적용하고, 새 섹션은 content hook이 처리한다.
   useEffect(() => {
     const rendition = renditionRef.current;
     if (!rendition) return;
     rendition.themes.fontSize(`${fontSize}%`);
-    if (fontFamily) rendition.themes.font(fontFamily);
+    fontFamilyRef.current = fontFamily;
     const views = rendition.manager?.views?.all?.() || [];
     for (const view of views) {
+      applyFontFamilyToContents(view?.contents, fontFamily);
       reexpandView(view);
     }
   }, [fontSize, fontFamily]);
@@ -352,7 +429,7 @@ export default function ViewEPUB({
 
   return (
     <div
-      className="epub-viewer"
+      className={`epub-viewer${preview ? "" : " epub-viewer--framed"}`}
       style={{
         height: containerHeight,
         textAlign: "center",

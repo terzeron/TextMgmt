@@ -494,14 +494,66 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     expect(decreaseButton.disabled).toBe(true);
   });
 
-  it("글꼴을 바꾸면 themes.font가 반영되고 localStorage에 저장된다", async () => {
+  it("글꼴을 바꾸면 본문 텍스트 요소에 !important 규칙을 주입하고 localStorage에 저장된다", async () => {
     render(<ViewEPUB bookId={1} standalone={true} />);
     await openBook();
     fireEvent.change(screen.getByLabelText("글꼴 선택"), {
       target: { value: "sans-serif" },
     });
-    expect(lastRendition.themes.font).toHaveBeenCalledWith("sans-serif");
+    const hook = lastRendition.hooks.content.register.mock.calls.at(-1)[0];
+    const contentDocument = document.implementation.createHTMLDocument();
+    hook({ document: contentDocument });
+    const styleEl = contentDocument.getElementById(
+      "epub-font-family-override",
+    );
+    expect(styleEl?.textContent).toContain("sans-serif");
+    expect(styleEl?.textContent).toContain("!important");
+    expect(styleEl?.textContent).toContain("p");
     expect(localStorage.getItem("epub_fontFamily")).toBe("sans-serif");
+  });
+
+  it("글꼴을 기본으로 바꾸면 주입한 규칙을 제거한다", async () => {
+    localStorageMock._set("epub_fontFamily", "sans-serif");
+    render(<ViewEPUB bookId={1} standalone={true} />);
+    await openBook();
+    fireEvent.change(screen.getByLabelText("글꼴 선택"), {
+      target: { value: "" },
+    });
+    const hook = lastRendition.hooks.content.register.mock.calls.at(-1)[0];
+    const contentDocument = document.implementation.createHTMLDocument();
+    const styleEl = contentDocument.createElement("style");
+    styleEl.id = "epub-font-family-override";
+    contentDocument.head.appendChild(styleEl);
+    hook({ document: contentDocument });
+    expect(
+      contentDocument.getElementById("epub-font-family-override"),
+    ).toBeNull();
+  });
+
+  it("콘텐츠 문서에 웹폰트 @font-face를 주입한다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await waitFor(() => expect(lastRendition).not.toBeNull());
+    const hook = lastRendition.hooks.content.register.mock.calls.at(-1)[0];
+    const contentDocument = document.implementation.createHTMLDocument();
+    hook({ document: contentDocument });
+    const faceEl = contentDocument.getElementById("epub-font-face-override");
+    expect(faceEl?.textContent).toContain("@font-face");
+    expect(faceEl?.textContent).toContain("'Nanum Gothic'");
+    expect(faceEl?.textContent).toContain("'Nanum Myeongjo'");
+    expect(faceEl?.textContent).toContain("/fonts/nanum-gothic-korean-400.woff2");
+    expect(faceEl?.textContent).toContain("unicode-range");
+  });
+
+  it("전체보기 뷰어는 툴바가 가리지 않게 여백 클래스를 넣는다", () => {
+    const { container } = render(<ViewEPUB bookId={1} />);
+    expect(container.firstChild.className).toContain("epub-viewer--framed");
+  });
+
+  it("preview 뷰어는 여백 클래스를 넣지 않는다", () => {
+    const { container } = render(<ViewEPUB bookId={1} preview={true} />);
+    expect(container.firstChild.className).not.toContain(
+      "epub-viewer--framed",
+    );
   });
 
   it("독자 위치가 저장된 글꼴 크기가 첫 렌더에 적용된다", async () => {

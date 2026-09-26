@@ -1,3 +1,11 @@
+/* 툴바·페이지 버튼·페이지 정보가 본문을 가리지 않게 뷰어에 여백을 둔다.
+   box-sizing: border-box로 padding이 height에 포함되어 부모를 넘치지 않는다.
+   rendition 영역 자체가 이 content box 안에서 다시 쪼개지므로 본문 클리핑은 없다. */
+.epub-viewer--framed {
+    box-sizing: border-box;
+    padding: 56px 64px 44px 64px;
+}
+
 .epub-toolbar {
     position: absolute;
     top: 0;
