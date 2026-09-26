@@ -59,7 +59,7 @@ build_backend() {
 
 build_frontend() {
     echo "=== Building frontend ($TAG) ==="
-    docker build -q "${BUILD_FLAGS[@]}" -f frontend/Dockerfile -t "terzeron/tm_frontend:$TAG" . > /dev/null && \
+    docker build -q "${BUILD_FLAGS[@]}" -f frontend/Dockerfile --build-arg "APP_BUILD_ID=$TAG" -t "terzeron/tm_frontend:$TAG" . > /dev/null && \
     FRONTEND_DIGEST="$(push_image tm_frontend)"
 }
 

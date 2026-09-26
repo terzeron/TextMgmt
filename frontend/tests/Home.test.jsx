@@ -47,4 +47,15 @@ describe("Home", () => {
     render(<Home />);
     expect(screen.getByText("우진은채네 책방")).toBeDefined();
   });
+
+  it("빌드 ID를 화면 하단에 고정해 표시한다", () => {
+    render(<Home />);
+    const footer = screen.getByTestId("build-id");
+    // vite define이 타임스탬프나 이미지 태그를 박으므로 값 형식은 검증하지 않는다
+    expect(footer.textContent).toMatch(/^build: .+$/);
+    expect(footer.style.position).toBe("fixed");
+    expect(footer.style.bottom).toBe("0px");
+    expect(footer.style.left).toBe("0px");
+    expect(footer.style.right).toBe("0px");
+  });
 });

@@ -1,8 +1,8 @@
 import { useEffect } from "react";
 import { useOutletContext } from "react-router-dom";
 
-// vite define이 박는 빌드 ID(__APP_BUILD_ID__)를 보여 각 브라우저가
-// 실제로 최신 배포를 받았는지 확인할 수 있게 한다.
+// vite define이 박는 빌드 ID(__APP_BUILD_ID__, 이미지 태그와 같은 값)를 보여
+// 각 브라우저가 실제로 최신 배포를 받았는지 확인할 수 있게 한다.
 /* global __APP_BUILD_ID__ */
 const BUILD_ID = typeof __APP_BUILD_ID__ !== "undefined" ? __APP_BUILD_ID__ : "dev";
 
@@ -26,7 +26,15 @@ export default function Home() {
             <footer
                 data-testid="build-id"
                 className="text-muted text-center"
-                style={{ fontSize: "12px", padding: "8px" }}
+                style={{
+                    fontSize: "12px",
+                    padding: "4px 8px",
+                    position: "fixed",
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    zIndex: 1030,
+                }}
             >
                 build: {BUILD_ID}
             </footer>

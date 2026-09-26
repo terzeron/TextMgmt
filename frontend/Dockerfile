@@ -10,6 +10,9 @@ COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
 RUN npm install -g npm@10.9.2 && npm ci
 
 COPY frontend/ .
+# build.sh가 넘기는 이미지 태그(TAG)를 번들에 박아 화면 하단에서
+# 실제 배포 빌드를 확인하게 한다. 미전달이면 vite가 빌드 시각을 쓴다.
+ARG APP_BUILD_ID
 RUN npm run build
 
 
