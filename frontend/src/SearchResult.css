@@ -74,3 +74,12 @@
     flex: 0 0 auto;
     white-space: nowrap;
 }
+
+/* 최신 책 탭은 표지와 제목을 더 크게 보여준다. */
+#latest-books .cover-grid {
+    grid-template-columns: repeat(auto-fill, minmax(144px, 1fr));
+}
+
+#latest-books .cover-grid-title {
+    font-size: 1.0rem;
+}
