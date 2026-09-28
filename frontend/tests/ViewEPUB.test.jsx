@@ -262,6 +262,12 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     );
   });
 
+  it("EPUB 내부 스크립트 실행을 허용하지 않는다", async () => {
+    render(<ViewEPUB bookId={7} />);
+    await waitFor(() => expect(lastBook?.renderTo).toHaveBeenCalled());
+    expect(lastBook.renderTo.mock.calls[0][1].allowScriptedContent).toBe(false);
+  });
+
   it("초기 로딩 시 스피너를 표시한다", () => {
     render(<ViewEPUB bookId={1} />);
     expect(screen.getByText("로딩 중...")).toBeTruthy();
