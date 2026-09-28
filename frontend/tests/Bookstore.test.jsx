@@ -827,6 +827,32 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
       expect(onCategoriesFound).toHaveBeenCalled();
     });
   });
+
+  it.each([
+    ["문피아", "munpia", "https://novel.munpia.com/page/hd.platinum/view/search/keyword/%EC%A0%80%EC%9E%90%20%EC%A0%9C%EB%AA%A9/order/search_result"],
+    ["시리즈", "naverseries", "https://series.naver.com/search/search.series?t=all&q=%EC%A0%9C%EB%AA%A9%20%EC%A0%80%EC%9E%90"],
+    ["조아라", "joara", "https://www.joara.com/search?target=subject&word=%EC%A0%9C%EB%AA%A9&search="],
+  ])("%s는 응답 URL이 없어도 서점 검색 링크를 표시한다", async (label, store, expectedUrl) => {
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+    });
+
+    await act(async () => {
+      render(<Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: label }));
+      fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" }).at(-1));
+    });
+
+    await waitFor(() => {
+      const links = screen.getAllByText("서점에서 보기");
+      expect(
+        links.some((link) => link.closest("a").getAttribute("href") === expectedUrl),
+      ).toBe(true);
+    });
+  });
 });
 
 describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
@@ -864,6 +890,43 @@ describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
     await waitFor(() => {
       expect(rawJsonGetReq).toHaveBeenCalled();
     });
+  });
+
+  it("ISBN이 없으면 제목과 저자+제목 검색에서 각각 2건씩 합쳐 최대 4건을 표시한다", async () => {
+    rawJsonGetReq.mockImplementation((url, onSuccess) => {
+      const titleOnly = !url.includes("author=");
+      const prefix = titleOnly ? "제목" : "저자제목";
+      setTimeout(() => onSuccess({
+        status: "success",
+        result: Array.from({ length: 5 }, (_, i) => ({
+          title: `${prefix}${i + 1}`,
+          author: "저자",
+          category: "소설 > 한국소설",
+          book_url: `${prefix}${i + 1}`,
+        })),
+      }), 0);
+    });
+
+    await act(async () => {
+      render(<Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" })[0]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("제목1")).toBeTruthy();
+      expect(screen.getByText("제목2")).toBeTruthy();
+      expect(screen.getByText("저자제목1")).toBeTruthy();
+      expect(screen.getByText("저자제목2")).toBeTruthy();
+      expect(screen.queryByText("제목3")).toBeNull();
+      expect(screen.queryByText("저자제목3")).toBeNull();
+    });
+    expect(rawJsonGetReq).toHaveBeenCalledTimes(2);
+    const urls = rawJsonGetReq.mock.calls.map(([url]) => url);
+    expect(urls.some((url) => url.includes("title=%EC%A0%9C%EB%AA%A9") && !url.includes("author="))).toBe(true);
+    expect(urls.some((url) => url.includes("title=%EC%A0%9C%EB%AA%A9") && url.includes("author="))).toBe(true);
   });
 
   it("저자 없이 제목만 있으면 author 파라미터 없이 자동 검색한다", async () => {

@@ -1002,6 +1002,22 @@ def test_search_bookstore_api_success(client, monkeypatch: pytest.MonkeyPatch):
     assert body["result"][0]["isbn"] == "ISBN"
 
 
+def test_search_bookstore_api_limits_results_to_four(client, monkeypatch: pytest.MonkeyPatch):
+    class DummyStore:
+        def search(self, isbn: str = "", title: str = "", author: str = ""):
+            return [
+                (f"T{i}", "A", "C", f"U{i}", "S", "") for i in range(6)
+            ], "kw", "title"
+
+        def build_search_url(self, keyword: str) -> str:
+            return f"https://example.com?q={keyword}"
+
+    monkeypatch.setattr(main, "Yes24Bookstore", DummyStore)
+    resp = client.get("/search/bookstore/yes24?title=Hello")
+    assert resp.status_code == 200
+    assert len(resp.json()["result"]) == 4
+
+
 def test_category_mapping_endpoints(client, monkeypatch: pytest.MonkeyPatch):
     class DummyMapping:
         def get_all_mappings(self, content_type="book"):

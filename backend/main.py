@@ -1225,7 +1225,7 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
 
     # 결과가 튜플 리스트이므로 딕셔너리로 변환 (isbn은 튜플 6번째 원소로 이미 포함)
     books_data = []
-    for r in results[:5]:
+    for r in results[:4]:
         book_title, book_author, category, book_url, _, book_isbn = r
         item = {"title": book_title, "author": book_author, "category": category, "book_url": book_url}
         if book_isbn:
