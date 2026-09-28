@@ -150,6 +150,22 @@ function state(page) {
 // 기본 동작
 // ──────────────────────────────────────────────────────────────────────────
 
+test("첫 화면에 EPUB 표지를 표시하고 다음 페이지에서 본문으로 간다", async ({ page }) => {
+  await mockApis(page);
+  await page.setViewportSize({ width: 900, height: 800 });
+  await page.goto("/book-view/200885711?category=" + encodeURIComponent("_epub"));
+
+  const cover = page.locator(".epub-cover-page img");
+  await expect(cover).toBeVisible();
+  await expect(cover).toHaveAttribute("alt", "책 표지");
+  await expect
+    .poll(() => cover.evaluate((image) => image.naturalWidth))
+    .toBeGreaterThan(0);
+
+  await page.locator(".epub-page-next").click();
+  await expect(page.locator(".epub-cover-page")).toHaveCount(0);
+});
+
 test("책이 열리고 본문 텍스트가 보인다", async ({ page }) => {
   await openEmbedded(page);
   const st = await state(page);
