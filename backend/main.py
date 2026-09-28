@@ -1656,8 +1656,8 @@ async def log_client_error(body: ClientErrorLogModel, auth_user: dict | None = D
 
     LOGGER.error("[CLIENT_ERROR] type=%s, user=%s(%s), url=%s, message=%s", body.error_type, email, role, body.url, body.message)
     if body.component_stack:
-        LOGGER.error("[CLIENT_ERROR] Component Stack:\n%s", body.component_stack.strip())
+        LOGGER.error("[CLIENT_ERROR] Component Stack: %s", json.dumps(body.component_stack, ensure_ascii=False))
     if body.stack:
-        LOGGER.error("[CLIENT_ERROR] Stack Trace:\n%s", body.stack.strip())
+        LOGGER.error("[CLIENT_ERROR] Stack Trace: %s", json.dumps(body.stack, ensure_ascii=False))
 
     return {"status": "ok"}
