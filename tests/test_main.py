@@ -1332,7 +1332,7 @@ def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
     assert resp.json()["result"][0]["created_time"] == "2023-12-31T00:00:00.000000"
     assert dummy._instance.latest_exclude_categories == []
 
-    resp = dummy_client.get("/latest?limit=101")
+    resp = dummy_client.get("/latest?limit=1001")
     assert resp.status_code == 422
 
     async def get_epub(book_id: int):
