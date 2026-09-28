@@ -9,7 +9,7 @@
 그래서 서점 응답만 따로 모은다. 키는 두 가지다.
 
   isbn:<isbn>    가장 확실하다. 제목 표기가 달라도 같은 책을 가리킨다.
-  title:<제목>   ISBN 을 모를 때 쓴다. 서점 검색에 넣은 제목 그대로다.
+  title_author:<제목>\0<저자>   ISBN 을 모를 때 쓴다.
 
 ISBN 은 서점 응답에서 얻는다. 쓸 때 두 키에 모두 넣고, 읽을 때는 ISBN 을 먼저 본다.
 
@@ -34,8 +34,8 @@ def _isbn_key(isbn: str) -> str:
     return f"isbn:{isbn.strip()}"
 
 
-def _title_key(title: str) -> str:
-    return f"title:{title.strip()}"
+def _title_author_key(title: str, author: str) -> str:
+    return f"title_author:{title.strip()}\0{author.strip()}"
 
 
 def _isbn_from_stores(stores: Dict[str, Dict[str, Any]]) -> str:
@@ -47,17 +47,25 @@ def _isbn_from_stores(stores: Dict[str, Dict[str, Any]]) -> str:
     return ""
 
 
+def _author_from_stores(stores: Dict[str, Dict[str, Any]]) -> str:
+    for name in STORE_NAMES:
+        author = (stores.get(name) or {}).get("author") or ""
+        if author.strip():
+            return author.strip()
+    return ""
+
+
 def _has_any_answer(stores: Dict[str, Dict[str, Any]]) -> bool:
     """서점 중 한 곳이라도 카테고리를 줬는가."""
     return any((stores.get(name) or {}).get("cat") for name in STORE_NAMES)
 
 
 class BookstoreResponseCache:
-    """서점 3곳의 응답을 ISBN·제목으로 찾아 쓰는 캐시."""
+    """서점 3곳의 응답을 ISBN 또는 제목·저자 조합으로 찾아 쓰는 캐시."""
 
     def __init__(self, path: Path | str):
         self.path = Path(path)
-        self._entries: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self._entries: Dict[str, Dict[str, Any]] = {}
         self._load()
 
     def _load(self) -> None:
@@ -78,23 +86,40 @@ class BookstoreResponseCache:
                     stores = record.get("stores")
                     if not isinstance(stores, dict):
                         continue
+                    entry = {
+                        "stores": stores,
+                        "isbn": str(record.get("isbn") or _isbn_from_stores(stores)).strip(),
+                        "author": str(record.get("author") or _author_from_stores(stores)).strip(),
+                    }
                     for key in record.get("keys") or []:
                         # 나중 줄이 이긴다. 같은 책을 다시 물었으면 새 답이 맞다.
-                        self._entries[key] = stores
+                        self._entries[key] = entry
         except OSError as e:
             logger.warning("서점 캐시를 읽지 못했다 (%s): %s", self.path, e)
 
-    def get(self, isbn: str = "", title: str = "") -> Optional[Dict[str, Dict[str, Any]]]:
-        """ISBN 을 먼저 보고, 없으면 제목으로 찾는다. 없으면 None."""
-        if isbn and isbn.strip():
-            hit = self._entries.get(_isbn_key(isbn))
+    def get(self, isbn: str = "", title: str = "", author: str = "") -> Optional[Dict[str, Dict[str, Any]]]:
+        """ISBN 과 제목·저자 키를 확인하고 저장된 식별 정보까지 검증한다."""
+        requested_isbn = isbn.strip()
+        requested_author = author.strip()
+        candidates = []
+        if requested_isbn:
+            hit = self._entries.get(_isbn_key(requested_isbn))
             if hit is not None:
-                return hit
-        if title and title.strip():
-            return self._entries.get(_title_key(title))
+                candidates.append(hit)
+        if title.strip() and requested_author:
+            hit = self._entries.get(_title_author_key(title, requested_author))
+            if hit is not None and hit not in candidates:
+                candidates.append(hit)
+
+        for entry in candidates:
+            if requested_isbn and entry["isbn"] != requested_isbn:
+                continue
+            if requested_author and entry["author"] != requested_author:
+                continue
+            return entry["stores"]
         return None
 
-    def put(self, stores: Dict[str, Dict[str, Any]], isbn: str = "", title: str = "") -> None:
+    def put(self, stores: Dict[str, Dict[str, Any]], isbn: str = "", title: str = "", author: str = "") -> None:
         """서점 응답을 남긴다. 전부 빈손이면 남기지 않는다.
 
         다 비었을 때 그것이 '정말 없는 책' 인지 '지금 망이 끊긴 것' 인지 구분할 방법이
@@ -104,17 +129,19 @@ class BookstoreResponseCache:
             return
 
         keys: List[str] = []
-        effective_isbn = isbn.strip() if isbn and isbn.strip() else _isbn_from_stores(stores)
+        effective_isbn = _isbn_from_stores(stores) or (isbn.strip() if isbn else "")
+        effective_author = author.strip() if author and author.strip() else _author_from_stores(stores)
         if effective_isbn:
             keys.append(_isbn_key(effective_isbn))
-        if title and title.strip():
-            keys.append(_title_key(title))
+        if title and title.strip() and effective_author:
+            keys.append(_title_author_key(title, effective_author))
         if not keys:
             return
 
+        entry = {"stores": stores, "isbn": effective_isbn, "author": effective_author}
         for key in keys:
-            self._entries[key] = stores
-        self._append({"keys": keys, "stores": stores, "cached_at": datetime.now(timezone.utc).isoformat()})
+            self._entries[key] = entry
+        self._append({"keys": keys, "isbn": effective_isbn, "author": effective_author, "stores": stores, "cached_at": datetime.now(timezone.utc).isoformat()})
 
     def _append(self, record: Dict[str, Any]) -> None:
         try:
