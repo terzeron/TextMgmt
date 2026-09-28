@@ -9,8 +9,8 @@
 import argparse
 import json
 import logging
-import shutil
 import sys
+import tempfile
 import textwrap
 import time
 from collections import Counter
@@ -197,11 +197,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help=_help("""\
-            벡터화 블록을 이 디렉토리로 흘려보낸다 (기본: 안 함)
+            벡터화 블록을 이 디렉토리 아래 임시 하위 디렉터리에 쓴다 (기본: 안 함)
               메모리가 좁은 기계에서 쓴다. 필드 블록을 만드는 즉시 디스크에 쓰고
               메모리에서 지운 뒤, 마지막에 한 블록씩 다시 읽어 합친다.
               기준 없이 쓰면 23만 건에서 피크가 9.7GB 라 여유 10GB 기계에서
-              죽는다. 대신 디스크를 약 4GB 쓰고 합치는 시간이 더 걸린다."""),
+              죽는다. 대신 디스크를 약 4GB 쓰고 합치는 시간이 더 걸린다.
+              학습이 끝나면 도구가 만든 하위 디렉터리만 지우며, 지정 경로는 보존한다."""),
     )
     t.add_argument(
         "--min-per-category",
@@ -516,18 +517,55 @@ def _overrides(args: argparse.Namespace) -> Dict[str, Any]:
     return over
 
 
-def _holdout_docs(docs: List[Dict[str, Any]], config: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """학습 때와 같은 규칙으로 홀드아웃을 다시 떼어낸다.
+def _holdout_docs(docs: List[Dict[str, Any]], config: Dict[str, Any], manifest_path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """저장된 명단을 우선 쓰고, 없으면 학습 때와 같은 규칙으로 다시 뗀다.
 
-    문서 키의 해시로 나누므로, 코퍼스에 문서가 들고 나도 각 문서의 소속은 안 바뀐다.
-    예전처럼 위치 인덱스로 나누면 한 건만 바뀌어도 전혀 다른 집합이 떨어져,
-    학습에 쓴 문서가 홀드아웃에 섞이고 정답률이 부풀려진다.
+    기존 모델과의 호환을 위해 manifest가 없는 모델은 해시 기반 분할로 대체한다.
     """
+    if manifest_path is not None and manifest_path.exists():
+        return _load_manifest_holdout(docs, manifest_path)
+    if manifest_path is not None:
+        logger.warning("holdout manifest가 없어 해시 분할을 재구성한다. 코퍼스가 바뀌었다면 결과가 신뢰되지 않을 수 있다: %s", manifest_path)
+
     from backend.classifier.training import filter_by_size, split_holdout
 
     kept, _ = filter_by_size(docs, config["corpus"]["min_per_category"])
     _, hold = split_holdout(kept, float(config["holdout"]), int(config["seed"]))
     return hold
+
+
+def _holdout_manifest_path(model_path: Path) -> Path:
+    return model_path.with_name(model_path.name + ".holdout.json")
+
+
+def _write_holdout_manifest(path: Path, docs: List[Dict[str, Any]], config: Dict[str, Any]) -> None:
+    from backend.classifier.training import document_key
+
+    holdout = _holdout_docs(docs, config)
+    keys = sorted({document_key(doc) for doc in holdout if document_key(doc)})
+    payload = {"version": 1, "holdout_ratio": float(config["holdout"]), "seed": int(config["seed"]), "document_keys": keys}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    temporary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary_path.replace(path)
+
+
+def _load_manifest_holdout(docs: List[Dict[str, Any]], manifest_path: Path) -> List[Dict[str, Any]]:
+    from backend.classifier.training import document_key
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    keys = payload.get("document_keys") if isinstance(payload, dict) else None
+    if not isinstance(keys, list) or any(not isinstance(key, str) for key in keys):
+        raise ValueError(f"잘못된 holdout manifest: {manifest_path}")
+    key_set = set(keys)
+    holdout = [doc for doc in docs if document_key(doc) in key_set]
+    found = {document_key(doc) for doc in holdout}
+    missing = key_set - found
+    if missing:
+        logger.warning("holdout manifest 문서 %d건을 현재 코퍼스에서 찾지 못했다", len(missing))
+    if key_set and not holdout:
+        raise ValueError(f"holdout manifest 문서를 현재 코퍼스에서 찾지 못했다: {manifest_path}")
+    return holdout
 
 
 def _iter_files(root: Path) -> List[Path]:
@@ -577,16 +615,21 @@ def cmd_train(args: argparse.Namespace) -> int:
     if not any(d.get("publisher") for d in docs):
         logger.warning("학습 데이터에 publisher 가 하나도 없다. 'collect --with-publisher' 로 다시 모으면 전집 판정이 좋아진다.")
 
-    model, report = train(docs, cfg, accept_parent=SERIES_TO_PARENT, spill_dir=args.spill_dir)
-    path = model.save(args.out)
-    size_mb = path.stat().st_size / 1024 / 1024
     if args.spill_dir:
-        # 합쳐 둔 행렬은 5GB 를 넘는다. 모델을 저장한 뒤에는 쓸 데가 없다.
-        shutil.rmtree(args.spill_dir, ignore_errors=True)
+        args.spill_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="classify-spill-", dir=args.spill_dir) as spill_dir:
+            model, report = train(docs, cfg, accept_parent=SERIES_TO_PARENT, spill_dir=Path(spill_dir))
+            path = model.save(args.out)
+    else:
+        model, report = train(docs, cfg, accept_parent=SERIES_TO_PARENT)
+        path = model.save(args.out)
+    size_mb = path.stat().st_size / 1024 / 1024
+    _write_holdout_manifest(_holdout_manifest_path(path), docs, cfg)
 
     print(format_report(report))
     print()
     print(f"모델 저장: {path}  ({size_mb:.0f}MB, 특징 {model.meta['features']:,}개, 학습 {model.meta['train_seconds']:.0f}초)")
+    print(f"홀드아웃 명단 저장: {_holdout_manifest_path(path)}")
     for name, info in model.meta["blocks"].items():
         print(f"  {name:<10} 특징 {info['features']:>8,}  가중치 {info['weight']}")
     if args.save_config:
@@ -600,7 +643,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
 
     model = _load_model(args.model)
     docs = _load_corpus(args.corpus)
-    hold = _holdout_docs(docs, model.config)
+    hold = _holdout_docs(docs, model.config, manifest_path=_holdout_manifest_path(args.model))
     print(format_report(evaluate(model, hold, accept_parent=SERIES_TO_PARENT)))
     return 0
 
@@ -616,7 +659,7 @@ def cmd_score_calibration(args: argparse.Namespace) -> int:
 
     model = _load_model(args.model)
     docs = _load_corpus(args.corpus)
-    hold = _holdout_docs(docs, model.config)
+    hold = _holdout_docs(docs, model.config, manifest_path=_holdout_manifest_path(args.model))
     print(f"홀드아웃 {len(hold):,}건으로 눈금을 잰다")
 
     calibration = fit_confidence_calibration(model, hold, accept_parent=SERIES_TO_PARENT)
@@ -657,7 +700,7 @@ def cmd_bookstore_policy(args: argparse.Namespace) -> int:
 
     model = _load_model(args.model)
     docs = _load_corpus(args.corpus)
-    hold = _holdout_docs(docs, model.config)
+    hold = _holdout_docs(docs, model.config, manifest_path=_holdout_manifest_path(args.model))
     random.Random(model.config["seed"]).shuffle(hold)
 
     # 서점을 실제로 쓰는 자리에서 재야 한다.
