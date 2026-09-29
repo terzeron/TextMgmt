@@ -47,6 +47,67 @@ const collectStoreCategories = (storeData, storeKey, categories) => {
   }
 };
 
+const combineSearchResults = (titleResult, authorTitleResult) => {
+  const candidates = [
+    ...(titleResult?.result || []).slice(0, 2),
+    ...(authorTitleResult?.result || []).slice(0, 2),
+  ];
+  const seen = new Set();
+  const results = candidates.filter((book) => {
+    const key = book.book_url || `${book.title || ""}_${book.author || ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 4);
+  if (!results.length && titleResult?.error && (authorTitleResult?.error || !authorTitleResult)) {
+    return titleResult;
+  }
+  return {
+    ...authorTitleResult,
+    ...titleResult,
+    status: results.length ? "success" : "not_found",
+    result: results,
+  };
+};
+
+const requestSearch = (store, search) => {
+  const params = new URLSearchParams(search);
+  return new Promise((resolve) => {
+    rawJsonGetReq(
+      `/search/bookstore/${store}?${params.toString()}`,
+      resolve,
+      (error) => {
+        console.error(error);
+        resolve({ error: true, message: "검색 중 오류가 발생했습니다." });
+      },
+    );
+  });
+};
+
+const buildStoreSearchUrl = (store, title, author) => {
+  const encodedTitle = encodeURIComponent(title || "");
+  switch (store) {
+    case "munpia": {
+      const keyword = [author, title].filter(Boolean).join(" ");
+      return keyword
+        ? `https://novel.munpia.com/page/hd.platinum/view/search/keyword/${encodeURIComponent(keyword)}/order/search_result`
+        : "";
+    }
+    case "naverseries": {
+      const keyword = [title, author].filter(Boolean).join(" ");
+      return keyword
+        ? `https://series.naver.com/search/search.series?t=all&q=${encodeURIComponent(keyword)}`
+        : "";
+    }
+    case "joara":
+      return title
+        ? `https://www.joara.com/search?target=subject&word=${encodedTitle}&search=`
+        : "";
+    default:
+      return "";
+  }
+};
+
 // 카테고리 유사도 판정에 참여하는 서점 목록
 // 교보는 "국내도서 > 소설 > 한국소설" 처럼 다른 두 곳과 같은 모양의 분류 경로를 준다.
 const CATEGORY_STORES = ["yes24", "aladin", "kyobo", "naver"];
@@ -101,6 +162,22 @@ export default function Bookstore(props) {
       const currentAuthor = props.bookInfo.author || "";
 
       if (!currentIsbn && !currentTitle && !currentAuthor) return null;
+
+      if (!currentIsbn && currentTitle) {
+        setData((prev) => ({ ...prev, [store]: { loading: true } }));
+        const [titleResult, authorTitleResult] = await Promise.all([
+          requestSearch(store, { title: currentTitle }),
+          currentAuthor
+            ? requestSearch(store, {
+                title: currentTitle,
+                author: currentAuthor,
+              })
+            : null,
+        ]);
+        const result = combineSearchResults(titleResult, authorTitleResult);
+        setData((prev) => ({ ...prev, [store]: result }));
+        return result;
+      }
 
       // 1. ISBN 검색 시도 (ISBN이 있는 경우)
       if (currentIsbn) {
@@ -272,6 +349,31 @@ export default function Bookstore(props) {
     // 새 검색 시작 시 기존 결과 초기화
     setData((prev) => ({ ...prev, [store]: { loading: true } }));
 
+    if (method === "title_author" && !isbn && title) {
+      Promise.all([
+        requestSearch(store, { title }),
+        author ? requestSearch(store, { title, author }) : null,
+      ]).then(([titleResult, authorTitleResult]) => {
+        const result = combineSearchResults(titleResult, authorTitleResult);
+        setData((prev) => {
+          const newData = { ...prev, [store]: result, [cacheKey]: result };
+          if (CATEGORY_STORES.includes(store) && props.onCategoriesFound) {
+            const categories = {};
+            for (const storeKey of CATEGORY_STORES) {
+              collectStoreCategories(
+                storeKey === store ? result : newData[storeKey],
+                storeKey,
+                categories,
+              );
+            }
+            props.onCategoriesFound(categories);
+          }
+          return newData;
+        });
+      });
+      return;
+    }
+
     const params = new URLSearchParams();
 
     switch (method) {
@@ -331,6 +433,8 @@ export default function Bookstore(props) {
   const renderTabContent = (storeKey) => {
     const result = data[storeKey];
     const storeInfo = STORES.find((s) => s.key === storeKey);
+    const searchUrl =
+      result?.search_url || buildStoreSearchUrl(storeKey, title, author);
 
     return (
       <div>
@@ -373,9 +477,9 @@ export default function Bookstore(props) {
               )}
             </Button>
           </ButtonGroup>
-          {result?.search_url && (
+          {searchUrl && (
             <a
-              href={result.search_url}
+              href={searchUrl}
               target="_blank"
               rel="noreferrer"
               className="ms-2"

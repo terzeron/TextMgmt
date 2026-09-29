@@ -62,7 +62,7 @@ describe("LatestBooks", () => {
 
   afterEach(cleanup);
 
-  it("최신 책 100권을 조회하고 기존 목록 컴포넌트로 렌더링한다", async () => {
+  it("최신 책 1000권을 조회하고 기존 목록 컴포넌트로 렌더링한다", async () => {
     mockRawJsonGetReq.mockImplementation((url, resolve, reject, final) => {
       resolve({
         status: "success",
@@ -84,7 +84,7 @@ describe("LatestBooks", () => {
 
     await waitFor(() => {
       expect(mockRawJsonGetReq).toHaveBeenCalledWith(
-        "/latest?limit=100",
+        "/latest?limit=1000",
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
@@ -97,7 +97,7 @@ describe("LatestBooks", () => {
     expect(list.textContent).toContain("새 책");
   });
 
-  it("최신 만화 100권을 조회하고 기존 목록 컴포넌트로 렌더링한다", async () => {
+  it("최신 만화 1000권을 조회하고 기존 목록 컴포넌트로 렌더링한다", async () => {
     mockRawJsonGetReq.mockImplementation((url, resolve, reject, final) => {
       resolve({
         status: "success",
@@ -119,7 +119,7 @@ describe("LatestBooks", () => {
 
     await waitFor(() => {
       expect(mockRawJsonGetReq).toHaveBeenCalledWith(
-        "/comics/latest?limit=100",
+        "/comics/latest?limit=1000",
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
@@ -259,7 +259,7 @@ describe("LatestBooks", () => {
 
     await waitFor(() => {
       expect(mockRawJsonGetReq).toHaveBeenCalledWith(
-        "/latest?limit=100",
+        "/latest?limit=1000",
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),

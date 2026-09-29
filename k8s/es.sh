@@ -34,7 +34,22 @@ CURRENT_MAP_COUNT=$(sysctl -n vm.max_map_count)
 echo "  현재 vm.max_map_count: $CURRENT_MAP_COUNT (필요: $REQUIRED_MAP_COUNT 이상)"
 
 if [ -f "$SYSCTL_FILE" ]; then
-  echo "  $SYSCTL_FILE 이미 존재 - 건너뜀"
+  echo "  $SYSCTL_FILE 이미 존재"
+  if [ "$CURRENT_MAP_COUNT" -lt "$REQUIRED_MAP_COUNT" ]; then
+    if sudo -n true 2>/dev/null; then
+      echo "  낮은 현행값을 sysctl 설정에서 다시 적용 중..."
+      sudo sysctl -q --system
+      CURRENT_MAP_COUNT=$(sysctl -n vm.max_map_count)
+      echo "  적용 후: $CURRENT_MAP_COUNT"
+    else
+      echo "  ERROR: 현행값이 필요값보다 낮고 sudo 권한이 없어 적용할 수 없다." >&2
+      exit 1
+    fi
+  fi
+  if [ "$CURRENT_MAP_COUNT" -lt "$REQUIRED_MAP_COUNT" ]; then
+    echo "  ERROR: 적용 뒤에도 현행값이 필요값보다 낮다. ES 가 기동하지 못한다." >&2
+    exit 1
+  fi
 elif sudo -n true 2>/dev/null; then
   echo "  $SYSCTL_FILE 생성 중..."
   sudo tee "$SYSCTL_FILE" >/dev/null <<'SYSCTL'
@@ -43,7 +58,12 @@ elif sudo -n true 2>/dev/null; then
 vm.max_map_count=1048576
 SYSCTL
   sudo sysctl -q --system
-  echo "  적용 후: $(sysctl -n vm.max_map_count)"
+  CURRENT_MAP_COUNT=$(sysctl -n vm.max_map_count)
+  echo "  적용 후: $CURRENT_MAP_COUNT"
+  if [ "$CURRENT_MAP_COUNT" -lt "$REQUIRED_MAP_COUNT" ]; then
+    echo "  ERROR: 적용 뒤에도 현행값이 필요값보다 낮다. ES 가 기동하지 못한다." >&2
+    exit 1
+  fi
 else
   echo "  경고: sudo 에 비밀번호가 필요해 $SYSCTL_FILE 을 만들지 못했다."
   echo "  현재 값으로는 동작하지만, OS 업그레이드 후 ES 가 기동하지 않을 수 있다."

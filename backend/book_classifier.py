@@ -709,7 +709,7 @@ class BookClassifierService:
         """
         import time
 
-        cached = self.bookstore_cache.get(isbn=isbn, title=search_title)
+        cached = self.bookstore_cache.get(isbn=isbn, title=search_title, author=raw_author)
         if cached is not None:
             return cached.get("yes24", {}), cached.get("aladin", {}), cached.get("kyobo", {})
 
@@ -741,7 +741,7 @@ class BookClassifierService:
         k_entry = _do_query(self.kyobo)
         time.sleep(self.delay)
 
-        self.bookstore_cache.put({"yes24": y_entry, "aladin": a_entry, "kyobo": k_entry}, isbn=isbn, title=search_title)
+        self.bookstore_cache.put({"yes24": y_entry, "aladin": a_entry, "kyobo": k_entry}, isbn=isbn, title=search_title, author=raw_author)
         return y_entry, a_entry, k_entry
 
     def classify_file(self, fpath: Path, source_dir: Path, trust_single_match: bool = True, use_bookstore: bool = True, use_content_meta: bool = True, cache_only: bool = False) -> Tuple[Optional[str], str, str, Dict[str, Any]]:

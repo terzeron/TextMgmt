@@ -178,10 +178,13 @@ export default function ViewEPUB({
   const timeoutRef = useRef(null);
   const saveTimerRef = useRef(null);
   const cfiRef = useRef("");
+  const coverPageRef = useRef(false);
 
   const [epubData, setEpubData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState(null);
+  const [coverUrl, setCoverUrl] = useState(null);
+  const [isCoverPage, setIsCoverPage] = useState(false);
   const [pageInfo, setPageInfo] = useState({ page: 0, total: 0 });
   const [fontSize, setFontSize] = useState(() =>
     preview ? 100 : readFontSize(),
@@ -204,6 +207,9 @@ export default function ViewEPUB({
     setIsLoading(true);
     setErrorMessage(null);
     setEpubData(null);
+    setCoverUrl(null);
+    setIsCoverPage(false);
+    coverPageRef.current = false;
     cfiRef.current = "";
 
     const chapters = preview ? CHAPTERS_PREVIEW : 0;
@@ -240,7 +246,7 @@ export default function ViewEPUB({
       manager: "default",
       width: "100%",
       height: "100%",
-      allowScriptedContent: true,
+      allowScriptedContent: false,
     });
     renditionRef.current = rendition;
 
@@ -316,7 +322,7 @@ export default function ViewEPUB({
       if (location?.start?.cfi) {
         cfiRef.current = location.start.cfi;
       }
-      if (preview || !bookId) return;
+      if (preview || !bookId || coverPageRef.current) return;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       saveTimerRef.current = setTimeout(() => {
         writeSavedLocation(bookId, cfiRef.current);
@@ -327,7 +333,23 @@ export default function ViewEPUB({
       try {
         await book.ready;
         const saved = !preview ? readSavedLocation(bookId) : null;
+
+        const showCoverIfAvailable = async () => {
+          if (typeof book.coverUrl !== "function") return;
+          try {
+            const url = await book.coverUrl();
+            if (url) {
+              setCoverUrl(url);
+              setIsCoverPage(true);
+              coverPageRef.current = true;
+            }
+          } catch {
+            // 표지를 읽지 못하면 EPUB 본문을 첫 화면으로 표시한다.
+          }
+        };
+
         if (preview || !saved) {
+          await showCoverIfAvailable();
           await rendition.display();
         } else {
           try {
@@ -335,6 +357,7 @@ export default function ViewEPUB({
           } catch {
             // 저장된 위치가 무효하면 지우고 책 맨 앞부터
             localStorage.removeItem(`epub_location_${bookId}`);
+            await showCoverIfAvailable();
             await rendition.display();
           }
         }
@@ -342,6 +365,14 @@ export default function ViewEPUB({
       } catch {
         localStorage.removeItem(`epub_location_${bookId}`);
         try {
+          if (typeof book.coverUrl === "function") {
+            const url = await book.coverUrl().catch(() => null);
+            if (url) {
+              setCoverUrl(url);
+              setIsCoverPage(true);
+              coverPageRef.current = true;
+            }
+          }
           await rendition.display();
         } catch (fallbackErr) {
           setErrorMessage(
@@ -388,10 +419,17 @@ export default function ViewEPUB({
   }, [fontSize, fontFamily]);
 
   const goNext = useCallback(() => {
+    if (coverPageRef.current) {
+      coverPageRef.current = false;
+      setIsCoverPage(false);
+      if (!preview && bookId) writeSavedLocation(bookId, cfiRef.current);
+      return;
+    }
     renditionRef.current?.next();
-  }, []);
+  }, [bookId, preview]);
 
   const goPrev = useCallback(() => {
+    if (coverPageRef.current) return;
     renditionRef.current?.prev();
   }, []);
 
@@ -483,12 +521,19 @@ export default function ViewEPUB({
         />
       </Suspense>
 
+      {isCoverPage && coverUrl && (
+        <div className="epub-cover-page" data-testid="epub-cover-page">
+          <img src={coverUrl} alt="책 표지" />
+        </div>
+      )}
+
       {!isLoading && !errorMessage && epubData && (
         <>
           <button
             type="button"
             className="epub-page-btn epub-page-prev"
             onClick={goPrev}
+            disabled={isCoverPage}
             aria-label="이전 페이지"
           >
             ‹
@@ -504,7 +549,7 @@ export default function ViewEPUB({
         </>
       )}
 
-      {!preview && !isLoading && epubData && (
+      {!preview && !isCoverPage && !isLoading && epubData && (
         <div className="epub-page-info" data-testid="epub-page-info">
           {pageInfo.total > 0
             ? `${pageInfo.page} / ${pageInfo.total}`

@@ -15,7 +15,7 @@ import { faList, faTableCellsLarge } from "@fortawesome/free-solid-svg-icons";
 import { rawJsonGetReq } from "./Common.js";
 import SearchResult from "./SearchResult";
 
-const LATEST_ITEM_LIMIT = 100;
+const LATEST_ITEM_LIMIT = 1000;
 const VIEW_MODE_STORAGE_KEY_PREFIX = "tm_latest_view_mode_";
 
 // 뷰 모드는 탭별 편의 설정이다. 저장소를 쓸 수 없으면 커버 뷰를 사용한다.

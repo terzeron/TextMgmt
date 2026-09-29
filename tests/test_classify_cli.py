@@ -88,6 +88,30 @@ def test_evaluate_prints_the_coverage_curve(model_file, capsys):
     assert "판정률" in capsys.readouterr().out
 
 
+def test_evaluate_uses_the_model_holdout_manifest(model_file, monkeypatch, capsys):
+    import backend.classifier.training as training
+    from backend.classifier.corpus import read_jsonl
+    from utils.classify_cli import _holdout_manifest_path
+
+    model_path, corpus = model_file
+    selected = read_jsonl(corpus)[-1]
+    _holdout_manifest_path(model_path).write_text(
+        json.dumps({"document_keys": [training.document_key(selected)]}), encoding="utf-8"
+    )
+    evaluated = []
+
+    def fake_evaluate(model, docs, accept_parent=None):
+        evaluated.extend(docs)
+        return {}
+
+    monkeypatch.setattr(training, "evaluate", fake_evaluate)
+    monkeypatch.setattr(training, "format_report", lambda _report: "holdout report")
+
+    assert main(["evaluate", "--model", str(model_path), "--corpus", str(corpus)]) == 0
+    assert [doc["id"] for doc in evaluated] == [selected["id"]]
+    assert "holdout report" in capsys.readouterr().out
+
+
 def test_bookstore_policy_runs_to_the_end_and_writes_the_threshold(model_file, monkeypatch, tmp_path, capsys):
     """서점 조회부터 집계·저장까지 실제로 통과시킨다.
 
@@ -325,6 +349,39 @@ def test_train_writes_a_model_and_reports_blocks(tmp_path, monkeypatch, capsys):
     printed = capsys.readouterr().out
     assert "모델 저장" in printed
     assert out.exists()
+    assert json.loads(out.with_name(out.name + ".holdout.json").read_text(encoding="utf-8"))["document_keys"]
+
+
+def test_train_spill_cleanup_preserves_other_files_in_requested_directory(tmp_path, monkeypatch):
+    import utils.classify_cli as cli
+
+    corpus = tmp_path / "corpus.jsonl"
+    write_jsonl(make_docs(), corpus)
+    monkeypatch.setattr(cli, "load_config", lambda path=None: TEST_CONFIG)
+    spill_dir = tmp_path / "spill"
+    spill_dir.mkdir()
+    marker = spill_dir / "keep.txt"
+    marker.write_text("user data", encoding="utf-8")
+
+    assert main(["train", "--corpus", str(corpus), "--out", str(tmp_path / "model.joblib"), "--spill-dir", str(spill_dir)]) == 0
+
+    assert marker.read_text(encoding="utf-8") == "user data"
+    assert list(spill_dir.iterdir()) == [marker]
+
+
+def test_holdout_docs_uses_saved_manifest_keys(model_file, tmp_path):
+    from backend.classifier.corpus import read_jsonl
+    from utils.classify_cli import _holdout_docs
+
+    _, corpus = model_file
+    docs = read_jsonl(corpus)
+    manifest = tmp_path / "holdout.json"
+    chosen = docs[-1]
+    manifest.write_text(json.dumps({"document_keys": [str(chosen["id"])]}), encoding="utf-8")
+
+    hold = _holdout_docs(docs, TEST_CONFIG, manifest_path=manifest)
+
+    assert [doc["id"] for doc in hold] == [chosen["id"]]
 
 
 def test_train_warns_when_corpus_has_no_publisher(tmp_path, monkeypatch, caplog):

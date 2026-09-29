@@ -1225,7 +1225,7 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
 
     # 결과가 튜플 리스트이므로 딕셔너리로 변환 (isbn은 튜플 6번째 원소로 이미 포함)
     books_data = []
-    for r in results[:5]:
+    for r in results[:4]:
         book_title, book_author, category, book_url, _, book_isbn = r
         item = {"title": book_title, "author": book_author, "category": category, "book_url": book_url}
         if book_isbn:
@@ -1656,8 +1656,8 @@ async def log_client_error(body: ClientErrorLogModel, auth_user: dict | None = D
 
     LOGGER.error("[CLIENT_ERROR] type=%s, user=%s(%s), url=%s, message=%s", body.error_type, email, role, body.url, body.message)
     if body.component_stack:
-        LOGGER.error("[CLIENT_ERROR] Component Stack:\n%s", body.component_stack.strip())
+        LOGGER.error("[CLIENT_ERROR] Component Stack: %s", json.dumps(body.component_stack, ensure_ascii=False))
     if body.stack:
-        LOGGER.error("[CLIENT_ERROR] Stack Trace:\n%s", body.stack.strip())
+        LOGGER.error("[CLIENT_ERROR] Stack Trace: %s", json.dumps(body.stack, ensure_ascii=False))
 
     return {"status": "ok"}

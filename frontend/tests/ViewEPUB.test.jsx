@@ -25,6 +25,7 @@ let containerMetrics;
 
 let failNextDisplay = false;
 let hangDisplay = false;
+let mockCoverUrl = null;
 
 function setFailNextDisplay() {
   failNextDisplay = true;
@@ -99,6 +100,7 @@ function createMockRendition() {
 function createMockBook() {
   return {
     ready: Promise.resolve(),
+    coverUrl: vi.fn(() => Promise.resolve(mockCoverUrl)),
     loaded: { metadata: Promise.resolve({ title: "테스트 책 제목" }) },
     spine: Array.from({ length: 12 }, (_, i) => ({
       href: `OEBPS/Text/section${i}.html`,
@@ -225,6 +227,7 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
   beforeEach(() => {
     lastRendition = null;
     lastBook = null;
+    mockCoverUrl = null;
     failNextDisplay = false;
     hangDisplay = false;
     localStorageMock.clear();
@@ -262,9 +265,41 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     );
   });
 
+  it("EPUB 내부 스크립트 실행을 허용하지 않는다", async () => {
+    render(<ViewEPUB bookId={7} />);
+    await waitFor(() => expect(lastBook?.renderTo).toHaveBeenCalled());
+    expect(lastBook.renderTo.mock.calls[0][1].allowScriptedContent).toBe(false);
+  });
+
   it("초기 로딩 시 스피너를 표시한다", () => {
     render(<ViewEPUB bookId={1} />);
     expect(screen.getByText("로딩 중...")).toBeTruthy();
+  });
+
+  it("표지가 있으면 맨 앞에 표시하고 다음 이동 시 본문으로 간다", async () => {
+    mockCoverUrl = "blob:epub-cover";
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+
+    expect(screen.getByRole("img", { name: "책 표지" }).getAttribute("src")).toBe(
+      "blob:epub-cover",
+    );
+    expect(lastRendition.next).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "다음 페이지" }));
+
+    expect(screen.queryByRole("img", { name: "책 표지" })).toBeNull();
+    expect(lastRendition.next).not.toHaveBeenCalled();
+  });
+
+  it("저장된 읽기 위치가 있으면 표지 대신 해당 위치를 복원한다", async () => {
+    mockCoverUrl = "blob:epub-cover";
+    localStorageMock._set("epub_location_1", "epubcfi(/6/6!/4/2)");
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+
+    expect(lastBook.coverUrl).not.toHaveBeenCalled();
+    expect(screen.queryByRole("img", { name: "책 표지" })).toBeNull();
   });
 
   it("displayed 이벤트가 오면 로딩이 풀린다", async () => {

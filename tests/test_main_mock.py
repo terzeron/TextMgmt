@@ -306,7 +306,7 @@ class TestViewerHiddenAccess:
         r = client.get("/latest")
 
         assert r.status_code == 200
-        mock_bm.get_latest_books.assert_called_once_with(size=100, exclude_categories=["secret", "shared", "no_latest"])
+        mock_bm.get_latest_books.assert_called_once_with(size=1000, exclude_categories=["secret", "shared", "no_latest"])
 
 
 # ── /pdf-pages/{book_id} ─────────────────────────────────────────────────────

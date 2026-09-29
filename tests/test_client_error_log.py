@@ -115,19 +115,22 @@ def test_log_client_error_strips_newlines_from_single_line_fields(client, caplog
     assert "real error [CLIENT_ERROR] type=FAKE" in logged
 
 
-def test_log_client_error_keeps_newlines_in_stack(client, caplog):
+def test_log_client_error_escapes_newlines_in_stack(client, caplog):
     """stack 은 여러 줄이 의미를 가지므로 개행을 보존한다."""
     payload = {
         "error_type": "CUSTOM_ERROR",
         "message": "boom",
-        "stack": "TypeError: boom\n    at A.jsx:1:1\n    at B.jsx:2:2",
+        "stack": "TypeError: boom\n[CLIENT_ERROR] type=FAKE, user=admin@evil.com(admin)\n    at B.jsx:2:2",
         "url": "http://localhost/x",
     }
     with caplog.at_level("ERROR"):
         response = client.post("/logs/client-error", json=payload)
 
     assert response.status_code == 200
-    assert "at A.jsx:1:1\n    at B.jsx:2:2" in caplog.text
+    stack_record = next(r.getMessage() for r in caplog.records if "Stack Trace:" in r.getMessage())
+    assert r"[CLIENT_ERROR] type=FAKE, user=admin@evil.com(admin)\n" in stack_record
+    other_records = [r.getMessage() for r in caplog.records if "Stack Trace:" not in r.getMessage()]
+    assert not any("[CLIENT_ERROR] type=FAKE" in record for record in other_records)
 
 
 def test_log_client_error_accepts_realistic_payload_unchanged(client, caplog):
