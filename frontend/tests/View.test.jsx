@@ -214,7 +214,7 @@ describe("View", () => {
     await waitFor(() => {
       expect(screen.getByTestId("folder")).toBeTruthy();
     });
-    expect(screen.getByTestId("folder").dataset.open).toBe("false");
+    expect(screen.getByTestId("folder").dataset.open).toBe("true");
   });
 
   it("카테고리 로드 실패 시 에러 메시지를 표시하지 않고 빈 폴더를 표시한다", async () => {
@@ -1670,7 +1670,7 @@ describe("View", () => {
     expect(screen.getByTestId("folder").dataset.open).toBe("false");
   });
 
-  it("책 없이 들어와도 디렉토리를 접은 상태로 시작한다", async () => {
+  it("책 없이 book-view에 들어오면 디렉토리를 펼친 상태로 시작한다", async () => {
     mockJsonGetReq.mockImplementation((url, payload, resolve) => {
       if (url === "/categories") resolve({ 소설: 10 });
     });
@@ -1680,10 +1680,23 @@ describe("View", () => {
     await waitFor(() => {
       expect(screen.getByTestId("folder")).toBeTruthy();
     });
-    expect(screen.getByTestId("folder").dataset.open).toBe("false");
+    expect(screen.getByTestId("folder").dataset.open).toBe("true");
   });
 
-  it("접힌 디렉토리를 누르면 펼친 Folder를 렌더링한다", async () => {
+  it("책 없이 comics-view에 들어오면 디렉토리를 펼친 상태로 시작한다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") resolve({ 만화: 10 });
+    });
+
+    render(<View basePath="/comics-view" apiPrefix="/comics" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder")).toBeTruthy();
+    });
+    expect(screen.getByTestId("folder").dataset.open).toBe("true");
+  });
+
+  it("펼친 디렉토리를 누르면 접힌 Folder를 렌더링한다", async () => {
     mockJsonGetReq.mockImplementation((url, payload, resolve) => {
       if (url === "/categories") resolve({ 소설: 10 });
     });
@@ -1693,14 +1706,14 @@ describe("View", () => {
     await waitFor(() => {
       expect(screen.getByTestId("folder")).toBeTruthy();
     });
-    expect(screen.getByTestId("folder").dataset.open).toBe("false");
+    expect(screen.getByTestId("folder").dataset.open).toBe("true");
 
     await act(async () => {
       screen.getByTestId("folder-toggle").click();
     });
 
     await waitFor(() => {
-      expect(screen.getByTestId("folder").dataset.open).toBe("true");
+      expect(screen.getByTestId("folder").dataset.open).toBe("false");
     });
   });
 

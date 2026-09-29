@@ -45,7 +45,7 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
     handleSearchCategoryChange,
     searchInProgress,
   } = useOutletContext();
-  const [isFolderOpen, setIsFolderOpen] = useState(false);
+  const [isFolderOpen, setIsFolderOpen] = useState(!routeBookId);
   const [expandedItems, setExpandedItems] = useState([]);
   const [errorMessage, setErrorMessage] = useState("");
   const [selectedEntryId, setSelectedEntryId] = useState("");
