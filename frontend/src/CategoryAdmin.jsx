@@ -471,6 +471,7 @@ export default function CategoryAdmin({
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showReloadModal, setShowReloadModal] = useState(false);
   const [showMismatchReloadModal, setShowMismatchReloadModal] = useState(false);
+  const [reloadAllMismatches, setReloadAllMismatches] = useState(false);
   const [showBulkReloadModal, setShowBulkReloadModal] = useState(false);
   const [showDeleteFileModal, setShowDeleteFileModal] = useState(false);
   const [reloading, setReloading] = useState(false);
@@ -517,8 +518,9 @@ export default function CategoryAdmin({
   const editBasePath = contentType === "comic" ? "/comics-edit" : "/book-edit";
   const contentLabel = contentType === "comic" ? "만화" : "책";
   const isRootCategory = selectedCategory === "_root";
-  const mismatchReloadTargetCategory =
-    selectedCategory || selectedMismatch?.category || "";
+  const mismatchReloadTargetCategory = reloadAllMismatches
+    ? ""
+    : selectedCategory || selectedMismatch?.category || "";
   const mismatchReloadTargetFolder = mismatchReloadTargetCategory
     ? findFolderInTree(folderData, mismatchReloadTargetCategory)
     : null;
@@ -2051,14 +2053,13 @@ export default function CategoryAdmin({
                     saving ||
                     bulkReloading ||
                     mismatchReloading ||
-                    mismatchReloadTargetCount === 0
+                    mismatchStats.itemCount === 0
                   }
-                  onClick={() => setShowMismatchReloadModal(true)}
-                  title={
-                    mismatchReloadTargetCategory
-                      ? "선택 디렉토리 이상 항목만 ES 재적재"
-                      : "전체 이상 항목 ES 재적재"
-                  }
+                  onClick={() => {
+                    setReloadAllMismatches(true);
+                    setShowMismatchReloadModal(true);
+                  }}
+                  title="전체 이상 항목 ES 재적재"
                 >
                   {mismatchReloading ? (
                     <span className="d-flex align-items-center gap-1">
@@ -2248,7 +2249,10 @@ export default function CategoryAdmin({
                         mismatchReloading ||
                         mismatchReloadTargetCount === 0
                       }
-                      onClick={() => setShowMismatchReloadModal(true)}
+                      onClick={() => {
+                        setReloadAllMismatches(false);
+                        setShowMismatchReloadModal(true);
+                      }}
                       title="이상 항목만 ES 재적재"
                     >
                       {mismatchReloading ? (
@@ -2828,7 +2832,10 @@ export default function CategoryAdmin({
       {/* 이상 항목 ES 재적재 확인 모달 */}
       <Modal
         show={showMismatchReloadModal}
-        onHide={() => setShowMismatchReloadModal(false)}
+        onHide={() => {
+          setShowMismatchReloadModal(false);
+          setReloadAllMismatches(false);
+        }}
         centered
       >
         <Modal.Header closeButton>
@@ -2858,7 +2865,10 @@ export default function CategoryAdmin({
         <Modal.Footer>
           <Button
             variant="secondary"
-            onClick={() => setShowMismatchReloadModal(false)}
+            onClick={() => {
+              setShowMismatchReloadModal(false);
+              setReloadAllMismatches(false);
+            }}
           >
             취소
           </Button>
