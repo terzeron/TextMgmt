@@ -1445,6 +1445,7 @@ def print_usage(program_name: str):
 
 def main() -> int:
     BATCH_SIZE = 100
+    FILE_ARGUMENT_BATCH_SIZE = 100
     WORKER_COUNT = 2
 
     do_delete = False
@@ -1625,28 +1626,40 @@ def main() -> int:
 
         return processed_count, skipped_count, synced_count
 
+    pending_file_args: list[Path] = []
+
+    def process_file_args() -> None:
+        if not pending_file_args:
+            return
+        processed, _, _ = process_file_iter(pending_file_args, skip_check=True, skip_text=index_name_arg == "comics")
+        print(f"  argument 파일 {len(pending_file_args)}개 중 {processed}개 적재 완료")
+        pending_file_args.clear()
+
     for arg in file_args:
         target_path = Path(arg)
         if not target_path.exists():
+            process_file_args()
             LOGGER.error("can't find such a file or directory '%s'", target_path)
             return 0
         if not target_path.is_relative_to(Loader.path_prefix) and not target_path.is_relative_to(Loader.comics_path_prefix):
+            process_file_args()
             LOGGER.error(f"{target_path} is not in $TM_BOOK_DIR({Loader.path_prefix}) or $TM_COMICS_DIR({Loader.comics_path_prefix}).")
             continue
         print(f"====== {target_path} ======")
 
+        if target_path.is_file():
+            print(f"  [파일 강제 재적재] {target_path.name}")
+            pending_file_args.append(target_path)
+            if len(pending_file_args) == FILE_ARGUMENT_BATCH_SIZE:
+                process_file_args()
+            continue
+
+        process_file_args()
+
         # comics 인덱스는 텍스트 추출 건너뛰기
         skip_text = index_name_arg == "comics"
 
-        # 파일이 지정된 경우: 강제 재적재 (skip_check=True)
-        if target_path.is_file():
-            print(f"  [파일 강제 재적재] {target_path.name}")
-            processed, _, _ = process_file_iter([target_path], skip_check=True, skip_text=skip_text)
-            if processed > 0:
-                print("  파일 재적재 완료")
-            else:
-                print("  파일 적재 실패 (지원하지 않는 형식일 수 있음)")
-        elif do_recursive:
+        if do_recursive:
             # 전체 파일 등록 (generator 사용으로 메모리 효율화, hidden directory 제외)
             file_iter = (p for p in target_path.rglob("*") if p.is_file() and not any(part.startswith(".") or part in IGNORED_DIR_NAMES for part in p.relative_to(target_path).parts))
             skip_check = do_reload
@@ -1712,6 +1725,8 @@ def main() -> int:
                 print(f"    {synced2}개 경로 동기화")
 
         print("================================")
+
+    process_file_args()
 
     # 모든 작업 완료 후 인덱스 refresh
     es_manager.refresh()

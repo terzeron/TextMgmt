@@ -2968,6 +2968,26 @@ class TestLoaderMain:
         result = main()
         assert result == 0
 
+    def test_main_batches_file_arguments_by_hundred(self, monkeypatch, tmp_path):
+        """100개 파일씩 process_file_iter에 전달한다."""
+        self._setup_env(monkeypatch, tmp_path)
+        files = []
+        for number in range(101):
+            path = tmp_path / f"book-{number}.txt"
+            path.write_text(f"content {number}")
+            files.append(path)
+        monkeypatch.setattr("sys.argv", ["loader", "book", *(str(path) for path in files)])
+        from utils.loader import main
+
+        mock_es = MagicMock()
+        mock_es.es.ping.return_value = True
+        mock_es.delete_by_file_paths.return_value = 0
+        mock_es.insert.return_value = []
+        monkeypatch.setattr("utils.loader.ESManager", lambda index_name: mock_es)
+
+        assert main() == 0
+        assert [len(call.args[0]) for call in mock_es.insert.call_args_list] == [100, 1]
+
     def test_main_recursive(self, monkeypatch, tmp_path):
         """Lines 1026-1038: recursive directory processing"""
         self._setup_env(monkeypatch, tmp_path)
