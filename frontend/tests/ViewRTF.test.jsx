@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
 
 afterEach(cleanup);
 
@@ -30,8 +30,9 @@ vi.mock('rtf.js', () => ({
 import ViewRTF from '../src/ViewRTF';
 
 describe('ViewRTF', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
     });
 
     it('로딩 중 상태를 표시한다', () => {
@@ -61,6 +62,23 @@ describe('ViewRTF', () => {
         await waitFor(() => {
             expect(mockRender).toHaveBeenCalled();
         });
+    });
+
+    it('RTF 글꼴을 선택하고 렌더링 영역에 적용한다', async () => {
+        const mockElement = document.createElement('p');
+        mockElement.textContent = 'RTF 내용';
+        mockRender.mockResolvedValue([mockElement]);
+        mockTextGetReq.mockImplementation((url, payload, resolve) => {
+            resolve('rtf content');
+        });
+        render(<ViewRTF bookId={1} />);
+        fireEvent.change(await screen.findByLabelText('글꼴 선택'), {
+            target: { value: "'Noto Serif CJK KR', serif" },
+        });
+        expect(localStorage.getItem('reader_fontFamily')).toBe(
+            "'Noto Serif CJK KR', serif",
+        );
+        expect(document.querySelector('.reader-font-overridden')).toBeTruthy();
     });
 
     it('RTF 로딩이 비활성화된다', () => {

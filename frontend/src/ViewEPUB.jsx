@@ -2,6 +2,12 @@ import { useEffect, useRef, useState, useCallback, Suspense } from "react";
 import PropTypes from "prop-types";
 import ePub from "epubjs";
 import { getApiUrlPrefix } from "./Common";
+import ViewerFontSelect from "./ViewerFontSelect";
+import {
+  buildFontFaceCss,
+  readReaderFontFamily,
+  saveReaderFontFamily,
+} from "./viewerFonts";
 import "./ViewEPUB.css";
 
 const CHAPTERS_PREVIEW = 10;
@@ -10,51 +16,8 @@ const FONT_SIZE_MIN = 80;
 const FONT_SIZE_MAX = 160;
 const FONT_SIZE_STEP = 20;
 
-const FONT_FAMILIES = [
-  { label: "기본", value: "" },
-  { label: "나눔고딕", value: "'Nanum Gothic', sans-serif" },
-  { label: "나눔명조", value: "'Nanum Myeongjo', serif" },
-  { label: "Serif", value: "serif" },
-  { label: "Sans-serif", value: "sans-serif" },
-];
-
 const FONT_FAMILY_STYLE_ID = "epub-font-family-override";
 const FONT_FACE_STYLE_ID = "epub-font-face-override";
-
-// 나눔고딕/나눔명조 웹폰트를 콘텐츠 문서에 주입한다. iPad 등 시스템 폰트가
-// 없는 환경에서도 글꼴 변경이 동작하게 한다. 파일은 frontend/public/fonts에
-// 번들한 fontsource korean·latin 서브셋이다. epub.js가 콘텐츠 문서에 책 리소스
-// 경로의 <base>를 넣으므로 폰트 URL은 절대 경로여야 한다. korean·latin 규칙이
-// 같은 family·weight로 겹치면 나중에 선언된 쪽이 이기므로 latin을 나중에 둔다.
-const FONT_FACE_FAMILIES = [
-  { family: "Nanum Gothic", file: "nanum-gothic" },
-  { family: "Nanum Myeongjo", file: "nanum-myeongjo" },
-];
-const FONT_FACE_WEIGHTS = [400, 700];
-const KOREAN_UNICODE_RANGE =
-  "U+AC00-D7AF, U+1100-11FF, U+3130-318F, U+A960-A97F, U+D7B0-D7FF, " +
-  "U+3000-303F, U+FF00-FFEF, U+25A0-25FF, U+203B, U+327E-327F";
-const LATIN_UNICODE_RANGE =
-  "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, " +
-  "U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, " +
-  "U+2212, U+2215, U+FEFF, U+FFFD";
-
-const buildFontFaceCss = () => {
-  const base = `${window.location.origin}/fonts/`;
-  const face = (family, file, weight, subset, range) =>
-    `@font-face { font-family: '${family}'; font-style: normal; ` +
-    `font-weight: ${weight}; font-display: swap; ` +
-    `src: url(${base}${file}-${subset}-${weight}.woff2) format('woff2'); ` +
-    `unicode-range: ${range}; }`;
-  const rules = [];
-  for (const { family, file } of FONT_FACE_FAMILIES) {
-    for (const weight of FONT_FACE_WEIGHTS) {
-      rules.push(face(family, file, weight, "korean", KOREAN_UNICODE_RANGE));
-      rules.push(face(family, file, weight, "latin", LATIN_UNICODE_RANGE));
-    }
-  }
-  return rules.join("\n");
-};
 
 // epub.js themes.font()는 iframe body에만 inline font-family를 건다. 책 자체
 // CSS가 p, div 등 본문 요소에 font-family를 선언하면 상속이 깨져 글꼴 변경이
@@ -75,7 +38,7 @@ const applyFontFamilyToContents = (contents, family) => {
     faceEl.id = FONT_FACE_STYLE_ID;
     doc.head.appendChild(faceEl);
   }
-  faceEl.textContent = buildFontFaceCss();
+  faceEl.textContent = buildFontFaceCss(`${window.location.origin}/fonts/`);
   let styleEl = doc.getElementById(FONT_FAMILY_STYLE_ID);
   if (!family) {
     styleEl?.remove();
@@ -99,8 +62,6 @@ const readFontSize = () => {
   const saved = localStorage.getItem("epub_fontSize");
   return saved ? parseInt(saved, 10) : 100;
 };
-const readFontFamily = () => localStorage.getItem("epub_fontFamily") || "";
-
 const readSavedLocation = (bookId) => {
   try {
     return localStorage.getItem(`epub_location_${bookId}`) || null;
@@ -190,7 +151,7 @@ export default function ViewEPUB({
     preview ? 100 : readFontSize(),
   );
   const [fontFamily, setFontFamily] = useState(() =>
-    preview ? "" : readFontFamily(),
+    preview ? "" : readReaderFontFamily(),
   );
   const fontFamilyRef = useRef(fontFamily);
 
@@ -462,7 +423,7 @@ export default function ViewEPUB({
 
   const handleFontFamilyChange = useCallback((family) => {
     setFontFamily(family);
-    localStorage.setItem("epub_fontFamily", family);
+    saveReaderFontFamily(family);
   }, []);
 
   return (
@@ -499,17 +460,7 @@ export default function ViewEPUB({
           >
             A+
           </button>
-          <select
-            value={fontFamily}
-            onChange={(e) => handleFontFamilyChange(e.target.value)}
-            aria-label="글꼴 선택"
-          >
-            {FONT_FAMILIES.map((f) => (
-              <option key={f.value} value={f.value}>
-                {f.label}
-              </option>
-            ))}
-          </select>
+          <ViewerFontSelect value={fontFamily} onChange={handleFontFamilyChange} />
         </div>
       )}
 

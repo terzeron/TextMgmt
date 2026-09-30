@@ -3,11 +3,14 @@ import PropTypes from "prop-types";
 import { RTFJS } from "rtf.js";
 import { textGetReq } from "./Common";
 import DOMPurify from "dompurify";
+import ViewerFontSelect from "./ViewerFontSelect";
+import { useReaderFontFamily } from "./viewerFonts";
 
 export default function ViewRTF({ bookId, apiPrefix = '' }) {
     const parentRef = useRef(null);
     const [errorMessage, setErrorMessage] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [fontFamily, setFontFamily] = useReaderFontFamily();
 
     const stringToArrayBuffer = (string) => {
         const buffer = new ArrayBuffer(string.length);
@@ -80,8 +83,13 @@ export default function ViewRTF({ bookId, apiPrefix = '' }) {
     }, [bookId, apiPrefix]);
 
     return (
-        <div>
+        <div className="rtf-container">
             <Suspense fallback={<div className="loading">로딩 중...</div>}>
+                {!isLoading && !errorMessage && (
+                    <div className="viewer-font-toolbar">
+                        <ViewerFontSelect value={fontFamily} onChange={setFontFamily} />
+                    </div>
+                )}
                 {isLoading && (
                     <div className="loading-container">
                         <div className="spinner"></div>
@@ -93,7 +101,14 @@ export default function ViewRTF({ bookId, apiPrefix = '' }) {
                         {errorMessage}
                     </div>
                 )}
-                <div ref={parentRef} style={{ display: isLoading || errorMessage ? "none" : "block" }} />
+                <div
+                    ref={parentRef}
+                    className={fontFamily ? "reader-font-overridden" : ""}
+                    style={{
+                        display: isLoading || errorMessage ? "none" : "block",
+                        ...(fontFamily ? { "--reader-font-family": fontFamily } : {}),
+                    }}
+                />
             </Suspense>
         </div>
     );

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 
 afterEach(cleanup);
 
@@ -19,6 +19,7 @@ import ViewDOC from "../src/ViewDOC";
 describe("ViewDOC", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     global.fetch = vi.fn();
   });
 
@@ -63,6 +64,22 @@ describe("ViewDOC", () => {
       const content = document.querySelector(".doc-content");
       expect(content.innerHTML).toBe("<p>문서 내용</p>");
     });
+  });
+
+  it("문서 글꼴을 선택하고 콘텐츠 영역에 적용한다", async () => {
+    global.fetch.mockResolvedValue({
+      text: () => Promise.resolve("<p>문서 내용</p>"),
+    });
+    render(<ViewDOC bookId={1} fileType="doc" />);
+    fireEvent.change(await screen.findByLabelText("글꼴 선택"), {
+      target: { value: "'Noto Serif CJK KR', serif" },
+    });
+    expect(localStorage.getItem("reader_fontFamily")).toBe(
+      "'Noto Serif CJK KR', serif",
+    );
+    expect(document.querySelector(".doc-content").className).toContain(
+      "reader-font-overridden",
+    );
   });
 
   it("docx 타입은 mammoth으로 변환한다", async () => {

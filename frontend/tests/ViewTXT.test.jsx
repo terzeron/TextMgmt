@@ -23,6 +23,7 @@ import ViewTXT from "../src/ViewTXT";
 describe("ViewTXT", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
   });
 
   it("로딩 중 상태를 표시한다", () => {
@@ -41,6 +42,24 @@ describe("ViewTXT", () => {
       expect(screen.getByText("두 번째 줄")).toBeTruthy();
       expect(screen.getByText("세 번째 줄")).toBeTruthy();
     });
+  });
+
+  it("글꼴 선택을 우상단 툴바에 표시하고 선택값을 저장한다", async () => {
+    mockTextGetReq.mockImplementation((url, payload, resolve) => {
+      resolve("본문");
+    });
+    render(<ViewTXT bookId={1} />);
+    const select = await screen.findByLabelText("글꼴 선택");
+    fireEvent.change(select, {
+      target: { value: "'Noto Serif CJK KR', serif" },
+    });
+    expect(localStorage.getItem("reader_fontFamily")).toBe(
+      "'Noto Serif CJK KR', serif",
+    );
+    expect(document.querySelector(".txt-toolbar").className).toContain(
+      "viewer-font-toolbar",
+    );
+    expect(document.querySelector(".reader-font-overridden")).toBeTruthy();
   });
 
   it("lineCount로 줄 수를 제한한다", async () => {

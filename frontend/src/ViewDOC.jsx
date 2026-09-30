@@ -3,6 +3,8 @@ import PropTypes from "prop-types";
 import DOMPurify from "dompurify";
 import { getApiUrlPrefix } from "./Common";
 import mammoth from "mammoth";
+import ViewerFontSelect from "./ViewerFontSelect";
+import { useReaderFontFamily } from "./viewerFonts";
 
 export default function ViewDOC({
   bookId,
@@ -13,6 +15,7 @@ export default function ViewDOC({
   const [content, setContent] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState(null);
+  const [fontFamily, setFontFamily] = useReaderFontFamily();
 
   useEffect(() => {
     console.log(`ViewDOC: useEffect()`, bookId, fileType);
@@ -63,6 +66,11 @@ export default function ViewDOC({
 
   return (
     <div className="doc-container">
+      {!isLoading && !errorMessage && (
+        <div className="viewer-font-toolbar">
+          <ViewerFontSelect value={fontFamily} onChange={setFontFamily} />
+        </div>
+      )}
       {isLoading && (
         <div className="loading-container">
           <div className="spinner"></div>
@@ -71,9 +79,12 @@ export default function ViewDOC({
       )}
       {errorMessage && <div className="error-message">{errorMessage}</div>}
       <div
-        className="doc-content"
+        className={`doc-content${fontFamily ? " reader-font-overridden" : ""}`}
         dangerouslySetInnerHTML={{ __html: content }}
-        style={{ display: isLoading || errorMessage ? "none" : "block" }}
+        style={{
+          display: isLoading || errorMessage ? "none" : "block",
+          ...(fontFamily ? { "--reader-font-family": fontFamily } : {}),
+        }}
       />
     </div>
   );
