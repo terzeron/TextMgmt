@@ -1331,6 +1331,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
 
                 <Col id="right_panel" md="6" lg="7" className="ps-0 pe-0">
                   {selectedDirectory ? (
+                    <>
                     <SimilarBooks
                       key={selectedDirectory.category}
                       directoryName={selectedDirectory.name}
@@ -1340,6 +1341,16 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                       apiPrefix={apiPrefix}
                       basePath={basePath}
                     />
+                    <Bookstore
+                      key={`directory-${selectedDirectory.category}`}
+                      bookInfo={{
+                        title: selectedDirectory.name,
+                        author: selectedDirectory.author,
+                        isbn: "",
+                      }}
+                      searchTrigger={1}
+                    />
+                    </>
                   ) : <>
                   <SimilarBooks
                     bookId={bookInfo["book_id"]}

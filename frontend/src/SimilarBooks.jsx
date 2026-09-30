@@ -294,7 +294,7 @@ export default function SimilarBooks({
                         verticalAlign: "middle",
                       }}
                     >
-                      PDF {item.file_count.toLocaleString()}ea, {item.page_count.toLocaleString()}p, {formatDirectoryMegabytes(item.total_file_size)}MB
+                      {item.file_count.toLocaleString()}ea, {item.page_count.toLocaleString()}p, {formatDirectoryMegabytes(item.total_file_size)}MB
                     </span>
                     <span
                       style={{

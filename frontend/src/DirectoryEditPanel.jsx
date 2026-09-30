@@ -125,7 +125,7 @@ export default function DirectoryEditPanel({
         </Form.Group>
         <div className="mb-3" role="status">
           {pdfStats ? (
-            <>PDF {pdfStats.file_count.toLocaleString()}ea, {pdfStats.page_count.toLocaleString()}p, {Math.trunc(pdfStats.total_file_size / 1000).toLocaleString()}MB</>
+            <>{pdfStats.file_count.toLocaleString()}ea, {pdfStats.page_count.toLocaleString()}p, {Math.trunc(pdfStats.total_file_size / 1000).toLocaleString()}MB</>
           ) : statsError ? statsError : "PDF 통계 불러오는 중..."}
         </div>
         <hr />

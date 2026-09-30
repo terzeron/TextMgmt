@@ -164,9 +164,13 @@ vi.mock("../src/SimilarBooks", () => ({
 }));
 
 vi.mock("../src/Bookstore", () => ({
-  default: ({ onCategoriesFound: _onCategoriesFound }) => {
+  default: ({ onCategoriesFound: _onCategoriesFound, bookInfo, searchTrigger }) => {
     // 간접 테스트를 위해 즉시 호출
-    return <div data-testid="bookstore">Bookstore</div>;
+    return (
+      <div data-testid="bookstore" data-title={bookInfo?.title} data-search-trigger={searchTrigger}>
+        Bookstore
+      </div>
+    );
   },
 }));
 
@@ -271,6 +275,13 @@ function setupMockCategories(
  */
 function bridgeRawJsonGetReqToJsonGetReq() {
   mockRawJsonGetReq.mockImplementation((url, resolve, reject) => {
+    if (url.includes("/category-pdf-stats?")) {
+      resolve({
+        status: "success",
+        result: { file_count: 0, page_count: 0, total_file_size: 0 },
+      });
+      return;
+    }
     const bareUrl = url.split("?")[0];
     mockJsonGetReq(
       bareUrl,
@@ -350,6 +361,46 @@ describe("Edit", () => {
         (c) => c[0] === "/categories/1_fiction",
       );
       expect(hasCategoryCall).toBe(true);
+    });
+  });
+
+  it("책 디렉토리 화면에서 유사 검색 아래에 디렉토리명 서점 검색을 표시한다", async () => {
+    setupMockCategories();
+    render(<Edit />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-1_fiction")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+
+    await waitFor(() => {
+      const similarSearch = screen.getByTestId("similar-books");
+      const bookstoreSearch = screen.getByTestId("bookstore");
+      expect(similarSearch.compareDocumentPosition(bookstoreSearch) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(bookstoreSearch.dataset.title).toBe("1_fiction");
+      expect(bookstoreSearch.dataset.searchTrigger).toBe("1");
+    });
+  });
+
+  it("만화 디렉토리 화면에서 유사 검색 아래에 디렉토리명 서점 검색을 표시한다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") resolve(CATEGORIES);
+      else if (url.startsWith("/comics/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    render(<Edit basePath="/comics-edit" apiPrefix="/comics" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-1_fiction")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+
+    await waitFor(() => {
+      const similarSearch = screen.getByTestId("similar-books");
+      const bookstoreSearch = screen.getByTestId("bookstore");
+      expect(similarSearch.compareDocumentPosition(bookstoreSearch) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(bookstoreSearch.dataset.title).toBe("1_fiction");
+      expect(bookstoreSearch.dataset.searchTrigger).toBe("1");
     });
   });
 
