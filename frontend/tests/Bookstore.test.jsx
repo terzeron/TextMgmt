@@ -892,6 +892,144 @@ describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
     });
   });
 
+  it("자동 검색은 ISBN과 저자+제목 결과가 없으면 제목 검색으로 폴백한다", async () => {
+    rawJsonGetReq.mockImplementation((url, onSuccess) => {
+      const result = url.includes("title=") && !url.includes("author=")
+        ? [{ title: "제목 결과", category: "소설 > SF", book_url: "title-only" }]
+        : [];
+      setTimeout(() => onSuccess({ status: "success", result }), 0);
+    });
+
+    render(
+      <Bookstore
+        bookInfo={{ title: "제목", author: "저자", isbn: "978" }}
+        searchTrigger={1}
+      />,
+    );
+
+    expect(await screen.findAllByText("제목 결과")).toHaveLength(5);
+    const urls = rawJsonGetReq.mock.calls.map(([url]) => url);
+    expect(urls.some((url) => url.includes("isbn=978"))).toBe(true);
+    expect(urls.some((url) => url.includes("author=%EC%A0%80%EC%9E%90"))).toBe(true);
+    expect(urls.some((url) => url.includes("title=%EC%A0%9C%EB%AA%A9") && !url.includes("author="))).toBe(true);
+  });
+
+  it("자동 검색에서 저자+제목 결과를 반환하고 카테고리를 전달한다", async () => {
+    const onCategoriesFound = vi.fn();
+    rawJsonGetReq.mockImplementation((url, onSuccess) => {
+      const result = url.includes("author=")
+        ? [{
+            title: "검색 책",
+            author: "저자",
+            category: "소설 > 한국소설",
+            book_url: url,
+          }]
+        : [];
+      setTimeout(() => onSuccess({ status: "success", result }), 0);
+    });
+
+    render(
+      <Bookstore
+        bookInfo={{ title: "제목", author: "저자", isbn: "978" }}
+        searchTrigger={1}
+        onCategoriesFound={onCategoriesFound}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onCategoriesFound.mock.calls.at(-1)[0]).toEqual(
+        expect.objectContaining({ yes24_0_0: "소설 한국소설" }),
+      );
+    });
+  });
+
+  it("저자+제목 버튼의 병렬 검색 결과로 카테고리를 전달한다", async () => {
+    const onCategoriesFound = vi.fn();
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({
+        status: "success",
+        result: [{
+          title: "책",
+          category: "소설 > 한국소설",
+          book_url: "book",
+        }],
+      }), 0);
+    });
+
+    render(
+      <Bookstore
+        bookInfo={{ title: "제목", author: "저자", isbn: "" }}
+        onCategoriesFound={onCategoriesFound}
+      />,
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" })[0]);
+
+    await waitFor(() => {
+      expect(onCategoriesFound.mock.calls.at(-1)[0]).toEqual(
+        expect.objectContaining({ yes24_0_0: "소설 한국소설" }),
+      );
+    });
+  });
+
+  it("자동 검색 요청 오류는 로그를 남기고 빈 결과로 폴백한다", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    rawJsonGetReq.mockImplementation((_url, _onSuccess, onError) => {
+      setTimeout(() => onError("network error"), 0);
+    });
+
+    render(
+      <Bookstore
+        bookInfo={{ title: "제목", author: "저자", isbn: "" }}
+        searchTrigger={1}
+      />,
+    );
+    await waitFor(() => expect(rawJsonGetReq).toHaveBeenCalled());
+    await act(async () => {
+      for (const [, , onError] of rawJsonGetReq.mock.calls) {
+        onError("network error");
+      }
+    });
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith("network error"));
+    errorSpy.mockRestore();
+  });
+
+  it("ISBN 기반 자동 검색 요청 실패는 제목 검색으로 계속 진행한다", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    rawJsonGetReq.mockImplementation((url, onSuccess, onError) => {
+      if (url.includes("isbn=")) {
+        setTimeout(() => onError("ISBN network error"), 0);
+      } else {
+        setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+      }
+    });
+
+    render(
+      <Bookstore
+        bookInfo={{ title: "제목", author: "저자", isbn: "978" }}
+        searchTrigger={1}
+      />,
+    );
+
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith("ISBN network error"));
+    expect(rawJsonGetReq.mock.calls.some(([url]) => url.includes("title="))).toBe(true);
+    errorSpy.mockRestore();
+  });
+
+  it("ISBN이 있어도 저자+제목 버튼은 제목과 저자만 요청한다", async () => {
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+    });
+    render(
+      <Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "978" }} />,
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" })[0]);
+
+    await waitFor(() => expect(rawJsonGetReq).toHaveBeenCalled());
+    expect(rawJsonGetReq.mock.calls[0][0]).toContain("title=");
+    expect(rawJsonGetReq.mock.calls[0][0]).toContain("author=");
+    expect(rawJsonGetReq.mock.calls[0][0]).not.toContain("isbn=");
+  });
+
   it("ISBN이 없으면 제목과 저자+제목 검색에서 각각 2건씩 합쳐 최대 4건을 표시한다", async () => {
     rawJsonGetReq.mockImplementation((url, onSuccess) => {
       const titleOnly = !url.includes("author=");

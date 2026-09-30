@@ -1,0 +1,272 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+
+const { mockJsonPostReq, mockJsonPutReq, mockRawJsonGetReq } = vi.hoisted(() => ({
+  mockJsonPostReq: vi.fn(),
+  mockJsonPutReq: vi.fn(),
+  mockRawJsonGetReq: vi.fn(),
+}));
+
+vi.mock("../src/Common", () => ({
+  jsonPostReq: mockJsonPostReq,
+  jsonPutReq: mockJsonPutReq,
+  rawJsonGetReq: mockRawJsonGetReq,
+}));
+
+vi.mock("../src/Actions", () => ({
+  default: ({
+    onPreviousDirectory,
+    onNextDirectory,
+    moveToUpperButtonClicked,
+    moveToDirectoryButtonClicked,
+    selectDirectoryButtonClicked,
+    toNextEntryClicked,
+    toPrevEntryClicked,
+  }) => (
+    <div>
+      <button onClick={onPreviousDirectory}>이전 디렉토리</button>
+      <button onClick={onNextDirectory}>다음 디렉토리</button>
+      <button onClick={moveToUpperButtonClicked}>상위로 이동</button>
+      <button onClick={moveToDirectoryButtonClicked}>이동</button>
+      <button onClick={selectDirectoryButtonClicked}>카테고리 선택</button>
+      <button onClick={toNextEntryClicked}>다음 항목</button>
+      <button onClick={toPrevEntryClicked}>이전 항목</button>
+    </div>
+  ),
+}));
+
+import DirectoryEditPanel from "../src/DirectoryEditPanel";
+
+afterEach(cleanup);
+
+const props = (overrides = {}) => ({
+  directory: { category: "comics/series", name: "series" },
+  apiPrefix: "/comics",
+  showDirectoryNavigation: true,
+  selectedCategory: "comics",
+  otherCategoryList: ["comics", "other"],
+  previousDirectoryDisabled: false,
+  nextDirectoryDisabled: false,
+  onPreviousDirectory: vi.fn(),
+  onNextDirectory: vi.fn(),
+  isProcessing: false,
+  onSelectCategory: vi.fn(),
+  onMove: vi.fn(),
+  onComplete: vi.fn(),
+  onError: vi.fn(),
+  ...overrides,
+});
+
+describe("DirectoryEditPanel", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockRawJsonGetReq.mockImplementation((_url, success) =>
+      success({
+        status: "success",
+        result: { file_count: 3, page_count: 120, total_file_size: 5000 },
+      }),
+    );
+  });
+
+  it("통계를 표시하고 디렉토리 탐색 액션을 전달한다", async () => {
+    const values = props();
+    render(<DirectoryEditPanel {...values} />);
+
+    expect(await screen.findByText("3ea, 120p, 5MB")).toBeTruthy();
+    fireEvent.click(screen.getByText("이전 디렉토리"));
+    fireEvent.click(screen.getByText("다음 디렉토리"));
+    fireEvent.click(screen.getByText("상위로 이동"));
+    fireEvent.click(screen.getByText("이동"));
+    fireEvent.click(screen.getByText("카테고리 선택"));
+    fireEvent.click(screen.getByText("다음 항목"));
+    fireEvent.click(screen.getByText("이전 항목"));
+    expect(values.onPreviousDirectory).toHaveBeenCalledOnce();
+    expect(values.onNextDirectory).toHaveBeenCalledOnce();
+    expect(values.onMove).toHaveBeenCalledWith("series");
+    expect(values.onSelectCategory).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [
+      "API 오류 메시지",
+      (_url, success) => success({ status: "error", error: "통계 오류" }),
+      "통계 오류",
+    ],
+    [
+      "메시지가 없는 API 오류",
+      (_url, success) => success({ status: "error" }),
+      "PDF 통계를 불러오지 못했습니다.",
+    ],
+    [
+      "전송 오류",
+      (_url, _success, failure) => failure(),
+      "PDF 통계를 불러오지 못했습니다.",
+    ],
+  ])("통계 조회 %s를 표시한다", async (_label, implementation, message) => {
+    mockRawJsonGetReq.mockImplementation(implementation);
+    render(<DirectoryEditPanel {...props()} />);
+    expect(await screen.findByText(message)).toBeTruthy();
+  });
+
+  it("이름이 비었거나 경로 구분자가 있으면 변경을 거부한다", () => {
+    const values = props();
+    render(<DirectoryEditPanel {...values} />);
+    const name = screen.getAllByRole("textbox")[0];
+    fireEvent.change(name, { target: { value: " /invalid " } });
+    fireEvent.click(screen.getByText("이름 변경"));
+    expect(values.onError).toHaveBeenCalledWith(
+      "디렉토리 이름을 입력하세요. 이름에는 '/'를 사용할 수 없습니다.",
+    );
+
+    fireEvent.change(name, { target: { value: "   " } });
+    expect(screen.getByText("이름 변경").disabled).toBe(true);
+    expect(mockJsonPutReq).not.toHaveBeenCalled();
+  });
+
+  it("같은 이름은 요청하지 않고 유효한 이름은 부모 경로 안에서 변경한다", () => {
+    const values = props();
+    render(<DirectoryEditPanel {...values} />);
+    fireEvent.click(screen.getByText("이름 변경"));
+    expect(mockJsonPutReq).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getAllByRole("textbox")[0], {
+      target: { value: "  volume  " },
+    });
+    mockJsonPutReq.mockImplementation((_url, _body, success, _failure, done) => {
+      success();
+      done();
+    });
+    fireEvent.click(screen.getByText("이름 변경"));
+    expect(mockJsonPutReq).toHaveBeenCalledWith(
+      "/comics/categories/rename",
+      { old_category: "comics/series", new_category: "comics/volume" },
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(values.onComplete).toHaveBeenCalledWith(
+      "디렉토리 이름을 변경했습니다.",
+      { type: "rename", category: "comics/volume" },
+    );
+  });
+
+  it("최상위 디렉토리 이름 변경 실패를 표시한다", () => {
+    const values = props({ directory: { category: "series", name: "series" } });
+    mockJsonPutReq.mockImplementation((_url, _body, _success, failure, done) => {
+      failure("충돌");
+      done();
+    });
+    render(<DirectoryEditPanel {...values} />);
+    fireEvent.change(screen.getAllByRole("textbox")[0], {
+      target: { value: "new-series" },
+    });
+    fireEvent.click(screen.getByText("이름 변경"));
+    expect(mockJsonPutReq).toHaveBeenCalledWith(
+      "/comics/categories/rename",
+      { old_category: "series", new_category: "new-series" },
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(values.onError).toHaveBeenCalledWith(
+      "디렉토리 변경에 실패했습니다. 충돌",
+    );
+  });
+
+  it("이름 변경 요청 중에는 중복 제출을 막는다", () => {
+    mockJsonPutReq.mockImplementation(() => {});
+    render(<DirectoryEditPanel {...props()} />);
+    fireEvent.change(screen.getAllByRole("textbox")[0], {
+      target: { value: "new-series" },
+    });
+    fireEvent.click(screen.getByText("이름 변경"));
+    expect(screen.getByText("처리 중...").disabled).toBe(true);
+    expect(screen.getByText("삭제").disabled).toBe(true);
+  });
+
+  it("삭제 취소 시 요청하지 않고 삭제 성공을 부모에게 알린다", () => {
+    const values = props();
+    render(<DirectoryEditPanel {...values} />);
+    vi.mocked(window.confirm).mockReturnValueOnce(false);
+    fireEvent.click(screen.getByText("삭제"));
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+
+    mockJsonPostReq.mockImplementation((_url, _body, success, _failure, done) => {
+      success();
+      done();
+    });
+    fireEvent.click(screen.getByText("삭제"));
+    expect(mockJsonPostReq).toHaveBeenCalledWith(
+      "/comics/categories/delete",
+      { category: "comics/series" },
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(values.onComplete).toHaveBeenCalledWith(
+      "디렉토리와 하위 파일을 삭제했습니다.",
+      { type: "delete", category: "comics/series" },
+    );
+  });
+
+  it("삭제 실패와 bulk rename 실패를 표시하고 bulk 성공 실패 항목을 나열한다", async () => {
+    const values = props();
+    render(<DirectoryEditPanel {...values} />);
+    mockJsonPostReq.mockImplementation((_url, _body, _success, failure, done) => {
+      failure();
+      done();
+    });
+    fireEvent.click(screen.getByText("삭제"));
+    expect(values.onError).toHaveBeenCalledWith(
+      "디렉토리 삭제에 실패했습니다. undefined",
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("파일 이름에 적용할 패턴"), {
+      target: { value: "old" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("정규표현식 치환 문자열"), {
+      target: { value: "new" },
+    });
+    fireEvent.click(screen.getByText("파일 이름 변경"));
+    expect(await screen.findByText("오류: 파일 이름 변경 요청에 실패했습니다.")).toBeTruthy();
+
+    mockJsonPostReq.mockImplementation((_url, _body, success, _failure, done) => {
+      success({
+        changed_count: 2,
+        failed_count: 1,
+        failures: [{ file: "bad.pdf", error: "잠김" }],
+      });
+      done();
+    });
+    fireEvent.click(screen.getByText("파일 이름 변경"));
+    expect(await screen.findByText("변경된 파일 2개, 실패 1개")).toBeTruthy();
+    expect(screen.getByText("bad.pdf: 잠김")).toBeTruthy();
+  });
+
+  it("실패 없는 bulk rename을 표시한다", async () => {
+    mockJsonPostReq.mockImplementation((_url, _body, success, _failure, done) => {
+      success({ changed_count: 0 });
+      done();
+    });
+    render(<DirectoryEditPanel {...props()} />);
+    fireEvent.change(screen.getByPlaceholderText("파일 이름에 적용할 패턴"), {
+      target: { value: "old" },
+    });
+    fireEvent.click(screen.getByText("파일 이름 변경"));
+    expect(await screen.findByText("변경된 파일 0개")).toBeTruthy();
+    expect(screen.queryByRole("listitem")).toBeNull();
+  });
+
+  it("일괄 변경 요청 중에는 입력과 재실행을 막는다", () => {
+    mockJsonPostReq.mockImplementation(() => {});
+    render(<DirectoryEditPanel {...props()} />);
+    fireEvent.change(screen.getByPlaceholderText("파일 이름에 적용할 패턴"), {
+      target: { value: "old" },
+    });
+    fireEvent.click(screen.getByText("파일 이름 변경"));
+    expect(screen.getByText("변경 중...").disabled).toBe(true);
+    expect(screen.getByPlaceholderText("파일 이름에 적용할 패턴").disabled).toBe(true);
+  });
+});

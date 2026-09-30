@@ -82,7 +82,7 @@ export default function SimilarBooks({
   useEffect(() => {
     if (bookId) {
       loadFirstPage((books) => {
-        if (autoOpenHighScore && books.some((b) => b.score >= 90)) {
+        if (autoOpenHighScore && books.some((b) => b.score > 90)) {
           setIsOpen(true);
         }
       });
@@ -361,7 +361,7 @@ export default function SimilarBooks({
                 return (
                 <div
                   key={book.book_id}
-                  className={`search-result-item ${book.score >= 90 ? "highlight-secondary" : ""}`.trim()}
+                  className={`search-result-item ${book.score > 90 ? "highlight-secondary" : ""}`.trim()}
                 >
                   <span
                     className="search-result-item-text"

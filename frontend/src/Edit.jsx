@@ -234,6 +234,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
         (book) => {
           // URL의 category 대신 API 응답의 실제 category 사용 (위조 방지)
           const realCategory = book["category"] || "_root";
+          setSelectedDirectory(null);
           setSelectedEntryId(`${realCategory}/${bookId}`);
           setOriginalBookInfo(book);
           setBookInfo(decomposeTitle(book));
@@ -1188,6 +1189,9 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
               onCategoryChange={handleSearchCategoryChange}
               categoryLoading={searchInProgress}
             />
+          )}
+          {errorMessage && !bookInfo["book_id"] && !selectedDirectory && (
+            <Alert variant="danger">{errorMessage}</Alert>
           )}
       {(bookInfo["book_id"] || selectedDirectory) && (
             <>

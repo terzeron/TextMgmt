@@ -11,6 +11,7 @@ import {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -22,10 +23,15 @@ let renditionHandlers;
 let lastRendition = null;
 let lastBook = null;
 let containerMetrics;
+let mockViews = [];
 
 let failNextDisplay = false;
 let hangDisplay = false;
 let mockCoverUrl = null;
+let rejectReady = false;
+let rejectCoverUrl = false;
+let failEveryDisplay = false;
+let omitCoverUrl = false;
 
 function setFailNextDisplay() {
   failNextDisplay = true;
@@ -73,6 +79,7 @@ function createMockRendition() {
       for (const h of renditionHandlers[name] || []) h(...args);
     },
     display: vi.fn((target) => {
+      if (failEveryDisplay) return Promise.reject(new Error("표시 실패"));
       if (failNextDisplay && target !== undefined) {
         failNextDisplay = false;
         return Promise.reject(new Error("invalid location"));
@@ -92,15 +99,19 @@ function createMockRendition() {
       font: vi.fn(),
     },
     hooks: { content: { register: vi.fn() } },
-    manager: { stage: { container } },
+    manager: { stage: { container }, views: { all: () => mockViews } },
   };
   return rendition;
 }
 
 function createMockBook() {
-  return {
-    ready: Promise.resolve(),
-    coverUrl: vi.fn(() => Promise.resolve(mockCoverUrl)),
+  const book = {
+    ready: rejectReady ? Promise.reject(new Error("준비 실패")) : Promise.resolve(),
+    coverUrl: vi.fn(() =>
+      rejectCoverUrl
+        ? Promise.reject(new Error("표지 실패"))
+        : Promise.resolve(mockCoverUrl),
+    ),
     loaded: { metadata: Promise.resolve({ title: "테스트 책 제목" }) },
     spine: Array.from({ length: 12 }, (_, i) => ({
       href: `OEBPS/Text/section${i}.html`,
@@ -113,6 +124,8 @@ function createMockBook() {
     }),
     destroy: vi.fn(),
   };
+  if (omitCoverUrl) delete book.coverUrl;
+  return book;
 }
 
 vi.mock("epubjs", () => ({
@@ -154,6 +167,7 @@ const localStorageMock = (() => {
     clear: () => {
       store = {};
     },
+    _get: (key) => store[key] ?? null,
     _set: (key, value) => {
       store[key] = value;
     },
@@ -230,11 +244,17 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     mockCoverUrl = null;
     failNextDisplay = false;
     hangDisplay = false;
+    rejectReady = false;
+    rejectCoverUrl = false;
+    failEveryDisplay = false;
+    omitCoverUrl = false;
     localStorageMock.clear();
-    localStorageMock.getItem.mockClear();
+    localStorageMock.getItem.mockReset();
+    localStorageMock.getItem.mockImplementation((key) => localStorageMock._get(key));
     localStorageMock.setItem.mockClear();
     globalThis.fetch.mockClear();
     containerMetrics = { scrollTop: 0, scrollHeight: 2000, clientHeight: 500 };
+    mockViews = [];
     mqMock = null;
     mqListeners = [];
   });
@@ -308,6 +328,187 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     await waitFor(() =>
       expect(screen.queryByText("로딩 중...")).toBeNull(),
     );
+  });
+
+  it("EPUB 렌더 및 파싱 이벤트를 오류 메시지로 표시한다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await waitFor(() => expect(lastRendition).not.toBeNull());
+
+    await act(async () => {
+      lastRendition._emit("displayerror", new Error("화면 오류"));
+    });
+    expect(screen.getByText("EPUB 렌더링 오류: 화면 오류")).toBeTruthy();
+
+    await act(async () => {
+      lastRendition._emit("error", "문서 오류");
+    });
+    expect(screen.getByText("EPUB 파싱 오류: 문서 오류")).toBeTruthy();
+  });
+
+  it("책 준비 실패 후 표지가 있으면 표지를 거쳐 EPUB 표시를 복구한다", async () => {
+    rejectReady = true;
+    mockCoverUrl = "blob:fallback-cover";
+    render(<ViewEPUB bookId={1} />);
+
+    await waitFor(() => expect(lastRendition?.display).toHaveBeenCalled());
+    await act(async () => {
+      lastRendition._emit("displayed");
+    });
+    expect(screen.getByTestId("epub-cover-page")).toBeTruthy();
+    expect(lastBook.coverUrl).toHaveBeenCalledOnce();
+  });
+
+  it("책 준비와 복구 표시가 모두 실패하면 복구 오류를 표시한다", async () => {
+    rejectReady = true;
+    rejectCoverUrl = true;
+    failEveryDisplay = true;
+    render(<ViewEPUB bookId={1} />);
+
+    expect(await screen.findByText("EPUB 표시 실패: 표시 실패")).toBeTruthy();
+    expect(localStorageMock.removeItem).toHaveBeenCalledWith("epub_location_1");
+  });
+
+  it("저장 위치를 읽을 수 없으면 오류를 삼키고 처음부터 표시한다", async () => {
+    localStorageMock.getItem.mockImplementation((key) => {
+      if (key.startsWith("epub_location_")) {
+        throw new Error("storage disabled");
+      }
+      return null;
+    });
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    expect(lastRendition.display).toHaveBeenCalledWith();
+  });
+
+  it("표지 함수를 지원하지 않는 책은 표지 없이 복구한다", async () => {
+    rejectReady = true;
+    omitCoverUrl = true;
+    render(<ViewEPUB bookId={1} />);
+
+    await waitFor(() => expect(lastRendition?.display).toHaveBeenCalled());
+    expect(screen.queryByTestId("epub-cover-page")).toBeNull();
+  });
+
+  it("rendered 신호와 이미지·폰트·크기 변경마다 뷰를 다시 확장한다", async () => {
+    const observers = [];
+    class MockResizeObserver {
+      constructor(callback) {
+        this.callback = callback;
+        this.observe = vi.fn();
+        observers.push(this);
+      }
+    }
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+
+    render(<ViewEPUB bookId={1} />);
+    await waitFor(() => expect(lastRendition).not.toBeNull());
+
+    const contentDocument = document.implementation.createHTMLDocument();
+    const image = contentDocument.createElement("img");
+    const loadedImage = contentDocument.createElement("img");
+    Object.defineProperty(image, "complete", { value: false });
+    Object.defineProperty(loadedImage, "complete", { value: true });
+    const loadListener = vi.spyOn(image, "addEventListener");
+    Object.defineProperty(contentDocument, "images", {
+      configurable: true,
+      value: [image, loadedImage],
+    });
+    Object.defineProperty(contentDocument, "fonts", {
+      configurable: true,
+      value: { ready: Promise.resolve() },
+    });
+    const view = {
+      contents: { document: contentDocument },
+      expand: vi.fn(),
+    };
+
+    act(() => lastRendition._emit("rendered", {}, view));
+    expect(view.expand).toHaveBeenCalled();
+    expect(observers[0].observe).toHaveBeenCalledWith(contentDocument.body);
+    expect(loadListener).toHaveBeenCalledWith("load", expect.any(Function), {
+      once: true,
+    });
+
+    act(() => observers[0].callback());
+    image.dispatchEvent(new Event("load"));
+    await waitFor(() => {
+      expect(view.expand.mock.calls.length).toBeGreaterThanOrEqual(6);
+    }, { timeout: 3000 });
+  });
+
+  it("본문 문서가 없거나 head·body가 없으면 콘텐츠 후처리를 건너뛴다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await waitFor(() => expect(lastRendition).not.toBeNull());
+    const [lockOverflow, applyFont] = lastRendition.hooks.content.register.mock.calls.map(
+      ([callback]) => callback,
+    );
+    expect(() => lockOverflow({})).not.toThrow();
+    expect(() => applyFont({ document: {} })).not.toThrow();
+    expect(() => lastRendition._emit("rendered", {}, { contents: { document: {} } })).not.toThrow();
+  });
+
+  it("글꼴 변경 시 현재 열린 뷰의 본문 스타일도 갱신한다", async () => {
+    const contentDocument = document.implementation.createHTMLDocument();
+    const view = {
+      contents: { document: contentDocument },
+      expand: vi.fn(),
+    };
+    mockViews = [view];
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+
+    fireEvent.change(screen.getByLabelText("글꼴 선택"), {
+      target: { value: "'Noto Sans CJK KR', sans-serif" },
+    });
+
+    expect(contentDocument.getElementById("epub-font-face-override")).toBeTruthy();
+    expect(contentDocument.getElementById("epub-font-family-override").textContent).toContain("sans-serif");
+    expect(view.expand).toHaveBeenCalled();
+  });
+
+  it("글자 크기가 최대이면 확대를 막고 축소는 적용한다", async () => {
+    localStorageMock._set("epub_fontSize", "160");
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+
+    const increase = screen.getByRole("button", { name: "글자 크기 늘리기" });
+    const decrease = screen.getByRole("button", { name: "글자 크기 줄이기" });
+    expect(increase.disabled).toBe(true);
+    fireEvent.click(decrease);
+    expect(lastRendition.themes.fontSize).toHaveBeenLastCalledWith("140%");
+  });
+
+  it("본문 방향키 왼쪽으로 이전 페이지를 연다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+
+    fireEvent.keyDown(document, { key: "ArrowLeft" });
+    expect(lastRendition.prev).toHaveBeenCalledOnce();
+  });
+
+  it("연속 위치 변경은 이전 저장 타이머를 취소한다", async () => {
+    vi.useFakeTimers();
+    render(<ViewEPUB bookId={1} />);
+    await openBookWithoutTimers();
+    await act(async () => {
+      lastRendition._emit("relocated", {
+        start: { cfi: "epubcfi(/6/2)" },
+      });
+      lastRendition._emit("relocated", {
+        start: { cfi: "epubcfi(/6/4)" },
+      });
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(localStorage.getItem("epub_location_1")).toBe("epubcfi(/6/4)");
+  });
+
+  it("표지 페이지에서 왼쪽 방향키로 이전 본문으로 이동하지 않는다", async () => {
+    mockCoverUrl = "blob:epub-cover";
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+
+    fireEvent.keyDown(document, { key: "ArrowLeft" });
+    expect(lastRendition.prev).not.toHaveBeenCalled();
   });
 
   it("30초 내 로딩 미완료 시 타임아웃 에러를 표시한다", async () => {

@@ -309,8 +309,6 @@ export default function Bookstore(props) {
 
   // 특정 검색 방법으로 검색 수행 (버튼 클릭용)
   const fetchWithMethod = (store, method) => {
-    const storeInfo = STORES.find((s) => s.key === store);
-
     // 검색어 결정 (default 절이 모든 경우를 덮으므로 초기값 불필요)
     let searchTerms;
     switch (method) {
@@ -331,18 +329,6 @@ export default function Bookstore(props) {
     // 이미 해당 검색 결과가 있으면 재사용
     if (data[cacheKey] && !data[cacheKey].loading && !data[cacheKey].error) {
       setData((prev) => ({ ...prev, [store]: data[cacheKey] }));
-      return;
-    }
-
-    // ISBN 미지원 서점에서 ISBN 검색 시도 시 에러 표시
-    if (method === "isbn" && !storeInfo?.supportsIsbn) {
-      setData((prev) => ({
-        ...prev,
-        [store]: {
-          error: true,
-          message: "이 서점은 ISBN 검색을 지원하지 않습니다.",
-        },
-      }));
       return;
     }
 
@@ -389,14 +375,6 @@ export default function Bookstore(props) {
         if (isbn) params.append("isbn", isbn);
         if (title) params.append("title", title);
         if (author) params.append("author", author);
-    }
-
-    if (params.toString() === "") {
-      setData((prev) => ({
-        ...prev,
-        [store]: { error: true, message: "검색어가 없습니다." },
-      }));
-      return;
     }
 
     rawJsonGetReq(
