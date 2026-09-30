@@ -10,7 +10,7 @@
  * 책 선택 시의 side effect(제목 분해, 뷰어 URL 조립, 히스토리 갱신 등)는
  * 두 화면이 실제로 다르므로 각 컴포넌트에 남겨 둔다.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { jsonGetReq, rawJsonGetReq } from "./Common";
 import {
@@ -48,9 +48,11 @@ export function useCategoryTree({ apiPrefix, role, onError }) {
   const [folderData, setFolderData] = useState([]);
   const [categoryList, setCategoryList] = useState([]);
   const [hiddenCategories, setHiddenCategories] = useState(new Set());
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
 
   // 카테고리 목록을 받아 2단계 폴더 계층을 만든다.
-  useEffect(() => {
+  const reloadCategoryTree = useCallback(() => {
     const categoryListUrl = apiPrefix + "/categories";
     jsonGetReq(
       categoryListUrl,
@@ -132,15 +134,17 @@ export function useCategoryTree({ apiPrefix, role, onError }) {
         setCategoryList(allCategories);
       },
       (error) => {
-        if (onError) onError(error);
+        if (onErrorRef.current) onErrorRef.current(error);
       },
     );
+  }, [apiPrefix, role]);
 
+  useEffect(() => {
+    reloadCategoryTree();
     return () => {
       setFolderData([]);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- onError는 매 렌더 새 참조라 deps에서 제외 (의도된 누락)
-  }, [apiPrefix, role]);
+  }, [reloadCategoryTree]);
 
   /**
    * 카테고리의 책 목록을 커서 기반으로 한 페이지씩 이어 불러온다.
@@ -263,6 +267,7 @@ export function useCategoryTree({ apiPrefix, role, onError }) {
     setFolderData,
     categoryList,
     hiddenCategories,
+    reloadCategoryTree,
     loadCategoryPage,
     loadBookById,
   };

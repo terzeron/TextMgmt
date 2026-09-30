@@ -351,6 +351,18 @@ class ESManager:
         query = {"bool": {"should": [{"match": {"title": {"query": keyword, "boost": 10}}}, {"match": {"author": {"query": keyword, "boost": 5}}}, {"match": {"category.nori": {"query": keyword, "boost": 3}}}, {"match": {"summary": {"query": keyword, "boost": 1}}}], "minimum_should_match": 1}}
         return self._search(query, max_result_count=max_result_count, source_fields=self.LIST_SOURCE_FIELDS)
 
+    def search_similar_names(self, name: str, author: str = "", max_result_count: int = 20) -> list[tuple[int, dict[str, Any], float]]:
+        """이름과 추출한 저자만 사용해 유사 파일을 찾는다."""
+        wildcard_name = name.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
+        should = [
+            {"match": {"title": {"query": name, "fuzziness": "AUTO", "boost": 8}}},
+            {"wildcard": {"file_path": {"value": f"*{wildcard_name}*", "boost": 6}}},
+        ]
+        if author:
+            should.append({"match": {"author": {"query": author, "fuzziness": "AUTO", "boost": 10}}})
+        query = {"bool": {"should": should, "minimum_should_match": 1}}
+        return self._search(query, max_result_count=max_result_count, source_fields=self.LIST_SOURCE_FIELDS)
+
     def search_by_keyword_paged(self, keyword: str, size: int = 10, offset: int = 0, exclude_categories: list[str] | None = None, category: str | None = None) -> tuple[list[tuple[int, dict[str, Any], float]], int]:
         LOGGER.debug("search_by_keyword_paged(keyword='%s', size=%d, offset=%d, exclude_categories=%s, category=%s)", keyword, size, offset, exclude_categories, category)
         query: dict[str, Any] = {
@@ -568,6 +580,87 @@ class ESManager:
         body = {"size": 1, "aggs": {"unique_values": {"terms": {"field": field_name, "size": size}}}}
         result = self.es.search(index=self.index_name, body=body)
         return {bucket["key"]: bucket["doc_count"] for bucket in result["aggregations"]["unique_values"]["buckets"]}
+
+    def search_category_pdf_stats(self, category: str) -> dict[str, int]:
+        """카테고리와 하위 카테고리의 PDF 수, 페이지 합계, 파일 크기를 계산한다."""
+        query = {
+            "bool": {
+                "filter": [{
+                    "bool": {
+                        "should": [
+                            {"term": {"category": category}},
+                            {"prefix": {"category": category + "/"}},
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                }]
+            }
+        }
+        response = self.es.search(
+            index=self.index_name,
+            query=query,
+            size=0,
+            aggs={
+                "pdfs": {
+                    "filter": {"term": {"file_type": "pdf"}},
+                    "aggs": {
+                        "total_pages": {"sum": {"field": "page_count"}},
+                        "total_file_size": {"sum": {"field": "file_size"}},
+                    },
+                },
+            },
+        )
+        pdfs = response["aggregations"]["pdfs"]
+        return {
+            "file_count": pdfs["doc_count"],
+            "page_count": int(pdfs["total_pages"]["value"] or 0),
+            "total_file_size": int(pdfs["total_file_size"]["value"] or 0),
+        }
+
+    def search_categories_pdf_stats(self, categories: list[str]) -> dict[str, dict[str, int]]:
+        """여러 카테고리와 하위 경로의 PDF 수·페이지 합계를 한 번에 집계한다."""
+        if not categories:
+            return {}
+        category_filters = {
+            category: {
+                "bool": {
+                    "should": [
+                        {"term": {"category": category}},
+                        {"prefix": {"category": category + "/"}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+            for category in categories
+        }
+        response = self.es.search(
+            index=self.index_name,
+            query={"match_all": {}},
+            size=0,
+            aggs={
+                "by_category": {
+                    "filters": {"filters": category_filters},
+                    "aggs": {
+                        "pdfs": {
+                            "filter": {"term": {"file_type": "pdf"}},
+                            "aggs": {
+                                "total_pages": {"sum": {"field": "page_count"}},
+                                "total_file_size": {"sum": {"field": "file_size"}},
+                            },
+                        },
+                    },
+                }
+            },
+        )
+        buckets = response["aggregations"]["by_category"]["buckets"]
+        return {
+            category: {
+                "file_count": bucket["pdfs"]["doc_count"],
+                "page_count": int(bucket["pdfs"]["total_pages"]["value"] or 0),
+                "total_file_size": int(bucket["pdfs"]["total_file_size"]["value"] or 0),
+            }
+            for category, bucket in buckets.items()
+        }
 
     def iter_all_category_file_paths(self, batch_size: int = 10000) -> Iterator[tuple[str, str, int]]:
         """전체 문서를 (category, file_path, 문서 수)로 훑는다.

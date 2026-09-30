@@ -28,6 +28,7 @@ import Actions from "./Actions";
 import SimilarBooks from "./SimilarBooks";
 import SearchResult from "./SearchResult";
 import ViewSingle from "./ViewSingle";
+import DirectoryEditPanel from "./DirectoryEditPanel";
 import { DateTime } from "luxon";
 import {
   parseEntryId,
@@ -46,6 +47,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
   const isMobile = useIsMobile();
   const params = useParams();
   const [searchParams] = useSearchParams();
+  const directoryTarget = searchParams.get("directory");
   // 방법 B: /edit/bookId?category=... (우선) → 하위호환: /edit/category/bookId (폴백)
   const { routeCategory, routeBookId } = parseRouteTarget(
     params["*"],
@@ -64,7 +66,9 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
   } = useOutletContext();
   // URL로 책을 바로 열면 편집 영역에 집중하도록 디렉토리를 접은 채 시작한다.
   // 책 없이 들어오면 디렉토리가 유일한 탐색 수단이므로 펼친 채로 둔다.
-  const [isFolderOpen, setIsFolderOpen] = useState(() => !routeBookId);
+  const [isFolderOpen, setIsFolderOpen] = useState(
+    () => !routeBookId || Boolean(directoryTarget),
+  );
   const [expandedItems, setExpandedItems] = useState([]);
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
@@ -75,6 +79,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
   const [nextEntryId, setNextEntryId] = useState("");
   const [prevEntryId, setPrevEntryId] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
+  const [selectedDirectory, setSelectedDirectory] = useState(null);
 
   const [originalBookInfo, setOriginalBookInfo] = useState({});
   const [bookInfo, setBookInfo] = useState({});
@@ -103,6 +108,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
     categoryList,
     loadCategoryPage,
     loadBookById,
+    reloadCategoryTree,
   } = useCategoryTree({
     apiPrefix,
     onError: (error) =>
@@ -116,6 +122,23 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
       return () => clearTimeout(timer);
     }
   }, [successMessage]);
+
+  useEffect(() => {
+    if (!selectedDirectory) return;
+    const parentCategory = selectedDirectory.category.includes("/")
+      ? selectedDirectory.category.slice(0, selectedDirectory.category.lastIndexOf("/"))
+      : "";
+    setOtherCategoryList(
+      categoryList
+        .filter((category) =>
+          category !== "_root" &&
+          !category.includes("/") &&
+          category !== selectedDirectory.category &&
+          category !== parentCategory,
+        )
+        .sort((a, b) => a.localeCompare(b)),
+    );
+  }, [categoryList, selectedDirectory]);
 
   useEffect(() => {
     if (errorMessage) {
@@ -265,6 +288,37 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
       // 2단계 트리에서 검색
       const selectedFolderData = findFolderInTree(folderData, selectedEntryId);
       if (selectedFolderData && selectedFolderData.fileType === "folder") {
+        const directoryName = selectedFolderData.id.split("/").pop();
+        const parentCategory = selectedFolderData.id.includes("/")
+          ? selectedFolderData.id.slice(0, selectedFolderData.id.lastIndexOf("/"))
+          : "";
+        setSelectedDirectory(
+          selectedFolderData.isVirtualParent
+            ? null
+            : {
+                category: selectedFolderData.id,
+                name: directoryName,
+                author: decomposeTitle({
+                  author: "",
+                  title: directoryName,
+                  file_type: "dir",
+                }).author,
+              },
+        );
+        setBookInfo({});
+        setSelectedEntryId("");
+        setSelectedCategory("");
+        setOtherCategoryList(
+          categoryList
+            .filter(
+              (category) =>
+                category !== "_root" &&
+                !category.includes("/") &&
+                category !== selectedFolderData.id &&
+                category !== parentCategory,
+            )
+            .sort((a, b) => a.localeCompare(b)),
+        );
         // category entry (폴더)
 
         // 가상 부모 클릭 시 API 호출 안 함
@@ -277,6 +331,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
           loadCategoryPage(selectedEntryId);
         }
       } else if (selectedFolderData && selectedFolderData.book) {
+        setSelectedDirectory(null);
         // 최상위 파일 (folderData에 직접 포함된 파일)
         const book = selectedFolderData.book;
         const bookId = book["book_id"];
@@ -314,6 +369,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
         setPrevEntryId(prevEntryId);
         prevEntryIdRef.current = prevEntryId;
       } else {
+        setSelectedDirectory(null);
         // book entry
         const parsed = parseEntryId(selectedEntryId);
         /* v8 ignore next -- tree book entries are emitted in parseable category/bookId form. */
@@ -418,12 +474,24 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
   // 라우트 파라미터가 실제로 변경되면 초기화 플래그 리셋
   useEffect(() => {
     routeInitializedRef.current = false;
-  }, [routeCategory, routeBookId]);
+  }, [routeCategory, routeBookId, directoryTarget]);
 
   useEffect(() => {
     // 이미 URL 기반 초기 선택이 완료된 경우 재실행 방지
     // (삭제/변경 후 folderData 변경으로 인한 삭제된 항목 재선택 버그 방지)
     if (routeInitializedRef.current) return;
+
+    if (directoryTarget && folderData.length > 0) {
+      const directory = findFolderInTree(folderData, directoryTarget);
+      if (directory?.fileType === "folder") {
+        routeInitializedRef.current = true;
+        entryClicked(directoryTarget);
+      } else {
+        routeInitializedRef.current = true;
+        setErrorMessage(`선택한 디렉토리를 찾을 수 없습니다. (${directoryTarget})`);
+      }
+      return;
+    }
 
     if (routeCategory && routeBookId && folderData.length > 0) {
       // _root 카테고리는 folderData에서 /{bookId} 형식으로 저장됨
@@ -461,6 +529,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
       selectBookById(routeBookId);
     }
   }, [
+    directoryTarget,
     routeCategory,
     routeBookId,
     folderData,
@@ -476,6 +545,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
     if (
       !routeCategory &&
       !routeBookId &&
+      !directoryTarget &&
       folderData.length > 0 &&
       !selectedEntryId
     ) {
@@ -488,7 +558,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
         entryClicked(firstFile.id);
       }
     }
-  }, [routeCategory, routeBookId, folderData, selectedEntryId, entryClicked]);
+  }, [routeCategory, routeBookId, directoryTarget, folderData, selectedEntryId, entryClicked]);
 
   useEffect(() => {
     console.log(`bookInfo=${JSON.stringify(bookInfo)}`);
@@ -861,6 +931,42 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
     setSelectedCategory(props);
   }, []);
 
+  const directoryMutationCompleted = useCallback((message, mutation) => {
+    const remainingCategories = categoryList
+      .filter((category) =>
+        category !== "_root" &&
+        category !== mutation.category &&
+        !category.startsWith(mutation.category + "/"),
+      )
+      .sort((a, b) => a.localeCompare(b));
+    const nextCategory = mutation.type === "rename"
+      ? mutation.category
+      : remainingCategories.find((category) => category.localeCompare(mutation.category) > 0)
+        || remainingCategories[remainingCategories.length - 1]
+        || "";
+
+    setSuccessMessage(message);
+    setErrorMessage("");
+    setSelectedCategory("");
+    setBookInfo({});
+    setSelectedEntryId("");
+    if (nextCategory) {
+      const name = nextCategory.split("/").pop();
+      setSelectedDirectory({
+        category: nextCategory,
+        name,
+        author: decomposeTitle({ author: "", title: name, file_type: "dir" }).author,
+      });
+      setSelectedItems([nextCategory]);
+      window.history.replaceState(null, "", `${basePath}?directory=${encodeURIComponent(nextCategory)}`);
+    } else {
+      setSelectedDirectory(null);
+      setSelectedItems([]);
+      window.history.replaceState(null, "", basePath);
+    }
+    reloadCategoryTree();
+  }, [basePath, categoryList, decomposeTitle, reloadCategoryTree]);
+
   const moveToDirectoryButtonClicked = useCallback(() => {
     console.log(`move to '${selectedCategory}' as '${newFileName}'`);
     /* v8 ignore start -- move button is rendered only for selected book entries. */
@@ -877,6 +983,45 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
     }
     /* v8 ignore stop */
   }, [updateFile, selectedEntryId, selectedCategory, newFileName]);
+
+  const moveDirectoryToCategory = useCallback((directoryName) => {
+    if (!selectedDirectory || !selectedCategory || isProcessingRef.current) return;
+    if (
+      !directoryName ||
+      directoryName.includes("/") ||
+      directoryName === "." ||
+      directoryName === ".."
+    ) {
+      setErrorMessage("디렉토리 이름을 확인하세요. 이름에는 '/'를 사용할 수 없습니다.");
+      return;
+    }
+    const newCategory = `${selectedCategory}/${directoryName}`;
+    isProcessingRef.current = true;
+    setIsProcessing(true);
+    jsonPutReq(
+      `${apiPrefix}/categories/rename`,
+      { old_category: selectedDirectory.category, new_category: newCategory },
+      () => {
+        const movedDirectory = {
+          category: newCategory,
+          name: directoryName,
+          author: decomposeTitle({ author: "", title: directoryName, file_type: "dir" }).author,
+        };
+        setSelectedDirectory(movedDirectory);
+        setSelectedItems([newCategory]);
+        setSelectedEntryId("");
+        setBookInfo({});
+        setSuccessMessage("디렉토리를 이동했습니다.");
+        window.history.replaceState(null, "", `${basePath}?directory=${encodeURIComponent(newCategory)}`);
+        reloadCategoryTree();
+      },
+      (error) => setErrorMessage(`디렉토리 이동에 실패했습니다. ${error}`),
+      () => {
+        isProcessingRef.current = false;
+        setIsProcessing(false);
+      },
+    );
+  }, [apiPrefix, basePath, decomposeTitle, reloadCategoryTree, selectedCategory, selectedDirectory]);
 
   const deleteButtonClicked = useCallback(() => {
     if (isProcessingRef.current) return;
@@ -1035,10 +1180,28 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
               categoryLoading={searchInProgress}
             />
           )}
-          {bookInfo["book_id"] && (
+      {(bookInfo["book_id"] || selectedDirectory) && (
             <>
               <Row id="top_panel">
                 <Col id="left_panel" md="6" lg="5" className="ps-0 pe-0">
+                  {selectedDirectory ? (
+                    <>
+                    <DirectoryEditPanel
+                      key={selectedDirectory.category}
+                      directory={selectedDirectory}
+                      apiPrefix={apiPrefix}
+                      selectedCategory={selectedCategory}
+                      otherCategoryList={otherCategoryList}
+                      isProcessing={isProcessing}
+                      onSelectCategory={selectDirectoryButtonClicked}
+                      onMove={moveDirectoryToCategory}
+                      onComplete={directoryMutationCompleted}
+                      onError={setErrorMessage}
+                    />
+                    {errorMessage && <Alert variant="danger">{errorMessage}</Alert>}
+                    </>
+                  ) : (
+                  <>
                   <Card>
                     <Card.Header>책 정보</Card.Header>
                     <Suspense
@@ -1148,9 +1311,22 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                       )}
                     </Card.Body>
                   </Card>
+                  </>
+                  )}
                 </Col>
 
                 <Col id="right_panel" md="6" lg="7" className="ps-0 pe-0">
+                  {selectedDirectory ? (
+                    <SimilarBooks
+                      key={selectedDirectory.category}
+                      directoryName={selectedDirectory.name}
+                      directoryAuthor={selectedDirectory.author}
+                      directoryCategory={selectedDirectory.category}
+                      onSelect={entryClicked}
+                      apiPrefix={apiPrefix}
+                      basePath={basePath}
+                    />
+                  ) : <>
                   <SimilarBooks
                     bookId={bookInfo["book_id"]}
                     onSelect={entryClicked}
@@ -1175,10 +1351,11 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                     fileType={bookInfo["file_type"]}
                     apiPrefix={apiPrefix}
                   />
+                  </>}
                 </Col>
               </Row>
 
-              <Row id="bottom_panel">
+              {bookInfo["book_id"] && <Row id="bottom_panel">
                 <Col id="right_panel" className="ps-0 pe-0">
                   <ViewSingle
                     key={bookInfo["book_id"]}
@@ -1193,7 +1370,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                     apiPrefix={apiPrefix}
                   />
                 </Col>
-              </Row>
+              </Row>}
             </>
           )}
         </Col>
