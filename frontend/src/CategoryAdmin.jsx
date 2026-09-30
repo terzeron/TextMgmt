@@ -2407,6 +2407,24 @@ export default function CategoryAdmin({
                         ? "동일한 파일 경로로 ES에 중복 문서가 존재합니다. 파일 삭제 후 재적재 시 발생할 수 있습니다."
                         : `${contentLabel} 정보는 없고 파일시스템에만 존재합니다.`}
                   </div>
+                  <Button
+                    variant="outline-warning"
+                    size="sm"
+                    className="mb-2"
+                    disabled={
+                      saving ||
+                      bulkReloading ||
+                      mismatchReloading ||
+                      selectedMismatchCount === 0
+                    }
+                    onClick={() => {
+                      setReloadAllMismatches(false);
+                      setShowMismatchReloadModal(true);
+                    }}
+                    title="선택 항목 카테고리 이상 항목 재적재"
+                  >
+                    카테고리 이상 항목 재적재
+                  </Button>
                   {selectedMismatch.mismatchType === "duplicate" &&
                     selectedMismatch.dupDocs && (
                       <>

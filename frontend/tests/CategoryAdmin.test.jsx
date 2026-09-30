@@ -636,9 +636,7 @@ describe("CategoryAdmin", () => {
     ).toBe(false);
 
     fireEvent.click(screen.getByText("1_fiction"));
-    const mismatchReloadButton = within(header).getByRole("button", {
-      name: /이상 항목 재적재/,
-    });
+    const mismatchReloadButton = screen.getByTitle("이상 항목만 ES 재적재");
     expect(mismatchReloadButton.disabled).toBe(false);
     fireEvent.click(mismatchReloadButton);
 
@@ -720,10 +718,9 @@ describe("CategoryAdmin", () => {
     });
     fireEvent.click(screen.getByText("Missing File.pdf"));
 
-    const header = screen.getByText("디렉토리").closest(".card-header");
-    const mismatchReloadButton = within(header).getByRole("button", {
-      name: /이상 항목 재적재/,
-    });
+    const mismatchReloadButton = screen.getByTitle(
+      "선택 항목 카테고리 이상 항목 재적재",
+    );
     expect(mismatchReloadButton.disabled).toBe(false);
     fireEvent.click(mismatchReloadButton);
 
@@ -6006,7 +6003,7 @@ describe("CategoryAdmin 재적재 버튼별 스피너 및 실패 처리", () => 
 
     await waitFor(() => {
       const mismatchButton = screen.getByTitle(
-        "선택 디렉토리 이상 항목만 ES 재적재",
+        "이상 항목만 ES 재적재",
       );
       expect(within(mismatchButton).getByText("잔여 0건")).toBeTruthy();
     });
