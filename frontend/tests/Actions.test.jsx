@@ -477,6 +477,36 @@ describe("카테고리 버튼 하이라이트", () => {
 });
 
 describe("Actions 추가 분기", () => {
+  it("디렉토리 탐색 버튼을 카테고리 버튼보다 먼저 표시하고 선택한 탐색 동작을 호출한다", () => {
+    const previous = vi.fn();
+    const next = vi.fn();
+    render(
+      <Actions
+        {...defaultProps}
+        directoryMode
+        showDirectoryNavigation
+        previousDirectoryDisabled={false}
+        nextDirectoryDisabled={false}
+        onPreviousDirectory={previous}
+        onNextDirectory={next}
+      />,
+    );
+
+    const previousButton = screen.getByText("이전 디렉토리로");
+    const nextButton = screen.getByText("다음 디렉토리로");
+    expect(previousButton.compareDocumentPosition(screen.getByText("소설")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(previousButton);
+    fireEvent.click(nextButton);
+    expect(previous).toHaveBeenCalledOnce();
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it("탐색 가능 옵션이 없으면 디렉토리 탐색 버튼을 숨긴다", () => {
+    render(<Actions {...defaultProps} directoryMode />);
+    expect(screen.queryByText("이전 디렉토리로")).toBeNull();
+    expect(screen.queryByText("다음 디렉토리로")).toBeNull();
+  });
+
   it("캐시가 초기화되지 않았으면 fetchCategoryMappings를 호출한다", async () => {
     const fetchSpy = vi
       .spyOn(categoryMappingCache, "fetchCategoryMappings")

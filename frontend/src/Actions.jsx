@@ -387,6 +387,22 @@ export default function Actions(props) {
   return (
     <>
       <Row className="button_group">
+        {props.directoryMode && props.showDirectoryNavigation && <Button
+          variant="outline-warning"
+          className="btn-xs"
+          onClick={props.onPreviousDirectory}
+          disabled={props.isProcessing || props.previousDirectoryDisabled}
+        >
+          이전 디렉토리로
+        </Button>}
+        {props.directoryMode && props.showDirectoryNavigation && <Button
+          variant="outline-warning"
+          className="btn-xs"
+          onClick={props.onNextDirectory}
+          disabled={props.isProcessing || props.nextDirectoryDisabled}
+        >
+          다음 디렉토리로
+        </Button>}
         {!props.directoryMode && <Button
           variant="outline-warning"
           className="btn-xs"
@@ -494,4 +510,9 @@ Actions.propTypes = {
   suggestedCategories: PropTypes.object,
   isProcessing: PropTypes.bool,
   directoryMode: PropTypes.bool,
+  showDirectoryNavigation: PropTypes.bool,
+  previousDirectoryDisabled: PropTypes.bool,
+  nextDirectoryDisabled: PropTypes.bool,
+  onPreviousDirectory: PropTypes.func,
+  onNextDirectory: PropTypes.func,
 };

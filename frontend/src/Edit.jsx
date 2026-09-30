@@ -1023,6 +1023,15 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
     );
   }, [apiPrefix, basePath, decomposeTitle, reloadCategoryTree, selectedCategory, selectedDirectory]);
 
+  const directoryNavigation = categoryList
+    .filter((category) => category !== "_root")
+    .sort((a, b) => a.localeCompare(b));
+  const currentDirectoryIndex = directoryNavigation.indexOf(selectedDirectory?.category);
+  const selectAdjacentDirectory = useCallback((offset) => {
+    const category = directoryNavigation[currentDirectoryIndex + offset];
+    if (category) entryClicked(category);
+  }, [currentDirectoryIndex, directoryNavigation, entryClicked]);
+
   const deleteButtonClicked = useCallback(() => {
     if (isProcessingRef.current) return;
     console.log(`deleteButtonClicked: entryId=${selectedEntryId}`);
@@ -1190,8 +1199,13 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                       key={selectedDirectory.category}
                       directory={selectedDirectory}
                       apiPrefix={apiPrefix}
+                      showDirectoryNavigation={Boolean(apiPrefix)}
                       selectedCategory={selectedCategory}
                       otherCategoryList={otherCategoryList}
+                      previousDirectoryDisabled={currentDirectoryIndex <= 0}
+                      nextDirectoryDisabled={currentDirectoryIndex < 0 || currentDirectoryIndex >= directoryNavigation.length - 1}
+                      onPreviousDirectory={() => selectAdjacentDirectory(-1)}
+                      onNextDirectory={() => selectAdjacentDirectory(1)}
                       isProcessing={isProcessing}
                       onSelectCategory={selectDirectoryButtonClicked}
                       onMove={moveDirectoryToCategory}
