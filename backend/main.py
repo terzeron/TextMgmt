@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 
 import asyncio
+from difflib import SequenceMatcher
 import sys
 import os
 import json
+import re
 import time
 import logging.config
 import uuid
@@ -406,6 +408,12 @@ class CategoryRenameModel(BaseModel):
     new_category: str
 
 
+class CategoryBulkRenameModel(BaseModel):
+    category: str
+    pattern: str
+    replacement: str
+
+
 class CategoryDeleteModel(BaseModel):
     category: str
 
@@ -735,6 +743,97 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             response_object["error"] = error
         return response_object
 
+    @router.post("/categories/bulk-rename-files", dependencies=admin_dep)
+    async def bulk_rename_category_files(body: CategoryBulkRenameModel) -> dict[str, Any]:
+        if not body.category or body.category == "_root":
+            raise HTTPException(status_code=400, detail="A directory category is required")
+        if not body.pattern or len(body.pattern) > 256:
+            return {"status": "failure", "error": "정규표현식은 1~256자여야 합니다.", "changed_count": 0}
+        try:
+            regex = re.compile(body.pattern)
+            categories, category_error = await manager.get_categories()
+            if category_error:
+                return {"status": "failure", "error": category_error, "changed_count": 0}
+            target_categories = [
+                category for category in categories
+                if category == body.category or category.startswith(body.category + "/")
+            ]
+            books = []
+            for category in target_categories:
+                cursor = ""
+                while True:
+                    page, _, cursor, error = await manager.get_books_in_category_paged(category, cursor=cursor)
+                    if error:
+                        return {"status": "failure", "error": error, "changed_count": 0}
+                    books.extend(page)
+                    if not cursor:
+                        break
+
+            plans = []
+            for book in sorted(books, key=lambda item: str(item.file_path).casefold()):
+                original_name = book.file_path.name
+                changed_name = regex.sub(body.replacement, original_name)
+                if changed_name in ("", ".", "..") or "/" in changed_name or "\\" in changed_name:
+                    return {"status": "failure", "error": f"변경할 수 없는 파일 이름입니다: {changed_name}", "changed_count": 0}
+                if changed_name != original_name:
+                    plans.append((book, changed_name))
+        except re.error as error:
+            return {"status": "failure", "error": f"정규표현식 오류: {error}", "changed_count": 0}
+
+        reserved = set()
+        changed_count = 0
+        failures = []
+        for book, desired_name in plans:
+            source_path = book.file_path
+            target_path = source_path.with_name(desired_name)
+            if target_path.exists() and not source_path.samefile(target_path):
+                extension = Path(desired_name).suffix
+                stem = desired_name[:-len(extension)] if extension else desired_name
+                serial_pattern = re.compile(rf"^{re.escape(stem)} \((\d+)\){re.escape(extension)}$")
+                largest = 0
+                try:
+                    for entry in source_path.parent.iterdir():
+                        match = serial_pattern.match(entry.name)
+                        if match:
+                            largest = max(largest, int(match.group(1)))
+                except OSError as error:
+                    failures.append({"file": source_path.name, "error": str(error)})
+                    continue
+                serial = largest + 1
+                while True:
+                    candidate_name = f"{stem} ({serial}){extension}"
+                    target_path = source_path.with_name(candidate_name)
+                    if not target_path.exists() and str(target_path) not in reserved:
+                        break
+                    serial += 1
+            elif str(target_path) in reserved:
+                extension = Path(desired_name).suffix
+                stem = desired_name[:-len(extension)] if extension else desired_name
+                serial_pattern = re.compile(rf"^{re.escape(stem)} \((\d+)\){re.escape(extension)}$")
+                largest = 0
+                for prior in reserved:
+                    match = serial_pattern.match(Path(prior).name)
+                    if match:
+                        largest = max(largest, int(match.group(1)))
+                serial = largest + 1
+                while True:
+                    target_path = source_path.with_name(f"{stem} ({serial}){extension}")
+                    if not target_path.exists() and str(target_path) not in reserved:
+                        break
+                    serial += 1
+
+            result, error = await manager.update_book(
+                book.book_id, book.category, Path(target_path.name).stem,
+                book.author, target_path, book.file_type,
+            )
+            if error:
+                failures.append({"file": source_path.name, "error": error})
+            else:
+                changed_count += 1
+                reserved.add(str(target_path))
+        manager.es_manager.refresh()
+        return {"status": "success", "result": {"changed_count": changed_count, "failed_count": len(failures), "failures": failures[:20]}}
+
     @router.post("/categories/delete", dependencies=admin_dep)
     async def delete_category(body: CategoryDeleteModel) -> dict[str, Any]:
         LOGGER.debug("# delete_category(category='%s')", body.category)
@@ -937,6 +1036,88 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         else:
             response_object["error"] = error or err2
         return response_object
+
+    @router.get("/similar-names", dependencies=admin_dep)
+    async def search_similar_names(name: str, author: str = "", exclude_category: str = "") -> dict[str, Any]:
+        """유사한 이름의 파일과 카테고리 디렉토리를 함께 찾는다."""
+        response_object: dict[str, Any] = {"status": "failure"}
+        name = name.strip()
+        if not name:
+            response_object["error"] = "name is required"
+            return response_object
+        try:
+            books = await asyncio.to_thread(manager.es_manager.search_similar_names, name, author, 20)
+            categories, error = await manager.get_categories()
+            if error:
+                response_object["error"] = error
+                return response_object
+
+            normalized_name = " ".join(name.casefold().replace("_", " ").replace("-", " ").split())
+            directories = []
+            for category in categories:
+                if category == "_root" or category == exclude_category or category.startswith(exclude_category + "/"):
+                    continue
+                category_name = category.rsplit("/", 1)[-1]
+                candidate_name = " ".join(category_name.casefold().replace("_", " ").replace("-", " ").split())
+                score = SequenceMatcher(None, normalized_name, candidate_name).ratio() * 100
+                if score >= 35:
+                    directories.append({
+                        "kind": "directory",
+                        "id": category,
+                        "category": category,
+                        "label": category,
+                        "score": score,
+                    })
+            directories.sort(key=lambda item: (-item["score"], item["label"].casefold()))
+            directories = directories[:10]
+            directory_stats = await asyncio.to_thread(
+                manager.es_manager.search_categories_pdf_stats,
+                [item["category"] for item in directories],
+            )
+            for directory in directories:
+                directory.update(directory_stats.get(directory["category"], {"file_count": 0, "page_count": 0, "total_file_size": 0}))
+
+            files = []
+            for book_id, book, _score in books:
+                category = book.get("category") or "_root"
+                if exclude_category and (category == exclude_category or category.startswith(exclude_category + "/")):
+                    continue
+                filename = str(book.get("file_path") or "").rsplit("/", 1)[-1]
+                candidate_name = " ".join(Path(filename).stem.casefold().replace("_", " ").replace("-", " ").split())
+                name_score = SequenceMatcher(None, normalized_name, candidate_name).ratio()
+                if name_score < 0.35:
+                    continue
+                is_pdf = (book.get("file_type") or "").casefold() == "pdf"
+                files.append({
+                    "kind": "file",
+                    "id": str(book_id),
+                    "category": category,
+                    "label": filename if category == "_root" else f"{category}/{filename}",
+                    "score": name_score * 100,
+                    "file_count": 1 if is_pdf else 0,
+                    "page_count": int(book.get("page_count") or 0) if is_pdf else 0,
+                    "total_file_size": int(book.get("file_size") or 0) if is_pdf else 0,
+                })
+            response_object["status"] = "success"
+            response_object["result"] = sorted(
+                directories + files,
+                key=lambda item: (-item["score"], item["label"].casefold()),
+            )
+        except Exception as e:
+            LOGGER.exception("search_similar_names error: %s", e)
+            response_object["error"] = "유사 이름 검색에 실패했습니다."
+        return response_object
+
+    @router.get("/category-pdf-stats", dependencies=admin_dep)
+    async def get_category_pdf_stats(category: str) -> dict[str, Any]:
+        if not category or category == "_root":
+            raise HTTPException(status_code=400, detail="A directory category is required")
+        try:
+            stats = await asyncio.to_thread(manager.es_manager.search_category_pdf_stats, category)
+            return {"status": "success", "result": stats}
+        except Exception as e:
+            LOGGER.exception("get_category_pdf_stats error: %s", e)
+            return {"status": "failure", "error": "PDF 통계를 불러오지 못했습니다."}
 
     @router.get("/search/{keyword}")
     async def search_by_keyword(keyword: str, offset: int = 0, limit: int = 10, exclude_categories: str = "", category: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:

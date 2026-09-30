@@ -387,7 +387,7 @@ export default function Actions(props) {
   return (
     <>
       <Row className="button_group">
-        <Button
+        {!props.directoryMode && <Button
           variant="outline-warning"
           className="btn-xs"
           onClick={props.toPrevEntryClicked}
@@ -395,8 +395,8 @@ export default function Actions(props) {
         >
           이전 책으로
           {props.isProcessing && <FontAwesomeIcon icon={faSpinner} spin />}
-        </Button>
-        <Button
+        </Button>}
+        {!props.directoryMode && <Button
           variant="outline-warning"
           className="btn-xs"
           onClick={props.toNextEntryClicked}
@@ -404,8 +404,8 @@ export default function Actions(props) {
         >
           다음 책으로
           {props.isProcessing && <FontAwesomeIcon icon={faSpinner} spin />}
-        </Button>
-        {!props.selectedEntryId?.startsWith(ROOT_DIRECTORY) && (
+        </Button>}
+        {!props.directoryMode && !props.selectedEntryId?.startsWith(ROOT_DIRECTORY) && (
           <Button
             variant="outline-warning"
             className="btn-xs"
@@ -457,17 +457,19 @@ export default function Actions(props) {
 
       <Row>
         <InputGroup className="ms-0 me-0">
-          <Form.Control value={props.selectedCategory} readOnly />
+          <Form.Control value={props.selectedCategory} readOnly placeholder="이동할 카테고리를 선택하세요" />
           <Button
             variant="outline-warning"
             className="btn-xs"
             onClick={props.moveToDirectoryButtonClicked}
             disabled={
-              (!props.selectedEntryId && !props.selectedCategory) ||
+              (props.directoryMode
+                ? !props.selectedCategory
+                : !props.selectedEntryId && !props.selectedCategory) ||
               props.isProcessing
             }
           >
-            로 옮기기
+            {props.directoryMode ? "디렉토리 이동" : "로 옮기기"}
             <FontAwesomeIcon
               icon={props.isProcessing ? faSpinner : faTruckMoving}
               spin={props.isProcessing}
@@ -491,4 +493,5 @@ Actions.propTypes = {
   toPrevEntryClicked: PropTypes.func,
   suggestedCategories: PropTypes.object,
   isProcessing: PropTypes.bool,
+  directoryMode: PropTypes.bool,
 };

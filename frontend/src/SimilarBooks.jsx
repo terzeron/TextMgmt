@@ -30,6 +30,13 @@ const formatFileSize = (bytes) => {
   return Math.trunc(size).toLocaleString("en-US");
 };
 
+const formatDirectoryMegabytes = (bytes) => {
+  const size = Number(bytes);
+  return Number.isFinite(size) && size >= 0
+    ? Math.trunc(size / 1000).toLocaleString("en-US")
+    : "0";
+};
+
 export default function SimilarBooks({
   bookId,
   onSelect,
@@ -37,6 +44,9 @@ export default function SimilarBooks({
   basePath = "/book-edit",
   autoOpenHighScore = true,
   canEdit = true,
+  directoryName = "",
+  directoryAuthor = "",
+  directoryCategory = "",
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [similarBooks, setSimilarBooks] = useState([]);
@@ -44,6 +54,7 @@ export default function SimilarBooks({
   const [loadingMore, setLoadingMore] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [similarNames, setSimilarNames] = useState([]);
   const refreshTimerRef = useRef(null);
 
   const loadFirstPage = useCallback(
@@ -156,6 +167,44 @@ export default function SimilarBooks({
 
   const hasMore = similarBooks.length < total;
 
+  const loadSimilarNames = useCallback((onFinish) => {
+    if (!directoryName) return;
+    const query = new URLSearchParams({ name: directoryName, author: directoryAuthor, exclude_category: directoryCategory });
+    rawJsonGetReq(
+      `${apiPrefix}/similar-names?${query.toString()}`,
+      (data) => {
+        if (data.status === "success") setSimilarNames(data.result || []);
+        if (onFinish) onFinish();
+      },
+      (error) => {
+        console.error(error);
+        if (onFinish) onFinish();
+      },
+    );
+  }, [apiPrefix, directoryName, directoryAuthor, directoryCategory]);
+
+  useEffect(() => {
+    if (directoryName) {
+      setIsOpen(true);
+      loadSimilarNames();
+    }
+    return () => setSimilarNames([]);
+  }, [directoryName, loadSimilarNames]);
+
+  const handleRefreshNames = useCallback(() => {
+    if (refreshing || !directoryName) return;
+    const startedAt = Date.now();
+    setRefreshing(true);
+    setIsOpen(true);
+    loadSimilarNames(() => {
+      const remaining = Math.max(0, MIN_REFRESH_SPIN_MS - (Date.now() - startedAt));
+      refreshTimerRef.current = setTimeout(() => {
+        setRefreshing(false);
+        refreshTimerRef.current = null;
+      }, remaining);
+    });
+  }, [directoryName, loadSimilarNames, refreshing]);
+
   return (
     <Card>
       <Card.Header
@@ -167,17 +216,17 @@ export default function SimilarBooks({
           icon={isOpen ? faChevronDown : faChevronRight}
           className="me-2"
         />
-        유사한 책 목록
+        {directoryName ? "유사한 이름의 파일·디렉토리" : "유사한 책 목록"}
         <Button
           variant="outline-secondary"
           className="btn-xs ms-auto"
           onClick={(e) => {
             e.stopPropagation();
-            handleRefresh();
+            directoryName ? handleRefreshNames() : handleRefresh();
           }}
           disabled={refreshing}
           aria-busy={refreshing}
-          aria-label="유사한 책 목록 새로고침"
+          aria-label={directoryName ? "유사 이름 검색 새로고침" : "유사한 책 목록 새로고침"}
           title="새로고침"
         >
           {refreshing ? (
@@ -189,7 +238,61 @@ export default function SimilarBooks({
       </Card.Header>
       {isOpen && (
         <Card.Body>
-          {similarBooks && similarBooks.length > 0 ? (
+          {directoryName ? (
+            similarNames.length ? similarNames.map((item) => {
+              const safeBasePath = basePath || "/book-edit";
+              const href = item.kind === "directory"
+                ? `${safeBasePath}?directory=${encodeURIComponent(item.category)}`
+                : `${safeBasePath}/${item.id}?category=${encodeURIComponent(item.category)}`;
+              return (
+                <div
+                  className={`search-result-item ${item.score >= 90 ? "highlight-secondary" : ""}`.trim()}
+                  key={`${item.kind}:${item.id}`}
+                >
+                  <a
+                    className="search-result-item-text"
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: "inherit", textDecoration: "none" }}
+                  >
+                    {item.label}
+                  </a>
+                  <div className="search-result-item-actions">
+                    <span
+                      style={{
+                        display: "inline-block",
+                        backgroundColor: "#fff",
+                        color: "#000",
+                        border: "1px solid #000",
+                        borderRadius: "4px",
+                        padding: "2px 6px",
+                        fontSize: "0.6rem",
+                        lineHeight: 1,
+                        marginRight: "4px",
+                        verticalAlign: "middle",
+                      }}
+                    >
+                      PDF {item.file_count.toLocaleString()}ea, {item.page_count.toLocaleString()}p, {formatDirectoryMegabytes(item.total_file_size)}MB
+                    </span>
+                    <span
+                      style={{
+                        display: "inline-block",
+                        backgroundColor: "#6c757d",
+                        color: "#fff",
+                        borderRadius: "4px",
+                        padding: "1px 6px",
+                        fontSize: "0.75rem",
+                        verticalAlign: "middle",
+                      }}
+                    >
+                      {Math.round(item.score)}
+                    </span>
+                  </div>
+                </div>
+              );
+            }) : <div>유사한 파일이나 디렉토리가 없습니다.</div>
+          ) : similarBooks && similarBooks.length > 0 ? (
             <>
               {similarBooks.map((book) => {
                 const filename = (book.file_path || '').split('/').pop() || book.title || 'Unknown';
@@ -340,4 +443,7 @@ SimilarBooks.propTypes = {
   basePath: PropTypes.string,
   autoOpenHighScore: PropTypes.bool,
   canEdit: PropTypes.bool,
+  directoryName: PropTypes.string,
+  directoryAuthor: PropTypes.string,
+  directoryCategory: PropTypes.string,
 };
