@@ -1,0 +1,32 @@
+.viewer-font-select {
+    max-width: 190px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 13px;
+    cursor: pointer;
+    background: #fff;
+}
+
+.viewer-font-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    min-height: 40px;
+    padding: 6px 8px;
+    margin: 0 0 8px;
+    background: rgba(255, 255, 255, 0.95);
+}
+
+.doc-container,
+.rtf-container {
+    padding: 12px 24px 24px;
+}
+
+.reader-font-overridden,
+.reader-font-overridden * {
+    font-family: var(--reader-font-family) !important;
+}

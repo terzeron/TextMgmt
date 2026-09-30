@@ -532,8 +532,11 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
   it("글꼴을 바꾸면 본문 텍스트 요소에 !important 규칙을 주입하고 localStorage에 저장된다", async () => {
     render(<ViewEPUB bookId={1} standalone={true} />);
     await openBook();
+    expect(screen.queryByRole("option", { name: "Serif" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "Sans-serif" })).toBeNull();
+    expect(screen.getByRole("option", { name: "나눔바른고딕" })).toBeTruthy();
     fireEvent.change(screen.getByLabelText("글꼴 선택"), {
-      target: { value: "sans-serif" },
+      target: { value: "'Noto Sans CJK KR', sans-serif" },
     });
     const hook = lastRendition.hooks.content.register.mock.calls.at(-1)[0];
     const contentDocument = document.implementation.createHTMLDocument();
@@ -544,11 +547,13 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     expect(styleEl?.textContent).toContain("sans-serif");
     expect(styleEl?.textContent).toContain("!important");
     expect(styleEl?.textContent).toContain("p");
-    expect(localStorage.getItem("epub_fontFamily")).toBe("sans-serif");
+    expect(localStorage.getItem("epub_fontFamily")).toBe(
+      "'Noto Sans CJK KR', sans-serif",
+    );
   });
 
   it("글꼴을 기본으로 바꾸면 주입한 규칙을 제거한다", async () => {
-    localStorageMock._set("epub_fontFamily", "sans-serif");
+    localStorageMock._set("epub_fontFamily", "'Noto Sans CJK KR', sans-serif");
     render(<ViewEPUB bookId={1} standalone={true} />);
     await openBook();
     fireEvent.change(screen.getByLabelText("글꼴 선택"), {
@@ -575,6 +580,15 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     expect(faceEl?.textContent).toContain("@font-face");
     expect(faceEl?.textContent).toContain("'Nanum Gothic'");
     expect(faceEl?.textContent).toContain("'Nanum Myeongjo'");
+    expect(faceEl?.textContent).toContain("'Nanum Barun Gothic'");
+    expect(faceEl?.textContent).toContain("NanumBarunGothicSubset.woff2");
+    expect(faceEl?.textContent).toContain("NanumBarunGothicBoldSubset.woff2");
+    expect(faceEl?.textContent).toContain("NanumBarunGothicLightSubset.woff2");
+    expect(faceEl?.textContent).toContain("NanumBarunGothicUltraLightSubset.woff2");
+    expect(faceEl?.textContent).toContain("'Noto Serif CJK KR'");
+    expect(faceEl?.textContent).toContain("U+4E00-9FFF");
+    expect(faceEl?.textContent).toContain("/fonts/noto-serif-kr-400.woff2");
+    expect(faceEl?.textContent).toContain("/fonts/noto-sans-kr-400.woff2");
     expect(faceEl?.textContent).toContain("/fonts/nanum-gothic-korean-400.woff2");
     expect(faceEl?.textContent).toContain("unicode-range");
   });
@@ -588,6 +602,15 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     const { container } = render(<ViewEPUB bookId={1} preview={true} />);
     expect(container.firstChild.className).not.toContain(
       "epub-viewer--framed",
+    );
+  });
+
+  it("이전 나눔명조 설정을 한자 fallback을 포함한 값으로 이어받는다", async () => {
+    localStorageMock._set("epub_fontFamily", "'Nanum Myeongjo', serif");
+    render(<ViewEPUB bookId={1} standalone={true} />);
+    await openBook();
+    expect(screen.getByLabelText("글꼴 선택").value).toBe(
+      "'Nanum Myeongjo', 'Noto Serif CJK KR', serif",
     );
   });
 

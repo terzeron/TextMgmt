@@ -2,6 +2,8 @@ import {useEffect, useState, useMemo, Suspense} from "react";
 import PropTypes from "prop-types";
 import {textGetReq} from "./Common";
 import {formatText} from './textFormatter';
+import ViewerFontSelect from "./ViewerFontSelect";
+import { useReaderFontFamily } from "./viewerFonts";
 import './ViewTXT.css';
 
 export default function ViewTXT({bookId, lineCount, apiPrefix = ''}) {
@@ -10,6 +12,7 @@ export default function ViewTXT({bookId, lineCount, apiPrefix = ''}) {
     const [fileContent, setFileContent] = useState([]);
     const [merged, setMerged] = useState(false);
     const [minBlank, setMinBlank] = useState(1);
+    const [fontFamily, setFontFamily] = useReaderFontFamily();
 
     useEffect(() => {
         if (!bookId) {
@@ -75,7 +78,8 @@ export default function ViewTXT({bookId, lineCount, apiPrefix = ''}) {
                 </div>
             )}
             {!isLoading && fileContent.length > 0 && (
-                <div className="txt-toolbar">
+                <div className="txt-toolbar viewer-font-toolbar">
+                    <ViewerFontSelect value={fontFamily} onChange={setFontFamily} />
                     <button
                         className={`txt-merge-btn ${merged ? 'active' : ''}`}
                         onClick={() => setMerged(prev => !prev)}
@@ -96,14 +100,17 @@ export default function ViewTXT({bookId, lineCount, apiPrefix = ''}) {
                 </div>
             )}
             <Suspense fallback={<div className="loading">로딩 중...</div>}>
-                {!isLoading && !merged &&
-                    fileContent.map((line, index) => (
-                        <div key={index}>{line}</div>
-                    ))
-                }
-                {!isLoading && merged &&
-                    blocks.map((block, index) => renderBlock(block, index))
-                }
+                {!isLoading && (
+                    <div
+                        className={fontFamily ? "reader-font-overridden" : ""}
+                        style={fontFamily ? { "--reader-font-family": fontFamily } : undefined}
+                    >
+                        {!merged && fileContent.map((line, index) => (
+                            <div key={index}>{line}</div>
+                        ))}
+                        {merged && blocks.map((block, index) => renderBlock(block, index))}
+                    </div>
+                )}
             </Suspense>
         </div>
     );
