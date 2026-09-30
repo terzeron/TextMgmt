@@ -35,6 +35,13 @@ from backend.view_history_store import MAX_RECENT_VIEWS, create_view_history_sto
 ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
 JSON_MEDIA_TYPE = "application/json"
 
+
+def _directory_stat_similarity_points(value: int, reference: int) -> float:
+    if value == reference:
+        return 10.0
+    maximum = max(value, reference)
+    return 10 * min(value, reference) / maximum if maximum > 0 else 0.0
+
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
 
@@ -1039,14 +1046,13 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
 
     @router.get("/similar-names", dependencies=admin_dep)
     async def search_similar_names(name: str, author: str = "", exclude_category: str = "") -> dict[str, Any]:
-        """유사한 이름의 파일과 카테고리 디렉토리를 함께 찾는다."""
+        """이름과 PDF 통계를 반영해 유사한 디렉토리를 찾는다."""
         response_object: dict[str, Any] = {"status": "failure"}
         name = name.strip()
         if not name:
             response_object["error"] = "name is required"
             return response_object
         try:
-            books = await asyncio.to_thread(manager.es_manager.search_similar_names, name, author, 20)
             categories, error = await manager.get_categories()
             if error:
                 response_object["error"] = error
@@ -1059,50 +1065,44 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
                     continue
                 category_name = category.rsplit("/", 1)[-1]
                 candidate_name = " ".join(category_name.casefold().replace("_", " ").replace("-", " ").split())
-                score = SequenceMatcher(None, normalized_name, candidate_name).ratio() * 100
-                if score >= 35:
+                name_score = SequenceMatcher(None, normalized_name, candidate_name).ratio()
+                if name_score >= 0.35:
                     directories.append({
                         "kind": "directory",
                         "id": category,
                         "category": category,
                         "label": category,
-                        "score": score,
+                        "name_score": name_score,
                     })
-            directories.sort(key=lambda item: (-item["score"], item["label"].casefold()))
-            directories = directories[:10]
+            stats_categories = [item["category"] for item in directories]
+            if exclude_category and exclude_category != "_root":
+                stats_categories.append(exclude_category)
             directory_stats = await asyncio.to_thread(
                 manager.es_manager.search_categories_pdf_stats,
-                [item["category"] for item in directories],
+                stats_categories,
             )
             for directory in directories:
                 directory.update(directory_stats.get(directory["category"], {"file_count": 0, "page_count": 0, "total_file_size": 0}))
-
-            files = []
-            for book_id, book, _score in books:
-                category = book.get("category") or "_root"
-                if exclude_category and (category == exclude_category or category.startswith(exclude_category + "/")):
-                    continue
-                filename = str(book.get("file_path") or "").rsplit("/", 1)[-1]
-                candidate_name = " ".join(Path(filename).stem.casefold().replace("_", " ").replace("-", " ").split())
-                name_score = SequenceMatcher(None, normalized_name, candidate_name).ratio()
-                if name_score < 0.35:
-                    continue
-                is_pdf = (book.get("file_type") or "").casefold() == "pdf"
-                files.append({
-                    "kind": "file",
-                    "id": str(book_id),
-                    "category": category,
-                    "label": filename if category == "_root" else f"{category}/{filename}",
-                    "score": name_score * 100,
-                    "file_count": 1 if is_pdf else 0,
-                    "page_count": int(book.get("page_count") or 0) if is_pdf else 0,
-                    "total_file_size": int(book.get("file_size") or 0) if is_pdf else 0,
-                })
+            reference_stats = directory_stats.get(exclude_category, {})
+            for directory in directories:
+                stat_points = 0.0
+                if reference_stats:
+                    stat_points = sum(
+                        _directory_stat_similarity_points(
+                            int(directory.get(key) or 0),
+                            int(reference_stats.get(key) or 0),
+                        )
+                        for key in ("file_count", "total_file_size", "page_count")
+                    )
+                directory["score"] = (
+                    directory.pop("name_score") * 70
+                    + stat_points
+                )
             response_object["status"] = "success"
             response_object["result"] = sorted(
-                directories + files,
+                directories,
                 key=lambda item: (-item["score"], item["label"].casefold()),
-            )
+            )[:10]
         except Exception as e:
             LOGGER.exception("search_similar_names error: %s", e)
             response_object["error"] = "유사 이름 검색에 실패했습니다."

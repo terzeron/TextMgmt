@@ -10,14 +10,16 @@ import {
 
 afterEach(cleanup);
 
-const { mockRawJsonGetReq, mockJsonDeleteReq } = vi.hoisted(() => ({
+const { mockRawJsonGetReq, mockJsonDeleteReq, mockJsonPostReq } = vi.hoisted(() => ({
   mockRawJsonGetReq: vi.fn(),
   mockJsonDeleteReq: vi.fn(),
+  mockJsonPostReq: vi.fn(),
 }));
 
 vi.mock("../src/Common", () => ({
   rawJsonGetReq: mockRawJsonGetReq,
   jsonDeleteReq: mockJsonDeleteReq,
+  jsonPostReq: mockJsonPostReq,
   getApiUrlPrefix: () => "http://localhost:8000",
 }));
 
@@ -45,6 +47,7 @@ describe("SimilarBooks", () => {
   beforeEach(() => {
     mockRawJsonGetReq.mockReset();
     mockJsonDeleteReq.mockReset();
+    mockJsonPostReq.mockReset();
   });
 
   // ── 점수 배지 표시 ──
@@ -172,6 +175,41 @@ describe("SimilarBooks", () => {
       expect(screen.getByText("95")).toBeTruthy();
       expect(screen.getByText("72")).toBeTruthy();
     });
+  });
+
+  it("유사 이름 디렉토리는 편집·조회 아이콘 버튼을 행 오른쪽에 제공한다", async () => {
+    mockRawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("similar-names")) {
+        resolve({
+          status: "success",
+          result: [{
+            kind: "directory",
+            id: "Novel",
+            category: "Novel",
+            label: "Novel",
+            score: 88,
+            file_count: 1,
+            page_count: 120,
+            total_file_size: 5000,
+          }],
+        });
+      }
+    });
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+
+    render(<SimilarBooks directoryName="Novel" />);
+
+    const editButton = await screen.findByRole("button", { name: "Novel 편집" });
+    const viewButton = screen.getByRole("button", { name: "Novel 조회" });
+    expect(editButton.textContent).toBe("");
+    expect(viewButton.textContent).toBe("");
+    expect(editButton.parentElement.classList.contains("search-result-item-actions")).toBe(true);
+
+    fireEvent.click(editButton);
+    fireEvent.click(viewButton);
+    expect(open).toHaveBeenNthCalledWith(1, "/book-edit?directory=Novel", "_blank", "noopener");
+    expect(open).toHaveBeenNthCalledWith(2, "/book-view?directory=Novel", "_blank", "noopener");
+    open.mockRestore();
   });
 
   // ── 자동 펼침 ──
@@ -1060,6 +1098,34 @@ describe("SimilarBooks", () => {
         expect(screen.queryByText("test_category/Book 1.pdf")).toBeNull();
       });
       expect(screen.getByText("test_category/Book 2.pdf")).toBeTruthy();
+    });
+
+    it("유사 이름 디렉토리 삭제는 확인 후 하위 디렉토리까지 목록에서 제거한다", async () => {
+      mockRawJsonGetReq.mockImplementation((url, resolve) => {
+        if (url.includes("similar-names")) {
+          resolve({ status: "success", result: [
+            { kind: "directory", id: "Novel", category: "Novel", label: "Novel", score: 80, file_count: 2, page_count: 240, total_file_size: 10000 },
+            { kind: "directory", id: "Novel/Part", category: "Novel/Part", label: "Novel/Part", score: 75, file_count: 1, page_count: 120, total_file_size: 5000 },
+          ] });
+        }
+      });
+      mockJsonPostReq.mockImplementation((_url, _payload, resolve) => resolve({ status: "success" }));
+
+      render(<SimilarBooks directoryName="Novel" />);
+      const deleteButton = await screen.findByRole("button", { name: "Novel 삭제" });
+      fireEvent.click(deleteButton);
+
+      expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("되돌릴 수 없습니다"));
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/categories/delete",
+        { category: "Novel" },
+        expect.any(Function),
+        expect.any(Function),
+      );
+      await waitFor(() => {
+        expect(screen.queryByText("Novel", { selector: ".search-result-item-text" })).toBeNull();
+        expect(screen.queryByText("Novel/Part", { selector: ".search-result-item-text" })).toBeNull();
+      });
     });
 
     it("삭제에 실패하면 알림을 띄우고 목록을 유지한다", async () => {
