@@ -73,7 +73,7 @@ export default function CoverGrid({ results, basePath }) {
         {results.slice(0, visibleCount).map((book) => {
           const filename =
             (book.file_path || "").split("/").pop() || book.title || "Unknown";
-          const displayTitle = book.title || filename;
+          const displayTitle = book.display_title || book.title || filename;
           const category = book.category || "_root";
           const fileType = book.file_type || "";
           const coverSrc = COVER_FILE_TYPES.has(fileType)

@@ -118,6 +118,27 @@ describe("CoverGrid", () => {
     );
   });
 
+  it("display_title이 있으면 커버 아래에 디렉토리 이름을 표시한다", () => {
+    render(
+      <CoverGrid
+        results={[
+          {
+            ...makeBooks(1, "pdf")[0],
+            title: "첫 파일 제목",
+            display_title: "작품 디렉토리",
+          },
+        ]}
+        basePath="/comics-view"
+      />,
+    );
+
+    expect(screen.getByText("작품 디렉토리")).toBeTruthy();
+    expect(screen.queryByText("첫 파일 제목")).toBeNull();
+    expect(screen.getByRole("link").getAttribute("title")).toBe(
+      "작품 디렉토리",
+    );
+  });
+
   it(`처음에는 ${COVER_BATCH_SIZE}개만 그리고 끝에 닿으면 더 그린다`, () => {
     render(<CoverGrid results={makeBooks(45, "txt")} basePath="/book-view" />);
     expect(screen.getAllByRole("link")).toHaveLength(20);

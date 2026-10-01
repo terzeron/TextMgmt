@@ -67,7 +67,7 @@ export default function SearchResult({results, role, showEditButton, onLoadMore,
                                 const filePathParam = encodeURIComponent(book.file_path || '');
                                 const categoryParam = encodeURIComponent(category);
                                 const fileType = book.file_type || 'epub';
-                                const displayName = (!category || category === '_root') ? filename : `${category}/${filename}`;
+                                const displayName = book.display_title || ((!category || category === '_root') ? filename : `${category}/${filename}`);
                                 return (
                                 <div key={book.book_id} className="search-result-item">
                                     <span className="search-result-item-text">{displayName}</span>

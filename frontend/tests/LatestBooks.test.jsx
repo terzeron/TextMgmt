@@ -43,9 +43,10 @@ vi.mock("../src/SearchResult", () => ({
         data-show-edit={String(showEditButton)}
         data-base-path={basePath}
         data-view-mode={viewMode}
+        data-book-ids={results.map((book) => book.book_id).join(",")}
       >
         {results.length
-          ? results.map((book) => book.title).join(",")
+          ? results.map((book) => book.display_title || book.title).join(",")
           : emptyMessage}
       </div>
     </>
@@ -130,6 +131,60 @@ describe("LatestBooks", () => {
     expect(list.dataset.showEdit).toBe("false");
     expect(list.dataset.basePath).toBe("/comics-view");
     expect(list.textContent).toContain("새 만화");
+  });
+
+  it("최신 만화를 책 디렉토리별 1권이나 1화로 모아 표시한다", async () => {
+    mockRawJsonGetReq.mockImplementation((_url, resolve, _reject, final) => {
+      resolve({
+        status: "success",
+        result: [
+          {
+            book_id: 11,
+            title: "작품 A 2권",
+            category: "1_액션/작품 A",
+            file_path: "1_액션/작품 A/02.pdf",
+            file_type: "pdf",
+          },
+          {
+            book_id: 10,
+            title: "작품 A 1권",
+            category: "1_액션/작품 A",
+            file_path: "1_액션/작품 A/01.pdf",
+            file_type: "pdf",
+          },
+          {
+            book_id: 12,
+            title: "작품 A 부록",
+            category: "1_액션/작품 A/부록",
+            file_path: "1_액션/작품 A/부록/extra.pdf",
+            file_type: "pdf",
+          },
+          {
+            book_id: 20,
+            title: "다른 작품 10화",
+            category: "2_SF/다른 작품",
+            file_path: "2_SF/다른 작품/10화.pdf",
+            file_type: "pdf",
+          },
+          {
+            book_id: 21,
+            title: "다른 작품 1화",
+            category: "2_SF/다른 작품",
+            file_path: "2_SF/다른 작품/1화.pdf",
+            file_type: "pdf",
+          },
+        ],
+      });
+      final();
+    });
+
+    render(<LatestBooks contentType="comic" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("search-result").dataset.bookIds).toBe("10,21");
+    });
+    const list = screen.getByTestId("search-result");
+    expect(list.textContent).toBe("작품 A,다른 작품");
   });
 
   it("조회 실패 시 오류 메시지를 표시한다", async () => {
