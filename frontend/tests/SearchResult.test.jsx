@@ -28,6 +28,22 @@ describe("SearchResult", () => {
     expect(screen.getByText("역사/ancient.pdf")).toBeTruthy();
   });
 
+  it("display_title이 있으면 파일 경로 대신 디렉토리 이름을 표시한다", () => {
+    render(
+      <SearchResult
+        results={[
+          {
+            ...sampleResults[0],
+            display_title: "작품 디렉토리",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("작품 디렉토리")).toBeTruthy();
+    expect(screen.queryByText("소설/novel1.epub")).toBeNull();
+  });
+
   it("검색 결과에 없는 항목도 전체 카테고리 목록에서 표시한다", () => {
     render(
       <SearchResult

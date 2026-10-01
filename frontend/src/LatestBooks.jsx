@@ -17,6 +17,66 @@ import SearchResult from "./SearchResult";
 
 const LATEST_ITEM_LIMIT = 1000;
 const VIEW_MODE_STORAGE_KEY_PREFIX = "tm_latest_view_mode_";
+const COMIC_TOP_LEVEL_DIRECTORY_PATTERN = /^\d+_[^/]+$/;
+const FIRST_INSTALLMENT_PATTERN = /(?:^|[^\d])0*1\s*(?:권|화)(?=$|[^\d])/;
+
+function isFirstInstallment(book) {
+  const fileName = String(book?.file_path || "").split("/").pop() || "";
+  return FIRST_INSTALLMENT_PATTERN.test(`${book?.title || ""} ${fileName}`);
+}
+
+function shouldReplaceComicRepresentative(currentBook, candidateBook) {
+  const currentIsFirst = isFirstInstallment(currentBook);
+  const candidateIsFirst = isFirstInstallment(candidateBook);
+  if (currentIsFirst !== candidateIsFirst) return candidateIsFirst;
+
+  return (
+    String(candidateBook?.file_path || "").localeCompare(
+      String(currentBook?.file_path || ""),
+      "ko",
+      { numeric: true, sensitivity: "base" },
+    ) < 0
+  );
+}
+
+function groupLatestComicsByBookDirectory(results) {
+  if (!Array.isArray(results)) return [];
+
+  const directoryIndexes = new Map();
+  return results.reduce((groupedResults, book) => {
+    const [topLevelDirectory, bookDirectory] = String(
+      book?.category || "",
+    ).split("/");
+    if (
+      !COMIC_TOP_LEVEL_DIRECTORY_PATTERN.test(topLevelDirectory) ||
+      !bookDirectory
+    ) {
+      groupedResults.push(book);
+      return groupedResults;
+    }
+
+    const directoryPath = `${topLevelDirectory}/${bookDirectory}`;
+    const existingIndex = directoryIndexes.get(directoryPath);
+    if (existingIndex !== undefined) {
+      if (
+        shouldReplaceComicRepresentative(
+          groupedResults[existingIndex],
+          book,
+        )
+      ) {
+        groupedResults[existingIndex] = {
+          ...book,
+          display_title: bookDirectory,
+        };
+      }
+      return groupedResults;
+    }
+
+    directoryIndexes.set(directoryPath, groupedResults.length);
+    groupedResults.push({ ...book, display_title: bookDirectory });
+    return groupedResults;
+  }, []);
+}
 
 // 뷰 모드는 탭별 편의 설정이다. 저장소를 쓸 수 없으면 커버 뷰를 사용한다.
 function readViewMode(contentType) {
@@ -93,7 +153,12 @@ export default function LatestBooks({ contentType = "book" }) {
       `${config.apiPrefix}/latest?limit=${LATEST_ITEM_LIMIT}`,
       (data) => {
         if (data.status === "success") {
-          setItems(data.result || []);
+          const results = data.result || [];
+          setItems(
+            contentType === "comic"
+              ? groupLatestComicsByBookDirectory(results)
+              : results,
+          );
         } else {
           setItems([]);
           setErrorMessage(config.errorMessage);
@@ -105,7 +170,7 @@ export default function LatestBooks({ contentType = "book" }) {
       },
       () => setLoading(false),
     );
-  }, [config]);
+  }, [config, contentType]);
 
   return (
     <Container id={config.containerId} className="ps-0 pe-0">

@@ -136,6 +136,8 @@ class BookManager:
     # 커버 뷰 썸네일. 최신 목록은 한 화면에 수십 장을 받으므로 원본 대신 작게 줄여 보낸다.
     COVER_THUMBNAIL_WIDTH = 300
     COVER_JPEG_QUALITY = 85
+    COVER_CACHE_VERSION = 2
+    PDF_SPREAD_MIN_ASPECT_RATIO = 1.2
     # EPUB 뷰어용 이미지 축소 정책. epub.js는 책 전체를 브라우저 메모리에
     # 올리므로 이미지 수십 장(각 수 MB)이면 탭이 죽거나 일부 페이지만
     # 렌더링된다. 뷰어 산출물에서만 줄이고 원본은 건드리지 않는다.
@@ -2826,8 +2828,14 @@ class BookManager:
                 pdf = pypdfium2.PdfDocument(fp)
                 try:
                     page = pdf[0]
-                    scale = BookManager.COVER_THUMBNAIL_WIDTH / page.get_width()
+                    page_width = page.get_width()
+                    page_height = page.get_height()
+                    is_spread = page_width / page_height >= BookManager.PDF_SPREAD_MIN_ASPECT_RATIO
+                    cover_width = page_width / 2 if is_spread else page_width
+                    scale = BookManager.COVER_THUMBNAIL_WIDTH / cover_width
                     img = page.render(scale=scale).to_pil()
+                    if is_spread:
+                        img = img.crop((0, 0, img.width // 2, img.height))
                 finally:
                     pdf.close()
         else:
@@ -2859,7 +2867,7 @@ class BookManager:
 
         headers = {"Cache-Control": "private, max-age=86400"}
         cache_dir = self.path_prefix / ".cover_cache"
-        cache_file = cache_dir / f"{book_id}.jpg"
+        cache_file = cache_dir / f"{book_id}.v{self.COVER_CACHE_VERSION}.jpg"
         if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
             return Response(content=cache_file.read_bytes(), media_type="image/jpeg", headers=headers)
 

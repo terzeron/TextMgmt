@@ -143,6 +143,37 @@ def test_do_exist_index_get_existing_ids_and_paths():
     assert manager.get_existing_paths([1, 2]) == {1: "/a"}
 
 
+def test_get_existing_created_time_metadata_returns_stored_values():
+    es = DummyES()
+    manager = make_manager(es)
+
+    def mget(docs, source):
+        assert docs == [{"_index": "idx", "_id": "1"}, {"_index": "idx", "_id": "2"}]
+        assert source == ["created_time", "created_time_source"]
+        return {
+            "docs": [
+                {
+                    "_id": "1",
+                    "found": True,
+                    "_source": {
+                        "created_time": "2020-01-01T00:00:00",
+                        "created_time_source": "statx_btime",
+                    },
+                },
+                {"_id": "2", "found": False},
+            ]
+        }
+
+    es.mget = mget
+
+    assert manager.get_existing_created_time_metadata([1, 2]) == {
+        1: {
+            "created_time": "2020-01-01T00:00:00",
+            "created_time_source": "statx_btime",
+        }
+    }
+
+
 def test_create_index_paths(monkeypatch: pytest.MonkeyPatch):
     es = DummyES()
     manager = make_manager(es)

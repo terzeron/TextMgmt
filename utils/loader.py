@@ -1609,6 +1609,14 @@ def main() -> int:
 
             # 데이터 저장 (중복 file_path 문서 선제거 후 insert)
             if batch_data:
+                existing_created_time_metadata = es_manager.get_existing_created_time_metadata(list(batch_data))
+                for inode, metadata in existing_created_time_metadata.items():
+                    if inode not in batch_data:
+                        continue
+                    if "created_time" in metadata:
+                        batch_data[inode]["created_time"] = metadata["created_time"]
+                    if "created_time_source" in metadata:
+                        batch_data[inode]["created_time_source"] = metadata["created_time_source"]
                 new_file_paths = [v["file_path"] for v in batch_data.values() if "file_path" in v]
                 new_ids = list(batch_data.keys())
                 cleaned = es_manager.delete_by_file_paths(new_file_paths, exclude_ids=new_ids)
