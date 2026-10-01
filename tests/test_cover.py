@@ -76,6 +76,13 @@ def create_test_pdf(output_path: Path) -> None:
         writer.write(f)
 
 
+def create_test_spread_pdf(output_path: Path) -> None:
+    spread = Image.new("RGB", (1200, 800), (30, 30, 200))
+    spread.paste((200, 30, 30), (0, 0, 600, 800))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    spread.save(output_path, format="PDF", resolution=72)
+
+
 def _make_doc(relative_path: str, file_type: str) -> dict:
     return {"category": "test_category", "title": "Test Book", "author": "Author", "file_path": relative_path, "file_type": file_type, "file_size": 1, "line_count": 0, "page_count": 1, "isbn": "", "summary": "test", "updated_time": "2024-01-01T00:00:00.000000"}
 
@@ -185,6 +192,20 @@ class TestGetCover:
         _assert_jpeg_thumbnail(response.body)
 
     @pytest.mark.asyncio
+    async def test_pdf_spread_uses_left_half_as_cover(self, book_manager_module, temp_dir):
+        bm, mock_es = book_manager_module
+        create_test_spread_pdf(temp_dir / "test_category" / "spread.pdf")
+        _use_doc(mock_es, "test_category/spread.pdf", "pdf")
+
+        response = await bm.get_cover(book_id=109)
+
+        assert response.status_code == 200
+        img = Image.open(io.BytesIO(response.body))
+        assert img.height > img.width
+        red, _green, blue = img.getpixel((img.width // 2, img.height // 2))
+        assert red > blue
+
+    @pytest.mark.asyncio
     async def test_text_format_returns_404(self, book_manager_module, temp_dir):
         bm, mock_es = book_manager_module
         txt = temp_dir / "test_category" / "a.txt"
@@ -212,7 +233,7 @@ class TestGetCover:
 
         first = await bm.get_cover(book_id=108)
         assert first.status_code == 200
-        assert (temp_dir / ".cover_cache" / "108.jpg").exists()
+        assert (temp_dir / ".cover_cache" / "108.v2.jpg").exists()
 
         with patch.object(type(bm), "_extract_cover_thumbnail", side_effect=AssertionError("must use cache")):
             second = await bm.get_cover(book_id=108)
