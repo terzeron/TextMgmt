@@ -85,6 +85,23 @@ class ESManager:
                 result[int(doc["_id"])] = doc["_source"]["file_path"]
         return result
 
+    def get_existing_created_time_metadata(self, doc_ids: list[int]) -> dict[int, dict[str, str]]:
+        """주어진 ID 목록에서 기존 created_time 관련 필드를 조회한다."""
+        if not doc_ids:
+            return {}
+        LOGGER.debug("get_existing_created_time_metadata(%d ids)", len(doc_ids))
+        docs = [{"_index": self.index_name, "_id": str(doc_id)} for doc_id in doc_ids]
+        response = self.es.mget(docs=docs, source=["created_time", "created_time_source"])
+        result: dict[int, dict[str, str]] = {}
+        for doc in response["docs"]:
+            if not doc.get("found", False):
+                continue
+            source = doc.get("_source", {})
+            metadata = {field: source[field] for field in ("created_time", "created_time_source") if field in source}
+            if metadata:
+                result[int(doc["_id"])] = metadata
+        return result
+
     def create_index(self) -> dict[str, Any]:
         LOGGER.debug("create_index()")
         from elasticsearch import BadRequestError
