@@ -43,6 +43,20 @@ import {
 import useIsMobile from "./useIsMobile";
 import { useCategoryTree } from "./useCategoryTree";
 
+function getOtherTopLevelCategories(categories, currentCategory = "") {
+  const currentTopLevel = String(currentCategory).split("/")[0];
+  return [
+    ...new Set(
+      (categories || [])
+        .map((category) => String(category).split("/")[0])
+        .filter(
+          (category) =>
+            category && category !== "_root" && category !== currentTopLevel,
+        ),
+    ),
+  ].sort((a, b) => a.localeCompare(b));
+}
+
 export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
   const isMobile = useIsMobile();
   const params = useParams();
@@ -125,18 +139,8 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
 
   useEffect(() => {
     if (!selectedDirectory) return;
-    const parentCategory = selectedDirectory.category.includes("/")
-      ? selectedDirectory.category.slice(0, selectedDirectory.category.lastIndexOf("/"))
-      : "";
     setOtherCategoryList(
-      categoryList
-        .filter((category) =>
-          category !== "_root" &&
-          !category.includes("/") &&
-          category !== selectedDirectory.category &&
-          category !== parentCategory,
-        )
-        .sort((a, b) => a.localeCompare(b)),
+      getOtherTopLevelCategories(categoryList, selectedDirectory.category),
     );
   }, [categoryList, selectedDirectory]);
 
@@ -251,12 +255,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
           );
           setDownloadUrl(getApiUrlPrefix() + apiPrefix + "/download/" + bookId);
           setOtherCategoryList(
-            categoryList
-              .sort((a, b) => a.localeCompare(b))
-              .filter(
-                (cat) =>
-                  cat !== realCategory && cat !== "_root" && !cat.includes("/"),
-              ),
+            getOtherTopLevelCategories(categoryList, realCategory),
           );
           // 목록에 없는 책이므로 트리 기반 이전/다음 이동은 불가능하다.
           setNextEntryId("");
@@ -290,9 +289,6 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
       const selectedFolderData = findFolderInTree(folderData, selectedEntryId);
       if (selectedFolderData && selectedFolderData.fileType === "folder") {
         const directoryName = selectedFolderData.id.split("/").pop();
-        const parentCategory = selectedFolderData.id.includes("/")
-          ? selectedFolderData.id.slice(0, selectedFolderData.id.lastIndexOf("/"))
-          : "";
         setSelectedDirectory(
           selectedFolderData.isVirtualParent
             ? null
@@ -310,15 +306,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
         setSelectedEntryId("");
         setSelectedCategory("");
         setOtherCategoryList(
-          categoryList
-            .filter(
-              (category) =>
-                category !== "_root" &&
-                !category.includes("/") &&
-                category !== selectedFolderData.id &&
-                category !== parentCategory,
-            )
-            .sort((a, b) => a.localeCompare(b)),
+          getOtherTopLevelCategories(categoryList, selectedFolderData.id),
         );
         // category entry (폴더)
 
@@ -352,9 +340,10 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
               (apiPrefix ? "&api=" + encodeURIComponent(apiPrefix) : ""),
           );
         setDownloadUrl(getApiUrlPrefix() + apiPrefix + "/download/" + bookId);
-        const otherCategoryList = categoryList
-          .sort((a, b) => a.localeCompare(b))
-          .filter((cat) => cat !== "_root" && !cat.includes("/"));
+        const otherCategoryList = getOtherTopLevelCategories(
+          categoryList,
+          book["category"] || "_root",
+        );
         setOtherCategoryList(otherCategoryList);
         window.history.replaceState(
           null,
@@ -407,12 +396,10 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
             );
 
             // determine other category list
-            const otherCategoryList = categoryList
-              .sort((a, b) => a.localeCompare(b))
-              .filter(
-                (cat) =>
-                  cat !== category && cat !== "_root" && !cat.includes("/"),
-              );
+            const otherCategoryList = getOtherTopLevelCategories(
+              categoryList,
+              category,
+            );
             setOtherCategoryList(otherCategoryList);
             window.history.replaceState(
               null,

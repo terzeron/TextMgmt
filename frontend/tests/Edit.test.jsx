@@ -199,8 +199,10 @@ vi.mock("../src/Actions", () => ({
     selectDirectoryButtonClicked,
     onPreviousDirectory,
     onNextDirectory,
+    otherCategoryList = [],
   }) => (
     <div data-testid="actions">
+      <div data-testid="move-category-list">{otherCategoryList.join("|")}</div>
       <button data-testid="next-entry" onClick={toNextEntryClicked}>
         다음
       </button>
@@ -1625,6 +1627,32 @@ describe("Edit", () => {
     await waitFor(() => {
       expect(screen.getByTestId("book-title").textContent).toBe("중첩책1");
       expect(screen.getByTestId("book-author").textContent).toBe("작가I");
+    });
+  });
+
+  it("책 디렉토리만 있어도 현재 위치를 제외한 최상위 이동 대상을 모두 표시한다", async () => {
+    const nestedCategories = {
+      "0_웹툰/연재작": 1,
+      "7_고전정리/현재책": 1,
+      "8_기타만화/다른책": 1,
+    };
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(nestedCategories);
+      else if (url.startsWith("/categories/")) resolve([]);
+      else resolve({});
+    });
+
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-7_고전정리/현재책")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("folder-item-7_고전정리/현재책"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("move-category-list").textContent).toBe(
+        "0_웹툰|8_기타만화",
+      );
     });
   });
 
