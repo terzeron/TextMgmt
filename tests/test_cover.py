@@ -83,6 +83,32 @@ def create_test_spread_pdf(output_path: Path) -> None:
     spread.save(output_path, format="PDF", resolution=72)
 
 
+def create_test_webtoon_pdf(output_path: Path) -> None:
+    webtoon = Image.new("RGB", (600, 2400), (30, 30, 200))
+    webtoon.paste((200, 30, 30), (0, 0, 600, 900))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    webtoon.save(output_path, format="PDF", resolution=72)
+
+
+def create_test_pdf_with_blank_first_cover_area(output_path: Path, background: tuple[int, int, int]) -> None:
+    first_page = Image.new("RGB", (1200, 800), background)
+    first_page.paste((200, 30, 30), (600, 0, 1200, 800))
+    second_page = Image.new("RGB", (600, 900), (30, 30, 200))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    first_page.save(output_path, format="PDF", resolution=72, save_all=True, append_images=[second_page])
+
+
+def create_test_pdf_with_detailed_first_cover(output_path: Path) -> None:
+    first_page = Image.new("RGB", (600, 900), (255, 255, 255))
+    for x in range(0, 600, 20):
+        first_page.paste((0, 0, 0), (x, 0, x + 2, 900))
+    for y in range(0, 900, 20):
+        first_page.paste((0, 0, 0), (0, y, 600, y + 2))
+    second_page = Image.new("RGB", (600, 900), (30, 30, 200))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    first_page.save(output_path, format="PDF", resolution=72, save_all=True, append_images=[second_page])
+
+
 def _make_doc(relative_path: str, file_type: str) -> dict:
     return {"category": "test_category", "title": "Test Book", "author": "Author", "file_path": relative_path, "file_type": file_type, "file_size": 1, "line_count": 0, "page_count": 1, "isbn": "", "summary": "test", "updated_time": "2024-01-01T00:00:00.000000"}
 
@@ -190,6 +216,8 @@ class TestGetCover:
 
         assert response.status_code == 200
         _assert_jpeg_thumbnail(response.body)
+        img = Image.open(io.BytesIO(response.body))
+        assert img.size == (300, 450)
 
     @pytest.mark.asyncio
     async def test_pdf_spread_uses_left_half_as_cover(self, book_manager_module, temp_dir):
@@ -201,9 +229,55 @@ class TestGetCover:
 
         assert response.status_code == 200
         img = Image.open(io.BytesIO(response.body))
-        assert img.height > img.width
+        assert img.size == (300, 450)
         red, _green, blue = img.getpixel((img.width // 2, img.height // 2))
         assert red > blue
+
+    @pytest.mark.asyncio
+    async def test_pdf_webtoon_uses_top_cover_area(self, book_manager_module, temp_dir):
+        bm, mock_es = book_manager_module
+        create_test_webtoon_pdf(temp_dir / "test_category" / "webtoon.pdf")
+        _use_doc(mock_es, "test_category/webtoon.pdf", "pdf")
+
+        response = await bm.get_cover(book_id=110)
+
+        assert response.status_code == 200
+        img = Image.open(io.BytesIO(response.body))
+        assert img.size == (300, 450)
+        red, _green, blue = img.getpixel((img.width // 2, img.height - 10))
+        assert red > blue
+
+    @pytest.mark.parametrize(
+        ("background", "book_id"),
+        [((255, 255, 255), 111), ((0, 0, 0), 112)],
+    )
+    @pytest.mark.asyncio
+    async def test_pdf_blank_first_cover_area_uses_second_page(self, book_manager_module, temp_dir, background, book_id):
+        bm, mock_es = book_manager_module
+        create_test_pdf_with_blank_first_cover_area(temp_dir / "test_category" / f"blank-{book_id}.pdf", background)
+        _use_doc(mock_es, f"test_category/blank-{book_id}.pdf", "pdf")
+
+        response = await bm.get_cover(book_id=book_id)
+
+        assert response.status_code == 200
+        img = Image.open(io.BytesIO(response.body))
+        assert img.size == (300, 450)
+        red, green, blue = img.getpixel((img.width // 2, img.height // 2))
+        assert blue > red
+        assert blue > green
+
+    @pytest.mark.asyncio
+    async def test_pdf_detailed_first_cover_area_is_kept(self, book_manager_module, temp_dir):
+        bm, mock_es = book_manager_module
+        create_test_pdf_with_detailed_first_cover(temp_dir / "test_category" / "detailed.pdf")
+        _use_doc(mock_es, "test_category/detailed.pdf", "pdf")
+
+        response = await bm.get_cover(book_id=113)
+
+        assert response.status_code == 200
+        img = Image.open(io.BytesIO(response.body))
+        red, green, blue = img.getpixel((img.width // 2, img.height // 2))
+        assert max(red, green, blue) < 100
 
     @pytest.mark.asyncio
     async def test_text_format_returns_404(self, book_manager_module, temp_dir):
@@ -233,7 +307,7 @@ class TestGetCover:
 
         first = await bm.get_cover(book_id=108)
         assert first.status_code == 200
-        assert (temp_dir / ".cover_cache" / "108.v2.jpg").exists()
+        assert (temp_dir / ".cover_cache" / "108.v4.jpg").exists()
 
         with patch.object(type(bm), "_extract_cover_thumbnail", side_effect=AssertionError("must use cache")):
             second = await bm.get_cover(book_id=108)

@@ -1350,7 +1350,7 @@ def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
 
     assert dummy._instance.latest_exclude_categories == []
 
-    resp = dummy_client.get("/latest?limit=1001")
+    resp = dummy_client.get("/latest?limit=2001")
     assert resp.status_code == 422
 
     async def get_epub(book_id: int):

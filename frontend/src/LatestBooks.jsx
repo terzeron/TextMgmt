@@ -15,7 +15,7 @@ import { faList, faTableCellsLarge } from "@fortawesome/free-solid-svg-icons";
 import { rawJsonGetReq } from "./Common.js";
 import SearchResult from "./SearchResult";
 
-const LATEST_ITEM_LIMIT = 1000;
+const LATEST_ITEM_LIMIT = 2000;
 const VIEW_MODE_STORAGE_KEY_PREFIX = "tm_latest_view_mode_";
 const COMIC_TOP_LEVEL_DIRECTORY_PATTERN = /^\d+_[^/]+$/;
 const FIRST_INSTALLMENT_PATTERN = /(?:^|[^\d])0*1\s*(?:권|화)(?=$|[^\d])/;
