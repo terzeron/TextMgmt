@@ -197,7 +197,11 @@ export default function SimilarBooks({
     rawJsonGetReq(
       `${apiPrefix}/similar-names?${query.toString()}`,
       (data) => {
-        if (data.status === "success") setSimilarNames(data.result || []);
+        if (data.status === "success") {
+          const names = data.result || [];
+          setSimilarNames(names);
+          if (names.some((item) => item.score > 90)) setIsOpen(true);
+        }
         if (onFinish) onFinish();
       },
       (error) => {
@@ -209,7 +213,7 @@ export default function SimilarBooks({
 
   useEffect(() => {
     if (directoryName) {
-      setIsOpen(true);
+      setIsOpen(false);
       loadSimilarNames();
     }
     return () => setSimilarNames([]);
@@ -219,7 +223,6 @@ export default function SimilarBooks({
     if (refreshing || !directoryName) return;
     const startedAt = Date.now();
     setRefreshing(true);
-    setIsOpen(true);
     loadSimilarNames(() => {
       const remaining = Math.max(0, MIN_REFRESH_SPIN_MS - (Date.now() - startedAt));
       refreshTimerRef.current = setTimeout(() => {
@@ -271,7 +274,7 @@ export default function SimilarBooks({
               const isDeleting = String(deletingId) === String(item.id);
               return (
                 <div
-                  className={`search-result-item ${item.score >= 90 ? "highlight-secondary" : ""}`.trim()}
+                  className={`search-result-item ${item.score > 90 ? "highlight-secondary" : ""}`.trim()}
                   key={`${item.kind}:${item.id}`}
                 >
                   <span
