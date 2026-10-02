@@ -1463,3 +1463,227 @@ def test_joara_unused_html_hooks_are_inert():
     soup = BeautifulSoup("<html><body><a href='/book/1'>x</a></body></html>", "html.parser")
     assert store.extract_search_links(soup) == []
     assert store.extract_book_info(soup) == {"title": "", "author": "", "category": "", "isbn": ""}
+
+
+def test_naver_webtoon_search_url_and_author_is_ignored(monkeypatch: pytest.MonkeyPatch):
+    """네이버 웹툰은 '제목 저자' 키워드가 늘 0건이다. 제목만 한 번 부른다."""
+    from backend.bookstore import NaverWebtoonBookstore
+
+    store = NaverWebtoonBookstore(verbose=False)
+    url = store.build_search_url("유미의 세포들")
+    assert url.startswith("https://comic.naver.com/search?keyword=")
+    assert "%EC%9C%A0%EB%AF%B8" in url
+
+    seen: list[str] = []
+
+    def fake_search_by_keyword(keyword: str):
+        seen.append(keyword)
+        return [("유미의 세포들", "이동건", "로맨스", "https://comic.naver.com/webtoon/list?titleId=651673", url, "")]
+
+    monkeypatch.setattr(store, "search_by_keyword", fake_search_by_keyword)
+    results, keyword, method = store.search(isbn="9788934900011", title="유미의 세포들", author="이동건")
+    assert seen == ["유미의 세포들"]
+    assert keyword == "유미의 세포들"
+    assert method == "title"
+    assert results[0][0] == "유미의 세포들"
+
+
+def test_naver_webtoon_search_by_keyword_success():
+    from backend.bookstore import NaverWebtoonBookstore
+
+    store = NaverWebtoonBookstore(verbose=True)
+    calls: list[dict] = []
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "searchList": [
+                    {"titleId": 651673, "titleName": "유미의 세포들", "displayAuthor": "이동건", "genreList": [{"type": "PURE", "description": "로맨스"}]},
+                    {"titleId": 778153, "titleName": "유미의 세포들 외전", "displayAuthor": "이동건", "genreList": [{"type": "PURE", "description": "로맨스"}, {"type": "X", "description": "드라마"}]},
+                    {"titleId": 1, "titleName": "잘려야 하는 세 번째", "displayAuthor": "", "genreList": []},
+                ],
+                "pageInfo": {"totalRows": 3},
+            }
+
+    def fake_get(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return Resp()
+
+    store.session.get = fake_get
+    search_url = store.build_search_url("유미의 세포들")
+    assert store.search_by_keyword("유미의 세포들") == [
+        ("유미의 세포들", "이동건", "로맨스", "https://comic.naver.com/webtoon/list?titleId=651673", search_url, ""),
+        ("유미의 세포들 외전", "이동건", "로맨스/드라마", "https://comic.naver.com/webtoon/list?titleId=778153", search_url, ""),
+    ]
+    assert calls[0]["url"] == "https://comic.naver.com/api/search/webtoon"
+    assert calls[0]["params"] == {"keyword": "유미의 세포들", "page": "1"}
+
+
+def test_naver_webtoon_search_by_keyword_failure_paths(monkeypatch: pytest.MonkeyPatch):
+    from backend.bookstore import NaverWebtoonBookstore
+
+    store = NaverWebtoonBookstore(verbose=True)
+
+    class Empty:
+        status_code = 200
+
+        def json(self):
+            return {"searchList": [], "pageInfo": {"totalRows": 0}}
+
+    store.session.get = lambda *a, **k: Empty()
+    assert store.search_by_keyword("없는작품") == []
+
+    class NoId:
+        status_code = 200
+
+        def json(self):
+            return {"searchList": [{"titleName": "id 없음"}]}
+
+    store.session.get = lambda *a, **k: NoId()
+    assert store.search_by_keyword("x") == []
+
+    class ServerError:
+        status_code = 500
+
+        def json(self):
+            return {}
+
+    store.session.get = lambda *a, **k: ServerError()
+    assert store.search_by_keyword("x") == []
+
+    def raise_get(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(store.session, "get", raise_get)
+    assert store.search_by_keyword("x") == []
+
+
+def test_kakao_webtoon_search_url_and_author_is_ignored(monkeypatch: pytest.MonkeyPatch):
+    """카카오웹툰도 '제목 저자' 키워드가 0건이다. 제목만 한 번 부른다."""
+    from backend.bookstore import KakaoWebtoonBookstore
+
+    store = KakaoWebtoonBookstore(verbose=False)
+    url = store.build_search_url("이태원 클라쓰")
+    assert url.startswith("https://webtoon.kakao.com/search?keyword=")
+    assert "%EC%9D%B4%ED%83%9C%EC%9B%90" in url
+
+    seen: list[str] = []
+
+    def fake_search_by_keyword(keyword: str):
+        seen.append(keyword)
+        return [("이태원 클라쓰", "광진", "드라마", "https://webtoon.kakao.com/content/x/1338", url, "")]
+
+    monkeypatch.setattr(store, "search_by_keyword", fake_search_by_keyword)
+    results, keyword, method = store.search(isbn="9788934900011", title="이태원 클라쓰", author="광진")
+    assert seen == ["이태원 클라쓰"]
+    assert keyword == "이태원 클라쓰"
+    assert method == "title"
+    assert results[0][0] == "이태원 클라쓰"
+
+
+def test_kakao_webtoon_search_by_keyword_success():
+    """저자는 글·그림·원작만 모으고 중복·출판사를 뺀다. seoId 가 없으면 제목으로 URL 을 만든다."""
+    from backend.bookstore import KakaoWebtoonBookstore
+
+    store = KakaoWebtoonBookstore(verbose=True)
+    calls: list[dict] = []
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "data": {
+                    "content": [
+                        {
+                            "id": 1338,
+                            "title": "이태원 클라쓰",
+                            "seoId": "이태원-클라쓰",
+                            "genre": "드라마",
+                            "authors": [
+                                {"order": 1, "name": "광진", "type": "AUTHOR"},
+                                {"order": 2, "name": "광진", "type": "ILLUSTRATOR"},
+                                {"order": 3, "name": "카카오웹툰 스튜디오", "type": "PUBLISHER"},
+                            ],
+                        },
+                        {
+                            "id": 2320,
+                            "title": "나 혼자만 레벨업",
+                            "genre": "학원/판타지",
+                            "authors": [
+                                {"order": 1, "name": "현군", "type": "AUTHOR"},
+                                {"order": 2, "name": "장성락", "type": "ILLUSTRATOR"},
+                                {"order": 3, "name": "추공", "type": "ORIGINAL_STORY"},
+                                {"order": 4, "name": "디앤씨웹툰", "type": "PUBLISHER"},
+                            ],
+                        },
+                        {"id": 3, "title": "잘려야 하는 세 번째", "authors": []},
+                    ]
+                },
+                "meta": {"pagination": {"totalCount": 3}},
+            }
+
+    def fake_get(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return Resp()
+
+    store.session.get = fake_get
+    search_url = store.build_search_url("레벨업")
+    assert store.search_by_keyword("레벨업") == [
+        ("이태원 클라쓰", "광진", "드라마", "https://webtoon.kakao.com/content/%EC%9D%B4%ED%83%9C%EC%9B%90-%ED%81%B4%EB%9D%BC%EC%93%B0/1338", search_url, ""),
+        ("나 혼자만 레벨업", "현군, 장성락, 추공", "학원/판타지", "https://webtoon.kakao.com/content/%EB%82%98%20%ED%98%BC%EC%9E%90%EB%A7%8C%20%EB%A0%88%EB%B2%A8%EC%97%85/2320", search_url, ""),
+    ]
+    assert calls[0]["url"] == "https://gateway-kw.kakao.com/search/v2/content"
+    assert calls[0]["params"] == {"word": "레벨업", "offset": "0", "limit": "2"}
+
+
+def test_kakao_webtoon_search_by_keyword_failure_paths(monkeypatch: pytest.MonkeyPatch):
+    from backend.bookstore import KakaoWebtoonBookstore
+
+    store = KakaoWebtoonBookstore(verbose=True)
+
+    class Empty:
+        status_code = 200
+
+        def json(self):
+            return {"data": {"content": []}, "meta": {"pagination": {"totalCount": 0}}}
+
+    store.session.get = lambda *a, **k: Empty()
+    assert store.search_by_keyword("없는작품") == []
+
+    class NoId:
+        status_code = 200
+
+        def json(self):
+            return {"data": {"content": [{"title": "id 없음"}]}}
+
+    store.session.get = lambda *a, **k: NoId()
+    assert store.search_by_keyword("x") == []
+
+    class ServerError:
+        status_code = 500
+
+        def json(self):
+            return {}
+
+    store.session.get = lambda *a, **k: ServerError()
+    assert store.search_by_keyword("x") == []
+
+    def raise_get(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(store.session, "get", raise_get)
+    assert store.search_by_keyword("x") == []
+
+
+def test_webtoon_unused_html_hooks_are_inert():
+    """웹툰 두 곳은 API 를 직접 부르므로 HTML 훅은 호출되지 않는다."""
+    from backend.bookstore import KakaoWebtoonBookstore, NaverWebtoonBookstore
+
+    soup = BeautifulSoup("<html><body><a href='/x/1'>x</a></body></html>", "html.parser")
+    for cls in (NaverWebtoonBookstore, KakaoWebtoonBookstore):
+        store = cls(verbose=False)
+        assert store.extract_search_links(soup) == []
+        assert store.extract_book_info(soup) == {"title": "", "author": "", "category": "", "isbn": ""}

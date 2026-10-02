@@ -35,6 +35,24 @@ export const extractMultiPathCategories = (category) => {
     .filter(Boolean);
 };
 
+// 만화 디렉터리 이름 뒤에 붙는 괄호·권수·화수·완결 표기를 잘라 작품명만 남긴다.
+// 서점은 이 꼬리가 붙은 키워드를 0건으로 돌려준다.
+// 첫 괄호 앞에서 먼저 끊고, 괄호 없는 꼬리는 표기 패턴으로 끊는다.
+// 예: "개구리 인간 (1-34화)" → "개구리 인간"
+// 예: "개구리 인간 1~47화[완결]" → "개구리 인간"
+const COMIC_META_START =
+  /(?:\s+|\s*[([])(?=\d{1,4}\s*(?:[-~]\s*\d{1,4})?\s*(?:권|화|편|장)|(?:완결|미완|연재|누락|잘림|미수록))/;
+export const stripComicDirectoryMeta = (name) => {
+  if (!name) return "";
+  const trimmed = name.trim();
+  // 이름이 괄호나 표기로 시작하면 자르면 빈 문자열이 된다. 그때는 원본을 쓴다.
+  const parenIndex = trimmed.search(/[(（]/);
+  const beforeParen = parenIndex > 0 ? trimmed.slice(0, parenIndex) : trimmed;
+  const match = COMIC_META_START.exec(beforeParen);
+  const stripped = (match ? beforeParen.slice(0, match.index) : beforeParen).trim();
+  return stripped || trimmed;
+};
+
 // 검색 결과에서 카테고리를 수집하여 categories 객체에 추가
 const collectStoreCategories = (storeData, storeKey, categories) => {
   if (storeData?.status === "success" && storeData?.result?.length > 0) {
@@ -103,6 +121,14 @@ const buildStoreSearchUrl = (store, title, author) => {
       return title
         ? `https://www.joara.com/search?target=subject&word=${encodedTitle}&search=`
         : "";
+    case "naverwebtoon":
+      return title
+        ? `https://comic.naver.com/search?keyword=${encodedTitle}`
+        : "";
+    case "kakaowebtoon":
+      return title
+        ? `https://webtoon.kakao.com/search?keyword=${encodedTitle}`
+        : "";
     default:
       return "";
   }
@@ -117,6 +143,10 @@ const CATEGORY_STORES = ["yes24", "aladin", "kyobo", "naver"];
 // 카테고리 수집이 조용히 건너뛴다.
 const AUTO_SEARCH_STORES = ["yes24", "aladin", "kyobo", "naver", "ridi"];
 
+// 만화 모드에서만 자동 검색에 더하는 웹툰 서점. 책 탭에서는 웹툰 API 를 부르지 않는다.
+// 장르가 서점 분류 체계와 달라 CATEGORY_STORES 에는 넣지 않는다.
+const COMIC_AUTO_SEARCH_STORES = ["naverwebtoon", "kakaowebtoon"];
+
 // 서점 탭 정의 (supportsIsbn: ISBN 검색 지원 여부)
 const STORES = [
   { key: "yes24", label: "Yes24", supportsIsbn: true },
@@ -128,6 +158,9 @@ const STORES = [
   { key: "naverseries", label: "시리즈", supportsIsbn: false },
   // 조아라는 웹소설 연재처라 ISBN 이 없다. 제목으로만 찾는다.
   { key: "joara", label: "조아라", supportsIsbn: false },
+  // 웹툰도 ISBN 이 없다. 제목으로만 찾는다.
+  { key: "naverwebtoon", label: "네이버웹툰", supportsIsbn: false },
+  { key: "kakaowebtoon", label: "카카오웹툰", supportsIsbn: false },
 ];
 
 export default function Bookstore(props) {
@@ -136,13 +169,16 @@ export default function Bookstore(props) {
   const [isbn, setIsbn] = useState("");
   const [activeKey, setActiveKey] = useState(STORES[0].key);
   const [data, setData] = useState({});
+  // 만화 모드: ISBN 검색을 쓰지 않고, 검색 결과로 카테고리를 결정하지 않는다.
+  const onCategoriesFound = props.comic ? undefined : props.onCategoriesFound;
 
   // bookInfo 변경 시 로컬 필드만 동기화 (검색은 트리거하지 않음)
   useEffect(() => {
-    setTitle(props.bookInfo?.title || "");
+    const rawTitle = props.bookInfo?.title || "";
+    setTitle(props.comic ? stripComicDirectoryMeta(rawTitle) : rawTitle);
     setAuthor(props.bookInfo?.author || "");
-    setIsbn(props.bookInfo?.isbn || "");
-  }, [props.bookInfo]);
+    setIsbn(props.comic ? "" : props.bookInfo?.isbn || "");
+  }, [props.bookInfo, props.comic]);
 
   // 책 정보 로딩 또는 이름 변경 시에만 자동 검색 실행
   useEffect(() => {
@@ -151,14 +187,17 @@ export default function Bookstore(props) {
     // 탭 및 데이터 초기화
     setData({});
     setActiveKey(STORES[0].key);
-    if (props.onCategoriesFound) {
-      props.onCategoriesFound({});
+    if (onCategoriesFound) {
+      onCategoriesFound({});
     }
 
     // 자동 검색: ISBN → 저자+제목 → 제목 순으로 시도
     const autoSearch = async (store) => {
-      const currentIsbn = props.bookInfo.isbn || "";
-      const currentTitle = props.bookInfo.title || "";
+      const currentIsbn = props.comic ? "" : props.bookInfo.isbn || "";
+      const rawTitle = props.bookInfo.title || "";
+      const currentTitle = props.comic
+        ? stripComicDirectoryMeta(rawTitle)
+        : rawTitle;
       const currentAuthor = props.bookInfo.author || "";
 
       if (!currentIsbn && !currentTitle && !currentAuthor) return null;
@@ -223,8 +262,11 @@ export default function Bookstore(props) {
 
     const runAutoSearch = async () => {
       // 서점 검색을 병렬 실행 (서점 간 의존성 없음)
+      const autoStores = props.comic
+        ? [...AUTO_SEARCH_STORES, ...COMIC_AUTO_SEARCH_STORES]
+        : AUTO_SEARCH_STORES;
       const entries = await Promise.all(
-        AUTO_SEARCH_STORES.map(async (storeKey) => [
+        autoStores.map(async (storeKey) => [
           storeKey,
           await autoSearch(storeKey),
         ]),
@@ -232,12 +274,12 @@ export default function Bookstore(props) {
       const results = Object.fromEntries(entries);
 
       // 카테고리 유사도 판정 서점의 결과만 수집하여 부모에게 전달
-      if (props.onCategoriesFound) {
+      if (onCategoriesFound) {
         const categories = {};
         for (const storeKey of CATEGORY_STORES) {
           collectStoreCategories(results[storeKey], storeKey, categories);
         }
-        props.onCategoriesFound(categories);
+        onCategoriesFound(categories);
       }
     };
 
@@ -343,7 +385,7 @@ export default function Bookstore(props) {
         const result = combineSearchResults(titleResult, authorTitleResult);
         setData((prev) => {
           const newData = { ...prev, [store]: result, [cacheKey]: result };
-          if (CATEGORY_STORES.includes(store) && props.onCategoriesFound) {
+          if (CATEGORY_STORES.includes(store) && onCategoriesFound) {
             const categories = {};
             for (const storeKey of CATEGORY_STORES) {
               collectStoreCategories(
@@ -352,7 +394,7 @@ export default function Bookstore(props) {
                 categories,
               );
             }
-            props.onCategoriesFound(categories);
+            onCategoriesFound(categories);
           }
           return newData;
         });
@@ -385,13 +427,13 @@ export default function Bookstore(props) {
           const newData = { ...prev, [store]: json, [cacheKey]: json };
 
           // 카테고리 유사도 판정 서점의 검색 결과를 부모에게 전달
-          if (CATEGORY_STORES.includes(store) && props.onCategoriesFound) {
+          if (CATEGORY_STORES.includes(store) && onCategoriesFound) {
             const categories = {};
             for (const storeKey of CATEGORY_STORES) {
               const storeResult = storeKey === store ? json : newData[storeKey];
               collectStoreCategories(storeResult, storeKey, categories);
             }
-            props.onCategoriesFound(categories);
+            onCategoriesFound(categories);
           }
 
           return newData;
@@ -419,28 +461,30 @@ export default function Bookstore(props) {
         {/* 검색 버튼들 */}
         <div className="p-2 border-bottom">
           <ButtonGroup>
-            <Button
-              variant={
-                isbn && storeInfo?.supportsIsbn
-                  ? "outline-primary"
-                  : "outline-secondary"
-              }
-              size="sm"
-              onClick={() => fetchWithMethod(storeKey, "isbn")}
-              disabled={result?.loading || !isbn || !storeInfo?.supportsIsbn}
-              title={
-                !isbn
-                  ? "ISBN 정보 없음"
-                  : !storeInfo?.supportsIsbn
-                    ? "이 서점은 ISBN 검색 미지원"
-                    : ""
-              }
-            >
-              ISBN
-              {result?.loading && (
-                <FontAwesomeIcon icon={faSpinner} spin className="ms-1" />
-              )}
-            </Button>
+            {!props.comic && (
+              <Button
+                variant={
+                  isbn && storeInfo?.supportsIsbn
+                    ? "outline-primary"
+                    : "outline-secondary"
+                }
+                size="sm"
+                onClick={() => fetchWithMethod(storeKey, "isbn")}
+                disabled={result?.loading || !isbn || !storeInfo?.supportsIsbn}
+                title={
+                  !isbn
+                    ? "ISBN 정보 없음"
+                    : !storeInfo?.supportsIsbn
+                      ? "이 서점은 ISBN 검색 미지원"
+                      : ""
+                }
+              >
+                ISBN
+                {result?.loading && (
+                  <FontAwesomeIcon icon={faSpinner} spin className="ms-1" />
+                )}
+              </Button>
+            )}
             <Button
               variant={
                 title || author ? "outline-primary" : "outline-secondary"
@@ -538,4 +582,5 @@ Bookstore.propTypes = {
   }).isRequired,
   searchTrigger: PropTypes.number,
   onCategoriesFound: PropTypes.func,
+  comic: PropTypes.bool,
 };

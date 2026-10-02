@@ -1340,6 +1340,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                         isbn: "",
                       }}
                       searchTrigger={1}
+                      comic
                     />
                     </>
                   ) : <>
