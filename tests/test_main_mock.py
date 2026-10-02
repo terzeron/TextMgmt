@@ -306,7 +306,7 @@ class TestViewerHiddenAccess:
         r = client.get("/latest")
 
         assert r.status_code == 200
-        mock_bm.get_latest_books.assert_called_once_with(size=1000, exclude_categories=["secret", "shared", "no_latest"])
+        mock_bm.get_latest_books.assert_called_once_with(size=2000, exclude_categories=["secret", "shared", "no_latest"])
 
 
 # ── /pdf-pages/{book_id} ─────────────────────────────────────────────────────
@@ -1238,7 +1238,7 @@ class TestSearchBookstore:
         assert r.status_code == 200
         assert "isbn" not in r.json()["result"][0]
 
-    @pytest.mark.parametrize("store,cls", [("ridi", "RidibooksBookstore"), ("naver", "NaverShoppingBookstore"), ("naverseries", "NaverSeriesBookstore"), ("munpia", "MunpiaBookstore"), ("kyobo", "KyoboBookstore"), ("joara", "JoaraBookstore")])
+    @pytest.mark.parametrize("store,cls", [("ridi", "RidibooksBookstore"), ("naver", "NaverShoppingBookstore"), ("naverseries", "NaverSeriesBookstore"), ("munpia", "MunpiaBookstore"), ("kyobo", "KyoboBookstore"), ("joara", "JoaraBookstore"), ("naverwebtoon", "NaverWebtoonBookstore"), ("kakaowebtoon", "KakaoWebtoonBookstore")])
     def test_other_stores(self, client, store, cls):
         fake_store = MagicMock()
         fake_store.search.return_value = ([], "q", "title")

@@ -5,10 +5,13 @@ import PropTypes from "prop-types";
 
 import { getApiUrlPrefix } from "./Common.js";
 
+/* global __COVER_VERSION__ */
 // 한 번에 그리는 카드 수. 커버 요청도 이만큼씩만 나간다.
 export const COVER_BATCH_SIZE = 20;
 // 서버가 커버를 만들 수 있는 포맷. 나머지는 요청 없이 포맷명 박스로 그린다.
 const COVER_FILE_TYPES = new Set(["epub", "pdf"]);
+const COVER_VERSION =
+  typeof __COVER_VERSION__ !== "undefined" ? __COVER_VERSION__ : "dev";
 
 function CoverImage({ src, fileType }) {
   const [failed, setFailed] = useState(false);
@@ -73,11 +76,11 @@ export default function CoverGrid({ results, basePath }) {
         {results.slice(0, visibleCount).map((book) => {
           const filename =
             (book.file_path || "").split("/").pop() || book.title || "Unknown";
-          const displayTitle = book.title || filename;
+          const displayTitle = book.display_title || book.title || filename;
           const category = book.category || "_root";
           const fileType = book.file_type || "";
           const coverSrc = COVER_FILE_TYPES.has(fileType)
-            ? `${getApiUrlPrefix()}${apiPrefix}/cover/${book.book_id}`
+            ? `${getApiUrlPrefix()}${apiPrefix}/cover/${book.book_id}?v=${COVER_VERSION}`
             : null;
           return (
             <a

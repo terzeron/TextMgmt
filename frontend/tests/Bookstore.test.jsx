@@ -21,6 +21,7 @@ vi.mock("../src/Common", () => ({
 
 import { rawJsonGetReq } from "../src/Common";
 import Bookstore, {
+  stripComicDirectoryMeta,
   getTwoLevelCategory,
   extractMultiPathCategories,
 } from "../src/Bookstore";
@@ -211,11 +212,11 @@ describe("Bookstore 카테고리 수집", () => {
     expect(Object.keys(lastCall).some((k) => k.startsWith("kyobo_"))).toBe(true);
   });
 
-  it("조아라는 자동 검색과 카테고리 판정에 참여하지 않는다", async () => {
+  it.each(["joara", "naverwebtoon", "kakaowebtoon"])("%s는 자동 검색과 카테고리 판정에 참여하지 않는다", async (store) => {
     const onCategoriesFound = vi.fn();
 
     mockSearchResponses({
-      "/search/bookstore/joara": {
+      [`/search/bookstore/${store}`]: {
         status: "success",
         result: [
           { title: "T", author: "A", category: "판타지", book_url: "u" },
@@ -237,14 +238,14 @@ describe("Bookstore 카테고리 수집", () => {
       expect(onCategoriesFound).toHaveBeenCalled();
     });
 
-    // 조아라 장르("판타지")는 서점 분류 체계와 어휘가 달라 유사도 판정을 흐린다.
-    const joaraCalls = rawJsonGetReq.mock.calls.filter(([url]) =>
-      url.includes("/search/bookstore/joara"),
+    // 조아라·웹툰 장르("판타지", "학원/판타지")는 서점 분류 체계와 어휘가 달라 유사도 판정을 흐린다.
+    const storeCalls = rawJsonGetReq.mock.calls.filter(([url]) =>
+      url.includes(`/search/bookstore/${store}`),
     );
-    expect(joaraCalls).toHaveLength(0);
+    expect(storeCalls).toHaveLength(0);
     const lastCall =
       onCategoriesFound.mock.calls[onCategoriesFound.mock.calls.length - 1][0];
-    expect(Object.keys(lastCall).some((k) => k.startsWith("joara_"))).toBe(
+    expect(Object.keys(lastCall).some((k) => k.startsWith(`${store}_`))).toBe(
       false,
     );
   });
@@ -488,9 +489,11 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
     expect(tabTexts).toContain("문피아");
     expect(tabTexts).toContain("시리즈");
     expect(tabTexts).toContain("조아라");
+    expect(tabTexts).toContain("네이버웹툰");
+    expect(tabTexts).toContain("카카오웹툰");
   });
 
-  it("교보문고는 알라딘 바로 뒤, 조아라는 맨 마지막 탭이다", async () => {
+  it("교보문고는 알라딘 바로 뒤, 웹툰 두 곳은 맨 마지막 탭이다", async () => {
     await act(async () => {
       render(
         <Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />,
@@ -502,7 +505,7 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
       if (!seen.includes(t.textContent)) seen.push(t.textContent);
     }
     expect(seen.indexOf("교보문고")).toBe(seen.indexOf("알라딘") + 1);
-    expect(seen[seen.length - 1]).toBe("조아라");
+    expect(seen.slice(-2)).toEqual(["네이버웹툰", "카카오웹툰"]);
   });
 
   it("ISBN/저자+제목 검색 버튼이 렌더링된다", async () => {
@@ -832,6 +835,8 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
     ["문피아", "munpia", "https://novel.munpia.com/page/hd.platinum/view/search/keyword/%EC%A0%80%EC%9E%90%20%EC%A0%9C%EB%AA%A9/order/search_result"],
     ["시리즈", "naverseries", "https://series.naver.com/search/search.series?t=all&q=%EC%A0%9C%EB%AA%A9%20%EC%A0%80%EC%9E%90"],
     ["조아라", "joara", "https://www.joara.com/search?target=subject&word=%EC%A0%9C%EB%AA%A9&search="],
+    ["네이버웹툰", "naverwebtoon", "https://comic.naver.com/search?keyword=%EC%A0%9C%EB%AA%A9"],
+    ["카카오웹툰", "kakaowebtoon", "https://webtoon.kakao.com/search?keyword=%EC%A0%9C%EB%AA%A9"],
   ])("%s는 응답 URL이 없어도 서점 검색 링크를 표시한다", async (label, store, expectedUrl) => {
     rawJsonGetReq.mockImplementation((_url, onSuccess) => {
       setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
@@ -890,6 +895,144 @@ describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
     await waitFor(() => {
       expect(rawJsonGetReq).toHaveBeenCalled();
     });
+  });
+
+  it("자동 검색은 ISBN과 저자+제목 결과가 없으면 제목 검색으로 폴백한다", async () => {
+    rawJsonGetReq.mockImplementation((url, onSuccess) => {
+      const result = url.includes("title=") && !url.includes("author=")
+        ? [{ title: "제목 결과", category: "소설 > SF", book_url: "title-only" }]
+        : [];
+      setTimeout(() => onSuccess({ status: "success", result }), 0);
+    });
+
+    render(
+      <Bookstore
+        bookInfo={{ title: "제목", author: "저자", isbn: "978" }}
+        searchTrigger={1}
+      />,
+    );
+
+    expect(await screen.findAllByText("제목 결과")).toHaveLength(5);
+    const urls = rawJsonGetReq.mock.calls.map(([url]) => url);
+    expect(urls.some((url) => url.includes("isbn=978"))).toBe(true);
+    expect(urls.some((url) => url.includes("author=%EC%A0%80%EC%9E%90"))).toBe(true);
+    expect(urls.some((url) => url.includes("title=%EC%A0%9C%EB%AA%A9") && !url.includes("author="))).toBe(true);
+  });
+
+  it("자동 검색에서 저자+제목 결과를 반환하고 카테고리를 전달한다", async () => {
+    const onCategoriesFound = vi.fn();
+    rawJsonGetReq.mockImplementation((url, onSuccess) => {
+      const result = url.includes("author=")
+        ? [{
+            title: "검색 책",
+            author: "저자",
+            category: "소설 > 한국소설",
+            book_url: url,
+          }]
+        : [];
+      setTimeout(() => onSuccess({ status: "success", result }), 0);
+    });
+
+    render(
+      <Bookstore
+        bookInfo={{ title: "제목", author: "저자", isbn: "978" }}
+        searchTrigger={1}
+        onCategoriesFound={onCategoriesFound}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onCategoriesFound.mock.calls.at(-1)[0]).toEqual(
+        expect.objectContaining({ yes24_0_0: "소설 한국소설" }),
+      );
+    });
+  });
+
+  it("저자+제목 버튼의 병렬 검색 결과로 카테고리를 전달한다", async () => {
+    const onCategoriesFound = vi.fn();
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({
+        status: "success",
+        result: [{
+          title: "책",
+          category: "소설 > 한국소설",
+          book_url: "book",
+        }],
+      }), 0);
+    });
+
+    render(
+      <Bookstore
+        bookInfo={{ title: "제목", author: "저자", isbn: "" }}
+        onCategoriesFound={onCategoriesFound}
+      />,
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" })[0]);
+
+    await waitFor(() => {
+      expect(onCategoriesFound.mock.calls.at(-1)[0]).toEqual(
+        expect.objectContaining({ yes24_0_0: "소설 한국소설" }),
+      );
+    });
+  });
+
+  it("자동 검색 요청 오류는 로그를 남기고 빈 결과로 폴백한다", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    rawJsonGetReq.mockImplementation((_url, _onSuccess, onError) => {
+      setTimeout(() => onError("network error"), 0);
+    });
+
+    render(
+      <Bookstore
+        bookInfo={{ title: "제목", author: "저자", isbn: "" }}
+        searchTrigger={1}
+      />,
+    );
+    await waitFor(() => expect(rawJsonGetReq).toHaveBeenCalled());
+    await act(async () => {
+      for (const [, , onError] of rawJsonGetReq.mock.calls) {
+        onError("network error");
+      }
+    });
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith("network error"));
+    errorSpy.mockRestore();
+  });
+
+  it("ISBN 기반 자동 검색 요청 실패는 제목 검색으로 계속 진행한다", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    rawJsonGetReq.mockImplementation((url, onSuccess, onError) => {
+      if (url.includes("isbn=")) {
+        setTimeout(() => onError("ISBN network error"), 0);
+      } else {
+        setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+      }
+    });
+
+    render(
+      <Bookstore
+        bookInfo={{ title: "제목", author: "저자", isbn: "978" }}
+        searchTrigger={1}
+      />,
+    );
+
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith("ISBN network error"));
+    expect(rawJsonGetReq.mock.calls.some(([url]) => url.includes("title="))).toBe(true);
+    errorSpy.mockRestore();
+  });
+
+  it("ISBN이 있어도 저자+제목 버튼은 제목과 저자만 요청한다", async () => {
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+    });
+    render(
+      <Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "978" }} />,
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" })[0]);
+
+    await waitFor(() => expect(rawJsonGetReq).toHaveBeenCalled());
+    expect(rawJsonGetReq.mock.calls[0][0]).toContain("title=");
+    expect(rawJsonGetReq.mock.calls[0][0]).toContain("author=");
+    expect(rawJsonGetReq.mock.calls[0][0]).not.toContain("isbn=");
   });
 
   it("ISBN이 없으면 제목과 저자+제목 검색에서 각각 2건씩 합쳐 최대 4건을 표시한다", async () => {
@@ -1044,5 +1187,222 @@ describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
       expect(screen.getAllByText("URL없는책1").length).toBeGreaterThan(0);
       expect(screen.getAllByText("URL없는책2").length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe("Bookstore 만화 모드", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(
+        () =>
+          onSuccess({
+            status: "success",
+            result: [
+              { title: "T", author: "A", category: "드라마", book_url: "u" },
+            ],
+          }),
+        0,
+      );
+    });
+  });
+
+  it("ISBN 버튼이 없고 저자+제목 버튼만 남는다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore
+          comic
+          bookInfo={{ title: "제목", author: "저자", isbn: "978" }}
+        />,
+      );
+    });
+    expect(screen.queryAllByRole("button", { name: "ISBN" })).toHaveLength(0);
+    expect(
+      screen.getAllByRole("button", { name: "저자+제목" }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("bookInfo 에 ISBN 이 있어도 isbn 파라미터를 보내지 않는다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore
+          comic
+          bookInfo={{ title: "제목", author: "저자", isbn: "9781234567890" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+    await waitFor(() => {
+      expect(rawJsonGetReq).toHaveBeenCalled();
+    });
+    for (const [url] of rawJsonGetReq.mock.calls) {
+      expect(url).not.toContain("isbn=");
+    }
+  });
+
+  it("검색 결과로 카테고리를 결정하지 않는다", async () => {
+    const onCategoriesFound = vi.fn();
+    await act(async () => {
+      render(
+        <Bookstore
+          comic
+          bookInfo={{ title: "제목", author: "저자", isbn: "" }}
+          searchTrigger={1}
+          onCategoriesFound={onCategoriesFound}
+        />,
+      );
+    });
+    await waitFor(() => {
+      expect(rawJsonGetReq).toHaveBeenCalled();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" })[0]);
+    });
+    expect(onCategoriesFound).not.toHaveBeenCalled();
+  });
+
+  it("만화 모드가 아니면 ISBN 버튼이 그대로 있다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "978" }} />,
+      );
+    });
+    expect(
+      screen.getAllByRole("button", { name: "ISBN" }).length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("Bookstore 웹툰 자동 검색", () => {
+  const WEBTOON_STORES = ["naverwebtoon", "kakaowebtoon"];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+    });
+  });
+
+  const calledStores = () =>
+    new Set(
+      rawJsonGetReq.mock.calls.map(([url]) => url.split("?")[0].split("/").pop()),
+    );
+
+  it("만화 모드는 네이버웹툰·카카오웹툰도 자동 검색한다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore
+          comic
+          bookInfo={{ title: "제목", author: "저자", isbn: "" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+    await waitFor(() => {
+      for (const store of WEBTOON_STORES) {
+        expect(calledStores().has(store)).toBe(true);
+      }
+    });
+    // 기존 자동 검색 서점은 그대로 돈다.
+    for (const store of ["yes24", "aladin", "kyobo", "naver", "ridi"]) {
+      expect(calledStores().has(store)).toBe(true);
+    }
+  });
+
+  it("책 모드는 웹툰을 자동 검색하지 않는다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore
+          bookInfo={{ title: "제목", author: "저자", isbn: "" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+    await waitFor(() => {
+      expect(calledStores().has("yes24")).toBe(true);
+    });
+    for (const store of WEBTOON_STORES) {
+      expect(calledStores().has(store)).toBe(false);
+    }
+  });
+});
+
+describe("stripComicDirectoryMeta", () => {
+  it.each([
+    ["개구리 인간 1~47화[완결]", "개구리 인간"],
+    ["개구리 인간 1-5권", "개구리 인간"],
+    ["나 혼자만 레벨업 (완결)", "나 혼자만 레벨업"],
+    ["개구리 인간 (1-34화)", "개구리 인간"],
+    ["개구리 인간(1-34화)", "개구리 인간"],
+    ["개구리 인간 （1-34화）", "개구리 인간"],
+    ["개구리 인간 (시즌2)", "개구리 인간"],
+    ["개구리 인간 (Season 2) 1-3화", "개구리 인간"],
+    ["개구리 인간 (장혁준) 1~47화[완결]", "개구리 인간"],
+    ["나 혼자만 레벨업[완결]", "나 혼자만 레벨업"],
+    ["이태원 클라쓰 연재중", "이태원 클라쓰"],
+    ["유미의 세포들 12화", "유미의 세포들"],
+    ["개구리 인간", "개구리 인간"],
+    ["  개구리 인간  ", "개구리 인간"],
+  ])("%s → %s", (input, expected) => {
+    expect(stripComicDirectoryMeta(input)).toBe(expected);
+  });
+
+  it("제목 안의 숫자와 단어는 자르지 않는다", () => {
+    expect(stripComicDirectoryMeta("7번 국도")).toBe("7번 국도");
+    expect(stripComicDirectoryMeta("완결자")).toBe("완결자");
+    expect(stripComicDirectoryMeta("연재의 기술")).toBe("연재의 기술");
+  });
+
+  it("이름이 표기로 시작하면 원본을 돌려준다", () => {
+    expect(stripComicDirectoryMeta("완결 개구리 인간")).toBe("완결 개구리 인간");
+    expect(stripComicDirectoryMeta("(장혁준) 개구리 인간")).toBe("(장혁준) 개구리 인간");
+    expect(stripComicDirectoryMeta("")).toBe("");
+    expect(stripComicDirectoryMeta(undefined)).toBe("");
+  });
+});
+
+describe("Bookstore 만화 모드 검색어 정리", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+    });
+  });
+
+  it("자동 검색이 권수·완결 표기를 뺀 제목을 보낸다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore
+          comic
+          bookInfo={{ title: "개구리 인간 1~47화[완결]", author: "", isbn: "" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+    await waitFor(() => {
+      expect(rawJsonGetReq).toHaveBeenCalled();
+    });
+    for (const [url] of rawJsonGetReq.mock.calls) {
+      const title = new URLSearchParams(url.split("?")[1]).get("title");
+      expect(title).toBe("개구리 인간");
+    }
+  });
+
+  it("책 모드는 제목을 그대로 보낸다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore
+          bookInfo={{ title: "개구리 인간 1~47화[완결]", author: "", isbn: "" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+    await waitFor(() => {
+      expect(rawJsonGetReq).toHaveBeenCalled();
+    });
+    for (const [url] of rawJsonGetReq.mock.calls) {
+      const title = new URLSearchParams(url.split("?")[1]).get("title");
+      expect(title).toBe("개구리 인간 1~47화[완결]");
+    }
   });
 });

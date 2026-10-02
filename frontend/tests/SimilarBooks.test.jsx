@@ -10,14 +10,16 @@ import {
 
 afterEach(cleanup);
 
-const { mockRawJsonGetReq, mockJsonDeleteReq } = vi.hoisted(() => ({
+const { mockRawJsonGetReq, mockJsonDeleteReq, mockJsonPostReq } = vi.hoisted(() => ({
   mockRawJsonGetReq: vi.fn(),
   mockJsonDeleteReq: vi.fn(),
+  mockJsonPostReq: vi.fn(),
 }));
 
 vi.mock("../src/Common", () => ({
   rawJsonGetReq: mockRawJsonGetReq,
   jsonDeleteReq: mockJsonDeleteReq,
+  jsonPostReq: mockJsonPostReq,
   getApiUrlPrefix: () => "http://localhost:8000",
 }));
 
@@ -45,6 +47,7 @@ describe("SimilarBooks", () => {
   beforeEach(() => {
     mockRawJsonGetReq.mockReset();
     mockJsonDeleteReq.mockReset();
+    mockJsonPostReq.mockReset();
   });
 
   // ── 점수 배지 표시 ──
@@ -174,6 +177,42 @@ describe("SimilarBooks", () => {
     });
   });
 
+  it("유사 이름 디렉토리는 편집·조회 아이콘 버튼을 행 오른쪽에 제공한다", async () => {
+    mockRawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("similar-names")) {
+        resolve({
+          status: "success",
+          result: [{
+            kind: "directory",
+            id: "Novel",
+            category: "Novel",
+            label: "Novel",
+            score: 88,
+            file_count: 1,
+            page_count: 120,
+            total_file_size: 5000,
+          }],
+        });
+      }
+    });
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+
+    render(<SimilarBooks directoryName="Novel" />);
+    fireEvent.click(screen.getByText("유사한 이름의 디렉토리"));
+
+    const editButton = await screen.findByRole("button", { name: "Novel 편집" });
+    const viewButton = screen.getByRole("button", { name: "Novel 조회" });
+    expect(editButton.textContent).toBe("");
+    expect(viewButton.textContent).toBe("");
+    expect(editButton.parentElement.classList.contains("search-result-item-actions")).toBe(true);
+
+    fireEvent.click(editButton);
+    fireEvent.click(viewButton);
+    expect(open).toHaveBeenNthCalledWith(1, "/book-edit?directory=Novel", "_blank", "noopener");
+    expect(open).toHaveBeenNthCalledWith(2, "/book-view?directory=Novel", "_blank", "noopener");
+    open.mockRestore();
+  });
+
   // ── 자동 펼침 ──
 
   it("90점 이상인 책이 있으면 자동으로 펼쳐진다", async () => {
@@ -213,7 +252,7 @@ describe("SimilarBooks", () => {
     expect(screen.queryByRole("button", { name: /\s삭제$/ })).toBeNull();
   });
 
-  it("90점 미만이면 접힌 상태를 유지한다", async () => {
+  it("90점을 넘는 책이 없으면 접힌 상태를 유지한다", async () => {
     mockBooks([makeBook(1, 89), makeBook(2, 50)]);
 
     render(<SimilarBooks bookId={1} />);
@@ -222,14 +261,12 @@ describe("SimilarBooks", () => {
     expect(screen.queryByRole("button", { name: /\s편집$/ })).toBeNull();
   });
 
-  it("정확히 90점이면 자동으로 펼쳐진다 (경계값)", async () => {
+  it("정확히 90점이면 자동으로 펼쳐지지 않는다 (경계값)", async () => {
     mockBooks([makeBook(1, 90)]);
 
     render(<SimilarBooks bookId={1} />);
 
-    await waitFor(() => {
-      expect(screen.getByText("90")).toBeTruthy();
-    });
+    expect(screen.queryByText("90")).toBeNull();
   });
 
   it("89.9점이면 자동으로 펼쳐지지 않는다 (경계값)", () => {
@@ -238,6 +275,80 @@ describe("SimilarBooks", () => {
     render(<SimilarBooks bookId={1} />);
 
     expect(screen.queryByRole("button", { name: /\s편집$/ })).toBeNull();
+  });
+
+  it("유사한 이름의 디렉토리는 90점 초과 결과가 없으면 접힌 상태를 유지한다", async () => {
+    mockRawJsonGetReq.mockImplementation((_url, resolve) => {
+      resolve({
+        status: "success",
+        result: [{
+          kind: "directory",
+          id: "Novel",
+          category: "Novel",
+          label: "Novel",
+          score: 90,
+          file_count: 1,
+          page_count: 120,
+          total_file_size: 5000,
+        }],
+      });
+    });
+
+    render(<SimilarBooks directoryName="Novel" />);
+
+    await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
+    expect(
+      screen.queryByText("Novel", { selector: ".search-result-item-text" }),
+    ).toBeNull();
+  });
+
+  it("유사한 이름의 디렉토리는 90점 초과 항목이 있으면 펼치고 해당 행만 강조한다", async () => {
+    mockRawJsonGetReq.mockImplementation((_url, resolve) => {
+      resolve({
+        status: "success",
+        result: [
+          {
+            kind: "directory",
+            id: "Novel",
+            category: "Novel",
+            label: "Novel",
+            score: 91,
+            file_count: 1,
+            page_count: 120,
+            total_file_size: 5000,
+          },
+          {
+            kind: "directory",
+            id: "Other",
+            category: "Other",
+            label: "Other",
+            score: 90,
+            file_count: 1,
+            page_count: 120,
+            total_file_size: 5000,
+          },
+        ],
+      });
+    });
+
+    render(<SimilarBooks directoryName="Novel" />);
+
+    const highScoreRow = await screen.findByText("Novel", {
+      selector: ".search-result-item-text",
+    });
+    const boundaryScoreRow = screen.getByText("Other", {
+      selector: ".search-result-item-text",
+    });
+    expect(
+      highScoreRow
+        .closest(".search-result-item")
+        .classList.contains("highlight-secondary"),
+    ).toBe(true);
+    expect(
+      boundaryScoreRow
+        .closest(".search-result-item")
+        .classList.contains("highlight-secondary"),
+    ).toBe(false);
   });
 
   it("bookId 변경 시 자동 펼침 상태가 초기화된다", async () => {
@@ -302,17 +413,16 @@ describe("SimilarBooks", () => {
     expect(row70.classList.contains("highlight-secondary")).toBe(false);
   });
 
-  it("정확히 90점이면 highlight-secondary가 적용된다", async () => {
+  it("정확히 90점이면 highlight-secondary가 적용되지 않는다", async () => {
     mockBooks([makeBook(1, 90)]);
 
     render(<SimilarBooks bookId={1} />);
 
-    await waitFor(() => {
-      expect(screen.getByText("90")).toBeTruthy();
-    });
+    fireEvent.click(screen.getByText("유사한 책 목록"));
+    await waitFor(() => expect(screen.getByText("90")).toBeTruthy());
 
     const row = screen.getByText("90").closest("div[class]");
-    expect(row.classList.contains("highlight-secondary")).toBe(true);
+    expect(row.classList.contains("highlight-secondary")).toBe(false);
   });
 
   it("89점이면 highlight-secondary가 적용되지 않는다", async () => {
@@ -1062,6 +1172,88 @@ describe("SimilarBooks", () => {
       expect(screen.getByText("test_category/Book 2.pdf")).toBeTruthy();
     });
 
+    it("유사 이름 디렉토리 삭제는 확인 후 하위 디렉토리까지 목록에서 제거한다", async () => {
+      mockRawJsonGetReq.mockImplementation((url, resolve) => {
+        if (url.includes("similar-names")) {
+          resolve({ status: "success", result: [
+            { kind: "directory", id: "Novel", category: "Novel", label: "Novel", score: 80, file_count: 2, page_count: 240, total_file_size: 10000 },
+            { kind: "directory", id: "Novel/Part", category: "Novel/Part", label: "Novel/Part", score: 75, file_count: 1, page_count: 120, total_file_size: 5000 },
+          ] });
+        }
+      });
+      mockJsonPostReq.mockImplementation((_url, _payload, resolve) => resolve({ status: "success" }));
+
+      render(<SimilarBooks directoryName="Novel" />);
+      fireEvent.click(screen.getByText("유사한 이름의 디렉토리"));
+      const deleteButton = await screen.findByRole("button", { name: "Novel 삭제" });
+      fireEvent.click(deleteButton);
+
+      expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("되돌릴 수 없습니다"));
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/categories/delete",
+        { category: "Novel" },
+        expect.any(Function),
+        expect.any(Function),
+      );
+      await waitFor(() => {
+        expect(screen.queryByText("Novel", { selector: ".search-result-item-text" })).toBeNull();
+        expect(screen.queryByText("Novel/Part", { selector: ".search-result-item-text" })).toBeNull();
+      });
+    });
+
+    it("유사 이름 디렉토리 삭제 실패는 로그와 알림을 남기고 목록을 유지한다", async () => {
+      mockRawJsonGetReq.mockImplementation((_url, resolve) => {
+        resolve({ status: "success", result: [{
+          kind: "directory",
+          id: "Novel",
+          category: "Novel",
+          label: "Novel",
+          score: 80,
+          file_count: 2,
+          page_count: 240,
+          total_file_size: 10000,
+        }] });
+      });
+      mockJsonPostReq.mockImplementation((_url, _payload, _resolve, reject) =>
+        reject("permission denied"),
+      );
+
+      render(<SimilarBooks directoryName="Novel" />);
+      fireEvent.click(screen.getByText("유사한 이름의 디렉토리"));
+      fireEvent.click(await screen.findByRole("button", { name: "Novel 삭제" }));
+
+      await waitFor(() => {
+        expect(errorSpy).toHaveBeenCalledWith("permission denied");
+        expect(alertSpy).toHaveBeenCalledWith(
+          "디렉토리 삭제에 실패했습니다. permission denied",
+        );
+      });
+      expect(screen.getByText("Novel", { selector: ".search-result-item-text" })).toBeTruthy();
+    });
+
+    it("유사 이름 디렉토리 삭제를 취소하면 요청하지 않는다", async () => {
+      mockRawJsonGetReq.mockImplementation((_url, resolve) => {
+        resolve({ status: "success", result: [{
+          kind: "directory",
+          id: "Novel",
+          category: "Novel",
+          label: "Novel",
+          score: 80,
+          file_count: 2,
+          page_count: 240,
+          total_file_size: 10000,
+        }] });
+      });
+      confirmSpy.mockReturnValueOnce(false);
+
+      render(<SimilarBooks directoryName="Novel" />);
+      fireEvent.click(screen.getByText("유사한 이름의 디렉토리"));
+      fireEvent.click(await screen.findByRole("button", { name: "Novel 삭제" }));
+
+      expect(mockJsonPostReq).not.toHaveBeenCalled();
+      expect(screen.getByText("Novel", { selector: ".search-result-item-text" })).toBeTruthy();
+    });
+
     it("삭제에 실패하면 알림을 띄우고 목록을 유지한다", async () => {
       mockBooks([makeBook(1, 50)]);
       mockJsonDeleteReq.mockImplementation((url, payload, resolve, reject) => {
@@ -1113,6 +1305,77 @@ describe("SimilarBooks", () => {
   describe("새로고침 버튼", () => {
     const refreshButton = () =>
       screen.getByLabelText("유사한 책 목록 새로고침");
+
+    it("디렉토리 이름 검색을 새로고침하고 응답 실패 시 목록을 유지한다", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      let callCount = 0;
+      mockRawJsonGetReq.mockImplementation((_url, resolve, reject) => {
+        callCount++;
+        if (callCount === 1) {
+          resolve({
+            status: "success",
+            result: [{
+              kind: "directory",
+              id: "Novel",
+              category: "Novel",
+              label: "Novel",
+              score: 80,
+              file_count: 2,
+              page_count: 240,
+              total_file_size: 10000,
+            }],
+          });
+        } else {
+          reject("network error");
+        }
+      });
+
+      render(<SimilarBooks directoryName="Novel" />);
+      fireEvent.click(screen.getByText("유사한 이름의 디렉토리"));
+      expect(await screen.findByText("Novel", { selector: ".search-result-item-text" })).toBeTruthy();
+      const directoryRefresh = screen.getByLabelText("유사 이름 검색 새로고침");
+      fireEvent.click(directoryRefresh);
+
+      await waitFor(() => {
+        expect(directoryRefresh.getAttribute("aria-busy")).toBe("false");
+      });
+      expect(callCount).toBe(2);
+      expect(errorSpy).toHaveBeenCalledWith("network error");
+      expect(screen.getByText("Novel", { selector: ".search-result-item-text" })).toBeTruthy();
+      errorSpy.mockRestore();
+    });
+
+    it("디렉토리 새로고침의 빈 결과를 반영하고 스피너를 종료한다", async () => {
+      let callCount = 0;
+      mockRawJsonGetReq.mockImplementation((_url, resolve) => {
+        callCount++;
+        resolve(
+          callCount === 1
+            ? { status: "success", result: [{
+                kind: "directory",
+                id: "Novel",
+                category: "Novel",
+                label: "Novel",
+                score: 80,
+                file_count: 2,
+                page_count: 240,
+                total_file_size: 10000,
+              }] }
+            : { status: "success" },
+        );
+      });
+
+      render(<SimilarBooks directoryName="Novel" />);
+      fireEvent.click(screen.getByText("유사한 이름의 디렉토리"));
+      expect(await screen.findByText("Novel", { selector: ".search-result-item-text" })).toBeTruthy();
+      const directoryRefresh = screen.getByLabelText("유사 이름 검색 새로고침");
+      fireEvent.click(directoryRefresh);
+
+      await waitFor(() => {
+        expect(directoryRefresh.getAttribute("aria-busy")).toBe("false");
+      });
+      expect(screen.getByText("유사한 파일이나 디렉토리가 없습니다.")).toBeTruthy();
+    });
 
     it("클릭하면 첫 페이지를 다시 요청하고 목록을 교체한다", async () => {
       let callCount = 0;

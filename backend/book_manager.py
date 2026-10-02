@@ -55,7 +55,7 @@ MISMATCH_CACHE_TTL_SECONDS = 600
 # asyncio.to_thread로 호출되는 이 경로(워커 스레드)에서는 무력화된다.
 # Loader.PDF_STAGE_TIMEOUT(30초) 단계가 여러 번 누적될 수 있어 여유를 둔 상한.
 HARD_PARSE_TIMEOUT_SECONDS = 150
-MAX_LATEST_BOOK_COUNT = 1000
+MAX_LATEST_BOOK_COUNT = 2000
 CREATED_TIME_BACKFILL_ENV = "TM_BACKFILL_CREATED_TIME_ON_STARTUP"
 
 
@@ -136,6 +136,10 @@ class BookManager:
     # 커버 뷰 썸네일. 최신 목록은 한 화면에 수십 장을 받으므로 원본 대신 작게 줄여 보낸다.
     COVER_THUMBNAIL_WIDTH = 300
     COVER_JPEG_QUALITY = 85
+    COVER_CACHE_VERSION = 4
+    COVER_ASPECT_RATIO = 2 / 3
+    COVER_BACKGROUND_RATIO_THRESHOLD = 0.60
+    COVER_DETAIL_RATIO_THRESHOLD = 0.15
     # EPUB 뷰어용 이미지 축소 정책. epub.js는 책 전체를 브라우저 메모리에
     # 올리므로 이미지 수십 장(각 수 MB)이면 탭이 죽거나 일부 페이지만
     # 렌더링된다. 뷰어 산출물에서만 줄이고 원본은 건드리지 않는다.
@@ -2805,8 +2809,27 @@ class BookManager:
         return normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
 
     @staticmethod
+    def _is_mostly_blank_cover(img: Any) -> bool:
+        """작은 단색 영역만 있는 이미지를 빈 커버로 판정한다."""
+        from PIL import Image, ImageFilter
+
+        sample = img.convert("RGB").resize((64, 96), Image.Resampling.BILINEAR)
+        quantized = sample.quantize(colors=16)
+        colors = quantized.getcolors() or []
+        if not colors:
+            return False
+        pixel_count = sample.width * sample.height
+        background_ratio = max(count for count, _color in colors) / pixel_count
+        edges = sample.filter(ImageFilter.FIND_EDGES).convert("L")
+        detail_ratio = sum(value > 24 for value in edges.get_flattened_data()) / pixel_count
+        return (
+            background_ratio >= BookManager.COVER_BACKGROUND_RATIO_THRESHOLD
+            and detail_ratio <= BookManager.COVER_DETAIL_RATIO_THRESHOLD
+        )
+
+    @staticmethod
     def _extract_cover_thumbnail(file_path: Path, file_type: str) -> bytes | None:
-        """EPUB 커버 이미지나 PDF 첫 페이지를 JPEG 썸네일 바이트로 만든다. 커버가 없으면 None."""
+        """EPUB 커버 이미지나 PDF 앞쪽 커버 페이지를 JPEG 썸네일로 만든다."""
         from PIL import Image
 
         if file_type == "epub":
@@ -2825,9 +2848,25 @@ class BookManager:
             with BookManager._cover_render_lock, open(file_path, "rb") as fp:
                 pdf = pypdfium2.PdfDocument(fp)
                 try:
-                    page = pdf[0]
-                    scale = BookManager.COVER_THUMBNAIL_WIDTH / page.get_width()
-                    img = page.render(scale=scale).to_pil()
+                    def render_cover(page: Any) -> Any:
+                        page_width = page.get_width()
+                        page_height = page.get_height()
+                        cover_width = min(page_width, page_height * BookManager.COVER_ASPECT_RATIO)
+                        cover_height = cover_width / BookManager.COVER_ASPECT_RATIO
+                        crop = (0, page_height - cover_height, page_width - cover_width, 0)
+                        scale = BookManager.COVER_THUMBNAIL_WIDTH / cover_width
+                        rendered = page.render(scale=scale, crop=crop).to_pil()
+                        cover_size = (
+                            BookManager.COVER_THUMBNAIL_WIDTH,
+                            round(BookManager.COVER_THUMBNAIL_WIDTH / BookManager.COVER_ASPECT_RATIO),
+                        )
+                        if rendered.size != cover_size:
+                            rendered = rendered.resize(cover_size, Image.Resampling.LANCZOS)
+                        return rendered
+
+                    img = render_cover(pdf[0])
+                    if len(pdf) > 1 and BookManager._is_mostly_blank_cover(img):
+                        img = render_cover(pdf[1])
                 finally:
                     pdf.close()
         else:
@@ -2859,7 +2898,7 @@ class BookManager:
 
         headers = {"Cache-Control": "private, max-age=86400"}
         cache_dir = self.path_prefix / ".cover_cache"
-        cache_file = cache_dir / f"{book_id}.jpg"
+        cache_file = cache_dir / f"{book_id}.v{self.COVER_CACHE_VERSION}.jpg"
         if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
             return Response(content=cache_file.read_bytes(), media_type="image/jpeg", headers=headers)
 

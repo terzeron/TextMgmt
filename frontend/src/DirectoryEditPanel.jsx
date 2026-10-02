@@ -7,8 +7,13 @@ import Actions from "./Actions";
 export default function DirectoryEditPanel({
   directory,
   apiPrefix,
+  showDirectoryNavigation,
   selectedCategory,
   otherCategoryList,
+  previousDirectoryDisabled,
+  nextDirectoryDisabled,
+  onPreviousDirectory,
+  onNextDirectory,
   isProcessing,
   onSelectCategory,
   onMove,
@@ -120,15 +125,20 @@ export default function DirectoryEditPanel({
         </Form.Group>
         <div className="mb-3" role="status">
           {pdfStats ? (
-            <>PDF {pdfStats.file_count.toLocaleString()}ea, {pdfStats.page_count.toLocaleString()}p, {Math.trunc(pdfStats.total_file_size / 1000).toLocaleString()}MB</>
+            <>{pdfStats.file_count.toLocaleString()}ea, {pdfStats.page_count.toLocaleString()}p, {Math.trunc(pdfStats.total_file_size / 1000).toLocaleString()}MB</>
           ) : statsError ? statsError : "PDF 통계 불러오는 중..."}
         </div>
         <hr />
         <Actions
           directoryMode
+          showDirectoryNavigation={showDirectoryNavigation}
           selectedEntryId={directory.category}
           selectedCategory={selectedCategory}
           otherCategoryList={otherCategoryList}
+          previousDirectoryDisabled={previousDirectoryDisabled}
+          nextDirectoryDisabled={nextDirectoryDisabled}
+          onPreviousDirectory={onPreviousDirectory}
+          onNextDirectory={onNextDirectory}
           newFileName={name}
           moveToUpperButtonClicked={() => {}}
           moveToDirectoryButtonClicked={() => onMove(name.trim())}
@@ -188,8 +198,13 @@ DirectoryEditPanel.propTypes = {
     name: PropTypes.string.isRequired,
   }).isRequired,
   apiPrefix: PropTypes.string.isRequired,
+  showDirectoryNavigation: PropTypes.bool.isRequired,
   selectedCategory: PropTypes.string.isRequired,
   otherCategoryList: PropTypes.arrayOf(PropTypes.string).isRequired,
+  previousDirectoryDisabled: PropTypes.bool.isRequired,
+  nextDirectoryDisabled: PropTypes.bool.isRequired,
+  onPreviousDirectory: PropTypes.func.isRequired,
+  onNextDirectory: PropTypes.func.isRequired,
   isProcessing: PropTypes.bool.isRequired,
   onSelectCategory: PropTypes.func.isRequired,
   onMove: PropTypes.func.isRequired,

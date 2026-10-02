@@ -12,11 +12,18 @@ afterEach(cleanup);
 
 // ── mock 함수 ──
 
-const { mockJsonGetReq, mockJsonPutReq, mockJsonDeleteReq, mockRawJsonGetReq } =
+const {
+  mockJsonGetReq,
+  mockJsonPutReq,
+  mockJsonDeleteReq,
+  mockJsonPostReq,
+  mockRawJsonGetReq,
+} =
   vi.hoisted(() => ({
     mockJsonGetReq: vi.fn(),
     mockJsonPutReq: vi.fn(),
     mockJsonDeleteReq: vi.fn(),
+    mockJsonPostReq: vi.fn(),
     mockRawJsonGetReq: vi.fn(),
   }));
 
@@ -24,6 +31,7 @@ vi.mock("../src/Common", () => ({
   jsonGetReq: mockJsonGetReq,
   jsonPutReq: mockJsonPutReq,
   jsonDeleteReq: mockJsonDeleteReq,
+  jsonPostReq: mockJsonPostReq,
   rawJsonGetReq: mockRawJsonGetReq,
   getApiUrlPrefix: () => "http://localhost:8000",
   ROOT_DIRECTORY: "_root",
@@ -44,8 +52,12 @@ vi.mock("react-router-dom", () => ({
 }));
 
 vi.mock("../src/Folder", () => ({
-  default: ({ folderData, isOpen, onToggle, onClickHandler }) => (
-    <div data-testid={isOpen ? "folder-open" : "folder-closed"}>
+  default: ({ folderData, isOpen, onToggle, onClickHandler, expandedItems, selectedItems }) => (
+    <div
+      data-testid={isOpen ? "folder-open" : "folder-closed"}
+      data-expanded={JSON.stringify(expandedItems)}
+      data-selected={JSON.stringify(selectedItems)}
+    >
       {folderData.map((f) => (
         <div
           key={f.id}
@@ -164,9 +176,13 @@ vi.mock("../src/SimilarBooks", () => ({
 }));
 
 vi.mock("../src/Bookstore", () => ({
-  default: ({ onCategoriesFound: _onCategoriesFound }) => {
+  default: ({ onCategoriesFound: _onCategoriesFound, bookInfo, searchTrigger }) => {
     // 간접 테스트를 위해 즉시 호출
-    return <div data-testid="bookstore">Bookstore</div>;
+    return (
+      <div data-testid="bookstore" data-title={bookInfo?.title} data-search-trigger={searchTrigger}>
+        Bookstore
+      </div>
+    );
   },
 }));
 
@@ -185,8 +201,12 @@ vi.mock("../src/Actions", () => ({
     moveToUpperButtonClicked,
     moveToDirectoryButtonClicked,
     selectDirectoryButtonClicked,
+    onPreviousDirectory,
+    onNextDirectory,
+    otherCategoryList = [],
   }) => (
     <div data-testid="actions">
+      <div data-testid="move-category-list">{otherCategoryList.join("|")}</div>
       <button data-testid="next-entry" onClick={toNextEntryClicked}>
         다음
       </button>
@@ -198,6 +218,12 @@ vi.mock("../src/Actions", () => ({
       </button>
       <button data-testid="move-dir" onClick={moveToDirectoryButtonClicked}>
         디렉토리이동
+      </button>
+      <button data-testid="previous-directory" onClick={onPreviousDirectory}>
+        이전 디렉토리
+      </button>
+      <button data-testid="next-directory" onClick={onNextDirectory}>
+        다음 디렉토리
       </button>
       <button
         data-testid="select-dir"
@@ -271,6 +297,13 @@ function setupMockCategories(
  */
 function bridgeRawJsonGetReqToJsonGetReq() {
   mockRawJsonGetReq.mockImplementation((url, resolve, reject) => {
+    if (url.includes("/category-pdf-stats?")) {
+      resolve({
+        status: "success",
+        result: { file_count: 0, page_count: 0, total_file_size: 0 },
+      });
+      return;
+    }
     const bareUrl = url.split("?")[0];
     mockJsonGetReq(
       bareUrl,
@@ -290,6 +323,7 @@ function bridgeRawJsonGetReqToJsonGetReq() {
 describe("Edit", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockJsonPostReq.mockImplementation((_url, _payload, resolve) => resolve({}));
     vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.spyOn(console, "log").mockImplementation(() => {});
     bridgeRawJsonGetReqToJsonGetReq();
@@ -350,6 +384,46 @@ describe("Edit", () => {
         (c) => c[0] === "/categories/1_fiction",
       );
       expect(hasCategoryCall).toBe(true);
+    });
+  });
+
+  it("책 디렉토리 화면에서 유사 검색 아래에 디렉토리명 서점 검색을 표시한다", async () => {
+    setupMockCategories();
+    render(<Edit />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-1_fiction")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+
+    await waitFor(() => {
+      const similarSearch = screen.getByTestId("similar-books");
+      const bookstoreSearch = screen.getByTestId("bookstore");
+      expect(similarSearch.compareDocumentPosition(bookstoreSearch) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(bookstoreSearch.dataset.title).toBe("1_fiction");
+      expect(bookstoreSearch.dataset.searchTrigger).toBe("1");
+    });
+  });
+
+  it("만화 디렉토리 화면에서 유사 검색 아래에 디렉토리명 서점 검색을 표시한다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") resolve(CATEGORIES);
+      else if (url.startsWith("/comics/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    render(<Edit basePath="/comics-edit" apiPrefix="/comics" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-1_fiction")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+
+    await waitFor(() => {
+      const similarSearch = screen.getByTestId("similar-books");
+      const bookstoreSearch = screen.getByTestId("bookstore");
+      expect(similarSearch.compareDocumentPosition(bookstoreSearch) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(bookstoreSearch.dataset.title).toBe("1_fiction");
+      expect(bookstoreSearch.dataset.searchTrigger).toBe("1");
     });
   });
 
@@ -1212,6 +1286,238 @@ describe("Edit", () => {
     });
   });
 
+  it("URL로 연 디렉토리를 다른 카테고리로 옮기면 원래 자리의 다음 디렉토리를 선택한다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=1_fiction"),
+    ]);
+    setupMockCategories();
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    mockJsonPutReq.mockImplementation((_url, _payload, success, _failure, done) => {
+      success();
+      if (done) done();
+    });
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("select-dir"));
+    fireEvent.change(screen.getAllByRole("textbox")[0], {
+      target: { value: "renamed" },
+    });
+    fireEvent.click(screen.getByTestId("move-dir"));
+
+    await waitFor(() => expect(mockJsonPutReq).toHaveBeenCalled());
+    expect(mockJsonPutReq.mock.calls[0].slice(0, 2)).toEqual([
+      "/categories/rename",
+      { old_category: "1_fiction", new_category: "2_science/renamed" },
+    ]);
+    // 1_fiction 이 2_science/renamed 로 옮겨졌으니 원래 자리의 다음인 2_science 로 넘어간다.
+    expect(replaceState).toHaveBeenCalledWith(
+      null,
+      "",
+      "/book-edit?directory=2_science",
+    );
+  });
+
+  it("마지막 디렉토리를 옮기면 남은 디렉토리 중 마지막으로 넘어간다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=3_last"),
+    ]);
+    setupMockCategories({ "1_fiction": 3, "2_science": 2, "3_last": 1 }, []);
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    mockJsonPutReq.mockImplementation((_url, _payload, success, _failure, done) => {
+      success();
+      if (done) done();
+    });
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("select-dir"));
+    fireEvent.change(screen.getAllByRole("textbox")[0], {
+      target: { value: "moved" },
+    });
+    fireEvent.click(screen.getByTestId("move-dir"));
+
+    await waitFor(() => expect(mockJsonPutReq).toHaveBeenCalled());
+    expect(replaceState).toHaveBeenCalledWith(
+      null,
+      "",
+      "/book-edit?directory=2_science",
+    );
+  });
+
+  it("옮긴 뒤 넘어간 다음 디렉토리가 접힌 부모 안에 있으면 부모를 펼친다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=1_a"),
+    ]);
+    setupMockCategories(
+      { "1_a": 1, "2_p/x": 1, "2_p/y": 1, "3_z": 1 },
+      [],
+    );
+    mockJsonPutReq.mockImplementation((_url, _payload, success, _failure, done) => {
+      success();
+      if (done) done();
+    });
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("select-dir"));
+    fireEvent.change(screen.getAllByRole("textbox")[0], {
+      target: { value: "moved" },
+    });
+    fireEvent.click(screen.getByTestId("move-dir"));
+
+    await waitFor(() => {
+      const folder = screen.getByTestId("folder-open");
+      expect(JSON.parse(folder.dataset.selected)).toEqual(["2_p/x"]);
+      expect(JSON.parse(folder.dataset.expanded)).toEqual(["__virtual__2_p"]);
+    });
+  });
+
+  it("디렉토리 이름 변경 후 새 경로를 선택 상태로 유지한다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=1_fiction"),
+    ]);
+    setupMockCategories();
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    mockJsonPutReq.mockImplementation((_url, _payload, success, _failure, done) => {
+      success();
+      if (done) done();
+    });
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    fireEvent.change(screen.getAllByRole("textbox")[0], {
+      target: { value: "new-fiction" },
+    });
+    fireEvent.click(screen.getByText("이름 변경"));
+
+    await waitFor(() => {
+      expect(mockJsonPutReq.mock.calls[0].slice(0, 2)).toEqual([
+        "/categories/rename",
+        { old_category: "1_fiction", new_category: "new-fiction" },
+      ]);
+    });
+    expect(replaceState).toHaveBeenCalledWith(
+      null,
+      "",
+      "/book-edit?directory=new-fiction",
+    );
+  });
+
+  it("잘못된 디렉토리 이동 이름은 API 요청 전에 거부한다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=1_fiction"),
+    ]);
+    setupMockCategories();
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("select-dir"));
+    fireEvent.change(screen.getAllByRole("textbox")[0], {
+      target: { value: "bad/name" },
+    });
+    fireEvent.click(screen.getByTestId("move-dir"));
+
+    expect(mockJsonPutReq).not.toHaveBeenCalled();
+    expect(screen.getByText("디렉토리 이름을 확인하세요. 이름에는 '/'를 사용할 수 없습니다.")).toBeTruthy();
+  });
+
+  it("URL로 연 하위 디렉토리는 부모 폴더가 펼쳐지고 선택된 상태가 된다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    const target = "5_완결/[하즈키 카오루] 단편 모음";
+    useSearchParams.mockReturnValue([
+      new URLSearchParams(`directory=${encodeURIComponent(target)}`),
+    ]);
+    setupMockCategories({ "1_연재": 2, [target]: 3, "5_완결/other": 1 }, []);
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+
+    const folder = screen.getByTestId("folder-open");
+    expect(JSON.parse(folder.dataset.expanded)).toEqual(["__virtual__5_완결"]);
+    expect(JSON.parse(folder.dataset.selected)).toEqual([target]);
+  });
+
+  it("URL로 연 최상위 디렉토리는 펼침 목록을 바꾸지 않는다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=1_fiction"),
+    ]);
+    setupMockCategories();
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    const folder = screen.getByTestId("folder-open");
+    expect(JSON.parse(folder.dataset.expanded)).toEqual([]);
+    expect(JSON.parse(folder.dataset.selected)).toEqual(["1_fiction"]);
+  });
+
+  it("없는 디렉토리 라우트는 오류를 표시한다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=missing"),
+    ]);
+    setupMockCategories();
+
+    render(<Edit />);
+    expect(
+      await screen.findByText("선택한 디렉토리를 찾을 수 없습니다. (missing)"),
+    ).toBeTruthy();
+  });
+
+  it("마지막 디렉토리를 삭제하면 선택을 지우고 편집 기본 경로로 돌아간다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([new URLSearchParams("directory=solo")]);
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve({ solo: 1 });
+      else if (url.startsWith("/categories/")) resolve([]);
+      else resolve({});
+    });
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    mockJsonPostReq.mockImplementation((_url, _payload, success, _failure, done) => {
+      success();
+      if (done) done();
+    });
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    fireEvent.click(screen.getByText("삭제"));
+
+    await waitFor(() => {
+      expect(screen.queryByText("디렉토리 편집")).toBeNull();
+    });
+    expect(replaceState).toHaveBeenCalledWith(null, "", "/book-edit");
+  });
+
+  it("디렉토리 탐색 버튼으로 다음 디렉토리와 이전 디렉토리를 연다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=1_fiction"),
+    ]);
+    setupMockCategories();
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("next-directory"));
+    expect(screen.getAllByRole("textbox")[0].value).toBe("2_science");
+    fireEvent.click(screen.getByTestId("previous-directory"));
+    expect(screen.getAllByRole("textbox")[0].value).toBe("1_fiction");
+  });
+
   // ── resize 이벤트 핸들러 (line 31) ──
 
   it("윈도우 리사이즈 시 isMobile 상태가 업데이트된다", async () => {
@@ -1417,6 +1723,32 @@ describe("Edit", () => {
     await waitFor(() => {
       expect(screen.getByTestId("book-title").textContent).toBe("중첩책1");
       expect(screen.getByTestId("book-author").textContent).toBe("작가I");
+    });
+  });
+
+  it("책 디렉토리만 있어도 현재 위치를 제외한 최상위 이동 대상을 모두 표시한다", async () => {
+    const nestedCategories = {
+      "0_웹툰/연재작": 1,
+      "7_고전정리/현재책": 1,
+      "8_기타만화/다른책": 1,
+    };
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") resolve(nestedCategories);
+      else if (url.startsWith("/categories/")) resolve([]);
+      else resolve({});
+    });
+
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-7_고전정리/현재책")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("folder-item-7_고전정리/현재책"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("move-category-list").textContent).toBe(
+        "0_웹툰|8_기타만화",
+      );
     });
   });
 
@@ -2518,6 +2850,8 @@ describe("Edit - 대용량 카테고리(10000건 초과)", () => {
     mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
       if (url === "/categories") {
         resolve({ [LARGE_CATEGORY]: LARGE_CATEGORY_TOTAL });
+      } else if (url.includes("/category-pdf-stats?")) {
+        resolve({ file_count: 0, page_count: 0, total_file_size: 0 });
       } else if (url.startsWith("/categories/")) {
         // 상한에 걸려 잘린 목록 — 대상 책이 들어있지 않다
         resolve(TRUNCATED_LIST);
@@ -2532,7 +2866,12 @@ describe("Edit - 대용량 카테고리(10000건 초과)", () => {
     });
     // 페이지네이션 경로로 전환되더라도 동일하게 잘린 첫 페이지를 준다
     mockRawJsonGetReq.mockImplementation((url, resolve) => {
-      if (url.includes("/categories/")) {
+      if (url.includes("/category-pdf-stats?")) {
+        resolve({
+          status: "success",
+          result: { file_count: 0, page_count: 0, total_file_size: 0 },
+        });
+      } else if (url.includes("/categories/")) {
         resolve({
           status: "success",
           result: TRUNCATED_LIST,
@@ -2590,14 +2929,21 @@ describe("Edit - 대용량 카테고리(10000건 초과)", () => {
         resolve({});
       }
     });
-    mockRawJsonGetReq.mockImplementation((url, resolve) =>
-      resolve({
-        status: "success",
-        result: TRUNCATED_LIST,
-        total: LARGE_CATEGORY_TOTAL,
-        next_cursor: "",
-      }),
-    );
+    mockRawJsonGetReq.mockImplementation((url, resolve) => {
+      if (url.includes("/category-pdf-stats?")) {
+        resolve({
+          status: "success",
+          result: { file_count: 0, page_count: 0, total_file_size: 0 },
+        });
+      } else {
+        resolve({
+          status: "success",
+          result: TRUNCATED_LIST,
+          total: LARGE_CATEGORY_TOTAL,
+          next_cursor: "",
+        });
+      }
+    });
     await setRoute(99999999, LARGE_CATEGORY);
 
     render(<Edit />);
@@ -2714,7 +3060,12 @@ describe("Edit - 대용량 카테고리(10000건 초과)", () => {
     });
     // 2_science 는 다음 페이지가 남아 '더 보기'가 붙는다
     mockRawJsonGetReq.mockImplementation((url, resolve) => {
-      if (url.startsWith("/categories/1_fiction")) {
+      if (url.includes("/category-pdf-stats?")) {
+        resolve({
+          status: "success",
+          result: { file_count: 0, page_count: 0, total_file_size: 0 },
+        });
+      } else if (url.startsWith("/categories/1_fiction")) {
         resolve({
           status: "success",
           result: [MOVED_BOOK],

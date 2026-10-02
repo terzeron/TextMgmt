@@ -4476,6 +4476,38 @@ class TestLoaderMainBranches:
         assert "경로 변경 감지" in out
         assert "경로 동기화" in out
 
+    def test_reload_preserves_existing_created_time(self, monkeypatch, tmp_path):
+        """강제 재적재도 ES에 저장된 최초 생성 시각을 유지한다."""
+        _setup_loader_env(monkeypatch, tmp_path)
+        file_path = tmp_path / "[author] book.txt"
+        file_path.write_text("content", encoding="utf-8")
+        inode = file_path.stat().st_ino
+        monkeypatch.setattr("sys.argv", ["loader", "--reload", "book", str(file_path)])
+        from utils.loader import main
+
+        stored_metadata = {
+            inode: {
+                "created_time": "2020-01-01T00:00:00",
+                "created_time_source": "statx_btime",
+            }
+        }
+        inserted_data = {}
+
+        def capture_insert(data):
+            inserted_data.update(data)
+            return list(data)
+
+        mock_es = MagicMock()
+        mock_es.es.ping.return_value = True
+        mock_es.get_existing_created_time_metadata.return_value = stored_metadata
+        mock_es.delete_by_file_paths.return_value = 0
+        mock_es.insert.side_effect = capture_insert
+        monkeypatch.setattr("utils.loader.ESManager", lambda index_name: mock_es)
+
+        assert main() == 0
+        assert inserted_data[inode]["created_time"] == "2020-01-01T00:00:00"
+        assert inserted_data[inode]["created_time_source"] == "statx_btime"
+
     def test_recursive_skipped(self, monkeypatch, tmp_path, capsys):
         """변경 없는 기존 파일은 skip → 건너뜀 메시지(1002)."""
         _setup_loader_env(monkeypatch, tmp_path)
@@ -4695,6 +4727,9 @@ def test_main_recursive_reload_deletes_orphans(tmp_path, monkeypatch):
             return {}
 
         def get_existing_paths(self, ids):
+            return {}
+
+        def get_existing_created_time_metadata(self, ids):
             return {}
 
         def delete_by_file_paths(self, paths, exclude_ids=None):

@@ -1346,9 +1346,11 @@ def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
     assert resp.json()["status"] == "success"
     assert resp.json()["total"] == 1
     assert resp.json()["result"][0]["created_time"] == "2023-12-31T00:00:00.000000"
+
+
     assert dummy._instance.latest_exclude_categories == []
 
-    resp = dummy_client.get("/latest?limit=1001")
+    resp = dummy_client.get("/latest?limit=2001")
     assert resp.status_code == 422
 
     async def get_epub(book_id: int):
@@ -1408,6 +1410,31 @@ def test_main_search_validate_and_mismatch(dummy_client, monkeypatch):
 
     resp = dummy_client.get("/category-mismatches/A")
     assert resp.json()["status"] == "success"
+
+
+def test_similar_names_returns_directory_scores_out_of_100(dummy_client, monkeypatch):
+    from backend import main as main_mod
+
+    dummy = main_mod.book_manager._instance
+
+    async def get_categories():
+        return {"_root": 1, "Source": 1, "Novel": 1, "Novelty": 1}, None
+
+    dummy.get_categories = get_categories
+    dummy.es_manager.search_categories_pdf_stats = lambda categories: {
+        "Source": {"file_count": 10, "page_count": 1000, "total_file_size": 100_000_000},
+        "Novel": {"file_count": 10, "page_count": 1000, "total_file_size": 100_000_000},
+        "Novelty": {"file_count": 100, "page_count": 10000, "total_file_size": 1_000_000_000},
+    }
+
+    response = dummy_client.get("/similar-names?name=Novel&exclude_category=Source")
+
+    assert response.status_code == 200
+    results = response.json()["result"]
+    assert [item["kind"] for item in results] == ["directory", "directory"]
+    assert results[0]["category"] == "Novel"
+    assert results[0]["score"] == 100
+    assert results[1]["score"] == pytest.approx(70 * 5 / 6 + 3)
 
 
 def test_reload_job_flushes_progress_on_a_fixed_interval(tmp_path: Path, monkeypatch):
@@ -1672,6 +1699,8 @@ def test_search_bookstore_api_branches(dummy_client, monkeypatch):
     monkeypatch.setattr(main_mod.MunpiaBookstore, "search", fake_search)
     monkeypatch.setattr(main_mod.KyoboBookstore, "search", fake_search)
     monkeypatch.setattr(main_mod.JoaraBookstore, "search", fake_search)
+    monkeypatch.setattr(main_mod.NaverWebtoonBookstore, "search", fake_search)
+    monkeypatch.setattr(main_mod.KakaoWebtoonBookstore, "search", fake_search)
 
     assert dummy_client.get("/search/bookstore/yes24?title=t").json()["status"] == "not_found"
     assert dummy_client.get("/search/bookstore/aladin?title=t").json()["status"] == "not_found"
@@ -1681,6 +1710,8 @@ def test_search_bookstore_api_branches(dummy_client, monkeypatch):
     assert dummy_client.get("/search/bookstore/naverseries?title=t").json()["status"] == "not_found"
     assert dummy_client.get("/search/bookstore/munpia?title=t").json()["status"] == "not_found"
     assert dummy_client.get("/search/bookstore/joara?title=t").json()["status"] == "not_found"
+    assert dummy_client.get("/search/bookstore/naverwebtoon?title=t").json()["status"] == "not_found"
+    assert dummy_client.get("/search/bookstore/kakaowebtoon?title=t").json()["status"] == "not_found"
 
     resp = dummy_client.get("/search/bookstore/unknown?title=t")
     assert resp.status_code == 404

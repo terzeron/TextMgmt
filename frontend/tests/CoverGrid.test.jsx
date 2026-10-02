@@ -57,17 +57,19 @@ describe("CoverGrid", () => {
       />,
     );
     const imgs = Array.from(document.querySelectorAll("img"));
-    expect(imgs.map((img) => img.getAttribute("src"))).toEqual([
-      "http://api/cover/1",
-      "http://api/cover/7",
-    ]);
+    expect(imgs[0].getAttribute("src")).toMatch(
+      /^http:\/\/api\/cover\/1\?v=\d{10}$/,
+    );
+    expect(imgs[1].getAttribute("src")).toMatch(
+      /^http:\/\/api\/cover\/7\?v=\d{10}$/,
+    );
     expect(imgs[0].getAttribute("loading")).toBe("lazy");
   });
 
   it("만화 탭은 /comics 커버 API를 쓴다", () => {
     render(<CoverGrid results={makeBooks(1, "pdf")} basePath="/comics-view" />);
-    expect(document.querySelector("img").getAttribute("src")).toBe(
-      "http://api/comics/cover/1",
+    expect(document.querySelector("img").getAttribute("src")).toMatch(
+      /^http:\/\/api\/comics\/cover\/1\?v=\d{10}$/,
     );
   });
 
@@ -115,6 +117,27 @@ describe("CoverGrid", () => {
     expect(container.textContent).not.toContain("숨길 저자");
     expect(screen.getByRole("link").getAttribute("title")).toBe(
       "표시할 책 제목",
+    );
+  });
+
+  it("display_title이 있으면 커버 아래에 디렉토리 이름을 표시한다", () => {
+    render(
+      <CoverGrid
+        results={[
+          {
+            ...makeBooks(1, "pdf")[0],
+            title: "첫 파일 제목",
+            display_title: "작품 디렉토리",
+          },
+        ]}
+        basePath="/comics-view"
+      />,
+    );
+
+    expect(screen.getByText("작품 디렉토리")).toBeTruthy();
+    expect(screen.queryByText("첫 파일 제목")).toBeNull();
+    expect(screen.getByRole("link").getAttribute("title")).toBe(
+      "작품 디렉토리",
     );
   });
 

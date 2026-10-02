@@ -4,7 +4,7 @@ import "bootstrap/dist/css/bootstrap.min.css";
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import PropTypes from "prop-types";
-import { jsonDeleteReq, rawJsonGetReq } from "./Common";
+import { jsonDeleteReq, jsonPostReq, rawJsonGetReq } from "./Common";
 
 import { Card, Button, Spinner } from "react-bootstrap";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -82,7 +82,7 @@ export default function SimilarBooks({
   useEffect(() => {
     if (bookId) {
       loadFirstPage((books) => {
-        if (autoOpenHighScore && books.some((b) => b.score >= 90)) {
+        if (autoOpenHighScore && books.some((b) => b.score > 90)) {
           setIsOpen(true);
         }
       });
@@ -150,7 +150,10 @@ export default function SimilarBooks({
         null,
         () => {
           setSimilarBooks((prev) =>
-            prev.filter((b) => b.book_id !== targetBookId),
+            prev.filter((b) => String(b.book_id) !== String(targetBookId)),
+          );
+          setSimilarNames((prev) =>
+            prev.filter((item) => String(item.id) !== String(targetBookId)),
           );
           setTotal((prev) => Math.max(prev - 1, 0));
           setDeletingId(null);
@@ -165,6 +168,27 @@ export default function SimilarBooks({
     [apiPrefix, deletingId],
   );
 
+  const handleDeleteDirectory = (category, displayName) => {
+    if (deletingId !== null) return;
+    if (!window.confirm(`"${displayName}" 디렉토리와 하위 파일을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.`)) return;
+    setDeletingId(category);
+    jsonPostReq(
+      `${apiPrefix}/categories/delete`,
+      { category },
+      () => {
+        setSimilarNames((prev) => prev.filter((item) =>
+          item.category !== category && !item.category.startsWith(`${category}/`),
+        ));
+        setDeletingId(null);
+      },
+      (error) => {
+        console.error(error);
+        window.alert(`디렉토리 삭제에 실패했습니다. ${error}`);
+        setDeletingId(null);
+      },
+    );
+  };
+
   const hasMore = similarBooks.length < total;
 
   const loadSimilarNames = useCallback((onFinish) => {
@@ -173,7 +197,11 @@ export default function SimilarBooks({
     rawJsonGetReq(
       `${apiPrefix}/similar-names?${query.toString()}`,
       (data) => {
-        if (data.status === "success") setSimilarNames(data.result || []);
+        if (data.status === "success") {
+          const names = data.result || [];
+          setSimilarNames(names);
+          if (names.some((item) => item.score > 90)) setIsOpen(true);
+        }
         if (onFinish) onFinish();
       },
       (error) => {
@@ -185,7 +213,7 @@ export default function SimilarBooks({
 
   useEffect(() => {
     if (directoryName) {
-      setIsOpen(true);
+      setIsOpen(false);
       loadSimilarNames();
     }
     return () => setSimilarNames([]);
@@ -195,7 +223,6 @@ export default function SimilarBooks({
     if (refreshing || !directoryName) return;
     const startedAt = Date.now();
     setRefreshing(true);
-    setIsOpen(true);
     loadSimilarNames(() => {
       const remaining = Math.max(0, MIN_REFRESH_SPIN_MS - (Date.now() - startedAt));
       refreshTimerRef.current = setTimeout(() => {
@@ -216,7 +243,7 @@ export default function SimilarBooks({
           icon={isOpen ? faChevronDown : faChevronRight}
           className="me-2"
         />
-        {directoryName ? "유사한 이름의 파일·디렉토리" : "유사한 책 목록"}
+        {directoryName ? "유사한 이름의 디렉토리" : "유사한 책 목록"}
         <Button
           variant="outline-secondary"
           className="btn-xs ms-auto"
@@ -244,20 +271,17 @@ export default function SimilarBooks({
               const href = item.kind === "directory"
                 ? `${safeBasePath}?directory=${encodeURIComponent(item.category)}`
                 : `${safeBasePath}/${item.id}?category=${encodeURIComponent(item.category)}`;
+              const isDeleting = String(deletingId) === String(item.id);
               return (
                 <div
-                  className={`search-result-item ${item.score >= 90 ? "highlight-secondary" : ""}`.trim()}
+                  className={`search-result-item ${item.score > 90 ? "highlight-secondary" : ""}`.trim()}
                   key={`${item.kind}:${item.id}`}
                 >
-                  <a
+                  <span
                     className="search-result-item-text"
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: "inherit", textDecoration: "none" }}
                   >
                     {item.label}
-                  </a>
+                  </span>
                   <div className="search-result-item-actions">
                     <span
                       style={{
@@ -273,7 +297,7 @@ export default function SimilarBooks({
                         verticalAlign: "middle",
                       }}
                     >
-                      PDF {item.file_count.toLocaleString()}ea, {item.page_count.toLocaleString()}p, {formatDirectoryMegabytes(item.total_file_size)}MB
+                      {item.file_count.toLocaleString()}ea, {item.page_count.toLocaleString()}p, {formatDirectoryMegabytes(item.total_file_size)}MB
                     </span>
                     <span
                       style={{
@@ -288,6 +312,40 @@ export default function SimilarBooks({
                     >
                       {Math.round(item.score)}
                     </span>
+                    <Button
+                      variant="outline-warning"
+                      className="btn-xs"
+                      onClick={() => window.open(href, "_blank", "noopener")}
+                      aria-label={`${item.label} 편집`}
+                      title="편집"
+                      style={{ marginRight: "4px" }}
+                    >
+                      <FontAwesomeIcon icon={faPencil} />
+                    </Button>
+                    <Button
+                      variant="outline-primary"
+                      className="btn-xs"
+                      onClick={() => window.open(href.replace("-edit", "-view"), "_blank", "noopener")}
+                      aria-label={`${item.label} 조회`}
+                      title="조회"
+                    >
+                      <FontAwesomeIcon icon={faEye} />
+                    </Button>
+                    {canEdit && (
+                      <Button
+                        variant="outline-danger"
+                        className="btn-xs"
+                        onClick={() => item.kind === "directory"
+                          ? handleDeleteDirectory(item.category, item.label)
+                          : handleDelete(item.id, item.label)}
+                        disabled={deletingId !== null}
+                        aria-label={`${item.label} 삭제`}
+                        title="삭제"
+                        style={{ marginLeft: "4px" }}
+                      >
+                        <FontAwesomeIcon icon={isDeleting ? faSpinner : faTrash} spin={isDeleting} />
+                      </Button>
+                    )}
                   </div>
                 </div>
               );
@@ -306,7 +364,7 @@ export default function SimilarBooks({
                 return (
                 <div
                   key={book.book_id}
-                  className={`search-result-item ${book.score >= 90 ? "highlight-secondary" : ""}`.trim()}
+                  className={`search-result-item ${book.score > 90 ? "highlight-secondary" : ""}`.trim()}
                 >
                   <span
                     className="search-result-item-text"

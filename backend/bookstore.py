@@ -1024,6 +1024,139 @@ class JoaraBookstore(AbstractBookstore):
         return {"title": "", "author": "", "category": "", "isbn": ""}
 
 
+class NaverWebtoonBookstore(AbstractBookstore):
+    """네이버 웹툰 검색 구현.
+
+    comic.naver.com/search 는 SPA 라 HTML 에 결과가 없다. 브라우저가 부르는
+    /api/search/webtoon JSON 을 직접 호출한다.
+    """
+
+    BASE_URL = "https://comic.naver.com"
+    API_URL = "https://comic.naver.com/api/search/webtoon"
+    SUPPORTS_ISBN_SEARCH = False  # 웹툰에는 ISBN 이 없다
+
+    def build_search_url(self, keyword: str) -> str:
+        """사용자가 눌러 볼 수 있는 네이버 웹툰 검색 결과 페이지 URL"""
+        return f"{self.BASE_URL}/search?keyword={quote(keyword)}"
+
+    def search(self, isbn: str = "", title: str = "", author: str = "") -> tuple[list[tuple[str, str, str, str, str, str]], str, str]:
+        # 제목에 저자를 붙인 키워드는 늘 0건이다. 제목만 넘긴다.
+        return super().search(isbn="", title=title, author="")
+
+    def search_by_keyword(self, keyword: str) -> list[tuple[str, str, str, str, str, str]]:
+        """네이버 웹툰 검색 API 직접 호출"""
+        search_url = self.build_search_url(keyword)
+        try:
+            resp = self.session.get(self.API_URL, params={"keyword": keyword, "page": "1"}, timeout=10, verify=True)
+
+            if resp.status_code != 200:
+                if self.verbose:
+                    logger.warning(f"네이버 웹툰 API 응답 실패: {resp.status_code}")
+                return []
+
+            webtoons = resp.json().get("searchList") or []
+            if not webtoons:
+                if self.verbose:
+                    logger.info("네이버 웹툰 검색 결과가 없습니다")
+                return []
+
+            results: list[tuple[str, str, str, str, str, str]] = []
+            for webtoon in webtoons[: self.MAX_RESULTS]:
+                title_id = webtoon.get("titleId")
+                title = webtoon.get("titleName") or ""
+                author = webtoon.get("displayAuthor") or ""
+                category = "/".join(g["description"] for g in webtoon.get("genreList") or [] if g.get("description"))
+                detail_url = f"{self.BASE_URL}/webtoon/list?titleId={title_id}" if title_id else ""
+
+                if title and detail_url:
+                    results.append((title, author, category, detail_url, search_url, ""))
+
+            if self.verbose:
+                logger.info(f"네이버 웹툰에서 {len(results)}개의 검색 결과를 찾았습니다")
+            return results
+
+        except Exception as e:
+            if self.verbose:
+                logger.error(f"네이버 웹툰 검색 실패: {e}")
+            return []
+
+    def extract_search_links(self, soup: BeautifulSoup) -> list[str]:
+        """네이버 웹툰은 search_by_keyword를 오버라이드하므로 이 메서드는 사용되지 않음"""
+        return []
+
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
+        """네이버 웹툰은 search_by_keyword를 오버라이드하므로 이 메서드는 사용되지 않음"""
+        return {"title": "", "author": "", "category": "", "isbn": ""}
+
+
+class KakaoWebtoonBookstore(AbstractBookstore):
+    """카카오웹툰 검색 구현.
+
+    webtoon.kakao.com/search 는 SPA 라 HTML 에 결과가 없다. 브라우저가 부르는
+    gateway-kw.kakao.com 의 JSON 을 직접 호출한다.
+    """
+
+    BASE_URL = "https://webtoon.kakao.com"
+    API_URL = "https://gateway-kw.kakao.com/search/v2/content"
+    SUPPORTS_ISBN_SEARCH = False  # 웹툰에는 ISBN 이 없다
+    # authors 에는 출판사(PUBLISHER)도 섞여 있다. 사람만 저자로 본다.
+    AUTHOR_TYPES = ("AUTHOR", "ILLUSTRATOR", "ORIGINAL_STORY")
+
+    def build_search_url(self, keyword: str) -> str:
+        """사용자가 눌러 볼 수 있는 카카오웹툰 검색 결과 페이지 URL"""
+        return f"{self.BASE_URL}/search?keyword={quote(keyword)}"
+
+    def search(self, isbn: str = "", title: str = "", author: str = "") -> tuple[list[tuple[str, str, str, str, str, str]], str, str]:
+        # 제목에 저자를 붙인 키워드는 늘 0건이다. 제목만 넘긴다.
+        return super().search(isbn="", title=title, author="")
+
+    def search_by_keyword(self, keyword: str) -> list[tuple[str, str, str, str, str, str]]:
+        """카카오웹툰 검색 API 직접 호출"""
+        search_url = self.build_search_url(keyword)
+        try:
+            resp = self.session.get(self.API_URL, params={"word": keyword, "offset": "0", "limit": str(self.MAX_RESULTS)}, timeout=10, verify=True)
+
+            if resp.status_code != 200:
+                if self.verbose:
+                    logger.warning(f"카카오웹툰 API 응답 실패: {resp.status_code}")
+                return []
+
+            contents = (resp.json().get("data") or {}).get("content") or []
+            if not contents:
+                if self.verbose:
+                    logger.info("카카오웹툰 검색 결과가 없습니다")
+                return []
+
+            results: list[tuple[str, str, str, str, str, str]] = []
+            for content in contents[: self.MAX_RESULTS]:
+                content_id = content.get("id")
+                title = content.get("title") or ""
+                names = [a["name"] for a in content.get("authors") or [] if a.get("type") in self.AUTHOR_TYPES and a.get("name")]
+                author = ", ".join(dict.fromkeys(names))  # 글·그림이 같은 사람이면 한 번만
+                category = content.get("genre") or ""
+                detail_url = f"{self.BASE_URL}/content/{quote(content.get('seoId') or title)}/{content_id}" if content_id else ""
+
+                if title and detail_url:
+                    results.append((title, author, category, detail_url, search_url, ""))
+
+            if self.verbose:
+                logger.info(f"카카오웹툰에서 {len(results)}개의 검색 결과를 찾았습니다")
+            return results
+
+        except Exception as e:
+            if self.verbose:
+                logger.error(f"카카오웹툰 검색 실패: {e}")
+            return []
+
+    def extract_search_links(self, soup: BeautifulSoup) -> list[str]:
+        """카카오웹툰은 search_by_keyword를 오버라이드하므로 이 메서드는 사용되지 않음"""
+        return []
+
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
+        """카카오웹툰은 search_by_keyword를 오버라이드하므로 이 메서드는 사용되지 않음"""
+        return {"title": "", "author": "", "category": "", "isbn": ""}
+
+
 # 공개 API
 __all__ = [
     "AbstractBookstore",
@@ -1035,4 +1168,6 @@ __all__ = [
     "MunpiaBookstore",
     "NaverSeriesBookstore",
     "JoaraBookstore",
+    "NaverWebtoonBookstore",
+    "KakaoWebtoonBookstore",
 ]

@@ -14,6 +14,24 @@ const pdfWasmDir = fileURLToPath(
   new URL("./node_modules/pdfjs-dist/wasm", import.meta.url),
 );
 
+function getCoverVersion() {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Seoul",
+      year: "2-digit",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(new Date())
+      .filter(({ type }) => type !== "literal")
+      .map(({ type, value }) => [type, value]),
+  );
+  return `${parts.year}${parts.month}${parts.day}${parts.hour}${parts.minute}`;
+}
+
 function pdfWasmPlugin() {
   return {
     name: "pdf-wasm",
@@ -50,6 +68,7 @@ export default defineConfig({
     __APP_BUILD_ID__: JSON.stringify(
       process.env.APP_BUILD_ID || new Date().toISOString(),
     ),
+    __COVER_VERSION__: JSON.stringify(getCoverVersion()),
   },
   server: {
     https: true,
