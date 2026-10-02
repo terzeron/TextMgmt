@@ -34,6 +34,7 @@ import {
   parseEntryId,
   parseRouteTarget,
   findFolderInTree,
+  findParentFolderId,
   updateFolderChildren,
   determineNextEntryId,
   determinePrevEntryId,
@@ -474,6 +475,13 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
       if (directory?.fileType === "folder") {
         routeInitializedRef.current = true;
         entryClicked(directoryTarget);
+        // 선택한 디렉토리가 보이도록 부모 폴더를 펼친다.
+        const parentId = findParentFolderId(folderData, directoryTarget);
+        if (parentId) {
+          setExpandedItems((prev) =>
+            prev.includes(parentId) ? prev : [...prev, parentId],
+          );
+        }
       } else {
         routeInitializedRef.current = true;
         setErrorMessage(`선택한 디렉토리를 찾을 수 없습니다. (${directoryTarget})`);
@@ -946,6 +954,13 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
         author: decomposeTitle({ author: "", title: name, file_type: "dir" }).author,
       });
       setSelectedItems([nextCategory]);
+      // 다음 디렉토리가 접힌 부모 안에 있어도 보이도록 부모를 펼친다.
+      const parentId = findParentFolderId(folderData, nextCategory);
+      if (parentId) {
+        setExpandedItems((prev) =>
+          prev.includes(parentId) ? prev : [...prev, parentId],
+        );
+      }
       window.history.replaceState(null, "", `${basePath}?directory=${encodeURIComponent(nextCategory)}`);
     } else {
       setSelectedDirectory(null);
@@ -953,7 +968,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
       window.history.replaceState(null, "", basePath);
     }
     reloadCategoryTree();
-  }, [basePath, categoryList, decomposeTitle, reloadCategoryTree]);
+  }, [basePath, categoryList, decomposeTitle, folderData, reloadCategoryTree]);
 
   const moveToDirectoryButtonClicked = useCallback(() => {
     console.log(`move to '${selectedCategory}' as '${newFileName}'`);
@@ -989,27 +1004,15 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
     jsonPutReq(
       `${apiPrefix}/categories/rename`,
       { old_category: selectedDirectory.category, new_category: newCategory },
-      () => {
-        const movedDirectory = {
-          category: newCategory,
-          name: directoryName,
-          author: decomposeTitle({ author: "", title: directoryName, file_type: "dir" }).author,
-        };
-        setSelectedDirectory(movedDirectory);
-        setSelectedItems([newCategory]);
-        setSelectedEntryId("");
-        setBookInfo({});
-        setSuccessMessage("디렉토리를 이동했습니다.");
-        window.history.replaceState(null, "", `${basePath}?directory=${encodeURIComponent(newCategory)}`);
-        reloadCategoryTree();
-      },
+      // 옮긴 디렉토리는 원래 자리에서 사라진다. 삭제 때처럼 원래 자리의 다음 디렉토리로 넘어간다.
+      () => directoryMutationCompleted("디렉토리를 이동했습니다.", { type: "move", category: selectedDirectory.category }),
       (error) => setErrorMessage(`디렉토리 이동에 실패했습니다. ${error}`),
       () => {
         isProcessingRef.current = false;
         setIsProcessing(false);
       },
     );
-  }, [apiPrefix, basePath, decomposeTitle, reloadCategoryTree, selectedCategory, selectedDirectory]);
+  }, [apiPrefix, directoryMutationCompleted, selectedCategory, selectedDirectory]);
 
   const directoryNavigation = categoryList
     .filter((category) => category !== "_root")

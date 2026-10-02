@@ -52,8 +52,12 @@ vi.mock("react-router-dom", () => ({
 }));
 
 vi.mock("../src/Folder", () => ({
-  default: ({ folderData, isOpen, onToggle, onClickHandler }) => (
-    <div data-testid={isOpen ? "folder-open" : "folder-closed"}>
+  default: ({ folderData, isOpen, onToggle, onClickHandler, expandedItems, selectedItems }) => (
+    <div
+      data-testid={isOpen ? "folder-open" : "folder-closed"}
+      data-expanded={JSON.stringify(expandedItems)}
+      data-selected={JSON.stringify(selectedItems)}
+    >
       {folderData.map((f) => (
         <div
           key={f.id}
@@ -1282,7 +1286,7 @@ describe("Edit", () => {
     });
   });
 
-  it("URL로 연 디렉토리를 다른 카테고리로 옮기고 이름 변경을 반영한다", async () => {
+  it("URL로 연 디렉토리를 다른 카테고리로 옮기면 원래 자리의 다음 디렉토리를 선택한다", async () => {
     const { useParams, useSearchParams } = await import("react-router-dom");
     useParams.mockReturnValue({ "*": "" });
     useSearchParams.mockReturnValue([
@@ -1308,11 +1312,71 @@ describe("Edit", () => {
       "/categories/rename",
       { old_category: "1_fiction", new_category: "2_science/renamed" },
     ]);
+    // 1_fiction 이 2_science/renamed 로 옮겨졌으니 원래 자리의 다음인 2_science 로 넘어간다.
     expect(replaceState).toHaveBeenCalledWith(
       null,
       "",
-      "/book-edit?directory=2_science%2Frenamed",
+      "/book-edit?directory=2_science",
     );
+  });
+
+  it("마지막 디렉토리를 옮기면 남은 디렉토리 중 마지막으로 넘어간다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=3_last"),
+    ]);
+    setupMockCategories({ "1_fiction": 3, "2_science": 2, "3_last": 1 }, []);
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    mockJsonPutReq.mockImplementation((_url, _payload, success, _failure, done) => {
+      success();
+      if (done) done();
+    });
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("select-dir"));
+    fireEvent.change(screen.getAllByRole("textbox")[0], {
+      target: { value: "moved" },
+    });
+    fireEvent.click(screen.getByTestId("move-dir"));
+
+    await waitFor(() => expect(mockJsonPutReq).toHaveBeenCalled());
+    expect(replaceState).toHaveBeenCalledWith(
+      null,
+      "",
+      "/book-edit?directory=2_science",
+    );
+  });
+
+  it("옮긴 뒤 넘어간 다음 디렉토리가 접힌 부모 안에 있으면 부모를 펼친다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=1_a"),
+    ]);
+    setupMockCategories(
+      { "1_a": 1, "2_p/x": 1, "2_p/y": 1, "3_z": 1 },
+      [],
+    );
+    mockJsonPutReq.mockImplementation((_url, _payload, success, _failure, done) => {
+      success();
+      if (done) done();
+    });
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("select-dir"));
+    fireEvent.change(screen.getAllByRole("textbox")[0], {
+      target: { value: "moved" },
+    });
+    fireEvent.click(screen.getByTestId("move-dir"));
+
+    await waitFor(() => {
+      const folder = screen.getByTestId("folder-open");
+      expect(JSON.parse(folder.dataset.selected)).toEqual(["2_p/x"]);
+      expect(JSON.parse(folder.dataset.expanded)).toEqual(["__virtual__2_p"]);
+    });
   });
 
   it("디렉토리 이름 변경 후 새 경로를 선택 상태로 유지한다", async () => {
@@ -1365,6 +1429,38 @@ describe("Edit", () => {
 
     expect(mockJsonPutReq).not.toHaveBeenCalled();
     expect(screen.getByText("디렉토리 이름을 확인하세요. 이름에는 '/'를 사용할 수 없습니다.")).toBeTruthy();
+  });
+
+  it("URL로 연 하위 디렉토리는 부모 폴더가 펼쳐지고 선택된 상태가 된다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    const target = "5_완결/[하즈키 카오루] 단편 모음";
+    useSearchParams.mockReturnValue([
+      new URLSearchParams(`directory=${encodeURIComponent(target)}`),
+    ]);
+    setupMockCategories({ "1_연재": 2, [target]: 3, "5_완결/other": 1 }, []);
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+
+    const folder = screen.getByTestId("folder-open");
+    expect(JSON.parse(folder.dataset.expanded)).toEqual(["__virtual__5_완결"]);
+    expect(JSON.parse(folder.dataset.selected)).toEqual([target]);
+  });
+
+  it("URL로 연 최상위 디렉토리는 펼침 목록을 바꾸지 않는다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=1_fiction"),
+    ]);
+    setupMockCategories();
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    const folder = screen.getByTestId("folder-open");
+    expect(JSON.parse(folder.dataset.expanded)).toEqual([]);
+    expect(JSON.parse(folder.dataset.selected)).toEqual(["1_fiction"]);
   });
 
   it("없는 디렉토리 라우트는 오류를 표시한다", async () => {

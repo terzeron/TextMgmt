@@ -220,6 +220,21 @@ export function findFolderInTree(folderData, categoryId) {
 }
 
 /**
+ * 2단계 트리에서 카테고리 ID를 자식으로 가진 부모 폴더의 ID를 찾는다.
+ * 최상위 항목이거나 트리에 없으면 null.
+ *
+ * @param {Array} folderData - 폴더 트리 데이터
+ * @param {string} categoryId - 자식 카테고리 ID
+ * @returns {string|null} 부모 폴더 ID
+ */
+export function findParentFolderId(folderData, categoryId) {
+  const parent = folderData.find((item) =>
+    (item.children || []).some((child) => child.id === categoryId),
+  );
+  return parent ? parent.id : null;
+}
+
+/**
  * 2단계 트리에서 카테고리 ID의 항목을 불변 업데이트한다.
  *
  * @param {Array} folderData - 폴더 트리 데이터

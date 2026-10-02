@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
-import { determineNextEntryId, determinePrevEntryId, findCommonPrefix, buildFolderHierarchy, parseEntryId, findFolderInTree, updateFolderInTree, updateFolderChildren } from '../src/folderUtils';
+import { determineNextEntryId, determinePrevEntryId, findCommonPrefix, buildFolderHierarchy, parseEntryId, findFolderInTree, findParentFolderId, updateFolderInTree, updateFolderChildren } from '../src/folderUtils';
 
 // ── 테스트 데이터 ──
 
@@ -410,5 +410,39 @@ describe('buildFolderHierarchy - 그룹 재사용/prefix 제거', () => {
             'books/소설/SF',
             'books/소설/추리',
         ]);
+    });
+});
+
+describe('findParentFolderId', () => {
+    const tree = [
+        {
+            id: '__virtual__5_완결',
+            label: '5_완결',
+            fileType: 'folder',
+            isVirtualParent: true,
+            children: [{ id: '5_완결/[하즈키 카오루] 단편 모음', label: '[하즈키 카오루] 단편 모음', fileType: 'folder' }],
+        },
+        {
+            id: '4_대기',
+            label: '4_대기',
+            fileType: 'folder',
+            children: [{ id: '4_대기/a', label: 'a', fileType: 'folder' }],
+        },
+        { id: '1_solo', label: '1_solo', fileType: 'folder' },
+    ];
+
+    it('가상 부모 아래 자식의 부모 ID를 돌려준다', () => {
+        expect(findParentFolderId(tree, '5_완결/[하즈키 카오루] 단편 모음')).toBe('__virtual__5_완결');
+    });
+
+    it('실제 부모 아래 자식의 부모 ID를 돌려준다', () => {
+        expect(findParentFolderId(tree, '4_대기/a')).toBe('4_대기');
+    });
+
+    it('최상위 항목과 없는 항목은 null 이다', () => {
+        expect(findParentFolderId(tree, '1_solo')).toBeNull();
+        expect(findParentFolderId(tree, '4_대기')).toBeNull();
+        expect(findParentFolderId(tree, 'missing')).toBeNull();
+        expect(findParentFolderId([], 'x')).toBeNull();
     });
 });
