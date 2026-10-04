@@ -103,6 +103,8 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
   const [downloadUrl, setDownloadUrl] = useState("");
   const [suggestedCategories, setSuggestedCategories] = useState({});
   const [searchTrigger, setSearchTrigger] = useState(0);
+  // 파일 이름 변경 시 유사한 책 목록을 다시 불러오기 위한 키
+  const [similarReloadKey, setSimilarReloadKey] = useState(0);
 
   // 비멱등 버튼 중복 실행 방지 가드
   const isProcessingRef = useRef(false);
@@ -821,6 +823,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
           category: categoryForBackend,
         }));
         setSearchTrigger((prev) => prev + 1);
+        setSimilarReloadKey((prev) => prev + 1);
 
         let newFolderData = removeEntryFromFolderData(
           folderData,
@@ -1348,6 +1351,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                     </>
                   ) : <>
                   <SimilarBooks
+                    key={`${bookInfo["book_id"]}-${similarReloadKey}`}
                     bookId={bookInfo["book_id"]}
                     onSelect={entryClicked}
                     apiPrefix={apiPrefix}
