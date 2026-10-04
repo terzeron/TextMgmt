@@ -6,7 +6,7 @@ import PropTypes from "prop-types";
 import "./Edit.css";
 import "bootstrap/dist/css/bootstrap.min.css";
 
-import { Button, Tabs, Tab, Spinner, Card, ButtonGroup } from "react-bootstrap";
+import { Button, Spinner, Card } from "react-bootstrap";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner } from "@fortawesome/free-solid-svg-icons";
 import { rawJsonGetReq } from "./Common";
@@ -138,16 +138,23 @@ const buildStoreSearchUrl = (store, title, author) => {
 // 교보는 "국내도서 > 소설 > 한국소설" 처럼 다른 두 곳과 같은 모양의 분류 경로를 준다.
 const CATEGORY_STORES = ["yes24", "aladin", "kyobo", "naver"];
 
-// 자동 검색 대상 서점 목록 (카테고리 판정 서점 + 추가 자동 검색 서점)
+// 책 모드의 자동 검색 대상 서점 목록. 나머지 서점은 버튼을 눌러야 검색한다.
 // CATEGORY_STORES 는 이 목록의 부분집합이어야 한다. 여기서 빠진 서점은 결과가 없어
 // 카테고리 수집이 조용히 건너뛴다.
-const AUTO_SEARCH_STORES = ["yes24", "aladin", "kyobo", "naver", "ridi"];
+const AUTO_SEARCH_STORES = ["yes24", "aladin", "kyobo", "naver"];
 
-// 만화 모드에서만 자동 검색에 더하는 웹툰 서점. 책 탭에서는 웹툰 API 를 부르지 않는다.
-// 장르가 서점 분류 체계와 달라 CATEGORY_STORES 에는 넣지 않는다.
-const COMIC_AUTO_SEARCH_STORES = ["naverwebtoon", "kakaowebtoon"];
+// 만화 모드의 자동 검색 대상 서점 목록. 카테고리를 결정하지 않으므로 CATEGORY_STORES 와 무관하다.
+const COMIC_AUTO_SEARCH_STORES = [
+  "yes24",
+  "aladin",
+  "naverwebtoon",
+  "kakaowebtoon",
+];
 
-// 서점 탭 정의 (supportsIsbn: ISBN 검색 지원 여부)
+// 만화 모드에서 보여주지 않는 서점
+const COMIC_HIDDEN_STORES = ["naver", "munpia", "naverseries", "joara"];
+
+// 서점 목록 정의 (supportsIsbn: ISBN 검색 지원 여부, hideIsbn: ISBN 버튼 숨김)
 const STORES = [
   { key: "yes24", label: "Yes24", supportsIsbn: true },
   { key: "aladin", label: "알라딘", supportsIsbn: true },
@@ -158,17 +165,21 @@ const STORES = [
   { key: "naverseries", label: "시리즈", supportsIsbn: false },
   // 조아라는 웹소설 연재처라 ISBN 이 없다. 제목으로만 찾는다.
   { key: "joara", label: "조아라", supportsIsbn: false },
-  // 웹툰도 ISBN 이 없다. 제목으로만 찾는다.
-  { key: "naverwebtoon", label: "네이버웹툰", supportsIsbn: false },
-  { key: "kakaowebtoon", label: "카카오웹툰", supportsIsbn: false },
+  // 웹툰도 ISBN 이 없다. 제목으로만 찾으므로 ISBN 버튼을 숨긴다.
+  { key: "naverwebtoon", label: "네이버웹툰", supportsIsbn: false, hideIsbn: true },
+  { key: "kakaowebtoon", label: "카카오웹툰", supportsIsbn: false, hideIsbn: true },
 ];
 
 export default function Bookstore(props) {
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
   const [isbn, setIsbn] = useState("");
-  const [activeKey, setActiveKey] = useState(STORES[0].key);
   const [data, setData] = useState({});
+  // 서점별로 마지막에 수행한 검색 방법 ("isbn" | "title_author"). 토글 버튼의 선택 상태가 된다.
+  const [methods, setMethods] = useState({});
+  const visibleStores = props.comic
+    ? STORES.filter((s) => !COMIC_HIDDEN_STORES.includes(s.key))
+    : STORES;
   // 만화 모드: ISBN 검색을 쓰지 않고, 검색 결과로 카테고리를 결정하지 않는다.
   const onCategoriesFound = props.comic ? undefined : props.onCategoriesFound;
 
@@ -186,7 +197,7 @@ export default function Bookstore(props) {
 
     // 탭 및 데이터 초기화
     setData({});
-    setActiveKey(STORES[0].key);
+    setMethods({});
     if (onCategoriesFound) {
       onCategoriesFound({});
     }
@@ -203,6 +214,7 @@ export default function Bookstore(props) {
       if (!currentIsbn && !currentTitle && !currentAuthor) return null;
 
       if (!currentIsbn && currentTitle) {
+        setMethods((prev) => ({ ...prev, [store]: "title_author" }));
         setData((prev) => ({ ...prev, [store]: { loading: true } }));
         const [titleResult, authorTitleResult] = await Promise.all([
           requestSearch(store, { title: currentTitle }),
@@ -220,6 +232,7 @@ export default function Bookstore(props) {
 
       // 1. ISBN 검색 시도 (ISBN이 있는 경우)
       if (currentIsbn) {
+        setMethods((prev) => ({ ...prev, [store]: "isbn" }));
         const result = await fetchWithMethodInternal(
           store,
           "isbn",
@@ -234,6 +247,7 @@ export default function Bookstore(props) {
 
       // 2. 저자+제목 검색 시도
       if (currentTitle || currentAuthor) {
+        setMethods((prev) => ({ ...prev, [store]: "title_author" }));
         const result = await fetchWithMethodInternal(
           store,
           "title_author",
@@ -263,7 +277,7 @@ export default function Bookstore(props) {
     const runAutoSearch = async () => {
       // 서점 검색을 병렬 실행 (서점 간 의존성 없음)
       const autoStores = props.comic
-        ? [...AUTO_SEARCH_STORES, ...COMIC_AUTO_SEARCH_STORES]
+        ? COMIC_AUTO_SEARCH_STORES
         : AUTO_SEARCH_STORES;
       const entries = await Promise.all(
         autoStores.map(async (storeKey) => [
@@ -368,6 +382,8 @@ export default function Bookstore(props) {
     // 캐시 키에 검색어 포함
     const cacheKey = `${store}_${method}_${searchTerms}`;
 
+    setMethods((prev) => ({ ...prev, [store]: method }));
+
     // 이미 해당 검색 결과가 있으면 재사용
     if (data[cacheKey] && !data[cacheKey].loading && !data[cacheKey].error) {
       setData((prev) => ({ ...prev, [store]: data[cacheKey] }));
@@ -449,63 +465,69 @@ export default function Bookstore(props) {
     );
   };
 
-  // 탭 내용 렌더링 함수
-  const renderTabContent = (storeKey) => {
+  // 서점 한 줄 렌더링: 서점명 | 검색 버튼들 | 검색 결과
+  const renderStoreRow = (storeInfo) => {
+    const storeKey = storeInfo.key;
     const result = data[storeKey];
-    const storeInfo = STORES.find((s) => s.key === storeKey);
+    const method = methods[storeKey];
     const searchUrl =
       result?.search_url || buildStoreSearchUrl(storeKey, title, author);
+    const spinner = result?.loading && (
+      <FontAwesomeIcon icon={faSpinner} spin className="ms-1" />
+    );
 
     return (
-      <div>
-        {/* 검색 버튼들 */}
-        <div className="p-2 border-bottom">
-          <ButtonGroup>
-            {!props.comic && (
-              <Button
-                variant={
-                  isbn && storeInfo?.supportsIsbn
-                    ? "outline-primary"
-                    : "outline-secondary"
-                }
-                size="sm"
-                onClick={() => fetchWithMethod(storeKey, "isbn")}
-                disabled={result?.loading || !isbn || !storeInfo?.supportsIsbn}
-                title={
-                  !isbn
-                    ? "ISBN 정보 없음"
-                    : !storeInfo?.supportsIsbn
-                      ? "이 서점은 ISBN 검색 미지원"
-                      : ""
-                }
-              >
-                ISBN
-                {result?.loading && (
-                  <FontAwesomeIcon icon={faSpinner} spin className="ms-1" />
-                )}
-              </Button>
-            )}
+      <div
+        key={storeKey}
+        className="p-2 border-bottom"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "5.5rem minmax(6rem, 13rem) 1fr",
+          columnGap: "0.5rem",
+          alignItems: "start",
+        }}
+      >
+        <strong>{storeInfo.label}</strong>
+
+        {/* 검색 버튼들: 폭이 부족하면 줄바꿈 */}
+        <div className="d-flex flex-wrap gap-1">
+          {!storeInfo.hideIsbn && (
             <Button
               variant={
-                title || author ? "outline-primary" : "outline-secondary"
+                isbn && storeInfo.supportsIsbn
+                  ? "outline-primary"
+                  : "outline-secondary"
               }
               size="sm"
-              onClick={() => fetchWithMethod(storeKey, "title_author")}
-              disabled={result?.loading || (!title && !author)}
+              active={method === "isbn"}
+              aria-pressed={method === "isbn"}
+              onClick={() => fetchWithMethod(storeKey, "isbn")}
+              disabled={result?.loading || !isbn || !storeInfo.supportsIsbn}
+              title={
+                !isbn
+                  ? "ISBN 정보 없음"
+                  : !storeInfo.supportsIsbn
+                    ? "이 서점은 ISBN 검색 미지원"
+                    : ""
+              }
             >
-              저자+제목
-              {result?.loading && (
-                <FontAwesomeIcon icon={faSpinner} spin className="ms-1" />
-              )}
+              ISBN
+              {method === "isbn" && spinner}
             </Button>
-          </ButtonGroup>
+          )}
+          <Button
+            variant={title || author ? "outline-primary" : "outline-secondary"}
+            size="sm"
+            active={method === "title_author"}
+            aria-pressed={method === "title_author"}
+            onClick={() => fetchWithMethod(storeKey, "title_author")}
+            disabled={result?.loading || (!title && !author)}
+          >
+            저자+제목
+            {method === "title_author" && spinner}
+          </Button>
           {searchUrl && (
-            <a
-              href={searchUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="ms-2"
-            >
+            <a href={searchUrl} target="_blank" rel="noreferrer">
               <Button variant="outline-secondary" size="sm">
                 서점에서 보기
               </Button>
@@ -514,40 +536,45 @@ export default function Bookstore(props) {
         </div>
 
         {/* 검색 결과 */}
-        {result?.loading && (
-          <div className="text-center p-2">
-            <Spinner animation="border" size="sm" />
-          </div>
-        )}
+        <div>
+          {result?.loading && (
+            <div className="text-center">
+              <Spinner animation="border" size="sm" />
+            </div>
+          )}
 
-        {result?.error && (
-          <div className="text-danger p-2">
-            {result.message || "검색 중 오류가 발생했습니다."}
-          </div>
-        )}
+          {result?.error && (
+            <div className="text-danger">
+              {result.message || "검색 중 오류가 발생했습니다."}
+            </div>
+          )}
 
-        {result && !result.loading && !result.error && (
-          <>
-            {result.status === "success" && result.result.length > 0 ? (
-              result.result.map((item, idx) => (
-                <div key={item.book_url || idx} className="p-1 border-bottom">
-                  <div>
-                    <a href={item.book_url} target="_blank" rel="noreferrer">
-                      <strong>{item.title}</strong>
-                    </a>
+          {result && !result.loading && !result.error && (
+            <>
+              {result.status === "success" && result.result.length > 0 ? (
+                result.result.map((item, idx) => (
+                  <div
+                    key={item.book_url || idx}
+                    className={idx > 0 ? "pt-1 mt-1 border-top" : ""}
+                  >
+                    <div>
+                      <a href={item.book_url} target="_blank" rel="noreferrer">
+                        <strong>{item.title}</strong>
+                      </a>
+                    </div>
+                    <small className="text-muted">
+                      {item.author && <span>{item.author}</span>}
+                      {item.category && <span> | {item.category}</span>}
+                      {item.isbn && <span> | ISBN: {item.isbn}</span>}
+                    </small>
                   </div>
-                  <small className="text-muted">
-                    {item.author && <span>{item.author}</span>}
-                    {item.category && <span> | {item.category}</span>}
-                    {item.isbn && <span> | ISBN: {item.isbn}</span>}
-                  </small>
-                </div>
-              ))
-            ) : (
-              <p className="p-2 text-muted mb-0">검색 결과가 없습니다.</p>
-            )}
-          </>
-        )}
+                ))
+              ) : (
+                <span className="text-muted">검색 결과가 없습니다.</span>
+              )}
+            </>
+          )}
+        </div>
       </div>
     );
   };
@@ -556,20 +583,7 @@ export default function Bookstore(props) {
     <Card>
       <Card.Header>서점 검색</Card.Header>
 
-      <Card.Body className="p-0">
-        <Tabs
-          activeKey={activeKey}
-          onSelect={(k) => setActiveKey(k)}
-          variant="tabs"
-          className="m-0"
-        >
-          {STORES.map((store) => (
-            <Tab eventKey={store.key} title={store.label} key={store.key}>
-              {renderTabContent(store.key)}
-            </Tab>
-          ))}
-        </Tabs>
-      </Card.Body>
+      <Card.Body className="p-0">{visibleStores.map(renderStoreRow)}</Card.Body>
     </Card>
   );
 }
