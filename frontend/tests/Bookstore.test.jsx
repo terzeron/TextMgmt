@@ -1257,6 +1257,50 @@ describe("Bookstore 만화 모드", () => {
     }
   });
 
+  it("만화 모드는 bookInfo에 저자가 있어도 author 파라미터 없이 제목만 검색한다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore
+          comic
+          bookInfo={{ title: "제목", author: "저자", isbn: "" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+    await waitFor(() => {
+      expect(rawJsonGetReq).toHaveBeenCalled();
+    });
+    const urls = rawJsonGetReq.mock.calls.map(([url]) => url);
+    expect(urls.some((url) => url.includes("title=%EC%A0%9C%EB%AA%A9"))).toBe(true);
+    expect(urls.some((url) => url.includes("author="))).toBe(false);
+  });
+
+  it.each([
+    ["[저자] 작품명 (1-34화)", "작품명"],
+    ["(저자) 작품명 1~47화[완결]", "작품명"],
+    ["작품명 [저자]", "작품명"],
+    ["작품명 @ 저자", "작품명"],
+    ["작품명 1-34화", "작품명"],
+    ["1_장르", "1_장르"],
+    ["[저자]", "[저자]"],
+  ])("만화 디렉토리 이름 %s 은 %s 로 검색한다", async (name, expected) => {
+    await act(async () => {
+      render(
+        <Bookstore
+          comic
+          bookInfo={{ title: name, author: "", isbn: "" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+    await waitFor(() => {
+      expect(rawJsonGetReq).toHaveBeenCalled();
+    });
+    const expectedParam = `title=${encodeURIComponent(expected)}`;
+    const urls = rawJsonGetReq.mock.calls.map(([url]) => url);
+    expect(urls.every((url) => url.includes(expectedParam))).toBe(true);
+  });
+
   it("검색 결과로 카테고리를 결정하지 않는다", async () => {
     const onCategoriesFound = vi.fn();
     await act(async () => {

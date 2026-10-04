@@ -53,6 +53,25 @@ export const stripComicDirectoryMeta = (name) => {
   return stripped || trimmed;
 };
 
+// 만화 디렉터리 이름에 붙은 저자 표기를 떼고 작품명만 남긴다.
+// "[저자] 제목", "(저자) 제목", "제목 [저자]", "제목 @ 저자"를 처리한다.
+// "-"와 "_"는 구분자로 보지 않는다. "제목 1-34화", "1_장르"를 잘못 자르기 때문이다.
+// 떼고 나면 비는 이름은 원본을 쓴다.
+export const stripComicDirectoryAuthor = (name) => {
+  if (!name) return "";
+  const trimmed = name.trim();
+  const stripped = trimmed
+    .replace(/^\[[^\]]*\]\s*/, "")
+    .replace(/^\([^)]*\)\s*/, "")
+    .replace(/\s*\[[^\]]*\]$/, "")
+    .replace(/\s*@.*$/, "")
+    .trim();
+  return stripped || trimmed;
+};
+
+const toComicSearchTitle = (name) =>
+  stripComicDirectoryMeta(stripComicDirectoryAuthor(name));
+
 // 검색 결과에서 카테고리를 수집하여 categories 객체에 추가
 const collectStoreCategories = (storeData, storeKey, categories) => {
   if (storeData?.status === "success" && storeData?.result?.length > 0) {
@@ -186,8 +205,9 @@ export default function Bookstore(props) {
   // bookInfo 변경 시 로컬 필드만 동기화 (검색은 트리거하지 않음)
   useEffect(() => {
     const rawTitle = props.bookInfo?.title || "";
-    setTitle(props.comic ? stripComicDirectoryMeta(rawTitle) : rawTitle);
-    setAuthor(props.bookInfo?.author || "");
+    setTitle(props.comic ? toComicSearchTitle(rawTitle) : rawTitle);
+    // 만화 모드는 제목만으로 검색한다. 저자를 넣으면 서점이 0건을 돌려주는 경우가 있다.
+    setAuthor(props.comic ? "" : props.bookInfo?.author || "");
     setIsbn(props.comic ? "" : props.bookInfo?.isbn || "");
   }, [props.bookInfo, props.comic]);
 
@@ -207,9 +227,9 @@ export default function Bookstore(props) {
       const currentIsbn = props.comic ? "" : props.bookInfo.isbn || "";
       const rawTitle = props.bookInfo.title || "";
       const currentTitle = props.comic
-        ? stripComicDirectoryMeta(rawTitle)
+        ? toComicSearchTitle(rawTitle)
         : rawTitle;
-      const currentAuthor = props.bookInfo.author || "";
+      const currentAuthor = props.comic ? "" : props.bookInfo.author || "";
 
       if (!currentIsbn && !currentTitle && !currentAuthor) return null;
 

@@ -155,9 +155,16 @@ vi.mock("../src/ViewSingle", () => ({
   ),
 }));
 
-vi.mock("../src/SimilarBooks", () => ({
-  default: ({ onSelect }) => (
-    <div data-testid="similar-books">
+// 마운트마다 증가하는 식별자: key 변경으로 재마운트(=목록 재조회)됐는지 확인한다.
+let similarBooksMountSeq = 0;
+
+vi.mock("../src/SimilarBooks", async () => {
+  const { useState } = await import("react");
+  return {
+  default: function SimilarBooksMock({ onSelect }) {
+    const [mountId] = useState(() => ++similarBooksMountSeq);
+    return (
+    <div data-testid="similar-books" data-mount-id={mountId}>
       SimilarBooks
       <button
         data-testid="similar-select-missing"
@@ -172,8 +179,10 @@ vi.mock("../src/SimilarBooks", () => ({
         없는카테고리선택
       </button>
     </div>
-  ),
-}));
+    );
+  },
+  };
+});
 
 vi.mock("../src/Bookstore", () => ({
   default: ({ onCategoriesFound: _onCategoriesFound, bookInfo, searchTrigger }) => {
@@ -591,6 +600,45 @@ describe("Edit", () => {
         expect.any(Function),
       );
     });
+  });
+
+  it("파일 이름 변경에 성공하면 유사한 책 컴포넌트를 재마운트한다", async () => {
+    setupMockCategories();
+    mockJsonPutReq.mockImplementation((url, payload, resolve) => resolve());
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    const before = screen.getByTestId("similar-books").getAttribute("data-mount-id");
+
+    fireEvent.click(screen.getByTestId("change-btn"));
+
+    await waitFor(() => {
+      expect(mockJsonPutReq).toHaveBeenCalled();
+      expect(screen.getByTestId("similar-books").getAttribute("data-mount-id")).not.toBe(before);
+    });
+  });
+
+  it("파일 이름 변경에 실패하면 유사한 책 컴포넌트를 재마운트하지 않는다", async () => {
+    setupMockCategories();
+    mockJsonPutReq.mockImplementation((url, payload, resolve, reject) => reject("서버 오류"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<Edit />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-open")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction/101"));
+    const before = screen.getByTestId("similar-books").getAttribute("data-mount-id");
+
+    fireEvent.click(screen.getByTestId("change-btn"));
+
+    await waitFor(() => {
+      expect(mockJsonPutReq).toHaveBeenCalled();
+    });
+    expect(screen.getByTestId("similar-books").getAttribute("data-mount-id")).toBe(before);
   });
 
   it("apiPrefix가 전달되면 API URL에 포함된다", async () => {
