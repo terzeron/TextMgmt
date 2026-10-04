@@ -7,9 +7,19 @@ import {
   act,
   waitFor,
   cleanup,
+  within,
 } from "@testing-library/react";
 
 afterEach(cleanup);
+
+// 서점 한 줄의 서점명 요소: 바로 뒤에 버튼 묶음(d-flex)이 오는 <strong>
+const storeLabelElements = () =>
+  [...document.querySelectorAll("strong")].filter((el) =>
+    el.nextElementSibling?.classList.contains("d-flex"),
+  );
+const storeLabels = () => storeLabelElements().map((el) => el.textContent);
+const storeRow = (label) =>
+  storeLabelElements().find((el) => el.textContent === label).parentElement;
 
 vi.mock("../src/Common", () => ({
   rawJsonGetReq: vi.fn(),
@@ -472,40 +482,43 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
     vi.clearAllMocks();
   });
 
-  it("서점 탭들이 렌더링된다", async () => {
+  it("서점별 한 줄이 렌더링된다", async () => {
     await act(async () => {
       render(
         <Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />,
       );
     });
-    // 탭은 중복 렌더링될 수 있으므로 getAllByRole 사용
-    const tabs = screen.getAllByRole("tab");
-    const tabTexts = tabs.map((t) => t.textContent);
-    expect(tabTexts).toContain("Yes24");
-    expect(tabTexts).toContain("알라딘");
-    expect(tabTexts).toContain("교보문고");
-    expect(tabTexts).toContain("네이버쇼핑");
-    expect(tabTexts).toContain("RIDI");
-    expect(tabTexts).toContain("문피아");
-    expect(tabTexts).toContain("시리즈");
-    expect(tabTexts).toContain("조아라");
-    expect(tabTexts).toContain("네이버웹툰");
-    expect(tabTexts).toContain("카카오웹툰");
+    expect(storeLabels()).toEqual([
+      "Yes24",
+      "알라딘",
+      "교보문고",
+      "네이버쇼핑",
+      "RIDI",
+      "문피아",
+      "시리즈",
+      "조아라",
+      "네이버웹툰",
+      "카카오웹툰",
+    ]);
   });
 
-  it("교보문고는 알라딘 바로 뒤, 웹툰 두 곳은 맨 마지막 탭이다", async () => {
+  it("만화 모드는 네이버쇼핑·문피아·시리즈·조아라를 보여주지 않는다", async () => {
     await act(async () => {
       render(
-        <Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />,
+        <Bookstore
+          comic
+          bookInfo={{ title: "제목", author: "저자", isbn: "" }}
+        />,
       );
     });
-    // 탭이 중복 렌더링될 수 있어 첫 등장 순서만 본다.
-    const seen = [];
-    for (const t of screen.getAllByRole("tab")) {
-      if (!seen.includes(t.textContent)) seen.push(t.textContent);
-    }
-    expect(seen.indexOf("교보문고")).toBe(seen.indexOf("알라딘") + 1);
-    expect(seen.slice(-2)).toEqual(["네이버웹툰", "카카오웹툰"]);
+    expect(storeLabels()).toEqual([
+      "Yes24",
+      "알라딘",
+      "교보문고",
+      "RIDI",
+      "네이버웹툰",
+      "카카오웹툰",
+    ]);
   });
 
   it("ISBN/저자+제목 검색 버튼이 렌더링된다", async () => {
@@ -677,24 +690,18 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
     });
   });
 
-  it("ISBN 미지원 서점 탭에서 ISBN 버튼이 비활성화된다", async () => {
+  it("ISBN 미지원 서점 줄에서 ISBN 버튼이 비활성화된다", async () => {
     await act(async () => {
       render(
         <Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "978" }} />,
       );
     });
 
-    // 네이버쇼핑 탭으로 전환 (ISBN 미지원)
-    const tabs = screen.getAllByRole("tab");
-    const naverTab = tabs.find((t) => t.textContent === "네이버쇼핑");
-    await act(async () => {
-      fireEvent.click(naverTab);
-    });
-
-    // 네이버쇼핑 탭의 ISBN 버튼이 disabled인지 확인
-    const isbnButtons = screen.getAllByRole("button", { name: "ISBN" });
-    const disabledBtn = isbnButtons.find((btn) => btn.disabled);
-    expect(disabledBtn).toBeTruthy();
+    // 네이버쇼핑은 ISBN 미지원이라 ISBN 버튼이 disabled여야 한다
+    expect(
+      within(storeRow("네이버쇼핑")).getByRole("button", { name: "ISBN" })
+        .disabled,
+    ).toBe(true);
   });
 
   it("서점에서 보기 링크가 search_url이 있을 때 표시된다", async () => {
@@ -847,8 +854,9 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
     });
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("tab", { name: label }));
-      fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" }).at(-1));
+      fireEvent.click(
+        within(storeRow(label)).getByRole("button", { name: "저자+제목" }),
+      );
     });
 
     await waitFor(() => {
@@ -912,7 +920,7 @@ describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
       />,
     );
 
-    expect(await screen.findAllByText("제목 결과")).toHaveLength(5);
+    expect(await screen.findAllByText("제목 결과")).toHaveLength(4);
     const urls = rawJsonGetReq.mock.calls.map(([url]) => url);
     expect(urls.some((url) => url.includes("isbn=978"))).toBe(true);
     expect(urls.some((url) => url.includes("author=%EC%A0%80%EC%9E%90"))).toBe(true);
@@ -1207,7 +1215,7 @@ describe("Bookstore 만화 모드", () => {
     });
   });
 
-  it("ISBN 버튼이 없고 저자+제목 버튼만 남는다", async () => {
+  it("ISBN 버튼은 ISBN이 없어 비활성이고 웹툰 줄에는 아예 없다", async () => {
     await act(async () => {
       render(
         <Bookstore
@@ -1216,7 +1224,16 @@ describe("Bookstore 만화 모드", () => {
         />,
       );
     });
-    expect(screen.queryAllByRole("button", { name: "ISBN" })).toHaveLength(0);
+    for (const label of ["Yes24", "알라딘", "교보문고", "RIDI"]) {
+      expect(
+        within(storeRow(label)).getByRole("button", { name: "ISBN" }).disabled,
+      ).toBe(true);
+    }
+    for (const label of ["네이버웹툰", "카카오웹툰"]) {
+      expect(
+        within(storeRow(label)).queryByRole("button", { name: "ISBN" }),
+      ).toBeNull();
+    }
     expect(
       screen.getAllByRole("button", { name: "저자+제목" }).length,
     ).toBeGreaterThan(0);
@@ -1303,10 +1320,72 @@ describe("Bookstore 웹툰 자동 검색", () => {
         expect(calledStores().has(store)).toBe(true);
       }
     });
-    // 기존 자동 검색 서점은 그대로 돈다.
-    for (const store of ["yes24", "aladin", "kyobo", "naver", "ridi"]) {
-      expect(calledStores().has(store)).toBe(true);
+    expect(calledStores().has("yes24")).toBe(true);
+    expect(calledStores().has("aladin")).toBe(true);
+    // 그 밖의 서점은 버튼을 눌러야 검색한다.
+    for (const store of ["kyobo", "naver", "ridi"]) {
+      expect(calledStores().has(store)).toBe(false);
     }
+  });
+
+  it("책 모드는 Yes24·알라딘·교보·네이버쇼핑만 자동 검색한다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore
+          bookInfo={{ title: "제목", author: "저자", isbn: "" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+    await waitFor(() => {
+      for (const store of ["yes24", "aladin", "kyobo", "naver"]) {
+        expect(calledStores().has(store)).toBe(true);
+      }
+    });
+    for (const store of ["ridi", "munpia", "naverseries", "joara"]) {
+      expect(calledStores().has(store)).toBe(false);
+    }
+  });
+
+  it("자동 검색한 방법이 토글 버튼의 선택 상태가 된다", async () => {
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(
+        () =>
+          onSuccess({
+            status: "success",
+            result: [{ title: "T", book_url: "u" }],
+          }),
+        0,
+      );
+    });
+    await act(async () => {
+      render(
+        <Bookstore
+          bookInfo={{ title: "제목", author: "저자", isbn: "978" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+    const pressed = (label, name) =>
+      within(storeRow(label))
+        .getByRole("button", { name })
+        .getAttribute("aria-pressed");
+    await waitFor(() => {
+      expect(pressed("Yes24", "ISBN")).toBe("true");
+    });
+    expect(pressed("Yes24", "저자+제목")).toBe("false");
+    // 자동 검색하지 않는 서점은 어느 쪽도 선택되지 않는다.
+    expect(pressed("RIDI", "ISBN")).toBe("false");
+    expect(pressed("RIDI", "저자+제목")).toBe("false");
+
+    await act(async () => {
+      fireEvent.click(
+        within(storeRow("RIDI")).getByRole("button", { name: "저자+제목" }),
+      );
+    });
+    await waitFor(() => {
+      expect(pressed("RIDI", "저자+제목")).toBe("true");
+    });
   });
 
   it("책 모드는 웹툰을 자동 검색하지 않는다", async () => {

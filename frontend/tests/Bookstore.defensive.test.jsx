@@ -55,11 +55,12 @@ describe("Bookstore defensive search handlers", () => {
   });
 
   it("ISBN 미지원 서점은 ISBN 검색 버튼을 비활성화한다", () => {
-    render(<Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "978" }} />);
+    const { container } = render(
+      <Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "978" }} />,
+    );
 
-    // 탭 순서에 기대지 않는다. 서점이 늘면 인덱스가 밀려 엉뚱한 탭을 누른다.
-    // 탭은 중복 렌더링될 수 있어 첫 번째만 쓴다.
-    const naver = screen.getAllByRole("region", { name: "네이버쇼핑" })[0];
+    // 줄 순서에 기대지 않는다. 서점이 늘면 인덱스가 밀려 엉뚱한 줄을 누른다.
+    const naver = within(container).getByText("네이버쇼핑").parentElement;
     expect(within(naver).getByRole("button", { name: "ISBN" }).disabled).toBe(true);
     expect(mockRawJsonGetReq).not.toHaveBeenCalled();
   });
