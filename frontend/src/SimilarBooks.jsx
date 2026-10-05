@@ -174,7 +174,7 @@ export default function SimilarBooks({
     setDeletingId(category);
     jsonPostReq(
       `${apiPrefix}/categories/delete`,
-      { category },
+      { category, delete_files: true },
       () => {
         setSimilarNames((prev) => prev.filter((item) =>
           item.category !== category && !item.category.startsWith(`${category}/`),

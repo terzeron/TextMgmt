@@ -1191,7 +1191,7 @@ describe("SimilarBooks", () => {
       expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("되돌릴 수 없습니다"));
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/categories/delete",
-        { category: "Novel" },
+        { category: "Novel", delete_files: true },
         expect.any(Function),
         expect.any(Function),
       );

@@ -423,6 +423,7 @@ class CategoryBulkRenameModel(BaseModel):
 
 class CategoryDeleteModel(BaseModel):
     category: str
+    delete_files: bool = False
 
 
 class ReloadAllMismatchesModel(BaseModel):
@@ -845,7 +846,7 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     async def delete_category(body: CategoryDeleteModel) -> dict[str, Any]:
         LOGGER.debug("# delete_category(category='%s')", body.category)
         response_object: dict[str, Any] = {"status": "failure"}
-        result, error = await manager.delete_category(body.category)
+        result, error = await manager.delete_category(body.category, delete_files=body.delete_files)
         if error is None:
             # MySQL 카테고리 매핑 삭제 (하위 카테고리 포함, 이벤트 루프 블로킹 방지)
             mapping_deleted = await asyncio.to_thread(category_mapping.delete_category, body.category, content_type=content_type, prefix=True)
@@ -1118,6 +1119,13 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         except Exception as e:
             LOGGER.exception("get_category_pdf_stats error: %s", e)
             return {"status": "failure", "error": "PDF 통계를 불러오지 못했습니다."}
+
+    @router.get("/category-delete-preview", dependencies=admin_dep)
+    async def get_category_delete_preview(category: str) -> dict[str, Any]:
+        result, error = await manager.preview_delete_category(category)
+        if error is None:
+            return {"status": "success", "result": result}
+        return {"status": "failure", "error": error}
 
     @router.get("/search/{keyword}")
     async def search_by_keyword(keyword: str, offset: int = 0, limit: int = 10, exclude_categories: str = "", category: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:

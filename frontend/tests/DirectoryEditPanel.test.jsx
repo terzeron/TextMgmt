@@ -200,7 +200,7 @@ describe("DirectoryEditPanel", () => {
     fireEvent.click(screen.getByText("삭제"));
     expect(mockJsonPostReq).toHaveBeenCalledWith(
       "/comics/categories/delete",
-      { category: "comics/series" },
+      { category: "comics/series", delete_files: true },
       expect.any(Function),
       expect.any(Function),
       expect.any(Function),

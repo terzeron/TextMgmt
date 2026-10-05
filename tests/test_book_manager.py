@@ -2561,6 +2561,168 @@ def test_delete_category_rejects_root(tmp_path: Path):
     assert es.deleted_by_category["deleted"] == 2  # delete_by_category 미호출
 
 
+def test_delete_category_keeps_files_by_default(tmp_path: Path):
+    """카테고리 관리 서브탭은 ES 문서만 지운다. delete_files를 주지 않으면 디스크를 건드리지 않는다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.counts = {"A": 1}
+    es.deleted_by_category = {"deleted": 1, "failures": []}
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "one.pdf").write_bytes(b"x")
+
+    result, err = asyncio_runner(manager.delete_category("A"))
+
+    assert err is None
+    assert result["deleted_count"] == 1
+    assert "fs_deleted" not in result
+    assert (tmp_path / "A" / "one.pdf").exists()
+
+
+def test_delete_category_removes_directory_tree(tmp_path: Path):
+    """UI가 '하위 디렉토리의 모든 파일을 삭제'라고 안내하므로 ES뿐 아니라 디스크도 지워야 한다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.counts = {"A": 2}
+    es.deleted_by_category = {"deleted": 2, "failures": []}
+    (tmp_path / "A" / "sub").mkdir(parents=True)
+    (tmp_path / "A" / "one.pdf").write_bytes(b"x")
+    (tmp_path / "A" / "sub" / "two.pdf").write_bytes(b"x")
+    (tmp_path / "B").mkdir()
+    (tmp_path / "B" / "keep.pdf").write_bytes(b"x")
+
+    result, err = asyncio_runner(manager.delete_category("A", delete_files=True))
+
+    assert err is None
+    assert result["deleted_count"] == 2
+    assert result["fs_deleted"] is True
+    assert not (tmp_path / "A").exists()
+    assert (tmp_path / "B" / "keep.pdf").exists()
+
+
+def test_delete_category_es_only_when_directory_missing(tmp_path: Path):
+    """디스크에 디렉토리가 없어도 ES 문서는 지우고 성공으로 돌려준다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.counts = {"A": 1}
+    es.deleted_by_category = {"deleted": 1, "failures": []}
+
+    result, err = asyncio_runner(manager.delete_category("A", delete_files=True))
+
+    assert err is None
+    assert result["deleted_count"] == 1
+    assert result["fs_deleted"] is False
+
+
+def test_delete_category_removes_directory_without_es_docs(tmp_path: Path):
+    """ES에 문서가 없어도(빈 디렉토리, 미적재 파일) 편집 탭에서는 디스크 디렉토리를 지운다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.counts = {"A": 0}
+    es.deleted_by_category = {"deleted": 0, "failures": []}
+    (tmp_path / "A" / "sub").mkdir(parents=True)
+    (tmp_path / "A" / "sub" / "unindexed.jpg").write_bytes(b"x")
+
+    result, err = asyncio_runner(manager.delete_category("A", delete_files=True))
+
+    assert err is None
+    assert result["deleted_count"] == 0
+    assert result["fs_deleted"] is True
+    assert not (tmp_path / "A").exists()
+
+
+def test_delete_category_errors_when_nothing_to_delete(tmp_path: Path):
+    """ES 문서도 디스크 디렉토리도 없으면 지울 대상이 없다고 알린다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.counts = {"A": 0}
+
+    result, err = asyncio_runner(manager.delete_category("A", delete_files=True))
+
+    assert result == {}
+    assert "문서가 없습니다" in err
+
+
+def test_delete_category_keeps_es_when_fs_delete_fails(tmp_path: Path, monkeypatch):
+    """디렉토리 삭제가 실패하면 ES 문서를 남겨 다시 시도할 수 있게 한다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.counts = {"A": 1}
+    es.deleted_by_category = {"deleted": 99, "failures": []}
+    (tmp_path / "A").mkdir()
+
+    def fail_rmtree(*_args, **_kwargs):
+        raise OSError("denied")
+
+    monkeypatch.setattr("backend.book_manager.shutil.rmtree", fail_rmtree)
+    deleted_calls = []
+    es.delete_by_category = lambda category, prefix=False: deleted_calls.append(category) or {"deleted": 1, "failures": []}
+
+    result, err = asyncio_runner(manager.delete_category("A", delete_files=True))
+
+    assert result == {}
+    assert "디렉토리 삭제 실패" in err
+    assert deleted_calls == []
+    assert (tmp_path / "A").exists()
+
+
+def test_delete_category_rejects_library_root_alias(tmp_path: Path):
+    """'.'는 path_prefix 자신으로 해석되어 라이브러리 전체가 지워진다. 거부해야 한다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.counts = {".": 5}
+    (tmp_path / "A").mkdir()
+    (tmp_path / "A" / "one.pdf").write_bytes(b"x")
+
+    result, err = asyncio_runner(manager.delete_category(".", delete_files=True))
+
+    assert result == {}
+    assert err
+    assert (tmp_path / "A" / "one.pdf").exists()
+
+
+def test_preview_delete_category_counts_subtree(tmp_path: Path):
+    """삭제 확인 모달용 미리보기: 하위 디렉토리 수, 디스크 파일 수, ES 문서 수를 센다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.counts = {"A": 7}
+    (tmp_path / "A" / "s1" / "deep").mkdir(parents=True)
+    (tmp_path / "A" / "s2").mkdir()
+    (tmp_path / "A" / "one.pdf").write_bytes(b"x")
+    (tmp_path / "A" / "s1" / "two.pdf").write_bytes(b"x")
+    (tmp_path / "A" / "s1" / "deep" / "three.pdf").write_bytes(b"x")
+    (tmp_path / "B").mkdir()
+    (tmp_path / "B" / "other.pdf").write_bytes(b"x")
+
+    result, err = asyncio_runner(manager.preview_delete_category("A"))
+
+    assert err is None
+    assert result == {"category": "A", "directory_count": 3, "file_count": 3, "es_count": 7}
+    assert (tmp_path / "A" / "one.pdf").exists()
+
+
+def test_preview_delete_category_without_directory(tmp_path: Path):
+    """디스크에 디렉토리가 없으면 파일·디렉토리는 0으로 돌려준다."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    es.counts = {"A": 2}
+
+    result, err = asyncio_runner(manager.preview_delete_category("A"))
+
+    assert err is None
+    assert result == {"category": "A", "directory_count": 0, "file_count": 0, "es_count": 2}
+
+
+def test_preview_delete_category_rejects_unsafe_names(tmp_path: Path):
+    """삭제와 같은 이름 검증을 쓴다: 빈 값, '..', '_root', 라이브러리 루트 별칭."""
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    (tmp_path / "A").mkdir()
+    for name in ("", "../A", "_root", "."):
+        result, err = asyncio_runner(manager.preview_delete_category(name))
+        assert result == {}, name
+        assert err, name
+
+
 def test_rename_category_rejects_root_as_source(tmp_path: Path):
     """'_root'를 이름 변경하면 파일은 최상위에 남고 ES category만 바뀌어 불일치가 생긴다."""
     es = DummyES()
