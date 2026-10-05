@@ -469,6 +469,8 @@ export default function CategoryAdmin({
   // rename/delete 모달
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  // 삭제 모달이 열릴 때 가져오는 삭제 대상 건수: {status: loading|ready|error, ...}
+  const [deletePreview, setDeletePreview] = useState(null);
   const [showReloadModal, setShowReloadModal] = useState(false);
   const [showMismatchReloadModal, setShowMismatchReloadModal] = useState(false);
   const [reloadAllMismatches, setReloadAllMismatches] = useState(false);
@@ -1365,13 +1367,35 @@ export default function CategoryAdmin({
     );
   }, [selectedCategory, newCategoryName, apiPrefix, loadData]);
 
+  useEffect(() => {
+    if (!showDeleteModal || !selectedCategory) {
+      setDeletePreview(null);
+      return undefined;
+    }
+    let cancelled = false;
+    setDeletePreview({ status: "loading" });
+    jsonGetReq(
+      `${apiPrefix}/category-delete-preview?category=${encodeURIComponent(selectedCategory)}`,
+      null,
+      (result) => {
+        if (!cancelled) setDeletePreview({ status: "ready", ...result });
+      },
+      () => {
+        if (!cancelled) setDeletePreview({ status: "error" });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [showDeleteModal, selectedCategory, apiPrefix]);
+
   const handleDeleteCategory = useCallback(() => {
     /* v8 ignore next -- delete modal opens only after category selection. */
     if (!selectedCategory) return;
     setSaving(true);
     jsonPostReq(
       `${apiPrefix}/categories/delete`,
-      { category: selectedCategory },
+      { category: selectedCategory, delete_files: true },
       () => {
         setShowDeleteModal(false);
         setSelectedCategory("");
@@ -2220,10 +2244,10 @@ export default function CategoryAdmin({
                       title={
                         isRootCategory
                           ? "최상위 디렉토리는 삭제할 수 없습니다"
-                          : "카테고리 삭제"
+                          : "디렉토리 삭제"
                       }
                     >
-                      삭제 <FontAwesomeIcon icon={faTrash} />
+                      디렉토리 삭제 <FontAwesomeIcon icon={faTrash} />
                     </Button>
                     <Button
                       variant="outline-success"
@@ -2688,24 +2712,33 @@ export default function CategoryAdmin({
         </Modal.Footer>
       </Modal>
 
-      {/* 카테고리 삭제 확인 모달 */}
+      {/* 디렉토리 삭제 확인 모달 */}
       <Modal
         show={showDeleteModal}
         onHide={() => setShowDeleteModal(false)}
         centered
       >
         <Modal.Header closeButton>
-          <Modal.Title>카테고리 삭제</Modal.Title>
+          <Modal.Title>디렉토리 삭제</Modal.Title>
         </Modal.Header>
         <Modal.Body>
           <p className="fw-bold">
-            카테고리 &apos;{selectedCategory}&apos; 및 하위 카테고리의 ES 문서를
-            삭제합니다.
+            디렉토리 &apos;{selectedCategory}&apos;를 삭제합니다.
           </p>
-          <p className="text-muted">
-            파일은 디스크에 그대로 남습니다. 다시 필요하면 ES 재적재로 되살릴 수
-            있습니다.
-          </p>
+          {deletePreview?.status === "ready" ? (
+            <p>
+              하위 디렉토리 {deletePreview.directory_count}개와 파일{" "}
+              {deletePreview.file_count}개를 디스크에서 삭제하고, ES 문서{" "}
+              {deletePreview.es_count}건도 삭제합니다.
+            </p>
+          ) : deletePreview?.status === "error" ? (
+            <p className="text-danger">
+              삭제 대상을 확인하지 못했습니다. 모달을 닫고 다시 시도하세요.
+            </p>
+          ) : (
+            <p className="text-muted">삭제 대상을 세는 중...</p>
+          )}
+          <p className="text-muted">이 작업은 되돌릴 수 없습니다.</p>
         </Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowDeleteModal(false)}>
@@ -2714,7 +2747,7 @@ export default function CategoryAdmin({
           <Button
             variant="danger"
             onClick={handleDeleteCategory}
-            disabled={saving}
+            disabled={saving || deletePreview?.status !== "ready"}
           >
             {saving ? <Spinner animation="border" size="sm" /> : "삭제"}
           </Button>

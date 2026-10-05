@@ -73,7 +73,7 @@ export default function DirectoryEditPanel({
     setSaving(true);
     jsonPostReq(
       `${apiPrefix}/categories/delete`,
-      { category: directory.category },
+      { category: directory.category, delete_files: true },
       () => onComplete("디렉토리와 하위 파일을 삭제했습니다.", { type: "delete", category: directory.category }),
       (error) => onError(`디렉토리 삭제에 실패했습니다. ${error}`),
       () => setSaving(false),

@@ -1978,12 +1978,36 @@ def test_rename_category_error_path(dummy_client, monkeypatch):
 def test_delete_category_error_path(dummy_client, monkeypatch):
     from backend import main as main_mod
 
-    async def delete_fail(category):
+    async def delete_fail(category, delete_files=False):
         return None, f"cannot delete {category}"
 
     monkeypatch.setattr(main_mod.book_manager._instance, "delete_category", delete_fail, raising=False)
     resp = dummy_client.post("/categories/delete", json={"category": "A"})
     assert resp.json() == {"status": "failure", "error": "cannot delete A"}
+
+
+@pytest.mark.parametrize("prefix", ["", "/comics"])
+def test_category_delete_preview(dummy_client, monkeypatch, prefix):
+    """책·만화 관리 탭이 같은 미리보기 엔드포인트를 쓴다."""
+    from backend import main as main_mod
+
+    async def preview_ok(category):
+        return {"category": category, "directory_count": 2, "file_count": 5, "es_count": 4}, None
+
+    monkeypatch.setattr(main_mod.book_manager._instance, "preview_delete_category", preview_ok, raising=False)
+    resp = dummy_client.get(f"{prefix}/category-delete-preview", params={"category": "A/B"})
+    assert resp.json() == {"status": "success", "result": {"category": "A/B", "directory_count": 2, "file_count": 5, "es_count": 4}}
+
+
+def test_category_delete_preview_error_path(dummy_client, monkeypatch):
+    from backend import main as main_mod
+
+    async def preview_fail(category):
+        return {}, f"bad {category}"
+
+    monkeypatch.setattr(main_mod.book_manager._instance, "preview_delete_category", preview_fail, raising=False)
+    resp = dummy_client.get("/category-delete-preview", params={"category": "A"})
+    assert resp.json() == {"status": "failure", "error": "bad A"}
 
 
 def test_rename_category_mysql_mapping_failure(dummy_client, monkeypatch):
@@ -2013,7 +2037,7 @@ def test_delete_category_hidden_subcategories(dummy_client, monkeypatch):
     """delete_category cleans hidden and latest-excluded subcategories."""
     from backend import main as main_mod
 
-    async def delete_ok(category):
+    async def delete_ok(category, delete_files=False):
         return {"category": category, "deleted_count": 1}, None
 
     main_mod.book_manager._instance.delete_category = delete_ok
@@ -2197,7 +2221,7 @@ def test_delete_category_mapping_not_deleted(dummy_client, monkeypatch):
     """Line 333: delete_category mapping_deleted=False 경로"""
     from backend import main as main_mod
 
-    async def delete_ok(category):
+    async def delete_ok(category, delete_files=False):
         return {"category": category, "deleted_count": 1}, None
 
     main_mod.book_manager._instance.delete_category = delete_ok

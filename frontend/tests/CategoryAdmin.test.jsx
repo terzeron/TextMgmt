@@ -88,6 +88,8 @@ function setupMockResponses(
     mappingsResult = MAPPINGS_RESPONSE,
     hiddenResult = HIDDEN_RESPONSE,
     latestExcludedResult = LATEST_EXCLUDED_RESPONSE,
+    deletePreviewResult = { category: "", directory_count: 2, file_count: 12, es_count: 10 },
+    deletePreviewError,
   } = {},
 ) {
   mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
@@ -102,6 +104,12 @@ function setupMockResponses(
         reject(mismatchError);
       } else {
         resolve(mismatchResult);
+      }
+    } else if (url.startsWith(apiPrefix + "/category-delete-preview")) {
+      if (deletePreviewError) {
+        reject(deletePreviewError);
+      } else {
+        resolve(deletePreviewResult);
       }
     } else if (url === apiPrefix + "/category-mismatches/reload-status") {
       resolve({ status: "idle" });
@@ -1786,11 +1794,11 @@ describe("CategoryAdmin", () => {
     });
 
     fireEvent.click(screen.getByText("1_fiction"));
-    const deleteBtn = screen.getByTitle("카테고리 삭제");
+    const deleteBtn = screen.getByTitle("디렉토리 삭제");
     fireEvent.click(deleteBtn);
 
     const modal = await screen.findByRole("dialog");
-    expect(within(modal).getByText("카테고리 삭제")).toBeTruthy();
+    expect(within(modal).getByText("디렉토리 삭제")).toBeTruthy();
 
     mockJsonPostReq.mockImplementation((url, payload, resolve) => {
       resolve({ deleted_count: 10 });
@@ -1800,12 +1808,169 @@ describe("CategoryAdmin", () => {
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/categories/delete",
-        { category: "1_fiction" },
+        { category: "1_fiction", delete_files: true },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
       );
     });
+  });
+
+  it("하위 디렉토리를 선택하면 확인 모달을 거쳐 그 하위 경로만 삭제한다", async () => {
+    setupMockResponses(
+      { "8_parent": 1, "8_parent/child_a": 3, "8_parent/child_b": 4, "9_other": 2 },
+      MISMATCH_RESPONSE_EMPTY,
+    );
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("8_parent")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("8_parent"));
+    fireEvent.click(await screen.findByText("child_a"));
+    fireEvent.click(screen.getByTitle("디렉토리 삭제"));
+
+    // 확인 모달이 뜨고, 확정 전에는 요청이 나가지 않는다.
+    const modal = await screen.findByRole("dialog");
+    expect(within(modal).getByText("디렉토리 삭제")).toBeTruthy();
+    expect(within(modal).getByText(/8_parent\/child_a/)).toBeTruthy();
+    expect(
+      await within(modal).findByText(/하위 디렉토리 2개와 파일 12개/),
+    ).toBeTruthy();
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+
+    // 취소하면 요청 없이 닫힌다.
+    fireEvent.click(within(modal).getByRole("button", { name: "취소" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTitle("디렉토리 삭제"));
+    const reopened = await screen.findByRole("dialog");
+    mockJsonPostReq.mockImplementation((_url, _payload, resolve) => {
+      resolve({ deleted_count: 3 });
+    });
+    fireEvent.click(within(reopened).getByRole("button", { name: "삭제" }));
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/categories/delete",
+        { category: "8_parent/child_a", delete_files: true },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
+  it("삭제 모달은 지워질 디렉토리와 하위 디렉토리·파일·ES 문서 건수를 보여준다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, {
+      deletePreviewResult: {
+        category: "1_fiction",
+        directory_count: 3,
+        file_count: 41,
+        es_count: 38,
+      },
+    });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    fireEvent.click(screen.getByTitle("디렉토리 삭제"));
+
+    const modal = await screen.findByRole("dialog");
+    expect(within(modal).getByText(/'1_fiction'를 삭제합니다/)).toBeTruthy();
+    expect(
+      await within(modal).findByText(
+        /하위 디렉토리 3개와 파일 41개를 디스크에서 삭제하고, ES 문서 38건도 삭제합니다/,
+      ),
+    ).toBeTruthy();
+    expect(mockJsonGetReq).toHaveBeenCalledWith(
+      "/category-delete-preview?category=1_fiction",
+      null,
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(
+      within(modal).getByRole("button", { name: "삭제" }).disabled,
+    ).toBe(false);
+  });
+
+  it("만화 관리 탭도 /comics 경로로 삭제 건수를 가져온다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, {
+      apiPrefix: "/comics",
+      deletePreviewResult: {
+        category: "1_fiction",
+        directory_count: 1,
+        file_count: 7,
+        es_count: 7,
+      },
+    });
+    render(<CategoryAdmin contentType="comic" />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    fireEvent.click(screen.getByTitle("디렉토리 삭제"));
+
+    const modal = await screen.findByRole("dialog");
+    expect(
+      await within(modal).findByText(/하위 디렉토리 1개와 파일 7개/),
+    ).toBeTruthy();
+    expect(mockJsonGetReq).toHaveBeenCalledWith(
+      "/comics/category-delete-preview?category=1_fiction",
+      null,
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
+  it("삭제 건수를 가져오는 동안과 실패했을 때는 삭제 확정 버튼을 막는다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY, {
+      deletePreviewError: "서버 오류",
+    });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    fireEvent.click(screen.getByTitle("디렉토리 삭제"));
+
+    const modal = await screen.findByRole("dialog");
+    expect(
+      await within(modal).findByText(/삭제 대상을 확인하지 못했습니다/),
+    ).toBeTruthy();
+    expect(
+      within(modal).getByRole("button", { name: "삭제" }).disabled,
+    ).toBe(true);
+    fireEvent.click(within(modal).getByRole("button", { name: "삭제" }));
+    expect(mockJsonPostReq).not.toHaveBeenCalled();
+  });
+
+  it("삭제 건수 응답 전에는 '세는 중' 문구를 보이고 확정 버튼을 막는다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    const originalImpl = mockJsonGetReq.getMockImplementation();
+    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
+      if (url.startsWith("/category-delete-preview")) return; // 응답 보류
+      originalImpl(url, payload, resolve, reject);
+    });
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    fireEvent.click(screen.getByTitle("디렉토리 삭제"));
+
+    const modal = await screen.findByRole("dialog");
+    expect(within(modal).getByText("삭제 대상을 세는 중...")).toBeTruthy();
+    expect(
+      within(modal).getByRole("button", { name: "삭제" }).disabled,
+    ).toBe(true);
   });
 
   it("분류 제안 버튼 클릭 시 선택 카테고리로 분류 제안을 시작한다", async () => {
@@ -1915,7 +2080,7 @@ describe("CategoryAdmin", () => {
       ),
     ).toEqual([
       "이름 변경",
-      "카테고리 삭제",
+      "디렉토리 삭제",
       "ES 재적재",
       "이상 항목만 ES 재적재",
       "분류 제안",
@@ -2588,7 +2753,7 @@ describe("CategoryAdmin", () => {
     });
 
     fireEvent.click(screen.getByText("1_fiction"));
-    fireEvent.click(screen.getByTitle("카테고리 삭제"));
+    fireEvent.click(screen.getByTitle("디렉토리 삭제"));
 
     const modal = await screen.findByRole("dialog");
 
@@ -2618,7 +2783,7 @@ describe("CategoryAdmin", () => {
     });
 
     fireEvent.click(screen.getByText("1_fiction"));
-    fireEvent.click(screen.getByTitle("카테고리 삭제"));
+    fireEvent.click(screen.getByTitle("디렉토리 삭제"));
 
     const modal = await screen.findByRole("dialog");
 
@@ -3134,7 +3299,7 @@ describe("CategoryAdmin", () => {
     });
 
     fireEvent.click(screen.getByText("1_fiction"));
-    fireEvent.click(screen.getByTitle("카테고리 삭제"));
+    fireEvent.click(screen.getByTitle("디렉토리 삭제"));
     const modal = await screen.findByRole("dialog");
     fireEvent.click(within(modal).getByRole("button", { name: "취소" }));
     await waitFor(() => {
@@ -3234,7 +3399,7 @@ describe("CategoryAdmin", () => {
     });
 
     fireEvent.click(screen.getByText("1_fiction"));
-    fireEvent.click(screen.getByTitle("카테고리 삭제"));
+    fireEvent.click(screen.getByTitle("디렉토리 삭제"));
     const modal = await screen.findByRole("dialog");
     const closeBtn = modal.querySelector(".btn-close");
     fireEvent.click(closeBtn);
@@ -3775,7 +3940,7 @@ describe("CategoryAdmin 기본 에러 메시지 폴백", () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     await openAndSelect();
 
-    fireEvent.click(screen.getByTitle("카테고리 삭제"));
+    fireEvent.click(screen.getByTitle("디렉토리 삭제"));
     const modal = await screen.findByRole("dialog");
 
     mockJsonPostReq.mockImplementation((url, payload, _res, reject, done) => {
@@ -4012,7 +4177,7 @@ describe("CategoryAdmin 성공 메시지 자동 소멸", () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     await openAndSelect();
 
-    fireEvent.click(screen.getByTitle("카테고리 삭제"));
+    fireEvent.click(screen.getByTitle("디렉토리 삭제"));
     const modal = await screen.findByRole("dialog");
 
     mockJsonPostReq.mockImplementation((url, payload, resolve, _r, done) => {
@@ -4024,7 +4189,7 @@ describe("CategoryAdmin 성공 메시지 자동 소멸", () => {
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/categories/delete",
-        { category: "1_fiction" },
+        { category: "1_fiction", delete_files: true },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),

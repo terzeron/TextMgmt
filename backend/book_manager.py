@@ -3001,32 +3001,77 @@ class BookManager:
 
         return {"old_category": old_category, "new_category": new_category, "updated_count": es_result["updated"], "fs_renamed": fs_renamed}, None
 
-    async def delete_category(self, category: str) -> tuple[dict[str, Any], str | None]:
-        """카테고리의 모든 문서를 일괄 삭제 (ES + FS)
+    def _resolve_deletable_category_dir(self, category: str, reject_library_root: bool) -> tuple[Path, str | None]:
+        """삭제 대상 카테고리의 디스크 경로를 검증해 돌려준다. 실패하면 (path_prefix, 오류 메시지)."""
+        root = self.path_prefix.resolve()
+        if not category:
+            return root, "카테고리 이름이 비어있습니다"
+        if ".." in category:
+            return root, "카테고리 이름에 '..'는 사용할 수 없습니다"
+        # '_root'를 지우면 최상위 파일의 ES 문서만 사라지고 파일은 그대로 남아 불일치가 생긴다.
+        if category == "_root":
+            return root, "최상위 디렉토리는 삭제할 수 없습니다"
+
+        # 경로 검증 (Path Traversal 방지)
+        dir_check = (self.path_prefix / category).resolve()
+        if not dir_check.is_relative_to(root):
+            return root, f"잘못된 경로입니다: {category}"
+        # '.'처럼 path_prefix 자신으로 풀리는 이름은 라이브러리 전체를 가리킨다.
+        if reject_library_root and dir_check == root:
+            return root, f"잘못된 경로입니다: {category}"
+        return dir_check, None
+
+    async def preview_delete_category(self, category: str) -> tuple[dict[str, Any], str | None]:
+        """삭제 확인 모달용으로, 지워질 하위 디렉토리 수·디스크 파일 수·ES 문서 수를 센다. 아무것도 바꾸지 않는다."""
+        dir_check, error = self._resolve_deletable_category_dir(category, reject_library_root=True)
+        if error:
+            return {}, error
+
+        def count_tree() -> tuple[int, int]:
+            directory_count = 0
+            file_count = 0
+            for _dirpath, dirnames, filenames in os.walk(dir_check):
+                real_dirs = [name for name in dirnames if not (Path(_dirpath) / name).is_symlink()]
+                directory_count += len(real_dirs)
+                # 디렉토리 링크는 따라가지 않고 파일 하나로 센다(rmtree도 링크 대상은 지우지 않는다).
+                file_count += len(filenames) + len(dirnames) - len(real_dirs)
+                dirnames[:] = real_dirs
+            return directory_count, file_count
+
+        directory_count, file_count = await asyncio.to_thread(count_tree) if dir_check.is_dir() else (0, 0)
+        es_count = await asyncio.to_thread(self.es_manager.count_by_category, category, True)
+        return {"category": category, "directory_count": directory_count, "file_count": file_count, "es_count": es_count}, None
+
+    async def delete_category(self, category: str, delete_files: bool = False) -> tuple[dict[str, Any], str | None]:
+        """카테고리의 모든 문서를 일괄 삭제한다.
+
+        delete_files=False(기본)면 ES 문서만 지우고 파일은 디스크에 남긴다(카테고리 관리 서브탭).
+        delete_files=True면 디렉토리 트리도 지운다(편집 탭). 디스크를 먼저 지워서, 실패하면
+        ES 문서가 남아 다시 시도할 수 있다.
 
         Returns:
             (result_dict, error_message) 튜플
         """
         LOGGER.debug("# delete_category(category='%s')", category)
 
-        # 입력 검증
-        if not category:
-            return {}, "카테고리 이름이 비어있습니다"
-        if ".." in category:
-            return {}, "카테고리 이름에 '..'는 사용할 수 없습니다"
-        # '_root'를 지우면 최상위 파일의 ES 문서만 사라지고 파일은 그대로 남아 불일치가 생긴다.
-        if category == "_root":
-            return {}, "최상위 디렉토리는 삭제할 수 없습니다"
-
-        # 경로 검증 (Path Traversal 방지)
-        dir_check = (self.path_prefix / category).resolve()
-        if not dir_check.is_relative_to(self.path_prefix.resolve()):
-            return {}, f"잘못된 경로입니다: {category}"
+        dir_check, error = self._resolve_deletable_category_dir(category, reject_library_root=delete_files)
+        if error:
+            return {}, error
 
         # ES에서 문서 수 확인 (하위 카테고리 포함)
+        # 파일까지 지우는 경우, ES 문서가 없어도 디스크 디렉토리가 있으면 지운다(빈 디렉토리, 미적재 파일).
         doc_count = self.es_manager.count_by_category(category, prefix=True)
-        if doc_count == 0:
+        if doc_count == 0 and not (delete_files and dir_check.is_dir()):
             return {}, f"카테고리 '{category}'에 문서가 없습니다"
+
+        fs_deleted = False
+        if delete_files and dir_check.is_dir():
+            try:
+                await asyncio.to_thread(shutil.rmtree, dir_check)
+                fs_deleted = True
+            except OSError as e:
+                LOGGER.warning("delete_category: 디렉토리 삭제 실패 '%s': %s", dir_check, e)
+                return {}, f"디렉토리 삭제 실패: {e}"
 
         # ES delete_by_query 실행 (하위 카테고리 포함)
         try:
@@ -3038,6 +3083,8 @@ class BookManager:
             return {}, f"ES 삭제 부분 실패: {es_result['failures']}"
 
         result: dict[str, Any] = {"category": category, "deleted_count": es_result["deleted"]}
+        if delete_files:
+            result["fs_deleted"] = fs_deleted
 
         return result, None
 
