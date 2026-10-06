@@ -299,6 +299,42 @@ describe("DirectoryEditPanel", () => {
     expect(screen.getByLabelText("목차").value).toBe("1-10회 완");
   });
 
+  it.each(["1 7권", "1-7권", "(1-7권)"])("완결 표기가 없는 %s는 파일 7개를 확인한 뒤 분리한다", async (suffix) => {
+    let completeStats;
+    const onMetadataReady = vi.fn();
+    const sourceName = `터무니 없는 스킬로 이세계 방랑밥 ${suffix}`;
+    mockRawJsonGetReq.mockImplementation((_url, success) => { completeStats = success; });
+    const values = props({ directory: { category: "comics/series", name: sourceName }, onMetadataReady });
+    render(<DirectoryEditPanel {...values} />);
+    expect(onMetadataReady).not.toHaveBeenCalled();
+
+    act(() => completeStats({ status: "success", result: { file_count: 7, page_count: 100, total_file_size: 5000 } }));
+
+    await waitFor(() => expect(screen.getByLabelText("목차").value).toBe("1-7권"));
+    expect(screen.getByLabelText("제목").value).toBe("터무니 없는 스킬로 이세계 방랑밥");
+    expect(screen.getByLabelText("신규 이름").value).toBe("터무니 없는 스킬로 이세계 방랑밥 (1-7권)");
+    expect(onMetadataReady).toHaveBeenCalledExactlyOnceWith({ category: "comics/series", sourceName, title: "터무니 없는 스킬로 이세계 방랑밥", author: "" });
+    fireEvent.click(screen.getByText("이동"));
+    expect(values.onMove).toHaveBeenCalledWith("터무니 없는 스킬로 이세계 방랑밥 (1-7권)");
+  });
+
+  it("완결 표기가 없는 범위와 파일 수가 다르면 제목을 유지한다", () => {
+    const sourceName = "터무니 없는 스킬로 이세계 방랑밥 1 7권";
+    render(<DirectoryEditPanel {...props({ directory: { category: "comics/series", name: sourceName } })} />);
+    expect(screen.getByLabelText("제목").value).toBe(sourceName);
+    expect(screen.getByLabelText("목차").value).toBe("");
+  });
+
+  it.each(["제목", "목차", "신규 이름"])("완결 표기 없는 범위를 보정해도 편집한 %s를 보존한다", async (label) => {
+    let completeStats;
+    mockRawJsonGetReq.mockImplementation((_url, success) => { completeStats = success; });
+    render(<DirectoryEditPanel {...props({ directory: { category: "comics/series", name: "터무니 없는 스킬로 이세계 방랑밥 1 7권" } })} />);
+    fireEvent.change(screen.getByLabelText(label), { target: { value: "사용자 편집" } });
+    act(() => completeStats({ status: "success", result: { file_count: 7, page_count: 100, total_file_size: 5000 } }));
+    await waitFor(() => expect(screen.getByLabelText(label).value).toBe("사용자 편집"));
+    if (label === "제목") expect(screen.getByLabelText("목차").value).toBe("1-7권");
+  });
+
   it("단일 화수와 완결 표기를 목차로 분리한다", async () => {
     mockRawJsonGetReq.mockImplementation((_url, success) =>
       success({

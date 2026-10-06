@@ -17,6 +17,9 @@ const PLAIN_CONTENTS_PATTERN = new RegExp(
 const SPLIT_CONTENTS_PATTERN = new RegExp(
   String.raw`(?:\(\s*(${CONTENTS_VALUE})\s*\)|(${CONTENTS_VALUE}))\s*(?:\[\s*(${COMPLETION_PATTERN})\s*\]|\(\s*(${COMPLETION_PATTERN})\s*\))\s*$`,
 );
+const BARE_CONTENTS_PATTERN = new RegExp(
+  String.raw`(?:^|\s)(?:\(\s*(${CONTENTS_VALUE})\s*\)|(${CONTENTS_VALUE}))\s*$`,
+);
 const EXTRA_CONTENTS_PATTERN = new RegExp(
   String.raw`(?:^|\s|\()\s*(${CONTENTS_VALUE})\s*\)?(.*)$`,
 );
@@ -49,7 +52,7 @@ function buildContents(value, completion, fileCount, contentsUnit) {
   }
   const normalizedCompletion = completion === "외포완" ? "완외"
     : completion === "완결" || completion === "完" ? "완" : completion;
-  return `${normalizedValue} ${normalizedCompletion}`;
+  return [normalizedValue, normalizedCompletion].filter(Boolean).join(" ");
 }
 
 function parseDirectoryName(name, fileCount, contentsUnit) {
@@ -104,6 +107,16 @@ function parseDirectoryName(name, fileCount, contentsUnit) {
         : splitContentsMatch[3] || splitContentsMatch[4];
     contents = buildContents(value, completion, fileCount, contentsUnit);
     remainder = remainder.slice(0, contentsMatch.index).trim();
+  } else {
+    const bareContentsMatch = BARE_CONTENTS_PATTERN.exec(remainder);
+    const value = bareContentsMatch
+      ? buildContents(bareContentsMatch[1] || bareContentsMatch[2], "", fileCount, contentsUnit)
+      : "";
+    const rangeMatch = /^1[-~](\d+)[화회권]$/.exec(value);
+    if (rangeMatch && Number(rangeMatch[1]) > 0 && Number(rangeMatch[1]) === Number(fileCount)) {
+      contents = value;
+      remainder = remainder.slice(0, bareContentsMatch.index).trim();
+    }
   }
 
   const editionMatch = EDITION_PATTERN.exec(remainder);
@@ -290,7 +303,9 @@ export default function DirectoryEditPanel({
   useEffect(() => {
     const parsed = parseDirectoryName(directory.name);
     const inferred = parseDirectoryName(directory.name, pdfStats?.file_count, contentsUnit);
-    if (contents !== parsed.directoryContents || contents === inferred.directoryContents) return;
+    const nextTitle = title === parsed.directoryTitle ? inferred.directoryTitle : title;
+    const nextContents = contents === parsed.directoryContents ? inferred.directoryContents : contents;
+    if (title === nextTitle && contents === nextContents) return;
 
     const currentParts = {
       directoryAuthor: author,
@@ -298,9 +313,10 @@ export default function DirectoryEditPanel({
       directoryEdition: edition,
       directoryContents: contents,
     };
-    setContents(inferred.directoryContents);
+    setTitle(nextTitle);
+    setContents(nextContents);
     setName((current) => current === buildDirectoryName(currentParts)
-      ? buildDirectoryName({ ...currentParts, directoryContents: inferred.directoryContents })
+      ? buildDirectoryName({ ...currentParts, directoryTitle: nextTitle, directoryContents: nextContents })
       : current,
     );
   }, [directory.name, pdfStats?.file_count, contentsUnit, author, title, edition, contents]);
@@ -311,6 +327,7 @@ export default function DirectoryEditPanel({
     const inferred = parseDirectoryName(directory.name, pdfStats?.file_count, contentsUnit);
     // 목차 보정 결과가 편집 필드에 반영된 다음 검색을 시작한다.
     if (contents === parsed.directoryContents && contents !== inferred.directoryContents) return;
+    if (title === parsed.directoryTitle && title !== inferred.directoryTitle) return;
     reportedMetadataKey.current = metadataKey;
     onMetadataReady({ category: directory.category, sourceName: directory.name, title, author });
   }, [onMetadataReady, statsReadyKey, unitReadyKey, metadataKey, directory.category, directory.name, pdfStats?.file_count, contentsUnit, contents, title, author]);
