@@ -486,6 +486,50 @@ describe("DirectoryEditPanel", () => {
     expect(mockRawJsonGetReq.mock.calls.some(([url]) => url.includes("cursor=page%2F2%2B%3D"))).toBe(true);
   });
 
+  it("본편 파일에 단위가 없으면 다음 페이지의 외전 파일로 단위를 결정한다", async () => {
+    const sourceName = "바른연애 길잡이 1-159 외포완 + 후기 캡";
+    const category = `9_temp/${sourceName}`;
+    const onMetadataReady = vi.fn();
+    let completeExtras;
+    mockRawJsonGetReq.mockImplementation((url, success) => {
+      if (url.includes("category-pdf-stats")) {
+        success({ status: "success", result: { file_count: 159, page_count: 100, total_file_size: 5000 } });
+      } else if (url.includes("cursor=")) {
+        completeExtras = success;
+      } else {
+        success({
+          status: "success",
+          result: [{ file_path: `${category}/[0001] 0001.pdf` }],
+          next_cursor: "extras/2+=",
+        });
+      }
+    });
+    const values = props({ directory: { category, name: sourceName }, onMetadataReady });
+    render(<DirectoryEditPanel {...values} />);
+
+    expect(screen.getByLabelText("제목").value).toBe("바른연애 길잡이");
+    expect(screen.getByLabelText("목차").value).toBe("1-159 완외");
+    expect(onMetadataReady).not.toHaveBeenCalled();
+    expect(mockRawJsonGetReq).toHaveBeenCalledWith(
+      `/comics/categories/9_temp/${encodeURIComponent(sourceName)}?limit=5000&cursor=extras%2F2%2B%3D`,
+      expect.any(Function), expect.any(Function),
+    );
+
+    act(() => completeExtras({
+      status: "success",
+      result: [
+        { file_path: `${category}/[0153] 외전 0001화.pdf` },
+        { file_path: `${category}/[0159] 후기.pdf` },
+      ],
+    }));
+
+    await waitFor(() => expect(screen.getByLabelText("목차").value).toBe("1-159화 완외"));
+    expect(screen.getByLabelText("신규 이름").value).toBe("바른연애 길잡이 (1-159화 완외)");
+    expect(onMetadataReady).toHaveBeenCalledExactlyOnceWith({ category, sourceName, title: "바른연애 길잡이", author: "" });
+    fireEvent.click(screen.getByText("이동"));
+    expect(values.onMove).toHaveBeenCalledWith("바른연애 길잡이 (1-159화 완외)");
+  });
+
   it.each(["제목", "목차", "신규 이름"])("단위 조회가 늦어도 편집한 %s를 보존한다", async (label) => {
     let resolveFiles;
     mockRawJsonGetReq.mockImplementation((url, success) => {
