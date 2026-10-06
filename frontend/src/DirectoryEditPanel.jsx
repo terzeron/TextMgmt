@@ -9,10 +9,10 @@ const COMPLETION_VALUES = new Set(["완결", "미완", "외포완", "완외", "�
 const COMPLETION_PATTERN = String.raw`(?:완결|미완|외포완|완외|완|完)`;
 const CONTENTS_VALUE = String.raw`\d+(?:(?:\s*[-~]\s*|\s+)\d+\s*[화회권]?|\s*[화회권])`;
 const PAREN_CONTENTS_PATTERN = new RegExp(
-  String.raw`\(\s*(${CONTENTS_VALUE})\s+(${COMPLETION_PATTERN})\s*\)\s*$`,
+  String.raw`\(\s*(${CONTENTS_VALUE})\s*(${COMPLETION_PATTERN})\s*\)\s*$`,
 );
 const PLAIN_CONTENTS_PATTERN = new RegExp(
-  String.raw`(?:^|\s)(${CONTENTS_VALUE})\s+(${COMPLETION_PATTERN})(?:\s+캡)?\s*$`,
+  String.raw`(?:^|\s)(${CONTENTS_VALUE})\s*(${COMPLETION_PATTERN})(?:\s+캡)?\s*$`,
 );
 const SPLIT_CONTENTS_PATTERN = new RegExp(
   String.raw`(?:\(\s*(${CONTENTS_VALUE})\s*\)|(${CONTENTS_VALUE}))\s*(?:\[\s*(${COMPLETION_PATTERN})\s*\]|\(\s*(${COMPLETION_PATTERN})\s*\))\s*$`,

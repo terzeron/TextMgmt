@@ -595,6 +595,20 @@ describe("DirectoryEditPanel", () => {
     await waitFor(() => expect(screen.getByLabelText("목차").value).toBe("1-35 완외"));
   });
 
+  it.each(["1-8권完 캡", "1-8권완 캡", "1-8권완결 캡", "(1-8권完)"])(
+    "단위에 붙은 완결 표기 %s를 목차로 분리한다",
+    (suffix) => {
+      const values = props({ directory: { category: "comics/series", name: `사상 최강의 3류 만화가 ${suffix}` } });
+      render(<DirectoryEditPanel {...values} />);
+
+      expect(screen.getByLabelText("제목").value).toBe("사상 최강의 3류 만화가");
+      expect(screen.getByLabelText("목차").value).toBe("1-8권 완");
+      expect(screen.getByLabelText("신규 이름").value).toBe("사상 최강의 3류 만화가 (1-8권 완)");
+      fireEvent.click(screen.getByText("이동"));
+      expect(values.onMove).toHaveBeenCalledWith("사상 최강의 3류 만화가 (1-8권 완)");
+    },
+  );
+
   it.each(["1~10화[완결]", "1~10화[完]", "(1~10화 완결)", "1~10화 완결"])(
     "완결 표기 %s를 완으로 통일한다",
     (suffix) => {
