@@ -112,8 +112,10 @@ function parseDirectoryName(name, fileCount, contentsUnit) {
     const value = bareContentsMatch
       ? buildContents(bareContentsMatch[1] || bareContentsMatch[2], "", fileCount, contentsUnit)
       : "";
+    const hasExplicitRange = bareContentsMatch &&
+      /^\d+\s*[-~]\s*\d+\s*[화회권]$/.test(bareContentsMatch[1] || bareContentsMatch[2]);
     const rangeMatch = /^1[-~](\d+)[화회권]$/.exec(value);
-    if (rangeMatch && Number(rangeMatch[1]) > 0 && Number(rangeMatch[1]) === Number(fileCount)) {
+    if (hasExplicitRange || (rangeMatch && Number(rangeMatch[1]) > 0 && Number(rangeMatch[1]) === Number(fileCount))) {
       contents = value;
       remainder = remainder.slice(0, bareContentsMatch.index).trim();
     }

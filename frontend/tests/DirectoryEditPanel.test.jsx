@@ -343,8 +343,48 @@ describe("DirectoryEditPanel", () => {
     expect(values.onMove).toHaveBeenCalledWith("터무니 없는 스킬로 이세계 방랑밥 (1-7권)");
   });
 
-  it("완결 표기가 없는 범위와 파일 수가 다르면 제목을 유지한다", () => {
-    const sourceName = "터무니 없는 스킬로 이세계 방랑밥 1 7권";
+  it.each(["1-44화", "1~44화", "(1-44화)", "1 - 44 화", "2-44권", "1-44회"])(
+    "완결 없는 명시적 범위 %s는 파일 수와 무관하게 분리한다",
+    async (suffix) => {
+      let completeStats;
+      mockRawJsonGetReq.mockImplementation((_url, success) => { completeStats = success; });
+      const sourceName = `악녀는 모래시계를 되돌린다 ${suffix}`;
+      const expectedContents = suffix.replace(/[()\s]/g, "");
+      const onMetadataReady = vi.fn();
+      const values = props({ directory: { category: "comics/series", name: sourceName }, onMetadataReady });
+      render(<DirectoryEditPanel {...values} />);
+
+      expect(screen.getByLabelText("제목").value).toBe("악녀는 모래시계를 되돌린다");
+      expect(screen.getByLabelText("목차").value).toBe(expectedContents);
+      expect(onMetadataReady).not.toHaveBeenCalled();
+      act(() => completeStats({ status: "success", result: { file_count: 45, page_count: 100, total_file_size: 5000 } }));
+      await waitFor(() => expect(onMetadataReady).toHaveBeenCalledExactlyOnceWith({
+        category: "comics/series", sourceName, title: "악녀는 모래시계를 되돌린다", author: "",
+      }));
+      expect(screen.getByLabelText("신규 이름").value).toBe(`악녀는 모래시계를 되돌린다 (${expectedContents})`);
+      fireEvent.change(screen.getByLabelText("목차"), { target: { value: "수정" } });
+      fireEvent.click(screen.getByRole("button", { name: "복원" }));
+      expect(screen.getByLabelText("목차").value).toBe(expectedContents);
+      fireEvent.click(screen.getByText("이동"));
+      expect(values.onMove).toHaveBeenCalledWith(`악녀는 모래시계를 되돌린다 (${expectedContents})`);
+    },
+  );
+
+  it.each(["API 오류", "전송 오류"])("명시적 범위는 통계 조회 %s에도 분리한다", async (failure) => {
+    mockRawJsonGetReq.mockImplementation((_url, success, error) => failure === "API 오류"
+      ? success({ status: "error" }) : error());
+    const onMetadataReady = vi.fn();
+    const sourceName = "악녀는 모래시계를 되돌린다 1-44화";
+    render(<DirectoryEditPanel {...props({ directory: { category: "comics/series", name: sourceName }, onMetadataReady })} />);
+
+    await waitFor(() => expect(onMetadataReady).toHaveBeenCalledExactlyOnceWith({
+      category: "comics/series", sourceName, title: "악녀는 모래시계를 되돌린다", author: "",
+    }));
+    expect(screen.getByLabelText("목차").value).toBe("1-44화");
+  });
+
+  it.each(["1 7권", "1-44", "44화"])("완결 없는 불명확한 범위 %s와 파일 수가 다르면 제목을 유지한다", (suffix) => {
+    const sourceName = `터무니 없는 스킬로 이세계 방랑밥 ${suffix}`;
     render(<DirectoryEditPanel {...props({ directory: { category: "comics/series", name: sourceName } })} />);
     expect(screen.getByLabelText("제목").value).toBe(sourceName);
     expect(screen.getByLabelText("목차").value).toBe("");
