@@ -200,7 +200,8 @@ export default function SimilarBooks({
         if (data.status === "success") {
           const names = data.result || [];
           setSimilarNames(names);
-          if (names.some((item) => item.score > 90)) setIsOpen(true);
+          const autoOpenScore = apiPrefix === "/comics" ? 70 : 90;
+          if (names.some((item) => item.score > autoOpenScore)) setIsOpen(true);
         }
         if (onFinish) onFinish();
       },

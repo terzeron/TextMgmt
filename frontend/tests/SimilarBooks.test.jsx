@@ -351,6 +351,55 @@ describe("SimilarBooks", () => {
     ).toBe(false);
   });
 
+  it("만화 유사 디렉토리는 70점 초과 항목이 있으면 기본으로 펼친다", async () => {
+    mockRawJsonGetReq.mockImplementation((_url, resolve) => {
+      resolve({
+        status: "success",
+        result: [{
+          kind: "directory",
+          id: "Comic",
+          category: "Comic",
+          label: "Comic",
+          score: 71,
+          file_count: 1,
+          page_count: 120,
+          total_file_size: 5000,
+        }],
+      });
+    });
+
+    render(<SimilarBooks directoryName="Comic" apiPrefix="/comics" />);
+
+    expect(await screen.findByText("Comic", {
+      selector: ".search-result-item-text",
+    })).toBeTruthy();
+  });
+
+  it("만화 유사 디렉토리는 정확히 70점이면 접힌 상태를 유지한다", async () => {
+    mockRawJsonGetReq.mockImplementation((_url, resolve) => {
+      resolve({
+        status: "success",
+        result: [{
+          kind: "directory",
+          id: "Comic",
+          category: "Comic",
+          label: "Comic",
+          score: 70,
+          file_count: 1,
+          page_count: 120,
+          total_file_size: 5000,
+        }],
+      });
+    });
+
+    render(<SimilarBooks directoryName="Comic" apiPrefix="/comics" />);
+
+    await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
+    expect(
+      screen.queryByText("Comic", { selector: ".search-result-item-text" }),
+    ).toBeNull();
+  });
+
   it("bookId 변경 시 자동 펼침 상태가 초기화된다", async () => {
     let callCount = 0;
     mockRawJsonGetReq.mockImplementation((url, resolve) => {
