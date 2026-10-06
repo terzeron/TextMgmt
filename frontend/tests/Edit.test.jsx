@@ -161,10 +161,10 @@ let similarBooksMountSeq = 0;
 vi.mock("../src/SimilarBooks", async () => {
   const { useState } = await import("react");
   return {
-  default: function SimilarBooksMock({ onSelect }) {
+  default: function SimilarBooksMock({ onSelect, directoryName, directoryAuthor }) {
     const [mountId] = useState(() => ++similarBooksMountSeq);
     return (
-    <div data-testid="similar-books" data-mount-id={mountId}>
+    <div data-testid="similar-books" data-mount-id={mountId} data-directory-name={directoryName} data-directory-author={directoryAuthor}>
       SimilarBooks
       <button
         data-testid="similar-select-missing"
@@ -185,11 +185,14 @@ vi.mock("../src/SimilarBooks", async () => {
 });
 
 vi.mock("../src/Bookstore", () => ({
-  default: ({ onCategoriesFound: _onCategoriesFound, bookInfo, searchTrigger }) => {
+  default: ({ onCategoriesFound, bookInfo, searchTrigger }) => {
     // 간접 테스트를 위해 즉시 호출
     return (
-      <div data-testid="bookstore" data-title={bookInfo?.title} data-search-trigger={searchTrigger}>
+      <div data-testid="bookstore" data-title={bookInfo?.title} data-author={bookInfo?.author} data-search-trigger={searchTrigger}>
         Bookstore
+        <button data-testid="recommend-webtoon" onClick={() => onCategoriesFound?.({ naverwebtoon_0_0: "웹툰" })}>
+          웹툰 추천
+        </button>
       </div>
     );
   },
@@ -213,8 +216,9 @@ vi.mock("../src/Actions", () => ({
     onPreviousDirectory,
     onNextDirectory,
     otherCategoryList = [],
+    suggestedCategories = {},
   }) => (
-    <div data-testid="actions">
+    <div data-testid="actions" data-suggested-categories={JSON.stringify(suggestedCategories)}>
       <div data-testid="move-category-list">{otherCategoryList.join("|")}</div>
       <button data-testid="next-entry" onClick={toNextEntryClicked}>
         다음
@@ -434,6 +438,74 @@ describe("Edit", () => {
       expect(bookstoreSearch.dataset.title).toBe("1_fiction");
       expect(bookstoreSearch.dataset.searchTrigger).toBe("1");
     });
+  });
+
+  it("디렉토리 자동 분할이 끝난 뒤 정리한 제목과 저자로 검색 컴포넌트를 한 번 연다", async () => {
+    const category = "8_기타만화/[저자] 작품명 (애장판) (1102화 완결)";
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/comics/categories") resolve({ [category]: 1, "0_웹툰/다른작품": 1 });
+      else resolve([]);
+    });
+    const originalRaw = mockRawJsonGetReq.getMockImplementation();
+    let completeStats;
+    mockRawJsonGetReq.mockImplementation((url, ...callbacks) => {
+      if (url.includes("category-pdf-stats")) completeStats = callbacks[0];
+      else originalRaw(url, ...callbacks);
+    });
+    render(<Edit apiPrefix="/comics" />);
+    fireEvent.click(await screen.findByTestId(`folder-item-${category}`));
+    expect(screen.queryByTestId("bookstore")).toBeNull();
+    expect(screen.queryByTestId("similar-books")).toBeNull();
+    completeStats({ status: "success", result: { file_count: 102, page_count: 100, total_file_size: 5000 } });
+    const search = await screen.findByTestId("bookstore");
+    const similar = screen.getByTestId("similar-books");
+    expect(search.dataset.title).toBe("작품명");
+    expect(search.dataset.author).toBe("저자");
+    expect(similar.dataset.directoryName).toBe("작품명");
+    expect(similar.dataset.directoryAuthor).toBe("저자");
+    expect(screen.getByLabelText("목차").value).toBe("1-102화 완");
+    const mountId = similar.dataset.mountId;
+    fireEvent.change(screen.getByLabelText("제목"), { target: { value: "수동 변경" } });
+    expect(screen.getByTestId("similar-books").dataset.mountId).toBe(mountId);
+    expect(screen.getByTestId("bookstore").dataset.title).toBe("작품명");
+  });
+
+  it("만화 디렉토리의 웹툰 검색 결과를 이동 카테고리 추천에 전달한다", async () => {
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/comics/categories") resolve({ "0_웹툰/연재작": 1, "8_기타만화/작품명": 1 });
+      else if (url.startsWith("/comics/categories/")) resolve([]);
+      else resolve({});
+    });
+    render(<Edit apiPrefix="/comics" />);
+    fireEvent.click(await screen.findByTestId("folder-item-8_기타만화/작품명"));
+    fireEvent.click(await screen.findByTestId("recommend-webtoon"));
+
+    expect(JSON.parse(screen.getByTestId("actions").dataset.suggestedCategories)).toEqual({ naverwebtoon_0_0: "웹툰" });
+  });
+
+  it("이전 디렉토리로 돌아가도 새 편집 컴포넌트의 분할 완료 전에 검색하지 않는다", async () => {
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/comics/categories") resolve({ "8_기타만화/작품A": 1, "8_기타만화/작품B": 1 });
+      else resolve([]);
+    });
+    const originalRaw = mockRawJsonGetReq.getMockImplementation();
+    const pending = [];
+    mockRawJsonGetReq.mockImplementation((url, ...callbacks) => {
+      if (url.includes("category-pdf-stats")) pending.push(callbacks[0]);
+      else originalRaw(url, ...callbacks);
+    });
+    render(<Edit apiPrefix="/comics" />);
+    fireEvent.click(await screen.findByTestId("folder-item-8_기타만화/작품A"));
+    pending[0]({ status: "success", result: { file_count: 3, page_count: 10, total_file_size: 1000 } });
+    expect((await screen.findByTestId("bookstore")).dataset.title).toBe("작품A");
+    fireEvent.click(screen.getByTestId("folder-item-8_기타만화/작품B"));
+    expect(screen.queryByTestId("bookstore")).toBeNull();
+    fireEvent.click(screen.getByTestId("folder-item-8_기타만화/작품A"));
+    expect(screen.queryByTestId("bookstore")).toBeNull();
+    pending[1]({ status: "success", result: { file_count: 3, page_count: 10, total_file_size: 1000 } });
+    expect(screen.queryByTestId("bookstore")).toBeNull();
+    pending[2]({ status: "success", result: { file_count: 3, page_count: 10, total_file_size: 1000 } });
+    expect((await screen.findByTestId("bookstore")).dataset.title).toBe("작품A");
   });
 
   it("책 항목 클릭 시 책 정보를 표시한다", async () => {

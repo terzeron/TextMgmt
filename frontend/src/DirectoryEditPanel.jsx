@@ -1,18 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import { Button, Card, Form, InputGroup } from "react-bootstrap";
 import { jsonPostReq, jsonPutReq, rawJsonGetReq } from "./Common";
 import Actions from "./Actions";
 import { CATEGORY_PAGE_SIZE } from "./useCategoryTree";
 
-const COMPLETION_VALUES = new Set(["완결", "미완", "완외", "완", "完"]);
-const COMPLETION_PATTERN = String.raw`(?:완결|미완|완외|완|完)`;
+const COMPLETION_VALUES = new Set(["완결", "미완", "외포완", "완외", "완", "完"]);
+const COMPLETION_PATTERN = String.raw`(?:완결|미완|외포완|완외|완|完)`;
 const CONTENTS_VALUE = String.raw`\d+(?:(?:\s*[-~]\s*|\s+)\d+\s*[화회권]?|\s*[화회권])`;
 const PAREN_CONTENTS_PATTERN = new RegExp(
   String.raw`\(\s*(${CONTENTS_VALUE})\s+(${COMPLETION_PATTERN})\s*\)\s*$`,
 );
 const PLAIN_CONTENTS_PATTERN = new RegExp(
-  String.raw`(?:^|\s)(${CONTENTS_VALUE})\s+(${COMPLETION_PATTERN})\s*$`,
+  String.raw`(?:^|\s)(${CONTENTS_VALUE})\s+(${COMPLETION_PATTERN})(?:\s+캡)?\s*$`,
 );
 const SPLIT_CONTENTS_PATTERN = new RegExp(
   String.raw`(?:\(\s*(${CONTENTS_VALUE})\s*\)|(${CONTENTS_VALUE}))\s*(?:\[\s*(${COMPLETION_PATTERN})\s*\]|\(\s*(${COMPLETION_PATTERN})\s*\))\s*$`,
@@ -47,7 +47,8 @@ function buildContents(value, completion, fileCount, contentsUnit) {
   ) {
     normalizedValue = `1-${rangeEndCount}화`;
   }
-  const normalizedCompletion = completion === "완결" || completion === "完" ? "완" : completion;
+  const normalizedCompletion = completion === "외포완" ? "완외"
+    : completion === "완결" || completion === "完" ? "완" : completion;
   return `${normalizedValue} ${normalizedCompletion}`;
 }
 
@@ -89,8 +90,8 @@ function parseDirectoryName(name, fileCount, contentsUnit) {
   const extraContentsMatch = EXTRA_CONTENTS_PATTERN.exec(remainder);
   const hasCompletedExtras =
     extraContentsMatch &&
-    /외전|특별편|후기/.test(extraContentsMatch[2]) &&
-    /(?:^|[^가-힣\w])(?:완결|완|完)(?=$|[^가-힣\w])/.test(extraContentsMatch[2]);
+    /외전|특별편|후기|외포완/.test(extraContentsMatch[2]) &&
+    /(?:^|[^가-힣\w])(?:완결|외포완|완|完)(?=$|[^가-힣\w])/.test(extraContentsMatch[2]);
   const contentsMatch = hasCompletedExtras
     ? extraContentsMatch
     : inlineContentsMatch || splitContentsMatch;
@@ -146,6 +147,7 @@ export default function DirectoryEditPanel({
   showDirectoryNavigation,
   selectedCategory,
   otherCategoryList,
+  suggestedCategories,
   previousDirectoryDisabled,
   nextDirectoryDisabled,
   onPreviousDirectory,
@@ -155,6 +157,7 @@ export default function DirectoryEditPanel({
   onMove,
   onComplete,
   onError,
+  onMetadataReady,
 }) {
   const initialNameParts = parseDirectoryName(directory.name);
   const [author, setAuthor] = useState(initialNameParts.directoryAuthor);
@@ -165,6 +168,10 @@ export default function DirectoryEditPanel({
   const [saving, setSaving] = useState(false);
   const [pdfStats, setPdfStats] = useState(null);
   const [contentsUnit, setContentsUnit] = useState("");
+  const metadataKey = JSON.stringify([apiPrefix, directory.category, directory.name]);
+  const [statsReadyKey, setStatsReadyKey] = useState("");
+  const [unitReadyKey, setUnitReadyKey] = useState("");
+  const reportedMetadataKey = useRef("");
   const [statsError, setStatsError] = useState("");
   const [bulkPattern, setBulkPattern] = useState("");
   const [bulkReplacement, setBulkReplacement] = useState("");
@@ -213,25 +220,38 @@ export default function DirectoryEditPanel({
   };
 
   useEffect(() => {
+    let cancelled = false;
+    setStatsReadyKey("");
     setPdfStats(null);
     setStatsError("");
     rawJsonGetReq(
       `${apiPrefix}/category-pdf-stats?category=${encodeURIComponent(directory.category)}`,
       (data) => {
+        if (cancelled) return;
         if (data.status === "success") {
           setPdfStats(data.result);
         } else {
           setStatsError(data.error || "PDF 통계를 불러오지 못했습니다.");
         }
+        setStatsReadyKey(metadataKey);
       },
-      () => setStatsError("PDF 통계를 불러오지 못했습니다."),
+      () => {
+        if (cancelled) return;
+        setStatsError("PDF 통계를 불러오지 못했습니다.");
+        setStatsReadyKey(metadataKey);
+      },
     );
-  }, [apiPrefix, directory.category, directory.name]);
+    return () => { cancelled = true; };
+  }, [apiPrefix, directory.category, directory.name, metadataKey]);
 
   useEffect(() => {
+    setUnitReadyKey("");
     setContentsUnit("");
     const parsed = parseDirectoryName(directory.name);
-    if (!/^\d+[-~]\d+\s/.test(parsed.directoryContents)) return;
+    if (!/^\d+[-~]\d+\s/.test(parsed.directoryContents)) {
+      setUnitReadyKey(metadataKey);
+      return;
+    }
 
     let cancelled = false;
     const units = new Set();
@@ -240,24 +260,32 @@ export default function DirectoryEditPanel({
       rawJsonGetReq(
         `${apiPrefix}/categories/${categoryPath}?limit=${CATEGORY_PAGE_SIZE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
         (data) => {
-          if (cancelled || data.status !== "success" || !Array.isArray(data.result)) return;
+          if (cancelled) return;
+          if (data.status !== "success" || !Array.isArray(data.result)) {
+            setUnitReadyKey(metadataKey);
+            return;
+          }
           for (const file of data.result) {
             const filename = (file.file_path || "").split("/").pop();
             for (const match of filename.matchAll(/\d+(권|화)/g)) units.add(match[1]);
           }
-          if (units.size > 1) return;
+          if (units.size > 1) {
+            setUnitReadyKey(metadataKey);
+            return;
+          }
           if (data.next_cursor) {
             loadFilePage(data.next_cursor);
-          } else if (units.size === 1) {
-            setContentsUnit([...units][0]);
+          } else {
+            if (units.size === 1) setContentsUnit([...units][0]);
+            setUnitReadyKey(metadataKey);
           }
         },
-        () => {},
+        () => { if (!cancelled) setUnitReadyKey(metadataKey); },
       );
     };
     loadFilePage();
     return () => { cancelled = true; };
-  }, [apiPrefix, directory.category, directory.name]);
+  }, [apiPrefix, directory.category, directory.name, metadataKey]);
 
   useEffect(() => {
     const parsed = parseDirectoryName(directory.name);
@@ -276,6 +304,16 @@ export default function DirectoryEditPanel({
       : current,
     );
   }, [directory.name, pdfStats?.file_count, contentsUnit, author, title, edition, contents]);
+
+  useEffect(() => {
+    if (!onMetadataReady || statsReadyKey !== metadataKey || unitReadyKey !== metadataKey || reportedMetadataKey.current === metadataKey) return;
+    const parsed = parseDirectoryName(directory.name);
+    const inferred = parseDirectoryName(directory.name, pdfStats?.file_count, contentsUnit);
+    // 목차 보정 결과가 편집 필드에 반영된 다음 검색을 시작한다.
+    if (contents === parsed.directoryContents && contents !== inferred.directoryContents) return;
+    reportedMetadataKey.current = metadataKey;
+    onMetadataReady({ category: directory.category, sourceName: directory.name, title, author });
+  }, [onMetadataReady, statsReadyKey, unitReadyKey, metadataKey, directory.category, directory.name, pdfStats?.file_count, contentsUnit, contents, title, author]);
 
   const submit = () => {
     const cleanName = name.trim();
@@ -468,7 +506,7 @@ export default function DirectoryEditPanel({
           selectDirectoryButtonClicked={onSelectCategory}
           toNextEntryClicked={() => {}}
           toPrevEntryClicked={() => {}}
-          suggestedCategories={{}}
+          suggestedCategories={suggestedCategories}
           isProcessing={isProcessing || saving}
         />
       </Card.Body>
@@ -524,6 +562,7 @@ DirectoryEditPanel.propTypes = {
   showDirectoryNavigation: PropTypes.bool.isRequired,
   selectedCategory: PropTypes.string.isRequired,
   otherCategoryList: PropTypes.arrayOf(PropTypes.string).isRequired,
+  suggestedCategories: PropTypes.object,
   previousDirectoryDisabled: PropTypes.bool.isRequired,
   nextDirectoryDisabled: PropTypes.bool.isRequired,
   onPreviousDirectory: PropTypes.func.isRequired,
@@ -533,4 +572,5 @@ DirectoryEditPanel.propTypes = {
   onMove: PropTypes.func.isRequired,
   onComplete: PropTypes.func.isRequired,
   onError: PropTypes.func.isRequired,
+  onMetadataReady: PropTypes.func,
 };

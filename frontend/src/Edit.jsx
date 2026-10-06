@@ -95,6 +95,12 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
   const [prevEntryId, setPrevEntryId] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
   const [selectedDirectory, setSelectedDirectory] = useState(null);
+  const [directorySearchInfo, setDirectorySearchInfo] = useState(null);
+  const directorySearchReady = selectedDirectory &&
+    directorySearchInfo?.directory === selectedDirectory;
+  const handleDirectoryMetadataReady = useCallback((info) => {
+    setDirectorySearchInfo({ ...info, directory: selectedDirectory });
+  }, [selectedDirectory]);
 
   const [originalBookInfo, setOriginalBookInfo] = useState({});
   const [bookInfo, setBookInfo] = useState({});
@@ -1199,6 +1205,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                       showDirectoryNavigation={Boolean(apiPrefix)}
                       selectedCategory={selectedCategory}
                       otherCategoryList={otherCategoryList}
+                      suggestedCategories={suggestedCategories}
                       previousDirectoryDisabled={currentDirectoryIndex <= 0}
                       nextDirectoryDisabled={currentDirectoryIndex < 0 || currentDirectoryIndex >= directoryNavigation.length - 1}
                       onPreviousDirectory={() => selectAdjacentDirectory(-1)}
@@ -1208,6 +1215,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                       onMove={moveDirectoryToCategory}
                       onComplete={directoryMutationCompleted}
                       onError={setErrorMessage}
+                      onMetadataReady={handleDirectoryMetadataReady}
                     />
                     {errorMessage && <Alert variant="danger">{errorMessage}</Alert>}
                     </>
@@ -1329,10 +1337,11 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                 <Col id="right_panel" md="6" lg="7" className="ps-0 pe-0">
                   {selectedDirectory ? (
                     <>
+                    {directorySearchReady ? <>
                     <SimilarBooks
                       key={selectedDirectory.category}
-                      directoryName={selectedDirectory.name}
-                      directoryAuthor={selectedDirectory.author}
+                      directoryName={directorySearchInfo.title}
+                      directoryAuthor={directorySearchInfo.author}
                       directoryCategory={selectedDirectory.category}
                       onSelect={entryClicked}
                       apiPrefix={apiPrefix}
@@ -1340,14 +1349,13 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                     />
                     <Bookstore
                       key={`directory-${selectedDirectory.category}`}
-                      bookInfo={{
-                        title: selectedDirectory.name,
-                        author: selectedDirectory.author,
-                        isbn: "",
-                      }}
+                      bookInfo={directorySearchInfo}
                       searchTrigger={1}
+                      onCategoriesFound={setSuggestedCategories}
                       comic
+                      titleParsed
                     />
+                    </> : <div role="status">디렉토리 정보 정리 중...</div>}
                     </>
                   ) : <>
                   <SimilarBooks

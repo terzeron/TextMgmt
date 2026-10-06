@@ -70,6 +70,65 @@ describe("DirectoryEditPanel", () => {
     );
   });
 
+  it.each(["통계 먼저", "단위 먼저"])("%s 완료돼도 자동 분할 전체가 끝나야 검색용 메타데이터를 알린다", async (order) => {
+    const pending = {};
+    const onMetadataReady = vi.fn();
+    mockRawJsonGetReq.mockImplementation((url, success) => {
+      pending[url.includes("category-pdf-stats") ? "stats" : "unit"] = success;
+    });
+    render(<DirectoryEditPanel {...props({
+      directory: { category: "comics/series", name: "[저자] 작품명 (애장판) 1-35 완 + 후기 캡" },
+      onMetadataReady,
+    })} />);
+    expect(onMetadataReady).not.toHaveBeenCalled();
+    const completeStats = () => pending.stats({ status: "success", result: { file_count: 35, page_count: 100, total_file_size: 5000 } });
+    const completeUnit = () => pending.unit({ status: "success", result: [{ file_path: "comics/series/01화.pdf" }] });
+    await act(async () => (order === "통계 먼저" ? completeStats : completeUnit)());
+    expect(onMetadataReady).not.toHaveBeenCalled();
+    await act(async () => (order === "통계 먼저" ? completeUnit : completeStats)());
+    await waitFor(() => expect(onMetadataReady).toHaveBeenCalledOnce());
+    expect(screen.getByLabelText("목차").value).toBe("1-35화 완외");
+    expect(onMetadataReady).toHaveBeenCalledWith({ category: "comics/series", sourceName: "[저자] 작품명 (애장판) 1-35 완 + 후기 캡", title: "작품명", author: "저자" });
+    fireEvent.change(screen.getByLabelText("제목"), { target: { value: "수정한 제목" } });
+    expect(onMetadataReady).toHaveBeenCalledOnce();
+  });
+
+  it("메타데이터 조회가 실패해도 기본 분할 결과로 검색을 시작할 수 있다", async () => {
+    const onMetadataReady = vi.fn();
+    mockRawJsonGetReq.mockImplementation((_url, _success, failure) => failure());
+    render(<DirectoryEditPanel {...props({ directory: { category: "comics/series", name: "작품명 1-35 완" }, onMetadataReady })} />);
+
+    await waitFor(() => expect(onMetadataReady).toHaveBeenCalledOnce());
+    expect(onMetadataReady).toHaveBeenCalledWith({ category: "comics/series", sourceName: "작품명 1-35 완", title: "작품명", author: "" });
+  });
+
+  it.each([
+    ["땅 보고 걷는 아이 1 70 외포완 + 후기포함 캡", "땅 보고 걷는 아이", "1-70화 완외", "화"],
+    ["라일락 200% 1-87 외포완 + 후기포함 캡", "라일락 200%", "1-87화 완외", "화"],
+    ["맘마미안 1-102 완 캡", "맘마미안", "1-102화 완", "화"],
+    ["바른연애 길잡이 1-159 외포완 + 후기 캡", "바른연애 길잡이", "1-159화 완외", "화"],
+    ["작품명 1-35 완 캡", "작품명", "1-35권 완", "권"],
+    ["작품명 1-35 외포완", "작품명", "1-35화 완외", "화"],
+  ])("단위 없는 회차 %s를 분할한 뒤 파일명에서 단위를 추론한다", async (sourceName, title, contents, unit) => {
+    const onMetadataReady = vi.fn();
+    mockRawJsonGetReq.mockImplementation((url, success) => success({
+      status: "success",
+      result: url.includes("category-pdf-stats")
+        ? { file_count: 35, page_count: 100, total_file_size: 5000 }
+        : [{ file_path: `comics/series/01${unit}.pdf` }],
+    }));
+    const values = props({ directory: { category: "comics/series", name: sourceName }, onMetadataReady });
+    render(<DirectoryEditPanel {...values} />);
+
+    await waitFor(() => expect(screen.getByLabelText("목차").value).toBe(contents));
+    expect(screen.getByLabelText("제목").value).toBe(title);
+    expect(screen.getByLabelText("신규 이름").value).toBe(`${title} (${contents})`);
+    expect(onMetadataReady).toHaveBeenCalledOnce();
+    expect(onMetadataReady).toHaveBeenCalledWith({ category: "comics/series", sourceName, title, author: "" });
+    fireEvent.click(screen.getByText("이동"));
+    expect(values.onMove).toHaveBeenCalledWith(`${title} (${contents})`);
+  });
+
   it("통계와 디렉토리 이름 구성 요소를 input field로 표시한다", async () => {
     const values = props({
       directory: {
