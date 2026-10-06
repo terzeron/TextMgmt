@@ -3,10 +3,11 @@ import PropTypes from "prop-types";
 import { Button, Card, Form, InputGroup } from "react-bootstrap";
 import { jsonPostReq, jsonPutReq, rawJsonGetReq } from "./Common";
 import Actions from "./Actions";
+import { CATEGORY_PAGE_SIZE } from "./useCategoryTree";
 
 const COMPLETION_VALUES = new Set(["완결", "미완", "완외", "완", "完"]);
 const COMPLETION_PATTERN = String.raw`(?:완결|미완|완외|완|完)`;
-const CONTENTS_VALUE = String.raw`\d+(?:(?:\s*[-~]\s*|\s+)\d+)?\s*[화회권]`;
+const CONTENTS_VALUE = String.raw`\d+(?:(?:\s*[-~]\s*|\s+)\d+\s*[화회권]?|\s*[화회권])`;
 const PAREN_CONTENTS_PATTERN = new RegExp(
   String.raw`\(\s*(${CONTENTS_VALUE})\s+(${COMPLETION_PATTERN})\s*\)\s*$`,
 );
@@ -22,10 +23,13 @@ const EXTRA_CONTENTS_PATTERN = new RegExp(
 const EDITION_PATTERN =
   /(^|\s)(?:\(\s*)?(정식한국어판|정식판|한국어판|애장판|완전판)(?:\s*\))?(?=\s|$)/;
 
-function buildContents(value, completion, fileCount) {
+function buildContents(value, completion, fileCount, contentsUnit) {
   let normalizedValue = value
     .replace(/(\d)\s+(?=\d)/g, "$1-")
     .replace(/\s+/g, "");
+  if (/\d$/.test(normalizedValue) && contentsUnit) {
+    normalizedValue += contentsUnit;
+  }
   const singleEpisodeMatch = /^(\d+)화$/.exec(normalizedValue);
   const episodeCount = Number(singleEpisodeMatch?.[1]);
   const joinedRangeMatch = /^1(\d+)화$/.exec(normalizedValue);
@@ -42,13 +46,12 @@ function buildContents(value, completion, fileCount) {
     rangeEndCount === Number(fileCount)
   ) {
     normalizedValue = `1-${rangeEndCount}화`;
-    completion =
-      completion === "미완" || completion === "완외" ? completion : "완";
   }
-  return `${normalizedValue} ${completion}`;
+  const normalizedCompletion = completion === "완결" || completion === "完" ? "완" : completion;
+  return `${normalizedValue} ${normalizedCompletion}`;
 }
 
-function parseDirectoryName(name, fileCount) {
+function parseDirectoryName(name, fileCount, contentsUnit) {
   let remainder = name.trim();
   let author = "";
   const leadingAuthorMatch = /^\[([^\]]+)]\s*/.exec(remainder);
@@ -91,7 +94,7 @@ function parseDirectoryName(name, fileCount) {
       : inlineContentsMatch
         ? inlineContentsMatch[2]
         : splitContentsMatch[3] || splitContentsMatch[4];
-    contents = buildContents(value, completion, fileCount);
+    contents = buildContents(value, completion, fileCount, contentsUnit);
     remainder = remainder.slice(0, contentsMatch.index).trim();
   }
 
@@ -154,6 +157,7 @@ export default function DirectoryEditPanel({
   const [name, setName] = useState(buildDirectoryName(initialNameParts));
   const [saving, setSaving] = useState(false);
   const [pdfStats, setPdfStats] = useState(null);
+  const [contentsUnit, setContentsUnit] = useState("");
   const [statsError, setStatsError] = useState("");
   const [bulkPattern, setBulkPattern] = useState("");
   const [bulkReplacement, setBulkReplacement] = useState("");
@@ -197,7 +201,7 @@ export default function DirectoryEditPanel({
   };
 
   const restoreName = () => {
-    const original = parseDirectoryName(directory.name, pdfStats?.file_count);
+    const original = parseDirectoryName(directory.name, pdfStats?.file_count, contentsUnit);
     updateNameParts(original);
   };
 
@@ -208,25 +212,7 @@ export default function DirectoryEditPanel({
       `${apiPrefix}/category-pdf-stats?category=${encodeURIComponent(directory.category)}`,
       (data) => {
         if (data.status === "success") {
-          const stats = data.result;
-          setPdfStats(stats);
-          const parsed = parseDirectoryName(directory.name);
-          const parsedWithFileCount = parseDirectoryName(
-            directory.name,
-            stats.file_count,
-          );
-          if (parsed.directoryContents !== parsedWithFileCount.directoryContents) {
-            setContents((current) =>
-              current === parsed.directoryContents
-                ? parsedWithFileCount.directoryContents
-                : current,
-            );
-            setName((current) =>
-              current === buildDirectoryName(parsed)
-                ? buildDirectoryName(parsedWithFileCount)
-                : current,
-            );
-          }
+          setPdfStats(data.result);
         } else {
           setStatsError(data.error || "PDF 통계를 불러오지 못했습니다.");
         }
@@ -234,6 +220,55 @@ export default function DirectoryEditPanel({
       () => setStatsError("PDF 통계를 불러오지 못했습니다."),
     );
   }, [apiPrefix, directory.category, directory.name]);
+
+  useEffect(() => {
+    setContentsUnit("");
+    const parsed = parseDirectoryName(directory.name);
+    if (!/^\d+[-~]\d+\s/.test(parsed.directoryContents)) return;
+
+    let cancelled = false;
+    const units = new Set();
+    const categoryPath = directory.category.split("/").map(encodeURIComponent).join("/");
+    const loadFilePage = (cursor = "") => {
+      rawJsonGetReq(
+        `${apiPrefix}/categories/${categoryPath}?limit=${CATEGORY_PAGE_SIZE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+        (data) => {
+          if (cancelled || data.status !== "success" || !Array.isArray(data.result)) return;
+          for (const file of data.result) {
+            const filename = (file.file_path || "").split("/").pop();
+            for (const match of filename.matchAll(/\d+(권|화)/g)) units.add(match[1]);
+          }
+          if (units.size > 1) return;
+          if (data.next_cursor) {
+            loadFilePage(data.next_cursor);
+          } else if (units.size === 1) {
+            setContentsUnit([...units][0]);
+          }
+        },
+        () => {},
+      );
+    };
+    loadFilePage();
+    return () => { cancelled = true; };
+  }, [apiPrefix, directory.category, directory.name]);
+
+  useEffect(() => {
+    const parsed = parseDirectoryName(directory.name);
+    const inferred = parseDirectoryName(directory.name, pdfStats?.file_count, contentsUnit);
+    if (contents !== parsed.directoryContents || contents === inferred.directoryContents) return;
+
+    const currentParts = {
+      directoryAuthor: author,
+      directoryTitle: title,
+      directoryEdition: edition,
+      directoryContents: contents,
+    };
+    setContents(inferred.directoryContents);
+    setName((current) => current === buildDirectoryName(currentParts)
+      ? buildDirectoryName({ ...currentParts, directoryContents: inferred.directoryContents })
+      : current,
+    );
+  }, [directory.name, pdfStats?.file_count, contentsUnit, author, title, edition, contents]);
 
   const submit = () => {
     const cleanName = name.trim();

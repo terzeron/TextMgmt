@@ -179,9 +179,9 @@ describe("DirectoryEditPanel", () => {
     expect(screen.getByLabelText("저자").value).toBe("홍길동");
     expect(screen.getByLabelText("제목").value).toBe("테스트 만화");
     expect(screen.getByLabelText("판본").value).toBe("애장판");
-    expect(screen.getByLabelText("목차").value).toBe("1-10권 완결");
+    expect(screen.getByLabelText("목차").value).toBe("1-10권 완");
     expect(screen.getByLabelText("신규 이름").value).toBe(
-      "[홍길동] 테스트 만화 (애장판) (1-10권 완결)",
+      "[홍길동] 테스트 만화 (애장판) (1-10권 완)",
     );
   });
 
@@ -200,9 +200,9 @@ describe("DirectoryEditPanel", () => {
     expect(screen.getByLabelText("저자").value).toBe("김작가");
     expect(screen.getByLabelText("제목").value).toBe("테스트 만화");
     expect(screen.getByLabelText("판본").value).toBe("정식한국어판");
-    expect(screen.getByLabelText("목차").value).toBe("1~20화 完");
+    expect(screen.getByLabelText("목차").value).toBe("1~20화 완");
     expect(screen.getByLabelText("신규 이름").value).toBe(
-      "[김작가] 테스트 만화 (정식한국어판) (1~20화 完)",
+      "[김작가] 테스트 만화 (정식한국어판) (1~20화 완)",
     );
   });
 
@@ -243,7 +243,7 @@ describe("DirectoryEditPanel", () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText("제목").value).toBe("테스트 만화");
-      expect(screen.getByLabelText("목차").value).toBe("123화 완결");
+      expect(screen.getByLabelText("목차").value).toBe("123화 완");
     });
   });
 
@@ -266,9 +266,9 @@ describe("DirectoryEditPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("목차").value).toBe("1~123화 완결");
+      expect(screen.getByLabelText("목차").value).toBe("1~123화 완");
       expect(screen.getByLabelText("신규 이름").value).toBe(
-        "[홍길동] 테스트 만화 (1~123화 완결)",
+        "[홍길동] 테스트 만화 (1~123화 완)",
       );
     });
   });
@@ -277,9 +277,9 @@ describe("DirectoryEditPanel", () => {
     ["1102화 완결", 102, "1-102화 완"],
     ["1102화 미완", 102, "1-102화 미완"],
     ["1102화 完", 102, "1-102화 완"],
-    ["1102화 완결", 101, "1102화 완결"],
-    ["2102화 완결", 102, "2102화 완결"],
-    ["1102화 완결", 1102, "1~1102화 완결"],
+    ["1102화 완결", 101, "1102화 완"],
+    ["2102화 완결", 102, "2102화 완"],
+    ["1102화 완결", 1102, "1~1102화 완"],
   ])("붙은 화수 %s와 파일 수 %i를 목차 %s로 처리한다", async (originalContents, fileCount, expectedContents) => {
     let resolveStats;
     mockRawJsonGetReq.mockImplementation((_url, success) => {
@@ -294,7 +294,7 @@ describe("DirectoryEditPanel", () => {
     });
     render(<DirectoryEditPanel {...values} />);
 
-    expect(screen.getByLabelText("목차").value).toBe(originalContents);
+    expect(screen.getByLabelText("목차").value).toBe(originalContents.replace(/(?:완결|完)$/, "완"));
     act(() => resolveStats({
       status: "success",
       result: { file_count: fileCount, page_count: 120, total_file_size: 5000 },
@@ -372,6 +372,125 @@ describe("DirectoryEditPanel", () => {
     expect(screen.getByLabelText("제목").value).toBe("외전 로맨스");
     expect(screen.getByLabelText("목차").value).toBe("1-65화 완");
   });
+
+  it.each([
+    [["comic/series/두근두근 연극부 01화.pdf", "comic/series/후기.pdf"], "1-35화 완외"],
+    [["comic/series/두근두근 연극부 01권.pdf"], "1-35권 완외"],
+    [["comic/35권/두근두근 연극부 01화.pdf"], "1-35화 완외"],
+    [["comic/series/두근두근 연극부 01.pdf"], "1-35 완외"],
+    [["comic/series/01화.pdf", "comic/series/01권.pdf"], "1-35 완외"],
+    [["comic/series/01권 01화.pdf"], "1-35 완외"],
+  ])("단위 없는 범위는 내부 파일 이름 %j로 %s를 결정한다", async (filePaths, expectedContents) => {
+    mockRawJsonGetReq.mockImplementation((url, success) => success({
+      status: "success",
+      result: url.includes("category-pdf-stats")
+        ? { file_count: 35, page_count: 120, total_file_size: 5000 }
+        : filePaths.map((file_path) => ({ file_path, title: "파일 이름 대신 쓰면 안 되는 01권" })),
+    }));
+    const values = props({
+      directory: {
+        category: "comics/series",
+        name: "두근두근 연극부 1-35 완 + 후기 캡",
+      },
+    });
+    render(<DirectoryEditPanel {...values} />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("제목").value).toBe("두근두근 연극부");
+      expect(screen.getByLabelText("목차").value).toBe(expectedContents);
+      expect(screen.getByLabelText("신규 이름").value).toBe(
+        `두근두근 연극부 (${expectedContents})`,
+      );
+    });
+    fireEvent.change(screen.getByLabelText("목차"), { target: { value: "수정" } });
+    fireEvent.click(screen.getByRole("button", { name: "복원" }));
+    expect(screen.getByLabelText("목차").value).toBe(expectedContents);
+    fireEvent.click(screen.getByText("이동"));
+    expect(values.onMove).toHaveBeenCalledWith(`두근두근 연극부 (${expectedContents})`);
+  });
+
+  it("다음 페이지까지 확인하고 누락된 단위를 결정한다", async () => {
+    mockRawJsonGetReq.mockImplementation((url, success) => {
+      if (url.includes("category-pdf-stats")) {
+        success({ status: "success", result: { file_count: 35, page_count: 120, total_file_size: 5000 } });
+      } else if (url.includes("cursor=")) {
+        success({ status: "success", result: [{ file_path: "comics/series/02화.pdf" }] });
+      } else {
+        success({ status: "success", result: [{ file_path: "comics/series/01.pdf" }], next_cursor: "page/2+=" });
+      }
+    });
+    render(<DirectoryEditPanel {...props({
+      directory: { category: "comics/series", name: "두근두근 연극부 (1-35 완)" },
+    })} />);
+
+    await waitFor(() => expect(screen.getByLabelText("목차").value).toBe("1-35화 완"));
+    expect(mockRawJsonGetReq.mock.calls.some(([url]) => url.includes("cursor=page%2F2%2B%3D"))).toBe(true);
+  });
+
+  it.each(["제목", "목차", "신규 이름"])("단위 조회가 늦어도 편집한 %s를 보존한다", async (label) => {
+    let resolveFiles;
+    mockRawJsonGetReq.mockImplementation((url, success) => {
+      if (url.includes("category-pdf-stats")) {
+        success({ status: "success", result: { file_count: 35, page_count: 120, total_file_size: 5000 } });
+      } else {
+        resolveFiles = success;
+      }
+    });
+    render(<DirectoryEditPanel {...props({
+      directory: { category: "comics/series", name: "두근두근 연극부 1-35 완 + 후기 캡" },
+    })} />);
+    fireEvent.change(screen.getByLabelText(label), { target: { value: "사용자 편집" } });
+    act(() => resolveFiles({ status: "success", result: [{ file_path: "comics/series/01화.pdf" }] }));
+
+    await waitFor(() => expect(screen.getByLabelText(label).value).toBe("사용자 편집"));
+    if (label === "제목") {
+      expect(screen.getByLabelText("목차").value).toBe("1-35화 완외");
+      expect(screen.getByLabelText("신규 이름").value).toBe("사용자 편집 (1-35화 완외)");
+    }
+  });
+
+  it("이미 단위가 있는 범위는 파일 목록을 조회하지 않는다", () => {
+    render(<DirectoryEditPanel {...props({
+      directory: { category: "comics/series", name: "두근두근 연극부 (1-35권 완외)" },
+    })} />);
+
+    expect(screen.getByLabelText("목차").value).toBe("1-35권 완외");
+    expect(mockRawJsonGetReq).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["API 오류", "전송 오류"])("단위 조회 %s에서는 단위를 추측하지 않는다", async (failureType) => {
+    mockRawJsonGetReq.mockImplementation((url, success, failure) => {
+      if (url.includes("category-pdf-stats")) {
+        success({ status: "success", result: { file_count: 35, page_count: 120, total_file_size: 5000 } });
+      } else if (failureType === "API 오류") {
+        success({ status: "failure", error: "조회 오류" });
+      } else {
+        failure();
+      }
+    });
+    render(<DirectoryEditPanel {...props({
+      directory: { category: "comics/series", name: "두근두근 연극부 1-35 완 + 후기 캡" },
+    })} />);
+
+    await waitFor(() => expect(screen.getByLabelText("목차").value).toBe("1-35 완외"));
+  });
+
+  it.each(["1~10화[완결]", "1~10화[完]", "(1~10화 완결)", "1~10화 완결"])(
+    "완결 표기 %s를 완으로 통일한다",
+    (suffix) => {
+      const values = props({
+        directory: { category: "comics/series", name: `라크리모사 ${suffix}` },
+      });
+      render(<DirectoryEditPanel {...values} />);
+
+      expect(screen.getByLabelText("저자").value).toBe("");
+      expect(screen.getByLabelText("제목").value).toBe("라크리모사");
+      expect(screen.getByLabelText("목차").value).toBe("1~10화 완");
+      expect(screen.getByLabelText("신규 이름").value).toBe("라크리모사 (1~10화 완)");
+      fireEvent.click(screen.getByText("이동"));
+      expect(values.onMove).toHaveBeenCalledWith("라크리모사 (1~10화 완)");
+    },
+  );
 
   it("변경한 구성 요소로 조합한 이름을 이동 대상에 전달한다", () => {
     const values = props();
