@@ -488,10 +488,34 @@ describe("DirectoryEditPanel", () => {
     expect(values.onMove).toHaveBeenCalledWith(`동트는 로맨스 (${expectedContents})`);
   });
 
+  it.each(["외포 완 툰", "외포  완 툰", "외포완 툰"])("외전 완결 표기 %s를 완외로 분리한다", async (suffix) => {
+    const sourceName = `써클 트랩 1-22화 ${suffix}`;
+    const onMetadataReady = vi.fn();
+    const values = props({
+      directory: { category: "comics/series", name: sourceName },
+      onMetadataReady,
+    });
+    render(<DirectoryEditPanel {...values} />);
+
+    expect(screen.getByLabelText("제목").value).toBe("써클 트랩");
+    expect(screen.getByLabelText("목차").value).toBe("1-22화 완외");
+    expect(screen.getByLabelText("신규 이름").value).toBe("써클 트랩 (1-22화 완외)");
+    await waitFor(() => expect(onMetadataReady).toHaveBeenCalledExactlyOnceWith({
+      category: "comics/series", sourceName, title: "써클 트랩", author: "",
+    }));
+    fireEvent.change(screen.getByLabelText("목차"), { target: { value: "수정" } });
+    fireEvent.click(screen.getByRole("button", { name: "복원" }));
+    expect(screen.getByLabelText("목차").value).toBe("1-22화 완외");
+    fireEvent.click(screen.getByText("이동"));
+    expect(values.onMove).toHaveBeenCalledWith("써클 트랩 (1-22화 완외)");
+  });
+
   it.each([
     "1-65화 외전 포함 미완",
     "1-65화 특별편 포함",
     "1-65화 후기 포함 완전판",
+    "1-65화 외포 미완 툰",
+    "1-65화 외포 툰",
   ])("완결 표기가 없는 %s를 완외로 오인하지 않는다", (suffix) => {
     render(<DirectoryEditPanel {...props({
       directory: { category: "comics/series", name: `동트는 로맨스 ${suffix}` },

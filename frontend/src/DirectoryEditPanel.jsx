@@ -93,7 +93,7 @@ function parseDirectoryName(name, fileCount, contentsUnit) {
   const extraContentsMatch = EXTRA_CONTENTS_PATTERN.exec(remainder);
   const hasCompletedExtras =
     extraContentsMatch &&
-    /외전|특별편|후기|외포완/.test(extraContentsMatch[2]) &&
+    /외전|특별편|후기|외포\s*완/.test(extraContentsMatch[2]) &&
     /(?:^|[^가-힣\w])(?:완결|외포완|완|完)(?=$|[^가-힣\w])/.test(extraContentsMatch[2]);
   const contentsMatch = hasCompletedExtras
     ? extraContentsMatch
