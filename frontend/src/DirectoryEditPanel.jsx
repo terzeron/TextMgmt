@@ -4,6 +4,86 @@ import { Button, Card, Form, InputGroup } from "react-bootstrap";
 import { jsonPostReq, jsonPutReq, rawJsonGetReq } from "./Common";
 import Actions from "./Actions";
 
+const COMPLETION_VALUES = new Set(["완결", "미완", "완", "完"]);
+const CONTENTS_RANGE = String.raw`\d+\s*[-~]\s*\d+\s*[화회권]`;
+const CANONICAL_CONTENTS_PATTERN = new RegExp(
+  String.raw`\(\s*(${CONTENTS_RANGE})\s+(완결|미완|완|完)\s*\)\s*$`,
+);
+const SPLIT_CONTENTS_PATTERN = new RegExp(
+  String.raw`(?:\(\s*(${CONTENTS_RANGE})\s*\)|(${CONTENTS_RANGE}))\s*(?:\[\s*(완결|미완|완|完)\s*\]|\(\s*(완결|미완|완|完)\s*\))\s*$`,
+);
+const EDITION_PATTERN =
+  /(^|\s)(?:\(\s*)?(정식한국어판|정식판|한국어판|애장판|완전판)(?:\s*\))?(?=\s|$)/;
+
+function parseDirectoryName(name) {
+  let remainder = name.trim();
+  let author = "";
+  const leadingAuthorMatch = /^\[([^\]]+)]\s*/.exec(remainder);
+  if (
+    leadingAuthorMatch &&
+    !COMPLETION_VALUES.has(leadingAuthorMatch[1].trim())
+  ) {
+    author = leadingAuthorMatch[1].trim();
+    remainder = remainder.slice(leadingAuthorMatch[0].length).trim();
+  }
+
+  const trailingAuthorMatch = /\s*\[([^\]]+)]\s*$/.exec(remainder);
+  if (
+    !author &&
+    trailingAuthorMatch &&
+    !COMPLETION_VALUES.has(trailingAuthorMatch[1].trim())
+  ) {
+    author = trailingAuthorMatch[1].trim();
+    remainder = remainder.slice(0, trailingAuthorMatch.index).trim();
+  }
+
+  let edition = "";
+  let contents = "";
+  const canonicalContentsMatch = CANONICAL_CONTENTS_PATTERN.exec(remainder);
+  const splitContentsMatch = SPLIT_CONTENTS_PATTERN.exec(remainder);
+  const contentsMatch = canonicalContentsMatch || splitContentsMatch;
+  if (contentsMatch) {
+    const range = (contentsMatch[1] || contentsMatch[2]).replace(/\s+/g, "");
+    const completion = contentsMatch[3] || contentsMatch[4] || contentsMatch[2];
+    contents = `${range} ${completion}`;
+    remainder = remainder.slice(0, contentsMatch.index).trim();
+  }
+
+  const editionMatch = EDITION_PATTERN.exec(remainder);
+  if (editionMatch) {
+    edition = editionMatch[2];
+    remainder = `${remainder.slice(0, editionMatch.index)} ${remainder.slice(
+      editionMatch.index + editionMatch[0].length,
+    )}`.trim();
+  }
+
+  return {
+    directoryAuthor: author,
+    directoryTitle: remainder.replace(/\s+/g, " "),
+    directoryEdition: edition,
+    directoryContents: contents,
+  };
+}
+
+function buildDirectoryName({
+  directoryAuthor,
+  directoryTitle,
+  directoryEdition,
+  directoryContents,
+}) {
+  const parts = [];
+  if (directoryAuthor.trim()) parts.push(`[${directoryAuthor.trim()}]`);
+  if (directoryTitle.trim()) parts.push(directoryTitle.trim());
+  if (directoryEdition.trim()) parts.push(`(${directoryEdition.trim()})`);
+  if (directoryContents.trim()) parts.push(`(${directoryContents.trim()})`);
+  return parts.join(" ");
+}
+
+function splitLeadingText(value) {
+  const match = /^(\S+)\s+(.+)$/.exec(value.trim());
+  return match ? [match[1], match[2]] : null;
+}
+
 export default function DirectoryEditPanel({
   directory,
   apiPrefix,
@@ -20,7 +100,12 @@ export default function DirectoryEditPanel({
   onComplete,
   onError,
 }) {
-  const [name, setName] = useState(directory.name);
+  const initialNameParts = parseDirectoryName(directory.name);
+  const [author, setAuthor] = useState(initialNameParts.directoryAuthor);
+  const [title, setTitle] = useState(initialNameParts.directoryTitle);
+  const [edition, setEdition] = useState(initialNameParts.directoryEdition);
+  const [contents, setContents] = useState(initialNameParts.directoryContents);
+  const [name, setName] = useState(buildDirectoryName(initialNameParts));
   const [saving, setSaving] = useState(false);
   const [pdfStats, setPdfStats] = useState(null);
   const [statsError, setStatsError] = useState("");
@@ -29,6 +114,46 @@ export default function DirectoryEditPanel({
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkInfo, setBulkInfo] = useState("");
   const [bulkFailures, setBulkFailures] = useState([]);
+
+  const updateNameParts = (updates) => {
+    const next = {
+      directoryAuthor: author,
+      directoryTitle: title,
+      directoryEdition: edition,
+      directoryContents: contents,
+      ...updates,
+    };
+    setAuthor(next.directoryAuthor);
+    setTitle(next.directoryTitle);
+    setEdition(next.directoryEdition);
+    setContents(next.directoryContents);
+    setName(buildDirectoryName(next));
+  };
+
+  const splitAuthor = () => {
+    const result = splitLeadingText(author);
+    if (result) {
+      updateNameParts({
+        directoryAuthor: result[0],
+        directoryTitle: result[1],
+      });
+    }
+  };
+
+  const splitTitle = () => {
+    const result = splitLeadingText(title);
+    if (result) {
+      updateNameParts({
+        directoryAuthor: result[0],
+        directoryTitle: result[1],
+      });
+    }
+  };
+
+  const restoreName = () => {
+    const original = parseDirectoryName(directory.name);
+    updateNameParts(original);
+  };
 
   useEffect(() => {
     setPdfStats(null);
@@ -103,31 +228,118 @@ export default function DirectoryEditPanel({
     <Card className="mb-3">
       <Card.Header>디렉토리 편집</Card.Header>
       <Card.Body>
-        <Form.Group className="mb-3">
-          <Form.Label>디렉토리 이름</Form.Label>
-          <InputGroup>
-            <Form.Control
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              disabled={saving}
-            />
-            <Button onClick={submit} disabled={saving || isProcessing || !name.trim()}>
-              {saving ? "처리 중..." : "이름 변경"}
-            </Button>
-            <Button
-              variant="outline-danger"
-              onClick={deleteDirectory}
-              disabled={saving || isProcessing}
-            >
-              삭제
-            </Button>
-          </InputGroup>
-        </Form.Group>
-        <div className="mb-3" role="status">
-          {pdfStats ? (
-            <>{pdfStats.file_count.toLocaleString()}ea, {pdfStats.page_count.toLocaleString()}p, {Math.trunc(pdfStats.total_file_size / 1000).toLocaleString()}MB</>
-          ) : statsError ? statsError : "PDF 통계 불러오는 중..."}
-        </div>
+        <InputGroup size="sm" className="directory-edit-row mb-2">
+          <InputGroup.Text>파일 수</InputGroup.Text>
+          <Form.Control
+            aria-label="파일 수"
+            value={pdfStats ? `${pdfStats.file_count.toLocaleString()}ea` : ""}
+            readOnly
+            disabled
+          />
+          <InputGroup.Text>페이지 수</InputGroup.Text>
+          <Form.Control
+            aria-label="페이지 수"
+            value={pdfStats ? `${pdfStats.page_count.toLocaleString()}p` : ""}
+            readOnly
+            disabled
+          />
+          <InputGroup.Text>파일 크기</InputGroup.Text>
+          <Form.Control
+            aria-label="파일 크기"
+            value={pdfStats ? `${Math.trunc(pdfStats.total_file_size / 1000).toLocaleString()}MB` : ""}
+            readOnly
+            disabled
+          />
+        </InputGroup>
+        {!pdfStats && (
+          <div className={statsError ? "text-danger mb-2" : "mb-2"} role="status">
+            {statsError || "PDF 통계 불러오는 중..."}
+          </div>
+        )}
+        <InputGroup size="sm" className="directory-edit-row mb-2">
+          <InputGroup.Text>저자</InputGroup.Text>
+          <Form.Control
+            aria-label="저자"
+            value={author}
+            onChange={(event) =>
+              updateNameParts({ directoryAuthor: event.target.value })
+            }
+            disabled={saving || isProcessing}
+          />
+          <InputGroup.Text>목차</InputGroup.Text>
+          <Form.Control
+            aria-label="목차"
+            value={contents}
+            onChange={(event) =>
+              updateNameParts({ directoryContents: event.target.value })
+            }
+            disabled={saving || isProcessing}
+          />
+          <Button variant="outline-secondary" className="btn-xs" onClick={splitAuthor} disabled={saving || isProcessing}>
+            분할
+          </Button>
+          <Button
+            variant="outline-secondary"
+            className="btn-xs"
+            onClick={() =>
+              updateNameParts({ directoryAuthor: title, directoryTitle: author })
+            }
+            disabled={saving || isProcessing}
+          >
+            교환
+          </Button>
+        </InputGroup>
+        <InputGroup size="sm" className="directory-edit-row mb-2">
+          <InputGroup.Text>제목</InputGroup.Text>
+          <Form.Control
+            aria-label="제목"
+            value={title}
+            onChange={(event) =>
+              updateNameParts({ directoryTitle: event.target.value })
+            }
+            disabled={saving || isProcessing}
+          />
+          <InputGroup.Text>판본</InputGroup.Text>
+          <Form.Control
+            aria-label="판본"
+            value={edition}
+            onChange={(event) =>
+              updateNameParts({ directoryEdition: event.target.value })
+            }
+            disabled={saving || isProcessing}
+          />
+          <Button variant="outline-secondary" className="btn-xs" onClick={splitTitle} disabled={saving || isProcessing}>
+            분할
+          </Button>
+          <Button variant="outline-secondary" className="btn-xs" onClick={restoreName} disabled={saving || isProcessing}>
+            복원
+          </Button>
+        </InputGroup>
+        <InputGroup size="sm" className="directory-edit-row mb-3">
+          <InputGroup.Text>신규 이름</InputGroup.Text>
+          <Form.Control
+            aria-label="신규 이름"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            disabled={saving || isProcessing}
+          />
+          <Button
+            variant="outline-success"
+            className="btn-xs"
+            onClick={submit}
+            disabled={saving || isProcessing || !name.trim()}
+          >
+            {saving ? "처리 중..." : "변경"}
+          </Button>
+          <Button
+            variant="outline-danger"
+            className="btn-xs"
+            onClick={deleteDirectory}
+            disabled={saving || isProcessing}
+          >
+            삭제
+          </Button>
+        </InputGroup>
         <hr />
         <Actions
           directoryMode

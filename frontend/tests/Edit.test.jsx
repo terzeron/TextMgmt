@@ -1350,7 +1350,7 @@ describe("Edit", () => {
     render(<Edit />);
     expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
     fireEvent.click(screen.getByTestId("select-dir"));
-    fireEvent.change(screen.getAllByRole("textbox")[0], {
+    fireEvent.change(screen.getByLabelText("신규 이름"), {
       target: { value: "renamed" },
     });
     fireEvent.click(screen.getByTestId("move-dir"));
@@ -1384,7 +1384,7 @@ describe("Edit", () => {
     render(<Edit />);
     expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
     fireEvent.click(screen.getByTestId("select-dir"));
-    fireEvent.change(screen.getAllByRole("textbox")[0], {
+    fireEvent.change(screen.getByLabelText("신규 이름"), {
       target: { value: "moved" },
     });
     fireEvent.click(screen.getByTestId("move-dir"));
@@ -1415,7 +1415,7 @@ describe("Edit", () => {
     render(<Edit />);
     expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
     fireEvent.click(screen.getByTestId("select-dir"));
-    fireEvent.change(screen.getAllByRole("textbox")[0], {
+    fireEvent.change(screen.getByLabelText("신규 이름"), {
       target: { value: "moved" },
     });
     fireEvent.click(screen.getByTestId("move-dir"));
@@ -1442,10 +1442,10 @@ describe("Edit", () => {
 
     render(<Edit />);
     expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
-    fireEvent.change(screen.getAllByRole("textbox")[0], {
+    fireEvent.change(screen.getByLabelText("신규 이름"), {
       target: { value: "new-fiction" },
     });
-    fireEvent.click(screen.getByText("이름 변경"));
+    fireEvent.click(screen.getByRole("button", { name: "변경" }));
 
     await waitFor(() => {
       expect(mockJsonPutReq.mock.calls[0].slice(0, 2)).toEqual([
@@ -1470,7 +1470,7 @@ describe("Edit", () => {
     render(<Edit />);
     expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
     fireEvent.click(screen.getByTestId("select-dir"));
-    fireEvent.change(screen.getAllByRole("textbox")[0], {
+    fireEvent.change(screen.getByLabelText("신규 이름"), {
       target: { value: "bad/name" },
     });
     fireEvent.click(screen.getByTestId("move-dir"));
@@ -1561,9 +1561,9 @@ describe("Edit", () => {
     render(<Edit />);
     expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
     fireEvent.click(screen.getByTestId("next-directory"));
-    expect(screen.getAllByRole("textbox")[0].value).toBe("2_science");
+    expect(screen.getByLabelText("신규 이름").value).toBe("2_science");
     fireEvent.click(screen.getByTestId("previous-directory"));
-    expect(screen.getAllByRole("textbox")[0].value).toBe("1_fiction");
+    expect(screen.getByLabelText("신규 이름").value).toBe("1_fiction");
   });
 
   // ── resize 이벤트 핸들러 (line 31) ──

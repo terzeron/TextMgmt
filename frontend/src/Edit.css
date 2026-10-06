@@ -41,6 +41,17 @@
     top: 0;
 }
 
+@media (max-width: 575.98px) {
+    #edit .directory-edit-row {
+        display: grid;
+        grid-template-columns: max-content minmax(0, 1fr);
+    }
+
+    #edit .directory-edit-row > .form-control {
+        width: 100%;
+    }
+}
+
 /* 버튼 클릭 효과 - transition 설정 */
 #edit .btn {
     transition: all 0.1s ease;

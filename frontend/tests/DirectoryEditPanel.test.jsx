@@ -70,11 +70,31 @@ describe("DirectoryEditPanel", () => {
     );
   });
 
-  it("통계를 표시하고 디렉토리 탐색 액션을 전달한다", async () => {
+  it("통계와 디렉토리 이름 구성 요소를 input field로 표시한다", async () => {
+    const values = props({
+      directory: {
+        category: "comics/series",
+        name: "[홍길동] 테스트 만화 (애장판) (1-10권 완)",
+      },
+    });
+    render(<DirectoryEditPanel {...values} />);
+
+    expect((await screen.findByLabelText("파일 수")).value).toBe("3ea");
+    expect(screen.getByLabelText("페이지 수").value).toBe("120p");
+    expect(screen.getByLabelText("파일 크기").value).toBe("5MB");
+    expect(screen.getByLabelText("저자").value).toBe("홍길동");
+    expect(screen.getByLabelText("제목").value).toBe("테스트 만화");
+    expect(screen.getByLabelText("판본").value).toBe("애장판");
+    expect(screen.getByLabelText("목차").value).toBe("1-10권 완");
+    expect(screen.getByLabelText("신규 이름").value).toBe(
+      "[홍길동] 테스트 만화 (애장판) (1-10권 완)",
+    );
+  });
+
+  it("디렉토리 탐색 액션을 전달한다", () => {
     const values = props();
     render(<DirectoryEditPanel {...values} />);
 
-    expect(await screen.findByText("3ea, 120p, 5MB")).toBeTruthy();
     fireEvent.click(screen.getByText("이전 디렉토리"));
     fireEvent.click(screen.getByText("다음 디렉토리"));
     fireEvent.click(screen.getByText("상위로 이동"));
@@ -87,6 +107,192 @@ describe("DirectoryEditPanel", () => {
     expect(values.onMove).toHaveBeenCalledWith("series");
     expect(values.onSelectCategory).toHaveBeenCalledOnce();
   });
+
+  it("입력한 구성 요소로 신규 이름을 조합한다", () => {
+    render(<DirectoryEditPanel {...props()} />);
+
+    fireEvent.change(screen.getByLabelText("저자"), {
+      target: { value: "홍길동" },
+    });
+    fireEvent.change(screen.getByLabelText("제목"), {
+      target: { value: "테스트 만화" },
+    });
+    fireEvent.change(screen.getByLabelText("판본"), {
+      target: { value: "애장판" },
+    });
+    fireEvent.change(screen.getByLabelText("목차"), {
+      target: { value: "1-10권 완" },
+    });
+
+    expect(screen.getByLabelText("신규 이름").value).toBe(
+      "[홍길동] 테스트 만화 (애장판) (1-10권 완)",
+    );
+  });
+
+  it("분할, 교환, 복원 버튼으로 이름 구성 요소를 편집한다", () => {
+    render(
+      <DirectoryEditPanel
+        {...props({
+          directory: {
+            category: "comics/series",
+            name: "[홍길동] 테스트 만화 (애장판) (1-10권 완)",
+          },
+        })}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("제목"), {
+      target: { value: "김작가 새제목" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "분할" })[1]);
+    expect(screen.getByLabelText("저자").value).toBe("김작가");
+    expect(screen.getByLabelText("제목").value).toBe("새제목");
+
+    fireEvent.click(screen.getByRole("button", { name: "교환" }));
+    expect(screen.getByLabelText("저자").value).toBe("새제목");
+    expect(screen.getByLabelText("제목").value).toBe("김작가");
+
+    fireEvent.click(screen.getByRole("button", { name: "복원" }));
+    expect(screen.getByLabelText("저자").value).toBe("홍길동");
+    expect(screen.getByLabelText("제목").value).toBe("테스트 만화");
+    expect(screen.getByLabelText("신규 이름").value).toBe(
+      "[홍길동] 테스트 만화 (애장판) (1-10권 완)",
+    );
+  });
+
+  it("분리된 목차 범위와 완결 표기를 표준 형식으로 조합한다", () => {
+    render(
+      <DirectoryEditPanel
+        {...props({
+          directory: {
+            category: "comics/series",
+            name: "[홍길동] 테스트 만화 (애장판) (1-10권) [완결]",
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByLabelText("저자").value).toBe("홍길동");
+    expect(screen.getByLabelText("제목").value).toBe("테스트 만화");
+    expect(screen.getByLabelText("판본").value).toBe("애장판");
+    expect(screen.getByLabelText("목차").value).toBe("1-10권 완결");
+    expect(screen.getByLabelText("신규 이름").value).toBe(
+      "[홍길동] 테스트 만화 (애장판) (1-10권 완결)",
+    );
+  });
+
+  it("맨 뒤 저자와 괄호 없는 판본을 분리한다", () => {
+    render(
+      <DirectoryEditPanel
+        {...props({
+          directory: {
+            category: "comics/series",
+            name: "테스트 만화 정식한국어판 (1~20화) (完) [김작가]",
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByLabelText("저자").value).toBe("김작가");
+    expect(screen.getByLabelText("제목").value).toBe("테스트 만화");
+    expect(screen.getByLabelText("판본").value).toBe("정식한국어판");
+    expect(screen.getByLabelText("목차").value).toBe("1~20화 完");
+    expect(screen.getByLabelText("신규 이름").value).toBe(
+      "[김작가] 테스트 만화 (정식한국어판) (1~20화 完)",
+    );
+  });
+
+  it("완결 표기를 맨 뒤 저자로 오인하지 않는다", () => {
+    render(
+      <DirectoryEditPanel
+        {...props({
+          directory: {
+            category: "comics/series",
+            name: "테스트 만화 (1-10회) [완]",
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByLabelText("저자").value).toBe("");
+    expect(screen.getByLabelText("제목").value).toBe("테스트 만화");
+    expect(screen.getByLabelText("목차").value).toBe("1-10회 완");
+  });
+
+  it("변경한 구성 요소로 조합한 이름을 이동 대상에 전달한다", () => {
+    const values = props();
+    render(<DirectoryEditPanel {...values} />);
+
+    fireEvent.change(screen.getByLabelText("저자"), {
+      target: { value: "김작가" },
+    });
+    fireEvent.change(screen.getByLabelText("제목"), {
+      target: { value: "새 만화" },
+    });
+    fireEvent.change(screen.getByLabelText("판본"), {
+      target: { value: "완전판" },
+    });
+    fireEvent.change(screen.getByLabelText("목차"), {
+      target: { value: "1-20권 완" },
+    });
+    fireEvent.click(screen.getByText("이동"));
+
+    expect(values.onMove).toHaveBeenCalledWith(
+      "[김작가] 새 만화 (완전판) (1-20권 완)",
+    );
+  });
+
+  it("권·화 정보만 있는 괄호를 목차로 분리한다", () => {
+    render(
+      <DirectoryEditPanel
+        {...props({
+          directory: {
+            category: "comics/series",
+            name: "[홍길동] 테스트 만화 (1-10권 완)",
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByLabelText("판본").value).toBe("");
+    expect(screen.getByLabelText("목차").value).toBe("1-10권 완");
+  });
+
+  it("단일 판본 정보를 목차로 오인하지 않는다", () => {
+    render(
+      <DirectoryEditPanel
+        {...props({
+          directory: {
+            category: "comics/series",
+            name: "[홍길동] 테스트 만화 (완전판)",
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByLabelText("판본").value).toBe("완전판");
+    expect(screen.getByLabelText("목차").value).toBe("");
+  });
+
+  it.each(["갠소", "개인소장", "공유금지", "공금"])(
+    "비허용 판본 텍스트 %s는 제목에 남기고 판본을 비운다",
+    (label) => {
+      render(
+        <DirectoryEditPanel
+          {...props({
+            directory: {
+              category: "comics/series",
+              name: `[홍길동] 테스트 만화 (${label}) (1-10권 완)`,
+            },
+          })}
+        />,
+      );
+
+      expect(screen.getByLabelText("제목").value).toBe(`테스트 만화 (${label})`);
+      expect(screen.getByLabelText("판본").value).toBe("");
+      expect(screen.getByLabelText("목차").value).toBe("1-10권 완");
+    },
+  );
 
   it.each([
     [
@@ -113,32 +319,32 @@ describe("DirectoryEditPanel", () => {
   it("이름이 비었거나 경로 구분자가 있으면 변경을 거부한다", () => {
     const values = props();
     render(<DirectoryEditPanel {...values} />);
-    const name = screen.getAllByRole("textbox")[0];
+    const name = screen.getByLabelText("신규 이름");
     fireEvent.change(name, { target: { value: " /invalid " } });
-    fireEvent.click(screen.getByText("이름 변경"));
+    fireEvent.click(screen.getByRole("button", { name: "변경" }));
     expect(values.onError).toHaveBeenCalledWith(
       "디렉토리 이름을 입력하세요. 이름에는 '/'를 사용할 수 없습니다.",
     );
 
     fireEvent.change(name, { target: { value: "   " } });
-    expect(screen.getByText("이름 변경").disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "변경" }).disabled).toBe(true);
     expect(mockJsonPutReq).not.toHaveBeenCalled();
   });
 
   it("같은 이름은 요청하지 않고 유효한 이름은 부모 경로 안에서 변경한다", () => {
     const values = props();
     render(<DirectoryEditPanel {...values} />);
-    fireEvent.click(screen.getByText("이름 변경"));
+    fireEvent.click(screen.getByRole("button", { name: "변경" }));
     expect(mockJsonPutReq).not.toHaveBeenCalled();
 
-    fireEvent.change(screen.getAllByRole("textbox")[0], {
+    fireEvent.change(screen.getByLabelText("신규 이름"), {
       target: { value: "  volume  " },
     });
     mockJsonPutReq.mockImplementation((_url, _body, success, _failure, done) => {
       success();
       done();
     });
-    fireEvent.click(screen.getByText("이름 변경"));
+    fireEvent.click(screen.getByRole("button", { name: "변경" }));
     expect(mockJsonPutReq).toHaveBeenCalledWith(
       "/comics/categories/rename",
       { old_category: "comics/series", new_category: "comics/volume" },
@@ -159,10 +365,10 @@ describe("DirectoryEditPanel", () => {
       done();
     });
     render(<DirectoryEditPanel {...values} />);
-    fireEvent.change(screen.getAllByRole("textbox")[0], {
+    fireEvent.change(screen.getByLabelText("신규 이름"), {
       target: { value: "new-series" },
     });
-    fireEvent.click(screen.getByText("이름 변경"));
+    fireEvent.click(screen.getByRole("button", { name: "변경" }));
     expect(mockJsonPutReq).toHaveBeenCalledWith(
       "/comics/categories/rename",
       { old_category: "series", new_category: "new-series" },
@@ -178,10 +384,10 @@ describe("DirectoryEditPanel", () => {
   it("이름 변경 요청 중에는 중복 제출을 막는다", () => {
     mockJsonPutReq.mockImplementation(() => {});
     render(<DirectoryEditPanel {...props()} />);
-    fireEvent.change(screen.getAllByRole("textbox")[0], {
+    fireEvent.change(screen.getByLabelText("신규 이름"), {
       target: { value: "new-series" },
     });
-    fireEvent.click(screen.getByText("이름 변경"));
+    fireEvent.click(screen.getByRole("button", { name: "변경" }));
     expect(screen.getByText("처리 중...").disabled).toBe(true);
     expect(screen.getByText("삭제").disabled).toBe(true);
   });
