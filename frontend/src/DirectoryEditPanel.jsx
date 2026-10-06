@@ -462,6 +462,11 @@ export default function DirectoryEditPanel({
             onChange={(event) =>
               updateNameParts({ directoryTitle: event.target.value.replace(/\s*\/\s*/g, ", ") })
             }
+            onBlur={(event) => {
+              if (event.target.value.includes("/")) {
+                updateNameParts({ directoryTitle: event.target.value.replace(/\s*\/\s*/g, ", ") });
+              }
+            }}
             disabled={saving || isProcessing}
           />
           <InputGroup.Text>판본</InputGroup.Text>

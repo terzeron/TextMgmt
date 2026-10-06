@@ -209,6 +209,31 @@ describe("DirectoryEditPanel", () => {
     expect(values.onMove).toHaveBeenCalledWith(`[저자] ${expected} (애장판) (1-10권 완)`);
   });
 
+  it.each([
+    ["봉이 / 갈피 / 오윤", "봉이, 갈피, 오윤"],
+    ["XXX/YYY / ZZZ", "XXX, YYY, ZZZ"],
+  ])("입력 이벤트를 놓쳐도 제목 %s에서 포커스가 빠지면 슬래시를 보정한다", (input, expected) => {
+    const values = props({ directory: { category: "comics/series", name: "[저자] 기존 제목 (애장판) (1-10권 완)" } });
+    render(<DirectoryEditPanel {...values} />);
+    const titleInput = screen.getByLabelText("제목");
+    fireEvent.focus(titleInput);
+    fireEvent.focusOut(titleInput, { target: { value: input } });
+
+    expect(titleInput.value).toBe(expected);
+    expect(screen.getByLabelText("신규 이름").value).toBe(`[저자] ${expected} (애장판) (1-10권 완)`);
+    fireEvent.click(screen.getByText("이동"));
+    expect(values.onMove).toHaveBeenCalledWith(`[저자] ${expected} (애장판) (1-10권 완)`);
+  });
+
+  it("슬래시 없는 제목에서 포커스가 빠져도 수동으로 수정한 신규 이름을 유지한다", () => {
+    render(<DirectoryEditPanel {...props()} />);
+    fireEvent.change(screen.getByLabelText("신규 이름"), { target: { value: "사용자 지정 이름" } });
+    const titleInput = screen.getByLabelText("제목");
+    fireEvent.focus(titleInput);
+    fireEvent.blur(titleInput);
+    expect(screen.getByLabelText("신규 이름").value).toBe("사용자 지정 이름");
+  });
+
   it("분할, 교환, 복원 버튼으로 이름 구성 요소를 편집한다", () => {
     render(
       <DirectoryEditPanel
