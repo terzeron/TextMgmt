@@ -41,6 +41,16 @@
     top: 0;
 }
 
+#edit .directory-title-control {
+    flex: 7 1 0;
+    width: 0;
+}
+
+#edit .directory-edition-control {
+    flex: 3 1 0;
+    width: 0;
+}
+
 @media (max-width: 575.98px) {
     #edit .directory-edit-row {
         display: grid;

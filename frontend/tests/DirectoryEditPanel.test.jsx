@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const { mockJsonPostReq, mockJsonPutReq, mockRawJsonGetReq } = vi.hoisted(() => ({
   mockJsonPostReq: vi.fn(),
@@ -83,8 +83,12 @@ describe("DirectoryEditPanel", () => {
     expect(screen.getByLabelText("페이지 수").value).toBe("120p");
     expect(screen.getByLabelText("파일 크기").value).toBe("5MB");
     expect(screen.getByLabelText("저자").value).toBe("홍길동");
-    expect(screen.getByLabelText("제목").value).toBe("테스트 만화");
-    expect(screen.getByLabelText("판본").value).toBe("애장판");
+    const titleInput = screen.getByLabelText("제목");
+    const editionInput = screen.getByLabelText("판본");
+    expect(titleInput.value).toBe("테스트 만화");
+    expect(editionInput.value).toBe("애장판");
+    expect(titleInput.classList.contains("directory-title-control")).toBe(true);
+    expect(editionInput.classList.contains("directory-edition-control")).toBe(true);
     expect(screen.getByLabelText("목차").value).toBe("1-10권 완");
     expect(screen.getByLabelText("신규 이름").value).toBe(
       "[홍길동] 테스트 만화 (애장판) (1-10권 완)",
@@ -217,6 +221,56 @@ describe("DirectoryEditPanel", () => {
     expect(screen.getByLabelText("저자").value).toBe("");
     expect(screen.getByLabelText("제목").value).toBe("테스트 만화");
     expect(screen.getByLabelText("목차").value).toBe("1-10회 완");
+  });
+
+  it("단일 화수와 완결 표기를 목차로 분리한다", async () => {
+    mockRawJsonGetReq.mockImplementation((_url, success) =>
+      success({
+        status: "success",
+        result: { file_count: 122, page_count: 120, total_file_size: 5000 },
+      }),
+    );
+    render(
+      <DirectoryEditPanel
+        {...props({
+          directory: {
+            category: "comics/series",
+            name: "[홍길동] 테스트 만화 123화 완결",
+          },
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("제목").value).toBe("테스트 만화");
+      expect(screen.getByLabelText("목차").value).toBe("123화 완결");
+    });
+  });
+
+  it("단일 화수가 파일 수와 같으면 1부터의 범위로 보정한다", async () => {
+    mockRawJsonGetReq.mockImplementation((_url, success) =>
+      success({
+        status: "success",
+        result: { file_count: 123, page_count: 120, total_file_size: 5000 },
+      }),
+    );
+    render(
+      <DirectoryEditPanel
+        {...props({
+          directory: {
+            category: "comics/series",
+            name: "[홍길동] 테스트 만화 123화 완결",
+          },
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("목차").value).toBe("1~123화 완결");
+      expect(screen.getByLabelText("신규 이름").value).toBe(
+        "[홍길동] 테스트 만화 (1~123화 완결)",
+      );
+    });
   });
 
   it("변경한 구성 요소로 조합한 이름을 이동 대상에 전달한다", () => {

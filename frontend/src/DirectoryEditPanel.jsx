@@ -5,17 +5,35 @@ import { jsonPostReq, jsonPutReq, rawJsonGetReq } from "./Common";
 import Actions from "./Actions";
 
 const COMPLETION_VALUES = new Set(["완결", "미완", "완", "完"]);
-const CONTENTS_RANGE = String.raw`\d+\s*[-~]\s*\d+\s*[화회권]`;
-const CANONICAL_CONTENTS_PATTERN = new RegExp(
-  String.raw`\(\s*(${CONTENTS_RANGE})\s+(완결|미완|완|完)\s*\)\s*$`,
+const COMPLETION_PATTERN = String.raw`(?:완결|미완|완|完)`;
+const CONTENTS_VALUE = String.raw`\d+(?:\s*[-~]\s*\d+)?\s*[화회권]`;
+const PAREN_CONTENTS_PATTERN = new RegExp(
+  String.raw`\(\s*(${CONTENTS_VALUE})\s+(${COMPLETION_PATTERN})\s*\)\s*$`,
+);
+const PLAIN_CONTENTS_PATTERN = new RegExp(
+  String.raw`(?:^|\s)(${CONTENTS_VALUE})\s+(${COMPLETION_PATTERN})\s*$`,
 );
 const SPLIT_CONTENTS_PATTERN = new RegExp(
-  String.raw`(?:\(\s*(${CONTENTS_RANGE})\s*\)|(${CONTENTS_RANGE}))\s*(?:\[\s*(완결|미완|완|完)\s*\]|\(\s*(완결|미완|완|完)\s*\))\s*$`,
+  String.raw`(?:\(\s*(${CONTENTS_VALUE})\s*\)|(${CONTENTS_VALUE}))\s*(?:\[\s*(${COMPLETION_PATTERN})\s*\]|\(\s*(${COMPLETION_PATTERN})\s*\))\s*$`,
 );
 const EDITION_PATTERN =
   /(^|\s)(?:\(\s*)?(정식한국어판|정식판|한국어판|애장판|완전판)(?:\s*\))?(?=\s|$)/;
 
-function parseDirectoryName(name) {
+function buildContents(value, completion, fileCount) {
+  let normalizedValue = value.replace(/\s+/g, "");
+  const singleEpisodeMatch = /^(\d+)화$/.exec(normalizedValue);
+  const episodeCount = Number(singleEpisodeMatch?.[1]);
+  if (
+    singleEpisodeMatch &&
+    episodeCount > 1 &&
+    episodeCount === Number(fileCount)
+  ) {
+    normalizedValue = `1~${episodeCount}화`;
+  }
+  return `${normalizedValue} ${completion}`;
+}
+
+function parseDirectoryName(name, fileCount) {
   let remainder = name.trim();
   let author = "";
   const leadingAuthorMatch = /^\[([^\]]+)]\s*/.exec(remainder);
@@ -39,13 +57,17 @@ function parseDirectoryName(name) {
 
   let edition = "";
   let contents = "";
-  const canonicalContentsMatch = CANONICAL_CONTENTS_PATTERN.exec(remainder);
+  const inlineContentsMatch =
+    PAREN_CONTENTS_PATTERN.exec(remainder) ||
+    PLAIN_CONTENTS_PATTERN.exec(remainder);
   const splitContentsMatch = SPLIT_CONTENTS_PATTERN.exec(remainder);
-  const contentsMatch = canonicalContentsMatch || splitContentsMatch;
+  const contentsMatch = inlineContentsMatch || splitContentsMatch;
   if (contentsMatch) {
-    const range = (contentsMatch[1] || contentsMatch[2]).replace(/\s+/g, "");
-    const completion = contentsMatch[3] || contentsMatch[4] || contentsMatch[2];
-    contents = `${range} ${completion}`;
+    const value = contentsMatch[1] || contentsMatch[2];
+    const completion = inlineContentsMatch
+      ? inlineContentsMatch[2]
+      : splitContentsMatch[3] || splitContentsMatch[4];
+    contents = buildContents(value, completion, fileCount);
     remainder = remainder.slice(0, contentsMatch.index).trim();
   }
 
@@ -151,7 +173,7 @@ export default function DirectoryEditPanel({
   };
 
   const restoreName = () => {
-    const original = parseDirectoryName(directory.name);
+    const original = parseDirectoryName(directory.name, pdfStats?.file_count);
     updateNameParts(original);
   };
 
@@ -161,12 +183,33 @@ export default function DirectoryEditPanel({
     rawJsonGetReq(
       `${apiPrefix}/category-pdf-stats?category=${encodeURIComponent(directory.category)}`,
       (data) => {
-        if (data.status === "success") setPdfStats(data.result);
-        else setStatsError(data.error || "PDF 통계를 불러오지 못했습니다.");
+        if (data.status === "success") {
+          const stats = data.result;
+          setPdfStats(stats);
+          const parsed = parseDirectoryName(directory.name);
+          const parsedWithFileCount = parseDirectoryName(
+            directory.name,
+            stats.file_count,
+          );
+          if (parsed.directoryContents !== parsedWithFileCount.directoryContents) {
+            setContents((current) =>
+              current === parsed.directoryContents
+                ? parsedWithFileCount.directoryContents
+                : current,
+            );
+            setName((current) =>
+              current === buildDirectoryName(parsed)
+                ? buildDirectoryName(parsedWithFileCount)
+                : current,
+            );
+          }
+        } else {
+          setStatsError(data.error || "PDF 통계를 불러오지 못했습니다.");
+        }
       },
       () => setStatsError("PDF 통계를 불러오지 못했습니다."),
     );
-  }, [apiPrefix, directory.category]);
+  }, [apiPrefix, directory.category, directory.name]);
 
   const submit = () => {
     const cleanName = name.trim();
@@ -293,6 +336,7 @@ export default function DirectoryEditPanel({
           <InputGroup.Text>제목</InputGroup.Text>
           <Form.Control
             aria-label="제목"
+            className="directory-title-control"
             value={title}
             onChange={(event) =>
               updateNameParts({ directoryTitle: event.target.value })
@@ -302,6 +346,7 @@ export default function DirectoryEditPanel({
           <InputGroup.Text>판본</InputGroup.Text>
           <Form.Control
             aria-label="판본"
+            className="directory-edition-control"
             value={edition}
             onChange={(event) =>
               updateNameParts({ directoryEdition: event.target.value })
