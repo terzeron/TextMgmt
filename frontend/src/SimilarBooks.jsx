@@ -200,7 +200,7 @@ export default function SimilarBooks({
         if (data.status === "success") {
           const names = data.result || [];
           setSimilarNames(names);
-          if (names.some((item) => item.score > 90)) setIsOpen(true);
+          if (names.some((item) => item.score > 50)) setIsOpen(true);
         }
         if (onFinish) onFinish();
       },

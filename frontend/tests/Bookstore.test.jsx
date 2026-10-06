@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { useState } from "react";
 import {
   render,
   screen,
@@ -1301,7 +1302,7 @@ describe("Bookstore 만화 모드", () => {
     expect(urls.every((url) => url.includes(expectedParam))).toBe(true);
   });
 
-  it("검색 결과로 카테고리를 결정하지 않는다", async () => {
+  it("일반 서점 분류나 제목이 다른 웹툰으로 카테고리를 결정하지 않는다", async () => {
     const onCategoriesFound = vi.fn();
     await act(async () => {
       render(
@@ -1319,7 +1320,8 @@ describe("Bookstore 만화 모드", () => {
     await act(async () => {
       fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" })[0]);
     });
-    expect(onCategoriesFound).not.toHaveBeenCalled();
+    expect(onCategoriesFound).toHaveBeenCalled();
+    expect(onCategoriesFound.mock.calls.every(([categories]) => Object.keys(categories).length === 0)).toBe(true);
   });
 
   it("만화 모드가 아니면 ISBN 버튼이 그대로 있다", async () => {
@@ -1331,6 +1333,59 @@ describe("Bookstore 만화 모드", () => {
     expect(
       screen.getAllByRole("button", { name: "ISBN" }).length,
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("Bookstore 웹툰 저자 표시", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    [true, "naverwebtoon", "네이버웹툰"],
+    [true, "kakaowebtoon", "카카오웹툰"],
+    [false, "naverwebtoon", "네이버웹툰"],
+    [false, "kakaowebtoon", "카카오웹툰"],
+  ])("만화 모드 %s에서 %s의 저자 구분자만 쉼표로 표시한다", async (comic, store, label) => {
+    const item = Object.freeze({ title: "작품 / 부제", author: "봉이 / 갈피 / 오윤", category: "로맨스 / 판타지" });
+    const bookInfo = Object.freeze({ title: "작품 / 부제", author: "검색 저자 / 다른 저자" });
+    rawJsonGetReq.mockImplementation((_url, success) => success({ status: "success", result: [item] }));
+    render(<Bookstore comic={comic} bookInfo={bookInfo} />);
+    const row = within(storeRow(label));
+    const search = () => fireEvent.click(row.getByRole("button", { name: "저자+제목" }));
+    search();
+
+    await waitFor(() => expect(row.getByText("봉이, 갈피, 오윤")).toBeTruthy());
+    expect(row.getByText(item.title)).toBeTruthy();
+    expect(row.getByText(`| ${item.category}`)).toBeTruthy();
+    expect(item.author).toBe("봉이 / 갈피 / 오윤");
+    const requests = rawJsonGetReq.mock.calls.length;
+    for (const [url] of rawJsonGetReq.mock.calls) {
+      const parsed = new URL(url, "http://localhost");
+      expect(parsed.pathname).toBe(`/search/bookstore/${store}`);
+      expect(parsed.searchParams.get("title")).toBe(bookInfo.title);
+      if (parsed.searchParams.has("author")) expect(parsed.searchParams.get("author")).toBe(bookInfo.author);
+    }
+    search();
+    expect(rawJsonGetReq).toHaveBeenCalledTimes(requests);
+    expect(row.getByText("봉이, 갈피, 오윤")).toBeTruthy();
+  });
+
+  it.each(["Yes24", "알라딘"])("%s 저자명의 슬래시는 변경하지 않는다", async (label) => {
+    rawJsonGetReq.mockImplementation((_url, success) => success({ status: "success", result: [{ author: "봉이 / 갈피 / 오윤" }] }));
+    render(<Bookstore comic bookInfo={{ title: "작품명" }} />);
+    const row = within(storeRow(label));
+    fireEvent.click(row.getByRole("button", { name: "저자+제목" }));
+    await waitFor(() => expect(row.getByText("봉이 / 갈피 / 오윤")).toBeTruthy());
+  });
+
+  it.each(["봉이/갈피", "봉이, 갈피", "봉이", "", null, undefined])("웹툰 저자 %s는 지정된 구분자가 없으면 유지한다", async (author) => {
+    rawJsonGetReq.mockImplementation((_url, success) => success({ status: "success", result: [{ title: "작품명", author }] }));
+    render(<Bookstore comic bookInfo={{ title: "작품명" }} searchTrigger={1} />);
+    for (const label of ["네이버웹툰", "카카오웹툰"]) {
+      const row = within(storeRow(label));
+      await waitFor(() => expect(row.getByText("작품명")).toBeTruthy());
+      if (author) expect(row.getByText(author)).toBeTruthy();
+      else expect(storeRow(label).querySelector("small").textContent).toBe("");
+    }
   });
 });
 
@@ -1348,6 +1403,93 @@ describe("Bookstore 웹툰 자동 검색", () => {
     new Set(
       rawJsonGetReq.mock.calls.map(([url]) => url.split("?")[0].split("/").pop()),
     );
+
+  it("편집 컴포넌트가 분할한 제목은 다시 자르지 않고 검색한다", async () => {
+    render(<Bookstore comic titleParsed bookInfo={{ title: "작품명 (특별한 부제)", author: "저자" }} searchTrigger={1} />);
+
+    await waitFor(() => expect(rawJsonGetReq).toHaveBeenCalledTimes(4));
+    for (const [url] of rawJsonGetReq.mock.calls) {
+      expect(new URL(url, "http://localhost").searchParams.get("title")).toBe("작품명 (특별한 부제)");
+    }
+  });
+
+  it.each([
+    ["naverwebtoon", "작품명", "작품명"],
+    ["kakaowebtoon", "작품명", "작품명 시즌 2"],
+    ["naverwebtoon", "[저자] 작품명 (1~10화 완)", "작품명 외전"],
+  ])("%s 작품명에 제목 %s이 포함되면 웹툰을 추천한다", async (store, title, resultTitle) => {
+    const onCategoriesFound = vi.fn();
+    rawJsonGetReq.mockImplementation((url, success) => success({
+      status: "success",
+      result: url.includes(`/${store}?`) ? [{ title: resultTitle, category: "드라마" }] : [],
+    }));
+    render(<Bookstore comic bookInfo={{ title }} searchTrigger={1} onCategoriesFound={onCategoriesFound} />);
+
+    await waitFor(() => expect(onCategoriesFound).toHaveBeenLastCalledWith({ [`${store}_0_0`]: "웹툰" }));
+  });
+
+  it.each([
+    ["작품명", "다른 작품", "success"],
+    ["작품명 시즌 2", "작품명", "success"],
+    ["", "작품명", "success"],
+    ["작품명", undefined, "success"],
+    ["작품명", "작품명", "failure"],
+  ])("제목 %s과 작품명 %s이 조건에 맞지 않으면 웹툰을 추천하지 않는다", async (title, resultTitle, status) => {
+    const onCategoriesFound = vi.fn();
+    rawJsonGetReq.mockImplementation((_url, success) => success({
+      status, result: status === "success" ? [{ title: resultTitle, category: "웹툰" }] : [],
+    }));
+    render(<Bookstore comic bookInfo={{ title }} searchTrigger={1} onCategoriesFound={onCategoriesFound} />);
+
+    await waitFor(() => expect(onCategoriesFound).toHaveBeenLastCalledWith({}));
+  });
+
+  it.each([
+    ["naverwebtoon", "로맨스"],
+    ["kakaowebtoon", "로맨스"],
+    ["naverwebtoon", "로맨스/드라마"],
+    ["kakaowebtoon", "로맨스판타지"],
+  ])("%s의 일치 작품 장르가 %s이면 웹툰 대신 여성향을 추천한다", async (store, category) => {
+    const onCategoriesFound = vi.fn();
+    rawJsonGetReq.mockImplementation((url, success) => success({
+      status: "success", result: url.includes(`/${store}?`) ? [{ title: "작품명 외전", category }] : [],
+    }));
+    render(<Bookstore comic bookInfo={{ title: "작품명" }} searchTrigger={1} onCategoriesFound={onCategoriesFound} />);
+
+    await waitFor(() => expect(onCategoriesFound).toHaveBeenLastCalledWith({ [`${store}_0_0`]: "여성향" }));
+  });
+
+  it("로맨스 장르여도 작품명이 불일치하면 여성향을 추천하지 않는다", async () => {
+    const onCategoriesFound = vi.fn();
+    rawJsonGetReq.mockImplementation((_url, success) => success({ status: "success", result: [{ title: "다른 작품", category: "로맨스" }] }));
+    render(<Bookstore comic bookInfo={{ title: "작품명" }} searchTrigger={1} onCategoriesFound={onCategoriesFound} />);
+
+    await waitFor(() => expect(onCategoriesFound).toHaveBeenLastCalledWith({}));
+  });
+
+  it("일치 작품에 로맨스가 있으면 일반 웹툰 추천보다 여성향을 우선한다", async () => {
+    const onCategoriesFound = vi.fn();
+    rawJsonGetReq.mockImplementation((url, success) => success({
+      status: "success", result: [{ title: "작품명", category: url.includes("/naverwebtoon?") ? "로맨스" : "드라마" }],
+    }));
+    render(<Bookstore comic bookInfo={{ title: "작품명" }} searchTrigger={1} onCategoriesFound={onCategoriesFound} />);
+
+    await waitFor(() => expect(onCategoriesFound).toHaveBeenLastCalledWith({ naverwebtoon_0_0: "여성향" }));
+  });
+
+  it.each([[true, "네이버웹툰", "naverwebtoon"], [false, "카카오웹툰", "kakaowebtoon"]])(
+    "만화 모드 %s에서 %s 수동 검색도 웹툰을 추천한다",
+    async (comic, label, store) => {
+      const onCategoriesFound = vi.fn();
+      rawJsonGetReq.mockImplementation((_url, success) => success({
+        status: "success", result: [{ title: "작품명 외전", category: "드라마" }],
+      }));
+      render(<Bookstore comic={comic} bookInfo={{ title: "작품명" }} onCategoriesFound={onCategoriesFound} />);
+      fireEvent.click(within(storeRow(label)).getByRole("button", { name: "저자+제목" }));
+
+      await waitFor(() => expect(onCategoriesFound).toHaveBeenLastCalledWith({ [`${store}_0_0`]: "웹툰" }));
+    },
+  );
 
   it("만화 모드는 네이버웹툰·카카오웹툰도 자동 검색한다", async () => {
     await act(async () => {
@@ -1369,6 +1511,58 @@ describe("Bookstore 웹툰 자동 검색", () => {
     // 그 밖의 서점은 버튼을 눌러야 검색한다.
     for (const store of ["kyobo", "naver", "ridi"]) {
       expect(calledStores().has(store)).toBe(false);
+    }
+  });
+
+  it("다음 검색을 시작하면 이전 검색의 웹툰 추천을 무시한다", async () => {
+    const pending = [];
+    const onCategoriesFound = vi.fn();
+    rawJsonGetReq.mockImplementation((url, success) => pending.push({ url, success }));
+    const { rerender } = render(<Bookstore comic bookInfo={{ title: "이전 작품" }} searchTrigger={1} onCategoriesFound={onCategoriesFound} />);
+    rerender(<Bookstore comic bookInfo={{ title: "현재 작품" }} searchTrigger={2} onCategoriesFound={onCategoriesFound} />);
+    await act(async () => {
+      pending.filter(({ url }) => url.includes(encodeURIComponent("현재 작품"))).forEach(({ success }) => success({ status: "success", result: [] }));
+    });
+    await act(async () => {
+      pending.filter(({ url }) => url.includes(encodeURIComponent("이전 작품"))).forEach(({ success }) => success({ status: "success", result: [{ title: "이전 작품" }] }));
+    });
+    expect(onCategoriesFound).toHaveBeenLastCalledWith({});
+  });
+
+  it("캐시를 재사용해도 웹툰을 추천하고 불일치하는 새 검색은 추천을 지운다", async () => {
+    const onCategoriesFound = vi.fn();
+    rawJsonGetReq.mockImplementation((_url, success) => success({ status: "success", result: [{ title: "작품명" }] }));
+    const { rerender } = render(<Bookstore comic bookInfo={{ title: "작품명" }} onCategoriesFound={onCategoriesFound} />);
+    const search = () => fireEvent.click(within(storeRow("네이버웹툰")).getByRole("button", { name: "저자+제목" }));
+    search();
+    await waitFor(() => expect(onCategoriesFound).toHaveBeenLastCalledWith({ naverwebtoon_0_0: "웹툰" }));
+    const requests = rawJsonGetReq.mock.calls.length;
+    onCategoriesFound.mockClear();
+    search();
+    expect(onCategoriesFound).toHaveBeenLastCalledWith({ naverwebtoon_0_0: "웹툰" });
+    expect(rawJsonGetReq).toHaveBeenCalledTimes(requests);
+    rerender(<Bookstore comic bookInfo={{ title: "다른 작품" }} onCategoriesFound={onCategoriesFound} />);
+    search();
+    await waitFor(() => expect(onCategoriesFound).toHaveBeenLastCalledWith({}));
+  });
+
+  it("수동 검색 추천으로 부모 상태를 갱신해도 렌더링 오류가 없다", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    rawJsonGetReq.mockImplementation((_url, success) => success({ status: "success", result: [{ title: "작품명" }] }));
+    function Parent() {
+      const [categories, setCategories] = useState({});
+      return <><Bookstore comic bookInfo={{ title: "작품명" }} onCategoriesFound={setCategories} /><output data-testid="recommendations">{JSON.stringify(categories)}</output></>;
+    }
+    try {
+      render(<Parent />);
+      for (const label of ["네이버웹툰", "카카오웹툰"]) {
+        fireEvent.click(within(storeRow(label)).getByRole("button", { name: "저자+제목" }));
+        await waitFor(() => expect(screen.getByTestId("recommendations").textContent).toContain("웹툰"));
+      }
+      await waitFor(() => expect(JSON.parse(screen.getByTestId("recommendations").textContent)).toEqual({ naverwebtoon_0_0: "웹툰", kakaowebtoon_0_0: "웹툰" }));
+      expect(errors).not.toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
     }
   });
 
