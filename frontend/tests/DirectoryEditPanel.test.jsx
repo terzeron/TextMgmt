@@ -492,6 +492,43 @@ describe("DirectoryEditPanel", () => {
     },
   );
 
+  it.each(["1_fiction", "2_science", "일반_디렉토리"])(
+    "목차 정보가 없는 디렉토리 %s의 밑줄을 보존한다",
+    (originalName) => {
+      render(<DirectoryEditPanel {...props({
+        directory: { category: "comics/series", name: originalName },
+      })} />);
+
+      expect(screen.getByLabelText("제목").value).toBe(originalName);
+      expect(screen.getByLabelText("신규 이름").value).toBe(originalName);
+    },
+  );
+
+  it.each([
+    ["만화_정구미_노란구미의_돈까스_취업_1_2권_完", "", "정구미 노란구미의 돈까스 취업", "1~2권 완"],
+    ["정구미_노란구미의_돈까스_취업_1_2권_完", "", "정구미 노란구미의 돈까스 취업", "1~2권 완"],
+    ["만화_[정구미]_노란구미의_돈까스_취업_1_2권_完", "정구미", "노란구미의 돈까스 취업", "1~2권 완"],
+    ["만화의_시작_1_2권_완", "", "만화의 시작", "1~2권 완"],
+    ["정구미_만화_취업_1_2권_完", "", "정구미 만화 취업", "1~2권 완"],
+    ["만화_정구미_노란구미의_돈까스_취업_1-2권_完", "", "정구미 노란구미의 돈까스 취업", "1-2권 완"],
+  ])("밑줄 형식 %s에서 접두어와 이름 구성 요소를 정리한다", (originalName, author, title, contents) => {
+    const values = props({
+      directory: { category: "comics/series", name: originalName },
+    });
+    render(<DirectoryEditPanel {...values} />);
+    const newName = `${author ? `[${author}] ` : ""}${title} (${contents})`;
+
+    expect(screen.getByLabelText("저자").value).toBe(author);
+    expect(screen.getByLabelText("제목").value).toBe(title);
+    expect(screen.getByLabelText("목차").value).toBe(contents);
+    expect(screen.getByLabelText("신규 이름").value).toBe(newName);
+    fireEvent.change(screen.getByLabelText("제목"), { target: { value: "수정" } });
+    fireEvent.click(screen.getByRole("button", { name: "복원" }));
+    expect(screen.getByLabelText("신규 이름").value).toBe(newName);
+    fireEvent.click(screen.getByText("이동"));
+    expect(values.onMove).toHaveBeenCalledWith(newName);
+  });
+
   it("변경한 구성 요소로 조합한 이름을 이동 대상에 전달한다", () => {
     const values = props();
     render(<DirectoryEditPanel {...values} />);

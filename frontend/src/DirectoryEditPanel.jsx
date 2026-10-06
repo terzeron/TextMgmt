@@ -53,6 +53,13 @@ function buildContents(value, completion, fileCount, contentsUnit) {
 
 function parseDirectoryName(name, fileCount, contentsUnit) {
   let remainder = name.trim();
+  if (/^만화_|\d+[화회권]_(?:완결|미완|완외|완|完)$/.test(remainder)) {
+    remainder = remainder
+      .replace(/^만화_/, "")
+      .replace(/(\d+)_(\d+[화회권])(?=_|$)/g, "$1~$2")
+      .replace(/_/g, " ")
+      .trim();
+  }
   let author = "";
   const leadingAuthorMatch = /^\[([^\]]+)]\s*/.exec(remainder);
   if (
