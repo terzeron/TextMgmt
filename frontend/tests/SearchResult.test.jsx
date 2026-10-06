@@ -499,4 +499,27 @@ describe("SearchResult 커버 뷰", () => {
     fireEvent.click(screen.getByText("검색 결과"));
     expect(screen.queryByText("소설/novel1.epub")).toBeNull();
   });
+
+  it("_root 카테고리는 '분류 없음'으로 표시한다", () => {
+    render(
+      <SearchResult
+        results={sampleResults}
+        categories={["_root", "소설"]}
+        selectedCategory=""
+        onCategoryChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: "분류 없음" })).toBeTruthy();
+  });
+
+  it("커버 뷰에서 basePath가 비어 있어도 기본 편집 경로로 그린다", () => {
+    const { container } = render(
+      <SearchResult results={sampleResults} viewMode="cover" basePath="" />,
+    );
+
+    expect(
+      container.querySelector('a[href="/book-view/1?category=%EC%86%8C%EC%84%A4"]'),
+    ).toBeTruthy();
+  });
 });

@@ -1047,4 +1047,83 @@ describe("DirectoryEditPanel", () => {
     expect(screen.getByText("변경 중...").disabled).toBe(true);
     expect(screen.getByPlaceholderText("파일 이름에 적용할 패턴").disabled).toBe(true);
   });
+
+  describe("커버리지 경계", () => {
+    const rangeDirectory = { category: "comics/series", name: "작품명 1-35 완" };
+
+    it("저자 칸의 분할 버튼은 공백 기준으로 저자와 제목을 나눈다", () => {
+      render(<DirectoryEditPanel {...props()} />);
+
+      fireEvent.change(screen.getByLabelText("저자"), { target: { value: "김작가 새제목" } });
+      fireEvent.click(screen.getAllByRole("button", { name: "분할" })[0]);
+
+      expect(screen.getByLabelText("저자").value).toBe("김작가");
+      expect(screen.getByLabelText("제목").value).toBe("새제목");
+    });
+
+    it("공백이 없어 나눌 수 없으면 분할 버튼은 값을 바꾸지 않는다", () => {
+      render(<DirectoryEditPanel {...props()} />);
+
+      fireEvent.change(screen.getByLabelText("저자"), { target: { value: "한단어" } });
+      fireEvent.change(screen.getByLabelText("제목"), { target: { value: "단어" } });
+      fireEvent.click(screen.getAllByRole("button", { name: "분할" })[0]);
+      fireEvent.click(screen.getAllByRole("button", { name: "분할" })[1]);
+
+      expect(screen.getByLabelText("저자").value).toBe("한단어");
+      expect(screen.getByLabelText("제목").value).toBe("단어");
+    });
+
+    it("제목을 비우면 신규 이름에서 제목을 뺀다", () => {
+      render(<DirectoryEditPanel {...props({ directory: { category: "comics/series", name: "[저자] 작품명" } })} />);
+
+      fireEvent.change(screen.getByLabelText("제목"), { target: { value: "  " } });
+
+      expect(screen.getByLabelText("신규 이름").value).toBe("[저자]");
+    });
+
+    it.each(["완결", "完", "외포완"])("완결 표기 %s를 표준 표기로 바꾼다", (completion) => {
+      render(<DirectoryEditPanel {...props({ directory: { category: "comics/series", name: `작품명 1-35 ${completion}` } })} />);
+
+      expect(screen.getByLabelText("목차").value).toMatch(/^1-35.* 완외?$/);
+    });
+
+    it("언마운트 뒤 늦게 도착한 통계·파일 응답은 무시한다", () => {
+      const callbacks = [];
+      mockRawJsonGetReq.mockImplementation((url, success, failure) => {
+        callbacks.push({ url, success, failure });
+      });
+      const onMetadataReady = vi.fn();
+      const { unmount } = render(<DirectoryEditPanel {...props({ directory: rangeDirectory, onMetadataReady })} />);
+      expect(callbacks.length).toBeGreaterThanOrEqual(2);
+      unmount();
+
+      for (const { success, failure } of callbacks) {
+        success({ status: "success", result: [], next_cursor: "" });
+        failure();
+      }
+      expect(onMetadataReady).not.toHaveBeenCalled();
+    });
+
+    it("파일 목록 응답이 실패 상태이거나 배열이 아니면 단위 추론을 마친다", async () => {
+      const onMetadataReady = vi.fn();
+      mockRawJsonGetReq.mockImplementation((url, success) => {
+        if (url.includes("category-pdf-stats")) success({ status: "error" });
+        else success({ status: "error" });
+      });
+      render(<DirectoryEditPanel {...props({ directory: rangeDirectory, onMetadataReady })} />);
+
+      await waitFor(() => expect(onMetadataReady).toHaveBeenCalledOnce());
+    });
+
+    it("file_path가 없는 파일은 단위 추론에서 건너뛴다", async () => {
+      const onMetadataReady = vi.fn();
+      mockRawJsonGetReq.mockImplementation((url, success) => {
+        if (url.includes("category-pdf-stats")) success({ status: "success", result: { file_count: 3, page_count: 30, total_file_size: 100 } });
+        else success({ status: "success", result: [{}, { file_path: "a/01화.pdf" }] });
+      });
+      render(<DirectoryEditPanel {...props({ directory: rangeDirectory, onMetadataReady })} />);
+
+      await waitFor(() => expect(onMetadataReady).toHaveBeenCalledOnce());
+    });
+  });
 });

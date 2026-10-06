@@ -882,3 +882,57 @@ class TestClassifyProposalItems(unittest.TestCase):
         items = cm.get_classify_proposal_items()
         assert len(items) == 250
         assert [item["file_path"] for item in items] == [f"{i}.epub" for i in range(250)]
+
+
+class TestClassifyProposalDeleteAndMerge(unittest.TestCase):
+    def _cm(self, cursor):
+        cm_mod, cm = build_cm(cursor)
+        conns = []
+
+        @contextlib.contextmanager
+        def _conn():
+            conn = FakeConn(cursor)
+            conns.append(conn)
+            yield conn
+
+        cm._get_connection = _conn
+        return cm, conns
+
+    def test_delete_classify_proposal_item_returns_deleted_count_and_commits(self):
+        cursor = FakeCursor(rowcount=1)
+        cm, conns = self._cm(cursor)
+
+        assert cm.delete_classify_proposal_item("/lib/a.epub", content_type="comic") == 1
+
+        sql, params = cursor.executed[-1]
+        assert sql.startswith("DELETE FROM classify_proposal_items")
+        assert params == ("comic", "/lib/a.epub")
+        assert conns[-1].committed
+
+    def test_delete_classify_proposal_item_missing_row_returns_zero(self):
+        cursor = FakeCursor(rowcount=0)
+        cm, _ = self._cm(cursor)
+
+        assert cm.delete_classify_proposal_item("/lib/none.epub") == 0
+
+    def test_merge_classify_proposal_status_patches_payload_without_status(self):
+        cursor = FakeCursor()
+        cm, conns = self._cm(cursor)
+
+        cm.merge_classify_proposal_status({"status": "ready", "progress": 3, "name": "한글"})
+
+        sql, params = cursor.executed[-1]
+        assert "JSON_MERGE_PATCH" in sql
+        assert json.loads(params[0]) == {"progress": 3, "name": "한글"}
+        assert params[1] == "book"
+        assert conns[-1].committed
+
+    def test_merge_classify_proposal_status_with_only_status_is_a_no_op(self):
+        cursor = FakeCursor()
+        cm, conns = self._cm(cursor)
+        before = len(cursor.executed)
+
+        cm.merge_classify_proposal_status({"status": "ready"})
+
+        assert len(cursor.executed) == before
+        assert conns == []

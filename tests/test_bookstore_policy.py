@@ -321,3 +321,20 @@ def test_service_passes_its_library_root_to_the_classifier(tmp_path):
 
     service = BookClassifierService(library_root=tmp_path / "books", cache_file=tmp_path / "cache.json")
     assert service.classifier.library_root == tmp_path / "books"
+
+
+def test_keyword_map_ignores_blank_keywords(monkeypatch):
+    import backend.classifier.bookstore_policy as mod
+
+    class FakeMapping:
+        def get_all_mappings(self, content_type="book"):
+            return {"3_SF": ["  ", "", None, " 과학소설 "]}
+
+    monkeypatch.setitem(__import__("sys").modules, "backend.category_mapping", type("M", (), {"CategoryMapping": FakeMapping}))
+
+    assert mod._load_from_db() == {"과학소설": ["3_SF"]}
+
+
+def test_quantile_bands_skips_cut_when_search_window_is_empty():
+    """값이 둘뿐이면 분위수 자리 좌우에 살필 칸이 없어 경계를 만들지 않는다."""
+    assert quantile_bands([0.1, 0.2], count=2) == []

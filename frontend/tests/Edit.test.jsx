@@ -1562,6 +1562,21 @@ describe("Edit", () => {
     );
   });
 
+  it("이동할 카테고리를 고르기 전에는 디렉토리 이동 요청을 보내지 않는다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=1_fiction"),
+    ]);
+    setupMockCategories();
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("move-dir"));
+
+    expect(mockJsonPutReq).not.toHaveBeenCalled();
+  });
+
   it("잘못된 디렉토리 이동 이름은 API 요청 전에 거부한다", async () => {
     const { useParams, useSearchParams } = await import("react-router-dom");
     useParams.mockReturnValue({ "*": "" });
@@ -1579,6 +1594,28 @@ describe("Edit", () => {
 
     expect(mockJsonPutReq).not.toHaveBeenCalled();
     expect(screen.getByText("디렉토리 이름을 확인하세요. 이름에는 '/'를 사용할 수 없습니다.")).toBeTruthy();
+  });
+
+  it("디렉토리 이동 요청이 실패하면 오류 메시지를 표시한다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=1_fiction"),
+    ]);
+    setupMockCategories();
+    mockJsonPutReq.mockImplementation((_url, _payload, _success, failure, done) => {
+      failure("permission denied");
+      if (done) done();
+    });
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("select-dir"));
+    fireEvent.click(screen.getByTestId("move-dir"));
+
+    expect(
+      await screen.findByText("디렉토리 이동에 실패했습니다. permission denied"),
+    ).toBeTruthy();
   });
 
   it("URL로 연 하위 디렉토리는 부모 폴더가 펼쳐지고 선택된 상태가 된다", async () => {
@@ -1874,6 +1911,81 @@ describe("Edit", () => {
       expect(screen.getByTestId("book-title").textContent).toBe("중첩책1");
       expect(screen.getByTestId("book-author").textContent).toBe("작가I");
     });
+  });
+
+  it("만화 중첩 카테고리(3단계) 책은 api 파라미터를 붙인 보기 주소로 연다", async () => {
+    const nestedCategories = { "1_fiction": 3, "1_fiction/sub": 2 };
+    const subBooks = [
+      {
+        book_id: 601,
+        title: "[작가I] 중첩책1",
+        author: "",
+        file_type: "epub",
+        file_path: "1_fiction/sub/[작가I] 중첩책1.epub",
+        category: "1_fiction/sub",
+      },
+    ];
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") resolve(nestedCategories);
+      else if (url === "/comics/categories/1_fiction/sub") resolve(subBooks);
+      else if (url.startsWith("/comics/categories/")) resolve([]);
+      else resolve({});
+    });
+    render(<Edit apiPrefix="/comics" basePath="/comics-edit" />);
+    fireEvent.click(await screen.findByTestId("folder-item-1_fiction/sub"));
+    fireEvent.click(await screen.findByTestId("folder-item-1_fiction/sub/601"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("중첩책1");
+    });
+    expect(
+      document.querySelector('[data-view-url*="&api=%2Fcomics"]'),
+    ).toBeTruthy();
+  });
+
+  it("이미 펼쳐진 부모 안의 다음 디렉토리로 넘어가도 펼침 목록에 중복을 넣지 않는다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=2_p/x"),
+    ]);
+    setupMockCategories(
+      { "1_a": 1, "2_p/x": 1, "2_p/y": 1, "3_z": 1 },
+      [],
+    );
+    mockJsonPutReq.mockImplementation((_url, _payload, success, _failure, done) => {
+      success();
+      if (done) done();
+    });
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    expect(JSON.parse(screen.getByTestId("folder-open").dataset.expanded)).toEqual(["__virtual__2_p"]);
+    fireEvent.click(screen.getByTestId("select-dir"));
+    fireEvent.change(screen.getByLabelText("신규 이름"), {
+      target: { value: "moved" },
+    });
+    fireEvent.click(screen.getByTestId("move-dir"));
+
+    await waitFor(() => {
+      const folder = screen.getByTestId("folder-open");
+      expect(JSON.parse(folder.dataset.selected)).toEqual(["2_p/y"]);
+    });
+    expect(JSON.parse(screen.getByTestId("folder-open").dataset.expanded)).toEqual(["__virtual__2_p"]);
+  });
+
+  it("첫 디렉토리에서 이전, 마지막 디렉토리에서 다음을 눌러도 선택이 바뀌지 않는다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([
+      new URLSearchParams("directory=1_fiction"),
+    ]);
+    setupMockCategories();
+
+    render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("previous-directory"));
+    expect(screen.getByLabelText("신규 이름").value).toBe("1_fiction");
   });
 
   it("책 디렉토리만 있어도 현재 위치를 제외한 최상위 이동 대상을 모두 표시한다", async () => {

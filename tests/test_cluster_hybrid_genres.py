@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from utils.cluster_hybrid_genres import (
+    extract_content_head_tail_words,
     extract_head_tail_words,
     calculate_genre_frequencies,
     main,
@@ -326,3 +327,69 @@ def test_semi_cluster_wuxia_fantasy_hybrid():
     res = calculate_5_genre_scores_and_ratios("무림판타지", text)
     assert res["cluster"] == "하이브리드_무협_판타지"
     assert res["target_cat"] == "3_판타지"
+
+
+def test_first_1000_words_wraps_head_tail_extraction(tmp_path: Path):
+    from utils.cluster_hybrid_genres import extract_content_first_1000_words
+
+    f = tmp_path / "book.txt"
+    f.write_text("무협 강호의 소림사 화산파 내공 진기 무림맹 " * 50, encoding="utf-8")
+    assert extract_content_first_1000_words(f) == extract_content_head_tail_words(f, 500, 500)
+    assert extract_content_first_1000_words(f) != ""
+
+
+def test_txt_tail_read_failure_keeps_the_head_text(tmp_path: Path):
+    f = tmp_path / "book.txt"
+    f.write_text("무협 강호의 소림사 화산파 내공 진기 무림맹 " * 50, encoding="utf-8")
+    with patch.object(Path, "stat", side_effect=OSError("gone")):
+        text = extract_content_head_tail_words(f, 10, 10)
+    assert text.split()[:3] == ["무협", "강호의", "소림사"]
+
+
+def test_epub_with_only_cover_like_names_falls_back_to_all_html(tmp_path: Path):
+    import zipfile
+
+    epub = tmp_path / "book.epub"
+    body = "<p>" + "소림사 화산파 내공 진기 무림맹 " * 20 + "</p>"
+    with zipfile.ZipFile(epub, "w") as z:
+        z.writestr("OEBPS/cover.xhtml", body)
+        z.writestr("OEBPS/nav.xhtml", body)
+    text = extract_content_head_tail_words(epub, 10, 10)
+    assert "소림사" in text
+
+
+def test_clean_disclaimer_of_empty_text_is_empty():
+    from utils.cluster_hybrid_genres import clean_disclaimer_and_colophon
+
+    assert clean_disclaimer_and_colophon("") == ""
+
+
+def test_explicit_wuxia_title_boosts_wuxia_and_zeroes_bl_and_romance():
+    from utils.cluster_hybrid_genres import calculate_5_genre_scores_and_ratios
+
+    text = "소림사 무당파 화산파 장문인 내공 진기 운기조식 강호 무림맹 " * 5
+    plain = calculate_5_genre_scores_and_ratios("제목", text)["scores"]
+    tagged = calculate_5_genre_scores_and_ratios("[무협] 제목", text)["scores"]
+    # 제목의 태그 단어도 본문 점수에 잡히므로 보너스 5점 이상 오른다
+    assert tagged["3_무협"] >= plain["3_무협"] + 5
+    assert tagged["9_BLGL"] == 0 and tagged["3_여성향"] == 0
+
+
+def test_explicit_fantasy_title_boosts_fantasy_and_zeroes_bl_and_romance():
+    from utils.cluster_hybrid_genres import calculate_5_genre_scores_and_ratios
+
+    text = "던전 상태창 마나 스킬 몬스터 레이드 " * 5
+    plain = calculate_5_genre_scores_and_ratios("제목", text)["scores"]
+    tagged = calculate_5_genre_scores_and_ratios("[판타지] 제목", text)["scores"]
+    assert tagged["3_판타지"] >= plain["3_판타지"] + 5
+    assert tagged["9_BLGL"] == 0 and tagged["3_여성향"] == 0
+
+
+def test_explicit_other_genre_title_only_adds_the_bonus():
+    from utils.cluster_hybrid_genres import calculate_5_genre_scores_and_ratios
+
+    text = "무림맹 화산파 " * 3
+    plain = calculate_5_genre_scores_and_ratios("제목", text)["scores"]
+    tagged = calculate_5_genre_scores_and_ratios("[로맨스] 제목", text)["scores"]
+    assert tagged["3_여성향"] >= plain["3_여성향"] + 5
+    assert tagged["3_무협"] == plain["3_무협"]

@@ -1723,3 +1723,99 @@ describe("Bookstore 만화 모드 검색어 정리", () => {
     }
   });
 });
+
+describe("Bookstore 검색어 조합 경계", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "not_found", result: [] }), 0);
+    });
+  });
+
+  it.each(["(1-5권) 작품", "[완결] 작품"])(
+    "이름이 괄호 표기로 시작하면(%s) 원본을 돌려준다",
+    (name) => {
+      expect(stripComicDirectoryMeta(name)).toBe(name);
+    },
+  );
+
+  it("저자 없이 제목만 검색하다 오류가 나면 오류 결과를 그대로 표시한다", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    rawJsonGetReq.mockImplementation((_url, _onSuccess, onError) => {
+      setTimeout(() => onError(new Error("서버 오류")), 0);
+    });
+
+    await act(async () => {
+      render(
+        <Bookstore
+          bookInfo={{ title: "제목만", author: "", isbn: "" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+
+    expect((await screen.findAllByText("검색 중 오류가 발생했습니다.")).length).toBeGreaterThan(0);
+    errorSpy.mockRestore();
+  });
+
+  it("제목 없이 저자만 있으면 ISBN 단계 없이 저자로 자동 검색한다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore
+          bookInfo={{ title: "", author: "저자만", isbn: "" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+
+    await waitFor(() => expect(rawJsonGetReq).toHaveBeenCalled());
+    const urls = rawJsonGetReq.mock.calls.map((c) => c[0]);
+    expect(urls.every((u) => u.includes("author=") && !u.includes("title=") && !u.includes("isbn="))).toBe(true);
+  });
+
+  it("ISBN과 제목만 있으면 ISBN 실패 뒤 저자 없이 제목만으로 검색한다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore
+          bookInfo={{ title: "제목", author: "", isbn: "978" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+
+    await waitFor(() =>
+      expect(rawJsonGetReq.mock.calls.some((c) => c[0].includes("title=") && !c[0].includes("isbn="))).toBe(true),
+    );
+    const titleCalls = rawJsonGetReq.mock.calls.filter((c) => c[0].includes("title="));
+    expect(titleCalls.every((c) => !c[0].includes("author="))).toBe(true);
+  });
+
+  it("ISBN만 있으면 ISBN 검색이 실패해도 제목·저자 검색은 하지 않는다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore
+          bookInfo={{ title: "", author: "", isbn: "978" }}
+          searchTrigger={1}
+        />,
+      );
+    });
+
+    await waitFor(() => expect(rawJsonGetReq).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(rawJsonGetReq.mock.calls.every((c) => c[0].includes("isbn=978"))).toBe(true);
+  });
+
+  it("ISBN이 있어도 저자가 비어 있으면 저자+제목 버튼은 제목만 보낸다", async () => {
+    render(
+      <Bookstore bookInfo={{ title: "제목", author: "", isbn: "978" }} />,
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" })[0]);
+
+    await waitFor(() => expect(rawJsonGetReq).toHaveBeenCalled());
+    expect(rawJsonGetReq.mock.calls[0][0]).toContain("title=");
+    expect(rawJsonGetReq.mock.calls[0][0]).not.toContain("author=");
+  });
+});
+

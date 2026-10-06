@@ -780,3 +780,27 @@ def test_shrink_sources_leaves_the_filename_alone():
     docs = [{"name": "무협 1234 강호 5678 협객.epub"}]
     shrink_sources(docs, ["name"], [("filename", {"source": "name", "max_chars": 5})])
     assert docs[0]["name"] == "무협 1234 강호 5678 협객.epub"
+
+
+def test_rss_note_is_empty_when_proc_status_is_unreadable(monkeypatch):
+    import builtins
+
+    from backend.classifier.training import rss_note
+
+    def deny(*_args, **_kwargs):
+        raise OSError("no /proc")
+
+    monkeypatch.setattr(builtins, "open", deny)
+    assert rss_note() == ""
+
+
+def test_train_logs_dropped_small_categories(caplog):
+    config = merge_config(
+        DEFAULT_CONFIG,
+        {"corpus": {"min_per_category": 5}, "model": {"n_jobs": 1}, "fields": {"body_word": {"min_df": 1, "max_features": 5000}, "body_char": {"enabled": False}, "filename": {"min_df": 1}, "title": {"min_df": 1}, "author": {"min_df": 1}, "publisher": {"min_df": 1}, "file_type": {"min_df": 1}}, "holdout": 0.25},
+    )
+    docs = make_docs() + [{"id": "tiny-0", "cat": "9_희귀", "text": "희귀 문서", "title": "희귀", "author": "작가", "publisher": "출판사", "type": "txt", "name": "희귀.txt", "path": "/x/희귀.txt"}]
+    with caplog.at_level("INFO", logger="backend.classifier.training"):
+        model, _ = train(docs, config, accept_parent=SERIES_TO_PARENT)
+    assert "9_희귀" not in set(model.classes)
+    assert any("표본 부족으로 제외한 카테고리 1개" in r.getMessage() for r in caplog.records)
