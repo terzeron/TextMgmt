@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components --
    서점 카테고리 파싱 유틸이 컴포넌트와 co-located. HMR 힌트일 뿐 런타임 영향 없음. */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
 
 import "./Edit.css";
@@ -73,9 +73,17 @@ const toComicSearchTitle = (name) =>
   stripComicDirectoryMeta(stripComicDirectoryAuthor(name));
 
 // 검색 결과에서 카테고리를 수집하여 categories 객체에 추가
-const collectStoreCategories = (storeData, storeKey, categories) => {
+const collectStoreCategories = (storeData, storeKey, categories, searchTitle, comic) => {
   if (storeData?.status === "success" && storeData?.result?.length > 0) {
     storeData.result.forEach((item, idx) => {
+      if (storeKey === "naverwebtoon" || storeKey === "kakaowebtoon") {
+        const title = searchTitle?.trim();
+        if (title && item.title?.includes(title)) {
+          categories[`${storeKey}_${idx}_0`] = item.category?.includes("로맨스") ? "여성향" : "웹툰";
+        }
+        return;
+      }
+      if (comic) return;
       const cats = extractMultiPathCategories(item.category);
       cats.forEach((cat, pathIdx) => {
         categories[`${storeKey}_${idx}_${pathIdx}`] = cat;
@@ -155,14 +163,26 @@ const buildStoreSearchUrl = (store, title, author) => {
 
 // 카테고리 유사도 판정에 참여하는 서점 목록
 // 교보는 "국내도서 > 소설 > 한국소설" 처럼 다른 두 곳과 같은 모양의 분류 경로를 준다.
-const CATEGORY_STORES = ["yes24", "aladin", "kyobo", "naver"];
+const CATEGORY_STORES = ["yes24", "aladin", "kyobo", "naver", "naverwebtoon", "kakaowebtoon"];
+
+const collectSearchCategories = (results, title, comic) => {
+  const categories = {};
+  for (const store of CATEGORY_STORES) {
+    collectStoreCategories(results[store], store, categories, title, comic);
+  }
+  if (Object.values(categories).includes("여성향")) {
+    for (const key of Object.keys(categories)) {
+      if (categories[key] === "웹툰") delete categories[key];
+    }
+  }
+  return categories;
+};
 
 // 책 모드의 자동 검색 대상 서점 목록. 나머지 서점은 버튼을 눌러야 검색한다.
-// CATEGORY_STORES 는 이 목록의 부분집합이어야 한다. 여기서 빠진 서점은 결과가 없어
-// 카테고리 수집이 조용히 건너뛴다.
+// 웹툰은 책 모드에서 수동 검색할 때만 추천에 참여한다.
 const AUTO_SEARCH_STORES = ["yes24", "aladin", "kyobo", "naver"];
 
-// 만화 모드의 자동 검색 대상 서점 목록. 카테고리를 결정하지 않으므로 CATEGORY_STORES 와 무관하다.
+// 만화 모드의 자동 검색 대상 서점 목록. 제목이 일치한 웹툰만 추천에 참여한다.
 const COMIC_AUTO_SEARCH_STORES = [
   "yes24",
   "aladin",
@@ -194,29 +214,37 @@ export default function Bookstore(props) {
   const [author, setAuthor] = useState("");
   const [isbn, setIsbn] = useState("");
   const [data, setData] = useState({});
+  const categoryResults = useRef({});
   // 서점별로 마지막에 수행한 검색 방법 ("isbn" | "title_author"). 토글 버튼의 선택 상태가 된다.
   const [methods, setMethods] = useState({});
   const visibleStores = props.comic
     ? STORES.filter((s) => !COMIC_HIDDEN_STORES.includes(s.key))
     : STORES;
-  // 만화 모드: ISBN 검색을 쓰지 않고, 검색 결과로 카테고리를 결정하지 않는다.
-  const onCategoriesFound = props.comic ? undefined : props.onCategoriesFound;
+  const onCategoriesFound = props.onCategoriesFound;
+  const reportStoreCategories = (store, result, searchTitle) => {
+    categoryResults.current = { ...categoryResults.current, [store]: result };
+    if (CATEGORY_STORES.includes(store) && onCategoriesFound) {
+      onCategoriesFound(collectSearchCategories(categoryResults.current, searchTitle, props.comic));
+    }
+  };
 
   // bookInfo 변경 시 로컬 필드만 동기화 (검색은 트리거하지 않음)
   useEffect(() => {
     const rawTitle = props.bookInfo?.title || "";
-    setTitle(props.comic ? toComicSearchTitle(rawTitle) : rawTitle);
+    setTitle(props.comic && !props.titleParsed ? toComicSearchTitle(rawTitle) : rawTitle);
     // 만화 모드는 제목만으로 검색한다. 저자를 넣으면 서점이 0건을 돌려주는 경우가 있다.
     setAuthor(props.comic ? "" : props.bookInfo?.author || "");
     setIsbn(props.comic ? "" : props.bookInfo?.isbn || "");
-  }, [props.bookInfo, props.comic]);
+  }, [props.bookInfo, props.comic, props.titleParsed]);
 
   // 책 정보 로딩 또는 이름 변경 시에만 자동 검색 실행
   useEffect(() => {
     if (!props.searchTrigger) return; // 초기 마운트 시 스킵
+    let cancelled = false;
 
     // 탭 및 데이터 초기화
     setData({});
+    categoryResults.current = {};
     setMethods({});
     if (onCategoriesFound) {
       onCategoriesFound({});
@@ -226,7 +254,7 @@ export default function Bookstore(props) {
     const autoSearch = async (store) => {
       const currentIsbn = props.comic ? "" : props.bookInfo.isbn || "";
       const rawTitle = props.bookInfo.title || "";
-      const currentTitle = props.comic
+      const currentTitle = props.comic && !props.titleParsed
         ? toComicSearchTitle(rawTitle)
         : rawTitle;
       const currentAuthor = props.comic ? "" : props.bookInfo.author || "";
@@ -306,18 +334,20 @@ export default function Bookstore(props) {
         ]),
       );
       const results = Object.fromEntries(entries);
+      if (cancelled) return;
+      categoryResults.current = results;
 
       // 카테고리 유사도 판정 서점의 결과만 수집하여 부모에게 전달
       if (onCategoriesFound) {
-        const categories = {};
-        for (const storeKey of CATEGORY_STORES) {
-          collectStoreCategories(results[storeKey], storeKey, categories);
-        }
-        onCategoriesFound(categories);
+        const searchTitle = props.comic && !props.titleParsed
+          ? toComicSearchTitle(props.bookInfo.title || "")
+          : props.bookInfo.title;
+        onCategoriesFound(collectSearchCategories(results, searchTitle, props.comic));
       }
     };
 
     runAutoSearch();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- searchTrigger 변경만 트리거로 사용 (다른 props는 의도적으로 deps에서 제외)
   }, [props.searchTrigger]);
 
@@ -407,6 +437,7 @@ export default function Bookstore(props) {
     // 이미 해당 검색 결과가 있으면 재사용
     if (data[cacheKey] && !data[cacheKey].loading && !data[cacheKey].error) {
       setData((prev) => ({ ...prev, [store]: data[cacheKey] }));
+      reportStoreCategories(store, data[cacheKey], title);
       return;
     }
 
@@ -419,21 +450,8 @@ export default function Bookstore(props) {
         author ? requestSearch(store, { title, author }) : null,
       ]).then(([titleResult, authorTitleResult]) => {
         const result = combineSearchResults(titleResult, authorTitleResult);
-        setData((prev) => {
-          const newData = { ...prev, [store]: result, [cacheKey]: result };
-          if (CATEGORY_STORES.includes(store) && onCategoriesFound) {
-            const categories = {};
-            for (const storeKey of CATEGORY_STORES) {
-              collectStoreCategories(
-                storeKey === store ? result : newData[storeKey],
-                storeKey,
-                categories,
-              );
-            }
-            onCategoriesFound(categories);
-          }
-          return newData;
-        });
+        setData((prev) => ({ ...prev, [store]: result, [cacheKey]: result }));
+        reportStoreCategories(store, result, title);
       });
       return;
     }
@@ -459,21 +477,8 @@ export default function Bookstore(props) {
       `/search/bookstore/${store}?${params.toString()}`,
       (json) => {
         // 결과를 store와 cacheKey 둘 다에 저장
-        setData((prev) => {
-          const newData = { ...prev, [store]: json, [cacheKey]: json };
-
-          // 카테고리 유사도 판정 서점의 검색 결과를 부모에게 전달
-          if (CATEGORY_STORES.includes(store) && onCategoriesFound) {
-            const categories = {};
-            for (const storeKey of CATEGORY_STORES) {
-              const storeResult = storeKey === store ? json : newData[storeKey];
-              collectStoreCategories(storeResult, storeKey, categories);
-            }
-            onCategoriesFound(categories);
-          }
-
-          return newData;
-        });
+        setData((prev) => ({ ...prev, [store]: json, [cacheKey]: json }));
+        reportStoreCategories(store, json, title);
       },
       (error) => {
         console.error(error);
@@ -617,4 +622,5 @@ Bookstore.propTypes = {
   searchTrigger: PropTypes.number,
   onCategoriesFound: PropTypes.func,
   comic: PropTypes.bool,
+  titleParsed: PropTypes.bool,
 };
