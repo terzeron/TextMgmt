@@ -23,12 +23,21 @@ function buildContents(value, completion, fileCount) {
   let normalizedValue = value.replace(/\s+/g, "");
   const singleEpisodeMatch = /^(\d+)화$/.exec(normalizedValue);
   const episodeCount = Number(singleEpisodeMatch?.[1]);
+  const joinedRangeMatch = /^1(\d+)화$/.exec(normalizedValue);
+  const rangeEndCount = Number(joinedRangeMatch?.[1]);
   if (
     singleEpisodeMatch &&
     episodeCount > 1 &&
     episodeCount === Number(fileCount)
   ) {
     normalizedValue = `1~${episodeCount}화`;
+  } else if (
+    joinedRangeMatch &&
+    rangeEndCount > 1 &&
+    rangeEndCount === Number(fileCount)
+  ) {
+    normalizedValue = `1-${rangeEndCount}화`;
+    completion = completion === "미완" ? "미완" : "완";
   }
   return `${normalizedValue} ${completion}`;
 }

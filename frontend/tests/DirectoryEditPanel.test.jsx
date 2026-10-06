@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const { mockJsonPostReq, mockJsonPutReq, mockRawJsonGetReq } = vi.hoisted(() => ({
   mockJsonPostReq: vi.fn(),
@@ -271,6 +271,47 @@ describe("DirectoryEditPanel", () => {
         "[홍길동] 테스트 만화 (1~123화 완결)",
       );
     });
+  });
+
+  it.each([
+    ["1102화 완결", 102, "1-102화 완"],
+    ["1102화 미완", 102, "1-102화 미완"],
+    ["1102화 完", 102, "1-102화 완"],
+    ["1102화 완결", 101, "1102화 완결"],
+    ["2102화 완결", 102, "2102화 완결"],
+    ["1102화 완결", 1102, "1~1102화 완결"],
+  ])("붙은 화수 %s와 파일 수 %i를 목차 %s로 처리한다", async (originalContents, fileCount, expectedContents) => {
+    let resolveStats;
+    mockRawJsonGetReq.mockImplementation((_url, success) => {
+      resolveStats = success;
+    });
+    const title = "대위님! 이번 전쟁터는 이곳인가요？";
+    const values = props({
+      directory: {
+        category: "comics/series",
+        name: `${title} ${originalContents}`,
+      },
+    });
+    render(<DirectoryEditPanel {...values} />);
+
+    expect(screen.getByLabelText("목차").value).toBe(originalContents);
+    act(() => resolveStats({
+      status: "success",
+      result: { file_count: fileCount, page_count: 120, total_file_size: 5000 },
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("제목").value).toBe(title);
+      expect(screen.getByLabelText("목차").value).toBe(expectedContents);
+      expect(screen.getByLabelText("신규 이름").value).toBe(
+        `${title} (${expectedContents})`,
+      );
+    });
+    fireEvent.change(screen.getByLabelText("목차"), { target: { value: "수정" } });
+    fireEvent.click(screen.getByRole("button", { name: "복원" }));
+    expect(screen.getByLabelText("목차").value).toBe(expectedContents);
+    fireEvent.click(screen.getByText("이동"));
+    expect(values.onMove).toHaveBeenCalledWith(`${title} (${expectedContents})`);
   });
 
   it("변경한 구성 요소로 조합한 이름을 이동 대상에 전달한다", () => {
