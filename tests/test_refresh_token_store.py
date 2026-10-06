@@ -919,3 +919,85 @@ def test_mysql_migration_adds_columns_to_legacy_table(mysql_container):
     item = store.list_sessions(status="all")["items"][0]
     assert item["client_ip"] == ""
     assert item["user_agent"] == ""
+
+
+# --- UA 요약 / 세션 목록 상한 ---
+
+
+@pytest.mark.parametrize(
+    "user_agent, expected",
+    [
+        ("Mozilla/5.0 Chrome/120.0 Safari/537.36", "Chrome 120"),
+        ("curl (iPhone OS 17_2 like)", "iOS 17"),
+    ],
+)
+def test_summarize_user_agent_with_only_browser_or_only_os(user_agent, expected):
+    from backend.refresh_token_store import summarize_user_agent
+
+    assert summarize_user_agent(user_agent) == expected
+
+
+def test_parse_browser_name_version_returns_none_when_pattern_has_no_version(monkeypatch):
+    import re
+
+    from backend import refresh_token_store as mod
+
+    monkeypatch.setattr(mod, "_UA_BROWSER_PATTERNS", ((re.compile("Foo"), "Foo {0}"),))
+    assert mod._parse_browser_name_version("Foo/1") is None
+
+
+def test_sqlite_session_rows_warns_when_limit_is_reached(tmp_path, monkeypatch, caplog):
+    from backend import refresh_token_store as mod
+
+    store, _ = _session_fixture(tmp_path)
+    monkeypatch.setattr(mod, "MAX_SESSION_GROUPS", 1)
+    with caplog.at_level("WARNING"):
+        rows = store._session_rows()
+    assert len(rows) == 1
+    assert any("상한" in r.getMessage() for r in caplog.records)
+
+
+def test_mysql_session_rows_warns_when_limit_is_reached(monkeypatch, caplog):
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock
+
+    from backend import refresh_token_store as mod
+
+    monkeypatch.setattr(mod, "MAX_SESSION_GROUPS", 1)
+    cur = MagicMock()
+    cur.fetchall.return_value = [{"family_id": "F"}]
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+
+    @contextmanager
+    def connect():
+        yield conn
+
+    store = mod.MySQLRefreshTokenStore.__new__(mod.MySQLRefreshTokenStore)
+    store._connect = connect
+    with caplog.at_level("WARNING"):
+        rows = store._session_rows(email="e", family_id="F")
+    assert rows == [{"family_id": "F"}]
+    assert any("상한" in r.getMessage() for r in caplog.records)
+    # now 두 번 + email + family_id
+    assert len(cur.execute.call_args.args[1]) == 4
+
+
+def test_mysql_session_rows_treats_none_result_as_empty():
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock
+
+    from backend import refresh_token_store as mod
+
+    cur = MagicMock()
+    cur.fetchall.return_value = None
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+
+    @contextmanager
+    def connect():
+        yield conn
+
+    store = mod.MySQLRefreshTokenStore.__new__(mod.MySQLRefreshTokenStore)
+    store._connect = connect
+    assert store._session_rows() == []

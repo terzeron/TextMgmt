@@ -503,3 +503,110 @@ def test_reband_stops_when_there_are_no_rows(tmp_path):
         main(["bookstore-policy", "--reband", str(saved)])
     # 서점 조회부터 다시 해야 한다는 것을 알려야 한다.
     assert "서점 조회부터" in str(e.value)
+
+
+# ---------------------------------------------------------------------------
+# score-calibration / reclassify 의 남은 갈래 / 스크립트 실행
+# ---------------------------------------------------------------------------
+
+FAKE_CALIBRATION = {"x": [0.01, 0.05, 0.15], "y": [0.5, 0.8, 0.99], "n": 123}
+
+
+def test_score_calibration_stops_when_holdout_is_too_small(model_file, capsys):
+    path, corpus = model_file
+    before = path.read_bytes()
+
+    assert main(["score-calibration", "--model", str(path), "--corpus", str(corpus)]) == 1
+
+    assert "표본이 모자라" in capsys.readouterr().out
+    assert path.read_bytes() == before
+
+
+def test_score_calibration_dry_run_leaves_the_model_file_alone(model_file, monkeypatch, capsys):
+    import backend.classifier.training as training
+
+    path, corpus = model_file
+    before = path.read_bytes()
+    monkeypatch.setattr(training, "fit_confidence_calibration", lambda *_a, **_k: FAKE_CALIBRATION)
+
+    assert main(["score-calibration", "--model", str(path), "--corpus", str(corpus), "--dry-run"]) == 0
+
+    out = capsys.readouterr().out
+    assert "계단 3칸, 표본 123건" in out
+    assert "--dry-run 이라 모델 파일은 그대로 둔다" in out
+    assert path.read_bytes() == before
+
+
+def test_score_calibration_saves_the_scale_into_the_model(model_file, monkeypatch, capsys):
+    import backend.classifier.training as training
+    from backend.classifier.model import CategoryModel
+
+    path, corpus = model_file
+    monkeypatch.setattr(training, "fit_confidence_calibration", lambda *_a, **_k: FAKE_CALIBRATION)
+
+    assert main(["score-calibration", "--model", str(path), "--corpus", str(corpus)]) == 0
+
+    assert "모델에 눈금을 넣었다" in capsys.readouterr().out
+    assert CategoryModel.load(path).meta["confidence_calibration"] == FAKE_CALIBRATION
+
+
+def test_reclassify_limit_caps_the_number_of_files(model_file, tmp_path, capsys):
+    path, _ = model_file
+    library = tmp_path / "library"
+    source = library / "0_inbox"
+    source.mkdir(parents=True)
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (source / name).write_text(" ".join([VOCAB["3_무협"]] * 3), encoding="utf-8")
+
+    assert main(["reclassify", "0_inbox", "--model", str(path), "--library-root", str(library), "--no-es", "--limit", "2"]) == 0
+
+    assert "대상 2건" in capsys.readouterr().out
+
+
+def test_reclassify_counts_files_that_cannot_be_moved(model_file, tmp_path, monkeypatch, capsys):
+    import shutil
+
+    path, _ = model_file
+    library = tmp_path / "library"
+    source = library / "0_inbox"
+    source.mkdir(parents=True)
+    book = source / "무림맹_장문인.txt"
+    book.write_text(" ".join([VOCAB["3_무협"]] * 3), encoding="utf-8")
+
+    def deny(*_args, **_kwargs):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(shutil, "move", deny)
+
+    assert main(["reclassify", "0_inbox", "--model", str(path), "--library-root", str(library), "--no-es", "--min-confidence", "0.0", "--apply"]) == 0
+
+    assert book.exists()
+    assert "실패 1건" in capsys.readouterr().out
+
+
+def test_info_lists_dropped_categories_and_truncates_after_ten(model_file, tmp_path, capsys):
+    from backend.classifier.model import CategoryModel
+
+    path, _ = model_file
+    model = CategoryModel.load(path)
+    model.meta["dropped_categories"] = [f"9_희귀{i}" for i in range(12)]
+    patched = tmp_path / "dropped.joblib"
+    model.save(patched)
+
+    assert main(["info", "--model", str(patched)]) == 0
+
+    out = capsys.readouterr().out
+    assert "제외 카테고리 12개: 9_희귀0" in out
+    assert "9_희귀9 ..." in out
+    assert "9_희귀10" not in out
+
+
+def test_running_as_script_exits_with_main_status(model_file, monkeypatch):
+    import runpy
+    import sys
+
+    path, _ = model_file
+    monkeypatch.setattr(sys, "argv", ["classify_cli.py", "info", "--model", str(path)])
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_module("utils.classify_cli", run_name="__main__")
+    assert exc.value.code == 0

@@ -168,3 +168,44 @@ def test_model_prefers_the_stored_calibration_over_the_curve():
 
     assert model.confidence_calibration is stored
     assert model.expected_accuracy(0.076) == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# 곡선이 모자라거나 겹칠 때
+# ---------------------------------------------------------------------------
+
+
+def test_coverage_curve_with_a_single_point_is_none():
+    holdout = {"n": 10, "curve": [{"coverage": 0.5, "precision": 0.9, "threshold": 0.1}]}
+    assert from_coverage_report(holdout) is None
+
+
+def test_coverage_curve_skips_points_that_do_not_widen_coverage():
+    """판정률이 같은 점이 둘이면 정렬상 뒤쪽 점은 차분할 폭이 0 이라 건너뛴다."""
+    holdout = {
+        "n": 10,
+        "curve": [
+            {"coverage": 0.5, "precision": 0.95, "threshold": 0.12},
+            {"coverage": 0.5, "precision": 0.94, "threshold": 0.11},
+            {"coverage": 1.0, "precision": 0.9, "threshold": 0.02},
+        ],
+    }
+    cal = from_coverage_report(holdout)
+    assert cal is not None
+    assert cal["x"] == [0.02, 0.11]
+
+
+def test_coverage_curve_with_one_distinct_threshold_is_none():
+    """임계값이 모두 같으면 눈금의 x 가 한 점으로 접힌다."""
+    holdout = {
+        "n": 10,
+        "curve": [
+            {"coverage": 0.5, "precision": 0.95, "threshold": 0.1},
+            {"coverage": 1.0, "precision": 0.9, "threshold": 0.1},
+        ],
+    }
+    assert from_coverage_report(holdout) is None
+
+
+def test_expected_accuracy_with_unreadable_values_is_none():
+    assert expected_accuracy({"x": [0.1, "high"], "y": [0.5, 0.9]}, 0.2) is None

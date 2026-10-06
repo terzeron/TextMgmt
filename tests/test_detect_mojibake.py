@@ -335,3 +335,25 @@ def test_list_library_files_skips_hidden_files_and_tool_caches(tmp_path):
 
     names = [p.name for p in list_library_files(root)]
     assert names == ["a.txt"]
+
+
+def test_importing_adds_repo_root_to_sys_path(monkeypatch):
+    import runpy
+    import sys
+
+    from utils import detect_mojibake
+
+    repo_str = str(detect_mojibake.REPO_ROOT)
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if p != repo_str])
+    runpy.run_module("utils.detect_mojibake", run_name="test_mod")
+    assert repo_str in sys.path
+
+
+def test_running_as_script_exits_with_main_status(monkeypatch, capsys):
+    import runpy
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["detect_mojibake.py", "check"])
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_module("utils.detect_mojibake", run_name="__main__")
+    assert exc.value.code == 1
