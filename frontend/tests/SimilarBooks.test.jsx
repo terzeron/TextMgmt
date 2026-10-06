@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  act,
   render,
   screen,
   fireEvent,
@@ -1569,6 +1570,142 @@ describe("SimilarBooks", () => {
       expect(screen.getByText("test_category/Book 1.pdf")).toBeTruthy();
       expect(errorSpy).toHaveBeenCalledWith("network error");
       errorSpy.mockRestore();
+    });
+  });
+
+  describe("유사 이름 목록 경계", () => {
+    const nameItem = (overrides = {}) => ({
+      kind: "file",
+      id: 7,
+      category: "Novel/Part",
+      label: "Part",
+      score: 80,
+      file_count: 1,
+      page_count: 10,
+      total_file_size: 5000,
+      ...overrides,
+    });
+
+    const mockNames = (items) => {
+      mockRawJsonGetReq.mockImplementation((_url, resolve) => {
+        resolve({ status: "success", result: items });
+      });
+    };
+
+    beforeEach(() => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it.each([
+      ["음수", -1],
+      ["숫자가 아닌 값", "abc"],
+    ])("총 용량이 %s이면 0MB로 표시한다", async (_name, size) => {
+      mockNames([nameItem({ total_file_size: size })]);
+
+      render(<SimilarBooks directoryName="Novel" />);
+
+      expect(await screen.findByText(/0MB/)).toBeTruthy();
+    });
+
+    it("basePath가 비어 있으면 기본 편집 경로로 파일 항목 링크를 만든다", async () => {
+      mockNames([nameItem()]);
+      const open = vi.spyOn(window, "open").mockImplementation(() => null);
+
+      render(<SimilarBooks directoryName="Novel" basePath="" />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Part 편집" }));
+      fireEvent.click(screen.getByRole("button", { name: "Part 조회" }));
+      expect(open).toHaveBeenNthCalledWith(1, "/book-edit/7?category=Novel%2FPart", "_blank", "noopener");
+      expect(open).toHaveBeenNthCalledWith(2, "/book-view/7?category=Novel%2FPart", "_blank", "noopener");
+    });
+
+    it("파일 항목 삭제는 책 삭제 API를 호출하고 진행 중에는 스피너를 보인다", async () => {
+      mockNames([nameItem()]);
+      let finish;
+      mockJsonDeleteReq.mockImplementation((_url, _body, success) => {
+        finish = success;
+      });
+
+      render(<SimilarBooks directoryName="Novel" />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Part 삭제" }));
+      expect(mockJsonDeleteReq.mock.calls[0][0]).toContain("/books/7");
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Part 삭제" }).disabled).toBe(true),
+      );
+      expect(screen.getByRole("button", { name: "Part 삭제" }).querySelector(".fa-spin")).toBeTruthy();
+
+      act(() => finish());
+      await waitFor(() =>
+        expect(screen.getByText("유사한 파일이나 디렉토리가 없습니다.")).toBeTruthy(),
+      );
+    });
+
+    it("실패 상태 응답은 목록을 바꾸지 않고, 첫 조회 오류는 로그만 남긴다", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      mockRawJsonGetReq.mockImplementation((_url, resolve) => resolve({ status: "error" }));
+      const { unmount } = render(<SimilarBooks directoryName="Novel" />);
+      await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalledTimes(1));
+      unmount();
+
+      mockRawJsonGetReq.mockImplementation((_url, _resolve, reject) => reject("boom"));
+      render(<SimilarBooks directoryName="Novel" />);
+      await waitFor(() => expect(errorSpy).toHaveBeenCalledWith("boom"));
+    });
+  });
+
+  describe("진행 중 재진입 방어", () => {
+    // disabled 버튼은 DOM 클릭이 막히므로, React가 최신 렌더로 갱신해 둔 onClick을 직접 호출해 방어 분기를 검증한다.
+    const callReactOnClick = (element) => {
+      const propsKey = Object.keys(element).find((key) => key.startsWith("__reactProps$"));
+      element[propsKey].onClick({ stopPropagation: () => {} });
+    };
+
+    it("디렉토리 삭제 진행 중에는 재진입한 삭제 요청을 무시한다", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      mockRawJsonGetReq.mockImplementation((_url, resolve) => {
+        resolve({
+          status: "success",
+          result: [{
+            kind: "directory", id: "Novel", category: "Novel", label: "Novel",
+            score: 80, file_count: 1, page_count: 10, total_file_size: 5000,
+          }],
+        });
+      });
+      mockJsonPostReq.mockImplementation(() => {});
+
+      render(<SimilarBooks directoryName="Novel" />);
+      const deleteButton = await screen.findByRole("button", { name: "Novel 삭제" });
+      fireEvent.click(deleteButton);
+      await waitFor(() => expect(deleteButton.disabled).toBe(true));
+
+      callReactOnClick(deleteButton);
+
+      expect(window.confirm).toHaveBeenCalledTimes(1);
+      expect(mockJsonPostReq).toHaveBeenCalledTimes(1);
+      vi.restoreAllMocks();
+    });
+
+    it("새로고침 진행 중에는 재진입한 디렉토리 이름 새로고침을 무시한다", async () => {
+      mockRawJsonGetReq.mockImplementation((_url, resolve) => {
+        resolve({ status: "success", result: [] });
+      });
+
+      render(<SimilarBooks directoryName="Novel" />);
+      await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalledTimes(1));
+      const refreshButton = screen.getByLabelText("유사 이름 검색 새로고침");
+      fireEvent.click(refreshButton);
+      await waitFor(() => expect(refreshButton.getAttribute("aria-busy")).toBe("true"));
+      const callsDuringRefresh = mockRawJsonGetReq.mock.calls.length;
+
+      callReactOnClick(refreshButton);
+
+      expect(mockRawJsonGetReq.mock.calls.length).toBe(callsDuringRefresh);
+      await waitFor(() => expect(refreshButton.getAttribute("aria-busy")).toBe("false"));
     });
   });
 });

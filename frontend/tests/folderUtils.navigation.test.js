@@ -446,3 +446,12 @@ describe('findParentFolderId', () => {
         expect(findParentFolderId([], 'x')).toBeNull();
     });
 });
+
+describe('entry ID를 해석할 수 없는 경우', () => {
+    it('슬래시가 없거나 bookId가 숫자가 아니면 다음·이전 항목이 없다', () => {
+        expect(determineNextEntryId(rootFiles, 'plain')).toBeNull();
+        expect(determineNextEntryId(rootFiles, 'cat/not-a-number')).toBeNull();
+        expect(determinePrevEntryId(rootFiles, 'plain')).toBeNull();
+        expect(determinePrevEntryId(rootFiles, 'cat/not-a-number')).toBeNull();
+    });
+});

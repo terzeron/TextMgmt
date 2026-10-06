@@ -529,3 +529,60 @@ describe("LatestBooks", () => {
     });
   });
 });
+
+describe("LatestBooks 만화 대표 선정 경계", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  afterEach(cleanup);
+
+  const renderComics = async (result) => {
+    mockRawJsonGetReq.mockImplementation((_url, resolve, _reject, final) => {
+      resolve({ status: "success", result });
+      final();
+    });
+    render(<LatestBooks contentType="comic" />);
+    await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
+    return screen.getByTestId("search-result");
+  };
+
+  it.each([
+    ["경로가 더 앞서면 교체한다", ["1_a/작품/02.pdf", "1_a/작품/01.pdf"], "2"],
+    ["경로가 더 뒤면 유지한다", ["1_a/작품/01.pdf", "1_a/작품/02.pdf"], "1"],
+  ])("둘 다 1권이 아닐 때 %s", async (_name, paths, expectedId) => {
+    const list = await renderComics(
+      paths.map((file_path, index) => ({
+        book_id: index + 1,
+        title: `작품 ${index + 5}권`,
+        category: "1_a/작품",
+        file_path,
+      })),
+    );
+    await waitFor(() => expect(list.dataset.bookIds).toBe(expectedId));
+  });
+
+  it("둘 다 1권이면 경로 순으로 고른다", async () => {
+    const list = await renderComics([
+      { book_id: 1, title: "작품 1권", category: "1_a/작품", file_path: "1_a/작품/b.pdf" },
+      { book_id: 2, title: "작품 1화", category: "1_a/작품", file_path: "1_a/작품/a.pdf" },
+    ]);
+    await waitFor(() => expect(list.dataset.bookIds).toBe("2"));
+  });
+
+  it("title과 file_path가 없는 항목도 안전하게 묶는다", async () => {
+    const list = await renderComics([
+      { book_id: 1, category: "1_a/작품" },
+      { book_id: 2, category: "1_a/작품" },
+      { book_id: 3, title: "작품 1권", category: "1_a/작품" },
+      { book_id: 4, category: null },
+    ]);
+    await waitFor(() => expect(list.dataset.bookIds).toContain("3"));
+  });
+
+  it("만화 결과가 배열이 아니면 빈 목록으로 처리한다", async () => {
+    const list = await renderComics({ unexpected: true });
+    await waitFor(() => expect(list.textContent).toBe("최신 만화가 없습니다."));
+  });
+});

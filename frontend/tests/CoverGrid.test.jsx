@@ -173,4 +173,38 @@ describe("CoverGrid", () => {
     );
     expect(screen.getAllByRole("link")).toHaveLength(20);
   });
+
+  it("file_type·category·제목 정보가 비어 있어도 기본값으로 그린다", () => {
+    const { container } = render(
+      <CoverGrid
+        results={[
+          { book_id: 1 },
+          { book_id: 2, title: "제목만 있음", file_type: "txt" },
+          { book_id: 3, display_title: "표시 제목", file_path: "a/b.txt" },
+        ]}
+        basePath="/book-edit"
+      />,
+    );
+
+    expect(container.querySelector('a[href="/book-view/1?category=_root"]')).toBeTruthy();
+    expect(screen.getByText("Unknown")).toBeTruthy();
+    expect(screen.getAllByText("?").length).toBe(2);
+    expect(screen.getByText("제목만 있음")).toBeTruthy();
+    expect(screen.getByText("표시 제목")).toBeTruthy();
+  });
+
+  it("__COVER_VERSION__ 정의가 없으면 dev 버전으로 커버 URL을 만든다", async () => {
+    const saved = globalThis.__COVER_VERSION__;
+    delete globalThis.__COVER_VERSION__;
+    vi.resetModules();
+    try {
+      const { default: FreshCoverGrid } = await import("../src/CoverGrid");
+      const { container } = render(
+        <FreshCoverGrid results={makeBooks(1)} basePath="/book-edit" />,
+      );
+      expect(container.querySelector("img").getAttribute("src")).toContain("v=");
+    } finally {
+      if (saved !== undefined) globalThis.__COVER_VERSION__ = saved;
+    }
+  });
 });

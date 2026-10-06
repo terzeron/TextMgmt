@@ -1731,4 +1731,96 @@ describe("View", () => {
     expect(column).toBeTruthy();
     expect(column.classList.contains("col-md-3")).toBe(true);
   });
+
+  it("만화 딥링크에서 트리에 없는 카테고리는 api 파라미터를 붙여 직접 조회한다", async () => {
+    mockRouteState.wildcard = "99";
+    mockRouteState.searchParams = "category=깊은/3레벨/카테고리";
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") {
+        resolve({ 만화: 1 });
+      } else if (url === "/comics/books/99") {
+        resolve({
+          book_id: 99,
+          title: "깊은만화",
+          file_type: "pdf",
+          file_path: "/deep.pdf",
+          category: "깊은/3레벨/카테고리",
+        });
+      }
+    });
+
+    render(<View apiPrefix="/comics" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-single").dataset.viewUrl).toContain(
+        "&api=%2Fcomics",
+      );
+    });
+  });
+
+  it("책을 연 상태에서 디렉토리 목록 오류가 뒤늦게 도착하면 책 정보와 함께 오류 알림을 표시한다", async () => {
+    mockRouteState.wildcard = "99";
+    mockRouteState.searchParams = "category=깊은/3레벨/카테고리";
+    let lateReject;
+    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
+      if (url === "/categories") {
+        lateReject = reject;
+        resolve({ 소설: 1 });
+      } else if (url === "/books/99") {
+        resolve({
+          book_id: 99,
+          title: "깊은카테고리책",
+          file_type: "pdf",
+          file_path: "/deep.pdf",
+          category: "깊은/3레벨/카테고리",
+        });
+      }
+    });
+
+    render(<View />);
+    await waitFor(() => {
+      expect(screen.getByTestId("book-info-view")).toBeTruthy();
+    });
+
+    act(() => lateReject("서버 오류"));
+
+    expect(await screen.findByText(/can't load directory data, 서버 오류/)).toBeTruthy();
+  });
+
+  it("만화의 가상 부모 하위 카테고리 책은 api 파라미터가 붙은 viewUrl로 연다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") {
+        resolve({ "문학/소설": 3, "문학/시": 2, 역사: 1 });
+      } else if (url === "/comics/categories/문학/소설") {
+        resolve([
+          {
+            book_id: 42,
+            title: "깊은만화",
+            file_type: "pdf",
+            file_path: "/deep.pdf",
+            category: "문학/소설",
+          },
+        ]);
+      }
+    });
+
+    render(<View apiPrefix="/comics" />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-문학/소설")).toBeTruthy();
+    });
+    screen.getByTestId("folder-item-문학/소설").click();
+    await waitFor(() => {
+      expect(
+        mockJsonGetReq.mock.calls.find((c) => c[0] === "/comics/categories/문학/소설"),
+      ).toBeTruthy();
+    });
+
+    screen.getByTestId("custom-deep-click").click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-single").dataset.viewUrl).toContain(
+        "&api=%2Fcomics",
+      );
+    });
+  });
 });

@@ -58,4 +58,17 @@ describe("Home", () => {
     expect(footer.style.left).toBe("0px");
     expect(footer.style.right).toBe("0px");
   });
+
+  it("__APP_BUILD_ID__ 정의가 없으면 dev로 표시한다", async () => {
+    const saved = globalThis.__APP_BUILD_ID__;
+    delete globalThis.__APP_BUILD_ID__;
+    vi.resetModules();
+    try {
+      const { default: FreshHome } = await import("../src/Home");
+      render(<FreshHome />);
+      expect(screen.getByTestId("build-id").textContent).toBe("build: dev");
+    } finally {
+      if (saved !== undefined) globalThis.__APP_BUILD_ID__ = saved;
+    }
+  });
 });

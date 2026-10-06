@@ -4253,6 +4253,13 @@ describe("CategoryAdmin 성공 메시지 자동 소멸", () => {
       expect(formatErrorMessage(12345)).toBe("12345");
     });
 
+    it("비어 있거나 문자열이 아닌 필드는 건너뛰고 다음 필드나 문자열 변환으로 넘어간다", () => {
+      expect(formatErrorMessage({ message: "", detail: "", error: "마지막 필드" })).toBe("마지막 필드");
+      expect(formatErrorMessage({ message: 1, detail: 2, error: 3 })).toBe("[object Object]");
+      expect(formatErrorMessage({ detail: "상세" })).toBe("상세");
+      expect(formatErrorMessage(new Error(""))).toBe("Error");
+    });
+
     it("API 실패 시 reject 콜백에 Error 객체가 전달되어도 TypeError 없이 alert 박스에 표시된다", async () => {
       setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
       await openAndSelect();
@@ -5185,35 +5192,45 @@ describe("CategoryAdmin 분류 제안", () => {
     });
   });
 
-  it("완료 기록은 지웠는데 표를 다시 못 불러오면 그 사실을 알린다", async () => {
+  it("완료 기록은 지웠는데 표를 다시 못 불러오면 그 사실을 알리고 5초 뒤 지운다", async () => {
     // DELETE 는 성공했다. 재조회만 실패하면 표가 그대로라 삭제 여부를 알 길이 없다.
-    await renderReadyProposal([PROPOSAL_ITEM_UNSURE, PROPOSAL_ITEM_MOVED]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await renderReadyProposal([PROPOSAL_ITEM_UNSURE, PROPOSAL_ITEM_MOVED]);
 
-    mockJsonDeleteReq.mockImplementation(
-      (url, _payload, resolve, _reject, final) => {
-        resolve({ deleted_count: 1 });
-        if (final) final();
-      },
-    );
-    mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
-      if (url === "/categories/classify-proposal") reject("재조회 오류");
-      else if (url === "/categories") resolve(CATEGORIES_RESPONSE);
-      else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
-      else if (url.startsWith("/category-mismatches/reload-status"))
-        resolve({ status: "idle" });
-      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
-      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
-      else if (url.startsWith("/latest-excluded-categories"))
-        resolve(LATEST_EXCLUDED_RESPONSE);
-    });
+      mockJsonDeleteReq.mockImplementation(
+        (url, _payload, resolve, _reject, final) => {
+          resolve({ deleted_count: 1 });
+          if (final) final();
+        },
+      );
+      mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
+        if (url === "/categories/classify-proposal") reject("재조회 오류");
+        else if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+        else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
+        else if (url.startsWith("/category-mismatches/reload-status"))
+          resolve({ status: "idle" });
+        else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+        else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+        else if (url.startsWith("/latest-excluded-categories"))
+          resolve(LATEST_EXCLUDED_RESPONSE);
+      });
 
-    fireEvent.click(screen.getByRole("button", { name: "완료 기록 삭제" }));
-    const modal = await screen.findByRole("dialog");
-    fireEvent.click(within(modal).getByRole("button", { name: "삭제" }));
+      fireEvent.click(screen.getByRole("button", { name: "완료 기록 삭제" }));
+      const modal = await screen.findByRole("dialog");
+      fireEvent.click(within(modal).getByRole("button", { name: "삭제" }));
 
-    await waitFor(() => {
-      expect(screen.getByText("재조회 오류")).toBeTruthy();
-    });
+      await waitFor(() => {
+        expect(screen.getByText("재조회 오류")).toBeTruthy();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(screen.queryByText("재조회 오류")).toBeNull();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
   });
 
   it("분류 제안 다시 시작 모달은 닫기(X)로도 닫힌다", async () => {
@@ -7670,3 +7687,225 @@ describe("CategoryAdmin 재적재 완료 반영", () => {
     }
   });
 });
+
+describe("CategoryAdmin 카테고리 재적재 후속 조회 실패", () => {
+  beforeEach(() => {
+    mockJsonGetReq.mockReset();
+    mockJsonDeleteReq.mockReset();
+    mockJsonPostReq.mockReset();
+    mockJsonPutReq.mockReset();
+  });
+
+  it("카테고리 재적재가 error로 끝나면 문서 수 재조회 실패를 무시하고 안내를 5초 뒤 지운다", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let categoriesCalls = 0;
+      mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
+        if (url === "/categories") {
+          categoriesCalls += 1;
+          if (categoriesCalls === 1) resolve(CATEGORIES_RESPONSE);
+          else reject("문서 수 조회 실패");
+        } else if (url === "/category-mismatches") {
+          resolve(MISMATCH_RESPONSE_WITH_DATA);
+        } else if (url.startsWith("/category-mismatches/reload-status")) {
+          resolve({ status: "error", category: "1_fiction", error: "카테고리 재적재 실패" });
+        } else if (url.startsWith("/category-mappings")) {
+          resolve(MAPPINGS_RESPONSE);
+        } else if (url.startsWith("/hidden-categories")) {
+          resolve(HIDDEN_RESPONSE);
+        } else if (url.startsWith("/latest-excluded-categories")) {
+          resolve(LATEST_EXCLUDED_RESPONSE);
+        }
+      });
+      mockJsonPostReq.mockImplementation((_url, _payload, resolve, _reject, done) => {
+        resolve({ started: true });
+        if (done) done();
+      });
+
+      render(<CategoryAdmin />);
+      await waitFor(() => {
+        expect(screen.getByText("디렉토리")).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByText("1_fiction"));
+      fireEvent.click(screen.getByTitle("이상 항목만 ES 재적재"));
+      const modal = await screen.findByRole("dialog");
+      fireEvent.click(
+        within(modal).getByRole("button", { name: "이상 항목 재적재" }),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("카테고리 재적재 실패")).toBeTruthy();
+      });
+      expect(categoriesCalls).toBeGreaterThan(1);
+
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(screen.queryByText("카테고리 재적재 실패")).toBeNull();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("지난 제안 상태 복원 조회가 실패해도 화면은 그대로 열린다", async () => {
+    mockJsonGetReq.mockImplementation((url, _payload, resolve, reject) => {
+      if (url === "/categories/classify-proposal") reject("복원 실패");
+      else if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
+      else if (url.startsWith("/category-mismatches/reload-status")) resolve({ status: "idle" });
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories")) resolve(LATEST_EXCLUDED_RESPONSE);
+    });
+
+    render(<CategoryAdmin />);
+
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+    expect(mockJsonGetReq.mock.calls.some((call) => call[0] === "/categories/classify-proposal")).toBe(true);
+  });
+});
+
+describe("CategoryAdmin 분류 제안 상태 경계", () => {
+  beforeEach(() => {
+    mockJsonGetReq.mockReset();
+    mockJsonDeleteReq.mockReset();
+    mockJsonPostReq.mockReset();
+    mockJsonPutReq.mockReset();
+  });
+
+  function mockProposalGet(proposal) {
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === "/categories") resolve(CATEGORIES_RESPONSE);
+      else if (url === "/category-mismatches") resolve(MISMATCH_RESPONSE_EMPTY);
+      else if (url.startsWith("/category-mismatches/reload-status"))
+        resolve({ status: "idle" });
+      else if (url === "/categories/classify-proposal") resolve(proposal);
+      else if (url.startsWith("/category-mappings")) resolve(MAPPINGS_RESPONSE);
+      else if (url.startsWith("/hidden-categories")) resolve(HIDDEN_RESPONSE);
+      else if (url.startsWith("/latest-excluded-categories"))
+        resolve(LATEST_EXCLUDED_RESPONSE);
+    });
+  }
+
+  const renderLoaded = async () => {
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("디렉토리")).toBeTruthy();
+    });
+  };
+
+  it.each([
+    ["빈 응답", null],
+    ["idle 상태", { status: "idle" }],
+  ])("복원한 제안이 %s이면 제안 카드를 그리지 않는다", async (_name, proposal) => {
+    mockProposalGet(proposal);
+    await renderLoaded();
+
+    expect(screen.queryByText(/^분류 제안:/)).toBeNull();
+  });
+
+  it("후보와 건수가 없는 ready 제안도 0 / 0으로 카드를 그린다", async () => {
+    mockProposalGet({
+      status: "ready",
+      source_category: "1_fiction",
+      items: [
+        {
+          file_path: "1_fiction/a.epub",
+          title: "후보 없는 책",
+          current_category: "1_fiction",
+          grade: "certain",
+          apply_status: "pending",
+        },
+      ],
+    });
+    await renderLoaded();
+
+    expect(await screen.findByText("분류 제안: 1_fiction")).toBeTruthy();
+    expect(screen.getByText("0 / 0")).toBeTruthy();
+    expect(screen.getByText("후보 없는 책")).toBeTruthy();
+  });
+
+  it("실패 제안에 원인이 없으면 원인을 알 수 없다고 표시한다", async () => {
+    mockProposalGet({ status: "failed", source_category: "1_fiction" });
+    await renderLoaded();
+
+    expect(await screen.findByText(/원인을 알 수 없습니다\./)).toBeTruthy();
+  });
+
+  it("처리 건수가 없는 진행 중 제안은 0/전체 건수를 버튼에 표시한다", async () => {
+    mockProposalGet({
+      status: "running",
+      source_category: "1_fiction",
+      total_count: 5,
+    });
+    await renderLoaded();
+
+    expect(await screen.findByText("0/5")).toBeTruthy();
+  });
+
+  it("다른 카테고리의 분류 작업이 도는 중이면 버튼 안내에 그 카테고리를 알려준다", async () => {
+    mockProposalGet({
+      status: "running",
+      source_category: "1_fiction",
+      total_count: 5,
+      processed_count: 1,
+    });
+    await renderLoaded();
+    await screen.findByText("1/5");
+
+    fireEvent.click(screen.getByText("2_science", { selector: "p" }));
+
+    expect(
+      await screen.findByTitle(
+        "1_fiction 분류 작업이 끝나야 시작할 수 있습니다",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("삭제 건수 응답이 모달을 닫은 뒤 늦게 도착해도 무시한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    const originalImpl = mockJsonGetReq.getMockImplementation();
+    const held = [];
+    mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
+      if (url.startsWith("/category-delete-preview")) {
+        held.push({ resolve, reject });
+        return;
+      }
+      originalImpl(url, payload, resolve, reject);
+    });
+    await renderLoaded();
+
+    fireEvent.click(screen.getByText("1_fiction"));
+    fireEvent.click(screen.getByTitle("디렉토리 삭제"));
+    const modal = await screen.findByRole("dialog");
+    fireEvent.click(within(modal).getByRole("button", { name: "취소" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    expect(held).toHaveLength(1);
+    act(() => {
+      held[0].resolve({ directory_count: 1, file_count: 1, es_count: 1 });
+      held[0].reject("늦은 오류");
+    });
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("건수 필드가 하나도 없는 이상 항목은 0건으로 집계한다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, {
+      mismatches: [],
+      es_only: [{ category: "1_fiction" }],
+      fs_only: [],
+    });
+
+    render(<CategoryAdmin />);
+
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+  });
+});
+

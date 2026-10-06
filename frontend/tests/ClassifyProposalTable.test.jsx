@@ -8,6 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import ClassifyProposalTable, {
+  SORT_COLUMNS,
   resolveTarget,
   isSelectable,
   isAlreadyInCurrentCategory,
@@ -918,4 +919,44 @@ describe("제자리 제안 표시", () => {
       .map((row) => within(row).getAllByRole("cell")[0].textContent);
     expect(titles[0]).toBe("낮은 정답률");
   });
+
+  it("추천 2가 없는 행은 추천 2 정렬에서 방향과 무관하게 뒤로 간다", () => {
+    renderTable();
+    const titleOrder = () =>
+      screen
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => within(row).getAllByRole("cell")[0].textContent);
+    const button = screen.getByLabelText("추천 2 정렬");
+
+    fireEvent.click(button);
+    expect(titleOrder()).toEqual(["애매한 책", "불확실한 책", "확실한 책"]);
+    fireEvent.click(button);
+    expect(titleOrder()).toEqual(["애매한 책", "불확실한 책", "확실한 책"]);
+  });
+
+  it("추천 2에 카테고리 값이 비어 있는 행도 추천 2 정렬에서 뒤로 간다", () => {
+    const items = [
+      { ...ITEMS[0], file_path: "A/x.epub", title: "빈 추천", candidates: [ITEMS[0].candidates[0], {}] },
+      ITEMS[1],
+    ];
+    renderTable({ items, choices: {} });
+
+    fireEvent.click(screen.getByLabelText("추천 2 정렬"));
+
+    const titles = screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => within(row).getAllByRole("cell")[0].textContent);
+    expect(titles).toEqual(["애매한 책", "빈 추천"]);
+  });
+
+  it("추천 열 정렬 키는 후보가 없거나 카테고리가 비면 null을 준다", () => {
+    expect(SORT_COLUMNS.candidate0({})).toBeNull();
+    expect(SORT_COLUMNS.candidate1({})).toBeNull();
+    expect(SORT_COLUMNS.candidate1({ candidates: [{ category: "A" }] })).toBeNull();
+    expect(SORT_COLUMNS.candidate1({ candidates: [{ category: "A" }, { category: null }] })).toBeNull();
+    expect(SORT_COLUMNS.candidate1({ candidates: [{ category: "A" }, { category: "B" }] })).toBe("B");
+  });
 });
+

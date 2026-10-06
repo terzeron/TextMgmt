@@ -695,4 +695,19 @@ describe("Common Utilities", () => {
       expect(reject).toHaveBeenCalled();
     });
   });
+
+  it("JSON 응답 본문이 비어 있으면 Unknown error로 reject한다", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => null,
+    });
+
+    const reject = vi.fn();
+    jsonGetReq("/test-endpoint", null, null, reject);
+
+    await vi.waitFor(() => {
+      expect(reject).toHaveBeenCalledWith("Unknown error");
+    });
+  });
 });

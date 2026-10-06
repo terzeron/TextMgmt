@@ -355,4 +355,21 @@ describe("clientLogger", () => {
     expect(() => window.dispatchEvent(promiseEvent)).not.toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    "ResizeObserver loop completed with undelivered notifications",
+    "ResizeObserver loop limit exceeded",
+  ])("무해한 브라우저 오류 '%s'는 보고하지 않는다", (message) => {
+    navigator.sendBeacon = undefined;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    global.fetch = fetchMock;
+    initGlobalErrorLogging();
+
+    window.dispatchEvent(new ErrorEvent("error", { message }));
+    const promiseEvent = new CustomEvent("unhandledrejection");
+    Object.defineProperty(promiseEvent, "reason", { value: new Error(message) });
+    window.dispatchEvent(promiseEvent);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

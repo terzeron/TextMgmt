@@ -11,6 +11,7 @@ import {
   MemoryRouter,
   Route,
   Routes,
+  useNavigate,
   useOutletContext,
 } from "react-router-dom";
 /* eslint-disable react/prop-types -- 테스트 mock 컴포넌트는 throwaway라 PropTypes 검증 불필요 */
@@ -1738,5 +1739,123 @@ describe("Navigation Component", () => {
     await waitFor(() => {
       expect(fetch).not.toHaveBeenCalledWith("/api/auth/me", expect.anything());
     });
+  });
+
+  describe("검색 카테고리 목록 재적재", () => {
+    function CategoryHarness() {
+      const context = useOutletContext();
+      const navigate = useNavigate();
+      return (
+        <>
+          <span data-testid="categories">
+            {context.searchCategories.join("|")}
+          </span>
+          <span data-testid="selected">{context.selectedSearchCategory}</span>
+          <button
+            type="button"
+            onClick={() => context.handleSearchCategoryChange("과학")}
+          >
+            과학 선택
+          </button>
+          <button type="button" onClick={() => navigate("/comics-view")}>
+            만화로
+          </button>
+          <button type="button" onClick={() => navigate("/book-view")}>
+            책으로
+          </button>
+        </>
+      );
+    }
+
+    const renderHarness = () =>
+      render(
+        <MemoryRouter initialEntries={["/book-view"]}>
+          <Routes>
+            <Route element={<Navigation />}>
+              <Route path="/book-view" element={<CategoryHarness />} />
+              <Route path="/comics-view" element={<CategoryHarness />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>,
+      );
+
+    beforeEach(() => {
+      fetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status: "success", result: { role: "admin" } }),
+      });
+    });
+
+    it("재적재한 목록에 없는 선택값은 해제하고, 실패 응답과 오류는 목록을 비운다", async () => {
+      const responses = {
+        "/categories": (resolve) =>
+          resolve({ status: "success", result: { 과학: 1, 소설: 2 } }),
+        "/comics/categories": (resolve) =>
+          resolve({ status: "success", result: { 만화: 1 } }),
+      };
+      Common.rawJsonGetReq.mockImplementation((url, resolve, reject) => {
+        if (url.endsWith("/categories")) responses[url](resolve, reject);
+      });
+
+      renderHarness();
+      await waitFor(() =>
+        expect(screen.getByTestId("categories").textContent).toBe("과학|소설"),
+      );
+      fireEvent.click(screen.getByText("과학 선택"));
+      expect(screen.getByTestId("selected").textContent).toBe("과학");
+
+      fireEvent.click(screen.getByText("만화로"));
+      await waitFor(() =>
+        expect(screen.getByTestId("categories").textContent).toBe("만화"),
+      );
+      expect(screen.getByTestId("selected").textContent).toBe("");
+
+      responses["/categories"] = (resolve) => resolve({ status: "error" });
+      fireEvent.click(screen.getByText("책으로"));
+      await waitFor(() =>
+        expect(screen.getByTestId("categories").textContent).toBe(""),
+      );
+
+      responses["/comics/categories"] = (_resolve, reject) => reject(new Error("x"));
+      const callsBefore = Common.rawJsonGetReq.mock.calls.length;
+      fireEvent.click(screen.getByText("만화로"));
+      await waitFor(() =>
+        expect(Common.rawJsonGetReq.mock.calls.length).toBeGreaterThan(callsBefore),
+      );
+      expect(screen.getByTestId("categories").textContent).toBe("");
+    });
+
+    it("성공 응답에 result가 없으면 빈 목록이 된다", async () => {
+      Common.rawJsonGetReq.mockImplementation((url, resolve) => {
+        if (url === "/categories") resolve({ status: "success" });
+      });
+      renderHarness();
+      await waitFor(() =>
+        expect(Common.rawJsonGetReq).toHaveBeenCalledWith(
+          "/categories",
+          expect.any(Function),
+          expect.any(Function),
+        ),
+      );
+      expect(screen.getByTestId("categories").textContent).toBe("");
+    });
+  });
+
+  it("세션 복원 응답에 role이 없으면 로그인 상태로 바꾸지 않는다", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: "success", result: {} }),
+    });
+
+    render(
+      <MemoryRouter>
+        <Navigation />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith("/api/auth/me", expect.anything()),
+    );
+    expect(screen.queryByText(/로그아웃/)).toBeNull();
   });
 });
