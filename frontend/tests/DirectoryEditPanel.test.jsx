@@ -193,15 +193,16 @@ describe("DirectoryEditPanel", () => {
   });
 
   it.each([
-    ["XXX / YYY", "XXX, YYY"],
-    ["XXX/YYY / ZZZ", "XXX, YYY, ZZZ"],
-    ["XXX  /  YYY", "XXX, YYY"],
+    ["XXX / YYY", "XXX / YYY"],
+    ["XXX/YYY / ZZZ", "XXX/YYY / ZZZ"],
+    ["XXX  /  YYY", "XXX  /  YYY"],
     ["XXX, YYY", "XXX, YYY"],
-  ])("제목 입력 %s의 슬래시를 쉼표로 바꾸고 신규 이름에 반영한다", (input, expected) => {
+  ])("제목 입력 %s를 자동 치환하지 않고 신규 이름에 반영한다", (input, expected) => {
     const values = props({ directory: { category: "comics/series", name: "[저자] 기존 제목 (애장판) (1-10권 완)" } });
     render(<DirectoryEditPanel {...values} />);
 
     fireEvent.change(screen.getByLabelText("제목"), { target: { value: input } });
+    fireEvent.blur(screen.getByLabelText("제목"));
 
     expect(screen.getByLabelText("제목").value).toBe(expected);
     expect(screen.getByLabelText("신규 이름").value).toBe(`[저자] ${expected} (애장판) (1-10권 완)`);
@@ -210,19 +211,21 @@ describe("DirectoryEditPanel", () => {
   });
 
   it.each([
-    ["봉이 / 갈피 / 오윤", "봉이, 갈피, 오윤"],
-    ["XXX/YYY / ZZZ", "XXX, YYY, ZZZ"],
-  ])("입력 이벤트를 놓쳐도 제목 %s에서 포커스가 빠지면 슬래시를 보정한다", (input, expected) => {
+    "봉이 / 갈피 / 오윤",
+    "XXX/YYY / ZZZ",
+  ])("제목 %s에서 포커스가 빠져도 슬래시와 수동 신규 이름을 유지한다", (input) => {
     const values = props({ directory: { category: "comics/series", name: "[저자] 기존 제목 (애장판) (1-10권 완)" } });
     render(<DirectoryEditPanel {...values} />);
     const titleInput = screen.getByLabelText("제목");
+    fireEvent.change(titleInput, { target: { value: input } });
+    fireEvent.change(screen.getByLabelText("신규 이름"), { target: { value: "사용자 지정 이름" } });
     fireEvent.focus(titleInput);
-    fireEvent.focusOut(titleInput, { target: { value: input } });
+    fireEvent.blur(titleInput);
 
-    expect(titleInput.value).toBe(expected);
-    expect(screen.getByLabelText("신규 이름").value).toBe(`[저자] ${expected} (애장판) (1-10권 완)`);
+    expect(titleInput.value).toBe(input);
+    expect(screen.getByLabelText("신규 이름").value).toBe("사용자 지정 이름");
     fireEvent.click(screen.getByText("이동"));
-    expect(values.onMove).toHaveBeenCalledWith(`[저자] ${expected} (애장판) (1-10권 완)`);
+    expect(values.onMove).toHaveBeenCalledWith("사용자 지정 이름");
   });
 
   it("슬래시 없는 제목에서 포커스가 빠져도 수동으로 수정한 신규 이름을 유지한다", () => {

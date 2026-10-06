@@ -588,7 +588,13 @@ export default function Bookstore(props) {
                       </a>
                     </div>
                     <small className="text-muted">
-                      {item.author && <span>{item.author}</span>}
+                      {item.author && (
+                        <span>
+                          {storeKey === "naverwebtoon" || storeKey === "kakaowebtoon"
+                            ? item.author.replaceAll(" / ", ", ")
+                            : item.author}
+                        </span>
+                      )}
                       {item.category && <span> | {item.category}</span>}
                       {item.isbn && <span> | ISBN: {item.isbn}</span>}
                     </small>

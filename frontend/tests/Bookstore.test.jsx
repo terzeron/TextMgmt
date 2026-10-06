@@ -1336,6 +1336,59 @@ describe("Bookstore 만화 모드", () => {
   });
 });
 
+describe("Bookstore 웹툰 저자 표시", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    [true, "naverwebtoon", "네이버웹툰"],
+    [true, "kakaowebtoon", "카카오웹툰"],
+    [false, "naverwebtoon", "네이버웹툰"],
+    [false, "kakaowebtoon", "카카오웹툰"],
+  ])("만화 모드 %s에서 %s의 저자 구분자만 쉼표로 표시한다", async (comic, store, label) => {
+    const item = Object.freeze({ title: "작품 / 부제", author: "봉이 / 갈피 / 오윤", category: "로맨스 / 판타지" });
+    const bookInfo = Object.freeze({ title: "작품 / 부제", author: "검색 저자 / 다른 저자" });
+    rawJsonGetReq.mockImplementation((_url, success) => success({ status: "success", result: [item] }));
+    render(<Bookstore comic={comic} bookInfo={bookInfo} />);
+    const row = within(storeRow(label));
+    const search = () => fireEvent.click(row.getByRole("button", { name: "저자+제목" }));
+    search();
+
+    await waitFor(() => expect(row.getByText("봉이, 갈피, 오윤")).toBeTruthy());
+    expect(row.getByText(item.title)).toBeTruthy();
+    expect(row.getByText(`| ${item.category}`)).toBeTruthy();
+    expect(item.author).toBe("봉이 / 갈피 / 오윤");
+    const requests = rawJsonGetReq.mock.calls.length;
+    for (const [url] of rawJsonGetReq.mock.calls) {
+      const parsed = new URL(url, "http://localhost");
+      expect(parsed.pathname).toBe(`/search/bookstore/${store}`);
+      expect(parsed.searchParams.get("title")).toBe(bookInfo.title);
+      if (parsed.searchParams.has("author")) expect(parsed.searchParams.get("author")).toBe(bookInfo.author);
+    }
+    search();
+    expect(rawJsonGetReq).toHaveBeenCalledTimes(requests);
+    expect(row.getByText("봉이, 갈피, 오윤")).toBeTruthy();
+  });
+
+  it.each(["Yes24", "알라딘"])("%s 저자명의 슬래시는 변경하지 않는다", async (label) => {
+    rawJsonGetReq.mockImplementation((_url, success) => success({ status: "success", result: [{ author: "봉이 / 갈피 / 오윤" }] }));
+    render(<Bookstore comic bookInfo={{ title: "작품명" }} />);
+    const row = within(storeRow(label));
+    fireEvent.click(row.getByRole("button", { name: "저자+제목" }));
+    await waitFor(() => expect(row.getByText("봉이 / 갈피 / 오윤")).toBeTruthy());
+  });
+
+  it.each(["봉이/갈피", "봉이, 갈피", "봉이", "", null, undefined])("웹툰 저자 %s는 지정된 구분자가 없으면 유지한다", async (author) => {
+    rawJsonGetReq.mockImplementation((_url, success) => success({ status: "success", result: [{ title: "작품명", author }] }));
+    render(<Bookstore comic bookInfo={{ title: "작품명" }} searchTrigger={1} />);
+    for (const label of ["네이버웹툰", "카카오웹툰"]) {
+      const row = within(storeRow(label));
+      await waitFor(() => expect(row.getByText("작품명")).toBeTruthy());
+      if (author) expect(row.getByText(author)).toBeTruthy();
+      else expect(storeRow(label).querySelector("small").textContent).toBe("");
+    }
+  });
+});
+
 describe("Bookstore 웹툰 자동 검색", () => {
   const WEBTOON_STORES = ["naverwebtoon", "kakaowebtoon"];
 
