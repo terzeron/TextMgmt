@@ -314,6 +314,65 @@ describe("DirectoryEditPanel", () => {
     expect(values.onMove).toHaveBeenCalledWith(`${title} (${expectedContents})`);
   });
 
+  it.each([
+    ["1 65화 외전, 특별편, 후기 포함 완 캡", "1-65화 완외"],
+    ["1-65화 완결 외전 포함", "1-65화 완외"],
+    ["1~65회 후기 포함 完", "1~65회 완외"],
+    ["(1-65권 완 특별편 포함)", "1-65권 완외"],
+    ["1-65화 [완] (외전 포함)", "1-65화 완외"],
+    ["(1-65화 완외)", "1-65화 완외"],
+    ["(1-65화) [완외]", "1-65화 완외"],
+    ["165화 외전 포함 완", "1-65화 완외"],
+  ])("완결과 추가 회차 정보 %s를 %s로 통일한다", async (originalContents, expectedContents) => {
+    mockRawJsonGetReq.mockImplementation((_url, success) => success({
+      status: "success",
+      result: { file_count: 65, page_count: 120, total_file_size: 5000 },
+    }));
+    const values = props({
+      directory: {
+        category: "comics/series",
+        name: `동트는 로맨스 ${originalContents}`,
+      },
+    });
+    render(<DirectoryEditPanel {...values} />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("저자").value).toBe("");
+      expect(screen.getByLabelText("제목").value).toBe("동트는 로맨스");
+      expect(screen.getByLabelText("목차").value).toBe(expectedContents);
+      expect(screen.getByLabelText("신규 이름").value).toBe(
+        `동트는 로맨스 (${expectedContents})`,
+      );
+    });
+    fireEvent.change(screen.getByLabelText("목차"), { target: { value: "수정" } });
+    fireEvent.click(screen.getByRole("button", { name: "복원" }));
+    expect(screen.getByLabelText("목차").value).toBe(expectedContents);
+    fireEvent.click(screen.getByText("이동"));
+    expect(values.onMove).toHaveBeenCalledWith(`동트는 로맨스 (${expectedContents})`);
+  });
+
+  it.each([
+    "1-65화 외전 포함 미완",
+    "1-65화 특별편 포함",
+    "1-65화 후기 포함 완전판",
+  ])("완결 표기가 없는 %s를 완외로 오인하지 않는다", (suffix) => {
+    render(<DirectoryEditPanel {...props({
+      directory: { category: "comics/series", name: `동트는 로맨스 ${suffix}` },
+    })} />);
+
+    expect(screen.getByLabelText("목차").value).toBe("");
+    expect(screen.getByLabelText("신규 이름").value).not.toContain("완외");
+  });
+
+  it("제목의 외전 표기만으로 목차를 완외로 바꾸지 않는다", () => {
+    render(<DirectoryEditPanel {...props({
+      directory: { category: "comics/series", name: "외전 로맨스 (1-65화 완)" },
+    })} />);
+
+    expect(screen.getByLabelText("제목").value).toBe("외전 로맨스");
+    expect(screen.getByLabelText("목차").value).toBe("1-65화 완");
+  });
+
   it("변경한 구성 요소로 조합한 이름을 이동 대상에 전달한다", () => {
     const values = props();
     render(<DirectoryEditPanel {...values} />);

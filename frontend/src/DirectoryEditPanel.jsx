@@ -4,9 +4,9 @@ import { Button, Card, Form, InputGroup } from "react-bootstrap";
 import { jsonPostReq, jsonPutReq, rawJsonGetReq } from "./Common";
 import Actions from "./Actions";
 
-const COMPLETION_VALUES = new Set(["완결", "미완", "완", "完"]);
-const COMPLETION_PATTERN = String.raw`(?:완결|미완|완|完)`;
-const CONTENTS_VALUE = String.raw`\d+(?:\s*[-~]\s*\d+)?\s*[화회권]`;
+const COMPLETION_VALUES = new Set(["완결", "미완", "완외", "완", "完"]);
+const COMPLETION_PATTERN = String.raw`(?:완결|미완|완외|완|完)`;
+const CONTENTS_VALUE = String.raw`\d+(?:(?:\s*[-~]\s*|\s+)\d+)?\s*[화회권]`;
 const PAREN_CONTENTS_PATTERN = new RegExp(
   String.raw`\(\s*(${CONTENTS_VALUE})\s+(${COMPLETION_PATTERN})\s*\)\s*$`,
 );
@@ -16,11 +16,16 @@ const PLAIN_CONTENTS_PATTERN = new RegExp(
 const SPLIT_CONTENTS_PATTERN = new RegExp(
   String.raw`(?:\(\s*(${CONTENTS_VALUE})\s*\)|(${CONTENTS_VALUE}))\s*(?:\[\s*(${COMPLETION_PATTERN})\s*\]|\(\s*(${COMPLETION_PATTERN})\s*\))\s*$`,
 );
+const EXTRA_CONTENTS_PATTERN = new RegExp(
+  String.raw`(?:^|\s|\()\s*(${CONTENTS_VALUE})\s*\)?(.*)$`,
+);
 const EDITION_PATTERN =
   /(^|\s)(?:\(\s*)?(정식한국어판|정식판|한국어판|애장판|완전판)(?:\s*\))?(?=\s|$)/;
 
 function buildContents(value, completion, fileCount) {
-  let normalizedValue = value.replace(/\s+/g, "");
+  let normalizedValue = value
+    .replace(/(\d)\s+(?=\d)/g, "$1-")
+    .replace(/\s+/g, "");
   const singleEpisodeMatch = /^(\d+)화$/.exec(normalizedValue);
   const episodeCount = Number(singleEpisodeMatch?.[1]);
   const joinedRangeMatch = /^1(\d+)화$/.exec(normalizedValue);
@@ -37,7 +42,8 @@ function buildContents(value, completion, fileCount) {
     rangeEndCount === Number(fileCount)
   ) {
     normalizedValue = `1-${rangeEndCount}화`;
-    completion = completion === "미완" ? "미완" : "완";
+    completion =
+      completion === "미완" || completion === "완외" ? completion : "완";
   }
   return `${normalizedValue} ${completion}`;
 }
@@ -70,12 +76,21 @@ function parseDirectoryName(name, fileCount) {
     PAREN_CONTENTS_PATTERN.exec(remainder) ||
     PLAIN_CONTENTS_PATTERN.exec(remainder);
   const splitContentsMatch = SPLIT_CONTENTS_PATTERN.exec(remainder);
-  const contentsMatch = inlineContentsMatch || splitContentsMatch;
+  const extraContentsMatch = EXTRA_CONTENTS_PATTERN.exec(remainder);
+  const hasCompletedExtras =
+    extraContentsMatch &&
+    /외전|특별편|후기/.test(extraContentsMatch[2]) &&
+    /(?:^|[^가-힣\w])(?:완결|완|完)(?=$|[^가-힣\w])/.test(extraContentsMatch[2]);
+  const contentsMatch = hasCompletedExtras
+    ? extraContentsMatch
+    : inlineContentsMatch || splitContentsMatch;
   if (contentsMatch) {
     const value = contentsMatch[1] || contentsMatch[2];
-    const completion = inlineContentsMatch
-      ? inlineContentsMatch[2]
-      : splitContentsMatch[3] || splitContentsMatch[4];
+    const completion = hasCompletedExtras
+      ? "완외"
+      : inlineContentsMatch
+        ? inlineContentsMatch[2]
+        : splitContentsMatch[3] || splitContentsMatch[4];
     contents = buildContents(value, completion, fileCount);
     remainder = remainder.slice(0, contentsMatch.index).trim();
   }
