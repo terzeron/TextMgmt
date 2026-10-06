@@ -440,6 +440,36 @@ describe("Edit", () => {
     });
   });
 
+  it.each(["", "/comics"])("같은 디렉토리를 다시 클릭해도 검색과 편집 내용을 유지한다 (%s)", async (apiPrefix) => {
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === `${apiPrefix}/categories`) resolve(CATEGORIES);
+      else if (url.startsWith(`${apiPrefix}/categories/`)) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    render(<Edit apiPrefix={apiPrefix} />);
+    const directory = await screen.findByTestId("folder-item-1_fiction");
+    fireEvent.click(directory);
+    const bookstore = await screen.findByTestId("bookstore");
+    const similar = screen.getByTestId("similar-books");
+    const mountId = similar.dataset.mountId;
+    fireEvent.change(screen.getByLabelText("제목"), { target: { value: "수동 제목" } });
+    fireEvent.change(screen.getByLabelText("저자"), { target: { value: "수동 저자" } });
+    const newName = screen.getByLabelText("신규 이름").value;
+    const requestCount = mockRawJsonGetReq.mock.calls.length;
+
+    for (let i = 0; i < 3; i++) {
+      fireEvent.click(directory);
+      expect(screen.getByTestId("similar-books")).toBe(similar);
+      expect(screen.getByTestId("similar-books").dataset.mountId).toBe(mountId);
+      expect(screen.getByTestId("bookstore")).toBe(bookstore);
+      expect(screen.getByLabelText("제목").value).toBe("수동 제목");
+      expect(screen.getByLabelText("저자").value).toBe("수동 저자");
+      expect(screen.getByLabelText("신규 이름").value).toBe(newName);
+      expect(screen.queryByText("디렉토리 정보 정리 중...")).toBeNull();
+    }
+    expect(mockRawJsonGetReq.mock.calls.length).toBe(requestCount);
+  });
+
   it("디렉토리 자동 분할이 끝난 뒤 정리한 제목과 저자로 검색 컴포넌트를 한 번 연다", async () => {
     const category = "8_기타만화/[저자] 작품명 (애장판) (1102화 완결)";
     mockJsonGetReq.mockImplementation((url, _payload, resolve) => {

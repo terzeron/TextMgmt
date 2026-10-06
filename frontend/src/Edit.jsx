@@ -298,19 +298,22 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
       const selectedFolderData = findFolderInTree(folderData, selectedEntryId);
       if (selectedFolderData && selectedFolderData.fileType === "folder") {
         const directoryName = selectedFolderData.id.split("/").pop();
-        setSelectedDirectory(
-          selectedFolderData.isVirtualParent
-            ? null
-            : {
-                category: selectedFolderData.id,
-                name: directoryName,
-                author: decomposeTitle({
-                  author: "",
-                  title: directoryName,
-                  file_type: "dir",
-                }).author,
-              },
-        );
+        setSelectedDirectory((current) => {
+          if (selectedFolderData.isVirtualParent) return null;
+          // 같은 디렉토리의 펼침만 바뀌면 검색 준비 상태와 편집 내용을 유지한다.
+          if (current?.category === selectedFolderData.id && current.name === directoryName) {
+            return current;
+          }
+          return {
+            category: selectedFolderData.id,
+            name: directoryName,
+            author: decomposeTitle({
+              author: "",
+              title: directoryName,
+              file_type: "dir",
+            }).author,
+          };
+        });
         setBookInfo({});
         setSelectedEntryId("");
         setSelectedCategory("");
