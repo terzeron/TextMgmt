@@ -192,6 +192,23 @@ describe("DirectoryEditPanel", () => {
     );
   });
 
+  it.each([
+    ["XXX / YYY", "XXX, YYY"],
+    ["XXX/YYY / ZZZ", "XXX, YYY, ZZZ"],
+    ["XXX  /  YYY", "XXX, YYY"],
+    ["XXX, YYY", "XXX, YYY"],
+  ])("제목 입력 %s의 슬래시를 쉼표로 바꾸고 신규 이름에 반영한다", (input, expected) => {
+    const values = props({ directory: { category: "comics/series", name: "[저자] 기존 제목 (애장판) (1-10권 완)" } });
+    render(<DirectoryEditPanel {...values} />);
+
+    fireEvent.change(screen.getByLabelText("제목"), { target: { value: input } });
+
+    expect(screen.getByLabelText("제목").value).toBe(expected);
+    expect(screen.getByLabelText("신규 이름").value).toBe(`[저자] ${expected} (애장판) (1-10권 완)`);
+    fireEvent.click(screen.getByText("이동"));
+    expect(values.onMove).toHaveBeenCalledWith(`[저자] ${expected} (애장판) (1-10권 완)`);
+  });
+
   it("분할, 교환, 복원 버튼으로 이름 구성 요소를 편집한다", () => {
     render(
       <DirectoryEditPanel
