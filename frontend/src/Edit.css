@@ -7,6 +7,17 @@
     font-size: small;
 }
 
+/* 편집 탭의 모든 카드 헤더 높이를 같게 맞춘다.
+   텍스트만 있는 헤더와 select·버튼이 든 헤더의 높이 차이를 없앤다.
+   py-2 같은 Bootstrap 유틸리티가 !important라서 padding도 !important로 덮는다. */
+#edit .card-header {
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    min-height: 40px;
+    padding: 4px 8px !important;
+}
+
 #edit .btn-xs {
     padding: 0.05rem 0.15rem;
     font-size: 0.6rem;
