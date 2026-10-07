@@ -1125,6 +1125,30 @@ describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
     expect(rawJsonGetReq.mock.calls[0][0]).not.toContain("isbn=");
   });
 
+  it("한쪽 검색 결과가 모자라면 다른 쪽 나머지로 채워 최대 4건을 표시한다", async () => {
+    rawJsonGetReq.mockImplementation((url, onSuccess) => {
+      const titleOnly = !url.includes("author=");
+      setTimeout(() => onSuccess({
+        status: titleOnly ? "success" : "not_found",
+        result: titleOnly
+          ? Array.from({ length: 5 }, (_, i) => ({ title: `제목${i + 1}`, author: "저자", book_url: `제목${i + 1}` }))
+          : [],
+      }), 0);
+    });
+
+    await act(async () => {
+      render(<Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "도서명" })[0]);
+    });
+
+    await waitFor(() => {
+      for (const n of [1, 2, 3, 4]) expect(screen.getByText(`제목${n}`)).toBeTruthy();
+      expect(screen.queryByText("제목5")).toBeNull();
+    });
+  });
+
   it("ISBN이 없으면 제목과 저자+제목 검색에서 각각 2건씩 합쳐 최대 4건을 표시한다", async () => {
     rawJsonGetReq.mockImplementation((url, onSuccess) => {
       const titleOnly = !url.includes("author=");

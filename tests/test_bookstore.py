@@ -1492,6 +1492,7 @@ def test_naver_webtoon_search_by_keyword_success():
     from backend.bookstore import NaverWebtoonBookstore
 
     store = NaverWebtoonBookstore(verbose=True)
+    store.MAX_RESULTS = 2  # 잘림 동작만 본다. 기본값은 test_bookstore_default_max_results_is_four
     calls: list[dict] = []
 
     class Resp:
@@ -1588,6 +1589,7 @@ def test_kakao_webtoon_search_by_keyword_success():
     from backend.bookstore import KakaoWebtoonBookstore
 
     store = KakaoWebtoonBookstore(verbose=True)
+    store.MAX_RESULTS = 2  # 잘림 동작만 본다. 기본값은 test_bookstore_default_max_results_is_four
     calls: list[dict] = []
 
     class Resp:
@@ -1746,6 +1748,7 @@ def test_bomtoon_search_by_keyword_success():
     from backend.bookstore import BomtoonBookstore
 
     store = BomtoonBookstore(verbose=True)
+    store.MAX_RESULTS = 2  # 잘림 동작만 본다. 기본값은 test_bookstore_default_max_results_is_four
     calls: list[dict] = []
 
     class Resp:
@@ -1801,6 +1804,7 @@ def test_lezhin_search_by_keyword_success():
     from backend.bookstore import LezhinBookstore
 
     store = LezhinBookstore(verbose=True)
+    store.MAX_RESULTS = 2  # 잘림 동작만 본다. 기본값은 test_bookstore_default_max_results_is_four
     calls: list[dict] = []
 
     class Resp:
@@ -1881,6 +1885,7 @@ def test_toptoon_search_by_keyword_ranks_and_formats(monkeypatch: pytest.MonkeyP
     from backend.bookstore import ToptoonBookstore
 
     store = ToptoonBookstore(verbose=True)
+    store.MAX_RESULTS = 2  # 잘림 동작만 본다. 기본값은 test_bookstore_default_max_results_is_four
     urls: list[str] = []
     catalog = [
         _toptoon_comic("회귀했더니 최강 네크로맨서", "slip", views=900),
@@ -1983,3 +1988,21 @@ def test_toptoon_search_by_keyword_failure_paths(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(store.session, "get", raise_get)
     assert store.search_by_keyword("x") == []
+
+
+def test_bookstore_default_max_results_is_four():
+    """서점 하나가 돌려주는 결과는 기본 최대 4개다."""
+    from backend.bookstore import AbstractBookstore, NaverWebtoonBookstore
+
+    assert AbstractBookstore.MAX_RESULTS == 4
+
+    store = NaverWebtoonBookstore(verbose=False)
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"searchList": [{"titleId": i, "titleName": f"작품 {i}", "displayAuthor": "", "genreList": []} for i in range(1, 6)]}
+
+    store.session.get = lambda *a, **k: Resp()
+    assert [r[0] for r in store.search_by_keyword("작품")] == ["작품 1", "작품 2", "작품 3", "작품 4"]

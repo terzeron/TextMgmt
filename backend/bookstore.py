@@ -41,7 +41,7 @@ class AbstractBookstore(ABC):
     """서점 검색을 위한 베이스 인터페이스"""
 
     BASE_URL: str
-    MAX_RESULTS: int = 2
+    MAX_RESULTS: int = 4
     SUPPORTS_ISBN_SEARCH: bool = False  # ISBN 검색 지원 여부
     AUTHOR_FIRST_SEARCH: bool = False  # 저자+제목 검색 시 저자를 앞에 배치
 

@@ -92,10 +92,19 @@ const collectStoreCategories = (storeData, storeKey, categories, searchTitle, co
   }
 };
 
+// 서점 하나에 보여줄 결과의 최대 개수
+const MAX_STORE_RESULTS = 4;
+
 const combineSearchResults = (titleResult, authorTitleResult) => {
+  // 두 검색에서 절반씩 먼저 모으고, 한쪽이 모자라면 다른 쪽 나머지로 채운다.
+  const half = MAX_STORE_RESULTS / 2;
+  const titleList = titleResult?.result || [];
+  const authorTitleList = authorTitleResult?.result || [];
   const candidates = [
-    ...(titleResult?.result || []).slice(0, 2),
-    ...(authorTitleResult?.result || []).slice(0, 2),
+    ...titleList.slice(0, half),
+    ...authorTitleList.slice(0, half),
+    ...titleList.slice(half),
+    ...authorTitleList.slice(half),
   ];
   const seen = new Set();
   const results = candidates.filter((book) => {
@@ -103,7 +112,7 @@ const combineSearchResults = (titleResult, authorTitleResult) => {
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).slice(0, 4);
+  }).slice(0, MAX_STORE_RESULTS);
   if (!results.length && titleResult?.error && (authorTitleResult?.error || !authorTitleResult)) {
     return titleResult;
   }
