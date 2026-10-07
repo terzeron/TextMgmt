@@ -156,6 +156,18 @@ const buildStoreSearchUrl = (store, title, author) => {
       return title
         ? `https://webtoon.kakao.com/search?keyword=${encodedTitle}`
         : "";
+    case "bomtoon":
+      return title
+        ? `https://www.bomtoon.com/search?q=${encodedTitle}&ref=input`
+        : "";
+    case "lezhin":
+      return title
+        ? `https://www.lezhin.com/ko/search?t=all&q=${encodedTitle}`
+        : "";
+    case "toptoon":
+      return title
+        ? `https://toptoon.com/hashtag?keyword=${encodedTitle}`
+        : "";
     default:
       return "";
   }
@@ -193,7 +205,17 @@ const COMIC_AUTO_SEARCH_STORES = [
 // 만화 모드에서 보여주지 않는 서점
 const COMIC_HIDDEN_STORES = ["naver", "munpia", "naverseries", "joara"];
 
-// 서점 목록 정의 (supportsIsbn: ISBN 검색 지원 여부, hideIsbn: ISBN 버튼 숨김)
+// 만화 모드에서 먼저 보여줄 서점 순서. 나머지는 STORES 순서대로 뒤따른다.
+const COMIC_STORE_PRIORITY = [
+  "naverwebtoon",
+  "kakaowebtoon",
+  "bomtoon",
+  "toptoon",
+  "lezhin",
+];
+
+// 서점 목록 정의 (supportsIsbn: ISBN 검색 지원 여부, hideIsbn: ISBN 버튼 숨김,
+// comicOnly: 만화 모드에서만 표시. 자동 검색 대상이 아니라 버튼을 눌러야 검색한다)
 const STORES = [
   { key: "yes24", label: "Yes24", supportsIsbn: true },
   { key: "aladin", label: "알라딘", supportsIsbn: true },
@@ -207,7 +229,15 @@ const STORES = [
   // 웹툰도 ISBN 이 없다. 제목으로만 찾으므로 ISBN 버튼을 숨긴다.
   { key: "naverwebtoon", label: "네이버웹툰", supportsIsbn: false, hideIsbn: true },
   { key: "kakaowebtoon", label: "카카오웹툰", supportsIsbn: false, hideIsbn: true },
+  { key: "bomtoon", label: "봄툰", supportsIsbn: false, hideIsbn: true, comicOnly: true },
+  { key: "toptoon", label: "탑툰", supportsIsbn: false, hideIsbn: true, comicOnly: true },
+  { key: "lezhin", label: "레진코믹스", supportsIsbn: false, hideIsbn: true, comicOnly: true },
 ];
+
+const comicPriority = (key) => {
+  const index = COMIC_STORE_PRIORITY.indexOf(key);
+  return index === -1 ? COMIC_STORE_PRIORITY.length : index;
+};
 
 export default function Bookstore(props) {
   const [title, setTitle] = useState("");
@@ -218,8 +248,10 @@ export default function Bookstore(props) {
   // 서점별로 마지막에 수행한 검색 방법 ("isbn" | "title_author"). 토글 버튼의 선택 상태가 된다.
   const [methods, setMethods] = useState({});
   const visibleStores = props.comic
-    ? STORES.filter((s) => !COMIC_HIDDEN_STORES.includes(s.key))
-    : STORES;
+    ? STORES.filter((s) => !COMIC_HIDDEN_STORES.includes(s.key)).sort(
+        (a, b) => comicPriority(a.key) - comicPriority(b.key),
+      )
+    : STORES.filter((s) => !s.comicOnly);
   const onCategoriesFound = props.onCategoriesFound;
   const reportStoreCategories = (store, result, searchTitle) => {
     categoryResults.current = { ...categoryResults.current, [store]: result };

@@ -513,13 +513,43 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
       );
     });
     expect(storeLabels()).toEqual([
+      "네이버웹툰",
+      "카카오웹툰",
+      "봄툰",
+      "탑툰",
+      "레진코믹스",
       "Yes24",
       "알라딘",
       "교보문고",
       "RIDI",
-      "네이버웹툰",
-      "카카오웹툰",
     ]);
+  });
+
+  it("봄툰·탑툰·레진코믹스는 책 모드에서 보여주지 않는다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />,
+      );
+    });
+    for (const label of ["봄툰", "탑툰", "레진코믹스"]) {
+      expect(storeLabels()).not.toContain(label);
+    }
+  });
+
+  it("봄툰·탑툰·레진코믹스는 ISBN 버튼 없이 도서명 검색만 한다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore
+          comic
+          bookInfo={{ title: "제목", author: "", isbn: "" }}
+        />,
+      );
+    });
+    for (const label of ["봄툰", "탑툰", "레진코믹스"]) {
+      const row = within(storeRow(label));
+      expect(row.queryByRole("button", { name: "ISBN" })).toBeNull();
+      expect(row.getByRole("button", { name: "도서명" })).toBeTruthy();
+    }
   });
 
   it("ISBN/저자+제목 검색 버튼이 렌더링된다", async () => {
@@ -866,6 +896,57 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
         links.some((link) => link.closest("a").getAttribute("href") === expectedUrl),
       ).toBe(true);
     });
+  });
+});
+
+describe("Bookstore 만화 전용 서점", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ["봄툰", "https://www.bomtoon.com/search?q=%EC%A0%9C%EB%AA%A9&ref=input"],
+    ["탑툰", "https://toptoon.com/hashtag?keyword=%EC%A0%9C%EB%AA%A9"],
+    ["레진코믹스", "https://www.lezhin.com/ko/search?t=all&q=%EC%A0%9C%EB%AA%A9"],
+  ])("%s는 응답 URL이 없어도 서점 검색 링크를 표시한다", async (label, expectedUrl) => {
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+    });
+
+    await act(async () => {
+      render(<Bookstore comic bookInfo={{ title: "제목", author: "", isbn: "" }} />);
+    });
+    await act(async () => {
+      fireEvent.click(within(storeRow(label)).getByRole("button", { name: "도서명" }));
+    });
+
+    await waitFor(() => {
+      const links = screen.getAllByText("서점");
+      expect(
+        links.some((link) => link.closest("a").getAttribute("href") === expectedUrl),
+      ).toBe(true);
+    });
+  });
+
+  it.each([
+    ["봄툰", "bomtoon"],
+    ["탑툰", "toptoon"],
+    ["레진코믹스", "lezhin"],
+  ])("%s 버튼은 해당 서점 API로 제목만 검색한다", async (label, store) => {
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+    });
+    await act(async () => {
+      render(<Bookstore comic bookInfo={{ title: "제목", author: "저자", isbn: "9788934900011" }} />);
+    });
+    await act(async () => {
+      fireEvent.click(within(storeRow(label)).getByRole("button", { name: "도서명" }));
+    });
+    const url = rawJsonGetReq.mock.calls.map(([u]) => u).find((u) => u.startsWith(`/search/bookstore/${store}?`));
+    expect(url).toBeTruthy();
+    const params = new URLSearchParams(url.split("?")[1]);
+    expect(params.get("title")).toBe("제목");
+    expect(params.get("isbn")).toBeNull();
   });
 });
 
@@ -1509,7 +1590,7 @@ describe("Bookstore 웹툰 자동 검색", () => {
     expect(calledStores().has("yes24")).toBe(true);
     expect(calledStores().has("aladin")).toBe(true);
     // 그 밖의 서점은 버튼을 눌러야 검색한다.
-    for (const store of ["kyobo", "naver", "ridi"]) {
+    for (const store of ["kyobo", "naver", "ridi", "bomtoon", "toptoon", "lezhin"]) {
       expect(calledStores().has(store)).toBe(false);
     }
   });
