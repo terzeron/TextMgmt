@@ -637,6 +637,37 @@ describe("DirectoryEditPanel", () => {
     expect(values.onMove).toHaveBeenCalledWith(`두근두근 연극부 (${expectedContents})`);
   });
 
+  it.each([
+    [["comic/series/미녀는 야수 01화.pdf", "comic/series/미녀는 야수 02화.pdf"], "01-02화"],
+    [["comic/series/미녀는 야수 01권.pdf"], "01-02권"],
+    [["comic/series/01화.pdf", "comic/series/02권.pdf"], "01-02"],
+    [["comic/series/미녀는 야수 01.pdf"], "01-02"],
+  ])("완결 표기 없는 괄호 범위 (01-02)는 내부 파일 이름 %j로 %s를 결정한다", async (filePaths, expectedContents) => {
+    mockRawJsonGetReq.mockImplementation((url, success) => success({
+      status: "success",
+      result: url.includes("category-pdf-stats")
+        ? { file_count: 2, page_count: 120, total_file_size: 5000 }
+        : filePaths.map((file_path) => ({ file_path })),
+    }));
+    const onMetadataReady = vi.fn();
+    const values = props({
+      directory: { category: "comics/series", name: "미녀는 야수 (01-02)" },
+      onMetadataReady,
+    });
+    render(<DirectoryEditPanel {...values} />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("제목").value).toBe("미녀는 야수");
+      expect(screen.getByLabelText("목차").value).toBe(expectedContents);
+      expect(screen.getByLabelText("신규 이름").value).toBe(`미녀는 야수 (${expectedContents})`);
+    });
+    await waitFor(() => expect(onMetadataReady).toHaveBeenCalledExactlyOnceWith({
+      category: "comics/series", sourceName: "미녀는 야수 (01-02)", title: "미녀는 야수", author: "",
+    }));
+    fireEvent.click(screen.getByText("이동"));
+    expect(values.onMove).toHaveBeenCalledWith(`미녀는 야수 (${expectedContents})`);
+  });
+
   it("다음 페이지까지 확인하고 누락된 단위를 결정한다", async () => {
     mockRawJsonGetReq.mockImplementation((url, success) => {
       if (url.includes("category-pdf-stats")) {

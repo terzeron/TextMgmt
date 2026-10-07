@@ -276,7 +276,8 @@ export default function DirectoryEditPanel({
     setUnitReadyKey("");
     setContentsUnit("");
     const parsed = parseDirectoryName(directory.name);
-    if (!/^\d+[-~]\d+\s/.test(parsed.directoryContents)) {
+    // 단위 없는 범위("1-35 완외", "01-02")만 파일 이름으로 단위를 추정한다.
+    if (!/^\d+[-~]\d+(?:\s|$)/.test(parsed.directoryContents)) {
       setUnitReadyKey(metadataKey);
       return;
     }
