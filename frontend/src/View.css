@@ -7,6 +7,17 @@
     font-size: small;
 }
 
+/* 조회 탭의 모든 카드 헤더 높이를 같게 맞춘다. (Edit.css의 #edit 규칙과 같다)
+   디렉토리·검색 결과·유사 도서 헤더가 나란히 놓여도 select·버튼 때문에 높이가 어긋나지 않게 한다.
+   py-2 같은 Bootstrap 유틸리티가 !important라서 padding도 !important로 덮는다. */
+#view .card-header {
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    min-height: 40px;
+    padding: 4px 8px !important;
+}
+
 #view .btn-xs {
     padding: 0.05rem 0.15rem;
     font-size: 0.6rem;

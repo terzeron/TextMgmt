@@ -293,33 +293,35 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
             />
           </Suspense>
         </Col>
-        {bookInfo["book_id"] && (
+        {(hasSearched || bookInfo["book_id"]) && (
           <Col xs={12} md={9} className="view-similar-books-panel">
-            <SimilarBooks
-              bookId={bookInfo["book_id"]}
-              onSelect={entryClicked}
-              apiPrefix={apiPrefix}
-              basePath={basePath.replace("-view", "-edit")}
-              autoOpenHighScore={false}
-              canEdit={role === "admin"}
-            />
+            {hasSearched && (
+              <SearchResult
+                results={searchResults}
+                role={role}
+                onLoadMore={handleLoadMore}
+                hasMore={searchResults.length < searchTotal}
+                loading={searchLoading}
+                basePath={basePath}
+                categories={searchCategories}
+                selectedCategory={selectedSearchCategory}
+                onCategoryChange={handleSearchCategoryChange}
+                categoryLoading={searchInProgress}
+              />
+            )}
+            {bookInfo["book_id"] && (
+              <SimilarBooks
+                bookId={bookInfo["book_id"]}
+                onSelect={entryClicked}
+                apiPrefix={apiPrefix}
+                basePath={basePath.replace("-view", "-edit")}
+                autoOpenHighScore={false}
+                canEdit={role === "admin"}
+              />
+            )}
           </Col>
         )}
       </Row>
-      {hasSearched && (
-        <SearchResult
-          results={searchResults}
-          role={role}
-          onLoadMore={handleLoadMore}
-          hasMore={searchResults.length < searchTotal}
-          loading={searchLoading}
-          basePath={basePath}
-          categories={searchCategories}
-          selectedCategory={selectedSearchCategory}
-          onCategoryChange={handleSearchCategoryChange}
-          categoryLoading={searchInProgress}
-        />
-      )}
       {!hasSearched && !bookInfo["book_id"] && bookLoadError && (
         <Row id="top_panel">
           <Col lg="12" className="ps-0 pe-0 me-0 ">
