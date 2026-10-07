@@ -112,7 +112,7 @@
     color: white !important;
 }
 
-/* outline-primary (ISBN, 저자+제목, 다운로드) */
+/* outline-primary (ISBN, 도서명, 다운로드) */
 #edit .btn-outline-primary:active {
     background-color: #007bff !important;
     border-color: #007bff !important;

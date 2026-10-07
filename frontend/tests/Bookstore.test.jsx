@@ -513,13 +513,43 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
       );
     });
     expect(storeLabels()).toEqual([
+      "네이버웹툰",
+      "카카오웹툰",
+      "봄툰",
+      "탑툰",
+      "레진코믹스",
       "Yes24",
       "알라딘",
       "교보문고",
       "RIDI",
-      "네이버웹툰",
-      "카카오웹툰",
     ]);
+  });
+
+  it("봄툰·탑툰·레진코믹스는 책 모드에서 보여주지 않는다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />,
+      );
+    });
+    for (const label of ["봄툰", "탑툰", "레진코믹스"]) {
+      expect(storeLabels()).not.toContain(label);
+    }
+  });
+
+  it("봄툰·탑툰·레진코믹스는 ISBN 버튼 없이 도서명 검색만 한다", async () => {
+    await act(async () => {
+      render(
+        <Bookstore
+          comic
+          bookInfo={{ title: "제목", author: "", isbn: "" }}
+        />,
+      );
+    });
+    for (const label of ["봄툰", "탑툰", "레진코믹스"]) {
+      const row = within(storeRow(label));
+      expect(row.queryByRole("button", { name: "ISBN" })).toBeNull();
+      expect(row.getByRole("button", { name: "도서명" })).toBeTruthy();
+    }
   });
 
   it("ISBN/저자+제목 검색 버튼이 렌더링된다", async () => {
@@ -531,7 +561,7 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
     const isbnButtons = screen.getAllByRole("button", { name: "ISBN" });
     expect(isbnButtons.length).toBeGreaterThanOrEqual(1);
     const authorTitleButtons = screen.getAllByRole("button", {
-      name: "저자+제목",
+      name: "도서명",
     });
     expect(authorTitleButtons.length).toBeGreaterThanOrEqual(1);
   });
@@ -592,7 +622,7 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
     });
 
     const titleAuthorButtons = screen.getAllByRole("button", {
-      name: "저자+제목",
+      name: "도서명",
     });
     await act(async () => {
       fireEvent.click(titleAuthorButtons[0]);
@@ -705,7 +735,7 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
     ).toBe(true);
   });
 
-  it("서점에서 보기 링크가 search_url이 있을 때 표시된다", async () => {
+  it("서점 링크가 search_url이 있을 때 표시된다", async () => {
     rawJsonGetReq.mockImplementation((url, onSuccess) => {
       setTimeout(
         () =>
@@ -730,7 +760,7 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
 
     await waitFor(() => {
       expect(
-        screen.getAllByText("서점에서 보기").length,
+        screen.getAllByText("서점").length,
       ).toBeGreaterThanOrEqual(1);
     });
   });
@@ -856,16 +886,67 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
 
     await act(async () => {
       fireEvent.click(
-        within(storeRow(label)).getByRole("button", { name: "저자+제목" }),
+        within(storeRow(label)).getByRole("button", { name: "도서명" }),
       );
     });
 
     await waitFor(() => {
-      const links = screen.getAllByText("서점에서 보기");
+      const links = screen.getAllByText("서점");
       expect(
         links.some((link) => link.closest("a").getAttribute("href") === expectedUrl),
       ).toBe(true);
     });
+  });
+});
+
+describe("Bookstore 만화 전용 서점", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ["봄툰", "https://www.bomtoon.com/search?q=%EC%A0%9C%EB%AA%A9&ref=input"],
+    ["탑툰", "https://toptoon.com/hashtag?keyword=%EC%A0%9C%EB%AA%A9"],
+    ["레진코믹스", "https://www.lezhin.com/ko/search?t=all&q=%EC%A0%9C%EB%AA%A9"],
+  ])("%s는 응답 URL이 없어도 서점 검색 링크를 표시한다", async (label, expectedUrl) => {
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+    });
+
+    await act(async () => {
+      render(<Bookstore comic bookInfo={{ title: "제목", author: "", isbn: "" }} />);
+    });
+    await act(async () => {
+      fireEvent.click(within(storeRow(label)).getByRole("button", { name: "도서명" }));
+    });
+
+    await waitFor(() => {
+      const links = screen.getAllByText("서점");
+      expect(
+        links.some((link) => link.closest("a").getAttribute("href") === expectedUrl),
+      ).toBe(true);
+    });
+  });
+
+  it.each([
+    ["봄툰", "bomtoon"],
+    ["탑툰", "toptoon"],
+    ["레진코믹스", "lezhin"],
+  ])("%s 버튼은 해당 서점 API로 제목만 검색한다", async (label, store) => {
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+    });
+    await act(async () => {
+      render(<Bookstore comic bookInfo={{ title: "제목", author: "저자", isbn: "9788934900011" }} />);
+    });
+    await act(async () => {
+      fireEvent.click(within(storeRow(label)).getByRole("button", { name: "도서명" }));
+    });
+    const url = rawJsonGetReq.mock.calls.map(([u]) => u).find((u) => u.startsWith(`/search/bookstore/${store}?`));
+    expect(url).toBeTruthy();
+    const params = new URLSearchParams(url.split("?")[1]);
+    expect(params.get("title")).toBe("제목");
+    expect(params.get("isbn")).toBeNull();
   });
 });
 
@@ -976,7 +1057,7 @@ describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
         onCategoriesFound={onCategoriesFound}
       />,
     );
-    fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "도서명" })[0]);
 
     await waitFor(() => {
       expect(onCategoriesFound.mock.calls.at(-1)[0]).toEqual(
@@ -1036,12 +1117,36 @@ describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
     render(
       <Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "978" }} />,
     );
-    fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "도서명" })[0]);
 
     await waitFor(() => expect(rawJsonGetReq).toHaveBeenCalled());
     expect(rawJsonGetReq.mock.calls[0][0]).toContain("title=");
     expect(rawJsonGetReq.mock.calls[0][0]).toContain("author=");
     expect(rawJsonGetReq.mock.calls[0][0]).not.toContain("isbn=");
+  });
+
+  it("한쪽 검색 결과가 모자라면 다른 쪽 나머지로 채워 최대 4건을 표시한다", async () => {
+    rawJsonGetReq.mockImplementation((url, onSuccess) => {
+      const titleOnly = !url.includes("author=");
+      setTimeout(() => onSuccess({
+        status: titleOnly ? "success" : "not_found",
+        result: titleOnly
+          ? Array.from({ length: 5 }, (_, i) => ({ title: `제목${i + 1}`, author: "저자", book_url: `제목${i + 1}` }))
+          : [],
+      }), 0);
+    });
+
+    await act(async () => {
+      render(<Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "도서명" })[0]);
+    });
+
+    await waitFor(() => {
+      for (const n of [1, 2, 3, 4]) expect(screen.getByText(`제목${n}`)).toBeTruthy();
+      expect(screen.queryByText("제목5")).toBeNull();
+    });
   });
 
   it("ISBN이 없으면 제목과 저자+제목 검색에서 각각 2건씩 합쳐 최대 4건을 표시한다", async () => {
@@ -1064,7 +1169,7 @@ describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
     });
 
     await act(async () => {
-      fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" })[0]);
+      fireEvent.click(screen.getAllByRole("button", { name: "도서명" })[0]);
     });
 
     await waitFor(() => {
@@ -1112,7 +1217,7 @@ describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
       render(<Bookstore bookInfo={{ title: "", author: "저자만", isbn: "" }} />);
     });
 
-    const buttons = screen.getAllByRole("button", { name: "저자+제목" });
+    const buttons = screen.getAllByRole("button", { name: "도서명" });
     await act(async () => {
       fireEvent.click(buttons[0]);
     });
@@ -1134,7 +1239,7 @@ describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
       render(<Bookstore bookInfo={{ title: "제목만", author: "", isbn: "" }} />);
     });
 
-    const buttons = screen.getAllByRole("button", { name: "저자+제목" });
+    const buttons = screen.getAllByRole("button", { name: "도서명" });
     await act(async () => {
       fireEvent.click(buttons[0]);
     });
@@ -1156,7 +1261,7 @@ describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
       render(<Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />);
     });
 
-    const buttons = screen.getAllByRole("button", { name: "저자+제목" });
+    const buttons = screen.getAllByRole("button", { name: "도서명" });
     await act(async () => {
       fireEvent.click(buttons[0]);
     });
@@ -1187,7 +1292,7 @@ describe("Bookstore 부분 검색어 / 폴백 렌더링", () => {
       render(<Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />);
     });
 
-    const buttons = screen.getAllByRole("button", { name: "저자+제목" });
+    const buttons = screen.getAllByRole("button", { name: "도서명" });
     await act(async () => {
       fireEvent.click(buttons[0]);
     });
@@ -1236,7 +1341,7 @@ describe("Bookstore 만화 모드", () => {
       ).toBeNull();
     }
     expect(
-      screen.getAllByRole("button", { name: "저자+제목" }).length,
+      screen.getAllByRole("button", { name: "도서명" }).length,
     ).toBeGreaterThan(0);
   });
 
@@ -1318,7 +1423,7 @@ describe("Bookstore 만화 모드", () => {
       expect(rawJsonGetReq).toHaveBeenCalled();
     });
     await act(async () => {
-      fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" })[0]);
+      fireEvent.click(screen.getAllByRole("button", { name: "도서명" })[0]);
     });
     expect(onCategoriesFound).toHaveBeenCalled();
     expect(onCategoriesFound.mock.calls.every(([categories]) => Object.keys(categories).length === 0)).toBe(true);
@@ -1350,7 +1455,7 @@ describe("Bookstore 웹툰 저자 표시", () => {
     rawJsonGetReq.mockImplementation((_url, success) => success({ status: "success", result: [item] }));
     render(<Bookstore comic={comic} bookInfo={bookInfo} />);
     const row = within(storeRow(label));
-    const search = () => fireEvent.click(row.getByRole("button", { name: "저자+제목" }));
+    const search = () => fireEvent.click(row.getByRole("button", { name: "도서명" }));
     search();
 
     await waitFor(() => expect(row.getByText("봉이, 갈피, 오윤")).toBeTruthy());
@@ -1373,7 +1478,7 @@ describe("Bookstore 웹툰 저자 표시", () => {
     rawJsonGetReq.mockImplementation((_url, success) => success({ status: "success", result: [{ author: "봉이 / 갈피 / 오윤" }] }));
     render(<Bookstore comic bookInfo={{ title: "작품명" }} />);
     const row = within(storeRow(label));
-    fireEvent.click(row.getByRole("button", { name: "저자+제목" }));
+    fireEvent.click(row.getByRole("button", { name: "도서명" }));
     await waitFor(() => expect(row.getByText("봉이 / 갈피 / 오윤")).toBeTruthy());
   });
 
@@ -1485,7 +1590,7 @@ describe("Bookstore 웹툰 자동 검색", () => {
         status: "success", result: [{ title: "작품명 외전", category: "드라마" }],
       }));
       render(<Bookstore comic={comic} bookInfo={{ title: "작품명" }} onCategoriesFound={onCategoriesFound} />);
-      fireEvent.click(within(storeRow(label)).getByRole("button", { name: "저자+제목" }));
+      fireEvent.click(within(storeRow(label)).getByRole("button", { name: "도서명" }));
 
       await waitFor(() => expect(onCategoriesFound).toHaveBeenLastCalledWith({ [`${store}_0_0`]: "웹툰" }));
     },
@@ -1509,7 +1614,7 @@ describe("Bookstore 웹툰 자동 검색", () => {
     expect(calledStores().has("yes24")).toBe(true);
     expect(calledStores().has("aladin")).toBe(true);
     // 그 밖의 서점은 버튼을 눌러야 검색한다.
-    for (const store of ["kyobo", "naver", "ridi"]) {
+    for (const store of ["kyobo", "naver", "ridi", "bomtoon", "toptoon", "lezhin"]) {
       expect(calledStores().has(store)).toBe(false);
     }
   });
@@ -1533,7 +1638,7 @@ describe("Bookstore 웹툰 자동 검색", () => {
     const onCategoriesFound = vi.fn();
     rawJsonGetReq.mockImplementation((_url, success) => success({ status: "success", result: [{ title: "작품명" }] }));
     const { rerender } = render(<Bookstore comic bookInfo={{ title: "작품명" }} onCategoriesFound={onCategoriesFound} />);
-    const search = () => fireEvent.click(within(storeRow("네이버웹툰")).getByRole("button", { name: "저자+제목" }));
+    const search = () => fireEvent.click(within(storeRow("네이버웹툰")).getByRole("button", { name: "도서명" }));
     search();
     await waitFor(() => expect(onCategoriesFound).toHaveBeenLastCalledWith({ naverwebtoon_0_0: "웹툰" }));
     const requests = rawJsonGetReq.mock.calls.length;
@@ -1556,7 +1661,7 @@ describe("Bookstore 웹툰 자동 검색", () => {
     try {
       render(<Parent />);
       for (const label of ["네이버웹툰", "카카오웹툰"]) {
-        fireEvent.click(within(storeRow(label)).getByRole("button", { name: "저자+제목" }));
+        fireEvent.click(within(storeRow(label)).getByRole("button", { name: "도서명" }));
         await waitFor(() => expect(screen.getByTestId("recommendations").textContent).toContain("웹툰"));
       }
       await waitFor(() => expect(JSON.parse(screen.getByTestId("recommendations").textContent)).toEqual({ naverwebtoon_0_0: "웹툰", kakaowebtoon_0_0: "웹툰" }));
@@ -1611,18 +1716,18 @@ describe("Bookstore 웹툰 자동 검색", () => {
     await waitFor(() => {
       expect(pressed("Yes24", "ISBN")).toBe("true");
     });
-    expect(pressed("Yes24", "저자+제목")).toBe("false");
+    expect(pressed("Yes24", "도서명")).toBe("false");
     // 자동 검색하지 않는 서점은 어느 쪽도 선택되지 않는다.
     expect(pressed("RIDI", "ISBN")).toBe("false");
-    expect(pressed("RIDI", "저자+제목")).toBe("false");
+    expect(pressed("RIDI", "도서명")).toBe("false");
 
     await act(async () => {
       fireEvent.click(
-        within(storeRow("RIDI")).getByRole("button", { name: "저자+제목" }),
+        within(storeRow("RIDI")).getByRole("button", { name: "도서명" }),
       );
     });
     await waitFor(() => {
-      expect(pressed("RIDI", "저자+제목")).toBe("true");
+      expect(pressed("RIDI", "도서명")).toBe("true");
     });
   });
 
@@ -1811,7 +1916,7 @@ describe("Bookstore 검색어 조합 경계", () => {
     render(
       <Bookstore bookInfo={{ title: "제목", author: "", isbn: "978" }} />,
     );
-    fireEvent.click(screen.getAllByRole("button", { name: "저자+제목" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "도서명" })[0]);
 
     await waitFor(() => expect(rawJsonGetReq).toHaveBeenCalled());
     expect(rawJsonGetReq.mock.calls[0][0]).toContain("title=");

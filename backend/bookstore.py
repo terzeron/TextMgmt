@@ -41,7 +41,7 @@ class AbstractBookstore(ABC):
     """서점 검색을 위한 베이스 인터페이스"""
 
     BASE_URL: str
-    MAX_RESULTS: int = 2
+    MAX_RESULTS: int = 4
     SUPPORTS_ISBN_SEARCH: bool = False  # ISBN 검색 지원 여부
     AUTHOR_FIRST_SEARCH: bool = False  # 저자+제목 검색 시 저자를 앞에 배치
 
@@ -1157,6 +1157,205 @@ class KakaoWebtoonBookstore(AbstractBookstore):
         return {"title": "", "author": "", "category": "", "isbn": ""}
 
 
+class _TitleApiWebtoonBookstore(AbstractBookstore):
+    """제목만으로 사이트의 데이터 API 를 직접 부르는 웹툰 서점의 공통 베이스.
+
+    웹툰에는 ISBN 이 없고, 제목에 저자를 붙인 키워드는 0건이 되기 쉽다.
+    서브클래스는 search_by_keyword 만 구현한다.
+    """
+
+    SUPPORTS_ISBN_SEARCH = False
+
+    def search(self, isbn: str = "", title: str = "", author: str = "") -> tuple[list[tuple[str, str, str, str, str, str]], str, str]:
+        return super().search(isbn="", title=title, author="")
+
+    def extract_search_links(self, soup: BeautifulSoup) -> list[str]:
+        """search_by_keyword 를 오버라이드하므로 이 메서드는 사용되지 않음"""
+        return []
+
+    def extract_book_info(self, soup: BeautifulSoup) -> BookInfo:
+        """search_by_keyword 를 오버라이드하므로 이 메서드는 사용되지 않음"""
+        return {"title": "", "author": "", "category": "", "isbn": ""}
+
+
+class BomtoonBookstore(_TitleApiWebtoonBookstore):
+    """봄툰 검색 구현.
+
+    bomtoon.com/search 는 SPA 라 HTML 에 결과가 없다. 브라우저가 부르는
+    balcony-search-api JSON 을 직접 호출한다. 웹소설(novel)이 섞여 오므로 뺀다.
+    """
+
+    BASE_URL = "https://www.bomtoon.com"
+    API_URL = "https://www.bomtoon.com/api/balcony-search-api/search"
+    NOVEL_TYPE = "novel"
+    CATEGORY_TAG_COUNT = 3
+
+    def build_search_url(self, keyword: str) -> str:
+        """사용자가 눌러 볼 수 있는 봄툰 검색 결과 페이지 URL"""
+        return f"{self.BASE_URL}/search?q={quote(keyword)}&ref=input"
+
+    def search_by_keyword(self, keyword: str) -> list[tuple[str, str, str, str, str, str]]:
+        """봄툰 검색 API 직접 호출"""
+        search_url = self.build_search_url(keyword)
+        params = {"searchText": keyword, "contentsType": "ALL", "page": "0", "size": "50", "device": "WEB", "isExcludeAdult": "false", "onlyComplete": "false", "isSearchTool": "true", "sortType": "ACCURACY"}
+        try:
+            resp = self.session.get(self.API_URL, params=params, timeout=10, verify=True)
+
+            if resp.status_code != 200:
+                if self.verbose:
+                    logger.warning(f"봄툰 API 응답 실패: {resp.status_code}")
+                return []
+
+            contents = (resp.json().get("data") or {}).get("results") or []
+            results: list[tuple[str, str, str, str, str, str]] = []
+            for content in contents:
+                if content.get("contentsType") == self.NOVEL_TYPE:
+                    continue
+                alias = content.get("alias")
+                title = content.get("title") or ""
+                author = ", ".join(dict.fromkeys(content.get("author") or []))
+                category = "/".join((content.get("tags") or [])[: self.CATEGORY_TAG_COUNT])
+                detail_url = f"{self.BASE_URL}/detail/{quote(alias)}" if alias else ""
+
+                if title and detail_url:
+                    results.append((title, author, category, detail_url, search_url, ""))
+                if len(results) >= self.MAX_RESULTS:
+                    break
+
+            if self.verbose:
+                logger.info(f"봄툰에서 {len(results)}개의 검색 결과를 찾았습니다")
+            return results
+
+        except Exception as e:
+            if self.verbose:
+                logger.error(f"봄툰 검색 실패: {e}")
+            return []
+
+
+class LezhinBookstore(_TitleApiWebtoonBookstore):
+    """레진코믹스 검색 구현.
+
+    lezhin.com/ko/search 는 SPA 라 HTML 에 결과가 없다. 브라우저가 부르는
+    lz-api advanced-search JSON 을 직접 호출한다.
+    """
+
+    BASE_URL = "https://www.lezhin.com"
+    API_URL = "https://www.lezhin.com/lz-api/v2/advanced-search"
+    # artists 에는 출판사(publisher)·레이블(label)도 섞여 있다. 사람만 저자로 본다.
+    AUTHOR_ROLES = ("writer", "painter", "scripter", "original")
+
+    def build_search_url(self, keyword: str) -> str:
+        """사용자가 눌러 볼 수 있는 레진코믹스 검색 결과 페이지 URL"""
+        return f"{self.BASE_URL}/ko/search?t=all&q={quote(keyword)}"
+
+    def search_by_keyword(self, keyword: str) -> list[tuple[str, str, str, str, str, str]]:
+        """레진코믹스 검색 API 직접 호출"""
+        search_url = self.build_search_url(keyword)
+        try:
+            resp = self.session.get(self.API_URL, params={"q": keyword, "t": "all", "order": "popular", "offset": "0", "limit": str(self.MAX_RESULTS)}, timeout=10, verify=True)
+
+            if resp.status_code != 200:
+                if self.verbose:
+                    logger.warning(f"레진코믹스 API 응답 실패: {resp.status_code}")
+                return []
+
+            contents = resp.json().get("data") or []
+            results: list[tuple[str, str, str, str, str, str]] = []
+            for content in contents[: self.MAX_RESULTS]:
+                alias = content.get("alias")
+                title = content.get("title") or ""
+                names = [a["name"] for a in content.get("artists") or [] if a.get("role") in self.AUTHOR_ROLES and a.get("name")]
+                author = ", ".join(dict.fromkeys(names))
+                category = "/".join(content.get("genres") or [])
+                detail_url = f"{self.BASE_URL}/ko/comic/{quote(alias)}" if alias else ""
+
+                if title and detail_url:
+                    results.append((title, author, category, detail_url, search_url, ""))
+
+            if self.verbose:
+                logger.info(f"레진코믹스에서 {len(results)}개의 검색 결과를 찾았습니다")
+            return results
+
+        except Exception as e:
+            if self.verbose:
+                logger.error(f"레진코믹스 검색 실패: {e}")
+            return []
+
+
+class ToptoonBookstore(_TitleApiWebtoonBookstore):
+    """탑툰 검색 구현.
+
+    toptoon.com/hashtag 는 전체 작품 목록 JSON(comicTotal)을 받아 브라우저에서
+    걸러 낸다. 서버 검색 API 가 없으므로 같은 JSON 을 받아 제목으로 직접 거른다.
+    JSON 주소에는 내용 해시가 들어 있어 바뀐다. 매번 페이지 HTML 에서 찾는다.
+    """
+
+    BASE_URL = "https://toptoon.com"
+    CATALOG_URL_PATTERN = re.compile(r"https://[a-z0-9.-]+\.cloudfront\.net/production/comicTotal/[0-9a-f]+\.json")
+
+    def build_search_url(self, keyword: str) -> str:
+        """사용자가 눌러 볼 수 있는 탑툰 검색 결과 페이지 URL"""
+        return f"{self.BASE_URL}/hashtag?keyword={quote(keyword)}"
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        """공백을 없애고 소문자로 바꿔 제목 포함 여부를 비교한다"""
+        return "".join(text.split()).lower()
+
+    def search_by_keyword(self, keyword: str) -> list[tuple[str, str, str, str, str, str]]:
+        """탑툰 작품 목록 JSON 을 받아 제목에 키워드가 든 작품을 고른다"""
+        search_url = self.build_search_url(keyword)
+        needle = self._normalize(keyword)
+        if not needle:
+            return []
+        try:
+            page = self.session.get(search_url, timeout=10, verify=True)
+            if page.status_code != 200:
+                if self.verbose:
+                    logger.warning(f"탑툰 페이지 응답 실패: {page.status_code}")
+                return []
+
+            found = self.CATALOG_URL_PATTERN.search(page.text)
+            if not found:
+                if self.verbose:
+                    logger.warning("탑툰 작품 목록 JSON 주소를 찾지 못했습니다")
+                return []
+
+            catalog_resp = self.session.get(found.group(0), timeout=20, verify=True)
+            if catalog_resp.status_code != 200:
+                if self.verbose:
+                    logger.warning(f"탑툰 작품 목록 응답 실패: {catalog_resp.status_code}")
+                return []
+
+            matches = []
+            for comic in catalog_resp.json():
+                meta = comic.get("meta") or {}
+                title = meta.get("title") or ""
+                normalized = self._normalize(title)
+                if needle not in normalized or not meta.get("comicsListUrl"):
+                    continue
+                # 제목이 같은 작품, 제목이 키워드로 시작하는 작품, 나머지 순. 같은 순위는 조회수 순.
+                rank = 0 if normalized == needle else 1 if normalized.startswith(needle) else 2
+                matches.append((rank, -(meta.get("viewCount") or 0), comic))
+            matches.sort(key=lambda m: (m[0], m[1]))
+
+            results: list[tuple[str, str, str, str, str, str]] = []
+            for _, _, comic in matches[: self.MAX_RESULTS]:
+                meta = comic["meta"]
+                author = (meta.get("authorList") or {}).get("authorStr") or (meta.get("author") or {}).get("authorString") or ""
+                category = "/".join(g["name"] for g in meta.get("genre") or [] if g.get("name"))
+                results.append((meta["title"], author, category, f"{self.BASE_URL}{meta['comicsListUrl']}", search_url, ""))
+
+            if self.verbose:
+                logger.info(f"탑툰에서 {len(results)}개의 검색 결과를 찾았습니다")
+            return results
+
+        except Exception as e:
+            if self.verbose:
+                logger.error(f"탑툰 검색 실패: {e}")
+            return []
+
+
 # 공개 API
 __all__ = [
     "AbstractBookstore",
@@ -1170,4 +1369,7 @@ __all__ = [
     "JoaraBookstore",
     "NaverWebtoonBookstore",
     "KakaoWebtoonBookstore",
+    "BomtoonBookstore",
+    "LezhinBookstore",
+    "ToptoonBookstore",
 ]

@@ -26,7 +26,7 @@ from pydantic import BaseModel, field_validator
 from backend.auth import require_auth, require_admin, optional_auth, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, observation_hash, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
 from backend.book_manager import BookManager, MAX_LATEST_BOOK_COUNT
 from backend.comics_manager import ComicsManager
-from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore, JoaraBookstore, NaverWebtoonBookstore, KakaoWebtoonBookstore
+from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore, JoaraBookstore, NaverWebtoonBookstore, KakaoWebtoonBookstore, BomtoonBookstore, LezhinBookstore, ToptoonBookstore
 from backend.category_mapping import CategoryMapping
 from backend.refresh_token_store import create_refresh_token_store
 from backend.view_history_store import MAX_RECENT_VIEWS, create_view_history_store
@@ -1400,6 +1400,12 @@ async def search_bookstore_api(store_name: str, title: str = "", author: str = "
         store_class = NaverWebtoonBookstore
     elif store_name.lower() == "kakaowebtoon":
         store_class = KakaoWebtoonBookstore
+    elif store_name.lower() == "bomtoon":
+        store_class = BomtoonBookstore
+    elif store_name.lower() == "lezhin":
+        store_class = LezhinBookstore
+    elif store_name.lower() == "toptoon":
+        store_class = ToptoonBookstore
     else:
         raise HTTPException(status_code=404, detail="Bookstore not found")
 

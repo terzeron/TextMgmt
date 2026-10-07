@@ -16,6 +16,30 @@ const FONT_SIZE_MIN = 80;
 const FONT_SIZE_MAX = 160;
 const FONT_SIZE_STEP = 20;
 
+// 전체 진행률용 가상 위치 간격(글자 수). 글자 크기와 무관하게 고정이다.
+const LOCATION_CHARS = 1024;
+const SLIDER_STEPS = 1000;
+const SLIDER_DEBOUNCE_MS = 150;
+const PAGE_JUMP = 10;
+
+const locationsCacheKey = (bookId) => `epub_locations_${bookId}`;
+
+const readCachedLocations = (bookId) => {
+  try {
+    return localStorage.getItem(locationsCacheKey(bookId));
+  } catch {
+    return null;
+  }
+};
+
+const writeCachedLocations = (bookId, json) => {
+  try {
+    localStorage.setItem(locationsCacheKey(bookId), json);
+  } catch {
+    // 용량 초과·차단 시 캐시 없이 매번 계산한다.
+  }
+};
+
 const FONT_FAMILY_STYLE_ID = "epub-font-family-override";
 const FONT_FACE_STYLE_ID = "epub-font-face-override";
 
@@ -140,6 +164,8 @@ export default function ViewEPUB({
   const saveTimerRef = useRef(null);
   const cfiRef = useRef("");
   const coverPageRef = useRef(false);
+  const sliderTimerRef = useRef(null);
+  const jumpingRef = useRef(false);
 
   const [epubData, setEpubData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -147,6 +173,8 @@ export default function ViewEPUB({
   const [coverUrl, setCoverUrl] = useState(null);
   const [isCoverPage, setIsCoverPage] = useState(false);
   const [pageInfo, setPageInfo] = useState({ page: 0, total: 0 });
+  // 책 전체 진행률(0~1). 위치 계산이 끝나기 전에는 null이다.
+  const [progress, setProgress] = useState(null);
   const [fontSize, setFontSize] = useState(() =>
     preview ? 100 : readFontSize(),
   );
@@ -251,6 +279,33 @@ export default function ViewEPUB({
       installReexpand(view);
     });
 
+    let locationsReady = false;
+    let disposed = false;
+
+    const syncProgress = (cfi) => {
+      if (!locationsReady || !cfi) return;
+      const value = book.locations.percentageFromCfi(cfi);
+      if (typeof value === "number") setProgress(value);
+    };
+
+    const prepareLocations = async () => {
+      try {
+        const cached = readCachedLocations(bookId);
+        if (cached) {
+          book.locations.load(cached);
+        } else {
+          await book.locations.generate(LOCATION_CHARS);
+          if (disposed) return;
+          writeCachedLocations(bookId, book.locations.save());
+        }
+        if (disposed) return;
+        locationsReady = true;
+        syncProgress(cfiRef.current);
+      } catch {
+        // 계산에 실패하면 챕터 기준 표기를 그대로 둔다.
+      }
+    };
+
     const syncPageInfo = (location) => {
       const displayed = location?.start?.displayed;
       if (displayed?.total > 0) {
@@ -282,6 +337,7 @@ export default function ViewEPUB({
       syncPageInfo(location);
       if (location?.start?.cfi) {
         cfiRef.current = location.start.cfi;
+        syncProgress(location.start.cfi);
       }
       if (preview || !bookId || coverPageRef.current) return;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -293,6 +349,7 @@ export default function ViewEPUB({
     (async () => {
       try {
         await book.ready;
+        if (!preview) prepareLocations();
         const saved = !preview ? readSavedLocation(bookId) : null;
 
         const showCoverIfAvailable = async () => {
@@ -346,6 +403,9 @@ export default function ViewEPUB({
     })();
 
     return () => {
+      disposed = true;
+      setProgress(null);
+      if (sliderTimerRef.current) clearTimeout(sliderTimerRef.current);
       orientationMq.removeEventListener("change", onOrientationChange);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -394,13 +454,90 @@ export default function ViewEPUB({
     renditionRef.current?.prev();
   }, []);
 
-  // 키보드 방향키: 문서와 iframe 내부(rendition keyup) 둘 다 받는다.
+  // 책 전체 비율(0~1) 위치로 이동한다. 표지 화면이면 표지를 먼저 닫는다.
+  const goToProgress = useCallback((ratio) => {
+    const rendition = renditionRef.current;
+    const locations = bookRef.current?.locations;
+    if (!rendition || !(locations?.total > 0)) return;
+    const cfi = locations.cfiFromPercentage(Math.min(1, Math.max(0, ratio)));
+    if (!cfi || cfi === -1) return;
+    if (coverPageRef.current) {
+      coverPageRef.current = false;
+      setIsCoverPage(false);
+    }
+    rendition.display(cfi);
+  }, []);
+
+  const handleSliderChange = useCallback(
+    (event) => {
+      const ratio = Number(event.target.value) / SLIDER_STEPS;
+      setProgress(ratio);
+      if (sliderTimerRef.current) clearTimeout(sliderTimerRef.current);
+      sliderTimerRef.current = setTimeout(
+        () => goToProgress(ratio),
+        SLIDER_DEBOUNCE_MS,
+      );
+    },
+    [goToProgress],
+  );
+
+  // PageUp/PageDown: 한 페이지씩 PAGE_JUMP번 넘긴다. 이동 중 추가 입력은 무시한다.
+  const jumpPages = useCallback(
+    async (direction) => {
+      if (coverPageRef.current) {
+        if (direction > 0) goNext();
+        return;
+      }
+      const rendition = renditionRef.current;
+      if (!rendition || jumpingRef.current) return;
+      jumpingRef.current = true;
+      try {
+        for (let i = 0; i < PAGE_JUMP; i += 1) {
+          await (direction > 0 ? rendition.next() : rendition.prev());
+        }
+      } finally {
+        jumpingRef.current = false;
+      }
+    },
+    [goNext],
+  );
+
+  // 키보드: 문서와 iframe 내부(rendition keyup) 둘 다 받는다.
+  // 슬라이더·글꼴 선택 같은 입력 컨트롤이 포커스면 그쪽 키 동작을 그대로 둔다.
   useEffect(() => {
     const rendition = renditionRef.current;
     if (!rendition) return;
     const onKey = (event) => {
-      if (event.key === "ArrowRight") goNext();
-      else if (event.key === "ArrowLeft") goPrev();
+      if (event.ctrlKey || event.altKey || event.metaKey) return;
+      if (/^(INPUT|SELECT|TEXTAREA)$/.test(event.target?.tagName)) return;
+      let handled = true;
+      switch (event.key) {
+        case " ":
+        case "ArrowRight":
+        case "ArrowDown":
+          goNext();
+          break;
+        case "Backspace":
+        case "ArrowLeft":
+        case "ArrowUp":
+          goPrev();
+          break;
+        case "PageDown":
+          jumpPages(1);
+          break;
+        case "PageUp":
+          jumpPages(-1);
+          break;
+        case "Home":
+          if (!coverPageRef.current) rendition.display(0);
+          break;
+        case "End":
+          goToProgress(1);
+          break;
+        default:
+          handled = false;
+      }
+      if (handled) event.preventDefault?.();
     };
     document.addEventListener("keydown", onKey);
     rendition.on("keyup", onKey);
@@ -408,7 +545,7 @@ export default function ViewEPUB({
       document.removeEventListener("keydown", onKey);
       rendition.off("keyup", onKey);
     };
-  }, [epubData, goNext, goPrev]);
+  }, [epubData, goNext, goPrev, jumpPages, goToProgress]);
 
   const handleFontSizeChange = useCallback((delta) => {
     setFontSize((prev) => {
@@ -500,11 +637,43 @@ export default function ViewEPUB({
         </>
       )}
 
-      {!preview && !isCoverPage && !isLoading && epubData && (
-        <div className="epub-page-info" data-testid="epub-page-info">
-          {pageInfo.total > 0
-            ? `${pageInfo.page} / ${pageInfo.total}`
-            : "페이지 계산 중..."}
+      {!preview && !isLoading && epubData && (
+        <div className="epub-progress" data-testid="epub-progress">
+          {progress !== null && (
+            <>
+              <button
+                type="button"
+                onClick={() => goToProgress(0)}
+                aria-label="책의 처음으로"
+              >
+                ⏮
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={SLIDER_STEPS}
+                value={Math.round(progress * SLIDER_STEPS)}
+                onChange={handleSliderChange}
+                aria-label="읽기 진행률"
+              />
+              <button
+                type="button"
+                onClick={() => goToProgress(1)}
+                aria-label="책의 끝으로"
+              >
+                ⏭
+              </button>
+            </>
+          )}
+          {!isCoverPage && (
+            <span className="epub-page-info" data-testid="epub-page-info">
+              {progress !== null
+                ? `${Math.round(progress * 100)}%`
+                : pageInfo.total > 0
+                  ? `${pageInfo.page} / ${pageInfo.total}`
+                  : "페이지 계산 중..."}
+            </span>
+          )}
         </div>
       )}
     </div>

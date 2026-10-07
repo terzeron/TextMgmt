@@ -1492,6 +1492,7 @@ def test_naver_webtoon_search_by_keyword_success():
     from backend.bookstore import NaverWebtoonBookstore
 
     store = NaverWebtoonBookstore(verbose=True)
+    store.MAX_RESULTS = 2  # 잘림 동작만 본다. 기본값은 test_bookstore_default_max_results_is_four
     calls: list[dict] = []
 
     class Resp:
@@ -1588,6 +1589,7 @@ def test_kakao_webtoon_search_by_keyword_success():
     from backend.bookstore import KakaoWebtoonBookstore
 
     store = KakaoWebtoonBookstore(verbose=True)
+    store.MAX_RESULTS = 2  # 잘림 동작만 본다. 기본값은 test_bookstore_default_max_results_is_four
     calls: list[dict] = []
 
     class Resp:
@@ -1679,11 +1681,328 @@ def test_kakao_webtoon_search_by_keyword_failure_paths(monkeypatch: pytest.Monke
 
 
 def test_webtoon_unused_html_hooks_are_inert():
-    """웹툰 두 곳은 API 를 직접 부르므로 HTML 훅은 호출되지 않는다."""
-    from backend.bookstore import KakaoWebtoonBookstore, NaverWebtoonBookstore
+    """웹툰 서점은 API 를 직접 부르므로 HTML 훅은 호출되지 않는다."""
+    from backend.bookstore import BomtoonBookstore, KakaoWebtoonBookstore, LezhinBookstore, NaverWebtoonBookstore, ToptoonBookstore
 
     soup = BeautifulSoup("<html><body><a href='/x/1'>x</a></body></html>", "html.parser")
-    for cls in (NaverWebtoonBookstore, KakaoWebtoonBookstore):
+    for cls in (NaverWebtoonBookstore, KakaoWebtoonBookstore, BomtoonBookstore, LezhinBookstore, ToptoonBookstore):
         store = cls(verbose=False)
         assert store.extract_search_links(soup) == []
         assert store.extract_book_info(soup) == {"title": "", "author": "", "category": "", "isbn": ""}
+
+
+def _failure_path_checks(store, empty_payload, no_id_payload, monkeypatch: pytest.MonkeyPatch):
+    """세 웹툰 서점이 공유하는 실패 경로: 빈 결과·식별자 없음·HTTP 오류·예외는 모두 빈 리스트."""
+
+    class Resp:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    store.session.get = lambda *a, **k: Resp(200, empty_payload)
+    assert store.search_by_keyword("없는작품") == []
+    store.session.get = lambda *a, **k: Resp(200, no_id_payload)
+    assert store.search_by_keyword("x") == []
+    store.session.get = lambda *a, **k: Resp(500, {})
+    assert store.search_by_keyword("x") == []
+
+    def raise_get(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(store.session, "get", raise_get)
+    assert store.search_by_keyword("x") == []
+
+
+def test_new_webtoon_stores_ignore_author_and_isbn(monkeypatch: pytest.MonkeyPatch):
+    """봄툰·레진·탑툰은 웹툰이라 ISBN·저자를 쓰지 않고 제목만 한 번 부른다."""
+    from backend.bookstore import BomtoonBookstore, LezhinBookstore, ToptoonBookstore
+
+    for cls in (BomtoonBookstore, LezhinBookstore, ToptoonBookstore):
+        store = cls(verbose=False)
+        assert store.SUPPORTS_ISBN_SEARCH is False
+        seen: list[str] = []
+
+        def fake_search_by_keyword(keyword: str, seen=seen, store=store):
+            seen.append(keyword)
+            return [("작품", "작가", "장르", "https://example.com/x", store.build_search_url(keyword), "")]
+
+        monkeypatch.setattr(store, "search_by_keyword", fake_search_by_keyword)
+        results, keyword, method = store.search(isbn="9788934900011", title="작품", author="작가")
+        assert seen == ["작품"]
+        assert (keyword, method) == ("작품", "title")
+        assert results[0][0] == "작품"
+
+
+def test_bomtoon_search_url():
+    from backend.bookstore import BomtoonBookstore
+
+    url = BomtoonBookstore(verbose=False).build_search_url("용사")
+    assert url == "https://www.bomtoon.com/search?q=%EC%9A%A9%EC%82%AC&ref=input"
+
+
+def test_bomtoon_search_by_keyword_success():
+    """웹소설(novel)은 건너뛰고 만화만 MAX_RESULTS 건 모은다. 저자 중복은 한 번만 쓴다."""
+    from backend.bookstore import BomtoonBookstore
+
+    store = BomtoonBookstore(verbose=True)
+    store.MAX_RESULTS = 2  # 잘림 동작만 본다. 기본값은 test_bookstore_default_max_results_is_four
+    calls: list[dict] = []
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "data": {
+                    "results": [
+                        {"contentsId": 1, "title": "용사 소설", "alias": "novel1", "author": ["소설가"], "tags": ["판타지"], "contentsType": "novel"},
+                        {"contentsId": 37760, "title": "이 용사, 전 마왕에 대하여", "alias": "dldydtk", "author": ["사와다 후로페", "사와다 후로페", "아마나 코우타"], "tags": ["판타지", "이계/이세계", "마왕", "용사"], "contentsType": "cartoon"},
+                        {"contentsId": 27933, "title": "저, 용사가 아니니까요.", "alias": "NotWorrior", "author": ["이사키 우타"], "tags": ["판타지"], "contentsType": "comic"},
+                        {"contentsId": 3, "title": "잘려야 하는 세 번째", "alias": "third", "author": [], "tags": [], "contentsType": "cartoon"},
+                    ]
+                }
+            }
+
+    def fake_get(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return Resp()
+
+    store.session.get = fake_get
+    search_url = store.build_search_url("용사")
+    assert store.search_by_keyword("용사") == [
+        ("이 용사, 전 마왕에 대하여", "사와다 후로페, 아마나 코우타", "판타지/이계/이세계/마왕", "https://www.bomtoon.com/detail/dldydtk", search_url, ""),
+        ("저, 용사가 아니니까요.", "이사키 우타", "판타지", "https://www.bomtoon.com/detail/NotWorrior", search_url, ""),
+    ]
+    assert calls[0]["url"] == "https://www.bomtoon.com/api/balcony-search-api/search"
+    assert calls[0]["params"]["searchText"] == "용사"
+    assert calls[0]["params"]["contentsType"] == "ALL"
+
+
+def test_bomtoon_search_by_keyword_failure_paths(monkeypatch: pytest.MonkeyPatch):
+    from backend.bookstore import BomtoonBookstore
+
+    _failure_path_checks(
+        BomtoonBookstore(verbose=True),
+        {"data": {"results": []}},
+        {"data": {"results": [{"title": "alias 없음", "contentsType": "cartoon"}]}},
+        monkeypatch,
+    )
+
+
+def test_lezhin_search_url():
+    from backend.bookstore import LezhinBookstore
+
+    url = LezhinBookstore(verbose=False).build_search_url("연애")
+    assert url == "https://www.lezhin.com/ko/search?t=all&q=%EC%97%B0%EC%95%A0"
+
+
+def test_lezhin_search_by_keyword_success():
+    """저자는 글·그림·각본·원작만 모으고 출판사·레이블은 뺀다."""
+    from backend.bookstore import LezhinBookstore
+
+    store = LezhinBookstore(verbose=True)
+    store.MAX_RESULTS = 2  # 잘림 동작만 본다. 기본값은 test_bookstore_default_max_results_is_four
+    calls: list[dict] = []
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "data": [
+                    {
+                        "title": "체험! XX의 현장",
+                        "alias": "experience",
+                        "genres": ["BL"],
+                        "artists": [
+                            {"name": "강언니", "role": "writer"},
+                            {"name": "미스피엠", "role": "painter"},
+                            {"name": "강언니", "role": "scripter"},
+                            {"name": "레진엔터", "role": "publisher"},
+                            {"name": "레진BL", "role": "label"},
+                        ],
+                    },
+                    {"title": "언슬립", "alias": "unsleep", "genres": ["BL", "드라마"], "artists": [{"name": "현외", "role": "original"}]},
+                    {"title": "잘려야 하는 세 번째", "alias": "third", "genres": [], "artists": []},
+                ],
+                "hasNext": True,
+            }
+
+    def fake_get(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return Resp()
+
+    store.session.get = fake_get
+    search_url = store.build_search_url("연애")
+    assert store.search_by_keyword("연애") == [
+        ("체험! XX의 현장", "강언니, 미스피엠", "BL", "https://www.lezhin.com/ko/comic/experience", search_url, ""),
+        ("언슬립", "현외", "BL/드라마", "https://www.lezhin.com/ko/comic/unsleep", search_url, ""),
+    ]
+    assert calls[0]["url"] == "https://www.lezhin.com/lz-api/v2/advanced-search"
+    assert calls[0]["params"] == {"q": "연애", "t": "all", "order": "popular", "offset": "0", "limit": "2"}
+
+
+def test_lezhin_search_by_keyword_failure_paths(monkeypatch: pytest.MonkeyPatch):
+    from backend.bookstore import LezhinBookstore
+
+    _failure_path_checks(
+        LezhinBookstore(verbose=True),
+        {"data": []},
+        {"data": [{"title": "alias 없음"}]},
+        monkeypatch,
+    )
+
+
+def test_toptoon_search_url():
+    from backend.bookstore import ToptoonBookstore
+
+    url = ToptoonBookstore(verbose=False).build_search_url("네크로")
+    assert url == "https://toptoon.com/hashtag?keyword=%EB%84%A4%ED%81%AC%EB%A1%9C"
+
+
+CATALOG_URL = "https://d41fbnkczk68k.cloudfront.net/production/comicTotal/4e88df07070cad71b94e7fd9cf7e820bcab109c3f138947a87baba14912de8f0.json"
+
+
+def _toptoon_comic(title, comic_id, views=0, genres=("판타지",), author_str="작가"):
+    return {
+        "id": comic_id,
+        "meta": {
+            "title": title,
+            "viewCount": views,
+            "genre": [{"idx": i, "name": g} for i, g in enumerate(genres)],
+            "authorList": {"authorStr": author_str},
+            "author": {"authorString": "무시되는 값"},
+            "comicsListUrl": f"/comic/ep_list/{comic_id}",
+        },
+    }
+
+
+def test_toptoon_search_by_keyword_ranks_and_formats(monkeypatch: pytest.MonkeyPatch):
+    """페이지 HTML 에서 목록 JSON 주소를 찾아 받고, 제목 일치 > 키워드로 시작 > 포함 순, 같으면 조회수 순으로 고른다."""
+    from backend.bookstore import ToptoonBookstore
+
+    store = ToptoonBookstore(verbose=True)
+    store.MAX_RESULTS = 2  # 잘림 동작만 본다. 기본값은 test_bookstore_default_max_results_is_four
+    urls: list[str] = []
+    catalog = [
+        _toptoon_comic("회귀했더니 최강 네크로맨서", "slip", views=900),
+        _toptoon_comic("네크로 시티", "city", views=10, genres=("드라마", "판타지")),
+        _toptoon_comic("네 크로", "exact", views=1),
+        _toptoon_comic("무관한 작품", "other", views=99999),
+        {"id": "nolink", "meta": {"title": "네크로 링크없음"}},
+    ]
+
+    class Page:
+        status_code = 200
+        text = f"<script>fileUrl: '{CATALOG_URL}',</script>"
+
+    class Catalog:
+        status_code = 200
+
+        def json(self):
+            return catalog
+
+    def fake_get(url, **kwargs):
+        urls.append(url)
+        return Page() if url.startswith("https://toptoon.com/hashtag") else Catalog()
+
+    store.session.get = fake_get
+    search_url = store.build_search_url("네크로")
+    # 공백은 무시하고 비교하므로 "네 크로" 는 키워드와 같은 제목(1순위)이다.
+    # 그다음 키워드로 시작하는 "네크로 시티", 나머지는 MAX_RESULTS(2) 에서 잘린다.
+    assert store.search_by_keyword("네크로") == [
+        ("네 크로", "작가", "판타지", "https://toptoon.com/comic/ep_list/exact", search_url, ""),
+        ("네크로 시티", "작가", "드라마/판타지", "https://toptoon.com/comic/ep_list/city", search_url, ""),
+    ]
+    assert urls == [search_url, CATALOG_URL]
+
+    # 같은 순위끼리는 조회수가 많은 쪽이 먼저다.
+    catalog[:] = [
+        _toptoon_comic("네크로 하나", "low", views=1),
+        _toptoon_comic("네크로 둘", "high", views=500),
+    ]
+    assert [r[0] for r in store.search_by_keyword("네크로")] == ["네크로 둘", "네크로 하나"]
+
+
+def test_toptoon_search_by_keyword_falls_back_to_author_string():
+    from backend.bookstore import ToptoonBookstore
+
+    store = ToptoonBookstore(verbose=False)
+    comic = _toptoon_comic("크로스오버", "crossover")
+    comic["meta"]["authorList"] = {}
+    comic["meta"]["author"] = {"authorString": "MONNMONN"}
+
+    class Page:
+        status_code = 200
+        text = CATALOG_URL
+
+    class Catalog:
+        status_code = 200
+
+        def json(self):
+            return [comic]
+
+    store.session.get = lambda url, **k: Page() if "hashtag" in url else Catalog()
+    assert store.search_by_keyword("크로스오버")[0][1] == "MONNMONN"
+
+
+def test_toptoon_search_by_keyword_failure_paths(monkeypatch: pytest.MonkeyPatch):
+    from backend.bookstore import ToptoonBookstore
+
+    store = ToptoonBookstore(verbose=True)
+
+    class Resp:
+        def __init__(self, status_code=200, text="", payload=None):
+            self.status_code = status_code
+            self.text = text
+            self._payload = payload if payload is not None else []
+
+        def json(self):
+            return self._payload
+
+    # 공백뿐인 키워드는 요청 없이 끝난다.
+    store.session.get = lambda *a, **k: pytest.fail("요청하면 안 된다")
+    assert store.search_by_keyword("   ") == []
+
+    # 페이지 HTTP 오류
+    store.session.get = lambda *a, **k: Resp(status_code=500)
+    assert store.search_by_keyword("x") == []
+
+    # 페이지에 목록 JSON 주소가 없음
+    store.session.get = lambda *a, **k: Resp(text="<html></html>")
+    assert store.search_by_keyword("x") == []
+
+    # 목록 JSON HTTP 오류
+    store.session.get = lambda url, **k: Resp(text=CATALOG_URL) if "hashtag" in url else Resp(status_code=404)
+    assert store.search_by_keyword("x") == []
+
+    # 일치하는 제목이 없음
+    store.session.get = lambda url, **k: Resp(text=CATALOG_URL) if "hashtag" in url else Resp(payload=[_toptoon_comic("다른 작품", "a")])
+    assert store.search_by_keyword("없는작품") == []
+
+    def raise_get(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(store.session, "get", raise_get)
+    assert store.search_by_keyword("x") == []
+
+
+def test_bookstore_default_max_results_is_four():
+    """서점 하나가 돌려주는 결과는 기본 최대 4개다."""
+    from backend.bookstore import AbstractBookstore, NaverWebtoonBookstore
+
+    assert AbstractBookstore.MAX_RESULTS == 4
+
+    store = NaverWebtoonBookstore(verbose=False)
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"searchList": [{"titleId": i, "titleName": f"작품 {i}", "displayAuthor": "", "genreList": []} for i in range(1, 6)]}
+
+    store.session.get = lambda *a, **k: Resp()
+    assert [r[0] for r in store.search_by_keyword("작품")] == ["작품 1", "작품 2", "작품 3", "작품 4"]

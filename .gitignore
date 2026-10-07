@@ -37,6 +37,7 @@ Vagrantfile
 .codegraph
 .serena
 graphify-out
+.playwright-mcp
 
 # 코퍼스 수집 캐시와 측정 리포트. 재생성 가능한 중간 산출물이다.
 tmp/
