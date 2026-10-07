@@ -79,18 +79,38 @@
     right: 8px;
 }
 
-.epub-page-info {
+.epub-progress {
     position: absolute;
     bottom: 4px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 10;
-    font-size: 13px;
-    color: #666;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: calc(100% - 96px);
     background: rgba(255, 255, 255, 0.85);
     padding: 2px 12px;
     border-radius: 10px;
-    pointer-events: none;
+}
+
+.epub-progress button {
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0 2px;
+}
+
+.epub-progress input[type="range"] {
+    width: min(40vw, 320px);
+}
+
+.epub-page-info {
+    font-size: 13px;
+    color: #666;
+    min-width: 3.5em;
+    text-align: right;
 }
 
 .epub-cover-page {

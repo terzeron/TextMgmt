@@ -118,6 +118,14 @@ function createMockBook() {
       href: `OEBPS/Text/section${i}.html`,
       index: i,
     })),
+    locations: {
+      total: 10,
+      generate: vi.fn(() => Promise.resolve([])),
+      load: vi.fn(),
+      save: vi.fn(() => '["cfi0","cfi1"]'),
+      percentageFromCfi: vi.fn(() => 0.37),
+      cfiFromPercentage: vi.fn((ratio) => `epubcfi(ratio-${ratio})`),
+    },
     renderTo: vi.fn(() => {
       lastRendition = createMockRendition();
       lastRendition.book = lastBook;
@@ -614,9 +622,10 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     expect(lastRendition.prev).toHaveBeenCalled();
   });
 
-  it("relocated의 displayed.page/total로 페이지 정보를 갱신한다", async () => {
+  it("위치 계산 전에는 displayed.page/total(챕터 기준)로 표기한다", async () => {
     render(<ViewEPUB bookId={1} />);
     await openBook();
+    lastBook.locations.percentageFromCfi.mockReturnValue(null);
     await act(async () => {
       lastRendition._emit("relocated", {
         start: {
@@ -627,6 +636,127 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       });
     });
     expect(screen.getByText("3 / 12")).toBeTruthy();
+  });
+
+  it("위치 계산이 끝나면 전체 진행률(%)과 슬라이더를 보여준다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    await act(async () => {
+      lastRendition._emit("relocated", {
+        start: { cfi: "epubcfi(/6/4)", displayed: { page: 3, total: 12 } },
+      });
+    });
+    expect(screen.getByText("37%")).toBeTruthy();
+    expect(lastBook.locations.generate).toHaveBeenCalledWith(1024);
+    expect(screen.getByRole("slider", { name: "읽기 진행률" })).toBeTruthy();
+  });
+
+  it("끝 버튼은 책 전체 비율 1 위치로 이동한다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    await act(async () => {
+      lastRendition._emit("relocated", {
+        start: { cfi: "epubcfi(/6/4)", displayed: { page: 3, total: 12 } },
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "책의 끝으로" }));
+    expect(lastBook.locations.cfiFromPercentage).toHaveBeenCalledWith(1);
+    expect(lastRendition.display).toHaveBeenLastCalledWith("epubcfi(ratio-1)");
+  });
+
+  it("슬라이더를 움직이면 해당 비율 위치로 이동한다(debounce)", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    await act(async () => {
+      lastRendition._emit("relocated", {
+        start: { cfi: "epubcfi(/6/4)", displayed: { page: 3, total: 12 } },
+      });
+    });
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByRole("slider", { name: "읽기 진행률" }), {
+      target: { value: "500" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    vi.useRealTimers();
+    expect(lastRendition.display).toHaveBeenLastCalledWith("epubcfi(ratio-0.5)");
+  });
+
+  it("캐시된 위치가 있으면 다시 계산하지 않는다", async () => {
+    localStorage.setItem("epub_locations_1", '["cfi0","cfi1"]');
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    expect(lastBook.locations.load).toHaveBeenCalledWith('["cfi0","cfi1"]');
+    expect(lastBook.locations.generate).not.toHaveBeenCalled();
+    localStorage.removeItem("epub_locations_1");
+  });
+
+  it("스페이스·아래·오른쪽 키는 다음 페이지로 간다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    for (const key of [" ", "ArrowDown", "ArrowRight"]) {
+      fireEvent.keyDown(document, { key });
+    }
+    expect(lastRendition.next).toHaveBeenCalledTimes(3);
+  });
+
+  it("백스페이스·위·왼쪽 키는 이전 페이지로 간다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    for (const key of ["Backspace", "ArrowUp", "ArrowLeft"]) {
+      fireEvent.keyDown(document, { key });
+    }
+    expect(lastRendition.prev).toHaveBeenCalledTimes(3);
+  });
+
+  it("PageDown/PageUp은 10페이지씩 이동한다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "PageDown" });
+    });
+    expect(lastRendition.next).toHaveBeenCalledTimes(10);
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "PageUp" });
+    });
+    expect(lastRendition.prev).toHaveBeenCalledTimes(10);
+  });
+
+  it("Home은 첫 페이지, End는 마지막 위치로 이동한다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    fireEvent.keyDown(document, { key: "Home" });
+    expect(lastRendition.display).toHaveBeenLastCalledWith(0);
+    fireEvent.keyDown(document, { key: "End" });
+    expect(lastRendition.display).toHaveBeenLastCalledWith("epubcfi(ratio-1)");
+  });
+
+  it("슬라이더에 포커스가 있으면 키를 가로채지 않는다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    await act(async () => {
+      lastRendition._emit("relocated", {
+        start: { cfi: "epubcfi(/6/4)", displayed: { page: 3, total: 12 } },
+      });
+    });
+    fireEvent.keyDown(screen.getByRole("slider", { name: "읽기 진행률" }), {
+      key: "ArrowRight",
+    });
+    expect(lastRendition.next).not.toHaveBeenCalled();
+  });
+
+  it("Ctrl 조합 키는 무시한다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    fireEvent.keyDown(document, { key: "ArrowLeft", ctrlKey: true });
+    expect(lastRendition.prev).not.toHaveBeenCalled();
+  });
+
+  it("preview에서는 위치 계산을 하지 않는다", async () => {
+    render(<ViewEPUB bookId={1} preview />);
+    await openBook();
+    expect(lastBook.locations.generate).not.toHaveBeenCalled();
   });
 
   it("relocated 이후 읽기 위치(CFI)가 저장된다(throttle)", async () => {
