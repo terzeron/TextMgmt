@@ -393,6 +393,30 @@ describe("DirectoryEditPanel", () => {
     expect(screen.getByLabelText("목차").value).toBe("");
   });
 
+  it.each(["(01-05)", "(1-5)", "(1~5)", "( 01 - 05 )"])(
+    "단위 없는 괄호 범위 %s를 목차로 분리한다",
+    (suffix) => {
+      const sourceName = `미녀는 야수 ${suffix}`;
+      const expectedContents = suffix.replace(/[()\s]/g, "");
+      const values = props({ directory: { category: "comics/series", name: sourceName } });
+      render(<DirectoryEditPanel {...values} />);
+
+      expect(screen.getByLabelText("제목").value).toBe("미녀는 야수");
+      expect(screen.getByLabelText("목차").value).toBe(expectedContents);
+      expect(screen.getByLabelText("신규 이름").value).toBe(`미녀는 야수 (${expectedContents})`);
+    },
+  );
+
+  it.each(["(2020-2021)", "(05-01)", "(5-5)", "(1234-1240)"])(
+    "연도 범위나 순서가 맞지 않는 괄호 숫자 %s는 제목으로 유지한다",
+    (suffix) => {
+      const sourceName = `미녀는 야수 ${suffix}`;
+      render(<DirectoryEditPanel {...props({ directory: { category: "comics/series", name: sourceName } })} />);
+      expect(screen.getByLabelText("제목").value).toBe(sourceName);
+      expect(screen.getByLabelText("목차").value).toBe("");
+    },
+  );
+
   it.each(["제목", "목차", "신규 이름"])("완결 표기 없는 범위를 보정해도 편집한 %s를 보존한다", async (label) => {
     let completeStats;
     mockRawJsonGetReq.mockImplementation((_url, success) => { completeStats = success; });

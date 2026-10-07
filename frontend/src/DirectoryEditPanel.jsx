@@ -55,6 +55,15 @@ function buildContents(value, completion, fileCount, contentsUnit) {
   return [normalizedValue, normalizedCompletion].filter(Boolean).join(" ");
 }
 
+// 단위 없는 괄호 범위 "(01-05)"는 회차 목차로 본다. "(2020-2021)" 같은 연도 범위와
+// 구분하려고 3자리 이하 숫자이면서 앞 수가 뒤 수보다 작을 때만 인정한다.
+// 괄호 없는 "1-44"는 제목의 일부일 수 있어 여기서 다루지 않는다.
+const PAREN_UNITLESS_RANGE_PATTERN = /^(\d{1,3})\s*[-~]\s*(\d{1,3})$/;
+function isParenthesizedUnitlessRange(bareContentsMatch) {
+  const range = PAREN_UNITLESS_RANGE_PATTERN.exec((bareContentsMatch?.[1] ?? "").trim());
+  return Boolean(range) && Number(range[1]) < Number(range[2]);
+}
+
 function parseDirectoryName(name, fileCount, contentsUnit) {
   let remainder = name.trim();
   if (/^만화_|\d+[화회권]_(?:완결|미완|완외|완|完)$/.test(remainder)) {
@@ -115,7 +124,11 @@ function parseDirectoryName(name, fileCount, contentsUnit) {
     const hasExplicitRange = bareContentsMatch &&
       /^\d+\s*[-~]\s*\d+\s*[화회권]$/.test(bareContentsMatch[1] || bareContentsMatch[2]);
     const rangeMatch = /^1[-~](\d+)[화회권]$/.exec(value);
-    if (hasExplicitRange || (rangeMatch && Number(rangeMatch[1]) > 0 && Number(rangeMatch[1]) === Number(fileCount))) {
+    if (
+      hasExplicitRange ||
+      isParenthesizedUnitlessRange(bareContentsMatch) ||
+      (rangeMatch && Number(rangeMatch[1]) > 0 && Number(rangeMatch[1]) === Number(fileCount))
+    ) {
       contents = value;
       remainder = remainder.slice(0, bareContentsMatch.index).trim();
     }
