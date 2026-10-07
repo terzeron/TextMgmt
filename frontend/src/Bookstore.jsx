@@ -548,13 +548,13 @@ export default function Bookstore(props) {
             onClick={() => fetchWithMethod(storeKey, "title_author")}
             disabled={result?.loading || (!title && !author)}
           >
-            저자+제목
+            도서명
             {method === "title_author" && spinner}
           </Button>
           {searchUrl && (
             <a href={searchUrl} target="_blank" rel="noreferrer">
               <Button variant="outline-secondary" size="sm">
-                서점에서 보기
+                서점
               </Button>
             </a>
           )}

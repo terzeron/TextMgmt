@@ -50,7 +50,7 @@ describe("Bookstore defensive search handlers", () => {
     render(<Bookstore bookInfo={{ title: "", author: "", isbn: "" }} />);
 
     expect(screen.getAllByRole("button", { name: "ISBN" })[0].disabled).toBe(true);
-    expect(screen.getAllByRole("button", { name: "저자+제목" })[0].disabled).toBe(true);
+    expect(screen.getAllByRole("button", { name: "도서명" })[0].disabled).toBe(true);
     expect(mockRawJsonGetReq).not.toHaveBeenCalled();
   });
 
