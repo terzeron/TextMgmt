@@ -1201,7 +1201,7 @@ def test_search_by_category_paged_passes_search_after_and_handles_error():
     assert manager.search_by_category_paged("A", size=5) == ([], 0, None)
 
 
-def test_search_latest_docs_sorts_by_created_time_and_excludes_hidden_categories():
+def test_search_latest_docs_sorts_by_updated_time_and_excludes_hidden_categories():
     es = DummyES()
     manager = make_manager(es)
     captured = {}
@@ -1237,7 +1237,7 @@ def test_search_latest_docs_sorts_by_created_time_and_excludes_hidden_categories
     assert result[0][0] == 7
     assert captured["size"] == 100
     assert captured["track_total_hits"] is True
-    assert captured["sort"][0] == {"created_time": {"order": "desc", "missing": "_last"}}
+    assert captured["sort"][0] == {"updated_time": {"order": "desc", "missing": "_last"}}
     assert {"term": {"category": "A"}} in captured["query"]["bool"]["must_not"][0]["bool"]["should"]
     assert {"prefix": {"category": "A/"}} in captured["query"]["bool"]["must_not"][0]["bool"]["should"]
 

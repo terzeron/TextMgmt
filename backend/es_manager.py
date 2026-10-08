@@ -391,7 +391,7 @@ class ESManager:
             query["bool"]["filter"] = [{"term": {"category": category}}]
         return self._search_paged(query, size=size, offset=offset, source_fields=self.LIST_SOURCE_FIELDS)
 
-    LATEST_SORT: list[dict[str, Any]] = [{"created_time": {"order": "desc", "missing": "_last"}}, {"updated_time": {"order": "desc", "missing": "_last"}}, {"file_path": {"order": "asc"}}]
+    LATEST_SORT: list[dict[str, Any]] = [{"updated_time": {"order": "desc", "missing": "_last"}}, {"created_time": {"order": "desc", "missing": "_last"}}, {"file_path": {"order": "asc"}}]
 
     @staticmethod
     def _exclude_category_queries(categories: list[str] | None) -> list[dict[str, Any]]:
