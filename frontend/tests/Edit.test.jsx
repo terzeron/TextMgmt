@@ -185,10 +185,10 @@ vi.mock("../src/SimilarBooks", async () => {
 });
 
 vi.mock("../src/Bookstore", () => ({
-  default: ({ onCategoriesFound, bookInfo, searchTrigger }) => {
+  default: ({ onCategoriesFound, bookInfo, searchTrigger, comic }) => {
     // 간접 테스트를 위해 즉시 호출
     return (
-      <div data-testid="bookstore" data-title={bookInfo?.title} data-author={bookInfo?.author} data-search-trigger={searchTrigger}>
+      <div data-testid="bookstore" data-title={bookInfo?.title} data-author={bookInfo?.author} data-search-trigger={searchTrigger} data-comic={String(Boolean(comic))}>
         Bookstore
         <button data-testid="recommend-webtoon" onClick={() => onCategoriesFound?.({ naverwebtoon_0_0: "웹툰" })}>
           웹툰 추천
@@ -199,7 +199,11 @@ vi.mock("../src/Bookstore", () => ({
 }));
 
 vi.mock("../src/SimilarityDebug", () => ({
-  default: () => <div data-testid="similarity-debug">SimilarityDebug</div>,
+  default: ({ showWhenEmpty }) => (
+    <div data-testid="similarity-debug" data-show-when-empty={String(Boolean(showWhenEmpty))}>
+      SimilarityDebug
+    </div>
+  ),
 }));
 
 vi.mock("../src/EpubDiagnoseView", () => ({
@@ -438,6 +442,36 @@ describe("Edit", () => {
       expect(bookstoreSearch.dataset.title).toBe("1_fiction");
       expect(bookstoreSearch.dataset.searchTrigger).toBe("1");
     });
+  });
+
+  it.each([
+    ["", "false"],
+    ["/comics", "true"],
+  ])("개별 파일 편집 화면에서 서점 검색을 표시하고 유사도 디버그도 함께 표시한다 (%s)", async (apiPrefix, expectedComic) => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "42" });
+    useSearchParams.mockReturnValue([new URLSearchParams("category=9_deep/a/b/c")]);
+    mockJsonGetReq.mockImplementation((url, _payload, resolve) => {
+      if (url === `${apiPrefix}/categories`) resolve(CATEGORIES);
+      else if (url === `${apiPrefix}/books/42`) {
+        resolve({
+          book_id: 42,
+          title: "작품명",
+          author: "",
+          file_type: "zip",
+          file_path: "9_deep/a/b/c/작품명.zip",
+          category: "9_deep/a/b/c",
+        });
+      } else resolve([]);
+    });
+    render(<Edit apiPrefix={apiPrefix} />);
+
+    const bookstore = await screen.findByTestId("bookstore");
+    expect(bookstore.dataset.comic).toBe(expectedComic);
+    expect(bookstore.dataset.title).toBe("작품명");
+    expect(screen.getByTestId("similarity-debug").dataset.showWhenEmpty).toBe(expectedComic);
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([new URLSearchParams()]);
   });
 
   it.each(["", "/comics"])("같은 디렉토리를 다시 클릭해도 검색과 편집 내용을 유지한다 (%s)", async (apiPrefix) => {

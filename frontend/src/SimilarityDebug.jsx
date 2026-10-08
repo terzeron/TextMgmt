@@ -21,7 +21,7 @@ const STORE_COLORS = {
     ridi: '#00897B',
 };
 
-export default function SimilarityDebug({suggestedCategories, categoryList}) {
+export default function SimilarityDebug({suggestedCategories, categoryList, showWhenEmpty = false}) {
     const [isOpen, setIsOpen] = useState(false);
     const [debugInfo, setDebugInfo] = useState(null);
     const [mappingsLoaded, setMappingsLoaded] = useState(false);
@@ -46,7 +46,26 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
     }, [suggestedCategories, categoryList, mappingsLoaded]);
 
     if (!debugInfo) {
-        return null;
+        if (!showWhenEmpty) {
+            return null;
+        }
+        // 만화는 웹툰 서점과 일치할 때만 카테고리가 생긴다. 패널을 숨기지 않고 이유를 알린다.
+        return (
+            <Card>
+                <Card.Header
+                    onClick={() => setIsOpen(!isOpen)}
+                    style={{cursor: 'pointer', userSelect: 'none'}}
+                    className="py-2">
+                    <FontAwesomeIcon icon={isOpen ? faChevronDown : faChevronRight} className="me-2"/>
+                    유사도 계산 디버그
+                </Card.Header>
+                {isOpen && (
+                    <Card.Body className="p-2 text-muted" style={{fontSize: '0.8rem'}}>
+                        서점 검색 결과에서 추출된 카테고리가 없습니다. 서점을 수동으로 검색하면 다시 계산합니다.
+                    </Card.Body>
+                )}
+            </Card>
+        );
     }
 
     return (
@@ -169,5 +188,6 @@ export default function SimilarityDebug({suggestedCategories, categoryList}) {
 
 SimilarityDebug.propTypes = {
     suggestedCategories: PropTypes.object,
-    categoryList: PropTypes.array
+    categoryList: PropTypes.array,
+    showWhenEmpty: PropTypes.bool
 };
