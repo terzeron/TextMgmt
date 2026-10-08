@@ -50,6 +50,11 @@
     white-space: nowrap;
 }
 
+/* View.css의 `#view .card-header { display: flex }`가 id 선택자라 위 grid를 덮는다. 클래스를 하나 더 붙여 우선순위를 높인다. */
+#view .card-header.book-viewer-header {
+    display: grid;
+}
+
 .book-viewer-actions {
     display: flex;
     gap: 6px;

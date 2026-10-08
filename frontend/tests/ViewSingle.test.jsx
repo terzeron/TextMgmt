@@ -457,6 +457,38 @@ describe("ViewSingle", () => {
     });
   });
 
+  it("admin 역할일 때 편집 버튼 오른쪽에 디렉토리 편집 버튼을 표시한다", () => {
+    render(
+      <ViewSingle
+        bookId={1}
+        fileType="pdf"
+        filePath="/test.pdf"
+        role="admin"
+        editUrl="/edit/1"
+        directoryEditUrl="/edit?directory=a"
+      />,
+    );
+    const edit = screen.getByText("편집").closest("a");
+    const dirEdit = screen.getByText("디렉토리 편집").closest("a");
+    expect(dirEdit.getAttribute("href")).toBe("/edit?directory=a");
+    expect(
+      edit.compareDocumentPosition(dirEdit) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("admin이 아니면 디렉토리 편집 버튼을 숨긴다", () => {
+    render(
+      <ViewSingle
+        bookId={1}
+        fileType="pdf"
+        filePath="/test.pdf"
+        role="user"
+        directoryEditUrl="/edit?directory=a"
+      />,
+    );
+    expect(screen.queryByText("디렉토리 편집")).toBeNull();
+  });
+
   it("embedded 책 이동과 관리 버튼을 하나의 header에 표시한다", () => {
     render(
       <ViewSingle
