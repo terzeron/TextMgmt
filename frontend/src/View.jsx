@@ -277,6 +277,10 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
   const editUrl = bookInfo["book_id"]
     ? `${editBasePath}/${bookInfo["book_id"]}?category=${encodeURIComponent(bookInfo["category"] || "_root")}`
     : "";
+  const directoryEditUrl =
+    bookInfo["book_id"] && bookInfo["category"]
+      ? `${editBasePath}?directory=${encodeURIComponent(bookInfo["category"])}`
+      : "";
 
   return (
     <Container id="view">
@@ -365,6 +369,7 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
                 pageCount={10}
                 apiPrefix={apiPrefix}
                 editUrl={editUrl}
+                directoryEditUrl={directoryEditUrl}
                 onNextBook={toNextEntryButtonClicked}
                 hasNextBook={!!nextEntryId}
                 onPrevBook={toPrevEntryButtonClicked}

@@ -190,7 +190,7 @@ export default function ViewSingle(props) {
     <div>책이 선택되지 않았습니다.</div>
   );
   const hasHeaderActions =
-    props.editUrl || props.downloadUrl || props.viewUrl;
+    props.editUrl || props.directoryEditUrl || props.downloadUrl || props.viewUrl;
 
   return (
     <Card className={standalone ? "standalone-viewer" : ""}>
@@ -212,6 +212,13 @@ export default function ViewSingle(props) {
               <a href={props.editUrl}>
                 <Button variant="outline-secondary" size="sm">
                   편집
+                </Button>
+              </a>
+            )}
+            {props.role === "admin" && props.directoryEditUrl && (
+              <a href={props.directoryEditUrl}>
+                <Button variant="outline-secondary" size="sm">
+                  디렉토리 편집
                 </Button>
               </a>
             )}
@@ -296,6 +303,7 @@ ViewSingle.propTypes = {
   preview: PropTypes.bool,
   apiPrefix: PropTypes.string,
   editUrl: PropTypes.string,
+  directoryEditUrl: PropTypes.string,
   onNextBook: PropTypes.func,
   hasNextBook: PropTypes.bool,
   onPrevBook: PropTypes.func,
