@@ -1368,19 +1368,17 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                     apiPrefix={apiPrefix}
                     basePath={basePath}
                   />
-                  {apiPrefix === "" && (
-                    <Bookstore
-                      bookInfo={bookInfo}
-                      searchTrigger={searchTrigger}
-                      onCategoriesFound={setSuggestedCategories}
-                    />
-                  )}
-                  {apiPrefix === "" && (
-                    <SimilarityDebug
-                      suggestedCategories={suggestedCategories}
-                      categoryList={otherCategoryList}
-                    />
-                  )}
+                  <Bookstore
+                    bookInfo={bookInfo}
+                    searchTrigger={searchTrigger}
+                    onCategoriesFound={setSuggestedCategories}
+                    comic={apiPrefix === "/comics"}
+                  />
+                  <SimilarityDebug
+                    suggestedCategories={suggestedCategories}
+                    categoryList={otherCategoryList}
+                    showWhenEmpty={apiPrefix === "/comics"}
+                  />
                   <EpubDiagnoseView
                     bookId={bookInfo["book_id"]}
                     fileType={bookInfo["file_type"]}

@@ -40,6 +40,47 @@ describe("SimilarityDebug 기본 렌더링", () => {
     expect(container.innerHTML).toBe("");
   });
 
+  it("showWhenEmpty면 debugInfo가 없어도 헤더를 보이고 열면 안내 문구를 보인다", () => {
+    mockGetSimilarityDebugInfo.mockReturnValue(null);
+    render(
+      <SimilarityDebug
+        suggestedCategories={{}}
+        categoryList={["소설"]}
+        showWhenEmpty
+      />,
+    );
+    expect(screen.getByText("유사도 계산 디버그")).toBeTruthy();
+    expect(screen.queryByText(/추출된 카테고리가 없습니다/)).toBeNull();
+    fireEvent.click(screen.getByText("유사도 계산 디버그"));
+    expect(screen.getByText(/추출된 카테고리가 없습니다/)).toBeTruthy();
+  });
+
+  it("showWhenEmpty 상태에서 서점 카테고리가 생기면 계산 결과로 다시 그린다", () => {
+    mockGetSimilarityDebugInfo.mockReturnValue(null);
+    const { rerender } = render(
+      <SimilarityDebug
+        suggestedCategories={{}}
+        categoryList={["0_웹툰"]}
+        showWhenEmpty
+      />,
+    );
+    fireEvent.click(screen.getByText("유사도 계산 디버그"));
+    expect(screen.getByText(/추출된 카테고리가 없습니다/)).toBeTruthy();
+
+    mockGetSimilarityDebugInfo.mockReturnValue(
+      makeDebugInfo({ naverwebtoon_0_0: { original: "웹툰", keywords: ["웹툰"] } }),
+    );
+    rerender(
+      <SimilarityDebug
+        suggestedCategories={{ naverwebtoon_0_0: "웹툰" }}
+        categoryList={["0_웹툰"]}
+        showWhenEmpty
+      />,
+    );
+    expect(screen.queryByText(/추출된 카테고리가 없습니다/)).toBeNull();
+    expect(screen.getByText("유사도 계산 디버그")).toBeTruthy();
+  });
+
   it("카드 헤더를 클릭하면 본문이 열린다", () => {
     mockGetSimilarityDebugInfo.mockReturnValue(
       makeDebugInfo({ yes24_0_0: { original: "소설", keywords: ["소설"] } }),
