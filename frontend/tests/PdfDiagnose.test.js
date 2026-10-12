@@ -15,7 +15,7 @@ const {
   mockDestroy: vi.fn(),
 }));
 
-vi.mock("pdfjs-dist", () => ({
+vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
   getDocument: mockGetDocument,
   GlobalWorkerOptions: { workerSrc: "" },
 }));
