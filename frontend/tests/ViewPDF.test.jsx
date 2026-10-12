@@ -27,7 +27,7 @@ const { mockGetDocument } = vi.hoisted(() => ({
   mockGetDocument: vi.fn(),
 }));
 
-vi.mock("pdfjs-dist", () => ({
+vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
   getDocument: mockGetDocument,
   GlobalWorkerOptions: { workerSrc: "" },
 }));
@@ -38,7 +38,7 @@ vi.mock("../src/Common", () => ({
 }));
 
 import ViewPDF from "../src/ViewPDF";
-import * as pdfjs from "pdfjs-dist";
+import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 // 실제 pdfjs-dist 6.x에서 PDFDocumentProxy에는 destroy()가 없고
 // loadingTask.destroy()로 정리한다. mock도 동일하게 구성한다.
@@ -836,7 +836,7 @@ describe("ViewPDF", () => {
   // (CDN 고정 버전을 쓰면 API/Worker 버전이 drift되어 렌더링이 깨진다)
   it("loads workerSrc from the installed pdfjs-dist build", () => {
     expect(pdfjs.GlobalWorkerOptions.workerSrc).toContain(
-      "pdfjs-dist/build/pdf.worker",
+      "pdfjs-dist/legacy/build/pdf.worker",
     );
   });
 
