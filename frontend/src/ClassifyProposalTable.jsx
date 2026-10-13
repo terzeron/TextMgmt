@@ -296,6 +296,7 @@ SortButton.propTypes = {
 function FilterCheckbox({ label, value, onCycle }) {
   const inputRef = useRef(null);
   useEffect(() => {
+    /* v8 ignore else -- 마운트 후 effect가 실행될 때 ref는 항상 채워져 있다. */
     if (inputRef.current) inputRef.current.indeterminate = value == null;
   }, [value]);
   return (
@@ -383,6 +384,7 @@ export default function ClassifyProposalTable({
       setChoice(item.file_path, null);
       return;
     }
+    /* v8 ignore next -- 후보 체크박스는 candidates가 있을 때만 그려진다. */
     const candidate = (item.candidates || [])[index];
     setChoice(item.file_path, {
       source: "candidate",

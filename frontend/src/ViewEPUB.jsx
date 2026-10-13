@@ -298,6 +298,7 @@ export default function ViewEPUB({
           if (disposed) return;
           writeCachedLocations(bookId, book.locations.save());
         }
+        /* v8 ignore next -- 캐시 경로는 await가 없고 생성 경로는 위에서 이미 확인해 여기서 disposed일 수 없다. */
         if (disposed) return;
         locationsReady = true;
         syncProgress(cfiRef.current);

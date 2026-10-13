@@ -1038,6 +1038,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
   const deleteButtonClicked = useCallback(() => {
     if (isProcessingRef.current) return;
     console.log(`deleteButtonClicked: entryId=${selectedEntryId}`);
+    /* v8 ignore else -- 디렉토리 선택 중에는 책 삭제 버튼이 그려지지 않는다. */
     if (selectedEntryId?.includes("/")) {
       const parsed = parseEntryId(selectedEntryId);
       /* v8 ignore next -- selected book entry ids are parseable. */

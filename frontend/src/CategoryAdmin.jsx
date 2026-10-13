@@ -1424,6 +1424,7 @@ export default function CategoryAdmin({
   // 분류 제안 시작. 더 이상 파일을 바로 옮기지 않는다 — 제안만 만들고, 실제
   // 이동은 관리자가 표를 검토하고 승인해야 일어난다.
   const handleStartClassifyProposal = useCallback(() => {
+    /* v8 ignore next -- 분류 제안 버튼은 selectedCategory가 있을 때만 그려진다. */
     if (!selectedCategory) return;
     const category = selectedCategory;
     setProposalChoices({});
@@ -1487,6 +1488,7 @@ export default function CategoryAdmin({
   // 뒤를 부른다 — 파일이 남았는데 행만 사라지면 표에서 다시 손댈 길이 없어진다.
   const handleDeleteProposalBook = useCallback(
     (item) => {
+      /* v8 ignore next -- 삭제 중에는 버튼이 disabled라 이 가드는 2차 방어다. */
       if (deletingProposalPath !== null) return;
       const label = item.title || item.file_path;
       if (!window.confirm(`"${label}"을(를) 삭제하시겠습니까?`)) return;
