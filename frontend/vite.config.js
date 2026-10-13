@@ -107,7 +107,7 @@ export default defineConfig({
       provider: "v8",
       include: ["src/**/*.{js,jsx}"],
       reportsDirectory: "coverage-reports/unit",
-      reporter: [["text", { skipFull: true }], "html", "lcovonly"],
+      reporter: [["text", { skipFull: false }], "html", "lcovonly"],
     },
   },
 });

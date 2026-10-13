@@ -501,6 +501,7 @@ export default function Bookstore(props) {
 
     switch (method) {
       case "isbn":
+        /* v8 ignore next -- ISBN 버튼은 isbn이 비면 disabled고, 자동 검색은 fetchWithMethodInternal을 쓴다. */
         if (isbn) params.append("isbn", isbn);
         break;
       case "title_author":

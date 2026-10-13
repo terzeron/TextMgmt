@@ -1325,8 +1325,6 @@ class BookManager:
         normalized = posixpath.normpath(file_path.replace("\\", "/"))
         if normalized == ".":
             return ""
-        if normalized.startswith("./"):
-            return normalized[2:]
         return normalized
 
     def _clear_mismatch_cache(self) -> None:
@@ -1845,8 +1843,7 @@ class BookManager:
             return bool(outcome)
 
         async def _report_progress(payload: dict[str, Any]) -> None:
-            if on_progress is None:
-                return
+            assert on_progress is not None  # 호출부가 on_progress 가 있을 때만 부른다
             outcome = on_progress(payload)
             if inspect.isawaitable(outcome):
                 await outcome

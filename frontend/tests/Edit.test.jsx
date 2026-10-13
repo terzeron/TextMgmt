@@ -2008,6 +2008,26 @@ describe("Edit", () => {
     expect(JSON.parse(screen.getByTestId("folder-open").dataset.expanded)).toEqual(["__virtual__2_p"]);
   });
 
+  it("URL의 directory가 같은 부모 안의 다른 디렉토리로 바뀌어도 펼침 목록에 중복을 넣지 않는다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([new URLSearchParams("directory=2_p/x")]);
+    setupMockCategories({ "1_a": 1, "2_p/x": 1, "2_p/y": 1, "3_z": 1 }, []);
+
+    const { rerender } = render(<Edit />);
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    expect(JSON.parse(screen.getByTestId("folder-open").dataset.expanded)).toEqual(["__virtual__2_p"]);
+
+    useSearchParams.mockReturnValue([new URLSearchParams("directory=2_p/y")]);
+    rerender(<Edit />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("신규 이름").value).toBe("y");
+    });
+    expect(JSON.parse(screen.getByTestId("folder-open").dataset.expanded)).toEqual(["__virtual__2_p"]);
+    useSearchParams.mockReturnValue([new URLSearchParams()]);
+  });
+
   it("첫 디렉토리에서 이전, 마지막 디렉토리에서 다음을 눌러도 선택이 바뀌지 않는다", async () => {
     const { useParams, useSearchParams } = await import("react-router-dom");
     useParams.mockReturnValue({ "*": "" });

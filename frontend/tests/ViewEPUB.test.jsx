@@ -33,6 +33,8 @@ let rejectCoverUrl = false;
 let failEveryDisplay = false;
 let failDisplayError = null;
 let omitCoverUrl = false;
+let deferGenerate = false;
+let resolveGenerate = null;
 
 function setFailNextDisplay() {
   failNextDisplay = true;
@@ -120,7 +122,13 @@ function createMockBook() {
     })),
     locations: {
       total: 10,
-      generate: vi.fn(() => Promise.resolve([])),
+      generate: vi.fn(() =>
+        deferGenerate
+          ? new Promise((resolve) => {
+              resolveGenerate = () => resolve([]);
+            })
+          : Promise.resolve([]),
+      ),
       load: vi.fn(),
       save: vi.fn(() => '["cfi0","cfi1"]'),
       percentageFromCfi: vi.fn(() => 0.37),
@@ -258,6 +266,8 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     failEveryDisplay = false;
     failDisplayError = null;
     omitCoverUrl = false;
+    deferGenerate = false;
+    resolveGenerate = null;
     localStorageMock.clear();
     localStorageMock.getItem.mockReset();
     localStorageMock.getItem.mockImplementation((key) => localStorageMock._get(key));
@@ -1145,5 +1155,144 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     await act(async () => {});
 
     expect(screen.queryByText(/EPUB 로딩 실패/)).toBeNull();
+  });
+
+  // ─── 커버리지 보강: 표지·진행 이동·키 입력의 경계 경로 ───────────
+  async function openWithProgress() {
+    await openBook();
+    await act(async () => {
+      lastRendition._emit("relocated", {
+        start: { cfi: "epubcfi(/6/4)", displayed: { page: 3, total: 12 } },
+      });
+    });
+  }
+
+  it("책의 처음 버튼은 비율 0 위치로 이동한다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openWithProgress();
+    fireEvent.click(screen.getByRole("button", { name: "책의 처음으로" }));
+    expect(lastBook.locations.cfiFromPercentage).toHaveBeenCalledWith(0);
+    expect(lastRendition.display).toHaveBeenLastCalledWith("epubcfi(ratio-0)");
+  });
+
+  it("위치 변환이 실패(-1 또는 빈 값)하면 이동하지 않는다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openWithProgress();
+    const before = lastRendition.display.mock.calls.length;
+
+    lastBook.locations.cfiFromPercentage.mockReturnValueOnce(-1);
+    fireEvent.click(screen.getByRole("button", { name: "책의 끝으로" }));
+    lastBook.locations.cfiFromPercentage.mockReturnValueOnce(null);
+    fireEvent.click(screen.getByRole("button", { name: "책의 끝으로" }));
+
+    expect(lastRendition.display.mock.calls.length).toBe(before);
+  });
+
+  it("위치 목록이 비어 있으면 End 키로 이동하지 않는다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    lastBook.locations.total = 0;
+    const before = lastRendition.display.mock.calls.length;
+
+    fireEvent.keyDown(document, { key: "End" });
+
+    expect(lastRendition.display.mock.calls.length).toBe(before);
+    expect(lastBook.locations.cfiFromPercentage).not.toHaveBeenCalled();
+  });
+
+  it("표지 화면에서 진행 이동을 하면 표지를 먼저 닫는다", async () => {
+    mockCoverUrl = "blob:epub-cover";
+    render(<ViewEPUB bookId={1} />);
+    await openWithProgress();
+    expect(screen.queryByTestId("epub-cover-page")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "책의 끝으로" }));
+
+    expect(screen.queryByTestId("epub-cover-page")).toBeNull();
+    expect(lastRendition.display).toHaveBeenLastCalledWith("epubcfi(ratio-1)");
+  });
+
+  it("슬라이더를 연속으로 움직이면 이전 debounce 타이머를 취소한다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openWithProgress();
+    vi.useFakeTimers();
+    const slider = screen.getByRole("slider", { name: "읽기 진행률" });
+    fireEvent.change(slider, { target: { value: "200" } });
+    fireEvent.change(slider, { target: { value: "700" } });
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+    vi.useRealTimers();
+
+    expect(lastBook.locations.cfiFromPercentage).toHaveBeenCalledTimes(1);
+    expect(lastRendition.display).toHaveBeenLastCalledWith("epubcfi(ratio-0.7)");
+  });
+
+  it("표지 화면에서 PageDown은 표지만 넘기고 PageUp은 무시한다", async () => {
+    mockCoverUrl = "blob:epub-cover";
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "PageUp" });
+    });
+    expect(screen.queryByTestId("epub-cover-page")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "PageDown" });
+    });
+    expect(screen.queryByTestId("epub-cover-page")).toBeNull();
+    expect(lastRendition.next).not.toHaveBeenCalled();
+    expect(lastRendition.prev).not.toHaveBeenCalled();
+  });
+
+  it("페이지 점프 중 들어온 추가 PageDown은 무시한다", async () => {
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    lastRendition.next.mockImplementation(() => new Promise(() => {}));
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "PageDown" });
+      fireEvent.keyDown(document, { key: "PageDown" });
+    });
+
+    expect(lastRendition.next).toHaveBeenCalledTimes(1);
+  });
+
+  it("표지 화면에서 Home은 본문 첫 페이지로 이동하지 않는다", async () => {
+    mockCoverUrl = "blob:epub-cover";
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    const before = lastRendition.display.mock.calls.length;
+
+    fireEvent.keyDown(document, { key: "Home" });
+
+    expect(lastRendition.display.mock.calls.length).toBe(before);
+  });
+
+  it("위치 계산이 끝나기 전에 언마운트하면 결과를 저장하지 않는다", async () => {
+    deferGenerate = true;
+    const { unmount } = render(<ViewEPUB bookId={1} />);
+    await waitFor(() => expect(lastBook?.locations.generate).toHaveBeenCalled());
+    const book = lastBook;
+
+    unmount();
+    await act(async () => {
+      resolveGenerate();
+    });
+
+    expect(book.locations.save).not.toHaveBeenCalled();
+  });
+
+  it("위치 캐시를 읽다 예외가 나도 위치를 새로 계산한다", async () => {
+    localStorageMock.getItem.mockImplementation((key) => {
+      if (String(key).startsWith("epub_locations_")) throw new Error("denied");
+      return localStorageMock._get(key);
+    });
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+
+    await waitFor(() => expect(lastBook.locations.generate).toHaveBeenCalled());
+    expect(lastBook.locations.load).not.toHaveBeenCalled();
   });
 });

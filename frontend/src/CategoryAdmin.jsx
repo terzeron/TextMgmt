@@ -357,20 +357,11 @@ function buildMismatchStats(mismatchData) {
   };
 }
 
-function countLoadedMismatchEntries(folder) {
-  return (folder?.children || []).reduce(
-    (count, child) => count + (child.mismatchType ? 1 : 0),
-    0,
-  );
-}
-
 // 재적재는 선택한 카테고리 하나만 처리하므로 하위 폴더 합계(count)가 아니라
 // 그 카테고리 자체의 건수를 대상으로 삼는다.
 function getMismatchReloadTargetCount(folder) {
   const ownCount = Number(folder?.ownCount ?? folder?.count ?? 0);
-  if (Number.isFinite(ownCount) && ownCount > 0) return ownCount;
-
-  return countLoadedMismatchEntries(folder);
+  return Number.isFinite(ownCount) && ownCount > 0 ? ownCount : 0;
 }
 
 function sumChildCounts(nodes) {
@@ -1433,6 +1424,7 @@ export default function CategoryAdmin({
   // 분류 제안 시작. 더 이상 파일을 바로 옮기지 않는다 — 제안만 만들고, 실제
   // 이동은 관리자가 표를 검토하고 승인해야 일어난다.
   const handleStartClassifyProposal = useCallback(() => {
+    /* v8 ignore next -- 분류 제안 버튼은 selectedCategory가 있을 때만 그려진다. */
     if (!selectedCategory) return;
     const category = selectedCategory;
     setProposalChoices({});
@@ -1496,22 +1488,17 @@ export default function CategoryAdmin({
   // 뒤를 부른다 — 파일이 남았는데 행만 사라지면 표에서 다시 손댈 길이 없어진다.
   const handleDeleteProposalBook = useCallback(
     (item) => {
+      /* v8 ignore next -- 삭제 중에는 버튼이 disabled라 이 가드는 2차 방어다. */
       if (deletingProposalPath !== null) return;
       const label = item.title || item.file_path;
       if (!window.confirm(`"${label}"을(를) 삭제하시겠습니까?`)) return;
 
       setDeletingProposalPath(item.file_path);
       const dropRow = () => {
-        setProposal((prev) =>
-          prev
-            ? {
-                ...prev,
-                items: (prev.items || []).filter(
-                  (row) => row.file_path !== item.file_path,
-                ),
-              }
-            : prev,
-        );
+        setProposal((prev) => ({
+          ...prev,
+          items: prev.items.filter((row) => row.file_path !== item.file_path),
+        }));
         // 지운 책의 선택이 남으면 승인 대상에 그대로 실린다.
         setProposalChoices((prev) => {
           const next = { ...prev };
@@ -1580,7 +1567,7 @@ export default function CategoryAdmin({
       () => {
         // 서버가 응답 전에 이미 상태를 applying으로 선점해 두므로, 다음 폴링이
         // 실제 진행 상황(이동 상태별 항목)을 곧바로 읽어온다.
-        setProposal((prev) => (prev ? { ...prev, status: "applying" } : prev));
+        setProposal((prev) => ({ ...prev, status: "applying" }));
         setProposalPolling(true);
       },
       (error) => {

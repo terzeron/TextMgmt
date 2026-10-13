@@ -314,9 +314,7 @@ def _extract_text_bruteforce(body_data: bytes) -> str:
             continue
         readable = sum(1 for ch in stripped if ch.isspace() or ch.isalnum() or 0xAC00 <= ord(ch) <= 0xD7A3 or 0x4E00 <= ord(ch) <= 0x9FFF or 0x1100 <= ord(ch) <= 0x11FF)
         if readable / len(stripped) >= 0.7:
-            # V2.00 레코드 구분자 패턴 제거
-            if stripped in ("豼豼d", "Āú塴豼豼", "āĀĀú塴豼豼", "*ú塴豼豼", "āĀú塴豼豼", "Ǵ塴豼豼Āāā"):
-                continue
+            # V2.00 레코드 구분자 패턴 제거. 알려진 구분자는 모두 8자 미만이라 위의 길이 필터가 먼저 버린다.
             if "豼豼" in stripped and len(stripped) < 20:
                 continue
             clean.append(stripped)
