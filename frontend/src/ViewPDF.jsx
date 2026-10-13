@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
 import { flushSync } from "react-dom";
 import PropTypes from "prop-types";
 import { getApiUrlPrefix } from "./Common";
@@ -67,8 +73,16 @@ export default function ViewPDF({
     500,
   ];
   const [fitMode, setFitMode] = useState(!preview);
+  // 1장씩 보기: CSS scroll-snap으로 뷰포트당 1쪽만 보이게 한다 (PC 전용, 기본 꺼짐)
+  const [singlePage, setSinglePage] = useState(false);
   const [zoomIndex, setZoomIndex] = useState(ZOOM_STEPS.indexOf(100));
   const zoomPercent = ZOOM_STEPS[zoomIndex];
+  const toggleSinglePage = () => {
+    setSinglePage((prev) => !prev);
+    // 버튼에 포커스가 남으면 Space가 토글을 다시 눌러버리므로 스크롤 컨테이너로 옮긴다.
+    // 컨테이너가 포커스를 가져야 Space/PageDown이 이 컨테이너를 스크롤한다.
+    containerRef.current?.focus({ preventScroll: true });
+  };
   const zoomDown = () => setZoomIndex((prev) => Math.max(0, prev - 1));
   const zoomUp = () =>
     setZoomIndex((prev) => Math.min(ZOOM_STEPS.length - 1, prev + 1));
@@ -291,6 +305,28 @@ export default function ViewPDF({
     /* v8 ignore next -- cancellation is called only for active RenderTask objects. */
     if (task && typeof task.cancel === "function") task.cancel();
   }, []);
+
+  // 1장씩 보기: 뷰어 위의 카드 헤더·nav가 차지하는 높이만큼 viewport가 줄어든다.
+  // 컨테이너를 viewport 맨 위에 맞춘 뒤 실제로 보이는 높이를 CSS 변수로 넘기면,
+  // 쪽 높이 = 보이는 높이가 되어 한 쪽이 잘리지 않는다. 스크롤과 snap은 CSS가 맡는다.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!singlePage || !el) return undefined;
+    const measure = () => {
+      const top = Math.max(0, el.getBoundingClientRect().top);
+      el.style.setProperty(
+        "--pdf-avail-h",
+        `${Math.max(window.innerHeight - top, 200)}px`,
+      );
+    };
+    el.scrollIntoView?.({ block: "start" });
+    measure();
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("resize", measure);
+      el.style.removeProperty("--pdf-avail-h");
+    };
+  }, [singlePage]);
 
   useEffect(() => {
     if (!bookId) {
@@ -518,7 +554,11 @@ export default function ViewPDF({
   const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1);
 
   return (
-    <div className="pdf-container" ref={containerRef}>
+    <div
+      className={`pdf-container${singlePage ? " pdf-single" : ""}`}
+      ref={containerRef}
+      tabIndex={-1}
+    >
       <div className="pdf-toolbar">
         <div className="pdf-info">
           {loadedPages < totalPages
@@ -526,6 +566,15 @@ export default function ViewPDF({
             : `총 ${totalPages}쪽 표시`}
         </div>
         <div className="pdf-zoom-controls">
+          <button
+            className={`pdf-zoom-btn pdf-zoom-fit-btn pdf-single-btn ${singlePage ? "active" : ""}`}
+            onClick={toggleSinglePage}
+          >
+            <span className="toggle-track">
+              <span className="toggle-knob" />
+            </span>
+            1장씩
+          </button>
           <button
             className={`pdf-zoom-btn pdf-zoom-fit-btn ${fitMode ? "active" : ""}`}
             onClick={() => setFitMode((prev) => !prev)}
@@ -539,17 +588,19 @@ export default function ViewPDF({
           <button
             className="pdf-zoom-btn"
             onClick={zoomDown}
-            disabled={fitMode || zoomIndex === 0}
+            disabled={fitMode || singlePage || zoomIndex === 0}
           >
             −
           </button>
           <span className="pdf-zoom-label">
-            {fitMode ? "-" : `${zoomPercent}%`}
+            {fitMode || singlePage ? "-" : `${zoomPercent}%`}
           </span>
           <button
             className="pdf-zoom-btn"
             onClick={zoomUp}
-            disabled={fitMode || zoomIndex === ZOOM_STEPS.length - 1}
+            disabled={
+              fitMode || singlePage || zoomIndex === ZOOM_STEPS.length - 1
+            }
           >
             +
           </button>
@@ -579,11 +630,15 @@ export default function ViewPDF({
 
 const pdfStyles = `
     .pdf-container {
+        --pdf-toolbar-h: 32px;
         width: 100%;
         height: calc(100vh - 10px);
         overflow-y: auto;
+        outline: none;
     }
     .pdf-toolbar {
+        box-sizing: border-box;
+        height: var(--pdf-toolbar-h);
         position: sticky;
         top: 0;
         z-index: 10;
@@ -664,6 +719,32 @@ const pdfStyles = `
     }
     .pdf-content {
         overflow-x: auto;
+    }
+    .pdf-single-btn {
+        display: none;
+    }
+    /* 1장씩 보기는 키보드(Space/PageDown)가 있는 PC 전용이다.
+       각 쪽을 뷰포트 높이에 맞춰 snap 지점으로 만들면 브라우저 기본 키 스크롤이 한 쪽씩 넘어간다. */
+    @media (hover: hover) and (pointer: fine) {
+        .pdf-single-btn {
+            display: flex;
+        }
+        .pdf-container.pdf-single {
+            height: var(--pdf-avail-h, calc(100vh - 10px));
+            scroll-snap-type: y mandatory;
+            scroll-padding-top: var(--pdf-toolbar-h);
+        }
+        /* overflow-x:auto는 overflow-y도 auto로 만들어 snap 컨테이너를 가로채므로 푼다 */
+        .pdf-container.pdf-single .pdf-content {
+            overflow: visible;
+        }
+        .pdf-container.pdf-single .pdf-page {
+            width: 100% !important;
+            height: calc(var(--pdf-avail-h, calc(100vh - 10px)) - var(--pdf-toolbar-h)) !important;
+            object-fit: contain;
+            scroll-snap-align: start;
+            scroll-snap-stop: always;
+        }
     }
     .pdf-page {
         display: block;
