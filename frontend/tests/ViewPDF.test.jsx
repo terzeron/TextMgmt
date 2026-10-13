@@ -537,6 +537,135 @@ describe("ViewPDF", () => {
     });
   });
 
+  it("1장씩 토글은 기본 꺼짐이고, 켜면 pdf-single 클래스와 컨테이너 포커스가 적용된다", async () => {
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => createMockPdf(1));
+
+    const { container } = render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
+    });
+
+    const root = container.querySelector(".pdf-container");
+    const singleButton = container.querySelector(".pdf-single-btn"); // jsdom은 media query가 PC 조건(hover/pointer)에 맞지 않아 버튼을 숨김 처리한다
+    const fitButton = screen.getByRole("button", { name: /맞춤/ });
+
+    // 1장씩 버튼은 맞춤 버튼 바로 왼쪽에 놓인다
+    expect(singleButton.nextElementSibling).toBe(fitButton);
+    expect(root.classList.contains("pdf-single")).toBe(false);
+    expect(singleButton.classList.contains("active")).toBe(false);
+
+    singleButton.click();
+    await waitFor(() => {
+      expect(root.classList.contains("pdf-single")).toBe(true);
+      expect(singleButton.classList.contains("active")).toBe(true);
+    });
+    // Space/PageDown이 컨테이너를 스크롤하도록 포커스가 컨테이너로 옮겨진다
+    expect(document.activeElement).toBe(root);
+
+    singleButton.click();
+    await waitFor(() => {
+      expect(root.classList.contains("pdf-single")).toBe(false);
+    });
+  });
+
+  describe("1장씩 보기 높이 측정", () => {
+    const AVAIL = "--pdf-avail-h";
+    let originalInnerHeight;
+    let originalScrollIntoView;
+
+    beforeEach(() => {
+      originalInnerHeight = window.innerHeight;
+      originalScrollIntoView = Element.prototype.scrollIntoView;
+      window.innerHeight = 800;
+    });
+
+    afterEach(() => {
+      window.innerHeight = originalInnerHeight;
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+      vi.restoreAllMocks();
+    });
+
+    const renderLoaded = async (containerTop) => {
+      globalThis.fetch = createMockFetch(2);
+      setupGetDocument(() => createMockPdf(1));
+      const view = render(<ViewPDF bookId={1} />);
+      await waitFor(() => {
+        expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
+      });
+      const root = view.container.querySelector(".pdf-container");
+      root.getBoundingClientRect = () => ({ top: containerTop });
+      const singleButton = view.container.querySelector(".pdf-single-btn");
+      return { root, singleButton };
+    };
+
+    it("켜면 컨테이너를 viewport 맨 위로 맞추고 보이는 높이를 CSS 변수에 넣는다", async () => {
+      const scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+      const { root, singleButton } = await renderLoaded(120);
+
+      expect(root.style.getPropertyValue(AVAIL)).toBe("");
+
+      act(() => singleButton.click());
+
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+      // 카드 헤더/nav가 차지하는 120px을 뺀 보이는 높이
+      expect(root.style.getPropertyValue(AVAIL)).toBe("680px");
+    });
+
+    it("끄면 CSS 변수를 지우고 resize 리스너를 해제한다", async () => {
+      Element.prototype.scrollIntoView = vi.fn();
+      const removeSpy = vi.spyOn(window, "removeEventListener");
+      const { root, singleButton } = await renderLoaded(120);
+
+      act(() => singleButton.click());
+      expect(root.style.getPropertyValue(AVAIL)).toBe("680px");
+
+      act(() => singleButton.click());
+      expect(root.style.getPropertyValue(AVAIL)).toBe("");
+      expect(removeSpy).toHaveBeenCalledWith("resize", expect.any(Function));
+    });
+
+    it("창 크기가 바뀌면 보이는 높이를 다시 측정한다", async () => {
+      Element.prototype.scrollIntoView = vi.fn();
+      const { root, singleButton } = await renderLoaded(100);
+
+      act(() => singleButton.click());
+      expect(root.style.getPropertyValue(AVAIL)).toBe("700px");
+
+      window.innerHeight = 600;
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      expect(root.style.getPropertyValue(AVAIL)).toBe("500px");
+    });
+
+    it("컨테이너가 viewport 위로 벗어나도(top<0) 전체 viewport 높이를 쓴다", async () => {
+      Element.prototype.scrollIntoView = vi.fn();
+      const { root, singleButton } = await renderLoaded(-50);
+
+      act(() => singleButton.click());
+      expect(root.style.getPropertyValue(AVAIL)).toBe("800px");
+    });
+
+    it("보이는 높이가 너무 작으면 최소 200px로 제한한다", async () => {
+      Element.prototype.scrollIntoView = vi.fn();
+      const { root, singleButton } = await renderLoaded(790);
+
+      act(() => singleButton.click());
+      expect(root.style.getPropertyValue(AVAIL)).toBe("200px");
+    });
+
+    it("scrollIntoView가 없는 환경에서도 측정은 동작한다", async () => {
+      Element.prototype.scrollIntoView = undefined;
+      const { root, singleButton } = await renderLoaded(100);
+
+      act(() => singleButton.click());
+      expect(root.style.getPropertyValue(AVAIL)).toBe("700px");
+    });
+  });
+
   it("맞춤 버튼을 끄면 확대/축소 컨트롤을 사용할 수 있다", async () => {
     globalThis.fetch = createMockFetch(2);
     setupGetDocument(() => createMockPdf(1));
@@ -1418,27 +1547,41 @@ describe("computeRenderScale", () => {
   });
 
   it("캔버스 CSS 폭을 모르면 기본 배율(1.2 x dpr)을 쓴다", () => {
-    expect(computeRenderScale(pageOf(600, 800), { clientWidth: 0 }, 2)).toBeCloseTo(2.4);
+    expect(
+      computeRenderScale(pageOf(600, 800), { clientWidth: 0 }, 2),
+    ).toBeCloseTo(2.4);
     expect(computeRenderScale(pageOf(600, 800), null, 1)).toBeCloseTo(1.2);
   });
 
   it("페이지 크기가 0이면 기본 배율을 쓴다", () => {
-    expect(computeRenderScale(pageOf(0, 800), { clientWidth: 500 }, 1)).toBeCloseTo(1.2);
-    expect(computeRenderScale(pageOf(600, 0), { clientWidth: 500 }, 1)).toBeCloseTo(1.2);
+    expect(
+      computeRenderScale(pageOf(0, 800), { clientWidth: 500 }, 1),
+    ).toBeCloseTo(1.2);
+    expect(
+      computeRenderScale(pageOf(600, 0), { clientWidth: 500 }, 1),
+    ).toBeCloseTo(1.2);
   });
 
   it("화면 폭에 맞춘 배율이 기본 배율보다 크면 그 배율을 쓴다", () => {
     // wanted = 1000 * 1 / 100 = 10, areaCap = sqrt(1.5M / (100*100)) ≈ 12.2
-    expect(computeRenderScale(pageOf(100, 100), { clientWidth: 1000 }, 1)).toBeCloseTo(10);
+    expect(
+      computeRenderScale(pageOf(100, 100), { clientWidth: 1000 }, 1),
+    ).toBeCloseTo(10);
   });
 
   it("캔버스 면적 상한을 넘기지 않는다", () => {
     // wanted = 5000 / 100 = 50, areaCap = sqrt(1.5M / 10000) ≈ 12.247
-    const scale = computeRenderScale(pageOf(100, 100), { clientWidth: 5000 }, 1);
+    const scale = computeRenderScale(
+      pageOf(100, 100),
+      { clientWidth: 5000 },
+      1,
+    );
     expect(scale).toBeCloseTo(Math.sqrt(1_500_000 / 10_000));
   });
 
   it("화면이 작아 계산 배율이 기본보다 작아도 기본 배율 아래로 내려가지 않는다", () => {
-    expect(computeRenderScale(pageOf(1000, 1000), { clientWidth: 100 }, 1)).toBeCloseTo(1.2);
+    expect(
+      computeRenderScale(pageOf(1000, 1000), { clientWidth: 100 }, 1),
+    ).toBeCloseTo(1.2);
   });
 });
