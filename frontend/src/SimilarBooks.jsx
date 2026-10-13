@@ -192,7 +192,6 @@ export default function SimilarBooks({
   const hasMore = similarBooks.length < total;
 
   const loadSimilarNames = useCallback((onFinish) => {
-    if (!directoryName) return;
     const query = new URLSearchParams({ name: directoryName, author: directoryAuthor, exclude_category: directoryCategory });
     rawJsonGetReq(
       `${apiPrefix}/similar-names?${query.toString()}`,

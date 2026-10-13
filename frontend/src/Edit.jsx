@@ -48,7 +48,7 @@ function getOtherTopLevelCategories(categories, currentCategory = "") {
   const currentTopLevel = String(currentCategory).split("/")[0];
   return [
     ...new Set(
-      (categories || [])
+      categories
         .map((category) => String(category).split("/")[0])
         .filter(
           (category) =>

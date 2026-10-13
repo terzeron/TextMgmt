@@ -50,8 +50,7 @@ function buildContents(value, completion, fileCount, contentsUnit) {
   ) {
     normalizedValue = `1-${rangeEndCount}화`;
   }
-  const normalizedCompletion = completion === "외포완" ? "완외"
-    : completion === "완결" || completion === "完" ? "완" : completion;
+  const normalizedCompletion = completion === "완결" || completion === "完" ? "완" : completion;
   return [normalizedValue, normalizedCompletion].filter(Boolean).join(" ");
 }
 

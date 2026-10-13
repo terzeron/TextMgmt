@@ -435,7 +435,7 @@ export default function Actions(props) {
             />
           </Button>
         )}
-        {(renderingInfoList || []).map((info) => {
+        {renderingInfoList.map((info) => {
           const highlightRank = highlightedCategories.indexOf(info["key"]);
           const isTop1 = highlightRank === 0;
           const isTop2to5 = highlightRank >= 1 && highlightRank <= 4;
