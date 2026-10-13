@@ -427,6 +427,32 @@ describe("DirectoryEditPanel", () => {
     if (label === "제목") expect(screen.getByLabelText("목차").value).toBe("1-7권");
   });
 
+  it("목차를 먼저 편집해도 제목 보정이 반영된 뒤에 메타데이터 검색을 시작한다", async () => {
+    const onMetadataReady = vi.fn();
+    const pending = [];
+    mockRawJsonGetReq.mockImplementation((url, success) => { pending.push({ url, success }); });
+    render(<DirectoryEditPanel {...props({
+      directory: { category: "comics/series", name: "터무니 없는 스킬로 이세계 방랑밥 1 7권" },
+      onMetadataReady,
+    })} />);
+    fireEvent.change(screen.getByLabelText("목차"), { target: { value: "사용자 편집" } });
+
+    act(() => {
+      for (const { url, success } of pending) {
+        success(url.includes("category-pdf-stats")
+          ? { status: "success", result: { file_count: 7, page_count: 100, total_file_size: 5000 } }
+          : { status: "success", result: [{ file_path: "comics/series/01권.pdf" }] });
+      }
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("제목").value).toBe("터무니 없는 스킬로 이세계 방랑밥"));
+    expect(screen.getByLabelText("목차").value).toBe("사용자 편집");
+    await waitFor(() => expect(onMetadataReady).toHaveBeenCalledOnce());
+    expect(onMetadataReady).toHaveBeenCalledWith(expect.objectContaining({
+      title: "터무니 없는 스킬로 이세계 방랑밥",
+    }));
+  });
+
   it("단일 화수와 완결 표기를 목차로 분리한다", async () => {
     mockRawJsonGetReq.mockImplementation((_url, success) =>
       success({

@@ -37,7 +37,7 @@ vi.mock("../src/Common", () => ({
   getAuthToken: () => "test-token",
 }));
 
-import ViewPDF from "../src/ViewPDF";
+import ViewPDF, { computeRenderScale } from "../src/ViewPDF";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 // 실제 pdfjs-dist 6.x에서 PDFDocumentProxy에는 destroy()가 없고
@@ -1409,5 +1409,36 @@ describe("ViewPDF", () => {
     } finally {
       globalThis.IntersectionObserver = RealIO;
     }
+  });
+});
+
+describe("computeRenderScale", () => {
+  const pageOf = (width, height) => ({
+    getViewport: vi.fn(() => ({ width, height })),
+  });
+
+  it("캔버스 CSS 폭을 모르면 기본 배율(1.2 x dpr)을 쓴다", () => {
+    expect(computeRenderScale(pageOf(600, 800), { clientWidth: 0 }, 2)).toBeCloseTo(2.4);
+    expect(computeRenderScale(pageOf(600, 800), null, 1)).toBeCloseTo(1.2);
+  });
+
+  it("페이지 크기가 0이면 기본 배율을 쓴다", () => {
+    expect(computeRenderScale(pageOf(0, 800), { clientWidth: 500 }, 1)).toBeCloseTo(1.2);
+    expect(computeRenderScale(pageOf(600, 0), { clientWidth: 500 }, 1)).toBeCloseTo(1.2);
+  });
+
+  it("화면 폭에 맞춘 배율이 기본 배율보다 크면 그 배율을 쓴다", () => {
+    // wanted = 1000 * 1 / 100 = 10, areaCap = sqrt(1.5M / (100*100)) ≈ 12.2
+    expect(computeRenderScale(pageOf(100, 100), { clientWidth: 1000 }, 1)).toBeCloseTo(10);
+  });
+
+  it("캔버스 면적 상한을 넘기지 않는다", () => {
+    // wanted = 5000 / 100 = 50, areaCap = sqrt(1.5M / 10000) ≈ 12.247
+    const scale = computeRenderScale(pageOf(100, 100), { clientWidth: 5000 }, 1);
+    expect(scale).toBeCloseTo(Math.sqrt(1_500_000 / 10_000));
+  });
+
+  it("화면이 작아 계산 배율이 기본보다 작아도 기본 배율 아래로 내려가지 않는다", () => {
+    expect(computeRenderScale(pageOf(1000, 1000), { clientWidth: 100 }, 1)).toBeCloseTo(1.2);
   });
 });

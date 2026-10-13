@@ -7022,6 +7022,69 @@ describe("CategoryAdmin 재적재 충돌 및 폴링 방어 처리", () => {
     }
   });
 
+  it("window가 없는 환경(SSR)에서는 재적재 소유자를 읽지 않고 렌더링한다", async () => {
+    const { renderToString } = await import("react-dom/server");
+    const getItemSpy = vi.spyOn(Storage.prototype, "getItem");
+    const realWindow = globalThis.window;
+    vi.stubGlobal("window", undefined);
+    try {
+      // MUI Portal은 서버 렌더러가 지원하지 않아 throw하지만, 재적재 소유자를 읽는
+      // useState 초기화는 그 전에 실행된다. 여기서는 그 초기화만 확인한다.
+      try {
+        renderToString(<CategoryAdmin />);
+      } catch (error) {
+        expect(String(error)).toMatch(/Portals/);
+      }
+    } finally {
+      vi.stubGlobal("window", realWindow);
+      vi.unstubAllGlobals();
+    }
+    expect(getItemSpy).not.toHaveBeenCalledWith(
+      "CategoryAdmin.allReloadOwner.book",
+    );
+    getItemSpy.mockRestore();
+  });
+
+  it("window가 사라진 시점의 재적재 소유자 저장은 저장소를 건드리지 않는다", async () => {
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const realWindow = globalThis.window;
+    try {
+      setupWithHeldReloadStatus();
+      render(<CategoryAdmin />);
+      await waitFor(() => {
+        expect(screen.getByText("디렉토리")).toBeTruthy();
+      });
+
+      mockJsonPostReq.mockImplementation(
+        (_url, _payload, resolve, _reject, done) => {
+          vi.stubGlobal("window", undefined);
+          try {
+            resolve({ already_running: true, category: "2_science" });
+          } finally {
+            vi.stubGlobal("window", realWindow);
+          }
+          if (done) done();
+        },
+      );
+      setItemSpy.mockClear();
+      fireEvent.click(headerButton("일괄 재적재"));
+      const modal = await screen.findByRole("dialog");
+      fireEvent.click(
+        within(modal).getByRole("button", { name: "일괄 재적재" }),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(/이미 진행 중/)).toBeTruthy();
+      });
+      // 시작 시점(window 있음)의 저장 1회만 있고, window가 없던 null 저장은 건너뛴다.
+      expect(setItemSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.stubGlobal("window", realWindow);
+      vi.unstubAllGlobals();
+      setItemSpy.mockRestore();
+    }
+  });
+
   it("contentType이 비어 있으면 기본 book 세션 키로 재적재 소유자를 읽는다", async () => {
     const getItemSpy = vi.spyOn(Storage.prototype, "getItem");
     try {
@@ -7908,4 +7971,3 @@ describe("CategoryAdmin 분류 제안 상태 경계", () => {
     });
   });
 });
-
