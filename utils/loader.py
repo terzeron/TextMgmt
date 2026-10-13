@@ -274,12 +274,6 @@ class Loader:
             return False, "무손실 디코딩 가능한 인코딩을 찾지 못함"
 
         utf8_bytes = text.encode("utf-8")
-        # 3. 글자수·내용 검증 — 새 바이트를 다시 읽었을 때 원본 디코딩 결과와 같아야 한다
-        roundtrip = utf8_bytes.decode("utf-8")
-        if len(roundtrip) != len(text):
-            return False, f"글자수 불일치: {len(text)} → {len(roundtrip)}"
-        if roundtrip != text:
-            return False, "재인코딩 내용 불일치"
 
         if dry_run:
             return True, f"{source_enc} → utf-8 ({len(text)}자, {len(raw)}B → {len(utf8_bytes)}B) [dry-run]"
