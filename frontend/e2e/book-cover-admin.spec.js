@@ -237,6 +237,13 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
   await expect(firstHeader.getByRole("heading")).toHaveCSS("font-size", "20px");
   await expect(firstHeader.getByRole("button", { name: "편집" })).toBeEnabled();
   await expect(firstHeader.getByRole("button", { name: "조회" })).toBeEnabled();
+  const google = firstHeader.getByRole("link", { name: "구글" });
+  await expect(google).toHaveAttribute("href", `https://www.google.com/search?tbm=isch&q=${encodeURIComponent("표지 없는 책 0")}`);
+  await expect(google).toHaveAttribute("target", "_blank");
+  await expect(google).toHaveAttribute("rel", "noopener noreferrer");
+  const researchRect = await firstHeader.getByRole("button", { name: "재검색" }).boundingBox();
+  const googleRect = await google.boundingBox();
+  expect(googleRect.x).toBeGreaterThan(researchRect.x + researchRect.width);
   await expect(page.getByRole("button", { name: "다음 EPUB 검사" })).toHaveCount(0);
   const first = page.getByRole("button", { name: "YES24 서점 후보 0-0 표지 선택" });
   await expect(first).toBeEnabled();

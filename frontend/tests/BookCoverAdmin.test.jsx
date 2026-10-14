@@ -46,6 +46,25 @@ function deferred() {
 }
 
 describe("책 표지 관리", () => {
+  it("재검색 오른쪽 구글 버튼은 제목의 한글과 특수문자를 보존해 이미지 검색을 새 탭에서 연다", async () => {
+    setup();
+    const title = "구운몽 & 꿈 #1 + 이야기?";
+    overrideRequest(async (path, options, original) => {
+      const result = await original(path, options);
+      return path.startsWith("/missing") ? { ...result, items: result.items.map((item) => ({ ...item, title })) } : result;
+    });
+    render(<BookCoverAdmin />);
+    const link = await screen.findByRole("link", { name: "구글" });
+    expect(screen.getByRole("button", { name: "재검색" }).nextElementSibling).toBe(link);
+    const href = link.getAttribute("href");
+    expect(href.startsWith("https://www.google.com/search?")).toBe(true);
+    const query = new URLSearchParams(href.split("?")[1]);
+    expect(query.get("tbm")).toBe("isch");
+    expect(query.get("q")).toBe(title);
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
   it("카테고리 옆 토글로 기존 표지를 조회하고 후보로 교체한 뒤 빈 표지 모드로 돌아간다", async () => {
     setup();
     const pending = deferred();

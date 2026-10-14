@@ -376,6 +376,9 @@ export default function BookCoverAdmin() {
                     onClick={() => window.open(`/book-view/${item.book_id}?category=${encodeURIComponent(item.category || ROOT)}`, "_blank", "noopener")}>조회</Button>
                   <Button size="sm" variant="outline-secondary" disabled={item.saving || item.busy || item.status === "error"}
                     onClick={() => clearCandidates(item, true)}>재검색</Button>
+                  <Button as="a" role="link" size="sm" variant="outline-secondary"
+                    href={`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(item.title)}`}
+                    target="_blank" rel="noopener noreferrer">구글</Button>
                 </div>
               </div>
               <div className="book-cover-filename">{item.file_path.split("/").pop()}</div>
