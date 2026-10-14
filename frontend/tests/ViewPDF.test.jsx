@@ -37,7 +37,8 @@ vi.mock("../src/Common", () => ({
   getAuthToken: () => "test-token",
 }));
 
-import ViewPDF, { computeRenderScale } from "../src/ViewPDF";
+import ViewPDF from "../src/ViewPDF";
+import { computeRenderScale } from "../src/pdfRenderScale";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 // 실제 pdfjs-dist 6.x에서 PDFDocumentProxy에는 destroy()가 없고
