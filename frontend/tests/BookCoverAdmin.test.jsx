@@ -75,13 +75,13 @@ describe("책 표지 관리", () => {
     });
     render(<BookCoverAdmin />);
     await screen.findByText("검사한 EPUB에는 표지 없는 책이 없습니다.");
-    const toggle = screen.getByRole("button", { name: "표기 교체" });
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
-    expect(within(toggle.parentElement).getByText("최상위 디렉토리")).toBeTruthy();
+    const toggle = screen.getByRole("switch", { name: "표지 교체" });
+    expect(toggle.checked).toBe(false);
+    expect(within(toggle.closest(".book-cover-directory-mode")).getByText("최상위 디렉토리")).toBeTruthy();
     fireEvent.click(toggle);
     const current = await screen.findByAltText("기존 표지 책 현재 표지");
     fireEvent.load(current);
-    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(toggle.checked).toBe(true);
     expect(screen.queryByRole("button", { name: /표지 저장 완료/ })).toBeNull();
     expect(screen.getByRole("button", { name: "기존 표지 책 내 책 표지 확대" }).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "기존 표지 책 내 책 표지 확대" }));
@@ -109,7 +109,7 @@ describe("책 표지 관리", () => {
       ? { items: path.includes("covered=true") ? [{ file_path: "책.epub", title: "기존 표지 책", status: "covered", has_cover: true, revision: "r1" }] : [], scanned: 1, total: 1 }
       : original(path, options));
     render(<BookCoverAdmin />);
-    fireEvent.click(screen.getByRole("button", { name: "표기 교체" }));
+    fireEvent.click(screen.getByRole("switch", { name: "표지 교체" }));
     await screen.findByAltText("기존 표지 책 현재 표지");
     await screen.findByAltText("서점 책");
     fireEvent.click(screen.getByRole("button", { name: "기존 표지 책 임시 표지 삭제" }));
@@ -135,7 +135,7 @@ describe("책 표지 관리", () => {
     });
     render(<BookCoverAdmin />);
     await waitFor(() => expect(previousSignal).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "표기 교체" }));
+    fireEvent.click(screen.getByRole("switch", { name: "표지 교체" }));
     await screen.findByText("검사한 EPUB에는 표지가 있는 책이 없습니다.");
     expect(previousSignal.aborted).toBe(true);
     await act(async () => pending.resolve({ items: [{ file_path: "old.epub", title: "지난 목록", status: "missing" }], scanned: 1, total: 1 }));
@@ -154,12 +154,12 @@ describe("책 표지 관리", () => {
       return original(path, options);
     });
     render(<BookCoverAdmin />);
-    fireEvent.click(screen.getByRole("button", { name: "표기 교체" }));
+    fireEvent.click(screen.getByRole("switch", { name: "표지 교체" }));
     await screen.findByAltText("뒤 페이지 책 현재 표지");
     expect(request.mock.calls.some(([path]) => path.startsWith("/missing") && path.includes("cursor=60") && path.includes("covered=true"))).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "다른 디렉토리" }));
     await screen.findByText("검사한 EPUB에는 표지가 있는 책이 없습니다.");
-    expect(screen.getByRole("button", { name: "표기 교체" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("switch", { name: "표지 교체" }).checked).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "새로고침" }));
     await waitFor(() => expect(request.mock.calls.filter(([path]) => path.startsWith("/missing?directory=other") && path.includes("covered=true"))).toHaveLength(2));
   });
@@ -172,7 +172,7 @@ describe("책 표지 관리", () => {
       return original(path, options);
     });
     render(<BookCoverAdmin />);
-    fireEvent.click(screen.getByRole("button", { name: "표기 교체" }));
+    fireEvent.click(screen.getByRole("switch", { name: "표지 교체" }));
     await screen.findByAltText("서점 책");
     const current = screen.getByAltText("기존 표지 책 현재 표지");
     fireEvent.load(current);
@@ -180,7 +180,7 @@ describe("책 표지 관리", () => {
     await screen.findByText("EPUB이 변경되었습니다");
     expect(screen.getByAltText("기존 표지 책 현재 표지").getAttribute("src")).toContain("v=r1");
     expect(screen.queryByRole("button", { name: /표지 저장 완료/ })).toBeNull();
-    expect(screen.getByRole("button", { name: "표기 교체" }).disabled).toBe(false);
+    expect(screen.getByRole("switch", { name: "표지 교체" }).disabled).toBe(false);
   });
 
   it("각 후보 이미지 안의 돋보기는 그 후보를 확대하고 EPUB 저장을 실행하지 않는다", async () => {

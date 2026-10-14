@@ -78,15 +78,15 @@ test("표지 관리: 카테고리 옆 교체 토글로 기존 표지를 비교�
   await page.goto("/admin");
   await page.getByRole("tab", { name: "책 표지 관리" }).click();
   await expect(page.getByText("검사한 EPUB에는 표지 없는 책이 없습니다.")).toBeVisible();
-  const toggle = page.getByRole("button", { name: "표기 교체" });
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  const toggle = page.getByRole("switch", { name: "표지 교체" });
+  await expect(toggle).not.toBeChecked();
   const category = page.locator(".book-cover-directory-mode small");
   const categoryRect = await category.boundingBox();
   const toggleRect = await toggle.boundingBox();
   expect(toggleRect.x).toBeGreaterThan(categoryRect.x + categoryRect.width);
   expect(Math.abs((toggleRect.y + toggleRect.height / 2) - (categoryRect.y + categoryRect.height / 2))).toBeLessThan(1);
   await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(toggle).toBeChecked();
   await expect(page.getByAltText("기존 표지 책 현재 표지")).toBeVisible();
   await expect(page.getByRole("button", { name: "기존 표지 책 현재 표지", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: /표지 저장 완료/ })).toHaveCount(0);
@@ -250,9 +250,9 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
   await expect(first).toHaveAttribute("title", "해상도 1위 / 4개");
   await expect(first).toHaveCSS("background-color", "rgb(0, 255, 0)");
   await expect(first).toHaveCSS("padding", "5px");
-  expect(await first.evaluate((node) => node.getBoundingClientRect().width)).toBe(84);
+  expect(await first.evaluate((node) => node.getBoundingClientRect().width)).toBe(105);
   const ownCover = page.locator(".book-cover-current .cover-grid-cover").first();
-  expect(await ownCover.evaluate((node) => node.getBoundingClientRect().width)).toBe(90);
+  expect(await ownCover.evaluate((node) => node.getBoundingClientRect().width)).toBe(113);
   const ownTop = await ownCover.evaluate((node) => node.getBoundingClientRect().top);
   const candidateTop = await first.evaluate((node) => node.getBoundingClientRect().top);
   expect(ownTop).toBeCloseTo(candidateTop, 1);
@@ -314,6 +314,9 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
   await expect(page.getByRole("heading", { name: "표지 없는 책 59", exact: true })).toHaveCount(1);
   expect(listingCursors).toEqual(["", "30"]);
   await expect(page.getByRole("heading", { name: "표지 없는 책 1", exact: true })).toHaveCount(1);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.locator(".book-cover-current").first().evaluate((node) => node.getBoundingClientRect().width)).toBe(86);
+  expect(await page.locator(".book-cover-candidate").first().evaluate((node) => node.getBoundingClientRect().width)).toBe(105);
   expect(errors).toEqual([]);
 });
 

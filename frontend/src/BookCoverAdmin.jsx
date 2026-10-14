@@ -347,8 +347,9 @@ export default function BookCoverAdmin() {
         <div className="book-cover-toolbar">
           <div><h2>책 표지 관리</h2><div className="book-cover-directory-mode">
             <small>{directory === ROOT ? "최상위 디렉토리" : directory}</small>
-            <Button size="sm" variant={replaceCovers ? "primary" : "outline-primary"} aria-pressed={replaceCovers}
-              disabled={items.some((item) => item.saving || item.busy)} onClick={() => setReplaceCovers((value) => !value)}>표기 교체</Button>
+            <Form.Check type="switch" role="switch" id="book-cover-replace" label="표지 교체" className="m-0"
+              checked={replaceCovers} disabled={items.some((item) => item.saving || item.busy)}
+              onChange={(event) => setReplaceCovers(event.target.checked)} />
           </div></div>
           <Button size="sm" variant="outline-secondary" disabled={loading || items.some((item) => item.saving || item.busy)} onClick={() => {
             setItems([]);
