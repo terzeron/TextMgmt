@@ -46,6 +46,124 @@ function deferred() {
 }
 
 describe("책 표지 관리", () => {
+  it("카테고리 옆 토글로 기존 표지를 조회하고 후보로 교체한 뒤 빈 표지 모드로 돌아간다", async () => {
+    setup();
+    const pending = deferred();
+    overrideRequest((path, options, original) => {
+      if (path.startsWith("/missing")) return { items: path.includes("covered=true") ? [{ file_path: "책.epub", title: "기존 표지 책", status: "covered", has_cover: true, revision: "r1" }] : [], total: 1, scanned: 1 };
+      if (path === "/apply-image") return pending.promise;
+      return original(path, options);
+    });
+    render(<BookCoverAdmin />);
+    await screen.findByText("검사한 EPUB에는 표지 없는 책이 없습니다.");
+    const toggle = screen.getByRole("button", { name: "표기 교체" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(within(toggle.parentElement).getByText("최상위 디렉토리")).toBeTruthy();
+    fireEvent.click(toggle);
+    const current = await screen.findByAltText("기존 표지 책 현재 표지");
+    fireEvent.load(current);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByRole("button", { name: /표지 저장 완료/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "기존 표지 책 내 책 표지 확대" }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "기존 표지 책 내 책 표지 확대" }));
+    expect(screen.getByAltText("기존 표지 책 내 책 확대 표지").getAttribute("src")).toContain("v=r1&original=true");
+    fireEvent.click(screen.getByRole("button", { name: "확대 닫기" }));
+    const candidate = await screen.findByRole("button", { name: "YES24 서점 책 표지 선택" });
+    await waitFor(() => expect(candidate.disabled).toBe(false));
+    expect(request.mock.calls.some(([path]) => path.startsWith("/candidates/yes24") && path.includes("include_covered=true"))).toBe(true);
+    fireEvent.click(candidate);
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply-image", { body: { file_path: "책.epub", revision: "r1", image_data: "Y292ZXI=" } }));
+    expect(toggle.disabled).toBe(true);
+    await act(async () => pending.resolve({ revision: "r2" }));
+    const completed = await screen.findByAltText("기존 표지 책 저장한 표지");
+    expect(completed.getAttribute("src")).toContain("v=r2");
+    expect(toggle.disabled).toBe(false);
+    fireEvent.click(toggle);
+    await screen.findByText("검사한 EPUB에는 표지 없는 책이 없습니다.");
+    expect(screen.queryByRole("heading", { name: "기존 표지 책" })).toBeNull();
+  });
+
+  it("기존 표지 모드에서도 미리보기만 지우고 직접 URL로 표지를 교체한다", async () => {
+    setup();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    overrideRequest((path, options, original) => path.startsWith("/missing")
+      ? { items: path.includes("covered=true") ? [{ file_path: "책.epub", title: "기존 표지 책", status: "covered", has_cover: true, revision: "r1" }] : [], scanned: 1, total: 1 }
+      : original(path, options));
+    render(<BookCoverAdmin />);
+    fireEvent.click(screen.getByRole("button", { name: "표기 교체" }));
+    await screen.findByAltText("기존 표지 책 현재 표지");
+    await screen.findByAltText("서점 책");
+    fireEvent.click(screen.getByRole("button", { name: "기존 표지 책 임시 표지 삭제" }));
+    expect(screen.queryByAltText("기존 표지 책 현재 표지")).toBeNull();
+    expect(request.mock.calls.some(([path]) => path === "/cache/clear")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "직접 입력" }));
+    fireEvent.change(screen.getByLabelText("표지 이미지 URL"), { target: { value: "https://example.org/new.jpg" } });
+    fireEvent.click(screen.getByRole("button", { name: "표지 적용" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply-url", { body: { file_path: "책.epub", revision: "r1", url: "https://example.org/new.jpg", replace_existing: true } }));
+  });
+
+  it("표지 모드를 바꾸면 이전 검사 요청을 취소하고 늦은 결과를 무시한다", async () => {
+    setup();
+    const pending = deferred();
+    let previousSignal;
+    overrideRequest((path, options, original) => {
+      if (path.startsWith("/missing")) {
+        if (path.includes("covered=true")) return { items: [], scanned: 0, total: 0 };
+        previousSignal = options.signal;
+        return pending.promise;
+      }
+      return original(path, options);
+    });
+    render(<BookCoverAdmin />);
+    await waitFor(() => expect(previousSignal).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "표기 교체" }));
+    await screen.findByText("검사한 EPUB에는 표지가 있는 책이 없습니다.");
+    expect(previousSignal.aborted).toBe(true);
+    await act(async () => pending.resolve({ items: [{ file_path: "old.epub", title: "지난 목록", status: "missing" }], scanned: 1, total: 1 }));
+    expect(screen.queryByRole("heading", { name: "지난 목록" })).toBeNull();
+  });
+
+  it("교체 모드의 자동 다음 검사와 디렉토리 전환 및 새로고침에도 조회 조건을 유지한다", async () => {
+    setup();
+    overrideRequest((path, options, original) => {
+      if (path.startsWith("/missing")) {
+        if (!path.includes("covered=true")) return { items: [], scanned: 0, total: 0 };
+        if (path.includes("directory=other")) return { items: [], scanned: 1, total: 1 };
+        if (!path.includes("cursor=60")) return { items: [], scanned: 60, total: 61, next_cursor: "60" };
+        return { items: [{ file_path: "책.epub", title: "뒤 페이지 책", status: "covered", has_cover: true, revision: "r1" }], scanned: 61, total: 61 };
+      }
+      return original(path, options);
+    });
+    render(<BookCoverAdmin />);
+    fireEvent.click(screen.getByRole("button", { name: "표기 교체" }));
+    await screen.findByAltText("뒤 페이지 책 현재 표지");
+    expect(request.mock.calls.some(([path]) => path.startsWith("/missing") && path.includes("cursor=60") && path.includes("covered=true"))).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "다른 디렉토리" }));
+    await screen.findByText("검사한 EPUB에는 표지가 있는 책이 없습니다.");
+    expect(screen.getByRole("button", { name: "표기 교체" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "새로고침" }));
+    await waitFor(() => expect(request.mock.calls.filter(([path]) => path.startsWith("/missing?directory=other") && path.includes("covered=true"))).toHaveLength(2));
+  });
+
+  it("기존 표지 교체에 실패하면 현재 표지와 revision을 유지한다", async () => {
+    setup();
+    overrideRequest((path, options, original) => {
+      if (path.startsWith("/missing")) return { items: path.includes("covered=true") ? [{ file_path: "책.epub", title: "기존 표지 책", status: "covered", has_cover: true, revision: "r1" }] : [], scanned: 1, total: 1 };
+      if (path === "/apply-image") throw new Error("EPUB이 변경되었습니다");
+      return original(path, options);
+    });
+    render(<BookCoverAdmin />);
+    fireEvent.click(screen.getByRole("button", { name: "표기 교체" }));
+    await screen.findByAltText("서점 책");
+    const current = screen.getByAltText("기존 표지 책 현재 표지");
+    fireEvent.load(current);
+    fireEvent.click(screen.getByRole("button", { name: "YES24 서점 책 표지 선택" }));
+    await screen.findByText("EPUB이 변경되었습니다");
+    expect(screen.getByAltText("기존 표지 책 현재 표지").getAttribute("src")).toContain("v=r1");
+    expect(screen.queryByRole("button", { name: /표지 저장 완료/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "표기 교체" }).disabled).toBe(false);
+  });
+
   it("각 후보 이미지 안의 돋보기는 그 후보를 확대하고 EPUB 저장을 실행하지 않는다", async () => {
     setup();
     const second = { candidate_id: "b".repeat(64), title: "두 번째 표지" };

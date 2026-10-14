@@ -103,6 +103,13 @@
     저장한 표지를 읽은 뒤 돋보기를 활성화한다. 저장된 이미지 크기로 확대하며 행 숨기기를 실행하지 않는다.
 22. 서점 재시도는 오류 캐시를 건너뛰며 진행 상태와 disabled 버튼을 표시한다.
     완료 이후 이미지 재시도도 가능하다. 실패하면 오류와 재시도 버튼을 다시 표시한다.
+23. 카테고리명 오른쪽에 `표기 교체` toggle 버튼을 표시한다. 초기 상태는 꺼짐이다.
+    꺼짐은 표지가 없는 EPUB만 조회하고, 켜짐은 표지가 있는 EPUB만 조회한다.
+    원래 표지는 `현재 표지`로 표시한다. 후보 적용이 성공한 뒤 `저장 완료` 상태로 전환한다.
+    원래 표지와 후보의 확대·직접 URL·재검색·재시도·미리보기만 지우기를 제공한다.
+    교체 전에 backup과 최신 revision을 확인한다. 저장 실패 시 현재 표지와 목록을 유지한다.
+    저장 중에는 toggle을 비활성화한다. 모드 전환 시 검사와 서점 요청을 취소하고 Blob을 해제한다.
+    디렉토리 전환·새로고침·자동 다음 페이지에서도 선택한 모드를 유지한다.
 
 ## Backend와 API
 
@@ -112,7 +119,7 @@
 | 메서드 | 경로 | 역할 |
 | --- | --- | --- |
 | GET | `/admin/book-covers/directories` | 책 루트의 디렉토리 트리 데이터 |
-| GET | `/admin/book-covers/missing` | `directory`, `cursor`, `limit`로 표지 없는 파일 조회 |
+| GET | `/admin/book-covers/missing` | `directory`, `cursor`, `limit`로 파일 조회. 기본은 표지 없는 파일, `covered=true`는 표지 있는 파일 |
 | GET | `/admin/book-covers/candidates/{store_name}` | 상대 `file_path`의 제목·저자·ISBN으로 후보 검색 |
 | GET | `/admin/book-covers/candidate-image/{candidate_id}` | 검증한 후보의 이미지 제공 |
 | POST | `/admin/book-covers/apply` | `{file_path, candidate_id, revision}`으로 표지 저장 |

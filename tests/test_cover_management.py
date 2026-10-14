@@ -29,6 +29,49 @@ def image_bytes():
     return output.getvalue()
 
 
+def test_covered_listing_mode_filters_pages_and_preserves_epub(cover_api, tmp_path):
+    client, _, _ = cover_api
+    paths = [make_epub(tmp_path / "0-covered.epub", cover=True),
+             make_epub(tmp_path / "1-missing.epub"),
+             make_epub(tmp_path / "2-covered.epub", cover=True)]
+    (tmp_path / "3-broken.epub").write_bytes(b"invalid zip")
+    originals = {path: path.read_bytes() for path in paths}
+    default = client.get("/admin/book-covers/missing?limit=2").json()["result"]
+    assert [item["file_path"] for item in default["items"]] == ["1-missing.epub"]
+    page = client.get("/admin/book-covers/missing?covered=true&limit=2").json()["result"]
+    assert [(item["file_path"], item["status"], item["has_cover"]) for item in page["items"]] == [("0-covered.epub", "covered", True)]
+    assert page["next_cursor"] == "2" and page["scanned"] == 2 and page["total"] == 4
+    next_page = client.get("/admin/book-covers/missing?covered=true&limit=2&cursor=2").json()["result"]
+    assert [(item["file_path"], item["status"]) for item in next_page["items"]] == [("2-covered.epub", "covered"), ("3-broken.epub", "error")]
+    assert next_page["next_cursor"] is None
+    assert client.get("/admin/book-covers/missing?covered=invalid").status_code == 422
+    assert all(path.read_bytes() == original for path, original in originals.items())
+    assert not (tmp_path / ".cover_backups").exists()
+
+
+def test_existing_cover_listing_can_recommend_and_replace_with_backup(cover_api, tmp_path, monkeypatch):
+    import base64
+    from backend import cover_management as module
+    client, _, _ = cover_api
+    path = make_epub(tmp_path / "book.epub", cover=True)
+    original = path.read_bytes()
+    monkeypatch.setattr(module, "search_candidates", lambda *args: {"status": "success", "candidates": [
+        {"title": "교체 후보", "image_url": "https://image.yes24.com/cover.jpg", "detail_url": "https://www.yes24.com/book"}]})
+    monkeypatch.setattr(module, "fetch_bytes", lambda *args: image_bytes())
+    item = client.get("/admin/book-covers/missing?covered=true").json()["result"]["items"][0]
+    assert client.get("/admin/book-covers/candidates/yes24?file_path=book.epub").status_code == 409
+    candidate = client.get("/admin/book-covers/candidates/yes24?file_path=book.epub&include_covered=true").json()["result"]["candidates"][0]
+    image = client.get("/admin/book-covers/candidate-image/" + candidate["candidate_id"])
+    response = client.post("/admin/book-covers/apply-image", json={"file_path": "book.epub", "revision": item["revision"], "image_data": base64.b64encode(image.content).decode()})
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["revision"] != item["revision"]
+    assert (tmp_path / result["backup_path"]).read_bytes() == original
+    assert not module.CoverManagement(tmp_path)._book_cache("book.epub").exists()
+    with zipfile.ZipFile(path) as archive:
+        assert archive.read("OPS/chapter.xhtml") == "<html><body>본문을 보존한다.</body></html>".encode()
+
+
 def test_original_cover_preview_uses_saved_600px_image(cover_api, tmp_path):
     from backend.cover_management import CoverManagement
     from backend.epub_cover import add_cover, inspect_epub
@@ -704,6 +747,16 @@ def test_apply_waits_for_download_and_removes_its_cache(tmp_path, monkeypatch):
         image.unlink()
     started = threading.Event()
     release = threading.Event()
+    waiting_for_download = threading.Event()
+    real_flock = cover_management.fcntl.flock
+    def observe_lock(file, mode):
+        try:
+            return real_flock(file, mode)
+        except BlockingIOError:
+            if mode & cover_management.fcntl.LOCK_EX:
+                waiting_for_download.set()
+            raise
+    monkeypatch.setattr(cover_management.fcntl, "flock", observe_lock)
     def download(*args):
         started.set()
         assert release.wait(3)
@@ -715,6 +768,7 @@ def test_apply_waits_for_download_and_removes_its_cache(tmp_path, monkeypatch):
         assert started.wait(3)
         applying = pool.submit(service.apply, "book.epub", candidates[0]["candidate_id"], old_revision)
         try:
+            assert waiting_for_download.wait(3)
             assert not applying.done()
         finally:
             release.set()

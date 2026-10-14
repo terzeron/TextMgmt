@@ -26,6 +26,7 @@ export default function BookCoverAdmin() {
   const [expanded, setExpanded] = useState([ROOT]);
   const [folderOpen, setFolderOpen] = useState(true);
   const [directory, setDirectory] = useState(ROOT);
+  const [replaceCovers, setReplaceCovers] = useState(false);
   const [items, setItems] = useState([]);
   const [sources, setSources] = useState({});
   const [images, setImages] = useState({});
@@ -66,7 +67,7 @@ export default function BookCoverAdmin() {
     setLoading(true);
     setError("");
     try {
-      const result = await coverAdminRequest(`/missing?directory=${encodeURIComponent(id === ROOT ? "" : id)}&cursor=${cursor}`, { signal: controller.signal });
+      const result = await coverAdminRequest(`/missing?directory=${encodeURIComponent(id === ROOT ? "" : id)}&cursor=${cursor}${replaceCovers ? "&covered=true" : ""}`, { signal: controller.signal });
       if (generation.current !== current || controller.signal.aborted) return;
       setItems((previous) => append ? [...previous, ...result.items] : result.items);
       setPage(result);
@@ -78,7 +79,7 @@ export default function BookCoverAdmin() {
         setLoading(false);
       }
     }
-  }, []);
+  }, [replaceCovers]);
 
   useEffect(() => {
     const imageUrls = urls.current;
@@ -140,7 +141,7 @@ export default function BookCoverAdmin() {
       const right = Math.min(viewport.right, clip.right);
       return right > left && rect.right > rect.left && rect.right > left && rect.left < right;
     };
-    const eligibleRows = items.filter((item) => item.status === "missing" && !item.saving && !item.busy && !item.paused)
+    const eligibleRows = items.filter((item) => ["missing", "covered"].includes(item.status) && !item.saving && !item.busy && !item.paused)
       .flatMap((item) => {
         const node = rows.current.get(item.file_path);
         return node ? [{ key: item.file_path, item, rect: node.getBoundingClientRect() }] : [];
@@ -176,7 +177,7 @@ export default function BookCoverAdmin() {
         tasks.push({ key: `search:${item.file_path}:${store}:${versions.get(item.file_path)}`, store, backgroundKey: visible ? undefined : item.file_path, run: async (signal) => {
           updateSource(item.file_path, store, { status: "loading", retrying: source?.retrying });
           try {
-            const result = await coverAdminRequest(`/candidates/${store}?file_path=${encodeURIComponent(item.file_path)}${item.saved ? "&include_covered=true" : ""}${source?.refresh ? "&refresh=true" : ""}`, { signal });
+            const result = await coverAdminRequest(`/candidates/${store}?file_path=${encodeURIComponent(item.file_path)}${item.saved || item.has_cover ? "&include_covered=true" : ""}${source?.refresh ? "&refresh=true" : ""}`, { signal });
             if (!signal.aborted) updateSource(item.file_path, store, result);
           } catch (exc) {
             updateSource(item.file_path, store, signal.aborted ? source : { status: "error", error: exc.message });
@@ -248,10 +249,11 @@ export default function BookCoverAdmin() {
     };
     update({ saving: true, error: "" });
     try {
+      const hasCover = item.has_cover || !!item.saved;
       let path = candidate.url ? "/apply-url" : "/apply";
       const body = { file_path: item.file_path, revision: item.saved?.revision || item.revision };
-      if (candidate.url) Object.assign(body, { url: candidate.url }, item.saved ? { replace_existing: true } : {});
-      else if (item.saved) {
+      if (candidate.url) Object.assign(body, { url: candidate.url }, hasCover ? { replace_existing: true } : {});
+      else if (hasCover) {
         path = "/apply-image";
         body.image_data = await new Promise((resolve, reject) => {
           const reader = new FileReader();
@@ -278,7 +280,7 @@ export default function BookCoverAdmin() {
       if (!window.confirm("미리보기만 비울까요? EPUB 표지는 다른 표지를 선택할 때 교체합니다.")) return;
       setZoom(null);
       previewState(item.file_path, { previewHidden: true, previewReady: false, error: "", paused: false });
-      if (item.saved) setSources((previous) => ({ ...previous, [item.file_path]: Object.fromEntries(
+      if (item.saved || item.has_cover) setSources((previous) => ({ ...previous, [item.file_path]: Object.fromEntries(
         Object.entries(previous[item.file_path] || {}).map(([store, source]) => [store, { ...source, status: "loading" }]),
       ) }));
       return;
@@ -315,7 +317,7 @@ export default function BookCoverAdmin() {
     bookVersions.current.set(item.file_path, (bookVersions.current.get(item.file_path) || 0) + 1);
     previewState(item.file_path, { paused: false });
     setSources((previous) => ({ ...previous, [item.file_path]: Object.fromEntries(
-      Object.entries(previous[item.file_path] || {}).map(([name, source]) => [name, item.saved || name === store
+      Object.entries(previous[item.file_path] || {}).map(([name, source]) => [name, item.saved || item.has_cover || name === store
         ? { ...source, status: "loading", refresh: name === store, retrying: name === store } : source]),
     ) }));
   };
@@ -340,7 +342,11 @@ export default function BookCoverAdmin() {
       </Col>
       <Col md={10} className="book-cover-panel">
         <div className="book-cover-toolbar">
-          <div><h2>책 표지 관리</h2><small>{directory === ROOT ? "최상위 디렉토리" : directory}</small></div>
+          <div><h2>책 표지 관리</h2><div className="book-cover-directory-mode">
+            <small>{directory === ROOT ? "최상위 디렉토리" : directory}</small>
+            <Button size="sm" variant={replaceCovers ? "primary" : "outline-primary"} aria-pressed={replaceCovers}
+              disabled={items.some((item) => item.saving || item.busy)} onClick={() => setReplaceCovers((value) => !value)}>표기 교체</Button>
+          </div></div>
           <Button size="sm" variant="outline-secondary" disabled={loading || items.some((item) => item.saving || item.busy)} onClick={() => {
             setItems([]);
             setSources({});
@@ -348,11 +354,12 @@ export default function BookCoverAdmin() {
             loadPage(directory);
           }}>새로고침</Button>
         </div>
-        <p className="text-muted small">후보를 선택하면 EPUB에 표지를 저장합니다. 저장한 표지를 확인한 뒤 클릭하면 행을 숨깁니다.</p>
+        <p className="text-muted small">{replaceCovers ? "후보를 선택하면 EPUB의 기존 표지를 교체합니다." : "후보를 선택하면 EPUB에 표지를 저장합니다."} 저장한 표지를 확인한 뒤 클릭하면 행을 숨깁니다.</p>
         {error && <Alert variant="danger">{error}</Alert>}
         {page && <p className="small text-muted">EPUB 검사 {page.scanned} / {page.total} · 현재 목록 {items.length}개</p>}
         <div aria-live="polite">
           {items.map((item) => {
+            const hasCover = item.has_cover || !!item.saved;
             const ranked = rankCoverImages(Object.values(sources[item.file_path] || {}).flatMap((store) => store?.candidates || []), images);
             return (
             <article key={item.file_path} className={`book-cover-row${item.saved ? " is-saved" : ""}`}
@@ -374,15 +381,15 @@ export default function BookCoverAdmin() {
                   <div className="book-cover-store-header"><h4>내 책</h4></div>
                   <div className="book-cover-image-frame">
                     <Button size="sm" variant="outline-secondary" className="book-cover-magnifier" title="표지 확대"
-                      aria-label={`${item.title} 내 책 표지 확대`} disabled={!item.saved || item.previewHidden || !item.previewReady || item.saving || item.busy}
+                      aria-label={`${item.title} 내 책 표지 확대`} disabled={!hasCover || item.previewHidden || !item.previewReady || item.saving || item.busy}
                       onClick={() => setZoom({ own: true, item, index: 0, previews: [{ id: `own:${item.file_path}`, title: `${item.title} 내 책`,
-                        url: `${getApiUrlPrefix()}${API_ROOT}/preview?file_path=${encodeURIComponent(item.file_path)}&v=${encodeURIComponent(item.saved.revision)}&original=true`,
+                        url: `${getApiUrlPrefix()}${API_ROOT}/preview?file_path=${encodeURIComponent(item.file_path)}&v=${encodeURIComponent(item.saved?.revision || item.revision)}&original=true`,
                       }] })}><FontAwesomeIcon icon={faMagnifyingGlass} /></Button>
-                  {item.saved && !item.previewHidden ? (
-                    <button type="button" className="cover-grid-cover book-cover-completed" aria-label={`${item.title} 표지 저장 완료 · 행 숨기기`}
-                      disabled={!item.previewReady} onClick={() => setItems((previous) => previous.filter((entry) => entry.file_path !== item.file_path))}>
-                      <img className="cover-grid-image" alt={`${item.title} 저장한 표지`}
-                        src={`${getApiUrlPrefix()}${API_ROOT}/preview?file_path=${encodeURIComponent(item.file_path)}&v=${encodeURIComponent(item.saved.revision)}`}
+                  {hasCover && !item.previewHidden ? (
+                    <button type="button" className={`cover-grid-cover ${item.saved ? "book-cover-completed" : "book-cover-existing"}`} aria-label={`${item.title} ${item.saved ? "표지 저장 완료 · 행 숨기기" : "현재 표지"}`}
+                      disabled={!item.previewReady || !item.saved} onClick={() => setItems((previous) => previous.filter((entry) => entry.file_path !== item.file_path))}>
+                      <img className="cover-grid-image" loading="lazy" alt={`${item.title} ${item.saved ? "저장한 표지" : "현재 표지"}`}
+                        src={`${getApiUrlPrefix()}${API_ROOT}/preview?file_path=${encodeURIComponent(item.file_path)}&v=${encodeURIComponent(item.saved?.revision || item.revision)}`}
                         onLoad={() => previewState(item.file_path, { previewReady: true })}
                         onError={() => previewState(item.file_path, { previewReady: false, error: "저장한 표지를 표시하지 못했습니다. 새로고침하세요" })} />
                     </button>
@@ -465,7 +472,7 @@ export default function BookCoverAdmin() {
         </div>
         <div ref={scanTrigger} className="book-cover-scan-trigger" aria-hidden="true" />
         {loading && <div role="status"><Spinner size="sm" /> EPUB 검사 중…</div>}
-        {!loading && page && items.length === 0 && <Alert variant="info">검사한 EPUB에는 표지 없는 책이 없습니다.</Alert>}
+        {!loading && page && items.length === 0 && <Alert variant="info">{replaceCovers ? "검사한 EPUB에는 표지가 있는 책이 없습니다." : "검사한 EPUB에는 표지 없는 책이 없습니다."}</Alert>}
       </Col>
       <Modal show={!!manual} onHide={() => { if (!manual?.busy) setManual(null); }} centered aria-labelledby="book-cover-url-title">
         <Modal.Header closeButton={!manual?.busy}><Modal.Title id="book-cover-url-title">표지 직접 입력</Modal.Title></Modal.Header>

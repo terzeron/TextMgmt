@@ -74,7 +74,7 @@ class CoverManagement:
                                  "fileType": "folder", "children": []})
         return sorted(children, key=lambda item: item["label"].casefold())
 
-    def missing(self, directory: str, cursor: str, limit: int) -> dict[str, Any]:
+    def missing(self, directory: str, cursor: str, limit: int, *, covered: bool = False) -> dict[str, Any]:
         parent = self.resolve(directory, directory=True)
         if cursor and (not cursor.isdigit() or len(cursor) > 10):
             raise CoverError("목록 cursor가 올바르지 않습니다")
@@ -88,9 +88,9 @@ class CoverManagement:
                         "category": str(path.parent.relative_to(self.root)) if path.parent != self.root else "_root"}
             try:
                 metadata = inspect_epub(path)
-                if metadata["has_cover"]:
+                if metadata["has_cover"] != covered:
                     continue
-                items.append({**metadata, **identity, "status": "missing"})
+                items.append({**metadata, **identity, "status": "covered" if covered else "missing"})
             except CoverError as exc:
                 items.append({**identity, "revision": revision(path), "title": path.stem, "status": "error", "error": str(exc)})
         next_offset = min(offset + limit, len(files))
@@ -409,8 +409,8 @@ def create_cover_router(get_book_manager: Callable[[], Any]) -> APIRouter:
         return {"status": "success", "result": await run(CoverManagement(Book.path_prefix).directories, directory)}
 
     @router.get("/missing", dependencies=[Depends(require_admin)])
-    async def missing(directory: str = Query("", max_length=4096), cursor: str = Query("", max_length=10), limit: int = Query(60, ge=1, le=100)):
-        return {"status": "success", "result": await run(CoverManagement(Book.path_prefix).missing, directory, cursor, limit)}
+    async def missing(directory: str = Query("", max_length=4096), cursor: str = Query("", max_length=10), limit: int = Query(60, ge=1, le=100), covered: bool = False):
+        return {"status": "success", "result": await run(lambda: CoverManagement(Book.path_prefix).missing(directory, cursor, limit, covered=covered))}
 
     @router.get("/candidates/{store_name}", dependencies=[Depends(require_admin)])
     async def candidates(request: Request, store_name: str, file_path: str = Query(..., min_length=1, max_length=4096), include_covered: bool = False, refresh: bool = False):

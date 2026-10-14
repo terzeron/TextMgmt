@@ -4,6 +4,7 @@
 .book-cover-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .book-cover-toolbar h2 { font-size: 1.15rem; margin: 0 0 4px; }
 .book-cover-toolbar small { overflow-wrap: anywhere; }
+.book-cover-directory-mode { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .book-cover-row { border: 1px solid #dee2e6; border-radius: 6px; padding: 12px; margin-bottom: 12px; }
 .book-cover-row.is-saved { border-color: #198754; background: #f2faf5; }
 .book-cover-row-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 4px; }
@@ -19,6 +20,7 @@
 .book-cover-trash { flex: 0 0 auto; padding: 2px 4px; font-size: .7rem; }
 .book-cover-completed { padding: 0; border: 2px solid #198754; cursor: pointer; }
 .book-cover-completed:disabled { cursor: wait; }
+.book-cover-existing { padding: 0; }
 .book-cover-candidates { min-width: 0; display: flex; gap: 14px; overflow-x: auto; padding-bottom: 10px; }
 .book-cover-store { flex: 0 0 auto; min-width: 112px; max-width: 520px; }
 .book-cover-store h4 { font-size: .8rem; font-weight: 600; margin-bottom: 6px; }
