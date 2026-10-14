@@ -1,0 +1,47 @@
+.book-cover-admin { padding-top: 12px; }
+.book-cover-directory { padding-right: 12px; }
+.book-cover-panel { min-width: 0; padding: 0 12px; }
+.book-cover-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.book-cover-toolbar h2 { font-size: 1.15rem; margin: 0 0 4px; }
+.book-cover-toolbar small { overflow-wrap: anywhere; }
+.book-cover-row { border: 1px solid #dee2e6; border-radius: 6px; padding: 12px; margin-bottom: 12px; }
+.book-cover-row.is-saved { border-color: #198754; background: #f2faf5; }
+.book-cover-row-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 4px; }
+.book-cover-row h3 { font-size: 1.25rem; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+.book-cover-row-actions { display: flex; flex: 0 0 auto; gap: 6px; }
+.book-cover-scan-trigger { height: 1px; }
+.book-cover-filename { font-size: .75rem; color: #6c757d; margin-bottom: 8px; overflow-wrap: anywhere; }
+.book-cover-row-body { display: flex; gap: 14px; align-items: flex-start; }
+.book-cover-current { flex: 0 0 90px; }
+.book-cover-current small { display: block; font-size: .75rem; margin-top: 6px; }
+.book-cover-status { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+.book-cover-status small { flex: 1; }
+.book-cover-trash { flex: 0 0 auto; padding: 2px 4px; font-size: .7rem; }
+.book-cover-completed { padding: 0; border: 2px solid #198754; cursor: pointer; }
+.book-cover-completed:disabled { cursor: wait; }
+.book-cover-candidates { min-width: 0; display: flex; gap: 14px; overflow-x: auto; padding-bottom: 10px; }
+.book-cover-store { flex: 0 0 auto; min-width: 112px; max-width: 520px; }
+.book-cover-store h4 { font-size: .8rem; font-weight: 600; margin-bottom: 6px; }
+.book-cover-store-header { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
+.book-cover-store-header h4 { font-size: .8rem; font-weight: 600; margin: 0; }
+.book-cover-magnifier { padding: 2px 4px; font-size: .7rem; }
+.book-cover-store > small { display: block; width: 112px; }
+.book-cover-store-images { display: flex; gap: 8px; }
+.book-cover-candidate { width: 84px; flex: 0 0 84px; }
+.book-cover-candidate button.cover-grid-cover { padding: 5px; }
+.book-cover-candidate .cover-grid-image { object-fit: contain; background: #f8f9fa; }
+.book-cover-image-size { display: block; min-height: 28px; line-height: 14px; margin-top: 4px; color: #495057; }
+.book-cover-image-size span { display: block; }
+.book-cover-candidate button.cover-grid-cover:not(:disabled):hover { border-color: #0d6efd; }
+.book-cover-candidate button.cover-grid-cover:focus-visible, .book-cover-completed:focus-visible { outline: 3px solid #0d6efd; outline-offset: 2px; }
+.book-cover-candidate-title { display: block; font-size: .75rem; line-height: 1.3; margin-top: 4px; overflow-wrap: anywhere; }
+.book-cover-candidate small { font-size: .7rem; }
+.book-cover-retry { display: block; border: 0; background: transparent; color: #0d6efd; padding: 4px 0; font-size: .75rem; text-decoration: underline; }
+.book-cover-search-link { display: block; font-size: .75rem; margin-top: 4px; }
+.book-cover-zoom-layer .modal-dialog { width: max-content; max-width: 90vw; margin-left: auto; margin-right: auto; }
+.book-cover-zoom-layer .modal-content { max-height: 85vh; }
+.book-cover-zoom-layer .modal-header { font-size: .8rem; }
+.book-cover-zoom-panel { overflow: auto; }
+.book-cover-zoom-select { display: block; border: 0; padding: 0 !important; background: transparent; }
+.book-cover-zoom-image { display: block; width: auto; height: auto; max-width: none; max-height: none; }
+@media (max-width: 767px) { .book-cover-directory { padding: 0 12px 12px; } .book-cover-current { flex-basis: 69px; } }

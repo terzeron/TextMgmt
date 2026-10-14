@@ -2766,7 +2766,7 @@ class BookManager:
     def _find_epub_cover_member(zin) -> str | None:
         """EPUB ZIP 안에서 커버 이미지 멤버 경로를 찾는다.
 
-        EPUB3 properties="cover-image" → EPUB2 <meta name="cover"> → id/href 에 'cover' 가 든 이미지 순으로 본다.
+        명시한 표지 이미지가 없으면 guide나 manifest의 표지 XHTML에서 이미지를 찾는다.
         """
         from lxml import etree  # type: ignore[attr-defined]
         from posixpath import normpath, join as pjoin, dirname
@@ -2783,6 +2783,8 @@ class BookManager:
 
         # opf: 프리픽스 유무와 무관하게 찾도록 localname 으로 비교한다.
         image_items = []
+        page_items = []
+        cover_pages = []
         meta_cover_id = ""
         for el in opf.iter():
             if not isinstance(el.tag, str):
@@ -2790,20 +2792,60 @@ class BookManager:
             name = etree.QName(el).localname
             if name == "item" and el.get("media-type", "").startswith("image/"):
                 image_items.append(el)
+            elif name == "item" and el.get("media-type") == "application/xhtml+xml":
+                page_items.append(el)
             elif name == "meta" and el.get("name") == "cover":
                 meta_cover_id = el.get("content", "")
+            elif name == "reference" and "cover" in el.get("type", "").split():
+                cover_pages.append(el.get("href", ""))
 
         chosen = next((el for el in image_items if "cover-image" in (el.get("properties") or "").split()), None)
         if chosen is None and meta_cover_id:
             chosen = next((el for el in image_items if el.get("id") == meta_cover_id), None)
         if chosen is None:
             chosen = next((el for el in image_items if "cover" in f"{el.get('id', '')} {el.get('href', '')}".lower()), None)
-        if chosen is None:
-            return None
-
-        href = unquote(chosen.get("href", "")).split("#")[0].split("?")[0]
         opf_dir = dirname(opf_path)
-        return normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+        if chosen is not None:
+            href = unquote(chosen.get("href", "")).split("#")[0].split("?")[0]
+            return normpath(pjoin(opf_dir, href)) if opf_dir else normpath(href)
+
+        cover_pages.extend(el.get("href", "") for el in page_items if
+                           (meta_cover_id and el.get("id") == meta_cover_id) or
+                           "cover" in f"{el.get('id', '')} {el.get('href', '')}".lower())
+
+        def member_path(base: str, href: str) -> str | None:
+            parsed = urlparse(href)
+            if parsed.scheme or parsed.netloc or not parsed.path:
+                return None
+            member = normpath(pjoin(base, unquote(parsed.path)))
+            if member.startswith(("/", "../")) or member not in zin.NameToInfo:
+                return None
+            return member
+
+        for page_href in dict.fromkeys(cover_pages):
+            page_member = member_path(opf_dir, page_href)
+            if not page_member or zin.getinfo(page_member).file_size > 4 * 1024 * 1024:
+                continue
+            try:
+                page = etree.fromstring(zin.read(page_member), _safe_xml_parser(recover=True))
+            except etree.XMLSyntaxError:
+                continue
+            if page is None:
+                continue
+            for el in page.iter():
+                if not isinstance(el.tag, str):
+                    continue
+                name = etree.QName(el).localname
+                if name == "img":
+                    href = el.get("src", "")
+                elif name == "image":
+                    href = el.get("href") or el.get("{http://www.w3.org/1999/xlink}href", "")
+                else:
+                    continue
+                member = member_path(dirname(page_member), href)
+                if member:
+                    return member
+        return None
 
     @staticmethod
     def _is_mostly_blank_cover(img: Any) -> bool:

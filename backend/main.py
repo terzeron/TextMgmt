@@ -30,6 +30,7 @@ from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore
 from backend.category_mapping import CategoryMapping
 from backend.refresh_token_store import create_refresh_token_store
 from backend.view_history_store import MAX_RECENT_VIEWS, create_view_history_store
+from backend.cover_management import create_cover_router
 
 # 에러 및 미디어 타입 상수 정의
 ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
@@ -284,6 +285,7 @@ bookstore = _LazyProxy(_create_bookstore, "bookstore")
 category_mapping = _LazyProxy(_create_category_mapping, "category mapping")
 refresh_token_store = _LazyProxy(create_refresh_token_store, "refresh token store")
 view_history_store = _LazyProxy(create_view_history_store, "view history store")
+app.include_router(create_cover_router(lambda: book_manager))
 
 
 def _client_ip(request: Request) -> str:

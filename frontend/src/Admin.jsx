@@ -10,6 +10,7 @@ import { Nav, Tab } from "react-bootstrap";
 import CategoryAdmin from "./CategoryAdmin";
 import LoginSessionAdmin from "./LoginSessionAdmin";
 import ViewHistoryAdmin from "./ViewHistoryAdmin";
+import BookCoverAdmin from "./BookCoverAdmin";
 
 const SESSION_TAB = "login-session";
 const VIEW_HISTORY_TAB = "view-history";
@@ -37,6 +38,11 @@ const SUBTABS = [
     key: COMIC_TAB,
     title: "만화 카테고리 관리",
     render: () => <CategoryAdmin contentType="comic" />,
+  },
+  {
+    key: "book-cover",
+    title: "책 표지 관리",
+    render: () => <BookCoverAdmin />,
   },
 ];
 
