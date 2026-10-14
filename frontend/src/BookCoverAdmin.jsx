@@ -135,8 +135,11 @@ export default function BookCoverAdmin() {
     const isStoreVisible = (path, store) => {
       const node = rows.current.get(path)?.querySelector(`[data-store="${store}"]`);
       if (!node) return false;
+      const scroller = node.closest(".book-cover-candidates");
+      // 초기 빈 칸은 검색 결과가 오면 넓어진다. 이때의 일시 노출로 뒤쪽 검색을 시작하지 않는다.
+      if (!scroller.scrollLeft && STORES.slice(0, 4).some(([name]) => !sources[path]?.[name] || sources[path][name].status === "loading")) return false;
       const rect = node.getBoundingClientRect();
-      const clip = node.closest(".book-cover-candidates").getBoundingClientRect();
+      const clip = scroller.getBoundingClientRect();
       const left = Math.max(viewport.left, clip.left);
       const right = Math.min(viewport.right, clip.right);
       return right > left && rect.right > rect.left && rect.right > left && rect.left < right;

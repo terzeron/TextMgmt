@@ -188,6 +188,47 @@ describe("책 표지 관리", () => {
     await waitFor(() => expect(request).toHaveBeenCalledWith("/apply", { body: { file_path: "책.epub", revision: "r1", candidate_id: second.candidate_id } }));
   });
 
+  it("초기 빈 서점 칸이 잠깐 노출돼도 앞쪽 검색으로 레이아웃이 정해지기 전에는 뒤쪽을 검색하지 않는다", async () => {
+    setup();
+    const pending = deferred();
+    const lateStores = ["ridi", "munpia", "naverseries", "joara"];
+    let expanded = false;
+    let exposed = false;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function () {
+      const store = this.getAttribute("data-store") || this.closest(".book-cover-store")?.getAttribute("data-store");
+      const left = lateStores.includes(store) && expanded && !exposed ? 600 : 20;
+      return { top: 0, bottom: 200, left, right: left + (this.classList.contains("book-cover-candidates") ? 400 : 100), width: 100, height: 200 };
+    });
+    overrideRequest(async (path, options, original) => {
+      if (["yes24", "aladin", "kyobo", "naver"].some((store) => path.startsWith(`/candidates/${store}?`))) await pending.promise;
+      return original(path, options);
+    });
+    render(<BookCoverAdmin />);
+    await waitFor(() => expect(request.mock.calls.filter(([path]) => path.startsWith("/candidates/")).length).toBeGreaterThanOrEqual(4));
+    const lateSearches = () => request.mock.calls.filter(([path]) => lateStores.some((store) => path.startsWith(`/candidates/${store}?`)));
+    expect(lateSearches()).toHaveLength(0);
+    expanded = true;
+    await act(async () => pending.resolve());
+    await screen.findByAltText("서점 책");
+    expect(lateSearches()).toHaveLength(0);
+    exposed = true;
+    fireEvent.scroll(screen.getByLabelText("테스트 책 서점 표지 후보"));
+    await waitFor(() => expect(lateSearches()).toHaveLength(4));
+  });
+
+  it("앞쪽 검색이 대기 중이어도 사용자가 가로로 스크롤해 노출한 뒤쪽 서점은 검색한다", async () => {
+    setup();
+    const pending = deferred();
+    overrideRequest((path, options, original) => path.startsWith("/candidates/yes24?") ? pending.promise : original(path, options));
+    render(<BookCoverAdmin />);
+    await waitFor(() => expect(request.mock.calls.some(([path]) => path.startsWith("/candidates/yes24?"))).toBe(true));
+    const scrollArea = screen.getByLabelText("테스트 책 서점 표지 후보");
+    Object.defineProperty(scrollArea, "scrollLeft", { configurable: true, value: 100 });
+    fireEvent.scroll(scrollArea);
+    await waitFor(() => expect(request.mock.calls.some(([path]) => path.startsWith("/candidates/ridi?"))).toBe(true));
+    await act(async () => pending.resolve({ status: "not_found", candidates: [] }));
+  });
+
   it("오른쪽 서점은 가로로 노출될 때 검색과 이미지를 받고 재노출 때 재사용한다", async () => {
     setup();
     let exposed = "";

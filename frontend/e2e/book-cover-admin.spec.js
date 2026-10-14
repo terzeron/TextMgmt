@@ -8,6 +8,50 @@ const candidatePngs = [
   "iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAIAAAA2iEnWAAAAE0lEQVR4nGP8z8DAwMDAxIBMAQAUQAEF3SN5DgAAAABJRU5ErkJggg==",
 ].map((base64) => Buffer.from(base64, "base64"));
 
+test("표지 관리: 초기 빈 칸의 일시 노출로 뒤쪽 서점을 먼저 검색하지 않는다", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.route("**/auth/me", (route) => route.fulfill({ json: { status: "success", result: { role: "admin", email: "test@example.com" } } }));
+  await page.route("**/auth/sessions**", (route) => route.fulfill({ json: { status: "success", result: { sessions: [], total: 0 } } }));
+  const firstStores = ["yes24", "aladin", "kyobo", "naver"];
+  const searches = [];
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  await page.route("**/admin/book-covers/**", async (route) => {
+    const endpoint = new URL(route.request().url()).pathname.split("/admin/book-covers")[1];
+    let result;
+    if (endpoint === "/directories") result = [];
+    else if (endpoint === "/missing") result = { items: [{ file_path: "layout.epub", title: "초기 배치 책", revision: "r1", status: "missing" }], scanned: 1, total: 1 };
+    else if (endpoint.startsWith("/candidates/")) {
+      const store = endpoint.split("/").pop();
+      searches.push(store);
+      if (firstStores.includes(store)) {
+        await pending;
+        result = { status: "success", candidates: Array.from({ length: 4 }, (_, index) => ({
+          candidate_id: (firstStores.indexOf(store) * 4 + index).toString(16).padStart(64, "0"),
+          title: `${store} 후보 ${index}`, detail_url: "https://www.yes24.com/",
+        })) };
+      } else result = { status: "not_found", candidates: [] };
+    } else if (endpoint.startsWith("/candidate-image/")) return route.fulfill({ contentType: "image/png", body: candidatePngs[0] });
+    else return route.fulfill({ status: 404 });
+    return route.fulfill({ json: { status: "success", result } });
+  });
+  await page.goto("/admin");
+  await page.getByRole("tab", { name: "책 표지 관리" }).click();
+  try {
+    await expect.poll(() => searches.filter((store) => firstStores.includes(store)).length).toBe(4);
+    expect(searches.filter((store) => !firstStores.includes(store))).toEqual([]);
+  } finally { release(); }
+  await expect(page.getByAltText("yes24 후보 0")).toBeVisible();
+  const ridi = page.locator('.book-cover-store[data-store="ridi"]');
+  await expect.poll(() => ridi.evaluate((node) => node.getBoundingClientRect().left >= node.closest(".book-cover-candidates").getBoundingClientRect().right)).toBe(true);
+  expect(searches.filter((store) => !firstStores.includes(store))).toEqual([]);
+  await ridi.evaluate((node) => {
+    const clip = node.closest(".book-cover-candidates");
+    clip.scrollLeft += node.getBoundingClientRect().left - clip.getBoundingClientRect().left;
+  });
+  await expect.poll(() => searches.includes("ridi")).toBe(true);
+});
+
 test("표지 관리: 카테고리 옆 교체 토글로 기존 표지를 비교하고 교체한다", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.route("**/auth/me", (route) => route.fulfill({ json: { status: "success", result: { role: "admin", email: "test@example.com" } } }));
