@@ -46,10 +46,96 @@ function deferred() {
 }
 
 describe("책 표지 관리", () => {
+  it("각 후보 이미지 안의 돋보기는 그 후보를 확대하고 EPUB 저장을 실행하지 않는다", async () => {
+    setup();
+    const second = { candidate_id: "b".repeat(64), title: "두 번째 표지" };
+    overrideRequest(async (path, options, original) => {
+      const result = await original(path, options);
+      return path.startsWith("/candidates/yes24") ? { ...result, candidates: [...result.candidates, second] } : result;
+    });
+    render(<BookCoverAdmin />);
+    await screen.findByAltText("두 번째 표지");
+    const magnifier = screen.getByRole("button", { name: "YES24 두 번째 표지 표지 확대" });
+    const frame = magnifier.closest(".book-cover-image-frame");
+    expect(frame).not.toBeNull();
+    expect(within(frame).getByRole("button", { name: "YES24 두 번째 표지 표지 선택" })).toBeTruthy();
+    expect(magnifier.closest(".book-cover-store-header")).toBeNull();
+    expect(magnifier.closest("button")).toBe(magnifier);
+    const requests = request.mock.calls.filter(([path]) => path.startsWith("/candidate-image")).length;
+    fireEvent.click(magnifier);
+    expect(screen.getByRole("dialog", { name: "두 번째 표지 표지 확대" })).toBeTruthy();
+    expect(request.mock.calls.some(([path]) => path === "/apply")).toBe(false);
+    expect(request.mock.calls.filter(([path]) => path.startsWith("/candidate-image"))).toHaveLength(requests);
+    fireEvent.click(screen.getByRole("button", { name: "두 번째 표지 확대 표지 선택" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply", { body: { file_path: "책.epub", revision: "r1", candidate_id: second.candidate_id } }));
+  });
+
+  it("오른쪽 서점은 가로로 노출될 때 검색과 이미지를 받고 재노출 때 재사용한다", async () => {
+    setup();
+    let exposed = "";
+    const lateStores = ["ridi", "munpia", "naverseries", "joara"];
+    const ids = Object.fromEntries(lateStores.map((store, index) => [store, String(index + 1).repeat(64)]));
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function () {
+      const store = this.getAttribute("data-store") || this.closest(".book-cover-store")?.getAttribute("data-store");
+      const left = lateStores.includes(store) && store !== exposed ? 600 : 20;
+      return { top: 0, bottom: 200, left, right: left + (this.classList.contains("book-cover-candidates") ? 400 : 100), width: 100, height: 200 };
+    });
+    overrideRequest((path, options, original) => {
+      const store = path.split("/candidates/")[1]?.split("?")[0];
+      return lateStores.includes(store) ? { status: "success", candidates: [{ candidate_id: ids[store], title: `${store} 후보` }] } : original(path, options);
+    });
+    render(<BookCoverAdmin />);
+    await screen.findByAltText("서점 책");
+    const searches = (store) => request.mock.calls.filter(([path]) => path.startsWith(`/candidates/${store}?`));
+    expect(["yes24", "aladin", "kyobo", "naver"].map((store) => searches(store).length)).toEqual([1, 1, 1, 1]);
+    expect(lateStores.map((store) => searches(store).length)).toEqual([0, 0, 0, 0]);
+    const scrollArea = screen.getByLabelText("테스트 책 서점 표지 후보");
+    for (const store of lateStores) {
+      exposed = store;
+      fireEvent.scroll(scrollArea);
+      await screen.findByAltText(`${store} 후보`);
+      expect(searches(store)).toHaveLength(1);
+      expect(request.mock.calls.filter(([path]) => path === `/candidate-image/${ids[store]}`)).toHaveLength(1);
+    }
+    exposed = "ridi";
+    fireEvent.scroll(scrollArea);
+    await act(async () => new Promise((resolve) => requestAnimationFrame(resolve)));
+    expect(lateStores.map((store) => searches(store).length)).toEqual([1, 1, 1, 1]);
+    exposed = "";
+    fireEvent.scroll(scrollArea);
+    fireEvent.click(screen.getByRole("button", { name: "재검색" }));
+    await waitFor(() => expect(searches("yes24")).toHaveLength(2));
+    expect(lateStores.map((store) => searches(store).length)).toEqual([1, 1, 1, 1]);
+    exposed = "ridi";
+    fireEvent.scroll(scrollArea);
+    await waitFor(() => expect(searches("ridi")).toHaveLength(2));
+  });
+
+  it("스크롤 영역 안이어도 브라우저 오른쪽 밖에 있는 서점은 resize로 노출될 때 검색한다", async () => {
+    setup();
+    const initialWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 500 });
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function () {
+      const store = this.getAttribute("data-store") || this.closest(".book-cover-store")?.getAttribute("data-store");
+      const left = ["ridi", "munpia", "naverseries", "joara"].includes(store) ? 600 : 0;
+      return { top: 0, bottom: 200, left, right: this.classList.contains("book-cover-candidates") ? 900 : left + 100, width: 100, height: 200 };
+    });
+    try {
+      render(<BookCoverAdmin />);
+      await screen.findByAltText("서점 책");
+      expect(request.mock.calls.some(([path]) => path.startsWith("/candidates/ridi"))).toBe(false);
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 });
+      fireEvent.resize(window);
+      await waitFor(() => expect(request.mock.calls.some(([path]) => path.startsWith("/candidates/ridi"))).toBe(true));
+    } finally {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: initialWidth });
+    }
+  });
+
   it("내 책 확대에 실패하면 모달을 닫고 저장한 표지와 행을 유지한다", async () => {
     setup();
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(candidate);
     await screen.findByAltText("테스트 책 저장한 표지");
@@ -68,7 +154,7 @@ describe("책 표지 관리", () => {
     expect(await screen.findByRole("heading", { name: "내 책" })).toBeTruthy();
     const magnifier = screen.getByRole("button", { name: "테스트 책 내 책 표지 확대" });
     expect(magnifier.disabled).toBe(true);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(candidate);
     await screen.findByAltText("테스트 책 저장한 표지");
@@ -111,7 +197,7 @@ describe("책 표지 관리", () => {
     setup();
     vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(candidate);
     await screen.findByAltText("테스트 책 저장한 표지");
@@ -125,7 +211,7 @@ describe("책 표지 관리", () => {
     setup();
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(candidate);
     await screen.findByAltText("테스트 책 저장한 표지");
@@ -143,7 +229,7 @@ describe("책 표지 관리", () => {
   it("빠른 표지 선택 반복은 교체 이미지를 읽는 중 중복 요청을 만들지 않는다", async () => {
     setup();
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(candidate);
     await screen.findByAltText("테스트 책 저장한 표지");
@@ -169,7 +255,7 @@ describe("책 표지 관리", () => {
     available = true;
     fireEvent.click(screen.getByText("이미지 재시도"));
     await screen.findByAltText("서점 책");
-    expect(screen.getByRole("button", { name: /YES24.*서점 책/ }).disabled).toBe(false);
+    expect(screen.getByRole("button", { name: /YES24.*서점 책.*표지 선택/ }).disabled).toBe(false);
   });
   it("저장 이후 재검색한 후보 ID가 바뀌어도 받은 이미지를 유지한다", async () => {
     setup();
@@ -181,7 +267,7 @@ describe("책 표지 관리", () => {
         : result;
     });
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     const before = request.mock.calls.filter(([path]) => path.startsWith("/candidate-image")).length;
     fireEvent.click(candidate);
@@ -196,7 +282,7 @@ describe("책 표지 관리", () => {
   it.each(["reader", "server"])("표지 교체의 %s 실패는 기존 저장 상태를 유지한다", async (failure) => {
     setup();
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(candidate);
     await screen.findByAltText("테스트 책 저장한 표지");
@@ -210,7 +296,7 @@ describe("책 표지 관리", () => {
   it("교체 이미지를 읽는 중 디렉토리가 바뀌면 이전 EPUB을 갱신하지 않는다", async () => {
     setup();
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(candidate);
     await screen.findByAltText("테스트 책 저장한 표지");
@@ -260,12 +346,12 @@ describe("책 표지 관리", () => {
   it("돋보기 클릭으로만 추가 fetch 없이 확대하고 확대 이미지에서 적용한다", async () => {
     setup();
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     const requests = request.mock.calls.filter(([path]) => path.startsWith("/candidate-image")).length;
     fireEvent.mouseEnter(candidate);
     expect(screen.queryByRole("dialog")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "YES24 표지 확대" }));
+    fireEvent.click(screen.getByRole("button", { name: "YES24 서점 책 표지 확대" }));
     const panel = screen.getByRole("dialog", { name: "서점 책 표지 확대" });
     expect(screen.getByAltText("서점 책 확대 표지").getAttribute("src")).toBe("blob:cover");
     fireEvent.mouseLeave(panel, { relatedTarget: document.body });
@@ -284,13 +370,13 @@ describe("책 표지 관리", () => {
     const pending = deferred();
     overrideRequest((path, options, original) => path.startsWith("/candidate-image") ? pending.promise : original(path, options));
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
-    expect(screen.getByRole("button", { name: "YES24 표지 확대" }).disabled).toBe(true);
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
+    expect(screen.getByRole("button", { name: "YES24 서점 책 표지 확대" }).disabled).toBe(true);
     fireEvent.mouseEnter(candidate);
     expect(screen.queryByRole("dialog")).toBeNull();
     await act(async () => pending.resolve(new Blob(["cover"])));
     await waitFor(() => expect(candidate.disabled).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: "YES24 표지 확대" }));
+    fireEvent.click(screen.getByRole("button", { name: "YES24 서점 책 표지 확대" }));
     expect(screen.getByRole("dialog")).toBeTruthy();
     fireEvent.mouseLeave(candidate, { relatedTarget: document.body });
     expect(screen.getByRole("dialog")).toBeTruthy();
@@ -307,7 +393,7 @@ describe("책 표지 관리", () => {
     });
     render(<BookCoverAdmin />);
     await waitFor(() => expect(screen.getByRole("button", { name: "YES24 두 번째 표지 표지 선택" }).disabled).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: "YES24 표지 확대" }));
+    fireEvent.click(screen.getByRole("button", { name: "YES24 서점 책 표지 확대" }));
     expect(screen.getByRole("button", { name: "이전 표지" }).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "다음 표지" }));
     expect(screen.getByAltText("두 번째 표지 확대 표지")).toBeTruthy();
@@ -340,7 +426,7 @@ describe("책 표지 관리", () => {
     expect(screen.queryByText("취소")).toBeNull();
     visible = true;
     fireEvent.scroll(window);
-    await waitFor(() => expect(screen.getByRole("button", { name: /YES24.*서점 책/ }).disabled).toBe(false));
+    await waitFor(() => expect(screen.getByRole("button", { name: /YES24.*서점 책.*표지 선택/ }).disabled).toBe(false));
   });
 
   it.each(["search", "image"])("이전 디렉토리의 %s 실패가 새 목록에 나타나지 않는다", async (type) => {
@@ -395,8 +481,8 @@ describe("책 표지 관리", () => {
       return result;
     });
     render(<BookCoverAdmin />);
-    const first = await screen.findByRole("button", { name: /YES24.*서점 책/ });
-    const second = await screen.findByRole("button", { name: /YES24.*두 번째 후보/ });
+    const first = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
+    const second = await screen.findByRole("button", { name: /YES24.*두 번째 후보.*표지 선택/ });
     await waitFor(() => expect(first.disabled || second.disabled).toBe(false));
     const secondRow = screen.getByRole("heading", { name: "두 번째 책" }).closest("article");
     fireEvent.click(within(secondRow).getByRole("button", { name: "편집" }));
@@ -448,7 +534,7 @@ describe("책 표지 관리", () => {
       }, { timeout: 5000 });
     }
     await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalled());
-    const buttons = () => [...document.querySelectorAll('[aria-label^="YES24 후보 "]')];
+    const buttons = () => [...document.querySelectorAll('[aria-label^="YES24 후보 "][aria-label$="표지 선택"]')];
     await waitFor(() => expect(buttons().filter((button) => !button.disabled).length).toBeLessThanOrEqual(80));
     const evicted = buttons().find((button) => button.disabled);
     expect(evicted).toBeTruthy();
@@ -546,18 +632,18 @@ describe("책 표지 관리", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     overrideRequest((path, options, original) => path === "/cache/clear" ? Promise.reject(new Error("캐시 삭제 실패")) : original(path, options));
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "재검색" }));
     await screen.findByText("캐시 삭제 실패");
-    expect(screen.getByRole("button", { name: /YES24.*서점 책/ }).disabled).toBe(false);
+    expect(screen.getByRole("button", { name: /YES24.*서점 책.*표지 선택/ }).disabled).toBe(false);
   });
 
   it("완료 문구 오른쪽 휴지통은 미리보기만 비우고 재검색은 최신 revision을 보낸다", async () => {
     setup();
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(candidate);
     await screen.findByRole("button", { name: /테스트 책.*완료/ });
@@ -575,7 +661,7 @@ describe("책 표지 관리", () => {
     setup();
     overrideRequest((path, options, original) => path === "/apply" ? { revision: "r2", warning: "캐시 정리 경고" } : original(path, options));
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(candidate);
     await screen.findByText("캐시 정리 경고");
@@ -596,7 +682,7 @@ describe("책 표지 관리", () => {
     await screen.findByText("서점 오류");
     fireEvent.click(screen.getByRole("button", { name: "재시도", exact: true }));
     fireEvent.click(await screen.findByRole("button", { name: "이미지 재시도" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /YES24.*서점 책/ }).disabled).toBe(false));
+    await waitFor(() => expect(screen.getByRole("button", { name: /YES24.*서점 책.*표지 선택/ }).disabled).toBe(false));
   });
 
   it("서점 검색 링크와 서버 캐시의 이미지 크기를 표시한다", async () => {
@@ -626,7 +712,7 @@ describe("책 표지 관리", () => {
       return original(path, options);
     });
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(candidate);
     fireEvent.click(screen.getByRole("button", { name: "다른 디렉토리" }));
@@ -683,7 +769,7 @@ describe("책 표지 관리", () => {
     setup();
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(candidate);
     await screen.findByAltText("테스트 책 저장한 표지");
@@ -694,14 +780,14 @@ describe("책 표지 관리", () => {
     confirm.mockReturnValue(true);
     fireEvent.click(trash);
     expect(screen.queryByAltText("테스트 책 저장한 표지")).toBeNull();
-    expect(screen.getByRole("button", { name: /YES24.*서점 책/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /YES24.*서점 책.*표지 선택/ })).toBeTruthy();
     expect(URL.revokeObjectURL).not.toHaveBeenCalled();
   });
 
   it("재검색은 서버 캐시를 비운 뒤 서점 검색을 다시 실행한다", async () => {
     setup();
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     const searches = () => request.mock.calls.filter(([path]) => path.startsWith("/candidates/yes24"));
     expect(searches()).toHaveLength(1);
@@ -795,7 +881,7 @@ describe("책 표지 관리", () => {
   it("저장한 표지를 확인한 뒤 클릭해야 행을 숨긴다", async () => {
     setup();
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(candidate);
     const completed = await screen.findByRole("button", { name: /테스트 책.*완료/ });
@@ -809,7 +895,7 @@ describe("책 표지 관리", () => {
   it("저장 실패 시 행을 유지한다", async () => {
     setup({ fail: true });
     render(<BookCoverAdmin />);
-    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책/ });
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
     await waitFor(() => expect(candidate.disabled).toBe(false));
     fireEvent.click(candidate);
     await screen.findByText("저장 실패");
@@ -825,6 +911,6 @@ describe("책 표지 관리", () => {
     fireEvent.load(image);
     expect(await screen.findByText("600 × 900 px")).toBeTruthy();
     expect(screen.getByText("5 B")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /YES24.*서점 책/ }).style.backgroundColor).toBe("rgb(0, 255, 0)");
+    expect(screen.getByRole("button", { name: /YES24.*서점 책.*표지 선택/ }).style.backgroundColor).toBe("rgb(0, 255, 0)");
   });
 });

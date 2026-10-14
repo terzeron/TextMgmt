@@ -131,6 +131,15 @@ export default function BookCoverAdmin() {
     const versions = new Map(items.map((item) => [item.file_path, bookVersions.current.get(item.file_path) || 0]));
     const isCurrent = (path) => generation.current === current && (bookVersions.current.get(path) || 0) === versions.get(path);
     const tasks = [];
+    const isStoreVisible = (path, store) => {
+      const node = rows.current.get(path)?.querySelector(`[data-store="${store}"]`);
+      if (!node) return false;
+      const rect = node.getBoundingClientRect();
+      const clip = node.closest(".book-cover-candidates").getBoundingClientRect();
+      const left = Math.max(viewport.left, clip.left);
+      const right = Math.min(viewport.right, clip.right);
+      return right > left && rect.right > rect.left && rect.right > left && rect.left < right;
+    };
     const eligibleRows = items.filter((item) => item.status === "missing" && !item.saving && !item.busy && !item.paused)
       .flatMap((item) => {
         const node = rows.current.get(item.file_path);
@@ -160,7 +169,8 @@ export default function BookCoverAdmin() {
     const rowTargets = selectViewportTargets(eligibleRows, viewport);
     const visibleBooks = new Set(rowTargets.filter((record) => record.visible).map((record) => record.key));
     for (const { item, visible } of rowTargets) {
-      for (const [store] of STORES) {
+      for (const [index, [store]] of STORES.entries()) {
+        if (index >= 4 && !isStoreVisible(item.file_path, store)) continue;
         const source = sources[item.file_path]?.[store];
         if (source && source.status !== "loading") continue;
         tasks.push({ key: `search:${item.file_path}:${store}:${versions.get(item.file_path)}`, store, backgroundKey: visible ? undefined : item.file_path, run: async (signal) => {
@@ -176,7 +186,8 @@ export default function BookCoverAdmin() {
     }
     const imageRecords = [];
     for (const item of items.filter((entry) => !entry.saving && !entry.busy && !entry.paused)) {
-      for (const [store] of STORES) {
+      for (const [index, [store]] of STORES.entries()) {
+        if (index >= 4 && !isStoreVisible(item.file_path, store)) continue;
         if (sources[item.file_path]?.[store]?.status === "loading") continue;
         for (const candidate of sources[item.file_path]?.[store]?.candidates || []) {
           const node = candidates.current.get(candidate.candidate_id);
@@ -360,13 +371,13 @@ export default function BookCoverAdmin() {
               <div className="book-cover-filename">{item.file_path.split("/").pop()}</div>
               <div className="book-cover-row-body">
                 <div className="book-cover-current">
-                  <div className="book-cover-store-header"><h4>내 책</h4>
+                  <div className="book-cover-store-header"><h4>내 책</h4></div>
+                  <div className="book-cover-image-frame">
                     <Button size="sm" variant="outline-secondary" className="book-cover-magnifier" title="표지 확대"
                       aria-label={`${item.title} 내 책 표지 확대`} disabled={!item.saved || item.previewHidden || !item.previewReady || item.saving || item.busy}
                       onClick={() => setZoom({ own: true, item, index: 0, previews: [{ id: `own:${item.file_path}`, title: `${item.title} 내 책`,
                         url: `${getApiUrlPrefix()}${API_ROOT}/preview?file_path=${encodeURIComponent(item.file_path)}&v=${encodeURIComponent(item.saved.revision)}&original=true`,
                       }] })}><FontAwesomeIcon icon={faMagnifyingGlass} /></Button>
-                  </div>
                   {item.saved && !item.previewHidden ? (
                     <button type="button" className="cover-grid-cover book-cover-completed" aria-label={`${item.title} 표지 저장 완료 · 행 숨기기`}
                       disabled={!item.previewReady} onClick={() => setItems((previous) => previous.filter((entry) => entry.file_path !== item.file_path))}>
@@ -376,6 +387,7 @@ export default function BookCoverAdmin() {
                         onError={() => previewState(item.file_path, { previewReady: false, error: "저장한 표지를 표시하지 못했습니다. 새로고침하세요" })} />
                     </button>
                   ) : <div className="cover-grid-cover"><div className="cover-grid-placeholder">표지 없음</div></div>}
+                  </div>
                   <div className="book-cover-status">
                     <small>{item.saving ? "저장 중…" : item.saved && !item.previewHidden ? "저장 완료 · 표지를 눌러 숨기기" : "서점 표지를 선택하세요"}</small>
                     <Button size="sm" variant="outline-secondary" className="book-cover-trash" title="미리보기 지우기"
@@ -395,12 +407,8 @@ export default function BookCoverAdmin() {
                         width: images[candidate.candidate_id].width || candidate.width,
                         height: images[candidate.candidate_id].height || candidate.height,
                       }));
-                      return <section className="book-cover-store" key={store}>
-                        <div className="book-cover-store-header"><h4>{label}</h4>
-                          <Button size="sm" variant="outline-secondary" className="book-cover-magnifier" title="표지 확대"
-                            aria-label={`${label} 표지 확대`} disabled={!previews.length || item.saving || item.busy}
-                            onClick={() => setZoom({ item, previews, index: 0 })}><FontAwesomeIcon icon={faMagnifyingGlass} /></Button>
-                        </div>
+                      return <section className="book-cover-store" key={store} data-store={store}>
+                        <div className="book-cover-store-header"><h4>{label}</h4></div>
                         <div className="book-cover-store-images">
                           {(source?.candidates || []).map((candidate) => {
                             const image = images[candidate.candidate_id];
@@ -409,6 +417,10 @@ export default function BookCoverAdmin() {
                             const height = image?.height || candidate.height;
                             const byteSize = image?.byte_size ?? candidate.byte_size;
                             return <div className="book-cover-candidate" key={candidate.candidate_id}>
+                              <div className="book-cover-image-frame">
+                              <Button size="sm" variant="outline-secondary" className="book-cover-magnifier" title="표지 확대"
+                                aria-label={`${label} ${candidate.title} 표지 확대`} disabled={!image?.url || item.saving || item.busy}
+                                onClick={() => setZoom({ item, previews, index: previews.findIndex((entry) => entry.id === candidate.candidate_id) })}><FontAwesomeIcon icon={faMagnifyingGlass} /></Button>
                               <button type="button" className="cover-grid-cover" disabled={!image?.url || item.saving || item.busy}
                                 style={rank ? { backgroundColor: rank.color } : undefined}
                                 title={rank ? `해상도 ${rank.rank}위 / ${rank.count}개` : "표지 크기 확인 전"}
@@ -418,6 +430,7 @@ export default function BookCoverAdmin() {
                                   onLoad={(event) => recordImageSize(candidate.candidate_id, event.currentTarget)} />
                                   : <div className="cover-grid-placeholder">{image?.loading ? <Spinner size="sm" /> : image?.error ? "이미지 오류" : "표지 후보"}</div>}
                               </button>
+                              </div>
                               <small className="book-cover-image-size">
                                 {width && height ? <><span>{width} × {height} px</span><span>{formatCoverBytes(byteSize)}</span></> : "크기 확인 전"}
                               </small>

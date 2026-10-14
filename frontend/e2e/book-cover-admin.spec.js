@@ -8,6 +8,54 @@ const candidatePngs = [
   "iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAIAAAA2iEnWAAAAE0lEQVR4nGP8z8DAwMDAxIBMAQAUQAEF3SN5DgAAAABJRU5ErkJggg==",
 ].map((base64) => Buffer.from(base64, "base64"));
 
+test("표지 관리: 오른쪽 서점은 가로 스크롤로 노출될 때 검색하고 이미지를 재사용한다", async ({ page }) => {
+  await page.setViewportSize({ width: 780, height: 900 });
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("**/auth/me", (route) => route.fulfill({ json: { status: "success", result: { role: "admin", email: "test@example.com" } } }));
+  await page.route("**/auth/sessions**", (route) => route.fulfill({ json: { status: "success", result: { sessions: [], total: 0 } } }));
+  const stores = ["yes24", "aladin", "kyobo", "naver", "ridi", "munpia", "naverseries", "joara"];
+  const searches = [], images = [];
+  await page.route("**/admin/book-covers/**", async (route) => {
+    const endpoint = new URL(route.request().url()).pathname.split("/admin/book-covers")[1];
+    let result;
+    if (endpoint === "/directories") result = [];
+    else if (endpoint === "/missing") result = { items: [{ file_path: "lazy.epub", title: "가로 스크롤 책", revision: "r1", status: "missing" }], scanned: 1, total: 1 };
+    else if (endpoint.startsWith("/candidates/")) {
+      const store = endpoint.split("/").pop();
+      searches.push(store);
+      result = { status: "success", candidates: [{ candidate_id: String(stores.indexOf(store) + 1).repeat(64), title: `${store} 표지`, detail_url: "https://www.yes24.com/" }] };
+    } else if (endpoint.startsWith("/candidate-image/")) {
+      images.push(endpoint.split("/").pop());
+      return route.fulfill({ contentType: "image/png", body: candidatePngs[0] });
+    } else return route.fulfill({ status: 404 });
+    return route.fulfill({ json: { status: "success", result } });
+  });
+  await page.goto("/admin");
+  await page.getByRole("tab", { name: "책 표지 관리" }).click();
+  await expect.poll(() => stores.slice(0, 4).every((store) => searches.includes(store))).toBe(true);
+  await expect(page.getByAltText("yes24 표지")).toBeVisible();
+  expect(searches.filter((store) => stores.indexOf(store) >= 4)).toEqual([]);
+  for (const store of stores.slice(4)) {
+    const section = page.locator(`.book-cover-store[data-store="${store}"]`);
+    await section.evaluate((node) => {
+      const clip = node.closest(".book-cover-candidates");
+      clip.scrollLeft += node.getBoundingClientRect().left - clip.getBoundingClientRect().left;
+    });
+    await expect(section.getByAltText(`${store} 표지`)).toBeVisible();
+    expect(searches.filter((name) => name === store)).toHaveLength(1);
+    expect(images.filter((id) => id === String(stores.indexOf(store) + 1).repeat(64))).toHaveLength(1);
+  }
+  await page.locator('.book-cover-store[data-store="ridi"]').evaluate((node) => {
+    const clip = node.closest(".book-cover-candidates");
+    clip.scrollLeft += node.getBoundingClientRect().left - clip.getBoundingClientRect().left;
+  });
+  await expect(page.getByAltText("ridi 표지")).toBeVisible();
+  expect(searches.filter((store) => store === "ridi")).toHaveLength(1);
+  expect(images.filter((id) => id === "5".repeat(64))).toHaveLength(1);
+  expect(errors).toEqual([]);
+});
+
 test("표지 관리: 화면 밖의 책은 5초 후에 미리 검색한다", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 800 });
   await page.route("**/auth/me", (route) => route.fulfill({ json: { status: "success", result: { role: "admin", name: "테스트", email: "test@example.com" } } }));
@@ -104,13 +152,24 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
   const ownTop = await ownCover.evaluate((node) => node.getBoundingClientRect().top);
   const candidateTop = await first.evaluate((node) => node.getBoundingClientRect().top);
   expect(ownTop).toBeCloseTo(candidateTop, 1);
+  for (const magnifier of [page.getByRole("button", { name: "표지 없는 책 0 내 책 표지 확대", exact: true }),
+    page.getByRole("button", { name: "YES24 서점 후보 0-0 표지 확대", exact: true })]) {
+    await expect(magnifier).toHaveCSS("position", "absolute");
+    const distances = await magnifier.evaluate((node) => {
+      const cover = node.parentElement.querySelector(".cover-grid-cover").getBoundingClientRect();
+      const button = node.getBoundingClientRect();
+      return { top: button.top - cover.top, right: cover.right - button.right };
+    });
+    expect(distances.top).toBeCloseTo(2, 1);
+    expect(distances.right).toBeCloseTo(2, 1);
+  }
   await expect(page.getByRole("button", { name: "표지 없는 책 0 내 책 표지 확대", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "YES24 서점 후보 0-1 표지 선택" })).toHaveCSS("background-color", "rgb(170, 255, 0)");
   await expect(page.getByRole("button", { name: "YES24 서점 후보 0-2 표지 선택" })).toHaveCSS("background-color", "rgb(255, 170, 0)");
   await expect(page.getByRole("button", { name: "YES24 서점 후보 0-3 표지 선택" })).toHaveCSS("background-color", "rgb(255, 0, 0)");
   await expect(page.locator(".book-cover-row").first().getByText("24 × 36 px")).toBeVisible();
   await page.waitForTimeout(700);
-  const visible = await page.locator(".book-cover-candidate > button").evaluateAll((nodes) => nodes.filter((node) => {
+  const visible = await page.locator(".book-cover-candidate .cover-grid-cover").evaluateAll((nodes) => nodes.filter((node) => {
     const rect = node.getBoundingClientRect();
     const clip = node.closest(".book-cover-candidates").getBoundingClientRect();
     return rect.bottom > 0 && rect.top < innerHeight && rect.right > Math.max(0, clip.left) && rect.left < Math.min(innerWidth, clip.right);
@@ -121,7 +180,7 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
   const beforeZoom = imageRequests.length;
   await first.hover();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page.locator(".book-cover-row").first().getByRole("button", { name: "YES24 표지 확대", exact: true }).click();
+  await page.locator(".book-cover-row").first().getByRole("button", { name: "YES24 서점 후보 0-0 표지 확대", exact: true }).click();
   const expanded = page.getByRole("dialog", { name: "서점 후보 0-0 표지 확대" });
   await expect(expanded).toBeVisible();
   const image = expanded.getByAltText("서점 후보 0-0 확대 표지");

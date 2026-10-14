@@ -25,6 +25,8 @@
 .book-cover-store-header { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
 .book-cover-store-header h4 { font-size: .8rem; font-weight: 600; margin: 0; }
 .book-cover-magnifier { padding: 2px 4px; font-size: .7rem; }
+.book-cover-image-frame { position: relative; }
+.book-cover-image-frame > .book-cover-magnifier { position: absolute; top: 2px; right: 2px; z-index: 1; background: rgba(255, 255, 255, .9); }
 .book-cover-store > small { display: block; width: 112px; }
 .book-cover-store-images { display: flex; gap: 8px; }
 .book-cover-candidate { width: 84px; flex: 0 0 84px; }
