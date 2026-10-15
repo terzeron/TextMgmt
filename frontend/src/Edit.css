@@ -45,13 +45,6 @@
     border-color: #ffe082 !important;
 }
 
-#edit .directory-menu {
-    height: calc(100vh - 80px);
-    overflow-y: auto;
-    position: sticky;
-    top: 0;
-}
-
 #edit .directory-title-control {
     flex: 7 1 0;
     width: 0;

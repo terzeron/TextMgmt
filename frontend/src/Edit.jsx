@@ -41,7 +41,7 @@ import {
   MORE_ENTRY_FILE_TYPE,
   MORE_ENTRY_SUFFIX,
 } from "./folderUtils";
-import useIsMobile from "./useIsMobile";
+import SplitLayout from "./SplitLayout";
 import { useCategoryTree } from "./useCategoryTree";
 
 function getOtherTopLevelCategories(categories, currentCategory = "") {
@@ -59,7 +59,6 @@ function getOtherTopLevelCategories(categories, currentCategory = "") {
 }
 
 export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
-  const isMobile = useIsMobile();
   const params = useParams();
   const [searchParams] = useSearchParams();
   const directoryTarget = searchParams.get("directory");
@@ -1126,14 +1125,6 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
     }
   }, [prevEntryId, entryClicked]);
 
-  // 모바일에서는 directory-menu 클래스를 제거하여 고정 높이 스타일 방지
-  const directoryClassName = isMobile
-    ? "ps-0 pe-0"
-    : "ps-0 pe-0 section directory-menu";
-  /* v8 ignore next 2 -- responsive column matrix is covered by browser layout, not unit branches. */
-  const contentColumnMd = isMobile ? 12 : isFolderOpen ? 9 : 12;
-  const contentColumnLg = isMobile ? 12 : isFolderOpen ? 10 : 12;
-
   /* v8 ignore start -- collapsed sidebar is reachable only through interactive Folder toggle. */
   const collapsedFolderPanel = !isFolderOpen ? (
     <Suspense fallback={<div className="loading">로딩 중...</div>}>
@@ -1152,13 +1143,9 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
 
   return (
     <Container id="edit">
-      <Row fluid="true">
+      <SplitLayout storageKey="split:edit">
         {isFolderOpen && (
-          <Col
-            md={isMobile ? 12 : 3}
-            lg={isMobile ? 12 : 2}
-            className={directoryClassName}
-          >
+          <SplitLayout.Left>
             <Suspense fallback={<div className="loading">로딩 중...</div>}>
               <Folder
                 folderData={folderData}
@@ -1170,14 +1157,10 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                 onClickHandler={entryClicked}
               />
             </Suspense>
-          </Col>
+          </SplitLayout.Left>
         )}
 
-        <Col
-          md={contentColumnMd}
-          lg={contentColumnLg}
-          className={isMobile ? "ps-0 pe-0" : "section"}
-        >
+        <SplitLayout.Right>
           {collapsedFolderPanel}
           {hasSearched && (
             <SearchResult
@@ -1407,8 +1390,8 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
               </Row>}
             </>
           )}
-        </Col>
-      </Row>
+        </SplitLayout.Right>
+      </SplitLayout>
     </Container>
   );
 }

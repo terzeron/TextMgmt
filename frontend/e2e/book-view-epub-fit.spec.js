@@ -258,3 +258,26 @@ test("데스크톱: 스크롤 상태에서 viewport가 커져도 뷰어가 붕�
   );
 });
 
+
+test("데스크톱: 책 보기 상단 영역의 너비 조절 핸들이 보이고 드래그된다", async ({
+  page,
+}) => {
+  await openBookView(page, { width: 1280, height: 800 });
+
+  const handle = page.getByRole("separator");
+  const box = await handle.boundingBox();
+  expect(box.height).toBeGreaterThan(20);
+
+  const left = page.locator(".split-layout-left").first();
+  const before = (await left.boundingBox()).width;
+  // 초기값은 전체 너비의 3:9(25%)
+  const total = (await page.locator(".split-layout").first().boundingBox()).width;
+  expect(before / total).toBeCloseTo(0.25, 1);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 50, box.y + box.height / 2, {
+    steps: 5,
+  });
+  await page.mouse.up();
+  expect((await left.boundingBox()).width - before).toBeGreaterThan(40);
+});

@@ -9,6 +9,7 @@ import "bootstrap/dist/css/bootstrap.min.css";
 import { Container, Row, Col, Alert } from "react-bootstrap";
 
 import Folder from "./Folder.jsx";
+import SplitLayout from "./SplitLayout";
 import ViewSingle from "./ViewSingle.jsx";
 import BookInfoView from "./BookInfoView.jsx";
 import SimilarBooks from "./SimilarBooks.jsx";
@@ -284,8 +285,12 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
 
   return (
     <Container id="view">
-      <Row className="view-tools-row g-0 align-items-start">
-        <Col xs={12} md={3} className="view-directory-panel">
+      <SplitLayout
+        storageKey="split:view"
+        scroll={false}
+        className="view-tools-row"
+      >
+        <SplitLayout.Left className="view-directory-panel">
           <Suspense fallback={<div className="loading">로딩 중...</div>}>
             <Folder
               folderData={folderData}
@@ -296,9 +301,9 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
               onClickHandler={entryClicked}
             />
           </Suspense>
-        </Col>
+        </SplitLayout.Left>
         {(hasSearched || bookInfo["book_id"]) && (
-          <Col xs={12} md={9} className="view-similar-books-panel">
+          <SplitLayout.Right className="view-similar-books-panel">
             {hasSearched && (
               <SearchResult
                 results={searchResults}
@@ -323,9 +328,9 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
                 canEdit={role === "admin"}
               />
             )}
-          </Col>
+          </SplitLayout.Right>
         )}
-      </Row>
+      </SplitLayout>
       {!hasSearched && !bookInfo["book_id"] && bookLoadError && (
         <Row id="top_panel">
           <Col lg="12" className="ps-0 pe-0 me-0 ">

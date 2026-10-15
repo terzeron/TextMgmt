@@ -150,6 +150,16 @@ describe("CategoryAdmin", () => {
     });
   });
 
+  it("디렉토리와 작업 패널을 SplitLayout으로 나눈다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_WITH_DATA);
+    const { container } = render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(container.querySelector(".split-layout-left")).toBeTruthy();
+    });
+    expect(container.querySelector(".split-layout-right")).toBeTruthy();
+    expect(screen.getByRole("separator")).toBeTruthy();
+  });
+
   // ── 데이터 로딩 ──
 
   it("필수 데이터 API와 최신 자료 제외 설정 API를 모두 호출한다", async () => {
