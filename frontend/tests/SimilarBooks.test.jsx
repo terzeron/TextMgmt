@@ -64,20 +64,20 @@ describe("SimilarBooks", () => {
     });
   });
 
-  it("file_size가 있으면 바이트 숫자를 점수 왼쪽에 가장 작은 배지로 표시한다", async () => {
+  it("file_size가 있으면 MB를 점수 왼쪽에 가장 작은 배지로 표시한다", async () => {
     mockBooks([makeBook(1, 87.4)]);
 
     render(<SimilarBooks bookId={1} />);
     fireEvent.click(screen.getByText("유사한 책 목록"));
 
     await waitFor(() => {
-      expect(screen.getByText("1,000")).toBeTruthy();
+      expect(screen.getByText("0.00 MB")).toBeTruthy();
       expect(screen.getByText("87")).toBeTruthy();
     });
 
-    expect(screen.queryByText("1,000 B")).toBeNull();
+    expect(screen.queryByText("1,000")).toBeNull();
 
-    const fileSizeBadge = screen.getByText("1,000");
+    const fileSizeBadge = screen.getByText("0.00 MB");
     const scoreBadge = screen.getByText("87");
     const badges = Array.from(
       fileSizeBadge.parentElement.querySelectorAll("span"),
@@ -92,11 +92,17 @@ describe("SimilarBooks", () => {
     expect(fileSizeBadge.style.transform).toBe("scale(0.75)");
   });
 
-  it("file_size가 1024 이상이어도 KB나 MB로 변환하지 않는다", async () => {
+  it.each([
+    [0, "0.00 MB"],
+    [1048576, "1.00 MB"],
+    [1234567, "1.18 MB"],
+    [1572864, "1.50 MB"],
+    ["1572864", "1.50 MB"],
+  ])("file_size %s를 %s로 표시한다", async (fileSize, expected) => {
     mockBooks([
       {
         ...makeBook(1, 87.4),
-        file_size: 1048576,
+        file_size: fileSize,
       },
     ]);
 
@@ -104,10 +110,38 @@ describe("SimilarBooks", () => {
     fireEvent.click(screen.getByText("유사한 책 목록"));
 
     await waitFor(() => {
-      expect(screen.getByText("1,048,576")).toBeTruthy();
+      expect(screen.getByText(expected)).toBeTruthy();
     });
 
-    expect(screen.queryByText(/MB|KB/)).toBeNull();
+    expect(screen.queryByText("1,048,576")).toBeNull();
+  });
+
+  it("파일 크기와 파일 행수를 함께 표시한다", async () => {
+    mockBooks([{ ...makeBook(1, 87.4), file_size: 1572864, line_count: 1234 }]);
+
+    render(<SimilarBooks bookId={1} />);
+    fireEvent.click(screen.getByText("유사한 책 목록"));
+
+    expect(await screen.findByText("1.50 MB, 1,234행")).toBeTruthy();
+  });
+
+  it("파일 크기가 없어도 파일 행수를 표시한다", async () => {
+    mockBooks([{ ...makeBook(1, 87.4), file_size: null, line_count: 1234 }]);
+
+    render(<SimilarBooks bookId={1} />);
+    fireEvent.click(screen.getByText("유사한 책 목록"));
+
+    expect(await screen.findByText("1,234행")).toBeTruthy();
+  });
+
+  it.each([0, null, undefined])("line_count가 %s이면 행수를 생략한다", async (lineCount) => {
+    mockBooks([{ ...makeBook(1, 87.4), line_count: lineCount }]);
+
+    render(<SimilarBooks bookId={1} />);
+    fireEvent.click(screen.getByText("유사한 책 목록"));
+
+    expect(await screen.findByText("0.00 MB")).toBeTruthy();
+    expect(screen.queryByText(/행$/)).toBeNull();
   });
 
   it.each([

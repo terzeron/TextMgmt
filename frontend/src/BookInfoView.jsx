@@ -65,7 +65,7 @@ export default function BookInfoView(props) {
           <Col xs="3">
             <InputGroup size="sm">
               <InputGroup.Text>크기</InputGroup.Text>
-              <Form.Control value={fileSize.toLocaleString()} readOnly disabled />
+              <Form.Control value={`${(fileSize / (1024 * 1024)).toFixed(2)} MB`} readOnly disabled />
             </InputGroup>
           </Col>
           <Col xs="3">
