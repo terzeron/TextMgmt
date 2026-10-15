@@ -93,14 +93,21 @@ def _inspect_archive(archive: zipfile.ZipFile) -> dict[str, Any]:
     _, package = _read_package(archive)
     member = BookManager._find_epub_cover_member(archive)
     has_cover = bool(member and member in archive.namelist())
+    image_info = None
     if has_cover and member is not None:
         if archive.getinfo(member).file_size > MAX_IMAGE_BYTES:
             raise CoverError("기존 표지가 검사 크기 제한을 초과했습니다")
+        data = archive.read(member)
+        image_info = {"byte_size": len(data)}
         # SVG 표지를 읽지 못한다고 표지 없는 책으로 오인하지 않는다.
         if member.lower().endswith(".svg"):
-            etree.fromstring(archive.read(member), _safe_xml_parser())
+            etree.fromstring(data, _safe_xml_parser())
         else:
-            normalize_image(archive.read(member))
+            normalize_image(data)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+                with Image.open(io.BytesIO(data)) as image:
+                    image_info.update(width=image.width, height=image.height)
     metadata = {}
     for key, localname in (("title", "title"), ("author", "creator"), ("isbn", "identifier")):
         values = package.xpath(f'//*[local-name()="{localname}"]/text()')
@@ -108,7 +115,7 @@ def _inspect_archive(archive: zipfile.ZipFile) -> dict[str, Any]:
     if metadata["isbn"]:
         value = metadata["isbn"].removeprefix("urn:isbn:").replace("-", "")
         metadata["isbn"] = value if value.isdigit() and len(value) in (10, 13) else ""
-    return {**metadata, "has_cover": has_cover}
+    return {**metadata, "has_cover": has_cover, "cover_image": image_info}
 
 
 def inspect_epub(path: Path) -> dict[str, Any]:

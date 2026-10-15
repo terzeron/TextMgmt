@@ -46,6 +46,38 @@ function deferred() {
 }
 
 describe("책 표지 관리", () => {
+  it("빈 표지도 크기 자리와 저장 아이콘을 항상 표시하고 휴지통 왼쪽에 배치한다", async () => {
+    setup();
+    render(<BookCoverAdmin />);
+    await screen.findByRole("heading", { name: "테스트 책" });
+    const save = screen.getByRole("button", { name: "테스트 책 저장 확인" });
+    const trash = screen.getByRole("button", { name: "테스트 책 임시 표지 삭제" });
+    const own = save.closest(".book-cover-current");
+    expect(within(own).getByText("— × — px")).toBeTruthy();
+    expect(within(own).getByText("— B")).toBeTruthy();
+    expect(screen.queryByText("서점 표지를 선택하세요")).toBeNull();
+    expect(save.disabled).toBe(true);
+    expect(save.nextElementSibling).toBe(trash);
+    expect(save.querySelector('svg[data-icon="floppy-disk"]')).toBeTruthy();
+    expect(save.querySelector(".spinner-border")).toBeNull();
+    fireEvent.click(save);
+    expect(screen.getByRole("heading", { name: "테스트 책" })).toBeTruthy();
+  });
+
+  it("교체 모드에서 기존 표지의 실제 크기를 저장 전부터 표시한다", async () => {
+    setup();
+    overrideRequest((path, options, original) => path.startsWith("/missing") ? {
+      items: [{ file_path: "책.epub", title: "테스트 책", status: "covered", has_cover: true, revision: "r1", cover_image: { width: 1200, height: 1800, byte_size: 20480 } }], scanned: 1, total: 1,
+    } : original(path, options));
+    render(<BookCoverAdmin />);
+    const image = await screen.findByAltText("테스트 책 현재 표지");
+    const own = image.closest(".book-cover-current");
+    expect(within(own).getByText("1200 × 1800 px")).toBeTruthy();
+    expect(within(own).getByText("20.0 KB")).toBeTruthy();
+    fireEvent.load(image);
+    expect(within(own).getByRole("button", { name: "테스트 책 저장 확인" }).disabled).toBe(true);
+  });
+
   it("파일명 제목을 헤딩과 구글 검색어에 동일하게 사용한다", async () => {
     setup();
     const filePath = "3_SF그리폰북스/[랜들 개릿] 다아시 경의 모험.epub";
@@ -69,7 +101,9 @@ describe("책 표지 관리", () => {
     const choice = await screen.findByRole("button", { name: "YES24 서점 책 표지 선택" });
     await waitFor(() => expect(choice.disabled).toBe(false));
     fireEvent.click(choice);
-    expect(await screen.findByText("저장 중…")).toBeTruthy();
+    const status = await screen.findByRole("status", { name: "테스트 책 저장 중" });
+    expect(status.closest("button").disabled).toBe(true);
+    expect(status.classList.contains("spinner-border")).toBe(true);
     await act(async () => pending.resolve({ revision: "r2", cover_image: { width: 600, height: 900, byte_size: 12345 } }));
     const own = screen.getByAltText("테스트 책 저장한 표지").closest(".book-cover-current");
     expect(within(own).getByText("600 × 900 px")).toBeTruthy();
@@ -79,13 +113,15 @@ describe("책 표지 관리", () => {
     expect(confirm.disabled).toBe(true);
     fireEvent.load(screen.getByAltText("테스트 책 저장한 표지"));
     expect(confirm.disabled).toBe(false);
+    expect(within(own).queryByRole("status")).toBeNull();
+    expect(confirm.querySelector('svg[data-icon="floppy-disk"]')).toBeTruthy();
     expect(confirm.parentElement).toBe(within(own).getByRole("button", { name: "테스트 책 임시 표지 삭제" }).parentElement);
     fireEvent.click(confirm);
     expect(screen.queryByRole("heading", { name: "테스트 책" })).toBeNull();
     expect(request.mock.calls.filter(([path]) => path === "/apply")).toHaveLength(1);
   });
 
-  it("저장한 미리보기를 지우면 크기와 저장 확인 버튼만 숨기고 후보를 유지한다", async () => {
+  it("저장한 미리보기를 지우면 크기를 비우고 저장 버튼을 비활성화하며 후보를 유지한다", async () => {
     setup();
     vi.spyOn(window, "confirm").mockReturnValue(true);
     overrideRequest((path, options, original) => path === "/apply" ? { revision: "r2", cover_image: { width: 600, height: 900, byte_size: 512 } } : original(path, options));
@@ -96,8 +132,9 @@ describe("책 표지 관리", () => {
     await screen.findByText("600 × 900 px");
     fireEvent.click(screen.getByRole("button", { name: "테스트 책 임시 표지 삭제" }));
     expect(screen.queryByText("600 × 900 px")).toBeNull();
-    expect(screen.queryByRole("button", { name: "테스트 책 저장 확인" })).toBeNull();
-    expect(screen.getByText("서점 표지를 선택하세요")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "테스트 책 저장 확인" }).disabled).toBe(true);
+    expect(screen.getByText("— × — px")).toBeTruthy();
+    expect(screen.queryByText("서점 표지를 선택하세요")).toBeNull();
     expect(screen.getByRole("button", { name: "YES24 서점 책 표지 선택" })).toBeTruthy();
     expect(request.mock.calls.some(([path]) => path === "/cache/clear")).toBe(false);
   });

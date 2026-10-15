@@ -29,6 +29,20 @@ def image_bytes():
     return output.getvalue()
 
 
+def test_existing_cover_listing_exposes_original_dimensions_and_bytes(cover_api, tmp_path):
+    client, _, _ = cover_api
+    path = make_epub(tmp_path / "book.epub", cover=True)
+    output = io.BytesIO()
+    Image.new("RGB", (2400, 3600), "blue").save(output, "JPEG")
+    data = output.getvalue()
+    rewrite_epub_members(path, lambda members: members.update({"OPS/cover.jpg": data}))
+    original = path.read_bytes()
+    response = client.get("/admin/book-covers/missing?covered=true")
+    assert response.status_code == 200
+    assert response.json()["result"]["items"][0]["cover_image"] == {"width": 2400, "height": 3600, "byte_size": len(data)}
+    assert path.read_bytes() == original
+
+
 @pytest.mark.parametrize("filename,title", [
     ("[랜들 개릿] 다아시 경의 모험.epub", "랜들 개릿 다아시 경의 모험"),
     ("[작가] 구운몽—꿈(1) & 이야기!.EPUB", "작가 구운몽 꿈 1 이야기"),

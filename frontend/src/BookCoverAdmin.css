@@ -17,8 +17,7 @@
 .book-cover-current small { display: block; font-size: .75rem; margin-top: 6px; }
 .book-cover-status { margin-bottom: 6px; }
 .book-cover-current-actions { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
-.book-cover-save { padding: 2px 4px; font-size: .7rem; }
-.book-cover-trash { flex: 0 0 auto; padding: 2px 4px; font-size: .7rem; }
+.book-cover-save, .book-cover-trash { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; font-size: .875rem; }
 .book-cover-completed { padding: 0; border: 2px solid #198754; cursor: pointer; }
 .book-cover-completed:disabled { cursor: wait; }
 .book-cover-existing { padding: 0; }
@@ -48,5 +47,5 @@
 .book-cover-zoom-layer .modal-header { font-size: .8rem; }
 .book-cover-zoom-panel { overflow: auto; }
 .book-cover-zoom-select { display: block; border: 0; padding: 0 !important; background: transparent; }
-.book-cover-zoom-image { display: block; width: auto; height: auto; max-width: none; max-height: none; }
+.book-cover-zoom-image { display: block; width: 800px; height: auto; max-width: none; max-height: none; }
 @media (max-width: 767px) { .book-cover-directory { padding: 0 12px 12px; } .book-cover-current { flex-basis: 86px; } }

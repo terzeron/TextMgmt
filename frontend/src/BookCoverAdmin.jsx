@@ -364,6 +364,7 @@ export default function BookCoverAdmin() {
         <div aria-live="polite">
           {items.map((item) => {
             const hasCover = item.has_cover || !!item.saved;
+            const ownImage = !item.previewHidden && (item.saved?.cover_image || item.cover_image);
             const ranked = rankCoverImages(Object.values(sources[item.file_path] || {}).flatMap((store) => store?.candidates || []), images);
             return (
             <article key={item.file_path} className={`book-cover-row${item.saved ? " is-saved" : ""}`}
@@ -403,17 +404,18 @@ export default function BookCoverAdmin() {
                   ) : <div className="cover-grid-cover"><div className="cover-grid-placeholder">표지 없음</div></div>}
                   </div>
                   <div className="book-cover-status">
-                    {item.saving ? <small>저장 중…</small> : item.saved && !item.previewHidden ? (
-                      <small className="book-cover-image-size">
-                        {item.saved.cover_image ? <><span>{item.saved.cover_image.width} × {item.saved.cover_image.height} px</span>
-                          <span>{formatCoverBytes(item.saved.cover_image.byte_size)}</span></> : "크기 확인 전"}
-                      </small>
-                    ) : <small>서점 표지를 선택하세요</small>}
+                    <small className="book-cover-image-size">
+                      <span>{ownImage?.width || "—"} × {ownImage?.height || "—"} px</span>
+                      <span>{ownImage?.byte_size != null ? formatCoverBytes(ownImage.byte_size) : "— B"}</span>
+                    </small>
                   </div>
                   <div className="book-cover-current-actions">
-                    {item.saved && !item.previewHidden && <Button size="sm" variant="outline-success" className="book-cover-save" title="저장 확인 후 행 숨기기"
-                      aria-label={`${item.title} 저장 확인`} disabled={!item.previewReady || item.saving || item.busy}
-                      onClick={() => setItems((previous) => previous.filter((entry) => entry.file_path !== item.file_path))}><FontAwesomeIcon icon={faFloppyDisk} /></Button>}
+                    <Button size="sm" variant="outline-success" className="book-cover-save" title="저장 확인 후 행 숨기기"
+                      aria-label={`${item.title} 저장 확인`} aria-busy={!!item.saving}
+                      disabled={!item.saved || item.previewHidden || !item.previewReady || item.saving || item.busy}
+                      onClick={() => setItems((previous) => previous.filter((entry) => entry.file_path !== item.file_path))}>
+                      {item.saving ? <Spinner animation="border" size="sm" role="status" aria-label={`${item.title} 저장 중`} /> : <FontAwesomeIcon icon={faFloppyDisk} />}
+                    </Button>
                     <Button size="sm" variant="outline-secondary" className="book-cover-trash" title="미리보기 지우기"
                       aria-label={`${item.title} 임시 표지 삭제`} disabled={item.saving || item.busy}
                       onClick={() => clearCandidates(item)}><FontAwesomeIcon icon={faTrash} /></Button>
