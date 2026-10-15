@@ -19,7 +19,7 @@ function setup({ fail = false } = {}) {
   vi.stubGlobal("URL", { ...URL, createObjectURL: () => "blob:cover", revokeObjectURL: vi.fn() });
   request.mockImplementation(async (path) => {
     if (path.startsWith("/directories")) return [];
-    if (path.startsWith("/missing")) return { items: [{ file_path: "3_라이트노벨/책.epub", title: "테스트 책", status: "missing", revision: "r1", book_id: 123, category: "소설/한글 & 이야기" }], next_cursor: null, scanned: 1, total: 1 };
+    if (path.startsWith("/missing")) return { items: [{ file_path: "책.epub", title: "테스트 책", status: "missing", revision: "r1", book_id: 123, category: "소설/한글 & 이야기" }], next_cursor: null, scanned: 1, total: 1 };
     if (path.startsWith("/candidates/yes24")) return { status: "success", candidates: [{ candidate_id: "a".repeat(64), title: "서점 책", author: "저자", detail_url: "https://www.yes24.com/book" }] };
     if (path.startsWith("/candidates/")) return { status: "not_found", candidates: [] };
     if (path.startsWith("/candidate-image")) return new Blob(["cover"], { type: "image/jpeg" });
@@ -54,42 +54,44 @@ function useBookPath(filePath) {
 }
 
 describe("디렉토리별 자동·수동 서점 검색", () => {
-  it.each(["3_라이트노벨", "3_판타지", "3_무협", "3_여성향"])("%s 아래 책은 일반 서점을 자동 검색하고 웹소설 서점은 수동으로 둔다", async (directory) => {
+  const GENERAL = ["yes24", "aladin", "kyobo", "naver", "ridi"];
+  const WEB_NOVEL = ["munpia", "naverseries", "joara"];
+
+  it.each(["3_라이트노벨", "3_판타지", "3_무협", "3_여성향"])("%s 아래 책은 웹소설 서점을 자동 검색하고 일반 서점은 수동으로 오른쪽에 둔다", async (directory) => {
     setup();
     useBookPath(`${directory}/하위/책.epub`);
     const { container } = render(<BookCoverAdmin />);
     await screen.findByRole("heading", { name: "테스트 책" });
-    expect(storeOrder(container)).toEqual(["yes24", "aladin", "kyobo", "naver", "ridi", "munpia", "naverseries", "joara"]);
+    expect(storeOrder(container)).toEqual([...WEB_NOVEL, ...GENERAL]);
+    await waitFor(() => expect(searchedStores()).toEqual(expect.arrayContaining(WEB_NOVEL)));
+    for (const store of GENERAL) expect(searchedStores()).not.toContain(store);
+    for (const label of ["YES24", "알라딘", "교보문고", "네이버쇼핑", "RIDI"]) expect(screen.getByRole("button", { name: `테스트 책 ${label} 검색` })).toBeTruthy();
+    for (const label of ["문피아", "시리즈", "조아라"]) expect(screen.queryByRole("button", { name: `테스트 책 ${label} 검색` })).toBeNull();
+  });
+
+  it("일반 책은 일반 서점을 자동 검색하고 웹소설 서점은 수동으로 오른쪽에 둔다", async () => {
+    setup();
+    useBookPath("소설/책.epub");
+    const { container } = render(<BookCoverAdmin />);
+    await screen.findByRole("heading", { name: "테스트 책" });
+    expect(storeOrder(container)).toEqual([...GENERAL, ...WEB_NOVEL]);
     await waitFor(() => expect(searchedStores()).toEqual(expect.arrayContaining(["yes24", "aladin", "kyobo", "naver"])));
-    expect(searchedStores()).not.toEqual(expect.arrayContaining(["munpia"]));
-    expect(searchedStores()).not.toEqual(expect.arrayContaining(["naverseries"]));
-    expect(searchedStores()).not.toEqual(expect.arrayContaining(["joara"]));
+    for (const store of WEB_NOVEL) expect(searchedStores()).not.toContain(store);
     for (const label of ["문피아", "시리즈", "조아라"]) expect(screen.getByRole("button", { name: `테스트 책 ${label} 검색` })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "테스트 책 YES24 검색" })).toBeNull();
   });
 
-  it("그 밖의 디렉토리 책은 웹소설 서점을 자동 검색하고 일반 서점은 수동으로 오른쪽에 둔다", async () => {
-    setup();
-    useBookPath("소설/책.epub");
-    const { container } = render(<BookCoverAdmin />);
-    await screen.findByRole("heading", { name: "테스트 책" });
-    expect(storeOrder(container)).toEqual(["munpia", "naverseries", "joara", "yes24", "aladin", "kyobo", "naver", "ridi"]);
-    await waitFor(() => expect(searchedStores()).toEqual(expect.arrayContaining(["munpia", "naverseries", "joara"])));
-    for (const store of ["yes24", "aladin", "kyobo", "naver", "ridi"]) expect(searchedStores()).not.toContain(store);
-    for (const label of ["YES24", "알라딘", "교보문고", "네이버쇼핑", "RIDI"]) expect(screen.getByRole("button", { name: `테스트 책 ${label} 검색` })).toBeTruthy();
-  });
-
-  it("디렉토리 이름과 같은 이름의 최상위 파일은 그 디렉토리 책으로 보지 않는다", async () => {
+  it("디렉토리 이름과 같은 이름의 최상위 파일은 서브컬쳐 책으로 보지 않는다", async () => {
     setup();
     useBookPath("3_판타지.epub");
     const { container } = render(<BookCoverAdmin />);
     await screen.findByRole("heading", { name: "테스트 책" });
-    expect(storeOrder(container).slice(0, 3)).toEqual(["munpia", "naverseries", "joara"]);
+    expect(storeOrder(container).slice(0, 4)).toEqual(["yes24", "aladin", "kyobo", "naver"]);
   });
 
   it("수동 서점은 검색 버튼을 눌러야 요청하고 결과를 표시한다", async () => {
     setup();
-    useBookPath("소설/책.epub");
+    useBookPath("3_판타지/책.epub");
     render(<BookCoverAdmin />);
     await screen.findByRole("heading", { name: "테스트 책" });
     await waitFor(() => expect(searchedStores()).toContain("munpia"));
@@ -223,7 +225,7 @@ describe("책 표지 관리", () => {
   it("교체 모드에서 기존 표지의 실제 크기를 저장 전부터 표시한다", async () => {
     setup();
     overrideRequest((path, options, original) => path.startsWith("/missing") ? {
-      items: [{ file_path: "3_라이트노벨/책.epub", title: "테스트 책", status: "covered", has_cover: true, revision: "r1", cover_image: { width: 1200, height: 1800, byte_size: 20480 } }], scanned: 1, total: 1,
+      items: [{ file_path: "책.epub", title: "테스트 책", status: "covered", has_cover: true, revision: "r1", cover_image: { width: 1200, height: 1800, byte_size: 20480 } }], scanned: 1, total: 1,
     } : original(path, options));
     render(<BookCoverAdmin />);
     const image = await screen.findByAltText("테스트 책 현재 표지");
@@ -318,7 +320,7 @@ describe("책 표지 관리", () => {
     setup();
     const pending = deferred();
     overrideRequest((path, options, original) => {
-      if (path.startsWith("/missing")) return { items: path.includes("covered=true") ? [{ file_path: "3_라이트노벨/책.epub", title: "기존 표지 책", status: "covered", has_cover: true, revision: "r1" }] : [], total: 1, scanned: 1 };
+      if (path.startsWith("/missing")) return { items: path.includes("covered=true") ? [{ file_path: "책.epub", title: "기존 표지 책", status: "covered", has_cover: true, revision: "r1" }] : [], total: 1, scanned: 1 };
       if (path === "/apply-image") return pending.promise;
       return original(path, options);
     });
@@ -340,7 +342,7 @@ describe("책 표지 관리", () => {
     await waitFor(() => expect(candidate.disabled).toBe(false));
     expect(request.mock.calls.some(([path]) => path.startsWith("/candidates/yes24") && path.includes("include_covered=true"))).toBe(true);
     fireEvent.click(candidate);
-    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply-image", { body: { file_path: "3_라이트노벨/책.epub", revision: "r1", image_data: "Y292ZXI=" } }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply-image", { body: { file_path: "책.epub", revision: "r1", image_data: "Y292ZXI=" } }));
     expect(toggle.disabled).toBe(true);
     await act(async () => pending.resolve({ revision: "r2" }));
     const completed = await screen.findByAltText("기존 표지 책 저장한 표지");
@@ -355,7 +357,7 @@ describe("책 표지 관리", () => {
     setup();
     vi.spyOn(window, "confirm").mockReturnValue(true);
     overrideRequest((path, options, original) => path.startsWith("/missing")
-      ? { items: path.includes("covered=true") ? [{ file_path: "3_라이트노벨/책.epub", title: "기존 표지 책", status: "covered", has_cover: true, revision: "r1" }] : [], scanned: 1, total: 1 }
+      ? { items: path.includes("covered=true") ? [{ file_path: "책.epub", title: "기존 표지 책", status: "covered", has_cover: true, revision: "r1" }] : [], scanned: 1, total: 1 }
       : original(path, options));
     render(<BookCoverAdmin />);
     fireEvent.click(screen.getByRole("switch", { name: "표지 교체" }));
@@ -367,7 +369,7 @@ describe("책 표지 관리", () => {
     fireEvent.click(screen.getByRole("button", { name: "직접 입력" }));
     fireEvent.change(screen.getByLabelText("표지 이미지 URL"), { target: { value: "https://example.org/new.jpg" } });
     fireEvent.click(screen.getByRole("button", { name: "표지 적용" }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply-url", { body: { file_path: "3_라이트노벨/책.epub", revision: "r1", url: "https://example.org/new.jpg", replace_existing: true } }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply-url", { body: { file_path: "책.epub", revision: "r1", url: "https://example.org/new.jpg", replace_existing: true } }));
   });
 
   it("표지 모드를 바꾸면 이전 검사 요청을 취소하고 늦은 결과를 무시한다", async () => {
@@ -398,7 +400,7 @@ describe("책 표지 관리", () => {
         if (!path.includes("covered=true")) return { items: [], scanned: 0, total: 0 };
         if (path.includes("directory=other")) return { items: [], scanned: 1, total: 1 };
         if (!path.includes("cursor=60")) return { items: [], scanned: 60, total: 61, next_cursor: "60" };
-        return { items: [{ file_path: "3_라이트노벨/책.epub", title: "뒤 페이지 책", status: "covered", has_cover: true, revision: "r1" }], scanned: 61, total: 61 };
+        return { items: [{ file_path: "책.epub", title: "뒤 페이지 책", status: "covered", has_cover: true, revision: "r1" }], scanned: 61, total: 61 };
       }
       return original(path, options);
     });
@@ -416,7 +418,7 @@ describe("책 표지 관리", () => {
   it("기존 표지 교체에 실패하면 현재 표지와 revision을 유지한다", async () => {
     setup();
     overrideRequest((path, options, original) => {
-      if (path.startsWith("/missing")) return { items: path.includes("covered=true") ? [{ file_path: "3_라이트노벨/책.epub", title: "기존 표지 책", status: "covered", has_cover: true, revision: "r1" }] : [], scanned: 1, total: 1 };
+      if (path.startsWith("/missing")) return { items: path.includes("covered=true") ? [{ file_path: "책.epub", title: "기존 표지 책", status: "covered", has_cover: true, revision: "r1" }] : [], scanned: 1, total: 1 };
       if (path === "/apply-image") throw new Error("EPUB이 변경되었습니다");
       return original(path, options);
     });
@@ -453,7 +455,7 @@ describe("책 표지 관리", () => {
     expect(request.mock.calls.some(([path]) => path === "/apply")).toBe(false);
     expect(request.mock.calls.filter(([path]) => path.startsWith("/candidate-image"))).toHaveLength(requests);
     fireEvent.click(screen.getByRole("button", { name: "두 번째 표지 확대 표지 선택" }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply", { body: { file_path: "3_라이트노벨/책.epub", revision: "r1", candidate_id: second.candidate_id } }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply", { body: { file_path: "책.epub", revision: "r1", candidate_id: second.candidate_id } }));
   });
 
   it("초기 빈 서점 칸이 잠깐 노출돼도 앞쪽 검색으로 레이아웃이 정해지기 전에는 뒤쪽을 검색하지 않는다", async () => {
@@ -613,7 +615,7 @@ describe("책 표지 관리", () => {
     render(<BookCoverAdmin />);
     await waitFor(() => expect(request.mock.calls.some(([path]) => path.startsWith("/candidates/yes24"))).toBe(true));
     fireEvent.click(screen.getByRole("button", { name: "재검색" }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith("/cache/clear", { body: { file_path: "3_라이트노벨/책.epub", revision: "r1" } }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/cache/clear", { body: { file_path: "책.epub", revision: "r1" } }));
     await act(async () => pending.resolve({ status: "success", candidates: [{ candidate_id: "a".repeat(64), title: "지난 후보" }] }));
     await screen.findByAltText("새로운 후보");
     expect(screen.queryByText("지난 후보")).toBeNull();
@@ -631,7 +633,7 @@ describe("책 표지 관리", () => {
     fireEvent.click(screen.getByRole("button", { name: "테스트 책 임시 표지 삭제" }));
     expect(screen.getByAltText("테스트 책 저장한 표지").getAttribute("src")).toContain("v=r2");
     fireEvent.click(candidate);
-    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply-image", { body: { file_path: "3_라이트노벨/책.epub", revision: "r2", image_data: "Y292ZXI=" } }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply-image", { body: { file_path: "책.epub", revision: "r2", image_data: "Y292ZXI=" } }));
   });
 
   it("교체 후 직접 URL을 적용하면 최신 revision으로 다시 교체한다", async () => {
@@ -649,7 +651,7 @@ describe("책 표지 관리", () => {
     fireEvent.change(screen.getByLabelText("표지 이미지 URL"), { target: { value: "https://example.org/new.jpg" } });
     fireEvent.click(screen.getByRole("button", { name: "표지 적용" }));
     await waitFor(() => expect(request).toHaveBeenCalledWith("/apply-url", { body: {
-      file_path: "3_라이트노벨/책.epub", revision: "r3", url: "https://example.org/new.jpg", replace_existing: true,
+      file_path: "책.epub", revision: "r3", url: "https://example.org/new.jpg", replace_existing: true,
     } }));
   });
 
@@ -766,7 +768,7 @@ describe("책 표지 관리", () => {
     expect(screen.getByRole("button", { name: "재검색" }).disabled).toBe(false);
     expect(request.mock.calls.some(([path]) => path === "/cache/clear")).toBe(false);
     fireEvent.click(other);
-    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply-image", { body: { file_path: "3_라이트노벨/책.epub", revision: "r2", image_data: "Y292ZXI=" } }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply-image", { body: { file_path: "책.epub", revision: "r2", image_data: "Y292ZXI=" } }));
     await screen.findByAltText("테스트 책 저장한 표지");
     expect(screen.getByAltText("테스트 책 저장한 표지").getAttribute("src")).toContain("v=r3");
   });
@@ -829,7 +831,7 @@ describe("책 표지 관리", () => {
     expect(screen.getByAltText("서점 책 확대 표지")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "다음 표지" }));
     fireEvent.click(screen.getByRole("button", { name: "두 번째 표지 확대 표지 선택" }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply", { body: { file_path: "3_라이트노벨/책.epub", revision: "r1", candidate_id: second.candidate_id } }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/apply", { body: { file_path: "책.epub", revision: "r1", candidate_id: second.candidate_id } }));
   });
 
   it.each(["search", "image"])("화면을 벗어난 %s 요청 취소를 오류로 표시하지 않고 돌아오면 재요청한다", async (type) => {
@@ -903,8 +905,8 @@ describe("책 표지 관리", () => {
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
     overrideRequest(async (path, options, original) => {
       const result = await original(path, options);
-      if (path.startsWith("/missing")) return { ...result, items: [...result.items, { ...result.items[0], file_path: "3_라이트노벨/두번째.epub", title: "두 번째 책", book_id: 124, category: "" }] };
-      if (path.startsWith("/candidates/yes24") && path.includes(encodeURIComponent("3_라이트노벨/두번째.epub"))) return { ...result, candidates: result.candidates.map((item) => ({ ...item, candidate_id: "b".repeat(64), title: "두 번째 후보" })) };
+      if (path.startsWith("/missing")) return { ...result, items: [...result.items, { ...result.items[0], file_path: "두번째.epub", title: "두 번째 책", book_id: 124, category: "" }] };
+      if (path.startsWith("/candidates/yes24") && path.includes(encodeURIComponent("두번째.epub"))) return { ...result, candidates: result.candidates.map((item) => ({ ...item, candidate_id: "b".repeat(64), title: "두 번째 후보" })) };
       return result;
     });
     render(<BookCoverAdmin />);
@@ -939,7 +941,7 @@ describe("책 표지 관리", () => {
       return { top, bottom: top + 200, left: 0, right: 100, width: 100, height: 200 };
     });
     overrideRequest((path, options, original) => {
-      if (path.startsWith("/missing")) return { items: Array.from({ length: count }, (_, index) => ({ file_path: `3_라이트노벨/책${index}.epub`, title: `책 ${index}`, revision: "r1", status: "missing" })), next_cursor: null, scanned: count, total: count };
+      if (path.startsWith("/missing")) return { items: Array.from({ length: count }, (_, index) => ({ file_path: `책${index}.epub`, title: `책 ${index}`, revision: "r1", status: "missing" })), next_cursor: null, scanned: count, total: count };
       if (path.startsWith("/candidates/yes24")) {
         const index = Number(new URLSearchParams(path.split("?")[1]).get("file_path").match(/책(\d+)/)[1]);
         return { status: "success", candidates: Array.from({ length: 4 }, (_, candidate) => ({ candidate_id: (index * 4 + candidate).toString(16).padStart(64, "0"), title: `후보 ${index}-${candidate}`, width: 120, height: 180, byte_size: 5 })) };
@@ -1079,7 +1081,7 @@ describe("책 표지 관리", () => {
     expect(screen.queryByAltText("테스트 책 저장한 표지")).toBeNull();
     expect(request.mock.calls.some(([path]) => path === "/cache/clear")).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "재검색" }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith("/cache/clear", { body: { file_path: "3_라이트노벨/책.epub", revision: "r2" } }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/cache/clear", { body: { file_path: "책.epub", revision: "r2" } }));
     expect(screen.getByRole("button", { name: "재검색" }).disabled).toBe(false);
     expect(screen.getByRole("button", { name: "직접 입력" })).toBeTruthy();
   });
@@ -1187,7 +1189,7 @@ describe("책 표지 관리", () => {
     fireEvent.change(screen.getByLabelText("표지 이미지 URL"), { target: { value: "https://example.org/cover.jpg" } });
     fireEvent.click(screen.getByRole("button", { name: "표지 적용" }));
     await screen.findByRole("button", { name: /테스트 책.*완료/ });
-    expect(request).toHaveBeenCalledWith("/apply-url", { body: { file_path: "3_라이트노벨/책.epub", revision: "r1", url: "https://example.org/cover.jpg" } });
+    expect(request).toHaveBeenCalledWith("/apply-url", { body: { file_path: "책.epub", revision: "r1", url: "https://example.org/cover.jpg" } });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getByRole("button", { name: "테스트 책 임시 표지 삭제" })).toBeTruthy();
   });
@@ -1220,7 +1222,7 @@ describe("책 표지 관리", () => {
     expect(searches()).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "재검색" }));
     await waitFor(() => expect(searches()).toHaveLength(2));
-    expect(request).toHaveBeenCalledWith("/cache/clear", { body: { file_path: "3_라이트노벨/책.epub", revision: "r1" } });
+    expect(request).toHaveBeenCalledWith("/cache/clear", { body: { file_path: "책.epub", revision: "r1" } });
   });
 
   it("제목 옆에서 기존 편집과 조회 화면을 새 창으로 연다", async () => {

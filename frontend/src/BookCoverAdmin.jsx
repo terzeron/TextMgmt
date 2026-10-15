@@ -19,15 +19,16 @@ const STORES = [
   ["naverseries", "시리즈"], ["joara", "조아라"],
 ];
 // 디렉토리별로 자동 검색할 서점 그룹. 나머지 서점은 "검색" 버튼을 눌러야 검색한다.
-const LIGHT_NOVEL_DIRECTORIES = new Set(["3_라이트노벨", "3_판타지", "3_무협", "3_여성향"]);
+// 서브컬쳐 장르는 웹소설 서점을, 일반 책은 일반 서점을 자동 검색한다.
+const SUBCULTURE_DIRECTORIES = new Set(["3_라이트노벨", "3_판타지", "3_무협", "3_여성향"]);
 const AUTO_STORES = {
-  lightNovel: new Set(["yes24", "aladin", "kyobo", "naver", "ridi"]),
-  general: new Set(["munpia", "naverseries", "joara"]),
+  subculture: new Set(["munpia", "naverseries", "joara"]),
+  general: new Set(["yes24", "aladin", "kyobo", "naver", "ridi"]),
 };
 // 자동 검색 서점을 왼쪽에, 수동 검색 서점을 오른쪽에 둔다(각 그룹 안의 순서는 STORES 순서).
 function storeLayout(filePath) {
   const [top, ...rest] = String(filePath).split("/");
-  const auto = rest.length && LIGHT_NOVEL_DIRECTORIES.has(top) ? AUTO_STORES.lightNovel : AUTO_STORES.general;
+  const auto = rest.length && SUBCULTURE_DIRECTORIES.has(top) ? AUTO_STORES.subculture : AUTO_STORES.general;
   return { auto, stores: [...STORES.filter(([name]) => auto.has(name)), ...STORES.filter(([name]) => !auto.has(name))] };
 }
 const API_ROOT = "/admin/book-covers";
