@@ -1358,3 +1358,89 @@ def test_direct_store_url_uses_same_store_lock(tmp_path, monkeypatch, host):
     monkeypatch.setattr(module, "fetch_url_image", lambda url: image_bytes())
     module.CoverManagement(tmp_path).apply_url("book.epub", f"https://{host}/cover.jpg", inspect_epub(path)["revision"])
     assert stores == ["yes24"]
+
+
+def _clock(monkeypatch):
+    from backend import cover_sources
+
+    clock = {"now": 5000.0}
+    monkeypatch.setattr(cover_sources, "_now", lambda: clock["now"])
+    monkeypatch.setattr(cover_sources, "_sleep", lambda seconds: clock.__setitem__("now", clock["now"] + seconds))
+    return clock
+
+
+def _http_error(status):
+    import requests
+
+    response = requests.Response()
+    response.status_code = status
+    return requests.HTTPError(response=response)
+
+
+def test_store_block_returns_wait_message_without_cache_and_stops_requests(tmp_path, monkeypatch):
+    from backend import cover_management as module
+
+    clock = _clock(monkeypatch)
+    make_epub(tmp_path / "a.epub")
+    make_epub(tmp_path / "b.epub")
+    service = module.CoverManagement(tmp_path)
+    calls = []
+
+    def search(store, metadata):
+        calls.append(metadata["title"])
+        raise _http_error(418)
+
+    monkeypatch.setattr(module, "search_candidates", search)
+    first = service.candidates("naver", "a.epub")
+    assert first["status"] == "error" and first["blocked"] is True and first["retry_after"] == 60
+    assert "1분" in first["error"]
+    # 차단 중에는 다른 책도, 수동 재시도(refresh)도 서점에 요청하지 않는다
+    assert service.candidates("naver", "b.epub")["blocked"] is True
+    assert service.candidates("naver", "a.epub", refresh=True)["blocked"] is True
+    assert len(calls) == 1
+    # 차단 응답은 책별 캐시에 남기지 않는다
+    assert not list(service.cache.rglob("search-*.json"))
+    # 다른 서점은 영향이 없다
+    monkeypatch.setattr(module, "search_candidates", lambda *args: {"status": "not_found", "candidates": []})
+    assert service.candidates("yes24", "a.epub")["status"] == "not_found"
+    # 대기 후 시험 요청이 성공하면 차단이 풀리고 backoff가 초기화된다
+    clock["now"] += 61
+    assert service.candidates("naver", "b.epub")["status"] == "not_found"
+    monkeypatch.setattr(module, "search_candidates", lambda *args: (_ for _ in ()).throw(_http_error(429)))
+    assert service.candidates("naver", "a.epub")["retry_after"] == 60
+
+
+def test_store_block_backoff_grows_when_probe_is_still_blocked(tmp_path, monkeypatch):
+    from backend import cover_management as module
+
+    clock = _clock(monkeypatch)
+    make_epub(tmp_path / "a.epub")
+    service = module.CoverManagement(tmp_path)
+    monkeypatch.setattr(module, "search_candidates", lambda *args: (_ for _ in ()).throw(_http_error(418)))
+    assert service.candidates("naver", "a.epub")["retry_after"] == 60
+    clock["now"] += 61
+    second = service.candidates("naver", "a.epub", refresh=True)
+    assert second["retry_after"] == 120 and "2분" in second["error"]
+
+
+def test_non_rate_limit_http_error_is_cached_briefly_and_logs_status(tmp_path, monkeypatch, caplog):
+    from backend import cover_management as module
+
+    _clock(monkeypatch)
+    make_epub(tmp_path / "a.epub")
+    make_epub(tmp_path / "b.epub")
+    service = module.CoverManagement(tmp_path)
+    calls = []
+
+    def search(store, metadata):
+        calls.append(metadata["title"])
+        raise _http_error(500)
+
+    monkeypatch.setattr(module, "search_candidates", search)
+    with caplog.at_level("WARNING"):
+        result = service.candidates("naver", "a.epub")
+    assert result["status"] == "error" and "blocked" not in result
+    assert "500" in caplog.text
+    assert service.candidates("naver", "a.epub")["status"] == "error"
+    assert service.candidates("naver", "b.epub")["status"] == "error"
+    assert calls == ["a", "b"]

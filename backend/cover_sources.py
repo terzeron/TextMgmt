@@ -3,6 +3,7 @@
 import fcntl
 import ipaddress
 import json
+import math
 import socket
 import time
 import uuid
@@ -68,6 +69,84 @@ def store_lock(cache_dir: Path, store: str) -> Iterator[None]:
             yield
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+# 서점이 짧은 시간의 연속 요청을 418/429로 막는 경우가 있다(네이버는 4~5건 뒤).
+# 요청 간격을 두고, 막히면 일정 시간 요청을 멈춘 뒤 한 건만 시험한다.
+STORE_MIN_INTERVAL = {"naver": 2.0}
+BLOCK_STATUSES = (418, 429)
+BLOCK_BACKOFF_START = 60
+BLOCK_BACKOFF_MAX = 300
+
+_now = time.time
+_sleep = time.sleep
+
+
+class StoreBlocked(Exception):
+    """서점이 요청을 제한 중이라 retry_after초 동안 요청하지 않는다."""
+
+    def __init__(self, retry_after: int):
+        super().__init__(f"store blocked for {retry_after}s")
+        self.retry_after = retry_after
+
+
+def blocked_status(exc: BaseException) -> bool:
+    response = exc.response if isinstance(exc, requests.HTTPError) else None
+    return response is not None and response.status_code in BLOCK_STATUSES
+
+
+class StoreGate:
+    """서점별 요청 간격과 차단 backoff. store_lock 안에서만 쓴다.
+
+    상태를 cache_dir의 파일에 두어 공유 볼륨의 replica끼리 같은 차단 상태를 본다.
+    """
+
+    def __init__(self, cache_dir: Path, store: str):
+        self.store = store
+        self.path = cache_dir / f"{store}.gate.json"
+
+    def _load(self) -> dict[str, Any]:
+        try:
+            value = json.loads(self.path.read_text())
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, state: dict[str, Any]) -> None:
+        try:
+            self.path.write_text(json.dumps(state))
+        except OSError:
+            pass  # 상태를 못 남겨도 검색 자체는 계속한다.
+
+    def before_request(self) -> None:
+        state = self._load()
+        remaining = float(state.get("blocked_until", 0)) - _now()
+        if remaining > 0:
+            raise StoreBlocked(math.ceil(remaining))
+        interval = STORE_MIN_INTERVAL.get(self.store, 0)
+        while True:
+            wait = float(state.get("last_request", 0)) + interval - _now()
+            if wait <= 0:
+                break
+            check_cancelled()
+            _sleep(min(wait, 0.2))
+        state["last_request"] = _now()
+        self._save(state)
+
+    def record_success(self) -> None:
+        state = self._load()
+        state.pop("blocked_until", None)
+        state.pop("backoff", None)
+        self._save(state)
+
+    def record_blocked(self) -> int:
+        state = self._load()
+        previous = int(state.get("backoff", 0))
+        backoff = min(previous * 2, BLOCK_BACKOFF_MAX) if previous else BLOCK_BACKOFF_START
+        state["backoff"] = backoff
+        state["blocked_until"] = _now() + backoff
+        self._save(state)
+        return backoff
 
 
 def validate_url(store: str, url: str) -> str:

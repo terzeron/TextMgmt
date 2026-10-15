@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -30,7 +31,7 @@ from pydantic import BaseModel, Field
 
 from backend.auth import require_admin
 from backend.book import Book
-from backend.cover_sources import STORES, STORE_HOSTS, FetchCancelled, check_cancelled, fetch_bytes, search_candidates, store_lock, request_cancelled
+from backend.cover_sources import STORES, STORE_HOSTS, FetchCancelled, StoreBlocked, StoreGate, blocked_status, check_cancelled, fetch_bytes, search_candidates, store_lock, request_cancelled
 from backend.epub_cover import CoverError, MAX_IMAGE_BYTES, add_cover, inspect_epub, normalize_image, revision
 from backend.direct_cover_url import fetch_url_image
 from utils.corpus_layout import IGNORED_DIR_NAMES
@@ -194,8 +195,11 @@ class CoverManagement:
                 cached = self._cached_search(result_path)
                 if cached:
                     return cached
+                gate = StoreGate(self.cache, store)
                 try:
+                    gate.before_request()
                     result = search_candidates(store, metadata)
+                    gate.record_success()
                     for candidate in result["candidates"]:
                         suffix = hashlib.sha256(f"{cache_key}:{candidate['image_url']}".encode()).hexdigest()[:32]
                         candidate_id = self._book_key(relative) + suffix
@@ -205,12 +209,26 @@ class CoverManagement:
                         candidate.pop("image_url")
                 except FetchCancelled:
                     raise
+                except StoreBlocked as blocked:
+                    # 차단 안내는 책별 캐시에 남기지 않는다. 서점 단위 상태(gate)가 판단한다.
+                    return self._blocked_result(store, metadata, blocked.retry_after)
                 except Exception as exc:
-                    LOGGER.warning("Cover candidate search failed (%s): %s", store, type(exc).__name__)
+                    if blocked_status(exc):
+                        retry_after = gate.record_blocked()
+                        LOGGER.warning("Cover store rate-limited (%s): HTTP %s, pausing %ss", store, exc.response.status_code, retry_after)  # type: ignore[attr-defined]
+                        return self._blocked_result(store, metadata, retry_after)
+                    status = getattr(getattr(exc, "response", None), "status_code", None)
+                    LOGGER.warning("Cover candidate search failed (%s): %s%s", store, type(exc).__name__, f" HTTP {status}" if status else "")
                     result = {"status": "error", "error": "서점에 접근하지 못했습니다. 잠시 후 다시 시도하세요",
                               "search_url": STORES[store](verbose=False).build_search_url(metadata["title"]), "candidates": []}
                 self._write(result_path, json.dumps(result, ensure_ascii=False).encode())
                 return result
+
+    def _blocked_result(self, store: str, metadata: dict[str, Any], retry_after: int) -> dict[str, Any]:
+        minutes = max(1, math.ceil(retry_after / 60))
+        return {"status": "error", "blocked": True, "retry_after": retry_after,
+                "error": f"서점이 일시적으로 요청을 제한하고 있습니다. 약 {minutes}분 뒤 다시 시도하세요",
+                "search_url": STORES[store](verbose=False).build_search_url(metadata["title"]), "candidates": []}
 
     def _candidate_path(self, candidate_id: str) -> Path:
         if not re.fullmatch(r"[a-f0-9]{64}", candidate_id):

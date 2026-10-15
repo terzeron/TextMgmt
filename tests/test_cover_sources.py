@@ -248,3 +248,109 @@ def test_empty_and_blocked_search_closes_session(monkeypatch, html, status):
     assert client.session.close.called
     with pytest.raises(ValueError):
         module.search_candidates("unknown", {"title": "책"})
+
+
+def http_error(status):
+    import requests
+
+    response = requests.Response()
+    response.status_code = status
+    return requests.HTTPError(response=response)
+
+
+def fake_clock(monkeypatch, start=1000.0):
+    from backend import cover_sources as module
+
+    clock = {"now": start, "slept": []}
+    monkeypatch.setattr(module, "_now", lambda: clock["now"])
+
+    def sleep(seconds):
+        clock["slept"].append(seconds)
+        clock["now"] += seconds
+
+    monkeypatch.setattr(module, "_sleep", sleep)
+    return clock
+
+
+@pytest.mark.parametrize("status,blocked", [(418, True), (429, True), (500, False), (404, False)])
+def test_only_rate_limit_statuses_count_as_store_block(status, blocked):
+    from backend.cover_sources import blocked_status
+
+    assert blocked_status(http_error(status)) is blocked
+    assert blocked_status(ValueError("418")) is False
+
+
+def test_store_gate_backoff_doubles_up_to_cap_and_resets_after_success(tmp_path, monkeypatch):
+    from backend.cover_sources import StoreBlocked, StoreGate
+
+    clock = fake_clock(monkeypatch)
+    gate = StoreGate(tmp_path, "naver")
+    gate.before_request()
+    assert gate.record_blocked() == 60
+    with pytest.raises(StoreBlocked) as blocked:
+        gate.before_request()
+    assert blocked.value.retry_after == 60
+    clock["now"] += 30
+    with pytest.raises(StoreBlocked) as blocked:
+        gate.before_request()
+    assert blocked.value.retry_after == 30
+    expected = [120, 240, 300, 300]
+    for wait in expected:
+        clock["now"] += 301
+        gate.before_request()  # 시험 요청
+        assert gate.record_blocked() == wait
+    clock["now"] += 301
+    gate.before_request()
+    gate.record_success()
+    gate.before_request()
+    assert gate.record_blocked() == 60
+
+
+def test_store_gate_state_is_shared_through_cache_dir(tmp_path, monkeypatch):
+    from backend.cover_sources import StoreBlocked, StoreGate
+
+    fake_clock(monkeypatch)
+    StoreGate(tmp_path, "naver").record_blocked()
+    with pytest.raises(StoreBlocked):
+        StoreGate(tmp_path, "naver").before_request()
+    StoreGate(tmp_path, "yes24").before_request()
+
+
+def test_store_gate_spaces_naver_requests_but_not_other_stores(tmp_path, monkeypatch):
+    from backend.cover_sources import StoreGate
+
+    clock = fake_clock(monkeypatch)
+    naver = StoreGate(tmp_path, "naver")
+    naver.before_request()
+    assert clock["slept"] == []
+    naver.before_request()
+    assert sum(clock["slept"]) == pytest.approx(2.0)
+    clock["slept"].clear()
+    yes24 = StoreGate(tmp_path, "yes24")
+    yes24.before_request()
+    yes24.before_request()
+    assert clock["slept"] == []
+
+
+def test_store_gate_wait_can_be_cancelled(tmp_path, monkeypatch):
+    from backend.cover_sources import FetchCancelled, StoreGate, request_cancelled
+
+    fake_clock(monkeypatch)
+    gate = StoreGate(tmp_path, "naver")
+    gate.before_request()
+    token = request_cancelled.set(lambda: True)
+    try:
+        with pytest.raises(FetchCancelled):
+            gate.before_request()
+    finally:
+        request_cancelled.reset(token)
+
+
+def test_store_gate_ignores_corrupt_state_file(tmp_path, monkeypatch):
+    from backend.cover_sources import StoreGate
+
+    fake_clock(monkeypatch)
+    (tmp_path / "naver.gate.json").write_text("{not json")
+    gate = StoreGate(tmp_path, "naver")
+    gate.before_request()
+    assert gate.record_blocked() == 60
