@@ -18,6 +18,18 @@ const STORES = [
   ["naver", "네이버쇼핑"], ["ridi", "RIDI"], ["munpia", "문피아"],
   ["naverseries", "시리즈"], ["joara", "조아라"],
 ];
+// 디렉토리별로 자동 검색할 서점 그룹. 나머지 서점은 "검색" 버튼을 눌러야 검색한다.
+const LIGHT_NOVEL_DIRECTORIES = new Set(["3_라이트노벨", "3_판타지", "3_무협", "3_여성향"]);
+const AUTO_STORES = {
+  lightNovel: new Set(["yes24", "aladin", "kyobo", "naver", "ridi"]),
+  general: new Set(["munpia", "naverseries", "joara"]),
+};
+// 자동 검색 서점을 왼쪽에, 수동 검색 서점을 오른쪽에 둔다(각 그룹 안의 순서는 STORES 순서).
+function storeLayout(filePath) {
+  const [top, ...rest] = String(filePath).split("/");
+  const auto = rest.length && LIGHT_NOVEL_DIRECTORIES.has(top) ? AUTO_STORES.lightNovel : AUTO_STORES.general;
+  return { auto, stores: [...STORES.filter(([name]) => auto.has(name)), ...STORES.filter(([name]) => !auto.has(name))] };
+}
 const API_ROOT = "/admin/book-covers";
 const ROOT = "_root";
 const initialTree = [{ id: ROOT, label: "책 디렉토리", fileType: "folder", children: [] }];
@@ -133,12 +145,12 @@ export default function BookCoverAdmin() {
     const versions = new Map(items.map((item) => [item.file_path, bookVersions.current.get(item.file_path) || 0]));
     const isCurrent = (path) => generation.current === current && (bookVersions.current.get(path) || 0) === versions.get(path);
     const tasks = [];
-    const isStoreVisible = (path, store) => {
+    const isStoreVisible = (path, store, layout) => {
       const node = rows.current.get(path)?.querySelector(`[data-store="${store}"]`);
       if (!node) return false;
       const scroller = node.closest(".book-cover-candidates");
       // 초기 빈 칸은 검색 결과가 오면 넓어진다. 이때의 일시 노출로 뒤쪽 검색을 시작하지 않는다.
-      if (!scroller.scrollLeft && STORES.slice(0, 4).some(([name]) => !sources[path]?.[name] || sources[path][name].status === "loading")) return false;
+      if (!scroller.scrollLeft && layout.stores.slice(0, 4).filter(([name]) => layout.auto.has(name)).some(([name]) => !sources[path]?.[name] || sources[path][name].status === "loading")) return false;
       const rect = node.getBoundingClientRect();
       const clip = scroller.getBoundingClientRect();
       const left = Math.max(viewport.left, clip.left);
@@ -174,8 +186,12 @@ export default function BookCoverAdmin() {
     const rowTargets = selectViewportTargets(eligibleRows, viewport);
     const visibleBooks = new Set(rowTargets.filter((record) => record.visible).map((record) => record.key));
     for (const { item, visible } of rowTargets) {
-      for (const [index, [store]] of STORES.entries()) {
-        if (index >= 4 && !isStoreVisible(item.file_path, store)) continue;
+      const layout = storeLayout(item.file_path);
+      for (const [index, [store]] of layout.stores.entries()) {
+        const isAuto = layout.auto.has(store);
+        // 수동 서점은 사용자가 검색을 누르기(source가 loading으로 생기기) 전에는 요청하지 않는다.
+        if (!isAuto && !sources[item.file_path]?.[store]) continue;
+        if (isAuto && index >= 4 && !isStoreVisible(item.file_path, store, layout)) continue;
         const source = sources[item.file_path]?.[store];
         if (source && source.status !== "loading") continue;
         tasks.push({ key: `search:${item.file_path}:${store}:${versions.get(item.file_path)}`, store, backgroundKey: visible ? undefined : item.file_path, run: async (signal) => {
@@ -191,8 +207,9 @@ export default function BookCoverAdmin() {
     }
     const imageRecords = [];
     for (const item of items.filter((entry) => !entry.saving && !entry.busy && !entry.paused)) {
-      for (const [index, [store]] of STORES.entries()) {
-        if (index >= 4 && !isStoreVisible(item.file_path, store)) continue;
+      const layout = storeLayout(item.file_path);
+      for (const [index, [store]] of layout.stores.entries()) {
+        if (layout.auto.has(store) && index >= 4 && !isStoreVisible(item.file_path, store, layout)) continue;
         if (sources[item.file_path]?.[store]?.status === "loading") continue;
         for (const candidate of sources[item.file_path]?.[store]?.candidates || []) {
           const node = candidates.current.get(candidate.candidate_id);
@@ -317,6 +334,9 @@ export default function BookCoverAdmin() {
   };
 
   const previewState = (path, changes) => setItems((previous) => previous.map((item) => item.file_path === path ? { ...item, ...changes } : item));
+  const searchStore = (item, store) => setSources((previous) => ({
+    ...previous, [item.file_path]: { ...previous[item.file_path], [store]: { status: "loading" } },
+  }));
   const retryStore = (item, store) => {
     bookVersions.current.set(item.file_path, (bookVersions.current.get(item.file_path) || 0) + 1);
     previewState(item.file_path, { paused: false });
@@ -427,8 +447,9 @@ export default function BookCoverAdmin() {
                 </div>
                 {item.status === "error" ? <Alert variant="warning">{item.error}</Alert> : (
                   <div className="book-cover-candidates" aria-label={`${item.title} 서점 표지 후보`}>
-                    {STORES.map(([store, label]) => {
+                    {storeLayout(item.file_path).stores.map(([store, label]) => {
                       const source = sources[item.file_path]?.[store];
+                      const isAuto = storeLayout(item.file_path).auto.has(store);
                       const previews = (source?.candidates || []).filter((candidate) => images[candidate.candidate_id]?.url).map((candidate) => ({
                         id: candidate.candidate_id, title: candidate.title, candidate, url: images[candidate.candidate_id].url,
                         width: images[candidate.candidate_id].width || candidate.width,
@@ -474,7 +495,9 @@ export default function BookCoverAdmin() {
                             </div>;
                           })}
                         </div>
-                        {(!source || source.status === "loading") && <small role="status">{source ? "검색 중…" : "검색 대기"}</small>}
+                        {((!source && isAuto) || source?.status === "loading") && <small role="status">{source ? "검색 중…" : "검색 대기"}</small>}
+                        {!source && !isAuto && <button type="button" className="book-cover-retry" aria-label={`${item.title} ${label} 검색`}
+                          disabled={item.saving || item.busy || item.paused} onClick={() => searchStore(item, store)}>검색</button>}
                         {source?.status === "loading" && source.retrying && <button type="button" className="book-cover-retry" disabled><Spinner size="sm" /> 재시도 중…</button>}
                         {source?.status === "not_found" && <small>후보 없음</small>}
                         {source?.status === "error" && <><small className="text-danger">{source.error}</small><button type="button" className="book-cover-retry" onClick={() => retryStore(item, store)}>재시도</button></>}

@@ -20,7 +20,7 @@ test("표지 관리: 초기 빈 칸의 일시 노출로 뒤쪽 서점을 먼저 
     const endpoint = new URL(route.request().url()).pathname.split("/admin/book-covers")[1];
     let result;
     if (endpoint === "/directories") result = [];
-    else if (endpoint === "/missing") result = { items: [{ file_path: "[랜들 개릿] 다아시 경의 모험.epub", title: "랜들 개릿 다아시 경의 모험", revision: "r1", status: "missing" }], scanned: 1, total: 1 };
+    else if (endpoint === "/missing") result = { items: [{ file_path: "3_라이트노벨/[랜들 개릿] 다아시 경의 모험.epub", title: "랜들 개릿 다아시 경의 모험", revision: "r1", status: "missing" }], scanned: 1, total: 1 };
     else if (endpoint.startsWith("/candidates/")) {
       const store = endpoint.split("/").pop();
       searches.push(store);
@@ -83,7 +83,7 @@ test("표지 관리: 카테고리 옆 교체 토글로 기존 표지를 비교�
     else if (endpoint === "/missing") {
       const covered = url.searchParams.get("covered") === "true";
       listings.push(covered);
-      result = { items: covered ? [{ file_path: "covered.epub", title: "기존 표지 책", revision: "r1", has_cover: true, status: "covered", cover_image: { width: 24, height: 36, byte_size: candidatePngs[0].length } }] : [], scanned: 1, total: 1 };
+      result = { items: covered ? [{ file_path: "3_라이트노벨/covered.epub", title: "기존 표지 책", revision: "r1", has_cover: true, status: "covered", cover_image: { width: 24, height: 36, byte_size: candidatePngs[0].length } }] : [], scanned: 1, total: 1 };
     } else if (endpoint.startsWith("/candidates/")) {
       searches.push(url.searchParams.get("include_covered"));
       result = { status: endpoint.endsWith("yes24") ? "success" : "not_found", candidates: endpoint.endsWith("yes24") ? [{ candidate_id: "a".repeat(64), title: "교체 후보", detail_url: "https://www.yes24.com/" }] : [] };
@@ -165,7 +165,7 @@ test("표지 관리: 오른쪽 서점은 가로 스크롤로 노출될 때 검�
     const endpoint = new URL(route.request().url()).pathname.split("/admin/book-covers")[1];
     let result;
     if (endpoint === "/directories") result = [];
-    else if (endpoint === "/missing") result = { items: [{ file_path: "lazy.epub", title: "가로 스크롤 책", revision: "r1", status: "missing" }], scanned: 1, total: 1 };
+    else if (endpoint === "/missing") result = { items: [{ file_path: "3_라이트노벨/lazy.epub", title: "가로 스크롤 책", revision: "r1", status: "missing" }], scanned: 1, total: 1 };
     else if (endpoint.startsWith("/candidates/")) {
       const store = endpoint.split("/").pop();
       searches.push(store);
@@ -181,7 +181,8 @@ test("표지 관리: 오른쪽 서점은 가로 스크롤로 노출될 때 검�
   await expect.poll(() => stores.slice(0, 4).every((store) => searches.includes(store))).toBe(true);
   await expect(page.getByAltText("yes24 표지")).toBeVisible();
   expect(searches.filter((store) => stores.indexOf(store) >= 4)).toEqual([]);
-  for (const store of stores.slice(4)) {
+  // 라이트노벨 디렉토리에서는 RIDI만 자동 검색(가로 노출 시)이고, 문피아·시리즈·조아라는 수동이다.
+  for (const store of ["ridi"]) {
     const section = page.locator(`.book-cover-store[data-store="${store}"]`);
     await section.evaluate((node) => {
       const clip = node.closest(".book-cover-candidates");
@@ -198,6 +199,11 @@ test("표지 관리: 오른쪽 서점은 가로 스크롤로 노출될 때 검�
   await expect(page.getByAltText("ridi 표지")).toBeVisible();
   expect(searches.filter((store) => store === "ridi")).toHaveLength(1);
   expect(images.filter((id) => id === "5".repeat(64))).toHaveLength(1);
+  expect(searches.filter((store) => ["munpia", "naverseries", "joara"].includes(store))).toEqual([]);
+  const munpia = page.locator('.book-cover-store[data-store="munpia"]');
+  await munpia.getByRole("button", { name: "가로 스크롤 책 문피아 검색" }).click();
+  await expect(munpia.getByAltText("munpia 표지")).toBeVisible();
+  expect(searches.filter((store) => store === "munpia")).toHaveLength(1);
   expect(errors).toEqual([]);
 });
 
@@ -212,10 +218,10 @@ test("표지 관리: 화면 밖의 책은 5초 후에 미리 검색한다", asyn
     let result;
     if (endpoint === "/directories") result = [];
     else if (endpoint === "/missing") result = { items: Array.from({ length: 20 }, (_, index) => ({
-      file_path: `책${index}.epub`, title: `책 ${index}`, revision: "r1", status: "missing",
+      file_path: `3_라이트노벨/책${index}.epub`, title: `책 ${index}`, revision: "r1", status: "missing",
     })), scanned: 20, total: 20 };
     else if (endpoint.startsWith("/candidates/")) {
-      searches.push({ index: Number(url.searchParams.get("file_path").match(/\d+/)[0]), time: Date.now() });
+      searches.push({ index: Number(url.searchParams.get("file_path").match(/책(\d+)/)[1]), time: Date.now() });
       result = { status: "not_found", candidates: [] };
     } else return route.fulfill({ status: 404 });
     return route.fulfill({ json: { status: "success", result } });
@@ -254,13 +260,13 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
       listingCursors.push(cursor);
       const offset = Number(cursor || 0);
       result = {
-        items: Array.from({ length: 30 }, (_, index) => ({ file_path: `책${offset + index}.epub`, title: `표지 없는 책 ${offset + index}`, revision: "r1", status: "missing", book_id: 1000 + offset + index, category: "_root" })),
+        items: Array.from({ length: 30 }, (_, index) => ({ file_path: `3_라이트노벨/책${offset + index}.epub`, title: `표지 없는 책 ${offset + index}`, revision: "r1", status: "missing", book_id: 1000 + offset + index, category: "_root" })),
         scanned: offset + 30, total: 60, next_cursor: offset === 0 ? "30" : null,
       };
     }
     else if (endpoint.startsWith("/candidates/")) {
       const store = endpoint.split("/").pop();
-      const index = Number(url.searchParams.get("file_path").match(/\d+/)[0]);
+      const index = Number(url.searchParams.get("file_path").match(/책(\d+)/)[1]);
       searches.push({ store, index });
       result = { status: store === "yes24" ? "success" : "not_found", candidates: store === "yes24" ? Array.from({ length: 4 }, (_, candidate) => ({
         candidate_id: (index * 4 + candidate).toString(16).padStart(64, "0"),
@@ -383,7 +389,7 @@ test("표지 관리: 직접 URL, 미리보기 삭제, 교체, 재검색과 서�
     const endpoint = url.pathname.split("/admin/book-covers")[1];
     let result;
     if (endpoint === "/directories") result = [];
-    else if (endpoint === "/missing") result = { items: [{ title: "직접 입력 책", file_path: "book.epub", revision: "r1", book_id: 101, category: "_root", status: "missing" }], scanned: 1, total: 1 };
+    else if (endpoint === "/missing") result = { items: [{ title: "직접 입력 책", file_path: "3_라이트노벨/book.epub", revision: "r1", book_id: 101, category: "_root", status: "missing" }], scanned: 1, total: 1 };
     else if (endpoint.startsWith("/candidates/")) {
       if (endpoint.endsWith("aladin")) {
         if (url.searchParams.get("refresh") === "true") {
@@ -429,7 +435,7 @@ test("표지 관리: 직접 URL, 미리보기 삭제, 교체, 재검색과 서�
   await modal.getByRole("button", { name: "표지 적용" }).click();
   const completed = page.getByRole("button", { name: /직접 입력 책 표지 저장 완료/ });
   await expect(completed).toBeEnabled();
-  expect(applied).toEqual({ file_path: "book.epub", revision: "r1", url: "https://example.org/cover.png" });
+  expect(applied).toEqual({ file_path: "3_라이트노벨/book.epub", revision: "r1", url: "https://example.org/cover.png" });
   const trash = page.getByRole("button", { name: "직접 입력 책 임시 표지 삭제" });
   expect(await trash.evaluate((node) => node.parentElement.className)).toBe("book-cover-current-actions");
   page.once("dialog", (dialog) => dialog.accept());
@@ -440,7 +446,7 @@ test("표지 관리: 직접 URL, 미리보기 삭제, 교체, 재검색과 서�
   await expect(page.getByRole("button", { name: "재검색", exact: true })).toBeEnabled();
   await candidate.click();
   await expect(completed).toBeEnabled();
-  expect(replaced.file_path).toBe("book.epub");
+  expect(replaced.file_path).toBe("3_라이트노벨/book.epub");
   expect(replaced.revision).toBe("r2");
   expect(Buffer.from(replaced.image_data, "base64")).toEqual(candidatePngs[0]);
   await completed.click();
