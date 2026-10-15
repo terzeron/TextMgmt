@@ -828,8 +828,9 @@ describe("Edit", () => {
     vi.stubGlobal("innerWidth", 500);
     const { container } = render(<Edit />);
     await waitFor(() => {
-      expect(container.querySelector(".section.directory-menu")).toBeNull();
+      expect(container.querySelector(".split-layout.is-stacked")).toBeTruthy();
     });
+    vi.unstubAllGlobals();
   });
 
   it("다음 버튼 클릭 시 다음 책으로 이동한다", async () => {
@@ -1750,7 +1751,9 @@ describe("Edit", () => {
     });
     const { container } = render(<Edit />);
     await waitFor(() => {
-      expect(container.querySelector(".section.directory-menu")).toBeTruthy();
+      expect(
+        container.querySelector(".split-layout:not(.is-stacked)"),
+      ).toBeTruthy();
     });
 
     // 모바일 크기로 리사이즈
@@ -1761,7 +1764,7 @@ describe("Edit", () => {
     });
     fireEvent(window, new Event("resize"));
     await waitFor(() => {
-      expect(container.querySelector(".section.directory-menu")).toBeNull();
+      expect(container.querySelector(".split-layout.is-stacked")).toBeTruthy();
     });
   });
 
@@ -2263,8 +2266,16 @@ describe("Edit", () => {
       else resolve({});
     });
 
+    vi.stubGlobal("innerWidth", 1024);
     render(<Edit />);
     expect(screen.getByTestId("folder-closed")).toBeTruthy();
+    // 접힌 상태에서는 왼쪽 pane과 핸들이 없고, 펼치면 생긴다
+    expect(document.querySelector(".split-layout-left")).toBeNull();
+    expect(screen.queryByRole("separator")).toBeNull();
+    fireEvent.click(screen.getByText("펼치기"));
+    expect(document.querySelector(".split-layout-left")).toBeTruthy();
+    expect(screen.getByRole("separator")).toBeTruthy();
+    vi.unstubAllGlobals();
     // 카테고리 책 로드 후 1_fiction/101이 선택되어 책 정보 표시
     await waitFor(() => {
       expect(screen.getByTestId("book-title").textContent).toBe("소설1");
@@ -3073,7 +3084,7 @@ describe("Edit", () => {
     expect(screen.queryByTestId("folder-closed")).toBeNull();
   });
 
-  it("모바일 폭에서는 열 너비를 12로 렌더링한다", async () => {
+  it("모바일 폭에서는 쌓기 레이아웃으로 렌더링한다", async () => {
     const originalWidth = window.innerWidth;
     Object.defineProperty(window, "innerWidth", {
       writable: true,
@@ -3086,7 +3097,8 @@ describe("Edit", () => {
     await waitFor(() => {
       expect(screen.getByTestId("folder-open")).toBeTruthy();
     });
-    expect(document.querySelector(".col-md-12")).toBeTruthy();
+    expect(document.querySelector(".split-layout.is-stacked")).toBeTruthy();
+    expect(screen.queryByRole("separator")).toBeNull();
 
     Object.defineProperty(window, "innerWidth", {
       writable: true,
