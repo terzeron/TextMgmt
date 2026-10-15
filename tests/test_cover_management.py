@@ -29,6 +29,91 @@ def image_bytes():
     return output.getvalue()
 
 
+@pytest.mark.parametrize("filename,title", [
+    ("[랜들 개릿] 다아시 경의 모험.epub", "랜들 개릿 다아시 경의 모험"),
+    ("[작가] 구운몽—꿈(1) & 이야기!.EPUB", "작가 구운몽 꿈 1 이야기"),
+    ("제목.v2.epub", "제목 v2"),
+    ("  책\t 이름   .epub", "책 이름"),
+    ("【作者】中文_タイトル〈第2巻〉.epub", "作者 中文 タイトル 第2巻"),
+    ("한글 이름.epub", "한글 이름"),
+    ("★[!]★.epub", "제목 없음"),
+])
+def test_cover_listing_and_search_use_same_filename_title(tmp_path, monkeypatch, filename, title):
+    from backend import cover_management as module
+    path = make_epub(tmp_path / "folder.epub" / filename)
+    original = path.read_bytes()
+    service = module.CoverManagement(tmp_path)
+    item = service.missing("folder.epub", "", 60)["items"][0]
+    assert item["title"] == title
+    seen = []
+    def search(store, metadata):
+        seen.append(metadata["title"])
+        return {"status": "not_found", "candidates": []}
+    monkeypatch.setattr(module, "search_candidates", search)
+    service.candidates("yes24", item["file_path"])
+    assert seen == [item["title"]]
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("covered", [False, True])
+def test_filename_title_replaces_old_metadata_search_cache(tmp_path, monkeypatch, covered):
+    import hashlib
+    from backend import cover_management as module
+    from backend.epub_cover import inspect_epub
+    path = make_epub(tmp_path / "[저자] 제목 1.epub", cover=covered)
+    service = module.CoverManagement(tmp_path)
+    revision = inspect_epub(path)["revision"]
+    calls = []
+    monkeypatch.setattr(module, "search_candidates", lambda store, metadata: calls.append((store, metadata["title"])) or {"status": "not_found", "candidates": []})
+    for store in module.STORES:
+        old_key = f"{store}:{path.name}:{revision}" + (":books-v2" if store == "aladin" else "")
+        old_hash = hashlib.sha256(old_key.encode()).hexdigest()
+        for parent in (service.cache, service._book_cache(path.name)):
+            service._write(parent / f"search-{old_hash}.json", b'{"status":"not_found","candidates":[]}')
+        for _ in range(2):
+            service.candidates(store, path.name, include_covered=covered)
+    assert calls == [(store, "저자 제목 1") for store in module.STORES]
+    assert service.missing("", "", 60, covered=covered)["items"][0]["title"] == "저자 제목 1"
+
+
+def test_broken_epub_title_also_uses_clean_filename(tmp_path):
+    from backend.cover_management import CoverManagement
+    (tmp_path / "[저자] 손상된—책.epub").write_bytes(b"invalid zip")
+    item = CoverManagement(tmp_path).missing("", "", 60)["items"][0]
+    assert (item["title"], item["status"]) == ("저자 손상된 책", "error")
+
+
+@pytest.mark.parametrize("endpoint", ["apply", "apply-url", "apply-image"])
+def test_saved_cover_size_matches_embedded_image(cover_api, tmp_path, monkeypatch, endpoint):
+    import base64
+    from backend import cover_management as module
+    from backend.epub_cover import inspect_epub
+    client, _, _ = cover_api
+    path = make_epub(tmp_path / "book.epub")
+    output = io.BytesIO()
+    Image.new("RGB", (1800, 2400), "blue").save(output, "PNG")
+    data = output.getvalue()
+    service = module.CoverManagement(tmp_path)
+    monkeypatch.setattr(module, "fetch_url_image", lambda *args: data)
+    body = {"file_path": "book.epub", "revision": inspect_epub(path)["revision"]}
+    if endpoint == "apply":
+        candidate_id = "a" * 64
+        service._write(service.cache / f"candidate-{candidate_id}.json", json.dumps({**body, "store": "yes24"}).encode())
+        service._write(service.cache / f"image-{candidate_id}.jpg", data)
+        body["candidate_id"] = candidate_id
+    elif endpoint == "apply-url":
+        body["url"] = "https://example.org/cover.png"
+    else:
+        body["image_data"] = base64.b64encode(data).decode()
+    response = client.post(f"/admin/book-covers/{endpoint}", json=body)
+    assert response.status_code == 200
+    with zipfile.ZipFile(path) as archive:
+        embedded = archive.read(next(name for name in archive.namelist() if "tm-cover-" in name and name.endswith(".jpg")))
+    with Image.open(io.BytesIO(embedded)) as image:
+        assert image.size == (600, 800)
+    assert response.json()["result"]["cover_image"] == {"width": 600, "height": 800, "byte_size": len(embedded)}
+
+
 def test_covered_listing_mode_filters_pages_and_preserves_epub(cover_api, tmp_path):
     client, _, _ = cover_api
     paths = [make_epub(tmp_path / "0-covered.epub", cover=True),
@@ -789,7 +874,7 @@ def test_legacy_cache_provides_image_size_without_external_fetch(tmp_path, monke
     old_revision = inspect_epub(path)["revision"]
     candidate_id = "b" * 64
     record = {"store": "yes24", "file_path": "book.epub", "revision": old_revision, "image_url": "https://image.yes24.com/book.jpg"}
-    key = hashlib.sha256(f"yes24:book.epub:{old_revision}".encode()).hexdigest()
+    key = hashlib.sha256(f"yes24:book.epub:{old_revision}:filename-v1".encode()).hexdigest()
     service._write(service.cache / f"candidate-{candidate_id}.json", json.dumps(record).encode())
     service._write(service.cache / f"image-{candidate_id}.jpg", image_bytes())
     service._write(service.cache / f"search-{key}.json", json.dumps({"status": "success", "candidates": [{"candidate_id": candidate_id}]}).encode())

@@ -3,7 +3,6 @@
 import fcntl
 import ipaddress
 import json
-import re
 import socket
 import time
 import uuid
@@ -183,10 +182,6 @@ def search_candidates(store: str, metadata: dict[str, Any]) -> dict[str, Any]:
     keyword = metadata.get("isbn") if client.SUPPORTS_ISBN_SEARCH else ""
     keyword = keyword or metadata["title"]
     if store == "aladin":
-        if not metadata.get("isbn"):
-            keyword = re.sub(r"\[[^\]]*\]", "", keyword).split(" - ")[0].strip()
-            keyword = re.sub(r"\s+\d+(?:권)?$", "", keyword)
-            keyword = " ".join(keyword.split())
         search_url = AladinBookstore.BASE_URL + "/search/wsearchresult.aspx?" + urlencode({"SearchTarget": "Book", "SearchWord": keyword})
     else:
         search_url = client.build_search_url(keyword)

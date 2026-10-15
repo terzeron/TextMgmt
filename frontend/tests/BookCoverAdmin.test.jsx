@@ -46,6 +46,62 @@ function deferred() {
 }
 
 describe("책 표지 관리", () => {
+  it("파일명 제목을 헤딩과 구글 검색어에 동일하게 사용한다", async () => {
+    setup();
+    const filePath = "3_SF그리폰북스/[랜들 개릿] 다아시 경의 모험.epub";
+    const title = "랜들 개릿 다아시 경의 모험";
+    overrideRequest(async (path, options, original) => {
+      const result = await original(path, options);
+      return path.startsWith("/missing") ? { ...result, items: result.items.map((item) => ({ ...item, file_path: filePath, title })) } : result;
+    });
+    render(<BookCoverAdmin />);
+    expect(await screen.findByRole("heading", { name: title })).toBeTruthy();
+    const query = new URLSearchParams(screen.getByRole("link", { name: "구글" }).getAttribute("href").split("?")[1]);
+    expect(query.get("q")).toBe(title);
+    expect(screen.getByText("[랜들 개릿] 다아시 경의 모험.epub")).toBeTruthy();
+  });
+
+  it("저장한 이미지의 실제 크기를 표시하고 저장 확인 아이콘으로 행을 숨긴다", async () => {
+    setup();
+    const pending = deferred();
+    overrideRequest((path, options, original) => path === "/apply" ? pending.promise : original(path, options));
+    render(<BookCoverAdmin />);
+    const choice = await screen.findByRole("button", { name: "YES24 서점 책 표지 선택" });
+    await waitFor(() => expect(choice.disabled).toBe(false));
+    fireEvent.click(choice);
+    expect(await screen.findByText("저장 중…")).toBeTruthy();
+    await act(async () => pending.resolve({ revision: "r2", cover_image: { width: 600, height: 900, byte_size: 12345 } }));
+    const own = screen.getByAltText("테스트 책 저장한 표지").closest(".book-cover-current");
+    expect(within(own).getByText("600 × 900 px")).toBeTruthy();
+    expect(within(own).getByText("12.1 KB")).toBeTruthy();
+    expect(screen.queryByText("저장 완료 · 표지를 눌러 숨기기")).toBeNull();
+    const confirm = within(own).getByRole("button", { name: "테스트 책 저장 확인" });
+    expect(confirm.disabled).toBe(true);
+    fireEvent.load(screen.getByAltText("테스트 책 저장한 표지"));
+    expect(confirm.disabled).toBe(false);
+    expect(confirm.parentElement).toBe(within(own).getByRole("button", { name: "테스트 책 임시 표지 삭제" }).parentElement);
+    fireEvent.click(confirm);
+    expect(screen.queryByRole("heading", { name: "테스트 책" })).toBeNull();
+    expect(request.mock.calls.filter(([path]) => path === "/apply")).toHaveLength(1);
+  });
+
+  it("저장한 미리보기를 지우면 크기와 저장 확인 버튼만 숨기고 후보를 유지한다", async () => {
+    setup();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    overrideRequest((path, options, original) => path === "/apply" ? { revision: "r2", cover_image: { width: 600, height: 900, byte_size: 512 } } : original(path, options));
+    render(<BookCoverAdmin />);
+    const choice = await screen.findByRole("button", { name: "YES24 서점 책 표지 선택" });
+    await waitFor(() => expect(choice.disabled).toBe(false));
+    fireEvent.click(choice);
+    await screen.findByText("600 × 900 px");
+    fireEvent.click(screen.getByRole("button", { name: "테스트 책 임시 표지 삭제" }));
+    expect(screen.queryByText("600 × 900 px")).toBeNull();
+    expect(screen.queryByRole("button", { name: "테스트 책 저장 확인" })).toBeNull();
+    expect(screen.getByText("서점 표지를 선택하세요")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "YES24 서점 책 표지 선택" })).toBeTruthy();
+    expect(request.mock.calls.some(([path]) => path === "/cache/clear")).toBe(false);
+  });
+
   it("재검색 오른쪽 구글 버튼은 제목의 한글과 특수문자를 보존해 이미지 검색을 새 탭에서 연다", async () => {
     setup();
     const title = "구운몽 & 꿈 #1 + 이야기?";

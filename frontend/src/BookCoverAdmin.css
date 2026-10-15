@@ -15,8 +15,9 @@
 .book-cover-row-body { display: flex; gap: 14px; align-items: flex-start; }
 .book-cover-current { flex: 0 0 113px; }
 .book-cover-current small { display: block; font-size: .75rem; margin-top: 6px; }
-.book-cover-status { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
-.book-cover-status small { flex: 1; }
+.book-cover-status { margin-bottom: 6px; }
+.book-cover-current-actions { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+.book-cover-save { padding: 2px 4px; font-size: .7rem; }
 .book-cover-trash { flex: 0 0 auto; padding: 2px 4px; font-size: .7rem; }
 .book-cover-completed { padding: 0; border: 2px solid #198754; cursor: pointer; }
 .book-cover-completed:disabled { cursor: wait; }

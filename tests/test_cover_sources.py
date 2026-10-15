@@ -26,7 +26,7 @@ def test_naver_and_joara_search_candidates():
     assert parse_joara_candidates(data)[0]["image_url"] == "https://cf-image.joara.com/book.png"
 
 
-@pytest.mark.parametrize("title,keyword", [("불멸과 소멸 1 [이상문]", "불멸과 소멸"), ("우리말의 상상력 1 - 어휘의 기원", "우리말의 상상력")])
+@pytest.mark.parametrize("title,keyword", [("불멸과 소멸 1 이상문", "불멸과 소멸 1 이상문"), ("우리말의 상상력 1 어휘의 기원", "우리말의 상상력 1 어휘의 기원")])
 def test_aladin_covers_use_clean_book_keyword_instead_of_all_products(monkeypatch, title, keyword):
     from urllib.parse import parse_qs, urlparse
     from backend import cover_sources as module
@@ -47,8 +47,21 @@ def test_aladin_cover_search_keeps_isbn(monkeypatch):
     from backend import cover_sources as module
     seen = []
     monkeypatch.setattr(module, "fetch_bytes", lambda store,url,session: seen.append(url) or '검색 결과 없음'.encode())
-    module.search_candidates("aladin", {"title": "제목 [저자]", "isbn": "9781234567890"})
+    module.search_candidates("aladin", {"title": "제목 저자 1", "isbn": "9781234567890"})
     assert parse_qs(urlparse(seen[0]).query)["SearchWord"] == ["9781234567890"]
+
+
+@pytest.mark.parametrize("store", ["yes24", "aladin", "kyobo"])
+@pytest.mark.parametrize("isbn", ["9781234567890", ""])
+def test_isbn_capable_stores_preserve_priority_and_filename_title_fallback(monkeypatch, store, isbn):
+    from urllib.parse import parse_qs, urlparse
+    from backend import cover_sources as module
+    seen = []
+    monkeypatch.setattr(module, "fetch_bytes", lambda _, url, session: seen.append(url) or "검색 결과 없음".encode())
+    result = module.search_candidates(store, {"title": "랜들 개릿 다아시 경의 모험 1", "isbn": isbn})
+    keyword = isbn or "랜들 개릿 다아시 경의 모험 1"
+    assert [keyword] in parse_qs(urlparse(seen[0]).query).values()
+    assert result["search_url"] == seen[0]
 
 
 def test_aladin_common_no_image_placeholder_is_not_a_cover():
@@ -194,7 +207,9 @@ def test_all_store_search_flows_with_local_fixtures(monkeypatch, store):
     client.extract_search_links.return_value = [] if store == "ridi" else ["https://example.org/detail"]
     client.extract_book_info.return_value = {"title": "책", "author": "저자"}
     monkeypatch.setitem(module.STORES, store, lambda **kwargs: client)
+    requests = []
     def fetch(_, url, session):
+        requests.append(url)
         if store == "joara":
             return json.dumps({"status": 1, "data": {"list": [{"book_code": "1", "cover": "https://image.example.org/a", "subject": "책"}]}}).encode()
         if store == "munpia":
@@ -207,8 +222,11 @@ def test_all_store_search_flows_with_local_fixtures(monkeypatch, store):
     assert result["status"] == "success"
     assert result["candidates"][0]["title"] == "책"
     assert client.session.close.called
-    if store == "yes24":
-        client.build_search_url.assert_called_with("1234567890")
+    if store != "aladin":
+        client.build_search_url.assert_called_with("1234567890" if store == "yes24" else "검색 제목")
+    if store in ("joara", "munpia"):
+        from urllib.parse import parse_qs, urlparse
+        assert parse_qs(urlparse(requests[0]).query)["query"] == ["검색 제목"]
     if store == "ridi":
         assert client.session.headers["Referer"] == "https://ridibooks.com/"
 

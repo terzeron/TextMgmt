@@ -206,6 +206,8 @@ def _stage_cover(source: BinaryIO, destination: Path, image: bytes) -> None:
 
 def add_cover(path: Path, image: bytes, expected_revision: str, backup_dir: Path, *, replace_existing: bool = False) -> dict[str, Any]:
     image = normalize_image(image, max_width=600)
+    with Image.open(io.BytesIO(image)) as cover:
+        image_info = {"width": cover.width, "height": cover.height, "byte_size": len(image)}
     with path.open("r+b") as source:
         try:
             fcntl.flock(source, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -251,4 +253,5 @@ def add_cover(path: Path, image: bytes, expected_revision: str, backup_dir: Path
                 os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
         finally:
             staged.unlink(missing_ok=True)
-    return {"revision": revision(path), "backup_path": str(backup), "file_size": path.stat().st_size, "book_id": original_stat.st_ino}
+    return {"revision": revision(path), "backup_path": str(backup), "file_size": path.stat().st_size,
+            "book_id": original_stat.st_ino, "cover_image": image_info}

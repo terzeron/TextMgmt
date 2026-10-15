@@ -14,6 +14,7 @@ import shutil
 import tempfile
 import time
 import threading
+import unicodedata
 import zipfile
 from pathlib import Path
 from contextlib import contextmanager, nullcontext
@@ -35,6 +36,12 @@ from backend.direct_cover_url import fetch_url_image
 from utils.corpus_layout import IGNORED_DIR_NAMES
 
 LOGGER = logging.getLogger(__name__)
+
+
+def filename_title(path: Path) -> str:
+    name = unicodedata.normalize("NFC", path.stem)
+    name = "".join(" " if unicodedata.category(char)[0] in "PS" else char for char in name)
+    return " ".join(name.split()) or "제목 없음"
 
 
 class CoverManagement:
@@ -85,14 +92,15 @@ class CoverManagement:
         for path in files[offset:offset + limit]:
             relative = str(path.relative_to(self.root))
             identity = {"file_path": relative, "book_id": path.stat().st_ino,
-                        "category": str(path.parent.relative_to(self.root)) if path.parent != self.root else "_root"}
+                        "category": str(path.parent.relative_to(self.root)) if path.parent != self.root else "_root",
+                        "title": filename_title(path)}
             try:
                 metadata = inspect_epub(path)
                 if metadata["has_cover"] != covered:
                     continue
                 items.append({**metadata, **identity, "status": "covered" if covered else "missing"})
             except CoverError as exc:
-                items.append({**identity, "revision": revision(path), "title": path.stem, "status": "error", "error": str(exc)})
+                items.append({**identity, "revision": revision(path), "status": "error", "error": str(exc)})
         next_offset = min(offset + limit, len(files))
         return {"items": items, "next_cursor": str(next_offset) if next_offset < len(files) else None,
                 "scanned": next_offset, "total": len(files)}
@@ -165,11 +173,10 @@ class CoverManagement:
         relative = str(path.relative_to(self.root))
         with self._book_lock(relative):
             metadata = inspect_epub(path)
+            metadata["title"] = filename_title(path)
             if metadata["has_cover"] and not include_covered:
                 raise CoverError("EPUB에 이미 표지가 있습니다")
-            key = f"{store}:{relative}:{metadata['revision']}"
-            if store == "aladin":
-                key += ":books-v2"
+            key = f"{store}:{relative}:{metadata['revision']}:filename-v1"
             cache_key = hashlib.sha256(key.encode()).hexdigest()
             book_cache = self._book_cache(relative)
             result_path = book_cache / f"search-{cache_key}.json"
@@ -326,7 +333,8 @@ class CoverManagement:
                     if cached.is_file() and cached.name.startswith((f"{result['book_id']}.", f"{result['book_id']}_")):
                         cached.unlink(missing_ok=True)
         response = {"file_path": relative, "revision": result["revision"], "book_id": result["book_id"],
-                    "file_size": result["file_size"], "backup_path": str(Path(result["backup_path"]).relative_to(self.root))}
+                    "file_size": result["file_size"], "cover_image": result["cover_image"],
+                    "backup_path": str(Path(result["backup_path"]).relative_to(self.root))}
         if result.get("warning"):
             response["warning"] = result["warning"]
         return response
