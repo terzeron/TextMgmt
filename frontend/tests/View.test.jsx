@@ -217,6 +217,23 @@ describe("View", () => {
     expect(screen.getByTestId("folder").dataset.open).toBe("true");
   });
 
+  it("검색 전에는 디렉토리만 렌더하고 핸들은 두지 않는다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/categories") {
+        resolve({ 소설: 10, 역사: 5 });
+      }
+    });
+
+    const { container } = render(<View />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("folder")).toBeTruthy();
+    });
+    expect(container.querySelector(".split-layout-left")).toBeTruthy();
+    expect(container.querySelector(".split-layout-right")).toBeNull();
+    expect(screen.queryByRole("separator")).toBeNull();
+  });
+
   it("카테고리 로드 실패 시 에러 메시지를 표시하지 않고 빈 폴더를 표시한다", async () => {
     mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
       if (url === "/categories") {
@@ -411,17 +428,22 @@ describe("View", () => {
     expect(screen.getByTestId("similar-books").dataset.basePath).toBe(
       "/book-edit",
     );
-    const toolsRow = screen
-      .getByTestId("folder")
-      .closest(".view-tools-row");
+    const toolsRow = screen.getByTestId("folder").closest(".view-tools-row");
     expect(toolsRow).toBeTruthy();
-    expect(screen.getByTestId("folder").closest(".col-md-3")).toBeTruthy();
+    expect(toolsRow.classList.contains("split-layout")).toBe(true);
+    expect(toolsRow.classList.contains("no-scroll")).toBe(true);
     expect(
-      screen.getByTestId("similar-books").closest(".col-md-9"),
+      screen
+        .getByTestId("folder")
+        .closest(".split-layout-left.view-directory-panel"),
     ).toBeTruthy();
-    expect(toolsRow.contains(screen.getByTestId("book-info-view"))).toBe(
-      false,
-    );
+    expect(
+      screen
+        .getByTestId("similar-books")
+        .closest(".split-layout-right.view-similar-books-panel"),
+    ).toBeTruthy();
+    expect(screen.getByRole("separator")).toBeTruthy();
+    expect(toolsRow.contains(screen.getByTestId("book-info-view"))).toBe(false);
     expect(
       toolsRow.compareDocumentPosition(screen.getByTestId("book-info-view")) &
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -1717,7 +1739,7 @@ describe("View", () => {
     });
   });
 
-  it("디렉토리는 mobile 12칸, desktop 3칸으로 렌더링한다", async () => {
+  it("디렉토리는 SplitLayout 왼쪽 pane에 렌더링한다", async () => {
     mockJsonGetReq.mockImplementation((url, payload, resolve) => {
       if (url === "/categories") resolve({ 소설: 10 });
     });
@@ -1727,9 +1749,10 @@ describe("View", () => {
     await waitFor(() => {
       expect(screen.getByTestId("folder")).toBeTruthy();
     });
-    const column = screen.getByTestId("folder").closest(".col-12");
+    const column = screen
+      .getByTestId("folder")
+      .closest(".split-layout-left.view-directory-panel");
     expect(column).toBeTruthy();
-    expect(column.classList.contains("col-md-3")).toBe(true);
   });
 
   it("만화 딥링크에서 트리에 없는 카테고리는 api 파라미터를 붙여 직접 조회한다", async () => {
@@ -1784,7 +1807,9 @@ describe("View", () => {
 
     act(() => lateReject("서버 오류"));
 
-    expect(await screen.findByText(/can't load directory data, 서버 오류/)).toBeTruthy();
+    expect(
+      await screen.findByText(/can't load directory data, 서버 오류/),
+    ).toBeTruthy();
   });
 
   it("만화의 가상 부모 하위 카테고리 책은 api 파라미터가 붙은 viewUrl로 연다", async () => {
@@ -1811,7 +1836,9 @@ describe("View", () => {
     screen.getByTestId("folder-item-문학/소설").click();
     await waitFor(() => {
       expect(
-        mockJsonGetReq.mock.calls.find((c) => c[0] === "/comics/categories/문학/소설"),
+        mockJsonGetReq.mock.calls.find(
+          (c) => c[0] === "/comics/categories/문학/소설",
+        ),
       ).toBeTruthy();
     });
 
