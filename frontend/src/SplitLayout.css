@@ -1,0 +1,48 @@
+/* 두 컬럼 공통 레이아웃. 내비바 높이는 --navbar-h로 바꿀 수 있다(기본 80px). */
+.split-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.split-layout:not(.is-stacked):not(.no-scroll) {
+  height: calc(100vh - var(--navbar-h, 80px));
+  height: calc(100dvh - var(--navbar-h, 80px));
+}
+
+.split-layout:not(.is-stacked):not(.no-scroll) > .split-layout-left,
+.split-layout:not(.is-stacked):not(.no-scroll) > .split-layout-right {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.split-layout > .split-layout-left,
+.split-layout > .split-layout-right {
+  min-width: 0;
+}
+
+.split-layout-handle {
+  position: relative;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  outline: none;
+}
+
+.split-layout-handle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--bs-border-color, #dee2e6);
+  transition: background 0.1s;
+}
+
+.split-layout-handle:hover::before,
+.split-layout-handle:focus-visible::before,
+.split-layout-handle.is-dragging::before {
+  width: 4px;
+  background: var(--bs-primary, #0d6efd);
+}
