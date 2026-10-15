@@ -123,6 +123,29 @@ describe("책 표지 관리", () => {
     expect(request.mock.calls.some(([path]) => path === "/apply")).toBe(false);
   });
 
+  it("디렉토리와 표지 패널을 SplitLayout으로 나누고 핸들을 제공한다", async () => {
+    setup();
+    const { container } = render(<BookCoverAdmin />);
+    await screen.findByRole("heading", { name: "테스트 책" });
+    expect(container.querySelector(".split-layout-left.book-cover-directory")).toBeTruthy();
+    expect(container.querySelector(".split-layout-right.book-cover-panel")).toBeTruthy();
+    expect(screen.getByRole("separator")).toBeTruthy();
+  });
+
+  it("좁은 화면에서는 SplitLayout이 쌓이고 핸들이 없다", async () => {
+    setup();
+    const initialWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 500 });
+    try {
+      const { container } = render(<BookCoverAdmin />);
+      await screen.findByRole("heading", { name: "테스트 책" });
+      expect(container.querySelector(".split-layout.is-stacked")).toBeTruthy();
+      expect(screen.queryByRole("separator")).toBeNull();
+    } finally {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: initialWidth });
+    }
+  });
+
   it("빈 표지도 크기 자리와 저장 아이콘을 항상 표시하고 휴지통 왼쪽에 배치한다", async () => {
     setup();
     render(<BookCoverAdmin />);

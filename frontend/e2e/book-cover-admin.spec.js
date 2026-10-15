@@ -280,7 +280,8 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
   await expect(page.getByRole("tree")).toBeVisible();
   const directoryWidth = await page.locator(".book-cover-directory").evaluate((node) => node.getBoundingClientRect().width);
   const panelWidth = await page.locator(".book-cover-panel").evaluate((node) => node.getBoundingClientRect().width);
-  expect(panelWidth / directoryWidth).toBeCloseTo(5, 1);
+  expect(Math.round(directoryWidth)).toBe(240);
+  expect(panelWidth).toBeGreaterThan(directoryWidth * 4);
   const firstHeader = page.locator(".book-cover-row-header").first();
   await expect(firstHeader.getByRole("heading")).toHaveCSS("font-size", "20px");
   await expect(firstHeader.getByRole("button", { name: "편집" })).toBeEnabled();
@@ -444,4 +445,49 @@ test("표지 관리: 직접 URL, 미리보기 삭제, 교체, 재검색과 서�
   expect(Buffer.from(replaced.image_data, "base64")).toEqual(candidatePngs[0]);
   await completed.click();
   await expect(page.getByRole("heading", { name: "직접 입력 책", exact: true })).toHaveCount(0);
+});
+
+test("표지 관리: 핸들 드래그로 디렉토리 너비를 조절하고 두 pane이 독립 스크롤된다", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 700 });
+  await page.route("**/auth/me", (route) => route.fulfill({ json: { status: "success", result: { role: "admin", email: "test@example.com" } } }));
+  await page.route("**/auth/sessions**", (route) => route.fulfill({ json: { status: "success", result: { sessions: [], total: 0 } } }));
+  await page.route("**/admin/book-covers/**", (route) => {
+    const endpoint = new URL(route.request().url()).pathname.split("/admin/book-covers")[1];
+    const result = endpoint === "/directories"
+      ? [{ id: "fiction", label: "소설", fileType: "folder", children: [] }]
+      : { items: [], scanned: 0, total: 0 };
+    return route.fulfill({ json: { status: "success", result } });
+  });
+  const open = async () => {
+    await page.goto("/admin");
+    await page.getByRole("tab", { name: "책 표지 관리" }).click();
+    await expect(page.getByRole("tree")).toBeVisible();
+  };
+  await open();
+  const left = page.locator(".split-layout-left");
+  const handle = page.getByRole("separator");
+  await expect(left).toHaveCSS("overflow-y", "auto");
+  await expect(page.locator(".split-layout-right")).toHaveCSS("overflow-y", "auto");
+  const before = (await left.boundingBox()).width;
+  const box = await handle.boundingBox();
+  const y = box.y + 40;
+  await page.mouse.move(box.x + box.width / 2, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 60, y, { steps: 5 });
+  await page.mouse.up();
+  const after = (await left.boundingBox()).width;
+  expect(after - before).toBeGreaterThan(50);
+  await page.reload();
+  await page.getByRole("tab", { name: "책 표지 관리" }).click();
+  await expect(page.getByRole("tree")).toBeVisible();
+  expect(Math.abs((await left.boundingBox()).width - after)).toBeLessThan(2);
+
+  // 터치 경로: 합성 pointer 이벤트(pointerType=touch). 실기기 터치는 검증하지 못한다.
+  const b2 = await handle.boundingBox();
+  const x = b2.x + b2.width / 2;
+  const touch = { pointerType: "touch", pointerId: 7, isPrimary: true, clientY: b2.y + 40 };
+  await handle.dispatchEvent("pointerdown", { ...touch, clientX: x });
+  await handle.dispatchEvent("pointermove", { ...touch, clientX: x - 40 });
+  await handle.dispatchEvent("pointerup", { ...touch, clientX: x - 40 });
+  expect((await left.boundingBox()).width).toBeLessThan(after - 30);
 });

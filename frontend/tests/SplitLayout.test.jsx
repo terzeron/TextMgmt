@@ -98,6 +98,17 @@ describe("SplitLayout", () => {
     expect(container.querySelector(".split-layout")).toBeTruthy();
   });
 
+  it("setPointerCapture가 예외를 던져도 드래그는 계속된다", () => {
+    mockContainerWidth(1000);
+    renderLayout();
+    handle().setPointerCapture = () => {
+      throw new DOMException("no active pointer", "NotFoundError");
+    };
+    fireEvent.pointerDown(handle(), { clientX: 300, pointerId: 9, button: 0 });
+    fireEvent.pointerMove(handle(), { clientX: 340, pointerId: 9 });
+    expect(widthOf()).toBe(320);
+  });
+
   it("마우스 보조 버튼은 드래그를 시작하지 않는다", () => {
     mockContainerWidth(1000);
     renderLayout();
@@ -180,6 +191,19 @@ describe("SplitLayout", () => {
     expect(handle()).toBeNull();
     expect(container.querySelector(".split-layout-left")).toBeNull();
     expect(container.querySelector(".split-layout-right")).toBeTruthy();
+  });
+
+  it("Left/Right가 아닌 자식도 grid 밖에 그대로 렌더한다", () => {
+    const { container } = render(
+      <SplitLayout storageKey={KEY}>
+        <SplitLayout.Left>A</SplitLayout.Left>
+        <SplitLayout.Right>B</SplitLayout.Right>
+        <div data-testid="extra">EXTRA</div>
+      </SplitLayout>,
+    );
+    const extra = screen.getByTestId("extra");
+    expect(extra.textContent).toBe("EXTRA");
+    expect(container.querySelector(".split-layout").contains(extra)).toBe(false);
   });
 
   it("scroll={false}면 no-scroll 클래스를 단다", () => {

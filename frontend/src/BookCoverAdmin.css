@@ -1,5 +1,4 @@
 .book-cover-admin { padding-top: 12px; }
-.book-cover-directory { padding-right: 12px; }
 .book-cover-panel { min-width: 0; padding: 0 12px; }
 .book-cover-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .book-cover-toolbar h2 { font-size: 1.15rem; margin: 0 0 4px; }

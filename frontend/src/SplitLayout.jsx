@@ -3,7 +3,7 @@
  * 두 pane이 따로 스크롤되고, 가운데 핸들을 끌거나 화살표 키로 왼쪽 너비를 바꾼다.
  * 768px 미만에서는 위아래로 쌓고 핸들을 렌더하지 않는다.
  */
-import { Children, useCallback, useRef, useState } from "react";
+import { Children, Fragment, useCallback, useRef, useState } from "react";
 import useIsMobile from "./useIsMobile";
 import "./SplitLayout.css";
 
@@ -78,10 +78,18 @@ export default function SplitLayout({
   const items = Children.toArray(children);
   const leftItem = items.find((item) => item.type === SplitLeft);
   const rightItem = items.find((item) => item.type === SplitRight);
+  // 모달처럼 pane이 아닌 자식은 grid 칸을 차지하지 않도록 grid 밖에 그대로 렌더한다.
+  const otherItems = items.filter(
+    (item) => item !== leftItem && item !== rightItem,
+  );
 
   const onPointerDown = (event) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    } catch {
+      // 이미 끝난 포인터면 캡처만 포기하고 드래그는 이어간다.
+    }
     drag.current = { startX: event.clientX, startWidth: widthRef.current };
     setDragging(true);
   };
@@ -97,7 +105,11 @@ export default function SplitLayout({
     if (!drag.current) return;
     drag.current = null;
     setDragging(false);
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    try {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    } catch {
+      // 캡처가 이미 풀렸으면 무시한다.
+    }
     commit(widthRef.current, { persist: true });
   };
 
@@ -133,39 +145,42 @@ export default function SplitLayout({
     .join(" ");
 
   return (
-    <div ref={containerRef} className={classes} style={style}>
-      {leftItem && (
-        <div
-          className={`split-layout-left ${leftItem.props.className || ""}`.trim()}
-        >
-          {leftItem.props.children}
-        </div>
-      )}
-      {showHandle && (
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="디렉토리 너비 조절"
-          aria-valuenow={leftWidth}
-          aria-valuemin={minLeft}
-          tabIndex={0}
-          className={`split-layout-handle${dragging ? " is-dragging" : ""}`}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
-          onKeyDown={onKeyDown}
-          onDoubleClick={() => commit(defaultLeftWidth, { persist: true })}
-        />
-      )}
-      {rightItem && (
-        <div
-          className={`split-layout-right ${rightItem.props.className || ""}`.trim()}
-        >
-          {rightItem.props.children}
-        </div>
-      )}
-    </div>
+    <Fragment>
+      <div ref={containerRef} className={classes} style={style}>
+        {leftItem && (
+          <div
+            className={`split-layout-left ${leftItem.props.className || ""}`.trim()}
+          >
+            {leftItem.props.children}
+          </div>
+        )}
+        {showHandle && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="디렉토리 너비 조절"
+            aria-valuenow={leftWidth}
+            aria-valuemin={minLeft}
+            tabIndex={0}
+            className={`split-layout-handle${dragging ? " is-dragging" : ""}`}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            onKeyDown={onKeyDown}
+            onDoubleClick={() => commit(defaultLeftWidth, { persist: true })}
+          />
+        )}
+        {rightItem && (
+          <div
+            className={`split-layout-right ${rightItem.props.className || ""}`.trim()}
+          >
+            {rightItem.props.children}
+          </div>
+        )}
+      </div>
+      {otherItems}
+    </Fragment>
   );
 }
 

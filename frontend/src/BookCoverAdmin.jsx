@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Col, Row, Spinner, Modal, Form } from "react-bootstrap";
+import { Alert, Button, Spinner, Modal, Form } from "react-bootstrap";
+import SplitLayout from "./SplitLayout";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faTrash, faMagnifyingGlass, faFloppyDisk } from "@fortawesome/free-solid-svg-icons";
 import Folder from "./Folder";
@@ -335,15 +336,15 @@ export default function BookCoverAdmin() {
   };
 
   return (
-    <Row className="g-0 book-cover-admin">
-      <Col md={2} className="book-cover-directory">
+    <SplitLayout storageKey="split:book-cover-admin" defaultLeftWidth={240} className="book-cover-admin">
+      <SplitLayout.Left className="book-cover-directory">
         <Folder folderData={folderData} expandedItems={expanded} onExpandedItemsChange={setExpanded}
           isOpen={folderOpen} onToggle={setFolderOpen} onClickHandler={(id) => {
             loadDirectories(id);
             if (id !== directory) setDirectory(id);
           }} />
-      </Col>
-      <Col md={10} className="book-cover-panel">
+      </SplitLayout.Left>
+      <SplitLayout.Right className="book-cover-panel">
         <div className="book-cover-toolbar">
           <div><h2>책 표지 관리</h2><div className="book-cover-directory-mode">
             <small>{directory === ROOT ? "최상위 디렉토리" : directory}</small>
@@ -492,7 +493,7 @@ export default function BookCoverAdmin() {
         <div ref={scanTrigger} className="book-cover-scan-trigger" aria-hidden="true" />
         {loading && <div role="status"><Spinner size="sm" /> EPUB 검사 중…</div>}
         {!loading && page && items.length === 0 && <Alert variant="info">{replaceCovers ? "검사한 EPUB에는 표지가 있는 책이 없습니다." : "검사한 EPUB에는 표지 없는 책이 없습니다."}</Alert>}
-      </Col>
+      </SplitLayout.Right>
       <Modal show={!!manual} onHide={() => { if (!manual?.busy) setManual(null); }} centered aria-labelledby="book-cover-url-title">
         <Modal.Header closeButton={!manual?.busy}><Modal.Title id="book-cover-url-title">표지 직접 입력</Modal.Title></Modal.Header>
         <Form onSubmit={async (event) => {
@@ -525,6 +526,6 @@ export default function BookCoverAdmin() {
         } : undefined}
         onImageError={zoom.own ? () => { setZoom(null); previewState(zoom.item.file_path, { error: "저장한 표지를 확대하지 못했습니다" }); } : undefined}
         onSelect={zoom.own ? undefined : () => { setZoom(null); save(zoom.item, zoom.previews[zoom.index].candidate); }} />}
-    </Row>
+    </SplitLayout>
   );
 }
