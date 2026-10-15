@@ -1,12 +1,13 @@
-/* 두 컬럼 공통 레이아웃. 내비바 높이는 --navbar-h로 바꿀 수 있다(기본 80px). */
+/* 두 컬럼 공통 레이아웃. 높이는 컨테이너 위쪽 간격(--split-top, 컴포넌트가 측정)을 뺀 값이고,
+   측정 전에는 --navbar-h(기본 80px)를 쓴다. */
 .split-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
 }
 
 .split-layout:not(.is-stacked):not(.no-scroll) {
-  height: calc(100vh - var(--navbar-h, 80px));
-  height: calc(100dvh - var(--navbar-h, 80px));
+  height: calc(100vh - var(--split-top, var(--navbar-h, 80px)));
+  height: calc(100dvh - var(--split-top, var(--navbar-h, 80px)));
 }
 
 .split-layout:not(.is-stacked):not(.no-scroll) > .split-layout-left,
@@ -21,6 +22,7 @@
 }
 
 .split-layout-handle {
+  align-self: stretch; /* 부모가 align-items: start여도 핸들 높이가 0이 되지 않게 한다 */
   position: relative;
   cursor: col-resize;
   touch-action: none;

@@ -3,7 +3,14 @@
  * 두 pane이 따로 스크롤되고, 가운데 핸들을 끌거나 화살표 키로 왼쪽 너비를 바꾼다.
  * 768px 미만에서는 위아래로 쌓고 핸들을 렌더하지 않는다.
  */
-import { Children, Fragment, useCallback, useRef, useState } from "react";
+import {
+  Children,
+  Fragment,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import useIsMobile from "./useIsMobile";
 import "./SplitLayout.css";
 
@@ -53,13 +60,43 @@ export default function SplitLayout({
     () => (storageKey && readStoredWidth(storageKey)) || defaultLeftWidth,
   );
 
+  // 컨테이너의 현재 너비와 문서 위쪽 간격. 창 크기나 위쪽 내용이 바뀌면 다시 잰다.
+  const [metrics, setMetrics] = useState({ width: 0, top: null });
+
+  const measure = useCallback(() => {
+    const node = containerRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const top = Math.round(rect.top + window.scrollY);
+    setMetrics((prev) =>
+      prev.width === rect.width && prev.top === top
+        ? prev
+        : { width: rect.width, top },
+    );
+  }, []);
+
+  useLayoutEffect(() => {
+    measure();
+    window.addEventListener("resize", measure);
+    let observer;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(measure);
+      observer.observe(containerRef.current);
+      observer.observe(document.body);
+    }
+    return () => {
+      window.removeEventListener("resize", measure);
+      observer?.disconnect();
+    };
+  }, [measure]);
+
   const clampWidth = useCallback(
     (value) => {
-      const total = containerRef.current?.getBoundingClientRect().width || 0;
+      const total = metrics.width;
       const max = total ? Math.max(minLeft, total * maxLeftRatio) : Infinity;
       return Math.round(Math.min(Math.max(value, minLeft), max));
     },
-    [minLeft, maxLeftRatio],
+    [metrics.width, minLeft, maxLeftRatio],
   );
 
   const leftWidth = clampWidth(rawWidth);
@@ -126,14 +163,14 @@ export default function SplitLayout({
   const showHandle = !isStacked && leftItem && rightItem;
   // 첫 렌더에는 컨테이너 너비를 모르므로, 최대 비율은 CSS min()으로도 건다.
   const maxWidthCss = (px) => `min(${px}px, ${maxLeftRatio * 100}%)`;
-  let style;
+  let style = {};
   if (!isStacked && leftItem && rightItem) {
-    style = {
-      gridTemplateColumns: `${maxWidthCss(leftWidth)} ${HANDLE_WIDTH}px minmax(0, 1fr)`,
-    };
+    style.gridTemplateColumns = `${maxWidthCss(leftWidth)} ${HANDLE_WIDTH}px minmax(0, 1fr)`;
   } else if (!isStacked && leftItem) {
-    style = { gridTemplateColumns: maxWidthCss(leftWidth) };
+    style.gridTemplateColumns = maxWidthCss(leftWidth);
   }
+  // 높이는 화면에서 컨테이너 위쪽 간격을 뺀 만큼. 측정 전에는 CSS 기본값을 쓴다.
+  if (scroll && metrics.top !== null) style["--split-top"] = `${metrics.top}px`;
 
   const classes = [
     "split-layout",

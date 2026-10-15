@@ -152,12 +152,59 @@ describe("SplitLayout", () => {
     expect(widthOf()).toBe(340);
   });
 
-  it("저장된 너비가 컨테이너 최대값보다 크면 첫 조작에서 최대값 기준으로 줄어든다", () => {
+  it("저장된 너비가 컨테이너 최대값보다 크면 조작 없이도 최대값으로 보인다", () => {
     window.localStorage.setItem(KEY, "900");
     mockContainerWidth(1000);
     renderLayout();
-    fireEvent.keyDown(handle(), { key: "ArrowLeft" });
     expect(widthOf()).toBe(600);
+  });
+
+  it("창이 줄면 보이는 너비와 값이 함께 줄고, 다시 커지면 원래 너비로 돌아온다", () => {
+    window.localStorage.setItem(KEY, "700");
+    const rect = mockContainerWidth(1600);
+    renderLayout();
+    expect(widthOf()).toBe(700);
+    rect.mockReturnValue({ width: 1000, height: 600, top: 0, left: 0 });
+    fireEvent(window, new Event("resize"));
+    expect(widthOf()).toBe(600);
+    // 줄어든 상태에서 첫 드래그가 바로 움직인다(죽은 구간 없음)
+    fireEvent.pointerDown(handle(), { clientX: 600, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(handle(), { clientX: 560, pointerId: 1 });
+    expect(widthOf()).toBe(560);
+    fireEvent.pointerUp(handle(), { pointerId: 1 });
+    rect.mockReturnValue({ width: 2000, height: 600, top: 0, left: 0 });
+    fireEvent(window, new Event("resize"));
+    expect(widthOf()).toBe(560);
+  });
+
+  it("컨테이너가 문서 위에서 떨어진 만큼 높이에서 뺀다", () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 1000,
+      height: 600,
+      top: 38,
+      left: 0,
+    });
+    const { container } = renderLayout();
+    expect(
+      container
+        .querySelector(".split-layout")
+        .style.getPropertyValue("--split-top"),
+    ).toBe("38px");
+  });
+
+  it("scroll={false}면 위 간격을 측정해 쓰지 않는다", () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 1000,
+      height: 600,
+      top: 38,
+      left: 0,
+    });
+    const { container } = renderLayout({ scroll: false });
+    expect(
+      container
+        .querySelector(".split-layout")
+        .style.getPropertyValue("--split-top"),
+    ).toBe("");
   });
 
   it("localStorage가 막히거나 값이 숫자가 아니어도 기본 너비로 동작한다", () => {
@@ -203,7 +250,9 @@ describe("SplitLayout", () => {
     );
     const extra = screen.getByTestId("extra");
     expect(extra.textContent).toBe("EXTRA");
-    expect(container.querySelector(".split-layout").contains(extra)).toBe(false);
+    expect(container.querySelector(".split-layout").contains(extra)).toBe(
+      false,
+    );
   });
 
   it("scroll={false}면 no-scroll 클래스를 단다", () => {
