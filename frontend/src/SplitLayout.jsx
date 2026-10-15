@@ -34,6 +34,17 @@ function writeStoredWidth(key, value) {
   }
 }
 
+function clearStoredWidth(key) {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // 삭제 실패는 조절 동작에 영향을 주지 않는다.
+  }
+}
+
+// 0.28 * 100 같은 부동소수점 오차가 CSS 값에 남지 않게 한다.
+const pct = (ratio) => Number((ratio * 100).toFixed(4));
+
 function SplitLeft() {
   return null;
 }
@@ -44,7 +55,7 @@ function SplitRight() {
 
 export default function SplitLayout({
   storageKey,
-  defaultLeftWidth = 280,
+  defaultLeftRatio = 0.25,
   minLeft = 200,
   maxLeftRatio = 0.6,
   scroll = true,
@@ -57,7 +68,7 @@ export default function SplitLayout({
   const widthRef = useRef(0);
   const [dragging, setDragging] = useState(false);
   const [rawWidth, setRawWidth] = useState(
-    () => (storageKey && readStoredWidth(storageKey)) || defaultLeftWidth,
+    () => (storageKey && readStoredWidth(storageKey)) || null,
   );
 
   // 컨테이너의 현재 너비와 문서 위쪽 간격. 창 크기나 위쪽 내용이 바뀌면 다시 잰다.
@@ -99,7 +110,9 @@ export default function SplitLayout({
     [metrics.width, minLeft, maxLeftRatio],
   );
 
-  const leftWidth = clampWidth(rawWidth);
+  // 저장된 너비가 없으면(null) 컨테이너 너비의 defaultLeftRatio를 따라간다.
+  const ratioWidth = metrics.width ? metrics.width * defaultLeftRatio : minLeft;
+  const leftWidth = clampWidth(rawWidth ?? ratioWidth);
   widthRef.current = leftWidth;
 
   const commit = useCallback(
@@ -150,6 +163,11 @@ export default function SplitLayout({
     commit(widthRef.current, { persist: true });
   };
 
+  const resetWidth = () => {
+    setRawWidth(null);
+    if (storageKey) clearStoredWidth(storageKey);
+  };
+
   const onKeyDown = (event) => {
     if (event.key === "ArrowLeft") {
       event.preventDefault();
@@ -162,12 +180,15 @@ export default function SplitLayout({
 
   const showHandle = !isStacked && leftItem && rightItem;
   // 첫 렌더에는 컨테이너 너비를 모르므로, 최대 비율은 CSS min()으로도 건다.
-  const maxWidthCss = (px) => `min(${px}px, ${maxLeftRatio * 100}%)`;
+  const leftCss =
+    rawWidth === null
+      ? `clamp(${minLeft}px, ${pct(defaultLeftRatio)}%, ${pct(maxLeftRatio)}%)`
+      : `min(${leftWidth}px, ${pct(maxLeftRatio)}%)`;
   let style = {};
   if (!isStacked && leftItem && rightItem) {
-    style.gridTemplateColumns = `${maxWidthCss(leftWidth)} ${HANDLE_WIDTH}px minmax(0, 1fr)`;
+    style.gridTemplateColumns = `${leftCss} ${HANDLE_WIDTH}px minmax(0, 1fr)`;
   } else if (!isStacked && leftItem) {
-    style.gridTemplateColumns = maxWidthCss(leftWidth);
+    style.gridTemplateColumns = leftCss;
   }
   // 높이는 화면에서 컨테이너 위쪽 간격을 뺀 만큼. 측정 전에는 CSS 기본값을 쓴다.
   if (scroll && metrics.top !== null) style["--split-top"] = `${metrics.top}px`;
@@ -205,7 +226,7 @@ export default function SplitLayout({
             onPointerUp={endDrag}
             onPointerCancel={endDrag}
             onKeyDown={onKeyDown}
-            onDoubleClick={() => commit(defaultLeftWidth, { persist: true })}
+            onDoubleClick={resetWidth}
           />
         )}
         {rightItem && (

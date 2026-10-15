@@ -280,8 +280,8 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
   await expect(page.getByRole("tree")).toBeVisible();
   const directoryWidth = await page.locator(".book-cover-directory").evaluate((node) => node.getBoundingClientRect().width);
   const panelWidth = await page.locator(".book-cover-panel").evaluate((node) => node.getBoundingClientRect().width);
-  expect(Math.round(directoryWidth)).toBe(240);
-  expect(panelWidth).toBeGreaterThan(directoryWidth * 4);
+  expect(Math.round(directoryWidth)).toBe(360);
+  expect(panelWidth).toBeGreaterThan(directoryWidth * 2);
   const firstHeader = page.locator(".book-cover-row-header").first();
   await expect(firstHeader.getByRole("heading")).toHaveCSS("font-size", "20px");
   await expect(firstHeader.getByRole("button", { name: "편집" })).toBeEnabled();

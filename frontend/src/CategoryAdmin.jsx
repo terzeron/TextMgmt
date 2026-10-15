@@ -2001,7 +2001,7 @@ export default function CategoryAdmin({
       ) : folderData.length === 0 ? (
         <div className="text-muted p-3">카테고리 없음</div>
       ) : (
-        <SplitLayout storageKey="split:category-admin" defaultLeftWidth={360}>
+        <SplitLayout storageKey="split:category-admin">
           <SplitLayout.Left>
             <Card className="h-100">
               <Card.Header className="py-1 d-flex flex-wrap align-items-center gap-2">

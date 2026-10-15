@@ -1143,7 +1143,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
 
   return (
     <Container id="edit">
-      <SplitLayout storageKey="split:edit" defaultLeftWidth={260}>
+      <SplitLayout storageKey="split:edit">
         {isFolderOpen && (
           <SplitLayout.Left>
             <Suspense fallback={<div className="loading">로딩 중...</div>}>

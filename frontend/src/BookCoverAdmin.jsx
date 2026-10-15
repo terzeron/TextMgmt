@@ -336,7 +336,7 @@ export default function BookCoverAdmin() {
   };
 
   return (
-    <SplitLayout storageKey="split:book-cover-admin" defaultLeftWidth={240} className="book-cover-admin">
+    <SplitLayout storageKey="split:book-cover-admin" className="book-cover-admin">
       <SplitLayout.Left className="book-cover-directory">
         <Folder folderData={folderData} expandedItems={expanded} onExpandedItemsChange={setExpanded}
           isOpen={folderOpen} onToggle={setFolderOpen} onClickHandler={(id) => {

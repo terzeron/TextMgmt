@@ -27,7 +27,7 @@ function mockContainerWidth(width) {
 
 function renderLayout(props = {}, { left = true, right = true } = {}) {
   return render(
-    <SplitLayout storageKey={KEY} defaultLeftWidth={280} {...props}>
+    <SplitLayout storageKey={KEY} defaultLeftRatio={0.28} {...props}>
       {left && <SplitLayout.Left>LEFT</SplitLayout.Left>}
       {right && <SplitLayout.Right>RIGHT</SplitLayout.Right>}
     </SplitLayout>,
@@ -48,6 +48,7 @@ describe("SplitLayout", () => {
   });
 
   it("두 pane과 핸들을 렌더한다", () => {
+    mockContainerWidth(1000);
     const { container } = renderLayout();
     expect(container.querySelector(".split-layout-left").textContent).toBe(
       "LEFT",
@@ -209,6 +210,7 @@ describe("SplitLayout", () => {
 
   it("localStorage가 막히거나 값이 숫자가 아니어도 기본 너비로 동작한다", () => {
     window.localStorage.setItem(KEY, "abc");
+    mockContainerWidth(1000);
     renderLayout();
     expect(widthOf()).toBe(280);
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
@@ -230,7 +232,7 @@ describe("SplitLayout", () => {
     expect(handle()).toBeNull();
     expect(
       container.querySelector(".split-layout").getAttribute("style"),
-    ).toContain("280px");
+    ).toContain("28%");
   });
 
   it("오른쪽만 있으면 핸들과 왼쪽 pane이 없다", () => {
@@ -253,6 +255,46 @@ describe("SplitLayout", () => {
     expect(container.querySelector(".split-layout").contains(extra)).toBe(
       false,
     );
+  });
+
+  it("저장된 너비가 없으면 컨테이너 너비의 25%가 기본이고 창 크기를 따라간다", () => {
+    const rect = mockContainerWidth(1000);
+    render(
+      <SplitLayout storageKey={KEY}>
+        <SplitLayout.Left>A</SplitLayout.Left>
+        <SplitLayout.Right>B</SplitLayout.Right>
+      </SplitLayout>,
+    );
+    expect(widthOf()).toBe(250);
+    rect.mockReturnValue({ width: 2000, height: 600, top: 0, left: 0 });
+    fireEvent(window, new Event("resize"));
+    expect(widthOf()).toBe(500);
+  });
+
+  it("기본 비율이 200px보다 작아지면 200px로 제한한다", () => {
+    mockContainerWidth(600);
+    render(
+      <SplitLayout storageKey={KEY}>
+        <SplitLayout.Left>A</SplitLayout.Left>
+        <SplitLayout.Right>B</SplitLayout.Right>
+      </SplitLayout>,
+    );
+    expect(widthOf()).toBe(200);
+  });
+
+  it("더블클릭하면 저장된 너비를 지우고 기본 비율로 돌아간다", () => {
+    mockContainerWidth(1000);
+    render(
+      <SplitLayout storageKey={KEY}>
+        <SplitLayout.Left>A</SplitLayout.Left>
+        <SplitLayout.Right>B</SplitLayout.Right>
+      </SplitLayout>,
+    );
+    fireEvent.keyDown(handle(), { key: "ArrowRight" });
+    expect(window.localStorage.getItem(KEY)).toBe("266");
+    fireEvent.doubleClick(handle());
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+    expect(widthOf()).toBe(250);
   });
 
   it("scroll={false}면 no-scroll 클래스를 단다", () => {

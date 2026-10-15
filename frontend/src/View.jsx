@@ -287,7 +287,6 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
     <Container id="view">
       <SplitLayout
         storageKey="split:view"
-        defaultLeftWidth={280}
         scroll={false}
         className="view-tools-row"
       >
