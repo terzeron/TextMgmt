@@ -57,7 +57,7 @@ export default function ViewPDF({
     500,
   ];
   const [fitMode, setFitMode] = useState(!preview);
-  // 1장씩 보기: CSS scroll-snap으로 뷰포트당 1쪽만 보이게 한다 (PC 전용, 기본 꺼짐)
+  // 1장씩 보기: CSS scroll-snap으로 뷰포트당 1쪽만 보이게 한다 (PC·모바일 공통, 기본 꺼짐)
   const [singlePage, setSinglePage] = useState(false);
   const [zoomIndex, setZoomIndex] = useState(ZOOM_STEPS.indexOf(100));
   const zoomPercent = ZOOM_STEPS[zoomIndex];
@@ -704,31 +704,24 @@ const pdfStyles = `
     .pdf-content {
         overflow-x: auto;
     }
-    .pdf-single-btn {
-        display: none;
+    /* 1장씩 보기: 각 쪽을 뷰포트 높이에 맞춰 snap 지점으로 만든다.
+       PC는 키 스크롤(Space/PageDown), 모바일은 터치 스와이프가 한 쪽씩 넘어간다.
+       scroll-snap-stop: always가 빠른 스와이프로 여러 쪽을 건너뛰는 것을 막는다. */
+    .pdf-container.pdf-single {
+        height: var(--pdf-avail-h, calc(100vh - 10px));
+        scroll-snap-type: y mandatory;
+        scroll-padding-top: var(--pdf-toolbar-h);
     }
-    /* 1장씩 보기는 키보드(Space/PageDown)가 있는 PC 전용이다.
-       각 쪽을 뷰포트 높이에 맞춰 snap 지점으로 만들면 브라우저 기본 키 스크롤이 한 쪽씩 넘어간다. */
-    @media (hover: hover) and (pointer: fine) {
-        .pdf-single-btn {
-            display: flex;
-        }
-        .pdf-container.pdf-single {
-            height: var(--pdf-avail-h, calc(100vh - 10px));
-            scroll-snap-type: y mandatory;
-            scroll-padding-top: var(--pdf-toolbar-h);
-        }
-        /* overflow-x:auto는 overflow-y도 auto로 만들어 snap 컨테이너를 가로채므로 푼다 */
-        .pdf-container.pdf-single .pdf-content {
-            overflow: visible;
-        }
-        .pdf-container.pdf-single .pdf-page {
-            width: 100% !important;
-            height: calc(var(--pdf-avail-h, calc(100vh - 10px)) - var(--pdf-toolbar-h)) !important;
-            object-fit: contain;
-            scroll-snap-align: start;
-            scroll-snap-stop: always;
-        }
+    /* overflow-x:auto는 overflow-y도 auto로 만들어 snap 컨테이너를 가로채므로 푼다 */
+    .pdf-container.pdf-single .pdf-content {
+        overflow: visible;
+    }
+    .pdf-container.pdf-single .pdf-page {
+        width: 100% !important;
+        height: calc(var(--pdf-avail-h, calc(100vh - 10px)) - var(--pdf-toolbar-h)) !important;
+        object-fit: contain;
+        scroll-snap-align: start;
+        scroll-snap-stop: always;
     }
     .pdf-page {
         display: block;
