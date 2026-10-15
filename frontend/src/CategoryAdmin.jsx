@@ -10,8 +10,6 @@ import {
   Form,
   InputGroup,
   Badge,
-  Row,
-  Col,
   Spinner,
   Modal,
 } from "react-bootstrap";
@@ -59,7 +57,7 @@ import ClassifyProposalTable, {
   isAlreadyInCurrentCategory,
 } from "./ClassifyProposalTable";
 import "./Folder.css";
-import "./CategoryAdmin.css";
+import SplitLayout from "./SplitLayout";
 
 // ── MUI TreeItem 스타일 (Folder.jsx의 CustomTreeItem 스타일 재사용) ──
 
@@ -2003,8 +2001,8 @@ export default function CategoryAdmin({
       ) : folderData.length === 0 ? (
         <div className="text-muted p-3">카테고리 없음</div>
       ) : (
-        <Row className="g-0">
-          <Col md={4} className="category-admin-directory">
+        <SplitLayout storageKey="split:category-admin" defaultLeftWidth={360}>
+          <SplitLayout.Left>
             <Card className="h-100">
               <Card.Header className="py-1 d-flex flex-wrap align-items-center gap-2">
                 <span className="me-auto">디렉토리</span>
@@ -2102,8 +2100,8 @@ export default function CategoryAdmin({
                 </div>
               </Card.Body>
             </Card>
-          </Col>
-          <Col md={8}>
+          </SplitLayout.Left>
+          <SplitLayout.Right>
             {/* 카테고리 선택 시 */}
             {selectedCategory && !selectedMismatch && (
               <Card>
@@ -2621,8 +2619,8 @@ export default function CategoryAdmin({
                 {actionResult.message}
               </div>
             )}
-          </Col>
-        </Row>
+          </SplitLayout.Right>
+        </SplitLayout>
       )}
 
       {/* 이름 변경 모달 */}
