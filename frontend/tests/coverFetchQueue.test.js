@@ -2,6 +2,24 @@ import { describe, it, expect, vi } from "vitest";
 import { createStoreQueue, selectViewportTargets } from "../src/coverFetchQueue";
 
 describe("표지 fetch 제한", () => {
+  it("미리 받기를 시작했던 책도 목록을 벗어났다가 돌아오면 다음 5초 기한을 지킨다", async () => {
+    vi.useFakeTimers();
+    const queue = createStoreQueue();
+    try {
+      const search = vi.fn().mockResolvedValue(undefined);
+      const image = vi.fn().mockResolvedValue(undefined);
+      queue.setTasks([{ key: "search", store: "yes24", backgroundKey: "book", run: search }]);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(search).toHaveBeenCalledOnce();
+      queue.setTasks([]);
+      queue.setTasks([{ key: "image", store: "yes24", backgroundKey: "book", run: image }]);
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(image).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(image).toHaveBeenCalledOnce();
+    } finally { queue.dispose(); vi.useRealTimers(); }
+  });
+
   it("미리 받기 대기 시간이 지나도 같은 서점의 보이는 책을 먼저 처리한다", async () => {
     vi.useFakeTimers();
     const queue = createStoreQueue();

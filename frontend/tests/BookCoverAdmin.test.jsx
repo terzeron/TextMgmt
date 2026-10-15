@@ -46,6 +46,83 @@ function deferred() {
 }
 
 describe("책 표지 관리", () => {
+  it.each([false, true])("빈 페이지를 지나 160권 이후의 마지막 책까지 자동 검사한다: 교체 %s", async (covered) => {
+    setup();
+    const cursors = [];
+    overrideRequest((path, options, original) => {
+      if (!path.startsWith("/missing")) return original(path, options);
+      const params = new URLSearchParams(path.split("?")[1]);
+      if ((params.get("covered") === "true") !== covered) return { items: [], scanned: 0, total: 0 };
+      const cursor = params.get("cursor");
+      cursors.push(cursor);
+      const scanned = Math.min(Number(cursor || 0) + 60, 241);
+      return { items: scanned === 241 ? [{ file_path: "last.epub", title: "마지막 책", status: covered ? "covered" : "missing", has_cover: covered, revision: "r1" }] : [],
+        scanned, total: 241, next_cursor: scanned < 241 ? String(scanned) : null };
+    });
+    render(<BookCoverAdmin />);
+    if (covered) fireEvent.click(screen.getByRole("switch", { name: "표지 교체" }));
+    await screen.findByRole("heading", { name: "마지막 책" });
+    expect(cursors).toEqual(["", "60", "120", "180", "240"]);
+    expect(screen.getByText("EPUB 검사 241 / 241 · 현재 목록 1개")).toBeTruthy();
+    fireEvent.scroll(window);
+    fireEvent.resize(window);
+    await act(async () => new Promise((resolve) => requestAnimationFrame(resolve)));
+    expect(cursors).toHaveLength(5);
+  });
+
+  it("추가 검사 중 디렉토리를 바꾸면 요청을 취소하고 늦은 실패를 무시한다", async () => {
+    setup();
+    const pending = deferred();
+    let pendingSignal;
+    overrideRequest(async (path, options, original) => {
+      if (path.startsWith("/missing?directory=other")) return { items: [{ file_path: "other/new.epub", title: "새 디렉토리 책", status: "missing", revision: "r1" }], scanned: 1, total: 1 };
+      if (path.startsWith("/missing") && path.includes("cursor=60")) { pendingSignal = options.signal; return pending.promise; }
+      const result = await original(path, options);
+      return path.startsWith("/missing") ? { ...result, next_cursor: "60", total: 180 } : result;
+    });
+    render(<BookCoverAdmin />);
+    await waitFor(() => expect(pendingSignal).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "다른 디렉토리" }));
+    await screen.findByRole("heading", { name: "새 디렉토리 책" });
+    expect(pendingSignal.aborted).toBe(true);
+    await act(async () => pending.reject(new Error("이전 디렉토리 검사 실패")));
+    expect(screen.queryByText("이전 디렉토리 검사 실패")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "테스트 책" })).toBeNull();
+    expect(screen.getByText("EPUB 검사 1 / 1 · 현재 목록 1개")).toBeTruthy();
+  });
+
+  it("카테고리가 없으면 편집과 조회 링크에 최상위 카테고리를 사용한다", async () => {
+    setup();
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    overrideRequest(async (path, options, original) => {
+      const result = await original(path, options);
+      return path.startsWith("/missing") ? { ...result, items: result.items.map((item) => ({ ...item, category: undefined })) } : result;
+    });
+    render(<BookCoverAdmin />);
+    await screen.findByRole("heading", { name: "테스트 책" });
+    fireEvent.click(screen.getByRole("button", { name: "편집" }));
+    fireEvent.click(screen.getByRole("button", { name: "조회" }));
+    expect(open).toHaveBeenNthCalledWith(1, "/book-edit/123?category=_root", "_blank", "noopener");
+    expect(open).toHaveBeenNthCalledWith(2, "/book-view/123?category=_root", "_blank", "noopener");
+  });
+
+  it("이미지 재시도가 연속 실패해도 다시 요청해서 표지를 표시한다", async () => {
+    setup();
+    let attempts = 0;
+    overrideRequest((path, options, original) => {
+      if (path.startsWith("/candidate-image") && ++attempts <= 2) return Promise.reject(new Error("이미지 다운로드 실패"));
+      return original(path, options);
+    });
+    render(<BookCoverAdmin />);
+    fireEvent.click(await screen.findByRole("button", { name: "이미지 재시도" }));
+    await waitFor(() => expect(attempts).toBe(2));
+    fireEvent.click(await screen.findByRole("button", { name: "이미지 재시도" }));
+    await screen.findByAltText("서점 책");
+    expect(attempts).toBe(3);
+    expect(screen.queryByRole("button", { name: "이미지 재시도" })).toBeNull();
+    expect(request.mock.calls.some(([path]) => path === "/apply")).toBe(false);
+  });
+
   it("빈 표지도 크기 자리와 저장 아이콘을 항상 표시하고 휴지통 왼쪽에 배치한다", async () => {
     setup();
     render(<BookCoverAdmin />);

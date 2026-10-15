@@ -148,6 +148,42 @@ def test_covered_listing_mode_filters_pages_and_preserves_epub(cover_api, tmp_pa
     assert not (tmp_path / ".cover_backups").exists()
 
 
+@pytest.mark.parametrize("covered", [False, True])
+def test_listing_scans_past_160_books_without_recursing_or_modifying_files(cover_api, tmp_path, monkeypatch, covered):
+    from backend import cover_management as module
+    client, _, _ = cover_api
+    selected = tmp_path / "selected"
+    paths = [make_epub(selected / f"book-{index:03}.epub", cover=covered if index == 240 else not covered)
+             for index in range(241)]
+    make_epub(selected / "nested" / "nested.epub", cover=covered)
+    make_epub(tmp_path / "sibling" / "sibling.epub", cover=covered)
+    make_epub(selected / ".hidden.epub", cover=covered)
+    (selected / "other.txt").write_text("대상 제외")
+    originals = {path: path.read_bytes() for path in paths}
+    real_inspect = module.inspect_epub
+    inspected = []
+    def inspect(path):
+        inspected.append(path)
+        return real_inspect(path)
+    monkeypatch.setattr(module, "inspect_epub", inspect)
+    cursor = ""
+    pages = []
+    for _ in range(5):
+        response = client.get("/admin/book-covers/missing", params={"directory": "selected", "cursor": cursor, "covered": covered})
+        assert response.status_code == 200
+        page = response.json()["result"]
+        pages.append(page)
+        cursor = page["next_cursor"]
+    assert [page["scanned"] for page in pages] == [60, 120, 180, 240, 241]
+    assert [page["next_cursor"] for page in pages] == ["60", "120", "180", "240", None]
+    assert all(page["total"] == 241 for page in pages)
+    assert all(not page["items"] for page in pages[:-1])
+    assert [item["file_path"] for item in pages[-1]["items"]] == ["selected/book-240.epub"]
+    assert inspected == paths
+    assert all(path.read_bytes() == original for path, original in originals.items())
+    assert not (tmp_path / ".cover_backups").exists()
+
+
 def test_existing_cover_listing_can_recommend_and_replace_with_backup(cover_api, tmp_path, monkeypatch):
     import base64
     from backend import cover_management as module
