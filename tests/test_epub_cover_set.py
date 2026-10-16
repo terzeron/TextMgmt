@@ -16,6 +16,16 @@ from tests.test_cover_management import image_bytes, make_epub
 URL = "https://img.example.com/cover.jpg"
 
 
+def image_bytes_of(color):
+    import io
+
+    from PIL import Image
+
+    output = io.BytesIO()
+    Image.new("RGB", (120, 180), color).save(output, "JPEG")
+    return output.getvalue()
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     """(manager 대역, EPUB 경로, 책). get_book 은 이 EPUB 를 가리키는 책을 돌려준다."""
@@ -24,7 +34,7 @@ def env(tmp_path, monkeypatch):
     book = SimpleNamespace(file_path=path, file_type="epub")
     es = MagicMock()
     es.update.return_value = True
-    manager = SimpleNamespace(path_prefix=tmp_path, es_manager=es, get_book=AsyncMock(return_value=(book, None)))
+    manager = SimpleNamespace(path_prefix=tmp_path, TRASH_DIRNAME="0_trash", es_manager=es, get_book=AsyncMock(return_value=(book, None)))
     return manager, path, book
 
 
@@ -52,7 +62,7 @@ async def test_adds_a_cover_to_an_epub_without_one(env):
 
 
 @pytest.mark.asyncio
-async def test_replaces_an_existing_cover_and_backs_up_the_original(env, tmp_path):
+async def test_replaces_an_existing_cover_and_keeps_the_original_in_0_trash(env, tmp_path):
     manager, path, _ = env
     make_epub(path, cover=True)
     original = path.read_bytes()
@@ -61,8 +71,57 @@ async def test_replaces_an_existing_cover_and_backs_up_the_original(env, tmp_pat
 
     assert error is None
     assert path.read_bytes() != original
-    backups = list((tmp_path / ".cover_backups").glob("*.epub"))
-    assert len(backups) == 1 and backups[0].read_bytes() == original
+    # PDF 편집과 같이 0_trash 에 원래 이름으로 둔다. 숨김 폴더 .cover_backups 는 쓰지 않는다.
+    assert (tmp_path / "0_trash" / "book.epub").read_bytes() == original
+    assert not (tmp_path / ".cover_backups").exists()
+
+
+@pytest.mark.asyncio
+async def test_second_edit_keeps_the_first_original(env, tmp_path, monkeypatch):
+    manager, path, _ = env
+    first_original = path.read_bytes()
+
+    await call(manager)
+    after_first = path.read_bytes()
+    monkeypatch.setattr("backend.cover_management.fetch_url_image", lambda url: image_bytes_of("blue"))
+    result, error = await call(manager)
+
+    assert error is None
+    assert path.read_bytes() != after_first
+    # 처음 원본을 지킨다(덮어쓰지 않는다). 임시 롤백 파일도 남기지 않는다.
+    assert (tmp_path / "0_trash" / "book.epub").read_bytes() == first_original
+    assert [p.name for p in (tmp_path / "0_trash").iterdir()] == ["book.epub"]
+    assert not list(path.parent.glob(".cover-*.tmp"))
+
+
+def test_failed_write_restores_the_current_file_not_the_older_backup(tmp_path, monkeypatch):
+    """백업이 이미 있으면 그것은 처음 원본이다. 쓰다가 실패하면 지금 원본으로 되돌려야 한다."""
+    import backend.epub_cover as module
+
+    path = make_epub(tmp_path / "book.epub")
+    trash = tmp_path / "0_trash"
+    module.add_cover(path, image_bytes(), module.inspect_epub(path)["revision"], trash, backup_name="book.epub")
+    current = path.read_bytes()
+    older = (trash / "book.epub").read_bytes()
+    assert current != older
+
+    real_fsync = module.os.fsync
+    calls = 0
+
+    def fail_on_write_back(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 3:  # 롤백 사본(1), 편집본(2), 본 파일에 쓴 뒤(3)
+            raise OSError("write failed")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(module.os, "fsync", fail_on_write_back)
+    with pytest.raises(OSError):
+        module.add_cover(path, image_bytes_of("green"), module.inspect_epub(path)["revision"], trash, replace_existing=True, backup_name="book.epub")
+
+    assert path.read_bytes() == current
+    assert (trash / "book.epub").read_bytes() == older
+    assert not list(tmp_path.glob(".cover-*.tmp"))
 
 
 @pytest.mark.asyncio

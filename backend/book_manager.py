@@ -3001,7 +3001,8 @@ class BookManager:
             service = CoverManagement(self.path_prefix)
             relative = str(book.file_path.relative_to(self.path_prefix))
             expected_revision = inspect_epub(service.resolve(relative))["revision"]
-            return service.apply_url(relative, url, expected_revision, replace_existing=True)
+            # 원본은 PDF 편집과 같이 0_trash 에 원래 이름으로 보존한다.
+            return service.apply_url(relative, url, expected_revision, replace_existing=True, backup_dir=self.path_prefix / self.TRASH_DIRNAME, backup_name=book.file_path.name)
 
         try:
             result = await asyncio.to_thread(apply)

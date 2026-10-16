@@ -302,7 +302,7 @@ class CoverManagement:
                 raise CoverError("표지 이미지를 먼저 확인하세요")
             return self._save_cover(path, relative, image_path.read_bytes(), expected_revision)
 
-    def apply_url(self, relative: str, url: str, expected_revision: str, *, replace_existing: bool = False) -> dict[str, Any]:
+    def apply_url(self, relative: str, url: str, expected_revision: str, *, replace_existing: bool = False, backup_dir: Path | None = None, backup_name: str | None = None) -> dict[str, Any]:
         path = self.resolve(relative)
         relative = str(path.relative_to(self.root))
         with self._book_lock(relative, exclusive=True):
@@ -315,7 +315,7 @@ class CoverManagement:
             store = next((name for name, domains in STORE_HOSTS.items() if any(host == domain or host.endswith("." + domain) for domain in domains)), None)
             with store_lock(self.cache, store) if store else nullcontext():
                 data = fetch_url_image(url)
-            return self._save_cover(path, relative, data, expected_revision, replace_existing=replace_existing)
+            return self._save_cover(path, relative, data, expected_revision, replace_existing=replace_existing, backup_dir=backup_dir, backup_name=backup_name)
 
     def apply_image(self, relative: str, image_data: str, expected_revision: str) -> dict[str, Any]:
         path = self.resolve(relative)
@@ -336,8 +336,8 @@ class CoverManagement:
             self._delete_book_cache(relative, expected_revision)
         return {"cleared": True, "file_path": relative}
 
-    def _save_cover(self, path: Path, relative: str, image: bytes, expected_revision: str, *, replace_existing: bool = False) -> dict[str, Any]:
-        result = add_cover(path, image, expected_revision, self.root / ".cover_backups", replace_existing=replace_existing)
+    def _save_cover(self, path: Path, relative: str, image: bytes, expected_revision: str, *, replace_existing: bool = False, backup_dir: Path | None = None, backup_name: str | None = None) -> dict[str, Any]:
+        result = add_cover(path, image, expected_revision, backup_dir or self.root / ".cover_backups", replace_existing=replace_existing, backup_name=backup_name)
         try:
             self._delete_book_cache(relative, expected_revision)
         except OSError as exc:

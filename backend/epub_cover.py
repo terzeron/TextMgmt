@@ -211,7 +211,12 @@ def _stage_cover(source: BinaryIO, destination: Path, image: bytes) -> None:
             raise CoverError("저장할 EPUB의 표지 검증에 실패했습니다")
 
 
-def add_cover(path: Path, image: bytes, expected_revision: str, backup_dir: Path, *, replace_existing: bool = False) -> dict[str, Any]:
+def add_cover(path: Path, image: bytes, expected_revision: str, backup_dir: Path, *, replace_existing: bool = False, backup_name: str | None = None) -> dict[str, Any]:
+    """표지를 넣고 원본을 backup_dir 에 보존한다.
+
+    backup_name 을 주면(휴지통 보존) 그 이름으로 두고, 같은 이름이 이미 있으면 덮어쓰지 않고 처음 원본을 지킨다(PDF 편집과 같다).
+    주지 않으면 편집마다 고유한 이름으로 둔다(표지 관리).
+    """
     image = normalize_image(image, max_width=600)
     with Image.open(io.BytesIO(image)) as cover:
         image_info = {"width": cover.width, "height": cover.height, "byte_size": len(image)}
@@ -227,17 +232,34 @@ def add_cover(path: Path, image: bytes, expected_revision: str, backup_dir: Path
                 raise CoverError("EPUB에 이미 표지가 있습니다")
         original_stat = path.stat()
         backup_dir.mkdir(parents=True, exist_ok=True)
-        backup_name = hashlib.sha256(f"{path}:{expected_revision}".encode()).hexdigest() + f"-{uuid.uuid4().hex}.epub"
-        backup = backup_dir / backup_name
+        named = backup_name is not None
+        backup = backup_dir / (backup_name or hashlib.sha256(f"{path}:{expected_revision}".encode()).hexdigest() + f"-{uuid.uuid4().hex}.epub")
+        backup_created = True
         source.seek(0)
-        with backup.open("xb") as output:
-            shutil.copyfileobj(source, output)
-            output.flush()
-            os.fsync(output.fileno())
+        try:
+            with backup.open("xb") as output:
+                shutil.copyfileobj(source, output)
+                output.flush()
+                os.fsync(output.fileno())
+        except FileExistsError:
+            if not named:
+                raise
+            backup_created = False
         descriptor, filename = tempfile.mkstemp(prefix=".cover-", suffix=".tmp", dir=path.parent)
         os.close(descriptor)
         staged = Path(filename)
+        # 이미 있던 백업은 처음 원본이라 지금 원본이 아니다. 실패 때 되돌릴 지금 원본은 따로 복사해 둔다.
+        rollback = backup
         try:
+            if not backup_created:
+                descriptor, rollback_name = tempfile.mkstemp(prefix=".cover-rollback-", suffix=".tmp", dir=path.parent)
+                os.close(descriptor)
+                rollback = Path(rollback_name)
+                source.seek(0)
+                with rollback.open("wb") as output:
+                    shutil.copyfileobj(source, output)
+                    output.flush()
+                    os.fsync(output.fileno())
             _stage_cover(source, staged, image)
             if revision(path) != expected_revision:
                 raise CoverError("EPUB이 변경되었습니다. 목록을 새로 불러오세요")
@@ -249,7 +271,7 @@ def add_cover(path: Path, image: bytes, expected_revision: str, backup_dir: Path
                     source.flush()
                     os.fsync(source.fileno())
             except Exception:
-                with backup.open("rb") as reader:
+                with rollback.open("rb") as reader:
                     source.seek(0)
                     shutil.copyfileobj(reader, source)
                     source.truncate()
@@ -260,5 +282,7 @@ def add_cover(path: Path, image: bytes, expected_revision: str, backup_dir: Path
                 os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
         finally:
             staged.unlink(missing_ok=True)
-    return {"revision": revision(path), "backup_path": str(backup), "file_size": path.stat().st_size,
+            if rollback is not backup:
+                rollback.unlink(missing_ok=True)
+    return {"revision": revision(path), "backup_path": str(backup), "backup_created": backup_created, "file_size": path.stat().st_size,
             "book_id": original_stat.st_ino, "cover_image": image_info}
