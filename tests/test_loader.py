@@ -1,5 +1,6 @@
 import sys
 import os
+from datetime import datetime
 import re
 import shutil
 import subprocess
@@ -4507,6 +4508,42 @@ class TestLoaderMainBranches:
         assert main() == 0
         assert inserted_data[inode]["created_time"] == "2020-01-01T00:00:00"
         assert inserted_data[inode]["created_time_source"] == "statx_btime"
+
+    def _run_reload_with_stored_updated_time(self, monkeypatch, tmp_path, stored_updated_time, mtime_ts):
+        _setup_loader_env(monkeypatch, tmp_path)
+        file_path = tmp_path / "[author] book.txt"
+        file_path.write_text("content", encoding="utf-8")
+        os.utime(file_path, (mtime_ts, mtime_ts))
+        inode = file_path.stat().st_ino
+        monkeypatch.setattr("sys.argv", ["loader", "--reload", "book", str(file_path)])
+        from utils.loader import main
+
+        inserted_data = {}
+
+        def capture_insert(data):
+            inserted_data.update(data)
+            return list(data)
+
+        mock_es = MagicMock()
+        mock_es.es.ping.return_value = True
+        mock_es.get_existing_created_time_metadata.return_value = {inode: {"created_time": "2020-01-01T00:00:00", "updated_time": stored_updated_time}}
+        mock_es.delete_by_file_paths.return_value = 0
+        mock_es.insert.side_effect = capture_insert
+        monkeypatch.setattr("utils.loader.ESManager", lambda index_name: mock_es)
+
+        assert main() == 0
+        return inserted_data[inode]
+
+    def test_reload_preserves_updated_time_when_file_unchanged(self, monkeypatch, tmp_path):
+        """파일 mtime이 저장된 updated_time보다 오래되면 재적재해도 updated_time을 유지한다."""
+        doc = self._run_reload_with_stored_updated_time(monkeypatch, tmp_path, "2021-02-03T04:05:06", datetime(2020, 1, 1).timestamp())
+        assert doc["updated_time"] == "2021-02-03T04:05:06"
+
+    def test_reload_refreshes_updated_time_when_file_modified(self, monkeypatch, tmp_path):
+        """파일 mtime이 저장된 updated_time보다 새로우면 updated_time을 갱신한다."""
+        doc = self._run_reload_with_stored_updated_time(monkeypatch, tmp_path, "2021-02-03T04:05:06", datetime(2022, 1, 1).timestamp())
+        assert doc["updated_time"] > "2021-02-03T04:05:06"
+        assert doc["updated_time"] != "2021-02-03T04:05:06"
 
     def test_recursive_skipped(self, monkeypatch, tmp_path, capsys):
         """변경 없는 기존 파일은 skip → 건너뜀 메시지(1002)."""

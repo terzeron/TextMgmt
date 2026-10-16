@@ -1627,6 +1627,14 @@ def main() -> int:
                         batch_data[inode]["created_time"] = metadata["created_time"]
                     if "created_time_source" in metadata:
                         batch_data[inode]["created_time_source"] = metadata["created_time_source"]
+                    # 파일이 마지막 적재 이후 바뀌지 않았으면 updated_time 유지 (최신 책 탭에 재적재분이 끼지 않도록)
+                    stored_updated_time = metadata.get("updated_time")
+                    if stored_updated_time and inode in file_stat_map:
+                        try:
+                            if file_stat_map[inode][1].st_mtime <= datetime.fromisoformat(stored_updated_time).timestamp():
+                                batch_data[inode]["updated_time"] = stored_updated_time
+                        except ValueError:
+                            pass
                 new_file_paths = [v["file_path"] for v in batch_data.values() if "file_path" in v]
                 new_ids = list(batch_data.keys())
                 cleaned = es_manager.delete_by_file_paths(new_file_paths, exclude_ids=new_ids)
