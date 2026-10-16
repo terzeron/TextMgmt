@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import zlib
 from collections import OrderedDict
 from collections.abc import Awaitable, Iterator
 from pathlib import Path
@@ -27,6 +28,8 @@ from backend.es_manager import ESManager
 from backend.book import Book
 from backend.book_classifier import BookClassifierService, clean_empty_parent_dirs
 from utils.corpus_layout import IGNORED_DIR_NAMES
+
+Rect = tuple[float, float, float, float, float]  # x0, y0, x1, y1 (쪽 크기 대비 0~1, 원점은 좌상단), angle (도, 시계 방향, 박스 중심 기준)
 
 logging.config.fileConfig(Path(__file__).parent.parent / "logging.conf", disable_existing_loggers=False)
 LOGGER = logging.getLogger(__name__)
@@ -2761,6 +2764,420 @@ class BookManager:
         except Exception as e:
             LOGGER.error("PDF pages extraction failed for book_id=%d: %s", book_id, e)
             return Response(status_code=500, content=f"PDF pages extraction failed ({type(e).__name__}): {e}")
+
+    TRASH_DIRNAME = "0_trash"
+
+    # 이미지 한 장을 쪽 전체에 그리는 단순한 내용 스트림: q W 0 0 H E F cm /ImN Do Q
+    MIN_CROP_PIXELS = 8
+    _SINGLE_IMAGE_CONTENT = re.compile(rb"^\s*q\s+(\S+)\s+0(?:\.0*)?\s+0(?:\.0*)?\s+(\S+)\s+(\S+)\s+(\S+)\s+cm\s+(/\S+)\s+Do\s+Q\s*$")
+
+    @staticmethod
+    def _crop_page(pdf: Any, page: Any, page_no: int, rect: Rect) -> None:
+        """이미지 한 장으로 된 쪽에서 rect(x0, y0, x1, y1, angle) 밖의 픽셀을 제거한다.
+
+        x0~y1 은 쪽 크기 대비 0~1(원점은 좌상단)이고, angle 은 박스 중심 기준 시계 방향 회전각(도)이다.
+        angle 이 0이 아니면 기울어진 영역을 곧게 펴서 잘라내며(재샘플링), 네 꼭짓점이 쪽 안에 있어야 한다.
+        쪽 크기도 같은 비율로 줄인다. 지원하지 않는 구조면 아무것도 바꾸지 않고 ValueError 를 던진다.
+        JPEG 은 원본 양자화 테이블·서브샘플링을 그대로 써서 재압축 손실을 줄인다.
+        """
+        import math
+
+        import pikepdf
+        from PIL import Image, JpegImagePlugin
+
+        def unsupported(reason: str) -> ValueError:
+            return ValueError(f"{page_no}쪽: 크롭할 수 없습니다 ({reason})")
+
+        if int(page.get("/Rotate", 0)) % 360:
+            raise unsupported("회전된 쪽")
+        resources = page.get("/Resources")
+        contents = page.get("/Contents")
+        if resources is None or contents is None:
+            raise unsupported("리소스 없음")
+        streams = list(contents) if isinstance(contents, pikepdf.Array) else [contents]
+        match = BookManager._SINGLE_IMAGE_CONTENT.match(b"\n".join(s.read_bytes() for s in streams))
+        if not match:
+            raise unsupported("이미지 한 장으로 된 쪽이 아님")
+        name = match.group(5).decode("latin-1")
+        xobjects = resources.get("/XObject")
+        image = xobjects.get(name) if xobjects is not None else None
+        if image is None or image.get("/Subtype") != "/Image":
+            raise unsupported("이미지를 찾을 수 없음")
+
+        box = [float(v) for v in page.get("/CropBox", page.mediabox)]
+        box_w, box_h = box[2] - box[0], box[3] - box[1]
+        try:
+            a, d, e, f = (float(match.group(i)) for i in (1, 2, 3, 4))
+        except ValueError:
+            raise unsupported("이미지 배치 행렬을 읽을 수 없음") from None
+        tol_w, tol_h = max(2.0, 0.01 * box_w), max(2.0, 0.01 * box_h)
+        if abs(a - box_w) > tol_w or abs(d - box_h) > tol_h or abs(e - box[0]) > tol_w or abs(f - box[1]) > tol_h:
+            raise unsupported("이미지가 쪽 전체를 덮지 않음")
+
+        image_filter = image.get("/Filter")
+        if isinstance(image_filter, pikepdf.Array) and len(image_filter) == 1:
+            image_filter = image_filter[0]
+        is_jpeg = image_filter == "/DCTDecode"
+        if is_jpeg:
+            if image.get("/ColorSpace") not in ("/DeviceRGB", "/DeviceGray") or "/SMask" in image or "/Mask" in image or "/Decode" in image or int(image.get("/BitsPerComponent", 8)) != 8:
+                raise unsupported("지원하지 않는 이미지 색상 구성")
+        else:
+            # Flate·LZW·RunLength 로 압축한(또는 압축하지 않은) 픽셀 이미지는 화질을 잃지 않게 무손실(Flate)로 다시 저장한다.
+            if image_filter not in (None, "/FlateDecode", "/LZWDecode", "/RunLengthDecode"):
+                raise unsupported(f"지원하지 않는 이미지 형식 {image_filter}")
+            if "/SMask" in image or "/Mask" in image or "/Decode" in image or bool(image.get("/ImageMask", False)):
+                raise unsupported("지원하지 않는 이미지 색상 구성")
+
+        x0, y0, x1, y1, angle = rect
+        if not all(math.isfinite(v) for v in rect) or not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1) or abs(angle) > 360:
+            raise unsupported("크롭 영역이 쪽 밖이거나 비어 있음")
+        if is_jpeg:
+            source = Image.open(io.BytesIO(image.read_raw_bytes()))
+        else:
+            try:
+                source = pikepdf.PdfImage(image).as_pil_image()
+            except Exception as exc:
+                raise unsupported("이미지를 해독할 수 없음") from exc
+        with source:
+            source.load()
+            if not is_jpeg:
+                if source.mode == "P":  # 팔레트 이미지는 RGB 로 펼친다
+                    source = source.convert("RGB")
+                if source.mode not in ("RGB", "L", "1"):
+                    raise unsupported(f"지원하지 않는 색상 모드 {source.mode}")
+            width, height = source.size
+            if width != int(image.Width) or height != int(image.Height):
+                raise unsupported("이미지 크기 불일치")
+            if abs(angle) < 0.01:
+                left, top, right, bottom = round(x0 * width), round(y0 * height), round(x1 * width), round(y1 * height)
+                out_w, out_h = right - left, bottom - top
+            else:
+                out_w, out_h = round((x1 - x0) * width), round((y1 - y0) * height)
+            if out_w < BookManager.MIN_CROP_PIXELS or out_h < BookManager.MIN_CROP_PIXELS:
+                raise unsupported("크롭 영역이 너무 작음")
+            if abs(angle) < 0.01:
+                cropped = source.crop((left, top, right, bottom))
+            else:
+                theta = math.radians(angle)
+                cos_t, sin_t = math.cos(theta), math.sin(theta)
+                center_x, center_y = (x0 + x1) / 2 * width, (y0 + y1) / 2 * height
+                half_w, half_h = out_w / 2, out_h / 2
+                for sign_x, sign_y in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+                    corner_x = center_x + cos_t * sign_x * half_w - sin_t * sign_y * half_h
+                    corner_y = center_y + sin_t * sign_x * half_w + cos_t * sign_y * half_h
+                    if not (-1.5 <= corner_x <= width + 1.5 and -1.5 <= corner_y <= height + 1.5):
+                        raise unsupported("기울어진 크롭 영역이 쪽 밖으로 나감")
+                # 출력 픽셀 (x, y) → 원본 좌표: 박스 중심을 기준으로 angle 만큼 돌린 위치
+                coefficients = (cos_t, -sin_t, center_x - cos_t * half_w + sin_t * half_h, sin_t, cos_t, center_y - sin_t * half_w - cos_t * half_h)
+                # 1비트 이미지는 보간할 수 없으므로 8비트 회색으로 올려서 돌린다
+                rotating = source.convert("L") if source.mode == "1" else source
+                fill = 255 if rotating.mode == "L" else (255, 255, 255)
+                cropped = rotating.transform((out_w, out_h), Image.Transform.AFFINE, coefficients, resample=Image.Resampling.BICUBIC, fillcolor=fill)
+            if is_jpeg:
+                # JPEG 은 원본 양자화 테이블·서브샘플링을 그대로 써서 재압축 손실을 줄인다.
+                save_args: dict[str, Any] = {"format": "JPEG", "qtables": source.quantization, "progressive": bool(source.info.get("progressive"))}
+                sampling = JpegImagePlugin.get_sampling(source)
+                if sampling != -1:
+                    save_args["subsampling"] = sampling
+                buf = io.BytesIO()
+                cropped.save(buf, **save_args)
+                encoded = buf.getvalue()
+            else:
+                encoded = zlib.compress(cropped.tobytes(), 6)
+
+        def components(colorspace: Any) -> int:
+            """색 공간의 채널 수. 모르면 0."""
+            if colorspace == "/DeviceRGB":
+                return 3
+            if colorspace == "/DeviceGray":
+                return 1
+            if isinstance(colorspace, pikepdf.Array) and len(colorspace) > 1 and colorspace[0] == "/ICCBased":
+                return int(colorspace[1].get("/N", 0))
+            return 0
+
+        # 이미지·리소스를 새로 만들어 끼운다: 다른 쪽이 같은 객체를 공유해도 영향이 없다.
+        new_image = pdf.make_stream(encoded)
+        new_image.Type = pikepdf.Name.XObject
+        new_image.Subtype = pikepdf.Name.Image
+        new_image.Width = out_w
+        new_image.Height = out_h
+        if is_jpeg:
+            new_image.ColorSpace = image.ColorSpace
+            new_image.BitsPerComponent = 8
+            new_image.Filter = pikepdf.Name.DCTDecode
+        else:
+            channels = 3 if cropped.mode == "RGB" else 1
+            # 원래 색 공간(ICC 프로파일 포함)이 채널 수가 맞으면 그대로 쓰고, 팔레트 등은 Device 색 공간으로 바꾼다.
+            original = image.get("/ColorSpace")
+            new_image.ColorSpace = original if components(original) == channels else (pikepdf.Name.DeviceRGB if channels == 3 else pikepdf.Name.DeviceGray)
+            new_image.BitsPerComponent = 1 if cropped.mode == "1" else 8
+            new_image.Filter = pikepdf.Name.FlateDecode
+        new_xobjects = pikepdf.Dictionary({k: v for k, v in xobjects.items()})
+        new_xobjects[name] = new_image
+        new_resources = pikepdf.Dictionary({k: v for k, v in resources.items()})
+        new_resources.XObject = new_xobjects
+        new_w = box_w * out_w / width
+        new_h = box_h * out_h / height
+        page.Resources = new_resources
+        page.Contents = pdf.make_stream(f"q {new_w:.4f} 0 0 {new_h:.4f} 0 0 cm {name} Do Q".encode("ascii"))
+        page.MediaBox = pikepdf.Array([0, 0, new_w, new_h])
+        for key in ("/CropBox", "/TrimBox", "/BleedBox", "/ArtBox"):
+            if key in page:
+                del page[key]
+
+    @staticmethod
+    def _download_image_as_jpeg(url: str) -> tuple[bytes, int, int]:
+        """URL 의 이미지를 내려받아 JPEG 로 정규화한다: (JPEG 바이트, 너비, 높이).
+
+        표지 관리와 같은 안전장치를 쓴다: 공개 IP 만 허용하고 연결 IP 를 고정하며 redirect 를 재검증하고,
+        크기·해상도를 제한한다. 실패하면 사용자에게 보여 줄 한국어 메시지의 ValueError 를 던진다.
+        """
+        from PIL import Image
+
+        from backend.direct_cover_url import fetch_url_image
+        from backend.epub_cover import normalize_image
+
+        try:
+            jpeg = normalize_image(fetch_url_image(url))
+        except ValueError:  # CoverError 는 ValueError 의 하위 클래스다
+            raise
+        except OSError as exc:  # DNS 실패 등
+            raise ValueError("이미지 서버 주소를 확인하지 못했습니다") from exc
+        with Image.open(io.BytesIO(jpeg)) as image:
+            return jpeg, image.width, image.height
+
+    @staticmethod
+    def _prepare_insert_images(urls: dict[int, str]) -> dict[int, tuple[bytes, int, int]]:
+        """쪽 번호별 이미지 URL을 내려받아 JPEG 로 정규화한다: {쪽: (JPEG 바이트, 너비, 높이)}.
+
+        하나라도 실패하면 ValueError 를 던지고, 호출자는 이 단계가 끝나기 전에는 파일을 건드리지 않는다.
+        """
+        prepared: dict[int, tuple[bytes, int, int]] = {}
+        for page_no in sorted(urls):
+            try:
+                prepared[page_no] = BookManager._download_image_as_jpeg(urls[page_no])
+            except ValueError as exc:
+                raise ValueError(f"{page_no}쪽 앞에 넣을 이미지를 가져올 수 없습니다: {exc}") from exc
+        return prepared
+
+    async def preview_insert_image(self, url: str) -> tuple[bytes | None, str | None]:
+        """저장 전에 끼워 넣을 이미지를 미리 보여 주기 위해 (JPEG 바이트, 오류 메시지)를 돌려준다.
+
+        저장할 때 서버가 가져오는 것과 같은 경로로 내려받고 정규화하므로, 화면에 보이는 이미지가 실제로 삽입될 이미지다.
+        """
+        url = url.strip()
+        if not url:
+            return None, "이미지 URL이 비어 있습니다"
+        try:
+            jpeg, _, _ = await asyncio.to_thread(BookManager._download_image_as_jpeg, url)
+        except ValueError as e:
+            return None, str(e)
+        except Exception as e:
+            LOGGER.error("preview_insert_image failed (%s): %s", type(e).__name__, e)
+            return None, "이미지를 가져오지 못했습니다"
+        return jpeg, None
+
+    @staticmethod
+    def _insert_image_page(pdf: Any, index: int, jpeg: bytes, width: int, height: int, page_w: float) -> None:
+        """index(0-based) 앞에 이미지 한 장짜리 쪽을 끼운다. 폭은 page_w(기준 쪽의 편집 전 폭)이고 높이는 이미지 비율을 따른다.
+
+        이미지가 쪽 전체를 덮는 단순한 구조로 만들어, 이후 크롭·분할도 같은 방식으로 할 수 있다.
+        """
+        import pikepdf
+
+        page_h = page_w * height / width
+        image = pdf.make_stream(jpeg)
+        image.Type = pikepdf.Name.XObject
+        image.Subtype = pikepdf.Name.Image
+        image.Width = width
+        image.Height = height
+        image.ColorSpace = pikepdf.Name.DeviceRGB
+        image.BitsPerComponent = 8
+        image.Filter = pikepdf.Name.DCTDecode
+        new_page = pikepdf.Dictionary(
+            Type=pikepdf.Name.Page,
+            MediaBox=pikepdf.Array([0, 0, page_w, page_h]),
+            Resources=pikepdf.Dictionary(XObject=pikepdf.Dictionary(Im0=image)),
+            Contents=pdf.make_stream(f"q {page_w:.4f} 0 0 {page_h:.4f} 0 0 cm /Im0 Do Q".encode("ascii")),
+        )
+        pdf.pages.insert(index, pikepdf.Page(pdf.make_indirect(new_page)))
+
+    @staticmethod
+    def _crop_pages(src: Path, dst: Path, crops: dict[int, Rect], splits: dict[int, tuple[Rect, Rect]] | None = None, inserts: dict[int, tuple[bytes, int, int]] | None = None) -> None:
+        """src 의 쪽(1-based)별 영역만 남겨 dst 에 저장한다. 하나라도 실패하면 ValueError.
+
+        splits 의 쪽은 둘로 나눈다: 원본 쪽을 복제해 (앞 영역, 뒤 영역)으로 각각 크롭하고
+        원본 자리에 앞, 뒤 순서로 넣는다. inserts 의 쪽은 그 앞에 이미지 쪽을 끼운다(분할한 쪽이면 앞쪽 앞에).
+        쪽 번호는 모두 src 기준이며, 뒤에서부터 처리해 번호가 밀리지 않게 한다.
+        """
+        import pikepdf
+
+        with pikepdf.open(src) as pdf:
+            # 삽입할 쪽의 폭은 기준 쪽의 편집 전 폭이다. 크롭·분할이 기준 쪽을 바꾸기 전에 읽어 둔다.
+            insert_widths: dict[int, float] = {}
+            for page_no in inserts or {}:
+                reference = pdf.pages[page_no - 1]
+                box = [float(v) for v in reference.get("/CropBox", reference.mediabox)]
+                insert_widths[page_no] = box[2] - box[0]
+            for page_no in sorted(crops):
+                BookManager._crop_page(pdf, pdf.pages[page_no - 1], page_no, crops[page_no])
+            for page_no in sorted(set(splits or {}) | set(inserts or {}), reverse=True):
+                index = page_no - 1
+                if page_no in (splits or {}):
+                    first, second = (splits or {})[page_no]
+                    # 쪽 사전을 얕게 복제한다. _crop_page 는 Resources·Contents·MediaBox 를 통째로 새로 끼우므로 서로 영향이 없다.
+                    duplicate = pdf.make_indirect(pikepdf.Dictionary({k: v for k, v in pdf.pages[index].obj.items()}))
+                    pdf.pages.insert(index + 1, pikepdf.Page(duplicate))
+                    BookManager._crop_page(pdf, pdf.pages[index], page_no, first)
+                    BookManager._crop_page(pdf, pdf.pages[index + 1], page_no, second)
+                if page_no in (inserts or {}):
+                    BookManager._insert_image_page(pdf, index, *(inserts or {})[page_no], insert_widths[page_no])
+            pdf.save(dst)
+
+    @staticmethod
+    def _remove_pdf_pages_with_backup(file_path: Path, trash_dir: Path, pages: list[int], crops: dict[int, Rect] | None = None, splits: dict[int, tuple[Rect, Rect]] | None = None, insert_urls: dict[int, str] | None = None) -> tuple[int, Path, bool]:
+        """원본을 trash_dir 에 같은 이름으로 보존한 뒤 편집한 PDF로 교체한다.
+
+        pages(1-based)는 쪽 전체를 삭제하고, crops 는 쪽별로 지정한 영역만 남기고, splits 는 한 쪽을 (앞, 뒤) 두 쪽으로 나누고, insert_urls 는 그 쪽 앞에 URL 의 이미지를 한 쪽으로 끼운다(쪽 번호는 모두 원본 기준).
+        반환: (남은 페이지 수, 백업 경로, 백업을 새로 만들었는지).
+        이미 같은 이름의 백업이 있으면 덮어쓰지 않는다. 그 파일이 편집 전 원본이다.
+        모든 검증과 편집본 생성이 끝난 뒤에야 백업·교체를 하므로, 실패하면 원본과 trash 는 그대로다.
+        교체는 같은 디렉터리의 임시 파일을 os.replace 로 바꿔 끼우므로 쓰기 중 중단돼도 원본이 남는다.
+        """
+        from pypdf import PdfReader, PdfWriter
+
+        remove = set(pages)
+        left = set(crops or {})
+        divided = set(splits or {})
+        inserted = set(insert_urls or {})
+        if not remove and not left and not divided and not inserted:
+            raise ValueError("변경할 쪽을 선택하세요")
+        if (remove & left) or (remove & divided) or (left & divided):
+            raise ValueError("같은 쪽에 삭제, 크롭, 분할을 함께 지정할 수 없습니다")
+        reader = PdfReader(str(file_path))
+        total = len(reader.pages)
+        if min(remove | left | divided | inserted) < 1 or max(remove | left | divided | inserted) > total:
+            raise ValueError(f"페이지 범위가 잘못되었습니다 (1~{total})")
+        if len(remove) >= total:
+            raise ValueError("모든 페이지를 삭제할 수 없습니다")
+
+        tmp_crop = file_path.with_name(f".{file_path.name}.crop.part")
+        tmp_new = file_path.with_name(f".{file_path.name}.edit.part")
+        tmp_backup = trash_dir / f".{file_path.name}.part"
+        try:
+            source = file_path
+            # 네트워크가 필요한 단계는 파일을 건드리기 전에 끝낸다. 실패하면 원본과 trash 는 그대로다.
+            images = BookManager._prepare_insert_images(dict(insert_urls or {})) if inserted else {}
+            if left or divided or inserted:
+                BookManager._crop_pages(file_path, tmp_crop, dict(crops or {}), dict(splits or {}), images)
+                source = tmp_crop
+
+            trash_dir.mkdir(parents=True, exist_ok=True)
+            backup_path = trash_dir / file_path.name
+            backup_created = False
+            if not backup_path.exists():
+                shutil.copy2(file_path, tmp_backup)
+                os.replace(tmp_backup, backup_path)
+                backup_created = True
+
+            if remove:
+                # 분할·삽입으로 쪽이 늘어났으므로 원본 번호를 편집본 번호로 옮긴다.
+                # 삽입한 쪽은 항상 남기고, 분할한 쪽은 두 쪽을 차지한다.
+                keep = []
+                position = 0
+                for index in range(total):
+                    if (index + 1) in inserted:
+                        keep.append(position)
+                        position += 1
+                    width = 2 if (index + 1) in divided else 1
+                    if (index + 1) not in remove:
+                        keep.extend(range(position, position + width))
+                    position += width
+                edited_reader = reader if source == file_path else PdfReader(str(source))
+                writer = PdfWriter()
+                writer.append(edited_reader, pages=keep)
+                if edited_reader.metadata:
+                    writer.add_metadata({k: v for k, v in edited_reader.metadata.items() if isinstance(v, str)})
+                with open(tmp_new, "wb") as f:
+                    writer.write(f)
+                os.replace(tmp_new, file_path)
+                remaining = len(keep)
+            else:
+                os.replace(tmp_crop, file_path)
+                remaining = total + len(divided) + len(inserted)
+        finally:
+            for leftover in (tmp_crop, tmp_new, tmp_backup):
+                leftover.unlink(missing_ok=True)
+        return remaining, backup_path, backup_created
+
+    async def delete_pdf_pages(self, book_id: int, pages: list[int], crops: list[dict[str, float]] | None = None, splits: list[dict[str, Any]] | None = None, inserts: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any] | None, str | None]:
+        """PDF 에서 pages(1-based)를 삭제하고 crops([{page, x0, y0, x1, y1}])는 지정 영역만 남기고, splits([{page, first, second}])는 한 쪽을 앞·뒤 두 쪽으로 나누고, inserts([{page, url}])는 그 쪽 앞에 URL 의 이미지를 한 쪽으로 끼운다. 원본은 path_prefix/0_trash 에 보존한다."""
+        LOGGER.debug("# delete_pdf_pages(book_id=%d, pages=%r, crops=%r, splits=%r, inserts=%r)", book_id, pages, crops, splits, inserts)
+        insert_urls: dict[int, str] = {}
+        for insert in inserts or []:
+            page_no, url = int(insert["page"]), str(insert["url"]).strip()
+            if page_no in insert_urls:
+                return None, f"{page_no}쪽 앞에 이미지가 둘 이상 지정되었습니다"
+            if not url:
+                return None, f"{page_no}쪽 앞에 넣을 이미지 URL이 비어 있습니다"
+            insert_urls[page_no] = url
+
+        def to_rect(box: dict[str, float]) -> Rect:
+            return (float(box["x0"]), float(box["y0"]), float(box["x1"]), float(box["y1"]), float(box.get("angle", 0.0)))
+
+        split_rects: dict[int, tuple[Rect, Rect]] = {}
+        for split in splits or []:
+            if int(split["page"]) in split_rects:
+                return None, f"{int(split['page'])}쪽에 분할이 둘 이상 지정되었습니다"
+            split_rects[int(split["page"])] = (to_rect(split["first"]), to_rect(split["second"]))
+        crop_rects: dict[int, Rect] = {}
+        for crop in crops or []:
+            if int(crop["page"]) in crop_rects:
+                return None, f"{int(crop['page'])}쪽에 크롭 영역이 둘 이상 지정되었습니다"
+            crop_rects[int(crop["page"])] = to_rect(crop)
+        doc = self.es_manager.search_by_id(book_id)
+        if not doc:
+            return None, f"Book not found: {book_id}"
+        book = self.item_class(book_id=book_id, info=doc)
+        file_path = book.file_path
+        if file_path.suffix.lower() != ".pdf":
+            return None, f"Not a PDF file: {file_path.name}"
+        try:
+            if not file_path.is_file():
+                return None, f"File not found: {file_path.name}"
+            remaining, backup_path, backup_created = await asyncio.to_thread(BookManager._remove_pdf_pages_with_backup, file_path, self.path_prefix / self.TRASH_DIRNAME, pages, crop_rects, split_rects, insert_urls)
+        except ValueError as e:
+            return None, str(e)
+        except OSError as e:
+            LOGGER.error("delete_pdf_pages failed for book_id=%d: %s", book_id, e)
+            return None, f"파일 처리 실패: {e.strerror or e}"
+        except Exception as e:
+            LOGGER.error("delete_pdf_pages failed for book_id=%d: %s", book_id, e)
+            return None, f"PDF 페이지 삭제 실패 ({type(e).__name__})"
+
+        # 파일이 바뀌었으니 표지 캐시를 비운다. 이후 단계가 실패해도 옛 표지가 남으면 안 되므로 먼저 지운다.
+        for cached_cover in (self.path_prefix / ".cover_cache").glob(f"{book_id}.v*.jpg"):
+            cached_cover.unlink(missing_ok=True)
+
+        # 파일이 바뀌었으니 ES 문서(page_count, file_size 등)를 다시 만든다.
+        try:
+            from utils.loader import Loader
+
+            data = Loader.read_file(file_path, path_prefix=self.path_prefix)
+            if not data or len(data) != 1:
+                raise RuntimeError("재색인할 문서를 읽지 못했습니다")
+            new_doc = dict(next(iter(data.values())))
+            new_doc.update({"category": doc.get("category", ""), "title": doc.get("title", ""), "author": doc.get("author", ""), "file_path": doc.get("file_path", ""), "file_type": doc.get("file_type", "pdf")})
+            if not self.es_manager.delete(book_id):
+                raise RuntimeError("ES 문서 삭제 실패")
+            reindexed_id, reindex_error = await self.add_book({book_id: new_doc})
+            if reindexed_id != book_id or reindex_error:
+                raise RuntimeError(reindex_error or "ES 재색인 실패")
+        except Exception as e:
+            LOGGER.error("delete_pdf_pages: reindex failed for book_id=%d: %s", book_id, e)
+            return None, f"페이지는 삭제되었으나 색인 갱신에 실패했습니다. 원본은 {self.TRASH_DIRNAME}/{backup_path.name} 에 있습니다: {e}"
+        self._clear_mismatch_cache()
+        return {"remaining_pages": remaining, "cropped_pages": len(crop_rects), "split_pages": len(split_rects), "inserted_pages": len(insert_urls), "backup": f"{self.TRASH_DIRNAME}/{backup_path.name}", "backup_created": backup_created}, None
 
     @staticmethod
     def _find_epub_cover_member(zin) -> str | None:

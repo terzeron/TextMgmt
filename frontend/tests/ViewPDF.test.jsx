@@ -1586,3 +1586,91 @@ describe("computeRenderScale", () => {
     ).toBeCloseTo(1.2);
   });
 });
+
+describe("ViewPDF: 쪽 크기가 비정상적으로 작은 PDF", () => {
+  let originalFetch;
+
+  // 이미지를 0.0934pt x 0.0675pt 로 그려 넣은 만화 PDF 와 같은 크기의 쪽
+  function createTinyPagePdf(numPages = 1) {
+    return {
+      numPages,
+      getPage: vi.fn(() =>
+        Promise.resolve({
+          getViewport: ({ scale }) => ({
+            width: 0.0934 * scale,
+            height: 0.0675 * scale,
+          }),
+          render: () => ({ promise: Promise.resolve() }),
+        }),
+      ),
+    };
+  }
+
+  beforeEach(() => {
+    mockGetDocument.mockReset();
+    originalFetch = globalThis.fetch;
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({}));
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("미리보기에서도 폭 0px 이 아니라 기준 폭으로 표시한다", async () => {
+    globalThis.fetch = createMockFetch(3);
+    setupGetDocument(() => createTinyPagePdf());
+
+    const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/총 3쪽 표시/)).toBeTruthy();
+    });
+    const canvases = container.querySelectorAll("canvas");
+    expect(canvases).toHaveLength(3);
+    for (const canvas of canvases) {
+      expect(canvas.style.width).toBe("900px");
+      // canvas 는 0x0 이 아니고 쪽 비율(0.0675/0.0934)을 유지한다.
+      // jsdom 은 clientWidth 가 0 이라 최소 변 크기(100px)로 렌더된다.
+      expect(canvas.width).toBeGreaterThan(0);
+      expect(canvas.height).toBeGreaterThanOrEqual(100);
+      expect(canvas.height / canvas.width).toBeCloseTo(0.0675 / 0.0934, 1);
+    }
+  });
+
+  it("정상 크기 쪽은 이전과 같이 쪽 크기로 폭을 정한다", async () => {
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => createMockPdf(1));
+
+    const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
+    });
+    // createMockPdf 는 scale 과 무관하게 800x600 을 돌려준다
+    expect(container.querySelector("canvas").style.width).toBe("800px");
+  });
+
+  it("편집 모드에서도 쪽 래퍼가 기준 폭으로 표시된다", async () => {
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => createTinyPagePdf());
+
+    const { container } = render(
+      <ViewPDF bookId={1} pageCount={10} preview editable />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
+    });
+    expect(container.querySelector(".pdf-page-wrap").style.width).toBe("900px");
+  });
+
+  it("computeRenderScale 은 화면 폭을 몰라도 canvas 짧은 변을 100px 이상으로 만든다", () => {
+    const tiny = { getViewport: () => ({ width: 0.0934, height: 0.0675 }) };
+    const scale = computeRenderScale(tiny, { clientWidth: 0 }, 1);
+    expect(0.0675 * scale).toBeGreaterThanOrEqual(100 - 1e-6);
+    // 정상 크기 쪽은 기존처럼 DISPLAY_SCALE 배율 그대로다
+    const normal = { getViewport: () => ({ width: 612, height: 792 }) };
+    expect(computeRenderScale(normal, { clientWidth: 0 }, 2)).toBeCloseTo(2.4);
+  });
+});

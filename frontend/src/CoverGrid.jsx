@@ -80,7 +80,11 @@ export default function CoverGrid({ results, basePath }) {
           const category = book.category || "_root";
           const fileType = book.file_type || "";
           const coverSrc = COVER_FILE_TYPES.has(fileType)
-            ? `${getApiUrlPrefix()}${apiPrefix}/cover/${book.book_id}?v=${COVER_VERSION}`
+            ? `${getApiUrlPrefix()}${apiPrefix}/cover/${book.book_id}?v=${COVER_VERSION}${
+                book.updated_time
+                  ? `&u=${encodeURIComponent(book.updated_time)}`
+                  : ""
+              }`
             : null;
           return (
             <a

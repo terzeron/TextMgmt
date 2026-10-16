@@ -155,6 +155,7 @@ export default function ViewSingle(props) {
         pageCount={pageCount}
         preview={preview}
         apiPrefix={ap}
+        editable={standalone ? false : props.editable || false}
       />
     ),
     epub: (
@@ -301,6 +302,7 @@ ViewSingle.propTypes = {
   lineCount: PropTypes.number,
   pageCount: PropTypes.number,
   preview: PropTypes.bool,
+  editable: PropTypes.bool,
   apiPrefix: PropTypes.string,
   editUrl: PropTypes.string,
   directoryEditUrl: PropTypes.string,

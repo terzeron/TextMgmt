@@ -1384,6 +1384,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                     lineCount={100}
                     pageCount={10}
                     preview={true}
+                    editable={true}
                     apiPrefix={apiPrefix}
                   />
                 </Col>
