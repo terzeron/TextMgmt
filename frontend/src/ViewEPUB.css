@@ -151,3 +151,9 @@
 .epub-cover-pending {
     z-index: 6;
 }
+
+/* 삭제 표시는 표지 영역(.epub-cover-page 의 inset)만 회색으로 덮고, 표지 레이어(z-index 5) 위에 둔다. */
+.epub-cover-delete {
+    z-index: 6;
+    background: rgba(90, 90, 90, 0.6);
+}

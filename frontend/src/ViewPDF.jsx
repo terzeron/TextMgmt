@@ -875,7 +875,7 @@ export default function ViewPDF({
               <canvas ref={setCanvasRef(pageNum)} className="pdf-page-canvas" />
               {mark?.kind === "page" && (
                 <div
-                  className="pdf-delete-overlay"
+                  className="viewer-edit-delete-overlay"
                   data-testid={`pdf-delete-overlay-${pageNum}`}
                   data-kind="page"
                 />
@@ -1131,12 +1131,6 @@ const pdfStyles = `
     }
     .pdf-container.pdf-single .pdf-page-wrap .pdf-page-canvas {
         object-fit: contain;
-    }
-    .pdf-delete-overlay {
-        position: absolute;
-        inset: 0;
-        background: rgba(90, 90, 90, 0.6);
-        pointer-events: none;
     }
     /* 이미지 삽입 미리보기: 저장 전에도 삽입될 쪽을 다른 쪽처럼 보여 준다. 점선 테두리와 라벨로 아직 저장 전임을 알린다. */
     .pdf-insert-preview {

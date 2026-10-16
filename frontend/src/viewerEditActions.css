@@ -64,3 +64,11 @@
 .viewer-edit-error {
     color: #c0392b;
 }
+
+/* 삭제 표시: 대상 위를 회색으로 덮는다. 클릭은 통과시킨다. */
+.viewer-edit-delete-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(90, 90, 90, 0.6);
+    pointer-events: none;
+}

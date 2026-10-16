@@ -1632,6 +1632,150 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       );
     });
 
+    describe("표지 삭제 표시(휴지통)", () => {
+      const trashButton = () =>
+        screen.getByRole("button", { name: "표지 삭제 표시" });
+
+      async function openWithCover() {
+        mockCoverUrl = "blob:epub-cover";
+        render(<ViewEPUB bookId={7} preview editable />);
+        await openBook();
+      }
+
+      it("표지가 있으면 휴지통 버튼을 둔다", async () => {
+        await openWithCover();
+        expect(trashButton()).toBeTruthy();
+      });
+
+      it("표지가 없으면 지울 것이 없으므로 휴지통 버튼을 두지 않는다", async () => {
+        render(<ViewEPUB bookId={7} preview editable />);
+        await openBook();
+        await act(async () => {
+          lastRendition._emit("relocated", { atStart: true, start: {} });
+        });
+
+        expect(screen.getByRole("button", { name: "표지 이미지 추가" })).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "표지 삭제 표시" })).toBeNull();
+      });
+
+      it("누르면 회색 덮개와 저장 버튼이 나오고 다시 누르면 해제한다", async () => {
+        await openWithCover();
+        expect(screen.queryByTestId("epub-cover-delete-overlay")).toBeNull();
+        expect(screen.queryByRole("button", { name: "저장" })).toBeNull();
+
+        fireEvent.click(trashButton());
+
+        expect(screen.getByTestId("epub-cover-delete-overlay")).toBeTruthy();
+        expect(screen.getByRole("button", { name: "저장" })).toBeTruthy();
+        expect(trashButton().getAttribute("aria-pressed")).toBe("true");
+        expect(trashButton().className).toContain("active");
+        expect(trashButton().title).toBe("삭제 표시 해제");
+        // 서버는 저장하기 전까지 건드리지 않는다.
+        expect(globalThis.fetch.mock.calls.some(([u]) => u === SAVE_URL)).toBe(false);
+
+        fireEvent.click(trashButton());
+
+        expect(screen.queryByTestId("epub-cover-delete-overlay")).toBeNull();
+        expect(screen.queryByRole("button", { name: "저장" })).toBeNull();
+        expect(trashButton().title).toBe("표지를 삭제 표시");
+      });
+
+      it("새 표지 삽입 표시가 있으면 삭제 표시가 그것을 지운다", async () => {
+        respond({ preview: blobResponse() });
+        await openWithPendingCover();
+
+        fireEvent.click(trashButton());
+
+        expect(screen.queryByTestId("epub-cover-pending")).toBeNull();
+        expect(screen.getByTestId("epub-cover-delete-overlay")).toBeTruthy();
+        expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith("blob:new-cover");
+      });
+
+      it("삭제 표시가 있으면 새 표지 삽입 표시가 그것을 지운다", async () => {
+        respond({ preview: blobResponse() });
+        await openWithCover();
+        fireEvent.click(trashButton());
+
+        fireEvent.click(screen.getByRole("button", { name: "표지 이미지 교체" }));
+        fireEvent.click(screen.getByText("삽입 표시"));
+        await screen.findByTestId("epub-cover-pending");
+
+        expect(screen.queryByTestId("epub-cover-delete-overlay")).toBeNull();
+        expect(trashButton().getAttribute("aria-pressed")).toBe("false");
+      });
+
+      it("확인창에서 취소하면 요청하지 않고 표시를 유지한다", async () => {
+        vi.spyOn(window, "confirm").mockReturnValue(false);
+        await openWithCover();
+        fireEvent.click(trashButton());
+
+        fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+        expect(window.confirm).toHaveBeenCalledWith(
+          "표지 삭제를 저장합니다. 원본은 0_trash에 보존됩니다. 저장할까요?",
+        );
+        expect(globalThis.fetch.mock.calls.some(([u]) => u === SAVE_URL)).toBe(false);
+        expect(screen.getByTestId("epub-cover-delete-overlay")).toBeTruthy();
+      });
+
+      it("저장하면 DELETE 를 호출하고 표시를 지운 뒤 EPUB 을 다시 불러온다", async () => {
+        respond({ save: jsonResponse({ status: "success", result: {} }) });
+        vi.spyOn(window, "confirm").mockReturnValue(true);
+        await openWithCover();
+        const loads = () =>
+          globalThis.fetch.mock.calls.filter(([u]) => u.includes("/preview/7")).length;
+        const before = loads();
+        fireEvent.click(trashButton());
+
+        fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+        await waitFor(() =>
+          expect(screen.queryByTestId("epub-cover-delete-overlay")).toBeNull(),
+        );
+        const call = globalThis.fetch.mock.calls.find(([u]) => u === SAVE_URL);
+        expect(call[1].method).toBe("DELETE");
+        expect(call[1].body).toBeUndefined();
+        await waitFor(() => expect(loads()).toBe(before + 1));
+      });
+
+      it("서버가 거절하면 사유를 보이고 삭제 표시를 유지한다", async () => {
+        respond({
+          save: jsonResponse({
+            status: "failure",
+            error: "이 EPUB의 표지는 이 도구가 넣은 것이 아니라 삭제할 수 없습니다",
+          }),
+        });
+        vi.spyOn(window, "confirm").mockReturnValue(true);
+        await openWithCover();
+        fireEvent.click(trashButton());
+
+        fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+        expect((await screen.findByRole("alert")).textContent).toContain(
+          "이 도구가 넣은 것이 아니라",
+        );
+        expect(screen.getByTestId("epub-cover-delete-overlay")).toBeTruthy();
+      });
+
+      it("저장 중에는 휴지통도 잠근다", async () => {
+        let finish;
+        respond({
+          save: new Promise((resolve) => {
+            finish = () => resolve(jsonResponse({ status: "success", result: {} }));
+          }),
+        });
+        vi.spyOn(window, "confirm").mockReturnValue(true);
+        await openWithCover();
+        fireEvent.click(trashButton());
+
+        fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+        await screen.findByText("저장 중...");
+        expect(trashButton().disabled).toBe(true);
+        await act(async () => finish());
+      });
+    });
+
     it("화면을 닫은 뒤 도착한 미리보기 응답은 버리고 blob URL 을 만들지 않는다", async () => {
       let arrive;
       const base = globalThis.fetch.getMockImplementation();

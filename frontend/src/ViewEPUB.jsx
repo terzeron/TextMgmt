@@ -4,6 +4,7 @@ import ePub from "epubjs";
 import { getApiUrlPrefix } from "./Common";
 import AddPhotoAlternateIcon from "@mui/icons-material/AddPhotoAlternate";
 import SaveIcon from "@mui/icons-material/Save";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
 import ViewerFontSelect from "./ViewerFontSelect";
 import EpubCoverModal from "./EpubCoverModal";
 import { describeHttpError } from "./httpError";
@@ -186,6 +187,8 @@ export default function ViewEPUB({
   // 저장하기 전까지 서버의 EPUB 은 건드리지 않는다. blob URL 은 쓰지 않게 되면 해제한다.
   const [pendingCover, setPendingCover] = useState(null);
   const pendingCoverRef = useRef(null);
+  // 표지 삭제 표시(PDF 의 쪽 삭제 표시와 같다). 새 표지 삽입 표시와는 함께 둘 수 없다.
+  const [removeMarked, setRemoveMarked] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const replacePendingCover = (next) => {
@@ -245,6 +248,7 @@ export default function ViewEPUB({
       const blob = await response.blob();
       if (cancelledRef.current) return null;
       setSaveError(null);
+      setRemoveMarked(false);
       replacePendingCover({ url, previewSrc: URL.createObjectURL(blob) });
       return null;
     } catch (err) {
@@ -252,11 +256,20 @@ export default function ViewEPUB({
     }
   };
 
-  // 저장 버튼은 새 표지가 있을 때만 그려지고 저장 중에는 disabled 이므로 여기서 따로 막지 않는다.
-  const savePendingCover = async () => {
+  const toggleRemoveMarked = () => {
+    setSaveError(null);
+    if (!removeMarked) replacePendingCover(null);
+    setRemoveMarked(!removeMarked);
+  };
+
+  // 저장 버튼은 표시한 변경이 있을 때만 그려지고 저장 중에는 disabled 이므로 여기서 따로 막지 않는다.
+  const saveMarkedCover = async () => {
+    const summary = removeMarked
+      ? "표지 삭제"
+      : `표지 이미지 ${coverUrl ? "교체" : "추가"}`;
     if (
       !window.confirm(
-        `표지 이미지 ${coverUrl ? "교체" : "추가"}를 저장합니다. 원본은 0_trash에 보존됩니다. 저장할까요?`,
+        `${summary}를 저장합니다. 원본은 0_trash에 보존됩니다. 저장할까요?`,
       )
     ) {
       return;
@@ -266,12 +279,14 @@ export default function ViewEPUB({
     try {
       const response = await fetch(
         `${getApiUrlPrefix()}${apiPrefix}/epub-cover/${bookId}`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: pendingCover.url }),
-        },
+        removeMarked
+          ? { method: "DELETE", credentials: "include" }
+          : {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ url: pendingCover.url }),
+            },
       );
       if (!response.ok) throw new Error(await describeHttpError(response));
       const body = await response.json();
@@ -279,6 +294,7 @@ export default function ViewEPUB({
         throw new Error(body.error || "저장에 실패했습니다.");
       }
       replacePendingCover(null);
+      setRemoveMarked(false);
       setReloadToken((prev) => prev + 1);
     } catch (err) {
       setSaveError(err?.message || "저장에 실패했습니다.");
@@ -720,6 +736,12 @@ export default function ViewEPUB({
 
       {editable && !isLoading && !errorMessage && epubData && (isCoverPage || atStart) && (
         <>
+          {removeMarked && (
+            <div
+              className="epub-cover-page epub-cover-delete viewer-edit-delete-overlay"
+              data-testid="epub-cover-delete-overlay"
+            />
+          )}
           {pendingCover && (
             <div
               className="epub-cover-page epub-cover-pending viewer-edit-pending"
@@ -741,18 +763,20 @@ export default function ViewEPUB({
                 {saveError}
               </span>
             )}
+            {(pendingCover || removeMarked) && (
+              <button
+                type="button"
+                className="viewer-edit-btn"
+                aria-label="저장"
+                title="표시한 변경을 저장"
+                disabled={saving}
+                onClick={saveMarkedCover}
+              >
+                <SaveIcon fontSize="small" />
+              </button>
+            )}
             {pendingCover && (
               <>
-                <button
-                  type="button"
-                  className="viewer-edit-btn"
-                  aria-label="저장"
-                  title="표시한 변경을 저장"
-                  disabled={saving}
-                  onClick={savePendingCover}
-                >
-                  <SaveIcon fontSize="small" />
-                </button>
                 <button
                   type="button"
                   className="viewer-edit-btn"
@@ -785,6 +809,19 @@ export default function ViewEPUB({
             >
               <AddPhotoAlternateIcon fontSize="small" />
             </button>
+            {coverUrl && (
+              <button
+                type="button"
+                className={`viewer-edit-btn${removeMarked ? " active" : ""}`}
+                aria-label="표지 삭제 표시"
+                aria-pressed={removeMarked}
+                title={removeMarked ? "삭제 표시 해제" : "표지를 삭제 표시"}
+                disabled={saving}
+                onClick={toggleRemoveMarked}
+              >
+                <DeleteOutlineIcon fontSize="small" />
+              </button>
+            )}
           </div>
         </>
       )}
