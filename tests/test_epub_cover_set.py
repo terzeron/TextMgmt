@@ -339,7 +339,9 @@ class TestEpubCoverEndpoint:
         from fastapi.testclient import TestClient
 
         import backend.main as main
-        from backend.auth import require_admin
+
+        # test_auth 가 backend.auth/main 을 reload 하므로, 앱 라우트가 실제로 잡고 있는 객체를 오버라이드해야 한다.
+        require_admin = main.require_admin
 
         fake = MagicMock()
         fake.set_epub_cover = AsyncMock(return_value=({"file_size": 10}, None))

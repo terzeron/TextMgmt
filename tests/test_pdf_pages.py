@@ -11,7 +11,6 @@ import logging.config
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-import importlib
 
 import pytest
 from fastapi.testclient import TestClient
@@ -80,9 +79,7 @@ def book_manager_module(temp_dir, _default_doc):
         import backend.book as book_mod
         import backend.book_manager as bm_mod
 
-        importlib.reload(book_mod)
-        importlib.reload(bm_mod)
-
+        # 모듈을 reload 하지 않는다: reload 하면 다른 테스트 파일이 들고 있는 옛 클래스와 어긋나 전체 실행에서 오염된다.
         with patch.object(bm_mod, "ESManager") as MockES:
             mock_es = MagicMock()
             MockES.return_value = mock_es
