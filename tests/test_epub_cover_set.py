@@ -35,11 +35,23 @@ def env(tmp_path, monkeypatch):
     es = MagicMock()
     es.update.return_value = True
     manager = SimpleNamespace(path_prefix=tmp_path, TRASH_DIRNAME="0_trash", es_manager=es, get_book=AsyncMock(return_value=(book, None)))
+    manager._change_epub_cover = lambda *args, **kwargs: BookManager._change_epub_cover(manager, *args, **kwargs)
     return manager, path, book
 
 
 async def call(manager, url=URL):
     return await BookManager.set_epub_cover(manager, 1, url)
+
+
+async def remove(manager):
+    return await BookManager.remove_epub_cover(manager, 1)
+
+
+def members(path):
+    import zipfile
+
+    with zipfile.ZipFile(path) as archive:
+        return {name: archive.read(name) for name in archive.namelist()}
 
 
 @pytest.mark.asyncio
@@ -201,6 +213,126 @@ async def test_index_update_failure_keeps_the_saved_cover_and_warns(env):
     assert "색인" in result["warning"]
 
 
+@pytest.mark.asyncio
+async def test_removes_a_cover_added_by_this_tool(env, tmp_path):
+    manager, path, _ = env
+    original = path.read_bytes()
+    await call(manager)
+    with_cover = path.read_bytes()
+    manager.es_manager.update.reset_mock()
+
+    result, error = await remove(manager)
+
+    assert error is None
+    assert not inspect_epub(path)["has_cover"]
+    names = members(path)
+    assert not [name for name in names if "tm-cover" in name]
+    assert b"tm-cover" not in names["OPS/book.opf"]
+    # 본문은 그대로다.
+    assert members(path)["OPS/chapter.xhtml"] == "<html><body>본문을 보존한다.</body></html>".encode()
+    assert result["cover_image"] is None and result["file_size"] == path.stat().st_size
+    # 처음 원본은 0_trash 에 그대로 있다(표지를 넣을 때 보존한 것).
+    assert (tmp_path / "0_trash" / "book.epub").read_bytes() == original and with_cover != original
+    _, kwargs = manager.es_manager.update.call_args
+    assert kwargs["file_size"] == path.stat().st_size
+    datetime.strptime(kwargs["updated_time"], "%Y-%m-%dT%H:%M:%S.%f")
+
+
+@pytest.mark.asyncio
+async def test_remove_clears_the_stale_thumbnail_and_preview_caches(env, tmp_path):
+    manager, path, _ = env
+    await call(manager)
+    book_id = path.stat().st_ino
+    stale = []
+    for directory, name in ((".cover_cache", f"{book_id}.v1.jpg"), (".preview_cache", f"{book_id}_10.epub")):
+        (tmp_path / directory).mkdir(exist_ok=True)
+        (tmp_path / directory / name).write_bytes(b"stale")
+        stale.append(tmp_path / directory / name)
+
+    await remove(manager)
+
+    assert not any(item.exists() for item in stale)
+
+
+@pytest.mark.asyncio
+async def test_remove_keeps_the_publishers_cover_declaration_untouched(env):
+    """출판사 표지를 이 도구가 대체한 책에서 도구 표지를 빼도 출판사 이미지 파일은 남는다."""
+    manager, path, _ = env
+    make_epub(path, cover=True)
+    await call(manager)
+    assert "OPS/cover.jpg" in members(path)
+
+    result, error = await remove(manager)
+
+    assert error is None
+    assert "OPS/cover.jpg" in members(path)
+    assert not [name for name in members(path) if "tm-cover" in name]
+
+
+@pytest.mark.asyncio
+async def test_remove_refuses_a_publisher_cover_without_any_backup_or_change(env, tmp_path):
+    manager, path, _ = env
+    make_epub(path, cover=True)
+    before = path.read_bytes()
+
+    result, error = await remove(manager)
+
+    assert result is None and "이 도구가 넣은 것이 아니라" in error
+    assert path.read_bytes() == before
+    assert not (tmp_path / "0_trash").exists()
+    assert not list(path.parent.glob(".cover-*.tmp"))
+    manager.es_manager.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_remove_refuses_a_book_without_a_cover(env, tmp_path):
+    manager, path, _ = env
+    before = path.read_bytes()
+
+    result, error = await remove(manager)
+
+    assert result is None and error
+    assert path.read_bytes() == before
+    assert not (tmp_path / "0_trash").exists()
+
+
+@pytest.mark.asyncio
+async def test_remove_rejects_a_non_epub_and_a_missing_book(env):
+    manager, _, book = env
+    book.file_type = "pdf"
+    result, error = await remove(manager)
+    assert result is None and "EPUB" in error
+
+    manager.get_book.return_value = (None, "No book found by '1'")
+    result, error = await remove(manager)
+    assert result is None and "No book found" in error
+
+
+@pytest.mark.asyncio
+async def test_remove_second_time_is_refused_because_nothing_is_left(env):
+    manager, path, _ = env
+    await call(manager)
+    await remove(manager)
+    after = path.read_bytes()
+
+    result, error = await remove(manager)
+
+    assert result is None and error
+    assert path.read_bytes() == after
+
+
+@pytest.mark.asyncio
+async def test_remove_index_failure_keeps_the_change_and_warns(env):
+    manager, path, _ = env
+    await call(manager)
+    manager.es_manager.update.return_value = False
+
+    result, error = await remove(manager)
+
+    assert error is None
+    assert "색인" in result["warning"]
+
+
 class TestEpubCoverEndpoint:
     @pytest.fixture
     def client(self):
@@ -211,6 +343,7 @@ class TestEpubCoverEndpoint:
 
         fake = MagicMock()
         fake.set_epub_cover = AsyncMock(return_value=({"file_size": 10}, None))
+        fake.remove_epub_cover = AsyncMock(return_value=({"file_size": 9}, None))
         proxy = main.book_manager
         previous = proxy._instance
         proxy._instance = fake
@@ -254,3 +387,25 @@ class TestEpubCoverEndpoint:
 
         response = TestClient(main.app).post("/comics/epub-cover/1", json={"url": URL})
         assert response.status_code in (401, 403)
+
+    def test_delete_success(self, client):
+        http, fake = client
+        response = http.delete("/epub-cover/1")
+        assert response.status_code == 200
+        assert response.json() == {"status": "success", "result": {"file_size": 9}}
+        fake.remove_epub_cover.assert_awaited_once_with(1)
+
+    def test_delete_failure_is_reported_in_the_body(self, client):
+        http, fake = client
+        fake.remove_epub_cover.return_value = (None, "이 EPUB의 표지는 이 도구가 넣은 것이 아니라 삭제할 수 없습니다")
+        body = http.delete("/epub-cover/1").json()
+        assert body == {"status": "failure", "error": "이 EPUB의 표지는 이 도구가 넣은 것이 아니라 삭제할 수 없습니다"}
+
+    def test_delete_requires_admin_on_books_and_comics(self):
+        from fastapi.testclient import TestClient
+
+        import backend.main as main
+
+        http = TestClient(main.app)
+        assert http.delete("/epub-cover/1").status_code in (401, 403)
+        assert http.delete("/comics/epub-cover/1").status_code in (401, 403)

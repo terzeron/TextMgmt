@@ -719,6 +719,14 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             return {"status": "success", "result": result}
         return {"status": "failure", "error": error}
 
+    @router.delete("/epub-cover/{book_id}", dependencies=admin_dep)
+    async def remove_epub_cover(book_id: int) -> dict[str, Any]:
+        LOGGER.debug("# remove_epub_cover(book_id=%d)", book_id)
+        result, error = await manager.remove_epub_cover(book_id)
+        if error is None:
+            return {"status": "success", "result": result}
+        return {"status": "failure", "error": error}
+
     @router.get("/cover/{book_id}", response_model=None)
     async def get_cover(book_id: int, payload: dict = Depends(require_auth)) -> Response:
         LOGGER.debug("# get_cover(book_id=%d)", book_id)

@@ -2980,8 +2980,22 @@ class BookManager:
     async def set_epub_cover(self, book_id: int, url: str) -> tuple[dict[str, Any] | None, str | None]:
         """EPUB 의 표지를 URL 의 이미지로 넣거나 바꾼다: (결과, 오류 메시지).
 
-        표지 관리와 같은 경로(CoverManagement.apply_url)를 쓰므로 URL 검증, 원본 백업, 썸네일·preview 캐시 무효화가 같다.
-        뷰어는 파일의 현재 revision 을 모르므로 여기서 읽어 넘기고, 저장 직전에 apply_url 이 잠금 안에서 다시 확인한다.
+        표지 관리와 같은 경로(CoverManagement.apply_url)를 쓰므로 URL 검증과 썸네일·preview 캐시 무효화가 같다.
+        """
+        url = url.strip()
+        if not url:
+            return None, "이미지 URL이 비어 있습니다"
+        return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.apply_url(relative, url, revision, replace_existing=True, **backup))
+
+    async def remove_epub_cover(self, book_id: int) -> tuple[dict[str, Any] | None, str | None]:
+        """EPUB 에서 이 도구가 넣은 표지를 뺀다: (결과, 오류 메시지). 출판사 원본 표지는 지우지 않고 사유를 돌려준다."""
+        return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.remove(relative, revision, **backup))
+
+    async def _change_epub_cover(self, book_id: int, change: Callable[..., dict[str, Any]]) -> tuple[dict[str, Any] | None, str | None]:
+        """표지를 바꾸는 공통 절차: 책 확인 → 백업과 함께 변경 → 색인 갱신.
+
+        뷰어는 파일의 현재 revision 을 모르므로 여기서 읽어 넘기고, 저장 직전에 잠금 안에서 다시 확인한다.
+        원본은 PDF 편집과 같이 0_trash 에 원래 이름으로 보존한다.
         """
         from datetime import datetime
 
@@ -2993,23 +3007,20 @@ class BookManager:
             return None, error
         if book.file_type != "epub":
             return None, "EPUB 파일이 아닙니다"
-        url = url.strip()
-        if not url:
-            return None, "이미지 URL이 비어 있습니다"
 
         def apply() -> dict[str, Any]:
             service = CoverManagement(self.path_prefix)
             relative = str(book.file_path.relative_to(self.path_prefix))
             expected_revision = inspect_epub(service.resolve(relative))["revision"]
-            # 원본은 PDF 편집과 같이 0_trash 에 원래 이름으로 보존한다.
-            return service.apply_url(relative, url, expected_revision, replace_existing=True, backup_dir=self.path_prefix / self.TRASH_DIRNAME, backup_name=book.file_path.name)
+            backup = {"backup_dir": self.path_prefix / self.TRASH_DIRNAME, "backup_name": book.file_path.name}
+            return change(service, relative, expected_revision, backup)
 
         try:
             result = await asyncio.to_thread(apply)
         except CoverError as e:
             return None, str(e)
         except (OSError, ValueError) as e:
-            LOGGER.error("set_epub_cover failed (%s): %s", type(e).__name__, e)
+            LOGGER.error("change_epub_cover failed (%s): %s", type(e).__name__, e)
             return None, "표지를 저장하지 못했습니다. 다시 시도하세요"
         try:
             # 최신 책 목록은 updated_time 순이다. 표지 저장은 EPUB 의 mtime 을 되돌리므로(캐시·재적재 판정 보존) 색인에 직접 반영한다.

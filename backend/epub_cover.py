@@ -12,7 +12,7 @@ import warnings
 import zipfile
 import uuid
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Callable
 
 from lxml import etree
 from PIL import Image
@@ -133,6 +133,46 @@ def inspect_epub(path: Path) -> dict[str, Any]:
         raise CoverError("EPUB 또는 기존 표지를 검사할 수 없습니다") from exc
 
 
+def _remove_tool_covers(opf_path: str, manifest: Any, metadata: Any, spine: Any) -> set[str]:
+    """이 도구가 넣은 표지(tm-cover-*)의 manifest 항목과 spine 참조를 지우고, 파일에서 뺄 멤버 경로를 돌려준다.
+
+    출판사 원본 표지는 건드리지 않는다. 그 구조는 책마다 달라 임의로 지우면 본문이 깨질 수 있다.
+    """
+    obsolete = set()
+    old_ids = {meta.get("content", "") for meta in metadata if meta.get("name") == "cover"}
+    old_ids.update(item.get("id", "") for item in manifest if "cover-image" in item.get("properties", "").split())
+    for old_id in old_ids:
+        if not re.fullmatch(r"tm-cover-[a-f0-9]{16}", old_id):
+            continue
+        for identifier, suffix in ((old_id, ".jpg"), (old_id.replace("tm-cover-", "tm-cover-page-"), ".xhtml")):
+            for item in list(manifest):
+                if item.get("id") == identifier and item.get("href") == identifier + suffix:
+                    obsolete.add(posixpath.join(posixpath.dirname(opf_path), item.get("href")))
+                    manifest.remove(item)
+                    for reference in list(spine):
+                        if reference.get("idref") == identifier:
+                            spine.remove(reference)
+    return obsolete
+
+
+def _write_epub(original: zipfile.ZipFile, destination: Path, opf_path: str, package: Any, obsolete: set[str], added: dict[str, bytes]) -> None:
+    """원본의 나머지 멤버는 그대로 복사하고 opf 만 바꿔 쓴다. obsolete 는 빼고 added 는 끝에 덧붙인다."""
+    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as updated:
+        updated.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        updated.comment = original.comment
+        for item in original.infolist():
+            if item.filename == "mimetype" or item.filename in obsolete:
+                continue
+            if item.filename == opf_path:
+                updated.writestr(item, etree.tostring(package, encoding="utf-8", xml_declaration=True))
+            else:
+                with original.open(item) as reader, updated.open(item, "w") as writer:
+                    while chunk := reader.read(1024 * 1024):
+                        writer.write(chunk)
+        for member, data in added.items():
+            updated.writestr(member, data)
+
+
 def _stage_cover(source: BinaryIO, destination: Path, image: bytes) -> None:
     source.seek(0)
     with zipfile.ZipFile(source) as original:
@@ -142,20 +182,7 @@ def _stage_cover(source: BinaryIO, destination: Path, image: bytes) -> None:
         spine = package.find(f"{{{OPF_NS}}}spine")
         if manifest is None or metadata is None or spine is None:
             raise CoverError("EPUB manifest, metadata 또는 spine이 없습니다")
-        obsolete = set()
-        old_ids = {meta.get("content", "") for meta in metadata if meta.get("name") == "cover"}
-        old_ids.update(item.get("id", "") for item in manifest if "cover-image" in item.get("properties", "").split())
-        for old_id in old_ids:
-            if not re.fullmatch(r"tm-cover-[a-f0-9]{16}", old_id):
-                continue
-            for identifier, suffix in ((old_id, ".jpg"), (old_id.replace("tm-cover-", "tm-cover-page-"), ".xhtml")):
-                for item in list(manifest):
-                    if item.get("id") == identifier and item.get("href") == identifier + suffix:
-                        obsolete.add(posixpath.join(posixpath.dirname(opf_path), item.get("href")))
-                        manifest.remove(item)
-                        for reference in list(spine):
-                            if reference.get("idref") == identifier:
-                                spine.remove(reference)
+        obsolete = _remove_tool_covers(opf_path, manifest, metadata, spine)
         digest = hashlib.sha256(image).hexdigest()[:16]
         cover_id = f"tm-cover-{digest}"
         page_id = f"tm-cover-page-{digest}"
@@ -190,20 +217,7 @@ def _stage_cover(source: BinaryIO, destination: Path, image: bytes) -> None:
         page = (f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml">'
                 f'<head><title>표지</title></head><body style="margin:0;text-align:center">'
                 f'<img src="{cover_href}" alt="표지" style="max-width:100%;max-height:100vh"/></body></html>')
-        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as updated:
-            updated.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
-            updated.comment = original.comment
-            for item in original.infolist():
-                if item.filename == "mimetype" or item.filename in obsolete:
-                    continue
-                if item.filename == opf_path:
-                    updated.writestr(item, etree.tostring(package, encoding="utf-8", xml_declaration=True))
-                else:
-                    with original.open(item) as reader, updated.open(item, "w") as writer:
-                        while chunk := reader.read(1024 * 1024):
-                            writer.write(chunk)
-            updated.writestr(cover_member, image)
-            updated.writestr(page_member, page)
+        _write_epub(original, destination, opf_path, package, obsolete, {cover_member: image, page_member: page.encode()})
     with destination.open("rb") as output:
         os.fsync(output.fileno())
     with zipfile.ZipFile(destination) as archive:
@@ -211,15 +225,35 @@ def _stage_cover(source: BinaryIO, destination: Path, image: bytes) -> None:
             raise CoverError("저장할 EPUB의 표지 검증에 실패했습니다")
 
 
-def add_cover(path: Path, image: bytes, expected_revision: str, backup_dir: Path, *, replace_existing: bool = False, backup_name: str | None = None) -> dict[str, Any]:
-    """표지를 넣고 원본을 backup_dir 에 보존한다.
+def _stage_cover_removal(source: BinaryIO, destination: Path) -> None:
+    source.seek(0)
+    with zipfile.ZipFile(source) as original:
+        opf_path, package = _read_package(original)
+        manifest = package.find(f"{{{OPF_NS}}}manifest")
+        metadata = package.find(f"{{{OPF_NS}}}metadata")
+        spine = package.find(f"{{{OPF_NS}}}spine")
+        if manifest is None or metadata is None or spine is None:
+            raise CoverError("EPUB manifest, metadata 또는 spine이 없습니다")
+        obsolete = _remove_tool_covers(opf_path, manifest, metadata, spine)
+        for meta in metadata.findall(f"{{{OPF_NS}}}meta"):
+            if meta.get("name") == "cover" and re.fullmatch(r"tm-cover-[a-f0-9]{16}", meta.get("content", "")):
+                metadata.remove(meta)
+        _write_epub(original, destination, opf_path, package, obsolete, {})
+    with destination.open("rb") as output:
+        os.fsync(output.fileno())
+    with zipfile.ZipFile(destination) as archive:
+        if archive.testzip() is not None:
+            raise CoverError("저장할 EPUB의 검증에 실패했습니다")
+        # 표지를 지워도 책 자체는 읽혀야 한다.
+        _read_package(archive)
+
+
+def _rewrite_epub(path: Path, expected_revision: str, backup_dir: Path, backup_name: str | None, stage: Callable[[BinaryIO, Path], None], precheck: Callable[[zipfile.ZipFile], None] | None = None) -> dict[str, Any]:
+    """EPUB 를 잠그고 원본을 보존한 뒤 stage 가 만든 새 파일로 제자리에서 바꾼다. 쓰다 실패하면 원본으로 되돌린다.
 
     backup_name 을 주면(휴지통 보존) 그 이름으로 두고, 같은 이름이 이미 있으면 덮어쓰지 않고 처음 원본을 지킨다(PDF 편집과 같다).
     주지 않으면 편집마다 고유한 이름으로 둔다(표지 관리).
     """
-    image = normalize_image(image, max_width=600)
-    with Image.open(io.BytesIO(image)) as cover:
-        image_info = {"width": cover.width, "height": cover.height, "byte_size": len(image)}
     with path.open("r+b") as source:
         try:
             fcntl.flock(source, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -227,9 +261,9 @@ def add_cover(path: Path, image: bytes, expected_revision: str, backup_dir: Path
             raise CoverError("이 EPUB은 현재 저장 중입니다") from exc
         if revision(path) != expected_revision:
             raise CoverError("EPUB이 변경되었습니다. 목록을 새로 불러오세요")
-        with zipfile.ZipFile(source) as archive:
-            if _inspect_archive(archive)["has_cover"] and not replace_existing:
-                raise CoverError("EPUB에 이미 표지가 있습니다")
+        if precheck is not None:
+            with zipfile.ZipFile(source) as archive:
+                precheck(archive)
         original_stat = path.stat()
         backup_dir.mkdir(parents=True, exist_ok=True)
         named = backup_name is not None
@@ -260,7 +294,7 @@ def add_cover(path: Path, image: bytes, expected_revision: str, backup_dir: Path
                     shutil.copyfileobj(source, output)
                     output.flush()
                     os.fsync(output.fileno())
-            _stage_cover(source, staged, image)
+            stage(source, staged)
             if revision(path) != expected_revision:
                 raise CoverError("EPUB이 변경되었습니다. 목록을 새로 불러오세요")
             try:
@@ -284,5 +318,32 @@ def add_cover(path: Path, image: bytes, expected_revision: str, backup_dir: Path
             staged.unlink(missing_ok=True)
             if rollback is not backup:
                 rollback.unlink(missing_ok=True)
-    return {"revision": revision(path), "backup_path": str(backup), "backup_created": backup_created, "file_size": path.stat().st_size,
-            "book_id": original_stat.st_ino, "cover_image": image_info}
+    return {"revision": revision(path), "backup_path": str(backup), "backup_created": backup_created, "file_size": path.stat().st_size, "book_id": original_stat.st_ino}
+
+
+def add_cover(path: Path, image: bytes, expected_revision: str, backup_dir: Path, *, replace_existing: bool = False, backup_name: str | None = None) -> dict[str, Any]:
+    image = normalize_image(image, max_width=600)
+    with Image.open(io.BytesIO(image)) as cover:
+        image_info = {"width": cover.width, "height": cover.height, "byte_size": len(image)}
+
+    def refuse_existing(archive: zipfile.ZipFile) -> None:
+        if _inspect_archive(archive)["has_cover"] and not replace_existing:
+            raise CoverError("EPUB에 이미 표지가 있습니다")
+
+    result = _rewrite_epub(path, expected_revision, backup_dir, backup_name, lambda source, staged: _stage_cover(source, staged, image), refuse_existing)
+    return {**result, "cover_image": image_info}
+
+
+def remove_cover(path: Path, expected_revision: str, backup_dir: Path, *, backup_name: str | None = None) -> dict[str, Any]:
+    """이 도구가 넣은 표지를 EPUB 에서 뺀다. 그런 표지가 없으면 백업도 만들지 않고 CoverError 를 낸다."""
+
+    def require_tool_cover(archive: zipfile.ZipFile) -> None:
+        opf_path, package = _read_package(archive)
+        manifest, metadata, spine = (package.find(f"{{{OPF_NS}}}{name}") for name in ("manifest", "metadata", "spine"))
+        if manifest is None or metadata is None or spine is None:
+            raise CoverError("EPUB manifest, metadata 또는 spine이 없습니다")
+        if not _remove_tool_covers(opf_path, manifest, metadata, spine):
+            raise CoverError("이 EPUB의 표지는 이 도구가 넣은 것이 아니라 삭제할 수 없습니다")
+
+    result = _rewrite_epub(path, expected_revision, backup_dir, backup_name, _stage_cover_removal, require_tool_cover)
+    return {**result, "cover_image": None}
