@@ -232,6 +232,69 @@ describe("SearchResult", () => {
     vi.unstubAllGlobals();
   });
 
+  describe("디렉토리 버튼", () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("편집 버튼 바로 뒤, 조회 버튼 앞에 표시한다", () => {
+      render(<SearchResult results={[sampleResults[0]]} showEditButton={true} />);
+      const labels = screen
+        .getAllByRole("button")
+        .map((button) => button.textContent)
+        .filter((text) => ["편집", "디렉토리", "조회", "전체보기"].includes(text));
+      expect(labels).toEqual(["편집", "디렉토리", "조회", "전체보기"]);
+    });
+
+    it("누르면 그 카테고리의 디렉토리 편집 화면을 새 탭으로 연다", () => {
+      const mockOpen = vi.fn();
+      vi.stubGlobal("open", mockOpen);
+      render(<SearchResult results={sampleResults} showEditButton={true} />);
+
+      fireEvent.click(screen.getAllByText("디렉토리")[1]);
+
+      expect(mockOpen).toHaveBeenCalledWith(
+        `/book-edit?directory=${encodeURIComponent("역사")}`,
+        "_blank",
+        "noopener",
+      );
+    });
+
+    it("만화 탭(comics-view)에서는 comics-edit 의 디렉토리 편집으로 간다", () => {
+      const mockOpen = vi.fn();
+      vi.stubGlobal("open", mockOpen);
+      render(
+        <SearchResult
+          results={[sampleResults[0]]}
+          showEditButton={true}
+          basePath="/comics-view"
+        />,
+      );
+
+      fireEvent.click(screen.getByText("디렉토리"));
+
+      expect(mockOpen).toHaveBeenCalledWith(
+        `/comics-edit?directory=${encodeURIComponent("소설")}`,
+        "_blank",
+        "noopener",
+      );
+    });
+
+    it("편집 권한이 없으면 숨긴다", () => {
+      render(<SearchResult results={sampleResults} showEditButton={false} />);
+      expect(screen.queryByText("디렉토리")).toBeNull();
+    });
+
+    it("카테고리가 없는 항목에는 표시하지 않는다", () => {
+      render(
+        <SearchResult
+          results={[{ book_id: 9, file_path: "/books/loose.epub", file_type: "epub" }]}
+          showEditButton={true}
+        />,
+      );
+      expect(screen.getByText("편집")).toBeTruthy();
+      expect(screen.queryByText("디렉토리")).toBeNull();
+    });
+  });
+
   it("조회 버튼 클릭 시 window.open을 호출한다", () => {
     const mockOpen = vi.fn();
     vi.stubGlobal("open", mockOpen);

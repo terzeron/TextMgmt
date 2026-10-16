@@ -81,6 +81,15 @@ export default function SearchResult({results, role, showEditButton, onLoadMore,
                                                 편집
                                             </Button>
                                         )}
+                                        {canEdit && book.category && (
+                                            <Button
+                                                variant="outline-warning" size="sm"
+                                                onClick={() => window.open(`${editBasePath}?directory=${categoryParam}`, '_blank', 'noopener')}
+                                                style={{marginRight: '4px'}}
+                                            >
+                                                디렉토리
+                                            </Button>
+                                        )}
                                         <Button
                                             variant="outline-primary" size="sm"
                                             onClick={() => window.open(`${viewBasePath}/${book.book_id}?category=${categoryParam}`, '_blank', 'noopener')}

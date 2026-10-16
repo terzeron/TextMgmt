@@ -220,7 +220,7 @@ export default function ViewSingle(props) {
             {props.role === "admin" && props.directoryEditUrl && (
               <a href={props.directoryEditUrl}>
                 <Button variant="outline-secondary" size="sm">
-                  디렉토리 편집
+                  디렉토리
                 </Button>
               </a>
             )}

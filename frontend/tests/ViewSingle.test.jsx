@@ -457,7 +457,7 @@ describe("ViewSingle", () => {
     });
   });
 
-  it("admin 역할일 때 편집 버튼 오른쪽에 디렉토리 편집 버튼을 표시한다", () => {
+  it("admin 역할일 때 편집 버튼 오른쪽에 디렉토리 버튼을 표시한다", () => {
     render(
       <ViewSingle
         bookId={1}
@@ -469,14 +469,14 @@ describe("ViewSingle", () => {
       />,
     );
     const edit = screen.getByText("편집").closest("a");
-    const dirEdit = screen.getByText("디렉토리 편집").closest("a");
+    const dirEdit = screen.getByText("디렉토리").closest("a");
     expect(dirEdit.getAttribute("href")).toBe("/edit?directory=a");
     expect(
       edit.compareDocumentPosition(dirEdit) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
-  it("admin이 아니면 디렉토리 편집 버튼을 숨긴다", () => {
+  it("admin이 아니면 디렉토리 버튼을 숨긴다", () => {
     render(
       <ViewSingle
         bookId={1}
@@ -486,6 +486,7 @@ describe("ViewSingle", () => {
         directoryEditUrl="/edit?directory=a"
       />,
     );
+    expect(screen.queryByText("디렉토리")).toBeNull();
     expect(screen.queryByText("디렉토리 편집")).toBeNull();
   });
 
