@@ -2,7 +2,11 @@ import { useEffect, useRef, useState, useCallback, Suspense } from "react";
 import PropTypes from "prop-types";
 import ePub from "epubjs";
 import { getApiUrlPrefix } from "./Common";
+import AddPhotoAlternateIcon from "@mui/icons-material/AddPhotoAlternate";
+import SaveIcon from "@mui/icons-material/Save";
+import CloseIcon from "@mui/icons-material/Close";
 import ViewerFontSelect from "./ViewerFontSelect";
+import EpubCoverModal from "./EpubCoverModal";
 import {
   buildFontFaceCss,
   readReaderFontFamily,
@@ -11,6 +15,19 @@ import {
 import "./ViewEPUB.css";
 
 const CHAPTERS_PREVIEW = 10;
+
+// 상태 코드만 노출하면 원인을 알 수 없으므로 본문을 함께 보여준다.
+async function describeHttpError(response) {
+  let detail = "";
+  try {
+    detail = (await response.text()).trim();
+  } catch {
+    // 본문을 읽지 못하면 상태 코드만으로 보고한다.
+  }
+  return detail
+    ? `HTTP ${response.status} - ${detail.slice(0, 200)}`
+    : `HTTP ${response.status}`;
+}
 
 const FONT_SIZE_MIN = 80;
 const FONT_SIZE_MAX = 160;
@@ -156,6 +173,7 @@ export default function ViewEPUB({
   preview = false,
   apiPrefix = "",
   standalone = false,
+  editable = false,
 }) {
   const hostRef = useRef(null);
   const renditionRef = useRef(null);
@@ -172,6 +190,31 @@ export default function ViewEPUB({
   const [errorMessage, setErrorMessage] = useState(null);
   const [coverUrl, setCoverUrl] = useState(null);
   const [isCoverPage, setIsCoverPage] = useState(false);
+  // 편집 화면 전용: 책의 첫 위치인지(표지가 없는 책도 첫 쪽에 표지 추가 버튼을 둔다), 표지 모달 표시, 저장 뒤 재로딩 카운터.
+  const [atStart, setAtStart] = useState(false);
+  const [coverDialog, setCoverDialog] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
+  // 편집 화면 전용: 저장 전 새 표지 { url, previewSrc }. URL 과 서버가 만든 미리보기(blob URL)다.
+  // 저장하기 전까지 서버의 EPUB 은 건드리지 않는다. blob URL 은 쓰지 않게 되면 해제한다.
+  const [pendingCover, setPendingCover] = useState(null);
+  const pendingCoverRef = useRef(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const replacePendingCover = (next) => {
+    if (pendingCoverRef.current) {
+      URL.revokeObjectURL(pendingCoverRef.current.previewSrc);
+    }
+    pendingCoverRef.current = next;
+    setPendingCover(next);
+  };
+  useEffect(
+    () => () => {
+      if (pendingCoverRef.current) {
+        URL.revokeObjectURL(pendingCoverRef.current.previewSrc);
+      }
+    },
+    [],
+  );
   const [pageInfo, setPageInfo] = useState({ page: 0, total: 0 });
   // 책 전체 진행률(0~1). 위치 계산이 끝나기 전에는 null이다.
   const [progress, setProgress] = useState(null);
@@ -185,6 +228,72 @@ export default function ViewEPUB({
 
   // 뷰어 높이는 상수로 둔다(측정·재계산 기계는 텍스트 잘림의 원인이었다).
   const containerHeight = standalone ? "100%" : preview ? "60vh" : "100dvh";
+
+  // 서버가 URL 의 이미지를 내려받아 정규화한 미리보기를 받아 온다. 저장할 때 들어가는 것과 같은 이미지다.
+  // 실패 사유(문자열)를 돌려주고, 성공하면 새 표지를 표시한 뒤 null 을 돌려준다.
+  // 미리보기는 PDF 이미지 삽입과 같은 insert-preview 를 쓴다.
+  const previewCover = async (url) => {
+    try {
+      const response = await fetch(
+        `${getApiUrlPrefix()}${apiPrefix}/pdf-pages/${bookId}/insert-preview`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        },
+      );
+      if (!response.ok) {
+        // 400 은 서버가 사람이 읽을 사유를 본문에 담아 보낸 것이다.
+        if (response.status === 400) {
+          const reason = (await response.text()).trim();
+          if (reason) return reason;
+        }
+        return await describeHttpError(response);
+      }
+      const blob = await response.blob();
+      setSaveError(null);
+      replacePendingCover({ url, previewSrc: URL.createObjectURL(blob) });
+      return null;
+    } catch (err) {
+      return err?.message || "이미지를 가져오지 못했습니다";
+    }
+  };
+
+  // 저장 버튼은 새 표지가 있을 때만 그려지고 저장 중에는 disabled 이므로 여기서 따로 막지 않는다.
+  const savePendingCover = async () => {
+    if (
+      !window.confirm(
+        `표지 이미지를 ${coverUrl ? "교체" : "추가"}하고 저장합니다. 원본은 백업됩니다. 저장할까요?`,
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const response = await fetch(
+        `${getApiUrlPrefix()}${apiPrefix}/epub-cover/${bookId}`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: pendingCover.url }),
+        },
+      );
+      if (!response.ok) throw new Error(await describeHttpError(response));
+      const body = await response.json();
+      if (body.status !== "success") {
+        throw new Error(body.error || "저장에 실패했습니다.");
+      }
+      replacePendingCover(null);
+      setReloadToken((prev) => prev + 1);
+    } catch (err) {
+      setSaveError(err?.message || "저장에 실패했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // 책 파일 로드
   useEffect(() => {
@@ -222,7 +331,7 @@ export default function ViewEPUB({
       });
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix는 mount 시 고정이라 의도적으로 deps에서 제외
-  }, [bookId, preview]);
+  }, [bookId, preview, reloadToken]);
 
   // 책 렌더링
   useEffect(() => {
@@ -336,6 +445,7 @@ export default function ViewEPUB({
       setIsLoading(false);
       setErrorMessage(null);
       syncPageInfo(location);
+      setAtStart(Boolean(location?.atStart));
       if (location?.start?.cfi) {
         cfiRef.current = location.start.cfi;
         syncProgress(location.start.cfi);
@@ -616,6 +726,87 @@ export default function ViewEPUB({
         </div>
       )}
 
+      {editable && !isLoading && !errorMessage && epubData && (isCoverPage || atStart) && (
+        <>
+          {pendingCover && (
+            <div
+              className="epub-cover-page epub-cover-pending"
+              data-testid="epub-cover-pending"
+            >
+              <img src={pendingCover.previewSrc} alt="저장 전 새 표지" />
+              <div className="epub-cover-pending-tag" title={pendingCover.url}>
+                새 표지 · 저장 전
+              </div>
+            </div>
+          )}
+          <div className="epub-cover-actions">
+            {saving && <span className="epub-cover-status">저장 중...</span>}
+            {saveError && (
+              <span className="epub-cover-error" role="alert">
+                {saveError}
+              </span>
+            )}
+            {pendingCover && (
+              <>
+                <button
+                  type="button"
+                  className="epub-cover-edit-btn"
+                  aria-label="새 표지 저장"
+                  title="새 표지를 EPUB 에 저장"
+                  disabled={saving}
+                  onClick={savePendingCover}
+                >
+                  <SaveIcon fontSize="small" />
+                </button>
+                <button
+                  type="button"
+                  className="epub-cover-edit-btn"
+                  aria-label="새 표지 취소"
+                  title="저장하지 않고 취소"
+                  disabled={saving}
+                  onClick={() => {
+                    setSaveError(null);
+                    replacePendingCover(null);
+                  }}
+                >
+                  <CloseIcon fontSize="small" />
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              className="epub-cover-edit-btn"
+              aria-label={coverUrl ? "표지 이미지 교체" : "표지 이미지 추가"}
+              aria-pressed={Boolean(pendingCover)}
+              title={
+                pendingCover
+                  ? "삽입할 이미지 URL 수정"
+                  : coverUrl
+                    ? "표지 이미지 URL로 교체"
+                    : "표지 이미지 URL로 추가"
+              }
+              disabled={saving}
+              onClick={() => setCoverDialog(true)}
+            >
+              <AddPhotoAlternateIcon fontSize="small" />
+            </button>
+          </div>
+        </>
+      )}
+
+      {coverDialog && (
+        <EpubCoverModal
+          hasCover={Boolean(coverUrl)}
+          initialUrl={pendingCover?.url}
+          onSubmit={async (url) => {
+            const message = await previewCover(url);
+            if (!message) setCoverDialog(false);
+            return message;
+          }}
+          onClose={() => setCoverDialog(false)}
+        />
+      )}
+
       {!isLoading && !errorMessage && epubData && (
         <>
           <button
@@ -686,4 +877,5 @@ ViewEPUB.propTypes = {
   preview: PropTypes.bool,
   apiPrefix: PropTypes.string,
   standalone: PropTypes.bool,
+  editable: PropTypes.bool,
 };

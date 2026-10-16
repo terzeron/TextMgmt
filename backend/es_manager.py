@@ -830,7 +830,7 @@ class ESManager:
         LOGGER.debug("refresh()")
         self.es.indices.refresh(index=self.index_name)
 
-    def update(self, doc_id: int, category: str = "", title: str = "", author: str = "", file_path: str = "", file_type: str = "", file_size: int = 0, summary: str = "") -> bool:
+    def update(self, doc_id: int, category: str = "", title: str = "", author: str = "", file_path: str = "", file_type: str = "", file_size: int = 0, summary: str = "", updated_time: str = "") -> bool:
         LOGGER.debug("update(doc_id=%d, title='%s', author='%s', file_path='%r', file_type='%s', file_size=%d, summary='%s', category='%s')", doc_id, title, author, file_path, file_type, file_size, summary, category)
         doc: dict[str, Any] = {}
         if category:
@@ -847,6 +847,8 @@ class ESManager:
             doc.update({"file_size": file_size})
         if summary:
             doc.update({"summary": summary})
+        if updated_time:
+            doc.update({"updated_time": updated_time})
         body = {"doc": doc}
         result = self.es.update(index=self.index_name, id=str(doc_id), body=body, refresh=True)
         if "_shards" in result:

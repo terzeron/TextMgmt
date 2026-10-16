@@ -133,3 +133,65 @@
     height: 100%;
     object-fit: contain;
 }
+
+/* 편집 화면 전용: 첫 쪽(표지) 우상단의 표지 추가·교체·저장·취소 버튼. 표지 레이어(z-index 5)는 클릭을 통과시키므로 그 위에 둔다. */
+.epub-cover-actions {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.epub-cover-edit-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.9);
+    color: #333;
+    cursor: pointer;
+}
+
+.epub-cover-edit-btn:hover:not(:disabled) {
+    background: #f0f0f0;
+}
+
+.epub-cover-edit-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.epub-cover-status,
+.epub-cover-error {
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.9);
+    font-size: 13px;
+}
+
+.epub-cover-error {
+    color: #b00020;
+}
+
+.epub-cover-pending {
+    z-index: 6;
+    flex-direction: column;
+}
+
+.epub-cover-pending img {
+    flex: 1 1 0;
+    min-height: 0;
+}
+
+.epub-cover-pending-tag {
+    padding: 2px 8px;
+    font-size: 13px;
+    color: #fff;
+    background: #0d6efd;
+    border-radius: 4px;
+}

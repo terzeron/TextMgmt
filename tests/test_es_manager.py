@@ -761,6 +761,26 @@ def test_update_with_file_size_and_summary():
     assert doc["summary"] == "test summary"
 
 
+def test_update_with_updated_time():
+    """updated_time 을 주면 최신 책 정렬 기준 필드로 색인한다. 주지 않으면 건드리지 않는다."""
+
+    class ESUpdateCapture(DummyES):
+        def __init__(self):
+            super().__init__()
+            self.bodies = []
+
+        def update(self, index: str, id: str, body: dict[str, Any], refresh=True):
+            self.bodies.append(body)
+            return {"_shards": {"failed": 0}}
+
+    es = ESUpdateCapture()
+    manager = make_manager(es)
+    assert manager.update(1, file_size=10, updated_time="2026-10-16T12:00:00.000000") is True
+    assert manager.update(1, file_size=10) is True
+    assert es.bodies[0]["doc"] == {"file_size": 10, "updated_time": "2026-10-16T12:00:00.000000"}
+    assert "updated_time" not in es.bodies[1]["doc"]
+
+
 def test_delete_by_category_no_prefix():
     """Line 612: delete_by_category with prefix=False"""
 

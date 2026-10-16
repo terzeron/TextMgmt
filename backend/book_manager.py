@@ -2977,6 +2977,50 @@ class BookManager:
             return None, "이미지를 가져오지 못했습니다"
         return jpeg, None
 
+    async def set_epub_cover(self, book_id: int, url: str) -> tuple[dict[str, Any] | None, str | None]:
+        """EPUB 의 표지를 URL 의 이미지로 넣거나 바꾼다: (결과, 오류 메시지).
+
+        표지 관리와 같은 경로(CoverManagement.apply_url)를 쓰므로 URL 검증, 원본 백업, 썸네일·preview 캐시 무효화가 같다.
+        뷰어는 파일의 현재 revision 을 모르므로 여기서 읽어 넘기고, 저장 직전에 apply_url 이 잠금 안에서 다시 확인한다.
+        """
+        from datetime import datetime
+
+        from backend.cover_management import CoverManagement
+        from backend.epub_cover import CoverError, inspect_epub
+
+        book, error = await self.get_book(book_id)
+        if book is None:
+            return None, error
+        if book.file_type != "epub":
+            return None, "EPUB 파일이 아닙니다"
+        url = url.strip()
+        if not url:
+            return None, "이미지 URL이 비어 있습니다"
+
+        def apply() -> dict[str, Any]:
+            service = CoverManagement(self.path_prefix)
+            relative = str(book.file_path.relative_to(self.path_prefix))
+            expected_revision = inspect_epub(service.resolve(relative))["revision"]
+            return service.apply_url(relative, url, expected_revision, replace_existing=True)
+
+        try:
+            result = await asyncio.to_thread(apply)
+        except CoverError as e:
+            return None, str(e)
+        except (OSError, ValueError) as e:
+            LOGGER.error("set_epub_cover failed (%s): %s", type(e).__name__, e)
+            return None, "표지를 저장하지 못했습니다. 다시 시도하세요"
+        try:
+            # 최신 책 목록은 updated_time 순이다. 표지 저장은 EPUB 의 mtime 을 되돌리므로(캐시·재적재 판정 보존) 색인에 직접 반영한다.
+            # loader 는 파일 mtime 이 저장된 updated_time 이하이면 이 값을 유지하므로 재적재해도 되돌아가지 않는다.
+            updated_time = datetime.now().isoformat(timespec="microseconds")
+            if not await asyncio.to_thread(self.es_manager.update, book_id, file_size=result["file_size"], updated_time=updated_time):
+                raise ValueError("ES update failed")
+        except Exception as e:
+            LOGGER.warning("Cover saved; ES metadata update failed: %s", type(e).__name__)
+            result["warning"] = "EPUB 표지를 저장했습니다. 검색 색인의 파일 크기는 갱신하지 못했습니다"
+        return result, None
+
     @staticmethod
     def _insert_image_page(pdf: Any, index: int, jpeg: bytes, width: int, height: int, page_w: float) -> None:
         """index(0-based) 앞에 이미지 한 장짜리 쪽을 끼운다. 폭은 page_w(기준 쪽의 편집 전 폭)이고 높이는 이미지 비율을 따른다.

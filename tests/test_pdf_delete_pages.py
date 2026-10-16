@@ -65,6 +65,22 @@ def loader():
 
 
 @pytest.mark.asyncio
+async def test_reindexed_document_gets_a_fresh_updated_time(env):
+    """저장한 PDF 는 최신 책 목록(updated_time 순)에 오른다. 모킹 없이 실제 Loader.read_file 로 재색인 문서를 만든다."""
+    from datetime import datetime
+
+    bm, es, pdf, root = env
+
+    result, error = await bm.delete_pdf_pages(1, [2])
+
+    assert error is None
+    indexed = bm.add_book.await_args.args[0][1]
+    assert indexed["page_count"] == 4
+    assert indexed["updated_time"] > "2024-01-01T00:00:00.000000"
+    assert abs((datetime.now() - datetime.fromisoformat(indexed["updated_time"])).total_seconds()) < 60
+
+
+@pytest.mark.asyncio
 async def test_deletes_pages_and_keeps_original_in_trash(env, loader):
     bm, es, pdf, root = env
     original = pdf.read_bytes()

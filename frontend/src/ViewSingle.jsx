@@ -164,6 +164,7 @@ export default function ViewSingle(props) {
         preview={preview}
         apiPrefix={ap}
         standalone={standalone}
+        editable={standalone ? false : props.editable || false}
       />
     ),
     doc: <ViewDOC bookId={bookId} fileType="doc" apiPrefix={ap} />,
