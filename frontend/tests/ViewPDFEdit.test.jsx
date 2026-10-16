@@ -399,9 +399,11 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
       const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
       const [split] = JSON.parse(post[1].body).splits;
       expect(split.page).toBe(2);
-      expect(split.first).toEqual({ x0: 0.05, y0: 0.05, x1: 0.5, y1: 0.95, angle: 0 });
+      expect(split.first).toEqual({ x0: 0, y0: 0, x1: 0.5, y1: 1, angle: 0 });
       expect(split.second.x0).toBeCloseTo(0.6, 5);
-      expect(split.second.x1).toBeCloseTo(0.95, 5);
+      expect(split.second.x1).toBeCloseTo(1, 5);
+      expect(split.second.y0).toBe(0);
+      expect(split.second.y1).toBe(1);
     });
     expect(window.confirm.mock.calls[0][0]).toContain("2쪽 분할");
   });

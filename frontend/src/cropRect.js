@@ -23,10 +23,11 @@ export function resizeRect(rect, handle, dx, dy, min = MIN_CROP_FRACTION) {
   return { ...rect, x0, y0, x1, y1 };
 }
 
-// 분할: 앞쪽(first)이 될 영역과 뒤쪽(second)이 될 영역의 기본값. 왼쪽 절반, 오른쪽 절반이다.
+// 분할: 앞쪽(first)이 될 영역과 뒤쪽(second)이 될 영역의 기본값. 쪽의 네 모서리에 맞춰 정확히 가운데(x=0.5)에서
+// 나뉘는 서로소 두 박스다: first 가 왼쪽 절반 전체, second 가 오른쪽 절반 전체를 차지한다.
 export const DEFAULT_SPLIT_RECTS = Object.freeze({
-  first: Object.freeze({ x0: 0.05, y0: 0.05, x1: 0.5, y1: 0.95, angle: 0 }),
-  second: Object.freeze({ x0: 0.5, y0: 0.05, x1: 0.95, y1: 0.95, angle: 0 }),
+  first: Object.freeze({ x0: 0, y0: 0, x1: 0.5, y1: 1, angle: 0 }),
+  second: Object.freeze({ x0: 0.5, y0: 0, x1: 1, y1: 1, angle: 0 }),
 });
 
 // 박스들의 합집합 바깥을 {left, top, width, height}(0~1 비율) 직사각형 조각으로 나눠 돌려준다.
