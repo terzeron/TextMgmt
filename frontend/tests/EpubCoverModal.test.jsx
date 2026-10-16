@@ -37,11 +37,11 @@ describe("EpubCoverModal", () => {
   it("표지 유무에 따라 제목이 다르다", () => {
     setup({ hasCover: true });
     expect(screen.getByText("표지 이미지 교체")).toBeTruthy();
-    expect(screen.getByText(/원본 EPUB은 백업됩니다/)).toBeTruthy();
+    expect(screen.getByText(/원본은 0_trash에 보존됩니다/)).toBeTruthy();
     cleanup();
     setup({ hasCover: false });
     expect(screen.getByText("표지 이미지 추가")).toBeTruthy();
-    expect(screen.queryByText(/원본 EPUB은 백업됩니다/)).toBeNull();
+    expect(screen.queryByText(/원본은 0_trash에 보존됩니다/)).toBeNull();
   });
 
   it("initialUrl 이 있으면 입력창을 채운다", () => {

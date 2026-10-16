@@ -14,6 +14,8 @@ import CropFreeIcon from "@mui/icons-material/CropFree";
 import VerticalSplitOutlinedIcon from "@mui/icons-material/VerticalSplitOutlined";
 import AddPhotoAlternateIcon from "@mui/icons-material/AddPhotoAlternate";
 import PdfInsertImageModal from "./PdfInsertImageModal";
+import { describeHttpError } from "./httpError";
+import "./viewerEditActions.css";
 import PdfCropBox from "./PdfCropBox";
 import { DEFAULT_CROP_RECT, DEFAULT_SPLIT_RECTS } from "./cropRect";
 
@@ -37,19 +39,6 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 const PDF_WASM_URL = `${window.location.origin}${import.meta.env.BASE_URL}pdf-wasm/`;
 
 // 서버는 실패 사유를 본문에 담아 보낸다(파일 없음, 스토리지 접근 오류 등).
-// 상태 코드만 노출하면 원인을 알 수 없으므로 본문을 함께 보여준다.
-async function describeHttpError(response) {
-  let detail = "";
-  try {
-    detail = (await response.text()).trim();
-  } catch {
-    // 본문을 읽지 못하면 상태 코드만으로 보고한다.
-  }
-  return detail
-    ? `HTTP ${response.status} - ${detail.slice(0, 200)}`
-    : `HTTP ${response.status}`;
-}
-
 // 쪽 크기(pt)가 비정상적으로 작은 PDF가 있다. 이미지를 0.09pt 폭으로 그려 넣은 만화 PDF가 그렇다.
 // 첫 쪽 크기로 표시 폭과 자리표시 canvas 를 정하면 폭 0px, canvas 0x0 이 되어 아무것도 보이지 않는다.
 // 첫 쪽의 CSS 폭이 이 값 미만이면 쪽 크기를 믿지 않고 기준 폭으로 대신한다(비율은 유지).
@@ -769,7 +758,7 @@ export default function ViewPDF({
             ` · 변경 표시 ${new Set([...markedPages.keys(), ...insertions.keys()]).size}쪽`}
           {saving && " · 저장 중..."}
           {saveError && (
-            <span className="pdf-save-error" role="alert">
+            <span className="viewer-edit-error" role="alert">
               {" · "}
               {saveError}
             </span>
@@ -842,7 +831,7 @@ export default function ViewPDF({
             <Fragment key={pageNum}>
               {insertion && (
                 <div
-                  className="pdf-page pdf-insert-preview"
+                  className="pdf-page pdf-insert-preview viewer-edit-pending"
                   data-testid={`pdf-insert-preview-${pageNum}`}
                   style={canvasStyle}
                 >
@@ -851,13 +840,13 @@ export default function ViewPDF({
                     src={insertion.previewSrc}
                     alt={`${pageNum}쪽 앞에 삽입될 이미지`}
                   />
-                  <div className="pdf-insert-tag" title={insertion.url}>
+                  <div className="viewer-edit-tag" title={insertion.url}>
                     새 쪽 · 저장 전 ({pageNum}쪽 앞에 삽입)
                   </div>
-                  <div className="pdf-page-actions">
+                  <div className="viewer-edit-actions">
                     <button
                       type="button"
-                      className="pdf-page-btn"
+                      className="viewer-edit-btn"
                       aria-label="저장"
                       title="표시한 변경을 저장"
                       disabled={saving}
@@ -867,7 +856,7 @@ export default function ViewPDF({
                     </button>
                     <button
                       type="button"
-                      className="pdf-page-btn"
+                      className="viewer-edit-btn"
                       aria-label={`${pageNum}쪽 앞 이미지 삽입 취소`}
                       title="삽입 취소"
                       disabled={saving}
@@ -916,11 +905,11 @@ export default function ViewPDF({
                   onChange={(id, rect) => changeBox(pageNum, id, rect)}
                 />
               )}
-              <div className="pdf-page-actions">
+              <div className="viewer-edit-actions">
                 {marked && (
                   <button
                     type="button"
-                    className="pdf-page-btn"
+                    className="viewer-edit-btn"
                     aria-label="저장"
                     title="표시한 변경을 저장"
                     disabled={saving}
@@ -931,7 +920,7 @@ export default function ViewPDF({
                 )}
                 <button
                   type="button"
-                  className={`pdf-page-btn${insertion ? " active" : ""}`}
+                  className={`viewer-edit-btn${insertion ? " active" : ""}`}
                   aria-label={`${pageNum}쪽 앞에 이미지 삽입`}
                   aria-pressed={Boolean(insertion)}
                   title={
@@ -946,7 +935,7 @@ export default function ViewPDF({
                 </button>
                 <button
                   type="button"
-                  className={`pdf-page-btn${mark?.kind === "split" ? " active" : ""}`}
+                  className={`viewer-edit-btn${mark?.kind === "split" ? " active" : ""}`}
                   aria-label={`${pageNum}쪽 분할`}
                   aria-pressed={mark?.kind === "split"}
                   title={
@@ -963,7 +952,7 @@ export default function ViewPDF({
                 </button>
                 <button
                   type="button"
-                  className={`pdf-page-btn${mark?.kind === "crop" ? " active" : ""}`}
+                  className={`viewer-edit-btn${mark?.kind === "crop" ? " active" : ""}`}
                   aria-label={`${pageNum}쪽 크롭`}
                   aria-pressed={mark?.kind === "crop"}
                   title={
@@ -980,7 +969,7 @@ export default function ViewPDF({
                 </button>
                 <button
                   type="button"
-                  className={`pdf-page-btn${mark?.kind === "page" ? " active" : ""}`}
+                  className={`viewer-edit-btn${mark?.kind === "page" ? " active" : ""}`}
                   aria-label={`${pageNum}쪽 삭제 표시`}
                   aria-pressed={mark?.kind === "page"}
                   title={
@@ -1152,9 +1141,6 @@ const pdfStyles = `
     /* 이미지 삽입 미리보기: 저장 전에도 삽입될 쪽을 다른 쪽처럼 보여 준다. 점선 테두리와 라벨로 아직 저장 전임을 알린다. */
     .pdf-insert-preview {
         position: relative;
-        outline: 2px dashed #4a90d9;
-        outline-offset: -2px;
-        background: #fff;
     }
     .pdf-insert-image {
         display: block;
@@ -1164,30 +1150,6 @@ const pdfStyles = `
     .pdf-container.pdf-single .pdf-insert-image {
         height: 100%;
         object-fit: contain;
-    }
-    .pdf-insert-tag {
-        position: absolute;
-        top: 6px;
-        left: 6px;
-        max-width: calc(100% - 60px);
-        padding: 2px 8px;
-        border-radius: 4px;
-        background: #4a90d9;
-        color: #fff;
-        font-size: 12px;
-        line-height: 18px;
-        pointer-events: none;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    .pdf-page-actions {
-        position: absolute;
-        top: 6px;
-        right: 6px;
-        z-index: 5;
-        display: flex;
-        gap: 4px;
     }
     /* 크롭: 박스 안은 선명하게 두고 바깥 네 구역만 회색+블러로 덮는다. 레이어 자체는 클릭을 통과시키고 핸들만 받는다. */
     .pdf-crop-layer {
@@ -1286,34 +1248,6 @@ const pdfStyles = `
         .pdf-crop-handle-n, .pdf-crop-handle-s { left: 28px; right: 28px; height: 28px; }
         .pdf-crop-handle-e, .pdf-crop-handle-w { top: 28px; bottom: 28px; width: 28px; }
         .pdf-crop-handle-nw, .pdf-crop-handle-ne, .pdf-crop-handle-sw, .pdf-crop-handle-se { width: 28px; height: 28px; }
-    }
-    .pdf-page-btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 30px;
-        height: 30px;
-        padding: 0;
-        border: 1px solid #bbb;
-        border-radius: 4px;
-        background: rgba(255,255,255,0.92);
-        color: #555;
-        cursor: pointer;
-    }
-    .pdf-page-btn:hover:not(:disabled) {
-        background: #e0e0e0;
-    }
-    .pdf-page-btn.active {
-        background: #d9534f;
-        border-color: #d9534f;
-        color: #fff;
-    }
-    .pdf-page-btn:disabled {
-        opacity: 0.4;
-        cursor: default;
-    }
-    .pdf-save-error {
-        color: #c0392b;
     }
     .loading-container {
         display: flex;

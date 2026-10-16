@@ -7,19 +7,8 @@ import {
   PREVIEW_PAGE_COUNT,
   previewScale,
 } from "./directoryPreviewLayout";
+import { describeHttpError } from "./httpError";
 import "./DirectoryPagePreview.css";
-
-async function describeHttpError(response) {
-  let detail = "";
-  try {
-    detail = (await response.text()).trim();
-  } catch {
-    // 본문을 읽지 못하면 상태 코드만으로 보고한다.
-  }
-  return detail
-    ? `HTTP ${response.status} - ${detail.slice(0, 200)}`
-    : `HTTP ${response.status}`;
-}
 
 // 디렉토리의 첫 파일(목록 정렬 기준 첫 번째)의 앞 10쪽을 왼쪽에서 오른쪽으로 나란히 보여 준다.
 // 오른쪽에 자리가 없으면 아래 줄로 넘어간다. PDF 가 아니면 보여 주지 않는다.

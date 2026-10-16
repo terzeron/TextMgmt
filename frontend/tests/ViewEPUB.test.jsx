@@ -1379,7 +1379,7 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       expect(
         screen.getByRole("button", { name: "표지 이미지 교체" }),
       ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "새 표지 저장" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "저장" })).toBeNull();
     });
 
     it("표지가 없어도 책의 첫 위치에서는 추가 버튼을 둔다", async () => {
@@ -1434,7 +1434,7 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       expect(JSON.parse(call[1].body)).toEqual({ url: "https://img.example.com/c.jpg" });
       // 저장하기 전에는 서버의 EPUB 을 건드리지 않는다.
       expect(globalThis.fetch.mock.calls.some(([u]) => u === SAVE_URL)).toBe(false);
-      expect(screen.getByRole("button", { name: "새 표지 저장" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "저장" })).toBeTruthy();
     });
 
     it("미리보기 400 은 사유를 모달에 돌려주고 표시하지 않는다", async () => {
@@ -1496,7 +1496,7 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       respond({ preview: blobResponse() });
       await openWithPendingCover();
 
-      fireEvent.click(screen.getByRole("button", { name: "새 표지 취소" }));
+      fireEvent.click(screen.getByRole("button", { name: "표지 이미지 삽입 취소" }));
 
       expect(screen.queryByTestId("epub-cover-pending")).toBeNull();
       expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith("blob:new-cover");
@@ -1507,7 +1507,7 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       vi.spyOn(window, "confirm").mockReturnValue(false);
       await openWithPendingCover();
 
-      fireEvent.click(screen.getByRole("button", { name: "새 표지 저장" }));
+      fireEvent.click(screen.getByRole("button", { name: "저장" }));
 
       expect(window.confirm).toHaveBeenCalled();
       expect(globalThis.fetch.mock.calls.some(([u]) => u === SAVE_URL)).toBe(false);
@@ -1520,10 +1520,12 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       await openWithPendingCover();
       const before = globalThis.fetch.mock.calls.filter(([u]) => u.includes("/preview/7")).length;
 
-      fireEvent.click(screen.getByRole("button", { name: "새 표지 저장" }));
+      fireEvent.click(screen.getByRole("button", { name: "저장" }));
 
       await waitFor(() => expect(screen.queryByTestId("epub-cover-pending")).toBeNull());
-      expect(confirm.mock.calls[0][0]).toContain("교체");
+      expect(confirm.mock.calls[0][0]).toBe(
+        "표지 이미지 교체를 저장합니다. 원본은 0_trash에 보존됩니다. 저장할까요?",
+      );
       const save = globalThis.fetch.mock.calls.find(([u]) => u === SAVE_URL);
       expect(save[1].method).toBe("POST");
       expect(JSON.parse(save[1].body)).toEqual({ url: "https://img.example.com/c.jpg" });
@@ -1546,10 +1548,12 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       fireEvent.click(screen.getByText("삽입 표시"));
       await screen.findByTestId("epub-cover-pending");
 
-      fireEvent.click(screen.getByRole("button", { name: "새 표지 저장" }));
+      fireEvent.click(screen.getByRole("button", { name: "저장" }));
 
       await waitFor(() => expect(confirm).toHaveBeenCalled());
-      expect(confirm.mock.calls[0][0]).toContain("추가");
+      expect(confirm.mock.calls[0][0]).toBe(
+        "표지 이미지 추가를 저장합니다. 원본은 0_trash에 보존됩니다. 저장할까요?",
+      );
     });
 
     it("저장 실패(status failure)는 툴바에 사유를 보이고 표시를 유지한다", async () => {
@@ -1560,7 +1564,7 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       vi.spyOn(window, "confirm").mockReturnValue(true);
       await openWithPendingCover();
 
-      fireEvent.click(screen.getByRole("button", { name: "새 표지 저장" }));
+      fireEvent.click(screen.getByRole("button", { name: "저장" }));
 
       expect((await screen.findByRole("alert")).textContent).toContain("EPUB이 변경되었습니다");
       expect(screen.getByTestId("epub-cover-pending")).toBeTruthy();
@@ -1570,11 +1574,11 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       respond({ preview: blobResponse(), save: textResponse(403, "forbidden") });
       vi.spyOn(window, "confirm").mockReturnValue(true);
       await openWithPendingCover();
-      fireEvent.click(screen.getByRole("button", { name: "새 표지 저장" }));
+      fireEvent.click(screen.getByRole("button", { name: "저장" }));
       expect((await screen.findByRole("alert")).textContent).toContain("HTTP 403 - forbidden");
 
       respond({ save: jsonResponse({ status: "failure" }) });
-      fireEvent.click(screen.getByRole("button", { name: "새 표지 저장" }));
+      fireEvent.click(screen.getByRole("button", { name: "저장" }));
       await waitFor(() =>
         expect(screen.getByRole("alert").textContent).toContain("저장에 실패했습니다."),
       );
@@ -1592,12 +1596,12 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       vi.spyOn(window, "confirm").mockReturnValue(true);
       await openWithPendingCover();
 
-      fireEvent.click(screen.getByRole("button", { name: "새 표지 저장" }));
+      fireEvent.click(screen.getByRole("button", { name: "저장" }));
 
       expect(await screen.findByText("저장 중...")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "새 표지 저장" }).disabled).toBe(true);
+      expect(screen.getByRole("button", { name: "저장" }).disabled).toBe(true);
       // 저장 중 재클릭은 요청을 더 만들지 않는다.
-      fireEvent.click(screen.getByRole("button", { name: "새 표지 저장" }));
+      fireEvent.click(screen.getByRole("button", { name: "저장" }));
       expect(globalThis.fetch.mock.calls.filter(([u]) => u === SAVE_URL)).toHaveLength(1);
       await act(async () => finish());
     });
@@ -1622,10 +1626,48 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       vi.spyOn(window, "confirm").mockReturnValue(true);
       fireEvent.click(screen.getByText("삽입 표시"));
       await screen.findByTestId("epub-cover-pending");
-      fireEvent.click(screen.getByRole("button", { name: "새 표지 저장" }));
+      fireEvent.click(screen.getByRole("button", { name: "저장" }));
       await waitFor(() =>
         expect(screen.getByRole("alert").textContent).toContain("저장에 실패했습니다."),
       );
+    });
+
+    it("화면을 닫은 뒤 도착한 미리보기 응답은 버리고 blob URL 을 만들지 않는다", async () => {
+      let arrive;
+      const base = globalThis.fetch.getMockImplementation();
+      globalThis.fetch.mockImplementation((url, init) =>
+        url === PREVIEW_URL
+          ? new Promise((resolve) => {
+              arrive = () => resolve(blobResponse());
+            })
+          : base(url, init),
+      );
+      mockCoverUrl = "blob:epub-cover";
+      render(<ViewEPUB bookId={7} preview editable />);
+      await openBook();
+      fireEvent.click(screen.getByRole("button", { name: "표지 이미지 교체" }));
+      fireEvent.click(screen.getByText("삽입 표시"));
+      await waitFor(() => expect(arrive).toBeTypeOf("function"));
+
+      cleanup();
+      await act(async () => arrive());
+
+      expect(globalThis.URL.createObjectURL).not.toHaveBeenCalled();
+    });
+
+    it("삽입 표시한 표지는 저장 전 표시(점선)와 PDF 와 같은 버튼 모양을 쓴다", async () => {
+      respond({ preview: blobResponse() });
+      await openWithPendingCover();
+
+      expect(screen.getByTestId("epub-cover-pending").className).toContain(
+        "viewer-edit-pending",
+      );
+      const insert = screen.getByRole("button", { name: "표지 이미지 교체" });
+      expect(insert.className).toContain("viewer-edit-btn");
+      expect(insert.className).toContain("active");
+      expect(insert.getAttribute("aria-pressed")).toBe("true");
+      expect(screen.getByRole("button", { name: "저장" }).title).toBe("표시한 변경을 저장");
+      expect(screen.getByRole("button", { name: "표지 이미지 삽입 취소" }).textContent).toBe("×");
     });
 
     it("화면을 닫으면 저장 전 미리보기를 해제한다", async () => {
