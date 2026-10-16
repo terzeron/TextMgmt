@@ -80,20 +80,20 @@ function mockPdfFetch(total = "30") {
 describe("previewScale", () => {
   it("높이가 PREVIEW_HEIGHT 가 되는 배율을 준다", () => {
     expect(previewScale(612, 792, 1)).toBeCloseTo(PREVIEW_HEIGHT / 792);
-    // 612x792 쪽도 dpr 2 에서 높이 900 CSS px = 1800 픽셀이 된다(상한 안쪽)
+    // 612x792 쪽도 dpr 2 에서 높이 PREVIEW_HEIGHT CSS px 의 2배 픽셀이 된다(상한 안쪽)
     expect(previewScale(612, 792, 2)).toBeCloseTo((PREVIEW_HEIGHT * 2) / 792);
   });
 
   it("면적 상한을 넘으면 배율을 낮춘다", () => {
-    // dpr 3 이면 612x792 쪽은 상한(2.6M 픽셀)을 넘으므로 배율이 byHeight 보다 낮아진다
-    const scale = previewScale(612, 792, 3);
+    // 가로 펼침면(1224x792)을 dpr 3 으로 그리면 상한(1.5M 픽셀)을 넘으므로 배율이 byHeight 보다 낮아진다
+    const scale = previewScale(1224, 792, 3);
     expect(scale).toBeLessThan((PREVIEW_HEIGHT * 3) / 792);
-    expect(612 * scale * (792 * scale)).toBeLessThanOrEqual(2_600_000 + 1);
+    expect(1224 * scale * (792 * scale)).toBeLessThanOrEqual(1_500_000 + 1);
   });
 
-  it("쪽 크기가 비정상적으로 작아도(0.09pt) 높이 900px 의 canvas 가 된다", () => {
+  it("쪽 크기가 비정상적으로 작아도(0.09pt) 고정 높이의 canvas 가 된다", () => {
     const scale = previewScale(0.0934, 0.0675, 1);
-    expect(0.0675 * scale).toBeCloseTo(900, 0);
+    expect(0.0675 * scale).toBeCloseTo(PREVIEW_HEIGHT, 0);
   });
 });
 
@@ -122,7 +122,7 @@ describe("DirectoryPagePreview", () => {
     );
   });
 
-  it("첫 파일의 앞 10쪽을 요청하고 쪽마다 canvas 를 높이 900px 로 놓는다", async () => {
+  it("첫 파일의 앞 10쪽을 요청하고 쪽마다 canvas 를 고정 높이로 놓는다", async () => {
     respondWithFirstFile(PDF_FILE);
     const fetchMock = mockPdfFetch("30");
     globalThis.fetch = fetchMock;
@@ -138,7 +138,7 @@ describe("DirectoryPagePreview", () => {
     );
     expect(mockGetDocument.mock.calls[0][0].wasmUrl).toBe("http://localhost/pdf-wasm/");
     for (const canvas of screen.getAllByLabelText(/^\d+쪽$/)) {
-      expect(canvas.style.height).toBe("900px");
+      expect(canvas.style.height).toBe(`${PREVIEW_HEIGHT}px`);
     }
     expect(screen.getByText(/제목 01권\.pdf · 1~10쪽 \/ 총 30쪽/)).toBeTruthy();
   });
@@ -166,13 +166,13 @@ describe("DirectoryPagePreview", () => {
 
     await waitFor(() => expect(doc.rendered).toHaveLength(2));
     const [portrait, spread] = screen.getAllByLabelText(/^\d+쪽$/);
-    expect(portrait.height).toBe(900);
-    expect(spread.height).toBe(900);
+    expect(portrait.height).toBe(PREVIEW_HEIGHT);
+    expect(spread.height).toBe(PREVIEW_HEIGHT);
     expect(portrait.width / portrait.height).toBeCloseTo(612 / 792, 2);
     expect(spread.width / spread.height).toBeCloseTo(1224 / 792, 2);
   });
 
-  it("쪽 크기가 0.09pt 인 PDF 도 보인다", async () => {
+  it("쪽 크기가 0.09pt 인 PDF 도 고정 높이로 보인다", async () => {
     respondWithFirstFile(PDF_FILE);
     globalThis.fetch = mockPdfFetch("1");
     const doc = createDoc([{ width: 0.0934, height: 0.0675 }]);
@@ -182,8 +182,8 @@ describe("DirectoryPagePreview", () => {
 
     await waitFor(() => expect(doc.rendered).toHaveLength(1));
     const canvas = screen.getByLabelText("1쪽");
-    expect(canvas.height).toBe(900);
-    expect(canvas.width).toBeGreaterThan(1000);
+    expect(canvas.height).toBe(PREVIEW_HEIGHT);
+    expect(canvas.width).toBeCloseTo(PREVIEW_HEIGHT * (0.0934 / 0.0675), -1);
   });
 
   it("PDF 가 아닌 첫 파일은 안내만 보이고 쪽을 요청하지 않는다", async () => {
