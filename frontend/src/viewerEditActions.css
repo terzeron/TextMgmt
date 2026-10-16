@@ -1,0 +1,74 @@
+/* PDF·EPUB 뷰어 편집 화면이 함께 쓰는 버튼과 표시. 두 뷰어의 모양과 동작을 같게 유지한다. */
+.viewer-edit-actions {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 5;
+    display: flex;
+    gap: 4px;
+}
+
+.viewer-edit-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid #bbb;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.92);
+    color: #555;
+    cursor: pointer;
+}
+
+.viewer-edit-btn:hover:not(:disabled) {
+    background: #e0e0e0;
+}
+
+.viewer-edit-btn.active {
+    background: #d9534f;
+    border-color: #d9534f;
+    color: #fff;
+}
+
+.viewer-edit-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+/* 저장 전 새 이미지 표시: 점선 테두리와 라벨로 아직 저장 전임을 알린다. */
+.viewer-edit-pending {
+    outline: 2px dashed #4a90d9;
+    outline-offset: -2px;
+    background: #fff;
+}
+
+.viewer-edit-tag {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    max-width: calc(100% - 60px);
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: #4a90d9;
+    color: #fff;
+    font-size: 12px;
+    line-height: 18px;
+    pointer-events: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.viewer-edit-error {
+    color: #c0392b;
+}
+
+/* 삭제 표시: 대상 위를 회색으로 덮는다. 클릭은 통과시킨다. */
+.viewer-edit-delete-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(90, 90, 90, 0.6);
+    pointer-events: none;
+}

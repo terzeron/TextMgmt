@@ -164,6 +164,7 @@ export default function ViewSingle(props) {
         preview={preview}
         apiPrefix={ap}
         standalone={standalone}
+        editable={standalone ? false : props.editable || false}
       />
     ),
     doc: <ViewDOC bookId={bookId} fileType="doc" apiPrefix={ap} />,
@@ -219,7 +220,7 @@ export default function ViewSingle(props) {
             {props.role === "admin" && props.directoryEditUrl && (
               <a href={props.directoryEditUrl}>
                 <Button variant="outline-secondary" size="sm">
-                  디렉토리 편집
+                  디렉토리
                 </Button>
               </a>
             )}

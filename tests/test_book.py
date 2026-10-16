@@ -89,13 +89,16 @@ def test_book_requires_book_dir():
     import sys
 
     prev = os.environ.pop("TM_BOOK_DIR", None)
+    # 지운 모듈을 되돌려 놓는다. 그러지 않으면 이후 import 가 새 Book 클래스를 만들어, 옛 Book 을 쥔
+    # backend.book_manager 와 어긋나 다른 테스트가 전체 실행에서만 실패한다.
+    original = sys.modules.pop("backend.book", None)
     try:
-        if "backend.book" in sys.modules:
-            del sys.modules["backend.book"]
         import pytest
 
         with pytest.raises(SystemExit):
             importlib.import_module("backend.book")
     finally:
+        if original is not None:
+            sys.modules["backend.book"] = original
         if prev is not None:
             os.environ["TM_BOOK_DIR"] = prev

@@ -445,6 +445,10 @@ class PdfInsertPreviewModel(BaseModel):
     url: str = Field(min_length=1, max_length=4096)
 
 
+class EpubCoverModel(BaseModel):
+    url: str = Field(min_length=1, max_length=4096)
+
+
 class PdfDeletePagesModel(BaseModel):
     pages: list[int] = []
     crops: list[PdfCropModel] = []
@@ -703,6 +707,22 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     async def delete_pdf_pages(book_id: int, body: PdfDeletePagesModel) -> dict[str, Any]:
         LOGGER.debug("# delete_pdf_pages(book_id=%d, pages=%r, crops=%r, splits=%r, inserts=%r)", book_id, body.pages, body.crops, body.splits, body.inserts)
         result, error = await manager.delete_pdf_pages(book_id, body.pages, [c.model_dump() for c in body.crops], [s.model_dump() for s in body.splits], [i.model_dump() for i in body.inserts])
+        if error is None:
+            return {"status": "success", "result": result}
+        return {"status": "failure", "error": error}
+
+    @router.post("/epub-cover/{book_id}", dependencies=admin_dep)
+    async def set_epub_cover(book_id: int, body: EpubCoverModel) -> dict[str, Any]:
+        LOGGER.debug("# set_epub_cover(book_id=%d, url=%r)", book_id, body.url)
+        result, error = await manager.set_epub_cover(book_id, body.url)
+        if error is None:
+            return {"status": "success", "result": result}
+        return {"status": "failure", "error": error}
+
+    @router.delete("/epub-cover/{book_id}", dependencies=admin_dep)
+    async def remove_epub_cover(book_id: int) -> dict[str, Any]:
+        LOGGER.debug("# remove_epub_cover(book_id=%d)", book_id)
+        result, error = await manager.remove_epub_cover(book_id)
         if error is None:
             return {"status": "success", "result": result}
         return {"status": "failure", "error": error}

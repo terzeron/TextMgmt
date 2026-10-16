@@ -39,7 +39,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # 표본이 이보다 적은 카테고리는 학습에서 뺀다.
         "min_per_category": 30,
         # 레이블로 쓸 디렉토리는 '숫자_이름' 꼴이다. 0_* 는 미분류/격리라 뺀다.
-        # 이 규칙 하나가 trash, _root, .preview_cache 같은 비카테고리 디렉토리를 함께 거른다.
+        # 이 규칙 하나가 0_trash, _root, .preview_cache 같은 비카테고리 디렉토리를 함께 거른다.
         # 실측에서 그 셋이 789건 섞여 들어왔다.
         "label_pattern": r"^[1-9]_",
         # 위 꼴이지만 레이블이 아닌 것. 9_북스캔OCR 은 책이 아니라 페이지 이미지다.

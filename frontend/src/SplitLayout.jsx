@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
+import PropTypes from "prop-types";
 import useIsMobile from "./useIsMobile";
 import "./SplitLayout.css";
 
@@ -241,6 +242,16 @@ export default function SplitLayout({
     </Fragment>
   );
 }
+
+SplitLayout.propTypes = {
+  storageKey: PropTypes.string,
+  defaultLeftRatio: PropTypes.number,
+  minLeft: PropTypes.number,
+  maxLeftRatio: PropTypes.number,
+  scroll: PropTypes.bool,
+  className: PropTypes.string,
+  children: PropTypes.node,
+};
 
 SplitLayout.Left = SplitLeft;
 SplitLayout.Right = SplitRight;

@@ -67,6 +67,18 @@ describe("unionDimRects", () => {
     );
   });
 
+  it("기본 분할 박스는 쪽 네 모서리에 맞는 서로소 왼쪽·오른쪽 절반이다", () => {
+    const { first, second } = DEFAULT_SPLIT_RECTS;
+    // 왼쪽(파랑)은 왼쪽 절반 전체, 오른쪽(빨강)은 오른쪽 절반 전체다.
+    expect(first).toEqual({ x0: 0, y0: 0, x1: 0.5, y1: 1, angle: 0 });
+    expect(second).toEqual({ x0: 0.5, y0: 0, x1: 1, y1: 1, angle: 0 });
+    // 가운데에서 딱 맞닿고 겹치지 않으며, 둘을 합치면 쪽 전체다.
+    expect(first.x1).toBe(second.x0);
+    expect(rectArea(first) + rectArea(second)).toBeCloseTo(1);
+    // 쪽 전체가 박스 안이므로 어둡게 덮을 곳이 없다.
+    expect(area(unionDimRects([first, second]))).toBeCloseTo(0);
+  });
+
   it("떨어진 두 박스는 각 박스 안을 덮지 않는다", () => {
     const { first, second } = DEFAULT_SPLIT_RECTS;
     expect(area(unionDimRects([first, second]))).toBeCloseTo(
