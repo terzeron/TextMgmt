@@ -149,7 +149,7 @@ def test_get_existing_created_time_metadata_returns_stored_values():
 
     def mget(docs, source):
         assert docs == [{"_index": "idx", "_id": "1"}, {"_index": "idx", "_id": "2"}]
-        assert source == ["created_time", "created_time_source"]
+        assert source == ["created_time", "created_time_source", "updated_time"]
         return {
             "docs": [
                 {
@@ -158,6 +158,7 @@ def test_get_existing_created_time_metadata_returns_stored_values():
                     "_source": {
                         "created_time": "2020-01-01T00:00:00",
                         "created_time_source": "statx_btime",
+                        "updated_time": "2021-02-03T04:05:06",
                     },
                 },
                 {"_id": "2", "found": False},
@@ -170,6 +171,7 @@ def test_get_existing_created_time_metadata_returns_stored_values():
         1: {
             "created_time": "2020-01-01T00:00:00",
             "created_time_source": "statx_btime",
+            "updated_time": "2021-02-03T04:05:06",
         }
     }
 

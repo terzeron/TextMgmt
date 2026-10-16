@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -7,6 +8,18 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import PropTypes from "prop-types";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
+import SaveIcon from "@mui/icons-material/Save";
+import CropFreeIcon from "@mui/icons-material/CropFree";
+import VerticalSplitOutlinedIcon from "@mui/icons-material/VerticalSplitOutlined";
+import AddPhotoAlternateIcon from "@mui/icons-material/AddPhotoAlternate";
+import PdfInsertImageModal from "./PdfInsertImageModal";
+import PdfCropBox from "./PdfCropBox";
+import { DEFAULT_CROP_RECT, DEFAULT_SPLIT_RECTS } from "./cropRect";
+
+// 크롭 박스 색. 분할에서는 파랑이 앞쪽 페이지, 빨강이 뒤쪽 페이지가 된다.
+const CROP_COLOR = "#4a90d9";
+const SPLIT_COLORS = { first: "#4a90d9", second: "#d9534f" };
 import { getApiUrlPrefix } from "./Common";
 import { DISPLAY_SCALE, computeRenderScale } from "./pdfRenderScale";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
@@ -37,6 +50,14 @@ async function describeHttpError(response) {
     : `HTTP ${response.status}`;
 }
 
+// 쪽 크기(pt)가 비정상적으로 작은 PDF가 있다. 이미지를 0.09pt 폭으로 그려 넣은 만화 PDF가 그렇다.
+// 첫 쪽 크기로 표시 폭과 자리표시 canvas 를 정하면 폭 0px, canvas 0x0 이 되어 아무것도 보이지 않는다.
+// 첫 쪽의 CSS 폭이 이 값 미만이면 쪽 크기를 믿지 않고 기준 폭으로 대신한다(비율은 유지).
+const MIN_PLAUSIBLE_CSS_WIDTH = 20;
+const FALLBACK_NATIVE_CSS_WIDTH = 900;
+// 이 경우 자리표시 canvas 는 작게 둔다. 실제 크기는 렌더할 때 화면 폭에 맞춰 정해진다.
+const FALLBACK_PLACEHOLDER_PIXEL_WIDTH = 90;
+
 const CHUNK_SIZE = 10;
 // 동시에 실행할 최대 렌더 개수. 워커 과부하를 막아 보이는 페이지에 자원을 집중시킨다.
 const MAX_CONCURRENT_RENDERS = 3;
@@ -46,6 +67,7 @@ export default function ViewPDF({
   pageCount = 0,
   preview = false,
   apiPrefix = "",
+  editable = false,
 }) {
   const [error, setError] = useState(null);
   const [totalPages, setTotalPages] = useState(0);
@@ -56,16 +78,181 @@ export default function ViewPDF({
     25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400,
     500,
   ];
+  // 편집 화면 전용: 쪽(1-based) → { kind: "page" }(쪽 전체 삭제) | { kind: "crop", rect }(남길 영역)
+  // | { kind: "split", rects: { first, second } }(앞·뒤 두 쪽으로 분할) 표시와 저장 상태.
+  // 저장하기 전까지 서버는 건드리지 않는다. 한 쪽에는 한 종류만 표시한다.
+  const [markedPages, setMarkedPages] = useState(() => new Map());
+  // 쪽(1-based) → { url, previewSrc }: 그 쪽 앞에 끼울 이미지의 URL 과, 서버가 만들어 준 미리보기(blob URL).
+  // 삭제·크롭·분할 표시와는 따로 둔다(같은 쪽에 함께 있을 수 있다). blob URL 은 쓰지 않게 되면 해제한다.
+  const [insertions, setInsertions] = useState(() => new Map());
+  const insertionsRef = useRef(insertions);
+  useEffect(() => {
+    insertionsRef.current = insertions;
+  }, [insertions]);
+  useEffect(
+    () => () => {
+      for (const entry of insertionsRef.current.values()) {
+        URL.revokeObjectURL(entry.previewSrc);
+      }
+    },
+    [],
+  );
+  // 이미지 URL 입력 모달이 열려 있는 쪽 번호(없으면 null)
+  const [insertDialog, setInsertDialog] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  // 저장 뒤 같은 bookId로 PDF를 다시 불러오기 위한 카운터
+  const [reloadToken, setReloadToken] = useState(0);
   const [fitMode, setFitMode] = useState(!preview);
-  // 1장씩 보기: CSS scroll-snap으로 뷰포트당 1쪽만 보이게 한다 (PC 전용, 기본 꺼짐)
+  // 1장씩 보기: CSS scroll-snap으로 뷰포트당 1쪽만 보이게 한다 (PC·모바일 공통, 기본 꺼짐)
   const [singlePage, setSinglePage] = useState(false);
   const [zoomIndex, setZoomIndex] = useState(ZOOM_STEPS.indexOf(100));
   const zoomPercent = ZOOM_STEPS[zoomIndex];
   const toggleSinglePage = () => {
     setSinglePage((prev) => !prev);
+    // 1장씩 보기는 이미지를 letterbox 로 맞춰 박스 좌표와 화면이 어긋나므로 크롭·분할 표시는 버린다.
+    setMarkedPages((prev) => {
+      if (![...prev.values()].some((mark) => mark.kind !== "page")) return prev;
+      return new Map([...prev].filter(([, mark]) => mark.kind === "page"));
+    });
     // 버튼에 포커스가 남으면 Space가 토글을 다시 눌러버리므로 스크롤 컨테이너로 옮긴다.
     // 컨테이너가 포커스를 가져야 Space/PageDown이 이 컨테이너를 스크롤한다.
     containerRef.current?.focus({ preventScroll: true });
+  };
+  const toggleMarkedPage = (pageNum, kind) => {
+    setSaveError(null);
+    setMarkedPages((prev) => {
+      const next = new Map(prev);
+      if (next.get(pageNum)?.kind === kind) next.delete(pageNum);
+      else if (kind === "crop")
+        next.set(pageNum, { kind, rect: { ...DEFAULT_CROP_RECT } });
+      else if (kind === "split")
+        next.set(pageNum, {
+          kind,
+          rects: {
+            first: { ...DEFAULT_SPLIT_RECTS.first },
+            second: { ...DEFAULT_SPLIT_RECTS.second },
+          },
+        });
+      else next.set(pageNum, { kind });
+      return next;
+    });
+  };
+  const changeBox = (pageNum, id, rect) =>
+    setMarkedPages((prev) => {
+      const mark = prev.get(pageNum);
+      if (!mark) return prev;
+      const next =
+        mark.kind === "split"
+          ? { kind: "split", rects: { ...mark.rects, [id]: rect } }
+          : { kind: "crop", rect };
+      return new Map(prev).set(pageNum, next);
+    });
+  const setInsertion = (pageNum, entry) => {
+    setSaveError(null);
+    const previous = insertionsRef.current.get(pageNum);
+    if (previous && previous.previewSrc !== entry?.previewSrc) {
+      URL.revokeObjectURL(previous.previewSrc);
+    }
+    setInsertions((prev) => {
+      const next = new Map(prev);
+      if (entry) next.set(pageNum, entry);
+      else next.delete(pageNum);
+      return next;
+    });
+  };
+  const clearInsertions = () => {
+    for (const entry of insertionsRef.current.values()) {
+      URL.revokeObjectURL(entry.previewSrc);
+    }
+    setInsertions(new Map());
+  };
+  // 서버가 URL 의 이미지를 내려받아 정규화한 미리보기를 받아 온다. 저장할 때 삽입되는 것과 같은 이미지다.
+  // 실패 사유(문자열)를 돌려주고, 성공하면 삽입을 표시한 뒤 null 을 돌려준다.
+  const previewInsertion = async (pageNum, url) => {
+    try {
+      const response = await fetch(
+        getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}/insert-preview`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        },
+      );
+      if (!response.ok) {
+        // 400 은 서버가 사람이 읽을 사유를 본문에 담아 보낸 것이다.
+        if (response.status === 400) {
+          const reason = (await response.text()).trim();
+          if (reason) return reason;
+        }
+        return await describeHttpError(response);
+      }
+      const blob = await response.blob();
+      /* v8 ignore next -- the viewer unmounts only while this request is in flight. */
+      if (cancelledRef.current) return null;
+      setInsertion(pageNum, { url, previewSrc: URL.createObjectURL(blob) });
+      return null;
+    } catch (err) {
+      return err?.message || "이미지를 가져오지 못했습니다";
+    }
+  };
+  const saveMarkedPages = async () => {
+    if (saving || (markedPages.size === 0 && insertions.size === 0)) return;
+    const entries = [...markedPages].sort(([a], [b]) => a - b);
+    const pages = entries
+      .filter(([, mark]) => mark.kind === "page")
+      .map(([pageNum]) => pageNum);
+    const crops = entries
+      .filter(([, mark]) => mark.kind === "crop")
+      .map(([pageNum, mark]) => ({ page: pageNum, ...mark.rect }));
+    const splits = entries
+      .filter(([, mark]) => mark.kind === "split")
+      .map(([pageNum, mark]) => ({ page: pageNum, ...mark.rects }));
+    const inserts = [...insertions]
+      .sort(([a], [b]) => a - b)
+      .map(([pageNum, entry]) => ({ page: pageNum, url: entry.url }));
+    const summary = [
+      inserts.length > 0 &&
+        `${inserts.map((i) => i.page).join(", ")}쪽 앞에 이미지 삽입`,
+      pages.length > 0 && `${pages.join(", ")}쪽 삭제`,
+      crops.length > 0 && `${crops.map((c) => c.page).join(", ")}쪽 크롭`,
+      splits.length > 0 && `${splits.map((c) => c.page).join(", ")}쪽 분할`,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    if (
+      !window.confirm(
+        `${summary}를 저장합니다. 원본은 0_trash에 보존됩니다. 저장할까요?`,
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const response = await fetch(
+        getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}/delete`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pages, crops, splits, inserts }),
+        },
+      );
+      if (!response.ok) throw new Error(await describeHttpError(response));
+      const body = await response.json();
+      if (body.status !== "success") {
+        throw new Error(body.error || "저장에 실패했습니다.");
+      }
+      setMarkedPages(new Map());
+      clearInsertions();
+      setReloadToken((prev) => prev + 1);
+    } catch (err) {
+      setSaveError(err?.message || "저장에 실패했습니다.");
+    } finally {
+      setSaving(false);
+    }
   };
   const zoomDown = () => setZoomIndex((prev) => Math.max(0, prev - 1));
   const zoomUp = () =>
@@ -322,6 +509,12 @@ export default function ViewPDF({
 
     const loadPdf = async () => {
       setError(null);
+      setMarkedPages(new Map());
+      for (const entry of insertionsRef.current.values()) {
+        URL.revokeObjectURL(entry.previewSrc);
+      }
+      setInsertions(new Map());
+      setInsertDialog(null);
       setTotalPages(0);
       setLoadedPages(0);
       setDownloadProgress(0);
@@ -384,8 +577,19 @@ export default function ViewPDF({
         const firstRenderViewport = firstPage.getViewport({
           scale: DISPLAY_SCALE * dpr,
         });
-        nativeWidthRef.current = firstCssViewport.width;
-        nativeHeightRef.current = firstCssViewport.height;
+        const implausiblySmall = !(
+          firstCssViewport.width >= MIN_PLAUSIBLE_CSS_WIDTH
+        );
+        const aspect =
+          firstCssViewport.width > 0 && firstCssViewport.height > 0
+            ? firstCssViewport.height / firstCssViewport.width
+            : 1;
+        nativeWidthRef.current = implausiblySmall
+          ? FALLBACK_NATIVE_CSS_WIDTH
+          : firstCssViewport.width;
+        nativeHeightRef.current = implausiblySmall
+          ? FALLBACK_NATIVE_CSS_WIDTH * aspect
+          : firstCssViewport.height;
 
         if (cancelledRef.current) return;
 
@@ -399,8 +603,12 @@ export default function ViewPDF({
           const canvas = canvasRefs.current[i];
           /* v8 ignore next 4 -- flushSync creates all page canvases before sizing. */
           if (canvas) {
-            canvas.width = firstRenderViewport.width;
-            canvas.height = firstRenderViewport.height;
+            canvas.width = implausiblySmall
+              ? FALLBACK_PLACEHOLDER_PIXEL_WIDTH
+              : firstRenderViewport.width;
+            canvas.height = implausiblySmall
+              ? Math.max(1, Math.round(FALLBACK_PLACEHOLDER_PIXEL_WIDTH * aspect))
+              : firstRenderViewport.height;
           }
         }
 
@@ -488,7 +696,15 @@ export default function ViewPDF({
       fetchingRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix는 mount 시 고정이라 의도적으로 deps에서 제외
-  }, [bookId, pageCount, preview, enqueueRender, cancelRender, fetchChunk]);
+  }, [
+    bookId,
+    pageCount,
+    preview,
+    reloadToken,
+    enqueueRender,
+    cancelRender,
+    fetchChunk,
+  ]);
 
   // 캔버스 ref 설정 함수
   const setCanvasRef = useCallback(
@@ -548,6 +764,16 @@ export default function ViewPDF({
           {loadedPages < totalPages
             ? `렌더링 중... ${loadedPages}/${totalPages}쪽`
             : `총 ${totalPages}쪽 표시`}
+          {editable &&
+            markedPages.size + insertions.size > 0 &&
+            ` · 변경 표시 ${new Set([...markedPages.keys(), ...insertions.keys()]).size}쪽`}
+          {saving && " · 저장 중..."}
+          {saveError && (
+            <span className="pdf-save-error" role="alert">
+              {" · "}
+              {saveError}
+            </span>
+          )}
         </div>
         <div className="pdf-zoom-controls">
           <button
@@ -591,22 +817,200 @@ export default function ViewPDF({
         </div>
       </div>
       <div className="pdf-content">
-        {pageNumbers.map((pageNum) => (
-          <canvas
-            key={pageNum}
-            ref={setCanvasRef(pageNum)}
-            className="pdf-page"
-            style={
-              fitMode
-                ? { width: "100%", height: "auto" }
-                : {
-                    width: `${Math.round((nativeWidthRef.current * zoomPercent) / 100)}px`,
-                    height: "auto",
+        {pageNumbers.map((pageNum) => {
+          const canvasStyle = fitMode
+            ? { width: "100%", height: "auto" }
+            : {
+                width: `${Math.round((nativeWidthRef.current * zoomPercent) / 100)}px`,
+                height: "auto",
+              };
+          if (!editable) {
+            return (
+              <canvas
+                key={pageNum}
+                ref={setCanvasRef(pageNum)}
+                className="pdf-page"
+                style={canvasStyle}
+              />
+            );
+          }
+          const mark = markedPages.get(pageNum);
+          const insertion = insertions.get(pageNum);
+          // 저장 버튼은 이 쪽에 무엇이든 변경 표시가 있을 때 나온다.
+          const marked = mark !== undefined || insertion !== undefined;
+          return (
+            <Fragment key={pageNum}>
+              {insertion && (
+                <div
+                  className="pdf-page pdf-insert-preview"
+                  data-testid={`pdf-insert-preview-${pageNum}`}
+                  style={canvasStyle}
+                >
+                  <img
+                    className="pdf-insert-image"
+                    src={insertion.previewSrc}
+                    alt={`${pageNum}쪽 앞에 삽입될 이미지`}
+                  />
+                  <div className="pdf-insert-tag" title={insertion.url}>
+                    새 쪽 · 저장 전 ({pageNum}쪽 앞에 삽입)
+                  </div>
+                  <div className="pdf-page-actions">
+                    <button
+                      type="button"
+                      className="pdf-page-btn"
+                      aria-label="저장"
+                      title="표시한 변경을 저장"
+                      disabled={saving}
+                      onClick={saveMarkedPages}
+                    >
+                      <SaveIcon fontSize="small" />
+                    </button>
+                    <button
+                      type="button"
+                      className="pdf-page-btn"
+                      aria-label={`${pageNum}쪽 앞 이미지 삽입 취소`}
+                      title="삽입 취소"
+                      disabled={saving}
+                      onClick={() => setInsertion(pageNum, null)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              )}
+            <div
+              className="pdf-page pdf-page-wrap"
+              style={canvasStyle}
+              data-marked={marked ? "true" : "false"}
+            >
+              <canvas ref={setCanvasRef(pageNum)} className="pdf-page-canvas" />
+              {mark?.kind === "page" && (
+                <div
+                  className="pdf-delete-overlay"
+                  data-testid={`pdf-delete-overlay-${pageNum}`}
+                  data-kind="page"
+                />
+              )}
+              {mark?.kind === "crop" && (
+                <PdfCropBox
+                  boxes={[{ id: "crop", rect: mark.rect, color: CROP_COLOR }]}
+                  onChange={(id, rect) => changeBox(pageNum, id, rect)}
+                />
+              )}
+              {mark?.kind === "split" && (
+                <PdfCropBox
+                  boxes={[
+                    {
+                      id: "first",
+                      rect: mark.rects.first,
+                      color: SPLIT_COLORS.first,
+                      label: "앞",
+                    },
+                    {
+                      id: "second",
+                      rect: mark.rects.second,
+                      color: SPLIT_COLORS.second,
+                      label: "뒤",
+                    },
+                  ]}
+                  onChange={(id, rect) => changeBox(pageNum, id, rect)}
+                />
+              )}
+              <div className="pdf-page-actions">
+                {marked && (
+                  <button
+                    type="button"
+                    className="pdf-page-btn"
+                    aria-label="저장"
+                    title="표시한 변경을 저장"
+                    disabled={saving}
+                    onClick={saveMarkedPages}
+                  >
+                    <SaveIcon fontSize="small" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={`pdf-page-btn${insertion ? " active" : ""}`}
+                  aria-label={`${pageNum}쪽 앞에 이미지 삽입`}
+                  aria-pressed={Boolean(insertion)}
+                  title={
+                    insertion
+                      ? "삽입할 이미지 URL 수정"
+                      : "이 쪽 앞에 이미지 URL로 새 쪽 삽입"
                   }
-            }
-          />
-        ))}
+                  disabled={saving}
+                  onClick={() => setInsertDialog(pageNum)}
+                >
+                  <AddPhotoAlternateIcon fontSize="small" />
+                </button>
+                <button
+                  type="button"
+                  className={`pdf-page-btn${mark?.kind === "split" ? " active" : ""}`}
+                  aria-label={`${pageNum}쪽 분할`}
+                  aria-pressed={mark?.kind === "split"}
+                  title={
+                    singlePage
+                      ? "1장씩 보기에서는 분할할 수 없습니다"
+                      : mark?.kind === "split"
+                        ? "분할 취소"
+                        : "파란 영역은 앞쪽, 빨간 영역은 뒤쪽 페이지로 분할"
+                  }
+                  disabled={saving || singlePage}
+                  onClick={() => toggleMarkedPage(pageNum, "split")}
+                >
+                  <VerticalSplitOutlinedIcon fontSize="small" />
+                </button>
+                <button
+                  type="button"
+                  className={`pdf-page-btn${mark?.kind === "crop" ? " active" : ""}`}
+                  aria-label={`${pageNum}쪽 크롭`}
+                  aria-pressed={mark?.kind === "crop"}
+                  title={
+                    singlePage
+                      ? "1장씩 보기에서는 크롭할 수 없습니다"
+                      : mark?.kind === "crop"
+                        ? "크롭 취소"
+                        : "남길 영역을 지정해 크롭"
+                  }
+                  disabled={saving || singlePage}
+                  onClick={() => toggleMarkedPage(pageNum, "crop")}
+                >
+                  <CropFreeIcon fontSize="small" />
+                </button>
+                <button
+                  type="button"
+                  className={`pdf-page-btn${mark?.kind === "page" ? " active" : ""}`}
+                  aria-label={`${pageNum}쪽 삭제 표시`}
+                  aria-pressed={mark?.kind === "page"}
+                  title={
+                    mark?.kind === "page"
+                      ? "삭제 표시 해제"
+                      : "이 쪽을 삭제 표시"
+                  }
+                  disabled={saving}
+                  onClick={() => toggleMarkedPage(pageNum, "page")}
+                >
+                  <DeleteOutlineIcon fontSize="small" />
+                </button>
+              </div>
+            </div>
+            </Fragment>
+          );
+        })}
       </div>
+      {insertDialog !== null && (
+        <PdfInsertImageModal
+          pageNum={insertDialog}
+          initialUrl={insertions.get(insertDialog)?.url}
+          onSubmit={async (url) => {
+            const message = await previewInsertion(insertDialog, url);
+            if (!message) setInsertDialog(null);
+            return message;
+          }}
+          onClose={() => setInsertDialog(null)}
+        />
+      )}
       <style>{pdfStyles}</style>
     </div>
   );
@@ -704,35 +1108,212 @@ const pdfStyles = `
     .pdf-content {
         overflow-x: auto;
     }
-    .pdf-single-btn {
-        display: none;
+    /* 1장씩 보기: 각 쪽을 뷰포트 높이에 맞춰 snap 지점으로 만든다.
+       PC는 키 스크롤(Space/PageDown), 모바일은 터치 스와이프가 한 쪽씩 넘어간다.
+       scroll-snap-stop: always가 빠른 스와이프로 여러 쪽을 건너뛰는 것을 막는다. */
+    .pdf-container.pdf-single {
+        height: var(--pdf-avail-h, calc(100vh - 10px));
+        scroll-snap-type: y mandatory;
+        scroll-padding-top: var(--pdf-toolbar-h);
     }
-    /* 1장씩 보기는 키보드(Space/PageDown)가 있는 PC 전용이다.
-       각 쪽을 뷰포트 높이에 맞춰 snap 지점으로 만들면 브라우저 기본 키 스크롤이 한 쪽씩 넘어간다. */
-    @media (hover: hover) and (pointer: fine) {
-        .pdf-single-btn {
-            display: flex;
-        }
-        .pdf-container.pdf-single {
-            height: var(--pdf-avail-h, calc(100vh - 10px));
-            scroll-snap-type: y mandatory;
-            scroll-padding-top: var(--pdf-toolbar-h);
-        }
-        /* overflow-x:auto는 overflow-y도 auto로 만들어 snap 컨테이너를 가로채므로 푼다 */
-        .pdf-container.pdf-single .pdf-content {
-            overflow: visible;
-        }
-        .pdf-container.pdf-single .pdf-page {
-            width: 100% !important;
-            height: calc(var(--pdf-avail-h, calc(100vh - 10px)) - var(--pdf-toolbar-h)) !important;
-            object-fit: contain;
-            scroll-snap-align: start;
-            scroll-snap-stop: always;
-        }
+    /* overflow-x:auto는 overflow-y도 auto로 만들어 snap 컨테이너를 가로채므로 푼다 */
+    .pdf-container.pdf-single .pdf-content {
+        overflow: visible;
+    }
+    .pdf-container.pdf-single .pdf-page {
+        width: 100% !important;
+        height: calc(var(--pdf-avail-h, calc(100vh - 10px)) - var(--pdf-toolbar-h)) !important;
+        object-fit: contain;
+        scroll-snap-align: start;
+        scroll-snap-stop: always;
     }
     .pdf-page {
         display: block;
         margin: 0 auto;
+    }
+    /* 편집 화면: 캔버스를 감싸는 래퍼. 버튼·회색 레이어를 캔버스 위에 겹친다. */
+    .pdf-page-wrap {
+        position: relative;
+    }
+    .pdf-page-wrap .pdf-page-canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+    }
+    .pdf-container.pdf-single .pdf-page-wrap .pdf-page-canvas {
+        object-fit: contain;
+    }
+    .pdf-delete-overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(90, 90, 90, 0.6);
+        pointer-events: none;
+    }
+    /* 이미지 삽입 미리보기: 저장 전에도 삽입될 쪽을 다른 쪽처럼 보여 준다. 점선 테두리와 라벨로 아직 저장 전임을 알린다. */
+    .pdf-insert-preview {
+        position: relative;
+        outline: 2px dashed #4a90d9;
+        outline-offset: -2px;
+        background: #fff;
+    }
+    .pdf-insert-image {
+        display: block;
+        width: 100%;
+        height: auto;
+    }
+    .pdf-container.pdf-single .pdf-insert-image {
+        height: 100%;
+        object-fit: contain;
+    }
+    .pdf-insert-tag {
+        position: absolute;
+        top: 6px;
+        left: 6px;
+        max-width: calc(100% - 60px);
+        padding: 2px 8px;
+        border-radius: 4px;
+        background: #4a90d9;
+        color: #fff;
+        font-size: 12px;
+        line-height: 18px;
+        pointer-events: none;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .pdf-page-actions {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        z-index: 5;
+        display: flex;
+        gap: 4px;
+    }
+    /* 크롭: 박스 안은 선명하게 두고 바깥 네 구역만 회색+블러로 덮는다. 레이어 자체는 클릭을 통과시키고 핸들만 받는다. */
+    .pdf-crop-layer {
+        position: absolute;
+        inset: 0;
+        z-index: 4;
+        pointer-events: none;
+    }
+    .pdf-crop-dim {
+        position: absolute;
+        background: rgba(90, 90, 90, 0.6);
+        -webkit-backdrop-filter: blur(3px);
+        backdrop-filter: blur(3px);
+    }
+    .pdf-crop-box {
+        --crop-color: #4a90d9;
+        position: absolute;
+        box-sizing: border-box;
+        border: 2px solid var(--crop-color);
+    }
+    .pdf-crop-label {
+        position: absolute;
+        top: 20px;
+        left: 4px;
+        padding: 0 6px;
+        border-radius: 3px;
+        background: var(--crop-color);
+        color: #fff;
+        font-size: 12px;
+        line-height: 18px;
+        pointer-events: none;
+    }
+    /* 조절 핸들은 모두 박스 안쪽(테두리 안)에만 둔다. 박스끼리 맞닿아도 서로의 핸들 영역이 겹치지 않는다.
+       변 핸들은 두 모서리 핸들 사이 전체를 따라 잡히고, 가운데에 눈에 보이는 손잡이를 그려 드래그할 수 있음을 알린다. */
+    .pdf-crop-handle {
+        position: absolute;
+        pointer-events: auto;
+        touch-action: none;
+    }
+    .pdf-crop-handle-n, .pdf-crop-handle-s { left: 16px; right: 16px; height: 16px; cursor: ns-resize; }
+    .pdf-crop-handle-n { top: 0; }
+    .pdf-crop-handle-s { bottom: 0; }
+    .pdf-crop-handle-e, .pdf-crop-handle-w { top: 16px; bottom: 16px; width: 16px; cursor: ew-resize; }
+    .pdf-crop-handle-w { left: 0; }
+    .pdf-crop-handle-e { right: 0; }
+    .pdf-crop-handle-n::after, .pdf-crop-handle-s::after,
+    .pdf-crop-handle-e::after, .pdf-crop-handle-w::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        box-sizing: border-box;
+        background: #fff;
+        border: 2px solid var(--crop-color);
+        border-radius: 3px;
+    }
+    .pdf-crop-handle-n::after, .pdf-crop-handle-s::after { width: 28px; height: 8px; }
+    .pdf-crop-handle-e::after, .pdf-crop-handle-w::after { width: 8px; height: 28px; }
+    /* 회전 손잡이: 박스 안쪽(위쪽 변 손잡이 바로 아래)에 둔다. 박스와 함께 돌고 박스 밖으로 나가지 않는다. */
+    .pdf-crop-rotate {
+        position: absolute;
+        top: 22px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        box-sizing: border-box;
+        border: 2px solid var(--crop-color);
+        border-radius: 50%;
+        background: #fff;
+        color: var(--crop-color);
+        font-size: 16px;
+        cursor: grab;
+        pointer-events: auto;
+        touch-action: none;
+    }
+    .pdf-crop-rotate:active {
+        cursor: grabbing;
+    }
+    .pdf-crop-handle-nw, .pdf-crop-handle-ne, .pdf-crop-handle-sw, .pdf-crop-handle-se {
+        width: 16px;
+        height: 16px;
+        box-sizing: border-box;
+        background: #fff;
+        border: 2px solid var(--crop-color);
+    }
+    .pdf-crop-handle-nw { top: 0; left: 0; cursor: nwse-resize; }
+    .pdf-crop-handle-se { bottom: 0; right: 0; cursor: nwse-resize; }
+    .pdf-crop-handle-ne { top: 0; right: 0; cursor: nesw-resize; }
+    .pdf-crop-handle-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+    @media (pointer: coarse) {
+        .pdf-crop-handle-n, .pdf-crop-handle-s { left: 28px; right: 28px; height: 28px; }
+        .pdf-crop-handle-e, .pdf-crop-handle-w { top: 28px; bottom: 28px; width: 28px; }
+        .pdf-crop-handle-nw, .pdf-crop-handle-ne, .pdf-crop-handle-sw, .pdf-crop-handle-se { width: 28px; height: 28px; }
+    }
+    .pdf-page-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        border: 1px solid #bbb;
+        border-radius: 4px;
+        background: rgba(255,255,255,0.92);
+        color: #555;
+        cursor: pointer;
+    }
+    .pdf-page-btn:hover:not(:disabled) {
+        background: #e0e0e0;
+    }
+    .pdf-page-btn.active {
+        background: #d9534f;
+        border-color: #d9534f;
+        color: #fff;
+    }
+    .pdf-page-btn:disabled {
+        opacity: 0.4;
+        cursor: default;
+    }
+    .pdf-save-error {
+        color: #c0392b;
     }
     .loading-container {
         display: flex;
@@ -778,4 +1359,5 @@ ViewPDF.propTypes = {
   pageCount: PropTypes.number,
   preview: PropTypes.bool,
   apiPrefix: PropTypes.string,
+  editable: PropTypes.bool,
 };

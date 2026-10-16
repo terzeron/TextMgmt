@@ -1,0 +1,41 @@
+/* 디렉토리 첫 파일의 앞 10쪽: 높이만 고정(PREVIEW_HEIGHT)하고 폭은 쪽 비율대로 둔다. 왼쪽에서 오른쪽으로 놓고 자리가 없으면 아래로 넘어간다. */
+.dir-page-preview {
+  margin-top: 12px;
+}
+
+.dir-page-preview-caption {
+  margin-bottom: 6px;
+  overflow: hidden;
+  color: #666;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-page-preview-note {
+  color: #666;
+  font-size: 13px;
+}
+
+.dir-page-preview-error {
+  color: #c0392b;
+  font-size: 13px;
+}
+
+.dir-page-preview-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  /* 고정 높이에서 폭이 컨테이너보다 넓어지는 쪽(가로 펼침면)은 줄여 왜곡하지 않고 가로 스크롤로 보게 한다. */
+  overflow-x: auto;
+}
+
+.dir-page-preview-page {
+  display: block;
+  flex: 0 0 auto;
+  /* 높이(inline style, PREVIEW_HEIGHT)만 고정하면 폭은 canvas 의 가로세로 비율대로 정해져 이미지가 왜곡되지 않는다. */
+  width: auto;
+  background: #fff;
+  box-shadow: 0 0 0 1px #ddd;
+}

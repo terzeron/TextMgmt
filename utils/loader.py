@@ -388,10 +388,29 @@ class Loader:
         return data, line_count, 0, raw_content
 
     @staticmethod
+    def _count_epub_lines(soup: BeautifulSoup) -> int:
+        """문단과 명시적 줄바꿈으로 행을 세고 소스 포맷·빈 행은 제외한다.
+
+        summary를 추출한 뒤 호출한다. 전달받은 soup는 집계를 위해 변경한다.
+        pre 안의 줄바꿈은 본문이므로 유지한다.
+        """
+        body = soup.body or soup
+        for tag in body.find_all(["head", "script", "style", "template"]):
+            tag.decompose()
+        for text in list(body.strings):
+            if text.find_parent("pre") is None:
+                text.replace_with(re.sub(r"\s+", " ", text))
+        block_tags = ["address", "article", "aside", "blockquote", "br", "caption", "dd", "div", "dl", "dt", "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul"]
+        for tag in body.find_all(block_tags):
+            tag.insert_before("\n")
+            tag.insert_after("\n")
+        return sum(bool(line.strip()) for line in body.get_text().splitlines())
+
+    @staticmethod
     def read_from_epub_with_extracting_zip(file_path: Path) -> tuple[str, int]:
         """메모리에서 직접 zip 내용을 읽어 처리 (임시 디렉토리 사용 안 함)"""
         result = ""
-        total_text = ""
+        line_count = 0
         try:
             with zipfile.ZipFile(file_path, "r") as zf:
                 # 1. container.xml에서 rootfile 찾기
@@ -415,16 +434,15 @@ class Loader:
                             warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
                             soup = BeautifulSoup(content, "lxml")
                         text = soup.get_text()
-                        total_text += text
                         if len(result) < Loader.TEXT_SIZE:
                             result += text
+                        line_count += Loader._count_epub_lines(soup)
                     except Exception:
                         continue
         except zipfile.BadZipFile as e:
             LOGGER.error(file_path)
             LOGGER.error(e)
 
-        line_count = total_text.count("\n") + 1 if total_text else 0
         return result[: Loader.TEXT_SIZE], line_count
 
     @staticmethod
@@ -433,7 +451,6 @@ class Loader:
         start_time = datetime.now()
 
         result = ""
-        total_text = ""
         line_count = 0
         try:
             book = epub.read_epub(file_path)
@@ -451,13 +468,12 @@ class Loader:
             for doc in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
-                    soup = BeautifulSoup(doc.get_body_content(), "lxml")
-                text = soup.get_text()
-                total_text += text
+                    # ebooklib 0.19는 자식 태그 없는 body를 빈 문자열로 반환한다.
+                    soup = BeautifulSoup(doc.get_body_content() or doc.content, "lxml")
+                text = (soup.body or soup).get_text()
                 if len(result) < Loader.TEXT_SIZE:
                     result += text
-
-            line_count = total_text.count("\n") + 1 if total_text else 0
+                line_count += Loader._count_epub_lines(soup)
 
             end_time = datetime.now()
             Stat.add("normal_epub_total_time", (end_time - start_time).total_seconds())
@@ -1611,6 +1627,14 @@ def main() -> int:
                         batch_data[inode]["created_time"] = metadata["created_time"]
                     if "created_time_source" in metadata:
                         batch_data[inode]["created_time_source"] = metadata["created_time_source"]
+                    # 파일이 마지막 적재 이후 바뀌지 않았으면 updated_time 유지 (최신 책 탭에 재적재분이 끼지 않도록)
+                    stored_updated_time = metadata.get("updated_time")
+                    if stored_updated_time and inode in file_stat_map:
+                        try:
+                            if file_stat_map[inode][1].st_mtime <= datetime.fromisoformat(stored_updated_time).timestamp():
+                                batch_data[inode]["updated_time"] = stored_updated_time
+                        except ValueError:
+                            pass
                 new_file_paths = [v["file_path"] for v in batch_data.values() if "file_path" in v]
                 new_ids = list(batch_data.keys())
                 cleaned = es_manager.delete_by_file_paths(new_file_paths, exclude_ids=new_ids)

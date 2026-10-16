@@ -27,7 +27,7 @@ const formatFileSize = (bytes) => {
   const size = Number(bytes);
   if (!Number.isFinite(size) || size < 0) return "";
 
-  return Math.trunc(size).toLocaleString("en-US");
+  return `${(size / (1024 * 1024)).toFixed(2)} MB`;
 };
 
 const formatDirectoryMegabytes = (bytes) => {
@@ -359,6 +359,10 @@ export default function SimilarBooks({
                 const categoryParam = encodeURIComponent(category);
                 const displayName = (!category || category === '_root') ? filename : `${category}/${filename}`;
                 const fileSizeLabel = formatFileSize(book.file_size);
+                const fileDetailsLabel = [
+                  fileSizeLabel,
+                  book.line_count > 0 ? `${Number(book.line_count).toLocaleString("en-US")}행` : "",
+                ].filter(Boolean).join(", ");
                 const isDeleting = deletingId === book.book_id;
                 return (
                 <div
@@ -375,7 +379,7 @@ export default function SimilarBooks({
                     {displayName}
                   </span>
                   <div style={{ whiteSpace: "nowrap", flexShrink: 0 }}>
-                    {fileSizeLabel && (
+                    {fileDetailsLabel && (
                       <span
                         style={{
                           display: "inline-block",
@@ -392,7 +396,7 @@ export default function SimilarBooks({
                           verticalAlign: "middle",
                         }}
                       >
-                        {fileSizeLabel}
+                        {fileDetailsLabel}
                       </span>
                     )}
                     {book.score > 0 && (

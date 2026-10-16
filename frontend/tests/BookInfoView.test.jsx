@@ -23,7 +23,7 @@ describe("BookInfoView", () => {
     expect(screen.getByDisplayValue("/books/test.pdf")).toBeTruthy();
     expect(screen.getByDisplayValue("pdf")).toBeTruthy();
     expect(screen.getByDisplayValue("978-1234567890")).toBeTruthy();
-    expect(screen.getByDisplayValue("1,024,000")).toBeTruthy();
+    expect(screen.getByDisplayValue("0.98 MB")).toBeTruthy();
     expect(screen.getByDisplayValue("150쪽")).toBeTruthy();
   });
 
@@ -54,7 +54,7 @@ describe("BookInfoView", () => {
   it("bookInfo가 없으면 빈 객체로 대체하여 기본값으로 안전하게 렌더링한다", () => {
     render(<BookInfoView bookInfo={null} />);
     // '{}' 대체 후 title/author/fileType/filePath/fileSize 모두 fallback 값 사용
-    expect(screen.getByDisplayValue("0")).toBeTruthy(); // fileSize 기본값
+    expect(screen.getByDisplayValue("0.00 MB")).toBeTruthy(); // fileSize 기본값
     const dashFields = screen.getAllByDisplayValue("-");
     expect(dashFields.length).toBeGreaterThanOrEqual(1); // isbn 및 분량 기본값
   });

@@ -73,6 +73,25 @@ describe("CoverGrid", () => {
     );
   });
 
+  it("updated_time이 바뀌면 커버 URL도 바뀌어 브라우저 캐시를 우회한다", () => {
+    const [book] = makeBooks(1, "pdf");
+    const src = (updatedTime) => {
+      const { container, unmount } = render(
+        <CoverGrid
+          results={[{ ...book, updated_time: updatedTime }]}
+          basePath="/comics-view"
+        />,
+      );
+      const value = container.querySelector("img").getAttribute("src");
+      unmount();
+      return value;
+    };
+    const before = src("2026-10-16T09:00:00.123456");
+    const after = src("2026-10-16T10:30:00.654321");
+    expect(before).toContain("&u=2026-10-16T09%3A00%3A00.123456");
+    expect(after).not.toBe(before);
+  });
+
   it("텍스트 포맷은 이미지를 요청하지 않고 대문자 포맷명을 보여준다", () => {
     render(<CoverGrid results={makeBooks(1, "txt")} basePath="/book-view" />);
     expect(document.querySelector("img")).toBeNull();

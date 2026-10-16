@@ -22,7 +22,7 @@ from fastapi.encoders import jsonable_encoder
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from backend.auth import require_auth, require_admin, optional_auth, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, observation_hash, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
 from backend.book_manager import BookManager, MAX_LATEST_BOOK_COUNT
 from backend.comics_manager import ComicsManager
@@ -412,6 +412,46 @@ class BookModel(BaseModel):
     score: float = 0.0
 
 
+class PdfRectModel(BaseModel):
+    """쪽 크기 대비 0~1 비율, 원점은 좌상단."""
+
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+    angle: float = 0.0  # 박스 중심 기준 시계 방향 회전각(도)
+
+
+class PdfCropModel(PdfRectModel):
+    page: int
+
+
+class PdfSplitModel(BaseModel):
+    """한 쪽을 둘로 나눈다. first 영역이 앞쪽, second 영역이 뒤쪽 페이지가 된다."""
+
+    page: int
+    first: PdfRectModel
+    second: PdfRectModel
+
+
+class PdfInsertModel(BaseModel):
+    """page 쪽 앞에 url 의 이미지를 한 쪽으로 끼운다."""
+
+    page: int
+    url: str = Field(min_length=1, max_length=4096)
+
+
+class PdfInsertPreviewModel(BaseModel):
+    url: str = Field(min_length=1, max_length=4096)
+
+
+class PdfDeletePagesModel(BaseModel):
+    pages: list[int] = []
+    crops: list[PdfCropModel] = []
+    splits: list[PdfSplitModel] = []
+    inserts: list[PdfInsertModel] = []
+
+
 class CategoryRenameModel(BaseModel):
     old_category: str
     new_category: str
@@ -650,6 +690,22 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         LOGGER.debug("# get_pdf_pages(book_id=%d, start=%d, end=%d)", book_id, start, end)
         await _ensure_viewer_book_allowed(manager, book_id, payload, content_type)
         return await manager.get_pdf_pages(book_id=book_id, start=start, end=end)
+
+    @router.post("/pdf-pages/{book_id}/insert-preview", dependencies=admin_dep, response_model=None)
+    async def preview_insert_image(book_id: int, body: PdfInsertPreviewModel) -> Response:
+        LOGGER.debug("# preview_insert_image(book_id=%d, url=%r)", book_id, body.url)
+        jpeg, error = await manager.preview_insert_image(body.url)
+        if jpeg is None:
+            return Response(status_code=400, content=error or "이미지를 가져오지 못했습니다")
+        return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "private, no-store"})
+
+    @router.post("/pdf-pages/{book_id}/delete", dependencies=admin_dep)
+    async def delete_pdf_pages(book_id: int, body: PdfDeletePagesModel) -> dict[str, Any]:
+        LOGGER.debug("# delete_pdf_pages(book_id=%d, pages=%r, crops=%r, splits=%r, inserts=%r)", book_id, body.pages, body.crops, body.splits, body.inserts)
+        result, error = await manager.delete_pdf_pages(book_id, body.pages, [c.model_dump() for c in body.crops], [s.model_dump() for s in body.splits], [i.model_dump() for i in body.inserts])
+        if error is None:
+            return {"status": "success", "result": result}
+        return {"status": "failure", "error": error}
 
     @router.get("/cover/{book_id}", response_model=None)
     async def get_cover(book_id: int, payload: dict = Depends(require_auth)) -> Response:
