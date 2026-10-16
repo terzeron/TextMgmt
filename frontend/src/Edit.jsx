@@ -29,6 +29,7 @@ import SimilarBooks from "./SimilarBooks";
 import SearchResult from "./SearchResult";
 import ViewSingle from "./ViewSingle";
 import DirectoryEditPanel from "./DirectoryEditPanel";
+import DirectoryPagePreview from "./DirectoryPagePreview";
 import { DateTime } from "luxon";
 import {
   parseEntryId,
@@ -1372,6 +1373,17 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                 </Col>
               </Row>
 
+              {selectedDirectory && apiPrefix === "/comics" && (
+                <Row id="bottom_panel">
+                  <Col className="ps-0 pe-0">
+                    <DirectoryPagePreview
+                      key={selectedDirectory.category}
+                      category={selectedDirectory.category}
+                      apiPrefix={apiPrefix}
+                    />
+                  </Col>
+                </Row>
+              )}
               {bookInfo["book_id"] && <Row id="bottom_panel">
                 <Col id="right_panel" className="ps-0 pe-0">
                   <ViewSingle

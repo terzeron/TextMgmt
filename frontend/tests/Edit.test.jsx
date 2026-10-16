@@ -206,6 +206,12 @@ vi.mock("../src/SimilarityDebug", () => ({
   ),
 }));
 
+vi.mock("../src/DirectoryPagePreview", () => ({
+  default: ({ category, apiPrefix }) => (
+    <div data-testid="directory-page-preview" data-category={category} data-api-prefix={apiPrefix} />
+  ),
+}));
+
 vi.mock("../src/EpubDiagnoseView", () => ({
   default: () => <div data-testid="epub-diagnose">EpubDiagnose</div>,
 }));
@@ -420,6 +426,37 @@ describe("Edit", () => {
       expect(bookstoreSearch.dataset.title).toBe("1_fiction");
       expect(bookstoreSearch.dataset.searchTrigger).toBe("1");
     });
+  });
+
+  it("만화 디렉토리 편집 화면에는 첫 파일 쪽 미리보기를 표시한다", async () => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === "/comics/categories") resolve(CATEGORIES);
+      else if (url.startsWith("/comics/categories/")) resolve(BOOKS_IN_FICTION);
+      else resolve({});
+    });
+    render(<Edit basePath="/comics-edit" apiPrefix="/comics" />);
+    await waitFor(() => {
+      expect(screen.getByTestId("folder-item-1_fiction")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("directory-page-preview")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("folder-item-1_fiction"));
+
+    const preview = await screen.findByTestId("directory-page-preview");
+    expect(preview.dataset.category).toBe("1_fiction");
+    expect(preview.dataset.apiPrefix).toBe("/comics");
+  });
+
+  it("책 디렉토리 편집 화면에는 쪽 미리보기를 표시하지 않는다", async () => {
+    const { useParams, useSearchParams } = await import("react-router-dom");
+    useParams.mockReturnValue({ "*": "" });
+    useSearchParams.mockReturnValue([new URLSearchParams("directory=1_fiction")]);
+    setupMockCategories();
+
+    render(<Edit />);
+
+    expect(await screen.findByText("디렉토리 편집")).toBeTruthy();
+    expect(screen.queryByTestId("directory-page-preview")).toBeNull();
   });
 
   it("만화 디렉토리 화면에서 유사 검색 아래에 디렉토리명 서점 검색을 표시한다", async () => {
