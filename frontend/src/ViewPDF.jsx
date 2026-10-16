@@ -858,6 +858,16 @@ export default function ViewPDF({
                     <button
                       type="button"
                       className="pdf-page-btn"
+                      aria-label="저장"
+                      title="표시한 변경을 저장"
+                      disabled={saving}
+                      onClick={saveMarkedPages}
+                    >
+                      <SaveIcon fontSize="small" />
+                    </button>
+                    <button
+                      type="button"
+                      className="pdf-page-btn"
                       aria-label={`${pageNum}쪽 앞 이미지 삽입 취소`}
                       title="삽입 취소"
                       disabled={saving}

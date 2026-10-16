@@ -6,6 +6,7 @@ import {
   waitFor,
   cleanup,
   fireEvent,
+  within,
 } from "@testing-library/react";
 
 afterEach(cleanup);
@@ -581,7 +582,9 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
       expect(preview.nextElementSibling.classList.contains("pdf-page-wrap")).toBe(true);
       expect(preview.nextElementSibling.querySelector('[aria-label="2쪽 삭제 표시"]')).toBeTruthy();
       expect(preview.previousElementSibling.querySelector('[aria-label="1쪽 삭제 표시"]')).toBeTruthy();
-      expect(screen.getAllByLabelText("저장")).toHaveLength(1);
+      // 저장 버튼은 삽입 미리보기와 그 쪽(2쪽)에 하나씩 있다
+      expect(screen.getAllByLabelText("저장")).toHaveLength(2);
+      expect(within(preview).getByLabelText("저장")).toBeTruthy();
       expect(screen.getByLabelText("2쪽 앞에 이미지 삽입").getAttribute("aria-pressed")).toBe("true");
       expect(screen.getByText(/변경 표시 1쪽/)).toBeTruthy();
     });
@@ -671,6 +674,53 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
       expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview-1");
     });
 
+    it("삽입 미리보기의 저장 버튼은 ×(삭제) 바로 왼쪽에 있고 같은 저장을 한다", async () => {
+      const fetchMock = createFetch(okResponse);
+      globalThis.fetch = fetchMock;
+      await renderEditable();
+      await stage(2, "https://img.example.com/a.png");
+      const preview = screen.getByTestId("pdf-insert-preview-2");
+      const save = within(preview).getByLabelText("저장");
+      expect(save.nextElementSibling).toBe(
+        within(preview).getByLabelText("2쪽 앞 이미지 삽입 취소"),
+      );
+
+      fireEvent.click(save);
+
+      await waitFor(() => {
+        const post = fetchMock.mock.calls.find(
+          ([u, init]) => init?.method === "POST" && String(u).endsWith("/delete"),
+        );
+        expect(JSON.parse(post[1].body).inserts).toEqual([
+          { page: 2, url: "https://img.example.com/a.png" },
+        ]);
+      });
+      expect(window.confirm.mock.calls[0][0]).toContain("2쪽 앞에 이미지 삽입");
+      await waitFor(() => expect(screen.queryByTestId("pdf-insert-preview-2")).toBeNull());
+    });
+
+    it("저장 중에는 삽입 미리보기의 저장·취소 버튼이 비활성화된다", async () => {
+      let release;
+      const base = createFetch(okResponse);
+      globalThis.fetch = vi.fn((url, init) =>
+        init?.method === "POST" && String(url).endsWith("/delete")
+          ? new Promise((resolve) => {
+              release = () => resolve(okResponse);
+            })
+          : base(url, init),
+      );
+      await renderEditable();
+      await stage(1, "https://img.example.com/a.png");
+      const preview = screen.getByTestId("pdf-insert-preview-1");
+
+      fireEvent.click(within(preview).getByLabelText("저장"));
+
+      await waitFor(() => expect(within(preview).getByLabelText("저장").disabled).toBe(true));
+      expect(within(preview).getByLabelText("1쪽 앞 이미지 삽입 취소").disabled).toBe(true);
+      release();
+      await waitFor(() => expect(screen.queryByTestId("pdf-insert-preview-1")).toBeNull());
+    });
+
     it("× 로 삽입을 취소하면 미리보기가 사라지고 blob URL 을 해제한다", async () => {
       globalThis.fetch = createFetch(okResponse);
       await renderEditable();
@@ -738,7 +788,7 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
       await renderEditable();
       await stage(1, "https://img.example.com/a.png");
 
-      fireEvent.click(screen.getByLabelText("저장"));
+      fireEvent.click(screen.getAllByLabelText("저장")[0]);
 
       await waitFor(() =>
         expect(screen.getByRole("alert").textContent).toContain("시간 초과"),
