@@ -85,6 +85,37 @@ def test_preview_downscales_large_epub_images(tmp_path: Path, monkeypatch: pytes
     assert calls, "이미지 멤버가 축소 경로를 지나야 한다"
 
 
+@pytest.mark.parametrize("cover_decl", [pytest.param('<meta name="cover" content="cover-img"/>', id="meta-cover"), pytest.param("", id="cover-image-property")])
+def test_preview_keeps_cover_image_not_referenced_by_chapters(tmp_path: Path, cover_decl: str):
+    properties = ' properties="cover-image"' if not cover_decl else ""
+    epub = tmp_path / "cov.epub"
+    with zipfile.ZipFile(epub, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+        zf.writestr("META-INF/container.xml", '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>')
+        zf.writestr("OEBPS/ch1.xhtml", "<html><body><p>본문</p></body></html>")
+        zf.writestr("OEBPS/images/front.jpg", _image_bytes("JPEG"))
+        zf.writestr(
+            "OEBPS/content.opf",
+            f"""<?xml version="1.0"?>
+            <package xmlns="http://www.idpf.org/2007/opf">
+              <metadata>{cover_decl}</metadata>
+              <manifest>
+                <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+                <item id="cover-img" href="images/front.jpg" media-type="image/jpeg"{properties}/>
+              </manifest>
+              <spine><itemref idref="c1"/></spine>
+            </package>""",
+        )
+    manager = make_manager(tmp_path, make_doc("cov.epub", "epub"))
+
+    resp = asyncio_runner(manager.get_book_preview(1, chapters=1))
+
+    assert resp.status_code == 200
+    with zipfile.ZipFile(resp.path) as zf:
+        assert "OEBPS/images/front.jpg" in zf.namelist()
+        assert 'id="cover-img"' in zf.read("OEBPS/content.opf").decode()
+
+
 # ---- 분류 후보 조립 ----
 
 
@@ -435,6 +466,31 @@ def test_find_epub_cover_member_ignores_comment_nodes(tmp_path: Path):
     </package>"""
     with _epub_with(tmp_path, {"META-INF/container.xml": _CONTAINER, "OEBPS/content.opf": opf}) as zin:
         assert BookManager._find_epub_cover_member(zin) == "OEBPS/img/c.png"
+
+
+def test_find_epub_cover_member_falls_back_to_first_spine_page_image(tmp_path: Path):
+    """표지 선언이 없고 meta cover 가 존재하지 않는 id 를 가리켜도 첫 spine 페이지의 이미지를 쓴다."""
+    opf = """<?xml version="1.0"?>
+    <package xmlns="http://www.idpf.org/2007/opf">
+      <metadata><meta name="cover" content="cover"/></metadata>
+      <manifest>
+        <item id="id0" href="0.html" media-type="application/xhtml+xml"/>
+        <item id="id1" href="1.html" media-type="application/xhtml+xml"/>
+        <item id="img1" href="images/img1.webp" media-type="image/webp"/>
+        <item id="img2" href="images/img2.webp" media-type="image/webp"/>
+      </manifest>
+      <spine><itemref idref="id0"/><itemref idref="id1"/></spine>
+    </package>"""
+    members = {
+        "META-INF/container.xml": _CONTAINER,
+        "OEBPS/content.opf": opf,
+        "OEBPS/0.html": '<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="images/img1.webp"/></body></html>',
+        "OEBPS/1.html": '<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="images/img2.webp"/></body></html>',
+        "OEBPS/images/img1.webp": "x",
+        "OEBPS/images/img2.webp": "x",
+    }
+    with _epub_with(tmp_path, members) as zin:
+        assert BookManager._find_epub_cover_member(zin) == "OEBPS/images/img1.webp"
 
 
 def test_blank_cover_check_returns_false_when_image_has_no_colors():

@@ -151,7 +151,7 @@ class BookManager:
     EPUB_IMAGE_JPEG_QUALITY = 80
     # 이미지 축소 정책 버전. 캐시 파일명에 붙여 정책이 바뀌면 옛 산출물이
     # 계속 서빙되지 않게 한다.
-    EPUB_IMAGE_POLICY_VERSION = 2
+    EPUB_IMAGE_POLICY_VERSION = 3
     EPUB_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png")
     # pypdfium2 는 스레드에서 동시에 부르면 전역 상태가 깨진다. to_thread 로 넘기는 렌더링을 직렬화한다.
     _cover_render_lock = threading.Lock()
@@ -919,6 +919,17 @@ class BookManager:
                         if "META-INF/container.xml" in zin.namelist():
                             files_to_include.add("META-INF/container.xml")
                         manifest_ids_to_keep = set(chapter_idrefs)
+
+                        # 커버는 meta cover/cover-image 로만 선언되고 챕터가 참조하지 않는 EPUB이 있다.
+                        # 챕터 참조만 따라가면 커버가 빠져 뷰어가 표지를 못 찾으므로 항상 남긴다.
+                        meta_cover_id = next((m.get("content", "") for m in opf.iter(f"{{{opf_ns}}}meta") if m.get("name") == "cover"), "")
+                        for item in opf.iter(f"{{{opf_ns}}}item"):
+                            item_id = item.get("id", "")
+                            is_cover = "cover-image" in (item.get("properties") or "").split() or (meta_cover_id and item_id == meta_cover_id)
+                            if is_cover and item_id in manifest and manifest[item_id]["media-type"].startswith("image/"):
+                                cover_href = unquote(manifest[item_id]["href"]).split("#")[0].split("?")[0]
+                                files_to_include.add(normpath(pjoin(opf_dir, cover_href)) if opf_dir else normpath(cover_href))
+                                manifest_ids_to_keep.add(item_id)
 
                         if toc_id and toc_id in manifest:
                             manifest_ids_to_keep.add(toc_id)
@@ -3259,6 +3270,7 @@ class BookManager:
         page_items = []
         cover_pages = []
         meta_cover_id = ""
+        first_spine_id = ""
         for el in opf.iter():
             if not isinstance(el.tag, str):
                 continue
@@ -3271,6 +3283,8 @@ class BookManager:
                 meta_cover_id = el.get("content", "")
             elif name == "reference" and "cover" in el.get("type", "").split():
                 cover_pages.append(el.get("href", ""))
+            elif name == "itemref" and not first_spine_id:
+                first_spine_id = el.get("idref", "")
 
         chosen = next((el for el in image_items if "cover-image" in (el.get("properties") or "").split()), None)
         if chosen is None and meta_cover_id:
@@ -3285,6 +3299,8 @@ class BookManager:
         cover_pages.extend(el.get("href", "") for el in page_items if
                            (meta_cover_id and el.get("id") == meta_cover_id) or
                            "cover" in f"{el.get('id', '')} {el.get('href', '')}".lower())
+        # 표지를 선언하지 않은 EPUB은 첫 spine 페이지가 표지 이미지 한 장인 경우가 많아 마지막 후보로 쓴다.
+        cover_pages.extend(el.get("href", "") for el in page_items if first_spine_id and el.get("id") == first_spine_id)
 
         def member_path(base: str, href: str) -> str | None:
             parsed = urlparse(href)
