@@ -53,6 +53,9 @@ const FALLBACK_PLACEHOLDER_PIXEL_WIDTH = 90;
 const CHUNK_SIZE = 10;
 // 동시에 실행할 최대 렌더 개수. 워커 과부하를 막아 보이는 페이지에 자원을 집중시킨다.
 const MAX_CONCURRENT_RENDERS = 3;
+// 보이는 영역(near zone) 밖에서 그려진 채로 남겨 두는 페이지 수. 가까운 순으로 이만큼만 남기고
+// 나머지는 canvas 비트맵과 청크 pdfDoc 을 해제해 긴 PDF 를 넘겨도 메모리가 쌓이지 않게 한다.
+const RETAIN_PAGES_OUTSIDE_VIEW = 6;
 
 export default function ViewPDF({
   bookId,
@@ -281,6 +284,8 @@ export default function ViewPDF({
   const containerRef = useRef(null);
   const canvasRefs = useRef({});
   const renderedPagesRef = useRef(new Set());
+  const everRenderedRef = useRef(new Set()); // 한 번이라도 그려진 페이지 (진행률 표시용, 해제해도 유지)
+  const nearPagesRef = useRef(new Set()); // 지금 near zone 에 있는 페이지 (해제 대상에서 제외)
   const observerRef = useRef(null);
 
   // 렌더 스케줄러 상태
@@ -357,6 +362,59 @@ export default function ViewPDF({
     return 2 + Math.floor((globalPageNum - 2) / CHUNK_SIZE) * CHUNK_SIZE;
   }, []);
 
+  // 그려 둔 페이지의 canvas 비트맵을 해제한다. 1x1 로 줄이되 aspect-ratio 로 레이아웃 높이는 유지해
+  // 스크롤 위치가 밀리지 않게 한다. 다시 보이면 executeRender 가 aspect-ratio 를 풀고 새로 그린다.
+  const evictPage = useCallback((pageNum) => {
+    renderedPagesRef.current.delete(pageNum);
+    const canvas = canvasRefs.current[pageNum];
+    if (!canvas || !canvas.width || !canvas.height) return;
+    canvas.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
+    canvas.width = 1;
+    canvas.height = 1;
+  }, []);
+
+  // pageNums 쪽을 포함한 청크 중 그려진·렌더 중·대기 중인 쪽이 하나도 없는 청크의 pdfDoc 을 해제한다.
+  // (해제한 청크는 그 쪽이 다시 필요해질 때 pumpQueue 가 다시 받아 온다.)
+  const releaseIdleChunks = useCallback((pageNums) => {
+    for (const [key, pdfDoc] of [...chunkDocsRef.current.entries()]) {
+      const [s, e] = key.split("-").map(Number);
+      if (!pageNums.some((n) => n >= s && n <= e)) continue;
+      let busy = false;
+      for (let n = s; n <= e && !busy; n++) {
+        busy =
+          renderedPagesRef.current.has(n) ||
+          activeRenderTasksRef.current.has(n) ||
+          renderQueueRef.current.has(n);
+      }
+      if (busy) continue;
+      chunkDocsRef.current.delete(key);
+      pdfDoc.loadingTask.destroy();
+    }
+  }, []);
+
+  // near zone 밖에서 그려진 페이지 중 near zone 에서 먼 것부터 해제해 RETAIN_PAGES_OUTSIDE_VIEW 개만 남긴다.
+  // 렌더가 끝날 때만 호출하면 충분하다: 그려진 페이지 수는 렌더로만 늘어난다.
+  const trimFarPages = useCallback(() => {
+    const near = nearPagesRef.current;
+    // 관찰자가 아직 위치를 알려주지 않았으면 어느 쪽이 보이는지 모르므로 해제하지 않는다
+    if (near.size === 0) return;
+    const nearMin = Math.min(...near);
+    const nearMax = Math.max(...near);
+    const far = [];
+    for (const pageNum of renderedPagesRef.current) {
+      if (near.has(pageNum) || activeRenderTasksRef.current.has(pageNum)) continue;
+      far.push({
+        pageNum,
+        dist: Math.max(nearMin - pageNum, pageNum - nearMax, 0),
+      });
+    }
+    if (far.length <= RETAIN_PAGES_OUTSIDE_VIEW) return;
+    far.sort((a, b) => a.dist - b.dist);
+    const evicted = far.slice(RETAIN_PAGES_OUTSIDE_VIEW).map((f) => f.pageNum);
+    for (const pageNum of evicted) evictPage(pageNum);
+    releaseIdleChunks(evicted);
+  }, [evictPage, releaseIdleChunks]);
+
   // 실제 렌더 실행. 스케줄러가 "청크 로드된" 페이지에 대해서만 호출한다. 취소 가능.
   const executeRender = useCallback(
     async (globalPageNum) => {
@@ -388,6 +446,7 @@ export default function ViewPDF({
         });
 
         const context = canvas.getContext("2d");
+        canvas.style.aspectRatio = "";
         canvas.width = renderViewport.width;
         canvas.height = renderViewport.height;
 
@@ -398,12 +457,16 @@ export default function ViewPDF({
         // 취소 가능하도록 슬롯 마커를 실제 RenderTask로 교체
         activeRenderTasksRef.current.set(globalPageNum, task);
         await task.promise;
+        // 그린 뒤에는 pdfjs 가 페이지에 붙들고 있는 operator list 등을 놓아 준다
+        page.cleanup?.();
 
-        setLoadedPages((prev) => prev + 1);
+        everRenderedRef.current.add(globalPageNum);
+        setLoadedPages(everRenderedRef.current.size);
 
         if (globalPageNum === 1) {
           setIsFirstPageReady(true);
         }
+        trimFarPages();
       } catch (err) {
         // 취소된 렌더는 재진입 시 다시 그릴 수 있도록 완료 표시를 해제한다
         renderedPagesRef.current.delete(globalPageNum);
@@ -412,7 +475,7 @@ export default function ViewPDF({
         }
       }
     },
-    [findChunkForPage],
+    [findChunkForPage, trimFarPages],
   );
 
   // 큐에서 청크가 로드되어 즉시 렌더 가능한 페이지 중 뷰포트에 가장 가까운 것을 고른다
@@ -540,6 +603,8 @@ export default function ViewPDF({
       setIsFirstPageReady(false);
       canvasRefs.current = {};
       renderedPagesRef.current = new Set();
+      everRenderedRef.current = new Set();
+      nearPagesRef.current = new Set();
       renderQueueRef.current = new Set();
       activeRenderTasksRef.current = new Map();
       chunkDocsRef.current = new Map();
@@ -660,7 +725,9 @@ export default function ViewPDF({
             for (const entry of entries) {
               const pageNum = parseInt(entry.target.dataset.page);
               if (!pageNum) continue;
+              nearPagesRef.current.delete(pageNum);
               if (entry.isIntersecting) {
+                nearPagesRef.current.add(pageNum);
                 enqueueRender(pageNum);
               } else if (
                 renderQueueRef.current.has(pageNum) ||
@@ -676,7 +743,8 @@ export default function ViewPDF({
 
         observerRef.current = observer;
 
-        for (let i = 2; i <= pagesToRender; i++) {
+        // 1쪽도 관찰한다: 해제된 뒤 다시 보이면 이 관찰자가 되살려야 한다.
+        for (let i = 1; i <= pagesToRender; i++) {
           const canvas = canvasRefs.current[i];
           /* v8 ignore next 4 -- flushSync creates all observed page canvases before observer setup. */
           if (canvas) {

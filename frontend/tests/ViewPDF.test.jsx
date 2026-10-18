@@ -1032,6 +1032,86 @@ describe("ViewPDF", () => {
     }
   });
 
+  // 메모리 절약: near zone 을 벗어난 페이지는 가까운 6쪽만 남기고 canvas 비트맵과 청크 pdfDoc 을 해제한다.
+  it("멀어진 페이지의 canvas 와 청크 pdfDoc 을 해제하고 다시 보이면 새로 그린다", async () => {
+    const TOTAL = 21;
+    const renderSpy = vi.fn(() => ({ promise: Promise.resolve() }));
+    const cleanupSpy = vi.fn();
+    const docs = [];
+    setupGetDocument(() => {
+      const pdf = {
+        numPages: 10,
+        getPage: vi.fn(() =>
+          Promise.resolve({
+            getViewport: () => ({ width: 800, height: 600 }),
+            render: renderSpy,
+            cleanup: cleanupSpy,
+          }),
+        ),
+      };
+      pdf.loadingTask = { promise: Promise.resolve(pdf), destroy: vi.fn() };
+      docs.push(pdf);
+      return pdf;
+    });
+    globalThis.fetch = createMockFetch(TOTAL);
+
+    // observe 시 자동 발사하지 않는 관찰자: 테스트가 스크롤 위치를 직접 지정한다
+    const observers = [];
+    const RealIO = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        observers.push(this);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+
+    try {
+      render(<ViewPDF bookId={1} />);
+      await waitFor(() => {
+        expect(document.querySelectorAll("canvas.pdf-page").length).toBe(TOTAL);
+      });
+      const canvases = [...document.querySelectorAll("canvas.pdf-page")];
+      const obs = observers[observers.length - 1];
+      const fire = (pageNum, isIntersecting) =>
+        act(() => {
+          obs.cb([{ isIntersecting, target: canvases[pageNum - 1] }], obs);
+        });
+
+      // 1쪽에서 TOTAL쪽까지 한 쪽씩 스크롤: 새 쪽이 near zone 에 들어오고 직전 쪽이 나간다
+      await fire(1, true);
+      await waitFor(() => expect(renderSpy).toHaveBeenCalledTimes(1));
+      for (let p = 2; p <= TOTAL; p++) {
+        await fire(p, true);
+        await fire(p - 1, false);
+        await waitFor(() => expect(renderSpy).toHaveBeenCalledTimes(p));
+      }
+
+      // 가장 먼 쪽(1~14)은 1x1 로 줄고 aspect-ratio 로 레이아웃 높이를 유지한다
+      expect(canvases[0].width).toBe(1);
+      expect(canvases[0].height).toBe(1);
+      expect(canvases[0].style.aspectRatio).toBe("800 / 600");
+      // 가까운 쪽(15~20)과 보는 쪽(21)은 그대로 둔다
+      expect(canvases[14].width).toBe(800);
+      expect(canvases[14].style.aspectRatio).toBe("");
+      expect(canvases[TOTAL - 1].width).toBe(800);
+
+      // 2~11쪽 청크는 쓰는 쪽이 없어 해제되고, 12~21쪽 청크는 남는다 (docs[0]=1쪽, [1]=2~11, [2]=12~21)
+      expect(docs[1].loadingTask.destroy).toHaveBeenCalled();
+      expect(docs[2].loadingTask.destroy).not.toHaveBeenCalled();
+      expect(cleanupSpy).toHaveBeenCalled();
+
+      // 해제된 1쪽이 다시 보이면 새로 그리고 aspect-ratio 잠금을 푼다
+      await fire(1, true);
+      await waitFor(() => expect(renderSpy).toHaveBeenCalledTimes(TOTAL + 1));
+      expect(canvases[0].style.aspectRatio).toBe("");
+    } finally {
+      globalThis.IntersectionObserver = RealIO;
+    }
+  });
+
   // ── 줌 경계값 (zoomUp/zoomDown clamp) ──
 
   it("최대 줌(500%)에서 + 를 더 눌러도 500%를 유지하고 + 버튼이 비활성화된다", async () => {
