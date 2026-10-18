@@ -57,53 +57,60 @@ function delegateRawToJsonGetReq() {
 }
 
 vi.mock("../src/Folder.jsx", () => ({
-  default: ({ folderData, onClickHandler, onToggle, isOpen }) => (
-    <div data-testid="folder" data-open={String(isOpen)}>
-      <button
-        data-testid="folder-toggle"
-        onClick={() => onToggle && onToggle(!isOpen)}
-      >
-        toggle
-      </button>
-      {folderData.map((item) => (
-        <div key={item.id}>
-          <button
-            data-testid={`folder-item-${item.id}`}
-            onClick={() => onClickHandler(item.id)}
-          >
-            {item.label}
-          </button>
-          {item.children?.map((child) => (
+  default: ({ folderData, onClickHandler, onToggle, isOpen }) => {
+    // 실제 Folder처럼 폴더가 아닌 항목(책)을 누르면 디렉토리 패널을 접는다.
+    const click = (item) => {
+      onClickHandler(item.id);
+      if (item.fileType !== "folder" && onToggle) onToggle(false);
+    };
+    return (
+      <div data-testid="folder" data-open={String(isOpen)}>
+        <button
+          data-testid="folder-toggle"
+          onClick={() => onToggle && onToggle(!isOpen)}
+        >
+          toggle
+        </button>
+        {folderData.map((item) => (
+          <div key={item.id}>
             <button
-              key={child.id}
-              data-testid={`folder-item-${child.id}`}
-              onClick={() => onClickHandler(child.id)}
+              data-testid={`folder-item-${item.id}`}
+              onClick={() => click(item)}
             >
-              {child.label}
+              {item.label}
             </button>
-          ))}
-        </div>
-      ))}
-      <button
-        data-testid="custom-entry-click"
-        onClick={() => onClickHandler("소설/999")}
-      >
-        custom
-      </button>
-      <button
-        data-testid="custom-deep-click"
-        onClick={() => onClickHandler("문학/소설/42")}
-      >
-        deep
-      </button>
-      <button
-        data-testid="custom-unparsable-click"
-        onClick={() => onClickHandler("소설/abc")}
-      >
-        unparsable
-      </button>
-    </div>
-  ),
+            {item.children?.map((child) => (
+              <button
+                key={child.id}
+                data-testid={`folder-item-${child.id}`}
+                onClick={() => click(child)}
+              >
+                {child.label}
+              </button>
+            ))}
+          </div>
+        ))}
+        <button
+          data-testid="custom-entry-click"
+          onClick={() => onClickHandler("소설/999")}
+        >
+          custom
+        </button>
+        <button
+          data-testid="custom-deep-click"
+          onClick={() => onClickHandler("문학/소설/42")}
+        >
+          deep
+        </button>
+        <button
+          data-testid="custom-unparsable-click"
+          onClick={() => onClickHandler("소설/abc")}
+        >
+          unparsable
+        </button>
+      </div>
+    );
+  },
 }));
 
 vi.mock("../src/ViewSingle.jsx", () => ({
@@ -172,6 +179,22 @@ vi.mock("../src/SearchResult", () => ({
   ),
 }));
 
+vi.mock("../src/CoverBrowser", () => ({
+  default: ({ apiPrefix, basePath, role, category, onClearCategory }) => (
+    <div
+      data-testid="cover-browser"
+      data-category={category}
+      data-api-prefix={apiPrefix}
+      data-base-path={basePath}
+      data-role={role}
+    >
+      <button data-testid="cover-clear" onClick={onClearCategory}>
+        clear
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock("../src/folderUtils", async () => {
   const actual = await vi.importActual("../src/folderUtils");
   return actual;
@@ -217,7 +240,7 @@ describe("View", () => {
     expect(screen.getByTestId("folder").dataset.open).toBe("true");
   });
 
-  it("검색 전에는 디렉토리만 렌더하고 핸들은 두지 않는다", async () => {
+  it("검색 전에도 오른쪽 컬럼을 두고 전체 책 커버 목록으로 채운다", async () => {
     mockJsonGetReq.mockImplementation((url, payload, resolve) => {
       if (url === "/categories") {
         resolve({ 소설: 10, 역사: 5 });
@@ -230,8 +253,13 @@ describe("View", () => {
       expect(screen.getByTestId("folder")).toBeTruthy();
     });
     expect(container.querySelector(".split-layout-left")).toBeTruthy();
-    expect(container.querySelector(".split-layout-right")).toBeNull();
-    expect(screen.queryByRole("separator")).toBeNull();
+    expect(container.querySelector(".split-layout-right")).toBeTruthy();
+    expect(screen.getByRole("separator")).toBeTruthy();
+    const browser = screen.getByTestId("cover-browser");
+    expect(browser.closest(".split-layout-right")).toBeTruthy();
+    expect(browser.dataset.category).toBe("");
+    expect(browser.dataset.apiPrefix).toBe("");
+    expect(browser.dataset.basePath).toBe("/book-view");
   });
 
   it("카테고리 로드 실패 시 에러 메시지를 표시하지 않고 빈 폴더를 표시한다", async () => {
@@ -428,26 +456,20 @@ describe("View", () => {
     expect(screen.getByTestId("similar-books").dataset.basePath).toBe(
       "/book-edit",
     );
-    const toolsRow = screen.getByTestId("folder").closest(".view-tools-row");
-    expect(toolsRow).toBeTruthy();
-    expect(toolsRow.classList.contains("split-layout")).toBe(true);
-    expect(toolsRow.classList.contains("no-scroll")).toBe(true);
-    expect(
-      screen
-        .getByTestId("folder")
-        .closest(".split-layout-left.view-directory-panel"),
-    ).toBeTruthy();
-    expect(
-      screen
-        .getByTestId("similar-books")
-        .closest(".split-layout-right.view-similar-books-panel"),
-    ).toBeTruthy();
-    expect(screen.getByRole("separator")).toBeTruthy();
-    expect(toolsRow.contains(screen.getByTestId("book-info-view"))).toBe(false);
-    expect(
-      toolsRow.compareDocumentPosition(screen.getByTestId("book-info-view")) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    // 책 보기는 오른쪽 컬럼 안에 놓이고, 두 컬럼은 따로 스크롤된다.
+    const layout = screen.getByTestId("view-single").closest(".split-layout");
+    expect(layout).toBeTruthy();
+    expect(layout.classList.contains("no-scroll")).toBe(false);
+    const right = screen
+      .getByTestId("view-single")
+      .closest(".split-layout-right.view-main-panel");
+    expect(right).toBeTruthy();
+    expect(right.contains(screen.getByTestId("book-info-view"))).toBe(true);
+    expect(right.contains(screen.getByTestId("similar-books"))).toBe(true);
+    // 책을 고르면 디렉토리가 접혀 왼쪽 컬럼이 없어지고, 접힌 디렉토리가 오른쪽 컬럼 위에 놓인다.
+    expect(layout.querySelector(".split-layout-left")).toBeNull();
+    expect(right.contains(screen.getByTestId("folder"))).toBe(true);
+    expect(screen.getByTestId("folder").dataset.open).toBe("false");
   });
 
   it("책을 열면 조회 이력을 1건 기록한다", async () => {
@@ -1848,6 +1870,449 @@ describe("View", () => {
       expect(screen.getByTestId("view-single").dataset.viewUrl).toContain(
         "&api=%2Fcomics",
       );
+    });
+  });
+
+  describe("커버 목록 브라우징", () => {
+    const stubScroll = () =>
+      vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+
+    const loadTree = () => {
+      mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+        if (url === "/categories") {
+          resolve({ 소설: 1 });
+        } else if (url === "/categories/소설") {
+          resolve([
+            {
+              book_id: 42,
+              title: "테스트소설",
+              file_type: "epub",
+              file_path: "/test.epub",
+              category: "소설",
+            },
+          ]);
+        }
+      });
+    };
+
+    beforeEach(() => {
+      // 앞선 테스트가 줄여 둔 창 폭이 남으면 컬럼이 쌓인 배치로 그려져 분할 동작을 볼 수 없다.
+      window.innerWidth = 1024;
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      window.history.replaceState(null, "", "/");
+    });
+
+    it("디렉토리를 고르면 커버 목록을 그 디렉토리로 바꾸고, 전체 보기로 되돌린다", async () => {
+      loadTree();
+      render(<View />);
+      await waitFor(() => {
+        expect(screen.getByTestId("folder-item-소설")).toBeTruthy();
+      });
+
+      act(() => screen.getByTestId("folder-item-소설").click());
+      await waitFor(() => {
+        expect(screen.getByTestId("cover-browser").dataset.category).toBe(
+          "소설",
+        );
+      });
+
+      act(() => screen.getByTestId("cover-clear").click());
+      expect(screen.getByTestId("cover-browser").dataset.category).toBe("");
+    });
+
+    // 트리에서 소설 디렉토리의 책(42)을 연다. 실제 Folder처럼 책을 누르면 디렉토리 패널이 접힌다.
+    const openBookViaTree = async () => {
+      await waitFor(() => {
+        expect(screen.getByTestId("folder-item-소설")).toBeTruthy();
+      });
+      act(() => screen.getByTestId("folder-item-소설").click());
+      await waitFor(() => {
+        expect(screen.getByTestId("folder-item-소설/42")).toBeTruthy();
+      });
+      act(() => screen.getByTestId("folder-item-소설/42").click());
+      await waitFor(() => {
+        expect(screen.getByTestId("view-single")).toBeTruthy();
+      });
+    };
+
+    it("왼쪽(디렉토리)과 오른쪽 컬럼이 따로 스크롤되고 폭을 조절할 수 있다", async () => {
+      loadTree();
+      const { container } = render(<View />);
+      await waitFor(() => {
+        expect(screen.getByTestId("cover-browser")).toBeTruthy();
+      });
+
+      const layout = container.querySelector(".split-layout");
+      // scroll={false}면 no-scroll이 붙어 문서 전체가 스크롤된다. 두 컬럼이 따로 스크롤되려면 없어야 한다.
+      expect(layout.classList.contains("no-scroll")).toBe(false);
+      expect(layout.querySelector(".split-layout-left")).toBeTruthy();
+      expect(layout.querySelector(".split-layout-right")).toBeTruthy();
+      expect(screen.getByRole("separator")).toBeTruthy();
+    });
+
+    it("트리에서 책을 고르면 오른쪽 컬럼에 책 보기가 열리고 디렉토리는 접히며 커버 목록은 숨는다", async () => {
+      loadTree();
+      stubScroll();
+      const { container } = render(<View />);
+      await openBookViaTree();
+
+      const right = container.querySelector(".split-layout-right");
+      expect(right.contains(screen.getByTestId("book-info-view"))).toBe(true);
+      expect(right.contains(screen.getByTestId("view-single"))).toBe(true);
+      expect(right.contains(screen.getByTestId("similar-books"))).toBe(true);
+      // 접힌 디렉토리는 왼쪽 컬럼 없이 오른쪽 컬럼 위에 놓인다(편집 화면과 같다).
+      expect(container.querySelector(".split-layout-left")).toBeNull();
+      expect(screen.getByTestId("folder").dataset.open).toBe("false");
+      expect(right.contains(screen.getByTestId("folder"))).toBe(true);
+      expect(screen.getByTestId("cover-browser").parentElement.hidden).toBe(
+        true,
+      );
+    });
+
+    it("커버 목록 버튼은 책 보기를 닫고 디렉토리를 펼치며, 숨겨 둔 같은 목록을 다시 보여 준다", async () => {
+      loadTree();
+      stubScroll();
+      const replaceState = vi.spyOn(window.history, "replaceState");
+      const { container } = render(<View />);
+      await waitFor(() => {
+        expect(screen.getByTestId("cover-browser")).toBeTruthy();
+      });
+      const browserBefore = screen.getByTestId("cover-browser");
+      await openBookViaTree();
+
+      act(() => screen.getByRole("button", { name: "← 커버 목록" }).click());
+
+      expect(screen.queryByTestId("view-single")).toBeNull();
+      expect(screen.queryByTestId("book-info-view")).toBeNull();
+      expect(screen.queryByTestId("similar-books")).toBeNull();
+      expect(screen.getByTestId("folder").dataset.open).toBe("true");
+      expect(container.querySelector(".split-layout-left")).toBeTruthy();
+      expect(replaceState).toHaveBeenLastCalledWith(
+        null,
+        "",
+        "/book-view?directory=" + encodeURIComponent("소설"),
+      );
+      // 다시 만든 것이 아니라 숨겼던 그 목록이어야 불러온 페이지와 스크롤 위치가 남는다.
+      expect(screen.getByTestId("cover-browser")).toBe(browserBefore);
+      expect(browserBefore.parentElement.hidden).toBe(false);
+    });
+
+    it("책을 열면 오른쪽 컬럼을 맨 위로 올리고, 목록으로 돌아오면 보던 위치를 되돌린다", async () => {
+      loadTree();
+      stubScroll();
+      const { container } = render(<View />);
+      await waitFor(() => {
+        expect(screen.getByTestId("cover-browser")).toBeTruthy();
+      });
+      const pane = container.querySelector(".split-layout-right");
+      pane.scrollTop = 1234;
+      act(() => {
+        pane.dispatchEvent(new Event("scroll"));
+      });
+
+      await openBookViaTree();
+      // 책 보기는 위에서부터 보여 준다.
+      expect(pane.scrollTop).toBe(0);
+      // 책 보기에서 올라간 위치가 기억을 덮어쓰면 안 된다.
+      act(() => {
+        pane.dispatchEvent(new Event("scroll"));
+      });
+
+      act(() => screen.getByRole("button", { name: "← 커버 목록" }).click());
+
+      expect(pane.scrollTop).toBe(1234);
+    });
+
+    it("좁은 화면에서 컬럼이 쌓이면 문서 전체의 스크롤 위치를 쓴다", async () => {
+      loadTree();
+      stubScroll();
+      const { container } = render(<View />);
+      await waitFor(() => {
+        expect(screen.getByTestId("cover-browser")).toBeTruthy();
+      });
+      container.querySelector(".split-layout").classList.add("is-stacked");
+
+      await openBookViaTree();
+
+      expect(window.scrollTo).toHaveBeenCalledWith(0, 0);
+    });
+
+    it("책이 열려 있을 때 디렉토리를 고르면 책 보기를 닫고 그 디렉토리 목록으로 돌아간다", async () => {
+      loadTree();
+      stubScroll();
+      const replaceState = vi.spyOn(window.history, "replaceState");
+      render(<View />);
+      await openBookViaTree();
+
+      act(() => screen.getByTestId("folder-item-소설").click());
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("view-single")).toBeNull();
+      });
+      expect(screen.getByTestId("cover-browser").dataset.category).toBe("소설");
+      expect(screen.getByTestId("cover-browser").parentElement.hidden).toBe(
+        false,
+      );
+      expect(replaceState).toHaveBeenLastCalledWith(
+        null,
+        "",
+        "/book-view?directory=" + encodeURIComponent("소설"),
+      );
+    });
+
+    it("커버 목록에 권한(role)을 넘긴다", async () => {
+      mockOutletContext.role = "viewer";
+      loadTree();
+      render(<View />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("cover-browser").dataset.role).toBe("viewer");
+      });
+    });
+
+    it("?directory= 로 진입하면 그 디렉토리 기준 커버 목록을 연다", async () => {
+      mockRouteState.searchParams =
+        "directory=" + encodeURIComponent("5_완결/[작가] 작품 (01-06권 완)");
+      loadTree();
+      render(<View basePath="/comics-view" apiPrefix="/comics" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("cover-browser")).toBeTruthy();
+      });
+      expect(screen.getByTestId("cover-browser").dataset.category).toBe(
+        "5_완결/[작가] 작품 (01-06권 완)",
+      );
+    });
+
+    it("책 딥링크가 있으면 ?directory= 는 쓰지 않는다", async () => {
+      mockRouteState.wildcard = "42";
+      mockRouteState.searchParams =
+        "category=소설&directory=" + encodeURIComponent("다른/디렉토리");
+      loadTree();
+      stubScroll();
+      render(<View />);
+      await waitFor(() => {
+        expect(screen.getByTestId("view-single")).toBeTruthy();
+      });
+
+      act(() => screen.getByRole("button", { name: "← 커버 목록" }).click());
+
+      // ?directory= 값은 무시하고, 딥링크 책이 속한 디렉토리의 목록으로 돌아간다.
+      expect(screen.getByTestId("cover-browser").dataset.category).toBe("소설");
+    });
+
+    it("디렉토리를 고르면 주소에 ?directory= 를 남기고, 전체로 되돌리면 지운다", async () => {
+      loadTree();
+      const replaceState = vi.spyOn(window.history, "replaceState");
+      render(<View />);
+      await waitFor(() => {
+        expect(screen.getByTestId("folder-item-소설")).toBeTruthy();
+      });
+
+      act(() => screen.getByTestId("folder-item-소설").click());
+      await waitFor(() => {
+        expect(replaceState).toHaveBeenLastCalledWith(
+          null,
+          "",
+          "/book-view?directory=" + encodeURIComponent("소설"),
+        );
+      });
+
+      act(() => screen.getByTestId("cover-clear").click());
+      expect(replaceState).toHaveBeenLastCalledWith(null, "", "/book-view");
+    });
+
+    it("딥링크 책을 여는 중에는 카테고리를 불러와도 주소를 바꾸지 않는다", async () => {
+      mockRouteState.wildcard = "42";
+      mockRouteState.searchParams = "category=소설";
+      loadTree();
+      const replaceState = vi.spyOn(window.history, "replaceState");
+      render(<View />);
+      await waitFor(() => {
+        expect(screen.getByTestId("view-single")).toBeTruthy();
+      });
+
+      const directoryCalls = replaceState.mock.calls.filter(([, , url]) =>
+        String(url).includes("directory="),
+      );
+      expect(directoryCalls).toEqual([]);
+    });
+
+    describe("기본 디렉토리", () => {
+      it("디렉토리 지정 없이 진입하면 탭의 기본 디렉토리를 기준으로 연다", async () => {
+        loadTree();
+        const replaceState = vi.spyOn(window.history, "replaceState");
+        render(<View defaultDirectory="2_소설한국" />);
+
+        await waitFor(() => {
+          expect(screen.getByTestId("cover-browser")).toBeTruthy();
+        });
+        expect(screen.getByTestId("cover-browser").dataset.category).toBe(
+          "2_소설한국",
+        );
+        // 기본값은 주소를 건드리지 않고 조용히 적용한다.
+        expect(replaceState).not.toHaveBeenCalled();
+      });
+
+      it("?directory= 가 있으면 기본 디렉토리보다 우선한다", async () => {
+        mockRouteState.searchParams = "directory=" + encodeURIComponent("소설");
+        loadTree();
+        render(<View defaultDirectory="2_소설한국" />);
+
+        await waitFor(() => {
+          expect(screen.getByTestId("cover-browser")).toBeTruthy();
+        });
+        expect(screen.getByTestId("cover-browser").dataset.category).toBe(
+          "소설",
+        );
+      });
+
+      it("?directory= 가 빈 값이면 사용자가 고른 루트이므로 기본 디렉토리를 쓰지 않는다", async () => {
+        mockRouteState.searchParams = "directory=";
+        loadTree();
+        render(<View defaultDirectory="2_소설한국" />);
+
+        await waitFor(() => {
+          expect(screen.getByTestId("cover-browser")).toBeTruthy();
+        });
+        expect(screen.getByTestId("cover-browser").dataset.category).toBe("");
+      });
+
+      it("전체 보기를 누르면 루트를 고른 것을 주소에 남긴다", async () => {
+        loadTree();
+        const replaceState = vi.spyOn(window.history, "replaceState");
+        render(<View defaultDirectory="2_소설한국" />);
+        await waitFor(() => {
+          expect(screen.getByTestId("cover-browser")).toBeTruthy();
+        });
+
+        act(() => screen.getByTestId("cover-clear").click());
+
+        expect(screen.getByTestId("cover-browser").dataset.category).toBe("");
+        expect(replaceState).toHaveBeenLastCalledWith(
+          null,
+          "",
+          "/book-view?directory=",
+        );
+      });
+
+      it("책 딥링크가 있으면 기본 디렉토리를 쓰지 않는다", async () => {
+        mockRouteState.wildcard = "42";
+        mockRouteState.searchParams = "category=소설";
+        loadTree();
+        stubScroll();
+        render(<View defaultDirectory="2_소설한국" />);
+        await waitFor(() => {
+          expect(screen.getByTestId("view-single")).toBeTruthy();
+        });
+
+        act(() => screen.getByRole("button", { name: "← 커버 목록" }).click());
+
+        // 책이 속한 디렉토리(소설)의 목록으로 돌아가며, 기본 디렉토리는 쓰지 않는다.
+        expect(screen.getByTestId("cover-browser").dataset.category).toBe(
+          "소설",
+        );
+      });
+
+      it("viewer에게 비노출인 기본 디렉토리는 루트로 대체한다", async () => {
+        mockOutletContext.role = "viewer";
+        mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+          if (url === "/categories") resolve({ "2_소설한국": 1, 소설: 1 });
+          else if (url.startsWith("/hidden-categories"))
+            resolve(["2_소설한국"]);
+        });
+        render(<View defaultDirectory="2_소설한국" />);
+
+        await waitFor(() => {
+          expect(screen.getByTestId("cover-browser").dataset.category).toBe("");
+        });
+      });
+
+      it("viewer에게 노출되는 기본 디렉토리는 그대로 쓴다", async () => {
+        mockOutletContext.role = "viewer";
+        mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+          if (url === "/categories") resolve({ "2_소설한국": 1, 소설: 1 });
+          else if (url.startsWith("/hidden-categories")) resolve(["소설"]);
+        });
+        render(<View defaultDirectory="2_소설한국" />);
+
+        await waitFor(() => {
+          expect(screen.getByTestId("folder-item-2_소설한국")).toBeTruthy();
+        });
+        expect(screen.getByTestId("cover-browser").dataset.category).toBe(
+          "2_소설한국",
+        );
+      });
+    });
+
+    it("검색 결과를 보여 주는 동안에는 커버 목록을 요청하지도 그리지도 않는다", async () => {
+      mockOutletContext.hasSearched = true;
+      mockOutletContext.searchResults = [{ book_id: 1 }];
+      loadTree();
+      render(<View />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("search-result")).toBeTruthy();
+      });
+      expect(screen.queryByTestId("cover-browser")).toBeNull();
+    });
+
+    it("딥링크로 책이 열리는 동안에는 커버 목록을 요청하지 않는다", async () => {
+      mockRouteState.wildcard = "42";
+      mockRouteState.searchParams = "category=소설";
+      loadTree();
+      render(<View />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("view-single")).toBeTruthy();
+      });
+      expect(screen.queryByTestId("cover-browser")).toBeNull();
+    });
+
+    it("딥링크 책에서 커버 목록으로 돌아오면, 이후 트리가 바뀌어도 그 책을 다시 열지 않는다", async () => {
+      mockRouteState.wildcard = "42";
+      mockRouteState.searchParams = "category=소설";
+      loadTree();
+      stubScroll();
+      render(<View />);
+      await waitFor(() => {
+        expect(screen.getByTestId("view-single")).toBeTruthy();
+      });
+
+      act(() => screen.getByRole("button", { name: "← 커버 목록" }).click());
+      expect(screen.queryByTestId("view-single")).toBeNull();
+      expect(screen.getByTestId("cover-browser")).toBeTruthy();
+
+      // 디렉토리를 고르면 트리 데이터가 바뀌어 딥링크 자동 선택 효과가 다시 돈다.
+      act(() => screen.getByTestId("folder-item-소설").click());
+      await waitFor(() => {
+        expect(screen.getByTestId("cover-browser").dataset.category).toBe(
+          "소설",
+        );
+      });
+      expect(screen.queryByTestId("view-single")).toBeNull();
+    });
+
+    it("딥링크 책을 찾지 못해도 커버 목록으로 빠져나갈 수 있다", async () => {
+      mockRouteState.wildcard = "999";
+      mockRouteState.searchParams =
+        "category=" + encodeURIComponent("없는/깊은");
+      mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {
+        if (url === "/categories") {
+          resolve({ 소설: 1 });
+        } else if (url === "/books/999") {
+          reject("not found");
+        }
+      });
+      render(<View />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("book-load-error")).toBeTruthy();
+      });
+      expect(screen.getByTestId("cover-browser")).toBeTruthy();
     });
   });
 });

@@ -1,4 +1,11 @@
-import { useEffect, useState, useCallback, Suspense } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useCallback,
+  Suspense,
+} from "react";
 import { useParams, useSearchParams, useOutletContext } from "react-router-dom";
 import PropTypes from "prop-types";
 
@@ -6,7 +13,7 @@ import { getApiUrlPrefix, recordBookView } from "./Common";
 
 import "./View.css";
 import "bootstrap/dist/css/bootstrap.min.css";
-import { Container, Row, Col, Alert } from "react-bootstrap";
+import { Container, Alert, Button } from "react-bootstrap";
 
 import Folder from "./Folder.jsx";
 import SplitLayout from "./SplitLayout";
@@ -15,6 +22,7 @@ import BookInfoView from "./BookInfoView.jsx";
 import SimilarBooks from "./SimilarBooks.jsx";
 import BookLoadError from "./BookLoadError.jsx";
 import SearchResult from "./SearchResult";
+import CoverBrowser from "./CoverBrowser";
 import {
   parseEntryId,
   parseRouteTarget,
@@ -25,7 +33,11 @@ import {
 } from "./folderUtils";
 import { useCategoryTree } from "./useCategoryTree";
 
-export default function View({ basePath = "/book-view", apiPrefix = "" }) {
+export default function View({
+  basePath = "/book-view",
+  apiPrefix = "",
+  defaultDirectory = "",
+}) {
   // get optional route params for deep link
   const params = useParams();
   const [searchParams] = useSearchParams();
@@ -56,6 +68,20 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
   const [bookLoadError, setBookLoadError] = useState("");
   const [viewUrl, setViewUrl] = useState("");
   const [downloadUrl, setDownloadUrl] = useState("");
+  // 오른쪽 컬럼 커버 목록이 보여 줄 디렉토리. 비우면 루트(전체). 책 딥링크가 우선이라 그때는 쓰지 않는다.
+  // ?directory= 가 있으면(빈 값은 사용자가 고른 루트) 그것을, 없으면 탭의 기본 디렉토리를 쓴다.
+  const [browseCategory, setBrowseCategory] = useState(() => {
+    if (routeBookId) return "";
+    const directoryParam = searchParams.get("directory");
+    return directoryParam !== null ? directoryParam : defaultDirectory;
+  });
+  // 커버 목록으로 돌아온 라우트 책 id. 같은 딥링크가 목록 뒤에 다시 열리지 않게 한다.
+  const [dismissedRouteBookId, setDismissedRouteBookId] = useState("");
+  const [coverGridMounted, setCoverGridMounted] = useState(false);
+  const bookIdRef = useRef("");
+  const deepLinkPendingRef = useRef(false);
+  const coverScrollRef = useRef(0);
+  const rightContentRef = useRef(null);
 
   // 열람 이력 기록. setBookInfo 호출 지점이 여러 곳이라 각 지점에 심으면 누락·중복이
   // 생기므로, 선택된 책이 바뀌는 것만 한 곳에서 감지한다.
@@ -65,11 +91,13 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
     recordBookView(apiPrefix, viewedBookId);
   }, [apiPrefix, viewedBookId]);
 
-  const { folderData, loadCategoryPage, loadBookById } = useCategoryTree({
-    apiPrefix,
-    role,
-    onError: (error) => setErrorMessage(`can't load directory data, ${error}`),
-  });
+  const { folderData, hiddenCategories, loadCategoryPage, loadBookById } =
+    useCategoryTree({
+      apiPrefix,
+      role,
+      onError: (error) =>
+        setErrorMessage(`can't load directory data, ${error}`),
+    });
 
   // 화면 전환 시 이전 책의 잔여 상태를 정리한다.
   useEffect(() => {
@@ -83,6 +111,32 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
       setDownloadUrl("");
     };
   }, [role, apiPrefix]);
+
+  // 커버 목록의 기준 디렉토리를 주소에 남겨 새로고침과 공유에서도 같은 목록이 열리게 한다.
+  const syncDirectoryUrl = useCallback(
+    (category) => {
+      // 기본 디렉토리가 있는 탭에서는 빈 값도 남겨야 "루트를 골랐다"는 뜻이 새로고침 뒤에도 유지된다.
+      window.history.replaceState(
+        null,
+        "",
+        category || defaultDirectory
+          ? `${basePath}?directory=${encodeURIComponent(category)}`
+          : basePath,
+      );
+    },
+    [basePath, defaultDirectory],
+  );
+
+  // 선택된 책의 상태만 비운다. URL과 디렉토리 패널은 호출하는 쪽이 정한다.
+  const clearBookSelection = useCallback(() => {
+    setBookInfo({});
+    setSelectedEntryId("");
+    setNextEntryId("");
+    setPrevEntryId("");
+    setViewUrl("");
+    setDownloadUrl("");
+    setBookLoadError("");
+  }, []);
 
   const entryClicked = useCallback(
     (selectedEntryId) => {
@@ -102,6 +156,12 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
         if (selectedFolderData.isVirtualParent) {
           return;
         }
+
+        // 오른쪽 커버 목록을 이 디렉토리의 책으로 채운다. 열려 있던 책 보기는 닫아 목록으로 돌아간다.
+        setBrowseCategory(selectedEntryId);
+        if (bookIdRef.current) clearBookSelection();
+        // 딥링크 책을 여는 중에도 이 함수가 카테고리를 불러오려고 호출된다. 그때 주소를 바꾸면 딥링크가 사라진다.
+        if (!deepLinkPendingRef.current) syncDirectoryUrl(selectedEntryId);
 
         // booksLoaded 플래그로 중복 로딩 방지
         if (!selectedFolderData.booksLoaded) {
@@ -179,8 +239,37 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
         }
       }
     },
-    [folderData, apiPrefix, basePath, loadCategoryPage],
+    [
+      folderData,
+      apiPrefix,
+      basePath,
+      loadCategoryPage,
+      clearBookSelection,
+      syncDirectoryUrl,
+    ],
   );
+
+  const showCoverList = useCallback(() => {
+    setDismissedRouteBookId(routeBookId || "");
+    clearBookSelection();
+    setIsFolderOpen(true);
+    syncDirectoryUrl(browseCategory);
+  }, [routeBookId, clearBookSelection, syncDirectoryUrl, browseCategory]);
+
+  // viewer에게 비노출인 디렉토리가 기본값이면 목록을 못 열므로 루트로 대체한다.
+  useEffect(() => {
+    if (!browseCategory || role !== "viewer") return;
+    const isHidden = Array.from(hiddenCategories).some(
+      (hidden) =>
+        browseCategory === hidden || browseCategory.startsWith(hidden + "/"),
+    );
+    if (isHidden) setBrowseCategory("");
+  }, [browseCategory, role, hiddenCategories]);
+
+  const clearBrowseCategory = useCallback(() => {
+    setBrowseCategory("");
+    syncDirectoryUrl("");
+  }, [syncDirectoryUrl]);
 
   // 폴더 트리와 무관하게 책 한 권을 직접 열어 화면에 반영한다.
   // (트리 목록은 상한에 걸려 잘릴 수 있으므로 목록에 의존하지 않는다.)
@@ -223,6 +312,7 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
 
   // if route specifies a category/bookId, auto-select after folderData loads
   useEffect(() => {
+    if (routeBookId && routeBookId === dismissedRouteBookId) return;
     if (routeCategory && routeBookId && folderData.length > 0) {
       // _root 카테고리는 folderData에서 /{bookId} 형식으로 저장됨
       if (routeCategory === "_root") {
@@ -273,6 +363,57 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
     /* v8 ignore stop */
   }, [prevEntryId, entryClicked]);
 
+  // 딥링크로 책이 열리는 중이면 첫 화면에서 쓰지 않을 커버 목록을 요청하지 않는다.
+  const deepLinkPending =
+    Boolean(routeBookId) &&
+    routeBookId !== dismissedRouteBookId &&
+    !bookInfo["book_id"] &&
+    !bookLoadError;
+  const showCoverGrid =
+    !hasSearched && !bookInfo["book_id"] && !deepLinkPending;
+  bookIdRef.current = bookInfo["book_id"] || "";
+  deepLinkPendingRef.current = deepLinkPending;
+
+  useEffect(() => {
+    if (showCoverGrid) setCoverGridMounted(true);
+  }, [showCoverGrid]);
+
+  // 오른쪽 컬럼이 따로 스크롤된다. 좁은 화면에서 컬럼이 위아래로 쌓이면 문서 전체가 스크롤된다.
+  const getScroller = useCallback(() => {
+    const pane = rightContentRef.current?.closest(".split-layout-right");
+    const layout = pane?.closest(".split-layout");
+    return pane && layout && !layout.classList.contains("is-stacked")
+      ? pane
+      : null;
+  }, []);
+
+  // 책을 보는 동안 커버 목록은 숨기기만 하고 유지한다. 같은 스크롤 영역을 책 보기와 나눠 쓰므로,
+  // 목록이 보이는 동안의 위치를 기억했다가 다시 보일 때 되돌린다. 구독 해제가 화면 갱신보다
+  // 먼저 일어나야 밀린 위치가 기억을 덮어쓰지 않으므로 layout effect를 쓴다.
+  useLayoutEffect(() => {
+    if (!showCoverGrid) return undefined;
+    const scroller = getScroller();
+    if (coverScrollRef.current) {
+      if (scroller) scroller.scrollTop = coverScrollRef.current;
+      else window.scrollTo(0, coverScrollRef.current);
+    }
+    const target = scroller || window;
+    const remember = () => {
+      coverScrollRef.current = scroller ? scroller.scrollTop : window.scrollY;
+    };
+    target.addEventListener("scroll", remember, { passive: true });
+    return () => target.removeEventListener("scroll", remember);
+  }, [showCoverGrid, getScroller]);
+
+  // 책을 열면 위에서부터 보여 준다.
+  const openedBookId = bookInfo["book_id"];
+  useLayoutEffect(() => {
+    if (!openedBookId) return;
+    const scroller = getScroller();
+    if (scroller) scroller.scrollTop = 0;
+    else window.scrollTo(0, 0);
+  }, [openedBookId, getScroller]);
+
   // editUrl 계산: basePath의 -view를 -edit로 변환
   const editBasePath = basePath.replace("-view", "-edit");
   const editUrl = bookInfo["book_id"]
@@ -283,27 +424,32 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
       ? `${editBasePath}?directory=${encodeURIComponent(bookInfo["category"])}`
       : "";
 
+  const folderPanel = (isOpen) => (
+    <Suspense fallback={<div className="loading">로딩 중...</div>}>
+      <Folder
+        folderData={folderData}
+        expandedItems={expandedItems}
+        onExpandedItemsChange={setExpandedItems}
+        isOpen={isOpen}
+        onToggle={setIsFolderOpen}
+        onClickHandler={entryClicked}
+      />
+    </Suspense>
+  );
+
+  // 디렉토리가 있는 화면은 모두 왼쪽(디렉토리)과 오른쪽(내용) 컬럼이 따로 스크롤되고 폭을 조절할 수 있다.
+  // 디렉토리를 접으면 왼쪽 컬럼을 없애고 접힌 디렉토리를 오른쪽 컬럼 위에 둔다(편집 화면과 같다).
   return (
     <Container id="view">
-      <SplitLayout
-        storageKey="split:view"
-        scroll={false}
-        className="view-tools-row"
-      >
-        <SplitLayout.Left className="view-directory-panel">
-          <Suspense fallback={<div className="loading">로딩 중...</div>}>
-            <Folder
-              folderData={folderData}
-              expandedItems={expandedItems}
-              onExpandedItemsChange={setExpandedItems}
-              isOpen={isFolderOpen}
-              onToggle={setIsFolderOpen}
-              onClickHandler={entryClicked}
-            />
-          </Suspense>
-        </SplitLayout.Left>
-        {(hasSearched || bookInfo["book_id"]) && (
-          <SplitLayout.Right className="view-similar-books-panel">
+      <SplitLayout storageKey="split:view">
+        {isFolderOpen && (
+          <SplitLayout.Left className="view-directory-panel">
+            {folderPanel(true)}
+          </SplitLayout.Left>
+        )}
+        <SplitLayout.Right className="view-main-panel">
+          <div ref={rightContentRef}>
+            {!isFolderOpen && folderPanel(false)}
             {hasSearched && (
               <SearchResult
                 results={searchResults}
@@ -318,73 +464,78 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
                 categoryLoading={searchInProgress}
               />
             )}
-            {bookInfo["book_id"] && (
-              <SimilarBooks
-                bookId={bookInfo["book_id"]}
-                onSelect={entryClicked}
+            {!hasSearched && !bookInfo["book_id"] && bookLoadError && (
+              <BookLoadError
+                bookId={routeBookId}
+                category={routeCategory}
+                error={bookLoadError}
+                role={role}
                 apiPrefix={apiPrefix}
-                basePath={basePath.replace("-view", "-edit")}
-                autoOpenHighScore={false}
-                canEdit={role === "admin"}
               />
             )}
-          </SplitLayout.Right>
-        )}
+            {bookInfo["book_id"] && (
+              <>
+                <div>
+                  <Button
+                    variant="outline-secondary"
+                    size="sm"
+                    onClick={showCoverList}
+                  >
+                    ← 커버 목록
+                  </Button>
+                </div>
+                <BookInfoView
+                  bookInfo={bookInfo}
+                  isEditEnabled={false}
+                  showDetails={false}
+                />
+                {errorMessage && (
+                  <Alert variant="danger" className="mb-0">
+                    {errorMessage}
+                  </Alert>
+                )}
+                <SimilarBooks
+                  bookId={bookInfo["book_id"]}
+                  onSelect={entryClicked}
+                  apiPrefix={apiPrefix}
+                  basePath={basePath.replace("-view", "-edit")}
+                  autoOpenHighScore={false}
+                  canEdit={role === "admin"}
+                />
+                <ViewSingle
+                  key={bookInfo["book_id"]}
+                  bookId={bookInfo["book_id"]}
+                  filePath={bookInfo["file_path"]}
+                  fileType={bookInfo["file_type"]}
+                  viewUrl={viewUrl}
+                  downloadUrl={downloadUrl}
+                  lineCount={100}
+                  pageCount={10}
+                  apiPrefix={apiPrefix}
+                  editUrl={editUrl}
+                  directoryEditUrl={directoryEditUrl}
+                  onNextBook={toNextEntryButtonClicked}
+                  hasNextBook={!!nextEntryId}
+                  onPrevBook={toPrevEntryButtonClicked}
+                  hasPrevBook={!!prevEntryId}
+                  role={role}
+                />
+              </>
+            )}
+            {(showCoverGrid || coverGridMounted) && (
+              <div hidden={!showCoverGrid}>
+                <CoverBrowser
+                  apiPrefix={apiPrefix}
+                  basePath={basePath}
+                  role={role}
+                  category={browseCategory}
+                  onClearCategory={clearBrowseCategory}
+                />
+              </div>
+            )}
+          </div>
+        </SplitLayout.Right>
       </SplitLayout>
-      {!hasSearched && !bookInfo["book_id"] && bookLoadError && (
-        <Row id="top_panel">
-          <Col lg="12" className="ps-0 pe-0 me-0 ">
-            <BookLoadError
-              bookId={routeBookId}
-              category={routeCategory}
-              error={bookLoadError}
-              role={role}
-              apiPrefix={apiPrefix}
-            />
-          </Col>
-        </Row>
-      )}
-      {bookInfo["book_id"] && (
-        <>
-          <Row id="top_panel">
-            <Col lg="12" className="ps-0 pe-0 me-0 ">
-              <BookInfoView
-                bookInfo={bookInfo}
-                isEditEnabled={false}
-                showDetails={false}
-              />
-              {errorMessage && (
-                <Alert variant="danger" className="mb-0">
-                  {errorMessage}
-                </Alert>
-              )}
-            </Col>
-          </Row>
-
-          <Row id="bottom_panel">
-            <Col id="right_panel" className="ps-0 pe-0">
-              <ViewSingle
-                key={bookInfo["book_id"]}
-                bookId={bookInfo["book_id"]}
-                filePath={bookInfo["file_path"]}
-                fileType={bookInfo["file_type"]}
-                viewUrl={viewUrl}
-                downloadUrl={downloadUrl}
-                lineCount={100}
-                pageCount={10}
-                apiPrefix={apiPrefix}
-                editUrl={editUrl}
-                directoryEditUrl={directoryEditUrl}
-                onNextBook={toNextEntryButtonClicked}
-                hasNextBook={!!nextEntryId}
-                onPrevBook={toPrevEntryButtonClicked}
-                hasPrevBook={!!prevEntryId}
-                role={role}
-              />
-            </Col>
-          </Row>
-        </>
-      )}
     </Container>
   );
 }
@@ -392,4 +543,5 @@ export default function View({ basePath = "/book-view", apiPrefix = "" }) {
 View.propTypes = {
   basePath: PropTypes.string,
   apiPrefix: PropTypes.string,
+  defaultDirectory: PropTypes.string,
 };

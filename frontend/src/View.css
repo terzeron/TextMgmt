@@ -24,9 +24,9 @@
     line-height: 1;
 }
 
-.view-tools-row {
+/* 오른쪽 컬럼 안의 카드·정보·뷰어를 위아래로 쌓을 때의 간격 */
+.view-main-panel > div > * {
     margin-bottom: 8px;
-    align-items: start;
 }
 
 /* 좌우 간격은 SplitLayout 핸들(16px)이 대신하므로 pane에는 padding을 두지 않는다. */

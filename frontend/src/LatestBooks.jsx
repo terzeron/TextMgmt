@@ -3,25 +3,22 @@ import { useOutletContext } from "react-router-dom";
 import PropTypes from "prop-types";
 
 import "bootstrap/dist/css/bootstrap.min.css";
-import {
-  Alert,
-  Container,
-  ToggleButton,
-  ToggleButtonGroup,
-} from "react-bootstrap";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faList, faTableCellsLarge } from "@fortawesome/free-solid-svg-icons";
+import { Alert, Container } from "react-bootstrap";
 
 import { rawJsonGetReq } from "./Common.js";
 import SearchResult from "./SearchResult";
+import CoverViewToggle from "./CoverViewToggle";
+import { useCoverViewMode } from "./useCoverViewMode";
 
 const LATEST_ITEM_LIMIT = 2000;
-const VIEW_MODE_STORAGE_KEY_PREFIX = "tm_latest_view_mode_";
 const COMIC_TOP_LEVEL_DIRECTORY_PATTERN = /^\d+_[^/]+$/;
 const FIRST_INSTALLMENT_PATTERN = /(?:^|[^\d])0*1\s*(?:권|화)(?=$|[^\d])/;
 
 function isFirstInstallment(book) {
-  const fileName = String(book?.file_path || "").split("/").pop() || "";
+  const fileName =
+    String(book?.file_path || "")
+      .split("/")
+      .pop() || "";
   return FIRST_INSTALLMENT_PATTERN.test(`${book?.title || ""} ${fileName}`);
 }
 
@@ -59,10 +56,7 @@ function groupLatestComicsByBookDirectory(results) {
     const existingIndex = directoryIndexes.get(directoryPath);
     if (existingIndex !== undefined) {
       if (
-        shouldReplaceComicRepresentative(
-          groupedResults[existingIndex],
-          book,
-        )
+        shouldReplaceComicRepresentative(groupedResults[existingIndex], book)
       ) {
         groupedResults[existingIndex] = {
           ...book,
@@ -76,26 +70,6 @@ function groupLatestComicsByBookDirectory(results) {
     groupedResults.push({ ...book, display_title: bookDirectory });
     return groupedResults;
   }, []);
-}
-
-// 뷰 모드는 탭별 편의 설정이다. 저장소를 쓸 수 없으면 커버 뷰를 사용한다.
-function readViewMode(contentType) {
-  try {
-    return localStorage.getItem(VIEW_MODE_STORAGE_KEY_PREFIX + contentType) ===
-      "list"
-      ? "list"
-      : "cover";
-  } catch {
-    return "cover";
-  }
-}
-
-function writeViewMode(contentType, viewMode) {
-  try {
-    localStorage.setItem(VIEW_MODE_STORAGE_KEY_PREFIX + contentType, viewMode);
-  } catch {
-    // 저장하지 못해도 현재 화면의 전환은 그대로 유지한다.
-  }
 }
 
 const LATEST_CONFIG = {
@@ -134,17 +108,7 @@ export default function LatestBooks({ contentType = "book" }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
-  const [viewMode, setViewMode] = useState(() => readViewMode(contentType));
-
-  // 책↔만화 탭 이동 때 같은 컴포넌트 인스턴스가 재사용될 수 있으므로 탭별 값을 다시 읽는다.
-  useEffect(() => {
-    setViewMode(readViewMode(contentType));
-  }, [contentType]);
-
-  const handleViewModeChange = (nextViewMode) => {
-    setViewMode(nextViewMode);
-    writeViewMode(contentType, nextViewMode);
-  };
+  const [viewMode, handleViewModeChange] = useCoverViewMode(contentType);
 
   useEffect(() => {
     setLoading(true);
@@ -203,32 +167,11 @@ export default function LatestBooks({ contentType = "book" }) {
         emptyMessage={loading ? "로딩 중..." : config.emptyMessage}
         viewMode={viewMode}
         headerActions={
-          <ToggleButtonGroup
-            type="radio"
-            name={`${config.containerId}-view-mode`}
-            size="sm"
-            value={viewMode}
+          <CoverViewToggle
+            id={config.containerId}
+            viewMode={viewMode}
             onChange={handleViewModeChange}
-          >
-            <ToggleButton
-              id={`${config.containerId}-view-list`}
-              value="list"
-              variant="outline-secondary"
-              title="목록 보기"
-            >
-              <FontAwesomeIcon icon={faList} />
-              <span className="visually-hidden">목록 보기</span>
-            </ToggleButton>
-            <ToggleButton
-              id={`${config.containerId}-view-cover`}
-              value="cover"
-              variant="outline-secondary"
-              title="커버 보기"
-            >
-              <FontAwesomeIcon icon={faTableCellsLarge} />
-              <span className="visually-hidden">커버 보기</span>
-            </ToggleButton>
-          </ToggleButtonGroup>
+          />
         }
       />
     </Container>

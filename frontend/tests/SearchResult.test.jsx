@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  render,
+  screen,
+  cleanup,
+  fireEvent,
+  act,
+} from "@testing-library/react";
 
 afterEach(cleanup);
 
@@ -585,4 +591,125 @@ describe("SearchResult 커버 뷰", () => {
       container.querySelector('a[href="/book-view/1?category=%EC%86%8C%EC%84%A4"]'),
     ).toBeTruthy();
   });
+
+  describe("서버 페이지를 이어받는 커버 뷰", () => {
+    let observers = [];
+
+    class MockIntersectionObserver {
+      constructor(callback) {
+        this.callback = callback;
+        observers.push(this);
+      }
+      observe() {}
+      disconnect() {}
+      fire(isIntersecting) {
+        act(() => this.callback([{ isIntersecting }]));
+      }
+    }
+
+    const makeBooks = (count) =>
+      Array.from({ length: count }, (_, i) => ({
+        book_id: i + 1,
+        category: "소설",
+        file_path: `소설/book${i + 1}.txt`,
+        file_type: "txt",
+      }));
+
+    beforeEach(() => {
+      observers = [];
+      globalThis.IntersectionObserver = MockIntersectionObserver;
+    });
+    afterEach(() => {
+      delete globalThis.IntersectionObserver;
+    });
+
+    it("커버 뷰는 '더 보기' 버튼 대신 스크롤 끝에서 다음 페이지를 이어받는다", () => {
+      const onLoadMore = vi.fn();
+      render(
+        <SearchResult
+          results={makeBooks(20)}
+          viewMode="cover"
+          basePath="/book-view"
+          hasMore
+          onLoadMore={onLoadMore}
+        />,
+      );
+
+      expect(screen.queryByText("더 보기")).toBeNull();
+      observers.at(-1).fire(true);
+      expect(onLoadMore).toHaveBeenCalledTimes(1);
+    });
+
+    it("받는 중에는 다음 페이지를 중복해서 요청하지 않는다", () => {
+      const onLoadMore = vi.fn();
+      render(
+        <SearchResult
+          results={makeBooks(20)}
+          viewMode="cover"
+          basePath="/book-view"
+          hasMore
+          loading
+          onLoadMore={onLoadMore}
+        />,
+      );
+
+      observers.at(-1).fire(true);
+
+      expect(onLoadMore).not.toHaveBeenCalled();
+    });
+
+    it("목록 뷰는 기존대로 '더 보기' 버튼으로 이어받는다", () => {
+      const onLoadMore = vi.fn();
+      render(
+        <SearchResult
+          results={makeBooks(3)}
+          viewMode="list"
+          basePath="/book-view"
+          hasMore
+          onLoadMore={onLoadMore}
+        />,
+      );
+
+      fireEvent.click(screen.getByText("더 보기"));
+
+      expect(onLoadMore).toHaveBeenCalledTimes(1);
+    });
+
+    it("coverResetKey가 같으면 결과가 이어붙어도 그린 개수를 되돌리지 않는다", () => {
+      const props = {
+        viewMode: "cover",
+        basePath: "/book-view",
+        hasMore: true,
+        onLoadMore: vi.fn(),
+        coverResetKey: "소설",
+      };
+      const { rerender } = render(
+        <SearchResult results={makeBooks(40)} {...props} />,
+      );
+      observers.at(-1).fire(true);
+      expect(screen.getAllByRole("link")).toHaveLength(40);
+
+      rerender(<SearchResult results={makeBooks(100)} {...props} />);
+
+      expect(screen.getAllByRole("link")).toHaveLength(40);
+    });
+
+    it("제목에 요소를 넘길 수 있다", () => {
+      render(
+        <SearchResult
+          results={sampleResults}
+          title={
+            <>
+              <span>전체 책</span>
+              <span>(최신순)</span>
+            </>
+          }
+        />,
+      );
+
+      expect(screen.getByText("전체 책")).toBeTruthy();
+      expect(screen.getByText("(최신순)")).toBeTruthy();
+    });
+  });
 });
+
