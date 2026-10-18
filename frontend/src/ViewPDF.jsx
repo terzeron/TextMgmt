@@ -15,6 +15,7 @@ import VerticalSplitOutlinedIcon from "@mui/icons-material/VerticalSplitOutlined
 import AddPhotoAlternateIcon from "@mui/icons-material/AddPhotoAlternate";
 import PdfInsertImageModal from "./PdfInsertImageModal";
 import { describeHttpError } from "./httpError";
+import { blobToBase64, requestInsertPreview } from "./insertPreview";
 import "./viewerEditActions.css";
 import PdfCropBox from "./PdfCropBox";
 import { DEFAULT_CROP_RECT, DEFAULT_SPLIT_RECTS } from "./cropRect";
@@ -156,31 +157,20 @@ export default function ViewPDF({
     }
     setInsertions(new Map());
   };
-  // 서버가 URL 의 이미지를 내려받아 정규화한 미리보기를 받아 온다. 저장할 때 삽입되는 것과 같은 이미지다.
+  // 서버가 이미지(URL 이면 내려받고, 이 기기의 파일이면 받아서)를 정규화한 미리보기를 받아 온다. 저장할 때 삽입되는 것과 같은 이미지다.
   // 실패 사유(문자열)를 돌려주고, 성공하면 삽입을 표시한 뒤 null 을 돌려준다.
-  const previewInsertion = async (pageNum, url) => {
+  const previewInsertion = async (pageNum, source) => {
     try {
-      const response = await fetch(
-        getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}/insert-preview`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url }),
-        },
-      );
-      if (!response.ok) {
-        // 400 은 서버가 사람이 읽을 사유를 본문에 담아 보낸 것이다.
-        if (response.status === 400) {
-          const reason = (await response.text()).trim();
-          if (reason) return reason;
-        }
-        return await describeHttpError(response);
-      }
-      const blob = await response.blob();
+      const blob = await requestInsertPreview(apiPrefix, bookId, source);
       /* v8 ignore next -- the viewer unmounts only while this request is in flight. */
       if (cancelledRef.current) return null;
-      setInsertion(pageNum, { url, previewSrc: URL.createObjectURL(blob) });
+      setInsertion(pageNum, {
+        ...(typeof source === "string"
+          ? { url: source }
+          : { label: source.name }),
+        blob,
+        previewSrc: URL.createObjectURL(blob),
+      });
       return null;
     } catch (err) {
       return err?.message || "이미지를 가져오지 못했습니다";
@@ -200,7 +190,7 @@ export default function ViewPDF({
       .map(([pageNum, mark]) => ({ page: pageNum, ...mark.rects }));
     const inserts = [...insertions]
       .sort(([a], [b]) => a - b)
-      .map(([pageNum, entry]) => ({ page: pageNum, url: entry.url }));
+      .map(([pageNum, entry]) => ({ page: pageNum, entry }));
     const summary = [
       inserts.length > 0 &&
         `${inserts.map((i) => i.page).join(", ")}쪽 앞에 이미지 삽입`,
@@ -220,13 +210,26 @@ export default function ViewPDF({
     setSaving(true);
     setSaveError(null);
     try {
+      // URL 로 고른 이미지는 서버가 다시 내려받고, 이 기기에서 고른 이미지는 미리 본 JPEG 를 그대로 보낸다.
+      const insertBodies = await Promise.all(
+        inserts.map(async ({ page, entry }) =>
+          entry.url
+            ? { page, url: entry.url }
+            : { page, image_data: await blobToBase64(entry.blob) },
+        ),
+      );
       const response = await fetch(
         getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}/delete`,
         {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pages, crops, splits, inserts }),
+          body: JSON.stringify({
+            pages,
+            crops,
+            splits,
+            inserts: insertBodies,
+          }),
         },
       );
       if (!response.ok) throw new Error(await describeHttpError(response));
@@ -840,7 +843,7 @@ export default function ViewPDF({
                     src={insertion.previewSrc}
                     alt={`${pageNum}쪽 앞에 삽입될 이미지`}
                   />
-                  <div className="viewer-edit-tag" title={insertion.url}>
+                  <div className="viewer-edit-tag" title={insertion.url ?? insertion.label}>
                     새 쪽 · 저장 전 ({pageNum}쪽 앞에 삽입)
                   </div>
                   <div className="viewer-edit-actions">

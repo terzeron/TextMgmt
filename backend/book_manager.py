@@ -3002,15 +3002,50 @@ class BookManager:
             return jpeg, image.width, image.height
 
     @staticmethod
-    def _prepare_insert_images(urls: dict[int, str]) -> dict[int, tuple[bytes, int, int]]:
-        """쪽 번호별 이미지 URL을 내려받아 JPEG 로 정규화한다: {쪽: (JPEG 바이트, 너비, 높이)}.
+    def _normalize_uploaded_image(data: bytes) -> tuple[bytes, int, int]:
+        """사용자가 올린 이미지를 URL 이미지와 같은 규칙으로 JPEG 에 정규화한다: (JPEG 바이트, 너비, 높이).
+
+        실패하면 사용자에게 보여 줄 한국어 메시지의 ValueError 를 던진다.
+        """
+        from PIL import Image, ImageOps
+
+        from backend.epub_cover import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, CoverError, normalize_image
+
+        if not data or len(data) > MAX_IMAGE_BYTES:
+            raise CoverError("이미지가 비어 있거나 너무 큽니다")
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                if image.width * image.height > MAX_IMAGE_PIXELS:
+                    raise CoverError("이미지 해상도가 너무 큽니다")
+                orientation = image.getexif().get(0x0112, 1)
+                # 이미 정규화된 JPEG 는 그대로 쓴다. 미리보기로 받은 이미지를 저장할 때 다시 인코딩하면 화면에서 본 것과 달라진다.
+                if image.format == "JPEG" and image.mode == "RGB" and orientation == 1 and image.width <= 2000 and image.height <= 3000:
+                    image.load()
+                    return data, image.width, image.height
+                # 폰 카메라는 회전을 픽셀이 아닌 EXIF 로 기록한다. 정규화가 EXIF 를 버리기 전에 반영하지 않으면 세로 사진이 눕는다.
+                if orientation != 1:
+                    buffer = io.BytesIO()
+                    ImageOps.exif_transpose(image).convert("RGB").save(buffer, "JPEG", quality=95)
+                    data = buffer.getvalue()
+        except CoverError:
+            raise
+        except Exception as exc:
+            raise CoverError("이미지 형식을 읽을 수 없습니다") from exc
+        jpeg = normalize_image(data)
+        with Image.open(io.BytesIO(jpeg)) as image:
+            return jpeg, image.width, image.height
+
+    @staticmethod
+    def _prepare_insert_images(sources: dict[int, str | bytes]) -> dict[int, tuple[bytes, int, int]]:
+        """쪽 번호별 이미지(URL 이면 내려받고, 바이트면 올린 파일)를 JPEG 로 정규화한다: {쪽: (JPEG 바이트, 너비, 높이)}.
 
         하나라도 실패하면 ValueError 를 던지고, 호출자는 이 단계가 끝나기 전에는 파일을 건드리지 않는다.
         """
         prepared: dict[int, tuple[bytes, int, int]] = {}
-        for page_no in sorted(urls):
+        for page_no in sorted(sources):
+            source = sources[page_no]
             try:
-                prepared[page_no] = BookManager._download_image_as_jpeg(urls[page_no])
+                prepared[page_no] = BookManager._normalize_uploaded_image(source) if isinstance(source, bytes) else BookManager._download_image_as_jpeg(source)
             except ValueError as exc:
                 raise ValueError(f"{page_no}쪽 앞에 넣을 이미지를 가져올 수 없습니다: {exc}") from exc
         return prepared
@@ -3032,12 +3067,28 @@ class BookManager:
             return None, "이미지를 가져오지 못했습니다"
         return jpeg, None
 
-    async def set_epub_cover(self, book_id: int, url: str) -> tuple[dict[str, Any] | None, str | None]:
-        """EPUB 의 표지를 URL 의 이미지로 넣거나 바꾼다: (결과, 오류 메시지).
+    async def preview_insert_upload(self, data: bytes) -> tuple[bytes | None, str | None]:
+        """올린 이미지를 저장 전에 미리 보여 주기 위해 (JPEG 바이트, 오류 메시지)를 돌려준다.
 
-        표지 관리와 같은 경로(CoverManagement.apply_url)를 쓰므로 URL 검증과 썸네일·preview 캐시 무효화가 같다.
+        저장할 때 서버가 다시 정규화하는 것과 같은 경로이므로, 화면에 보이는 이미지가 실제로 삽입될 이미지다.
         """
-        url = url.strip()
+        try:
+            jpeg, _, _ = await asyncio.to_thread(BookManager._normalize_uploaded_image, data)
+        except ValueError as e:
+            return None, str(e)
+        except Exception as e:
+            LOGGER.error("preview_insert_upload failed (%s): %s", type(e).__name__, e)
+            return None, "이미지를 읽지 못했습니다"
+        return jpeg, None
+
+    async def set_epub_cover(self, book_id: int, url: str | None = None, image_data: str | None = None) -> tuple[dict[str, Any] | None, str | None]:
+        """EPUB 의 표지를 URL 의 이미지(url) 또는 올린 이미지(image_data, base64)로 넣거나 바꾼다: (결과, 오류 메시지).
+
+        표지 관리와 같은 경로(CoverManagement.apply_url / apply_image)를 쓰므로 검증과 썸네일·preview 캐시 무효화가 같다.
+        """
+        if image_data:
+            return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.apply_image(relative, image_data, revision, **backup))
+        url = (url or "").strip()
         if not url:
             return None, "이미지 URL이 비어 있습니다"
         return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.apply_url(relative, url, revision, replace_existing=True, **backup))
@@ -3146,10 +3197,10 @@ class BookManager:
             pdf.save(dst)
 
     @staticmethod
-    def _remove_pdf_pages_with_backup(file_path: Path, trash_dir: Path, pages: list[int], crops: dict[int, Rect] | None = None, splits: dict[int, tuple[Rect, Rect]] | None = None, insert_urls: dict[int, str] | None = None) -> tuple[int, Path, bool]:
+    def _remove_pdf_pages_with_backup(file_path: Path, trash_dir: Path, pages: list[int], crops: dict[int, Rect] | None = None, splits: dict[int, tuple[Rect, Rect]] | None = None, insert_sources: dict[int, str | bytes] | None = None) -> tuple[int, Path, bool]:
         """원본을 trash_dir 에 같은 이름으로 보존한 뒤 편집한 PDF로 교체한다.
 
-        pages(1-based)는 쪽 전체를 삭제하고, crops 는 쪽별로 지정한 영역만 남기고, splits 는 한 쪽을 (앞, 뒤) 두 쪽으로 나누고, insert_urls 는 그 쪽 앞에 URL 의 이미지를 한 쪽으로 끼운다(쪽 번호는 모두 원본 기준).
+        pages(1-based)는 쪽 전체를 삭제하고, crops 는 쪽별로 지정한 영역만 남기고, splits 는 한 쪽을 (앞, 뒤) 두 쪽으로 나누고, insert_sources 는 그 쪽 앞에 이미지(URL 또는 올린 파일의 바이트)를 한 쪽으로 끼운다(쪽 번호는 모두 원본 기준).
         반환: (남은 페이지 수, 백업 경로, 백업을 새로 만들었는지).
         이미 같은 이름의 백업이 있으면 덮어쓰지 않는다. 그 파일이 편집 전 원본이다.
         모든 검증과 편집본 생성이 끝난 뒤에야 백업·교체를 하므로, 실패하면 원본과 trash 는 그대로다.
@@ -3160,7 +3211,7 @@ class BookManager:
         remove = set(pages)
         left = set(crops or {})
         divided = set(splits or {})
-        inserted = set(insert_urls or {})
+        inserted = set(insert_sources or {})
         if not remove and not left and not divided and not inserted:
             raise ValueError("변경할 쪽을 선택하세요")
         if (remove & left) or (remove & divided) or (left & divided):
@@ -3178,7 +3229,7 @@ class BookManager:
         try:
             source = file_path
             # 네트워크가 필요한 단계는 파일을 건드리기 전에 끝낸다. 실패하면 원본과 trash 는 그대로다.
-            images = BookManager._prepare_insert_images(dict(insert_urls or {})) if inserted else {}
+            images = BookManager._prepare_insert_images(dict(insert_sources or {})) if inserted else {}
             if left or divided or inserted:
                 BookManager._crop_pages(file_path, tmp_crop, dict(crops or {}), dict(splits or {}), images)
                 source = tmp_crop
@@ -3222,16 +3273,24 @@ class BookManager:
         return remaining, backup_path, backup_created
 
     async def delete_pdf_pages(self, book_id: int, pages: list[int], crops: list[dict[str, float]] | None = None, splits: list[dict[str, Any]] | None = None, inserts: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any] | None, str | None]:
-        """PDF 에서 pages(1-based)를 삭제하고 crops([{page, x0, y0, x1, y1}])는 지정 영역만 남기고, splits([{page, first, second}])는 한 쪽을 앞·뒤 두 쪽으로 나누고, inserts([{page, url}])는 그 쪽 앞에 URL 의 이미지를 한 쪽으로 끼운다. 원본은 path_prefix/0_trash 에 보존한다."""
-        LOGGER.debug("# delete_pdf_pages(book_id=%d, pages=%r, crops=%r, splits=%r, inserts=%r)", book_id, pages, crops, splits, inserts)
-        insert_urls: dict[int, str] = {}
+        """PDF 에서 pages(1-based)를 삭제하고 crops([{page, x0, y0, x1, y1}])는 지정 영역만 남기고, splits([{page, first, second}])는 한 쪽을 앞·뒤 두 쪽으로 나누고, inserts([{page, url} 또는 {page, image_data(base64)}])는 그 쪽 앞에 이미지를 한 쪽으로 끼운다. 원본은 path_prefix/0_trash 에 보존한다."""
+        # 올린 이미지(image_data)는 수 MB 의 base64 이므로 로그에는 쪽 번호와 URL 만 남긴다.
+        LOGGER.debug("# delete_pdf_pages(book_id=%d, pages=%r, crops=%r, splits=%r, inserts=%r)", book_id, pages, crops, splits, [(i["page"], i.get("url") or "<upload>") for i in inserts or []])
+        insert_sources: dict[int, str | bytes] = {}
         for insert in inserts or []:
-            page_no, url = int(insert["page"]), str(insert["url"]).strip()
-            if page_no in insert_urls:
+            page_no = int(insert["page"])
+            if page_no in insert_sources:
                 return None, f"{page_no}쪽 앞에 이미지가 둘 이상 지정되었습니다"
+            if insert.get("image_data"):
+                try:
+                    insert_sources[page_no] = base64.b64decode(insert["image_data"], validate=True)
+                except ValueError:  # binascii.Error 는 ValueError 의 하위 클래스다
+                    return None, f"{page_no}쪽 앞에 넣을 이미지 데이터를 읽을 수 없습니다"
+                continue
+            url = str(insert.get("url") or "").strip()
             if not url:
                 return None, f"{page_no}쪽 앞에 넣을 이미지 URL이 비어 있습니다"
-            insert_urls[page_no] = url
+            insert_sources[page_no] = url
 
         def to_rect(box: dict[str, float]) -> Rect:
             return (float(box["x0"]), float(box["y0"]), float(box["x1"]), float(box["y1"]), float(box.get("angle", 0.0)))
@@ -3256,7 +3315,7 @@ class BookManager:
         try:
             if not file_path.is_file():
                 return None, f"File not found: {file_path.name}"
-            remaining, backup_path, backup_created = await asyncio.to_thread(BookManager._remove_pdf_pages_with_backup, file_path, self.path_prefix / self.TRASH_DIRNAME, pages, crop_rects, split_rects, insert_urls)
+            remaining, backup_path, backup_created = await asyncio.to_thread(BookManager._remove_pdf_pages_with_backup, file_path, self.path_prefix / self.TRASH_DIRNAME, pages, crop_rects, split_rects, insert_sources)
         except ValueError as e:
             return None, str(e)
         except OSError as e:
@@ -3288,7 +3347,7 @@ class BookManager:
             LOGGER.error("delete_pdf_pages: reindex failed for book_id=%d: %s", book_id, e)
             return None, f"페이지는 삭제되었으나 색인 갱신에 실패했습니다. 원본은 {self.TRASH_DIRNAME}/{backup_path.name} 에 있습니다: {e}"
         self._clear_mismatch_cache()
-        return {"remaining_pages": remaining, "cropped_pages": len(crop_rects), "split_pages": len(split_rects), "inserted_pages": len(insert_urls), "backup": f"{self.TRASH_DIRNAME}/{backup_path.name}", "backup_created": backup_created}, None
+        return {"remaining_pages": remaining, "cropped_pages": len(crop_rects), "split_pages": len(split_rects), "inserted_pages": len(insert_sources), "backup": f"{self.TRASH_DIRNAME}/{backup_path.name}", "backup_created": backup_created}, None
 
     @staticmethod
     def _find_epub_cover_member(zin) -> str | None:

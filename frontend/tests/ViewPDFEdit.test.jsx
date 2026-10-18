@@ -701,6 +701,113 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
       await waitFor(() => expect(screen.queryByTestId("pdf-insert-preview-2")).toBeNull());
     });
 
+    describe("이 기기의 이미지", () => {
+      const photo = () => new File(["x"], "photo.jpg", { type: "image/jpeg" });
+      const pickFile = (file) =>
+        fireEvent.change(screen.getByLabelText("이 기기에서 이미지 선택"), {
+          target: { files: [file] },
+        });
+      const stageFile = async (pageNum, file) => {
+        openDialog(pageNum);
+        pickFile(file);
+        await waitFor(() =>
+          expect(screen.getByTestId(`pdf-insert-preview-${pageNum}`)).toBeTruthy(),
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      };
+
+      it("파일을 고르면 insert-preview-upload 로 올려 미리보기를 보여 준다", async () => {
+        const fetchMock = createFetch(okResponse);
+        globalThis.fetch = fetchMock;
+        await renderEditable();
+        const file = photo();
+
+        await stageFile(2, file);
+
+        const [url, init] = fetchMock.mock.calls.find(([u]) =>
+          String(u).includes("/insert-preview-upload"),
+        );
+        expect(url).toBe("http://localhost:8000/pdf-pages/1/insert-preview-upload");
+        expect(init.body.get("file")).toBe(file);
+        const preview = screen.getByTestId("pdf-insert-preview-2");
+        expect(preview.querySelector("img").getAttribute("src")).toBe("blob:preview-1");
+        // URL 이 없으므로 툴팁에는 파일 이름을 쓴다.
+        expect(preview.querySelector(".viewer-edit-tag").title).toBe("photo.jpg");
+      });
+
+      it("저장하면 미리 본 JPEG 를 image_data(base64)로 보내고 url 은 보내지 않는다", async () => {
+        const fetchMock = createFetch(okResponse);
+        globalThis.fetch = fetchMock;
+        await renderEditable();
+        await stageFile(2, photo());
+
+        fireEvent.click(within(screen.getByTestId("pdf-insert-preview-2")).getByLabelText("저장"));
+
+        await waitFor(() => {
+          const post = fetchMock.mock.calls.find(
+            ([u, init]) => init?.method === "POST" && String(u).endsWith("/delete"),
+          );
+          // 미리보기 응답의 Blob 내용은 "jpeg" 다.
+          expect(JSON.parse(post[1].body).inserts).toEqual([
+            { page: 2, image_data: "anBlZw==" },
+          ]);
+        });
+      });
+
+      it("URL 삽입과 파일 삽입을 한 번에 저장한다", async () => {
+        const fetchMock = createFetch(okResponse);
+        globalThis.fetch = fetchMock;
+        await renderEditable();
+        await stage(1, "https://img.example.com/a.png");
+        await stageFile(3, photo());
+
+        fireEvent.click(within(screen.getByTestId("pdf-insert-preview-1")).getByLabelText("저장"));
+
+        await waitFor(() => {
+          const post = fetchMock.mock.calls.find(
+            ([u, init]) => init?.method === "POST" && String(u).endsWith("/delete"),
+          );
+          expect(JSON.parse(post[1].body).inserts).toEqual([
+            { page: 1, url: "https://img.example.com/a.png" },
+            { page: 3, image_data: "anBlZw==" },
+          ]);
+        });
+      });
+
+      it("서버가 거절하면 사유를 모달에 보이고 삽입을 표시하지 않는다", async () => {
+        globalThis.fetch = createFetch(okResponse);
+        previewResponse = {
+          ok: false,
+          status: 400,
+          text: () => Promise.resolve("이미지 형식을 읽을 수 없습니다"),
+        };
+        await renderEditable();
+
+        openDialog(2);
+        pickFile(photo());
+
+        expect(await screen.findByText("이미지 형식을 읽을 수 없습니다")).toBeTruthy();
+        expect(screen.queryByTestId("pdf-insert-preview-2")).toBeNull();
+        expect(screen.getByRole("dialog")).toBeTruthy();
+      });
+
+      it("15MB 를 넘는 파일은 서버에 올리지 않고 거절한다", async () => {
+        const fetchMock = createFetch(okResponse);
+        globalThis.fetch = fetchMock;
+        await renderEditable();
+        const big = photo();
+        Object.defineProperty(big, "size", { value: 15 * 1024 * 1024 + 1 });
+
+        openDialog(2);
+        pickFile(big);
+
+        expect(await screen.findByText("이미지는 15MB 이하여야 합니다")).toBeTruthy();
+        expect(
+          fetchMock.mock.calls.some(([u]) => String(u).includes("/insert-preview")),
+        ).toBe(false);
+      });
+    });
+
     it("저장 중에는 삽입 미리보기의 저장·취소 버튼이 비활성화된다", async () => {
       let release;
       const base = createFetch(okResponse);

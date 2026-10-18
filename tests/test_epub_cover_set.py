@@ -361,7 +361,7 @@ class TestEpubCoverEndpoint:
         response = http.post("/epub-cover/1", json={"url": URL})
         assert response.status_code == 200
         assert response.json() == {"status": "success", "result": {"file_size": 10}}
-        fake.set_epub_cover.assert_awaited_once_with(1, URL)
+        fake.set_epub_cover.assert_awaited_once_with(1, URL, None)
 
     def test_failure_is_reported_in_the_body(self, client):
         http, fake = client
@@ -411,3 +411,101 @@ class TestEpubCoverEndpoint:
         http = TestClient(main.app)
         assert http.delete("/epub-cover/1").status_code in (401, 403)
         assert http.delete("/comics/epub-cover/1").status_code in (401, 403)
+
+
+# ── 올린 이미지(image_data)로 표지 넣기 ──
+
+
+def b64_of(color="red"):
+    import base64
+
+    return base64.b64encode(image_bytes_of(color)).decode()
+
+
+@pytest.mark.asyncio
+async def test_adds_a_cover_from_an_uploaded_image_without_fetching(env, monkeypatch):
+    manager, path, _ = env
+
+    def fail(url):
+        raise AssertionError("올린 이미지는 URL 을 내려받지 않는다")
+
+    monkeypatch.setattr("backend.cover_management.fetch_url_image", fail)
+
+    result, error = await BookManager.set_epub_cover(manager, 1, image_data=b64_of())
+
+    assert error is None
+    assert inspect_epub(path)["has_cover"]
+    assert result["file_size"] == path.stat().st_size
+    manager.es_manager.update.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_uploaded_cover_replaces_an_existing_one_and_keeps_the_original_in_0_trash(env, tmp_path):
+    manager, path, _ = env
+    make_epub(path, cover=True)
+    original = path.read_bytes()
+
+    _, error = await BookManager.set_epub_cover(manager, 1, image_data=b64_of("blue"))
+
+    assert error is None
+    assert path.read_bytes() != original
+    assert (tmp_path / "0_trash" / "book.epub").read_bytes() == original
+    assert not (tmp_path / ".cover_backups").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", ["***not-base64***", "bm90IGFuIGltYWdl"])  # 두 번째는 base64 이지만 이미지가 아니다
+async def test_unreadable_uploaded_cover_is_rejected_without_touching_the_epub(env, tmp_path, data):
+    manager, path, _ = env
+    original = path.read_bytes()
+
+    result, error = await BookManager.set_epub_cover(manager, 1, image_data=data)
+
+    assert result is None and error
+    assert path.read_bytes() == original
+    assert not (tmp_path / "0_trash").exists()
+    manager.es_manager.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_without_url_or_image_data_nothing_is_changed(env):
+    manager, path, _ = env
+    original = path.read_bytes()
+
+    result, error = await BookManager.set_epub_cover(manager, 1)
+
+    assert result is None and "비어" in error
+    assert path.read_bytes() == original
+
+
+class TestEpubCoverUploadEndpoint:
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+
+        import backend.main as main
+
+        fake = MagicMock()
+        fake.set_epub_cover = AsyncMock(return_value=({"file_size": 10}, None))
+        proxy = main.book_manager
+        previous = proxy._instance
+        proxy._instance = fake
+        main.app.dependency_overrides[main.require_admin] = lambda: {"role": "admin"}
+        try:
+            yield TestClient(main.app), fake
+        finally:
+            main.app.dependency_overrides.pop(main.require_admin, None)
+            proxy._instance = previous
+
+    def test_image_data_is_passed_to_the_manager(self, client):
+        http, fake = client
+        response = http.post("/epub-cover/1", json={"image_data": "QUJD"})
+        assert response.status_code == 200
+        assert response.json() == {"status": "success", "result": {"file_size": 10}}
+        fake.set_epub_cover.assert_awaited_once_with(1, None, "QUJD")
+
+    @pytest.mark.parametrize("body", [{}, {"url": URL, "image_data": "QUJD"}, {"image_data": ""}])
+    def test_requires_exactly_one_source(self, client, body):
+        http, fake = client
+        assert http.post("/epub-cover/1", json=body).status_code == 422
+        fake.set_epub_cover.assert_not_awaited()

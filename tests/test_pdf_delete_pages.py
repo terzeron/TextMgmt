@@ -1056,3 +1056,222 @@ async def test_save_clears_cover_cache(image_env, loader):
     assert error is None
     assert not (cache / "1.v4.jpg").exists()
     assert (cache / "2.v4.jpg").exists()
+
+
+# ── 올린 이미지(image_data)로 쪽 끼워넣기 ──
+
+
+def _b64(data):
+    import base64
+
+    return base64.b64encode(data).decode()
+
+
+def _upload(page, data=None):
+    return {"page": page, "image_data": _b64(data if data is not None else _png())}
+
+
+def _jpeg_with_orientation(orientation, width=200, height=100):
+    import io
+
+    from PIL import Image
+
+    exif = Image.Exif()
+    exif[0x0112] = orientation
+    out = io.BytesIO()
+    Image.new("RGB", (width, height), (10, 120, 200)).save(out, "JPEG", exif=exif)
+    return out.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_insert_uploaded_image_adds_a_page_without_fetching(image_env, loader, fetch):
+    bm, es, pdf, root = image_env
+    original = pdf.read_bytes()
+
+    result, error = await bm.delete_pdf_pages(1, [], None, None, [_upload(2)])
+
+    assert error is None
+    assert result["inserted_pages"] == 1
+    fetch.assert_not_called()
+    assert (root / "0_trash" / "book.pdf").read_bytes() == original
+    assert _page_count(pdf) == 5
+    width, height = _mediabox_size(pdf, 2)
+    assert width == pytest.approx(100.0) and height == pytest.approx(150.0)
+
+
+@pytest.mark.asyncio
+async def test_uploaded_and_url_inserts_can_be_mixed(image_env, loader, fetch):
+    bm, _, pdf, _ = image_env
+
+    result, error = await bm.delete_pdf_pages(1, [], None, None, [_insert(1), _upload(3)])
+
+    assert error is None and result["inserted_pages"] == 2
+    assert _page_count(pdf) == 6
+
+
+@pytest.mark.asyncio
+async def test_saved_upload_is_the_exact_preview_image(image_env, loader):
+    """미리보기로 받은 JPEG 를 그대로 보내 저장하면 다시 인코딩하지 않아 화면에서 본 이미지가 삽입된다."""
+    bm, _, pdf, _ = image_env
+
+    preview, error = await bm.preview_insert_upload(_png())
+    assert error is None
+    _, error = await bm.delete_pdf_pages(1, [], None, None, [_upload(1, preview)])
+
+    import pikepdf
+
+    assert error is None
+    with pikepdf.open(pdf) as doc:
+        saved = next(iter(doc.pages[0].Resources.XObject.values())).read_raw_bytes()
+    assert saved == preview
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("orientation, expected", [(1, (200, 100)), (6, (100, 200)), (8, (100, 200)), (3, (200, 100))])
+async def test_upload_preview_applies_exif_orientation(image_env, orientation, expected):
+    """폰 카메라 사진은 회전을 EXIF 로 기록한다. 반영하지 않으면 세로 사진이 옆으로 눕는다."""
+    bm, *_ = image_env
+
+    jpeg, error = await bm.preview_insert_upload(_jpeg_with_orientation(orientation))
+
+    import io
+
+    from PIL import Image
+
+    assert error is None
+    assert Image.open(io.BytesIO(jpeg)).size == expected
+
+
+@pytest.mark.asyncio
+async def test_upload_preview_shrinks_a_large_image(image_env):
+    bm, *_ = image_env
+
+    jpeg, error = await bm.preview_insert_upload(_png(3000, 1500))
+
+    import io
+
+    from PIL import Image
+
+    assert error is None
+    assert Image.open(io.BytesIO(jpeg)).size == (2000, 1000)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [b"", b"not an image", b"\xff\xd8\xff garbage"])
+async def test_upload_preview_rejects_empty_and_unreadable_data(image_env, data):
+    bm, *_ = image_env
+
+    jpeg, error = await bm.preview_insert_upload(data)
+
+    assert jpeg is None and error
+
+
+@pytest.mark.asyncio
+async def test_upload_preview_rejects_oversized_data(image_env):
+    from backend.epub_cover import MAX_IMAGE_BYTES
+
+    bm, *_ = image_env
+
+    jpeg, error = await bm.preview_insert_upload(b"\x00" * (MAX_IMAGE_BYTES + 1))
+
+    assert jpeg is None and "큽니다" in error
+
+
+@pytest.mark.asyncio
+async def test_unreadable_upload_fails_without_touching_the_files(image_env, loader):
+    bm, es, pdf, root = image_env
+    original = pdf.read_bytes()
+
+    result, error = await bm.delete_pdf_pages(1, [], None, None, [_upload(2, b"not an image")])
+
+    assert result is None and "2쪽 앞에 넣을 이미지를 가져올 수 없습니다" in error
+    assert pdf.read_bytes() == original
+    assert not (root / "0_trash").exists()
+    es.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_invalid_base64_is_rejected(image_env, loader):
+    bm, es, pdf, root = image_env
+    original = pdf.read_bytes()
+
+    result, error = await bm.delete_pdf_pages(1, [], None, None, [{"page": 2, "image_data": "***not-base64***"}])
+
+    assert result is None and "2쪽 앞에 넣을 이미지 데이터를 읽을 수 없습니다" in error
+    assert pdf.read_bytes() == original
+    assert not (root / "0_trash").exists()
+
+
+@pytest.mark.asyncio
+async def test_two_sources_for_the_same_page_are_rejected(image_env, loader, fetch):
+    bm, *_ = image_env
+
+    result, error = await bm.delete_pdf_pages(1, [], None, None, [_insert(2), _upload(2)])
+
+    assert result is None and "둘 이상" in error
+
+
+class TestInsertUploadEndpoint:
+    """POST /pdf-pages/{id}/insert-preview-upload 와 image_data 를 받는 저장 엔드포인트."""
+
+    @pytest.fixture
+    def client(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from fastapi.testclient import TestClient
+
+        import backend.main as main
+
+        fake = MagicMock()
+        fake.preview_insert_upload = AsyncMock(return_value=(b"\xff\xd8\xffJPEG", None))
+        fake.delete_pdf_pages = AsyncMock(return_value=({"remaining_pages": 5}, None))
+        proxy = main.book_manager
+        previous = proxy._instance
+        proxy._instance = fake
+        main.app.dependency_overrides[main.require_admin] = lambda: {"role": "admin"}
+        try:
+            yield TestClient(main.app), fake
+        finally:
+            main.app.dependency_overrides.pop(main.require_admin, None)
+            proxy._instance = previous
+
+    def test_upload_returns_jpeg_without_caching(self, client):
+        http, fake = client
+        response = http.post("/pdf-pages/1/insert-preview-upload", files={"file": ("a.png", b"PNGDATA", "image/png")})
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/jpeg"
+        assert response.headers["cache-control"] == "private, no-store"
+        assert response.content == b"\xff\xd8\xffJPEG"
+        fake.preview_insert_upload.assert_awaited_once_with(b"PNGDATA")
+
+    def test_upload_failure_returns_400_with_the_reason(self, client):
+        http, fake = client
+        fake.preview_insert_upload.return_value = (None, "이미지 형식을 읽을 수 없습니다")
+        response = http.post("/pdf-pages/1/insert-preview-upload", files={"file": ("a.txt", b"x", "text/plain")})
+        assert response.status_code == 400
+        assert "형식" in response.text
+
+    def test_upload_without_a_file_is_a_validation_error(self, client):
+        http, _ = client
+        assert http.post("/pdf-pages/1/insert-preview-upload").status_code == 422
+
+    def test_upload_requires_admin(self):
+        from fastapi.testclient import TestClient
+
+        import backend.main as main
+
+        response = TestClient(main.app).post("/pdf-pages/1/insert-preview-upload", files={"file": ("a.png", b"x", "image/png")})
+        assert response.status_code in (401, 403)
+
+    def test_delete_accepts_image_data(self, client):
+        http, fake = client
+        response = http.post("/pdf-pages/1/delete", json={"inserts": [{"page": 2, "image_data": "QUJD"}]})
+        assert response.status_code == 200 and response.json()["status"] == "success"
+        inserts = fake.delete_pdf_pages.await_args.args[4]
+        assert inserts == [{"page": 2, "url": None, "image_data": "QUJD"}]
+
+    @pytest.mark.parametrize("insert", [{"page": 2}, {"page": 2, "url": "https://a.example/a.png", "image_data": "QUJD"}, {"page": 2, "image_data": ""}])
+    def test_delete_requires_exactly_one_source(self, client, insert):
+        http, fake = client
+        assert http.post("/pdf-pages/1/delete", json={"inserts": [insert]}).status_code == 422
+        fake.delete_pdf_pages.assert_not_awaited()
