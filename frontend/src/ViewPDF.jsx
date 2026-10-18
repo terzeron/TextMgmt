@@ -91,6 +91,9 @@ export default function ViewPDF({
   );
   // 이미지 URL 입력 모달이 열려 있는 쪽 번호(없으면 null)
   const [insertDialog, setInsertDialog] = useState(null);
+  // 쪽 순서 바꾸기: 화면에 보이는 순서대로 원본 쪽 번호를 나열한 배열(null 이면 순서를 바꾸지 않았다).
+  // 표시와 삽입이 원본 쪽 번호를 키로 쓰므로 번호는 그대로 두고 보이는 순서만 바꾸며, 저장할 때 order 로 보낸다.
+  const [pageOrder, setPageOrder] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   // 저장 뒤 같은 bookId로 PDF를 다시 불러오기 위한 카운터
@@ -128,6 +131,18 @@ export default function ViewPDF({
         });
       else next.set(pageNum, { kind });
       return next;
+    });
+  };
+  // pageNum 쪽을 화면에서 delta(-1: 위, +1: 아래)칸 옮겨 이웃한 쪽과 맞바꾼다. 원래 순서로 돌아오면 변경 표시를 지운다.
+  const movePage = (pageNum, delta) => {
+    setSaveError(null);
+    setPageOrder((prev) => {
+      const order = prev ? [...prev] : Array.from({ length: totalPages }, (_, i) => i + 1);
+      const from = order.indexOf(pageNum);
+      const to = from + delta;
+      if (from < 0 || to < 0 || to >= order.length) return prev;
+      [order[from], order[to]] = [order[to], order[from]];
+      return order.every((n, i) => n === i + 1) ? null : order;
     });
   };
   const changeBox = (pageNum, id, rect) =>
@@ -179,7 +194,11 @@ export default function ViewPDF({
     }
   };
   const saveMarkedPages = async () => {
-    if (saving || (markedPages.size === 0 && insertions.size === 0)) return;
+    if (
+      saving ||
+      (markedPages.size === 0 && insertions.size === 0 && pageOrder === null)
+    )
+      return;
     const entries = [...markedPages].sort(([a], [b]) => a - b);
     const pages = entries
       .filter(([, mark]) => mark.kind === "page")
@@ -193,12 +212,16 @@ export default function ViewPDF({
     const inserts = [...insertions]
       .sort(([a], [b]) => a - b)
       .map(([pageNum, entry]) => ({ page: pageNum, entry }));
+    const reordered = pageOrder
+      ? pageOrder.filter((n, i) => n !== i + 1).sort((a, b) => a - b)
+      : [];
     const summary = [
       inserts.length > 0 &&
         `${inserts.map((i) => i.page).join(", ")}쪽 앞에 이미지 삽입`,
       pages.length > 0 && `${pages.join(", ")}쪽 삭제`,
       crops.length > 0 && `${crops.map((c) => c.page).join(", ")}쪽 크롭`,
       splits.length > 0 && `${splits.map((c) => c.page).join(", ")}쪽 분할`,
+      reordered.length > 0 && `${reordered.join(", ")}쪽 순서 변경`,
     ]
       .filter(Boolean)
       .join(", ");
@@ -231,6 +254,7 @@ export default function ViewPDF({
             crops,
             splits,
             inserts: insertBodies,
+            ...(pageOrder && { order: pageOrder }),
           }),
         },
       );
@@ -240,6 +264,7 @@ export default function ViewPDF({
         throw new Error(body.error || "저장에 실패했습니다.");
       }
       setMarkedPages(new Map());
+      setPageOrder(null);
       clearInsertions();
       setReloadToken((prev) => prev + 1);
     } catch (err) {
@@ -248,35 +273,6 @@ export default function ViewPDF({
       setSaving(false);
     }
   };
-  // 쪽(1-based)을 이웃한 쪽과 맞바꾼다. 다른 표시와 달리 바로 서버에 저장하고 PDF를 다시 불러온다.
-  // 저장하지 않은 표시는 쪽 번호가 어긋나므로, 표시가 남아 있는 동안에는 막는다.
-  const swapPages = async (pageNum, otherNum) => {
-    if (saving) return;
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const response = await fetch(
-        getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}/swap`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ page: pageNum, other: otherNum }),
-        },
-      );
-      if (!response.ok) throw new Error(await describeHttpError(response));
-      const body = await response.json();
-      if (body.status !== "success") {
-        throw new Error(body.error || "순서 변경에 실패했습니다.");
-      }
-      setReloadToken((prev) => prev + 1);
-    } catch (err) {
-      setSaveError(err?.message || "순서 변경에 실패했습니다.");
-    } finally {
-      setSaving(false);
-    }
-  };
-  const hasPendingEdits = markedPages.size > 0 || insertions.size > 0;
   const zoomDown = () => setZoomIndex((prev) => Math.max(0, prev - 1));
   const zoomUp = () =>
     setZoomIndex((prev) => Math.min(ZOOM_STEPS.length - 1, prev + 1));
@@ -775,6 +771,7 @@ export default function ViewPDF({
 
   // 페이지 번호 배열 생성
   const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1);
+  const displayOrder = pageOrder ?? pageNumbers;
 
   return (
     <div
@@ -840,7 +837,7 @@ export default function ViewPDF({
         </div>
       </div>
       <div className="pdf-content">
-        {pageNumbers.map((pageNum) => {
+        {displayOrder.map((pageNum, position) => {
           const canvasStyle = fitMode
             ? { width: "100%", height: "auto" }
             : {
@@ -859,8 +856,11 @@ export default function ViewPDF({
           }
           const mark = markedPages.get(pageNum);
           const insertion = insertions.get(pageNum);
+          // 순서를 바꾼 쪽은 원래 자리(pageNum)와 현재 자리(position + 1)가 다르다.
+          const moved = position + 1 !== pageNum;
           // 저장 버튼은 이 쪽에 무엇이든 변경 표시가 있을 때 나온다.
-          const marked = mark !== undefined || insertion !== undefined;
+          const marked =
+            mark !== undefined || insertion !== undefined || moved;
           return (
             <Fragment key={pageNum}>
               {insertion && (
@@ -907,6 +907,11 @@ export default function ViewPDF({
               data-marked={marked ? "true" : "false"}
             >
               <canvas ref={setCanvasRef(pageNum)} className="pdf-page-canvas" />
+              {moved && (
+                <div className="viewer-edit-tag">
+                  순서 변경 · 저장 전 ({pageNum}쪽 → {position + 1}번째)
+                </div>
+              )}
               {mark?.kind === "page" && (
                 <div
                   className="viewer-edit-delete-overlay"
@@ -955,28 +960,20 @@ export default function ViewPDF({
                 <button
                   type="button"
                   className="viewer-edit-btn"
-                  aria-label={`${pageNum}쪽을 이전 쪽과 순서 바꾸기`}
-                  title={
-                    hasPendingEdits
-                      ? "저장하지 않은 변경이 있으면 순서를 바꿀 수 없습니다"
-                      : "이전 쪽과 순서 바꾸기"
-                  }
-                  disabled={saving || hasPendingEdits || pageNum <= 1}
-                  onClick={() => swapPages(pageNum, pageNum - 1)}
+                  aria-label={`${pageNum}쪽을 위로 옮기기`}
+                  title="이전 쪽과 순서 바꾸기"
+                  disabled={saving || position === 0}
+                  onClick={() => movePage(pageNum, -1)}
                 >
                   <ArrowDropUpIcon fontSize="small" />
                 </button>
                 <button
                   type="button"
                   className="viewer-edit-btn"
-                  aria-label={`${pageNum}쪽을 다음 쪽과 순서 바꾸기`}
-                  title={
-                    hasPendingEdits
-                      ? "저장하지 않은 변경이 있으면 순서를 바꿀 수 없습니다"
-                      : "다음 쪽과 순서 바꾸기"
-                  }
-                  disabled={saving || hasPendingEdits || pageNum >= totalPages}
-                  onClick={() => swapPages(pageNum, pageNum + 1)}
+                  aria-label={`${pageNum}쪽을 아래로 옮기기`}
+                  title="다음 쪽과 순서 바꾸기"
+                  disabled={saving || position === displayOrder.length - 1}
+                  onClick={() => movePage(pageNum, 1)}
                 >
                   <ArrowDropDownIcon fontSize="small" />
                 </button>

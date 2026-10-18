@@ -3243,10 +3243,11 @@ class BookManager:
             pdf.save(dst)
 
     @staticmethod
-    def _remove_pdf_pages_with_backup(file_path: Path, trash_dir: Path, pages: list[int], crops: dict[int, Rect] | None = None, splits: dict[int, tuple[Rect, Rect]] | None = None, insert_sources: dict[int, str | bytes] | None = None) -> tuple[int, Path, bool]:
+    def _remove_pdf_pages_with_backup(file_path: Path, trash_dir: Path, pages: list[int], crops: dict[int, Rect] | None = None, splits: dict[int, tuple[Rect, Rect]] | None = None, insert_sources: dict[int, str | bytes] | None = None, order: list[int] | None = None) -> tuple[int, Path, bool]:
         """원본을 trash_dir 에 같은 이름으로 보존한 뒤 편집한 PDF로 교체한다.
 
         pages(1-based)는 쪽 전체를 삭제하고, crops 는 쪽별로 지정한 영역만 남기고, splits 는 한 쪽을 (앞, 뒤) 두 쪽으로 나누고, insert_sources 는 그 쪽 앞에 이미지(URL 또는 올린 파일의 바이트)를 한 쪽으로 끼운다(쪽 번호는 모두 원본 기준).
+        order 는 원본 쪽 번호를 새 순서대로 나열한 것으로, 앞쪽 len(order)쪽만 그 순서로 바꾼다. 삽입한 쪽과 분할한 두 쪽은 기준 쪽과 함께 움직인다.
         반환: (남은 페이지 수, 백업 경로, 백업을 새로 만들었는지).
         이미 같은 이름의 백업이 있으면 덮어쓰지 않는다. 그 파일이 편집 전 원본이다.
         모든 검증과 편집본 생성이 끝난 뒤에야 백업·교체를 하므로, 실패하면 원본과 trash 는 그대로다.
@@ -3258,16 +3259,20 @@ class BookManager:
         left = set(crops or {})
         divided = set(splits or {})
         inserted = set(insert_sources or {})
-        if not remove and not left and not divided and not inserted:
+        new_order = list(order or [])
+        if not remove and not left and not divided and not inserted and not new_order:
             raise ValueError("변경할 쪽을 선택하세요")
         if (remove & left) or (remove & divided) or (left & divided):
             raise ValueError("같은 쪽에 삭제, 크롭, 분할을 함께 지정할 수 없습니다")
         reader = PdfReader(str(file_path))
         total = len(reader.pages)
-        if min(remove | left | divided | inserted) < 1 or max(remove | left | divided | inserted) > total:
+        touched = remove | left | divided | inserted
+        if touched and (min(touched) < 1 or max(touched) > total):
             raise ValueError(f"페이지 범위가 잘못되었습니다 (1~{total})")
         if len(remove) >= total:
             raise ValueError("모든 페이지를 삭제할 수 없습니다")
+        if new_order and (len(new_order) > total or sorted(new_order) != list(range(1, len(new_order) + 1))):
+            raise ValueError("쪽 순서가 잘못되었습니다")
 
         tmp_crop = file_path.with_name(f".{file_path.name}.crop.part")
         tmp_new = file_path.with_name(f".{file_path.name}.edit.part")
@@ -3288,19 +3293,22 @@ class BookManager:
                 os.replace(tmp_backup, backup_path)
                 backup_created = True
 
-            if remove:
+            if remove or new_order:
                 # 분할·삽입으로 쪽이 늘어났으므로 원본 번호를 편집본 번호로 옮긴다.
-                # 삽입한 쪽은 항상 남기고, 분할한 쪽은 두 쪽을 차지한다.
-                keep = []
+                # 삽입한 쪽은 항상 남기고, 분할한 쪽은 두 쪽을 차지한다. 쪽마다 (삽입, 본문) 묶음을 만들어 순서대로 이어 붙인다.
+                groups: dict[int, list[int]] = {}
                 position = 0
                 for index in range(total):
+                    group = []
                     if (index + 1) in inserted:
-                        keep.append(position)
+                        group.append(position)
                         position += 1
                     width = 2 if (index + 1) in divided else 1
                     if (index + 1) not in remove:
-                        keep.extend(range(position, position + width))
+                        group.extend(range(position, position + width))
                     position += width
+                    groups[index + 1] = group
+                keep = [p for page_no in new_order + list(range(len(new_order) + 1, total + 1)) for p in groups[page_no]]
                 edited_reader = reader if source == file_path else PdfReader(str(source))
                 writer = PdfWriter()
                 writer.append(edited_reader, pages=keep)
@@ -3318,8 +3326,8 @@ class BookManager:
                 leftover.unlink(missing_ok=True)
         return remaining, backup_path, backup_created
 
-    async def delete_pdf_pages(self, book_id: int, pages: list[int], crops: list[dict[str, float]] | None = None, splits: list[dict[str, Any]] | None = None, inserts: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any] | None, str | None]:
-        """PDF 에서 pages(1-based)를 삭제하고 crops([{page, x0, y0, x1, y1}])는 지정 영역만 남기고, splits([{page, first, second}])는 한 쪽을 앞·뒤 두 쪽으로 나누고, inserts([{page, url} 또는 {page, image_data(base64)}])는 그 쪽 앞에 이미지를 한 쪽으로 끼운다. 원본은 path_prefix/0_trash 에 보존한다."""
+    async def delete_pdf_pages(self, book_id: int, pages: list[int], crops: list[dict[str, float]] | None = None, splits: list[dict[str, Any]] | None = None, inserts: list[dict[str, Any]] | None = None, order: list[int] | None = None) -> tuple[dict[str, Any] | None, str | None]:
+        """PDF 에서 pages(1-based)를 삭제하고 crops([{page, x0, y0, x1, y1}])는 지정 영역만 남기고, splits([{page, first, second}])는 한 쪽을 앞·뒤 두 쪽으로 나누고, inserts([{page, url} 또는 {page, image_data(base64)}])는 그 쪽 앞에 이미지를 한 쪽으로 끼운다. order 는 원본 쪽 번호를 새 순서대로 나열해 앞쪽 쪽들의 순서를 바꾼다. 원본은 path_prefix/0_trash 에 보존한다."""
         # 올린 이미지(image_data)는 수 MB 의 base64 이므로 로그에는 쪽 번호와 URL 만 남긴다.
         LOGGER.debug("# delete_pdf_pages(book_id=%d, pages=%r, crops=%r, splits=%r, inserts=%r)", book_id, pages, crops, splits, [(i["page"], i.get("url") or "<upload>") for i in inserts or []])
         insert_sources: dict[int, str | bytes] = {}
@@ -3361,7 +3369,7 @@ class BookManager:
         try:
             if not file_path.is_file():
                 return None, f"File not found: {file_path.name}"
-            remaining, backup_path, backup_created = await asyncio.to_thread(BookManager._remove_pdf_pages_with_backup, file_path, self.path_prefix / self.TRASH_DIRNAME, pages, crop_rects, split_rects, insert_sources)
+            remaining, backup_path, backup_created = await asyncio.to_thread(BookManager._remove_pdf_pages_with_backup, file_path, self.path_prefix / self.TRASH_DIRNAME, pages, crop_rects, split_rects, insert_sources, order)
         except ValueError as e:
             return None, str(e)
         except OSError as e:
@@ -3371,13 +3379,6 @@ class BookManager:
             LOGGER.error("delete_pdf_pages failed for book_id=%d: %s", book_id, e)
             return None, f"PDF 페이지 삭제 실패 ({type(e).__name__})"
 
-        reindex_error = await self._refresh_after_pdf_edit(book_id, doc, file_path, backup_path)
-        if reindex_error:
-            return None, reindex_error
-        return {"remaining_pages": remaining, "cropped_pages": len(crop_rects), "split_pages": len(split_rects), "inserted_pages": len(insert_sources), "backup": f"{self.TRASH_DIRNAME}/{backup_path.name}", "backup_created": backup_created}, None
-
-    async def _refresh_after_pdf_edit(self, book_id: int, doc: dict[str, Any], file_path: Path, backup_path: Path) -> str | None:
-        """편집으로 바뀐 PDF 의 표지 캐시를 비우고 ES 문서를 다시 만든다. 실패하면 사유를, 성공하면 None 을 돌려준다."""
         # 파일이 바뀌었으니 표지 캐시를 비운다. 이후 단계가 실패해도 옛 표지가 남으면 안 되므로 먼저 지운다.
         for cached_cover in (self.path_prefix / ".cover_cache").glob(f"{book_id}.v*.jpg"):
             cached_cover.unlink(missing_ok=True)
@@ -3397,73 +3398,10 @@ class BookManager:
             if reindexed_id != book_id or reindex_error:
                 raise RuntimeError(reindex_error or "ES 재색인 실패")
         except Exception as e:
-            LOGGER.error("PDF 편집 후 재색인 실패 book_id=%d: %s", book_id, e)
-            return f"페이지는 편집되었으나 색인 갱신에 실패했습니다. 원본은 {self.TRASH_DIRNAME}/{backup_path.name} 에 있습니다: {e}"
+            LOGGER.error("delete_pdf_pages: reindex failed for book_id=%d: %s", book_id, e)
+            return None, f"페이지는 삭제되었으나 색인 갱신에 실패했습니다. 원본은 {self.TRASH_DIRNAME}/{backup_path.name} 에 있습니다: {e}"
         self._clear_mismatch_cache()
-        return None
-
-    @staticmethod
-    def _swap_pdf_pages_with_backup(file_path: Path, trash_dir: Path, page: int, other: int) -> tuple[Path, bool]:
-        """인접한 두 쪽(1-based)의 순서를 맞바꾼다. 원본 보존·교체 규칙은 _remove_pdf_pages_with_backup 과 같다.
-
-        반환: (백업 경로, 백업을 새로 만들었는지).
-        """
-        import pikepdf
-
-        if abs(page - other) != 1:
-            raise ValueError("바로 앞이나 뒤 쪽과만 순서를 바꿀 수 있습니다")
-        tmp_new = file_path.with_name(f".{file_path.name}.swap.part")
-        tmp_backup = trash_dir / f".{file_path.name}.part"
-        try:
-            with pikepdf.open(file_path) as pdf:
-                total = len(pdf.pages)
-                if min(page, other) < 1 or max(page, other) > total:
-                    raise ValueError(f"페이지 범위가 잘못되었습니다 (1~{total})")
-                low, high = min(page, other) - 1, max(page, other) - 1
-                moved = pdf.pages[high]
-                del pdf.pages[high]
-                pdf.pages.insert(low, moved)
-                pdf.save(tmp_new)
-
-            trash_dir.mkdir(parents=True, exist_ok=True)
-            backup_path = trash_dir / file_path.name
-            backup_created = False
-            if not backup_path.exists():
-                shutil.copy2(file_path, tmp_backup)
-                os.replace(tmp_backup, backup_path)
-                backup_created = True
-            os.replace(tmp_new, file_path)
-        finally:
-            for leftover in (tmp_new, tmp_backup):
-                leftover.unlink(missing_ok=True)
-        return backup_path, backup_created
-
-    async def swap_pdf_pages(self, book_id: int, page: int, other: int) -> tuple[dict[str, Any] | None, str | None]:
-        """PDF 의 page 쪽과 인접한 other 쪽(1-based)의 순서를 맞바꾼다. 원본은 path_prefix/0_trash 에 보존한다."""
-        LOGGER.debug("# swap_pdf_pages(book_id=%d, page=%d, other=%d)", book_id, page, other)
-        doc = self.es_manager.search_by_id(book_id)
-        if not doc:
-            return None, f"Book not found: {book_id}"
-        book = self.item_class(book_id=book_id, info=doc)
-        file_path = book.file_path
-        if file_path.suffix.lower() != ".pdf":
-            return None, f"Not a PDF file: {file_path.name}"
-        try:
-            if not file_path.is_file():
-                return None, f"File not found: {file_path.name}"
-            backup_path, backup_created = await asyncio.to_thread(BookManager._swap_pdf_pages_with_backup, file_path, self.path_prefix / self.TRASH_DIRNAME, page, other)
-        except ValueError as e:
-            return None, str(e)
-        except OSError as e:
-            LOGGER.error("swap_pdf_pages failed for book_id=%d: %s", book_id, e)
-            return None, f"파일 처리 실패: {e.strerror or e}"
-        except Exception as e:
-            LOGGER.error("swap_pdf_pages failed for book_id=%d: %s", book_id, e)
-            return None, f"PDF 페이지 순서 변경 실패 ({type(e).__name__})"
-        reindex_error = await self._refresh_after_pdf_edit(book_id, doc, file_path, backup_path)
-        if reindex_error:
-            return None, reindex_error
-        return {"swapped": [page, other], "backup": f"{self.TRASH_DIRNAME}/{backup_path.name}", "backup_created": backup_created}, None
+        return {"remaining_pages": remaining, "cropped_pages": len(crop_rects), "split_pages": len(split_rects), "inserted_pages": len(insert_sources), "backup": f"{self.TRASH_DIRNAME}/{backup_path.name}", "backup_created": backup_created}, None
 
     @staticmethod
     def _find_epub_cover_member(zin) -> str | None:

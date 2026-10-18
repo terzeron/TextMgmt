@@ -166,68 +166,42 @@ async def test_reindex_failure_reports_backup_location(env, loader):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("page,other,expected", [(2, 3, [100, 102, 101, 103, 104]), (3, 2, [100, 102, 101, 103, 104]), (1, 2, [101, 100, 102, 103, 104]), (4, 5, [100, 101, 102, 104, 103])])
-async def test_swap_exchanges_adjacent_pages_and_keeps_original_in_trash(env, loader, page, other, expected):
+@pytest.mark.parametrize("order,expected", [([2, 1], [101, 100, 102, 103, 104]), ([1, 3, 2], [100, 102, 101, 103, 104]), ([5, 4, 3, 2, 1], [104, 103, 102, 101, 100]), ([2, 3, 1], [101, 102, 100, 103, 104])])
+async def test_order_rearranges_pages_and_keeps_original_in_trash(env, loader, order, expected):
     bm, es, pdf, root = env
     original = pdf.read_bytes()
 
-    result, error = await bm.swap_pdf_pages(1, page, other)
+    result, error = await bm.delete_pdf_pages(1, [], order=order)
 
     assert error is None
-    assert result == {"swapped": [page, other], "backup": "0_trash/book.pdf", "backup_created": True}
+    assert result["remaining_pages"] == 5 and result["backup"] == "0_trash/book.pdf"
     assert _widths(pdf) == expected
     assert (root / "0_trash" / "book.pdf").read_bytes() == original
     es.delete.assert_called_once_with(1)
-    bm.add_book.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("page,other", [(1, 3), (2, 2), (0, 1), (5, 6), (-1, 0)])
-async def test_swap_rejects_non_adjacent_or_out_of_range_pages(env, loader, page, other):
+async def test_order_and_delete_use_original_page_numbers(env, loader):
+    bm, _, pdf, _ = env
+
+    result, error = await bm.delete_pdf_pages(1, [1], order=[2, 1, 3])
+
+    assert error is None and result["remaining_pages"] == 4
+    assert _widths(pdf) == [101, 102, 103, 104]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("order", [[1, 1], [2, 3], [0, 1], [1, 2, 3, 4, 5, 6], [1, 3]])
+async def test_invalid_order_changes_nothing(env, loader, order):
     bm, es, pdf, root = env
     original = pdf.read_bytes()
 
-    result, error = await bm.swap_pdf_pages(1, page, other)
+    result, error = await bm.delete_pdf_pages(1, [], order=order)
 
-    assert result is None and error
+    assert result is None and "순서" in error
     assert pdf.read_bytes() == original
     assert not (root / "0_trash").exists()
     es.delete.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_swap_does_not_overwrite_existing_backup(env, loader):
-    bm, _, pdf, root = env
-    original = pdf.read_bytes()
-
-    await bm.swap_pdf_pages(1, 1, 2)
-    result, error = await bm.swap_pdf_pages(1, 1, 2)
-
-    assert error is None and result["backup_created"] is False
-    assert _widths(pdf) == [100, 101, 102, 103, 104]
-    assert (root / "0_trash" / "book.pdf").read_bytes() == original
-
-
-@pytest.mark.asyncio
-async def test_swap_reindex_failure_reports_backup_location(env, loader):
-    bm, _, pdf, root = env
-    bm.add_book = AsyncMock(return_value=(None, "boom"))
-
-    result, error = await bm.swap_pdf_pages(1, 2, 3)
-
-    assert result is None and "0_trash/book.pdf" in error
-    assert _widths(pdf) == [100, 102, 101, 103, 104]
-
-
-@pytest.mark.asyncio
-async def test_swap_rejects_non_pdf_and_unknown_book(env, loader):
-    bm, es, pdf, _ = env
-    es.search_by_id.return_value = {**es.search_by_id.return_value, "file_path": "cat/book.epub", "file_type": "epub"}
-    _, error = await bm.swap_pdf_pages(1, 1, 2)
-    assert "Not a PDF" in error
-    es.search_by_id.return_value = None
-    _, error = await bm.swap_pdf_pages(1, 1, 2)
-    assert "Book not found" in error
 
 
 # ── 이미지 크롭 ──
@@ -483,6 +457,16 @@ async def test_split_replaces_the_page_with_first_then_second(image_env, loader)
 
 
 @pytest.mark.asyncio
+async def test_split_pages_move_together_with_their_page_when_reordered(image_env, loader):
+    bm, _, pdf, _ = image_env
+
+    result, error = await bm.delete_pdf_pages(1, [], None, [_split(2, LEFT, RIGHT)], None, [2, 1])
+
+    assert error is None and result["remaining_pages"] == 5
+    assert [_first_image(pdf, n)[:2] for n in (1, 2, 3)] == [(50, 60), (50, 60), (100, 60)]
+
+
+@pytest.mark.asyncio
 async def test_split_boxes_may_overlap(image_env, loader):
     bm, _, pdf, _ = image_env
 
@@ -603,6 +587,18 @@ async def test_insert_adds_an_image_page_before_the_given_page(image_env, loader
     assert _first_image(pdf, 3)[:2] == (100, 60)  # 원본 2쪽은 한 칸 밀렸다
     assert _first_image(pdf, 1)[:2] == (100, 60)
     es.delete.assert_called_once_with(1)
+
+
+@pytest.mark.asyncio
+async def test_inserted_page_moves_together_with_its_reference_page_when_reordered(image_env, loader, fetch):
+    bm, _, pdf, _ = image_env
+
+    result, error = await bm.delete_pdf_pages(1, [], None, None, [_insert(2)], [2, 1])
+
+    assert error is None and result["remaining_pages"] == 5
+    assert _mediabox_size(pdf, 1)[1] == pytest.approx(150.0)  # 삽입한 쪽이 기준 쪽(원본 2쪽)과 함께 맨 앞으로 갔다
+    assert _mediabox_size(pdf, 2)[1] == pytest.approx(60.0)
+    assert _mediabox_size(pdf, 3)[1] == pytest.approx(60.0)
 
 
 @pytest.mark.asyncio
@@ -1293,7 +1289,6 @@ class TestInsertUploadEndpoint:
         fake = MagicMock()
         fake.preview_insert_upload = AsyncMock(return_value=(b"\xff\xd8\xffJPEG", None))
         fake.delete_pdf_pages = AsyncMock(return_value=({"remaining_pages": 5}, None))
-        fake.swap_pdf_pages = AsyncMock(return_value=({"swapped": [2, 3]}, None))
         proxy = main.book_manager
         previous = proxy._instance
         proxy._instance = fake
@@ -1320,21 +1315,10 @@ class TestInsertUploadEndpoint:
         assert response.status_code == 400
         assert "형식" in response.text
 
-    def test_swap_passes_both_pages_to_the_manager(self, client):
+    def test_delete_passes_the_new_page_order(self, client):
         http, fake = client
-        response = http.post("/pdf-pages/1/swap", json={"page": 3, "other": 2})
-        assert response.json() == {"status": "success", "result": {"swapped": [2, 3]}}
-        fake.swap_pdf_pages.assert_awaited_once_with(1, 3, 2)
-
-    def test_swap_failure_is_reported_in_the_body(self, client):
-        http, fake = client
-        fake.swap_pdf_pages.return_value = (None, "바로 앞이나 뒤 쪽과만 순서를 바꿀 수 있습니다")
-        assert http.post("/pdf-pages/1/swap", json={"page": 1, "other": 3}).json()["status"] == "failure"
-
-    def test_swap_requires_both_pages(self, client):
-        http, fake = client
-        assert http.post("/pdf-pages/1/swap", json={"page": 1}).status_code == 422
-        fake.swap_pdf_pages.assert_not_awaited()
+        assert http.post("/pdf-pages/1/delete", json={"order": [2, 1]}).json()["status"] == "success"
+        assert fake.delete_pdf_pages.await_args.args[5] == [2, 1]
 
     def test_upload_without_a_file_is_a_validation_error(self, client):
         http, _ = client

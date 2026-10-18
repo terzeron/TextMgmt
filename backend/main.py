@@ -473,13 +473,7 @@ class PdfDeletePagesModel(BaseModel):
     crops: list[PdfCropModel] = []
     splits: list[PdfSplitModel] = []
     inserts: list[PdfInsertModel] = []
-
-
-class PdfSwapPagesModel(BaseModel):
-    """page 쪽과 바로 이웃한 other 쪽의 순서를 맞바꾼다."""
-
-    page: int
-    other: int
+    order: list[int] = []  # 편집 전 쪽 번호를 새 순서대로 나열한다(앞쪽 len(order)쪽만 대상). 비어 있으면 순서를 바꾸지 않는다.
 
 
 class CategoryRenameModel(BaseModel):
@@ -741,16 +735,8 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
 
     @router.post("/pdf-pages/{book_id}/delete", dependencies=admin_dep)
     async def delete_pdf_pages(book_id: int, body: PdfDeletePagesModel) -> dict[str, Any]:
-        LOGGER.debug("# delete_pdf_pages(book_id=%d, pages=%r, crops=%r, splits=%r, inserts=%r)", book_id, body.pages, body.crops, body.splits, [(i.page, i.url or "<upload>") for i in body.inserts])
-        result, error = await manager.delete_pdf_pages(book_id, body.pages, [c.model_dump() for c in body.crops], [s.model_dump() for s in body.splits], [i.model_dump() for i in body.inserts])
-        if error is None:
-            return {"status": "success", "result": result}
-        return {"status": "failure", "error": error}
-
-    @router.post("/pdf-pages/{book_id}/swap", dependencies=admin_dep)
-    async def swap_pdf_pages(book_id: int, body: PdfSwapPagesModel) -> dict[str, Any]:
-        LOGGER.debug("# swap_pdf_pages(book_id=%d, page=%d, other=%d)", book_id, body.page, body.other)
-        result, error = await manager.swap_pdf_pages(book_id, body.page, body.other)
+        LOGGER.debug("# delete_pdf_pages(book_id=%d, pages=%r, crops=%r, splits=%r, inserts=%r, order=%r)", book_id, body.pages, body.crops, body.splits, [(i.page, i.url or "<upload>") for i in body.inserts], body.order)
+        result, error = await manager.delete_pdf_pages(book_id, body.pages, [c.model_dump() for c in body.crops], [s.model_dump() for s in body.splits], [i.model_dump() for i in body.inserts], body.order)
         if error is None:
             return {"status": "success", "result": result}
         return {"status": "failure", "error": error}
