@@ -152,6 +152,34 @@ describe("useCoverBrowse", () => {
     expect(result.current.total).toBeNull();
   });
 
+  it("미커버 페이지가 비어도 커서가 있으면 이어서 받는다", async () => {
+    const { result } = renderHook(() =>
+      useCoverBrowse({ apiPrefix: "", uncovered: true }),
+    );
+    act(() => pending[0].resolve(page([], "c1")));
+
+    await waitFor(() => expect(pending).toHaveLength(2));
+    expect(pending[1].url).toBe(
+      `/browse?limit=${BROWSE_PAGE_SIZE}&cursor=c1&uncovered=true`,
+    );
+    // 이어받는 동안은 계속 로딩 중이라 빈 목록 안내가 깜박이지 않는다.
+    expect(result.current.loading).toBe(true);
+
+    act(() => pending[1].resolve(page([5], "")));
+    await waitFor(() => expect(result.current.items).toHaveLength(1));
+    expect(result.current.hasMore).toBe(false);
+    expect(result.current.loading).toBe(false);
+    expect(pending).toHaveLength(2);
+  });
+
+  it("미커버가 아니면 빈 페이지에서 자동으로 이어받지 않는다", async () => {
+    renderHook(() => useCoverBrowse({ apiPrefix: "" }));
+    act(() => pending[0].resolve(page([], "c1")));
+
+    await waitFor(() => expect(pending[0]).toBeDefined());
+    expect(pending).toHaveLength(1);
+  });
+
   it("카테고리가 바뀌면 목록을 비우고 새 카테고리로 다시 받는다", async () => {
     const { result, rerender } = renderHook(
       ({ category }) => useCoverBrowse({ apiPrefix: "", category }),

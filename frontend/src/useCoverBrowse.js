@@ -45,6 +45,9 @@ export function useCoverBrowse({ apiPrefix, category = "", uncovered = false }) 
   const cursorRef = useRef("");
   const hasMoreRef = useRef(false);
   const loadingRef = useRef(false);
+  // 미커버 목록은 서버가 한 요청에서 훑는 범위가 한정돼 빈 페이지와 커서가 올 수 있다. 그때는 바로 이어받는다.
+  const continueRef = useRef(false);
+  const fetchPageRef = useRef(null);
 
   const fetchPage = useCallback(
     (generation) => {
@@ -52,6 +55,7 @@ export function useCoverBrowse({ apiPrefix, category = "", uncovered = false }) 
       setLoading(true);
       setError("");
       const stop = () => {
+        continueRef.current = false;
         hasMoreRef.current = false;
         setHasMore(false);
         setError(LOAD_ERROR_MESSAGE);
@@ -70,7 +74,10 @@ export function useCoverBrowse({ apiPrefix, category = "", uncovered = false }) 
           hasMoreRef.current = Boolean(nextCursor);
           setHasMore(Boolean(nextCursor));
           setTotal(data["total"] ?? null);
-          setItems((prev) => prev.concat(data["result"] || []));
+          const rows = data["result"] || [];
+          continueRef.current =
+            uncovered && rows.length === 0 && Boolean(nextCursor);
+          setItems((prev) => prev.concat(rows));
         },
         () => {
           if (generation !== generationRef.current) return;
@@ -78,6 +85,11 @@ export function useCoverBrowse({ apiPrefix, category = "", uncovered = false }) 
         },
         () => {
           if (generation !== generationRef.current) return;
+          if (continueRef.current) {
+            continueRef.current = false;
+            fetchPageRef.current(generation);
+            return;
+          }
           loadingRef.current = false;
           setLoading(false);
         },
@@ -86,9 +98,14 @@ export function useCoverBrowse({ apiPrefix, category = "", uncovered = false }) 
     [apiPrefix, category, uncovered],
   );
 
+  useEffect(() => {
+    fetchPageRef.current = fetchPage;
+  }, [fetchPage]);
+
   const reload = useCallback(() => {
     generationRef.current += 1;
     cursorRef.current = "";
+    continueRef.current = false;
     hasMoreRef.current = false;
     loadingRef.current = false;
     setItems([]);

@@ -145,7 +145,10 @@ class BookManager:
     COVER_ASPECT_RATIO = 2 / 3
     COVER_TALL_RATIO = 2
     # 미커버 목록이 한 요청에서 커버 목록을 훑는 최대 시간(초). 표지가 있는 책이 많으면 여러 요청으로 나눠 이어받는다.
-    UNCOVERED_SCAN_BUDGET_SECONDS = 20
+    UNCOVERED_SCAN_BUDGET_SECONDS = 10
+    # 요청 하나가 훑는 최대 페이지 수와 동시에 도는 스캔 수. 표지가 있는 책이 많아도 한 요청이 오래 붙잡지 못하게 한다.
+    UNCOVERED_MAX_SCAN_PAGES = 20
+    UNCOVERED_MAX_CONCURRENT_SCANS = 2
     COVER_BACKGROUND_RATIO_THRESHOLD = 0.60
     COVER_DETAIL_RATIO_THRESHOLD = 0.15
     # EPUB 뷰어용 이미지 축소 정책. epub.js는 책 전체를 브라우저 메모리에
@@ -683,22 +686,27 @@ class BookManager:
         """정식 표지가 없는 책만 최신순으로 한 페이지 조회한다. 항목 규칙은 get_cover_books_paged와 같다.
 
         커버 목록을 한 페이지씩 이어서 훑으며 표지가 없는 항목만 모은다. 모은 항목이 size개 이상이거나
-        목록 끝이거나 시간 예산이 끝나면 멈추고, 훑은 곳까지의 커서를 돌려준다. 전체 개수는 알 수 없어 None이다.
+        목록 끝이거나 시간 예산·페이지 수 한도에 닿으면 멈추고, 훑은 곳까지의 커서를 돌려준다.
+        항목이 없어도 한도에 닿으면 빈 목록과 커서를 돌려주므로 클라이언트가 커서로 이어받는다.
+        전체 개수는 알 수 없어 None이다.
         """
         LOGGER.debug("# get_uncovered_books_paged(category='%s', size=%d, cursor='%s', exclude_categories=%s)", category, size, cursor, exclude_categories)
         size = max(1, min(size, MAX_CATEGORY_PAGE_SIZE))
         deadline = time.monotonic() + self.UNCOVERED_SCAN_BUDGET_SECONDS
+        slots = self.__dict__.setdefault("_uncovered_scan_slots", asyncio.Semaphore(self.UNCOVERED_MAX_CONCURRENT_SCANS))
         items: list[tuple[Book, str]] = []
         scan_cursor = cursor
-        while True:
-            page, _total, next_cursor, error = await self.get_cover_books_paged(category=category, size=size, cursor=scan_cursor, exclude_categories=exclude_categories)
-            if error is not None:
-                return [], None, None, error
-            flags = await asyncio.to_thread(self._uncovered_flags, [book for book, _title in page])
-            items.extend(entry for entry, uncovered in zip(page, flags) if uncovered)
-            if not next_cursor or len(items) >= size or (items and time.monotonic() > deadline):
-                return items, None, next_cursor, None
-            scan_cursor = next_cursor
+        async with slots:
+            for _ in range(self.UNCOVERED_MAX_SCAN_PAGES):
+                page, _total, next_cursor, error = await self.get_cover_books_paged(category=category, size=size, cursor=scan_cursor, exclude_categories=exclude_categories)
+                if error is not None:
+                    return [], None, None, error
+                flags = await asyncio.to_thread(self._uncovered_flags, [book for book, _title in page])
+                items.extend(entry for entry, uncovered in zip(page, flags) if uncovered)
+                if not next_cursor or len(items) >= size or time.monotonic() > deadline:
+                    break
+                scan_cursor = next_cursor
+        return items, None, next_cursor, None
 
     async def get_latest_books(self, size: int = MAX_LATEST_BOOK_COUNT, exclude_categories: list[str] | None = None) -> tuple[list[Book], int, str | None]:
         LOGGER.debug("# get_latest_books(size=%d, exclude_categories=%s)", size, exclude_categories)

@@ -108,17 +108,53 @@ async def test_uncovered_page_ends_when_list_ends(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_uncovered_page_stops_after_budget_once_it_has_items(tmp_path):
-    plain = book("plain.pdf", tmp_path, (690, 1600))
+async def test_uncovered_page_stops_at_budget_even_without_items(tmp_path):
     covered = book("covered.pdf", tmp_path, (480, 623))
     manager = make_manager(tmp_path)
     manager.UNCOVERED_SCAN_BUDGET_SECONDS = -1
-    manager.get_cover_books_paged = AsyncMock(side_effect=[([(covered, "")], 9, "c1", None), ([(plain, "")], 9, "c2", None), ([(plain, "")], 9, "c3", None)])
+    manager.get_cover_books_paged = AsyncMock(side_effect=[([(covered, "")], 9, "c1", None), ([(covered, "")], 9, "c2", None)])
+
+    items, _total, next_cursor, error = await manager.get_uncovered_books_paged(size=5)
+
+    assert (items, next_cursor, error) == ([], "c1", None)
+    assert manager.get_cover_books_paged.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_uncovered_page_stops_at_page_cap_and_returns_resume_cursor(tmp_path):
+    covered = book("covered.pdf", tmp_path, (480, 623))
+    manager = make_manager(tmp_path)
+    manager.UNCOVERED_MAX_SCAN_PAGES = 2
+    manager.get_cover_books_paged = AsyncMock(side_effect=[([(covered, "")], 9, "c1", None), ([(covered, "")], 9, "c2", None), ([(covered, "")], 9, "c3", None)])
 
     items, _total, next_cursor, _error = await manager.get_uncovered_books_paged(size=5)
 
-    assert len(items) == 1
+    assert items == []
     assert next_cursor == "c2"
+    assert manager.get_cover_books_paged.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_uncovered_scans_run_at_most_two_at_once(tmp_path):
+    import asyncio
+
+    manager = make_manager(tmp_path)
+    running = 0
+    peak = 0
+
+    async def slow_page(**_kwargs):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.02)
+        running -= 1
+        return [], 0, None, None
+
+    manager.get_cover_books_paged = slow_page
+
+    await asyncio.gather(*(manager.get_uncovered_books_paged() for _ in range(6)))
+
+    assert peak == manager.UNCOVERED_MAX_CONCURRENT_SCANS
 
 
 @pytest.mark.asyncio
