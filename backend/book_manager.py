@@ -141,7 +141,7 @@ class BookManager:
     # 커버 뷰 썸네일. 최신 목록은 한 화면에 수십 장을 받으므로 원본 대신 작게 줄여 보낸다.
     COVER_THUMBNAIL_WIDTH = 300
     COVER_JPEG_QUALITY = 85
-    COVER_CACHE_VERSION = 5
+    COVER_CACHE_VERSION = 6
     COVER_ASPECT_RATIO = 2 / 3
     COVER_TALL_RATIO = 2
     # 미커버 목록이 한 요청에서 커버 목록을 훑는 최대 시간(초). 표지가 있는 책이 많으면 여러 요청으로 나눠 이어받는다.
@@ -3538,6 +3538,11 @@ class BookManager:
                             if rendered.size != (width, height):
                                 rendered = rendered.resize((width, height), Image.Resampling.LANCZOS)
                             return rendered
+                        if page_width > page_height:
+                            # 가로 쪽은 좌우 두 쪽이 합쳐진 펼침면인 경우가 많아 좌측 절반을 표지로 쓴다.
+                            half_width = page_width / 2
+                            scale = min(width / half_width, height / page_height)
+                            return page.render(scale=scale, crop=(0, 0, half_width, 0)).to_pil()
                         # 그 밖에는 자르지 않고 쪽 전체를 비율대로 줄인다. 남는 공간은 화면에서 비워 둔다.
                         scale = min(width / page_width, height / page_height)
                         return page.render(scale=scale).to_pil()

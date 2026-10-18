@@ -220,7 +220,7 @@ class TestGetCover:
         assert abs(img.height - round(300 * 792 / 612)) <= 1
 
     @pytest.mark.asyncio
-    async def test_pdf_spread_is_shown_whole(self, book_manager_module, temp_dir):
+    async def test_pdf_spread_uses_left_half_as_cover(self, book_manager_module, temp_dir):
         bm, mock_es = book_manager_module
         create_test_spread_pdf(temp_dir / "test_category" / "spread.pdf")
         _use_doc(mock_es, "test_category/spread.pdf", "pdf")
@@ -229,11 +229,10 @@ class TestGetCover:
 
         assert response.status_code == 200
         img = Image.open(io.BytesIO(response.body))
-        assert img.size == (300, 200)
-        left_red, _g, left_blue = img.getpixel((img.width // 4, img.height // 2))
-        right_red, _g, right_blue = img.getpixel((img.width * 3 // 4, img.height // 2))
-        assert left_red > left_blue
-        assert right_blue > right_red
+        assert img.size == (300, 400)
+        for x in (img.width // 4, img.width * 3 // 4):
+            red, _green, blue = img.getpixel((x, img.height // 2))
+            assert red > blue
 
     @pytest.mark.asyncio
     async def test_pdf_webtoon_uses_top_cover_area(self, book_manager_module, temp_dir):
@@ -309,7 +308,7 @@ class TestGetCover:
 
         first = await bm.get_cover(book_id=108)
         assert first.status_code == 200
-        assert (temp_dir / ".cover_cache" / "108.v5.jpg").exists()
+        assert (temp_dir / ".cover_cache" / "108.v6.jpg").exists()
 
         with patch.object(type(bm), "_extract_cover_thumbnail", side_effect=AssertionError("must use cache")):
             second = await bm.get_cover(book_id=108)
