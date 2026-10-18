@@ -1615,3 +1615,129 @@ def test_similar_docs_paged_msearch_limits_source():
     assert main_body["_source"] == ESManager.LIST_SOURCE_FIELDS
     clause = _summary_clause(main_body["query"]["bool"]["should"])
     assert "more_like_this" in clause
+
+
+def test_aggregate_cover_categories_counts_only_cover_types_across_pages_with_latest_times():
+    es = DummyES()
+    manager = make_manager(es)
+    calls = []
+
+    def bucket(category, count, updated, created):
+        return {"key": {"category": category}, "doc_count": count, "updated": {"value": updated}, "created": {"value": created}}
+
+    def fake_search(**kwargs):
+        calls.append(kwargs)
+        if "after" not in kwargs["aggs"]["categories"]["composite"]:
+            return {"aggregations": {"categories": {"buckets": [bucket("A", 2, 1000.0, 900.0)], "after_key": {"category": "A"}}}}
+        return {"aggregations": {"categories": {"buckets": [bucket("B", 5, 2000.0, None)], "after_key": None}}}
+
+    es.search = fake_search
+    assert manager.aggregate_cover_categories() == {"A": (2, 1000.0, 900.0), "B": (5, 2000.0, None)}
+    assert calls[0]["query"] == {"bool": {"filter": [{"terms": {"file_type": ["epub", "pdf"]}}]}}
+    assert calls[0]["aggs"]["categories"]["aggs"] == {"updated": {"max": {"field": "updated_time"}}, "created": {"max": {"field": "created_time"}}}
+    assert calls[1]["aggs"]["categories"]["composite"]["after"] == {"category": "A"}
+
+
+def test_aggregate_cover_categories_returns_empty_on_error_or_no_buckets():
+    es = DummyES()
+    manager = make_manager(es)
+
+    def boom(**_kwargs):
+        raise RuntimeError("es down")
+
+    es.search = boom
+    assert manager.aggregate_cover_categories() == {}
+
+    es.search = lambda **_kwargs: {"aggregations": {"categories": {"buckets": []}}}
+    assert manager.aggregate_cover_categories() == {}
+
+
+def test_search_cover_files_paged_filters_types_and_categories_and_returns_sort_values():
+    es = DummyES()
+    manager = make_manager(es)
+    captured = {}
+
+    def fake_search(**kwargs):
+        captured.update(kwargs)
+        return {"hits": {"total": {"value": 9}, "hits": [{"_id": "1", "_source": {"title": "가"}, "sort": ["가", "/1.epub"]}]}}
+
+    es.search = fake_search
+    hits, total = manager.search_cover_files_paged(["A", "B"], size=1, search_after=["x", "y"], exclude_categories=["secret"])
+
+    assert hits == [(1, {"title": "가"}, ["가", "/1.epub"])]
+    assert total == 9
+    assert captured["query"]["bool"]["filter"] == [{"terms": {"file_type": ["epub", "pdf"]}}, {"terms": {"category": ["A", "B"]}}]
+    assert captured["query"]["bool"]["must_not"] == ESManager._exclude_category_queries(["secret"])
+    # 최신 탭과 같은 최신순이다.
+    assert captured["sort"] == ESManager.LATEST_SORT
+    assert captured["search_after"] == ["x", "y"]
+
+
+def test_search_cover_files_paged_skips_search_without_categories_and_handles_error():
+    es = DummyES()
+    manager = make_manager(es)
+    es.search = lambda **_kwargs: (_ for _ in ()).throw(AssertionError("검색하면 안 된다"))
+    assert manager.search_cover_files_paged([]) == ([], 0)
+
+    def boom(**_kwargs):
+        raise RuntimeError("es down")
+
+    es.search = boom
+    assert manager.search_cover_files_paged(["A"]) == ([], 0)
+
+
+def test_search_group_representatives_queries_each_work_directory_by_file_path():
+    es = DummyES()
+    manager = make_manager(es)
+    captured = {}
+
+    def fake_msearch(**kwargs):
+        captured.update(kwargs)
+        return {
+            "responses": [
+                {"hits": {"hits": [{"_id": "3", "_source": {"title": "작품 1권"}}]}},
+                {"error": {"type": "boom"}},
+            ]
+        }
+
+    es.msearch = fake_msearch
+    result = manager.search_group_representatives(["a/작품", "b/작품"], exclude_categories=["secret"])
+
+    assert result == {"a/작품": [(3, {"title": "작품 1권"})]}
+    first_query = captured["searches"][1]
+    assert captured["searches"][0] == {}
+    assert first_query["sort"] == [{"file_path": "asc"}]
+    assert first_query["size"] == ESManager.REPRESENTATIVE_CANDIDATES
+    assert first_query["query"]["bool"]["should"] == [{"term": {"category": "a/작품"}}, {"prefix": {"category": "a/작품/"}}]
+    assert first_query["query"]["bool"]["filter"] == [{"terms": {"file_type": ["epub", "pdf"]}}]
+    assert first_query["query"]["bool"]["must_not"] == ESManager._exclude_category_queries(["secret"])
+
+
+def test_search_group_representatives_handles_empty_input_and_error():
+    es = DummyES()
+    manager = make_manager(es)
+    assert manager.search_group_representatives([]) == {}
+
+    def boom(**_kwargs):
+        raise RuntimeError("es down")
+
+    es.msearch = boom
+    assert manager.search_group_representatives(["a/b"]) == {}
+
+
+def test_search_latest_docs_only_returns_cover_types():
+    es = DummyES()
+    manager = make_manager(es)
+    captured = {}
+
+    def fake_search(**kwargs):
+        captured.update(kwargs)
+        return {"hits": {"total": {"value": 0}, "hits": []}}
+
+    es.search = fake_search
+    manager.search_latest_docs(max_result_count=5)
+    assert captured["query"] == {"bool": {"must": [{"match_all": {}}], "filter": [{"terms": {"file_type": ["epub", "pdf"]}}]}}
+
+    manager.search_latest_docs(max_result_count=5, exclude_categories=["secret"])
+    assert captured["query"]["bool"]["must_not"] == ESManager._exclude_category_queries(["secret"])
+    assert captured["query"]["bool"]["filter"] == [{"terms": {"file_type": ["epub", "pdf"]}}]

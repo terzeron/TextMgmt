@@ -308,6 +308,67 @@ class TestViewerHiddenAccess:
         assert r.status_code == 200
         mock_bm.get_latest_books.assert_called_once_with(size=2000, exclude_categories=["secret", "shared", "no_latest"])
 
+    def test_browse_returns_grouped_page_with_display_title_and_cursor(self, client, mock_bm, mock_cat):
+        mock_cat.get_hidden_categories.return_value = ["secret"]
+        book = MagicMock()
+        book.dict.return_value = {"book_id": 7, "category": "5_완결/암살교실", "title": "암살교실 01권", "author": "", "file_path": "5_완결/암살교실/암살교실 01권.pdf", "file_type": "pdf", "file_size": 1, "updated_time": "2024-01-01"}
+        mock_bm.get_cover_books_paged.return_value = ([(book, "암살교실")], 2295, "next-cur", None)
+
+        r = client.get("/browse?limit=60&cursor=abc&category=5_완결")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "success"
+        assert body["total"] == 2295
+        assert body["next_cursor"] == "next-cur"
+        assert body["result"][0]["book_id"] == 7
+        assert body["result"][0]["display_title"] == "암살교실"
+        # 관리자는 비노출 카테고리를 걸러내지 않는다.
+        mock_bm.get_cover_books_paged.assert_called_once_with(category="5_완결", size=60, cursor="abc", exclude_categories=[])
+
+    def test_browse_defaults_to_all_and_empty_display_title_for_plain_files(self, client, mock_bm, mock_cat):
+        book = MagicMock()
+        book.dict.return_value = {"book_id": 1, "category": "A", "title": "가", "author": "", "file_path": "A/가.epub", "file_type": "epub", "file_size": 1, "updated_time": "2024-01-01"}
+        mock_bm.get_cover_books_paged.return_value = ([(book, "")], 1, None, None)
+
+        r = client.get("/browse")
+
+        assert r.status_code == 200
+        assert r.json()["result"][0]["display_title"] == ""
+        assert r.json()["next_cursor"] is None
+        mock_bm.get_cover_books_paged.assert_called_once_with(category="", size=60, cursor="", exclude_categories=[])
+
+    def test_viewer_browse_excludes_hidden_categories(self, client, mock_bm, mock_cat):
+        main_module.app.dependency_overrides[main_module.require_auth] = lambda: VIEWER_PAYLOAD
+        mock_cat.get_hidden_categories.return_value = ["secret", "shared"]
+        mock_bm.get_cover_books_paged.return_value = ([], 0, None, None)
+
+        r = client.get("/browse")
+
+        assert r.status_code == 200
+        mock_bm.get_cover_books_paged.assert_called_once_with(category="", size=60, cursor="", exclude_categories=["secret", "shared"])
+
+    def test_viewer_cannot_browse_hidden_category(self, client, mock_bm, mock_cat):
+        main_module.app.dependency_overrides[main_module.require_auth] = lambda: VIEWER_PAYLOAD
+        mock_cat.get_hidden_categories.return_value = ["secret"]
+
+        r = client.get("/browse?category=secret/sub")
+
+        assert r.status_code == 403
+        mock_bm.get_cover_books_paged.assert_not_called()
+
+    def test_browse_reports_error(self, client, mock_bm, mock_cat):
+        mock_bm.get_cover_books_paged.return_value = ([], 0, None, "invalid cursor")
+
+        r = client.get("/browse?cursor=bad")
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "failure", "error": "invalid cursor"}
+
+    def test_browse_rejects_out_of_range_limit(self, client, mock_bm, mock_cat):
+        assert client.get("/browse?limit=0").status_code == 422
+        assert client.get("/browse?limit=999999").status_code == 422
+
 
 # ── /pdf-pages/{book_id} ─────────────────────────────────────────────────────
 

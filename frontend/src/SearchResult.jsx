@@ -11,7 +11,7 @@ import {faChevronDown, faChevronRight} from "@fortawesome/free-solid-svg-icons";
 
 import CoverGrid from './CoverGrid';
 
-export default function SearchResult({results, role, showEditButton, onLoadMore, hasMore = false, loading = false, basePath = '/book-edit', title = '검색 결과', emptyMessage = '검색 결과가 없습니다.', viewMode = 'list', headerActions = null, categories = [], selectedCategory = '', onCategoryChange = null, categoryLoading = false}) {
+export default function SearchResult({results, role, showEditButton, onLoadMore, hasMore = false, loading = false, basePath = '/book-edit', title = '검색 결과', emptyMessage = '검색 결과가 없습니다.', viewMode = 'list', headerActions = null, categories = [], selectedCategory = '', onCategoryChange = null, categoryLoading = false, coverResetKey}) {
     const [isOpen, setIsOpen] = useState(true);
     const canEdit = showEditButton !== undefined ? showEditButton : (role === 'admin');
     const availableResults = results || [];
@@ -57,7 +57,14 @@ export default function SearchResult({results, role, showEditButton, onLoadMore,
                     {availableResults.length > 0 ? (
                         <>
                             {viewMode === 'cover' ? (
-                                <CoverGrid results={availableResults} basePath={basePath || '/book-edit'}/>
+                                <CoverGrid
+                                    results={availableResults}
+                                    basePath={basePath || '/book-edit'}
+                                    hasMore={hasMore}
+                                    onLoadMore={onLoadMore}
+                                    loading={loading}
+                                    resetKey={coverResetKey}
+                                />
                             ) : availableResults.map((book) => {
                                 const filename = (book.file_path || '').split('/').pop() || book.title || 'Unknown';
                                 const category = book.category || '_root';
@@ -110,7 +117,8 @@ export default function SearchResult({results, role, showEditButton, onLoadMore,
                                 </div>
                                 );
                             })}
-                            {hasMore && (
+                            {/* 커버 보기는 스크롤하면 이어받으므로 '더 보기' 버튼이 필요 없다. */}
+                            {hasMore && viewMode !== 'cover' && (
                                 <div className="search-result-load-more-wrapper">
                                     <div
                                         className={`search-result-load-more${loading ? ' disabled' : ''}`}
@@ -143,7 +151,7 @@ SearchResult.propTypes = {
     hasMore: PropTypes.bool,
     loading: PropTypes.bool,
     basePath: PropTypes.string,
-    title: PropTypes.string,
+    title: PropTypes.node,
     emptyMessage: PropTypes.string,
     viewMode: PropTypes.oneOf(['list', 'cover']),
     headerActions: PropTypes.node,
@@ -151,6 +159,7 @@ SearchResult.propTypes = {
     selectedCategory: PropTypes.string,
     onCategoryChange: PropTypes.func,
     categoryLoading: PropTypes.bool,
+    coverResetKey: PropTypes.any,
 };
 
 SearchResult.defaultProps = {

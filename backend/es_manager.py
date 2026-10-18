@@ -361,6 +361,86 @@ class ESManager:
         next_search_after = hits[-1]["sort"] if len(hits) == size else None
         return result, total, next_search_after
 
+    # 커버를 그릴 수 있는 형식. 책·만화 탭의 커버 목록과 최신 탭은 이 형식만 보여 준다.
+    COVER_FILE_TYPES: list[str] = ["epub", "pdf"]
+
+    @classmethod
+    def _cover_type_filter(cls) -> dict[str, Any]:
+        return {"terms": {"file_type": cls.COVER_FILE_TYPES}}
+
+    def aggregate_cover_categories(self) -> dict[str, tuple[int, float | None, float | None]]:
+        """커버 형식(epub, pdf) 문서가 있는 카테고리별로 (문서 수, 최근 수정 시각, 최근 생성 시각)을 센다.
+
+        시각은 epoch 밀리초이고 값이 없으면 None이다. 작품 묶음의 최신순 위치를 정하는 데 쓴다.
+        """
+        stats: dict[str, tuple[int, float | None, float | None]] = {}
+        after: dict[str, Any] | None = None
+        while True:
+            composite: dict[str, Any] = {"size": 2000, "sources": [{"category": {"terms": {"field": "category"}}}]}
+            if after:
+                composite["after"] = after
+            sub_aggs = {"updated": {"max": {"field": "updated_time"}}, "created": {"max": {"field": "created_time"}}}
+            try:
+                response = self.es.search(index=self.index_name, size=0, query={"bool": {"filter": [self._cover_type_filter()]}}, aggs={"categories": {"composite": composite, "aggs": sub_aggs}}, track_total_hits=False)
+            except Exception as e:
+                LOGGER.error("aggregate_cover_categories error: %s", e)
+                return {}
+            aggregation = response["aggregations"]["categories"]
+            for bucket in aggregation["buckets"]:
+                stats[bucket["key"]["category"]] = (bucket["doc_count"], bucket["updated"]["value"], bucket["created"]["value"])
+            after = aggregation.get("after_key")
+            if not aggregation["buckets"] or not after:
+                return stats
+
+    def search_cover_files_paged(self, categories: list[str], size: int = 60, search_after: list[Any] | None = None, exclude_categories: list[str] | None = None) -> tuple[list[tuple[int, dict[str, Any], list[Any]]], int]:
+        """주어진 카테고리에 직접 속한 커버 형식 파일을 최신순(LATEST_SORT)으로 한 페이지 조회한다.
+
+        반환: ([(문서 id, 문서, 정렬값)], 전체 건수). 전체 건수는 search_after와 무관하다.
+        """
+        if not categories:
+            return [], 0
+        LOGGER.debug("search_cover_files_paged(categories=%d, size=%d, search_after=%s)", len(categories), size, search_after)
+        query: dict[str, Any] = {"bool": {"filter": [self._cover_type_filter(), {"terms": {"category": categories}}]}}
+        excluded = self._exclude_category_queries(exclude_categories)
+        if excluded:
+            query["bool"]["must_not"] = excluded
+        kwargs: dict[str, Any] = {"index": self.index_name, "query": query, "sort": self.LATEST_SORT, "size": size, "track_total_hits": True, "source": self.LIST_SOURCE_FIELDS}
+        if search_after:
+            kwargs["search_after"] = search_after
+        try:
+            response = self.es.search(**kwargs)
+        except Exception as e:
+            LOGGER.error("search_cover_files_paged error: %s", e)
+            return [], 0
+        hits = response["hits"]["hits"]
+        return [(int(hit["_id"]), hit["_source"], hit["sort"]) for hit in hits], response["hits"]["total"]["value"]
+
+    REPRESENTATIVE_CANDIDATES = 5
+
+    def search_group_representatives(self, group_keys: list[str], exclude_categories: list[str] | None = None) -> dict[str, list[tuple[int, dict[str, Any]]]]:
+        """작품 디렉토리마다 대표 후보(파일 경로순 앞쪽 몇 권)를 한 번에 조회한다."""
+        if not group_keys:
+            return {}
+        excluded = self._exclude_category_queries(exclude_categories)
+        searches: list[dict[str, Any]] = []
+        for key in group_keys:
+            query: dict[str, Any] = {"bool": {"filter": [self._cover_type_filter()], "should": [{"term": {"category": key}}, {"prefix": {"category": key + "/"}}], "minimum_should_match": 1}}
+            if excluded:
+                query["bool"]["must_not"] = excluded
+            searches += [{}, {"query": query, "sort": [{"file_path": "asc"}], "size": self.REPRESENTATIVE_CANDIDATES, "_source": self.LIST_SOURCE_FIELDS}]
+        try:
+            response = self.es.msearch(index=self.index_name, searches=searches)
+        except Exception as e:
+            LOGGER.error("search_group_representatives error: %s", e)
+            return {}
+        result: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+        for key, item in zip(group_keys, response["responses"]):
+            if "error" in item:
+                LOGGER.error("search_group_representatives(%s) error: %s", key, item["error"])
+                continue
+            result[key] = [(int(hit["_id"]), hit["_source"]) for hit in item["hits"]["hits"]]
+        return result
+
     def search_by_keyword(self, keyword: str, max_result_count: int = -1) -> list[tuple[int, dict[str, Any], float]]:
         if max_result_count < 0:
             max_result_count = self.DEFAULT_MAX_RESULT_COUNT
@@ -407,10 +487,10 @@ class ESManager:
     def search_latest_docs(self, max_result_count: int = 100, exclude_categories: list[str] | None = None) -> tuple[list[tuple[int, dict[str, Any], float]], int]:
         LOGGER.debug("search_latest_docs(max_result_count=%d, exclude_categories=%s)", max_result_count, exclude_categories)
         size = max(1, min(max_result_count, 10000))
-        query: dict[str, Any] = {"match_all": {}}
+        query: dict[str, Any] = {"bool": {"must": [{"match_all": {}}], "filter": [self._cover_type_filter()]}}
         excluded = self._exclude_category_queries(exclude_categories)
         if excluded:
-            query = {"bool": {"must": [{"match_all": {}}], "must_not": excluded}}
+            query["bool"]["must_not"] = excluded
         try:
             response = self.es.search(index=self.index_name, query=query, sort=self.LATEST_SORT, size=size, track_total_hits=True, source=self.LIST_SOURCE_FIELDS)
         except Exception as e:

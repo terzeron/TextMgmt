@@ -527,3 +527,190 @@ def test_get_cover_returns_503_when_storage_access_fails(tmp_path: Path, monkeyp
     resp = asyncio_runner(manager.get_cover(1))
 
     assert resp.status_code == 503
+
+
+# ---- 커버 목록(작품 묶음 + 커서) ----
+
+
+def _cover_doc(path: str, title: str, category: str, file_type: str = "epub") -> dict:
+    doc = make_doc(path, file_type)
+    doc.update({"title": title, "category": category, "file_path": path})
+    return doc
+
+
+def _fake_cover_es(manager: BookManager, stats: dict, files: list[tuple[dict, int]], reps: dict[str, list[dict]]) -> dict:
+    """ES 없이 커서 조회가 하는 일(최신순 정렬, search_after, 전체 건수)을 흉내 낸다. 받은 인자는 calls에 모은다.
+
+    files는 (문서, 수정 시각) 쌍이다. 정렬값은 ES와 같은 [수정 시각, 생성 시각, 파일 경로]다.
+    """
+    calls: dict = {"files": [], "reps": []}
+    entries = [(book_id, doc, [updated, 0, doc["file_path"]]) for book_id, (doc, updated) in enumerate(files, start=1)]
+    ordered = sorted(entries, key=lambda item: (-item[2][0], -item[2][1], item[2][2]))
+
+    def search_cover_files_paged(categories, size, search_after, exclude):
+        calls["files"].append({"categories": categories, "size": size, "search_after": search_after, "exclude": exclude})
+        eligible = [item for item in ordered if item[1]["category"] in categories]
+        key = lambda item: (-item[2][0], -item[2][1], item[2][2])  # noqa: E731
+        window = [item for item in eligible if not search_after or key(item) > (-search_after[0], -search_after[1], search_after[2])]
+        return window[:size], len(eligible)
+
+    def search_group_representatives(keys, exclude):
+        calls["reps"].append({"keys": keys, "exclude": exclude})
+        return {key: [(900 + index, doc) for index, doc in enumerate(reps[key])] for key in keys if key in reps}
+
+    manager.es_manager.aggregate_cover_categories = lambda: stats
+    manager.es_manager.search_cover_files_paged = search_cover_files_paged
+    manager.es_manager.search_group_representatives = search_group_representatives
+    return calls
+
+
+def _titles(items) -> list[tuple[str, str]]:
+    return [(book.title, display) for book, display in items]
+
+
+def _cover_fixture(tmp_path: Path):
+    """디렉토리 A: 직속 파일 가(수정 400), 다(수정 200)와 작품 디렉토리 나작품(최근 300), 라작품(최근 100)."""
+    manager = make_manager(tmp_path, DummyES())
+    files = [(_cover_doc("A/가.epub", "가", "A"), 400), (_cover_doc("A/다.pdf", "다", "A", "pdf"), 200)]
+    reps = {
+        "A/나작품": [_cover_doc("A/나작품/나작품 02권.pdf", "나작품 02권", "A/나작품", "pdf"), _cover_doc("A/나작품/나작품 01권.pdf", "나작품 01권", "A/나작품", "pdf")],
+        "A/라작품": [_cover_doc("A/라작품/라작품 1권.pdf", "라작품 1권", "A/라작품", "pdf")],
+    }
+    stats = {"A": (2, 400.0, 0.0), "A/나작품": (12, 300.0, 0.0), "A/라작품": (1, 100.0, 0.0)}
+    return manager, files, reps, stats
+
+
+def test_get_cover_books_paged_merges_files_and_work_groups_newest_first(tmp_path: Path):
+    manager, files, reps, stats = _cover_fixture(tmp_path)
+    calls = _fake_cover_es(manager, stats, files, reps)
+
+    items, total, next_cursor, error = asyncio_runner(manager.get_cover_books_paged(category="A", size=10))
+
+    assert error is None
+    assert next_cursor is None
+    assert total == 4
+    # 묶음은 1권을 대표로 하고 작품 디렉토리 이름을 display_title로 갖는다. 순서는 최신순이다.
+    assert _titles(items) == [("가", ""), ("나작품 01권", "나작품"), ("다", ""), ("라작품 1권", "라작품")]
+    assert calls["files"][0]["categories"] == ["A"]
+    assert calls["reps"][0]["keys"] == ["A/나작품", "A/라작품"]
+
+
+def test_get_cover_books_paged_pages_continue_without_gaps_or_repeats(tmp_path: Path):
+    manager, files, reps, stats = _cover_fixture(tmp_path)
+    _fake_cover_es(manager, stats, files, reps)
+
+    seen: list[tuple[str, str]] = []
+    cursor = ""
+    for _ in range(10):
+        items, total, cursor_next, error = asyncio_runner(manager.get_cover_books_paged(category="A", size=1, cursor=cursor))
+        assert error is None
+        assert total == 4
+        seen += _titles(items)
+        if cursor_next is None:
+            break
+        cursor = cursor_next
+    else:
+        pytest.fail("커서가 끝나지 않는다")
+
+    assert seen == [("가", ""), ("나작품 01권", "나작품"), ("다", ""), ("라작품 1권", "라작품")]
+
+
+def test_get_cover_books_paged_root_shows_root_files_and_one_card_per_top_level_directory(tmp_path: Path):
+    manager = make_manager(tmp_path, DummyES())
+    files = [(_cover_doc("루트책.epub", "루트책", "_root"), 50), (_cover_doc("3_판타지/가.epub", "가", "3_판타지"), 10)]
+    reps = {"3_판타지": [files[1][0]], "0_웹툰": [_cover_doc("0_웹툰/작품 01권.pdf", "작품 01권", "0_웹툰/작품", "pdf")]}
+    stats = {"_root": (1, 50.0, 0.0), "3_판타지": (12, 70.0, 0.0), "0_웹툰/작품": (3, 90.0, 0.0)}
+    calls = _fake_cover_es(manager, stats, files, reps)
+
+    items, total, next_cursor, error = asyncio_runner(manager.get_cover_books_paged(size=10))
+
+    assert error is None
+    assert next_cursor is None
+    # 3_판타지 직속 책은 펼치지 않고 디렉토리마다 대표 한 권만 나온다. 최신 시각이 큰 묶음부터다.
+    assert calls["files"][0]["categories"] == ["_root"]
+    assert calls["reps"][0]["keys"] == ["0_웹툰", "3_판타지"]
+    assert total == 3
+    assert _titles(items) == [("작품 01권", "0_웹툰"), ("가", "3_판타지"), ("루트책", "")]
+
+
+def test_get_cover_books_paged_scopes_to_selected_directory(tmp_path: Path):
+    manager, files, reps, stats = _cover_fixture(tmp_path)
+    calls = _fake_cover_es(manager, stats, files, reps)
+
+    items, total, _cursor, error = asyncio_runner(manager.get_cover_books_paged(category="A", size=10))
+
+    assert error is None
+    assert total == 4
+    assert calls["files"][0]["categories"] == ["A"]
+    assert [display for _book, display in items] == ["", "나작품", "", "라작품"]
+
+
+def test_get_cover_books_paged_excludes_hidden_categories_everywhere(tmp_path: Path):
+    manager, files, reps, stats = _cover_fixture(tmp_path)
+    calls = _fake_cover_es(manager, stats, files, reps)
+
+    items, total, _cursor, _error = asyncio_runner(manager.get_cover_books_paged(category="A", size=10, exclude_categories=["A/나작품"]))
+
+    assert total == 3
+    assert calls["reps"][0]["keys"] == ["A/라작품"]
+    assert calls["files"][0]["exclude"] == ["A/나작품"]
+    assert calls["reps"][0]["exclude"] == ["A/나작품"]
+    assert [display for _book, display in items] == ["", "", "라작품"]
+
+
+def test_get_cover_books_paged_skips_group_without_representative(tmp_path: Path):
+    manager, files, reps, stats = _cover_fixture(tmp_path)
+    reps.pop("A/나작품")
+    _fake_cover_es(manager, stats, files, reps)
+
+    items, _total, _cursor, _error = asyncio_runner(manager.get_cover_books_paged(category="A", size=10))
+
+    assert [display for _book, display in items] == ["", "", "라작품"]
+
+
+def test_get_cover_books_paged_keeps_paging_when_only_files_remain(tmp_path: Path):
+    manager, files, reps, stats = _cover_fixture(tmp_path)
+    _fake_cover_es(manager, stats, files, reps)
+
+    items, _total, next_cursor, _error = asyncio_runner(manager.get_cover_books_paged(category="A", size=2))
+
+    assert [display for _book, display in items] == ["", "나작품"]
+    assert next_cursor is not None
+
+
+@pytest.mark.parametrize(
+    "bad_cursor",
+    [
+        "bad_cursor!!!",
+        # 디코딩은 되지만 [그룹, 파일] 두 칸 형식이 아니다.
+        "WzFd",
+        "WyJ4IiwgbnVsbF0=",
+    ],
+)
+def test_get_cover_books_paged_rejects_malformed_cursor(tmp_path: Path, bad_cursor: str):
+    manager, files, reps, stats = _cover_fixture(tmp_path)
+    _fake_cover_es(manager, stats, files, reps)
+
+    assert asyncio_runner(manager.get_cover_books_paged(cursor=bad_cursor)) == ([], 0, None, "invalid cursor")
+
+
+def test_get_cover_books_paged_rejects_wrong_cursor_member_shapes(tmp_path: Path):
+    from backend.book_manager import encode_category_cursor
+
+    manager, files, reps, stats = _cover_fixture(tmp_path)
+    _fake_cover_es(manager, stats, files, reps)
+
+    # 묶음·파일 커서는 [수정 시각, 생성 시각, 경로] 세 칸이어야 한다.
+    for member in ([["a"], None], [None, "x"], [None, [1, 2]], [[1, 2, "k", "extra"], None]):
+        assert asyncio_runner(manager.get_cover_books_paged(cursor=encode_category_cursor(member)))[3] == "invalid cursor"
+
+
+def test_get_cover_books_paged_clamps_page_size(tmp_path: Path):
+    manager, files, reps, stats = _cover_fixture(tmp_path)
+    calls = _fake_cover_es(manager, stats, files, reps)
+
+    asyncio_runner(manager.get_cover_books_paged(size=0))
+    asyncio_runner(manager.get_cover_books_paged(size=10**9))
+
+    assert calls["files"][0]["size"] == 1
+    assert calls["files"][1]["size"] == bm_module.MAX_CATEGORY_PAGE_SIZE

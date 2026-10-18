@@ -25,6 +25,7 @@ from urllib.parse import quote, urlparse, unquote
 from fastapi.responses import FileResponse, Response
 from bs4 import BeautifulSoup
 from backend.es_manager import ESManager
+from backend.cover_browse import latest_rank, merge_cover_page, pick_representative, plan_cover_scope
 from backend.book import Book
 from backend.book_classifier import BookClassifierService, clean_empty_parent_dirs
 from utils.corpus_layout import IGNORED_DIR_NAMES
@@ -617,6 +618,49 @@ class BookManager:
         if doc:
             return self.item_class(book_id=book_id, info=doc), None
         return None, f"No book found by '{book_id}'"
+
+    async def get_cover_books_paged(self, category: str = "", size: int = 60, cursor: str = "", exclude_categories: list[str] | None = None) -> tuple[list[tuple[Book, str]], int, str | None, str | None]:
+        """커버 목록용 책을 최신순으로 한 페이지 조회한다. epub, pdf만 대상이다.
+
+        한 파일마다 한 장이지만, 작품 디렉토리(cover_browse.plan_cover_scope)는 대표 한 권으로 묶는다.
+        묶음 항목은 (대표 책, 작품 디렉토리 이름)이고 파일 항목은 (책, "")이다.
+        반환: (항목 목록, 전체 항목 수, 다음 커서 | None, 오류)
+        """
+        LOGGER.debug("# get_cover_books_paged(category='%s', size=%d, cursor='%s', exclude_categories=%s)", category, size, cursor, exclude_categories)
+        size = max(1, min(size, MAX_CATEGORY_PAGE_SIZE))
+        group_after: list[Any] | None = None
+        file_after: list[Any] | None = None
+        if cursor:
+            decoded = decode_category_cursor(cursor)
+            if not (isinstance(decoded, list) and len(decoded) == 2):
+                return [], 0, None, "invalid cursor"
+            group_after, file_after = decoded
+            if (group_after is not None and not (isinstance(group_after, list) and len(group_after) == 3)) or (file_after is not None and not (isinstance(file_after, list) and len(file_after) == 3)):
+                return [], 0, None, "invalid cursor"
+        excluded = exclude_categories or []
+        stats = await asyncio.to_thread(self.es_manager.aggregate_cover_categories)
+        file_categories, groups = plan_cover_scope(stats, category, excluded)
+        remaining = [group for group in groups if group.rank > latest_rank(*group_after)] if group_after else groups
+        files, files_total = await asyncio.to_thread(self.es_manager.search_cover_files_paged, file_categories, size, file_after, excluded)
+        entries, groups_used, files_used = merge_cover_page(remaining[:size], files, size)
+        used_groups = [value for kind, value in entries if kind == "group"]
+        representatives = await asyncio.to_thread(self.es_manager.search_group_representatives, [group.key for group in used_groups], excluded)
+
+        items: list[tuple[Book, str]] = []
+        for kind, value in entries:
+            if kind == "file":
+                book_id, doc, _sort = value
+                items.append((self.item_class(book_id=book_id, info=doc), ""))
+                continue
+            representative = pick_representative(representatives.get(value.key, []))
+            if representative is not None:
+                items.append((self.item_class(book_id=representative[0], info=representative[1]), value.name))
+
+        next_group_after = used_groups[-1].cursor_values if used_groups else group_after
+        next_file_after = files[files_used - 1][2] if files_used else file_after
+        has_more = len(remaining) > groups_used or files_used < len(files) or len(files) == size
+        next_cursor = encode_category_cursor([next_group_after, next_file_after]) if has_more else None
+        return items, len(groups) + files_total, next_cursor, None
 
     async def get_latest_books(self, size: int = MAX_LATEST_BOOK_COUNT, exclude_categories: list[str] | None = None) -> tuple[list[Book], int, str | None]:
         LOGGER.debug("# get_latest_books(size=%d, exclude_categories=%s)", size, exclude_categories)

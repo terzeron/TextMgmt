@@ -24,7 +24,7 @@ from google.oauth2 import id_token as google_id_token
 
 from pydantic import BaseModel, Field, field_validator
 from backend.auth import require_auth, require_admin, optional_auth, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, observation_hash, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
-from backend.book_manager import BookManager, MAX_LATEST_BOOK_COUNT
+from backend.book_manager import BookManager, MAX_CATEGORY_PAGE_SIZE, MAX_LATEST_BOOK_COUNT
 from backend.comics_manager import ComicsManager
 from backend.bookstore import AbstractBookstore, Yes24Bookstore, AladinBookstore, KyoboBookstore, RidibooksBookstore, NaverShoppingBookstore, NaverSeriesBookstore, MunpiaBookstore, JoaraBookstore, NaverWebtoonBookstore, KakaoWebtoonBookstore, BomtoonBookstore, LezhinBookstore, ToptoonBookstore
 from backend.category_mapping import CategoryMapping
@@ -410,6 +410,12 @@ class BookModel(BaseModel):
     created_time: str = ""
     updated_time: str
     score: float = 0.0
+
+
+class BrowseBookModel(BookModel):
+    """커버 목록 항목. 작품 디렉토리로 묶인 항목은 display_title에 디렉토리 이름이 들어 있다."""
+
+    display_title: str = ""
 
 
 class PdfRectModel(BaseModel):
@@ -1080,6 +1086,24 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         if error is None:
             response_object["status"] = "success"
             response_object["result"] = [BookModel(**book.dict()) for book in result]
+        else:
+            response_object["error"] = error
+        return response_object
+
+    @router.get("/browse")
+    async def browse_books(category: str = "", limit: int = Query(60, ge=1, le=MAX_CATEGORY_PAGE_SIZE), cursor: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:
+        """커버 목록용 책을 최신순으로 한 페이지씩 돌려준다. epub, pdf만 대상이고 작품 디렉토리는 대표 한 권으로 묶는다."""
+        LOGGER.debug("# browse_books(category='%s', limit=%d, cursor='%s')", category, limit, cursor)
+        response_object: dict[str, Any] = {"status": "failure"}
+        if category:
+            await _ensure_viewer_category_allowed(payload, category, content_type)
+        hidden_categories = await _get_viewer_hidden_categories(payload, content_type)
+        items, total, next_cursor, error = await manager.get_cover_books_paged(category=category, size=limit, cursor=cursor, exclude_categories=hidden_categories)
+        if error is None:
+            response_object["status"] = "success"
+            response_object["result"] = [BrowseBookModel(**book.dict(), display_title=display_title) for book, display_title in items]
+            response_object["total"] = total
+            response_object["next_cursor"] = next_cursor
         else:
             response_object["error"] = error
         return response_object

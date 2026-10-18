@@ -39,33 +39,66 @@ CoverImage.propTypes = {
   fileType: PropTypes.string,
 };
 
-export default function CoverGrid({ results, basePath }) {
+/**
+ * @param {object}   props
+ * @param {Array}    props.results - 지금까지 받은 책 목록
+ * @param {boolean}  [props.hasMore] - 서버에 이어받을 페이지가 더 있는지
+ * @param {function} [props.onLoadMore] - 끝이 화면에 들어오면 다음 서버 페이지를 부른다
+ * @param {boolean}  [props.loading] - 서버 페이지를 받는 중이면 중복 호출을 막는다
+ * @param {*}        [props.resetKey] - 바뀌면 그린 개수를 처음으로 되돌린다. 없으면 results가 바뀔 때마다 되돌린다
+ */
+export default function CoverGrid({
+  results,
+  basePath,
+  hasMore = false,
+  onLoadMore,
+  loading = false,
+  resetKey,
+}) {
   const [visibleCount, setVisibleCount] = useState(COVER_BATCH_SIZE);
   const sentinelRef = useRef(null);
-  const hasMore = visibleCount < results.length;
+  const hasHiddenResults = visibleCount < results.length;
+  const hasServerPage = hasMore && typeof onLoadMore === "function";
+  const needsSentinel = hasHiddenResults || hasServerPage;
+  // 서버 페이지가 이어붙을 때마다 results 참조가 바뀐다. 그때 그린 개수를 되돌리면 목록이 접히므로
+  // 이어받는 쪽은 resetKey(디렉토리 등)로만 되돌린다.
+  const resetToken = resetKey === undefined ? results : resetKey;
+  const onLoadMoreRef = useRef(onLoadMore);
+  onLoadMoreRef.current = onLoadMore;
 
   useEffect(() => {
     setVisibleCount(COVER_BATCH_SIZE);
-  }, [results]);
+  }, [resetToken]);
 
   useEffect(() => {
-    if (!hasMore) return undefined;
+    if (!needsSentinel) return undefined;
     if (typeof IntersectionObserver === "undefined") {
       setVisibleCount(results.length);
+      if (hasServerPage && !loading) onLoadMoreRef.current();
       return undefined;
     }
     // 묶음이 늘 때마다 다시 관찰한다. 새 묶음을 그린 뒤에도 끝이 화면 안이면 곧바로 다음 묶음을 부른다.
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        if (hasHiddenResults) {
           setVisibleCount((count) => count + COVER_BATCH_SIZE);
+        } else if (hasServerPage && !loading) {
+          onLoadMoreRef.current();
         }
       },
       { rootMargin: "200px" },
     );
     observer.observe(sentinelRef.current);
     return () => observer.disconnect();
-  }, [hasMore, visibleCount, results.length]);
+  }, [
+    needsSentinel,
+    hasHiddenResults,
+    hasServerPage,
+    loading,
+    visibleCount,
+    results.length,
+  ]);
 
   const apiPrefix = basePath.startsWith("/comics") ? "/comics" : "";
   const viewBasePath = basePath.replace("-edit", "-view");
@@ -103,7 +136,9 @@ export default function CoverGrid({ results, basePath }) {
           );
         })}
       </div>
-      {hasMore && <div ref={sentinelRef} className="cover-grid-sentinel" />}
+      {needsSentinel && (
+        <div ref={sentinelRef} className="cover-grid-sentinel" />
+      )}
     </>
   );
 }
@@ -111,4 +146,8 @@ export default function CoverGrid({ results, basePath }) {
 CoverGrid.propTypes = {
   results: PropTypes.array.isRequired,
   basePath: PropTypes.string.isRequired,
+  hasMore: PropTypes.bool,
+  onLoadMore: PropTypes.func,
+  loading: PropTypes.bool,
+  resetKey: PropTypes.any,
 };

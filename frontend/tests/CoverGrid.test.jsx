@@ -205,7 +205,9 @@ describe("CoverGrid", () => {
       />,
     );
 
-    expect(container.querySelector('a[href="/book-view/1?category=_root"]')).toBeTruthy();
+    expect(
+      container.querySelector('a[href="/book-view/1?category=_root"]'),
+    ).toBeTruthy();
     expect(screen.getByText("Unknown")).toBeTruthy();
     expect(screen.getAllByText("?").length).toBe(2);
     expect(screen.getByText("제목만 있음")).toBeTruthy();
@@ -221,9 +223,149 @@ describe("CoverGrid", () => {
       const { container } = render(
         <FreshCoverGrid results={makeBooks(1)} basePath="/book-edit" />,
       );
-      expect(container.querySelector("img").getAttribute("src")).toContain("v=");
+      expect(container.querySelector("img").getAttribute("src")).toContain(
+        "v=",
+      );
     } finally {
       if (saved !== undefined) globalThis.__COVER_VERSION__ = saved;
     }
+  });
+
+  describe("화면 안 선택과 서버 페이지 이어받기", () => {
+    it("서버 페이지를 이어받는 목록의 카드도 새 탭에서 연다", () => {
+      render(
+        <CoverGrid
+          results={makeBooks(1, "epub")}
+          basePath="/book-view"
+          hasMore
+          onLoadMore={vi.fn()}
+        />,
+      );
+
+      const link = screen.getByRole("link");
+      expect(link.getAttribute("target")).toBe("_blank");
+      expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+      // 클릭을 가로채지 않으므로 링크 기본 동작(새 탭)이 그대로 일어난다.
+      expect(fireEvent.click(link)).toBe(true);
+    });
+
+    it("그린 것을 다 보여 준 뒤 끝에 닿으면 서버의 다음 페이지를 부른다", () => {
+      const onLoadMore = vi.fn();
+      render(
+        <CoverGrid
+          results={makeBooks(20, "txt")}
+          basePath="/book-view"
+          hasMore
+          onLoadMore={onLoadMore}
+        />,
+      );
+      expect(screen.getAllByRole("link")).toHaveLength(20);
+
+      observers.at(-1).fire(false);
+      expect(onLoadMore).not.toHaveBeenCalled();
+
+      observers.at(-1).fire(true);
+      expect(onLoadMore).toHaveBeenCalledTimes(1);
+    });
+
+    it("받아 둔 항목이 남아 있으면 서버 페이지보다 먼저 그린다", () => {
+      const onLoadMore = vi.fn();
+      render(
+        <CoverGrid
+          results={makeBooks(45, "txt")}
+          basePath="/book-view"
+          hasMore
+          onLoadMore={onLoadMore}
+        />,
+      );
+
+      observers.at(-1).fire(true);
+
+      expect(screen.getAllByRole("link")).toHaveLength(40);
+      expect(onLoadMore).not.toHaveBeenCalled();
+    });
+
+    it("서버 페이지를 받는 중이면 다음 페이지를 중복해서 부르지 않는다", () => {
+      const onLoadMore = vi.fn();
+      render(
+        <CoverGrid
+          results={makeBooks(20, "txt")}
+          basePath="/book-view"
+          hasMore
+          loading
+          onLoadMore={onLoadMore}
+        />,
+      );
+
+      observers.at(-1).fire(true);
+
+      expect(onLoadMore).not.toHaveBeenCalled();
+    });
+
+    it("서버에 더 없으면 끝 감지 요소를 두지 않는다", () => {
+      const { container } = render(
+        <CoverGrid
+          results={makeBooks(20, "txt")}
+          basePath="/book-view"
+          hasMore={false}
+          onLoadMore={vi.fn()}
+        />,
+      );
+      expect(container.querySelector(".cover-grid-sentinel")).toBeNull();
+    });
+
+    it("resetKey가 그대로면 서버 페이지가 이어붙어도 그린 개수를 되돌리지 않는다", () => {
+      const props = {
+        basePath: "/book-view",
+        hasMore: true,
+        onLoadMore: vi.fn(),
+      };
+      const { rerender } = render(
+        <CoverGrid results={makeBooks(40, "txt")} resetKey="A" {...props} />,
+      );
+      observers.at(-1).fire(true);
+      expect(screen.getAllByRole("link")).toHaveLength(40);
+
+      rerender(
+        <CoverGrid results={makeBooks(100, "txt")} resetKey="A" {...props} />,
+      );
+
+      expect(screen.getAllByRole("link")).toHaveLength(40);
+    });
+
+    it("resetKey가 바뀌면 첫 묶음부터 다시 그린다", () => {
+      const props = {
+        basePath: "/book-view",
+        hasMore: true,
+        onLoadMore: vi.fn(),
+      };
+      const { rerender } = render(
+        <CoverGrid results={makeBooks(40, "txt")} resetKey="A" {...props} />,
+      );
+      observers.at(-1).fire(true);
+      expect(screen.getAllByRole("link")).toHaveLength(40);
+
+      rerender(
+        <CoverGrid results={makeBooks(40, "txt")} resetKey="B" {...props} />,
+      );
+
+      expect(screen.getAllByRole("link")).toHaveLength(20);
+    });
+
+    it("IntersectionObserver가 없어도 서버 페이지를 이어받는다", () => {
+      delete globalThis.IntersectionObserver;
+      const onLoadMore = vi.fn();
+      render(
+        <CoverGrid
+          results={makeBooks(25, "txt")}
+          basePath="/book-view"
+          hasMore
+          onLoadMore={onLoadMore}
+        />,
+      );
+      expect(screen.getAllByRole("link")).toHaveLength(25);
+      // 중복 호출은 loading 상태와 useCoverBrowse의 loadingRef가 막는다.
+      expect(onLoadMore).toHaveBeenCalled();
+    });
   });
 });
