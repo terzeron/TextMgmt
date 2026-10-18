@@ -475,6 +475,13 @@ class PdfDeletePagesModel(BaseModel):
     inserts: list[PdfInsertModel] = []
 
 
+class PdfSwapPagesModel(BaseModel):
+    """page 쪽과 바로 이웃한 other 쪽의 순서를 맞바꾼다."""
+
+    page: int
+    other: int
+
+
 class CategoryRenameModel(BaseModel):
     old_category: str
     new_category: str
@@ -736,6 +743,14 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     async def delete_pdf_pages(book_id: int, body: PdfDeletePagesModel) -> dict[str, Any]:
         LOGGER.debug("# delete_pdf_pages(book_id=%d, pages=%r, crops=%r, splits=%r, inserts=%r)", book_id, body.pages, body.crops, body.splits, [(i.page, i.url or "<upload>") for i in body.inserts])
         result, error = await manager.delete_pdf_pages(book_id, body.pages, [c.model_dump() for c in body.crops], [s.model_dump() for s in body.splits], [i.model_dump() for i in body.inserts])
+        if error is None:
+            return {"status": "success", "result": result}
+        return {"status": "failure", "error": error}
+
+    @router.post("/pdf-pages/{book_id}/swap", dependencies=admin_dep)
+    async def swap_pdf_pages(book_id: int, body: PdfSwapPagesModel) -> dict[str, Any]:
+        LOGGER.debug("# swap_pdf_pages(book_id=%d, page=%d, other=%d)", book_id, body.page, body.other)
+        result, error = await manager.swap_pdf_pages(book_id, body.page, body.other)
         if error is None:
             return {"status": "success", "result": result}
         return {"status": "failure", "error": error}

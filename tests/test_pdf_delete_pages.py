@@ -162,6 +162,74 @@ async def test_reindex_failure_reports_backup_location(env, loader):
     assert (root / "0_trash" / "book.pdf").is_file()
 
 
+# ── 쪽 순서 바꾸기 ──
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page,other,expected", [(2, 3, [100, 102, 101, 103, 104]), (3, 2, [100, 102, 101, 103, 104]), (1, 2, [101, 100, 102, 103, 104]), (4, 5, [100, 101, 102, 104, 103])])
+async def test_swap_exchanges_adjacent_pages_and_keeps_original_in_trash(env, loader, page, other, expected):
+    bm, es, pdf, root = env
+    original = pdf.read_bytes()
+
+    result, error = await bm.swap_pdf_pages(1, page, other)
+
+    assert error is None
+    assert result == {"swapped": [page, other], "backup": "0_trash/book.pdf", "backup_created": True}
+    assert _widths(pdf) == expected
+    assert (root / "0_trash" / "book.pdf").read_bytes() == original
+    es.delete.assert_called_once_with(1)
+    bm.add_book.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page,other", [(1, 3), (2, 2), (0, 1), (5, 6), (-1, 0)])
+async def test_swap_rejects_non_adjacent_or_out_of_range_pages(env, loader, page, other):
+    bm, es, pdf, root = env
+    original = pdf.read_bytes()
+
+    result, error = await bm.swap_pdf_pages(1, page, other)
+
+    assert result is None and error
+    assert pdf.read_bytes() == original
+    assert not (root / "0_trash").exists()
+    es.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_swap_does_not_overwrite_existing_backup(env, loader):
+    bm, _, pdf, root = env
+    original = pdf.read_bytes()
+
+    await bm.swap_pdf_pages(1, 1, 2)
+    result, error = await bm.swap_pdf_pages(1, 1, 2)
+
+    assert error is None and result["backup_created"] is False
+    assert _widths(pdf) == [100, 101, 102, 103, 104]
+    assert (root / "0_trash" / "book.pdf").read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_swap_reindex_failure_reports_backup_location(env, loader):
+    bm, _, pdf, root = env
+    bm.add_book = AsyncMock(return_value=(None, "boom"))
+
+    result, error = await bm.swap_pdf_pages(1, 2, 3)
+
+    assert result is None and "0_trash/book.pdf" in error
+    assert _widths(pdf) == [100, 102, 101, 103, 104]
+
+
+@pytest.mark.asyncio
+async def test_swap_rejects_non_pdf_and_unknown_book(env, loader):
+    bm, es, pdf, _ = env
+    es.search_by_id.return_value = {**es.search_by_id.return_value, "file_path": "cat/book.epub", "file_type": "epub"}
+    _, error = await bm.swap_pdf_pages(1, 1, 2)
+    assert "Not a PDF" in error
+    es.search_by_id.return_value = None
+    _, error = await bm.swap_pdf_pages(1, 1, 2)
+    assert "Book not found" in error
+
+
 # ── 이미지 크롭 ──
 
 
@@ -1225,6 +1293,7 @@ class TestInsertUploadEndpoint:
         fake = MagicMock()
         fake.preview_insert_upload = AsyncMock(return_value=(b"\xff\xd8\xffJPEG", None))
         fake.delete_pdf_pages = AsyncMock(return_value=({"remaining_pages": 5}, None))
+        fake.swap_pdf_pages = AsyncMock(return_value=({"swapped": [2, 3]}, None))
         proxy = main.book_manager
         previous = proxy._instance
         proxy._instance = fake
@@ -1250,6 +1319,22 @@ class TestInsertUploadEndpoint:
         response = http.post("/pdf-pages/1/insert-preview-upload", files={"file": ("a.txt", b"x", "text/plain")})
         assert response.status_code == 400
         assert "형식" in response.text
+
+    def test_swap_passes_both_pages_to_the_manager(self, client):
+        http, fake = client
+        response = http.post("/pdf-pages/1/swap", json={"page": 3, "other": 2})
+        assert response.json() == {"status": "success", "result": {"swapped": [2, 3]}}
+        fake.swap_pdf_pages.assert_awaited_once_with(1, 3, 2)
+
+    def test_swap_failure_is_reported_in_the_body(self, client):
+        http, fake = client
+        fake.swap_pdf_pages.return_value = (None, "바로 앞이나 뒤 쪽과만 순서를 바꿀 수 있습니다")
+        assert http.post("/pdf-pages/1/swap", json={"page": 1, "other": 3}).json()["status"] == "failure"
+
+    def test_swap_requires_both_pages(self, client):
+        http, fake = client
+        assert http.post("/pdf-pages/1/swap", json={"page": 1}).status_code == 422
+        fake.swap_pdf_pages.assert_not_awaited()
 
     def test_upload_without_a_file_is_a_validation_error(self, client):
         http, _ = client

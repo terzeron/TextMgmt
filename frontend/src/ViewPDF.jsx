@@ -13,6 +13,8 @@ import SaveIcon from "@mui/icons-material/Save";
 import CropFreeIcon from "@mui/icons-material/CropFree";
 import VerticalSplitOutlinedIcon from "@mui/icons-material/VerticalSplitOutlined";
 import AddPhotoAlternateIcon from "@mui/icons-material/AddPhotoAlternate";
+import ArrowDropUpIcon from "@mui/icons-material/ArrowDropUp";
+import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import PdfInsertImageModal from "./PdfInsertImageModal";
 import { describeHttpError } from "./httpError";
 import { blobToBase64, requestInsertPreview } from "./insertPreview";
@@ -246,6 +248,35 @@ export default function ViewPDF({
       setSaving(false);
     }
   };
+  // 쪽(1-based)을 이웃한 쪽과 맞바꾼다. 다른 표시와 달리 바로 서버에 저장하고 PDF를 다시 불러온다.
+  // 저장하지 않은 표시는 쪽 번호가 어긋나므로, 표시가 남아 있는 동안에는 막는다.
+  const swapPages = async (pageNum, otherNum) => {
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const response = await fetch(
+        getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}/swap`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ page: pageNum, other: otherNum }),
+        },
+      );
+      if (!response.ok) throw new Error(await describeHttpError(response));
+      const body = await response.json();
+      if (body.status !== "success") {
+        throw new Error(body.error || "순서 변경에 실패했습니다.");
+      }
+      setReloadToken((prev) => prev + 1);
+    } catch (err) {
+      setSaveError(err?.message || "순서 변경에 실패했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const hasPendingEdits = markedPages.size > 0 || insertions.size > 0;
   const zoomDown = () => setZoomIndex((prev) => Math.max(0, prev - 1));
   const zoomUp = () =>
     setZoomIndex((prev) => Math.min(ZOOM_STEPS.length - 1, prev + 1));
@@ -921,6 +952,34 @@ export default function ViewPDF({
                     <SaveIcon fontSize="small" />
                   </button>
                 )}
+                <button
+                  type="button"
+                  className="viewer-edit-btn"
+                  aria-label={`${pageNum}쪽을 이전 쪽과 순서 바꾸기`}
+                  title={
+                    hasPendingEdits
+                      ? "저장하지 않은 변경이 있으면 순서를 바꿀 수 없습니다"
+                      : "이전 쪽과 순서 바꾸기"
+                  }
+                  disabled={saving || hasPendingEdits || pageNum <= 1}
+                  onClick={() => swapPages(pageNum, pageNum - 1)}
+                >
+                  <ArrowDropUpIcon fontSize="small" />
+                </button>
+                <button
+                  type="button"
+                  className="viewer-edit-btn"
+                  aria-label={`${pageNum}쪽을 다음 쪽과 순서 바꾸기`}
+                  title={
+                    hasPendingEdits
+                      ? "저장하지 않은 변경이 있으면 순서를 바꿀 수 없습니다"
+                      : "다음 쪽과 순서 바꾸기"
+                  }
+                  disabled={saving || hasPendingEdits || pageNum >= totalPages}
+                  onClick={() => swapPages(pageNum, pageNum + 1)}
+                >
+                  <ArrowDropDownIcon fontSize="small" />
+                </button>
                 <button
                   type="button"
                   className={`viewer-edit-btn${insertion ? " active" : ""}`}

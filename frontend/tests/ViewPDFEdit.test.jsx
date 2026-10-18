@@ -918,4 +918,75 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
       expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview-1");
     });
   });
+
+  describe("쪽 순서 바꾸기", () => {
+    const swapPosts = (fetchMock) =>
+      fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/swap"));
+
+    it("쪽마다 위·아래 삼각형 버튼이 있고 첫 쪽의 위, 마지막 쪽의 아래는 꺼져 있다", async () => {
+      globalThis.fetch = createFetch(okResponse);
+      await renderEditable();
+
+      expect(screen.getAllByLabelText(/이전 쪽과 순서 바꾸기/)).toHaveLength(3);
+      expect(screen.getAllByLabelText(/다음 쪽과 순서 바꾸기/)).toHaveLength(3);
+      expect(screen.getByLabelText("1쪽을 이전 쪽과 순서 바꾸기").disabled).toBe(true);
+      expect(screen.getByLabelText("3쪽을 다음 쪽과 순서 바꾸기").disabled).toBe(true);
+      expect(screen.getByLabelText("2쪽을 이전 쪽과 순서 바꾸기").disabled).toBe(false);
+    });
+
+    it("editable 이 아니면 순서 버튼이 없다", async () => {
+      globalThis.fetch = createFetch(okResponse);
+      render(<ViewPDF bookId={1} pageCount={10} preview />);
+      await waitFor(() => expect(screen.getByText("총 3쪽 표시")).toBeTruthy());
+      expect(screen.queryByLabelText(/순서 바꾸기/)).toBeNull();
+    });
+
+    it("위 삼각형은 이전 쪽, 아래 삼각형은 다음 쪽과 맞바꾸도록 POST 하고 PDF 를 다시 불러온다", async () => {
+      const fetchMock = createFetch(okResponse);
+      globalThis.fetch = fetchMock;
+      await renderEditable();
+      const getsBefore = fetchMock.mock.calls.filter(([, init]) => !init?.method).length;
+
+      fireEvent.click(screen.getByLabelText("2쪽을 이전 쪽과 순서 바꾸기"));
+      await waitFor(() => expect(swapPosts(fetchMock)).toHaveLength(1));
+      expect(swapPosts(fetchMock)[0][0]).toBe("http://localhost:8000/pdf-pages/1/swap");
+      expect(JSON.parse(swapPosts(fetchMock)[0][1].body)).toEqual({ page: 2, other: 1 });
+      await waitFor(() => {
+        const getsAfter = fetchMock.mock.calls.filter(([, init]) => !init?.method).length;
+        expect(getsAfter).toBeGreaterThan(getsBefore);
+      });
+
+      await waitFor(() => expect(screen.getByLabelText("2쪽을 다음 쪽과 순서 바꾸기").disabled).toBe(false));
+      fireEvent.click(screen.getByLabelText("2쪽을 다음 쪽과 순서 바꾸기"));
+      await waitFor(() => expect(swapPosts(fetchMock)).toHaveLength(2));
+      expect(JSON.parse(swapPosts(fetchMock)[1][1].body)).toEqual({ page: 2, other: 3 });
+    });
+
+    it("서버가 실패를 돌려주면 오류를 보인다", async () => {
+      globalThis.fetch = createFetch({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ status: "failure", error: "순서 변경 불가" }),
+      });
+      await renderEditable();
+
+      fireEvent.click(screen.getByLabelText("2쪽을 다음 쪽과 순서 바꾸기"));
+
+      await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("순서 변경 불가"));
+    });
+
+    it("저장하지 않은 표시가 있으면 모든 순서 버튼이 꺼진다", async () => {
+      const fetchMock = createFetch(okResponse);
+      globalThis.fetch = fetchMock;
+      await renderEditable();
+
+      fireEvent.click(screen.getByLabelText("3쪽 삭제 표시"));
+
+      for (const button of screen.getAllByLabelText(/순서 바꾸기/)) {
+        expect(button.disabled).toBe(true);
+      }
+      fireEvent.click(screen.getByLabelText("2쪽을 이전 쪽과 순서 바꾸기"));
+      expect(swapPosts(fetchMock)).toHaveLength(0);
+    });
+  });
 });
