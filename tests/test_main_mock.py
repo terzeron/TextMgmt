@@ -338,6 +338,22 @@ class TestViewerHiddenAccess:
         assert r.json()["next_cursor"] is None
         mock_bm.get_cover_books_paged.assert_called_once_with(category="", size=60, cursor="", exclude_categories=[])
 
+    def test_browse_uncovered_uses_uncovered_query_and_reports_unknown_total(self, client, mock_bm, mock_cat):
+        book = MagicMock()
+        book.dict.return_value = {"book_id": 3, "category": "A", "title": "나", "author": "", "file_path": "A/나.pdf", "file_type": "pdf", "file_size": 1, "updated_time": "2024-01-01"}
+        mock_bm.get_uncovered_books_paged.return_value = ([(book, "")], None, "next-cur", None)
+
+        r = client.get("/browse?uncovered=true&limit=30")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "success"
+        assert body["total"] is None
+        assert body["next_cursor"] == "next-cur"
+        assert body["result"][0]["book_id"] == 3
+        mock_bm.get_uncovered_books_paged.assert_called_once_with(category="", size=30, cursor="", exclude_categories=[])
+        mock_bm.get_cover_books_paged.assert_not_called()
+
     def test_viewer_browse_excludes_hidden_categories(self, client, mock_bm, mock_cat):
         main_module.app.dependency_overrides[main_module.require_auth] = lambda: VIEWER_PAYLOAD
         mock_cat.get_hidden_categories.return_value = ["secret", "shared"]

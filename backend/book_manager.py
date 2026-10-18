@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, Response
 from bs4 import BeautifulSoup
 from backend.es_manager import ESManager
 from backend.cover_browse import latest_rank, merge_cover_page, pick_representative, plan_cover_scope
+from backend.cover_status import CoverStatusCache, has_official_cover
 from backend.book import Book
 from backend.book_classifier import BookClassifierService, clean_empty_parent_dirs
 from utils.corpus_layout import IGNORED_DIR_NAMES
@@ -140,8 +141,11 @@ class BookManager:
     # 커버 뷰 썸네일. 최신 목록은 한 화면에 수십 장을 받으므로 원본 대신 작게 줄여 보낸다.
     COVER_THUMBNAIL_WIDTH = 300
     COVER_JPEG_QUALITY = 85
-    COVER_CACHE_VERSION = 4
+    COVER_CACHE_VERSION = 5
     COVER_ASPECT_RATIO = 2 / 3
+    COVER_TALL_RATIO = 2
+    # 미커버 목록이 한 요청에서 커버 목록을 훑는 최대 시간(초). 표지가 있는 책이 많으면 여러 요청으로 나눠 이어받는다.
+    UNCOVERED_SCAN_BUDGET_SECONDS = 20
     COVER_BACKGROUND_RATIO_THRESHOLD = 0.60
     COVER_DETAIL_RATIO_THRESHOLD = 0.15
     # EPUB 뷰어용 이미지 축소 정책. epub.js는 책 전체를 브라우저 메모리에
@@ -661,6 +665,40 @@ class BookManager:
         has_more = len(remaining) > groups_used or files_used < len(files) or len(files) == size
         next_cursor = encode_category_cursor([next_group_after, next_file_after]) if has_more else None
         return items, len(groups) + files_total, next_cursor, None
+
+    def _uncovered_flags(self, books: list[Book]) -> list[bool]:
+        """책마다 정식 표지가 없으면 True. 읽을 수 없는 파일은 목록에서 빼려고 표지가 있는 것으로 본다."""
+        cache = CoverStatusCache(self.path_prefix / ".cover_cache" / "cover_status.sqlite3")
+        flags: list[bool] = []
+        for book in books:
+            try:
+                covered = cache.get_or_compute(book.file_path, lambda book=book: has_official_cover(book.file_path, book.file_type, BookManager._cover_render_lock))
+            except Exception as e:
+                LOGGER.warning("Cover status failed for %s: %s: %s", book.file_path, type(e).__name__, e)
+                covered = True
+            flags.append(not covered)
+        return flags
+
+    async def get_uncovered_books_paged(self, category: str = "", size: int = 60, cursor: str = "", exclude_categories: list[str] | None = None) -> tuple[list[tuple[Book, str]], int | None, str | None, str | None]:
+        """정식 표지가 없는 책만 최신순으로 한 페이지 조회한다. 항목 규칙은 get_cover_books_paged와 같다.
+
+        커버 목록을 한 페이지씩 이어서 훑으며 표지가 없는 항목만 모은다. 모은 항목이 size개 이상이거나
+        목록 끝이거나 시간 예산이 끝나면 멈추고, 훑은 곳까지의 커서를 돌려준다. 전체 개수는 알 수 없어 None이다.
+        """
+        LOGGER.debug("# get_uncovered_books_paged(category='%s', size=%d, cursor='%s', exclude_categories=%s)", category, size, cursor, exclude_categories)
+        size = max(1, min(size, MAX_CATEGORY_PAGE_SIZE))
+        deadline = time.monotonic() + self.UNCOVERED_SCAN_BUDGET_SECONDS
+        items: list[tuple[Book, str]] = []
+        scan_cursor = cursor
+        while True:
+            page, _total, next_cursor, error = await self.get_cover_books_paged(category=category, size=size, cursor=scan_cursor, exclude_categories=exclude_categories)
+            if error is not None:
+                return [], None, None, error
+            flags = await asyncio.to_thread(self._uncovered_flags, [book for book, _title in page])
+            items.extend(entry for entry, uncovered in zip(page, flags) if uncovered)
+            if not next_cursor or len(items) >= size or (items and time.monotonic() > deadline):
+                return items, None, next_cursor, None
+            scan_cursor = next_cursor
 
     async def get_latest_books(self, size: int = MAX_LATEST_BOOK_COUNT, exclude_categories: list[str] | None = None) -> tuple[list[Book], int, str | None]:
         LOGGER.debug("# get_latest_books(size=%d, exclude_categories=%s)", size, exclude_categories)
@@ -3482,18 +3520,19 @@ class BookManager:
                     def render_cover(page: Any) -> Any:
                         page_width = page.get_width()
                         page_height = page.get_height()
-                        cover_width = min(page_width, page_height * BookManager.COVER_ASPECT_RATIO)
-                        cover_height = cover_width / BookManager.COVER_ASPECT_RATIO
-                        crop = (0, page_height - cover_height, page_width - cover_width, 0)
-                        scale = BookManager.COVER_THUMBNAIL_WIDTH / cover_width
-                        rendered = page.render(scale=scale, crop=crop).to_pil()
-                        cover_size = (
-                            BookManager.COVER_THUMBNAIL_WIDTH,
-                            round(BookManager.COVER_THUMBNAIL_WIDTH / BookManager.COVER_ASPECT_RATIO),
-                        )
-                        if rendered.size != cover_size:
-                            rendered = rendered.resize(cover_size, Image.Resampling.LANCZOS)
-                        return rendered
+                        width = BookManager.COVER_THUMBNAIL_WIDTH
+                        height = round(width / BookManager.COVER_ASPECT_RATIO)
+                        if page_height >= page_width * BookManager.COVER_TALL_RATIO:
+                            # 가로의 2배 이상 긴 첫 쪽은 표지가 아닐 수 있어 가로 폭에 맞추고 위쪽 표지 영역만 쓴다.
+                            cover_height = page_width / BookManager.COVER_ASPECT_RATIO
+                            crop = (0, page_height - cover_height, 0, 0)
+                            rendered = page.render(scale=width / page_width, crop=crop).to_pil()
+                            if rendered.size != (width, height):
+                                rendered = rendered.resize((width, height), Image.Resampling.LANCZOS)
+                            return rendered
+                        # 그 밖에는 자르지 않고 쪽 전체를 비율대로 줄인다. 남는 공간은 화면에서 비워 둔다.
+                        scale = min(width / page_width, height / page_height)
+                        return page.render(scale=scale).to_pil()
 
                     img = render_cover(pdf[0])
                     if len(pdf) > 1 and BookManager._is_mostly_blank_cover(img):

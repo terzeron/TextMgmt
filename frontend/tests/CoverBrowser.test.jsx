@@ -48,7 +48,6 @@ const renderBrowser = (props = {}) =>
       basePath="/book-view"
       role="admin"
       category=""
-      onClearCategory={vi.fn()}
       {...props}
     />,
   );
@@ -67,7 +66,41 @@ describe("CoverBrowser", () => {
     expect(mockUseCoverBrowse).toHaveBeenCalledWith({
       apiPrefix: "/comics",
       category: "소설",
+      uncovered: false,
     });
+  });
+
+  it("미커버 버튼을 누르면 훅에 uncovered를 넘기고 제목에 표시한다", () => {
+    renderBrowser();
+    const button = screen.getByRole("button", { name: "미커버" });
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(button);
+
+    expect(mockUseCoverBrowse).toHaveBeenLastCalledWith({
+      apiPrefix: "",
+      category: "",
+      uncovered: true,
+    });
+    expect(
+      screen.getByRole("button", { name: "미커버" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(screen.getByTestId("title").textContent).toContain("미커버만");
+    expect(searchResultProps.current.emptyMessage).toBe("미커버 책이 없습니다.");
+    expect(searchResultProps.current.coverResetKey).toBe("|true");
+
+    fireEvent.click(screen.getByRole("button", { name: "미커버" }));
+    expect(mockUseCoverBrowse).toHaveBeenLastCalledWith({
+      apiPrefix: "",
+      category: "",
+      uncovered: false,
+    });
+  });
+
+  it("디렉토리를 골라도 전체 보기 버튼은 없고 미커버 버튼만 둔다", () => {
+    renderBrowser({ category: "소설" });
+    expect(screen.getByRole("button", { name: "미커버" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /전체 .* 보기/ })).toBeNull();
   });
 
   it("최신 탭과 같은 카드(SearchResult)에 목록과 서버 페이지 상태를 넘긴다", () => {
@@ -80,7 +113,7 @@ describe("CoverBrowser", () => {
     expect(props.hasMore).toBe(true);
     expect(props.loading).toBe(true);
     // 커버 보기에서 디렉토리가 바뀌면 그린 개수를 처음으로 되돌리는 기준이다.
-    expect(props.coverResetKey).toBe("소설");
+    expect(props.coverResetKey).toBe("소설|false");
     expect(props.role).toBe("admin");
     expect(props.showEditButton).toBe(true);
   });
@@ -113,13 +146,10 @@ describe("CoverBrowser", () => {
     expect(screen.getByTestId("title").textContent).toContain("전체 만화");
   });
 
-  it("디렉토리를 골랐으면 이름을 보여 주고 루트로 되돌리는 버튼을 둔다", () => {
-    const onClearCategory = vi.fn();
-    renderBrowser({ category: "5_수학과학일반", onClearCategory });
+  it("디렉토리를 골랐으면 이름을 보여 준다", () => {
+    renderBrowser({ category: "5_수학과학일반" });
 
     expect(screen.getByTestId("title").textContent).toContain("5_수학과학일반");
-    fireEvent.click(screen.getByRole("button", { name: "전체 책 보기" }));
-    expect(onClearCategory).toHaveBeenCalledTimes(1);
   });
 
   it("목록/커버 전환 버튼을 최신 탭과 같은 모양으로 둔다", () => {

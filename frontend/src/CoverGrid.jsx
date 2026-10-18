@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
 
 import { getApiUrlPrefix } from "./Common.js";
+import { markTallCover } from "./coverImageFit.js";
 
 /* global __COVER_VERSION__ */
 // 한 번에 그리는 카드 수. 커버 요청도 이만큼씩만 나간다.
@@ -29,6 +30,7 @@ function CoverImage({ src, fileType }) {
       src={src}
       alt=""
       loading="lazy"
+      onLoad={markTallCover}
       onError={() => setFailed(true)}
     />
   );

@@ -10,6 +10,7 @@ import { coverAdminRequest } from "./coverAdminApi";
 import { createStoreQueue, selectViewportTargets } from "./coverFetchQueue";
 import { rankCoverImages, formatCoverBytes } from "./coverImageRanking";
 import CoverImagePreview from "./CoverImagePreview";
+import { markTallCover } from "./coverImageFit.js";
 import "./CoverGrid.css";
 import "./BookCoverAdmin.css";
 
@@ -420,7 +421,7 @@ export default function BookCoverAdmin() {
                       disabled={!item.previewReady || !item.saved} onClick={() => setItems((previous) => previous.filter((entry) => entry.file_path !== item.file_path))}>
                       <img className="cover-grid-image" loading="lazy" alt={`${item.title} ${item.saved ? "저장한 표지" : "현재 표지"}`}
                         src={`${getApiUrlPrefix()}${API_ROOT}/preview?file_path=${encodeURIComponent(item.file_path)}&v=${encodeURIComponent(item.saved?.revision || item.revision)}`}
-                        onLoad={() => previewState(item.file_path, { previewReady: true })}
+                        onLoad={(event) => { markTallCover(event); previewState(item.file_path, { previewReady: true }); }}
                         onError={() => previewState(item.file_path, { previewReady: false, error: "저장한 표지를 표시하지 못했습니다. 새로고침하세요" })} />
                     </button>
                   ) : <div className="cover-grid-cover"><div className="cover-grid-placeholder">표지 없음</div></div>}
@@ -476,7 +477,7 @@ export default function BookCoverAdmin() {
                                 aria-label={`${label} ${candidate.title} 표지 선택`} onClick={() => save(item, candidate)}
                                 ref={(node) => { if (node) candidates.current.set(candidate.candidate_id, node); else candidates.current.delete(candidate.candidate_id); }}>
                                 {image?.url ? <img className="cover-grid-image" src={image.url} alt={candidate.title}
-                                  onLoad={(event) => recordImageSize(candidate.candidate_id, event.currentTarget)} />
+                                  onLoad={(event) => { markTallCover(event); recordImageSize(candidate.candidate_id, event.currentTarget); }} />
                                   : <div className="cover-grid-placeholder">{image?.loading ? <Spinner size="sm" /> : image?.error ? "이미지 오류" : "표지 후보"}</div>}
                               </button>
                               </div>

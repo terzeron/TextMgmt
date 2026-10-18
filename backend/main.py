@@ -1114,14 +1114,18 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.get("/browse")
-    async def browse_books(category: str = "", limit: int = Query(60, ge=1, le=MAX_CATEGORY_PAGE_SIZE), cursor: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:
-        """커버 목록용 책을 최신순으로 한 페이지씩 돌려준다. epub, pdf만 대상이고 작품 디렉토리는 대표 한 권으로 묶는다."""
-        LOGGER.debug("# browse_books(category='%s', limit=%d, cursor='%s')", category, limit, cursor)
+    async def browse_books(category: str = "", limit: int = Query(60, ge=1, le=MAX_CATEGORY_PAGE_SIZE), cursor: str = "", uncovered: bool = False, payload: dict = Depends(require_auth)) -> dict[str, Any]:
+        """커버 목록용 책을 최신순으로 한 페이지씩 돌려준다. epub, pdf만 대상이고 작품 디렉토리는 대표 한 권으로 묶는다.
+
+        uncovered=true면 정식 표지가 없는 책만 돌려주고 total은 알 수 없어 null이다.
+        """
+        LOGGER.debug("# browse_books(category='%s', limit=%d, cursor='%s', uncovered=%s)", category, limit, cursor, uncovered)
         response_object: dict[str, Any] = {"status": "failure"}
         if category:
             await _ensure_viewer_category_allowed(payload, category, content_type)
         hidden_categories = await _get_viewer_hidden_categories(payload, content_type)
-        items, total, next_cursor, error = await manager.get_cover_books_paged(category=category, size=limit, cursor=cursor, exclude_categories=hidden_categories)
+        fetch_page = manager.get_uncovered_books_paged if uncovered else manager.get_cover_books_paged
+        items, total, next_cursor, error = await fetch_page(category=category, size=limit, cursor=cursor, exclude_categories=hidden_categories)
         if error is None:
             response_object["status"] = "success"
             response_object["result"] = [BrowseBookModel(**book.dict(), display_title=display_title) for book, display_title in items]
