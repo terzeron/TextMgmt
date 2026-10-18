@@ -28,8 +28,15 @@
 .cover-grid-image {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* 잘라내지 않고 영역 안에 전체를 보여준다. 남는 공간은 비워 둔다. */
+  object-fit: contain;
   display: block;
+}
+
+/* 가로보다 2배 이상 긴 이미지는 가로 폭에 맞추고 위쪽부터 보여준다. */
+.cover-grid-image[data-tall="true"] {
+  object-fit: cover;
+  object-position: top;
 }
 
 .cover-grid-placeholder {

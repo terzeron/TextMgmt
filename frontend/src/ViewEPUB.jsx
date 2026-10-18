@@ -8,6 +8,7 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
 import ViewerFontSelect from "./ViewerFontSelect";
 import EpubCoverModal from "./EpubCoverModal";
 import { describeHttpError } from "./httpError";
+import { blobToBase64, requestInsertPreview } from "./insertPreview";
 import "./viewerEditActions.css";
 import {
   buildFontFaceCss,
@@ -223,33 +224,22 @@ export default function ViewEPUB({
   // 뷰어 높이는 상수로 둔다(측정·재계산 기계는 텍스트 잘림의 원인이었다).
   const containerHeight = standalone ? "100%" : preview ? "60vh" : "100dvh";
 
-  // 서버가 URL 의 이미지를 내려받아 정규화한 미리보기를 받아 온다. 저장할 때 들어가는 것과 같은 이미지다.
+  // 서버가 이미지(URL 이면 내려받고, 이 기기의 파일이면 받아서)를 정규화한 미리보기를 받아 온다. 저장할 때 들어가는 것과 같은 이미지다.
   // 실패 사유(문자열)를 돌려주고, 성공하면 새 표지를 표시한 뒤 null 을 돌려준다.
   // 미리보기는 PDF 이미지 삽입과 같은 insert-preview 를 쓴다.
-  const previewCover = async (url) => {
+  const previewCover = async (source) => {
     try {
-      const response = await fetch(
-        `${getApiUrlPrefix()}${apiPrefix}/pdf-pages/${bookId}/insert-preview`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url }),
-        },
-      );
-      if (!response.ok) {
-        // 400 은 서버가 사람이 읽을 사유를 본문에 담아 보낸 것이다.
-        if (response.status === 400) {
-          const reason = (await response.text()).trim();
-          if (reason) return reason;
-        }
-        return await describeHttpError(response);
-      }
-      const blob = await response.blob();
+      const blob = await requestInsertPreview(apiPrefix, bookId, source);
       if (cancelledRef.current) return null;
       setSaveError(null);
       setRemoveMarked(false);
-      replacePendingCover({ url, previewSrc: URL.createObjectURL(blob) });
+      replacePendingCover({
+        ...(typeof source === "string"
+          ? { url: source }
+          : { label: source.name }),
+        blob,
+        previewSrc: URL.createObjectURL(blob),
+      });
       return null;
     } catch (err) {
       return err?.message || "이미지를 가져오지 못했습니다";
@@ -277,6 +267,14 @@ export default function ViewEPUB({
     setSaving(true);
     setSaveError(null);
     try {
+      // URL 로 고른 이미지는 서버가 다시 내려받고, 이 기기에서 고른 이미지는 미리 본 JPEG 를 그대로 보낸다.
+      const coverBody = removeMarked
+        ? null
+        : JSON.stringify(
+            pendingCover.url
+              ? { url: pendingCover.url }
+              : { image_data: await blobToBase64(pendingCover.blob) },
+          );
       const response = await fetch(
         `${getApiUrlPrefix()}${apiPrefix}/epub-cover/${bookId}`,
         removeMarked
@@ -285,7 +283,7 @@ export default function ViewEPUB({
               method: "POST",
               credentials: "include",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ url: pendingCover.url }),
+              body: coverBody,
             },
       );
       if (!response.ok) throw new Error(await describeHttpError(response));
@@ -322,7 +320,13 @@ export default function ViewEPUB({
     const controller = new AbortController();
     const url = `${getApiUrlPrefix()}${apiPrefix}/preview/${bookId}?chapters=${chapters}`;
 
-    fetch(url, { signal: controller.signal, credentials: "include" })
+    // 표지 저장은 EPUB 의 mtime 을 되돌린다. 응답에 Last-Modified 만 있고 만료가 없으면 브라우저가
+    // 저장 전 응답을 휴리스틱으로 재사용해 서버에 묻지도 않으므로, 매번 재검증한다.
+    fetch(url, {
+      signal: controller.signal,
+      credentials: "include",
+      cache: "no-cache",
+    })
       .then(async (res) => {
         if (!res.ok) {
           const errText = await res.text();
@@ -748,7 +752,7 @@ export default function ViewEPUB({
               data-testid="epub-cover-pending"
             >
               <img src={pendingCover.previewSrc} alt="저장 전 새 표지" />
-              <div className="viewer-edit-tag" title={pendingCover.url}>
+              <div className="viewer-edit-tag" title={pendingCover.url ?? pendingCover.label}>
                 새 표지 · 저장 전
               </div>
             </div>

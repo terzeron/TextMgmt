@@ -59,6 +59,18 @@ describe("buildBrowseUrl", () => {
     );
   });
 
+  it("uncovered면 uncovered=true를 맨 뒤에 붙인다", () => {
+    expect(buildBrowseUrl("", "", "", true)).toBe(
+      `/browse?limit=${BROWSE_PAGE_SIZE}&uncovered=true`,
+    );
+    expect(buildBrowseUrl("/comics", "a", "cur", true)).toBe(
+      `/comics/browse?limit=${BROWSE_PAGE_SIZE}&category=a&cursor=cur&uncovered=true`,
+    );
+    expect(buildBrowseUrl("", "", "", false)).toBe(
+      `/browse?limit=${BROWSE_PAGE_SIZE}`,
+    );
+  });
+
   it("category가 있으면 쿼리 파라미터로 붙인다", () => {
     expect(buildBrowseUrl("", "5_수학과학일반", "")).toBe(
       `/browse?limit=${BROWSE_PAGE_SIZE}&category=${encodeURIComponent("5_수학과학일반")}`,
@@ -119,6 +131,52 @@ describe("useCoverBrowse", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     // 마지막 페이지까지 받음
     act(() => result.current.loadMore());
+    expect(pending).toHaveLength(1);
+  });
+
+  it("uncovered가 바뀌면 목록을 비우고 미커버만 다시 받는다", async () => {
+    const { result, rerender } = renderHook(
+      ({ uncovered }) => useCoverBrowse({ apiPrefix: "", uncovered }),
+      { initialProps: { uncovered: false } },
+    );
+    act(() => pending[0].resolve(page([1, 2], "cur1")));
+    await waitFor(() => expect(result.current.items).toHaveLength(2));
+
+    rerender({ uncovered: true });
+
+    expect(result.current.items).toEqual([]);
+    expect(pending[1].url).toBe(`/browse?limit=${BROWSE_PAGE_SIZE}&uncovered=true`);
+    // 서버가 전체 개수를 모르면 total은 null로 남는다.
+    act(() => pending[1].resolve({ status: "success", result: [{ book_id: 9 }], total: null, next_cursor: "" }));
+    await waitFor(() => expect(result.current.items).toHaveLength(1));
+    expect(result.current.total).toBeNull();
+  });
+
+  it("미커버 페이지가 비어도 커서가 있으면 이어서 받는다", async () => {
+    const { result } = renderHook(() =>
+      useCoverBrowse({ apiPrefix: "", uncovered: true }),
+    );
+    act(() => pending[0].resolve(page([], "c1")));
+
+    await waitFor(() => expect(pending).toHaveLength(2));
+    expect(pending[1].url).toBe(
+      `/browse?limit=${BROWSE_PAGE_SIZE}&cursor=c1&uncovered=true`,
+    );
+    // 이어받는 동안은 계속 로딩 중이라 빈 목록 안내가 깜박이지 않는다.
+    expect(result.current.loading).toBe(true);
+
+    act(() => pending[1].resolve(page([5], "")));
+    await waitFor(() => expect(result.current.items).toHaveLength(1));
+    expect(result.current.hasMore).toBe(false);
+    expect(result.current.loading).toBe(false);
+    expect(pending).toHaveLength(2);
+  });
+
+  it("미커버가 아니면 빈 페이지에서 자동으로 이어받지 않는다", async () => {
+    renderHook(() => useCoverBrowse({ apiPrefix: "" }));
+    act(() => pending[0].resolve(page([], "c1")));
+
+    await waitFor(() => expect(pending[0]).toBeDefined());
     expect(pending).toHaveLength(1);
   });
 

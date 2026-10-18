@@ -317,7 +317,7 @@ class CoverManagement:
                 data = fetch_url_image(url)
             return self._save_cover(path, relative, data, expected_revision, replace_existing=replace_existing, backup_dir=backup_dir, backup_name=backup_name)
 
-    def apply_image(self, relative: str, image_data: str, expected_revision: str) -> dict[str, Any]:
+    def apply_image(self, relative: str, image_data: str, expected_revision: str, *, backup_dir: Path | None = None, backup_name: str | None = None) -> dict[str, Any]:
         path = self.resolve(relative)
         relative = str(path.relative_to(self.root))
         try:
@@ -325,7 +325,7 @@ class CoverManagement:
         except (binascii.Error, ValueError) as exc:
             raise CoverError("표지 이미지 데이터를 읽을 수 없습니다") from exc
         with self._book_lock(relative, exclusive=True):
-            return self._save_cover(path, relative, data, expected_revision, replace_existing=True)
+            return self._save_cover(path, relative, data, expected_revision, replace_existing=True, backup_dir=backup_dir, backup_name=backup_name)
 
     def clear_cache(self, relative: str, expected_revision: str) -> dict[str, Any]:
         path = self.resolve(relative)

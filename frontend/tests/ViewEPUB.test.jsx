@@ -174,6 +174,15 @@ vi.mock("../src/EpubCoverModal", () => ({
         >
           삽입 표시
         </button>
+        <button
+          onClick={async () =>
+            setMessage(
+              (await onSubmit(new File(["x"], "cover.jpg", { type: "image/jpeg" }))) || "",
+            )
+          }
+        >
+          파일 표시
+        </button>
         <button onClick={onClose}>모달 닫기</button>
         {message && <span>{message}</span>}
       </div>
@@ -326,6 +335,13 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     expect(globalThis.fetch.mock.calls[0][0]).toBe(
       "http://localhost:8000/preview/7?chapters=0",
     );
+  });
+
+  it("EPUB 은 HTTP 캐시를 재검증해서 받는다(저장 뒤 옛 파일이 보이지 않게)", async () => {
+    render(<ViewEPUB bookId={7} />);
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    // 표지 저장은 EPUB 의 mtime 을 되돌린다. 재검증하지 않으면 브라우저가 휴리스틱 캐시로 저장 전 응답을 재사용한다.
+    expect(globalThis.fetch.mock.calls[0][1].cache).toBe("no-cache");
   });
 
   it("EPUB 내부 스크립트 실행을 허용하지 않는다", async () => {
@@ -1534,6 +1550,71 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
           globalThis.fetch.mock.calls.filter(([u]) => u.includes("/preview/7")).length,
         ).toBe(before + 1),
       );
+    });
+
+    describe("이 기기의 이미지", () => {
+      const UPLOAD_URL = "http://localhost:8000/pdf-pages/7/insert-preview-upload";
+
+      async function openWithPendingFile() {
+        mockCoverUrl = "blob:epub-cover";
+        render(<ViewEPUB bookId={7} preview editable />);
+        await openBook();
+        fireEvent.click(screen.getByRole("button", { name: "표지 이미지 교체" }));
+        fireEvent.click(screen.getByText("파일 표시"));
+        await screen.findByTestId("epub-cover-pending");
+      }
+      const respondUpload = ({ preview, save } = {}) => {
+        const base = globalThis.fetch.getMockImplementation();
+        globalThis.fetch.mockImplementation((url, init) => {
+          if (url === UPLOAD_URL && preview) return Promise.resolve(preview);
+          if (url === SAVE_URL && save) return Promise.resolve(save);
+          return base(url, init);
+        });
+      };
+
+      it("파일을 고르면 insert-preview-upload 로 올려 저장 전 표지로 보여 준다", async () => {
+        respondUpload({ preview: blobResponse() });
+        await openWithPendingFile();
+
+        const call = globalThis.fetch.mock.calls.find(([u]) => u === UPLOAD_URL);
+        expect(call[1].body.get("file").name).toBe("cover.jpg");
+        expect(screen.getByRole("img", { name: "저장 전 새 표지" }).getAttribute("src")).toBe(
+          "blob:new-cover",
+        );
+        // URL 이 없으므로 툴팁에는 파일 이름을 쓴다.
+        expect(screen.getByText("새 표지 · 저장 전").title).toBe("cover.jpg");
+        expect(globalThis.fetch.mock.calls.some(([u]) => u === SAVE_URL)).toBe(false);
+      });
+
+      it("저장하면 미리 본 JPEG 를 image_data(base64)로 보내고 url 은 보내지 않는다", async () => {
+        respondUpload({
+          preview: blobResponse(),
+          save: jsonResponse({ status: "success", result: {} }),
+        });
+        vi.spyOn(window, "confirm").mockReturnValue(true);
+        await openWithPendingFile();
+
+        fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+        await waitFor(() => {
+          const save = globalThis.fetch.mock.calls.find(([u]) => u === SAVE_URL);
+          expect(save[1].method).toBe("POST");
+          // 미리보기 응답의 Blob 내용은 "x" 다.
+          expect(JSON.parse(save[1].body)).toEqual({ image_data: "eA==" });
+        });
+      });
+
+      it("서버가 거절하면 사유를 모달에 돌려주고 표시하지 않는다", async () => {
+        respondUpload({ preview: textResponse(400, "이미지 형식을 읽을 수 없습니다") });
+        mockCoverUrl = "blob:epub-cover";
+        render(<ViewEPUB bookId={7} preview editable />);
+        await openBook();
+        fireEvent.click(screen.getByRole("button", { name: "표지 이미지 교체" }));
+        fireEvent.click(screen.getByText("파일 표시"));
+
+        expect(await screen.findByText("이미지 형식을 읽을 수 없습니다")).toBeTruthy();
+        expect(screen.queryByTestId("epub-cover-pending")).toBeNull();
+      });
     });
 
     it("표지가 없던 책의 확인 문구는 '추가'다", async () => {

@@ -701,6 +701,113 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
       await waitFor(() => expect(screen.queryByTestId("pdf-insert-preview-2")).toBeNull());
     });
 
+    describe("이 기기의 이미지", () => {
+      const photo = () => new File(["x"], "photo.jpg", { type: "image/jpeg" });
+      const pickFile = (file) =>
+        fireEvent.change(screen.getByLabelText("이 기기에서 이미지 선택"), {
+          target: { files: [file] },
+        });
+      const stageFile = async (pageNum, file) => {
+        openDialog(pageNum);
+        pickFile(file);
+        await waitFor(() =>
+          expect(screen.getByTestId(`pdf-insert-preview-${pageNum}`)).toBeTruthy(),
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      };
+
+      it("파일을 고르면 insert-preview-upload 로 올려 미리보기를 보여 준다", async () => {
+        const fetchMock = createFetch(okResponse);
+        globalThis.fetch = fetchMock;
+        await renderEditable();
+        const file = photo();
+
+        await stageFile(2, file);
+
+        const [url, init] = fetchMock.mock.calls.find(([u]) =>
+          String(u).includes("/insert-preview-upload"),
+        );
+        expect(url).toBe("http://localhost:8000/pdf-pages/1/insert-preview-upload");
+        expect(init.body.get("file")).toBe(file);
+        const preview = screen.getByTestId("pdf-insert-preview-2");
+        expect(preview.querySelector("img").getAttribute("src")).toBe("blob:preview-1");
+        // URL 이 없으므로 툴팁에는 파일 이름을 쓴다.
+        expect(preview.querySelector(".viewer-edit-tag").title).toBe("photo.jpg");
+      });
+
+      it("저장하면 미리 본 JPEG 를 image_data(base64)로 보내고 url 은 보내지 않는다", async () => {
+        const fetchMock = createFetch(okResponse);
+        globalThis.fetch = fetchMock;
+        await renderEditable();
+        await stageFile(2, photo());
+
+        fireEvent.click(within(screen.getByTestId("pdf-insert-preview-2")).getByLabelText("저장"));
+
+        await waitFor(() => {
+          const post = fetchMock.mock.calls.find(
+            ([u, init]) => init?.method === "POST" && String(u).endsWith("/delete"),
+          );
+          // 미리보기 응답의 Blob 내용은 "jpeg" 다.
+          expect(JSON.parse(post[1].body).inserts).toEqual([
+            { page: 2, image_data: "anBlZw==" },
+          ]);
+        });
+      });
+
+      it("URL 삽입과 파일 삽입을 한 번에 저장한다", async () => {
+        const fetchMock = createFetch(okResponse);
+        globalThis.fetch = fetchMock;
+        await renderEditable();
+        await stage(1, "https://img.example.com/a.png");
+        await stageFile(3, photo());
+
+        fireEvent.click(within(screen.getByTestId("pdf-insert-preview-1")).getByLabelText("저장"));
+
+        await waitFor(() => {
+          const post = fetchMock.mock.calls.find(
+            ([u, init]) => init?.method === "POST" && String(u).endsWith("/delete"),
+          );
+          expect(JSON.parse(post[1].body).inserts).toEqual([
+            { page: 1, url: "https://img.example.com/a.png" },
+            { page: 3, image_data: "anBlZw==" },
+          ]);
+        });
+      });
+
+      it("서버가 거절하면 사유를 모달에 보이고 삽입을 표시하지 않는다", async () => {
+        globalThis.fetch = createFetch(okResponse);
+        previewResponse = {
+          ok: false,
+          status: 400,
+          text: () => Promise.resolve("이미지 형식을 읽을 수 없습니다"),
+        };
+        await renderEditable();
+
+        openDialog(2);
+        pickFile(photo());
+
+        expect(await screen.findByText("이미지 형식을 읽을 수 없습니다")).toBeTruthy();
+        expect(screen.queryByTestId("pdf-insert-preview-2")).toBeNull();
+        expect(screen.getByRole("dialog")).toBeTruthy();
+      });
+
+      it("15MB 를 넘는 파일은 서버에 올리지 않고 거절한다", async () => {
+        const fetchMock = createFetch(okResponse);
+        globalThis.fetch = fetchMock;
+        await renderEditable();
+        const big = photo();
+        Object.defineProperty(big, "size", { value: 15 * 1024 * 1024 + 1 });
+
+        openDialog(2);
+        pickFile(big);
+
+        expect(await screen.findByText("이미지는 15MB 이하여야 합니다")).toBeTruthy();
+        expect(
+          fetchMock.mock.calls.some(([u]) => String(u).includes("/insert-preview")),
+        ).toBe(false);
+      });
+    });
+
     it("저장 중에는 삽입 미리보기의 저장·취소 버튼이 비활성화된다", async () => {
       let release;
       const base = createFetch(okResponse);
@@ -809,6 +916,138 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
       unmount();
 
       expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview-1");
+    });
+  });
+
+  describe("쪽 순서 바꾸기", () => {
+    const orderOnScreen = () =>
+      [...document.querySelectorAll(".pdf-page-wrap")].map((wrap) =>
+        Number(
+          within(wrap)
+            .getByLabelText(/쪽 삭제 표시/)
+            .getAttribute("aria-label")
+            .match(/\d+/)[0],
+        ),
+      );
+    const posts = (fetchMock) =>
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
+
+    it("쪽마다 위·아래 삼각형 버튼이 있고 첫 쪽의 위, 마지막 쪽의 아래는 꺼져 있다", async () => {
+      globalThis.fetch = createFetch(okResponse);
+      await renderEditable();
+
+      expect(screen.getAllByLabelText(/쪽을 위로 옮기기/)).toHaveLength(3);
+      expect(screen.getAllByLabelText(/쪽을 아래로 옮기기/)).toHaveLength(3);
+      expect(screen.getByLabelText("1쪽을 위로 옮기기").disabled).toBe(true);
+      expect(screen.getByLabelText("3쪽을 아래로 옮기기").disabled).toBe(true);
+      expect(screen.getByLabelText("2쪽을 위로 옮기기").disabled).toBe(false);
+      expect(screen.queryByLabelText("저장")).toBeNull();
+    });
+
+    it("editable 이 아니면 순서 버튼이 없다", async () => {
+      globalThis.fetch = createFetch(okResponse);
+      render(<ViewPDF bookId={1} pageCount={10} preview />);
+      await waitFor(() => expect(screen.getByText("총 3쪽 표시")).toBeTruthy());
+      expect(screen.queryByLabelText(/옮기기/)).toBeNull();
+    });
+
+    it("누르면 서버를 부르지 않고 화면 순서만 바뀌며 옮겨진 두 쪽에 저장 버튼과 라벨이 나타난다", async () => {
+      const fetchMock = createFetch(okResponse);
+      globalThis.fetch = fetchMock;
+      await renderEditable();
+
+      fireEvent.click(screen.getByLabelText("2쪽을 위로 옮기기"));
+
+      expect(orderOnScreen()).toEqual([2, 1, 3]);
+      expect(posts(fetchMock)).toHaveLength(0);
+      expect(screen.getAllByLabelText("저장")).toHaveLength(2);
+      expect(screen.getByText(/2쪽 → 1번째/)).toBeTruthy();
+      expect(screen.getByText(/1쪽 → 2번째/)).toBeTruthy();
+    });
+
+    it("원래 순서로 되돌리면 변경 표시와 저장 버튼이 사라진다", async () => {
+      globalThis.fetch = createFetch(okResponse);
+      await renderEditable();
+
+      fireEvent.click(screen.getByLabelText("2쪽을 위로 옮기기"));
+      fireEvent.click(screen.getByLabelText("2쪽을 아래로 옮기기"));
+
+      expect(orderOnScreen()).toEqual([1, 2, 3]);
+      expect(screen.queryByLabelText("저장")).toBeNull();
+      expect(screen.queryByText(/순서 변경 · 저장 전/)).toBeNull();
+    });
+
+    it("여러 번 옮기면 이어서 움직이고 저장하면 최종 순서를 order 로 보낸 뒤 PDF 를 다시 불러온다", async () => {
+      const fetchMock = createFetch(okResponse);
+      globalThis.fetch = fetchMock;
+      await renderEditable();
+      const getsBefore = fetchMock.mock.calls.filter(([, init]) => !init?.method).length;
+
+      fireEvent.click(screen.getByLabelText("3쪽을 위로 옮기기"));
+      fireEvent.click(screen.getByLabelText("3쪽을 위로 옮기기"));
+      expect(orderOnScreen()).toEqual([3, 1, 2]);
+      fireEvent.click(screen.getAllByLabelText("저장")[0]);
+
+      await waitFor(() => expect(posts(fetchMock)).toHaveLength(1));
+      expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("1, 2, 3쪽 순서 변경"));
+      expect(posts(fetchMock)[0][0]).toBe("http://localhost:8000/pdf-pages/1/delete");
+      expect(JSON.parse(posts(fetchMock)[0][1].body)).toEqual({
+        pages: [],
+        crops: [],
+        splits: [],
+        inserts: [],
+        order: [3, 1, 2],
+      });
+      await waitFor(() => {
+        const getsAfter = fetchMock.mock.calls.filter(([, init]) => !init?.method).length;
+        expect(getsAfter).toBeGreaterThan(getsBefore);
+      });
+      await waitFor(() => expect(screen.queryByLabelText("저장")).toBeNull());
+      expect(orderOnScreen()).toEqual([1, 2, 3]);
+    });
+
+    it("삭제 표시와 함께 저장하면 둘 다 원본 쪽 번호로 보낸다", async () => {
+      const fetchMock = createFetch(okResponse);
+      globalThis.fetch = fetchMock;
+      await renderEditable();
+
+      fireEvent.click(screen.getByLabelText("1쪽 삭제 표시"));
+      fireEvent.click(screen.getByLabelText("1쪽을 아래로 옮기기"));
+      fireEvent.click(screen.getAllByLabelText("저장")[0]);
+
+      await waitFor(() => expect(posts(fetchMock)).toHaveLength(1));
+      expect(JSON.parse(posts(fetchMock)[0][1].body)).toMatchObject({
+        pages: [1],
+        order: [2, 1, 3],
+      });
+    });
+
+    it("확인 창에서 취소하면 서버를 호출하지 않고 순서를 유지한다", async () => {
+      const fetchMock = createFetch(okResponse);
+      globalThis.fetch = fetchMock;
+      window.confirm = vi.fn(() => false);
+      await renderEditable();
+
+      fireEvent.click(screen.getByLabelText("2쪽을 아래로 옮기기"));
+      fireEvent.click(screen.getAllByLabelText("저장")[0]);
+
+      expect(posts(fetchMock)).toHaveLength(0);
+      expect(orderOnScreen()).toEqual([1, 3, 2]);
+    });
+
+    it("서버가 실패를 돌려주면 오류를 보이고 순서를 유지한다", async () => {
+      globalThis.fetch = createFetch({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ status: "failure", error: "순서 변경 불가" }),
+      });
+      await renderEditable();
+
+      fireEvent.click(screen.getByLabelText("2쪽을 위로 옮기기"));
+      fireEvent.click(screen.getAllByLabelText("저장")[0]);
+
+      await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("순서 변경 불가"));
+      expect(orderOnScreen()).toEqual([2, 1, 3]);
     });
   });
 });

@@ -91,8 +91,7 @@ def create_test_webtoon_pdf(output_path: Path) -> None:
 
 
 def create_test_pdf_with_blank_first_cover_area(output_path: Path, background: tuple[int, int, int]) -> None:
-    first_page = Image.new("RGB", (1200, 800), background)
-    first_page.paste((200, 30, 30), (600, 0, 1200, 800))
+    first_page = Image.new("RGB", (600, 900), background)
     second_page = Image.new("RGB", (600, 900), (30, 30, 200))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     first_page.save(output_path, format="PDF", resolution=72, save_all=True, append_images=[second_page])
@@ -217,7 +216,8 @@ class TestGetCover:
         assert response.status_code == 200
         _assert_jpeg_thumbnail(response.body)
         img = Image.open(io.BytesIO(response.body))
-        assert img.size == (300, 450)
+        assert img.width == 300
+        assert abs(img.height - round(300 * 792 / 612)) <= 1
 
     @pytest.mark.asyncio
     async def test_pdf_spread_uses_left_half_as_cover(self, book_manager_module, temp_dir):
@@ -229,9 +229,10 @@ class TestGetCover:
 
         assert response.status_code == 200
         img = Image.open(io.BytesIO(response.body))
-        assert img.size == (300, 450)
-        red, _green, blue = img.getpixel((img.width // 2, img.height // 2))
-        assert red > blue
+        assert img.size == (300, 400)
+        for x in (img.width // 4, img.width * 3 // 4):
+            red, _green, blue = img.getpixel((x, img.height // 2))
+            assert red > blue
 
     @pytest.mark.asyncio
     async def test_pdf_webtoon_uses_top_cover_area(self, book_manager_module, temp_dir):
@@ -307,7 +308,7 @@ class TestGetCover:
 
         first = await bm.get_cover(book_id=108)
         assert first.status_code == 200
-        assert (temp_dir / ".cover_cache" / "108.v4.jpg").exists()
+        assert (temp_dir / ".cover_cache" / "108.v6.jpg").exists()
 
         with patch.object(type(bm), "_extract_cover_thumbnail", side_effect=AssertionError("must use cache")):
             second = await bm.get_cover(book_id=108)

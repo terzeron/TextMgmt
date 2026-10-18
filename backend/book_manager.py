@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, Response
 from bs4 import BeautifulSoup
 from backend.es_manager import ESManager
 from backend.cover_browse import latest_rank, merge_cover_page, pick_representative, plan_cover_scope
+from backend.cover_status import CoverStatusCache, has_official_cover
 from backend.book import Book
 from backend.book_classifier import BookClassifierService, clean_empty_parent_dirs
 from utils.corpus_layout import IGNORED_DIR_NAMES
@@ -140,8 +141,14 @@ class BookManager:
     # 커버 뷰 썸네일. 최신 목록은 한 화면에 수십 장을 받으므로 원본 대신 작게 줄여 보낸다.
     COVER_THUMBNAIL_WIDTH = 300
     COVER_JPEG_QUALITY = 85
-    COVER_CACHE_VERSION = 4
+    COVER_CACHE_VERSION = 6
     COVER_ASPECT_RATIO = 2 / 3
+    COVER_TALL_RATIO = 2
+    # 미커버 목록이 한 요청에서 커버 목록을 훑는 최대 시간(초). 표지가 있는 책이 많으면 여러 요청으로 나눠 이어받는다.
+    UNCOVERED_SCAN_BUDGET_SECONDS = 10
+    # 요청 하나가 훑는 최대 페이지 수와 동시에 도는 스캔 수. 표지가 있는 책이 많아도 한 요청이 오래 붙잡지 못하게 한다.
+    UNCOVERED_MAX_SCAN_PAGES = 20
+    UNCOVERED_MAX_CONCURRENT_SCANS = 2
     COVER_BACKGROUND_RATIO_THRESHOLD = 0.60
     COVER_DETAIL_RATIO_THRESHOLD = 0.15
     # EPUB 뷰어용 이미지 축소 정책. epub.js는 책 전체를 브라우저 메모리에
@@ -661,6 +668,45 @@ class BookManager:
         has_more = len(remaining) > groups_used or files_used < len(files) or len(files) == size
         next_cursor = encode_category_cursor([next_group_after, next_file_after]) if has_more else None
         return items, len(groups) + files_total, next_cursor, None
+
+    def _uncovered_flags(self, books: list[Book]) -> list[bool]:
+        """책마다 정식 표지가 없으면 True. 읽을 수 없는 파일은 목록에서 빼려고 표지가 있는 것으로 본다."""
+        cache = CoverStatusCache(self.path_prefix / ".cover_cache" / "cover_status.sqlite3")
+        flags: list[bool] = []
+        for book in books:
+            try:
+                covered = cache.get_or_compute(book.file_path, lambda book=book: has_official_cover(book.file_path, book.file_type, BookManager._cover_render_lock))
+            except Exception as e:
+                LOGGER.warning("Cover status failed for %s: %s: %s", book.file_path, type(e).__name__, e)
+                covered = True
+            flags.append(not covered)
+        return flags
+
+    async def get_uncovered_books_paged(self, category: str = "", size: int = 60, cursor: str = "", exclude_categories: list[str] | None = None) -> tuple[list[tuple[Book, str]], int | None, str | None, str | None]:
+        """정식 표지가 없는 책만 최신순으로 한 페이지 조회한다. 항목 규칙은 get_cover_books_paged와 같다.
+
+        커버 목록을 한 페이지씩 이어서 훑으며 표지가 없는 항목만 모은다. 모은 항목이 size개 이상이거나
+        목록 끝이거나 시간 예산·페이지 수 한도에 닿으면 멈추고, 훑은 곳까지의 커서를 돌려준다.
+        항목이 없어도 한도에 닿으면 빈 목록과 커서를 돌려주므로 클라이언트가 커서로 이어받는다.
+        전체 개수는 알 수 없어 None이다.
+        """
+        LOGGER.debug("# get_uncovered_books_paged(category='%s', size=%d, cursor='%s', exclude_categories=%s)", category, size, cursor, exclude_categories)
+        size = max(1, min(size, MAX_CATEGORY_PAGE_SIZE))
+        deadline = time.monotonic() + self.UNCOVERED_SCAN_BUDGET_SECONDS
+        slots = self.__dict__.setdefault("_uncovered_scan_slots", asyncio.Semaphore(self.UNCOVERED_MAX_CONCURRENT_SCANS))
+        items: list[tuple[Book, str]] = []
+        scan_cursor = cursor
+        async with slots:
+            for _ in range(self.UNCOVERED_MAX_SCAN_PAGES):
+                page, _total, next_cursor, error = await self.get_cover_books_paged(category=category, size=size, cursor=scan_cursor, exclude_categories=exclude_categories)
+                if error is not None:
+                    return [], None, None, error
+                flags = await asyncio.to_thread(self._uncovered_flags, [book for book, _title in page])
+                items.extend(entry for entry, uncovered in zip(page, flags) if uncovered)
+                if not next_cursor or len(items) >= size or time.monotonic() > deadline:
+                    break
+                scan_cursor = next_cursor
+        return items, None, next_cursor, None
 
     async def get_latest_books(self, size: int = MAX_LATEST_BOOK_COUNT, exclude_categories: list[str] | None = None) -> tuple[list[Book], int, str | None]:
         LOGGER.debug("# get_latest_books(size=%d, exclude_categories=%s)", size, exclude_categories)
@@ -3002,15 +3048,50 @@ class BookManager:
             return jpeg, image.width, image.height
 
     @staticmethod
-    def _prepare_insert_images(urls: dict[int, str]) -> dict[int, tuple[bytes, int, int]]:
-        """쪽 번호별 이미지 URL을 내려받아 JPEG 로 정규화한다: {쪽: (JPEG 바이트, 너비, 높이)}.
+    def _normalize_uploaded_image(data: bytes) -> tuple[bytes, int, int]:
+        """사용자가 올린 이미지를 URL 이미지와 같은 규칙으로 JPEG 에 정규화한다: (JPEG 바이트, 너비, 높이).
+
+        실패하면 사용자에게 보여 줄 한국어 메시지의 ValueError 를 던진다.
+        """
+        from PIL import Image, ImageOps
+
+        from backend.epub_cover import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, CoverError, normalize_image
+
+        if not data or len(data) > MAX_IMAGE_BYTES:
+            raise CoverError("이미지가 비어 있거나 너무 큽니다")
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                if image.width * image.height > MAX_IMAGE_PIXELS:
+                    raise CoverError("이미지 해상도가 너무 큽니다")
+                orientation = image.getexif().get(0x0112, 1)
+                # 이미 정규화된 JPEG 는 그대로 쓴다. 미리보기로 받은 이미지를 저장할 때 다시 인코딩하면 화면에서 본 것과 달라진다.
+                if image.format == "JPEG" and image.mode == "RGB" and orientation == 1 and image.width <= 2000 and image.height <= 3000:
+                    image.load()
+                    return data, image.width, image.height
+                # 폰 카메라는 회전을 픽셀이 아닌 EXIF 로 기록한다. 정규화가 EXIF 를 버리기 전에 반영하지 않으면 세로 사진이 눕는다.
+                if orientation != 1:
+                    buffer = io.BytesIO()
+                    ImageOps.exif_transpose(image).convert("RGB").save(buffer, "JPEG", quality=95)
+                    data = buffer.getvalue()
+        except CoverError:
+            raise
+        except Exception as exc:
+            raise CoverError("이미지 형식을 읽을 수 없습니다") from exc
+        jpeg = normalize_image(data)
+        with Image.open(io.BytesIO(jpeg)) as image:
+            return jpeg, image.width, image.height
+
+    @staticmethod
+    def _prepare_insert_images(sources: dict[int, str | bytes]) -> dict[int, tuple[bytes, int, int]]:
+        """쪽 번호별 이미지(URL 이면 내려받고, 바이트면 올린 파일)를 JPEG 로 정규화한다: {쪽: (JPEG 바이트, 너비, 높이)}.
 
         하나라도 실패하면 ValueError 를 던지고, 호출자는 이 단계가 끝나기 전에는 파일을 건드리지 않는다.
         """
         prepared: dict[int, tuple[bytes, int, int]] = {}
-        for page_no in sorted(urls):
+        for page_no in sorted(sources):
+            source = sources[page_no]
             try:
-                prepared[page_no] = BookManager._download_image_as_jpeg(urls[page_no])
+                prepared[page_no] = BookManager._normalize_uploaded_image(source) if isinstance(source, bytes) else BookManager._download_image_as_jpeg(source)
             except ValueError as exc:
                 raise ValueError(f"{page_no}쪽 앞에 넣을 이미지를 가져올 수 없습니다: {exc}") from exc
         return prepared
@@ -3032,12 +3113,28 @@ class BookManager:
             return None, "이미지를 가져오지 못했습니다"
         return jpeg, None
 
-    async def set_epub_cover(self, book_id: int, url: str) -> tuple[dict[str, Any] | None, str | None]:
-        """EPUB 의 표지를 URL 의 이미지로 넣거나 바꾼다: (결과, 오류 메시지).
+    async def preview_insert_upload(self, data: bytes) -> tuple[bytes | None, str | None]:
+        """올린 이미지를 저장 전에 미리 보여 주기 위해 (JPEG 바이트, 오류 메시지)를 돌려준다.
 
-        표지 관리와 같은 경로(CoverManagement.apply_url)를 쓰므로 URL 검증과 썸네일·preview 캐시 무효화가 같다.
+        저장할 때 서버가 다시 정규화하는 것과 같은 경로이므로, 화면에 보이는 이미지가 실제로 삽입될 이미지다.
         """
-        url = url.strip()
+        try:
+            jpeg, _, _ = await asyncio.to_thread(BookManager._normalize_uploaded_image, data)
+        except ValueError as e:
+            return None, str(e)
+        except Exception as e:
+            LOGGER.error("preview_insert_upload failed (%s): %s", type(e).__name__, e)
+            return None, "이미지를 읽지 못했습니다"
+        return jpeg, None
+
+    async def set_epub_cover(self, book_id: int, url: str | None = None, image_data: str | None = None) -> tuple[dict[str, Any] | None, str | None]:
+        """EPUB 의 표지를 URL 의 이미지(url) 또는 올린 이미지(image_data, base64)로 넣거나 바꾼다: (결과, 오류 메시지).
+
+        표지 관리와 같은 경로(CoverManagement.apply_url / apply_image)를 쓰므로 검증과 썸네일·preview 캐시 무효화가 같다.
+        """
+        if image_data:
+            return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.apply_image(relative, image_data, revision, **backup))
+        url = (url or "").strip()
         if not url:
             return None, "이미지 URL이 비어 있습니다"
         return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.apply_url(relative, url, revision, replace_existing=True, **backup))
@@ -3146,10 +3243,11 @@ class BookManager:
             pdf.save(dst)
 
     @staticmethod
-    def _remove_pdf_pages_with_backup(file_path: Path, trash_dir: Path, pages: list[int], crops: dict[int, Rect] | None = None, splits: dict[int, tuple[Rect, Rect]] | None = None, insert_urls: dict[int, str] | None = None) -> tuple[int, Path, bool]:
+    def _remove_pdf_pages_with_backup(file_path: Path, trash_dir: Path, pages: list[int], crops: dict[int, Rect] | None = None, splits: dict[int, tuple[Rect, Rect]] | None = None, insert_sources: dict[int, str | bytes] | None = None, order: list[int] | None = None) -> tuple[int, Path, bool]:
         """원본을 trash_dir 에 같은 이름으로 보존한 뒤 편집한 PDF로 교체한다.
 
-        pages(1-based)는 쪽 전체를 삭제하고, crops 는 쪽별로 지정한 영역만 남기고, splits 는 한 쪽을 (앞, 뒤) 두 쪽으로 나누고, insert_urls 는 그 쪽 앞에 URL 의 이미지를 한 쪽으로 끼운다(쪽 번호는 모두 원본 기준).
+        pages(1-based)는 쪽 전체를 삭제하고, crops 는 쪽별로 지정한 영역만 남기고, splits 는 한 쪽을 (앞, 뒤) 두 쪽으로 나누고, insert_sources 는 그 쪽 앞에 이미지(URL 또는 올린 파일의 바이트)를 한 쪽으로 끼운다(쪽 번호는 모두 원본 기준).
+        order 는 원본 쪽 번호를 새 순서대로 나열한 것으로, 앞쪽 len(order)쪽만 그 순서로 바꾼다. 삽입한 쪽과 분할한 두 쪽은 기준 쪽과 함께 움직인다.
         반환: (남은 페이지 수, 백업 경로, 백업을 새로 만들었는지).
         이미 같은 이름의 백업이 있으면 덮어쓰지 않는다. 그 파일이 편집 전 원본이다.
         모든 검증과 편집본 생성이 끝난 뒤에야 백업·교체를 하므로, 실패하면 원본과 trash 는 그대로다.
@@ -3160,17 +3258,21 @@ class BookManager:
         remove = set(pages)
         left = set(crops or {})
         divided = set(splits or {})
-        inserted = set(insert_urls or {})
-        if not remove and not left and not divided and not inserted:
+        inserted = set(insert_sources or {})
+        new_order = list(order or [])
+        if not remove and not left and not divided and not inserted and not new_order:
             raise ValueError("변경할 쪽을 선택하세요")
         if (remove & left) or (remove & divided) or (left & divided):
             raise ValueError("같은 쪽에 삭제, 크롭, 분할을 함께 지정할 수 없습니다")
         reader = PdfReader(str(file_path))
         total = len(reader.pages)
-        if min(remove | left | divided | inserted) < 1 or max(remove | left | divided | inserted) > total:
+        touched = remove | left | divided | inserted
+        if touched and (min(touched) < 1 or max(touched) > total):
             raise ValueError(f"페이지 범위가 잘못되었습니다 (1~{total})")
         if len(remove) >= total:
             raise ValueError("모든 페이지를 삭제할 수 없습니다")
+        if new_order and (len(new_order) > total or sorted(new_order) != list(range(1, len(new_order) + 1))):
+            raise ValueError("쪽 순서가 잘못되었습니다")
 
         tmp_crop = file_path.with_name(f".{file_path.name}.crop.part")
         tmp_new = file_path.with_name(f".{file_path.name}.edit.part")
@@ -3178,7 +3280,7 @@ class BookManager:
         try:
             source = file_path
             # 네트워크가 필요한 단계는 파일을 건드리기 전에 끝낸다. 실패하면 원본과 trash 는 그대로다.
-            images = BookManager._prepare_insert_images(dict(insert_urls or {})) if inserted else {}
+            images = BookManager._prepare_insert_images(dict(insert_sources or {})) if inserted else {}
             if left or divided or inserted:
                 BookManager._crop_pages(file_path, tmp_crop, dict(crops or {}), dict(splits or {}), images)
                 source = tmp_crop
@@ -3191,19 +3293,22 @@ class BookManager:
                 os.replace(tmp_backup, backup_path)
                 backup_created = True
 
-            if remove:
+            if remove or new_order:
                 # 분할·삽입으로 쪽이 늘어났으므로 원본 번호를 편집본 번호로 옮긴다.
-                # 삽입한 쪽은 항상 남기고, 분할한 쪽은 두 쪽을 차지한다.
-                keep = []
+                # 삽입한 쪽은 항상 남기고, 분할한 쪽은 두 쪽을 차지한다. 쪽마다 (삽입, 본문) 묶음을 만들어 순서대로 이어 붙인다.
+                groups: dict[int, list[int]] = {}
                 position = 0
                 for index in range(total):
+                    group = []
                     if (index + 1) in inserted:
-                        keep.append(position)
+                        group.append(position)
                         position += 1
                     width = 2 if (index + 1) in divided else 1
                     if (index + 1) not in remove:
-                        keep.extend(range(position, position + width))
+                        group.extend(range(position, position + width))
                     position += width
+                    groups[index + 1] = group
+                keep = [p for page_no in new_order + list(range(len(new_order) + 1, total + 1)) for p in groups[page_no]]
                 edited_reader = reader if source == file_path else PdfReader(str(source))
                 writer = PdfWriter()
                 writer.append(edited_reader, pages=keep)
@@ -3221,17 +3326,25 @@ class BookManager:
                 leftover.unlink(missing_ok=True)
         return remaining, backup_path, backup_created
 
-    async def delete_pdf_pages(self, book_id: int, pages: list[int], crops: list[dict[str, float]] | None = None, splits: list[dict[str, Any]] | None = None, inserts: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any] | None, str | None]:
-        """PDF 에서 pages(1-based)를 삭제하고 crops([{page, x0, y0, x1, y1}])는 지정 영역만 남기고, splits([{page, first, second}])는 한 쪽을 앞·뒤 두 쪽으로 나누고, inserts([{page, url}])는 그 쪽 앞에 URL 의 이미지를 한 쪽으로 끼운다. 원본은 path_prefix/0_trash 에 보존한다."""
-        LOGGER.debug("# delete_pdf_pages(book_id=%d, pages=%r, crops=%r, splits=%r, inserts=%r)", book_id, pages, crops, splits, inserts)
-        insert_urls: dict[int, str] = {}
+    async def delete_pdf_pages(self, book_id: int, pages: list[int], crops: list[dict[str, float]] | None = None, splits: list[dict[str, Any]] | None = None, inserts: list[dict[str, Any]] | None = None, order: list[int] | None = None) -> tuple[dict[str, Any] | None, str | None]:
+        """PDF 에서 pages(1-based)를 삭제하고 crops([{page, x0, y0, x1, y1}])는 지정 영역만 남기고, splits([{page, first, second}])는 한 쪽을 앞·뒤 두 쪽으로 나누고, inserts([{page, url} 또는 {page, image_data(base64)}])는 그 쪽 앞에 이미지를 한 쪽으로 끼운다. order 는 원본 쪽 번호를 새 순서대로 나열해 앞쪽 쪽들의 순서를 바꾼다. 원본은 path_prefix/0_trash 에 보존한다."""
+        # 올린 이미지(image_data)는 수 MB 의 base64 이므로 로그에는 쪽 번호와 URL 만 남긴다.
+        LOGGER.debug("# delete_pdf_pages(book_id=%d, pages=%r, crops=%r, splits=%r, inserts=%r)", book_id, pages, crops, splits, [(i["page"], i.get("url") or "<upload>") for i in inserts or []])
+        insert_sources: dict[int, str | bytes] = {}
         for insert in inserts or []:
-            page_no, url = int(insert["page"]), str(insert["url"]).strip()
-            if page_no in insert_urls:
+            page_no = int(insert["page"])
+            if page_no in insert_sources:
                 return None, f"{page_no}쪽 앞에 이미지가 둘 이상 지정되었습니다"
+            if insert.get("image_data"):
+                try:
+                    insert_sources[page_no] = base64.b64decode(insert["image_data"], validate=True)
+                except ValueError:  # binascii.Error 는 ValueError 의 하위 클래스다
+                    return None, f"{page_no}쪽 앞에 넣을 이미지 데이터를 읽을 수 없습니다"
+                continue
+            url = str(insert.get("url") or "").strip()
             if not url:
                 return None, f"{page_no}쪽 앞에 넣을 이미지 URL이 비어 있습니다"
-            insert_urls[page_no] = url
+            insert_sources[page_no] = url
 
         def to_rect(box: dict[str, float]) -> Rect:
             return (float(box["x0"]), float(box["y0"]), float(box["x1"]), float(box["y1"]), float(box.get("angle", 0.0)))
@@ -3256,7 +3369,7 @@ class BookManager:
         try:
             if not file_path.is_file():
                 return None, f"File not found: {file_path.name}"
-            remaining, backup_path, backup_created = await asyncio.to_thread(BookManager._remove_pdf_pages_with_backup, file_path, self.path_prefix / self.TRASH_DIRNAME, pages, crop_rects, split_rects, insert_urls)
+            remaining, backup_path, backup_created = await asyncio.to_thread(BookManager._remove_pdf_pages_with_backup, file_path, self.path_prefix / self.TRASH_DIRNAME, pages, crop_rects, split_rects, insert_sources, order)
         except ValueError as e:
             return None, str(e)
         except OSError as e:
@@ -3288,7 +3401,7 @@ class BookManager:
             LOGGER.error("delete_pdf_pages: reindex failed for book_id=%d: %s", book_id, e)
             return None, f"페이지는 삭제되었으나 색인 갱신에 실패했습니다. 원본은 {self.TRASH_DIRNAME}/{backup_path.name} 에 있습니다: {e}"
         self._clear_mismatch_cache()
-        return {"remaining_pages": remaining, "cropped_pages": len(crop_rects), "split_pages": len(split_rects), "inserted_pages": len(insert_urls), "backup": f"{self.TRASH_DIRNAME}/{backup_path.name}", "backup_created": backup_created}, None
+        return {"remaining_pages": remaining, "cropped_pages": len(crop_rects), "split_pages": len(split_rects), "inserted_pages": len(insert_sources), "backup": f"{self.TRASH_DIRNAME}/{backup_path.name}", "backup_created": backup_created}, None
 
     @staticmethod
     def _find_epub_cover_member(zin) -> str | None:
@@ -3423,18 +3536,24 @@ class BookManager:
                     def render_cover(page: Any) -> Any:
                         page_width = page.get_width()
                         page_height = page.get_height()
-                        cover_width = min(page_width, page_height * BookManager.COVER_ASPECT_RATIO)
-                        cover_height = cover_width / BookManager.COVER_ASPECT_RATIO
-                        crop = (0, page_height - cover_height, page_width - cover_width, 0)
-                        scale = BookManager.COVER_THUMBNAIL_WIDTH / cover_width
-                        rendered = page.render(scale=scale, crop=crop).to_pil()
-                        cover_size = (
-                            BookManager.COVER_THUMBNAIL_WIDTH,
-                            round(BookManager.COVER_THUMBNAIL_WIDTH / BookManager.COVER_ASPECT_RATIO),
-                        )
-                        if rendered.size != cover_size:
-                            rendered = rendered.resize(cover_size, Image.Resampling.LANCZOS)
-                        return rendered
+                        width = BookManager.COVER_THUMBNAIL_WIDTH
+                        height = round(width / BookManager.COVER_ASPECT_RATIO)
+                        if page_height >= page_width * BookManager.COVER_TALL_RATIO:
+                            # 가로의 2배 이상 긴 첫 쪽은 표지가 아닐 수 있어 가로 폭에 맞추고 위쪽 표지 영역만 쓴다.
+                            cover_height = page_width / BookManager.COVER_ASPECT_RATIO
+                            crop = (0, page_height - cover_height, 0, 0)
+                            rendered = page.render(scale=width / page_width, crop=crop).to_pil()
+                            if rendered.size != (width, height):
+                                rendered = rendered.resize((width, height), Image.Resampling.LANCZOS)
+                            return rendered
+                        if page_width > page_height:
+                            # 가로 쪽은 좌우 두 쪽이 합쳐진 펼침면인 경우가 많아 좌측 절반을 표지로 쓴다.
+                            half_width = page_width / 2
+                            scale = min(width / half_width, height / page_height)
+                            return page.render(scale=scale, crop=(0, 0, half_width, 0)).to_pil()
+                        # 그 밖에는 자르지 않고 쪽 전체를 비율대로 줄인다. 남는 공간은 화면에서 비워 둔다.
+                        scale = min(width / page_width, height / page_height)
+                        return page.render(scale=scale).to_pil()
 
                     img = render_cover(pdf[0])
                     if len(pdf) > 1 and BookManager._is_mostly_blank_cover(img):

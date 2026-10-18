@@ -1,3 +1,4 @@
+import { useState } from "react";
 import PropTypes from "prop-types";
 
 import { Alert, Button } from "react-bootstrap";
@@ -17,12 +18,12 @@ export default function CoverBrowser({
   basePath,
   role,
   category,
-  onClearCategory,
 }) {
   const contentType = apiPrefix === "/comics" ? "comic" : "book";
   const [viewMode, changeViewMode] = useCoverViewMode(contentType);
+  const [uncovered, setUncovered] = useState(false);
   const { items, total, hasMore, loading, error, loadMore, reload } =
-    useCoverBrowse({ apiPrefix, category });
+    useCoverBrowse({ apiPrefix, category, uncovered });
   const allLabel = contentType === "comic" ? "전체 만화" : "전체 책";
   const containerId = `browse-${contentType === "comic" ? "comics" : "books"}`;
 
@@ -49,6 +50,7 @@ export default function CoverBrowser({
         title={
           <>
             <span>{category || allLabel}</span>
+            {uncovered && <span className="ms-2 text-muted">미커버만</span>}
             {total !== null && (
               <span className="ms-2 text-muted">
                 {total.toLocaleString()}건
@@ -57,24 +59,31 @@ export default function CoverBrowser({
             <span className="ms-2 text-muted">(최신순)</span>
           </>
         }
-        emptyMessage={loading ? "로딩 중..." : error ? "" : "책이 없습니다."}
+        emptyMessage={
+          loading
+            ? "로딩 중..."
+            : error
+              ? ""
+              : uncovered
+                ? "미커버 책이 없습니다."
+                : "책이 없습니다."
+        }
         viewMode={viewMode}
         hasMore={hasMore}
         loading={loading}
         onLoadMore={loadMore}
-        coverResetKey={category}
+        coverResetKey={`${category}|${uncovered}`}
         headerActions={
           <>
-            {category && (
-              <Button
-                variant="outline-secondary"
-                size="sm"
-                className="me-2"
-                onClick={onClearCategory}
-              >
-                {allLabel} 보기
-              </Button>
-            )}
+            <Button
+              variant={uncovered ? "secondary" : "outline-secondary"}
+              size="sm"
+              className="me-2"
+              aria-pressed={uncovered}
+              onClick={() => setUncovered((previous) => !previous)}
+            >
+              미커버
+            </Button>
             <CoverViewToggle
               id={containerId}
               viewMode={viewMode}
@@ -92,7 +101,6 @@ CoverBrowser.propTypes = {
   basePath: PropTypes.string.isRequired,
   role: PropTypes.string,
   category: PropTypes.string,
-  onClearCategory: PropTypes.func.isRequired,
 };
 
 CoverBrowser.defaultProps = {

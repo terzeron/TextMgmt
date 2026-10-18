@@ -32,7 +32,7 @@
 .book-cover-store-images { display: flex; gap: 8px; }
 .book-cover-candidate { width: 105px; flex: 0 0 105px; }
 .book-cover-candidate button.cover-grid-cover { padding: 5px; }
-.book-cover-candidate .cover-grid-image { object-fit: contain; background: #f8f9fa; }
+.book-cover-candidate .cover-grid-image { background: #f8f9fa; }
 .book-cover-image-size { display: block; min-height: 28px; line-height: 14px; margin-top: 4px; color: #495057; }
 .book-cover-image-size span { display: block; }
 .book-cover-candidate button.cover-grid-cover:not(:disabled):hover { border-color: #0d6efd; }

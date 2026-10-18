@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Literal, Callable, TypeVar
 from contextlib import asynccontextmanager, suppress
 from urllib.parse import urlparse
-from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -22,7 +22,7 @@ from fastapi.encoders import jsonable_encoder
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from backend.auth import require_auth, require_admin, optional_auth, determine_role, create_jwt_token, create_refresh_token, decode_refresh_token, observation_hash, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_TOKEN_EXPIRATION_SECONDS, ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME
 from backend.book_manager import BookManager, MAX_CATEGORY_PAGE_SIZE, MAX_LATEST_BOOK_COUNT
 from backend.comics_manager import ComicsManager
@@ -31,6 +31,7 @@ from backend.category_mapping import CategoryMapping
 from backend.refresh_token_store import create_refresh_token_store
 from backend.view_history_store import MAX_RECENT_VIEWS, create_view_history_store
 from backend.cover_management import create_cover_router
+from backend.epub_cover import MAX_IMAGE_BYTES
 
 # 에러 및 미디어 타입 상수 정의
 ERR_MISSING_INPUT = "제목 또는 저자를 입력해주세요"
@@ -440,19 +441,31 @@ class PdfSplitModel(BaseModel):
     second: PdfRectModel
 
 
-class PdfInsertModel(BaseModel):
-    """page 쪽 앞에 url 의 이미지를 한 쪽으로 끼운다."""
+class ImageSourceModel(BaseModel):
+    """이미지 출처: 공개 URL(url)이거나 사용자가 올려 서버가 정규화한 이미지(image_data, base64)이다. 하나만 받는다."""
+
+    url: str | None = Field(default=None, min_length=1, max_length=4096)
+    image_data: str | None = Field(default=None, min_length=1, max_length=((MAX_IMAGE_BYTES + 2) // 3) * 4)
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> "ImageSourceModel":
+        if (self.url is None) == (self.image_data is None):
+            raise ValueError("url 과 image_data 중 하나만 지정해야 합니다")
+        return self
+
+
+class PdfInsertModel(ImageSourceModel):
+    """page 쪽 앞에 이미지(url 또는 image_data)를 한 쪽으로 끼운다."""
 
     page: int
-    url: str = Field(min_length=1, max_length=4096)
 
 
 class PdfInsertPreviewModel(BaseModel):
     url: str = Field(min_length=1, max_length=4096)
 
 
-class EpubCoverModel(BaseModel):
-    url: str = Field(min_length=1, max_length=4096)
+class EpubCoverModel(ImageSourceModel):
+    pass
 
 
 class PdfDeletePagesModel(BaseModel):
@@ -460,6 +473,7 @@ class PdfDeletePagesModel(BaseModel):
     crops: list[PdfCropModel] = []
     splits: list[PdfSplitModel] = []
     inserts: list[PdfInsertModel] = []
+    order: list[int] = []  # 편집 전 쪽 번호를 새 순서대로 나열한다(앞쪽 len(order)쪽만 대상). 비어 있으면 순서를 바꾸지 않는다.
 
 
 class CategoryRenameModel(BaseModel):
@@ -709,18 +723,28 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
             return Response(status_code=400, content=error or "이미지를 가져오지 못했습니다")
         return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "private, no-store"})
 
+    @router.post("/pdf-pages/{book_id}/insert-preview-upload", dependencies=admin_dep, response_model=None)
+    async def preview_insert_upload(book_id: int, file: UploadFile = File(...)) -> Response:
+        LOGGER.debug("# preview_insert_upload(book_id=%d, filename=%r)", book_id, file.filename)
+        # 한도보다 1바이트 더 읽어 초과를 구별한다. 초과분은 읽지 않으므로 메모리가 한도 이상 늘지 않는다.
+        data = await file.read(MAX_IMAGE_BYTES + 1)
+        jpeg, error = await manager.preview_insert_upload(data)
+        if jpeg is None:
+            return Response(status_code=400, content=error or "이미지를 읽지 못했습니다")
+        return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "private, no-store"})
+
     @router.post("/pdf-pages/{book_id}/delete", dependencies=admin_dep)
     async def delete_pdf_pages(book_id: int, body: PdfDeletePagesModel) -> dict[str, Any]:
-        LOGGER.debug("# delete_pdf_pages(book_id=%d, pages=%r, crops=%r, splits=%r, inserts=%r)", book_id, body.pages, body.crops, body.splits, body.inserts)
-        result, error = await manager.delete_pdf_pages(book_id, body.pages, [c.model_dump() for c in body.crops], [s.model_dump() for s in body.splits], [i.model_dump() for i in body.inserts])
+        LOGGER.debug("# delete_pdf_pages(book_id=%d, pages=%r, crops=%r, splits=%r, inserts=%r, order=%r)", book_id, body.pages, body.crops, body.splits, [(i.page, i.url or "<upload>") for i in body.inserts], body.order)
+        result, error = await manager.delete_pdf_pages(book_id, body.pages, [c.model_dump() for c in body.crops], [s.model_dump() for s in body.splits], [i.model_dump() for i in body.inserts], body.order)
         if error is None:
             return {"status": "success", "result": result}
         return {"status": "failure", "error": error}
 
     @router.post("/epub-cover/{book_id}", dependencies=admin_dep)
     async def set_epub_cover(book_id: int, body: EpubCoverModel) -> dict[str, Any]:
-        LOGGER.debug("# set_epub_cover(book_id=%d, url=%r)", book_id, body.url)
-        result, error = await manager.set_epub_cover(book_id, body.url)
+        LOGGER.debug("# set_epub_cover(book_id=%d, url=%r)", book_id, body.url or "<upload>")
+        result, error = await manager.set_epub_cover(book_id, body.url, body.image_data)
         if error is None:
             return {"status": "success", "result": result}
         return {"status": "failure", "error": error}
@@ -1091,14 +1115,18 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return response_object
 
     @router.get("/browse")
-    async def browse_books(category: str = "", limit: int = Query(60, ge=1, le=MAX_CATEGORY_PAGE_SIZE), cursor: str = "", payload: dict = Depends(require_auth)) -> dict[str, Any]:
-        """커버 목록용 책을 최신순으로 한 페이지씩 돌려준다. epub, pdf만 대상이고 작품 디렉토리는 대표 한 권으로 묶는다."""
-        LOGGER.debug("# browse_books(category='%s', limit=%d, cursor='%s')", category, limit, cursor)
+    async def browse_books(category: str = "", limit: int = Query(60, ge=1, le=MAX_CATEGORY_PAGE_SIZE), cursor: str = "", uncovered: bool = False, payload: dict = Depends(require_auth)) -> dict[str, Any]:
+        """커버 목록용 책을 최신순으로 한 페이지씩 돌려준다. epub, pdf만 대상이고 작품 디렉토리는 대표 한 권으로 묶는다.
+
+        uncovered=true면 정식 표지가 없는 책만 돌려주고 total은 알 수 없어 null이다.
+        """
+        LOGGER.debug("# browse_books(category='%s', limit=%d, cursor='%s', uncovered=%s)", category, limit, cursor, uncovered)
         response_object: dict[str, Any] = {"status": "failure"}
         if category:
             await _ensure_viewer_category_allowed(payload, category, content_type)
         hidden_categories = await _get_viewer_hidden_categories(payload, content_type)
-        items, total, next_cursor, error = await manager.get_cover_books_paged(category=category, size=limit, cursor=cursor, exclude_categories=hidden_categories)
+        fetch_page = manager.get_uncovered_books_paged if uncovered else manager.get_cover_books_paged
+        items, total, next_cursor, error = await fetch_page(category=category, size=limit, cursor=cursor, exclude_categories=hidden_categories)
         if error is None:
             response_object["status"] = "success"
             response_object["result"] = [BrowseBookModel(**book.dict(), display_title=display_title) for book, display_title in items]

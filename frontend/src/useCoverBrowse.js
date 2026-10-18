@@ -15,11 +15,15 @@ export const BROWSE_PAGE_SIZE = 60;
 
 const LOAD_ERROR_MESSAGE = "책 목록을 불러오지 못했습니다.";
 
-/** category가 없으면 전체, 있으면 그 디렉토리를 기준으로 한 커버 목록 URL을 만든다. */
-export function buildBrowseUrl(apiPrefix, category, cursor) {
+/**
+ * category가 없으면 전체, 있으면 그 디렉토리를 기준으로 한 커버 목록 URL을 만든다.
+ * uncovered가 true면 정식 표지가 없는 책만 받는다.
+ */
+export function buildBrowseUrl(apiPrefix, category, cursor, uncovered = false) {
   const params = [`limit=${BROWSE_PAGE_SIZE}`];
   if (category) params.push(`category=${encodeURIComponent(category)}`);
   if (cursor) params.push(`cursor=${encodeURIComponent(cursor)}`);
+  if (uncovered) params.push("uncovered=true");
   return `${apiPrefix}/browse?${params.join("&")}`;
 }
 
@@ -27,8 +31,9 @@ export function buildBrowseUrl(apiPrefix, category, cursor) {
  * @param {object} options
  * @param {string} options.apiPrefix - "" (book) 또는 "/comics"
  * @param {string} [options.category] - 비우면 전체 책
+ * @param {boolean} [options.uncovered] - true면 정식 표지가 없는 책만. 서버가 전체 개수를 몰라 total은 null이다
  */
-export function useCoverBrowse({ apiPrefix, category = "" }) {
+export function useCoverBrowse({ apiPrefix, category = "", uncovered = false }) {
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(null);
   const [hasMore, setHasMore] = useState(false);
@@ -40,6 +45,9 @@ export function useCoverBrowse({ apiPrefix, category = "" }) {
   const cursorRef = useRef("");
   const hasMoreRef = useRef(false);
   const loadingRef = useRef(false);
+  // 미커버 목록은 서버가 한 요청에서 훑는 범위가 한정돼 빈 페이지와 커서가 올 수 있다. 그때는 바로 이어받는다.
+  const continueRef = useRef(false);
+  const fetchPageRef = useRef(null);
 
   const fetchPage = useCallback(
     (generation) => {
@@ -47,12 +55,13 @@ export function useCoverBrowse({ apiPrefix, category = "" }) {
       setLoading(true);
       setError("");
       const stop = () => {
+        continueRef.current = false;
         hasMoreRef.current = false;
         setHasMore(false);
         setError(LOAD_ERROR_MESSAGE);
       };
       rawJsonGetReq(
-        buildBrowseUrl(apiPrefix, category, cursorRef.current),
+        buildBrowseUrl(apiPrefix, category, cursorRef.current, uncovered),
         (data) => {
           if (generation !== generationRef.current) return;
           if (!data || data["status"] !== "success") {
@@ -65,7 +74,10 @@ export function useCoverBrowse({ apiPrefix, category = "" }) {
           hasMoreRef.current = Boolean(nextCursor);
           setHasMore(Boolean(nextCursor));
           setTotal(data["total"] ?? null);
-          setItems((prev) => prev.concat(data["result"] || []));
+          const rows = data["result"] || [];
+          continueRef.current =
+            uncovered && rows.length === 0 && Boolean(nextCursor);
+          setItems((prev) => prev.concat(rows));
         },
         () => {
           if (generation !== generationRef.current) return;
@@ -73,17 +85,27 @@ export function useCoverBrowse({ apiPrefix, category = "" }) {
         },
         () => {
           if (generation !== generationRef.current) return;
+          if (continueRef.current) {
+            continueRef.current = false;
+            fetchPageRef.current(generation);
+            return;
+          }
           loadingRef.current = false;
           setLoading(false);
         },
       );
     },
-    [apiPrefix, category],
+    [apiPrefix, category, uncovered],
   );
+
+  useEffect(() => {
+    fetchPageRef.current = fetchPage;
+  }, [fetchPage]);
 
   const reload = useCallback(() => {
     generationRef.current += 1;
     cursorRef.current = "";
+    continueRef.current = false;
     hasMoreRef.current = false;
     loadingRef.current = false;
     setItems([]);

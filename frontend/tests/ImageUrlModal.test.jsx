@@ -81,3 +81,69 @@ describe("PdfInsertImageModal", () => {
     );
   });
 });
+
+describe("ImageUrlModal: 이 기기에서 이미지 선택", () => {
+  const fileInput = () => screen.getByLabelText("이 기기에서 이미지 선택");
+  const pick = (file) =>
+    fireEvent.change(fileInput(), { target: { files: [file] } });
+  const photo = () => new File(["x"], "photo.jpg", { type: "image/jpeg" });
+
+  it("이미지 파일만 고르게 하고 id 에 접두어를 붙인다", () => {
+    render(<ImageUrlModal {...base} onSubmit={vi.fn()} onClose={vi.fn()} />);
+
+    expect(fileInput().type).toBe("file");
+    expect(fileInput().accept).toBe("image/*");
+    expect(fileInput().id).toBe("x-file");
+  });
+
+  it("파일을 고르면 곧바로 File 을 onSubmit 에 넘기고 요청 중에는 입력을 막는다", async () => {
+    const file = photo();
+    const onSubmit = vi.fn(() => new Promise(() => {}));
+    render(<ImageUrlModal {...base} onSubmit={onSubmit} onClose={vi.fn()} />);
+
+    pick(file);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toBe(file);
+    await screen.findByText("불러오는 중…");
+    expect(fileInput().disabled).toBe(true);
+  });
+
+  it("실패 사유를 보여 주고 같은 파일을 다시 고를 수 있게 입력을 되돌린다", async () => {
+    const onSubmit = vi
+      .fn()
+      .mockResolvedValueOnce("이미지 형식을 읽을 수 없습니다");
+    render(<ImageUrlModal {...base} onSubmit={onSubmit} onClose={vi.fn()} />);
+
+    pick(photo());
+
+    expect(await screen.findByText("이미지 형식을 읽을 수 없습니다")).toBeTruthy();
+    expect(fileInput().disabled).toBe(false);
+    expect(fileInput().value).toBe("");
+    pick(photo());
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+  });
+
+  it("고른 파일이 없으면 아무것도 보내지 않는다", () => {
+    const onSubmit = vi.fn();
+    render(<ImageUrlModal {...base} onSubmit={onSubmit} onClose={vi.fn()} />);
+
+    fireEvent.change(fileInput(), { target: { files: [] } });
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("URL 요청 중에 파일을 골라도 중복으로 보내지 않는다", async () => {
+    const onSubmit = vi.fn(() => new Promise(() => {}));
+    render(<ImageUrlModal {...base} onSubmit={onSubmit} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("이미지 URL"), {
+      target: { value: "https://img.example.com/a.jpg" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "삽입 표시" }));
+    await screen.findByText("불러오는 중…");
+
+    pick(photo());
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+});

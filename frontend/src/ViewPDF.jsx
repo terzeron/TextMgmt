@@ -13,8 +13,11 @@ import SaveIcon from "@mui/icons-material/Save";
 import CropFreeIcon from "@mui/icons-material/CropFree";
 import VerticalSplitOutlinedIcon from "@mui/icons-material/VerticalSplitOutlined";
 import AddPhotoAlternateIcon from "@mui/icons-material/AddPhotoAlternate";
+import ArrowDropUpIcon from "@mui/icons-material/ArrowDropUp";
+import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import PdfInsertImageModal from "./PdfInsertImageModal";
 import { describeHttpError } from "./httpError";
+import { blobToBase64, requestInsertPreview } from "./insertPreview";
 import "./viewerEditActions.css";
 import PdfCropBox from "./PdfCropBox";
 import { DEFAULT_CROP_RECT, DEFAULT_SPLIT_RECTS } from "./cropRect";
@@ -50,6 +53,9 @@ const FALLBACK_PLACEHOLDER_PIXEL_WIDTH = 90;
 const CHUNK_SIZE = 10;
 // 동시에 실행할 최대 렌더 개수. 워커 과부하를 막아 보이는 페이지에 자원을 집중시킨다.
 const MAX_CONCURRENT_RENDERS = 3;
+// 보이는 영역(near zone) 밖에서 그려진 채로 남겨 두는 페이지 수. 가까운 순으로 이만큼만 남기고
+// 나머지는 canvas 비트맵과 청크 pdfDoc 을 해제해 긴 PDF 를 넘겨도 메모리가 쌓이지 않게 한다.
+const RETAIN_PAGES_OUTSIDE_VIEW = 6;
 
 export default function ViewPDF({
   bookId,
@@ -88,6 +94,9 @@ export default function ViewPDF({
   );
   // 이미지 URL 입력 모달이 열려 있는 쪽 번호(없으면 null)
   const [insertDialog, setInsertDialog] = useState(null);
+  // 쪽 순서 바꾸기: 화면에 보이는 순서대로 원본 쪽 번호를 나열한 배열(null 이면 순서를 바꾸지 않았다).
+  // 표시와 삽입이 원본 쪽 번호를 키로 쓰므로 번호는 그대로 두고 보이는 순서만 바꾸며, 저장할 때 order 로 보낸다.
+  const [pageOrder, setPageOrder] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   // 저장 뒤 같은 bookId로 PDF를 다시 불러오기 위한 카운터
@@ -127,6 +136,18 @@ export default function ViewPDF({
       return next;
     });
   };
+  // pageNum 쪽을 화면에서 delta(-1: 위, +1: 아래)칸 옮겨 이웃한 쪽과 맞바꾼다. 원래 순서로 돌아오면 변경 표시를 지운다.
+  const movePage = (pageNum, delta) => {
+    setSaveError(null);
+    setPageOrder((prev) => {
+      const order = prev ? [...prev] : Array.from({ length: totalPages }, (_, i) => i + 1);
+      const from = order.indexOf(pageNum);
+      const to = from + delta;
+      if (from < 0 || to < 0 || to >= order.length) return prev;
+      [order[from], order[to]] = [order[to], order[from]];
+      return order.every((n, i) => n === i + 1) ? null : order;
+    });
+  };
   const changeBox = (pageNum, id, rect) =>
     setMarkedPages((prev) => {
       const mark = prev.get(pageNum);
@@ -156,38 +177,31 @@ export default function ViewPDF({
     }
     setInsertions(new Map());
   };
-  // 서버가 URL 의 이미지를 내려받아 정규화한 미리보기를 받아 온다. 저장할 때 삽입되는 것과 같은 이미지다.
+  // 서버가 이미지(URL 이면 내려받고, 이 기기의 파일이면 받아서)를 정규화한 미리보기를 받아 온다. 저장할 때 삽입되는 것과 같은 이미지다.
   // 실패 사유(문자열)를 돌려주고, 성공하면 삽입을 표시한 뒤 null 을 돌려준다.
-  const previewInsertion = async (pageNum, url) => {
+  const previewInsertion = async (pageNum, source) => {
     try {
-      const response = await fetch(
-        getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}/insert-preview`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url }),
-        },
-      );
-      if (!response.ok) {
-        // 400 은 서버가 사람이 읽을 사유를 본문에 담아 보낸 것이다.
-        if (response.status === 400) {
-          const reason = (await response.text()).trim();
-          if (reason) return reason;
-        }
-        return await describeHttpError(response);
-      }
-      const blob = await response.blob();
+      const blob = await requestInsertPreview(apiPrefix, bookId, source);
       /* v8 ignore next -- the viewer unmounts only while this request is in flight. */
       if (cancelledRef.current) return null;
-      setInsertion(pageNum, { url, previewSrc: URL.createObjectURL(blob) });
+      setInsertion(pageNum, {
+        ...(typeof source === "string"
+          ? { url: source }
+          : { label: source.name }),
+        blob,
+        previewSrc: URL.createObjectURL(blob),
+      });
       return null;
     } catch (err) {
       return err?.message || "이미지를 가져오지 못했습니다";
     }
   };
   const saveMarkedPages = async () => {
-    if (saving || (markedPages.size === 0 && insertions.size === 0)) return;
+    if (
+      saving ||
+      (markedPages.size === 0 && insertions.size === 0 && pageOrder === null)
+    )
+      return;
     const entries = [...markedPages].sort(([a], [b]) => a - b);
     const pages = entries
       .filter(([, mark]) => mark.kind === "page")
@@ -200,13 +214,17 @@ export default function ViewPDF({
       .map(([pageNum, mark]) => ({ page: pageNum, ...mark.rects }));
     const inserts = [...insertions]
       .sort(([a], [b]) => a - b)
-      .map(([pageNum, entry]) => ({ page: pageNum, url: entry.url }));
+      .map(([pageNum, entry]) => ({ page: pageNum, entry }));
+    const reordered = pageOrder
+      ? pageOrder.filter((n, i) => n !== i + 1).sort((a, b) => a - b)
+      : [];
     const summary = [
       inserts.length > 0 &&
         `${inserts.map((i) => i.page).join(", ")}쪽 앞에 이미지 삽입`,
       pages.length > 0 && `${pages.join(", ")}쪽 삭제`,
       crops.length > 0 && `${crops.map((c) => c.page).join(", ")}쪽 크롭`,
       splits.length > 0 && `${splits.map((c) => c.page).join(", ")}쪽 분할`,
+      reordered.length > 0 && `${reordered.join(", ")}쪽 순서 변경`,
     ]
       .filter(Boolean)
       .join(", ");
@@ -220,13 +238,27 @@ export default function ViewPDF({
     setSaving(true);
     setSaveError(null);
     try {
+      // URL 로 고른 이미지는 서버가 다시 내려받고, 이 기기에서 고른 이미지는 미리 본 JPEG 를 그대로 보낸다.
+      const insertBodies = await Promise.all(
+        inserts.map(async ({ page, entry }) =>
+          entry.url
+            ? { page, url: entry.url }
+            : { page, image_data: await blobToBase64(entry.blob) },
+        ),
+      );
       const response = await fetch(
         getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}/delete`,
         {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pages, crops, splits, inserts }),
+          body: JSON.stringify({
+            pages,
+            crops,
+            splits,
+            inserts: insertBodies,
+            ...(pageOrder && { order: pageOrder }),
+          }),
         },
       );
       if (!response.ok) throw new Error(await describeHttpError(response));
@@ -235,6 +267,7 @@ export default function ViewPDF({
         throw new Error(body.error || "저장에 실패했습니다.");
       }
       setMarkedPages(new Map());
+      setPageOrder(null);
       clearInsertions();
       setReloadToken((prev) => prev + 1);
     } catch (err) {
@@ -251,6 +284,8 @@ export default function ViewPDF({
   const containerRef = useRef(null);
   const canvasRefs = useRef({});
   const renderedPagesRef = useRef(new Set());
+  const everRenderedRef = useRef(new Set()); // 한 번이라도 그려진 페이지 (진행률 표시용, 해제해도 유지)
+  const nearPagesRef = useRef(new Set()); // 지금 near zone 에 있는 페이지 (해제 대상에서 제외)
   const observerRef = useRef(null);
 
   // 렌더 스케줄러 상태
@@ -327,6 +362,59 @@ export default function ViewPDF({
     return 2 + Math.floor((globalPageNum - 2) / CHUNK_SIZE) * CHUNK_SIZE;
   }, []);
 
+  // 그려 둔 페이지의 canvas 비트맵을 해제한다. 1x1 로 줄이되 aspect-ratio 로 레이아웃 높이는 유지해
+  // 스크롤 위치가 밀리지 않게 한다. 다시 보이면 executeRender 가 aspect-ratio 를 풀고 새로 그린다.
+  const evictPage = useCallback((pageNum) => {
+    renderedPagesRef.current.delete(pageNum);
+    const canvas = canvasRefs.current[pageNum];
+    if (!canvas || !canvas.width || !canvas.height) return;
+    canvas.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
+    canvas.width = 1;
+    canvas.height = 1;
+  }, []);
+
+  // pageNums 쪽을 포함한 청크 중 그려진·렌더 중·대기 중인 쪽이 하나도 없는 청크의 pdfDoc 을 해제한다.
+  // (해제한 청크는 그 쪽이 다시 필요해질 때 pumpQueue 가 다시 받아 온다.)
+  const releaseIdleChunks = useCallback((pageNums) => {
+    for (const [key, pdfDoc] of [...chunkDocsRef.current.entries()]) {
+      const [s, e] = key.split("-").map(Number);
+      if (!pageNums.some((n) => n >= s && n <= e)) continue;
+      let busy = false;
+      for (let n = s; n <= e && !busy; n++) {
+        busy =
+          renderedPagesRef.current.has(n) ||
+          activeRenderTasksRef.current.has(n) ||
+          renderQueueRef.current.has(n);
+      }
+      if (busy) continue;
+      chunkDocsRef.current.delete(key);
+      pdfDoc.loadingTask.destroy();
+    }
+  }, []);
+
+  // near zone 밖에서 그려진 페이지 중 near zone 에서 먼 것부터 해제해 RETAIN_PAGES_OUTSIDE_VIEW 개만 남긴다.
+  // 렌더가 끝날 때만 호출하면 충분하다: 그려진 페이지 수는 렌더로만 늘어난다.
+  const trimFarPages = useCallback(() => {
+    const near = nearPagesRef.current;
+    // 관찰자가 아직 위치를 알려주지 않았으면 어느 쪽이 보이는지 모르므로 해제하지 않는다
+    if (near.size === 0) return;
+    const nearMin = Math.min(...near);
+    const nearMax = Math.max(...near);
+    const far = [];
+    for (const pageNum of renderedPagesRef.current) {
+      if (near.has(pageNum) || activeRenderTasksRef.current.has(pageNum)) continue;
+      far.push({
+        pageNum,
+        dist: Math.max(nearMin - pageNum, pageNum - nearMax, 0),
+      });
+    }
+    if (far.length <= RETAIN_PAGES_OUTSIDE_VIEW) return;
+    far.sort((a, b) => a.dist - b.dist);
+    const evicted = far.slice(RETAIN_PAGES_OUTSIDE_VIEW).map((f) => f.pageNum);
+    for (const pageNum of evicted) evictPage(pageNum);
+    releaseIdleChunks(evicted);
+  }, [evictPage, releaseIdleChunks]);
+
   // 실제 렌더 실행. 스케줄러가 "청크 로드된" 페이지에 대해서만 호출한다. 취소 가능.
   const executeRender = useCallback(
     async (globalPageNum) => {
@@ -358,6 +446,7 @@ export default function ViewPDF({
         });
 
         const context = canvas.getContext("2d");
+        canvas.style.aspectRatio = "";
         canvas.width = renderViewport.width;
         canvas.height = renderViewport.height;
 
@@ -368,12 +457,16 @@ export default function ViewPDF({
         // 취소 가능하도록 슬롯 마커를 실제 RenderTask로 교체
         activeRenderTasksRef.current.set(globalPageNum, task);
         await task.promise;
+        // 그린 뒤에는 pdfjs 가 페이지에 붙들고 있는 operator list 등을 놓아 준다
+        page.cleanup?.();
 
-        setLoadedPages((prev) => prev + 1);
+        everRenderedRef.current.add(globalPageNum);
+        setLoadedPages(everRenderedRef.current.size);
 
         if (globalPageNum === 1) {
           setIsFirstPageReady(true);
         }
+        trimFarPages();
       } catch (err) {
         // 취소된 렌더는 재진입 시 다시 그릴 수 있도록 완료 표시를 해제한다
         renderedPagesRef.current.delete(globalPageNum);
@@ -382,7 +475,7 @@ export default function ViewPDF({
         }
       }
     },
-    [findChunkForPage],
+    [findChunkForPage, trimFarPages],
   );
 
   // 큐에서 청크가 로드되어 즉시 렌더 가능한 페이지 중 뷰포트에 가장 가까운 것을 고른다
@@ -510,6 +603,8 @@ export default function ViewPDF({
       setIsFirstPageReady(false);
       canvasRefs.current = {};
       renderedPagesRef.current = new Set();
+      everRenderedRef.current = new Set();
+      nearPagesRef.current = new Set();
       renderQueueRef.current = new Set();
       activeRenderTasksRef.current = new Map();
       chunkDocsRef.current = new Map();
@@ -630,7 +725,9 @@ export default function ViewPDF({
             for (const entry of entries) {
               const pageNum = parseInt(entry.target.dataset.page);
               if (!pageNum) continue;
+              nearPagesRef.current.delete(pageNum);
               if (entry.isIntersecting) {
+                nearPagesRef.current.add(pageNum);
                 enqueueRender(pageNum);
               } else if (
                 renderQueueRef.current.has(pageNum) ||
@@ -646,7 +743,8 @@ export default function ViewPDF({
 
         observerRef.current = observer;
 
-        for (let i = 2; i <= pagesToRender; i++) {
+        // 1쪽도 관찰한다: 해제된 뒤 다시 보이면 이 관찰자가 되살려야 한다.
+        for (let i = 1; i <= pagesToRender; i++) {
           const canvas = canvasRefs.current[i];
           /* v8 ignore next 4 -- flushSync creates all observed page canvases before observer setup. */
           if (canvas) {
@@ -741,6 +839,7 @@ export default function ViewPDF({
 
   // 페이지 번호 배열 생성
   const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1);
+  const displayOrder = pageOrder ?? pageNumbers;
 
   return (
     <div
@@ -806,7 +905,7 @@ export default function ViewPDF({
         </div>
       </div>
       <div className="pdf-content">
-        {pageNumbers.map((pageNum) => {
+        {displayOrder.map((pageNum, position) => {
           const canvasStyle = fitMode
             ? { width: "100%", height: "auto" }
             : {
@@ -825,8 +924,11 @@ export default function ViewPDF({
           }
           const mark = markedPages.get(pageNum);
           const insertion = insertions.get(pageNum);
+          // 순서를 바꾼 쪽은 원래 자리(pageNum)와 현재 자리(position + 1)가 다르다.
+          const moved = position + 1 !== pageNum;
           // 저장 버튼은 이 쪽에 무엇이든 변경 표시가 있을 때 나온다.
-          const marked = mark !== undefined || insertion !== undefined;
+          const marked =
+            mark !== undefined || insertion !== undefined || moved;
           return (
             <Fragment key={pageNum}>
               {insertion && (
@@ -840,7 +942,7 @@ export default function ViewPDF({
                     src={insertion.previewSrc}
                     alt={`${pageNum}쪽 앞에 삽입될 이미지`}
                   />
-                  <div className="viewer-edit-tag" title={insertion.url}>
+                  <div className="viewer-edit-tag" title={insertion.url ?? insertion.label}>
                     새 쪽 · 저장 전 ({pageNum}쪽 앞에 삽입)
                   </div>
                   <div className="viewer-edit-actions">
@@ -873,6 +975,11 @@ export default function ViewPDF({
               data-marked={marked ? "true" : "false"}
             >
               <canvas ref={setCanvasRef(pageNum)} className="pdf-page-canvas" />
+              {moved && (
+                <div className="viewer-edit-tag">
+                  순서 변경 · 저장 전 ({pageNum}쪽 → {position + 1}번째)
+                </div>
+              )}
               {mark?.kind === "page" && (
                 <div
                   className="viewer-edit-delete-overlay"
@@ -918,6 +1025,26 @@ export default function ViewPDF({
                     <SaveIcon fontSize="small" />
                   </button>
                 )}
+                <button
+                  type="button"
+                  className="viewer-edit-btn"
+                  aria-label={`${pageNum}쪽을 위로 옮기기`}
+                  title="이전 쪽과 순서 바꾸기"
+                  disabled={saving || position === 0}
+                  onClick={() => movePage(pageNum, -1)}
+                >
+                  <ArrowDropUpIcon fontSize="small" />
+                </button>
+                <button
+                  type="button"
+                  className="viewer-edit-btn"
+                  aria-label={`${pageNum}쪽을 아래로 옮기기`}
+                  title="다음 쪽과 순서 바꾸기"
+                  disabled={saving || position === displayOrder.length - 1}
+                  onClick={() => movePage(pageNum, 1)}
+                >
+                  <ArrowDropDownIcon fontSize="small" />
+                </button>
                 <button
                   type="button"
                   className={`viewer-edit-btn${insertion ? " active" : ""}`}
