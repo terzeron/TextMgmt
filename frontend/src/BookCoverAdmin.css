@@ -12,7 +12,7 @@
 .book-cover-scan-trigger { height: 1px; }
 .book-cover-filename { font-size: .75rem; color: #6c757d; margin-bottom: 8px; overflow-wrap: anywhere; }
 .book-cover-row-body { display: flex; gap: 14px; align-items: flex-start; }
-.book-cover-current { flex: 0 0 113px; }
+.book-cover-current { flex: 0 0 var(--cover-card-width); }
 .book-cover-current small { display: block; font-size: .75rem; margin-top: 6px; }
 .book-cover-status { margin-bottom: 6px; }
 .book-cover-current-actions { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
@@ -21,16 +21,16 @@
 .book-cover-completed:disabled { cursor: wait; }
 .book-cover-existing { padding: 0; }
 .book-cover-candidates { min-width: 0; display: flex; gap: 14px; overflow-x: auto; padding-bottom: 10px; }
-.book-cover-store { flex: 0 0 auto; min-width: 112px; max-width: 520px; }
+.book-cover-store { flex: 0 0 auto; min-width: var(--cover-card-width); max-width: 520px; }
 .book-cover-store h4 { font-size: .8rem; font-weight: 600; margin-bottom: 6px; }
 .book-cover-store-header { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
 .book-cover-store-header h4 { font-size: .8rem; font-weight: 600; margin: 0; }
 .book-cover-magnifier { padding: 2px 4px; font-size: .7rem; }
 .book-cover-image-frame { position: relative; }
 .book-cover-image-frame > .book-cover-magnifier { position: absolute; top: 2px; right: 2px; z-index: 1; background: rgba(255, 255, 255, .9); }
-.book-cover-store > small { display: block; width: 112px; }
+.book-cover-store > small { display: block; width: var(--cover-card-width); }
 .book-cover-store-images { display: flex; gap: 8px; }
-.book-cover-candidate { width: 105px; flex: 0 0 105px; }
+.book-cover-candidate { width: var(--cover-card-width); flex: 0 0 var(--cover-card-width); }
 .book-cover-candidate button.cover-grid-cover { padding: 5px; }
 .book-cover-candidate .cover-grid-image { background: #f8f9fa; }
 .book-cover-image-size { display: block; min-height: 28px; line-height: 14px; margin-top: 4px; color: #495057; }
@@ -47,4 +47,4 @@
 .book-cover-zoom-panel { overflow: auto; }
 .book-cover-zoom-select { display: block; border: 0; padding: 0 !important; background: transparent; }
 .book-cover-zoom-image { display: block; width: 800px; height: auto; max-width: none; max-height: none; }
-@media (max-width: 767px) { .book-cover-directory { padding: 0 12px 12px; } .book-cover-current { flex-basis: 86px; } }
+@media (max-width: 767px) { .book-cover-directory { padding: 0 12px 12px; } }
