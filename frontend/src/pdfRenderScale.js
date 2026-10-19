@@ -26,3 +26,29 @@ export function computeRenderScale(page, canvas, dpr) {
   const areaCap = Math.sqrt(MAX_CANVAS_PIXELS / (base.width * base.height));
   return Math.max(floor, Math.min(wanted, areaCap));
 }
+
+// 쪽 전체를 이미지 한 장으로 채운 PDF(만화·스캔본)의 이미지 픽셀 크기를 돌려준다. 아니면 null.
+// 이런 PDF 의 쪽 크기(pt)는 만든 도구가 임의로 정한 값이라(예: 448px 이미지를 300dpi 로 107.52pt) 그대로 쓰면
+// 원본 이미지보다 훨씬 작게 보인다. 이미지 픽셀 폭을 기준 표시 폭으로 삼으면 원래 크기로 보인다.
+// paintOp 는 pdfjs.OPS.paintImageXObject 이고 인자는 [objId, width, height]다.
+const ASPECT_TOLERANCE = 0.02;
+export async function getFullPageImageSize(page, paintOp) {
+  try {
+    if (typeof page?.getOperatorList !== "function" || paintOp === undefined) return null;
+    const { fnArray, argsArray } = await page.getOperatorList();
+    const images = [];
+    fnArray.forEach((fn, i) => {
+      if (fn === paintOp) images.push(argsArray[i]);
+    });
+    if (images.length !== 1) return null;
+    const [, width, height] = images[0];
+    const base = page.getViewport({ scale: 1 });
+    if (!(width > 0 && height > 0 && base.width > 0 && base.height > 0)) return null;
+    const imageAspect = height / width;
+    const pageAspect = base.height / base.width;
+    if (Math.abs(imageAspect - pageAspect) / pageAspect > ASPECT_TOLERANCE) return null;
+    return { width, height };
+  } catch {
+    return null;
+  }
+}

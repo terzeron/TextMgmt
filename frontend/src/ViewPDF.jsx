@@ -26,7 +26,11 @@ import { DEFAULT_CROP_RECT, DEFAULT_SPLIT_RECTS } from "./cropRect";
 const CROP_COLOR = "#4a90d9";
 const SPLIT_COLORS = { first: "#4a90d9", second: "#d9534f" };
 import { getApiUrlPrefix } from "./Common";
-import { DISPLAY_SCALE, computeRenderScale } from "./pdfRenderScale";
+import {
+  DISPLAY_SCALE,
+  computeRenderScale,
+  getFullPageImageSize,
+} from "./pdfRenderScale";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 // Safari 18.x 는 Map.getOrInsertComputed 가 없어 일반 빌드가 깨지므로 legacy 빌드를 쓴다.
 // 워커를 설치된 pdfjs-dist에서 직접 번들 → API 버전과 항상 일치 (버전 drift 방지)
@@ -668,12 +672,22 @@ export default function ViewPDF({
           firstCssViewport.width > 0 && firstCssViewport.height > 0
             ? firstCssViewport.height / firstCssViewport.width
             : 1;
-        nativeWidthRef.current = implausiblySmall
-          ? FALLBACK_NATIVE_CSS_WIDTH
-          : firstCssViewport.width;
-        nativeHeightRef.current = implausiblySmall
-          ? FALLBACK_NATIVE_CSS_WIDTH * aspect
-          : firstCssViewport.height;
+        // 쪽이 이미지 한 장이면 쪽 크기(pt) 대신 이미지 픽셀 크기를 원래 크기(100%)로 삼는다.
+        const imageSize = await getFullPageImageSize(
+          firstPage,
+          pdfjs.OPS?.paintImageXObject,
+        );
+        if (imageSize) {
+          nativeWidthRef.current = imageSize.width;
+          nativeHeightRef.current = imageSize.height;
+        } else {
+          nativeWidthRef.current = implausiblySmall
+            ? FALLBACK_NATIVE_CSS_WIDTH
+            : firstCssViewport.width;
+          nativeHeightRef.current = implausiblySmall
+            ? FALLBACK_NATIVE_CSS_WIDTH * aspect
+            : firstCssViewport.height;
+        }
 
         if (cancelledRef.current) return;
 
@@ -911,6 +925,9 @@ export default function ViewPDF({
             : {
                 width: `${Math.round((nativeWidthRef.current * zoomPercent) / 100)}px`,
                 height: "auto",
+                // 원래 크기(100%)에서 이미지가 컨테이너보다 넓으면 컨테이너 폭에 맞춘다.
+                // 사용자가 확대(+)한 경우에는 제한을 풀어 가로 스크롤로 볼 수 있게 한다.
+                maxWidth: zoomPercent <= 100 ? "100%" : "none",
               };
           if (!editable) {
             return (
