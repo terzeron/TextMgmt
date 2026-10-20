@@ -63,6 +63,9 @@ describe("diagnosePdf", () => {
     // wasmUrl 누락 시 이미지 기반 PDF 디코딩 실패 → getDocument 호출에 포함되어야 한다
     expect(mockGetDocument).toHaveBeenCalledWith(
       expect.objectContaining({
+        cMapUrl: expect.stringContaining("/pdf-cmaps/"),
+        cMapPacked: true,
+        standardFontDataUrl: expect.stringContaining("/pdf-standard-fonts/"),
         wasmUrl: expect.stringContaining("/pdf-wasm/"),
       }),
     );

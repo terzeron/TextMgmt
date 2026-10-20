@@ -4,17 +4,7 @@
  * pdf.js(pdfjs-dist)를 사용하여 브라우저에서 PDF 구조를 검증한다.
  * EpubDiagnose.js와 동일한 결과 구조를 반환한다.
  */
-import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
-// Safari 18.x 는 Map.getOrInsertComputed 가 없어 일반 빌드가 깨지므로 legacy 빌드를 쓴다.
-// 워커를 설치된 pdfjs-dist에서 직접 번들 → API 버전과 항상 일치 (버전 drift 방지)
-import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
-
-pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-
-// JPEG2000(OpenJPEG)/JBIG2 등 이미지 디코딩용 wasm 위치 (vite pdf-wasm 플러그인이 서빙·번들).
-// pdfjs 6.x 는 getDocument({ wasmUrl }) 로 wasm 디렉터리를 알려줘야 한다.
-/* v8 ignore next -- Vite BASE_URL fallback depends on the runtime bundle. */
-const PDF_WASM_URL = `${window.location.origin}${import.meta.env.BASE_URL}pdf-wasm/`;
+import { pdfjs, PDF_DOCUMENT_OPTIONS } from "./pdfjsEnv";
 
 // ─── 1. PDF 파싱 검사 ───
 
@@ -23,7 +13,7 @@ async function checkPdfParsing(buffer) {
   let pdfDoc;
 
   try {
-    pdfDoc = await pdfjs.getDocument({ data: buffer, wasmUrl: PDF_WASM_URL })
+    pdfDoc = await pdfjs.getDocument({ ...PDF_DOCUMENT_OPTIONS, data: buffer })
       .promise;
     results.push({ type: "ok", text: "pdf.js 파싱: 정상" });
   } catch (e) {

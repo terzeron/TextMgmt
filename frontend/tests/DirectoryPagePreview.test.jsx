@@ -14,9 +14,9 @@ vi.mock("../src/Common", () => ({
   rawJsonGetReq: mockRawJsonGetReq,
 }));
 
-vi.mock("../src/pdfjsEnv", () => ({
-  pdfjs: { getDocument: mockGetDocument },
-  PDF_WASM_URL: "http://localhost/pdf-wasm/",
+vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
+  getDocument: mockGetDocument,
+  GlobalWorkerOptions: { workerSrc: "" },
 }));
 
 vi.mock("../src/DirectoryPagePreview.css", () => ({}));
@@ -136,7 +136,12 @@ describe("DirectoryPagePreview", () => {
       `http://localhost:8000/comics/pdf-pages/7?start=1&end=${PREVIEW_PAGE_COUNT}`,
       { credentials: "include" },
     );
-    expect(mockGetDocument.mock.calls[0][0].wasmUrl).toBe("http://localhost/pdf-wasm/");
+    expect(mockGetDocument.mock.calls[0][0]).toEqual(expect.objectContaining({
+      cMapUrl: expect.stringContaining("/pdf-cmaps/"),
+      cMapPacked: true,
+      standardFontDataUrl: expect.stringContaining("/pdf-standard-fonts/"),
+      wasmUrl: expect.stringContaining("/pdf-wasm/"),
+    }));
     for (const canvas of screen.getAllByLabelText(/^\d+쪽$/)) {
       expect(canvas.style.height).toBe(`${PREVIEW_HEIGHT}px`);
     }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import { getApiUrlPrefix, rawJsonGetReq } from "./Common";
-import { pdfjs, PDF_WASM_URL } from "./pdfjsEnv";
+import { pdfjs, PDF_DOCUMENT_OPTIONS } from "./pdfjsEnv";
 import {
   PREVIEW_HEIGHT,
   PREVIEW_PAGE_COUNT,
@@ -61,8 +61,8 @@ export default function DirectoryPagePreview({ category, apiPrefix }) {
           const buffer = await response.arrayBuffer();
           if (cancelled) return;
           const doc = await pdfjs.getDocument({
+            ...PDF_DOCUMENT_OPTIONS,
             data: buffer,
-            wasmUrl: PDF_WASM_URL,
           }).promise;
           if (cancelled) {
             doc.loadingTask.destroy();

@@ -192,19 +192,22 @@ describe("ViewPDF", () => {
     });
   });
 
-  it("getDocument 에 wasmUrl 을 전달한다 (JPEG2000/JBIG2 이미지 디코딩용)", async () => {
-    // wasmUrl 누락 시 OpenJPEG 가 초기화되지 못해 이미지 기반 PDF 페이지가 렌더되지 않는다.
-    globalThis.fetch = createMockFetch(1);
+  it("첫 쪽과 나머지 청크에 CMap, 기본 글꼴, wasm 경로를 전달한다", async () => {
+    globalThis.fetch = createMockFetch(3);
     setupGetDocument(() => createMockPdf(1));
 
     render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(mockGetDocument).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expect(mockGetDocument.mock.calls.length).toBeGreaterThan(1);
+      for (const [options] of mockGetDocument.mock.calls) {
+        expect(options).toEqual(expect.objectContaining({
+          cMapUrl: expect.stringContaining("/pdf-cmaps/"),
+          cMapPacked: true,
+          standardFontDataUrl: expect.stringContaining("/pdf-standard-fonts/"),
           wasmUrl: expect.stringContaining("/pdf-wasm/"),
-        }),
-      );
+        }));
+      }
     });
   });
 
