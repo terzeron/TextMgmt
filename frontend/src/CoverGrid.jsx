@@ -114,12 +114,13 @@ export default function CoverGrid({
           const displayTitle = book.display_title || book.title || filename;
           const category = book.category || "_root";
           const fileType = book.file_type || "";
+          // ID를 재사용해도 브라우저가 이전 책의 이미지를 쓰지 않도록 원본 경로도 구분한다.
           const coverSrc = COVER_FILE_TYPES.has(fileType)
             ? `${getApiUrlPrefix()}${apiPrefix}/cover/${book.book_id}?v=${COVER_VERSION}${
                 book.updated_time
                   ? `&u=${encodeURIComponent(book.updated_time)}`
                   : ""
-              }`
+              }${book.file_path ? `&path=${encodeURIComponent(book.file_path)}` : ""}`
             : null;
           return (
             <a
