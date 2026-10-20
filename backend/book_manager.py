@@ -3140,7 +3140,7 @@ class BookManager:
         return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.apply_url(relative, url, revision, replace_existing=True, **backup))
 
     async def remove_epub_cover(self, book_id: int) -> tuple[dict[str, Any] | None, str | None]:
-        """EPUB 에서 이 도구가 넣은 표지를 뺀다: (결과, 오류 메시지). 출판사 원본 표지는 지우지 않고 사유를 돌려준다."""
+        """EPUB 표지를 읽기 순서에서 뺀다: (결과, 오류 메시지). 본문과 공유하는 이미지는 보존한다."""
         return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.remove(relative, revision, **backup))
 
     async def _change_epub_cover(self, book_id: int, change: Callable[..., dict[str, Any]]) -> tuple[dict[str, Any] | None, str | None]:
@@ -3165,7 +3165,12 @@ class BookManager:
             relative = str(book.file_path.relative_to(self.path_prefix))
             expected_revision = inspect_epub(service.resolve(relative))["revision"]
             backup = {"backup_dir": self.path_prefix / self.TRASH_DIRNAME, "backup_name": book.file_path.name}
-            return change(service, relative, expected_revision, backup)
+            result = change(service, relative, expected_revision, backup)
+            # 외부 파일 교체 뒤에도 ES의 책 ID는 이전 inode일 수 있다.
+            # 편집 화면은 ES의 책 ID로 미리보기를 요청하므로 이 캐시도 지운다.
+            if result["book_id"] != book_id:
+                service.invalidate_view_cache(book_id)
+            return result
 
         try:
             result = await asyncio.to_thread(apply)
@@ -3456,8 +3461,9 @@ class BookManager:
         cover_pages.extend(el.get("href", "") for el in page_items if
                            (meta_cover_id and el.get("id") == meta_cover_id) or
                            "cover" in f"{el.get('id', '')} {el.get('href', '')}".lower())
-        # 표지를 선언하지 않은 EPUB은 첫 spine 페이지가 표지 이미지 한 장인 경우가 많아 마지막 후보로 쓴다.
-        cover_pages.extend(el.get("href", "") for el in page_items if first_spine_id and el.get("id") == first_spine_id)
+        # 잘못된 표지 ID는 첫 페이지로 보완하되, 삭제한 표지를 본문 이미지로 대체하지 않는다.
+        if meta_cover_id:
+            cover_pages.extend(el.get("href", "") for el in page_items if first_spine_id and el.get("id") == first_spine_id)
 
         def member_path(base: str, href: str) -> str | None:
             parsed = urlparse(href)

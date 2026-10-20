@@ -348,19 +348,22 @@ class CoverManagement:
             result = remove_cover(path, expected_revision, backup_dir or self.root / ".cover_backups", backup_name=backup_name)
             return self._finish_save(relative, result, expected_revision)
 
+    def invalidate_view_cache(self, book_id: int) -> None:
+        """mtime을 보존하는 표지 편집 뒤 해당 책 ID의 썸네일과 미리보기를 지운다."""
+        for directory in (".cover_cache", ".preview_cache"):
+            cache_dir = self.root / directory
+            if cache_dir.is_dir():
+                for cached in cache_dir.glob(f"{book_id}*"):
+                    if cached.is_file() and cached.name.startswith((f"{book_id}.", f"{book_id}_")):
+                        cached.unlink(missing_ok=True)
+
     def _finish_save(self, relative: str, result: dict[str, Any], expected_revision: str) -> dict[str, Any]:
         try:
             self._delete_book_cache(relative, expected_revision)
         except OSError as exc:
             LOGGER.warning("Cover saved; candidate cache cleanup failed: %s", type(exc).__name__)
             result["warning"] = "EPUB 표지를 저장했습니다. 후보 캐시를 삭제하지 못했습니다"
-        # inode는 보존한다. mtime도 보존하므로 기존 썸네일과 EPUB preview를 명시적으로 지운다.
-        for directory in (".cover_cache", ".preview_cache"):
-            cache_dir = self.root / directory
-            if cache_dir.is_dir():
-                for cached in cache_dir.glob(f"{result['book_id']}*"):
-                    if cached.is_file() and cached.name.startswith((f"{result['book_id']}.", f"{result['book_id']}_")):
-                        cached.unlink(missing_ok=True)
+        self.invalidate_view_cache(result["book_id"])
         response = {"file_path": relative, "revision": result["revision"], "book_id": result["book_id"],
                     "file_size": result["file_size"], "cover_image": result["cover_image"],
                     "backup_path": str(Path(result["backup_path"]).relative_to(self.root))}

@@ -13,6 +13,7 @@ import zipfile
 import uuid
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
+from urllib.parse import unquote, urlparse
 
 from lxml import etree
 from PIL import Image
@@ -155,8 +156,123 @@ def _remove_tool_covers(opf_path: str, manifest: Any, metadata: Any, spine: Any)
     return obsolete
 
 
+def _member_path(base: str, href: str) -> str:
+    parsed = urlparse(href)
+    if parsed.scheme or parsed.netloc or not parsed.path:
+        return ""
+    member = posixpath.normpath(posixpath.join(base, unquote(parsed.path)))
+    return "" if member.startswith(("/", "../")) else member
+
+
+def _detach_publisher_cover(archive: zipfile.ZipFile, opf_path: str, package: Any, *, removing: bool = False) -> tuple[set[str], dict[str, bytes]]:
+    """표지 전용 항목을 읽기 순서와 탐색에서 뺀다. 본문과 공유하는 파일은 보존한다."""
+    member = BookManager._find_epub_cover_member(archive)
+    if not member:
+        return set(), {}
+    manifest, metadata, spine = (package.find(f"{{{OPF_NS}}}{name}") for name in ("manifest", "metadata", "spine"))
+    base = posixpath.dirname(opf_path)
+    images = [item for item in manifest if _member_path(base, item.get("href", "")) == member]
+    if not images:
+        return set(), {}  # 도구 표지는 _remove_tool_covers가 이미 처리했다.
+
+    documents = {}
+    for item in manifest:
+        if item.get("media-type") not in ("application/xhtml+xml", "image/svg+xml", "application/x-dtbncx+xml", "text/css"):
+            continue
+        name = _member_path(base, item.get("href", ""))
+        if name not in archive.NameToInfo:
+            continue
+        if archive.getinfo(name).file_size > MAX_XML_BYTES:
+            raise CoverError("표지와 본문 참조를 검사할 파일이 너무 큽니다")
+        data = archive.read(name)
+        if item.get("media-type") == "text/css":
+            documents[name] = (item, None, data)
+        else:
+            documents[name] = (item, etree.fromstring(data, _safe_xml_parser()), data)
+
+    def references(name: str, document: Any, data: bytes) -> set[str]:
+        hrefs = [value for element in document.iter() for value in element.attrib.values()] if document is not None else []
+        hrefs.extend(re.findall(r'url\(\s*[\'"]?([^\s\)\'\"]+)', data.decode("utf-8", errors="replace")))
+        return {_member_path(posixpath.dirname(name), href) for href in hrefs}
+
+    guide = package.find(f"{{{OPF_NS}}}guide")
+    cover_pages = {_member_path(base, ref.get("href", "")) for ref in guide if "cover" in ref.get("type", "").split()} if guide is not None else set()
+    cover_ids = {meta.get("content") for meta in metadata if meta.get("name") == "cover"}
+    first_id = spine[0].get("idref") if len(spine) else None
+    detached: set[str] = set()
+    for name, (item, document, _) in documents.items():
+        if item.get("media-type") != "application/xhtml+xml" or document is None:
+            continue
+        if name not in cover_pages and item.get("id") not in cover_ids | {first_id} and "cover" not in f"{item.get('id', '')} {item.get('href', '')}".lower():
+            continue
+        bodies = document.xpath('//*[local-name()="body"]')
+        body = bodies[0] if bodies else document
+        image_refs = [element.get("src") or element.get("href") or element.get("{http://www.w3.org/1999/xlink}href", "")
+                      for element in body.iter() if isinstance(element.tag, str) and etree.QName(element).localname in ("img", "image")]
+        if image_refs and all(_member_path(posixpath.dirname(name), href) == member for href in image_refs) and not "".join(body.itertext()).strip():
+            detached.add(name)
+
+    shared = any(member in references(name, document, data) for name, (_, document, data) in documents.items() if name not in detached and name != member)
+    if shared and removing:
+        raise CoverError("표지 이미지가 본문에서도 쓰여 자동으로 삭제할 수 없습니다")
+    # 일반 본문에서 링크한 표지 페이지를 지우면 링크가 깨지므로 저장 전에 거부한다.
+    for name, (item, document, data) in documents.items():
+        if name not in detached and item.get("media-type") != "application/x-dtbncx+xml" and "nav" not in item.get("properties", "").split():
+            if detached & references(name, document, data):
+                raise CoverError("표지 페이지가 본문에서도 쓰여 자동으로 삭제할 수 없습니다")
+    removed_ids = set()
+    for item in list(manifest):
+        if _member_path(base, item.get("href", "")) in detached or (item in images and not shared):
+            removed_ids.add(item.get("id"))
+            manifest.remove(item)
+    for reference in list(spine):
+        if reference.get("idref") in removed_ids:
+            spine.remove(reference)
+    for meta in list(metadata):
+        if meta.get("name") == "cover":
+            metadata.remove(meta)
+    if guide is not None:
+        for reference in list(guide):
+            if "cover" in reference.get("type", "").split():
+                guide.remove(reference)
+
+    updates: dict[str, bytes] = {}
+    for name, (item, document, _) in documents.items():
+        is_ncx = item.get("media-type") == "application/x-dtbncx+xml"
+        is_nav = "nav" in item.get("properties", "").split()
+        if document is None or (not is_ncx and not is_nav):
+            continue
+        changed = False
+        for content in document.xpath('//*[local-name()="content"]' if is_ncx else '//*[local-name()="a"]'):
+            if _member_path(posixpath.dirname(name), content.get("src" if is_ncx else "href", "")) not in detached:
+                continue
+            point = content.getparent()
+            # 하위 목차가 있으면 그 항목을 부모로 올려 본문 탐색 경로를 보존한다.
+            if is_ncx and etree.QName(point).localname == "navPoint":
+                parent = point.getparent()
+                for child in point.xpath('./*[local-name()="navPoint"]'):
+                    parent.insert(parent.index(point), child)
+                parent.remove(point)
+            elif is_nav:
+                if etree.QName(point).localname == "li" and not point.xpath('./*[local-name()="ol"]'):
+                    point.getparent().remove(point)
+                else:
+                    content.tag = "{http://www.w3.org/1999/xhtml}span"
+                    content.attrib.pop("href", None)
+            else:
+                raise CoverError("표지의 목차 참조를 안전하게 정리할 수 없습니다")
+            changed = True
+        if changed:
+            orders = document.xpath('//*[@playOrder]')
+            numbering = {old: str(index) for index, old in enumerate(sorted({int(node.get("playOrder")) for node in orders}), 1)}
+            for node in orders:
+                node.set("playOrder", numbering[int(node.get("playOrder"))])
+            updates[name] = etree.tostring(document, encoding="utf-8", xml_declaration=True)
+    return detached | ({member} if not shared else set()), updates
+
+
 def _write_epub(original: zipfile.ZipFile, destination: Path, opf_path: str, package: Any, obsolete: set[str], added: dict[str, bytes]) -> None:
-    """원본의 나머지 멤버는 그대로 복사하고 opf 만 바꿔 쓴다. obsolete 는 빼고 added 는 끝에 덧붙인다."""
+    """OPF와 added의 멤버를 갱신하고, obsolete를 제외한 나머지 멤버는 그대로 복사한다."""
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as updated:
         updated.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         updated.comment = original.comment
@@ -165,12 +281,15 @@ def _write_epub(original: zipfile.ZipFile, destination: Path, opf_path: str, pac
                 continue
             if item.filename == opf_path:
                 updated.writestr(item, etree.tostring(package, encoding="utf-8", xml_declaration=True))
+            elif item.filename in added:
+                updated.writestr(item, added[item.filename])
             else:
                 with original.open(item) as reader, updated.open(item, "w") as writer:
                     while chunk := reader.read(1024 * 1024):
                         writer.write(chunk)
         for member, data in added.items():
-            updated.writestr(member, data)
+            if member not in original.NameToInfo or member in obsolete:
+                updated.writestr(member, data)
 
 
 def _stage_cover(source: BinaryIO, destination: Path, image: bytes) -> None:
@@ -183,6 +302,8 @@ def _stage_cover(source: BinaryIO, destination: Path, image: bytes) -> None:
         if manifest is None or metadata is None or spine is None:
             raise CoverError("EPUB manifest, metadata 또는 spine이 없습니다")
         obsolete = _remove_tool_covers(opf_path, manifest, metadata, spine)
+        detached, updates = _detach_publisher_cover(original, opf_path, package)
+        obsolete.update(detached)
         digest = hashlib.sha256(image).hexdigest()[:16]
         cover_id = f"tm-cover-{digest}"
         page_id = f"tm-cover-page-{digest}"
@@ -216,8 +337,8 @@ def _stage_cover(source: BinaryIO, destination: Path, image: bytes) -> None:
         spine.insert(0, etree.Element(f"{{{OPF_NS}}}itemref", idref=page_id))
         page = (f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml">'
                 f'<head><title>표지</title></head><body style="margin:0;text-align:center">'
-                f'<img src="{cover_href}" alt="표지" style="max-width:100%;max-height:100vh"/></body></html>')
-        _write_epub(original, destination, opf_path, package, obsolete, {cover_member: image, page_member: page.encode()})
+                f'<div><img src="{cover_href}" alt="표지" style="max-width:100%;max-height:100vh"/></div></body></html>')
+        _write_epub(original, destination, opf_path, package, obsolete, {**updates, cover_member: image, page_member: page.encode()})
     with destination.open("rb") as output:
         os.fsync(output.fileno())
     with zipfile.ZipFile(destination) as archive:
@@ -235,10 +356,12 @@ def _stage_cover_removal(source: BinaryIO, destination: Path) -> None:
         if manifest is None or metadata is None or spine is None:
             raise CoverError("EPUB manifest, metadata 또는 spine이 없습니다")
         obsolete = _remove_tool_covers(opf_path, manifest, metadata, spine)
+        detached, updates = _detach_publisher_cover(original, opf_path, package, removing=True)
+        obsolete.update(detached)
         for meta in metadata.findall(f"{{{OPF_NS}}}meta"):
             if meta.get("name") == "cover" and re.fullmatch(r"tm-cover-[a-f0-9]{16}", meta.get("content", "")):
                 metadata.remove(meta)
-        _write_epub(original, destination, opf_path, package, obsolete, {})
+        _write_epub(original, destination, opf_path, package, obsolete, updates)
     with destination.open("rb") as output:
         os.fsync(output.fileno())
     with zipfile.ZipFile(destination) as archive:
@@ -246,6 +369,8 @@ def _stage_cover_removal(source: BinaryIO, destination: Path) -> None:
             raise CoverError("저장할 EPUB의 검증에 실패했습니다")
         # 표지를 지워도 책 자체는 읽혀야 한다.
         _read_package(archive)
+        if _inspect_archive(archive)["has_cover"]:
+            raise CoverError("표지를 삭제한 EPUB의 검증에 실패했습니다")
 
 
 def _rewrite_epub(path: Path, expected_revision: str, backup_dir: Path, backup_name: str | None, stage: Callable[[BinaryIO, Path], None], precheck: Callable[[zipfile.ZipFile], None] | None = None) -> dict[str, Any]:
@@ -335,15 +460,17 @@ def add_cover(path: Path, image: bytes, expected_revision: str, backup_dir: Path
 
 
 def remove_cover(path: Path, expected_revision: str, backup_dir: Path, *, backup_name: str | None = None) -> dict[str, Any]:
-    """이 도구가 넣은 표지를 EPUB 에서 뺀다. 그런 표지가 없으면 백업도 만들지 않고 CoverError 를 낸다."""
+    """EPUB 표지를 뺀다. 표지가 없거나 본문과 공유하면 원본과 백업을 건드리지 않는다."""
 
-    def require_tool_cover(archive: zipfile.ZipFile) -> None:
+    def require_cover(archive: zipfile.ZipFile) -> None:
         opf_path, package = _read_package(archive)
         manifest, metadata, spine = (package.find(f"{{{OPF_NS}}}{name}") for name in ("manifest", "metadata", "spine"))
         if manifest is None or metadata is None or spine is None:
             raise CoverError("EPUB manifest, metadata 또는 spine이 없습니다")
-        if not _remove_tool_covers(opf_path, manifest, metadata, spine):
-            raise CoverError("이 EPUB의 표지는 이 도구가 넣은 것이 아니라 삭제할 수 없습니다")
+        if not _inspect_archive(archive)["has_cover"]:
+            raise CoverError("EPUB에 표지가 없습니다")
+        _remove_tool_covers(opf_path, manifest, metadata, spine)
+        _detach_publisher_cover(archive, opf_path, package, removing=True)
 
-    result = _rewrite_epub(path, expected_revision, backup_dir, backup_name, _stage_cover_removal, require_tool_cover)
+    result = _rewrite_epub(path, expected_revision, backup_dir, backup_name, _stage_cover_removal, require_cover)
     return {**result, "cover_image": None}
