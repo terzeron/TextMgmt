@@ -1,5 +1,5 @@
-// 실제 세로·가로 viewport에 보이는 N개와 가장 가까운 ceil(N/4)개만 요청한다.
-export function selectViewportTargets(records, viewport) {
+// 기본은 보이는 N개와 인접 ceil(N/4)개. ahead 지정 시 아래쪽 책을 그 수만큼 미리 검색한다.
+export function selectViewportTargets(records, viewport, { ahead = 0 } = {}) {
   const distances = records.map((record) => {
     const clip = record.clip || viewport;
     const area = {
@@ -18,20 +18,27 @@ export function selectViewportTargets(records, viewport) {
     return { record, visible, distance };
   });
   const visible = distances.filter((item) => item.visible);
+  if (ahead) {
+    const upcoming = distances.filter(({ record: { rect }, visible }) => !visible &&
+      rect.top >= viewport.bottom && rect.bottom > rect.top && rect.right > rect.left &&
+      rect.right > viewport.left && rect.left < viewport.right)
+      .sort((a, b) => a.record.rect.top - b.record.rect.top).slice(0, ahead);
+    return [...visible, ...upcoming].map((item) => ({ ...item.record, visible: item.visible }));
+  }
   const extra = distances.filter((item) => !item.visible)
     .sort((a, b) => a.distance - b.distance).slice(0, Math.ceil(visible.length * 0.25));
   return [...visible, ...extra].map((item) => ({ ...item.record, visible: item.visible }));
 }
 
 // 모든 행의 검색과 이미지 요청을 한 queue에 넣는다. store별 동시 실행 수는 1이다.
-export function createStoreQueue() {
+export function createStoreQueue({ backgroundInterval = 5000 } = {}) {
   const active = new Map();
   const completed = new Set();
   let desiredKeys = new Set();
   let waiting = new Map();
   let disposed = false;
   const backgroundBooks = new Set();
-  let nextBackgroundAt = Date.now() + 5000;
+  let nextBackgroundAt = Date.now() + backgroundInterval;
   let timer;
 
   function pump() {
@@ -44,7 +51,7 @@ export function createStoreQueue() {
       if (task.backgroundKey && !backgroundBooks.has(task.backgroundKey)) {
         if (Date.now() < nextBackgroundAt) { deferred = true; continue; }
         backgroundBooks.add(task.backgroundKey);
-        nextBackgroundAt = Date.now() + 5000;
+        nextBackgroundAt = Date.now() + backgroundInterval;
       }
       waiting.delete(task.key);
       const controller = new AbortController();

@@ -99,7 +99,7 @@ export default function BookCoverAdmin() {
   useEffect(() => {
     const imageUrls = urls.current;
     generation.current += 1;
-    queue.current = createStoreQueue();
+    queue.current = createStoreQueue({ backgroundInterval: 1000 });
     setItems([]);
     setSources({});
     setImages({});
@@ -185,7 +185,7 @@ export default function BookCoverAdmin() {
       setSources((previous) => ({ ...previous, [path]: { ...previous[path], [store]:
         value?.status === "loading" || value?.status === "error" ? { ...value, candidates: previous[path]?.[store]?.candidates } : value } }));
     };
-    const rowTargets = selectViewportTargets(eligibleRows, viewport);
+    const rowTargets = selectViewportTargets(eligibleRows, viewport, { ahead: 3 });
     const visibleBooks = new Set(rowTargets.filter((record) => record.visible).map((record) => record.key));
     for (const { item, visible } of rowTargets) {
       const layout = storeLayout(item.file_path);

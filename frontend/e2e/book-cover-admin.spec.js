@@ -207,8 +207,10 @@ test("표지 관리: 오른쪽 서점은 가로 스크롤로 노출될 때 검�
   expect(errors).toEqual([]);
 });
 
-test("표지 관리: 화면 밖의 책은 5초 후에 미리 검색한다", async ({ page }) => {
+test("표지 관리: 스크롤 전에 아래쪽 3권을 미리 검색하고 대상 밖의 책은 검색하지 않는다", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 800 });
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/auth/me", (route) => route.fulfill({ json: { status: "success", result: { role: "admin", name: "테스트", email: "test@example.com" } } }));
   await page.route("**/auth/sessions**", (route) => route.fulfill({ json: { status: "success", result: { sessions: [], total: 0 } } }));
   const searches = [];
@@ -221,7 +223,7 @@ test("표지 관리: 화면 밖의 책은 5초 후에 미리 검색한다", asyn
       file_path: `책${index}.epub`, title: `책 ${index}`, revision: "r1", status: "missing",
     })), scanned: 20, total: 20 };
     else if (endpoint.startsWith("/candidates/")) {
-      searches.push({ index: Number(url.searchParams.get("file_path").match(/책(\d+)/)[1]), time: Date.now() });
+      searches.push({ index: Number(url.searchParams.get("file_path").match(/책(\d+)/)[1]), store: endpoint.split("/").pop(), time: Date.now() });
       result = { status: "not_found", candidates: [] };
     } else return route.fulfill({ status: 404 });
     return route.fulfill({ json: { status: "success", result } });
@@ -232,12 +234,22 @@ test("표지 관리: 화면 밖의 책은 5초 후에 미리 검색한다", asyn
   await expect(page.getByRole("heading", { name: "책 0", exact: true })).toBeVisible();
   const visible = await page.locator(".book-cover-row").evaluateAll((rows) => rows.map((node, index) => ({ index, rect: node.getBoundingClientRect() }))
     .filter(({ rect }) => rect.bottom > 0 && rect.top < innerHeight).map(({ index }) => index));
+  const upcoming = Array.from({ length: 3 }, (_, index) => Math.max(...visible) + index + 1);
   await expect.poll(() => searches.length).toBeGreaterThan(0);
-  expect(searches.every(({ index }) => visible.includes(index))).toBe(true);
-  await expect.poll(() => searches.some(({ index }) => !visible.includes(index)), { timeout: 8000 }).toBe(true);
+  await expect.poll(() => [...new Set(searches.filter(({ index }) => !visible.includes(index)).map(({ index }) => index))], { timeout: 4500 })
+    .toEqual(upcoming);
   const background = searches.filter(({ index }) => !visible.includes(index));
-  expect(background.every(({ time }) => time - start >= 4800)).toBe(true);
-  expect(new Set(background.map(({ index }) => index)).size).toBeLessThanOrEqual(Math.ceil(visible.length * 0.25));
+  expect(background.every(({ time }) => time - start >= 900)).toBe(true);
+  const firstBackground = background.find(({ index }) => index === upcoming[0]);
+  const thirdBackground = background.find(({ index }) => index === upcoming[2]);
+  expect(thirdBackground.time - firstBackground.time).toBeGreaterThanOrEqual(1800);
+  expect(searches.every(({ index }) => visible.includes(index) || upcoming.includes(index))).toBe(true);
+  expect(background.some(({ store }) => ["munpia", "naverseries", "joara"].includes(store))).toBe(false);
+
+  await page.getByRole("heading", { name: `책 ${upcoming[2] + 1}`, exact: true }).scrollIntoViewIfNeeded();
+  await expect.poll(() => searches.some(({ index }) => index > upcoming[2])).toBe(true);
+  expect(searches.filter(({ index, store }) => index === upcoming[0] && store === "yes24")).toHaveLength(1);
+  expect(errors).toEqual([]);
 });
 
 test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 완료 확인", async ({ page }) => {

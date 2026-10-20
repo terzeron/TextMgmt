@@ -834,10 +834,10 @@ describe("책 표지 관리", () => {
     await waitFor(() => expect(request).toHaveBeenCalledWith("/apply", { body: { file_path: "책.epub", revision: "r1", candidate_id: second.candidate_id } }));
   });
 
-  it.each(["search", "image"])("화면을 벗어난 %s 요청 취소를 오류로 표시하지 않고 돌아오면 재요청한다", async (type) => {
+  it.each(["search", "image"])("미리 검색 범위를 벗어난 %s 요청 취소를 오류로 표시하지 않고 돌아오면 재요청한다", async (type) => {
     setup();
     let visible = true;
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(() => ({ top: visible ? 0 : 5000, bottom: visible ? 200 : 5200, left: 0, right: 100, width: 100, height: 200 }));
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(() => ({ top: visible ? 0 : -5000, bottom: visible ? 200 : -4800, left: 0, right: 100, width: 100, height: 200 }));
     const pending = deferred();
     let signal, started = false;
     const prefix = type === "search" ? "/candidates/yes24" : "/candidate-image";

@@ -2,6 +2,55 @@ import { describe, it, expect, vi } from "vitest";
 import { createStoreQueue, selectViewportTargets } from "../src/coverFetchQueue";
 
 describe("표지 fetch 제한", () => {
+  it("책 미리 검색은 위쪽 책보다 아래쪽 3권을 선택하고 보이는 책을 먼저 둔다", () => {
+    const records = Array.from({ length: 8 }, (_, index) => ({
+      key: String(index), rect: { top: index * 100, bottom: index * 100 + 100, left: 0, right: 100 },
+    }));
+    const selected = selectViewportTargets(records, { top: 200, bottom: 400, left: 0, right: 100 }, { ahead: 3 });
+    expect(selected.map(({ key }) => key)).toEqual(["2", "3", "4", "5", "6"]);
+    expect(selected.map(({ visible }) => visible)).toEqual([true, true, false, false, false]);
+    expect(selectViewportTargets(records, { top: 800, bottom: 900, left: 0, right: 100 }, { ahead: 3 })).toEqual([]);
+  });
+
+  it("책 미리 검색은 크기가 없거나 가로로 숨긴 행을 제외하고 아래쪽 거리 순으로 제한한다", () => {
+    const records = [
+      { key: "far", rect: { top: 400, bottom: 500, left: 0, right: 100 } },
+      { key: "visible", rect: { top: 0, bottom: 100, left: 0, right: 100 } },
+      { key: "zero", rect: { top: 100, bottom: 100, left: 0, right: 100 } },
+      { key: "hidden", rect: { top: 100, bottom: 200, left: 200, right: 300 } },
+      { key: "near", rect: { top: 100, bottom: 200, left: 0, right: 100 } },
+    ];
+    expect(selectViewportTargets(records, { top: 0, bottom: 100, left: 0, right: 100 }, { ahead: 1 })
+      .map(({ key }) => key)).toEqual(["visible", "near"]);
+  });
+
+  it("책 미리 검색 간격을 줄여도 보이는 책을 우선하고 서점별 직렬 처리를 유지한다", async () => {
+    vi.useFakeTimers();
+    const queue = createStoreQueue({ backgroundInterval: 1000 });
+    try {
+      const started = [];
+      let finish;
+      queue.setTasks([
+        { key: "first", store: "yes24", backgroundKey: "book1", run: () => new Promise((resolve) => { started.push("first"); finish = resolve; }) },
+        { key: "second", store: "yes24", backgroundKey: "book2", run: async () => { started.push("second"); } },
+      ]);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(started).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(started).toEqual(["first"]);
+      queue.setTasks([
+        { key: "first", store: "yes24", backgroundKey: "book1", run: vi.fn() },
+        { key: "second", store: "yes24", backgroundKey: "book2", run: async () => { started.push("second"); } },
+        { key: "visible", store: "yes24", run: async () => { started.push("visible"); } },
+      ]);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(started).toEqual(["first"]);
+      finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(started).toEqual(["first", "visible", "second"]);
+    } finally { queue.dispose(); vi.useRealTimers(); }
+  });
+
   it("미리 받기를 시작했던 책도 목록을 벗어났다가 돌아오면 다음 5초 기한을 지킨다", async () => {
     vi.useFakeTimers();
     const queue = createStoreQueue();
