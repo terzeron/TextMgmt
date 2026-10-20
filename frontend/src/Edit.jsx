@@ -206,7 +206,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
         /^\s*(?<title>.*?)\s*@\s*(?<author>.*?)\s*\.(?<extension>\w+)\s*$/;
       // 저자 - 제목 . 확장자 or 저자 _ 제목 . 확장자
       const pattern5 =
-        /^\s*(?<author>.*?)\s*[_-]\s*(?<title>.*?)\s*\.(?<extension>\w+)\s*$/;
+        /^\s*(?<author>.*?)\s*(?<separator>[_-])\s*(?<title>.*?)\s*\.(?<extension>\w+)\s*$/;
       // 제목 ( 저자 )
       const pattern6 =
         /^\s*(?<title>.*?)\s*\(\s*(?<author>.*?)\s*\)\s*\.(?<extension>\w+)\s*$/;
@@ -224,6 +224,14 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
       ]) {
         const match = pattern.exec(name);
         if (match) {
+          // 숫자 사이의 하이픈은 회차 범위이므로 저자 구분자로 쓰지 않는다.
+          if (
+            match.groups.separator === "-" &&
+            /\d\s*$/.test(match.groups.author) &&
+            /^\s*\d/.test(match.groups.title)
+          ) {
+            continue;
+          }
           /* v8 ignore next -- supported filename patterns always define title. */
           title = match.groups.title || "";
           author = match.groups.author || "";
@@ -633,9 +641,14 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
   }, [bookInfo]);
 
   const resetButtonClicked = useCallback(() => {
-    const newBook = decomposeTitle(originalBookInfo);
-    setBookInfo(newBook);
-  }, [originalBookInfo, decomposeTitle]);
+    const fileName = originalBookInfo.file_path?.split("/").pop();
+    // 메타데이터나 자동 분해 결과 대신 실제 파일 이름을 제목으로 되돌린다.
+    setBookInfo({
+      ...originalBookInfo,
+      title: fileName ? fileName.replace(/\.[^.]+$/, "") : originalBookInfo.title,
+      author: "",
+    });
+  }, [originalBookInfo]);
 
   const checkEntryExistence = useCallback(
     (folderData, newDirName, newFileName) => {
