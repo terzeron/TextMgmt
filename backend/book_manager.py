@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hashlib
 import json
 import re
 import sys
@@ -141,7 +142,7 @@ class BookManager:
     # 커버 뷰 썸네일. 최신 목록은 한 화면에 수십 장을 받으므로 원본 대신 작게 줄여 보낸다.
     COVER_THUMBNAIL_WIDTH = 300
     COVER_JPEG_QUALITY = 85
-    COVER_CACHE_VERSION = 6
+    COVER_CACHE_VERSION = 7
     COVER_ASPECT_RATIO = 2 / 3
     COVER_TALL_RATIO = 2
     # 미커버 목록이 한 요청에서 커버 목록을 훑는 최대 시간(초). 표지가 있는 책이 많으면 여러 요청으로 나눠 이어받는다.
@@ -3588,15 +3589,22 @@ class BookManager:
         try:
             if not book.file_path.is_file():
                 return Response(status_code=404, content=f"File not found: {book.file_path}")
-            original_mtime = book.file_path.stat().st_mtime
+            source_stat = book.file_path.stat()
         except OSError as e:
             LOGGER.error("Cover file access failed for book_id=%d (%s): %s", book_id, book.file_path, e)
             return Response(status_code=503, content=f"Storage access error ({e.strerror}): {book.file_path}")
 
         headers = {"Cache-Control": "private, max-age=86400"}
         cache_dir = self.path_prefix / ".cover_cache"
-        cache_file = cache_dir / f"{book_id}.v{self.COVER_CACHE_VERSION}.jpg"
-        if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
+        # book_id는 재사용 가능한 inode다. 경로와 원본 revision까지 구분해 다른 책의 표지를 피한다.
+        # ctime은 mtime을 보존한 덮어쓰기나 파일 교체도 감지한다.
+        source_key = json.dumps([
+            str(book.file_path), book.file_type, source_stat.st_dev, source_stat.st_ino,
+            source_stat.st_size, source_stat.st_mtime_ns, source_stat.st_ctime_ns,
+        ], ensure_ascii=False)
+        source_revision = hashlib.sha256(source_key.encode("utf-8")).hexdigest()[:32]
+        cache_file = cache_dir / f"{book_id}.v{self.COVER_CACHE_VERSION}.{source_revision}.jpg"
+        if cache_file.exists():
             return Response(content=cache_file.read_bytes(), media_type="image/jpeg", headers=headers)
 
         try:
