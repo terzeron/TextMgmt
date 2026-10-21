@@ -315,6 +315,38 @@ class TestGetCover:
 
         assert second.status_code == 200
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("requested, expected", [(150, 150), (300, 300), (None, 300), (0, 300), (999, 300), (-1, 300)])
+    async def test_width_tier_is_whitelisted(self, book_manager_module, temp_dir, requested, expected):
+        bm, mock_es = book_manager_module
+        create_test_pdf(temp_dir / "test_category" / "tier.pdf")
+        _use_doc(mock_es, "test_category/tier.pdf", "pdf")
+
+        response = await bm.get_cover(book_id=130, width=requested)
+
+        assert response.status_code == 200
+        assert Image.open(io.BytesIO(response.body)).width <= expected
+        assert list((temp_dir / ".cover_cache").glob(f"130.v{bm.COVER_CACHE_VERSION}.w{expected}.*.jpg"))
+
+    @pytest.mark.asyncio
+    async def test_width_tiers_do_not_share_cache(self, book_manager_module, temp_dir):
+        bm, mock_es = book_manager_module
+        create_test_pdf(temp_dir / "test_category" / "tiers.pdf")
+        _use_doc(mock_es, "test_category/tiers.pdf", "pdf")
+
+        small = await bm.get_cover(book_id=131, width=150)
+        large = await bm.get_cover(book_id=131, width=300)
+
+        assert Image.open(io.BytesIO(small.body)).width <= 150
+        assert Image.open(io.BytesIO(large.body)).width > 150
+        assert len(list((temp_dir / ".cover_cache").glob(f"131.v{bm.COVER_CACHE_VERSION}.w*.jpg"))) == 2
+
+    def test_normalize_cover_width_rejects_non_int(self):
+        from backend.book_manager import BookManager
+
+        assert BookManager.normalize_cover_width(150) == 150
+        assert BookManager.normalize_cover_width("150") == BookManager.COVER_THUMBNAIL_WIDTH
+
 
 @pytest.mark.parametrize("content_type", ["book", "comic"])
 @pytest.mark.parametrize("change", ["path", "replacement", "preserved_mtime"])
@@ -338,7 +370,7 @@ async def test_cover_cache_tracks_source_file(tmp_path, content_type, change):
     _use_doc(manager.es_manager, relative, "pdf")
 
     with patch.object(item_class, "path_prefix", tmp_path), patch.object(
-        manager_class, "_extract_cover_thumbnail", side_effect=lambda path, _type: path.read_bytes()
+        manager_class, "_extract_cover_thumbnail", side_effect=lambda path, _type, _width=None: path.read_bytes()
     ) as extract:
         first = await manager.get_cover(book_id=123)
         assert first.body == b"first cover"

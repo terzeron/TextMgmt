@@ -371,7 +371,7 @@ class CoverManagement:
             response["warning"] = result["warning"]
         return response
 
-    def preview(self, relative: str, *, original: bool = False) -> bytes:
+    def preview(self, relative: str, *, original: bool = False, width: int | None = None) -> bytes:
         path = self.resolve(relative)
         # 저장 중인 파일을 읽지 않도록 표지 검사에서 shared lock을 확인한다.
         if not inspect_epub(path)["has_cover"]:
@@ -391,7 +391,7 @@ class CoverManagement:
                 raise CoverError("이 EPUB은 현재 저장 중입니다") from exc
             except (KeyError, zipfile.BadZipFile) as exc:
                 raise CoverError("저장한 표지를 읽을 수 없습니다") from exc
-        data = BookManager._extract_cover_thumbnail(path, "epub")
+        data = BookManager._extract_cover_thumbnail(path, "epub", width)
         if data is None:
             raise CoverError("저장한 표지를 읽을 수 없습니다")
         return data
@@ -494,9 +494,9 @@ def create_cover_router(get_book_manager: Callable[[], Any]) -> APIRouter:
         return {"status": "success", "result": await run(CoverManagement(Book.path_prefix).clear_cache, body.file_path, body.revision)}
 
     @router.get("/preview", dependencies=[Depends(require_admin)])
-    async def preview(file_path: str = Query(..., min_length=1, max_length=4096), v: str = Query("", max_length=200), original: bool = False):
+    async def preview(file_path: str = Query(..., min_length=1, max_length=4096), v: str = Query("", max_length=200), original: bool = False, w: int | None = None):
         service = CoverManagement(Book.path_prefix)
-        data = await run(lambda: service.preview(file_path, original=original))
+        data = await run(lambda: service.preview(file_path, original=original, width=w))
         return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, no-store"})
 
     return router

@@ -7,7 +7,8 @@ vi.mock("../src/Common.js", () => ({
 }));
 
 import CoverGrid from "../src/CoverGrid";
-import { markTallCover } from "../src/coverImageFit.js";
+import { readFileSync } from "node:fs";
+import { COVER_THUMB_WIDTHS, coverThumbProps, markTallCover } from "../src/coverImageFit.js";
 
 const loadWithSize = (img, width, height) => {
   Object.defineProperty(img, "naturalWidth", {
@@ -43,6 +44,33 @@ describe("markTallCover", () => {
   it("가로가 더 긴 이미지와 크기를 모르는 이미지는 tall이 아니다", () => {
     expect(mark(1000, 500)).toBe("false");
     expect(mark(0, 0)).toBe("false");
+  });
+});
+
+describe("coverThumbProps", () => {
+  it("1x는 150, 2x는 300 썸네일을 srcSet으로 펼친다", () => {
+    expect(coverThumbProps("/cover/7?v=1")).toEqual({
+      src: "/cover/7?v=1&w=300",
+      srcSet: "/cover/7?v=1&w=150 1x, /cover/7?v=1&w=300 2x",
+    });
+  });
+
+  it("쿼리가 없는 URL에는 ?로 붙인다", () => {
+    expect(coverThumbProps("/cover/7").srcSet).toBe(
+      "/cover/7?w=150 1x, /cover/7?w=300 2x",
+    );
+  });
+});
+
+describe("썸네일 폭 계약", () => {
+  it("CSS 카드 폭 상한은 서버 1x 썸네일 폭과 같고 2x는 그 두 배다", () => {
+    const css = readFileSync("src/CoverGrid.css", "utf-8");
+    const max = Number(css.match(/--cover-card-max:\s*(\d+)px/)[1]);
+    expect(COVER_THUMB_WIDTHS).toEqual([max, max * 2]);
+    const py = readFileSync("../backend/book_manager.py", "utf-8");
+    expect(py).toMatch(
+      new RegExp(`COVER_THUMBNAIL_WIDTHS = \\(${max}, ${max * 2}\\)`),
+    );
   });
 });
 

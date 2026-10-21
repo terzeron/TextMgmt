@@ -758,10 +758,10 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
         return {"status": "failure", "error": error}
 
     @router.get("/cover/{book_id}", response_model=None)
-    async def get_cover(book_id: int, payload: dict = Depends(require_auth)) -> Response:
-        LOGGER.debug("# get_cover(book_id=%d)", book_id)
+    async def get_cover(book_id: int, w: int | None = None, payload: dict = Depends(require_auth)) -> Response:
+        LOGGER.debug("# get_cover(book_id=%d, w=%s)", book_id, w)
         await _ensure_viewer_book_allowed(manager, book_id, payload, content_type)
-        return await manager.get_cover(book_id=book_id)
+        return await manager.get_cover(book_id=book_id, width=w)
 
     @router.get("/validate/{book_id}")
     async def validate_book(book_id: int, payload: dict = Depends(require_auth)) -> dict[str, Any]:
