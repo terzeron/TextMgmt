@@ -142,6 +142,7 @@ function createMockBook() {
     }),
     destroy: vi.fn(),
   };
+  book.spine.hooks = { content: { register: vi.fn() } };
   if (omitCoverUrl) delete book.coverUrl;
   return book;
 }
@@ -344,10 +345,34 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     expect(globalThis.fetch.mock.calls[0][1].cache).toBe("no-cache");
   });
 
-  it("EPUB 내부 스크립트 실행을 허용하지 않는다", async () => {
+  it("렌더링 전에 EPUB의 실행 코드를 제거하고 CSP를 첫 항목으로 넣는다", async () => {
     render(<ViewEPUB bookId={7} />);
     await waitFor(() => expect(lastBook?.renderTo).toHaveBeenCalled());
-    expect(lastBook.renderTo.mock.calls[0][1].allowScriptedContent).toBe(false);
+    const secure = lastBook.spine.hooks.content.register.mock.calls[0][0];
+    const doc = new DOMParser().parseFromString(`<html xmlns="http://www.w3.org/1999/xhtml"><head>
+      <script>parent.attacked = true;</script><meta http-equiv="refresh" content="0;url=evil.html" />
+      <meta name="viewport" content="width=600,height=800" /><link rel="stylesheet" href="book.css" />
+      </head><body onload="alert(1)"><p epub:type="pagebreak">본문</p><img src="image.jpg" onerror="alert(1)" />
+      <iframe srcdoc="bad"></iframe><a href="javascript:alert(1)">링크</a></body></html>`, "text/html");
+    await secure(doc);
+    const policy = doc.head.firstElementChild;
+    expect(policy.getAttribute("http-equiv")).toBe("Content-Security-Policy");
+    expect(policy.content).toContain("script-src 'none'");
+    expect(policy.content).toContain("frame-src 'none'");
+    expect(doc.querySelector('script, iframe, [onload], [onerror], meta[http-equiv="refresh"]')).toBeNull();
+    expect(doc.querySelector("a").hasAttribute("href")).toBe(false);
+    expect(doc.querySelector("p").textContent).toBe("본문");
+    expect(doc.querySelector("img").getAttribute("src")).toBe("image.jpg");
+    expect(doc.querySelector("link").getAttribute("href")).toBe("book.css");
+    expect(doc.querySelector('meta[name="viewport"]').content).toBe("width=600,height=800");
+  });
+
+  it("보안 정책을 넣을 수 없는 본문은 렌더링을 거부한다", async () => {
+    render(<ViewEPUB bookId={7} />);
+    await openBook();
+    const secure = lastBook.spine.hooks.content.register.mock.calls[0][0];
+    const doc = new DOMParser().parseFromString("<html><body>본문</body></html>", "application/xhtml+xml");
+    await expect(secure(doc)).rejects.toThrow("head");
   });
 
   it("초기 로딩 시 스피너를 표시한다", () => {
@@ -1020,12 +1045,61 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
   });
 
   describe("가로 스와이프", () => {
+    let swipeViews;
+    beforeEach(() => { swipeViews = new Map(); });
     const touch = (x, y = 100, identifier = 1) => ({
       clientX: x, clientY: y, identifier,
     });
     const emit = (type, touches, target, changedTouches = touches) => {
-      act(() => lastRendition._emit(type, { touches, changedTouches, target }));
+      const doc = target.ownerDocument;
+      if (doc !== document && !swipeViews.has(doc)) {
+        const view = { contents: { document: doc } };
+        swipeViews.set(doc, view);
+        act(() => lastRendition._emit("rendered", {}, view));
+      }
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperties(event, { touches: { value: touches }, changedTouches: { value: changedTouches } });
+      act(() => target.dispatchEvent(event));
+      return event;
     };
+
+    it("가로 이동의 기본 스크롤을 막고 손을 뗄 때 한 번만 넘긴다", async () => {
+      render(<ViewEPUB bookId={1} />);
+      await openBook();
+      const doc = document.implementation.createHTMLDocument();
+      emit("touchstart", [touch(250)], doc.body);
+      const move = emit("touchmove", [touch(180, 110)], doc.body);
+      expect(move.defaultPrevented).toBe(true);
+      expect(lastRendition.next).not.toHaveBeenCalled();
+      const end = emit("touchend", [], doc.body, [touch(100, 110)]);
+      expect(end.defaultPrevented).toBe(true);
+      expect(lastRendition.next).toHaveBeenCalledTimes(1);
+    });
+
+    it("세로 이동은 기본 스크롤을 막지 않는다", async () => {
+      render(<ViewEPUB bookId={1} />);
+      await openBook();
+      const doc = document.implementation.createHTMLDocument();
+      emit("touchstart", [touch(250)], doc.body);
+      expect(emit("touchmove", [touch(240, 200)], doc.body).defaultPrevented).toBe(false);
+      emit("touchend", [], doc.body, [touch(240, 250)]);
+      expect(lastRendition.next).not.toHaveBeenCalled();
+    });
+
+    it("섹션을 다시 표시해도 중복 처리하지 않고 제거한 문서는 해제한다", async () => {
+      render(<ViewEPUB bookId={1} />);
+      await openBook();
+      const doc = document.implementation.createHTMLDocument();
+      emit("touchstart", [touch(250)], doc.body);
+      const view = swipeViews.get(doc);
+      act(() => lastRendition._emit("rendered", {}, view));
+      emit("touchend", [], doc.body, [touch(100)]);
+      expect(lastRendition.next).toHaveBeenCalledTimes(1);
+      act(() => lastRendition._emit("removed", {}, view));
+      emit("touchstart", [touch(250)], doc.body);
+      emit("touchend", [], doc.body, [touch(100)]);
+      expect(lastRendition.next).toHaveBeenCalledTimes(1);
+    });
 
     it.each([false, true])("iframe에서 좌우로 한 쪽씩 넘긴다 (preview=%s)", async (preview) => {
       render(<ViewEPUB bookId={1} preview={preview} />);
@@ -1081,6 +1155,7 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       render(<ViewEPUB bookId={1} />);
       await openBook();
       const target = document.createElement(tag);
+      screen.getByTestId("epub-host").appendChild(target);
       emit("touchstart", [touch(250)], target);
       emit("touchend", [], target, [touch(100)]);
       expect(lastRendition.next).not.toHaveBeenCalled();
@@ -1097,7 +1172,8 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       fireEvent.touchStart(host, { touches: [touch(250)] });
       fireEvent.touchEnd(host, { touches: [], changedTouches: [touch(100)] });
       expect(rendition.next).not.toHaveBeenCalled();
-      expect(rendition.off).toHaveBeenCalledWith("touchend", expect.any(Function));
+      expect(rendition.off).toHaveBeenCalledWith("rendered", expect.any(Function));
+      expect(rendition.off).toHaveBeenCalledWith("removed", expect.any(Function));
     });
   });
 

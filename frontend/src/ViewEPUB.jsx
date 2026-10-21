@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback, Suspense } from "react";
 import PropTypes from "prop-types";
 import ePub from "epubjs";
+import DOMPurify from "dompurify";
 import { getApiUrlPrefix } from "./Common";
 import AddPhotoAlternateIcon from "@mui/icons-material/AddPhotoAlternate";
 import SaveIcon from "@mui/icons-material/Save";
@@ -18,6 +19,27 @@ import {
 import "./ViewEPUB.css";
 
 const CHAPTERS_PREVIEW = 10;
+
+// WebKit은 sandbox에서 스크립트를 금지하면 부모의 터치 리스너도 막는다.
+// https://bugs.webkit.org/show_bug.cgi?id=218086
+// 렌더링 전에 본문을 정제하고 CSP로 책의 스크립트·하위 문서를 차단한다.
+// async hook의 거부는 epub.js의 렌더링도 중단시킨다(동기 throw는 무시된다).
+const secureEpubDocument = async (doc) => {
+  for (const meta of doc.querySelectorAll("meta[http-equiv]")) meta.remove();
+  DOMPurify.sanitize(doc.documentElement, {
+    IN_PLACE: true,
+    WHOLE_DOCUMENT: true,
+    ADD_TAGS: ["base", "link", "meta"],
+    ADD_ATTR: ["epub:type", "content"],
+    FORBID_TAGS: ["iframe", "object", "embed", "form"],
+  });
+  const head = doc.querySelector("head");
+  if (!head) throw new Error("EPUB 본문에 head가 없습니다.");
+  const policy = doc.createElementNS("http://www.w3.org/1999/xhtml", "meta");
+  policy.setAttribute("http-equiv", "Content-Security-Policy");
+  policy.setAttribute("content", "script-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; form-action 'none'");
+  head.prepend(policy);
+};
 
 const FONT_SIZE_MIN = 80;
 const FONT_SIZE_MAX = 160;
@@ -350,13 +372,15 @@ export default function ViewEPUB({
     if (!epubData || !hostRef.current) return;
 
     const book = ePub(epubData);
+    book.spine.hooks.content.register(secureEpubDocument);
     bookRef.current = book;
     const rendition = book.renderTo(hostRef.current, {
       flow: "paginated",
       manager: "default",
       width: "100%",
       height: "100%",
-      allowScriptedContent: false,
+      // 책의 스크립트는 위의 정제와 CSP가 차단한다.
+      allowScriptedContent: true,
     });
     renditionRef.current = rendition;
 
@@ -577,17 +601,14 @@ export default function ViewEPUB({
     renditionRef.current?.prev();
   }, []);
 
-  // iframe 이벤트는 epub.js가 전달한다. 바깥 여백은 host에서 받고,
-  // 네이티브 가로 팬 대신 버튼과 같은 페이지 이동을 한 번만 실행한다.
+  // epub.js가 전달하는 터치는 passive라 기본 스크롤을 막을 수 없다.
+  // iframe 문서에서 직접 받아 가로 팬을 막고, 세로 스크롤은 허용한다.
   useEffect(() => {
     const rendition = renditionRef.current;
     const host = hostRef.current;
     if (!rendition || !host) return;
     let gesture = null;
-    const reset = () => {
-      gesture?.document.removeEventListener("touchcancel", reset);
-      gesture = null;
-    };
+    const reset = () => { gesture = null; };
     const onStart = (event) => {
       reset();
       const doc = event.target?.ownerDocument;
@@ -601,8 +622,6 @@ export default function ViewEPUB({
         x: touch.clientX, y: touch.clientY, id: touch.identifier,
         document: doc,
       };
-      // epub.js는 touchcancel을 전달하지 않아 해당 문서에서 직접 받는다.
-      doc.addEventListener("touchcancel", reset, { once: true });
     };
     const onMove = (event) => {
       if (!gesture) return;
@@ -613,7 +632,11 @@ export default function ViewEPUB({
       const touch = event.touches[0];
       const dx = Math.abs(touch.clientX - gesture.x);
       const dy = Math.abs(touch.clientY - gesture.y);
-      if (touch.identifier !== gesture.id || (dy > 10 && dy > dx)) reset();
+      if (touch.identifier !== gesture.id || (dy > 10 && dy > dx)) {
+        reset();
+        return;
+      }
+      if (dx > 8 && dx > dy * 1.5 && event.cancelable) event.preventDefault();
     };
     const onEnd = (event) => {
       const start = gesture;
@@ -624,20 +647,46 @@ export default function ViewEPUB({
       const dx = touch.clientX - start.x;
       const dy = touch.clientY - start.y;
       if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      if (event.cancelable) event.preventDefault();
       if (dx < 0) goNext();
       else goPrev();
     };
-    const handlers = { touchstart: onStart, touchmove: onMove, touchend: onEnd };
-    for (const [type, handler] of Object.entries(handlers)) {
-      host.addEventListener(type, handler, { passive: true });
-      rendition.on(type, handler);
-    }
+    const handlers = { touchstart: onStart, touchmove: onMove, touchend: onEnd, touchcancel: reset };
+    const bind = (target) => {
+      for (const [type, handler] of Object.entries(handlers)) {
+        target.addEventListener(type, handler, { capture: true, passive: false });
+      }
+      return () => {
+        for (const [type, handler] of Object.entries(handlers)) {
+          target.removeEventListener(type, handler, true);
+        }
+      };
+    };
+    const contentCleanups = new Map();
+    const onRemoved = (_section, view) => {
+      contentCleanups.get(view)?.();
+      contentCleanups.delete(view);
+    };
+    const onRendered = (_section, view) => {
+      const doc = view?.contents?.document;
+      if (!doc?.addEventListener) return;
+      // default manager는 제거 이벤트 없이 이전 iframe을 버리기도 한다.
+      for (const previous of contentCleanups.keys()) {
+        if (previous.element && !previous.element.isConnected) onRemoved(null, previous);
+      }
+      onRemoved(null, view);
+      contentCleanups.set(view, bind(doc));
+    };
+    const unbindHost = bind(host);
+    rendition.on("rendered", onRendered);
+    rendition.on("removed", onRemoved);
+    for (const view of rendition.manager?.views?.all?.() || []) onRendered(null, view);
     return () => {
       reset();
-      for (const [type, handler] of Object.entries(handlers)) {
-        host.removeEventListener(type, handler);
-        rendition.off(type, handler);
-      }
+      unbindHost();
+      for (const cleanup of contentCleanups.values()) cleanup();
+      rendition.off("rendered", onRendered);
+      rendition.off("removed", onRemoved);
     };
   }, [epubData, goNext, goPrev]);
 
@@ -792,7 +841,7 @@ export default function ViewEPUB({
         <div
           ref={hostRef}
           data-testid="epub-host"
-          style={{ height: "100%", width: "100%", textAlign: "left" }}
+          style={{ height: "100%", width: "100%", textAlign: "left", touchAction: "pan-y" }}
         />
       </Suspense>
 

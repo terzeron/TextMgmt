@@ -7,6 +7,7 @@
  *   본문이 다시 쪼개져도 뷰가 다시 측정된다.
  */
 import { readFileSync } from "node:fs";
+import JSZip from "jszip";
 import { test, expect } from "@playwright/test";
 
 const EPUB_BYTES = readFileSync(
@@ -24,7 +25,17 @@ const BOOK = {
   category: "_epub",
 };
 
-async function mockApis(page) {
+async function mockApis(page, epubBytes = EPUB_BYTES) {
+  await page.route("https://accounts.google.com/**", (r) => r.abort());
+  await page.route("**/category-mappings**", (r) =>
+    r.fulfill({ json: { status: "success", result: {} } }),
+  );
+  await page.route("**/category-pdf-stats?**", (r) =>
+    r.fulfill({ json: { status: "success", result: {} } }),
+  );
+  await page.route("**/search/bookstore/**", (r) =>
+    r.fulfill({ json: { status: "success", result: [] } }),
+  );
   await page.route("**/auth/me", (r) =>
     r.fulfill({
       status: 200,
@@ -80,11 +91,11 @@ async function mockApis(page) {
       body: JSON.stringify({ status: "success", result: [] }),
     }),
   );
-  await page.route("**/preview/200885711?chapters=0", (r) =>
+  await page.route("**/preview/200885711?chapters=*", (r) =>
     r.fulfill({
       status: 200,
       contentType: "application/epub+zip",
-      body: EPUB_BYTES,
+      body: epubBytes,
     }),
   );
   await page.route("**/view-history**", (r) =>
@@ -99,10 +110,10 @@ async function mockApis(page) {
   );
 }
 
-async function openEmbedded(page, viewport = { width: 900, height: 800 }) {
+async function openEmbedded(page, viewport = { width: 900, height: 800 }, route = "/book-view/200885711?category=_epub") {
   await mockApis(page);
   await page.setViewportSize(viewport);
-  await page.goto("/book-view/200885711?category=" + encodeURIComponent("_epub"));
+  await page.goto(route, { waitUntil: "domcontentloaded" });
   await page
     .locator(".epub-viewer iframe")
     .waitFor({ state: "visible", timeout: 20_000 });
@@ -213,9 +224,37 @@ test("키보드 방향키로 넘긴다", async ({ page }) => {
 });
 
 async function swipe(page, dx, dy = 0) {
+  await page.getByTestId("epub-host").scrollIntoViewIfNeeded();
   const box = await page.getByTestId("epub-host").boundingBox();
   const x = box.x + box.width / 2 - dx / 2;
   const y = box.y + box.height / 2 - dy / 2;
+  // Playwright WebKit은 네이티브 touchMove를 제공하지 않는다.
+  // 실제 본문 DOM에 이벤트를 보내 바인딩과 기본 동작 취소를 검증한다.
+  if (page.context().browser().browserType().name() === "webkit") {
+    const canceled = await page.evaluate(({ x, y, dx, dy }) => {
+      const iframe = document.querySelector(".epub-viewer iframe");
+      const rect = iframe.getBoundingClientRect();
+      const doc = iframe.contentDocument;
+      const target = doc.elementFromPoint(x - rect.x, y - rect.y);
+      const emit = (type, progress) => {
+        const touch = { identifier: 1, clientX: x + dx * progress, clientY: y + dy * progress };
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperties(event, {
+          touches: { value: type === "touchend" ? [] : [touch] },
+          changedTouches: { value: [touch] },
+        });
+        target.dispatchEvent(event);
+        return event.defaultPrevented;
+      };
+      emit("touchstart", 0);
+      const moveCanceled = emit("touchmove", 1);
+      emit("touchend", 1);
+      return moveCanceled;
+    }, { x, y, dx, dy });
+    expect(canceled).toBe(Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.5);
+    await page.waitForTimeout(600);
+    return;
+  }
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Input.dispatchTouchEvent", {
     type: "touchStart",
@@ -233,62 +272,105 @@ async function swipe(page, dx, dy = 0) {
   await page.waitForTimeout(600);
 }
 
-for (const viewport of [{ width: 900, height: 800 }, { width: 390, height: 844 }]) {
-  test(`가로 스와이프는 버튼과 같은 한 쪽을 넘긴다 (${viewport.width}px)`, async ({ page }, testInfo) => {
-    const errors = [];
-    page.on("pageerror", (error) => errors.push(error.message));
-    await openEmbedded(page, viewport);
-    if (await page.getByTestId("epub-cover-page").count()) {
-      await page.locator(".epub-page-next").click();
+test.describe("모바일 터치", () => {
+  test.use({ isMobile: true, hasTouch: true });
+  test("본문의 터치는 받으면서 책의 스크립트와 CSP 우회는 차단한다", async ({ page }) => {
+    const zip = await JSZip.loadAsync(EPUB_BYTES);
+    for (const entry of Object.values(zip.files).filter((entry) => /\.x?html$/.test(entry.name))) {
+      const html = await entry.async("string");
+      zip.file(entry.name, html.replace(/<head[^>]*>/, '$&<script>parent.epubScriptRan = true;</script><meta http-equiv="refresh" content="0;url=https://epub-test.invalid/escape" />')
+        .replace(/<body([^>]*)>/, '<body$1 onload="parent.epubScriptRan = true">'));
     }
-    // 앞표지·목차를 지나 여러 쪽짜리 본문에서 같은 한 쪽 이동을 비교한다.
-    for (let i = 0; i < 12; i++) {
-      const current = await state(page);
-      if (current.scrollWidth > current.clientWidth * 3 && current.text.length > 40) break;
-      await page.locator(".epub-page-next").click();
-      await page.waitForTimeout(350);
-    }
-    await expect.poll(async () => {
-      const current = await state(page);
-      return current.scrollWidth > current.clientWidth * 3 && current.text.length > 40;
-    }).toBe(true);
-    const before = await state(page);
-    await page.locator(".epub-page-next").click();
-    await expect.poll(async () => {
-      const current = await state(page);
-      return current.scrollLeft !== before.scrollLeft || current.text !== before.text;
-    }).toBe(true);
-    const next = await state(page);
-    await page.locator(".epub-page-prev").click();
-    const previousPosition = { scrollLeft: before.scrollLeft, text: before.text };
-    const nextPosition = { scrollLeft: next.scrollLeft, text: next.text };
-    await expect.poll(() => state(page)).toMatchObject(previousPosition);
-
-    await swipe(page, -160);
-    await expect.poll(() => state(page)).toMatchObject(nextPosition);
-    await swipe(page, 160);
-    await expect.poll(() => state(page)).toMatchObject(previousPosition);
-    await swipe(page, 0, 160);
-    expect(await state(page)).toMatchObject(previousPosition);
-    await swipe(page, -15);
-    expect(await state(page)).toMatchObject(previousPosition);
-    expect(errors).toEqual([]);
-    const screenshot = testInfo.outputPath("epub-swipe.png");
-    await page.screenshot({ path: screenshot });
-    await testInfo.attach("epub-swipe", { path: screenshot, contentType: "image/png" });
+    await mockApis(page, await zip.generateAsync({ type: "nodebuffer" }));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/viewer/epub/200885711?path=alice.epub", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".epub-viewer iframe")).toBeVisible();
+    await page.evaluate(() => {
+      const doc = document.querySelector(".epub-viewer iframe").contentDocument;
+      if (doc.querySelector("script, [onload], meta[http-equiv='refresh']")) throw new Error("정제되지 않은 본문");
+      window.epubTouchCount = 0;
+      window.epubCspViolations = [];
+      doc.addEventListener("touchstart", () => window.epubTouchCount++);
+      doc.addEventListener("securitypolicyviolation", (event) => window.epubCspViolations.push(event.violatedDirective));
+      // 정제 이후 실행 코드를 넣어도 CSP가 차단해야 한다.
+      const script = doc.createElement("script");
+      script.textContent = "parent.epubScriptRan = true";
+      doc.head.appendChild(script);
+      const nestedFrame = doc.createElement("iframe");
+      nestedFrame.style.display = "none";
+      nestedFrame.src = URL.createObjectURL(new Blob(["<script>parent.parent.epubScriptRan = true</script>"], { type: "text/html" }));
+      doc.body.appendChild(nestedFrame);
+    });
+    await expect.poll(() => page.evaluate(() => window.epubCspViolations.some((value) => value.startsWith("script-src")))).toBe(true);
+    await expect.poll(() => page.evaluate(() => window.epubCspViolations.includes("frame-src"))).toBe(true);
+    const box = await page.getByTestId("epub-host").boundingBox();
+    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+    await expect.poll(() => page.evaluate(() => window.epubTouchCount)).toBe(1);
+    expect(await page.evaluate(() => window.epubScriptRan)).toBeUndefined();
   });
-}
 
-test("전체보기 표지에서도 스와이프로 본문에 진입한다", async ({ page }) => {
-  await mockApis(page);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/viewer/epub/200885711?path=alice.epub");
-  await expect(page.getByTestId("epub-cover-page")).toBeVisible();
-  await swipe(page, 160);
-  await expect(page.getByTestId("epub-cover-page")).toBeVisible();
-  await swipe(page, -160);
-  await expect(page.getByTestId("epub-cover-page")).toHaveCount(0);
-  await expect(page.locator(".epub-viewer iframe")).toBeVisible();
+  for (const { name, viewport, route } of [
+    { name: "미리보기 태블릿", viewport: { width: 900, height: 800 }, route: "/book-view/200885711?category=_epub" },
+    { name: "미리보기 휴대전화", viewport: { width: 390, height: 844 }, route: "/book-view/200885711?category=_epub" },
+    { name: "편집 휴대전화", viewport: { width: 390, height: 844 }, route: "/book-edit/200885711?category=_epub" },
+    { name: "전체보기 휴대전화", viewport: { width: 390, height: 844 }, route: "/viewer/epub/200885711?path=alice.epub" },
+  ]) {
+    test(`가로 스와이프는 버튼과 같은 한 쪽을 넘긴다 (${name})`, async ({ page }, testInfo) => {
+      const errors = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await openEmbedded(page, viewport, route);
+      if (await page.getByTestId("epub-cover-page").count()) {
+        await page.locator(".epub-page-next").click();
+      }
+      // 앞표지·목차를 지나 여러 쪽짜리 본문에서 같은 한 쪽 이동을 비교한다.
+      for (let i = 0; i < 12; i++) {
+        const current = await state(page);
+        if (current.scrollWidth > current.clientWidth * 3 && current.text.length > 40) break;
+        await page.locator(".epub-page-next").click();
+        await page.waitForTimeout(350);
+      }
+      await expect.poll(async () => {
+        const current = await state(page);
+        return current.scrollWidth > current.clientWidth * 3 && current.text.length > 40;
+      }).toBe(true);
+      const before = await state(page);
+      await page.locator(".epub-page-next").click();
+      await expect.poll(async () => {
+        const current = await state(page);
+        return current.scrollLeft !== before.scrollLeft || current.text !== before.text;
+      }).toBe(true);
+      const next = await state(page);
+      await page.locator(".epub-page-prev").click();
+      const previousPosition = { scrollLeft: before.scrollLeft, text: before.text };
+      const nextPosition = { scrollLeft: next.scrollLeft, text: next.text };
+      await expect.poll(() => state(page)).toMatchObject(previousPosition);
+
+      await swipe(page, -160);
+      await expect.poll(() => state(page)).toMatchObject(nextPosition);
+      await swipe(page, 160);
+      await expect.poll(() => state(page)).toMatchObject(previousPosition);
+      await swipe(page, 0, 160);
+      expect(await state(page)).toMatchObject(previousPosition);
+      await swipe(page, -15);
+      expect(await state(page)).toMatchObject(previousPosition);
+      expect(errors).toEqual([]);
+      const screenshot = testInfo.outputPath("epub-swipe.png");
+      await page.screenshot({ path: screenshot });
+      await testInfo.attach("epub-swipe", { path: screenshot, contentType: "image/png" });
+    });
+  }
+
+  test("전체보기 표지에서도 스와이프로 본문에 진입한다", async ({ page }) => {
+    await mockApis(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/viewer/epub/200885711?path=alice.epub");
+    await expect(page.getByTestId("epub-cover-page")).toBeVisible();
+    await swipe(page, 160);
+    await expect(page.getByTestId("epub-cover-page")).toBeVisible();
+    await swipe(page, -160);
+    await expect(page.getByTestId("epub-cover-page")).toHaveCount(0);
+    await expect(page.locator(".epub-viewer iframe")).toBeVisible();
+  });
 });
 
 test("글자 크기를 키워도 본문이 잘리지 않는다", async ({ page }) => {
