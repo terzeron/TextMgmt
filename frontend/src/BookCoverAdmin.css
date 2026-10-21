@@ -21,7 +21,7 @@
 .book-cover-completed:disabled { cursor: wait; }
 .book-cover-existing { padding: 0; }
 .book-cover-candidates { min-width: 0; display: flex; gap: 14px; overflow-x: auto; padding-bottom: 10px; }
-.book-cover-store { flex: 0 0 auto; min-width: var(--cover-card-width); max-width: 520px; }
+.book-cover-store { flex: 0 0 auto; width: max-content; min-width: var(--cover-card-width); }
 .book-cover-store h4 { font-size: .8rem; font-weight: 600; margin-bottom: 6px; }
 .book-cover-store-header { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
 .book-cover-store-header h4 { font-size: .8rem; font-weight: 600; margin: 0; }

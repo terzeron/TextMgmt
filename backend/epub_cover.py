@@ -95,20 +95,27 @@ def _inspect_archive(archive: zipfile.ZipFile) -> dict[str, Any]:
     member = BookManager._find_epub_cover_member(archive)
     has_cover = bool(member and member in archive.namelist())
     image_info = None
+    cover_error = ""
     if has_cover and member is not None:
-        if archive.getinfo(member).file_size > MAX_IMAGE_BYTES:
-            raise CoverError("기존 표지가 검사 크기 제한을 초과했습니다")
-        data = archive.read(member)
-        image_info = {"byte_size": len(data)}
-        # SVG 표지를 읽지 못한다고 표지 없는 책으로 오인하지 않는다.
-        if member.lower().endswith(".svg"):
-            etree.fromstring(data, _safe_xml_parser())
-        else:
-            normalize_image(data)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", Image.DecompressionBombWarning)
-                with Image.open(io.BytesIO(data)) as image:
-                    image_info.update(width=image.width, height=image.height)
+        try:
+            byte_size = archive.getinfo(member).file_size
+            if byte_size > MAX_IMAGE_BYTES:
+                raise CoverError("기존 표지가 검사 크기 제한을 초과했습니다")
+            image_info = {"byte_size": byte_size}
+            if member.lower().endswith(".svg"):
+                etree.fromstring(archive.read(member), _safe_xml_parser())
+            else:
+                # 목록에서는 header만 읽는다. 픽셀 디코딩과 변환은 미리보기·저장에서 검증한다.
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+                    with archive.open(member) as source, Image.open(source) as image:
+                        if image.width * image.height > MAX_IMAGE_PIXELS:
+                            raise CoverError("기존 표지 이미지 해상도가 너무 큽니다")
+                        image_info.update(width=image.width, height=image.height)
+        except (OSError, ValueError, zipfile.BadZipFile, etree.XMLSyntaxError, Image.DecompressionBombError) as exc:
+            # 기존 이미지의 손상이 검색과 교체를 막지 않도록 EPUB 구조 오류와 구분한다.
+            cover_error = str(exc) if isinstance(exc, CoverError) else "기존 표지 이미지를 읽을 수 없습니다"
+            image_info = None
     metadata = {}
     for key, localname in (("title", "title"), ("author", "creator"), ("isbn", "identifier")):
         values = package.xpath(f'//*[local-name()="{localname}"]/text()')
@@ -116,7 +123,8 @@ def _inspect_archive(archive: zipfile.ZipFile) -> dict[str, Any]:
     if metadata["isbn"]:
         value = metadata["isbn"].removeprefix("urn:isbn:").replace("-", "")
         metadata["isbn"] = value if value.isdigit() and len(value) in (10, 13) else ""
-    return {**metadata, "has_cover": has_cover, "cover_image": image_info}
+    return {**metadata, "has_cover": has_cover, "cover_image": image_info,
+            **({"cover_error": cover_error} if cover_error else {})}
 
 
 def inspect_epub(path: Path) -> dict[str, Any]:

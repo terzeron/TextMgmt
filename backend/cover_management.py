@@ -97,9 +97,9 @@ class CoverManagement:
                         "title": filename_title(path)}
             try:
                 metadata = inspect_epub(path)
-                if metadata["has_cover"] != covered:
+                if metadata["has_cover"] != covered and not metadata.get("cover_error"):
                     continue
-                items.append({**metadata, **identity, "status": "covered" if covered else "missing"})
+                items.append({**metadata, **identity, "status": "covered" if metadata["has_cover"] else "missing"})
             except CoverError as exc:
                 items.append({**identity, "revision": revision(path), "status": "error", "error": str(exc)})
         next_offset = min(offset + limit, len(files))
