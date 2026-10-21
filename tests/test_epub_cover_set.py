@@ -11,7 +11,7 @@ import pytest
 
 from backend.book_manager import BookManager
 from backend.epub_cover import CoverError, inspect_epub
-from tests.test_cover_management import image_bytes, make_epub
+from tests.test_cover_management import image_bytes, make_epub, rewrite_epub_members
 
 URL = "https://img.example.com/cover.jpg"
 
@@ -255,33 +255,66 @@ async def test_remove_clears_the_stale_thumbnail_and_preview_caches(env, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_remove_keeps_the_publishers_cover_declaration_untouched(env):
-    """출판사 표지를 이 도구가 대체한 책에서 도구 표지를 빼도 출판사 이미지 파일은 남는다."""
+@pytest.mark.parametrize("action", ["remove", "replace"])
+async def test_cover_edit_clears_caches_for_index_id_and_current_inode(env, tmp_path, action):
+    """ES의 책 ID와 파일 inode가 달라도 편집 화면의 캐시를 지워야 한다."""
+    manager, path, _ = env
+    await call(manager)
+    indexed_id = 1  # get_book(1)이 현재 파일을 가리킨다.
+    inode = path.stat().st_ino
+    assert inode != indexed_id
+    stale = []
+    keep = []
+    for directory, suffix in ((".cover_cache", ".v1.jpg"), (".preview_cache", "_ch10_v3.epub")):
+        cache_dir = tmp_path / directory
+        cache_dir.mkdir(exist_ok=True)
+        for book_id in (indexed_id, inode):
+            cached = cache_dir / f"{book_id}{suffix}"
+            cached.write_bytes(b"stale")
+            stale.append(cached)
+        unrelated = cache_dir / f"{indexed_id}0{suffix}"
+        unrelated.write_bytes(b"keep")
+        keep.append(unrelated)
+
+    _, error = await (remove(manager) if action == "remove" else call(manager))
+
+    assert error is None
+    assert not any(cached.exists() for cached in stale)
+    assert all(cached.read_bytes() == b"keep" for cached in keep)
+
+
+@pytest.mark.asyncio
+async def test_replaced_publisher_cover_stays_in_the_backup(env, tmp_path):
+    """기존 표지는 백업에 보존하고, 새 표지를 지운 뒤 다시 나타나지 않아야 한다."""
     manager, path, _ = env
     make_epub(path, cover=True)
+    original = path.read_bytes()
     await call(manager)
-    assert "OPS/cover.jpg" in members(path)
+    assert "OPS/cover.jpg" not in members(path)
+    assert (tmp_path / "0_trash" / "book.epub").read_bytes() == original
 
     result, error = await remove(manager)
 
     assert error is None
-    assert "OPS/cover.jpg" in members(path)
+    assert not inspect_epub(path)["has_cover"]
     assert not [name for name in members(path) if "tm-cover" in name]
 
 
 @pytest.mark.asyncio
-async def test_remove_refuses_a_publisher_cover_without_any_backup_or_change(env, tmp_path):
+async def test_removes_a_publisher_cover_and_preserves_the_original_backup(env, tmp_path):
     manager, path, _ = env
     make_epub(path, cover=True)
     before = path.read_bytes()
 
     result, error = await remove(manager)
 
-    assert result is None and "이 도구가 넣은 것이 아니라" in error
-    assert path.read_bytes() == before
-    assert not (tmp_path / "0_trash").exists()
+    assert error is None
+    assert result["cover_image"] is None
+    assert not inspect_epub(path)["has_cover"]
+    assert (tmp_path / "0_trash" / "book.epub").read_bytes() == before
+    assert members(path)["OPS/chapter.xhtml"] == "<html><body>본문을 보존한다.</body></html>".encode()
     assert not list(path.parent.glob(".cover-*.tmp"))
-    manager.es_manager.update.assert_not_called()
+    manager.es_manager.update.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -293,6 +326,109 @@ async def test_remove_refuses_a_book_without_a_cover(env, tmp_path):
 
     assert result is None and error
     assert path.read_bytes() == before
+    assert not (tmp_path / "0_trash").exists()
+
+
+def attach_publisher_cover_page(path, *, shared=False):
+    """형님 EPUB과 같은 SVG 표지, guide, NCX 구조를 만든다."""
+    from lxml import etree
+    from backend.epub_cover import OPF_NS
+
+    def attach(files):
+        package = etree.fromstring(files["OPS/book.opf"])
+        manifest = package.find(f"{{{OPF_NS}}}manifest")
+        etree.SubElement(manifest, f"{{{OPF_NS}}}item", id="titlepage", href="Text/front.xhtml", **{"media-type": "application/xhtml+xml"})
+        etree.SubElement(manifest, f"{{{OPF_NS}}}item", id="ncx", href="toc.ncx", **{"media-type": "application/x-dtbncx+xml"})
+        spine = package.find(f"{{{OPF_NS}}}spine")
+        spine.insert(0, etree.Element(f"{{{OPF_NS}}}itemref", idref="titlepage"))
+        spine.set("toc", "ncx")
+        guide = etree.SubElement(package, f"{{{OPF_NS}}}guide")
+        etree.SubElement(guide, f"{{{OPF_NS}}}reference", type="cover", href="Text/front.xhtml#cover")
+        files["OPS/book.opf"] = etree.tostring(package)
+        files["OPS/Text/front.xhtml"] = b'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Cover</title></head><body><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="../cover.jpg"/></svg></body></html>'
+        files["OPS/toc.ncx"] = b'<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap><navPoint id="cover" playOrder="1"><navLabel><text>Cover</text></navLabel><content src="Text/front.xhtml#cover"/></navPoint><navPoint id="chapter" playOrder="2"><navLabel><text>Chapter</text></navLabel><content src="chapter.xhtml"/></navPoint></navMap></ncx>'
+        if package.get("version") == "3.0":
+            etree.SubElement(manifest, f"{{{OPF_NS}}}item", id="nav", href="nav.xhtml", properties="nav", **{"media-type": "application/xhtml+xml"})
+            files["OPS/nav.xhtml"] = b'<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="Text/front.xhtml#cover">Cover</a></li><li><a href="chapter.xhtml">Chapter</a></li></ol></nav></body></html>'
+            files["OPS/book.opf"] = etree.tostring(package)
+        if shared:
+            files["OPS/chapter.xhtml"] = b'<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Keep this chapter.</p><img src="cover.jpg"/></body></html>'
+
+    rewrite_epub_members(path, attach)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["remove", "replace"])
+@pytest.mark.parametrize("version", ["2.0", "3.0"])
+async def test_publisher_svg_cover_is_detached_from_spine_guide_and_toc(env, tmp_path, action, version):
+    from lxml import etree
+
+    manager, path, _ = env
+    make_epub(path, version=version, cover=True)
+    attach_publisher_cover_page(path)
+    original = path.read_bytes()
+    before = members(path)
+    stat = path.stat()
+
+    result, error = await (remove(manager) if action == "remove" else call(manager))
+
+    assert error is None
+    after = members(path)
+    package = etree.fromstring(after["OPS/book.opf"])
+    assert not package.xpath('//*[local-name()="itemref" and @idref="titlepage"]')
+    assert not package.xpath('//*[local-name()="reference" and @type="cover" and starts-with(@href,"Text/front.xhtml")]')
+    toc = etree.fromstring(after["OPS/toc.ncx"])
+    assert not toc.xpath('//*[local-name()="content" and starts-with(@src,"Text/front.xhtml")]')
+    assert toc.xpath('//*[local-name()="content" and @src="chapter.xhtml"]')
+    assert toc.xpath('string(//*[local-name()="navPoint"]/@playOrder)') == "1"
+    if version == "3.0":
+        nav = etree.fromstring(after["OPS/nav.xhtml"])
+        assert nav.xpath('//*[local-name()="a"]/@href') == ["chapter.xhtml"]
+    assert after["OPS/chapter.xhtml"] == before["OPS/chapter.xhtml"]
+    assert after["OPS/style.css"] == before["OPS/style.css"]
+    assert path.stat().st_ino == stat.st_ino
+    assert path.stat().st_mtime_ns == stat.st_mtime_ns
+    assert (tmp_path / "0_trash" / "book.epub").read_bytes() == original
+    assert inspect_epub(path)["has_cover"] is (action == "replace")
+    if action == "replace":
+        _, error = await remove(manager)
+        assert error is None
+        assert not inspect_epub(path)["has_cover"]
+
+
+@pytest.mark.asyncio
+async def test_removed_cover_does_not_promote_the_next_image_only_page(env):
+    manager, path, _ = env
+    make_epub(path, cover=True)
+    attach_publisher_cover_page(path)
+    chapter = b'<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="illustration.jpg"/></body></html>'
+
+    def illustrate(files):
+        files["OPS/chapter.xhtml"] = chapter
+        files["OPS/illustration.jpg"] = image_bytes_of("green")
+        files["OPS/book.opf"] = files["OPS/book.opf"].replace(b'</manifest>', b'<item id="illustration" href="illustration.jpg" media-type="image/jpeg"/></manifest>')
+
+    rewrite_epub_members(path, illustrate)
+
+    _, error = await remove(manager)
+
+    assert error is None
+    assert not inspect_epub(path)["has_cover"]
+    assert members(path)["OPS/chapter.xhtml"] == chapter
+    assert "OPS/illustration.jpg" in members(path)
+
+
+@pytest.mark.asyncio
+async def test_removal_preserves_a_cover_image_used_in_a_chapter(env, tmp_path):
+    manager, path, _ = env
+    make_epub(path, cover=True)
+    attach_publisher_cover_page(path, shared=True)
+    original = path.read_bytes()
+
+    result, error = await remove(manager)
+
+    assert result is None and "본문" in error
+    assert path.read_bytes() == original
     assert not (tmp_path / "0_trash").exists()
 
 

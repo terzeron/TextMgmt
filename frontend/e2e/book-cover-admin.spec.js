@@ -8,6 +8,50 @@ const candidatePngs = [
   "iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAIAAAA2iEnWAAAAE0lEQVR4nGP8z8DAwMDAxIBMAQAUQAEF3SN5DgAAAABJRU5ErkJggg==",
 ].map((base64) => Buffer.from(base64, "base64"));
 
+for (const covered of [false, true]) {
+  test(`표지 관리: 로컬 파일로 표지 ${covered ? "교체" : "추가"}`, async ({ page }) => {
+    await page.setViewportSize({ width: covered ? 390 : 1440, height: 1000 });
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.route("**/auth/me", (route) => route.fulfill({ json: { status: "success", result: { role: "admin", email: "test@example.com" } } }));
+    await page.route("**/auth/sessions**", (route) => route.fulfill({ json: { status: "success", result: { sessions: [], total: 0 } } }));
+    const uploads = [];
+    await page.route("**/admin/book-covers/**", async (route) => {
+      const endpoint = new URL(route.request().url()).pathname.split("/admin/book-covers")[1];
+      let result;
+      if (endpoint === "/directories") result = [];
+      else if (endpoint === "/missing") result = { items: [{ title: "업로드 책", file_path: "book.epub", revision: "r1", status: covered ? "covered" : "missing", has_cover: covered }], scanned: 1, total: 1 };
+      else if (endpoint.startsWith("/candidates/")) result = { status: "not_found", candidates: [] };
+      else if (endpoint === "/preview") return route.fulfill({ contentType: "image/png", body: candidatePngs[0] });
+      else if (endpoint === "/apply-image") {
+        uploads.push(route.request().postDataJSON());
+        result = { revision: `r${uploads.length + 1}`, cover_image: { width: 24, height: 36, byte_size: candidatePngs[0].length } };
+      } else return route.fulfill({ status: 404 });
+      return route.fulfill({ json: { status: "success", result } });
+    });
+    await page.goto("/admin");
+    await page.getByRole("tab", { name: "책 표지 관리" }).click();
+    if (covered) await page.getByRole("switch", { name: "표지 교체" }).check();
+    for (let index = 0; index < 2; index += 1) {
+      if (index) {
+        page.once("dialog", (dialog) => dialog.accept());
+        await page.getByRole("button", { name: "업로드 책 임시 표지 삭제" }).click();
+      }
+      await page.getByRole("button", { name: "직접 입력", exact: true }).click();
+      const modal = page.getByRole("dialog", { name: "표지 직접 입력" });
+      await expect(modal.getByLabel("표지 이미지 URL")).toHaveValue("");
+      await expect(modal.getByText("15MB 이하의 이미지를 선택하면 EPUB 표지에 바로 적용합니다.")).toBeVisible();
+      if (!index) await page.screenshot({ path: `/tmp/book-cover-upload-${covered ? "mobile" : "desktop"}.png`, animations: "disabled" });
+      await modal.getByLabel("이 기기에서 이미지 선택").setInputFiles({ name: "cover.png", mimeType: "image/png", buffer: candidatePngs[0] });
+      await expect(modal).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /업로드 책 표지 저장 완료/ })).toBeEnabled();
+      expect(uploads[index]).toEqual({ file_path: "book.epub", revision: `r${index + 1}`, image_data: candidatePngs[0].toString("base64") });
+      await expect(page.getByAltText("업로드 책 저장한 표지")).toHaveAttribute("src", new RegExp(`v=r${index + 2}`));
+    }
+    expect(errors).toEqual([]);
+  });
+}
+
 test("표지 관리: 초기 빈 칸의 일시 노출로 뒤쪽 서점을 먼저 검색하지 않는다", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.route("**/auth/me", (route) => route.fulfill({ json: { status: "success", result: { role: "admin", email: "test@example.com" } } }));
@@ -116,15 +160,8 @@ test("표지 관리: 카테고리 옆 교체 토글로 기존 표지를 비교�
   await expect(candidate).toBeEnabled();
   expect(searches.every((value) => value === "true")).toBe(true);
   await candidate.click();
-  try {
-    await expect(confirm.getByRole("status", { name: "기존 표지 책 저장 중" })).toBeVisible();
-    await expect(confirm).toBeDisabled();
-    await expect(confirm).toHaveAttribute("aria-busy", "true");
-  } finally { releaseSave(); }
-  await expect.poll(() => applied?.revision).toBe("r1");
-  expect(Buffer.from(applied.image_data, "base64")).toEqual(candidatePngs[0]);
-  const completed = page.getByRole("button", { name: "기존 표지 책 표지 저장 완료 · 행 숨기기" });
-  await expect(completed).toBeEnabled();
+  expect(applied).toBeUndefined();
+  await expect(confirm).toBeEnabled();
   await expect(own.getByText("24 × 36 px")).toBeVisible();
   await expect(own.getByText(`${candidatePngs[0].length} B`, { exact: true })).toBeVisible();
   await expect(own.getByText("저장 완료 · 표지를 눌러 숨기기")).toHaveCount(0);
@@ -137,8 +174,8 @@ test("표지 관리: 카테고리 옆 교체 토글로 기존 표지를 비교�
   }
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(confirm).toBeVisible();
-  const mobileInfo = await own.locator(".book-cover-image-size").boundingBox();
-  expect((await confirm.boundingBox()).y).toBeGreaterThanOrEqual(mobileInfo.y + mobileInfo.height);
+  await expect.poll(() => own.evaluate((node) => node.querySelector(".book-cover-save").getBoundingClientRect().top -
+    node.querySelector(".book-cover-image-size").getBoundingClientRect().bottom)).toBeGreaterThanOrEqual(0);
   await page.screenshot({ path: "/mnt/data/artifacts/book-cover/completed-size-actions.png", fullPage: false });
   await own.getByRole("button", { name: "기존 표지 책 내 책 표지 확대", exact: true }).click();
   const mobileZoom = page.getByRole("dialog", { name: "기존 표지 책 내 책 표지 확대", exact: true });
@@ -147,6 +184,14 @@ test("표지 관리: 카테고리 옆 교체 토글로 기존 표지를 비교�
   await page.screenshot({ path: "/mnt/data/artifacts/book-cover/zoom800-mobile.png", fullPage: false });
   await mobileZoom.getByRole("button", { name: "확대 닫기" }).click();
   await confirm.click();
+  try {
+    await expect(confirm.getByRole("status", { name: "기존 표지 책 저장 중" })).toBeVisible();
+    await expect(confirm).toBeDisabled();
+    await expect(confirm).toHaveAttribute("aria-busy", "true");
+    await expect(page.getByRole("heading", { name: "기존 표지 책", exact: true })).toBeVisible();
+  } finally { releaseSave(); }
+  await expect.poll(() => applied?.revision).toBe("r1");
+  expect(Buffer.from(applied.image_data, "base64")).toEqual(candidatePngs[0]);
   await expect(page.getByRole("heading", { name: "기존 표지 책", exact: true })).toHaveCount(0);
   await toggle.click();
   await expect(page.getByText("검사한 EPUB에는 표지 없는 책이 없습니다.")).toBeVisible();
@@ -207,8 +252,10 @@ test("표지 관리: 오른쪽 서점은 가로 스크롤로 노출될 때 검�
   expect(errors).toEqual([]);
 });
 
-test("표지 관리: 화면 밖의 책은 5초 후에 미리 검색한다", async ({ page }) => {
+test("표지 관리: 스크롤 전에 아래쪽 3권을 미리 검색하고 대상 밖의 책은 검색하지 않는다", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 800 });
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/auth/me", (route) => route.fulfill({ json: { status: "success", result: { role: "admin", name: "테스트", email: "test@example.com" } } }));
   await page.route("**/auth/sessions**", (route) => route.fulfill({ json: { status: "success", result: { sessions: [], total: 0 } } }));
   const searches = [];
@@ -221,7 +268,7 @@ test("표지 관리: 화면 밖의 책은 5초 후에 미리 검색한다", asyn
       file_path: `책${index}.epub`, title: `책 ${index}`, revision: "r1", status: "missing",
     })), scanned: 20, total: 20 };
     else if (endpoint.startsWith("/candidates/")) {
-      searches.push({ index: Number(url.searchParams.get("file_path").match(/책(\d+)/)[1]), time: Date.now() });
+      searches.push({ index: Number(url.searchParams.get("file_path").match(/책(\d+)/)[1]), store: endpoint.split("/").pop(), time: Date.now() });
       result = { status: "not_found", candidates: [] };
     } else return route.fulfill({ status: 404 });
     return route.fulfill({ json: { status: "success", result } });
@@ -232,12 +279,22 @@ test("표지 관리: 화면 밖의 책은 5초 후에 미리 검색한다", asyn
   await expect(page.getByRole("heading", { name: "책 0", exact: true })).toBeVisible();
   const visible = await page.locator(".book-cover-row").evaluateAll((rows) => rows.map((node, index) => ({ index, rect: node.getBoundingClientRect() }))
     .filter(({ rect }) => rect.bottom > 0 && rect.top < innerHeight).map(({ index }) => index));
+  const upcoming = Array.from({ length: 3 }, (_, index) => Math.max(...visible) + index + 1);
   await expect.poll(() => searches.length).toBeGreaterThan(0);
-  expect(searches.every(({ index }) => visible.includes(index))).toBe(true);
-  await expect.poll(() => searches.some(({ index }) => !visible.includes(index)), { timeout: 8000 }).toBe(true);
+  await expect.poll(() => [...new Set(searches.filter(({ index }) => !visible.includes(index)).map(({ index }) => index))], { timeout: 4500 })
+    .toEqual(upcoming);
   const background = searches.filter(({ index }) => !visible.includes(index));
-  expect(background.every(({ time }) => time - start >= 4800)).toBe(true);
-  expect(new Set(background.map(({ index }) => index)).size).toBeLessThanOrEqual(Math.ceil(visible.length * 0.25));
+  expect(background.every(({ time }) => time - start >= 900)).toBe(true);
+  const firstBackground = background.find(({ index }) => index === upcoming[0]);
+  const thirdBackground = background.find(({ index }) => index === upcoming[2]);
+  expect(thirdBackground.time - firstBackground.time).toBeGreaterThanOrEqual(1800);
+  expect(searches.every(({ index }) => visible.includes(index) || upcoming.includes(index))).toBe(true);
+  expect(background.some(({ store }) => ["munpia", "naverseries", "joara"].includes(store))).toBe(false);
+
+  await page.getByRole("heading", { name: `책 ${upcoming[2] + 1}`, exact: true }).scrollIntoViewIfNeeded();
+  await expect.poll(() => searches.some(({ index }) => index > upcoming[2])).toBe(true);
+  expect(searches.filter(({ index, store }) => index === upcoming[0] && store === "yes24")).toHaveLength(1);
+  expect(errors).toEqual([]);
 });
 
 test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 완료 확인", async ({ page }) => {
@@ -276,7 +333,7 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
       imageRequests.push(endpoint.split("/").pop());
       const candidate = parseInt(endpoint.split("/").pop(), 16) % 4;
       return route.fulfill({ contentType: "image/png", body: candidatePngs[candidate] });
-    } else if (endpoint === "/apply") { saved = true; result = { revision: "r2", cover_image: { width: 1, height: 1, byte_size: coverPng.length } }; }
+    } else if (endpoint === "/apply-image") { saved = true; result = { revision: "r2", cover_image: { width: 1, height: 1, byte_size: coverPng.length } }; }
     else if (endpoint === "/preview") return route.fulfill({ contentType: "image/png", body: coverPng });
     else return route.fulfill({ status: 404 });
     return route.fulfill({ json: { status: "success", result } });
@@ -305,9 +362,10 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
   await expect(first).toHaveAttribute("title", "해상도 1위 / 4개");
   await expect(first).toHaveCSS("background-color", "rgb(0, 255, 0)");
   await expect(first).toHaveCSS("padding", "5px");
-  expect(await first.evaluate((node) => node.getBoundingClientRect().width)).toBe(105);
+  const cardWidth = await first.evaluate((node) => parseFloat(getComputedStyle(node).getPropertyValue("--cover-card-width")));
+  expect(await first.evaluate((node) => node.getBoundingClientRect().width)).toBe(cardWidth);
   const ownCover = page.locator(".book-cover-current .cover-grid-cover").first();
-  expect(await ownCover.evaluate((node) => node.getBoundingClientRect().width)).toBe(113);
+  expect(await ownCover.evaluate((node) => node.getBoundingClientRect().width)).toBe(cardWidth);
   const ownTop = await ownCover.evaluate((node) => node.getBoundingClientRect().top);
   const candidateTop = await first.evaluate((node) => node.getBoundingClientRect().top);
   expect(ownTop).toBeCloseTo(candidateTop, 1);
@@ -328,15 +386,17 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
   await expect(page.getByRole("button", { name: "YES24 서점 후보 0-3 표지 선택" })).toHaveCSS("background-color", "rgb(255, 0, 0)");
   await expect(page.locator(".book-cover-row").first().getByText("24 × 36 px")).toBeVisible();
   await page.waitForTimeout(700);
-  const visible = await page.locator(".book-cover-candidate .cover-grid-cover").evaluateAll((nodes) => nodes.filter((node) => {
-    const rect = node.getBoundingClientRect();
-    const clip = node.closest(".book-cover-candidates").getBoundingClientRect();
-    return rect.bottom > 0 && rect.top < innerHeight && rect.right > Math.max(0, clip.left) && rect.left < Math.min(innerWidth, clip.right);
-  }).length);
-  expect(imageRequests.length, JSON.stringify({ visible, images: imageRequests.map((id) => parseInt(id, 16)), searches })).toBeLessThanOrEqual(visible + Math.ceil(visible * 0.25));
+  const targetBooks = await page.locator(".book-cover-row").evaluateAll((nodes) => {
+    const rows = nodes.map((node, index) => ({ index, rect: node.getBoundingClientRect() }));
+    return [...rows.filter(({ rect }) => rect.bottom > 0 && rect.top < innerHeight),
+      ...rows.filter(({ rect }) => rect.top >= innerHeight).slice(0, 3)].map(({ index }) => index);
+  });
+  expect(imageRequests.every((id) => targetBooks.includes(Math.floor(parseInt(id, 16) / 4)))).toBe(true);
+  expect(imageRequests.length).toBeLessThanOrEqual(targetBooks.length * 4);
   expect(searches.every(({ index }) => index < 6)).toBe(true);
   expect(listingCursors).toEqual([""]);
-  const beforeZoom = imageRequests.length;
+  const firstBookRequests = () => imageRequests.filter((id) => parseInt(id, 16) < 4).length;
+  const beforeZoom = firstBookRequests();
   await first.hover();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.locator(".book-cover-row").first().getByRole("button", { name: "YES24 서점 후보 0-0 표지 확대", exact: true }).click();
@@ -347,13 +407,13 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
   expect(await image.evaluate((node) => ({ width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height }))).toEqual({ width: 800, height: 1200 });
   await expect(expanded.getByText("원본 크기 · 24 × 36 px")).toBeVisible();
   expect(await expanded.locator(".book-cover-zoom-panel").evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
-  expect(imageRequests.length).toBe(beforeZoom);
+  expect(firstBookRequests()).toBe(beforeZoom);
   await page.mouse.move(0, 0);
   await expect(expanded).toBeVisible();
   await expanded.getByRole("button", { name: "서점 후보 0-0 확대 표지 선택" }).click();
-  const completed = page.getByRole("button", { name: "표지 없는 책 0 표지 저장 완료 · 행 숨기기" });
+  const completed = page.getByRole("button", { name: "표지 없는 책 0 표지 저장 · 행 숨기기" });
   await expect(completed).toBeEnabled();
-  expect(saved).toBe(true);
+  expect(saved).toBe(false);
   await page.getByRole("button", { name: "표지 없는 책 0 내 책 표지 확대", exact: true }).click();
   const ownModal = page.getByRole("dialog", { name: "표지 없는 책 0 내 책 표지 확대", exact: true });
   await expect(ownModal.getByAltText("표지 없는 책 0 내 책 확대 표지")).toBeVisible();
@@ -364,6 +424,7 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
   await page.screenshot({ path: "/tmp/tm-cover-admin-completed.png", fullPage: false });
   await completed.click();
   await expect(page.getByRole("heading", { name: "표지 없는 책 0", exact: true })).toHaveCount(0);
+  expect(saved).toBe(true);
   // 서점 후보가 나타나면서 행 높이가 바뀌므로 실제 목록 끝까지 계속 스크롤한다.
   await expect.poll(async () => {
     await page.locator(".book-cover-scan-trigger").scrollIntoViewIfNeeded();
@@ -373,8 +434,8 @@ test("표지 관리: 자동 추가 검사, viewport fetch 제한과 저장 후 �
   expect(listingCursors).toEqual(["", "30"]);
   await expect(page.getByRole("heading", { name: "표지 없는 책 1", exact: true })).toHaveCount(1);
   await page.setViewportSize({ width: 390, height: 844 });
-  expect(await page.locator(".book-cover-current").first().evaluate((node) => node.getBoundingClientRect().width)).toBe(86);
-  expect(await page.locator(".book-cover-candidate").first().evaluate((node) => node.getBoundingClientRect().width)).toBe(105);
+  expect(await page.locator(".book-cover-current").first().evaluate((node) => node.getBoundingClientRect().width)).toBe(cardWidth);
+  expect(await page.locator(".book-cover-candidate").first().evaluate((node) => node.getBoundingClientRect().width)).toBe(cardWidth);
   expect(errors).toEqual([]);
 });
 
@@ -445,12 +506,13 @@ test("표지 관리: 직접 URL, 미리보기 삭제, 교체, 재검색과 서�
   expect(cleared).toBe(1);
   await expect(page.getByRole("button", { name: "재검색", exact: true })).toBeEnabled();
   await candidate.click();
-  await expect(completed).toBeEnabled();
+  expect(replaced).toBeUndefined();
+  await page.getByRole("button", { name: "직접 입력 책 표지 저장 · 행 숨기기" }).click();
+  await expect(page.getByRole("heading", { name: "직접 입력 책", exact: true })).toHaveCount(0);
   expect(replaced.file_path).toBe("book.epub");
   expect(replaced.revision).toBe("r2");
   expect(Buffer.from(replaced.image_data, "base64")).toEqual(candidatePngs[0]);
-  await completed.click();
-  await expect(page.getByRole("heading", { name: "직접 입력 책", exact: true })).toHaveCount(0);
+
 });
 
 test("표지 관리: 핸들 드래그로 디렉토리 너비를 조절하고 두 pane이 독립 스크롤된다", async ({ page }) => {

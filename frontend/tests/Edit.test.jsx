@@ -629,6 +629,36 @@ describe("Edit", () => {
 
   // ── decomposeTitle ──
 
+  it.each([
+    ["제목 1-250회", "", "제목 1-250회"],
+    ["제목 1 - 250회", "", "제목 1 - 250회"],
+    ["제목 1- 250회", "", "제목 1- 250회"],
+    ["제목 1 -250회", "", "제목 1 -250회"],
+    ["제목 12-345권", "", "제목 12-345권"],
+    ["제목 1-250회 - 부제목", "", "제목 1-250회 - 부제목"],
+    ["저자 - 제목 1-250회", "저자", "제목 1-250회"],
+    ["저자_제목 1-250회", "저자", "제목 1-250회"],
+    ["1984 - 제목", "1984", "제목"],
+    ["저자 - 1984", "저자", "1984"],
+  ])("%s에서 숫자 범위와 저자 구분자를 구별한다", async (name, author, title) => {
+    setupMockCategories(CATEGORIES, [{
+      book_id: 201,
+      title: name,
+      author: "",
+      file_type: "epub",
+      file_path: `1_fiction/${name}.epub`,
+      category: "1_fiction",
+    }]);
+    render(<Edit />);
+    fireEvent.click(await screen.findByTestId("folder-item-1_fiction"));
+    fireEvent.click(await screen.findByTestId("folder-item-1_fiction/201"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("book-author").textContent).toBe(author);
+      expect(screen.getByTestId("book-title").textContent).toBe(title);
+    });
+  });
+
   it("[저자] 제목 패턴의 파일명을 분해한다", async () => {
     setupMockCategories();
     render(<Edit />);
@@ -1091,7 +1121,7 @@ describe("Edit", () => {
 
   // ── 초기화 버튼 (line 450) ──
 
-  it("초기화 버튼 클릭 시 원래 분해된 값으로 복원한다", async () => {
+  it("복원 버튼은 저자 자동 추출을 취소하고 원본 파일 이름을 되돌린다", async () => {
     setupMockCategories();
     render(<Edit />);
     await waitFor(() => {
@@ -1114,9 +1144,41 @@ describe("Edit", () => {
     // 초기화 버튼 클릭
     fireEvent.click(screen.getByTestId("reset-btn"));
     await waitFor(() => {
-      expect(screen.getByTestId("book-title").textContent).toBe("소설1");
-      expect(screen.getByTestId("book-author").textContent).toBe("작가A");
+      expect(screen.getByTestId("book-title").textContent).toBe("[작가A] 소설1");
+      expect(screen.getByTestId("book-author").textContent).toBe("");
+      expect(screen.getByTestId("filename-input").value).toBe("[작가A] 소설1.epub");
     });
+  });
+
+  it.each([
+    ["주제목 - 부제목", "", "주제목 - 부제목"],
+    ["부제목", "주제목", "주제목 - 부제목"],
+    ["가공된 제목", "저자", "원본.제목  -  부제목"],
+  ])("복원은 %s 메타데이터 대신 실제 파일 이름을 사용한다", async (title, author, originalName) => {
+    setupMockCategories(CATEGORIES, [{
+      book_id: 201,
+      title,
+      author,
+      file_type: "epub",
+      file_path: `1_fiction/${originalName}.epub`,
+      category: "1_fiction",
+    }]);
+    render(<Edit />);
+    fireEvent.click(await screen.findByTestId("folder-item-1_fiction"));
+    fireEvent.click(await screen.findByTestId("folder-item-1_fiction/201"));
+    fireEvent.change(screen.getByTestId("title-input"), { target: { value: "수정한 제목" } });
+    fireEvent.change(screen.getByTestId("author-input"), { target: { value: "수정한 저자" } });
+    fireEvent.change(screen.getByTestId("filename-input"), { target: { value: "수정한파일.epub" } });
+
+    for (let i = 0; i < 2; i++) {
+      fireEvent.click(screen.getByTestId("reset-btn"));
+      await waitFor(() => {
+        expect(screen.getByTestId("book-title").textContent).toBe(originalName);
+        expect(screen.getByTestId("book-author").textContent).toBe("");
+        expect(screen.getByTestId("filename-input").value).toBe(`${originalName}.epub`);
+      });
+    }
+    expect(mockJsonPutReq).not.toHaveBeenCalled();
   });
 
   // ── 저자자르기 버튼 (line 435) ──

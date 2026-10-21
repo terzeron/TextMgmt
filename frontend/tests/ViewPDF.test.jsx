@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup, act } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, act, fireEvent } from "@testing-library/react";
 
 afterEach(cleanup);
 
@@ -30,6 +30,7 @@ const { mockGetDocument } = vi.hoisted(() => ({
 vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
   getDocument: mockGetDocument,
   GlobalWorkerOptions: { workerSrc: "" },
+  OPS: { paintImageXObject: 85 },
 }));
 
 vi.mock("../src/Common", () => ({
@@ -38,7 +39,10 @@ vi.mock("../src/Common", () => ({
 }));
 
 import ViewPDF from "../src/ViewPDF";
-import { computeRenderScale } from "../src/pdfRenderScale";
+import {
+  computeRenderScale,
+  getFullPageImageSize,
+} from "../src/pdfRenderScale";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 // 실제 pdfjs-dist 6.x에서 PDFDocumentProxy에는 destroy()가 없고
@@ -188,19 +192,22 @@ describe("ViewPDF", () => {
     });
   });
 
-  it("getDocument 에 wasmUrl 을 전달한다 (JPEG2000/JBIG2 이미지 디코딩용)", async () => {
-    // wasmUrl 누락 시 OpenJPEG 가 초기화되지 못해 이미지 기반 PDF 페이지가 렌더되지 않는다.
-    globalThis.fetch = createMockFetch(1);
+  it("첫 쪽과 나머지 청크에 CMap, 기본 글꼴, wasm 경로를 전달한다", async () => {
+    globalThis.fetch = createMockFetch(3);
     setupGetDocument(() => createMockPdf(1));
 
     render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(mockGetDocument).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expect(mockGetDocument.mock.calls.length).toBeGreaterThan(1);
+      for (const [options] of mockGetDocument.mock.calls) {
+        expect(options).toEqual(expect.objectContaining({
+          cMapUrl: expect.stringContaining("/pdf-cmaps/"),
+          cMapPacked: true,
+          standardFontDataUrl: expect.stringContaining("/pdf-standard-fonts/"),
           wasmUrl: expect.stringContaining("/pdf-wasm/"),
-        }),
-      );
+        }));
+      }
     });
   });
 
@@ -1752,5 +1759,108 @@ describe("ViewPDF: 쪽 크기가 비정상적으로 작은 PDF", () => {
     // 정상 크기 쪽은 기존처럼 DISPLAY_SCALE 배율 그대로다
     const normal = { getViewport: () => ({ width: 612, height: 792 }) };
     expect(computeRenderScale(normal, { clientWidth: 0 }, 2)).toBeCloseTo(2.4);
+  });
+});
+
+describe("ViewPDF: 이미지 한 장짜리 쪽은 이미지 원래 크기로 표시", () => {
+  let originalFetch;
+
+  // 448x627 이미지를 300dpi 로 107.52 x 150.48pt 에 그려 넣은 만화 PDF
+  function createImagePagePdf(imageOps = [["img_1", 448, 627]]) {
+    return {
+      numPages: 1,
+      getPage: vi.fn(() =>
+        Promise.resolve({
+          getViewport: ({ scale }) => ({
+            width: 107.52 * scale,
+            height: 150.48 * scale,
+          }),
+          getOperatorList: () =>
+            Promise.resolve({
+              fnArray: imageOps.map(() => 85),
+              argsArray: imageOps,
+            }),
+          render: () => ({ promise: Promise.resolve() }),
+        }),
+      ),
+    };
+  }
+
+  beforeEach(() => {
+    mockGetDocument.mockReset();
+    originalFetch = globalThis.fetch;
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({}));
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("미리보기 폭이 쪽 크기(129px)가 아니라 이미지 픽셀 폭(448px)이다", async () => {
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => createImagePagePdf());
+
+    const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
+    });
+    expect(container.querySelector("canvas").style.width).toBe("448px");
+  });
+
+  it("원래 크기(100%)에서는 컨테이너 폭을 넘지 않게 제한하고 확대하면 제한을 푼다", async () => {
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => createImagePagePdf());
+
+    const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
+    });
+    expect(container.querySelector("canvas").style.maxWidth).toBe("100%");
+    fireEvent.click(screen.getByRole("button", { name: "+" }));
+    await waitFor(() => {
+      expect(container.querySelector("canvas").style.maxWidth).toBe("none");
+    });
+  });
+
+  it("이미지가 둘 이상이면 쪽 크기로 폭을 정한다", async () => {
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() =>
+      createImagePagePdf([
+        ["img_1", 448, 627],
+        ["img_2", 448, 627],
+      ]),
+    );
+
+    const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
+    });
+    expect(container.querySelector("canvas").style.width).toBe("129px");
+  });
+
+  it("getFullPageImageSize 는 쪽과 이미지 비율이 다르거나 연산 목록이 실패하면 null 이다", async () => {
+    const view = { getViewport: () => ({ width: 100, height: 150 }) };
+    const withOps = (args) => ({
+      ...view,
+      getOperatorList: () => Promise.resolve({ fnArray: [85], argsArray: [args] }),
+    });
+    expect(await getFullPageImageSize(withOps(["i", 100, 150]), 85)).toEqual({
+      width: 100,
+      height: 150,
+    });
+    // 쪽 일부에 그린 작은 이미지(비율 불일치)
+    expect(await getFullPageImageSize(withOps(["i", 100, 100]), 85)).toBeNull();
+    expect(
+      await getFullPageImageSize(
+        { ...view, getOperatorList: () => Promise.reject(new Error("x")) },
+        85,
+      ),
+    ).toBeNull();
+    expect(await getFullPageImageSize(view, 85)).toBeNull();
+    expect(await getFullPageImageSize(withOps(["i", 100, 150]), undefined)).toBeNull();
   });
 });

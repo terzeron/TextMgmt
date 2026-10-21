@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hashlib
 import json
 import re
 import sys
@@ -141,7 +142,7 @@ class BookManager:
     # 커버 뷰 썸네일. 최신 목록은 한 화면에 수십 장을 받으므로 원본 대신 작게 줄여 보낸다.
     COVER_THUMBNAIL_WIDTH = 300
     COVER_JPEG_QUALITY = 85
-    COVER_CACHE_VERSION = 6
+    COVER_CACHE_VERSION = 7
     COVER_ASPECT_RATIO = 2 / 3
     COVER_TALL_RATIO = 2
     # 미커버 목록이 한 요청에서 커버 목록을 훑는 최대 시간(초). 표지가 있는 책이 많으면 여러 요청으로 나눠 이어받는다.
@@ -3140,7 +3141,7 @@ class BookManager:
         return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.apply_url(relative, url, revision, replace_existing=True, **backup))
 
     async def remove_epub_cover(self, book_id: int) -> tuple[dict[str, Any] | None, str | None]:
-        """EPUB 에서 이 도구가 넣은 표지를 뺀다: (결과, 오류 메시지). 출판사 원본 표지는 지우지 않고 사유를 돌려준다."""
+        """EPUB 표지를 읽기 순서에서 뺀다: (결과, 오류 메시지). 본문과 공유하는 이미지는 보존한다."""
         return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.remove(relative, revision, **backup))
 
     async def _change_epub_cover(self, book_id: int, change: Callable[..., dict[str, Any]]) -> tuple[dict[str, Any] | None, str | None]:
@@ -3165,7 +3166,12 @@ class BookManager:
             relative = str(book.file_path.relative_to(self.path_prefix))
             expected_revision = inspect_epub(service.resolve(relative))["revision"]
             backup = {"backup_dir": self.path_prefix / self.TRASH_DIRNAME, "backup_name": book.file_path.name}
-            return change(service, relative, expected_revision, backup)
+            result = change(service, relative, expected_revision, backup)
+            # 외부 파일 교체 뒤에도 ES의 책 ID는 이전 inode일 수 있다.
+            # 편집 화면은 ES의 책 ID로 미리보기를 요청하므로 이 캐시도 지운다.
+            if result["book_id"] != book_id:
+                service.invalidate_view_cache(book_id)
+            return result
 
         try:
             result = await asyncio.to_thread(apply)
@@ -3456,8 +3462,9 @@ class BookManager:
         cover_pages.extend(el.get("href", "") for el in page_items if
                            (meta_cover_id and el.get("id") == meta_cover_id) or
                            "cover" in f"{el.get('id', '')} {el.get('href', '')}".lower())
-        # 표지를 선언하지 않은 EPUB은 첫 spine 페이지가 표지 이미지 한 장인 경우가 많아 마지막 후보로 쓴다.
-        cover_pages.extend(el.get("href", "") for el in page_items if first_spine_id and el.get("id") == first_spine_id)
+        # 잘못된 표지 ID는 첫 페이지로 보완하되, 삭제한 표지를 본문 이미지로 대체하지 않는다.
+        if meta_cover_id:
+            cover_pages.extend(el.get("href", "") for el in page_items if first_spine_id and el.get("id") == first_spine_id)
 
         def member_path(base: str, href: str) -> str | None:
             parsed = urlparse(href)
@@ -3582,15 +3589,22 @@ class BookManager:
         try:
             if not book.file_path.is_file():
                 return Response(status_code=404, content=f"File not found: {book.file_path}")
-            original_mtime = book.file_path.stat().st_mtime
+            source_stat = book.file_path.stat()
         except OSError as e:
             LOGGER.error("Cover file access failed for book_id=%d (%s): %s", book_id, book.file_path, e)
             return Response(status_code=503, content=f"Storage access error ({e.strerror}): {book.file_path}")
 
         headers = {"Cache-Control": "private, max-age=86400"}
         cache_dir = self.path_prefix / ".cover_cache"
-        cache_file = cache_dir / f"{book_id}.v{self.COVER_CACHE_VERSION}.jpg"
-        if cache_file.exists() and cache_file.stat().st_mtime >= original_mtime:
+        # book_id는 재사용 가능한 inode다. 경로와 원본 revision까지 구분해 다른 책의 표지를 피한다.
+        # ctime은 mtime을 보존한 덮어쓰기나 파일 교체도 감지한다.
+        source_key = json.dumps([
+            str(book.file_path), book.file_type, source_stat.st_dev, source_stat.st_ino,
+            source_stat.st_size, source_stat.st_mtime_ns, source_stat.st_ctime_ns,
+        ], ensure_ascii=False)
+        source_revision = hashlib.sha256(source_key.encode("utf-8")).hexdigest()[:32]
+        cache_file = cache_dir / f"{book_id}.v{self.COVER_CACHE_VERSION}.{source_revision}.jpg"
+        if cache_file.exists():
             return Response(content=cache_file.read_bytes(), media_type="image/jpeg", headers=headers)
 
         try:

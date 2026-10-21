@@ -308,12 +308,79 @@ class TestGetCover:
 
         first = await bm.get_cover(book_id=108)
         assert first.status_code == 200
-        assert (temp_dir / ".cover_cache" / "108.v6.jpg").exists()
+        assert len(list((temp_dir / ".cover_cache").glob(f"108.v{bm.COVER_CACHE_VERSION}.*.jpg"))) == 1
 
         with patch.object(type(bm), "_extract_cover_thumbnail", side_effect=AssertionError("must use cache")):
             second = await bm.get_cover(book_id=108)
 
         assert second.status_code == 200
+
+
+@pytest.mark.parametrize("content_type", ["book", "comic"])
+@pytest.mark.parametrize("change", ["path", "replacement", "preserved_mtime"])
+@pytest.mark.asyncio
+async def test_cover_cache_tracks_source_file(tmp_path, content_type, change):
+    """ID 재사용, 파일 교체, mtime을 보존한 수정으로 다른 표지를 재사용하지 않는다."""
+    from backend.book_manager import BookManager
+    from backend.comics_manager import ComicsManager
+
+    manager_class = BookManager if content_type == "book" else ComicsManager
+    item_class = manager_class.item_class
+    manager = manager_class.__new__(manager_class)
+    manager.path_prefix = tmp_path
+    manager.es_manager = MagicMock()
+    relative = "여성향/작품A/[0001] 0001화.pdf"
+    source = tmp_path / relative
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"first cover")
+    os.utime(source, ns=(1_000_000_000, 1_000_000_000))
+    original_stat = source.stat()
+    _use_doc(manager.es_manager, relative, "pdf")
+
+    with patch.object(item_class, "path_prefix", tmp_path), patch.object(
+        manager_class, "_extract_cover_thumbnail", side_effect=lambda path, _type: path.read_bytes()
+    ) as extract:
+        first = await manager.get_cover(book_id=123)
+        assert first.body == b"first cover"
+        assert (await manager.get_cover(book_id=123)).body == first.body
+        assert extract.call_count == 1
+
+        if change == "path":
+            relative = "0_웹툰/작품B/[0001] 0001화.pdf"
+            source = tmp_path / relative
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"other cover")
+        elif change == "replacement":
+            replacement = source.with_suffix(".tmp")
+            replacement.write_bytes(b"other cover")
+            replacement.replace(source)
+        else:
+            source.write_bytes(b"other cover")
+        # 원본보다 cache 생성 시각이 최신인 상태에서도 다른 파일을 구분해야 한다.
+        os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+        _use_doc(manager.es_manager, relative, "pdf")
+
+        second = await manager.get_cover(book_id=123)
+
+        assert second.status_code == 200
+        assert second.body == b"other cover"
+        assert extract.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_cover_ignores_legacy_id_only_cache(book_manager_module, temp_dir):
+    manager, mock_es = book_manager_module
+    relative = "test_category/legacy-cache.pdf"
+    create_test_pdf(temp_dir / relative)
+    _use_doc(mock_es, relative, "pdf")
+    legacy = temp_dir / ".cover_cache" / "124.v6.jpg"
+    legacy.parent.mkdir(exist_ok=True)
+    legacy.write_bytes(b"wrong book cover")
+
+    with patch.object(type(manager), "_extract_cover_thumbnail", return_value=b"correct cover"):
+        response = await manager.get_cover(book_id=124)
+
+    assert response.body == b"correct cover"
 
 
 class TestCoverEndpoint:

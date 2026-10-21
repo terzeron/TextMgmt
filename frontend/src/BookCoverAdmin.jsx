@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Spinner, Modal, Form } from "react-bootstrap";
+import { Alert, Button, Spinner, Form } from "react-bootstrap";
 import SplitLayout from "./SplitLayout";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faTrash, faMagnifyingGlass, faFloppyDisk } from "@fortawesome/free-solid-svg-icons";
@@ -10,6 +10,8 @@ import { coverAdminRequest } from "./coverAdminApi";
 import { createStoreQueue, selectViewportTargets } from "./coverFetchQueue";
 import { rankCoverImages, formatCoverBytes } from "./coverImageRanking";
 import CoverImagePreview from "./CoverImagePreview";
+import ImageUrlModal from "./ImageUrlModal";
+import { MAX_UPLOAD_BYTES } from "./insertPreview";
 import { markTallCover } from "./coverImageFit.js";
 import "./CoverGrid.css";
 import "./BookCoverAdmin.css";
@@ -99,7 +101,7 @@ export default function BookCoverAdmin() {
   useEffect(() => {
     const imageUrls = urls.current;
     generation.current += 1;
-    queue.current = createStoreQueue();
+    queue.current = createStoreQueue({ backgroundInterval: 1000 });
     setItems([]);
     setSources({});
     setImages({});
@@ -185,7 +187,7 @@ export default function BookCoverAdmin() {
       setSources((previous) => ({ ...previous, [path]: { ...previous[path], [store]:
         value?.status === "loading" || value?.status === "error" ? { ...value, candidates: previous[path]?.[store]?.candidates } : value } }));
     };
-    const rowTargets = selectViewportTargets(eligibleRows, viewport);
+    const rowTargets = selectViewportTargets(eligibleRows, viewport, { ahead: 3 });
     const visibleBooks = new Set(rowTargets.filter((record) => record.visible).map((record) => record.key));
     for (const { item, visible } of rowTargets) {
       const layout = storeLayout(item.file_path);
@@ -207,8 +209,9 @@ export default function BookCoverAdmin() {
         } });
       }
     }
-    const imageRecords = [];
-    for (const item of items.filter((entry) => !entry.saving && !entry.busy && !entry.paused)) {
+    const imageTargets = [];
+    for (const { item, rect } of rowTargets) {
+      const imageRecords = [];
       const layout = storeLayout(item.file_path);
       for (const [index, [store]] of layout.stores.entries()) {
         if (layout.auto.has(store) && index >= 4 && !isStoreVisible(item.file_path, store, layout)) continue;
@@ -220,13 +223,15 @@ export default function BookCoverAdmin() {
           imageRecords.push({ key: candidate.candidate_id, path: item.file_path, store, rect: node.getBoundingClientRect(), clip });
         }
       }
+      // 검색한 하단 3권도 이미지까지 준비한다. 가로 스크롤의 노출 제한은 유지한다.
+      imageTargets.push(...selectViewportTargets(imageRecords, { ...viewport, top: rect.top, bottom: rect.bottom }));
     }
-    const imageTargets = selectViewportTargets(imageRecords, viewport);
-    // 이미지 요청은 metadata 검색보다 먼저 처리한다.
+    // 이미지 요청은 metadata 검색보다 먼저, 가까운 책과 왼쪽 후보부터 처리한다.
+    const imageTasks = [];
     for (const record of imageTargets) {
       const existing = images[record.key];
       if (existing?.url || existing?.error) continue;
-      tasks.unshift({ key: `image:${record.key}:${versions.get(record.path)}`, store: record.store, backgroundKey: visibleBooks.has(record.path) ? undefined : record.path, run: async (signal) => {
+      imageTasks.push({ key: `image:${record.key}:${versions.get(record.path)}`, store: record.store, backgroundKey: visibleBooks.has(record.path) ? undefined : record.path, run: async (signal) => {
         if (!isCurrent(record.path)) return;
         setImages((previous) => ({ ...previous, [record.key]: { ...previous[record.key], loading: true } }));
         try {
@@ -242,9 +247,10 @@ export default function BookCoverAdmin() {
         }
       } });
     }
-    queue.current?.setTasks(tasks);
+    queue.current?.setTasks([...imageTasks, ...tasks]);
     // 긴 목록에서도 blob을 무제한으로 보관하지 않는다.
     const needed = new Set(imageTargets.map((record) => record.key));
+    for (const item of items) if (item.selected) needed.add(`selected:${item.file_path}`);
     const evicted = [];
     if (urls.current.size > 80) {
       for (const [key, url] of urls.current) {
@@ -262,7 +268,27 @@ export default function BookCoverAdmin() {
     });
   }, [items, sources, images, viewportTick]);
 
-  const save = async (item, candidate) => {
+  const releaseSelection = (path) => {
+    const key = `selected:${path}`;
+    const url = urls.current.get(key);
+    if (url) URL.revokeObjectURL(url);
+    urls.current.delete(key);
+  };
+  const selectCover = (item, candidate) => {
+    if (saving.current.has(item.file_path) || item.busy) return;
+    const image = images[candidate.candidate_id];
+    if (!image?.blob) return;
+    releaseSelection(item.file_path);
+    const url = URL.createObjectURL(image.blob);
+    urls.current.set(`selected:${item.file_path}`, url);
+    setZoom(null);
+    previewState(item.file_path, { selected: { ...image, url, file: image.blob }, previewHidden: false, previewReady: false, error: "" });
+  };
+  const confirmCover = (item) => {
+    if (item.selected) return save(item, { file: item.selected.file }, true);
+    if (item.saved) setItems((previous) => previous.filter((entry) => entry.file_path !== item.file_path));
+  };
+  const save = async (item, candidate, removeRow = false) => {
     if (saving.current.has(item.file_path) || item.busy) return;
     setZoom(null);
     saving.current.add(item.file_path);
@@ -272,22 +298,28 @@ export default function BookCoverAdmin() {
     };
     update({ saving: true, error: "" });
     try {
+      if (candidate.file?.size > MAX_UPLOAD_BYTES) throw new Error("이미지는 15MB 이하여야 합니다");
       const hasCover = item.has_cover || !!item.saved;
       let path = candidate.url ? "/apply-url" : "/apply";
       const body = { file_path: item.file_path, revision: item.saved?.revision || item.revision };
       if (candidate.url) Object.assign(body, { url: candidate.url }, hasCover ? { replace_existing: true } : {});
-      else if (hasCover) {
+      else if (candidate.file || hasCover) {
         path = "/apply-image";
         body.image_data = await new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve(reader.result.split(",")[1]);
           reader.onerror = () => reject(new Error("표지 이미지를 읽을 수 없습니다"));
-          reader.readAsDataURL(images[candidate.candidate_id].blob);
+          reader.readAsDataURL(candidate.file || images[candidate.candidate_id].blob);
         });
         if (generation.current !== current) return {};
       } else body.candidate_id = candidate.candidate_id;
       const result = await coverAdminRequest(path, { body });
-      update({ saving: false, saved: result, previewHidden: false, previewReady: false, paused: true, warning: result.warning });
+      if (generation.current !== current) return {};
+      releaseSelection(item.file_path);
+      if (removeRow) {
+        setItems((previous) => previous.filter((entry) => entry.file_path !== item.file_path));
+        if (result.warning) setError(`${item.title}: ${result.warning}`);
+      } else update({ saving: false, saved: result, selected: null, previewHidden: false, previewReady: false, paused: true, warning: result.warning });
       return {};
     } catch (exc) {
       update({ saving: false, error: exc.message });
@@ -300,9 +332,10 @@ export default function BookCoverAdmin() {
   const clearCandidates = async (item, repeat = false) => {
     if (saving.current.has(item.file_path) || item.busy) return;
     if (!repeat) {
-      if (!window.confirm("미리보기만 비울까요? EPUB 표지는 다른 표지를 선택할 때 교체합니다.")) return;
+      if (!window.confirm("선택한 표지와 미리보기를 비울까요? EPUB 파일은 변경하지 않습니다.")) return;
       setZoom(null);
-      previewState(item.file_path, { previewHidden: true, previewReady: false, error: "", paused: false });
+      releaseSelection(item.file_path);
+      previewState(item.file_path, { selected: null, previewHidden: true, previewReady: false, error: "", paused: false });
       if (item.saved || item.has_cover) setSources((previous) => ({ ...previous, [item.file_path]: Object.fromEntries(
         Object.entries(previous[item.file_path] || {}).map(([store, source]) => [store, { ...source, status: "loading" }]),
       ) }));
@@ -375,19 +408,21 @@ export default function BookCoverAdmin() {
               onChange={(event) => setReplaceCovers(event.target.checked)} />
           </div></div>
           <Button size="sm" variant="outline-secondary" disabled={loading || items.some((item) => item.saving || item.busy)} onClick={() => {
+            for (const item of items) releaseSelection(item.file_path);
             setItems([]);
             setSources({});
             setPage(null);
             loadPage(directory);
           }}>새로고침</Button>
         </div>
-        <p className="text-muted small">{replaceCovers ? "후보를 선택하면 EPUB의 기존 표지를 교체합니다." : "후보를 선택하면 EPUB에 표지를 저장합니다."} 저장한 표지를 확인한 뒤 클릭하면 행을 숨깁니다.</p>
+        <p className="text-muted small">서점 후보를 선택한 뒤 ‘내 책’ 표지를 클릭하면 EPUB에 저장하고 행을 숨깁니다.</p>
         {error && <Alert variant="danger">{error}</Alert>}
         {page && <p className="small text-muted">EPUB 검사 {page.scanned} / {page.total} · 현재 목록 {items.length}개</p>}
         <div aria-live="polite">
           {items.map((item) => {
-            const hasCover = item.has_cover || !!item.saved;
-            const ownImage = !item.previewHidden && (item.saved?.cover_image || item.cover_image);
+            const hasCover = item.has_cover || !!item.saved || !!item.selected;
+            const coverError = !item.saved && !item.selected && item.cover_error;
+            const ownImage = !item.previewHidden && (item.selected || item.saved?.cover_image || item.cover_image);
             const ranked = rankCoverImages(Object.values(sources[item.file_path] || {}).flatMap((store) => store?.candidates || []), images);
             return (
             <article key={item.file_path} className={`book-cover-row${item.saved ? " is-saved" : ""}`}
@@ -414,17 +449,17 @@ export default function BookCoverAdmin() {
                     <Button size="sm" variant="outline-secondary" className="book-cover-magnifier" title="표지 확대"
                       aria-label={`${item.title} 내 책 표지 확대`} disabled={!hasCover || item.previewHidden || !item.previewReady || item.saving || item.busy}
                       onClick={() => setZoom({ own: true, item, index: 0, previews: [{ id: `own:${item.file_path}`, title: `${item.title} 내 책`,
-                        url: `${getApiUrlPrefix()}${API_ROOT}/preview?file_path=${encodeURIComponent(item.file_path)}&v=${encodeURIComponent(item.saved?.revision || item.revision)}&original=true`,
+                        url: item.selected?.url || `${getApiUrlPrefix()}${API_ROOT}/preview?file_path=${encodeURIComponent(item.file_path)}&v=${encodeURIComponent(item.saved?.revision || item.revision)}&original=true`,
                       }] })}><FontAwesomeIcon icon={faMagnifyingGlass} /></Button>
-                  {hasCover && !item.previewHidden ? (
-                    <button type="button" className={`cover-grid-cover ${item.saved ? "book-cover-completed" : "book-cover-existing"}`} aria-label={`${item.title} ${item.saved ? "표지 저장 완료 · 행 숨기기" : "현재 표지"}`}
-                      disabled={!item.previewReady || !item.saved} onClick={() => setItems((previous) => previous.filter((entry) => entry.file_path !== item.file_path))}>
-                      <img className="cover-grid-image" loading="lazy" alt={`${item.title} ${item.saved ? "저장한 표지" : "현재 표지"}`}
-                        src={`${getApiUrlPrefix()}${API_ROOT}/preview?file_path=${encodeURIComponent(item.file_path)}&v=${encodeURIComponent(item.saved?.revision || item.revision)}`}
+                  {hasCover && !item.previewHidden && !coverError ? (
+                    <button type="button" className={`cover-grid-cover ${item.saved || item.selected ? "book-cover-completed" : "book-cover-existing"}`} aria-label={`${item.title} ${item.selected ? "표지 저장 · 행 숨기기" : item.saved ? "표지 저장 완료 · 행 숨기기" : "현재 표지"}`}
+                      disabled={!item.previewReady || (!item.saved && !item.selected) || item.saving || item.busy} onClick={() => confirmCover(item)}>
+                      <img className="cover-grid-image" loading="lazy" alt={`${item.title} ${item.selected ? "선택한 표지" : item.saved ? "저장한 표지" : "현재 표지"}`}
+                        src={item.selected?.url || `${getApiUrlPrefix()}${API_ROOT}/preview?file_path=${encodeURIComponent(item.file_path)}&v=${encodeURIComponent(item.saved?.revision || item.revision)}`}
                         onLoad={(event) => { markTallCover(event); previewState(item.file_path, { previewReady: true }); }}
                         onError={() => previewState(item.file_path, { previewReady: false, error: "저장한 표지를 표시하지 못했습니다. 새로고침하세요" })} />
                     </button>
-                  ) : <div className="cover-grid-cover"><div className="cover-grid-placeholder">표지 없음</div></div>}
+                  ) : <div className="cover-grid-cover"><div className="cover-grid-placeholder">{coverError ? "표지 읽기 오류" : "표지 없음"}</div></div>}
                   </div>
                   <div className="book-cover-status">
                     <small className="book-cover-image-size">
@@ -433,18 +468,19 @@ export default function BookCoverAdmin() {
                     </small>
                   </div>
                   <div className="book-cover-current-actions">
-                    <Button size="sm" variant="outline-success" className="book-cover-save" title="저장 확인 후 행 숨기기"
+                    <Button size="sm" variant="outline-success" className="book-cover-save" title="표지 저장 후 행 숨기기"
                       aria-label={`${item.title} 저장 확인`} aria-busy={!!item.saving}
-                      disabled={!item.saved || item.previewHidden || !item.previewReady || item.saving || item.busy}
-                      onClick={() => setItems((previous) => previous.filter((entry) => entry.file_path !== item.file_path))}>
+                      disabled={(!item.saved && !item.selected) || item.previewHidden || !item.previewReady || item.saving || item.busy}
+                      onClick={() => confirmCover(item)}>
                       {item.saving ? <Spinner animation="border" size="sm" role="status" aria-label={`${item.title} 저장 중`} /> : <FontAwesomeIcon icon={faFloppyDisk} />}
                     </Button>
                     <Button size="sm" variant="outline-secondary" className="book-cover-trash" title="미리보기 지우기"
                       aria-label={`${item.title} 임시 표지 삭제`} disabled={item.saving || item.busy}
                       onClick={() => clearCandidates(item)}><FontAwesomeIcon icon={faTrash} /></Button>
                   </div>
+                  {item.selected && <small>저장 전 · 내 책 표지를 클릭해 저장</small>}
                   {(!item.saved || item.previewHidden) && <Button size="sm" variant="outline-secondary" disabled={item.saving || item.busy || item.status === "error"}
-                    onClick={() => { setZoom(null); setManual({ item, url: "", error: "", busy: false }); }}>직접 입력</Button>}
+                    onClick={() => { setZoom(null); setManual({ item }); }}>직접 입력</Button>}
                   {item.paused && !item.saved && <small>검색 중지</small>}
                 </div>
                 {item.status === "error" ? <Alert variant="warning">{item.error}</Alert> : (
@@ -474,7 +510,7 @@ export default function BookCoverAdmin() {
                               <button type="button" className="cover-grid-cover" disabled={!image?.url || item.saving || item.busy}
                                 style={rank ? { backgroundColor: rank.color } : undefined}
                                 title={rank ? `해상도 ${rank.rank}위 / ${rank.count}개` : "표지 크기 확인 전"}
-                                aria-label={`${label} ${candidate.title} 표지 선택`} onClick={() => save(item, candidate)}
+                                aria-label={`${label} ${candidate.title} 표지 선택`} onClick={() => selectCover(item, candidate)}
                                 ref={(node) => { if (node) candidates.current.set(candidate.candidate_id, node); else candidates.current.delete(candidate.candidate_id); }}>
                                 {image?.url ? <img className="cover-grid-image" src={image.url} alt={candidate.title}
                                   onLoad={(event) => { markTallCover(event); recordImageSize(candidate.candidate_id, event.currentTarget); }} />
@@ -510,6 +546,7 @@ export default function BookCoverAdmin() {
                 )}
               </div>
               {item.status !== "error" && item.error && <Alert variant="danger">{item.error}</Alert>}
+              {coverError && <Alert variant="warning">{coverError}. 새 표지를 선택해 교체하세요.</Alert>}
               {item.warning && <Alert variant="warning">{item.warning}</Alert>}
             </article>
             );
@@ -519,30 +556,23 @@ export default function BookCoverAdmin() {
         {loading && <div role="status"><Spinner size="sm" /> EPUB 검사 중…</div>}
         {!loading && page && items.length === 0 && <Alert variant="info">{replaceCovers ? "검사한 EPUB에는 표지가 있는 책이 없습니다." : "검사한 EPUB에는 표지 없는 책이 없습니다."}</Alert>}
       </SplitLayout.Right>
-      <Modal show={!!manual} onHide={() => { if (!manual?.busy) setManual(null); }} centered aria-labelledby="book-cover-url-title">
-        <Modal.Header closeButton={!manual?.busy}><Modal.Title id="book-cover-url-title">표지 직접 입력</Modal.Title></Modal.Header>
-        <Form onSubmit={async (event) => {
-          event.preventDefault();
-          if (!manual || manual.busy || !manual.url.trim()) return;
+      {manual && <ImageUrlModal
+        idPrefix="book-cover"
+        title="표지 직접 입력"
+        description={<>{manual.item.title} · 공개 HTTP/HTTPS 이미지 URL을 입력하면 표지를 적용합니다.</>}
+        urlLabel="표지 이미지 URL"
+        submitLabel="표지 적용"
+        busyLabel="적용 중…"
+        fileDescription="15MB 이하의 이미지를 선택하면 EPUB 표지에 바로 적용합니다."
+        onClose={() => setManual(null)}
+        onSubmit={async (source) => {
           const current = generation.current;
-          setManual({ ...manual, busy: true, error: "" });
-          const result = await save(manual.item, { url: manual.url.trim() });
+          const result = await save(manual.item, typeof source === "string" ? { url: source } : { file: source });
           if (generation.current !== current) return;
-          if (result?.error) setManual((previous) => ({ ...previous, busy: false, error: result.error }));
-          else setManual(null);
-        }}>
-          <Modal.Body>
-            <p>{manual?.item.title}</p>
-            <Form.Group controlId="book-cover-url"><Form.Label>표지 이미지 URL</Form.Label>
-              <Form.Control type="url" required autoFocus maxLength={4096} disabled={manual?.busy}
-                value={manual?.url || ""} onChange={(event) => setManual((previous) => ({ ...previous, url: event.target.value }))} />
-            </Form.Group>
-            {manual?.error && <Alert variant="danger" className="mt-2">{manual.error}</Alert>}
-          </Modal.Body>
-          <Modal.Footer><Button variant="secondary" disabled={manual?.busy} onClick={() => setManual(null)}>취소</Button>
-            <Button type="submit" disabled={manual?.busy || !manual?.url.trim()}>{manual?.busy ? "적용 중…" : "표지 적용"}</Button></Modal.Footer>
-        </Form>
-      </Modal>
+          if (result?.error) return result.error;
+          setManual(null);
+        }}
+      />}
       {zoom && <CoverImagePreview preview={{ ...zoom.previews[zoom.index], index: zoom.index, count: zoom.previews.length }}
         onClose={closeZoom} onNavigate={(index) => setZoom((previous) => ({ ...previous, index }))}
         onImageLoad={zoom.own ? (event) => {
@@ -550,7 +580,7 @@ export default function BookCoverAdmin() {
           setZoom((previous) => previous?.own ? { ...previous, previews: [{ ...previous.previews[0], width, height }] } : previous);
         } : undefined}
         onImageError={zoom.own ? () => { setZoom(null); previewState(zoom.item.file_path, { error: "저장한 표지를 확대하지 못했습니다" }); } : undefined}
-        onSelect={zoom.own ? undefined : () => { setZoom(null); save(zoom.item, zoom.previews[zoom.index].candidate); }} />}
+        onSelect={zoom.own ? undefined : () => selectCover(zoom.item, zoom.previews[zoom.index].candidate)} />}
     </SplitLayout>
   );
 }

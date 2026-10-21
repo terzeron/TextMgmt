@@ -26,20 +26,12 @@ import { DEFAULT_CROP_RECT, DEFAULT_SPLIT_RECTS } from "./cropRect";
 const CROP_COLOR = "#4a90d9";
 const SPLIT_COLORS = { first: "#4a90d9", second: "#d9534f" };
 import { getApiUrlPrefix } from "./Common";
-import { DISPLAY_SCALE, computeRenderScale } from "./pdfRenderScale";
-import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
-// Safari 18.x 는 Map.getOrInsertComputed 가 없어 일반 빌드가 깨지므로 legacy 빌드를 쓴다.
-// 워커를 설치된 pdfjs-dist에서 직접 번들 → API 버전과 항상 일치 (버전 drift 방지)
-import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
-
-pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-
-// JPEG2000(OpenJPEG)/JBIG2 등 이미지 디코딩용 wasm 위치.
-// pdfjs 6.x 는 getDocument({ wasmUrl }) 로 wasm 디렉터리를 알려줘야 하며,
-// 미지정 시 "null" + 파일명으로 로드에 실패해 이미지 기반 페이지가 렌더되지 않는다.
-// vite pdf-wasm 플러그인이 설치된 pdfjs-dist 의 wasm 을 /pdf-wasm/ 로 서빙·번들한다.
-/* v8 ignore next -- Vite BASE_URL fallback depends on the runtime bundle. */
-const PDF_WASM_URL = `${window.location.origin}${import.meta.env.BASE_URL}pdf-wasm/`;
+import {
+  DISPLAY_SCALE,
+  computeRenderScale,
+  getFullPageImageSize,
+} from "./pdfRenderScale";
+import { pdfjs, PDF_DOCUMENT_OPTIONS } from "./pdfjsEnv";
 
 // 서버는 실패 사유를 본문에 담아 보낸다(파일 없음, 스토리지 접근 오류 등).
 // 쪽 크기(pt)가 비정상적으로 작은 PDF가 있다. 이미지를 0.09pt 폭으로 그려 넣은 만화 PDF가 그렇다.
@@ -328,8 +320,8 @@ export default function ViewPDF({
         if (cancelledRef.current) return;
 
         const pdfDoc = await pdfjs.getDocument({
+          ...PDF_DOCUMENT_OPTIONS,
           data: buffer,
-          wasmUrl: PDF_WASM_URL,
         }).promise;
         if (cancelledRef.current) {
           pdfDoc.loadingTask.destroy();
@@ -630,8 +622,8 @@ export default function ViewPDF({
         setDownloadProgress(30);
 
         const firstPdfDoc = await pdfjs.getDocument({
+          ...PDF_DOCUMENT_OPTIONS,
           data: firstBuffer,
-          wasmUrl: PDF_WASM_URL,
         }).promise;
         if (cancelledRef.current) {
           firstPdfDoc.loadingTask.destroy();
@@ -668,12 +660,22 @@ export default function ViewPDF({
           firstCssViewport.width > 0 && firstCssViewport.height > 0
             ? firstCssViewport.height / firstCssViewport.width
             : 1;
-        nativeWidthRef.current = implausiblySmall
-          ? FALLBACK_NATIVE_CSS_WIDTH
-          : firstCssViewport.width;
-        nativeHeightRef.current = implausiblySmall
-          ? FALLBACK_NATIVE_CSS_WIDTH * aspect
-          : firstCssViewport.height;
+        // 쪽이 이미지 한 장이면 쪽 크기(pt) 대신 이미지 픽셀 크기를 원래 크기(100%)로 삼는다.
+        const imageSize = await getFullPageImageSize(
+          firstPage,
+          pdfjs.OPS?.paintImageXObject,
+        );
+        if (imageSize) {
+          nativeWidthRef.current = imageSize.width;
+          nativeHeightRef.current = imageSize.height;
+        } else {
+          nativeWidthRef.current = implausiblySmall
+            ? FALLBACK_NATIVE_CSS_WIDTH
+            : firstCssViewport.width;
+          nativeHeightRef.current = implausiblySmall
+            ? FALLBACK_NATIVE_CSS_WIDTH * aspect
+            : firstCssViewport.height;
+        }
 
         if (cancelledRef.current) return;
 
@@ -911,6 +913,9 @@ export default function ViewPDF({
             : {
                 width: `${Math.round((nativeWidthRef.current * zoomPercent) / 100)}px`,
                 height: "auto",
+                // 원래 크기(100%)에서 이미지가 컨테이너보다 넓으면 컨테이너 폭에 맞춘다.
+                // 사용자가 확대(+)한 경우에는 제한을 풀어 가로 스크롤로 볼 수 있게 한다.
+                maxWidth: zoomPercent <= 100 ? "100%" : "none",
               };
           if (!editable) {
             return (

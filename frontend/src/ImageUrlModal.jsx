@@ -2,16 +2,18 @@ import { useState } from "react";
 import PropTypes from "prop-types";
 import { Alert, Button, Form, Modal } from "react-bootstrap";
 
-// 표지 관리의 "표지 직접 입력" 모달과 같은 모양이다. URL 을 받으면 서버가 이미지를 내려받아 미리보기를 만들고,
-// 성공하면 부모가 이 모달을 닫고 뷰어에 삽입될 이미지를 보여 준다. 실제 삽입은 저장할 때 한다.
-// PDF 쪽 삽입(PdfInsertImageModal)과 EPUB 표지(EpubCoverModal)가 제목과 안내만 달리해 함께 쓴다.
-// URL 대신 이 기기(PC, 모바일 사진첩·카메라)의 파일을 고를 수도 있다. 파일은 고르는 즉시 미리 본다.
-// onSubmit(source)의 source 는 URL(문자열) 또는 File 이다. 실패 사유(문자열)를 돌려주거나, 성공하면 null 을 돌려준다.
+// PDF 쪽 삽입, EPUB 표지, 책 표지 관리가 함께 쓰는 이미지 입력 모달이다.
+// onSubmit(source)에 URL(문자열) 또는 선택한 File을 넘긴다. 부모가 미리보기나 저장을 처리한다.
+// 실패 사유(문자열)를 돌려주면 모달에 표시한다. 성공하면 부모가 모달을 닫는다.
 export default function ImageUrlModal({
   idPrefix,
   title,
   description,
   initialUrl = "",
+  urlLabel = "이미지 URL",
+  submitLabel = "삽입 표시",
+  busyLabel = "불러오는 중…",
+  fileDescription = "PC의 파일이나 모바일의 사진첩·카메라에서 고를 수 있습니다. 15MB 이하이며, 고르면 바로 미리 봅니다.",
   onSubmit,
   onClose,
 }) {
@@ -61,7 +63,7 @@ export default function ImageUrlModal({
       <Form onSubmit={handleSubmit}>
         <Modal.Body>
           <Form.Group controlId={`${idPrefix}-url`}>
-            <Form.Label>이미지 URL</Form.Label>
+            <Form.Label>{urlLabel}</Form.Label>
             <Form.Control
               type="url"
               required
@@ -82,8 +84,7 @@ export default function ImageUrlModal({
               onChange={handleFile}
             />
             <Form.Text muted>
-              PC의 파일이나 모바일의 사진첩·카메라에서 고를 수 있습니다. 15MB
-              이하이며, 고르면 바로 미리 봅니다.
+              {fileDescription}
             </Form.Text>
           </Form.Group>
           {error && (
@@ -97,7 +98,7 @@ export default function ImageUrlModal({
             취소
           </Button>
           <Button type="submit" disabled={busy || !trimmed}>
-            {busy ? "불러오는 중…" : "삽입 표시"}
+            {busy ? busyLabel : submitLabel}
           </Button>
         </Modal.Footer>
       </Form>
@@ -110,6 +111,10 @@ ImageUrlModal.propTypes = {
   title: PropTypes.string.isRequired,
   description: PropTypes.node.isRequired,
   initialUrl: PropTypes.string,
+  urlLabel: PropTypes.string,
+  submitLabel: PropTypes.string,
+  busyLabel: PropTypes.string,
+  fileDescription: PropTypes.node,
   onSubmit: PropTypes.func.isRequired,
   onClose: PropTypes.func.isRequired,
 };

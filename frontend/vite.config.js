@@ -6,13 +6,23 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 
-// pdfjs-dist 6.x 는 JPEG2000(OpenJPEG)·JBIG2·ICC 디코딩에 wasm 파일을 사용하며
-// getDocument({ wasmUrl }) 로 그 디렉터리를 알려줘야 한다. 설치된 pdfjs-dist 의 wasm 을
-// 그대로 /pdf-wasm/ 로 서빙(dev)·번들(build)하여 worker API 버전과 항상 일치시킨다.
+// 설치된 pdfjs-dist의 wasm, CJK CMap, 기본 글꼴을 서빙(dev)·번들(build)한다.
+// worker와 보조 데이터의 버전을 일치시켜 이미지와 비내장 글꼴 PDF를 함께 지원한다.
 const PDF_WASM_PREFIX = "/pdf-wasm/";
 const pdfWasmDir = fileURLToPath(
   new URL("./node_modules/pdfjs-dist/wasm", import.meta.url),
 );
+const PDF_ASSETS = [
+  { prefix: PDF_WASM_PREFIX, dir: pdfWasmDir },
+  {
+    prefix: "/pdf-cmaps/",
+    dir: fileURLToPath(new URL("./node_modules/pdfjs-dist/cmaps", import.meta.url)),
+  },
+  {
+    prefix: "/pdf-standard-fonts/",
+    dir: fileURLToPath(new URL("./node_modules/pdfjs-dist/standard_fonts", import.meta.url)),
+  },
+];
 
 function getCoverVersion() {
   const parts = Object.fromEntries(
@@ -37,24 +47,29 @@ function pdfWasmPlugin() {
     name: "pdf-wasm",
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
-        if (!req.url || !req.url.startsWith(PDF_WASM_PREFIX)) return next();
-        const rel = req.url.slice(PDF_WASM_PREFIX.length).split("?")[0];
-        const file = path.join(pdfWasmDir, rel);
-        if (!file.startsWith(pdfWasmDir) || !fs.existsSync(file)) return next();
+        const asset = PDF_ASSETS.find(({ prefix }) => req.url?.startsWith(prefix));
+        if (!asset) return next();
+        const rel = req.url.slice(asset.prefix.length).split("?")[0];
+        if (!rel || path.basename(rel) !== rel) return next();
+        const file = path.join(asset.dir, rel);
+        if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return next();
         res.setHeader(
           "Content-Type",
-          file.endsWith(".wasm") ? "application/wasm" : "text/javascript",
+          file.endsWith(".wasm") ? "application/wasm" :
+            file.endsWith(".js") ? "text/javascript" : "application/octet-stream",
         );
         fs.createReadStream(file).pipe(res);
       });
     },
     generateBundle() {
-      for (const name of fs.readdirSync(pdfWasmDir)) {
-        this.emitFile({
-          type: "asset",
-          fileName: `pdf-wasm/${name}`,
-          source: fs.readFileSync(path.join(pdfWasmDir, name)),
-        });
+      for (const { prefix, dir } of PDF_ASSETS) {
+        for (const name of fs.readdirSync(dir)) {
+          this.emitFile({
+            type: "asset",
+            fileName: `${prefix.slice(1)}${name}`,
+            source: fs.readFileSync(path.join(dir, name)),
+          });
+        }
       }
     },
   };

@@ -5,9 +5,15 @@ import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-// JPEG2000(OpenJPEG)/JBIG2 등 이미지 디코딩용 wasm 위치. 미지정 시 이미지 기반 페이지가 렌더되지 않는다.
-// (ViewPDF.jsx 도 같은 설정을 갖고 있다. 이 모듈은 ViewPDF 밖에서 PDF 를 그리는 화면용이다.)
+// 설치된 pdfjs-dist의 보조 데이터를 모든 PDF 로딩 경로에서 함께 사용한다.
+// CMap이 없으면 KSCms-UHC-H 등 CJK 인코딩의 글꼴 로딩이 실패해 문자가 사라진다.
 /* v8 ignore next -- Vite BASE_URL fallback depends on the runtime bundle. */
 export const PDF_WASM_URL = `${window.location.origin}${import.meta.env.BASE_URL}pdf-wasm/`;
+export const PDF_DOCUMENT_OPTIONS = {
+  cMapUrl: `${window.location.origin}${import.meta.env.BASE_URL}pdf-cmaps/`,
+  cMapPacked: true,
+  standardFontDataUrl: `${window.location.origin}${import.meta.env.BASE_URL}pdf-standard-fonts/`,
+  wasmUrl: PDF_WASM_URL,
+};
 
 export { pdfjs };

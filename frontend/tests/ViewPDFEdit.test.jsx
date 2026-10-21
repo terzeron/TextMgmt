@@ -37,6 +37,7 @@ const { mockGetDocument } = vi.hoisted(() => ({ mockGetDocument: vi.fn() }));
 vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
   getDocument: mockGetDocument,
   GlobalWorkerOptions: { workerSrc: "" },
+  OPS: { paintImageXObject: 85 },
 }));
 
 vi.mock("../src/Common", () => ({

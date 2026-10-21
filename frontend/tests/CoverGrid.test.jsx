@@ -58,10 +58,10 @@ describe("CoverGrid", () => {
     );
     const imgs = Array.from(document.querySelectorAll("img"));
     expect(imgs[0].getAttribute("src")).toMatch(
-      /^http:\/\/api\/cover\/1\?v=\d{10}$/,
+      /^http:\/\/api\/cover\/1\?v=\d{10}&path=/,
     );
     expect(imgs[1].getAttribute("src")).toMatch(
-      /^http:\/\/api\/cover\/7\?v=\d{10}$/,
+      /^http:\/\/api\/cover\/7\?v=\d{10}&path=/,
     );
     expect(imgs[0].getAttribute("loading")).toBe("lazy");
   });
@@ -69,7 +69,7 @@ describe("CoverGrid", () => {
   it("만화 탭은 /comics 커버 API를 쓴다", () => {
     render(<CoverGrid results={makeBooks(1, "pdf")} basePath="/comics-view" />);
     expect(document.querySelector("img").getAttribute("src")).toMatch(
-      /^http:\/\/api\/comics\/cover\/1\?v=\d{10}$/,
+      /^http:\/\/api\/comics\/cover\/1\?v=\d{10}&path=/,
     );
   });
 
@@ -90,6 +90,25 @@ describe("CoverGrid", () => {
     const after = src("2026-10-16T10:30:00.654321");
     expect(before).toContain("&u=2026-10-16T09%3A00%3A00.123456");
     expect(after).not.toBe(before);
+  });
+
+  it("ID와 updated_time이 같아도 원본 경로가 다르면 커버 URL을 구분한다", () => {
+    const [book] = makeBooks(1, "pdf");
+    const firstPath = "8_여성향/[문나영, 이범배] 신혼부부 생활 백서 (1-111화 완)/[0001] 0001화.pdf";
+    const secondPath = "8_여성향/[이루이] 시한부의 아이까지 뺏으려 합니다 (1-82화 완)/[0001] 0001화.pdf";
+    const { container, rerender } = render(
+      <CoverGrid results={[{ ...book, file_path: firstPath }]} basePath="/comics-view" />,
+    );
+    const before = new URL(container.querySelector("img").src);
+
+    rerender(
+      <CoverGrid results={[{ ...book, file_path: secondPath }]} basePath="/comics-view" />,
+    );
+    const after = new URL(container.querySelector("img").src);
+
+    expect(before.searchParams.get("path")).toBe(firstPath);
+    expect(after.searchParams.get("path")).toBe(secondPath);
+    expect(after.href).not.toBe(before.href);
   });
 
   it("텍스트 포맷은 이미지를 요청하지 않고 대문자 포맷명을 보여준다", () => {

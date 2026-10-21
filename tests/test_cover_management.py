@@ -1207,6 +1207,11 @@ def test_epub_validation_limits_and_svg_cover(tmp_path, monkeypatch, mode):
         return
     elif mode == "large_existing":
         monkeypatch.setattr(module, "MAX_IMAGE_BYTES", 1)
+        result = module.inspect_epub(path)
+        assert result["has_cover"]
+        assert result["cover_image"] is None
+        assert "크기 제한" in result["cover_error"]
+        return
     with pytest.raises(module.CoverError):
         module.inspect_epub(path)
 
