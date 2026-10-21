@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
 
 import { getApiUrlPrefix } from "./Common.js";
-import { markTallCover } from "./coverImageFit.js";
+import { coverThumbProps, markTallCover } from "./coverImageFit.js";
 
 /* global __COVER_VERSION__ */
 // 한 번에 그리는 카드 수. 커버 요청도 이만큼씩만 나간다.
@@ -27,7 +27,7 @@ function CoverImage({ src, fileType }) {
   return (
     <img
       className="cover-grid-image"
-      src={src}
+      {...coverThumbProps(src)}
       alt=""
       loading="lazy"
       onLoad={markTallCover}

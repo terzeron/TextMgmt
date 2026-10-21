@@ -1,13 +1,16 @@
 /* 표지 카드 폭의 공통 기준. 그리드의 최소 폭과 표지 관리 화면의 고정 폭이 모두 이 값을 쓴다. */
 :root {
   --cover-card-width: 144px;
+  /* 카드 폭 상한. 서버 썸네일 1x 폭(backend COVER_THUMBNAIL_WIDTHS[0])과 같은 값이어야 한다. */
+  --cover-card-max: 150px;
 }
 
-/* 최소 카드 폭만 정하고 화면 폭 안에서 순서대로 흘려 배치한다. 기기별 열 수를 정하지 않는다.
-   줄마다 남는 폭은 카드들이 나눠 가져서 한쪽에만 빈 여백이 생기지 않는다. */
+/* 카드 폭은 최소~상한 사이로 두고 화면 폭 안에서 순서대로 흘려 배치한다. 기기별 열 수를 정하지 않는다.
+   상한을 넘겨 늘리지 않으므로 서버가 보내는 썸네일(1x 150px, 2x 300px)이 항상 충분하다. 남는 폭은 오른쪽 여백이 된다. */
 .cover-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--cover-card-width), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(var(--cover-card-width), var(--cover-card-max)));
+  justify-content: start;
   gap: 12px 8px;
 }
 

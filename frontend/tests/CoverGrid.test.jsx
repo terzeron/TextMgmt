@@ -64,6 +64,9 @@ describe("CoverGrid", () => {
       /^http:\/\/api\/cover\/7\?v=\d{10}&path=/,
     );
     expect(imgs[0].getAttribute("loading")).toBe("lazy");
+    expect(imgs[0].getAttribute("srcset")).toMatch(
+      /&w=150 1x, http:\/\/api\/cover\/1\?v=\d{10}.*&w=300 2x$/,
+    );
   });
 
   it("만화 탭은 /comics 커버 API를 쓴다", () => {

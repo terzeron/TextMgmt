@@ -140,9 +140,12 @@ class BookManager:
     # body 가 비고 화면이 백지가 된다. 원본은 두고 프리뷰 산출물에서만 쌍으로 편다.
     SELF_CLOSING_RCDATA_PATTERN = re.compile(rb"<(title|script|style|textarea)(\s[^<>]*?)?\s*/>", re.IGNORECASE)
     # 커버 뷰 썸네일. 최신 목록은 한 화면에 수십 장을 받으므로 원본 대신 작게 줄여 보낸다.
+    # 카드 폭 상한(frontend CoverGrid.css 의 --cover-card-max, 150px)의 1x/2x 두 단계를 만든다.
+    # w 를 생략하거나 목록 밖의 값이면 큰 쪽(COVER_THUMBNAIL_WIDTH)으로 처리해 이전 클라이언트의 화질을 지킨다.
+    COVER_THUMBNAIL_WIDTHS = (150, 300)
     COVER_THUMBNAIL_WIDTH = 300
     COVER_JPEG_QUALITY = 85
-    COVER_CACHE_VERSION = 7
+    COVER_CACHE_VERSION = 8
     COVER_ASPECT_RATIO = 2 / 3
     COVER_TALL_RATIO = 2
     # 미커버 목록이 한 요청에서 커버 목록을 훑는 최대 시간(초). 표지가 있는 책이 많으면 여러 요청으로 나눠 이어받는다.
@@ -3520,9 +3523,16 @@ class BookManager:
         )
 
     @staticmethod
-    def _extract_cover_thumbnail(file_path: Path, file_type: str) -> bytes | None:
+    def normalize_cover_width(width: int | None) -> int:
+        """허용한 썸네일 폭만 통과시킨다. 임의 값이 캐시 파일을 무한히 늘리지 못하게 한다."""
+        return width if width in BookManager.COVER_THUMBNAIL_WIDTHS else BookManager.COVER_THUMBNAIL_WIDTH
+
+    @staticmethod
+    def _extract_cover_thumbnail(file_path: Path, file_type: str, width: int | None = None) -> bytes | None:
         """EPUB 커버 이미지나 PDF 앞쪽 커버 페이지를 JPEG 썸네일로 만든다."""
         from PIL import Image
+
+        width = BookManager.normalize_cover_width(width)
 
         if file_type == "epub":
             import zipfile
@@ -3543,7 +3553,6 @@ class BookManager:
                     def render_cover(page: Any) -> Any:
                         page_width = page.get_width()
                         page_height = page.get_height()
-                        width = BookManager.COVER_THUMBNAIL_WIDTH
                         height = round(width / BookManager.COVER_ASPECT_RATIO)
                         if page_height >= page_width * BookManager.COVER_TALL_RATIO:
                             # 가로의 2배 이상 긴 첫 쪽은 표지가 아닐 수 있어 가로 폭에 맞추고 위쪽 표지 영역만 쓴다.
@@ -3571,15 +3580,15 @@ class BookManager:
             return None
 
         img = img.convert("RGB")
-        width = BookManager.COVER_THUMBNAIL_WIDTH
         img.thumbnail((width, width * 10))
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=BookManager.COVER_JPEG_QUALITY)
         return buf.getvalue()
 
-    async def get_cover(self, book_id: int) -> Response:
+    async def get_cover(self, book_id: int, width: int | None = None) -> Response:
         """EPUB 커버나 PDF 첫 페이지를 JPEG 썸네일로 반환한다. 커버가 없거나 만들 수 없으면 404."""
-        LOGGER.debug("# get_cover(book_id=%d)", book_id)
+        width = self.normalize_cover_width(width)
+        LOGGER.debug("# get_cover(book_id=%d, width=%d)", book_id, width)
         doc = self.es_manager.search_by_id(book_id)
         if not doc:
             return Response(status_code=404, content=f"Book not found: {book_id}")
@@ -3603,12 +3612,12 @@ class BookManager:
             source_stat.st_size, source_stat.st_mtime_ns, source_stat.st_ctime_ns,
         ], ensure_ascii=False)
         source_revision = hashlib.sha256(source_key.encode("utf-8")).hexdigest()[:32]
-        cache_file = cache_dir / f"{book_id}.v{self.COVER_CACHE_VERSION}.{source_revision}.jpg"
+        cache_file = cache_dir / f"{book_id}.v{self.COVER_CACHE_VERSION}.w{width}.{source_revision}.jpg"
         if cache_file.exists():
             return Response(content=cache_file.read_bytes(), media_type="image/jpeg", headers=headers)
 
         try:
-            data = await asyncio.to_thread(self._extract_cover_thumbnail, book.file_path, book.file_type)
+            data = await asyncio.to_thread(self._extract_cover_thumbnail, book.file_path, book.file_type, width)
         except Exception as e:
             # 손상 파일, 읽을 수 없는 이미지 포맷(SVG 등) 모두 여기로 온다. 화면은 포맷명 박스로 대체한다.
             LOGGER.warning("Cover extraction failed for book_id=%d (%s): %s: %s", book_id, book.file_path, type(e).__name__, e)

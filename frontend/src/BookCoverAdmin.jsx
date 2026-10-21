@@ -12,7 +12,7 @@ import { rankCoverImages, formatCoverBytes } from "./coverImageRanking";
 import CoverImagePreview from "./CoverImagePreview";
 import ImageUrlModal from "./ImageUrlModal";
 import { MAX_UPLOAD_BYTES } from "./insertPreview";
-import { markTallCover } from "./coverImageFit.js";
+import { coverThumbProps, markTallCover } from "./coverImageFit.js";
 import "./CoverGrid.css";
 import "./BookCoverAdmin.css";
 
@@ -455,7 +455,7 @@ export default function BookCoverAdmin() {
                     <button type="button" className={`cover-grid-cover ${item.saved || item.selected ? "book-cover-completed" : "book-cover-existing"}`} aria-label={`${item.title} ${item.selected ? "표지 저장 · 행 숨기기" : item.saved ? "표지 저장 완료 · 행 숨기기" : "현재 표지"}`}
                       disabled={!item.previewReady || (!item.saved && !item.selected) || item.saving || item.busy} onClick={() => confirmCover(item)}>
                       <img className="cover-grid-image" loading="lazy" alt={`${item.title} ${item.selected ? "선택한 표지" : item.saved ? "저장한 표지" : "현재 표지"}`}
-                        src={item.selected?.url || `${getApiUrlPrefix()}${API_ROOT}/preview?file_path=${encodeURIComponent(item.file_path)}&v=${encodeURIComponent(item.saved?.revision || item.revision)}`}
+                        {...(item.selected?.url ? { src: item.selected.url } : coverThumbProps(`${getApiUrlPrefix()}${API_ROOT}/preview?file_path=${encodeURIComponent(item.file_path)}&v=${encodeURIComponent(item.saved?.revision || item.revision)}`))}
                         onLoad={(event) => { markTallCover(event); previewState(item.file_path, { previewReady: true }); }}
                         onError={() => previewState(item.file_path, { previewReady: false, error: "저장한 표지를 표시하지 못했습니다. 새로고침하세요" })} />
                     </button>
