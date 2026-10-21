@@ -1019,6 +1019,88 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     expect(lastRendition.next).toHaveBeenCalled();
   });
 
+  describe("가로 스와이프", () => {
+    const touch = (x, y = 100, identifier = 1) => ({
+      clientX: x, clientY: y, identifier,
+    });
+    const emit = (type, touches, target, changedTouches = touches) => {
+      act(() => lastRendition._emit(type, { touches, changedTouches, target }));
+    };
+
+    it.each([false, true])("iframe에서 좌우로 한 쪽씩 넘긴다 (preview=%s)", async (preview) => {
+      render(<ViewEPUB bookId={1} preview={preview} />);
+      await openBook();
+      const doc = document.implementation.createHTMLDocument();
+      emit("touchstart", [touch(250)], doc.body);
+      emit("touchend", [], doc.body, [touch(100)]);
+      expect(lastRendition.next).toHaveBeenCalledTimes(1);
+      emit("touchstart", [touch(100)], doc.body);
+      emit("touchend", [], doc.body, [touch(250)]);
+      expect(lastRendition.prev).toHaveBeenCalledTimes(1);
+    });
+
+    it("표지 위 스와이프는 본문을 건너뛰지 않고 표지만 닫는다", async () => {
+      mockCoverUrl = "blob:cover";
+      render(<ViewEPUB bookId={1} />);
+      await openBook();
+      const host = screen.getByTestId("epub-host");
+      fireEvent.touchStart(host, { touches: [touch(250)] });
+      fireEvent.touchEnd(host, { touches: [], changedTouches: [touch(100)] });
+      expect(screen.queryByTestId("epub-cover-page")).toBeNull();
+      expect(lastRendition.next).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["짧은 터치", touch(230)],
+      ["세로 이동", touch(240, 250)],
+      ["대각선 이동", touch(150, 200)],
+      ["다른 손가락", touch(100, 100, 2)],
+    ])("%s는 넘기지 않는다", async (_name, end) => {
+      render(<ViewEPUB bookId={1} />);
+      await openBook();
+      const host = screen.getByTestId("epub-host");
+      emit("touchstart", [touch(250)], host);
+      emit("touchend", [], host, [end]);
+      expect(lastRendition.next).not.toHaveBeenCalled();
+      expect(lastRendition.prev).not.toHaveBeenCalled();
+    });
+
+    it.each(["touchcancel", "multitouch", "vertical"])("%s 후에는 남은 손가락으로 넘기지 않는다", async (reason) => {
+      render(<ViewEPUB bookId={1} />);
+      await openBook();
+      const doc = document.implementation.createHTMLDocument();
+      emit("touchstart", [touch(250)], doc.body);
+      if (reason === "touchcancel") doc.body.dispatchEvent(new Event("touchcancel", { bubbles: true }));
+      else emit("touchmove", reason === "multitouch"
+        ? [touch(240), touch(200, 100, 2)] : [touch(240, 200)], doc.body);
+      emit("touchend", [], doc.body, [touch(100)]);
+      expect(lastRendition.next).not.toHaveBeenCalled();
+    });
+
+    it.each(["a", "button", "input", "select", "textarea"])("%s 조작은 페이지를 넘기지 않는다", async (tag) => {
+      render(<ViewEPUB bookId={1} />);
+      await openBook();
+      const target = document.createElement(tag);
+      emit("touchstart", [touch(250)], target);
+      emit("touchend", [], target, [touch(100)]);
+      expect(lastRendition.next).not.toHaveBeenCalled();
+    });
+
+    it("뷰어를 닫으면 진행 중인 스와이프와 이벤트를 정리한다", async () => {
+      const { unmount } = render(<ViewEPUB bookId={1} />);
+      await openBook();
+      const host = screen.getByTestId("epub-host");
+      const rendition = lastRendition;
+      emit("touchstart", [touch(250)], host);
+      unmount();
+      emit("touchend", [], host, [touch(100)]);
+      fireEvent.touchStart(host, { touches: [touch(250)] });
+      fireEvent.touchEnd(host, { touches: [], changedTouches: [touch(100)] });
+      expect(rendition.next).not.toHaveBeenCalled();
+      expect(rendition.off).toHaveBeenCalledWith("touchend", expect.any(Function));
+    });
+  });
+
   it("standalone이면 100% 높이다", () => {
     const { container } = render(<ViewEPUB bookId={1} standalone={true} />);
     expect(container.firstChild.style.height).toBe("100%");

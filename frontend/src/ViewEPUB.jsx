@@ -577,6 +577,70 @@ export default function ViewEPUB({
     renditionRef.current?.prev();
   }, []);
 
+  // iframe 이벤트는 epub.js가 전달한다. 바깥 여백은 host에서 받고,
+  // 네이티브 가로 팬 대신 버튼과 같은 페이지 이동을 한 번만 실행한다.
+  useEffect(() => {
+    const rendition = renditionRef.current;
+    const host = hostRef.current;
+    if (!rendition || !host) return;
+    let gesture = null;
+    const reset = () => {
+      gesture?.document.removeEventListener("touchcancel", reset);
+      gesture = null;
+    };
+    const onStart = (event) => {
+      reset();
+      const doc = event.target?.ownerDocument;
+      if (
+        event.touches.length !== 1 || !doc ||
+        event.target.closest?.('a, button, input, select, textarea, [contenteditable]:not([contenteditable="false"])') ||
+        doc.getSelection()?.isCollapsed === false
+      ) return;
+      const touch = event.touches[0];
+      gesture = {
+        x: touch.clientX, y: touch.clientY, id: touch.identifier,
+        document: doc,
+      };
+      // epub.js는 touchcancel을 전달하지 않아 해당 문서에서 직접 받는다.
+      doc.addEventListener("touchcancel", reset, { once: true });
+    };
+    const onMove = (event) => {
+      if (!gesture) return;
+      if (event.touches.length !== 1) {
+        reset();
+        return;
+      }
+      const touch = event.touches[0];
+      const dx = Math.abs(touch.clientX - gesture.x);
+      const dy = Math.abs(touch.clientY - gesture.y);
+      if (touch.identifier !== gesture.id || (dy > 10 && dy > dx)) reset();
+    };
+    const onEnd = (event) => {
+      const start = gesture;
+      reset();
+      if (!start || event.touches.length || start.document.getSelection()?.isCollapsed === false) return;
+      const touch = Array.from(event.changedTouches).find((t) => t.identifier === start.id);
+      if (!touch) return;
+      const dx = touch.clientX - start.x;
+      const dy = touch.clientY - start.y;
+      if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      if (dx < 0) goNext();
+      else goPrev();
+    };
+    const handlers = { touchstart: onStart, touchmove: onMove, touchend: onEnd };
+    for (const [type, handler] of Object.entries(handlers)) {
+      host.addEventListener(type, handler, { passive: true });
+      rendition.on(type, handler);
+    }
+    return () => {
+      reset();
+      for (const [type, handler] of Object.entries(handlers)) {
+        host.removeEventListener(type, handler);
+        rendition.off(type, handler);
+      }
+    };
+  }, [epubData, goNext, goPrev]);
+
   // 책 전체 비율(0~1) 위치로 이동한다. 표지 화면이면 표지를 먼저 닫는다.
   const goToProgress = useCallback((ratio) => {
     const rendition = renditionRef.current;
