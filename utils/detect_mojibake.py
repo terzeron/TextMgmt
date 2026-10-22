@@ -51,7 +51,7 @@ import zipfile
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import unquote
 from xml.etree import ElementTree
 
@@ -92,10 +92,12 @@ ISSUE_NOT_ZIP = "not_zip"
 ISSUE_BAD_MIMETYPE = "bad_mimetype"
 ISSUE_NO_CONTAINER = "no_container"
 ISSUE_OPF_MISSING = "opf_missing"
+ISSUE_MEMBER_UNREADABLE = "member_unreadable"
+ISSUE_SCAN_ERROR = "scan_error"
 ISSUE_OPF_UNPARSABLE = "opf_unparsable"
 ISSUE_SPINE_MEMBER_MISSING = "spine_member_missing"
 ISSUE_PREFIXED_ROOT = "prefixed_root"
-EPUB_ISSUES = (ISSUE_NOT_ZIP, ISSUE_BAD_MIMETYPE, ISSUE_NO_CONTAINER, ISSUE_OPF_MISSING, ISSUE_OPF_UNPARSABLE, ISSUE_SPINE_MEMBER_MISSING, ISSUE_PREFIXED_ROOT)
+EPUB_ISSUES = (ISSUE_NOT_ZIP, ISSUE_BAD_MIMETYPE, ISSUE_NO_CONTAINER, ISSUE_OPF_MISSING, ISSUE_MEMBER_UNREADABLE, ISSUE_SCAN_ERROR, ISSUE_OPF_UNPARSABLE, ISSUE_SPINE_MEMBER_MISSING, ISSUE_PREFIXED_ROOT)
 
 # 루트 태그는 파일 앞부분에 있다. DOCTYPE 내부 선언(<!ELEMENT)과 주석은 건너뛴다.
 ROOT_TAG_HEAD_BYTES = 4096
@@ -163,7 +165,7 @@ def _category_of(p: Path) -> str:
 
 
 def _read_member(zf: zipfile.ZipFile, name: str, limit: int = MAX_XML_BYTES) -> Optional[bytes]:
-    """ZIP 멤버를 읽는다. 없거나 깨졌거나 limit 를 넘으면 None"""
+    """ZIP 멤버를 읽는다. 없거나 깨졌거나 limit 를 넘으면 None. 구분은 호출자가 NameToInfo 로 한다."""
     try:
         with zf.open(name) as f:
             data = f.read(limit + 1)
@@ -182,22 +184,89 @@ def _root_tag_name(head: bytes) -> Optional[str]:
     return m.group(1).decode("utf-8", errors="replace") if m else None
 
 
-def _spine_members(opf: ElementTree.Element, opf_path: str) -> List[str]:
-    """spine 순서대로 본문 문서의 ZIP 멤버 경로를 돌려준다"""
-    manifest = {el.get("id"): el.get("href") for el in opf.iter() if _local_name(el.tag) == "item" and el.get("href")}
+# 루트 요소 검사는 마크업 문서에만 한다. spine 에 오디오 같은 바이너리가 들어 있는 EPUB 이 있고,
+# 그 앞부분에서 우연히 찾은 '<x:y' 를 접두사 루트로 오탐한 적이 있다.
+MARKUP_MEDIA_TYPES = {"application/xhtml+xml", "text/html", "application/xml", "text/xml", "image/svg+xml"}
+MARKUP_EXTENSIONS = {".xhtml", ".html", ".htm", ".xml", ".svg"}
+
+
+def _is_markup(member: str, media_type: str) -> bool:
+    if media_type:
+        return media_type.lower() in MARKUP_MEDIA_TYPES
+    return posixpath.splitext(member)[1].lower() in MARKUP_EXTENSIONS
+
+
+def _spine_members(opf: ElementTree.Element, opf_path: str) -> List[Tuple[str, str]]:
+    """spine 순서대로 (본문 문서의 ZIP 멤버 경로, media-type)을 돌려준다"""
+    manifest = {el.get("id"): (el.get("href"), el.get("media-type") or "") for el in opf.iter() if _local_name(el.tag) == "item" and el.get("href")}
     base = posixpath.dirname(opf_path)
     members = []
     for el in opf.iter():
         if _local_name(el.tag) == "itemref" and manifest.get(el.get("idref")):
-            href = unquote(manifest[el.get("idref")]).split("#")[0]
-            members.append(posixpath.normpath(posixpath.join(base, href)))
+            href, media_type = manifest[el.get("idref")]
+            members.append((posixpath.normpath(posixpath.join(base, unquote(href).split("#")[0])), media_type))
     return members
+
+
+def _read_head(zf: zipfile.ZipFile, name: str, size: int) -> Optional[bytes]:
+    """멤버 앞부분만 읽는다. 읽을 수 없으면 None(Bad magic number, Overlapped entries 등)"""
+    try:
+        with zf.open(name) as f:
+            return f.read(size)
+    except Exception:  # noqa: BLE001  손상 ZIP 은 BadZipFile/zlib.error/RuntimeError 등으로 제각각 실패한다
+        return None
+
+
+def _check_epub_members(zf: zipfile.ZipFile, flag: Callable[[str, str], None]) -> None:
+    infos = zf.infolist()
+    first = infos[0] if infos else None
+    mimetype = _read_member(zf, "mimetype", 64) if first is not None and first.filename == "mimetype" else None
+    if first is None or first.compress_type != zipfile.ZIP_STORED or (mimetype or b"").strip() != EPUB_MIMETYPE:
+        flag(ISSUE_BAD_MIMETYPE, first.filename if first else "")
+
+    # 없는 것(고칠 수 있다)과 있지만 읽을 수 없는 것(ZIP 내부 손상이나 비정상적 크기)을 구분한다.
+    container = _read_member(zf, "META-INF/container.xml")
+    if container is None:
+        flag(ISSUE_MEMBER_UNREADABLE if "META-INF/container.xml" in zf.NameToInfo else ISSUE_NO_CONTAINER, "META-INF/container.xml")
+        return
+    try:
+        rootfile = next(el for el in ElementTree.fromstring(container).iter() if _local_name(el.tag) == "rootfile")
+        opf_path = posixpath.normpath(unquote(rootfile.get("full-path", "")))
+    except (ElementTree.ParseError, StopIteration):
+        flag(ISSUE_NO_CONTAINER, "META-INF/container.xml")
+        return
+
+    opf_bytes = _read_member(zf, opf_path)
+    if opf_bytes is None:
+        flag(ISSUE_MEMBER_UNREADABLE if opf_path in zf.NameToInfo else ISSUE_OPF_MISSING, opf_path)
+        return
+    try:
+        members = _spine_members(ElementTree.fromstring(opf_bytes), opf_path)
+    except ElementTree.ParseError:
+        flag(ISSUE_OPF_UNPARSABLE, opf_path)
+        return
+
+    names = set(zf.namelist())
+    for member, media_type in members:
+        if member not in names:
+            flag(ISSUE_SPINE_MEMBER_MISSING, member)
+            continue
+        if not _is_markup(member, media_type):
+            continue
+        head = _read_head(zf, member, ROOT_TAG_HEAD_BYTES)
+        if head is None:
+            flag(ISSUE_MEMBER_UNREADABLE, member)
+            continue
+        root_name = _root_tag_name(head)
+        if root_name and ":" in root_name:
+            flag(ISSUE_PREFIXED_ROOT, member)
 
 
 def inspect_epub_structure(path_str: str) -> Dict[str, Any]:
     """EPUB 한 건의 구조를 검사한다. 뷰어가 렌더링하지 못할 구조만 찾는다.
 
     issues 는 중복 없는 코드 목록이고, examples 는 코드별 첫 사례 멤버다.
+    파일 하나가 예상 못 한 예외를 내도 그 파일만 scan_error 로 기록한다(전체 스캔을 멈추지 않는다).
     """
     p = Path(path_str)
     issues: List[str] = []
@@ -208,54 +277,17 @@ def inspect_epub_structure(path_str: str) -> Dict[str, Any]:
             issues.append(code)
             examples[code] = member
 
-    def result() -> Dict[str, Any]:
-        return {"path": path_str, "category": _category_of(p), "issues": issues, "examples": examples}
-
     try:
         zf = zipfile.ZipFile(path_str)
     except (zipfile.BadZipFile, OSError):
         flag(ISSUE_NOT_ZIP)
-        return result()
-
-    with zf:
-        infos = zf.infolist()
-        first = infos[0] if infos else None
-        mimetype = _read_member(zf, "mimetype", 64) if first is not None and first.filename == "mimetype" else None
-        if first is None or first.compress_type != zipfile.ZIP_STORED or (mimetype or b"").strip() != EPUB_MIMETYPE:
-            flag(ISSUE_BAD_MIMETYPE, first.filename if first else "")
-
-        container = _read_member(zf, "META-INF/container.xml")
-        if container is None:
-            flag(ISSUE_NO_CONTAINER, "META-INF/container.xml")
-            return result()
-        try:
-            rootfile = next(el for el in ElementTree.fromstring(container).iter() if _local_name(el.tag) == "rootfile")
-            opf_path = posixpath.normpath(unquote(rootfile.get("full-path", "")))
-        except (ElementTree.ParseError, StopIteration):
-            flag(ISSUE_NO_CONTAINER, "META-INF/container.xml")
-            return result()
-
-        opf_bytes = _read_member(zf, opf_path)
-        if opf_bytes is None:
-            flag(ISSUE_OPF_MISSING, opf_path)
-            return result()
-        try:
-            members = _spine_members(ElementTree.fromstring(opf_bytes), opf_path)
-        except ElementTree.ParseError:
-            flag(ISSUE_OPF_UNPARSABLE, opf_path)
-            return result()
-
-        names = set(zf.namelist())
-        for member in members:
-            if member not in names:
-                flag(ISSUE_SPINE_MEMBER_MISSING, member)
-                continue
-            with zf.open(member) as f:
-                root_name = _root_tag_name(f.read(ROOT_TAG_HEAD_BYTES))
-            if root_name and ":" in root_name:
-                flag(ISSUE_PREFIXED_ROOT, member)
-
-    return result()
+    else:
+        with zf:
+            try:
+                _check_epub_members(zf, flag)
+            except Exception as e:  # noqa: BLE001  한 파일 때문에 수천 건 스캔이 중단되면 안 된다
+                flag(ISSUE_SCAN_ERROR, f"{type(e).__name__}: {e}"[:120])
+    return {"path": path_str, "category": _category_of(p), "issues": issues, "examples": examples}
 
 
 def list_library_files(root: Path) -> List[Path]:

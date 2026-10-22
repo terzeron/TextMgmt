@@ -409,6 +409,39 @@ def test_epub_structure_reports_each_issue_once_with_first_example(tmp_path):
     assert res["examples"]["prefixed_root"] == "OEBPS/ch 1.xhtml"
 
 
+def _epub_with_media_spine_item(path, media_type, member_name, payload):
+    opf = (
+        '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest>'
+        f'<item id="a" href="{member_name}" media-type="{media_type}"/></manifest><spine><itemref idref="a"/></spine></package>'
+    )
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip", zipfile.ZIP_STORED)
+        zf.writestr("META-INF/container.xml", CONTAINER_XML)
+        zf.writestr("OEBPS/content.opf", opf)
+        zf.writestr(f"OEBPS/{member_name}", payload)
+    return path
+
+
+def test_epub_structure_does_not_misread_binary_spine_item_as_prefixed_root(tmp_path):
+    """spine 에 오디오가 들어 있는 EPUB 은 바이너리의 우연한 '<x:y' 를 접두사 루트로 오탐하지 않는다.
+
+    코퍼스의 0_telegram 천승세의 포대령.epub 이 이 형태였다(mp3 헤더에 '<' 와 ':' 가 섞여 있었다).
+    """
+    epub = _epub_with_media_spine_item(tmp_path / "audio.epub", "audio/mpeg", "Audio/001.mp3", b"\xff\xfb\x90\x00 <ab:cd garbage")
+    assert inspect_epub_structure(str(epub))["issues"] == []
+
+
+@pytest.mark.parametrize(("media_type", "name"), [("application/xhtml+xml", "c.xhtml"), ("text/html", "c.html"), ("image/svg+xml", "c.svg"), ("application/xml", "c.xml")])
+def test_epub_structure_still_checks_markup_spine_items(tmp_path, media_type, name):
+    epub = _epub_with_media_spine_item(tmp_path / "m.epub", media_type, name, PREFIXED_CHAPTER)
+    assert inspect_epub_structure(str(epub))["issues"] == ["prefixed_root"]
+
+
+def test_epub_structure_falls_back_to_extension_when_media_type_is_missing(tmp_path):
+    epub = _epub_with_media_spine_item(tmp_path / "e.epub", "", "c.xhtml", PREFIXED_CHAPTER)
+    assert inspect_epub_structure(str(epub))["issues"] == ["prefixed_root"]
+
+
 def test_epub_structure_flags_non_zip(tmp_path):
     bad = tmp_path / "bad.epub"
     bad.write_bytes(b"not a zip")
@@ -444,6 +477,71 @@ def test_epub_structure_flags_unusable_container(tmp_path, container):
     assert res["issues"] == ["no_container"]
 
 
+def _corrupt_local_header(path, member):
+    """ZIP 중앙 디렉토리는 그대로 두고 멤버의 로컬 헤더 시그니처만 망가뜨린다(Bad magic number 를 재현)."""
+    with zipfile.ZipFile(path) as zf:
+        offset = zf.getinfo(member).header_offset
+    data = bytearray(path.read_bytes())
+    data[offset : offset + 4] = b"\x00\x00\x00\x00"
+    path.write_bytes(bytes(data))
+
+
+def test_epub_structure_flags_unreadable_opf_not_missing(tmp_path):
+    """OPF 가 ZIP 에 있지만 읽히지 않으면 opf_missing 이 아니라 member_unreadable 이다.
+
+    코퍼스의 Lumineers Songbook 이 이 형태였다. '없음'이라고 보고하면 파일을 고칠 수 있다고 오해한다.
+    """
+    epub = make_epub(tmp_path / "u.epub")
+    _corrupt_local_header(epub, "OEBPS/content.opf")
+    res = inspect_epub_structure(str(epub))
+    assert res["issues"] == ["member_unreadable"]
+    assert res["examples"]["member_unreadable"] == "OEBPS/content.opf"
+
+
+def test_epub_structure_flags_unreadable_container_not_missing(tmp_path):
+    epub = make_epub(tmp_path / "u.epub")
+    _corrupt_local_header(epub, "META-INF/container.xml")
+    res = inspect_epub_structure(str(epub))
+    assert res["issues"] == ["member_unreadable"]
+    assert res["examples"]["member_unreadable"] == "META-INF/container.xml"
+
+
+def test_epub_structure_flags_unreadable_chapter_instead_of_crashing(tmp_path):
+    """본문 멤버의 헤더가 망가져도(Bad magic number / Overlapped entries) 스캔이 죽지 않고 분류한다.
+
+    9_BLGL 의 EPUB 이 zipfile.BadZipFile 로 디렉토리 전체 스캔을 중단시켰다.
+    """
+    epub = make_epub(tmp_path / "c.epub")
+    _corrupt_local_header(epub, "OEBPS/ch 1.xhtml")
+    res = inspect_epub_structure(str(epub))
+    assert res["issues"] == ["member_unreadable"]
+    assert res["examples"]["member_unreadable"] == "OEBPS/ch 1.xhtml"
+
+
+def test_epub_structure_records_unexpected_errors_instead_of_aborting(tmp_path, monkeypatch):
+    """예상 못 한 예외가 나도 그 파일만 scan_error 로 기록하고 다음 파일로 간다."""
+    epub = make_epub(tmp_path / "e.epub")
+
+    def boom(head):
+        raise RuntimeError("예상 못 한 오류")
+
+    monkeypatch.setattr("utils.detect_mojibake._root_tag_name", boom)
+    res = inspect_epub_structure(str(epub))
+    assert res["issues"] == ["scan_error"]
+    assert "RuntimeError" in res["examples"]["scan_error"]
+
+
+def test_scan_epub_structure_survives_a_file_that_breaks_the_inspector(tmp_path):
+    make_epub(tmp_path / "a_ok.epub")
+    bad = make_epub(tmp_path / "b_bad.epub")
+    _corrupt_local_header(bad, "OEBPS/ch 1.xhtml")
+    make_epub(tmp_path / "c_ok.epub", PREFIXED_CHAPTER)
+    report = scan_epub_structure(tmp_path, workers=1)
+    assert report["total"] == 3
+    assert report["counts"]["member_unreadable"] == 1
+    assert report["counts"]["prefixed_root"] == 1
+
+
 def test_epub_structure_flags_missing_opf(tmp_path):
     res = inspect_epub_structure(str(make_epub(tmp_path / "o.epub", opf=None)))
     assert res["issues"] == ["opf_missing"]
@@ -466,9 +564,9 @@ def test_epub_structure_ignores_spine_items_without_manifest_entry(tmp_path):
     assert inspect_epub_structure(str(make_epub(tmp_path / "g.epub", opf=opf)))["issues"] == []
 
 
-def test_epub_structure_ignores_oversized_xml_member(tmp_path):
+def test_epub_structure_flags_oversized_xml_member_as_unreadable(tmp_path):
     big_opf = OPF_XML + " " * (5 * 1024 * 1024)
-    assert inspect_epub_structure(str(make_epub(tmp_path / "b.epub", opf=big_opf)))["issues"] == ["opf_missing"]
+    assert inspect_epub_structure(str(make_epub(tmp_path / "b.epub", opf=big_opf)))["issues"] == ["member_unreadable"]
 
 
 def test_epub_structure_chapter_without_root_tag_is_not_flagged(tmp_path):
