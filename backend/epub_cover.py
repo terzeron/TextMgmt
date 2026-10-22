@@ -173,7 +173,12 @@ def _member_path(base: str, href: str) -> str:
 
 
 def _detach_publisher_cover(archive: zipfile.ZipFile, opf_path: str, package: Any, *, removing: bool = False) -> tuple[set[str], dict[str, bytes]]:
-    """표지 전용 항목을 읽기 순서와 탐색에서 뺀다. 본문과 공유하는 파일은 보존한다."""
+    """표지 전용 항목을 읽기 순서와 탐색에서 뺀다. 본문과 공유하는 파일은 보존한다.
+
+    본문 페이지의 목차 링크(<a href>)가 빠지는 표지 페이지를 가리키면 링크만 걷어 낸 텍스트로 바꾼다.
+    새 표지 페이지로 다시 잇지 않는다. 도구가 넣은 표지는 삭제·교체로 사라지므로 다시 끊어진다.
+    링크 말고 다른 방식의 참조는 지울 수 없어 거부한다.
+    """
     member = BookManager._find_epub_cover_member(archive)
     if not member:
         return set(), {}
@@ -223,11 +228,30 @@ def _detach_publisher_cover(archive: zipfile.ZipFile, opf_path: str, package: An
     shared = any(member in references(name, document, data) for name, (_, document, data) in documents.items() if name not in detached and name != member)
     if shared and removing:
         raise CoverError("표지 이미지가 본문에서도 쓰여 자동으로 삭제할 수 없습니다")
-    # 일반 본문에서 링크한 표지 페이지를 지우면 링크가 깨지므로 저장 전에 거부한다.
+    # 일반 본문의 목차 링크는 다시 잇거나 걷어 내고, 링크가 아닌 참조는 깨지므로 저장 전에 거부한다.
+    relinked: dict[str, bytes] = {}
     for name, (item, document, data) in documents.items():
-        if name not in detached and item.get("media-type") != "application/x-dtbncx+xml" and "nav" not in item.get("properties", "").split():
-            if detached & references(name, document, data):
-                raise CoverError("표지 페이지가 본문에서도 쓰여 자동으로 삭제할 수 없습니다")
+        if name in detached or item.get("media-type") == "application/x-dtbncx+xml" or "nav" in item.get("properties", "").split():
+            continue
+        if not detached & references(name, document, data):
+            continue
+        if document is None:
+            raise CoverError("표지 페이지가 본문에서도 쓰여 자동으로 삭제할 수 없습니다")
+        links = []
+        for element in document.iter():
+            if not isinstance(element.tag, str):
+                continue
+            for attribute, value in element.attrib.items():
+                if _member_path(posixpath.dirname(name), value) in detached:
+                    if etree.QName(element).localname != "a" or attribute != "href":
+                        raise CoverError("표지 페이지가 본문에서도 쓰여 자동으로 삭제할 수 없습니다")
+                    links.append(element)
+        for link in links:
+            namespace = etree.QName(link).namespace
+            link.tag = f"{{{namespace}}}span" if namespace else "span"
+            link.attrib.pop("href", None)
+        if links:
+            relinked[name] = etree.tostring(document, encoding="utf-8", xml_declaration=True)
     removed_ids = set()
     for item in list(manifest):
         if _member_path(base, item.get("href", "")) in detached or (item in images and not shared):
@@ -244,7 +268,7 @@ def _detach_publisher_cover(archive: zipfile.ZipFile, opf_path: str, package: An
             if "cover" in reference.get("type", "").split():
                 guide.remove(reference)
 
-    updates: dict[str, bytes] = {}
+    updates: dict[str, bytes] = dict(relinked)
     for name, (item, document, _) in documents.items():
         is_ncx = item.get("media-type") == "application/x-dtbncx+xml"
         is_nav = "nav" in item.get("properties", "").split()
@@ -394,6 +418,47 @@ def _stage_cover(source: BinaryIO, destination: Path, image: bytes) -> None:
             raise CoverError("저장할 EPUB의 표지 검증에 실패했습니다")
 
 
+def _stage_illustration(source: BinaryIO, destination: Path, image: bytes, before_idref: str, created: dict[str, str]) -> None:
+    """before_idref 항목 바로 앞에 이미지 한 장짜리 도판 페이지를 끼운다. 새 페이지의 idref를 created에 적는다."""
+    source.seek(0)
+    with zipfile.ZipFile(source) as original:
+        opf_path, package = _read_package(original)
+        manifest = package.find(f"{{{OPF_NS}}}manifest")
+        spine = package.find(f"{{{OPF_NS}}}spine")
+        if manifest is None or spine is None:
+            raise CoverError("EPUB manifest 또는 spine이 없습니다")
+        target = next((reference for reference in spine if reference.get("idref") == before_idref), None)
+        if target is None:
+            raise CoverError("삽화를 넣을 위치를 찾을 수 없습니다. 책을 다시 열어 보세요")
+        if before_idref.startswith("tm-cover-page-"):
+            raise CoverError("표지 앞에는 삽화를 넣을 수 없습니다")
+        digest = hashlib.sha256(image).hexdigest()[:16]
+        existing_ids = {item.get("id") for item in manifest}
+        existing_names = set(original.namelist())
+        base = posixpath.dirname(opf_path)
+        # 같은 이미지를 여러 곳에 넣을 수 있도록 겹치면 번호를 붙인다.
+        for serial in range(1, 1000):
+            token = digest if serial == 1 else f"{digest}-{serial}"
+            image_id, page_id = f"tm-plate-{token}", f"tm-plate-page-{token}"
+            image_href, page_href = image_id + ".jpg", page_id + ".xhtml"
+            image_member, page_member = posixpath.join(base, image_href), posixpath.join(base, page_href)
+            if not {image_id, page_id} & existing_ids and not {image_member, page_member} & existing_names:
+                break
+        else:
+            raise CoverError("추가할 삽화 ID를 만들 수 없습니다")
+        etree.SubElement(manifest, f"{{{OPF_NS}}}item", id=image_id, href=image_href, **{"media-type": "image/jpeg"})
+        etree.SubElement(manifest, f"{{{OPF_NS}}}item", id=page_id, href=page_href, **{"media-type": "application/xhtml+xml"})
+        spine.insert(spine.index(target), etree.Element(f"{{{OPF_NS}}}itemref", idref=page_id))
+        _write_epub(original, destination, opf_path, package, set(), {image_member: image, page_member: _illustration_page(image_href)})
+        created["idref"] = page_id
+    with destination.open("rb") as output:
+        os.fsync(output.fileno())
+    with zipfile.ZipFile(destination) as archive:
+        if archive.testzip() is not None:
+            raise CoverError("저장할 EPUB의 검증에 실패했습니다")
+        _read_package(archive)
+
+
 def _stage_cover_removal(source: BinaryIO, destination: Path) -> None:
     source.seek(0)
     with zipfile.ZipFile(source) as original:
@@ -522,3 +587,11 @@ def remove_cover(path: Path, expected_revision: str, backup_dir: Path, *, backup
 
     result = _rewrite_epub(path, expected_revision, backup_dir, backup_name, _stage_cover_removal, require_cover)
     return {**result, "cover_image": None}
+
+
+def add_illustration(path: Path, image: bytes, expected_revision: str, backup_dir: Path, before_idref: str, *, backup_name: str | None = None) -> dict[str, Any]:
+    """before_idref 페이지 앞에 삽화 한 장을 넣는다. 표지는 건드리지 않는다."""
+    image = normalize_image(image, max_width=1200)
+    created: dict[str, str] = {}
+    result = _rewrite_epub(path, expected_revision, backup_dir, backup_name, lambda source, staged: _stage_illustration(source, staged, image, before_idref, created))
+    return {**result, "cover_image": None, "idref": created["idref"]}

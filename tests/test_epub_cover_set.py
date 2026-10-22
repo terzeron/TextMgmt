@@ -394,6 +394,113 @@ async def test_cover_image_already_used_in_the_body_is_not_duplicated_as_an_illu
     assert not [name for name in members(path) if "tm-plate-" in name]
 
 
+async def illustrate(manager, before, url=URL, **kwargs):
+    return await BookManager.insert_epub_illustration(manager, 1, before, url, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_illustration_is_inserted_before_the_chosen_page_without_touching_the_cover(env, tmp_path):
+    manager, path, _ = env
+    make_epub(path, cover=True)
+    await call(manager)
+    cover_before = {n: d for n, d in members(path).items() if n.startswith("OPS/tm-cover-")}
+    original = path.read_bytes()
+
+    result, error = await illustrate(manager, "chapter")
+
+    assert error is None
+    assert result["idref"].startswith("tm-plate-page-")
+    ids = spine_idrefs(path)
+    assert ids[0].startswith("tm-cover-page-") and ids[1].startswith("tm-plate-page-") and ids[-1] == "chapter"
+    assert ids.index(result["idref"]) == ids.index("chapter") - 1
+    after = members(path)
+    assert all(after[name] == data for name, data in cover_before.items())
+    assert inspect_epub(path)["has_cover"]
+    assert after["OPS/chapter.xhtml"] == members_of(original)["OPS/chapter.xhtml"]
+    assert (tmp_path / "0_trash" / "book.epub").exists()
+
+
+def members_of(data):
+    import io
+    import zipfile
+
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        return {name: archive.read(name) for name in archive.namelist()}
+
+
+@pytest.mark.asyncio
+async def test_illustration_goes_in_front_of_a_book_without_a_cover(env):
+    manager, path, _ = env
+
+    _, error = await illustrate(manager, "chapter")
+
+    assert error is None
+    ids = spine_idrefs(path)
+    assert ids[0].startswith("tm-plate-page-") and ids[1] == "chapter"
+    assert not inspect_epub(path)["has_cover"]
+
+
+@pytest.mark.asyncio
+async def test_illustration_before_the_cover_page_is_refused(env):
+    manager, path, _ = env
+    await call(manager)
+    before = path.read_bytes()
+    cover_page = spine_idrefs(path)[0]
+
+    result, error = await illustrate(manager, cover_page)
+
+    assert result is None and "표지 앞" in error
+    assert path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_illustration_at_an_unknown_position_is_refused_and_leaves_the_file_alone(env):
+    manager, path, _ = env
+    before = path.read_bytes()
+
+    result, error = await illustrate(manager, "no-such-page")
+
+    assert result is None and "위치" in error
+    assert path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_the_same_image_can_be_inserted_at_several_places(env):
+    manager, path, _ = env
+    first, _ = await illustrate(manager, "chapter")
+    second, error = await illustrate(manager, "chapter")
+
+    assert error is None
+    assert first["idref"] != second["idref"]
+    ids = spine_idrefs(path)
+    assert ids[:3] == [first["idref"], second["idref"], "chapter"]
+    assert len({n for n in members(path) if n.startswith("OPS/tm-plate-") and n.endswith(".jpg")}) == 2
+
+
+@pytest.mark.asyncio
+async def test_illustration_from_an_uploaded_image_needs_no_download(env, monkeypatch):
+    import base64
+
+    manager, path, _ = env
+    monkeypatch.setattr("backend.cover_management.fetch_url_image", lambda url: (_ for _ in ()).throw(AssertionError("다운로드 금지")))
+
+    _, error = await BookManager.insert_epub_illustration(manager, 1, "chapter", None, base64.b64encode(image_bytes_of("blue")).decode())
+
+    assert error is None
+    assert spine_idrefs(path)[0].startswith("tm-plate-page-")
+
+
+@pytest.mark.asyncio
+async def test_illustration_requires_an_image_source(env):
+    manager, path, _ = env
+    before = path.read_bytes()
+
+    result, error = await BookManager.insert_epub_illustration(manager, 1, "chapter", "  ", None)
+
+    assert result is None and error
+    assert path.read_bytes() == before
+
+
 @pytest.mark.asyncio
 async def test_removes_a_publisher_cover_and_preserves_the_original_backup(env, tmp_path):
     manager, path, _ = env
@@ -513,6 +620,43 @@ async def test_removed_cover_does_not_promote_the_next_image_only_page(env):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["remove", "replace"])
+async def test_body_toc_link_to_the_cover_page_is_unlinked_instead_of_blocking_the_edit(env, action):
+    """본문 안의 목차 페이지가 표지 페이지로 링크해도 편집을 막지 않는다. 링크만 걷어 낸다."""
+    manager, path, _ = env
+    make_epub(path, cover=True)
+    attach_publisher_cover_page(path)
+    page = b'<html xmlns="http://www.w3.org/1999/xhtml"><body><p><a class="toc-link" href="Text/front.xhtml">\xed\x91\x9c\xec\xa7\x80</a></p><a href="chapter2.xhtml">Next</a></body></html>'
+    rewrite_epub_members(path, lambda files: files.update({"OPS/chapter.xhtml": page}))
+
+    _, error = await (remove(manager) if action == "remove" else call(manager))
+
+    assert error is None
+    body = members(path)["OPS/chapter.xhtml"].decode()
+    assert 'href="Text/front.xhtml"' not in body
+    assert '<span class="toc-link">' in body
+    assert 'href="chapter2.xhtml"' in body  # 다른 링크는 그대로
+    assert "OPS/Text/front.xhtml" not in members(path)
+    assert inspect_epub(path)["has_cover"] is (action == "replace")
+
+
+@pytest.mark.asyncio
+async def test_non_link_reference_to_the_cover_page_still_blocks_the_edit(env):
+    """링크가 아닌 참조(iframe 등)는 걷어 낼 수 없어 편집을 거부하고 파일을 그대로 둔다."""
+    manager, path, _ = env
+    make_epub(path, cover=True)
+    attach_publisher_cover_page(path)
+    page = b'<html xmlns="http://www.w3.org/1999/xhtml"><body><iframe src="Text/front.xhtml"></iframe></body></html>'
+    rewrite_epub_members(path, lambda files: files.update({"OPS/chapter.xhtml": page}))
+    before = path.read_bytes()
+
+    result, error = await call(manager)
+
+    assert result is None and "본문" in error
+    assert path.read_bytes() == before
+
+
+@pytest.mark.asyncio
 async def test_removal_preserves_a_cover_image_used_in_a_chapter(env, tmp_path):
     manager, path, _ = env
     make_epub(path, cover=True)
@@ -576,6 +720,7 @@ class TestEpubCoverEndpoint:
         fake = MagicMock()
         fake.set_epub_cover = AsyncMock(return_value=({"file_size": 10}, None))
         fake.remove_epub_cover = AsyncMock(return_value=({"file_size": 9}, None))
+        fake.insert_epub_illustration = AsyncMock(return_value=({"idref": "tm-plate-page-x"}, None))
         proxy = main.book_manager
         previous = proxy._instance
         proxy._instance = fake
@@ -618,6 +763,34 @@ class TestEpubCoverEndpoint:
         import backend.main as main
 
         response = TestClient(main.app).post("/comics/epub-cover/1", json={"url": URL})
+        assert response.status_code in (401, 403)
+
+    def test_illustration_success(self, client):
+        http, fake = client
+        response = http.post("/epub-illustration/1", json={"url": URL, "before_idref": "chapter"})
+        assert response.status_code == 200
+        assert response.json() == {"status": "success", "result": {"idref": "tm-plate-page-x"}}
+        fake.insert_epub_illustration.assert_awaited_once_with(1, "chapter", URL, None)
+
+    def test_illustration_failure_is_reported_in_the_body(self, client):
+        http, fake = client
+        fake.insert_epub_illustration.return_value = (None, "삽화를 넣을 위치를 찾을 수 없습니다")
+        body = http.post("/epub-illustration/1", json={"url": URL, "before_idref": "nope"}).json()
+        assert body == {"status": "failure", "error": "삽화를 넣을 위치를 찾을 수 없습니다"}
+
+    def test_illustration_needs_a_position_and_exactly_one_image_source(self, client):
+        http, _ = client
+        assert http.post("/epub-illustration/1", json={"url": URL}).status_code == 422
+        assert http.post("/epub-illustration/1", json={"url": URL, "before_idref": ""}).status_code == 422
+        assert http.post("/epub-illustration/1", json={"before_idref": "chapter"}).status_code == 422
+        assert http.post("/epub-illustration/1", json={"url": URL, "image_data": "QQ==", "before_idref": "chapter"}).status_code == 422
+
+    def test_illustration_requires_admin(self):
+        from fastapi.testclient import TestClient
+
+        import backend.main as main
+
+        response = TestClient(main.app).post("/epub-illustration/1", json={"url": URL, "before_idref": "chapter"})
         assert response.status_code in (401, 403)
 
     def test_delete_success(self, client):

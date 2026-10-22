@@ -3143,6 +3143,16 @@ class BookManager:
             return None, "이미지 URL이 비어 있습니다"
         return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.apply_url(relative, url, revision, replace_existing=True, **backup))
 
+    async def insert_epub_illustration(self, book_id: int, before_idref: str, url: str | None = None, image_data: str | None = None) -> tuple[dict[str, Any] | None, str | None]:
+        """EPUB 의 before_idref 페이지 앞에 삽화를 넣는다: (결과, 오류 메시지). 표지는 바꾸지 않는다.
+
+        이미지는 URL(url) 또는 올린 이미지(image_data, base64)다. 저장 절차는 표지와 같다(백업·색인 갱신·캐시 무효화).
+        """
+        url = (url or "").strip()
+        if not image_data and not url:
+            return None, "이미지 URL이 비어 있습니다"
+        return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.insert_illustration(relative, revision, before_idref, url=url, image_data=image_data, **backup))
+
     async def remove_epub_cover(self, book_id: int) -> tuple[dict[str, Any] | None, str | None]:
         """EPUB 표지를 읽기 순서에서 뺀다: (결과, 오류 메시지). 본문과 공유하는 이미지는 보존한다."""
         return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.remove(relative, revision, **backup))

@@ -35,6 +35,7 @@ let failEveryDisplay = false;
 let failDisplayError = null;
 let omitCoverUrl = false;
 let firstSpineIdref = "";
+let spineGetter = null;
 let deferGenerate = false;
 let resolveGenerate = null;
 
@@ -145,6 +146,7 @@ function createMockBook() {
   };
   book.spine.hooks = { content: { register: vi.fn() } };
   if (firstSpineIdref) book.spine.get = vi.fn(() => ({ idref: firstSpineIdref }));
+  if (spineGetter) book.spine.get = vi.fn(spineGetter);
   if (omitCoverUrl) delete book.coverUrl;
   return book;
 }
@@ -187,6 +189,25 @@ vi.mock("../src/EpubCoverModal", () => ({
           파일 표시
         </button>
         <button onClick={onClose}>모달 닫기</button>
+        {message && <span>{message}</span>}
+      </div>
+    );
+  },
+}));
+
+vi.mock("../src/EpubIllustrationModal", () => ({
+  default: function EpubIllustrationModalStub({ initialUrl, onSubmit, onClose }) {
+    const [message, setMessage] = React.useState("");
+    return (
+      <div data-testid="illustration-modal" data-initial-url={initialUrl || ""}>
+        <button
+          onClick={async () =>
+            setMessage((await onSubmit("https://img.example.com/i.jpg")) || "")
+          }
+        >
+          삽화 표시
+        </button>
+        <button onClick={onClose}>삽화 모달 닫기</button>
         {message && <span>{message}</span>}
       </div>
     );
@@ -302,6 +323,7 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     failDisplayError = null;
     omitCoverUrl = false;
     firstSpineIdref = "";
+    spineGetter = null;
     deferGenerate = false;
     resolveGenerate = null;
     localStorageMock.clear();
@@ -1721,6 +1743,164 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
           globalThis.fetch.mock.calls.filter(([u]) => u.includes("/preview/7")).length,
         ).toBe(before + 1),
       );
+    });
+
+    describe("이 쪽 앞에 삽화 삽입", () => {
+      const ILLUSTRATION_URL = "http://localhost:8000/epub-illustration/7";
+      const sectionsByIndex = (target) => {
+        if (typeof target === "number") {
+          return { idref: `s${target}`, href: `OEBPS/Text/section${target}.html` };
+        }
+        if (typeof target === "string" && target.startsWith("#")) {
+          return { idref: target.slice(1), href: "OEBPS/tm-plate-page-new.xhtml" };
+        }
+        return null;
+      };
+      const relocateTo = async (index) => {
+        await act(async () => {
+          lastRendition._emit("relocated", {
+            start: { index, cfi: `epubcfi(/6/${index * 2 + 2})` },
+          });
+        });
+      };
+      const respondIllustration = ({ preview, save } = {}) => {
+        const base = globalThis.fetch.getMockImplementation();
+        globalThis.fetch.mockImplementation((url, init) => {
+          if (url === PREVIEW_URL && preview) return Promise.resolve(preview);
+          if (url === ILLUSTRATION_URL && save) return Promise.resolve(save);
+          // 같은 ArrayBuffer 를 다시 주면 React 가 변경으로 보지 않아 책이 다시 열리지 않는다. 실제 응답은 매번 새 버퍼다.
+          if (String(url).includes("/preview/")) {
+            return Promise.resolve(base(url, init)).then((response) => ({
+              ...response,
+              arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+            }));
+          }
+          return base(url, init);
+        });
+      };
+      async function openWithPendingIllustration() {
+        spineGetter = sectionsByIndex;
+        render(<ViewEPUB bookId={7} preview editable />);
+        await openBook();
+        await relocateTo(3);
+        fireEvent.click(screen.getByRole("button", { name: "이 쪽 앞에 삽화 삽입" }));
+        fireEvent.click(screen.getByText("삽화 표시"));
+        await screen.findByTestId("epub-cover-pending");
+      }
+
+      it("위치를 알 수 없으면 버튼을 그리지 않는다", async () => {
+        spineGetter = sectionsByIndex;
+        render(<ViewEPUB bookId={7} preview editable />);
+        await openBook();
+
+        expect(screen.queryByRole("button", { name: "이 쪽 앞에 삽화 삽입" })).toBeNull();
+      });
+
+      it("editable 이 아니면 버튼을 그리지 않는다", async () => {
+        spineGetter = sectionsByIndex;
+        render(<ViewEPUB bookId={7} preview />);
+        await openBook();
+        await relocateTo(3);
+
+        expect(screen.queryByRole("button", { name: "이 쪽 앞에 삽화 삽입" })).toBeNull();
+      });
+
+      it("본문 쪽에서는 표지 버튼 없이 삽화 버튼만 보인다", async () => {
+        spineGetter = sectionsByIndex;
+        mockCoverUrl = "blob:epub-cover";
+        render(<ViewEPUB bookId={7} preview editable />);
+        await openBook();
+        // 표지 오버레이를 먼저 넘기면 본문 쪽이 된다.
+        fireEvent.click(screen.getByRole("button", { name: "다음 페이지" }));
+        await relocateTo(3);
+
+        expect(screen.getByRole("button", { name: "이 쪽 앞에 삽화 삽입" })).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "표지 이미지 교체" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "표지 삭제 표시" })).toBeNull();
+      });
+
+      it("도구가 넣은 표지 페이지 앞에는 삽화 버튼을 그리지 않는다", async () => {
+        spineGetter = () => ({ idref: "tm-cover-page-5a991dcf381ed4bf", href: "c.xhtml" });
+        render(<ViewEPUB bookId={7} preview editable />);
+        await openBook();
+        await relocateTo(0);
+
+        expect(screen.queryByRole("button", { name: "이 쪽 앞에 삽화 삽입" })).toBeNull();
+      });
+
+      it("표시하면 보던 쪽 앞에 넣을 삽화로 미리 보여 준다", async () => {
+        respondIllustration({ preview: blobResponse() });
+        await openWithPendingIllustration();
+
+        expect(screen.getByRole("img", { name: "저장 전 새 삽화" })).toBeTruthy();
+        expect(screen.getByText("새 삽화 · 저장 전 · 보던 쪽 앞에 삽입")).toBeTruthy();
+        expect(globalThis.fetch.mock.calls.some(([u]) => u === ILLUSTRATION_URL)).toBe(false);
+      });
+
+      it("저장하면 epub-illustration 에 위치와 이미지를 보내고 새 삽화로 이동한다", async () => {
+        respondIllustration({
+          preview: blobResponse(),
+          save: jsonResponse({ status: "success", result: { idref: "tm-plate-page-new" } }),
+        });
+        const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+        await openWithPendingIllustration();
+
+        fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+        await waitFor(() => expect(screen.queryByTestId("epub-cover-pending")).toBeNull());
+        expect(confirm.mock.calls[0][0]).toBe(
+          "삽화 삽입를 저장합니다. 원본은 0_trash에 보존됩니다. 저장할까요?",
+        );
+        const save = globalThis.fetch.mock.calls.find(([u]) => u === ILLUSTRATION_URL);
+        expect(save[1].method).toBe("POST");
+        expect(JSON.parse(save[1].body)).toEqual({
+          url: "https://img.example.com/i.jpg",
+          before_idref: "s3",
+        });
+        // 다시 열린 책은 저장된 읽기 위치 대신 새 삽화 쪽으로 간다.
+        await waitFor(() =>
+          expect(lastRendition.display).toHaveBeenCalledWith("OEBPS/tm-plate-page-new.xhtml"),
+        )
+      });
+
+      it("저장 실패는 화면에 알리고 표시를 남긴다", async () => {
+        respondIllustration({
+          preview: blobResponse(),
+          save: jsonResponse({ status: "failure", error: "삽화를 넣을 위치를 찾을 수 없습니다" }),
+        });
+        vi.spyOn(window, "confirm").mockReturnValue(true);
+        await openWithPendingIllustration();
+
+        fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+        expect(await screen.findByText("삽화를 넣을 위치를 찾을 수 없습니다")).toBeTruthy();
+        expect(screen.getByTestId("epub-cover-pending")).toBeTruthy();
+      });
+
+      it("취소하면 표시와 미리보기를 지운다", async () => {
+        respondIllustration({ preview: blobResponse() });
+        await openWithPendingIllustration();
+
+        fireEvent.click(screen.getByRole("button", { name: "삽화 삽입 취소" }));
+
+        expect(screen.queryByTestId("epub-cover-pending")).toBeNull();
+        expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith("blob:new-cover");
+      });
+
+      it("미리보기가 실패하면 모달에 사유를 돌려주고 표시하지 않는다", async () => {
+        respondIllustration({ preview: textResponse(400, "내부 주소의 이미지는 사용할 수 없습니다") });
+        spineGetter = sectionsByIndex;
+        render(<ViewEPUB bookId={7} preview editable />);
+        await openBook();
+        await relocateTo(2);
+        fireEvent.click(screen.getByRole("button", { name: "이 쪽 앞에 삽화 삽입" }));
+        fireEvent.click(screen.getByText("삽화 표시"));
+
+        expect(await screen.findByText("내부 주소의 이미지는 사용할 수 없습니다")).toBeTruthy();
+        expect(screen.queryByTestId("epub-cover-pending")).toBeNull();
+        fireEvent.click(screen.getByText("삽화 모달 닫기"));
+        expect(screen.queryByTestId("illustration-modal")).toBeNull();
+      });
     });
 
     describe("이 기기의 이미지", () => {

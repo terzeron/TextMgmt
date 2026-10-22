@@ -468,6 +468,10 @@ class EpubCoverModel(ImageSourceModel):
     pass
 
 
+class EpubIllustrationModel(ImageSourceModel):
+    before_idref: str = Field(min_length=1, max_length=256)  # 이 spine 항목 앞에 삽화를 넣는다
+
+
 class PdfDeletePagesModel(BaseModel):
     pages: list[int] = []
     crops: list[PdfCropModel] = []
@@ -745,6 +749,14 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     async def set_epub_cover(book_id: int, body: EpubCoverModel) -> dict[str, Any]:
         LOGGER.debug("# set_epub_cover(book_id=%d, url=%r)", book_id, body.url or "<upload>")
         result, error = await manager.set_epub_cover(book_id, body.url, body.image_data)
+        if error is None:
+            return {"status": "success", "result": result}
+        return {"status": "failure", "error": error}
+
+    @router.post("/epub-illustration/{book_id}", dependencies=admin_dep)
+    async def insert_epub_illustration(book_id: int, body: EpubIllustrationModel) -> dict[str, Any]:
+        LOGGER.debug("# insert_epub_illustration(book_id=%d, before=%r, url=%r)", book_id, body.before_idref, body.url or "<upload>")
+        result, error = await manager.insert_epub_illustration(book_id, body.before_idref, body.url, body.image_data)
         if error is None:
             return {"status": "success", "result": result}
         return {"status": "failure", "error": error}
