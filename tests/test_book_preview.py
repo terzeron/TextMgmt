@@ -937,6 +937,146 @@ class TestEpubErrorRecovery:
             _cleanup_book(client, bm, book_id, epub_path)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "package_open",
+        [
+            '<package\n    xmlns="http://www.idpf.org/2007/opf" version="2.0">',
+            '<package xmlns="http://www.idpf.org/2007/opf" version="2.0">',
+        ],
+    )
+    async def test_preview_opf_is_strictly_parsable_for_other_unbound_prefixes(self, backend_test_setup, package_open):
+        """<package 뒤가 개행이거나 opf: 외의 접두사(xsi:)가 미선언이어도 브라우저가 파싱할 수 있는 OPF를 낸다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_path = bm.path_prefix / CATEGORY / "[Test Author] Other Unbound Prefix.epub"
+        _create_epub_with_unbound_prefix(epub_path)
+        with zipfile.ZipFile(str(epub_path)) as zf:
+            members = {n: zf.read(n) for n in zf.namelist()}
+        opf = members["OEBPS/content.opf"].decode().replace('<package xmlns="http://www.idpf.org/2007/opf" version="2.0">', package_open)
+        members["OEBPS/content.opf"] = opf.replace('opf:role="aut"', 'opf:role="aut" xsi:type="x"').encode()
+        with zipfile.ZipFile(str(epub_path), "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("mimetype", members.pop("mimetype"), compress_type=zipfile.ZIP_STORED)
+            for name, data in members.items():
+                zf.writestr(name, data)
+
+        book_id = await _register_epub_async(bm, epub_path)
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=0")
+            assert response.status_code == 200, response.text
+            with _parse_epub_zip(response.content) as zf:
+                ET.fromstring(zf.read("OEBPS/content.opf"))  # 엄격 XML 파서(브라우저와 같은 기준)
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("layout", ["compressed", "directory_first", "compressed_not_first"])
+    async def test_preview_normalizes_nonstandard_mimetype_layout(self, backend_test_setup, layout):
+        """mimetype 이 압축됐거나 맨 앞이 아닌 원본도 미리보기는 표준 배치(맨 앞·무압축)로 내보낸다.
+
+        코퍼스의 을유세계문학전집 86건이 이 형태였고, 뷰어는 이 정규화에 기대어 정상 동작한다.
+        """
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_path = bm.path_prefix / CATEGORY / f"[Test Author] Mimetype {layout}.epub"
+        epub_path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(str(epub_path), "w", zipfile.ZIP_DEFLATED) as zf:
+            if layout == "directory_first":
+                zf.writestr(zipfile.ZipInfo("META-INF/"), b"")
+                zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            elif layout == "compressed":
+                zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_DEFLATED)
+            zf.writestr("META-INF/container.xml", CONTAINER_XML)
+            zf.writestr("OEBPS/content.opf", _make_opf(2))
+            zf.writestr("OEBPS/toc.ncx", "<ncx/>")
+            zf.writestr("OEBPS/ch1.xhtml", _make_chapter_xhtml(1))
+            zf.writestr("OEBPS/ch2.xhtml", _make_chapter_xhtml(2))
+            if layout == "compressed_not_first":
+                zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_DEFLATED)
+
+        book_id = await _register_epub_async(bm, epub_path)
+        try:
+            response = client.get(f"/preview/{book_id}?chapters=0")
+            assert response.status_code == 200, response.text
+            with _parse_epub_zip(response.content) as zf:
+                first = zf.infolist()[0]
+                assert (first.filename, first.compress_type) == ("mimetype", zipfile.ZIP_STORED)
+                assert zf.read("mimetype") == b"application/epub+zip"
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("chapters", [0, 10])
+    async def test_preview_drops_dead_ncx_entries_and_counts_only_existing_chapters(self, backend_test_setup, chapters):
+        """spine·manifest·NCX 가 ZIP 에 없는 문서를 가리켜도 목차에 죽은 링크를 남기지 않고 챕터 수를 부풀리지 않는다."""
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_path = bm.path_prefix / CATEGORY / "[Test Author] Dead Spine Page.epub"
+        epub_path.parent.mkdir(parents=True, exist_ok=True)
+        ncx = (
+            '<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap>'
+            '<navPoint id="n1"><navLabel><text>1</text></navLabel><content src="ch1.xhtml"/></navPoint>'
+            '<navPoint id="n2"><navLabel><text>판권</text></navLabel><content src="colophon.xhtml"/></navPoint>'
+            "</navMap></ncx>"
+        )
+        opf = _make_opf(1).replace('<itemref idref="ch1"/>', '<itemref idref="ch1"/><itemref idref="colophon"/>').replace("</manifest>", '<item id="colophon" href="colophon.xhtml" media-type="application/xhtml+xml"/></manifest>')
+        with zipfile.ZipFile(str(epub_path), "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            zf.writestr("META-INF/container.xml", CONTAINER_XML)
+            zf.writestr("OEBPS/content.opf", opf)
+            zf.writestr("OEBPS/toc.ncx", ncx)
+            zf.writestr("OEBPS/ch1.xhtml", _make_chapter_xhtml(1))
+
+        book_id = await _register_epub_async(bm, epub_path)
+        try:
+            response = client.get(f"/preview/{book_id}?chapters={chapters}")
+            assert response.status_code == 200, response.text
+            assert response.headers.get("x-total-chapters") == "1"
+            with _parse_epub_zip(response.content) as zf:
+                assert b"colophon" not in zf.read("OEBPS/toc.ncx")
+                assert b"colophon" not in zf.read("OEBPS/content.opf")
+                assert b"ch1.xhtml" in zf.read("OEBPS/toc.ncx")
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("chapters", [0, 10])
+    async def test_preview_of_truncated_download_is_a_clear_422(self, backend_test_setup, chapters):
+        """다운로드가 중단돼 끝 디렉토리(EOCD)가 없는 ZIP 은 500 이 아니라 원인을 알 수 있는 422 로 답한다.
+
+        코퍼스의 죄와 벌 (하).epub 이 128KiB 에서 잘린 이 형태였다.
+        """
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_path = bm.path_prefix / CATEGORY / "[Test Author] Truncated Download.epub"
+        _create_epub_with_unbound_prefix(epub_path)
+        epub_path.write_bytes(epub_path.read_bytes()[:-120])  # EOCD 와 중앙 디렉토리를 잘라 낸다
+
+        book_id = await _register_epub_async(bm, epub_path)
+        try:
+            response = client.get(f"/preview/{book_id}?chapters={chapters}")
+            assert response.status_code == 422, response.text
+            assert "corrupted or not a valid ZIP" in response.text
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
+    async def test_total_chapters_of_truncated_download_is_zero(self, backend_test_setup):
+        from backend.book_manager import BookManager
+
+        bm = backend_test_setup["bm"]
+        epub_path = bm.path_prefix / CATEGORY / "[Test Author] Truncated Count.epub"
+        _create_epub_with_unbound_prefix(epub_path)
+        epub_path.write_bytes(epub_path.read_bytes()[:-120])
+        try:
+            assert BookManager._get_epub_total_chapters(epub_path) == 0
+        finally:
+            epub_path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
     async def test_total_chapters_unbound_prefix(self, backend_test_setup):
         """OPF에 선언되지 않은 프리픽스가 있어도 총 챕터 수가 올바르게 반환된다."""
         from backend.book_manager import BookManager
