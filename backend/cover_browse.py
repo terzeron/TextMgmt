@@ -99,8 +99,6 @@ def plan_cover_scope(category_stats: dict[str, CategoryStat], scope: str = "", h
                 file_categories.append(category)
                 continue
             key = name = category.split("/")[0]
-        if category_matches(key, hidden):
-            continue
         known = groups.get(key)
         groups[key] = CoverGroup(name, key, _later(known.updated if known else None, updated), _later(known.created if known else None, created))
     return file_categories, sorted(groups.values(), key=lambda group: group.rank)
