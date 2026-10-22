@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+from bs4 import BeautifulSoup
+
 # loader.py가 import 시점에 환경 변수와 외부 모듈을 요구하므로 사전 설정
 os.environ.setdefault("TM_BOOK_DIR", str(Path(__file__).parent.parent / "tests" / "books"))
 os.environ.setdefault("TM_COMICS_DIR", str(Path(__file__).parent.parent / "tests" / "comics"))
@@ -2067,6 +2070,62 @@ class TestReadFromDocx:
         assert line_count >= 2
 
 
+def _reference_count_epub_lines(soup):
+    """트리를 직접 고치던 이전 구현. 한 번 훑는 구현이 같은 값을 내는지 대조하는 기준이다."""
+    body = soup.body or soup
+    for tag in body.find_all(["head", "script", "style", "template"]):
+        tag.decompose()
+    for text in list(body.strings):
+        if text.find_parent("pre") is None:
+            text.replace_with(re.sub(r"\s+", " ", text))
+    block_tags = ["address", "article", "aside", "blockquote", "br", "caption", "dd", "div", "dl", "dt", "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul"]
+    for tag in body.find_all(block_tags):
+        tag.insert_before("\n")
+        tag.insert_after("\n")
+    return sum(bool(line.strip()) for line in body.get_text().splitlines())
+
+
+class TestCountEpubLines:
+    HTML_CASES = {
+        "paragraphs": "<html><body><p>a</p><p>b</p><p>  </p></body></html>",
+        "br_splits_line": "<html><body><p>a<br/>b<br/><br/>c</p></body></html>",
+        "inline_does_not_split": "<html><body><p>a<span>b</span><em>c</em> d</p></body></html>",
+        "pre_keeps_newlines": "<html><body><pre>x\n\ny\n  z</pre><p>after</p></body></html>",
+        "nested_pre_inline": "<html><body><pre>l1\n<b>l2\nl3</b></pre></body></html>",
+        "pre_nested_block": "<html><body><div><pre>a\nb</pre><div>c</div></div></body></html>",
+        "skipped_tags": "<html><head><title>t</title></head><body><script>var a=1;\nb()</script><style>p{}\n</style><p>x</p><template><p>y</p></template></body></html>",
+        "comment_ignored": "<html><body><p>a<!-- c\nd --></p><!-- e --></body></html>",
+        "ruby_annotation": "<html><body><p><ruby>漢<rt>han</rt><rp>(</rp></ruby>字</p></body></html>",
+        "whitespace_collapse": "<html><body><p>a\n\n  b\t\tc  d</p></body></html>",
+        "table_list": "<html><body><table><tr><td>a</td><td>b</td></tr></table><ul><li>1</li><li>2</li></ul></body></html>",
+        "text_directly_in_body": "<html><body>a\nb<div>c</div>d</body></html>",
+        "empty_body": "<html><body></body></html>",
+        "no_body_fragment": "<p>a</p><p>b</p>",
+        "cdata_like": "<html><body><p>a</p><![CDATA[x\ny]]></body></html>",
+    }
+
+    @pytest.mark.parametrize("name", sorted(HTML_CASES))
+    def test_matches_reference_implementation(self, name):
+        Loader = _get_loader()
+        html = self.HTML_CASES[name]
+        expected = _reference_count_epub_lines(BeautifulSoup(html, "lxml"))
+        assert Loader._count_epub_lines(BeautifulSoup(html, "lxml")) == expected
+
+    def test_known_counts(self):
+        Loader = _get_loader()
+        assert Loader._count_epub_lines(BeautifulSoup("<body><p>a</p><p>b</p><p> </p></body>", "lxml")) == 2
+        assert Loader._count_epub_lines(BeautifulSoup("<body><p>a<br/>b</p></body>", "lxml")) == 2
+        assert Loader._count_epub_lines(BeautifulSoup("<body><pre>x\n\ny</pre></body>", "lxml")) == 2
+        assert Loader._count_epub_lines(BeautifulSoup("<body><script>a\nb</script></body>", "lxml")) == 0
+
+    def test_does_not_mutate_soup(self):
+        Loader = _get_loader()
+        soup = BeautifulSoup("<html><head><title>t</title></head><body><script>s</script><p>a  b</p></body></html>", "lxml")
+        before = str(soup)
+        Loader._count_epub_lines(soup)
+        assert str(soup) == before
+
+
 class TestReadFromEpubFull:
     def test_read_epub_ebooklib_success_path(self, monkeypatch):
         Loader = _get_loader()
@@ -2094,6 +2153,58 @@ class TestReadFromEpubFull:
         assert "테스트 저자" in summary
         assert line_count >= 1
         assert page_count == 0
+
+    @staticmethod
+    def _read_epub_with_chapters(monkeypatch, chapters):
+        """chapters: ebooklib처럼 bytes로 돌려줄 챕터 본문 목록."""
+        import ebooklib
+
+        class FakeDoc:
+            def __init__(self, body):
+                self.body = body
+                self.content = body
+
+            def get_body_content(self):
+                return self.body
+
+        class FakeBook:
+            def get_metadata(self, namespace, key):
+                return []
+
+            def get_items_of_type(self, item_type):
+                assert item_type == ebooklib.ITEM_DOCUMENT
+                return [FakeDoc(c) for c in chapters]
+
+        monkeypatch.setattr("utils.loader.epub.read_epub", lambda _path: FakeBook())
+        return _get_loader().read_from_epub(Path("dummy.epub"))
+
+    def test_read_epub_short_utf8_chapter_bytes_not_misdetected(self, monkeypatch):
+        """짧은 UTF-8 bytes 챕터를 chardet이 Windows-1252로 오판하면 '부'가 '€'로 깨진다."""
+        body = '<body xml:lang="ko">\n  <h1>1부</h1>\n\n  <div class="img_center"><img src="a.png"/></div>\n</body>'.encode("utf-8")
+        summary, line_count, page_count = self._read_epub_with_chapters(monkeypatch, [body])
+        assert "1부" in summary
+        assert "€" not in summary
+        assert line_count == 1
+
+    def test_read_epub_nbsp_only_paragraph_is_not_counted_as_mojibake_line(self, monkeypatch):
+        """NBSP만 있는 문단이 'Â'로 오판되어 행으로 세어지면 안 된다."""
+        body = '<body class="x">\n<p class="y"><img src="a.png"/></p>\n<p> </p>\n</body>'.encode("utf-8")
+        _, line_count, _ = self._read_epub_with_chapters(monkeypatch, [body])
+        assert line_count == 0
+
+    def test_read_epub_utf8_bom_chapter_bytes(self, monkeypatch):
+        """BOM이 있는 bytes 챕터도 BOM 글자가 본문에 남지 않는다."""
+        body = b"\xef\xbb\xbf" + "<body><p>본문</p></body>".encode("utf-8")
+        summary, line_count, _ = self._read_epub_with_chapters(monkeypatch, [body])
+        assert summary.strip() == "본문"
+        assert line_count == 1
+
+    def test_read_epub_non_utf8_chapter_bytes_still_parsed(self, monkeypatch):
+        """UTF-8이 아닌 bytes 챕터는 디코딩에 실패해도 bs4의 인코딩 감지로 읽는다."""
+        body = "<body><p>한글 본문 줄입니다 가나다라</p></body>".encode("cp949")
+        summary, line_count, _ = self._read_epub_with_chapters(monkeypatch, [body])
+        assert "한글 본문" in summary
+        assert line_count == 1
 
     def test_read_epub_with_ebooklib(self, tmp_path: Path):
         """read_from_epub using ebooklib or fallback"""
@@ -4511,12 +4622,7 @@ class TestLoaderMainBranches:
         monkeypatch.setattr("sys.argv", ["loader", "--reload", "book", str(file_path)])
         from utils.loader import main
 
-        stored_metadata = {
-            inode: {
-                "created_time": "2020-01-01T00:00:00",
-                "created_time_source": "statx_btime",
-            }
-        }
+        stored_metadata = {inode: {"created_time": "2020-01-01T00:00:00", "created_time_source": "statx_btime"}}
         inserted_data = {}
 
         def capture_insert(data):
@@ -4563,6 +4669,12 @@ class TestLoaderMainBranches:
         """파일 mtime이 저장된 updated_time보다 오래되면 재적재해도 updated_time을 유지한다."""
         doc = self._run_reload_with_stored_updated_time(monkeypatch, tmp_path, "2021-02-03T04:05:06", datetime(2020, 1, 1).timestamp())
         assert doc["updated_time"] == "2021-02-03T04:05:06"
+
+    def test_reload_ignores_unparsable_stored_updated_time(self, monkeypatch, tmp_path):
+        """저장된 updated_time이 ISO 형식이 아니면 예외 없이 새 값으로 적재한다."""
+        doc = self._run_reload_with_stored_updated_time(monkeypatch, tmp_path, "not-a-date", datetime(2020, 1, 1).timestamp())
+        assert doc["updated_time"] != "not-a-date"
+        assert doc["created_time"] == "2020-01-01T00:00:00"
 
     def test_reload_refreshes_updated_time_when_file_modified(self, monkeypatch, tmp_path):
         """파일 mtime이 저장된 updated_time보다 새로우면 updated_time을 갱신한다."""

@@ -25,7 +25,7 @@ from ebooklib import epub
 import pypdf
 from docx import Document
 from striprtf.striprtf import rtf_to_text
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 import chardet
 
 from backend.classifier.reader import read_epub_publisher
@@ -400,24 +400,41 @@ class Loader:
 
         return data, line_count, 0, raw_content
 
+    EPUB_BLOCK_TAGS = frozenset(["address", "article", "aside", "blockquote", "br", "caption", "dd", "div", "dl", "dt", "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul"])
+    EPUB_SKIPPED_TAGS = frozenset(["head", "script", "style", "template"])
+
     @staticmethod
     def _count_epub_lines(soup: BeautifulSoup) -> int:
         """문단과 명시적 줄바꿈으로 행을 세고 소스 포맷·빈 행은 제외한다.
 
-        summary를 추출한 뒤 호출한다. 전달받은 soup는 집계를 위해 변경한다.
-        pre 안의 줄바꿈은 본문이므로 유지한다.
+        pre 안의 줄바꿈은 본문이므로 유지한다. soup는 변경하지 않는다.
+        트리를 직접 고치면 태그마다 삽입·탐색 비용이 들어 EPUB 적재의 두 번째 병목이 되므로
+        문서 순서로 한 번 훑으며 텍스트 조각을 모은다.
         """
         body = soup.body or soup
-        for tag in body.find_all(["head", "script", "style", "template"]):
-            tag.decompose()
-        for text in list(body.strings):
-            if text.find_parent("pre") is None:
-                text.replace_with(re.sub(r"\s+", " ", text))
-        block_tags = ["address", "article", "aside", "blockquote", "br", "caption", "dd", "div", "dl", "dt", "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul"]
-        for tag in body.find_all(block_tags):
-            tag.insert_before("\n")
-            tag.insert_after("\n")
-        return sum(bool(line.strip()) for line in body.get_text().splitlines())
+        text_types: Any = body.interesting_string_types
+        parts: list[str] = []
+        # (자식 iterator, 닫을 때 줄바꿈을 붙일지, pre 안인지)
+        stack: list[tuple[Any, bool, bool]] = [(iter(body.contents), False, False)]
+        while stack:
+            children, is_block, in_pre = stack[-1]
+            for child in children:
+                if isinstance(child, Tag):
+                    if child.name in Loader.EPUB_SKIPPED_TAGS:
+                        continue
+                    child_is_block = child.name in Loader.EPUB_BLOCK_TAGS
+                    if child_is_block:
+                        parts.append("\n")
+                    stack.append((iter(child.contents), child_is_block, in_pre or child.name == "pre"))
+                    break
+                if type(child) in text_types:
+                    text = str(child)
+                    parts.append(text if in_pre else re.sub(r"\s+", " ", text))
+            else:
+                stack.pop()
+                if is_block:
+                    parts.append("\n")
+        return sum(bool(line.strip()) for line in "".join(parts).splitlines())
 
     @staticmethod
     def read_from_epub_with_extracting_zip(file_path: Path) -> tuple[str, int]:
@@ -482,7 +499,15 @@ class Loader:
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
                     # ebooklib 0.19는 자식 태그 없는 body를 빈 문자열로 반환한다.
-                    soup = BeautifulSoup(doc.get_body_content() or doc.content, "lxml")
+                    markup = doc.get_body_content() or doc.content
+                    # bytes를 그대로 넘기면 bs4가 챕터마다 chardet을 돌려 느리고(EPUB 적재 시간의 36%),
+                    # 짧은 UTF-8 챕터를 Windows-1252/ISO-8859-1로 오판해 글자가 깨진다. EPUB 본문은 UTF-8이다.
+                    if isinstance(markup, bytes):
+                        try:
+                            markup = markup.decode("utf-8-sig")
+                        except UnicodeDecodeError:
+                            pass
+                    soup = BeautifulSoup(markup, "lxml")
                 text = (soup.body or soup).get_text()
                 if len(result) < Loader.TEXT_SIZE:
                     result += text
