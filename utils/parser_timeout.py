@@ -8,6 +8,7 @@ import는 순환이 되어, 두 모듈이 함께 의존할 수 있도록 별도 
 
 import multiprocessing
 import signal
+import sys
 import threading
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator
@@ -29,6 +30,27 @@ class ParserTimeout(BaseException):
 PARSER_TIMEOUT_RETRY_INTERVAL = 0.5
 
 
+def _hide_parser_timeout_noise(previous_hook: Callable[[Any], Any]) -> Callable[[Any], None]:
+    """ctypes 콜백 안에서 난 ParserTimeout 만 걸러 내는 sys.unraisablehook.
+
+    pypdfium2 는 파일 객체를 읽을 때마다 C 에서 Python 콜백(`_buffer_reader.__call__`)을 부른다.
+    알람이 그 콜백 안에서 울리면 예외가 ctypes 경계를 넘지 못하고 삼켜져 stderr 에
+    "Exception ignored on calling ctypes callback function"으로 찍힌다.
+
+    기능에는 영향이 없다. 콜백 실패는 pdfium 에 읽기 실패로 전달돼 오히려 빨리 빠져나오게 하고,
+    알람이 PARSER_TIMEOUT_RETRY_INTERVAL 간격으로 반복되므로 다음 알람이 Python 코드에서
+    정상 전파된다. 남는 것은 장기 실행 로그를 덮는 소음뿐이라 이 예외만 버린다.
+    그 밖의 삼켜진 예외(진짜 버그)는 원래 훅으로 그대로 보낸다.
+    """
+
+    def hook(unraisable: Any) -> None:
+        if isinstance(unraisable.exc_value, ParserTimeout):
+            return
+        previous_hook(unraisable)
+
+    return hook
+
+
 @contextmanager
 def time_limit(seconds: float, message: str) -> Iterator[None]:
     """SIGALRM으로 블록 전체에 벽시계 제한 시간을 건다.
@@ -48,12 +70,15 @@ def time_limit(seconds: float, message: str) -> Iterator[None]:
         raise ParserTimeout(message)
 
     previous_handler = signal.signal(signal.SIGALRM, _on_alarm)
+    previous_hook = sys.unraisablehook
+    sys.unraisablehook = _hide_parser_timeout_noise(previous_hook)
     signal.setitimer(signal.ITIMER_REAL, seconds, PARSER_TIMEOUT_RETRY_INTERVAL)
     try:
         yield
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_handler)
+        sys.unraisablehook = previous_hook
 
 
 def _run_target(result_queue: Any, func: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
