@@ -1455,3 +1455,15 @@ def test_non_rate_limit_http_error_is_cached_briefly_and_logs_status(tmp_path, m
     assert service.candidates("naver", "a.epub")["status"] == "error"
     assert service.candidates("naver", "b.epub")["status"] == "error"
     assert calls == ["a", "b"]
+
+
+@pytest.mark.parametrize("image_data", ["한글", "YQ=", "YQ==extra"])
+def test_insert_illustration_rejects_malformed_base64_without_changing_book(tmp_path, image_data):
+    from backend.cover_management import CoverManagement
+    from backend.epub_cover import CoverError, inspect_epub
+    path = make_epub(tmp_path / "book.epub", cover=True)
+    original = path.read_bytes()
+    with pytest.raises(CoverError, match="삽화 이미지 데이터"):
+        CoverManagement(tmp_path).insert_illustration("book.epub", inspect_epub(path)["revision"], "chapter", image_data=image_data)
+    assert path.read_bytes() == original
+    assert not (tmp_path / ".cover_backups").exists()

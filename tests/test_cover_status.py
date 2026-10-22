@@ -171,3 +171,47 @@ async def test_unreadable_file_is_not_reported_uncovered(tmp_path):
     manager = make_manager(tmp_path)
 
     assert manager._uncovered_flags([broken]) == [False]
+
+
+def test_pdf_without_pages_has_no_first_image(tmp_path, monkeypatch):
+    import pypdfium2
+
+    closed = []
+
+    class EmptyDocument:
+        def __init__(self, fp):
+            pass
+
+        def __len__(self):
+            return 0
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", EmptyDocument)
+    pdf = tmp_path / "empty.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+
+    assert pdf_first_image_size(pdf, LOCK) is None
+    assert has_official_cover(pdf, "pdf", LOCK) is False
+    assert closed == [True, True]
+
+
+@pytest.mark.parametrize("cover", [False, True])
+def test_epub_is_judged_by_cover_metadata(tmp_path, cover):
+    import io
+    import zipfile
+
+    path = tmp_path / "book.epub"
+    item = '<item id="cover" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>' if cover else ""
+    image = io.BytesIO()
+    Image.new("RGB", (120, 180), "red").save(image, "JPEG")
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        archive.writestr("META-INF/container.xml", '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>')
+        archive.writestr("OPS/book.opf", f'<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>t</dc:title></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>{item}</manifest><spine><itemref idref="chapter"/></spine></package>')
+        archive.writestr("OPS/chapter.xhtml", "<html><body>x</body></html>")
+        if cover:
+            archive.writestr("OPS/cover.jpg", image.getvalue())
+
+    assert has_official_cover(path, "epub", LOCK) is cover

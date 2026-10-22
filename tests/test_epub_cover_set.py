@@ -7,6 +7,8 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import zipfile
+
 import pytest
 
 from backend.book_manager import BookManager
@@ -912,3 +914,254 @@ class TestEpubCoverUploadEndpoint:
         http, fake = client
         assert http.post("/epub-cover/1", json=body).status_code == 422
         fake.set_epub_cover.assert_not_awaited()
+
+
+# ── epub_cover 방어 경로: 표지 분리, 교체 전 표지 보존, 검증 실패 ──
+
+NCX = '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap>{nav_map}</navMap>{extra}</ncx>'
+NAV = '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc">{body}</nav></body></html>'
+
+
+def publisher_cover_epub(tmp_path, **files):
+    """SVG 표지 페이지(Text/front.xhtml)를 가진 EPUB 3. files 로 멤버를 덮어쓴다."""
+    path = make_epub(tmp_path / "book.epub", cover=True)
+    attach_publisher_cover_page(path)
+    if files:
+        rewrite_epub_members(path, lambda members_: members_.update({name: data if isinstance(data, bytes) else data.encode() for name, data in files.items()}))
+    return path
+
+
+def remove_directly(path, tmp_path):
+    from backend.epub_cover import remove_cover
+
+    return remove_cover(path, inspect_epub(path)["revision"], tmp_path / ".cover_backups")
+
+
+def test_member_path_rejects_external_and_fragment_only_references():
+    from backend.epub_cover import _member_path
+
+    assert _member_path("OPS", "https://example.com/a.jpg") == ""
+    assert _member_path("OPS", "#top") == ""
+    assert _member_path("OPS", "") == ""
+    assert _member_path("OPS", "../../x.jpg") == ""
+    assert _member_path("OPS/Text", "../a%20b.jpg") == "OPS/a b.jpg"
+
+
+def test_manifest_page_missing_from_the_archive_is_skipped_while_detaching_the_cover(tmp_path):
+    path = publisher_cover_epub(tmp_path)
+    rewrite_epub_members(path, lambda files: files.update({"OPS/book.opf": files["OPS/book.opf"].replace(b"</manifest>", b'<item id="ghost" href="ghost.xhtml" media-type="application/xhtml+xml"/></manifest>')}))
+
+    remove_directly(path, tmp_path)
+
+    assert not inspect_epub(path)["has_cover"]
+    assert "OPS/Text/front.xhtml" not in members(path)
+
+
+def test_oversized_body_page_stops_cover_removal_without_touching_the_book(tmp_path, monkeypatch):
+    from backend import epub_cover
+
+    path = publisher_cover_epub(tmp_path, **{"OPS/chapter.xhtml": b"<html><body>" + b"x" * 6000 + b"</body></html>"})
+    original = path.read_bytes()
+    monkeypatch.setattr(epub_cover, "MAX_XML_BYTES", 5000)
+
+    with pytest.raises(CoverError, match="너무 큽니다"):
+        remove_directly(path, tmp_path)
+
+    assert path.read_bytes() == original
+    assert not (tmp_path / ".cover_backups").exists()
+
+
+def add_stylesheet_to_manifest(files):
+    files["OPS/book.opf"] = files["OPS/book.opf"].replace(b"</manifest>", b'<item id="css" href="style.css" media-type="text/css"/></manifest>')
+
+
+def test_stylesheet_that_does_not_use_the_cover_page_is_kept_as_is(tmp_path):
+    path = publisher_cover_epub(tmp_path)
+    rewrite_epub_members(path, add_stylesheet_to_manifest)
+    css = members(path)["OPS/style.css"]
+
+    remove_directly(path, tmp_path)
+
+    assert not inspect_epub(path)["has_cover"]
+    assert members(path)["OPS/style.css"] == css
+
+
+def test_stylesheet_that_uses_the_cover_page_blocks_removal(tmp_path):
+    path = publisher_cover_epub(tmp_path)
+    rewrite_epub_members(path, lambda files: (add_stylesheet_to_manifest(files), files.update({"OPS/style.css": b'body { background: url("Text/front.xhtml"); }'})))
+    original = path.read_bytes()
+
+    with pytest.raises(CoverError, match="표지 페이지가 본문에서도 쓰여"):
+        remove_directly(path, tmp_path)
+
+    assert path.read_bytes() == original
+
+
+def test_xml_comment_in_a_body_page_does_not_break_unlinking_the_cover_page(tmp_path):
+    page = b'<html xmlns="http://www.w3.org/1999/xhtml"><body><!-- note --><p><a href="Text/front.xhtml">cover</a></p></body></html>'
+    path = publisher_cover_epub(tmp_path, **{"OPS/chapter.xhtml": page})
+
+    remove_directly(path, tmp_path)
+
+    body = members(path)["OPS/chapter.xhtml"].decode()
+    assert "<!-- note -->" in body
+    assert "front.xhtml" not in body
+    assert "<span>cover</span>" in body
+
+
+def test_ncx_child_entries_move_up_when_their_cover_parent_is_removed(tmp_path):
+    from lxml import etree
+
+    nav_map = ('<navPoint id="cover" playOrder="1"><navLabel><text>Cover</text></navLabel><content src="Text/front.xhtml#cover"/>'
+               '<navPoint id="child" playOrder="2"><navLabel><text>Child</text></navLabel><content src="chapter.xhtml"/></navPoint></navPoint>')
+    path = publisher_cover_epub(tmp_path, **{"OPS/toc.ncx": NCX.format(nav_map=nav_map, extra="")})
+
+    remove_directly(path, tmp_path)
+
+    toc = etree.fromstring(members(path)["OPS/toc.ncx"])
+    points = toc.xpath('/*/*[local-name()="navMap"]/*[local-name()="navPoint"]')
+    assert [point.get("id") for point in points] == ["child"]
+    assert points[0].get("playOrder") == "1"
+    assert not toc.xpath('//*[starts-with(@src,"Text/front.xhtml")]')
+
+
+def test_nav_entry_with_sub_entries_keeps_its_place_as_plain_text(tmp_path):
+    from lxml import etree
+
+    body = '<ol><li><a href="Text/front.xhtml#cover">Cover</a><ol><li><a href="chapter.xhtml">Chapter</a></li></ol></li></ol>'
+    path = publisher_cover_epub(tmp_path, **{"OPS/nav.xhtml": NAV.format(body=body)})
+
+    remove_directly(path, tmp_path)
+
+    nav = etree.fromstring(members(path)["OPS/nav.xhtml"])
+    assert nav.xpath('//*[local-name()="a"]/@href') == ["chapter.xhtml"]
+    assert nav.xpath('string(//*[local-name()="li"]/*[local-name()="span"])') == "Cover"
+
+
+def test_ncx_page_list_reference_to_the_cover_cannot_be_cleaned_up_safely(tmp_path):
+    nav_map = '<navPoint id="chapter" playOrder="1"><navLabel><text>Chapter</text></navLabel><content src="chapter.xhtml"/></navPoint>'
+    page_list = '<pageList><pageTarget id="p1" type="normal" value="1"><navLabel><text>1</text></navLabel><content src="Text/front.xhtml"/></pageTarget></pageList>'
+    path = publisher_cover_epub(tmp_path, **{"OPS/toc.ncx": NCX.format(nav_map=nav_map, extra=page_list)})
+    original = path.read_bytes()
+
+    with pytest.raises(CoverError, match="목차 참조"):
+        remove_directly(path, tmp_path)
+
+    assert path.read_bytes() == original
+
+
+def test_replacing_a_cover_whose_image_is_not_in_the_manifest_keeps_no_plate(tmp_path):
+    from backend.epub_cover import add_cover
+
+    path = make_epub(tmp_path / "book.epub")
+
+    def hide_cover_image(files):
+        files["OPS/book.opf"] = files["OPS/book.opf"].replace(b"</package>", b'<guide><reference type="cover" href="front.xhtml"/></guide></package>')
+        files["OPS/front.xhtml"] = b'<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="pic.jpg"/></body></html>'
+        files["OPS/pic.jpg"] = image_bytes()
+
+    rewrite_epub_members(path, hide_cover_image)
+    assert inspect_epub(path)["has_cover"]
+
+    add_cover(path, image_bytes_of("blue"), inspect_epub(path)["revision"], tmp_path / ".cover_backups", replace_existing=True)
+
+    assert not [name for name in members(path) if "tm-plate" in name]
+    assert any(name.startswith("OPS/tm-cover-") for name in members(path))
+
+
+def test_illustration_needs_a_spine_and_manifest(tmp_path):
+    from backend.epub_cover import add_illustration
+
+    path = make_epub(tmp_path / "book.epub")
+    rewrite_epub_members(path, lambda files: files.update({"OPS/book.opf": files["OPS/book.opf"].replace(b'<spine><itemref idref="chapter"/></spine>', b"")}))
+    original = path.read_bytes()
+
+    with pytest.raises(CoverError, match="manifest 또는 spine"):
+        add_illustration(path, image_bytes(), inspect_epub(path)["revision"], tmp_path / ".cover_backups", "chapter")
+
+    assert path.read_bytes() == original
+
+
+def test_illustration_gives_up_when_every_numbered_id_is_taken(tmp_path):
+    import hashlib
+
+    from backend.epub_cover import _stage_illustration
+
+    path = make_epub(tmp_path / "book.epub")
+    image = image_bytes()
+    digest = hashlib.sha256(image).hexdigest()[:16]
+    items = "".join(f'<item id="tm-plate-{digest if serial == 1 else f"{digest}-{serial}"}" href="p{serial}.jpg" media-type="image/jpeg"/>' for serial in range(1, 1000))
+    rewrite_epub_members(path, lambda files: files.update({"OPS/book.opf": files["OPS/book.opf"].replace(b"</manifest>", items.encode() + b"</manifest>")}))
+
+    with path.open("rb") as source, pytest.raises(CoverError, match="삽화 ID"):
+        _stage_illustration(source, tmp_path / "staged.epub", image, "chapter", {})
+
+
+def test_corrupt_staged_epub_is_rejected_for_illustration_and_removal(tmp_path, monkeypatch):
+    from backend.epub_cover import add_illustration
+
+    path = make_epub(tmp_path / "book.epub")
+    original = path.read_bytes()
+    monkeypatch.setattr(zipfile.ZipFile, "testzip", lambda self: "OPS/chapter.xhtml")
+
+    with pytest.raises(CoverError, match="검증에 실패"):
+        add_illustration(path, image_bytes(), inspect_epub(path)["revision"], tmp_path / ".cover_backups", "chapter")
+    assert path.read_bytes() == original
+
+    covered = publisher_cover_epub(tmp_path / "removal")
+    original = covered.read_bytes()
+    with pytest.raises(CoverError, match="검증에 실패"):
+        remove_directly(covered, tmp_path / "removal")
+    assert covered.read_bytes() == original
+
+
+def test_removal_is_rejected_when_the_staged_epub_still_reports_a_cover(tmp_path, monkeypatch):
+    from backend import epub_cover
+
+    path = publisher_cover_epub(tmp_path)
+    original = path.read_bytes()
+    revision = inspect_epub(path)["revision"]
+    monkeypatch.setattr(epub_cover, "_inspect_archive", lambda archive: {"has_cover": True})
+
+    with pytest.raises(CoverError, match="표지를 삭제한 EPUB의 검증에 실패"):
+        epub_cover.remove_cover(path, revision, tmp_path / ".cover_backups")
+
+    assert path.read_bytes() == original
+
+
+def test_cover_removal_needs_manifest_metadata_and_spine(tmp_path):
+    from backend.epub_cover import _stage_cover_removal
+
+    path = make_epub(tmp_path / "book.epub", cover=True)
+    rewrite_epub_members(path, lambda files: files.update({"OPS/book.opf": files["OPS/book.opf"].replace(b"<spine>", b"<x>").replace(b"</spine>", b"</x>")}))
+    original = path.read_bytes()
+
+    with pytest.raises(CoverError, match="manifest, metadata 또는 spine"):
+        remove_directly(path, tmp_path)
+    assert path.read_bytes() == original
+
+    with path.open("rb") as source, pytest.raises(CoverError, match="manifest, metadata 또는 spine"):
+        _stage_cover_removal(source, tmp_path / "staged.epub")
+
+
+def test_unnamed_backup_collision_is_an_error_not_a_silent_reuse(tmp_path, monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+
+    from backend import epub_cover
+    from backend.epub_cover import add_cover
+
+    path = make_epub(tmp_path / "book.epub")
+    original = path.read_bytes()
+    revision = inspect_epub(path)["revision"]
+    monkeypatch.setattr(epub_cover, "uuid", SimpleNamespace(uuid4=lambda: SimpleNamespace(hex="f" * 32)))
+    backup_dir = tmp_path / ".cover_backups"
+    backup_dir.mkdir()
+    existing = backup_dir / (hashlib.sha256(f"{path}:{revision}".encode()).hexdigest() + "-" + "f" * 32 + ".epub")
+    existing.write_bytes(b"older backup")
+
+    with pytest.raises(FileExistsError):
+        add_cover(path, image_bytes(), revision, backup_dir)
+
+    assert path.read_bytes() == original
+    assert existing.read_bytes() == b"older backup"
