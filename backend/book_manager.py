@@ -631,14 +631,26 @@ class BookManager:
                 spine_el = opf.find(f".//{{{opf_ns}}}spine")
                 if spine_el is None:
                     return 0
-                names = set(zin.namelist())
-                names |= {unquote(n) for n in names}
+                # 풀린 이름(a b.xhtml) -> 실제 ZIP 항목 이름(a%20b.xhtml 로 저장된 경우도 있다)
+                actual_names = {n: n for n in zin.namelist()}
+                actual_names.update({unquote(n): n for n in zin.namelist()})
                 manifest = {item.get("id"): item.get("href", "") for item in opf.iter(f"{{{opf_ns}}}item")}
                 base = posixpath.dirname(opf_path)
+
+                def openable(member: str) -> bool:
+                    """ZIP 항목 헤더가 손상되지 않았는지 본다(로컬 헤더만 읽는 가벼운 검사)."""
+                    if member not in actual_names:
+                        return False
+                    try:
+                        zin.open(actual_names[member]).close()
+                    except zipfile.BadZipFile:
+                        return False
+                    return True
+
                 count = 0
                 for ref in spine_el.findall(f"{{{opf_ns}}}itemref"):
                     href = unquote(manifest.get(ref.get("idref"), "")).split("#")[0].split("?")[0]
-                    if href and posixpath.normpath(posixpath.join(base, href)) in names:
+                    if href and openable(posixpath.normpath(posixpath.join(base, href))):
                         count += 1
                 return count
         except Exception:
@@ -1131,8 +1143,9 @@ class BookManager:
                         for zp in chapter_zip_paths:
                             try:
                                 content = zin.read(zp).decode("utf-8", errors="replace")
-                            except KeyError:
-                                LOGGER.warning("EPUB preview: chapter file missing in archive: %s", zp)
+                            except (KeyError, zipfile.BadZipFile) as e:
+                                # 없거나 ZIP 항목이 손상돼 읽을 수 없는 챕터는 건너뛴다(책 전체를 거부하지 않는다).
+                                LOGGER.warning("EPUB preview: chapter file missing or unreadable in archive: %s (%s)", zp, type(e).__name__)
                                 continue
                             item_dir = dirname(zp)
                             soup = BeautifulSoup(content, "html.parser")
@@ -1159,8 +1172,8 @@ class BookManager:
                                         clean_m = unquote(m).split("#")[0].split("?")[0]
                                         if clean_m:
                                             referenced.add(normpath(pjoin(css_dir, clean_m)))
-                            except KeyError:
-                                LOGGER.warning("EPUB preview: CSS file missing in archive: %s", zp)
+                            except (KeyError, zipfile.BadZipFile):
+                                LOGGER.warning("EPUB preview: CSS file missing or unreadable in archive: %s", zp)
 
                         for ref_path in referenced:
                             if ref_path in href_to_id:
@@ -1273,8 +1286,8 @@ class BookManager:
                                     ):
                                         data = BookManager._downscale_epub_image(data)
                                     zout.writestr(zp, data)
-                                except KeyError:
-                                    LOGGER.warning("EPUB preview: missing file in archive: %s", zp)
+                                except (KeyError, zipfile.BadZipFile) as e:
+                                    LOGGER.warning("EPUB preview: missing or unreadable file in archive: %s (%s)", zp, type(e).__name__)
 
                 # 생성된 EPUB 유효성 검증
                 valid, err = BookManager._validate_preview_epub(cache_file)
