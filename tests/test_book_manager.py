@@ -6433,3 +6433,24 @@ def test_prune_dead_ncx_navpoints_ignores_unparsable_ncx_and_empty_src():
     assert _prune_dead_ncx_navpoints(b"<ncx", "OEBPS", lambda path: False) is None
     no_src = f'<ncx xmlns="{_NCX_NS}"><navMap><navPoint id="x"><content src=""/></navPoint><navPoint id="y"/></navMap></ncx>'.encode()
     assert _prune_dead_ncx_navpoints(no_src, "", lambda path: False) is None
+
+
+def test_total_chapters_counts_percent_encoded_zip_entry_names(tmp_path: Path):
+    """ZIP 항목 이름이 퍼센트 인코딩된 채 저장돼 있어도(href 는 풀어서 비교) 세어야 한다."""
+    epub = tmp_path / "pct.epub"
+    with zipfile.ZipFile(epub, "w") as zf:
+        zf.writestr("META-INF/container.xml", '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>')
+        zf.writestr("content.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="a" href="a%20b.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/></spine></package>')
+        zf.writestr("a%20b.xhtml", "<html/>")
+    assert BookManager._get_epub_total_chapters(epub) == 1
+
+
+def test_total_chapters_does_not_count_chapter_with_broken_zip_entry(tmp_path: Path):
+    epub = _epub_with_missing_page(tmp_path / "broken.epub", include_page=True)
+    with zipfile.ZipFile(epub) as zf:
+        offset = zf.getinfo("OEBPS/Text/colophon page.xhtml").header_offset
+    data = bytearray(epub.read_bytes())
+    data[offset : offset + 4] = b"\x00\x00\x00\x00"
+    epub.write_bytes(bytes(data))
+    assert BookManager._get_epub_total_chapters(epub) == 1
+

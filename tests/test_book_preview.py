@@ -1077,6 +1077,39 @@ class TestEpubErrorRecovery:
             epub_path.unlink(missing_ok=True)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("chapters", [0, 10])
+    async def test_preview_skips_chapter_whose_zip_entry_is_unreadable(self, backend_test_setup, chapters):
+        """챕터 하나의 ZIP 항목이 손상돼(Bad magic number / Overlapped entries) 읽히지 않아도 책 전체를 거부하지 않는다.
+
+        코퍼스의 9_BLGL [모아이] 사규연애 4권이 챕터 하나 때문에 통째로 422 였다.
+        읽을 수 없는 챕터만 누락 챕터처럼 건너뛰고 나머지는 열린다.
+        """
+        bm = backend_test_setup["bm"]
+        client = backend_test_setup["client"]
+
+        epub_path = bm.path_prefix / CATEGORY / "[Test Author] Unreadable Chapter.epub"
+        _create_epub_with_unbound_prefix(epub_path)
+        with zipfile.ZipFile(str(epub_path)) as zf:
+            offset = zf.getinfo("OEBPS/ch2.xhtml").header_offset
+        data = bytearray(epub_path.read_bytes())
+        data[offset : offset + 4] = b"\x00\x00\x00\x00"  # 로컬 헤더 시그니처를 망가뜨린다
+        epub_path.write_bytes(bytes(data))
+
+        book_id = await _register_epub_async(bm, epub_path)
+        try:
+            response = client.get(f"/preview/{book_id}?chapters={chapters}")
+            assert response.status_code == 200, response.text
+            assert response.headers.get("x-total-chapters") == "1"
+            with _parse_epub_zip(response.content) as zf:
+                names = zf.namelist()
+                assert "OEBPS/ch1.xhtml" in names
+                assert "OEBPS/ch2.xhtml" not in names
+                opf = zf.read("OEBPS/content.opf").decode()
+                assert 'idref="ch1"' in opf and 'idref="ch2"' not in opf
+        finally:
+            _cleanup_book(client, bm, book_id, epub_path)
+
+    @pytest.mark.asyncio
     async def test_total_chapters_unbound_prefix(self, backend_test_setup):
         """OPF에 선언되지 않은 프리픽스가 있어도 총 챕터 수가 올바르게 반환된다."""
         from backend.book_manager import BookManager
