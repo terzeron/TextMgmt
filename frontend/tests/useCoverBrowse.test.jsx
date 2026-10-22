@@ -248,6 +248,30 @@ describe("useCoverBrowse", () => {
     expect(result.current.total).toBeNull();
   });
 
+  it("result 가 응답에 없으면 빈 목록으로 다루고 성공 상태를 유지한다", async () => {
+    const { result } = renderHook(() => useCoverBrowse({ apiPrefix: "" }));
+    act(() => pending[0].resolve({ status: "success", total: 3 }));
+
+    await waitFor(() => expect(result.current.total).toBe(3));
+    expect(result.current.items).toEqual([]);
+    expect(result.current.error).toBe("");
+  });
+
+  it("카테고리가 바뀐 뒤 늦게 도착한 이전 요청의 실패는 오류로 올리지 않는다", async () => {
+    const { result, rerender } = renderHook(
+      ({ category }) => useCoverBrowse({ apiPrefix: "", category }),
+      { initialProps: { category: "A" } },
+    );
+    rerender({ category: "B" });
+
+    act(() => pending[1].resolve(page([20], "")));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => pending[0].reject(new Error("late")));
+
+    expect(result.current.error).toBe("");
+    expect(result.current.items.map((b) => b.book_id)).toEqual([20]);
+  });
+
   it("언마운트 뒤에 도착한 응답은 상태를 건드리지 않는다", async () => {
     const { result, unmount } = renderHook(() =>
       useCoverBrowse({ apiPrefix: "" }),

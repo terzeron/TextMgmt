@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from backend.auth import require_admin
 from backend.book import Book
 from backend.cover_sources import STORES, STORE_HOSTS, FetchCancelled, StoreBlocked, StoreGate, blocked_status, check_cancelled, fetch_bytes, search_candidates, store_lock, request_cancelled
-from backend.epub_cover import CoverError, MAX_IMAGE_BYTES, add_cover, inspect_epub, normalize_image, remove_cover, revision
+from backend.epub_cover import CoverError, MAX_IMAGE_BYTES, add_cover, add_illustration, inspect_epub, normalize_image, remove_cover, revision
 from backend.direct_cover_url import fetch_url_image
 from utils.corpus_layout import IGNORED_DIR_NAMES
 
@@ -311,11 +311,29 @@ class CoverManagement:
                 raise CoverError("EPUB이 변경되었습니다. 목록을 새로 불러오세요")
             if metadata["has_cover"] and not replace_existing:
                 raise CoverError("EPUB에 이미 표지가 있습니다")
-            host = (urlparse(url).hostname or "").lower()
-            store = next((name for name, domains in STORE_HOSTS.items() if any(host == domain or host.endswith("." + domain) for domain in domains)), None)
-            with store_lock(self.cache, store) if store else nullcontext():
-                data = fetch_url_image(url)
+            data = self._download_image(url)
             return self._save_cover(path, relative, data, expected_revision, replace_existing=replace_existing, backup_dir=backup_dir, backup_name=backup_name)
+
+    def _download_image(self, url: str) -> bytes:
+        host = (urlparse(url).hostname or "").lower()
+        store = next((name for name, domains in STORE_HOSTS.items() if any(host == domain or host.endswith("." + domain) for domain in domains)), None)
+        with store_lock(self.cache, store) if store else nullcontext():
+            return fetch_url_image(url)
+
+    def insert_illustration(self, relative: str, expected_revision: str, before_idref: str, *, url: str | None = None, image_data: str | None = None, backup_dir: Path | None = None, backup_name: str | None = None) -> dict[str, Any]:
+        """before_idref 페이지 앞에 URL 또는 올린 이미지(base64)를 삽화로 넣는다. 표지 저장과 같은 잠금·백업·캐시 무효화를 쓴다."""
+        path = self.resolve(relative)
+        relative = str(path.relative_to(self.root))
+        if image_data:
+            try:
+                data = base64.b64decode(image_data, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise CoverError("삽화 이미지 데이터를 읽을 수 없습니다") from exc
+        with self._book_lock(relative, exclusive=True):
+            if not image_data:
+                data = self._download_image(url or "")
+            result = add_illustration(path, data, expected_revision, backup_dir or self.root / ".cover_backups", before_idref, backup_name=backup_name)
+            return self._finish_save(relative, result, expected_revision)
 
     def apply_image(self, relative: str, image_data: str, expected_revision: str, *, backup_dir: Path | None = None, backup_name: str | None = None) -> dict[str, Any]:
         path = self.resolve(relative)
@@ -369,6 +387,8 @@ class CoverManagement:
                     "backup_path": str(Path(result["backup_path"]).relative_to(self.root))}
         if result.get("warning"):
             response["warning"] = result["warning"]
+        if result.get("idref"):
+            response["idref"] = result["idref"]
         return response
 
     def preview(self, relative: str, *, original: bool = False, width: int | None = None) -> bytes:

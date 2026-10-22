@@ -354,3 +354,17 @@ def test_store_gate_ignores_corrupt_state_file(tmp_path, monkeypatch):
     gate = StoreGate(tmp_path, "naver")
     gate.before_request()
     assert gate.record_blocked() == 60
+
+
+def test_store_gate_keeps_working_when_state_cannot_be_saved(tmp_path, monkeypatch):
+    from backend.cover_sources import StoreGate
+
+    gate = StoreGate(tmp_path, "naver")
+
+    def fail(*args, **kwargs):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(type(gate.path), "write_text", fail)
+    assert gate.record_blocked() == 60
+    assert not gate.path.exists()
+    gate.before_request()  # 상태가 없으니 막히지 않는다.

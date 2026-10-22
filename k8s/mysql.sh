@@ -15,6 +15,6 @@ kubectl apply -f mysql-deployment.yml
 
 # ready될 때까지 대기한 후에 연결 테스트
 echo "waiting for ready state..."
-kubectl -n textmanager wait --for=condition=ready pod -l app=tm-mysql-app --timeout=5m
+kubectl -n textmanager wait --for=condition=ready pod -l app=tm-mysql-84-app --timeout=5m
 sleep 10  # MySQL 초기화 대기
-kubectl -n textmanager exec deploy/tm-mysql -- mysql -h 127.0.0.1 -u"$TM_MYSQL_USER" -p"$TM_MYSQL_PASSWORD" -e "SELECT 1 AS test;" textmanager
+kubectl -n textmanager exec deploy/tm-mysql-84 -- mysql -h 127.0.0.1 -u"$TM_MYSQL_USER" -p"$TM_MYSQL_PASSWORD" -e "SELECT 1 AS test;" textmanager

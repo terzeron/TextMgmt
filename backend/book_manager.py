@@ -86,6 +86,78 @@ def _safe_xml_parser(recover: bool = False) -> Any:
     return etree.XMLParser(recover=recover, resolve_entities=False, no_network=True, load_dtd=False)
 
 
+# OPF에서 선언 없이 자주 쓰이는 접두사. 모르는 접두사는 자리표시 URN으로 선언한다(값은 읽지 않는다).
+_KNOWN_XML_PREFIXES = {
+    "opf": "http://www.idpf.org/2007/opf",
+    "dc": "http://purl.org/dc/elements/1.1/",
+    "dcterms": "http://purl.org/dc/terms/",
+    "xsi": "http://www.w3.org/2001/XMLSchema-instance",
+    "xlink": "http://www.w3.org/1999/xlink",
+    "epub": "http://www.idpf.org/2007/ops",
+}
+_XML_SKIP_RE = re.compile(r"<!--.*?-->|<\?.*?\?>|<!DOCTYPE[^>]*>", re.DOTALL)
+_XML_TAG_RE = re.compile(r"<(/?)([^\s/>!?][^>]*)>", re.DOTALL)
+_XML_ELEMENT_PREFIX_RE = re.compile(r"^([A-Za-z_][\w.-]*):")
+_XML_ATTR_PREFIX_RE = re.compile(r"\s([A-Za-z_][\w.-]*):[\w.-]+\s*=")
+_XML_DECLARED_PREFIX_RE = re.compile(r"xmlns:([A-Za-z_][\w.-]*)\s*=")
+
+
+def _declare_unbound_prefixes(xml_bytes: bytes) -> bytes:
+    """요소·속성 이름에 쓰였지만 선언되지 않은 접두사를 루트 요소에 선언한다.
+
+    lxml recover 파서는 미선언 접두사를 보존하지만 직렬화에는 xmlns 가 빠져 브라우저가 파싱하지 못한다.
+    속성 값(property="dcterms:modified")과 본문·주석 안의 접두사처럼 이름이 아닌 것은 세지 않는다.
+    빠진 선언이 없으면 입력을 그대로 돌려준다.
+    """
+    text = xml_bytes.decode("utf-8", errors="replace")
+    masked = _XML_SKIP_RE.sub(lambda m: " " * len(m.group()), text)
+    root = _XML_TAG_RE.search(masked)
+    if root is None:
+        return xml_bytes
+
+    declared = set(_XML_DECLARED_PREFIX_RE.findall(masked))
+    used: list[str] = []
+    for tag in _XML_TAG_RE.finditer(masked):
+        element = _XML_ELEMENT_PREFIX_RE.match(tag.group(2))
+        names = ([element.group(1)] if element else []) + _XML_ATTR_PREFIX_RE.findall(tag.group(2))
+        used.extend(n for n in names if n not in declared and n not in {"xml", "xmlns"} and n not in used)
+    if not used:
+        return xml_bytes
+
+    declarations = "".join(f' xmlns:{n}="{_KNOWN_XML_PREFIXES.get(n, f"urn:unbound-prefix:{n}")}"' for n in used)
+    name_end = root.start(2) + re.match(r"[^\s/>]+", root.group(2)).end()
+    return (text[:name_end] + declarations + text[name_end:]).encode("utf-8")
+
+
+_NCX_NS = "http://www.daisy.org/z3986/2005/ncx/"
+
+
+def _prune_dead_ncx_navpoints(ncx_bytes: bytes, ncx_dir: str, exists: Callable[[str], bool]) -> bytes | None:
+    """NCX 에서 ZIP 에 없는 문서를 가리키는 navPoint 를 지운다. 자식 navPoint 는 부모 자리로 올린다.
+
+    목차에서 죽은 링크를 누르면 뷰어가 렌더링 오류를 낸다. 바뀐 것이 없거나 파싱할 수 없으면 None.
+    """
+    from lxml import etree  # type: ignore[attr-defined]
+
+    try:
+        tree = etree.fromstring(ncx_bytes, _safe_xml_parser())
+    except etree.XMLSyntaxError:
+        return None
+    changed = False
+    for nav in list(tree.iter(f"{{{_NCX_NS}}}navPoint")):
+        content = nav.find(f"{{{_NCX_NS}}}content")
+        src = unquote(content.get("src", "")).split("#")[0].split("?")[0] if content is not None else ""
+        if not src or exists(posixpath.normpath(posixpath.join(ncx_dir, src))):
+            continue
+        parent = nav.getparent()
+        index = parent.index(nav)
+        for offset, child in enumerate(nav.findall(f"{{{_NCX_NS}}}navPoint")):
+            parent.insert(index + offset, child)
+        parent.remove(nav)
+        changed = True
+    return etree.tostring(tree, encoding="utf-8", xml_declaration=True) if changed else None
+
+
 def _env_flag_enabled(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -336,6 +408,7 @@ class BookManager:
 
                 # 4) spine itemref 검증: manifest에 없는 항목 제거
                 needs_rewrite = False
+                ncx_replacement: tuple[str, bytes] | None = None
                 spine_refs = list(spine_el.findall(f"{{{opf_ns}}}itemref"))
                 for ref in spine_refs:
                     idref = ref.get("idref", "")
@@ -379,6 +452,12 @@ class BookManager:
                             LOGGER.warning("EPUB validate: toc NCX '%s' not in ZIP, removing toc attribute", toc_zp)
                             del spine_el.attrib["toc"]
                             needs_rewrite = True
+                        else:
+                            pruned_ncx = _prune_dead_ncx_navpoints(zin.read(toc_zp), dirname(toc_zp), _in_names)
+                            if pruned_ncx is not None:
+                                LOGGER.warning("EPUB validate: removing NCX entries that point to missing documents in %s", toc_zp)
+                                ncx_replacement = (toc_zp, pruned_ncx)
+                                needs_rewrite = True
 
                 # 8) 필요 시 OPF 재작성
                 if needs_rewrite:
@@ -390,6 +469,8 @@ class BookManager:
                         for name in zin_r.namelist():
                             if name == opf_path:
                                 zout.writestr(name, modified_opf)
+                            elif ncx_replacement is not None and name == ncx_replacement[0]:
+                                zout.writestr(name, ncx_replacement[1])
                             elif name == "mimetype":
                                 zout.writestr(name, zin_r.read(name), compress_type=zipfile.ZIP_STORED)
                             else:
@@ -536,7 +617,7 @@ class BookManager:
 
     @staticmethod
     def _get_epub_total_chapters(file_path: Path) -> int:
-        """EPUB 파일의 총 챕터 수(spine itemref 수)를 반환"""
+        """EPUB 파일의 총 챕터 수를 반환한다. manifest 에 없거나 ZIP 에 없는 spine 문서는 뷰어가 보여 줄 수 없어 세지 않는다."""
         import zipfile
         from lxml import etree  # type: ignore[attr-defined]
 
@@ -550,7 +631,16 @@ class BookManager:
                 spine_el = opf.find(f".//{{{opf_ns}}}spine")
                 if spine_el is None:
                     return 0
-                return len(spine_el.findall(f"{{{opf_ns}}}itemref"))
+                names = set(zin.namelist())
+                names |= {unquote(n) for n in names}
+                manifest = {item.get("id"): item.get("href", "") for item in opf.iter(f"{{{opf_ns}}}item")}
+                base = posixpath.dirname(opf_path)
+                count = 0
+                for ref in spine_el.findall(f"{{{opf_ns}}}itemref"):
+                    href = unquote(manifest.get(ref.get("idref"), "")).split("#")[0].split("?")[0]
+                    if href and posixpath.normpath(posixpath.join(base, href)) in names:
+                        count += 1
+                return count
         except Exception:
             LOGGER.exception("Failed to get EPUB total chapters for '%s'", file_path)
             return 0
@@ -960,12 +1050,9 @@ class BookManager:
                     except KeyError:
                         LOGGER.warning("EPUB preview: OPF file missing in archive: %s (book_id=%d)", opf_path, book_id)
                         return Response(status_code=422, content=f"EPUB structure error: OPF file missing: {opf_path}")
-                    # opf: 프리픽스가 선언 없이 사용된 경우 추가
-                    # (lxml recover가 보존하지만 재직렬화 시 xmlns:opf 누락 → 브라우저 파싱 실패)
-                    opf_text = opf_bytes.decode("utf-8", errors="replace")
-                    if "opf:" in opf_text and "xmlns:opf=" not in opf_text:
-                        opf_text = opf_text.replace("<package ", f'<package xmlns:opf="{opf_ns}" ', 1)
-                        opf_bytes = opf_text.encode("utf-8")
+                    # 선언 없이 쓰인 접두사(opf:, xsi: 등)를 선언한다.
+                    # (lxml recover가 보존하지만 재직렬화 시 xmlns 누락 → 브라우저 파싱 실패)
+                    opf_bytes = _declare_unbound_prefixes(opf_bytes)
                     opf = etree.fromstring(opf_bytes, _safe_xml_parser(recover=True))
 
                     # manifest: id → href, media-type
@@ -3142,6 +3229,16 @@ class BookManager:
         if not url:
             return None, "이미지 URL이 비어 있습니다"
         return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.apply_url(relative, url, revision, replace_existing=True, **backup))
+
+    async def insert_epub_illustration(self, book_id: int, before_idref: str, url: str | None = None, image_data: str | None = None) -> tuple[dict[str, Any] | None, str | None]:
+        """EPUB 의 before_idref 페이지 앞에 삽화를 넣는다: (결과, 오류 메시지). 표지는 바꾸지 않는다.
+
+        이미지는 URL(url) 또는 올린 이미지(image_data, base64)다. 저장 절차는 표지와 같다(백업·색인 갱신·캐시 무효화).
+        """
+        url = (url or "").strip()
+        if not image_data and not url:
+            return None, "이미지 URL이 비어 있습니다"
+        return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.insert_illustration(relative, revision, before_idref, url=url, image_data=image_data, **backup))
 
     async def remove_epub_cover(self, book_id: int) -> tuple[dict[str, Any] | None, str | None]:
         """EPUB 표지를 읽기 순서에서 뺀다: (결과, 오류 메시지). 본문과 공유하는 이미지는 보존한다."""

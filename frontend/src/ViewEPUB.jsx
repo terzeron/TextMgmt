@@ -8,6 +8,7 @@ import SaveIcon from "@mui/icons-material/Save";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
 import ViewerFontSelect from "./ViewerFontSelect";
 import EpubCoverModal from "./EpubCoverModal";
+import EpubIllustrationModal from "./EpubIllustrationModal";
 import { describeHttpError } from "./httpError";
 import { blobToBase64, requestInsertPreview } from "./insertPreview";
 import "./viewerEditActions.css";
@@ -20,11 +21,28 @@ import "./ViewEPUB.css";
 
 const CHAPTERS_PREVIEW = 10;
 
+// 일부 EPUB은 <html:html>처럼 접두사를 붙여 저장한다. DOMPurify는 nodeName을 허용 목록과
+// 비교하므로 접두사 요소(루트는 예외를 던지고, 그 밖은 조용히 제거)를 처리하지 못한다.
+// 네임스페이스는 그대로 두고 접두사만 벗긴 요소로 바꿔 정제기에 넘긴다.
+const stripElementPrefixes = (doc) => {
+  for (const el of doc.querySelectorAll("*")) {
+    if (!el.prefix) continue;
+    const plain = doc.createElementNS(el.namespaceURI, el.localName);
+    for (const attr of el.attributes) {
+      if (attr.prefix === "xmlns") continue;
+      plain.setAttributeNS(attr.namespaceURI, attr.name, attr.value);
+    }
+    plain.append(...el.childNodes);
+    el.parentNode.replaceChild(plain, el);
+  }
+};
+
 // WebKit은 sandbox에서 스크립트를 금지하면 부모의 터치 리스너도 막는다.
 // https://bugs.webkit.org/show_bug.cgi?id=218086
 // 렌더링 전에 본문을 정제하고 CSP로 책의 스크립트·하위 문서를 차단한다.
 // async hook의 거부는 epub.js의 렌더링도 중단시킨다(동기 throw는 무시된다).
 const secureEpubDocument = async (doc) => {
+  stripElementPrefixes(doc);
   for (const meta of doc.querySelectorAll("meta[http-equiv]")) meta.remove();
   DOMPurify.sanitize(doc.documentElement, {
     IN_PLACE: true,
@@ -205,6 +223,10 @@ export default function ViewEPUB({
   // 편집 화면 전용: 책의 첫 위치인지(표지가 없는 책도 첫 쪽에 표지 추가 버튼을 둔다), 표지 모달 표시, 저장 뒤 재로딩 카운터.
   const [atStart, setAtStart] = useState(false);
   const [coverDialog, setCoverDialog] = useState(false);
+  // 편집 화면 전용: 지금 보는 spine 항목의 idref(삽화를 넣을 위치), 삽화 모달 표시, 저장 뒤 새 삽화로 이동할 idref.
+  const [currentIdref, setCurrentIdref] = useState("");
+  const [illustrationDialog, setIllustrationDialog] = useState(null);
+  const jumpIdrefRef = useRef("");
   const [reloadToken, setReloadToken] = useState(0);
   // 편집 화면 전용: 저장 전 새 표지 { url, previewSrc }. URL 과 서버가 만든 미리보기(blob URL)다.
   // 저장하기 전까지 서버의 EPUB 은 건드리지 않는다. blob URL 은 쓰지 않게 되면 해제한다.
@@ -249,7 +271,7 @@ export default function ViewEPUB({
   // 서버가 이미지(URL 이면 내려받고, 이 기기의 파일이면 받아서)를 정규화한 미리보기를 받아 온다. 저장할 때 들어가는 것과 같은 이미지다.
   // 실패 사유(문자열)를 돌려주고, 성공하면 새 표지를 표시한 뒤 null 을 돌려준다.
   // 미리보기는 PDF 이미지 삽입과 같은 insert-preview 를 쓴다.
-  const previewCover = async (source) => {
+  const previewCover = async (source, meta = {}) => {
     try {
       const blob = await requestInsertPreview(apiPrefix, bookId, source);
       if (cancelledRef.current) return null;
@@ -261,6 +283,7 @@ export default function ViewEPUB({
           : { label: source.name }),
         blob,
         previewSrc: URL.createObjectURL(blob),
+        ...meta,
       });
       return null;
     } catch (err) {
@@ -276,9 +299,12 @@ export default function ViewEPUB({
 
   // 저장 버튼은 표시한 변경이 있을 때만 그려지고 저장 중에는 disabled 이므로 여기서 따로 막지 않는다.
   const saveMarkedCover = async () => {
+    const illustration = !removeMarked && pendingCover?.beforeIdref;
     const summary = removeMarked
       ? "표지 삭제"
-      : `표지 이미지 ${coverUrl ? "교체" : "추가"}`;
+      : illustration
+        ? "삽화 삽입"
+        : `표지 이미지 ${coverUrl ? "교체" : "추가"}`;
     if (
       !window.confirm(
         `${summary}를 저장합니다. 원본은 0_trash에 보존됩니다. 저장할까요?`,
@@ -292,13 +318,14 @@ export default function ViewEPUB({
       // URL 로 고른 이미지는 서버가 다시 내려받고, 이 기기에서 고른 이미지는 미리 본 JPEG 를 그대로 보낸다.
       const coverBody = removeMarked
         ? null
-        : JSON.stringify(
-            pendingCover.url
+        : JSON.stringify({
+            ...(pendingCover.url
               ? { url: pendingCover.url }
-              : { image_data: await blobToBase64(pendingCover.blob) },
-          );
+              : { image_data: await blobToBase64(pendingCover.blob) }),
+            ...(illustration ? { before_idref: pendingCover.beforeIdref } : {}),
+          });
       const response = await fetch(
-        `${getApiUrlPrefix()}${apiPrefix}/epub-cover/${bookId}`,
+        `${getApiUrlPrefix()}${apiPrefix}/${illustration ? "epub-illustration" : "epub-cover"}/${bookId}`,
         removeMarked
           ? { method: "DELETE", credentials: "include" }
           : {
@@ -312,6 +339,10 @@ export default function ViewEPUB({
       const body = await response.json();
       if (body.status !== "success") {
         throw new Error(body.error || "저장에 실패했습니다.");
+      }
+      // 삽화를 넣으면 뒤쪽 위치가 밀려 저장해 둔 읽기 위치가 어긋나므로, 다시 열 때 새 삽화로 이동한다.
+      if (illustration && body.result?.idref) {
+        jumpIdrefRef.current = body.result.idref;
       }
       replacePendingCover(null);
       setRemoveMarked(false);
@@ -482,6 +513,12 @@ export default function ViewEPUB({
       setErrorMessage(null);
       syncPageInfo(location);
       setAtStart(Boolean(location?.atStart));
+      const sectionIndex = location?.start?.index;
+      setCurrentIdref(
+        typeof sectionIndex === "number"
+          ? book.spine?.get?.(sectionIndex)?.idref || ""
+          : "",
+      );
       if (location?.start?.cfi) {
         cfiRef.current = location.start.cfi;
         syncProgress(location.start.cfi);
@@ -493,27 +530,42 @@ export default function ViewEPUB({
       }, SAVE_THROTTLE_MS);
     });
 
+    // 이 도구가 넣은 표지 페이지(tm-cover-page-*)가 spine 첫 항목이면 그 페이지가 곧 표지다.
+    // 오버레이까지 띄우면 표지가 두 번 보이고, 오버레이는 화면 전체로 확대해 더 크게 보인다.
+    const showCover = (url) => {
+      setCoverUrl(url);
+      if (/^tm-cover-page-/.test(book.spine?.get?.(0)?.idref || "")) return;
+      setIsCoverPage(true);
+      coverPageRef.current = true;
+    };
+
     (async () => {
       try {
         await book.ready;
         if (!preview) prepareLocations();
         const saved = !preview ? readSavedLocation(bookId) : null;
+        const jumpTarget = jumpIdrefRef.current
+          ? book.spine?.get?.(`#${jumpIdrefRef.current}`)
+          : null;
+        jumpIdrefRef.current = "";
 
         const showCoverIfAvailable = async () => {
           if (typeof book.coverUrl !== "function") return;
           try {
             const url = await book.coverUrl();
-            if (url) {
-              setCoverUrl(url);
-              setIsCoverPage(true);
-              coverPageRef.current = true;
-            }
+            if (url) showCover(url);
           } catch {
             // 표지를 읽지 못하면 EPUB 본문을 첫 화면으로 표시한다.
           }
         };
 
-        if (preview || !saved) {
+        if (jumpTarget) {
+          await showCoverIfAvailable();
+          // 표지 오버레이는 첫 화면에서만 필요하므로, 삽화로 곧바로 이동할 때는 닫는다.
+          coverPageRef.current = false;
+          setIsCoverPage(false);
+          await rendition.display(jumpTarget.href);
+        } else if (preview || !saved) {
           await showCoverIfAvailable();
           await rendition.display();
         } else {
@@ -532,11 +584,7 @@ export default function ViewEPUB({
         try {
           if (typeof book.coverUrl === "function") {
             const url = await book.coverUrl().catch(() => null);
-            if (url) {
-              setCoverUrl(url);
-              setIsCoverPage(true);
-              coverPageRef.current = true;
-            }
+            if (url) showCover(url);
           }
           await rendition.display();
         } catch (fallbackErr) {
@@ -851,7 +899,7 @@ export default function ViewEPUB({
         </div>
       )}
 
-      {editable && !isLoading && !errorMessage && epubData && (isCoverPage || atStart) && (
+      {editable && !isLoading && !errorMessage && epubData && (
         <>
           {removeMarked && (
             <div
@@ -864,9 +912,14 @@ export default function ViewEPUB({
               className="epub-cover-page epub-cover-pending viewer-edit-pending"
               data-testid="epub-cover-pending"
             >
-              <img src={pendingCover.previewSrc} alt="저장 전 새 표지" />
+              <img
+                src={pendingCover.previewSrc}
+                alt={pendingCover.beforeIdref ? "저장 전 새 삽화" : "저장 전 새 표지"}
+              />
               <div className="viewer-edit-tag" title={pendingCover.url ?? pendingCover.label}>
-                새 표지 · 저장 전
+                {pendingCover.beforeIdref
+                  ? "새 삽화 · 저장 전 · 보던 쪽 앞에 삽입"
+                  : "새 표지 · 저장 전"}
               </div>
             </div>
           )}
@@ -897,7 +950,9 @@ export default function ViewEPUB({
                 <button
                   type="button"
                   className="viewer-edit-btn"
-                  aria-label="표지 이미지 삽입 취소"
+                  aria-label={
+                    pendingCover.beforeIdref ? "삽화 삽입 취소" : "표지 이미지 삽입 취소"
+                  }
                   title="삽입 취소"
                   disabled={saving}
                   onClick={() => {
@@ -909,24 +964,38 @@ export default function ViewEPUB({
                 </button>
               </>
             )}
-            <button
-              type="button"
-              className={`viewer-edit-btn${pendingCover ? " active" : ""}`}
-              aria-label={coverUrl ? "표지 이미지 교체" : "표지 이미지 추가"}
-              aria-pressed={Boolean(pendingCover)}
-              title={
-                pendingCover
-                  ? "삽입할 이미지 URL 수정"
-                  : coverUrl
-                    ? "표지를 이미지 URL로 교체"
-                    : "표지를 이미지 URL로 추가"
-              }
-              disabled={saving}
-              onClick={() => setCoverDialog(true)}
-            >
-              <AddPhotoAlternateIcon fontSize="small" />
-            </button>
-            {coverUrl && (
+            {!isCoverPage && currentIdref && !currentIdref.startsWith("tm-cover-page-") && (
+              <button
+                type="button"
+                className="viewer-edit-btn"
+                aria-label="이 쪽 앞에 삽화 삽입"
+                title="지금 보는 쪽 앞에 삽화를 삽입"
+                disabled={saving}
+                onClick={() => setIllustrationDialog({ beforeIdref: currentIdref })}
+              >
+                <AddPhotoAlternateIcon fontSize="small" />+
+              </button>
+            )}
+            {(isCoverPage || atStart) && (
+              <button
+                type="button"
+                className={`viewer-edit-btn${pendingCover && !pendingCover.beforeIdref ? " active" : ""}`}
+                aria-label={coverUrl ? "표지 이미지 교체" : "표지 이미지 추가"}
+                aria-pressed={Boolean(pendingCover && !pendingCover.beforeIdref)}
+                title={
+                  pendingCover
+                    ? "삽입할 이미지 URL 수정"
+                    : coverUrl
+                      ? "표지를 이미지 URL로 교체"
+                      : "표지를 이미지 URL로 추가"
+                }
+                disabled={saving}
+                onClick={() => setCoverDialog(true)}
+              >
+                <AddPhotoAlternateIcon fontSize="small" />
+              </button>
+            )}
+            {(isCoverPage || atStart) && coverUrl && (
               <button
                 type="button"
                 className={`viewer-edit-btn${removeMarked ? " active" : ""}`}
@@ -946,13 +1015,29 @@ export default function ViewEPUB({
       {coverDialog && (
         <EpubCoverModal
           hasCover={Boolean(coverUrl)}
-          initialUrl={pendingCover?.url}
+          initialUrl={pendingCover?.beforeIdref ? undefined : pendingCover?.url}
           onSubmit={async (url) => {
             const message = await previewCover(url);
             if (!message) setCoverDialog(false);
             return message;
           }}
           onClose={() => setCoverDialog(false)}
+        />
+      )}
+
+      {illustrationDialog && (
+        <EpubIllustrationModal
+          initialUrl={
+            pendingCover?.beforeIdref ? pendingCover.url : undefined
+          }
+          onSubmit={async (source) => {
+            const message = await previewCover(source, {
+              beforeIdref: illustrationDialog.beforeIdref,
+            });
+            if (!message) setIllustrationDialog(null);
+            return message;
+          }}
+          onClose={() => setIllustrationDialog(null)}
         />
       )}
 

@@ -255,3 +255,196 @@ describe("DirectoryPagePreview", () => {
     expect(mockRawJsonGetReq.mock.calls[1][0]).toBe("/comics/categories/b?limit=1");
   });
 });
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("DirectoryPagePreview 취소·기본값 분기", () => {
+  let originalFetch;
+  const originalDpr = window.devicePixelRatio;
+
+  beforeEach(() => {
+    mockRawJsonGetReq.mockReset();
+    mockGetDocument.mockReset();
+    originalFetch = globalThis.fetch;
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({}));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    window.devicePixelRatio = originalDpr;
+    vi.restoreAllMocks();
+  });
+
+  it("언마운트 뒤에 목록 응답이나 실패가 와도 상태를 바꾸지 않고 요청도 더 보내지 않는다", () => {
+    let callbacks;
+    mockRawJsonGetReq.mockImplementation((url, resolve, reject) => {
+      callbacks = { resolve, reject };
+    });
+    globalThis.fetch = vi.fn();
+    const { unmount } = render(<DirectoryPagePreview category="c" apiPrefix="/comics" />);
+    unmount();
+
+    // 둘 다 예외 없이 무시되고, PDF 를 받으러 가지 않는다.
+    callbacks.resolve({ status: "success", result: [PDF_FILE] });
+    callbacks.reject("late");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("실패 응답에 error 가 없으면 기본 문구를 알린다", async () => {
+    mockRawJsonGetReq.mockImplementation((url, resolve) => resolve({ status: "failure" }));
+    render(<DirectoryPagePreview category="c" apiPrefix="/comics" />);
+    expect((await screen.findByRole("alert")).textContent).toContain("첫 파일을 불러오지 못했습니다.");
+  });
+
+  it("result 가 배열이 아니면 성공 응답이어도 오류로 다룬다", async () => {
+    mockRawJsonGetReq.mockImplementation((url, resolve) =>
+      resolve({ status: "success", result: null, error: "형식 오류" }),
+    );
+    render(<DirectoryPagePreview category="c" apiPrefix="/comics" />);
+    expect((await screen.findByRole("alert")).textContent).toContain("형식 오류");
+  });
+
+  it("file_path 가 없으면 제목을 파일 이름으로 쓴다", async () => {
+    respondWithFirstFile({ book_id: 8, title: "제목만 있는 책", file_type: "txt" });
+    render(<DirectoryPagePreview category="c" apiPrefix="/comics" />);
+    expect((await screen.findByText(/제목만 있는 책/)).textContent).toContain("PDF가 아니라");
+  });
+
+  it("X-Total-Pages 헤더가 없으면 PDF 의 실제 쪽 수를 총 쪽수로 쓴다", async () => {
+    respondWithFirstFile(PDF_FILE);
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+      }),
+    );
+    const doc = createDoc([{ width: 612, height: 792 }, { width: 612, height: 792 }]);
+    mockGetDocument.mockReturnValue({ promise: Promise.resolve(doc) });
+    render(<DirectoryPagePreview category="c" apiPrefix="/comics" />);
+    expect(await screen.findByText(/1~2쪽 \/ 총 2쪽/)).toBeTruthy();
+  });
+
+  it("메시지가 없는 예외는 기본 문구로 알린다", async () => {
+    respondWithFirstFile(PDF_FILE);
+    globalThis.fetch = vi.fn(() => Promise.reject(undefined));
+    render(<DirectoryPagePreview category="c" apiPrefix="/comics" />);
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "미리보기를 불러오지 못했습니다: 미리보기를 불러오지 못했습니다.",
+    );
+  });
+
+  it("PDF 본문을 받는 도중 언마운트하면 문서를 열지 않는다", async () => {
+    respondWithFirstFile(PDF_FILE);
+    const buffer = deferred();
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "X-Total-Pages": "3" }),
+        arrayBuffer: () => buffer.promise,
+      }),
+    );
+    const { unmount } = render(<DirectoryPagePreview category="c" apiPrefix="/comics" />);
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    unmount();
+    buffer.resolve(new ArrayBuffer(8));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockGetDocument).not.toHaveBeenCalled();
+  });
+
+  it("문서를 여는 도중 언마운트하면 늦게 열린 문서를 바로 정리한다", async () => {
+    respondWithFirstFile(PDF_FILE);
+    globalThis.fetch = mockPdfFetch("3");
+    const opening = deferred();
+    mockGetDocument.mockReturnValue({ promise: opening.promise });
+    const { unmount } = render(<DirectoryPagePreview category="c" apiPrefix="/comics" />);
+    await waitFor(() => expect(mockGetDocument).toHaveBeenCalled());
+    unmount();
+
+    const doc = createDoc([{ width: 612, height: 792 }]);
+    opening.resolve(doc);
+    await waitFor(() => expect(doc.loadingTask.destroy).toHaveBeenCalledTimes(1));
+    expect(doc.getPage).not.toHaveBeenCalled();
+  });
+
+  it("devicePixelRatio 가 0 이면 1 로 보고 그린다", async () => {
+    window.devicePixelRatio = 0;
+    respondWithFirstFile(PDF_FILE);
+    globalThis.fetch = mockPdfFetch("1");
+    const doc = createDoc([{ width: 612, height: 792 }]);
+    mockGetDocument.mockReturnValue({ promise: Promise.resolve(doc) });
+    render(<DirectoryPagePreview category="c" apiPrefix="/comics" />);
+
+    await waitFor(() => expect(doc.rendered).toHaveLength(1));
+    const expected = previewScale(612, 792, 1);
+    expect(doc.rendered[0].viewport.height).toBeCloseTo(792 * expected);
+  });
+
+  it("크기가 0 인 쪽은 건너뛰고 나머지 쪽을 그린다", async () => {
+    respondWithFirstFile(PDF_FILE);
+    globalThis.fetch = mockPdfFetch("2");
+    const doc = createDoc([{ width: 0, height: 0 }, { width: 612, height: 792 }]);
+    mockGetDocument.mockReturnValue({ promise: Promise.resolve(doc) });
+    render(<DirectoryPagePreview category="c" apiPrefix="/comics" />);
+
+    await waitFor(() => expect(doc.rendered).toHaveLength(1));
+    expect(doc.rendered[0].number).toBe(2);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("쪽을 가져오는 도중 언마운트하면 그리지 않는다", async () => {
+    respondWithFirstFile(PDF_FILE);
+    globalThis.fetch = mockPdfFetch("2");
+    const doc = createDoc([{ width: 612, height: 792 }, { width: 612, height: 792 }]);
+    const gate = deferred();
+    const realGetPage = doc.getPage;
+    doc.getPage = vi.fn((number) => gate.promise.then(() => realGetPage(number)));
+    mockGetDocument.mockReturnValue({ promise: Promise.resolve(doc) });
+    const { unmount } = render(<DirectoryPagePreview category="c" apiPrefix="/comics" />);
+    await waitFor(() => expect(doc.getPage).toHaveBeenCalledTimes(1));
+    unmount();
+    gate.resolve();
+    await waitFor(() => expect(realGetPage).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+
+    expect(doc.rendered).toHaveLength(0);
+    expect(doc.getPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("쪽을 그리는 도중 언마운트하면 다음 쪽을 가져오지 않는다", async () => {
+    respondWithFirstFile(PDF_FILE);
+    globalThis.fetch = mockPdfFetch("2");
+    const sizes = [{ width: 612, height: 792 }, { width: 612, height: 792 }];
+    const doc = createDoc(sizes);
+    const painting = deferred();
+    const realGetPage = doc.getPage;
+    doc.getPage = vi.fn((number) =>
+      realGetPage(number).then((page) => ({
+        ...page,
+        render: () => ({ promise: painting.promise }),
+      })),
+    );
+    mockGetDocument.mockReturnValue({ promise: Promise.resolve(doc) });
+    const { unmount } = render(<DirectoryPagePreview category="c" apiPrefix="/comics" />);
+    await waitFor(() => expect(doc.getPage).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    unmount();
+    painting.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(doc.getPage).toHaveBeenCalledTimes(1);
+  });
+});

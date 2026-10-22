@@ -244,3 +244,44 @@ describe("dimClipPath", () => {
     expect(path).toContain("60% 70%");
   });
 });
+
+describe("cropRect 보강 (경계 분기)", () => {
+  it("unionDimRects 는 거의 같은 x 경계가 만든 폭 0 띠를 건너뛴다", () => {
+    const a = { x0: 0.5, y0: 0, x1: 0.8, y1: 1 };
+    const b = { x0: 0.5 + 1e-12, y0: 0, x1: 0.9, y1: 1 };
+    const pieces = unionDimRects([a, b]);
+    // 폭이 1e-9 이하인 조각은 없고, 덮는 면적은 쪽 전체에서 합집합(0.5~0.9)을 뺀 값이다.
+    expect(pieces.every((piece) => piece.width > 1e-9)).toBe(true);
+    expect(area(pieces)).toBeCloseTo(1 - 0.4);
+  });
+
+  it("angle 이 없는 박스는 각도 0 으로 보고 꼭짓점을 계산한다", () => {
+    const corners = boxCorners({ x0: 0.25, y0: 0.25, x1: 0.75, y1: 0.75 }, 100, 100);
+    expect(corners).toEqual([
+      [25, 25],
+      [75, 25],
+      [75, 75],
+      [25, 75],
+    ]);
+  });
+
+  it("angle 이 없는 박스의 resizeBox 는 resizeRect 와 같다", () => {
+    const plain = { x0: 0.2, y0: 0.2, x1: 0.8, y1: 0.8 };
+    expect(resizeBox(plain, "s", 0, 10, 100, 100)).toEqual(resizeRect(plain, "s", 0, 0.1));
+  });
+
+  it("기울어진 박스의 위쪽(n) 변은 박스 축을 따라 움직이고 아래쪽 변은 고정된다", () => {
+    const rect = { x0: 0.4, y0: 0.3, x1: 0.6, y1: 0.7, angle: 90 };
+    // 90도: 박스의 세로축이 화면의 왼쪽을 향한다. 위쪽 변을 화면 왼쪽으로 10px 끌면 높이가 10px 줄어든다.
+    const next = resizeBox(rect, "n", -10, 0, 100, 100);
+    expect(next.y1 - next.y0).toBeCloseTo(0.3);
+    expect(next.x1 - next.x0).toBeCloseTo(0.2);
+  });
+
+  it("기울어진 박스의 아래쪽(s) 변도 박스 축을 따라 움직인다", () => {
+    const rect = { x0: 0.4, y0: 0.3, x1: 0.6, y1: 0.7, angle: 90 };
+    // 90도: 아래쪽 변을 화면 왼쪽으로 10px 끌면 높이가 10px 는다.
+    const next = resizeBox(rect, "s", -10, 0, 100, 100);
+    expect(next.y1 - next.y0).toBeCloseTo(0.5);
+  });
+});

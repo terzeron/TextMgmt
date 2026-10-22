@@ -959,9 +959,12 @@ def test_get_epub_total_chapters(tmp_path: Path):
         zf.writestr(
             "content.opf",
             """<package xmlns="http://www.idpf.org/2007/opf">
+          <manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></manifest>
           <spine><itemref idref="c1"/><itemref idref="c2"/></spine>
         </package>""",
         )
+        zf.writestr("c1.xhtml", "<html/>")
+        zf.writestr("c2.xhtml", "<html/>")
     assert BookManager._get_epub_total_chapters(epub) == 2
 
 
@@ -6302,3 +6305,131 @@ def test_proposal_expected_accuracy_is_none_without_calibration(tmp_path: Path):
     proposal = manager._propose_category_for_file(book, "A", {}, fake, True, True)
 
     assert proposal["expected_accuracy"] is None
+
+
+# --- 미선언 네임스페이스 접두사 보정 ---
+
+_OPF_NS = "http://www.idpf.org/2007/opf"
+
+
+def _opf(sep: str = " ", attr: str = 'opf:role="aut"', extra_decl: str = "") -> bytes:
+    return f'<?xml version="1.0"?>\n<package{sep}xmlns="{_OPF_NS}"{extra_decl} version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator {attr}>x</dc:creator></metadata><manifest/><spine/></package>'.encode()
+
+
+def _strict_parses(data: bytes) -> bool:
+    from xml.etree import ElementTree
+
+    try:
+        ElementTree.fromstring(data)
+    except ElementTree.ParseError:
+        return False
+    return True
+
+
+@pytest.mark.parametrize("sep", [" ", "\n  ", "\t"])
+def test_declare_unbound_prefixes_handles_any_whitespace_after_package(sep: str):
+    from backend.book_manager import _declare_unbound_prefixes
+
+    fixed = _declare_unbound_prefixes(_opf(sep))
+    assert _strict_parses(fixed)
+    assert f'xmlns:opf="{_OPF_NS}"' in fixed.decode()
+
+
+@pytest.mark.parametrize(("attr", "prefix"), [('xsi:type="x"', "xsi"), ('calibre:series="s"', "calibre")])
+def test_declare_unbound_prefixes_handles_prefixes_other_than_opf(attr: str, prefix: str):
+    from backend.book_manager import _declare_unbound_prefixes
+
+    fixed = _declare_unbound_prefixes(_opf(attr=attr))
+    assert _strict_parses(fixed)
+    assert f"xmlns:{prefix}=" in fixed.decode()
+
+
+def test_declare_unbound_prefixes_returns_input_unchanged_when_nothing_is_missing():
+    from backend.book_manager import _declare_unbound_prefixes
+
+    clean = _opf(attr='id="a"')
+    assert _declare_unbound_prefixes(clean) is clean
+    declared = _opf(extra_decl=f' xmlns:opf="{_OPF_NS}"')
+    assert _declare_unbound_prefixes(declared) is declared
+
+
+def test_declare_unbound_prefixes_ignores_prefixes_that_only_appear_in_values_and_text():
+    from backend.book_manager import _declare_unbound_prefixes
+
+    data = b'<?xml version="1.0"?><!-- <fake:tag a:b="1"/> --><package xmlns="http://www.idpf.org/2007/opf"><meta property="dcterms:modified">urn:uuid:x</meta></package>'
+    assert _declare_unbound_prefixes(data) is data
+
+
+def test_declare_unbound_prefixes_keeps_xml_prefix_and_declares_each_prefix_once():
+    from backend.book_manager import _declare_unbound_prefixes
+
+    data = b'<package xmlns="http://www.idpf.org/2007/opf" xml:lang="ko"><a opf:x="1" opf:y="2"/><b xsi:z="1"/></package>'
+    fixed = _declare_unbound_prefixes(data).decode()
+    assert fixed.count("xmlns:opf=") == 1 and "xmlns:xml=" not in fixed
+    assert _strict_parses(fixed.encode())
+
+
+def test_declare_unbound_prefixes_without_root_element_is_unchanged():
+    from backend.book_manager import _declare_unbound_prefixes
+
+    assert _declare_unbound_prefixes(b"not xml") == b"not xml"
+
+
+# --- 누락된 spine 문서: 총 챕터 수와 NCX 목차 ---
+
+_NCX_NS = "http://www.daisy.org/z3986/2005/ncx/"
+
+
+def _epub_with_missing_page(path: Path, *, include_page: bool) -> Path:
+    container = '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
+    opf = '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0"><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="a" href="Text/a.xhtml" media-type="application/xhtml+xml"/><item id="colophon" href="Text/colophon%20page.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="a"/><itemref idref="colophon"/><itemref idref="ghost"/></spine></package>'
+    ncx = f'<?xml version="1.0"?><ncx xmlns="{_NCX_NS}"><navMap><navPoint id="n1"><navLabel><text>A</text></navLabel><content src="Text/a.xhtml#top"/></navPoint><navPoint id="n2"><navLabel><text>판권</text></navLabel><content src="Text/colophon%20page.xhtml"/><navPoint id="n3"><navLabel><text>자식</text></navLabel><content src="Text/a.xhtml#kid"/></navPoint></navPoint></navMap></ncx>'
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip", zipfile.ZIP_STORED)
+        zf.writestr("META-INF/container.xml", container)
+        zf.writestr("OEBPS/content.opf", opf)
+        zf.writestr("OEBPS/toc.ncx", ncx)
+        zf.writestr("OEBPS/Text/a.xhtml", "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>본문</p></body></html>")
+        if include_page:
+            zf.writestr("OEBPS/Text/colophon page.xhtml", "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>판권</p></body></html>")
+    return path
+
+
+def test_total_chapters_counts_only_spine_items_that_exist_in_the_zip(tmp_path: Path):
+    """manifest 에 없는 idref 와 ZIP 에 없는 문서는 뷰어가 보여 줄 수 없으므로 세지 않는다."""
+    assert BookManager._get_epub_total_chapters(_epub_with_missing_page(tmp_path / "missing.epub", include_page=False)) == 1
+    assert BookManager._get_epub_total_chapters(_epub_with_missing_page(tmp_path / "full.epub", include_page=True)) == 2
+
+
+def _ncx_srcs(data: bytes) -> list[str]:
+    from lxml import etree
+
+    return [c.get("src") for c in etree.fromstring(data).iter(f"{{{_NCX_NS}}}content")]
+
+
+def test_prune_dead_ncx_navpoints_drops_missing_targets_and_keeps_children(tmp_path: Path):
+    from backend.book_manager import _prune_dead_ncx_navpoints
+
+    with zipfile.ZipFile(_epub_with_missing_page(tmp_path / "m.epub", include_page=False)) as zf:
+        ncx = zf.read("OEBPS/toc.ncx")
+    names = {"OEBPS/Text/a.xhtml"}
+    pruned = _prune_dead_ncx_navpoints(ncx, "OEBPS", lambda path: path in names)
+    # 판권 항목만 사라지고, 그 아래 자식은 부모 자리로 올라온다
+    assert _ncx_srcs(pruned) == ["Text/a.xhtml#top", "Text/a.xhtml#kid"]
+
+
+def test_prune_dead_ncx_navpoints_returns_none_when_nothing_is_dead(tmp_path: Path):
+    from backend.book_manager import _prune_dead_ncx_navpoints
+
+    with zipfile.ZipFile(_epub_with_missing_page(tmp_path / "f.epub", include_page=True)) as zf:
+        ncx = zf.read("OEBPS/toc.ncx")
+    names = {"OEBPS/Text/a.xhtml", "OEBPS/Text/colophon page.xhtml"}
+    assert _prune_dead_ncx_navpoints(ncx, "OEBPS", lambda path: path in names) is None
+
+
+def test_prune_dead_ncx_navpoints_ignores_unparsable_ncx_and_empty_src():
+    from backend.book_manager import _prune_dead_ncx_navpoints
+
+    assert _prune_dead_ncx_navpoints(b"<ncx", "OEBPS", lambda path: False) is None
+    no_src = f'<ncx xmlns="{_NCX_NS}"><navMap><navPoint id="x"><content src=""/></navPoint><navPoint id="y"/></navMap></ncx>'.encode()
+    assert _prune_dead_ncx_navpoints(no_src, "", lambda path: False) is None

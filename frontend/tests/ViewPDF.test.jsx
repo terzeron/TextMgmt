@@ -1119,6 +1119,70 @@ describe("ViewPDF", () => {
     }
   });
 
+  // 쪽 크기를 알 수 없는(0x0) PDF 는 비율을 1 로 보고, 비트맵 크기가 0 인 canvas 는 해제 대상에서 건너뛴다.
+  it("쪽 크기가 0x0 인 PDF 도 멀어진 쪽 해제 중 예외 없이 canvas 를 그대로 둔다", async () => {
+    const TOTAL = 21;
+    const renderSpy = vi.fn(() => ({ promise: Promise.resolve() }));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    setupGetDocument(() => {
+      const pdf = {
+        numPages: 10,
+        getPage: vi.fn(() =>
+          Promise.resolve({
+            getViewport: () => ({ width: 0, height: 0 }),
+            render: renderSpy,
+          }),
+        ),
+      };
+      pdf.loadingTask = { promise: Promise.resolve(pdf), destroy: vi.fn() };
+      return pdf;
+    });
+    globalThis.fetch = createMockFetch(TOTAL);
+
+    const observers = [];
+    const RealIO = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        observers.push(this);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+
+    try {
+      render(<ViewPDF bookId={1} />);
+      await waitFor(() => {
+        expect(document.querySelectorAll("canvas.pdf-page").length).toBe(TOTAL);
+      });
+      const canvases = [...document.querySelectorAll("canvas.pdf-page")];
+      const obs = observers[observers.length - 1];
+      const fire = (pageNum, isIntersecting) =>
+        act(() => {
+          obs.cb([{ isIntersecting, target: canvases[pageNum - 1] }], obs);
+        });
+
+      await fire(1, true);
+      await waitFor(() => expect(renderSpy).toHaveBeenCalledTimes(1));
+      for (let p = 2; p <= TOTAL; p++) {
+        await fire(p, true);
+        await fire(p - 1, false);
+        await waitFor(() => expect(renderSpy).toHaveBeenCalledTimes(p));
+      }
+
+      // 비트맵이 0x0 이라 줄일 것이 없고 aspect-ratio 잠금도 걸지 않는다.
+      expect(canvases[0].width).toBe(0);
+      expect(canvases[0].height).toBe(0);
+      expect(canvases[0].style.aspectRatio).toBe("");
+      expect(
+        errorSpy.mock.calls.filter(([message]) => String(message).includes("렌더링 실패")),
+      ).toEqual([]);
+    } finally {
+      globalThis.IntersectionObserver = RealIO;
+    }
+  });
+
   // ── 줌 경계값 (zoomUp/zoomDown clamp) ──
 
   it("최대 줌(500%)에서 + 를 더 눌러도 500%를 유지하고 + 버튼이 비활성화된다", async () => {

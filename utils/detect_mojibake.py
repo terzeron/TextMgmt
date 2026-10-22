@@ -25,18 +25,35 @@ detect_mojibake.py
     uv run python utils/detect_mojibake.py scan
     uv run python utils/detect_mojibake.py scan --root /mnt/data/text/9_격언명언
     uv run python utils/detect_mojibake.py check --file '/mnt/data/text/9_격언명언/명언.txt'
+
+리포트는 대상 디렉토리마다 다른 이름으로 tmp/ 에 쓴다(예: tmp/epub_structure_report_2_소설외국.json).
+--report 로 경로를 직접 줄 수도 있다.
+
+EPUB 구조 검사(`epub-structure`)는 인코딩과 별개다. epubcheck 는 XML 규격만 보므로
+`<html:html>` 처럼 접두사가 붙은 본문도 통과시키지만, 뷰어의 정제기는 이를 거부한다.
+뷰어가 렌더링하지 못하는 구조를 찾는다.
+단 bad_mimetype 은 표준 위반일 뿐 뷰어를 깨뜨리지 않는다. 미리보기와 표지·삽화 편집이 mimetype 을
+맨 앞에 무압축으로 다시 쓰기 때문이다. 원본을 그대로 읽는 다른 리더를 위한 표준 적합성 검사다.
+
+    uv run python utils/detect_mojibake.py epub-structure --root /mnt/data/text/2_소설외국
+    uv run python utils/detect_mojibake.py epub-structure --file '/mnt/data/text/2_소설Abe전집/73 ... .epub'
 """
 
 import argparse
 import json
 import logging
 import os
+import posixpath
+import re
 import sys
 import time
+import zipfile
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import unquote
+from xml.etree import ElementTree
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -69,6 +86,23 @@ VERDICT_CORRUPTED = "corrupted"
 VERDICT_CLEAN = "clean"
 VERDICT_UNDETERMINED = "undetermined"
 VERDICT_UNREADABLE = "unreadable"
+
+EPUB_MIMETYPE = b"application/epub+zip"
+ISSUE_NOT_ZIP = "not_zip"
+ISSUE_BAD_MIMETYPE = "bad_mimetype"
+ISSUE_NO_CONTAINER = "no_container"
+ISSUE_OPF_MISSING = "opf_missing"
+ISSUE_OPF_UNPARSABLE = "opf_unparsable"
+ISSUE_SPINE_MEMBER_MISSING = "spine_member_missing"
+ISSUE_PREFIXED_ROOT = "prefixed_root"
+EPUB_ISSUES = (ISSUE_NOT_ZIP, ISSUE_BAD_MIMETYPE, ISSUE_NO_CONTAINER, ISSUE_OPF_MISSING, ISSUE_OPF_UNPARSABLE, ISSUE_SPINE_MEMBER_MISSING, ISSUE_PREFIXED_ROOT)
+
+# 루트 태그는 파일 앞부분에 있다. DOCTYPE 내부 선언(<!ELEMENT)과 주석은 건너뛴다.
+ROOT_TAG_HEAD_BYTES = 4096
+ROOT_TAG_RE = re.compile(rb"<(?![?!])([^\s/>]+)")
+COMMENT_RE = re.compile(rb"<!--.*?-->", re.DOTALL)
+# container.xml, OPF 는 작다. 비정상적으로 큰 멤버는 읽지 않는다.
+MAX_XML_BYTES = 5 * 1024 * 1024
 
 
 def classify_text(text: str) -> Tuple[str, Optional[float]]:
@@ -107,6 +141,121 @@ def inspect_file(path_str: str) -> Dict[str, Any]:
         # 같은 '판독 불가'라도 원인이 다르다. 빈 파일과 본문 추출 실패를 구분해 둔다.
         reason = "missing_or_empty" if size == 0 else ("no_text_extracted" if not text else "too_short")
     return {"path": path_str, "category": p.relative_to(DEFAULT_LIBRARY_ROOT).parts[0] if str(p).startswith(str(DEFAULT_LIBRARY_ROOT)) else "", "verdict": verdict, "likeness": round(likeness, 4) if likeness is not None else None, "size": size, "sample_len": len(text), "reason": reason}
+
+
+def default_report_path(kind: str, root: Path) -> Path:
+    """대상 디렉토리마다 다른 리포트 경로. 다른 디렉토리를 스캔해도 이전 리포트를 덮어쓰지 않는다.
+
+    라이브러리 하위는 상대 경로(2_소설외국, 하위는 __ 로 잇는다), 라이브러리 루트는 all,
+    라이브러리 밖은 디렉토리 이름을 쓴다.
+    """
+    root = Path(os.path.abspath(root))
+    try:
+        parts = root.relative_to(DEFAULT_LIBRARY_ROOT).parts
+    except ValueError:
+        parts = (root.name,)
+    slug = "__".join(re.sub(r"[^\w.-]+", "_", part) for part in parts) or "all"
+    return REPO_ROOT / "tmp" / f"{kind}_report_{slug}.json"
+
+
+def _category_of(p: Path) -> str:
+    return p.relative_to(DEFAULT_LIBRARY_ROOT).parts[0] if str(p).startswith(str(DEFAULT_LIBRARY_ROOT)) else ""
+
+
+def _read_member(zf: zipfile.ZipFile, name: str, limit: int = MAX_XML_BYTES) -> Optional[bytes]:
+    """ZIP 멤버를 읽는다. 없거나 깨졌거나 limit 를 넘으면 None"""
+    try:
+        with zf.open(name) as f:
+            data = f.read(limit + 1)
+    except Exception:  # noqa: BLE001  손상 ZIP 은 KeyError/BadZipFile/zlib.error/RuntimeError 등으로 제각각 실패한다
+        return None
+    return None if len(data) > limit else data
+
+
+def _local_name(tag: str) -> str:
+    return tag.rpartition("}")[2]
+
+
+def _root_tag_name(head: bytes) -> Optional[str]:
+    """XML 문서 루트 요소의 원래 이름(접두사 포함)"""
+    m = ROOT_TAG_RE.search(COMMENT_RE.sub(b"", head))
+    return m.group(1).decode("utf-8", errors="replace") if m else None
+
+
+def _spine_members(opf: ElementTree.Element, opf_path: str) -> List[str]:
+    """spine 순서대로 본문 문서의 ZIP 멤버 경로를 돌려준다"""
+    manifest = {el.get("id"): el.get("href") for el in opf.iter() if _local_name(el.tag) == "item" and el.get("href")}
+    base = posixpath.dirname(opf_path)
+    members = []
+    for el in opf.iter():
+        if _local_name(el.tag) == "itemref" and manifest.get(el.get("idref")):
+            href = unquote(manifest[el.get("idref")]).split("#")[0]
+            members.append(posixpath.normpath(posixpath.join(base, href)))
+    return members
+
+
+def inspect_epub_structure(path_str: str) -> Dict[str, Any]:
+    """EPUB 한 건의 구조를 검사한다. 뷰어가 렌더링하지 못할 구조만 찾는다.
+
+    issues 는 중복 없는 코드 목록이고, examples 는 코드별 첫 사례 멤버다.
+    """
+    p = Path(path_str)
+    issues: List[str] = []
+    examples: Dict[str, str] = {}
+
+    def flag(code: str, member: str = "") -> None:
+        if code not in issues:
+            issues.append(code)
+            examples[code] = member
+
+    def result() -> Dict[str, Any]:
+        return {"path": path_str, "category": _category_of(p), "issues": issues, "examples": examples}
+
+    try:
+        zf = zipfile.ZipFile(path_str)
+    except (zipfile.BadZipFile, OSError):
+        flag(ISSUE_NOT_ZIP)
+        return result()
+
+    with zf:
+        infos = zf.infolist()
+        first = infos[0] if infos else None
+        mimetype = _read_member(zf, "mimetype", 64) if first is not None and first.filename == "mimetype" else None
+        if first is None or first.compress_type != zipfile.ZIP_STORED or (mimetype or b"").strip() != EPUB_MIMETYPE:
+            flag(ISSUE_BAD_MIMETYPE, first.filename if first else "")
+
+        container = _read_member(zf, "META-INF/container.xml")
+        if container is None:
+            flag(ISSUE_NO_CONTAINER, "META-INF/container.xml")
+            return result()
+        try:
+            rootfile = next(el for el in ElementTree.fromstring(container).iter() if _local_name(el.tag) == "rootfile")
+            opf_path = posixpath.normpath(unquote(rootfile.get("full-path", "")))
+        except (ElementTree.ParseError, StopIteration):
+            flag(ISSUE_NO_CONTAINER, "META-INF/container.xml")
+            return result()
+
+        opf_bytes = _read_member(zf, opf_path)
+        if opf_bytes is None:
+            flag(ISSUE_OPF_MISSING, opf_path)
+            return result()
+        try:
+            members = _spine_members(ElementTree.fromstring(opf_bytes), opf_path)
+        except ElementTree.ParseError:
+            flag(ISSUE_OPF_UNPARSABLE, opf_path)
+            return result()
+
+        names = set(zf.namelist())
+        for member in members:
+            if member not in names:
+                flag(ISSUE_SPINE_MEMBER_MISSING, member)
+                continue
+            with zf.open(member) as f:
+                root_name = _root_tag_name(f.read(ROOT_TAG_HEAD_BYTES))
+            if root_name and ":" in root_name:
+                flag(ISSUE_PREFIXED_ROOT, member)
+
+    return result()
 
 
 def list_library_files(root: Path) -> List[Path]:
@@ -166,6 +315,30 @@ def scan(root: Path, workers: int = DEFAULT_WORKERS, limit: int = 0, progress_ev
     }
 
 
+def scan_epub_structure(root: Path, workers: int = DEFAULT_WORKERS, limit: int = 0) -> Dict[str, Any]:
+    """라이브러리의 EPUB 구조를 훑어 문제가 있는 파일 목록을 모은다"""
+    files = [p for p in list_library_files(root) if p.suffix.lower() == ".epub"]
+    if limit > 0:
+        files = files[:limit]
+    LOGGER.info(f"EPUB {len(files):,}건, 워커 {workers}개")
+
+    t0 = time.time()
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(inspect_epub_structure, [str(p) for p in files], chunksize=64))
+
+    flagged = [r for r in results if r["issues"]]
+    counts = {code: sum(1 for r in flagged if code in r["issues"]) for code in EPUB_ISSUES}
+    return {"scanned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "root": str(root), "total": len(results), "flagged_count": len(flagged), "counts": counts, "elapsed_sec": round(time.time() - t0, 1), "flagged": flagged}
+
+
+def print_epub_structure_summary(report: Dict[str, Any]) -> None:
+    total = report["total"] or 1
+    print(f"\nEPUB {report['total']:,}건 검사 / {report['elapsed_sec'] / 60:.1f}분, 문제 {report['flagged_count']:,}건 ({report['flagged_count'] / total:.2%})")
+    for code, n in report["counts"].items():
+        if n:
+            print(f"  {code:<22}{n:>8,}")
+
+
 def print_summary(report: Dict[str, Any]) -> None:
     counts = report["counts"]
     total = report["total"] or 1
@@ -189,15 +362,28 @@ def print_summary(report: Dict[str, Any]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="인코딩 손상 문서 전수 검사")
-    parser.add_argument("command", choices=["scan", "check"])
+    parser.add_argument("command", choices=["scan", "check", "epub-structure"])
     parser.add_argument("--root", type=Path, default=DEFAULT_LIBRARY_ROOT)
     parser.add_argument("--file", type=Path, action="append", default=None)
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     parser.add_argument("--limit", type=int, default=0, help="0 이면 전체")
-    parser.add_argument("--report", type=Path, default=REPO_ROOT / "tmp" / "mojibake_report.json")
+    parser.add_argument("--report", type=Path, default=None, help="기본값은 대상 디렉토리별 tmp/mojibake_report_<디렉토리>.json, epub-structure 는 tmp/epub_structure_report_<디렉토리>.json")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.command == "epub-structure":
+        if args.file:
+            for f in args.file:
+                print(json.dumps(inspect_epub_structure(str(f)), ensure_ascii=False))
+            return 0
+        report = scan_epub_structure(args.root, workers=args.workers, limit=args.limit)
+        report_path = args.report or default_report_path("epub_structure", args.root)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print_epub_structure_summary(report)
+        print(f"\n리포트: {report_path}")
+        return 0
 
     if args.command == "check":
         if not args.file:
@@ -208,10 +394,11 @@ def main() -> int:
         return 0
 
     report = scan(args.root, workers=args.workers, limit=args.limit)
-    args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    report_path = args.report or default_report_path("mojibake", args.root)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print_summary(report)
-    print(f"\n리포트: {args.report}")
+    print(f"\n리포트: {report_path}")
     return 0
 
 

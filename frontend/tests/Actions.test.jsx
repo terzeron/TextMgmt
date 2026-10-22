@@ -440,39 +440,97 @@ describe("카테고리 버튼 하이라이트", () => {
     expect(novelBtn.className).toContain("highlight");
   });
 
-  it("suggestedCategories 변경 시 manuallyClicked가 초기화된다", () => {
-    const selectFn = vi.fn();
-    const { rerender } = render(
-      <Actions
-        {...defaultProps}
-        suggestedCategories={{ yes24: "소설" }}
-        selectedCategory="소설"
-        selectDirectoryButtonClicked={selectFn}
-      />,
-    );
-    // 수동 클릭
-    fireEvent.click(screen.getByText("역사"));
-    rerender(
-      <Actions
-        {...defaultProps}
-        suggestedCategories={{ yes24: "소설" }}
-        selectedCategory="역사"
-        selectDirectoryButtonClicked={selectFn}
-      />,
-    );
-    // suggestedCategories가 변경되면 자동 선택으로 돌아감
-    rerender(
-      <Actions
-        {...defaultProps}
-        suggestedCategories={{ yes24: "역사" }}
-        selectedCategory="역사"
-        selectDirectoryButtonClicked={selectFn}
-      />,
-    );
-    const btn = screen.getByText("역사");
-    // 자동 선택이므로 highlight 클래스 유지
-    expect(btn.className).toContain("highlight");
-    expect(btn.style.backgroundColor).not.toBe("rgb(255, 255, 255)");
+  describe("사용자가 직접 고른 카테고리가 우선한다", () => {
+    const manualPick = () => {
+      const selectFn = vi.fn();
+      const view = render(
+        <Actions
+          {...defaultProps}
+          suggestedCategories={{ yes24: "소설" }}
+          selectedCategory="소설"
+          selectDirectoryButtonClicked={selectFn}
+        />,
+      );
+      fireEvent.click(screen.getByText("역사"));
+      selectFn.mockClear();
+      return { selectFn, ...view };
+    };
+
+    it("클릭한 뒤 새 서점 결과가 도착해도 선택을 바꾸지 않는다", () => {
+      const { selectFn, rerender } = manualPick();
+
+      rerender(
+        <Actions
+          {...defaultProps}
+          suggestedCategories={{ yes24: "과학" }}
+          selectedCategory="역사"
+          selectDirectoryButtonClicked={selectFn}
+        />,
+      );
+
+      expect(selectFn).not.toHaveBeenCalled();
+      expect(screen.getByText("역사").style.backgroundColor).toBe("rgb(255, 255, 255)");
+    });
+
+    it("카테고리 목록이 내용은 같고 새 배열로 바뀌어도 선택을 바꾸지 않는다", () => {
+      const { selectFn, rerender } = manualPick();
+
+      rerender(
+        <Actions
+          {...defaultProps}
+          otherCategoryList={["소설", "역사", "과학"]}
+          suggestedCategories={{ yes24: "소설" }}
+          selectedCategory="역사"
+          selectDirectoryButtonClicked={selectFn}
+        />,
+      );
+
+      expect(selectFn).not.toHaveBeenCalled();
+    });
+
+    it("검색 결과가 비었다가 다시 채워져도 선택을 바꾸지 않는다", () => {
+      const { selectFn, rerender } = manualPick();
+      const props = { ...defaultProps, selectedCategory: "역사", selectDirectoryButtonClicked: selectFn };
+
+      rerender(<Actions {...props} suggestedCategories={{}} />);
+      rerender(<Actions {...props} suggestedCategories={{ aladin: "과학" }} />);
+
+      expect(selectFn).not.toHaveBeenCalled();
+    });
+
+    it("다른 책으로 바뀌면 다시 자동 선택한다", () => {
+      const { selectFn, rerender } = manualPick();
+      const props = { ...defaultProps, selectedCategory: "역사", selectDirectoryButtonClicked: selectFn };
+
+      rerender(<Actions {...props} selectedEntryId="test/2" suggestedCategories={{}} />);
+      rerender(<Actions {...props} selectedEntryId="test/2" selectedCategory="" suggestedCategories={{ yes24: "과학" }} />);
+
+      expect(selectFn).toHaveBeenCalledWith(null, "과학");
+    });
+
+    it("직접 고르기 전에는 새 서점 결과로 자동 선택을 갱신한다", () => {
+      const selectFn = vi.fn();
+      const { rerender } = render(
+        <Actions
+          {...defaultProps}
+          suggestedCategories={{ yes24: "소설" }}
+          selectedCategory="소설"
+          selectDirectoryButtonClicked={selectFn}
+        />,
+      );
+      selectFn.mockClear();
+
+      rerender(
+        <Actions
+          {...defaultProps}
+          suggestedCategories={{ yes24: "역사" }}
+          selectedCategory="소설"
+          selectDirectoryButtonClicked={selectFn}
+        />,
+      );
+
+      expect(selectFn).toHaveBeenCalledWith(null, "역사");
+    });
   });
 });
 

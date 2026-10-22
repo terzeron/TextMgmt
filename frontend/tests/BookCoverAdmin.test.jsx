@@ -1539,3 +1539,210 @@ describe("책 표지 관리", () => {
     expect(screen.getByRole("button", { name: /YES24.*서점 책.*표지 선택/ }).style.backgroundColor).toBe("rgb(0, 255, 0)");
   });
 });
+
+describe("책 표지 관리: 동시 조작과 경계 상태", () => {
+  // 저장(/apply-image)을 끝내지 않은 채 후보를 골라 저장 직전 상태로 만든다.
+  async function prepareSelectedCover() {
+    setup();
+    const pending = deferred();
+    overrideRequest((path, options, original) => path === "/apply-image" ? pending.promise : original(path, options));
+    render(<BookCoverAdmin />);
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
+    await waitFor(() => expect(candidate.disabled).toBe(false));
+    fireEvent.click(candidate);
+    fireEvent.load(screen.getByAltText("테스트 책 선택한 표지"));
+    const confirm = screen.getByRole("button", { name: "테스트 책 표지 저장 · 행 숨기기" });
+    return { candidate, confirm, pending };
+  }
+  const applyImageCalls = () => request.mock.calls.filter(([path]) => path === "/apply-image");
+
+  it("저장을 시작한 같은 순간의 후보 재선택은 무시하고 선택한 표지를 유지한다", async () => {
+    const { candidate, confirm, pending } = await prepareSelectedCover();
+    URL.revokeObjectURL.mockClear();
+
+    act(() => {
+      confirm.click();
+      candidate.click();
+    });
+
+    // 재선택이 처리됐다면 이전 선택 미리보기를 해제(revoke)했을 것이다.
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    await waitFor(() => expect(applyImageCalls()).toHaveLength(1));
+    await act(async () => pending.resolve({ revision: "r2" }));
+  });
+
+  it("같은 책의 저장 확인을 연달아 눌러도 한 번만 저장한다", async () => {
+    const { confirm, pending } = await prepareSelectedCover();
+
+    act(() => {
+      confirm.click();
+      confirm.click();
+    });
+
+    await waitFor(() => expect(applyImageCalls()).toHaveLength(1));
+    await act(async () => pending.resolve({ revision: "r2" }));
+    expect(applyImageCalls()).toHaveLength(1);
+  });
+
+  it("저장 중인 책의 휴지통 클릭은 확인 창도 띄우지 않고 무시한다", async () => {
+    const { confirm, pending } = await prepareSelectedCover();
+    const confirmDialog = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    act(() => {
+      confirm.click();
+      screen.getByRole("button", { name: "테스트 책 임시 표지 삭제" }).click();
+    });
+
+    expect(confirmDialog).not.toHaveBeenCalled();
+    await waitFor(() => expect(applyImageCalls()).toHaveLength(1));
+    await act(async () => pending.resolve({ revision: "r2" }));
+  });
+
+  it("디렉토리를 바꾼 뒤 늦게 실패한 저장은 새 목록에 오류를 남기지 않는다", async () => {
+    const { confirm, pending } = await prepareSelectedCover();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(applyImageCalls()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "다른 디렉토리" }));
+    await act(async () => pending.reject(new Error("늦은 저장 실패")));
+
+    expect(screen.queryByText("늦은 저장 실패")).toBeNull();
+    expect(await screen.findByRole("heading", { name: "테스트 책" })).toBeTruthy();
+  });
+
+  it("디렉토리를 바꾼 뒤 늦게 실패한 재검색의 캐시 삭제는 새 목록에 오류를 남기지 않는다", async () => {
+    setup();
+    const pending = deferred();
+    overrideRequest((path, options, original) => path === "/cache/clear" ? pending.promise : original(path, options));
+    render(<BookCoverAdmin />);
+    await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
+    fireEvent.click(screen.getByRole("button", { name: "재검색" }));
+    await waitFor(() => expect(request.mock.calls.some(([path]) => path === "/cache/clear")).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "다른 디렉토리" }));
+    await act(async () => pending.reject(new Error("늦은 캐시 삭제 실패")));
+
+    expect(screen.queryByText("늦은 캐시 삭제 실패")).toBeNull();
+    expect(await screen.findByRole("heading", { name: "테스트 책" })).toBeTruthy();
+  });
+
+  const skippedBook = () => overrideRequest((path, options, original) => path.startsWith("/missing")
+    ? { items: [{ file_path: "책.epub", title: "테스트 책", status: "skipped", has_cover: true, revision: "r1" }], next_cursor: null, scanned: 1, total: 1 }
+    : original(path, options));
+
+  it("검색 대상이 아닌 상태의 책도 재검색은 캐시를 비우고 오류 없이 끝난다", async () => {
+    setup();
+    skippedBook();
+    render(<BookCoverAdmin />);
+    await screen.findByRole("heading", { name: "테스트 책" });
+    expect(request.mock.calls.some(([path]) => path.startsWith("/candidates/"))).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "재검색" }));
+
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/cache/clear", { body: { file_path: "책.epub", revision: "r1" } }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "재검색" }).disabled).toBe(false));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("검색 대상이 아닌 상태의 책도 휴지통은 미리보기만 숨기고 서버를 부르지 않는다", async () => {
+    setup();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    skippedBook();
+    render(<BookCoverAdmin />);
+    await screen.findByRole("heading", { name: "테스트 책" });
+
+    fireEvent.click(screen.getByRole("button", { name: "테스트 책 임시 표지 삭제" }));
+
+    expect(screen.getByText("표지 없음")).toBeTruthy();
+    expect(request.mock.calls.some(([path]) => path === "/cache/clear")).toBe(false);
+  });
+
+  it("새로고침과 같은 순간 누른 서점 재시도는 비워진 검색 결과 위에서도 안전하게 처리한다", async () => {
+    setup();
+    overrideRequest((path, options, original) => path.startsWith("/candidates/yes24") ? Promise.reject(new Error("검색 오류")) : original(path, options));
+    render(<BookCoverAdmin />);
+    const retry = await screen.findByRole("button", { name: "재시도" });
+    const refresh = screen.getByRole("button", { name: "새로고침" });
+    const listings = () => request.mock.calls.filter(([path]) => path.startsWith("/missing")).length;
+    const before = listings();
+
+    act(() => {
+      refresh.click();
+      retry.click();
+    });
+
+    await waitFor(() => expect(listings()).toBe(before + 1));
+    expect(await screen.findByRole("heading", { name: "테스트 책" })).toBeTruthy();
+  });
+
+  it("내 책 확대 창을 닫는 순간 도착한 이미지 크기 정보는 무시한다", async () => {
+    setup();
+    render(<BookCoverAdmin />);
+    const candidate = await screen.findByRole("button", { name: /YES24.*서점 책.*표지 선택/ });
+    await waitFor(() => expect(candidate.disabled).toBe(false));
+    submitManualCover();
+    await screen.findByAltText("테스트 책 저장한 표지");
+    fireEvent.load(screen.getByAltText("테스트 책 저장한 표지"));
+    fireEvent.click(screen.getByRole("button", { name: "테스트 책 내 책 표지 확대" }));
+    const enlarged = screen.getByAltText("테스트 책 내 책 확대 표지");
+    Object.defineProperties(enlarged, { naturalWidth: { value: 600 }, naturalHeight: { value: 900 } });
+
+    act(() => {
+      screen.getByRole("button", { name: "확대 닫기" }).click();
+      fireEvent.load(enlarged);
+    });
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByAltText("테스트 책 저장한 표지")).toBeTruthy();
+  });
+
+  it("긴 목록에서 Blob 을 회수해도 선택해 둔 표지는 유지하고, 회수된 후보를 확대 창에서 고르면 무시한다", async () => {
+    setup();
+    let currentRow = 0;
+    const count = 24;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function () {
+      const article = this.closest("article");
+      const index = article ? Number(article.querySelector("h3").textContent.match(/\d+/)[0]) : count;
+      const top = (index - currentRow) * 250;
+      return { top, bottom: top + 200, left: 0, right: 100, width: 100, height: 200 };
+    });
+    overrideRequest((path, options, original) => {
+      if (path.startsWith("/missing")) return { items: Array.from({ length: count }, (_, index) => ({ file_path: `책${index}.epub`, title: `책 ${index}`, revision: "r1", status: "missing" })), next_cursor: null, scanned: count, total: count };
+      if (path.startsWith("/candidates/yes24")) {
+        const index = Number(new URLSearchParams(path.split("?")[1]).get("file_path").match(/책(\d+)/)[1]);
+        return { status: "success", candidates: Array.from({ length: 4 }, (_, candidate) => ({ candidate_id: (index * 4 + candidate).toString(16).padStart(64, "0"), title: `후보 ${index}-${candidate}`, width: 120, height: 180, byte_size: 5 })) };
+      }
+      if (path.startsWith("/candidate-image")) return new Blob(["cover"]);
+      return original(path, options);
+    });
+    render(<BookCoverAdmin />);
+    const candidateButton = (row, image) => document.querySelector(`[aria-label="YES24 후보 ${row}-${image} 표지 선택"]`);
+    const waitRows = async (from, to) => waitFor(() => {
+      for (let row = from; row <= to; row += 1) {
+        for (let image = 0; image < 4; image += 1) expect(candidateButton(row, image)?.disabled, `${row}-${image}`).toBe(false);
+      }
+    }, { timeout: 5000 });
+    fireEvent.scroll(window);
+    await waitRows(0, 2);
+
+    // 0번 책은 후보를 골라 저장 전 상태로 두고, 다른 후보는 확대 창에 띄워 둔다.
+    fireEvent.click(candidateButton(0, 0));
+    await screen.findByAltText("책 0 선택한 표지");
+    fireEvent.click(document.querySelector('[aria-label="YES24 후보 0-1 표지 확대"]'));
+    expect(screen.getByRole("dialog", { name: "후보 0-1 표지 확대" })).toBeTruthy();
+
+    for (currentRow = 3; currentRow < count; currentRow += 3) {
+      fireEvent.scroll(window);
+      await waitRows(currentRow, Math.min(count - 1, currentRow + 2));
+    }
+    await waitFor(() => expect(candidateButton(0, 1).disabled).toBe(true));
+
+    // 오래된 Blob 은 회수됐지만 선택해 둔 표지는 그대로다.
+    expect(screen.getByAltText("책 0 선택한 표지")).toBeTruthy();
+    // 회수된 후보를 확대 창에서 고르려 해도 이미지가 없으니 아무것도 바뀌지 않는다.
+    const zoomSelect = screen.getByRole("button", { name: "후보 0-1 확대 표지 선택" });
+    fireEvent.click(zoomSelect);
+    expect(screen.getByAltText("책 0 선택한 표지")).toBeTruthy();
+    expect(request.mock.calls.some(([path]) => path.startsWith("/apply"))).toBe(false);
+  }, 30000);
+});

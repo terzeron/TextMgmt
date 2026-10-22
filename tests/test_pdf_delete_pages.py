@@ -1332,6 +1332,13 @@ class TestInsertUploadEndpoint:
         response = TestClient(main.app).post("/pdf-pages/1/insert-preview-upload", files={"file": ("a.png", b"x", "image/png")})
         assert response.status_code in (401, 403)
 
+    def test_delete_failure_is_reported_as_failure_status(self, client):
+        http, fake = client
+        fake.delete_pdf_pages.return_value = (None, "삭제할 쪽이 없습니다")
+        response = http.post("/pdf-pages/1/delete", json={"pages": [1]})
+        assert response.status_code == 200
+        assert response.json() == {"status": "failure", "error": "삭제할 쪽이 없습니다"}
+
     def test_delete_accepts_image_data(self, client):
         http, fake = client
         response = http.post("/pdf-pages/1/delete", json={"inserts": [{"page": 2, "image_data": "QUJD"}]})

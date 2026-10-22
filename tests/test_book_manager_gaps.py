@@ -714,3 +714,20 @@ def test_get_cover_books_paged_clamps_page_size(tmp_path: Path):
 
     assert calls["files"][0]["size"] == 1
     assert calls["files"][1]["size"] == bm_module.MAX_CATEGORY_PAGE_SIZE
+
+
+def test_extract_cover_thumbnail_scales_tall_first_page_to_exact_cover_size(tmp_path: Path):
+    """쪽 폭 66pt 의 세로로 긴 쪽은 pdfium 렌더 결과가 한 픽셀 어긋나(300x451) 도 썸네일 크기가 고정된다."""
+    import pikepdf
+
+    pdf_path = tmp_path / "tall.pdf"
+    pdf = pikepdf.new()
+    pdf.add_blank_page(page_size=(66, 165))
+    pdf.save(pdf_path)
+
+    data = BookManager._extract_cover_thumbnail(pdf_path, "pdf", 300)
+
+    assert data is not None
+    with Image.open(io.BytesIO(data)) as thumb:
+        assert thumb.format == "JPEG"
+        assert thumb.size == (300, round(300 / BookManager.COVER_ASPECT_RATIO))

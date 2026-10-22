@@ -4,11 +4,13 @@
 """
 
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
 
-from utils.detect_mojibake import MIN_SYLLABLES_FOR_LIKENESS, MOJIBAKE_LIKENESS_THRESHOLD, VERDICT_CLEAN, VERDICT_CORRUPTED, VERDICT_UNDETERMINED, VERDICT_UNREADABLE, classify_text, inspect_file, korean_likeness, list_library_files, scan
+from utils.detect_mojibake import MIN_SYLLABLES_FOR_LIKENESS, MOJIBAKE_LIKENESS_THRESHOLD, VERDICT_CLEAN, VERDICT_CORRUPTED, VERDICT_UNDETERMINED, VERDICT_UNREADABLE, classify_text, inspect_epub_structure, inspect_file, korean_likeness, list_library_files, scan, scan_epub_structure
+from utils.detect_mojibake import DEFAULT_LIBRARY_ROOT, default_report_path
 
 CLEAN_KOREAN = "소림사 장로가 강호에서 내공을 운기조식하며 화산파 검법을 수련했다. 그는 무림맹의 장문인으로서 제자들을 이끌었다. " * 6
 
@@ -357,3 +359,197 @@ def test_running_as_script_exits_with_main_status(monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         runpy.run_module("utils.detect_mojibake", run_name="__main__")
     assert exc.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# EPUB 구조 검사: epubcheck 는 통과시키지만 뷰어가 렌더링하지 못하는 구조
+# ---------------------------------------------------------------------------
+
+XHTML_NS = "http://www.w3.org/1999/xhtml"
+CONTAINER_XML = '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
+OPF_XML = '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0"><manifest><item id="c1" href="ch%201.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>'
+PLAIN_CHAPTER = f'<?xml version="1.0"?>\n<!DOCTYPE html [<!ELEMENT html ANY>]>\n<!-- <fake> -->\n<html xmlns="{XHTML_NS}"><head><title/></head><body><p>본문</p></body></html>'
+PREFIXED_CHAPTER = f'<?xml version="1.0"?>\n<html:html xmlns:html="{XHTML_NS}"><html:head><html:title/></html:head><html:body><html:p>본문</html:p></html:body></html:html>'
+
+
+def make_epub(path, chapter=PLAIN_CHAPTER, *, mimetype_first=True, container=CONTAINER_XML, opf=OPF_XML, chapter_name="OEBPS/ch 1.xhtml"):
+    with zipfile.ZipFile(path, "w") as z:
+        if mimetype_first:
+            z.writestr("mimetype", "application/epub+zip", zipfile.ZIP_STORED)
+        if container is not None:
+            z.writestr("META-INF/container.xml", container, zipfile.ZIP_DEFLATED)
+        if opf is not None:
+            z.writestr("OEBPS/content.opf", opf, zipfile.ZIP_DEFLATED)
+        if chapter_name:
+            z.writestr(chapter_name, chapter, zipfile.ZIP_DEFLATED)
+        if not mimetype_first:
+            z.writestr("mimetype", "application/epub+zip", zipfile.ZIP_DEFLATED)
+    return path
+
+
+def test_epub_structure_accepts_a_standard_epub(tmp_path):
+    """루트 앞의 DOCTYPE 내부 선언과 주석에 속지 않고, 퍼센트 인코딩된 href 도 푼다"""
+    res = inspect_epub_structure(str(make_epub(tmp_path / "ok.epub")))
+    assert res["issues"] == []
+
+
+def test_epub_structure_flags_prefixed_root(tmp_path):
+    res = inspect_epub_structure(str(make_epub(tmp_path / "p.epub", PREFIXED_CHAPTER)))
+    assert res["issues"] == ["prefixed_root"]
+    assert res["examples"]["prefixed_root"] == "OEBPS/ch 1.xhtml"
+
+
+def test_epub_structure_reports_each_issue_once_with_first_example(tmp_path):
+    opf = OPF_XML.replace('<itemref idref="c1"/>', '<itemref idref="c1"/><itemref idref="c2"/>').replace("</manifest>", '<item id="c2" href="ch2.xhtml" media-type="application/xhtml+xml"/></manifest>')
+    epub = make_epub(tmp_path / "t.epub", PREFIXED_CHAPTER, opf=opf)
+    with zipfile.ZipFile(epub, "a") as z:
+        z.writestr("OEBPS/ch2.xhtml", PREFIXED_CHAPTER)
+    res = inspect_epub_structure(str(epub))
+    assert res["issues"] == ["prefixed_root"]
+    assert res["examples"]["prefixed_root"] == "OEBPS/ch 1.xhtml"
+
+
+def test_epub_structure_flags_non_zip(tmp_path):
+    bad = tmp_path / "bad.epub"
+    bad.write_bytes(b"not a zip")
+    assert inspect_epub_structure(str(bad))["issues"] == ["not_zip"]
+
+
+def test_epub_structure_flags_truncated_download_as_non_zip(tmp_path):
+    """중단된 다운로드: 앞부분은 정상 ZIP 이지만 끝 디렉토리(EOCD)가 없다"""
+    epub = make_epub(tmp_path / "t.epub")
+    cut = tmp_path / "cut.epub"
+    cut.write_bytes(epub.read_bytes()[:-100])
+    assert inspect_epub_structure(str(cut))["issues"] == ["not_zip"]
+
+
+def test_epub_structure_flags_missing_file_as_non_zip(tmp_path):
+    assert inspect_epub_structure(str(tmp_path / "none.epub"))["issues"] == ["not_zip"]
+
+
+def test_epub_structure_flags_mimetype_not_first_or_stored(tmp_path):
+    res = inspect_epub_structure(str(make_epub(tmp_path / "m.epub", mimetype_first=False)))
+    assert res["issues"] == ["bad_mimetype"]
+
+
+def test_epub_structure_flags_empty_zip(tmp_path):
+    empty = tmp_path / "empty.epub"
+    zipfile.ZipFile(empty, "w").close()
+    assert inspect_epub_structure(str(empty))["issues"] == ["bad_mimetype", "no_container"]
+
+
+@pytest.mark.parametrize("container", [None, "<container", "<container><rootfiles/></container>"])
+def test_epub_structure_flags_unusable_container(tmp_path, container):
+    res = inspect_epub_structure(str(make_epub(tmp_path / "c.epub", container=container)))
+    assert res["issues"] == ["no_container"]
+
+
+def test_epub_structure_flags_missing_opf(tmp_path):
+    res = inspect_epub_structure(str(make_epub(tmp_path / "o.epub", opf=None)))
+    assert res["issues"] == ["opf_missing"]
+    assert res["examples"]["opf_missing"] == "OEBPS/content.opf"
+
+
+def test_epub_structure_flags_unparsable_opf(tmp_path):
+    res = inspect_epub_structure(str(make_epub(tmp_path / "o.epub", opf="<package")))
+    assert res["issues"] == ["opf_unparsable"]
+
+
+def test_epub_structure_flags_spine_member_missing(tmp_path):
+    res = inspect_epub_structure(str(make_epub(tmp_path / "s.epub", chapter_name=None)))
+    assert res["issues"] == ["spine_member_missing"]
+    assert res["examples"]["spine_member_missing"] == "OEBPS/ch 1.xhtml"
+
+
+def test_epub_structure_ignores_spine_items_without_manifest_entry(tmp_path):
+    opf = OPF_XML.replace('<itemref idref="c1"/>', '<itemref idref="ghost"/>')
+    assert inspect_epub_structure(str(make_epub(tmp_path / "g.epub", opf=opf)))["issues"] == []
+
+
+def test_epub_structure_ignores_oversized_xml_member(tmp_path):
+    big_opf = OPF_XML + " " * (5 * 1024 * 1024)
+    assert inspect_epub_structure(str(make_epub(tmp_path / "b.epub", opf=big_opf)))["issues"] == ["opf_missing"]
+
+
+def test_epub_structure_chapter_without_root_tag_is_not_flagged(tmp_path):
+    assert inspect_epub_structure(str(make_epub(tmp_path / "r.epub", chapter="plain text")))["issues"] == []
+
+
+def test_scan_epub_structure_counts_only_epubs_and_respects_limit(tmp_path):
+    make_epub(tmp_path / "a.epub")
+    make_epub(tmp_path / "b.epub", PREFIXED_CHAPTER)
+    (tmp_path / "c.txt").write_text("본문", encoding="utf-8")
+    report = scan_epub_structure(tmp_path, workers=1)
+    assert report["total"] == 2
+    assert report["flagged_count"] == 1
+    assert report["counts"]["prefixed_root"] == 1
+    assert [Path(r["path"]).name for r in report["flagged"]] == ["b.epub"]
+    assert scan_epub_structure(tmp_path, workers=1, limit=1)["total"] == 1
+
+
+def test_cli_epub_structure_file_prints_one_json_line(tmp_path, monkeypatch, capsys):
+    epub = make_epub(tmp_path / "p.epub", PREFIXED_CHAPTER)
+    assert run_cli(monkeypatch, "epub-structure", "--file", str(epub)) == 0
+    assert json.loads(capsys.readouterr().out)["issues"] == ["prefixed_root"]
+
+
+def test_cli_epub_structure_scan_writes_report_and_summary(tmp_path, monkeypatch, capsys):
+    make_epub(tmp_path / "p.epub", PREFIXED_CHAPTER)
+    report = tmp_path / "out" / "r.json"
+    assert run_cli(monkeypatch, "epub-structure", "--root", str(tmp_path), "--workers", "1", "--report", str(report)) == 0
+    out = capsys.readouterr().out
+    assert "prefixed_root" in out and "문제 1건" in out
+    assert json.loads(report.read_text(encoding="utf-8"))["flagged_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 리포트 파일명: 대상 디렉토리마다 달라야 다른 디렉토리 스캔이 이전 리포트를 덮어쓰지 않는다
+# ---------------------------------------------------------------------------
+
+
+def test_default_report_path_differs_per_directory(monkeypatch, tmp_path):
+    monkeypatch.setattr("utils.detect_mojibake.REPO_ROOT", tmp_path)
+    novel = default_report_path("epub_structure", DEFAULT_LIBRARY_ROOT / "2_소설외국")
+    classics = default_report_path("epub_structure", DEFAULT_LIBRARY_ROOT / "2_소설한국")
+    assert novel == tmp_path / "tmp" / "epub_structure_report_2_소설외국.json"
+    assert novel != classics
+
+
+def test_default_report_path_differs_per_kind(monkeypatch, tmp_path):
+    monkeypatch.setattr("utils.detect_mojibake.REPO_ROOT", tmp_path)
+    root = DEFAULT_LIBRARY_ROOT / "2_소설외국"
+    assert default_report_path("mojibake", root).name == "mojibake_report_2_소설외국.json"
+    assert default_report_path("mojibake", root) != default_report_path("epub_structure", root)
+
+
+def test_default_report_path_for_library_root_and_nested_and_outside(monkeypatch, tmp_path):
+    monkeypatch.setattr("utils.detect_mojibake.REPO_ROOT", tmp_path)
+    assert default_report_path("mojibake", DEFAULT_LIBRARY_ROOT).name == "mojibake_report_all.json"
+    assert default_report_path("mojibake", DEFAULT_LIBRARY_ROOT / "2_소설외국" / "completed").name == "mojibake_report_2_소설외국__completed.json"
+    assert default_report_path("mojibake", tmp_path / "my dir").name == "mojibake_report_my_dir.json"
+    assert default_report_path("mojibake", Path("/")).name == "mojibake_report_all.json"
+
+
+def test_default_report_path_normalizes_dot_segments_and_trailing_slash(monkeypatch, tmp_path):
+    monkeypatch.setattr("utils.detect_mojibake.REPO_ROOT", tmp_path)
+    assert default_report_path("mojibake", Path(f"{DEFAULT_LIBRARY_ROOT}/2_소설외국/../2_소설한국/")).name == "mojibake_report_2_소설한국.json"
+
+
+def test_cli_without_report_writes_a_per_directory_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("utils.detect_mojibake.REPO_ROOT", tmp_path)
+    scanned = tmp_path / "library_a"
+    scanned.mkdir()
+    (scanned / "a.txt").write_text(CLEAN_KOREAN, encoding="utf-8")
+    other = tmp_path / "library_b"
+    other.mkdir()
+    make_epub(other / "b.epub")
+
+    assert run_cli(monkeypatch, "scan", "--root", str(scanned), "--workers", "1") == 0
+    assert run_cli(monkeypatch, "epub-structure", "--root", str(other), "--workers", "1") == 0
+    assert run_cli(monkeypatch, "epub-structure", "--root", str(scanned), "--workers", "1") == 0
+
+    names = sorted(p.name for p in (tmp_path / "tmp").iterdir())
+    assert names == ["epub_structure_report_library_a.json", "epub_structure_report_library_b.json", "mojibake_report_library_a.json"]
+    assert json.loads((tmp_path / "tmp" / "epub_structure_report_library_b.json").read_text(encoding="utf-8"))["root"] == str(other)
+    assert "epub_structure_report_library_b.json" in capsys.readouterr().out
+
