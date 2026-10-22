@@ -48,6 +48,9 @@ logging.getLogger("pypdf._cmap").setLevel(logging.CRITICAL)
 # logging.conf의 root logger가 DEBUG라 그대로 두면 레코드 생성만으로 CPU를 통째로 태운다.
 # (실측: 손상 PDF 1건이 13시간 동안 100% CPU를 점유하며 /dev/null로 982GB를 씀)
 logging.getLogger("pdfminer").setLevel(logging.WARNING)
+# chardet도 같은 이유로 막는다. detect() 1회당 DEBUG 수십 줄(prober별 confidence)이 찍혀
+# 100건 적재마다 수천 줄이 /tmp/run.log에 쌓인다.
+logging.getLogger("chardet").setLevel(logging.WARNING)
 warnings.filterwarnings("ignore", message=".*XML.*HTML.*")
 warnings.filterwarnings("ignore", message=".*Ascii85.*")
 warnings.filterwarnings("ignore", message=".*startxref.*")
@@ -335,7 +338,17 @@ class Loader:
 
         try:
             raw_bytes = file_path.read_bytes()
-            detected = chardet.detect(raw_bytes)
+            # 전체를 넘기면 순수 Python chardet이 GIL을 잡고 큰 파일에 수십 초를 쓴다.
+            # 결과는 후보 순서만 정하므로 prefix로 충분하다.
+            # 엄격 UTF-8로 읽히고 BOM이 없으면 utf-8이 이미 첫 후보이므로 chardet(8KB당 16ms)을 건너뛴다.
+            # BOM 파일은 chardet이 UTF-8-SIG로 판정해 BOM을 벗기므로 예외다.
+            # 코퍼스 txt 표본 297건 전부 UTF-8이었고 chardet이 다른 결론을 낸 건은 0건이었다.
+            try:
+                raw_bytes.decode("utf-8")
+                skip_detect = not raw_bytes.startswith(b"\xef\xbb\xbf")
+            except UnicodeDecodeError:
+                skip_detect = False
+            detected = None if skip_detect else chardet.detect(raw_bytes[: Loader.TEXT_DETECT_PREFIX])
             detected_enc = detected.get("encoding") if detected else None
             confidence = detected.get("confidence", 0) if detected else 0
             if detected_enc and confidence >= 0.7 and detected_enc.lower() not in ["ascii", "iso-8859-1"]:

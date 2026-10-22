@@ -155,6 +155,31 @@ class TestReadFromText:
         summary, line_count, page_count, raw = Loader.read_from_text(f)
         assert "한글 본문입니다" in raw
 
+    def test_read_text_skips_chardet_for_plain_utf8(self, tmp_path: Path, monkeypatch):
+        """BOM 없는 UTF-8은 chardet을 호출하지 않고 그대로 읽는다."""
+        Loader = _get_loader()
+        f = tmp_path / "novel.txt"
+        f.write_bytes("한글 본문입니다 가나다라\n".encode("utf-8"))
+
+        import chardet
+
+        def boom(_b):
+            raise AssertionError("chardet 호출되면 안 된다")
+
+        monkeypatch.setattr(chardet, "detect", boom)
+
+        _, _, _, raw = Loader.read_from_text(f)
+        assert raw == "한글 본문입니다 가나다라\n"
+
+    def test_read_text_utf8_bom_still_uses_chardet_and_strips_bom(self, tmp_path: Path):
+        """UTF-8 BOM 파일은 chardet 경로를 유지해 BOM이 본문에 남지 않는다."""
+        Loader = _get_loader()
+        f = tmp_path / "novel.txt"
+        f.write_bytes(b"\xef\xbb\xbf" + "한글 본문입니다 가나다라\n".encode("utf-8"))
+
+        _, _, _, raw = Loader.read_from_text(f)
+        assert not raw.startswith("\ufeff")
+
     def test_read_text_falls_back_to_replace(self, tmp_path: Path):
         """모든 엄격 디코딩이 실패하면 errors='replace'로라도 읽어 적재를 이어간다.
 
