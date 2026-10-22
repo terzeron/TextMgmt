@@ -300,6 +300,29 @@ def _write_epub(original: zipfile.ZipFile, destination: Path, opf_path: str, pac
                 updated.writestr(member, data)
 
 
+def _read_previous_cover(archive: zipfile.ZipFile, opf_path: str, manifest: Any) -> tuple[str, bytes, str, str] | None:
+    """교체 전 표지 이미지를 (멤버 경로, 바이트, media-type, 확장자)로 읽는다. 도판으로 남길 수 없으면 None.
+
+    manifest 항목을 지우기 전에 불러야 한다. 이미지가 아니거나 너무 크면 남기지 않는다.
+    """
+    member = BookManager._find_epub_cover_member(archive)
+    if not member or member not in archive.NameToInfo or archive.getinfo(member).file_size > MAX_IMAGE_BYTES:
+        return None
+    base = posixpath.dirname(opf_path)
+    item = next((entry for entry in manifest if _member_path(base, entry.get("href", "")) == member), None)
+    media_type = item.get("media-type", "") if item is not None else ""
+    if not media_type.startswith("image/"):
+        return None
+    suffix = posixpath.splitext(member)[1].lower()
+    return member, archive.read(member), media_type, suffix if re.fullmatch(r"\.[a-z0-9]{1,5}", suffix) else ".jpg"
+
+
+def _illustration_page(image_href: str) -> bytes:
+    return (f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml">'
+            f'<head><title>도판</title></head><body style="margin:0;text-align:center">'
+            f'<div><img src="{image_href}" alt="도판" style="max-width:100%;max-height:100vh"/></div></body></html>').encode()
+
+
 def _stage_cover(source: BinaryIO, destination: Path, image: bytes) -> None:
     source.seek(0)
     with zipfile.ZipFile(source) as original:
@@ -309,6 +332,7 @@ def _stage_cover(source: BinaryIO, destination: Path, image: bytes) -> None:
         spine = package.find(f"{{{OPF_NS}}}spine")
         if manifest is None or metadata is None or spine is None:
             raise CoverError("EPUB manifest, metadata 또는 spine이 없습니다")
+        previous = _read_previous_cover(original, opf_path, manifest)
         obsolete = _remove_tool_covers(opf_path, manifest, metadata, spine)
         detached, updates = _detach_publisher_cover(original, opf_path, package)
         obsolete.update(detached)
@@ -346,7 +370,23 @@ def _stage_cover(source: BinaryIO, destination: Path, image: bytes) -> None:
         page = (f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml">'
                 f'<head><title>표지</title></head><body style="margin:0;text-align:center">'
                 f'<div><img src="{cover_href}" alt="표지" style="max-width:100%;max-height:100vh"/></div></body></html>')
-        _write_epub(original, destination, opf_path, package, obsolete, {**updates, cover_member: image, page_member: page.encode()})
+        added = {**updates, cover_member: image, page_member: page.encode()}
+        # 교체로 빠지는 기존 표지는 새 표지 바로 뒤의 도판으로 남긴다. 본문에서도 쓰여 파일이 그대로 남는 표지는 이미 본문에 있다.
+        # 이름에 cover를 넣지 않는다. 표지 탐색이 id·href의 cover로 이미지를 고르므로 표지로 오인된다.
+        if previous and previous[0] in obsolete:
+            _, previous_data, media_type, suffix = previous
+            plate_digest = hashlib.sha256(previous_data).hexdigest()[:16]
+            plate_id, plate_page_id = f"tm-plate-{plate_digest}", f"tm-plate-page-{plate_digest}"
+            plate_href, plate_page_href = plate_id + suffix, plate_page_id + ".xhtml"
+            plate_member = posixpath.join(posixpath.dirname(opf_path), plate_href)
+            plate_page_member = posixpath.join(posixpath.dirname(opf_path), plate_page_href)
+            taken = existing_ids | existing_names | {cover_id, page_id, cover_member, page_member}
+            if plate_digest != digest and not {plate_id, plate_page_id, plate_member, plate_page_member} & taken:
+                etree.SubElement(manifest, f"{{{OPF_NS}}}item", id=plate_id, href=plate_href, **{"media-type": media_type})
+                etree.SubElement(manifest, f"{{{OPF_NS}}}item", id=plate_page_id, href=plate_page_href, **{"media-type": "application/xhtml+xml"})
+                spine.insert(1, etree.Element(f"{{{OPF_NS}}}itemref", idref=plate_page_id))
+                added.update({plate_member: previous_data, plate_page_member: _illustration_page(plate_href)})
+        _write_epub(original, destination, opf_path, package, obsolete, added)
     with destination.open("rb") as output:
         os.fsync(output.fileno())
     with zipfile.ZipFile(destination) as archive:

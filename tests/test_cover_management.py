@@ -378,6 +378,7 @@ def test_cover_replacement_preserves_content_and_has_one_generated_cover(tmp_pat
     before = path.read_bytes()
     output = io.BytesIO()
     Image.new("RGB", (1800, 2700), "blue").save(output, "PNG")
+    plates: list[int] = []
     for data in (output.getvalue(), output.getvalue(), image_bytes()):
         result = add_cover(path, data, inspect_epub(path)["revision"], tmp_path / ".cover_backups", replace_existing=True)
         assert Path(result["backup_path"]).read_bytes() == before
@@ -388,11 +389,16 @@ def test_cover_replacement_preserves_content_and_has_one_generated_cover(tmp_pat
             assert archive.read(member) == normalize_image(data, max_width=600)
             assert len([name for name in archive.namelist() if "tm-cover-" in name]) == 2
             package = etree.fromstring(archive.read("OPS/book.opf"))
-            assert package.xpath('count(//*[local-name()="itemref"])') == 2
+            # 표지 페이지와 본문 1쪽에, 교체로 밀려난 이전 표지가 도판 페이지로 남는다.
+            plate_pages = [name for name in archive.namelist() if "tm-plate-page-" in name]
+            assert package.xpath('count(//*[local-name()="itemref"])') == 2 + len(plate_pages)
+            plates.append(len(plate_pages))
             assert archive.read("OPS/chapter.xhtml") == "<html><body>본문을 보존한다.</body></html>".encode()
             assert archive.read("OPS/style.css") == b"body { color: red; }"
             assert len(archive.namelist()) == len(set(archive.namelist()))
         before = path.read_bytes()
+    # 같은 이미지로 다시 교체하면 도판이 늘지 않고, 다른 이미지로 바꿀 때만 늘어난다.
+    assert plates == [1, 1, 2]
     assert first["revision"] != result["revision"]
 
 

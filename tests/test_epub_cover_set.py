@@ -300,6 +300,100 @@ async def test_replaced_publisher_cover_stays_in_the_backup(env, tmp_path):
     assert not [name for name in members(path) if "tm-cover" in name]
 
 
+def spine_idrefs(path):
+    from lxml import etree
+
+    package = etree.fromstring(members(path)["OPS/book.opf"])
+    return package.xpath('//*[local-name()="spine"]/*[local-name()="itemref"]/@idref')
+
+
+@pytest.mark.asyncio
+async def test_replaced_cover_stays_as_an_illustration_after_the_new_cover(env):
+    """교체로 빠지는 기존 표지는 새 표지 바로 뒤, 본문 앞의 도판으로 남는다."""
+    import zipfile
+
+    from backend.book_manager import BookManager
+
+    manager, path, _ = env
+    make_epub(path, cover=True)
+    old_cover = members(path)["OPS/cover.jpg"]
+
+    _, error = await call(manager)
+
+    assert error is None
+    after = members(path)
+    assert "OPS/cover.jpg" not in after
+    plates = [name for name in after if name.startswith("OPS/tm-plate-") and name.endswith(".jpg")]
+    assert len(plates) == 1 and after[plates[0]] == old_cover
+    ids = spine_idrefs(path)
+    assert ids[0].startswith("tm-cover-page-") and ids[1].startswith("tm-plate-page-") and ids[2] == "chapter"
+    page = after[f"OPS/{ids[1]}.xhtml"].decode()
+    assert plates[0].removeprefix("OPS/") in page
+    # 도판은 표지로 오인되지 않는다. 표지는 새 이미지다.
+    with zipfile.ZipFile(path) as archive:
+        assert "tm-cover-" in BookManager._find_epub_cover_member(archive)
+
+
+@pytest.mark.asyncio
+async def test_illustration_survives_cover_removal_and_is_not_taken_for_a_cover(env):
+    manager, path, _ = env
+    make_epub(path, cover=True)
+    await call(manager)
+
+    _, error = await remove(manager)
+
+    assert error is None
+    assert not inspect_epub(path)["has_cover"]
+    assert [name for name in members(path) if "tm-plate-" in name]
+    assert spine_idrefs(path)[0].startswith("tm-plate-page-")
+
+
+@pytest.mark.asyncio
+async def test_each_replacement_adds_the_previous_cover_newest_first(env, monkeypatch):
+    manager, path, _ = env
+    make_epub(path, cover=True)
+    await call(manager)
+    first_cover = [data for name, data in members(path).items() if name.startswith("OPS/tm-cover-") and name.endswith(".jpg")][0]
+    monkeypatch.setattr("backend.cover_management.fetch_url_image", lambda url: image_bytes_of("blue"))
+
+    _, error = await call(manager)
+
+    assert error is None
+    after = members(path)
+    assert len([name for name in after if name.startswith("OPS/tm-cover-") and name.endswith(".jpg")]) == 1
+    plate_images = [after[name] for name in after if name.startswith("OPS/tm-plate-") and name.endswith(".jpg")]
+    assert len(plate_images) == 2 and first_cover in plate_images
+    ids = spine_idrefs(path)
+    assert [i.split("-")[1] for i in ids[:3]] == ["cover", "plate", "plate"] and ids[3] == "chapter"
+
+
+@pytest.mark.asyncio
+async def test_same_image_replacement_adds_no_duplicate_illustration(env):
+    manager, path, _ = env
+    await call(manager)
+    before = len(spine_idrefs(path))
+
+    _, error = await call(manager)
+
+    assert error is None
+    assert len(spine_idrefs(path)) == before
+    assert not [name for name in members(path) if "tm-plate-" in name]
+
+
+@pytest.mark.asyncio
+async def test_cover_image_already_used_in_the_body_is_not_duplicated_as_an_illustration(env):
+    manager, path, _ = env
+    make_epub(path, cover=True)
+    attach_publisher_cover_page(path, shared=True)
+
+    _, error = await call(manager)
+
+    # 본문이 표지 이미지를 계속 쓰므로 파일은 제자리에 남는다. 이미 본문 도판이라 따로 복제하지 않는다.
+    assert error is None
+    assert "OPS/cover.jpg" in members(path)
+    assert not [name for name in members(path) if "tm-plate-" in name]
+
+
 @pytest.mark.asyncio
 async def test_removes_a_publisher_cover_and_preserves_the_original_backup(env, tmp_path):
     manager, path, _ = env
