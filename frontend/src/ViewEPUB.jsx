@@ -21,11 +21,28 @@ import "./ViewEPUB.css";
 
 const CHAPTERS_PREVIEW = 10;
 
+// 일부 EPUB은 <html:html>처럼 접두사를 붙여 저장한다. DOMPurify는 nodeName을 허용 목록과
+// 비교하므로 접두사 요소(루트는 예외를 던지고, 그 밖은 조용히 제거)를 처리하지 못한다.
+// 네임스페이스는 그대로 두고 접두사만 벗긴 요소로 바꿔 정제기에 넘긴다.
+const stripElementPrefixes = (doc) => {
+  for (const el of doc.querySelectorAll("*")) {
+    if (!el.prefix) continue;
+    const plain = doc.createElementNS(el.namespaceURI, el.localName);
+    for (const attr of el.attributes) {
+      if (attr.prefix === "xmlns") continue;
+      plain.setAttributeNS(attr.namespaceURI, attr.name, attr.value);
+    }
+    plain.append(...el.childNodes);
+    el.parentNode.replaceChild(plain, el);
+  }
+};
+
 // WebKit은 sandbox에서 스크립트를 금지하면 부모의 터치 리스너도 막는다.
 // https://bugs.webkit.org/show_bug.cgi?id=218086
 // 렌더링 전에 본문을 정제하고 CSP로 책의 스크립트·하위 문서를 차단한다.
 // async hook의 거부는 epub.js의 렌더링도 중단시킨다(동기 throw는 무시된다).
 const secureEpubDocument = async (doc) => {
+  stripElementPrefixes(doc);
   for (const meta of doc.querySelectorAll("meta[http-equiv]")) meta.remove();
   DOMPurify.sanitize(doc.documentElement, {
     IN_PLACE: true,

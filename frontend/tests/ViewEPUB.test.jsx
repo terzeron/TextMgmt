@@ -392,6 +392,24 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     expect(doc.querySelector('meta[name="viewport"]').content).toBe("width=600,height=800");
   });
 
+  it("네임스페이스 접두사가 붙은 XHTML도 정제하고 접두사를 벗긴다", async () => {
+    render(<ViewEPUB bookId={7} />);
+    await openBook();
+    const secure = lastBook.spine.hooks.content.register.mock.calls[0][0];
+    const doc = new DOMParser().parseFromString(`<html:html xmlns:html="http://www.w3.org/1999/xhtml"
+      xmlns:ns1="http://www.w3.org/2000/svg"><html:head><html:title>t</html:title>
+      <html:script>parent.attacked = true;</html:script></html:head>
+      <html:body onload="alert(1)"><html:p class="x">본문</html:p>
+      <ns1:svg viewBox="0 0 1 1"><ns1:image width="1" height="1" /></ns1:svg></html:body></html:html>`, "application/xhtml+xml");
+    await secure(doc);
+    expect(doc.documentElement.nodeName).toBe("html");
+    expect(doc.querySelector("p").textContent).toBe("본문");
+    expect(doc.querySelector("p").getAttribute("class")).toBe("x");
+    expect(doc.querySelector("svg image")).not.toBeNull();
+    expect(doc.querySelector("script, [onload]")).toBeNull();
+    expect(doc.head.firstElementChild.getAttribute("http-equiv")).toBe("Content-Security-Policy");
+  });
+
   it("보안 정책을 넣을 수 없는 본문은 렌더링을 거부한다", async () => {
     render(<ViewEPUB bookId={7} />);
     await openBook();
