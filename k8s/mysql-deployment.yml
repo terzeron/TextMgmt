@@ -1,8 +1,13 @@
+# 2026-10: MySQL 8.0.45 -> 8.4.13(LTS). 8.0은 2026-04 EOL이다.
+# 제자리 업그레이드는 데이터 사전을 되돌릴 수 없게 바꾸므로 같은 PVC를 쓰지 않고, 새 PVC(mysql84-pvc)에
+# 새 Deployment(tm-mysql-84)를 띄워 textmanager DB를 덤프/복원한 뒤 Service(tm-mysql)의 selector만 바꿨다.
+# 이전 Deployment tm-mysql(replica 0)과 PVC mysql-pvc는 롤백용으로 클러스터에 남아 있다(이 파일에는 없다).
+# 이 파일을 다시 apply해도 이전 인스턴스가 되살아나지 않는다.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: mysql-pvc
+  name: mysql84-pvc
   namespace: textmanager
 spec:
   accessModes:
@@ -15,7 +20,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: tm-mysql
+  name: tm-mysql-84
   namespace: textmanager
 spec:
   replicas: 1
@@ -27,11 +32,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: tm-mysql-app
+      app: tm-mysql-84-app
   template:
     metadata:
       labels:
-        app: tm-mysql-app
+        app: tm-mysql-84-app
     spec:
       # entrypoint가 root로 시작해야 하는 것과 무관하게 syscall 표면은 줄일 수 있다.
       securityContext:
@@ -39,14 +44,14 @@ spec:
           type: RuntimeDefault
       containers:
         - name: mysql
-          # 8.0 은 롤링 태그라 8.0.46, 8.0.47 로 조용히 올라간다. MySQL 은 기동 시
+          # 8.4 는 롤링 태그라 조용히 올라간다. MySQL 은 기동 시
           # 데이터 디렉터리를 새 포맷으로 올리고 다운그레이드가 불가능하므로
           # 패치 버전까지 고정한다. 올릴 때는 이 값을 직접 바꾼다.
-          image: mysql:8.0.45
-          # mysql:8.0 entrypoint는 root로 시작해 chown 후 gosu로 mysql 유저로 강등하므로
+          image: mysql:8.4.13
+          # mysql 공식 이미지(8.0, 8.4) entrypoint는 root로 시작해 chown 후 gosu로 mysql 유저로 강등하므로
           # runAsNonRoot 와 drop:[ALL] 은 기동을 깨뜨린다. 그 둘은 적용하지 않는다.
           # readOnlyRootFilesystem 은 쓰기가 필요한 두 경로(/tmp, /run/mysqld)를
-          # emptyDir 로 내주면 정상 기동한다. mysql:8.0 로컬 기동으로 확인했다:
+          # emptyDir 로 내주면 정상 기동한다. mysql:8.0 로컬 기동으로 확인했고 8.4.13도 같은 설정으로 기동했다(2026-10-22):
           # 초기화 완료, CREATE/INSERT/SELECT 성공, 에러 로그 없음.
           securityContext:
             allowPrivilegeEscalation: false
@@ -96,7 +101,7 @@ spec:
       volumes:
         - name: mysql-storage
           persistentVolumeClaim:
-            claimName: mysql-pvc
+            claimName: mysql84-pvc
         - name: mysql-initdb
           configMap:
             name: mysql-initdb-config
@@ -113,7 +118,7 @@ metadata:
   namespace: textmanager
 spec:
   selector:
-    app: tm-mysql-app
+    app: tm-mysql-84-app
   ports:
     - protocol: TCP
       port: 3306
