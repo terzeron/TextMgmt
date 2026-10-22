@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  act,
   render,
   screen,
   waitFor,
@@ -1050,5 +1051,144 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
       await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("순서 변경 불가"));
       expect(orderOnScreen()).toEqual([2, 1, 3]);
     });
+  });
+});
+
+describe("ViewPDF 편집 모드: 경계 분기", () => {
+  let originalFetch;
+
+  beforeEach(() => {
+    mockGetDocument.mockReset();
+    setupGetDocument();
+    originalFetch = globalThis.fetch;
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({}));
+    window.confirm = vi.fn(() => true);
+    let blobCount = 0;
+    URL.createObjectURL = vi.fn(() => `blob:preview-${(blobCount += 1)}`);
+    URL.revokeObjectURL = vi.fn();
+    previewResponse = {
+      ok: true,
+      status: 200,
+      blob: () => Promise.resolve(new Blob(["jpeg"], { type: "image/jpeg" })),
+    };
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  const postFetch = (post) =>
+    vi.fn((url, init) => {
+      if (init?.method === "POST") return post();
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "X-Total-Pages": "3" }),
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
+      });
+    });
+
+  it("실패 응답에 error 가 없으면 기본 저장 실패 문구를 보인다", async () => {
+    globalThis.fetch = postFetch(() =>
+      Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ status: "failure" }) }),
+    );
+    await renderEditable();
+
+    fireEvent.click(screen.getByLabelText("1쪽 삭제 표시"));
+    fireEvent.click(screen.getByLabelText("저장"));
+
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("저장에 실패했습니다."));
+    expect(screen.getByTestId("pdf-delete-overlay-1")).toBeTruthy();
+  });
+
+  it("메시지 없는 예외로 저장이 실패해도 기본 문구를 보이고 저장 버튼이 다시 켜진다", async () => {
+    globalThis.fetch = postFetch(() => Promise.reject(undefined));
+    await renderEditable();
+
+    fireEvent.click(screen.getByLabelText("1쪽 삭제 표시"));
+    fireEvent.click(screen.getByLabelText("저장"));
+
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("저장에 실패했습니다."));
+    expect(screen.getByLabelText("저장").disabled).toBe(false);
+  });
+
+  it("미리보기 요청이 메시지 없는 예외로 실패하면 기본 문구를 모달에 보인다", async () => {
+    const base = postFetch(() => Promise.resolve(okResponse));
+    globalThis.fetch = vi.fn((url, init) =>
+      String(url).includes("/insert-preview") ? Promise.reject(undefined) : base(url, init),
+    );
+    await renderEditable();
+
+    fireEvent.click(screen.getByLabelText("1쪽 앞에 이미지 삽입"));
+    fireEvent.change(screen.getByLabelText("이미지 URL"), {
+      target: { value: "https://img.example.com/a.png" },
+    });
+    fireEvent.click(screen.getByText("삽입 표시"));
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("이미지를 가져오지 못했습니다"),
+    );
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("PDF 를 다시 불러오면(다른 책) 남은 삽입 미리보기의 blob URL 을 해제한다", async () => {
+    globalThis.fetch = createFetch(okResponse);
+    const { rerender } = render(<ViewPDF bookId={1} pageCount={10} preview editable />);
+    await waitFor(() => expect(screen.getByText(/총 3쪽 표시/)).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("1쪽 앞에 이미지 삽입"));
+    fireEvent.change(screen.getByLabelText("이미지 URL"), {
+      target: { value: "https://img.example.com/a.png" },
+    });
+    fireEvent.click(screen.getByText("삽입 표시"));
+    await waitFor(() => expect(screen.getByTestId("pdf-insert-preview-1")).toBeTruthy());
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+
+    rerender(<ViewPDF bookId={2} pageCount={10} preview editable />);
+
+    await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview-1"));
+    await waitFor(() => expect(screen.queryByTestId("pdf-insert-preview-1")).toBeNull());
+  });
+
+  it("같은 화면 상태에서 아래로 옮기기를 연달아 눌러도 끝 쪽을 넘어 옮기지 않는다", async () => {
+    globalThis.fetch = createFetch(okResponse);
+    await renderEditable();
+    const down = screen.getByLabelText("2쪽을 아래로 옮기기");
+
+    act(() => {
+      down.click();
+      down.click();
+    });
+
+    const order = [...document.querySelectorAll(".pdf-page-wrap")].map((wrap) =>
+      Number(within(wrap).getByLabelText(/쪽 삭제 표시/).getAttribute("aria-label").match(/\d+/)[0]),
+    );
+    expect(order).toEqual([1, 3, 2]);
+  });
+
+  it("크롭 표시를 끄는 것과 같은 순간 들어온 박스 이동은 무시한다", async () => {
+    globalThis.fetch = createFetch(okResponse);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 200,
+      height: 100,
+      left: 0,
+      top: 0,
+      right: 200,
+      bottom: 100,
+    });
+    await renderEditable();
+    fireEvent.click(screen.getByLabelText("2쪽 크롭"));
+    const handle = document.querySelector('[data-handle="nw"]');
+    fireEvent.pointerDown(handle, { clientX: 20, clientY: 10, pointerId: 1 });
+
+    act(() => {
+      screen.getByLabelText("2쪽 크롭").click();
+      handle.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, clientX: 0, clientY: 0, pointerId: 1 }),
+      );
+    });
+
+    expect(screen.queryByTestId("pdf-crop-box")).toBeNull();
+    expect(screen.queryByLabelText("저장")).toBeNull();
   });
 });

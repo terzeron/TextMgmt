@@ -95,6 +95,16 @@ describe("CoverGrid", () => {
     expect(after).not.toBe(before);
   });
 
+  it("file_path 가 없으면 커버 URL 에 path 파라미터를 붙이지 않는다", () => {
+    const [book] = makeBooks(1, "epub");
+    const { container } = render(
+      <CoverGrid results={[{ ...book, file_path: undefined }]} basePath="/book-view" />,
+    );
+    const src = container.querySelector("img").getAttribute("src");
+    expect(src).toContain(`/cover/${book.book_id}?v=`);
+    expect(src).not.toContain("path=");
+  });
+
   it("ID와 updated_time이 같아도 원본 경로가 다르면 커버 URL을 구분한다", () => {
     const [book] = makeBooks(1, "pdf");
     const firstPath = "8_여성향/[문나영, 이범배] 신혼부부 생활 백서 (1-111화 완)/[0001] 0001화.pdf";

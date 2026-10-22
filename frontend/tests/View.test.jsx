@@ -2296,6 +2296,88 @@ describe("View", () => {
       expect(screen.queryByTestId("view-single")).toBeNull();
     });
 
+    it("딥링크 책에서 커버 목록으로 돌아온 뒤 다른 디렉토리를 열어 트리가 바뀌어도 책이 다시 열리지 않는다", async () => {
+      mockRouteState.wildcard = "42";
+      mockRouteState.searchParams = "category=소설";
+      mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+        if (url === "/categories") {
+          resolve({ 소설: 1, 수필: 1 });
+        } else if (url === "/categories/소설") {
+          resolve([
+            {
+              book_id: 42,
+              title: "테스트소설",
+              file_type: "epub",
+              file_path: "/test.epub",
+              category: "소설",
+            },
+          ]);
+        } else if (url === "/categories/수필") {
+          resolve([
+            {
+              book_id: 77,
+              title: "테스트수필",
+              file_type: "epub",
+              file_path: "/essay.epub",
+              category: "수필",
+            },
+          ]);
+        }
+      });
+      stubScroll();
+      render(<View />);
+      await waitFor(() => {
+        expect(screen.getByTestId("view-single")).toBeTruthy();
+      });
+
+      act(() => screen.getByRole("button", { name: "← 커버 목록" }).click());
+      expect(screen.queryByTestId("view-single")).toBeNull();
+
+      // 다른 디렉토리의 책 목록을 불러오면 folderData 가 바뀌어 딥링크 효과가 다시 돈다.
+      act(() => screen.getByTestId("folder-item-수필").click());
+      await waitFor(() => {
+        expect(screen.getByTestId("folder-item-수필/77")).toBeTruthy();
+      });
+      expect(screen.queryByTestId("view-single")).toBeNull();
+      expect(screen.getByTestId("cover-browser").dataset.category).toBe("수필");
+    });
+
+    it("컬럼이 쌓인 화면에서는 문서 스크롤 위치를 기억했다가 목록으로 돌아오면 되돌린다", async () => {
+      loadTree();
+      stubScroll();
+      const { container } = render(<View />);
+      await waitFor(() => {
+        expect(screen.getByTestId("cover-browser")).toBeTruthy();
+      });
+      // 분할 화면에서 오른쪽 컬럼을 700 까지 내려 두었다가 책을 연다.
+      const pane = container.querySelector(".split-layout-right");
+      pane.scrollTop = 700;
+      act(() => {
+        pane.dispatchEvent(new Event("scroll"));
+      });
+      container.querySelector(".split-layout").classList.add("is-stacked");
+      await openBookViaTree();
+
+      // 쌓인 화면에서 목록으로 돌아오면 컬럼 대신 window 를 700 으로 되돌린다.
+      act(() => screen.getByRole("button", { name: "← 커버 목록" }).click());
+      expect(window.scrollTo).toHaveBeenLastCalledWith(0, 700);
+
+      // 이제 목록이 보이는 동안의 위치는 window 의 scrollY 로 기억한다.
+      const scrollYDescriptor = Object.getOwnPropertyDescriptor(window, "scrollY");
+      Object.defineProperty(window, "scrollY", { value: 321, configurable: true });
+      try {
+        act(() => {
+          window.dispatchEvent(new Event("scroll"));
+        });
+        await openBookViaTree();
+        act(() => screen.getByRole("button", { name: "← 커버 목록" }).click());
+        expect(window.scrollTo).toHaveBeenLastCalledWith(0, 321);
+      } finally {
+        if (scrollYDescriptor) Object.defineProperty(window, "scrollY", scrollYDescriptor);
+        else delete window.scrollY;
+      }
+    });
+
     it("딥링크 책을 찾지 못해도 커버 목록으로 빠져나갈 수 있다", async () => {
       mockRouteState.wildcard = "999";
       mockRouteState.searchParams =

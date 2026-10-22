@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import SplitLayout from "../src/SplitLayout";
 
 const KEY = "split:test";
@@ -312,5 +312,78 @@ describe("SplitLayout", () => {
     expect(container.querySelector(".split-layout.extra")).toBeTruthy();
     expect(container.querySelector(".split-layout-left.l")).toBeTruthy();
     expect(container.querySelector(".split-layout-right.r")).toBeTruthy();
+  });
+
+  it("SplitLayout.Left/Right 는 자리 표시용이라 직접 호출하면 null 을 돌려준다", () => {
+    expect(SplitLayout.Left()).toBeNull();
+    expect(SplitLayout.Right()).toBeNull();
+  });
+
+  it("ResizeObserver 가 있으면 컨테이너와 body 를 관찰하고 크기 변화에 다시 잰다", () => {
+    const instances = [];
+    class MockResizeObserver {
+      constructor(callback) {
+        this.callback = callback;
+        this.observe = vi.fn();
+        this.disconnect = vi.fn();
+        instances.push(this);
+      }
+    }
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+    try {
+      const spy = mockContainerWidth(1000);
+      const { container, unmount } = renderLayout({ storageKey: undefined });
+      expect(instances).toHaveLength(1);
+      const [observer] = instances;
+      expect(observer.observe).toHaveBeenCalledWith(container.querySelector(".split-layout"));
+      expect(observer.observe).toHaveBeenCalledWith(document.body);
+      expect(widthOf()).toBe(280);
+
+      // 크기가 그대로면 다시 재도 값은 그대로다.
+      act(() => observer.callback());
+      expect(widthOf()).toBe(280);
+
+      // 관찰 중인 요소 크기가 바뀌면 콜백이 너비를 다시 재서 반영한다.
+      spy.mockReturnValue({ width: 2000, height: 600, top: 0, left: 0, right: 2000, bottom: 600 });
+      act(() => observer.callback());
+      expect(widthOf()).toBe(560);
+
+      unmount();
+      expect(observer.disconnect).toHaveBeenCalledTimes(1);
+      // 언마운트 뒤 늦게 온 콜백은 컨테이너가 없어도 예외 없이 무시한다.
+      expect(() => observer.callback()).not.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("드래그 중이 아닐 때 pointerup 은 아무것도 저장하지 않는다", () => {
+    mockContainerWidth(1000);
+    renderLayout();
+    fireEvent.pointerUp(handle(), { pointerId: 1 });
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+    expect(widthOf()).toBe(280);
+  });
+
+  it("storageKey 가 없으면 더블클릭해도 기본 비율로 돌아오고 저장소를 건드리지 않는다", () => {
+    mockContainerWidth(1000);
+    const removeSpy = vi.spyOn(Storage.prototype, "removeItem");
+    const setSpy = vi.spyOn(Storage.prototype, "setItem");
+    renderLayout({ storageKey: undefined });
+    fireEvent.keyDown(handle(), { key: "ArrowRight" });
+    expect(widthOf()).toBe(296);
+    fireEvent.doubleClick(handle());
+    expect(widthOf()).toBe(280);
+    expect(removeSpy).not.toHaveBeenCalled();
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+
+  it("화살표가 아닌 키는 너비를 바꾸지 않고 기본 동작도 막지 않는다", () => {
+    mockContainerWidth(1000);
+    renderLayout();
+    const notPrevented = fireEvent.keyDown(handle(), { key: "Enter" });
+    expect(notPrevented).toBe(true);
+    expect(widthOf()).toBe(280);
+    expect(window.localStorage.getItem(KEY)).toBeNull();
   });
 });

@@ -1181,6 +1181,28 @@ describe("Edit", () => {
     expect(mockJsonPutReq).not.toHaveBeenCalled();
   });
 
+  it("복원은 file_path 가 비어 있으면 원래 제목을 유지하고 저자만 비운다", async () => {
+    setupMockCategories(CATEGORIES, [{
+      book_id: 202,
+      title: "경로없는책",
+      author: "저자X",
+      file_type: "epub",
+      file_path: "",
+      category: "1_fiction",
+    }]);
+    render(<Edit />);
+    fireEvent.click(await screen.findByTestId("folder-item-1_fiction"));
+    fireEvent.click(await screen.findByTestId("folder-item-1_fiction/202"));
+    fireEvent.change(screen.getByTestId("title-input"), { target: { value: "수정한 제목" } });
+    expect(screen.getByTestId("book-title").textContent).toBe("수정한 제목");
+
+    fireEvent.click(screen.getByTestId("reset-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("book-title").textContent).toBe("경로없는책");
+      expect(screen.getByTestId("book-author").textContent).toBe("");
+    });
+  });
+
   // ── 저자자르기 버튼 (line 435) ──
 
   it("저자자르기 버튼 클릭 시 저자를 공백 기준으로 분해한다", async () => {
