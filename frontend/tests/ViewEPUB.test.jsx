@@ -34,6 +34,7 @@ let rejectCoverUrl = false;
 let failEveryDisplay = false;
 let failDisplayError = null;
 let omitCoverUrl = false;
+let firstSpineIdref = "";
 let deferGenerate = false;
 let resolveGenerate = null;
 
@@ -143,6 +144,7 @@ function createMockBook() {
     destroy: vi.fn(),
   };
   book.spine.hooks = { content: { register: vi.fn() } };
+  if (firstSpineIdref) book.spine.get = vi.fn(() => ({ idref: firstSpineIdref }));
   if (omitCoverUrl) delete book.coverUrl;
   return book;
 }
@@ -299,6 +301,7 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     failEveryDisplay = false;
     failDisplayError = null;
     omitCoverUrl = false;
+    firstSpineIdref = "";
     deferGenerate = false;
     resolveGenerate = null;
     localStorageMock.clear();
@@ -394,6 +397,16 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
 
     expect(screen.queryByRole("img", { name: "책 표지" })).toBeNull();
     expect(lastRendition.next).not.toHaveBeenCalled();
+  });
+
+  it("spine 첫 항목이 도구가 넣은 표지 페이지면 표지 오버레이를 띄우지 않는다", async () => {
+    mockCoverUrl = "blob:epub-cover";
+    firstSpineIdref = "tm-cover-page-5a991dcf381ed4bf";
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+
+    expect(lastBook.coverUrl).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId("epub-cover-page")).toBeNull();
   });
 
   it("저장된 읽기 위치가 있으면 표지 대신 해당 위치를 복원한다", async () => {

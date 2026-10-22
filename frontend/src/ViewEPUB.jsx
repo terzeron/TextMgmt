@@ -493,6 +493,15 @@ export default function ViewEPUB({
       }, SAVE_THROTTLE_MS);
     });
 
+      // 이 도구가 넣은 표지 페이지(tm-cover-page-*)가 spine 첫 항목이면 그 페이지가 곧 표지다.
+      // 오버레이까지 띄우면 표지가 두 번 보이고, 오버레이는 화면 전체로 확대해 더 크게 보인다.
+      const showCover = (url) => {
+        setCoverUrl(url);
+        if (/^tm-cover-page-/.test(book.spine?.get?.(0)?.idref || "")) return;
+        setIsCoverPage(true);
+        coverPageRef.current = true;
+      };
+
     (async () => {
       try {
         await book.ready;
@@ -503,11 +512,7 @@ export default function ViewEPUB({
           if (typeof book.coverUrl !== "function") return;
           try {
             const url = await book.coverUrl();
-            if (url) {
-              setCoverUrl(url);
-              setIsCoverPage(true);
-              coverPageRef.current = true;
-            }
+            if (url) showCover(url);
           } catch {
             // 표지를 읽지 못하면 EPUB 본문을 첫 화면으로 표시한다.
           }
@@ -532,11 +537,7 @@ export default function ViewEPUB({
         try {
           if (typeof book.coverUrl === "function") {
             const url = await book.coverUrl().catch(() => null);
-            if (url) {
-              setCoverUrl(url);
-              setIsCoverPage(true);
-              coverPageRef.current = true;
-            }
+            if (url) showCover(url);
           }
           await rendition.display();
         } catch (fallbackErr) {
