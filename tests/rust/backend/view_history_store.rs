@@ -220,7 +220,6 @@ struct Flags {
 }
 
 #[test]
-#[ignore = "DbConnection에 begin이 없어 `began` 단언을 그대로 옮길 수 없다(아래 FailingConn은 cursor() 요청을 begin으로 본다); 확신이 없어 유지"]
 fn test_record_view_rolls_back_and_reraises_on_db_error() {
     /// 두 번째 `execute`에서 실패하는 가짜 연결. 커서가 연결과 같은 호출 횟수와 기록을 공유한다.
     struct FailingConn {
@@ -297,15 +296,17 @@ fn test_record_view_rolls_back_and_reraises_on_db_error() {
 
 #[test]
 fn test_list_recent_views_warns_and_skips_unknown_content_type() {
+    type Executed = Arc<Mutex<Vec<(String, Vec<DbValue>)>>>;
+
     /// `execute`가 받은 (SQL, 파라미터)를 기록하고 `rows`를 돌려주는 가짜 연결.
     struct RowsConn {
         rows: Vec<Row>,
-        executed: Arc<Mutex<Vec<(String, Vec<DbValue>)>>>,
+        executed: Executed,
     }
 
     struct RowsCursor {
         rows: Vec<Row>,
-        executed: Arc<Mutex<Vec<(String, Vec<DbValue>)>>>,
+        executed: Executed,
     }
 
     impl DbCursor for RowsCursor {

@@ -1,8 +1,7 @@
 //! MySQL 접근 추상화. pymysql `DictCursor`의 의미(`%s` 자리표시자, 열 이름 맵 행, 수동 커밋, IntegrityError)를 Diesel 위에서 재현한다.
 //! 서비스 코드는 `DbConnection`/`ConnectionProvider`만 알고, 테스트는 가짜 연결을 주입한다. 설계: docs/rust-test-seams.md 3.4
 //!
-//! 주의: Diesel은 연결을 열 때 `time_zone`을 `+00:00`으로 맞춘다. pymysql은 서버 기본값을 쓴다.
-//! SQL의 `NOW()`나 `TIMESTAMP` 열을 읽는 코드를 옮길 때 이 차이를 확인해야 한다.
+//! 시간대: Diesel은 연결을 열 때 `time_zone`을 `+00:00`으로 바꾸므로, `connect`가 서버 전역 설정으로 되돌려 pymysql과 맞춘다.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -85,6 +84,19 @@ impl<T: Into<DbValue>> From<Option<T>> for DbValue {
     }
 }
 
+/// JSON 값을 옮긴다. 정수·문자열·null은 그대로, 불리언은 0/1, 나머지는 JSON 문자열이다.
+impl From<serde_json::Value> for DbValue {
+    fn from(v: serde_json::Value) -> Self {
+        match v {
+            serde_json::Value::Null => DbValue::Null,
+            serde_json::Value::Bool(b) => DbValue::Int(b.into()),
+            serde_json::Value::Number(n) => n.as_i64().map(DbValue::Int).unwrap_or_else(|| DbValue::Text(n.to_string())),
+            serde_json::Value::String(s) => DbValue::Text(s),
+            other => DbValue::Text(other.to_string()),
+        }
+    }
+}
+
 /// 열 이름 → 값. `DictCursor`가 돌려주는 dict에 대응한다.
 pub type Row = BTreeMap<String, DbValue>;
 
@@ -125,6 +137,20 @@ pub trait DbConnection: Send {
     fn commit(&mut self) -> Result<(), DbError>;
     fn rollback(&mut self) -> Result<(), DbError>;
     fn close(&mut self);
+
+    /// 커서 하나로 문장을 실행하고 영향받은(SELECT는 읽은) 행 수를 돌려준다.
+    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError> {
+        let mut cur = self.cursor();
+        cur.execute(sql, params)?;
+        Ok(cur.rowcount())
+    }
+
+    /// 커서 하나로 문장을 실행하고 첫 행을 돌려준다. 행이 없으면 `None`이다.
+    fn fetch_one(&mut self, sql: &str, params: &[DbValue]) -> Result<Option<Row>, DbError> {
+        let mut cur = self.cursor();
+        cur.execute(sql, params)?;
+        Ok(cur.fetchone())
+    }
 }
 
 /// 호출할 때마다 새 연결을 연다. Python 코드가 연산마다 `pymysql.connect`를 부르는 것과 같다.
@@ -364,7 +390,8 @@ impl DbConnection for MysqlDbConnection {
 /// 새 연결을 연다. pymysql 기본값처럼 자동 커밋을 끄고(`autocommit=0`), 커밋은 `commit()`으로 명시한다.
 pub fn connect(config: &MysqlConfig) -> Result<Box<dyn DbConnection>, DbError> {
     let mut conn = MysqlConnection::establish(&mysql_url(config)).map_err(|e| DbError::Other(format!("MySQL 연결 실패 ({}:{}): {e}", config.host, config.port)))?;
-    conn.batch_execute("SET autocommit=0").map_err(map_error)?;
+    // Diesel은 연결할 때 time_zone을 +00:00으로 바꾼다. pymysql처럼 서버 설정을 따르게 되돌린다.
+    conn.batch_execute("SET autocommit=0, time_zone=@@global.time_zone").map_err(map_error)?;
     Ok(Box::new(MysqlDbConnection { conn: Arc::new(Mutex::new(conn)), closed: false }))
 }
 

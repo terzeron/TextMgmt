@@ -55,6 +55,19 @@ mod values {
     }
 
     #[test]
+    fn json_values_convert_like_python_parameters() {
+        use serde_json::json;
+        assert_eq!(DbValue::from(json!(null)), DbValue::Null);
+        assert_eq!(DbValue::from(json!(true)), DbValue::Int(1));
+        assert_eq!(DbValue::from(json!(false)), DbValue::Int(0));
+        assert_eq!(DbValue::from(json!(42)), DbValue::Int(42));
+        assert_eq!(DbValue::from(json!("가")), DbValue::Text("가".into()));
+        assert_eq!(DbValue::from(json!(["a", 1])), DbValue::Text("[\"a\",1]".into()));
+        // i64 범위를 넘는 정수는 잘리지 않게 문자열로 둔다.
+        assert_eq!(DbValue::from(json!(18446744073709551615u64)), DbValue::Text("18446744073709551615".into()));
+    }
+
+    #[test]
     fn accessors_return_the_matching_variant_only() {
         assert_eq!(DbValue::Int(3).as_i64(), Some(3));
         assert_eq!(DbValue::Text("3".into()).as_i64(), None);
@@ -228,6 +241,31 @@ mod mysql {
         cur.executemany("INSERT INTO db_upd VALUES (%s)", &[vec![1.into()], vec![1.into()], vec![2.into()]]).unwrap();
         cur.execute("DELETE FROM db_upd WHERE n=%s", &[1.into()]).unwrap();
         assert_eq!(cur.rowcount(), 2);
+        conn.commit().unwrap();
+    }
+
+    #[test]
+    #[ignore = "Docker 필요"]
+    fn session_time_zone_follows_the_server_like_pymysql() {
+        // Diesel은 연결할 때 time_zone을 +00:00으로 바꾼다. pymysql은 서버 값을 그대로 쓰므로 TIMESTAMP를 읽는 결과가 달라진다.
+        let _g = mysql_fixture::db_lock();
+        let mut conn = container_conn();
+        let mut cur = conn.cursor();
+        cur.execute("SELECT @@session.time_zone AS s, @@global.time_zone AS g", &[]).unwrap();
+        let r = cur.fetchone().unwrap();
+        assert_eq!(r["s"], r["g"]);
+    }
+
+    #[test]
+    #[ignore = "Docker 필요"]
+    fn connection_execute_and_fetch_one_wrap_a_cursor() {
+        let _g = mysql_fixture::db_lock();
+        let mut conn = container_conn();
+        conn.execute("DROP TABLE IF EXISTS db_conn_helpers", &[]).unwrap();
+        conn.execute("CREATE TABLE db_conn_helpers (n INT)", &[]).unwrap();
+        assert_eq!(conn.execute("INSERT INTO db_conn_helpers VALUES (%s), (%s)", &[1.into(), 2.into()]).unwrap(), 2);
+        assert_eq!(conn.fetch_one("SELECT n FROM db_conn_helpers ORDER BY n DESC", &[]).unwrap(), Some(row(&[("n", DbValue::Int(2))])));
+        assert_eq!(conn.fetch_one("SELECT n FROM db_conn_helpers WHERE n=%s", &[99.into()]).unwrap(), None);
         conn.commit().unwrap();
     }
 }

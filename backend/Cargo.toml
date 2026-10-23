@@ -34,6 +34,10 @@ path = "../tests/rust/backend/db.rs"
 name = "common_smoke"
 path = "../tests/rust/backend/common_smoke.rs"
 
+[[test]]
+name = "view_history_store"
+path = "../tests/rust/backend/view_history_store.rs"
+
 [dev-dependencies]
 base64 = "0.23.1"
 flate2 = "1"
