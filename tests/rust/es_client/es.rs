@@ -176,10 +176,10 @@ fn from_env_reports_the_first_missing_variable() {
 }
 
 #[test]
-fn https_urls_are_rejected_because_tls_is_not_built_in() {
+fn https_urls_are_rejected_even_when_tls_is_built_in_by_another_crate() {
     // 내부망 http 전용이다. 인증서 검증을 끄는 우회로를 두지 않고 요청 단계에서 거부한다.
     let err = EsClient::new("https://127.0.0.1:1", "u", "p", "books").search(json!({}), 10, None).unwrap_err();
-    assert!(matches!(err, EsError::Transport(_)), "{err}");
+    assert!(matches!(&err, EsError::Transport(m) if m.contains("http만")), "{err}");
 }
 
 #[test]

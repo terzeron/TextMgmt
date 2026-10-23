@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use normalize_comic_directories::cache::{BookstoreSearchCache, StoreRow};
-use normalize_comic_directories::cli::{Options, parse_options, run};
+use normalize_comic_directories::cli::{LiveSearch, Options, parse_options, run, run_with_searcher};
 use normalize_comic_directories::plan::*;
 
 fn row(title: &str, author: &str) -> StoreRow {
@@ -311,7 +311,9 @@ fn parse_options_reads_flags_and_rejects_bad_input() {
     let d = parse_options(&[]).unwrap();
     assert_eq!(d.root, Path::new("/mnt/data/만화"));
     assert_eq!((d.max_searches, d.negative_cache_seconds, d.apply), (0, 7 * 24 * 3600, false));
-    assert!(parse_options(&args(&["--refresh-cache"])).unwrap_err().contains("Python"));
+    let f = parse_options(&args(&["--offline", "--refresh-cache"])).unwrap();
+    assert!(f.offline && f.refresh_cache);
+    assert!(!d.offline && !d.refresh_cache);
     assert!(parse_options(&args(&["--delay", "x"])).unwrap_err().contains("--delay"));
     assert_eq!(parse_options(&args(&["--max-searches", "-1"])).unwrap().max_searches, 0, "음수는 0으로 맞춘다");
     assert!(parse_options(&args(&["--max-searches", "abc"])).unwrap_err().contains("--max-searches"));
@@ -343,7 +345,7 @@ fn run_without_arguments_prints_usage_and_bad_commands_exit_two() {
 #[test]
 fn run_scans_with_the_cache_only_and_writes_the_report_without_renaming() {
     let (_tmp, root) = comic_root();
-    let (code, text, work) = run_args(&root, &[]);
+    let (code, text, work) = run_args(&root, &["--offline"]);
     assert_eq!(code, 0);
     assert!(text.contains("Directories scanned: 6"), "{text}");
     assert!(text.contains("Dry run only. Pass --apply to rename directories."));
@@ -361,7 +363,7 @@ fn run_with_apply_renames_the_planned_directories() {
     let cache = work.path().join("c.jsonl");
     let line = serde_json::json!({"query": "나루토|홍길동", "store": "yes24", "cached_at": 4102444800.0, "results": [{"title": "나루토 1", "author": "기시모토 마사시", "category": "만화", "url": "u", "isbn": ""}]});
     fs::write(&cache, format!("{line}\n")).unwrap();
-    let a = args(&["run", "--root", root.to_str().unwrap(), "--report", work.path().join("r.tsv").to_str().unwrap(), "--cache", cache.to_str().unwrap(), "--apply"]);
+    let a = args(&["run", "--root", root.to_str().unwrap(), "--report", work.path().join("r.tsv").to_str().unwrap(), "--cache", cache.to_str().unwrap(), "--offline", "--apply"]);
     let mut out = Vec::new();
     assert_eq!(run("ncd", &a, &mut out), 0);
     let text = String::from_utf8(out).unwrap();
@@ -438,4 +440,58 @@ fn a_group_or_world_writable_cache_is_refused_before_anything_runs() {
     let a = args(&["run", "--root", root.to_str().unwrap(), "--report", work.path().join("r.tsv").to_str().unwrap(), "--cache", cache.to_str().unwrap()]);
     assert_eq!(run("ncd", &a, &mut Vec::new()), 1);
     assert!(!work.path().join("r.tsv").exists(), "거부하면 리포트도 쓰지 않는다");
+}
+
+#[test]
+fn live_search_maps_bookstore_rows_into_cache_rows() {
+    struct Pages;
+    impl bookstore::Fetcher for Pages {
+        fn get(&self, _store: bookstore::Store, url: &str) -> Result<String, String> {
+            if url.contains("Product/Search") {
+                Ok(r#"<ul id="yesSchList"><li><div class="itemUnit"><div class="item_info"><div class="info_row info_name"><a class="gd_name" href="/product/goods/1">x</a></div></div></div></li></ul>"#.into())
+            } else {
+                Ok(r#"<h2 class="gd_name">나루토 1</h2><span class="gd_auth"><a>기시모토 마사시</a></span> ISBN13 9788900000001"#.into())
+            }
+        }
+    }
+    let live = LiveSearch { fetcher: Pages };
+    let rows = live.search("yes24", "나루토", "").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].title.as_str(), rows[0].author.as_str(), rows[0].isbn.as_str(), rows[0].url.as_str()),
+        ("나루토 1", "기시모토 마사시", "9788900000001", "https://www.yes24.com/product/goods/1")
+    );
+    assert!(live.is_live());
+    assert!(live.search("nope", "x", "").unwrap_err().contains("알 수 없는 서점"));
+}
+
+#[test]
+fn run_goes_live_by_default_fills_the_cache_and_offline_ignores_the_searcher() {
+    let (_tmp, root) = comic_root();
+    let work = tempfile::tempdir().unwrap();
+    let cache = work.path().join("c.jsonl");
+    let fake = Fake::new(vec![("yes24", Ok(vec![row("나루토 1", "기시모토 마사시")]))]);
+    let base = |extra: &[&str]| {
+        let mut a = args(&["run", "--root", root.to_str().unwrap(), "--report", work.path().join("r.tsv").to_str().unwrap(), "--cache", cache.to_str().unwrap(), "--delay", "0"]);
+        a.extend(extra.iter().map(|s| s.to_string()));
+        a
+    };
+    let mut out = Vec::new();
+    assert_eq!(run_with_searcher("ncd", &base(&[]), &mut out, &fake), 0);
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("Rename proposals: 1;"), "{text}");
+    assert!(!fake.calls.borrow().is_empty());
+    assert!(fs::read_to_string(&cache).unwrap().lines().count() >= 2, "조회 결과를 캐시에 남긴다");
+
+    // 이번에는 캐시만으로 같은 결과가 나오고 서점은 부르지 않는다.
+    let again = Fake::new(vec![]);
+    let mut out = Vec::new();
+    assert_eq!(run_with_searcher("ncd", &base(&["--offline"]), &mut out, &again), 0);
+    assert!(String::from_utf8(out).unwrap().contains("Rename proposals: 1;"));
+    assert!(again.calls.borrow().is_empty());
+
+    // --refresh-cache는 캐시를 비우고 다시 조회한다.
+    let third = Fake::new(vec![("yes24", Ok(vec![row("나루토 1", "기시모토 마사시")]))]);
+    assert_eq!(run_with_searcher("ncd", &base(&["--refresh-cache"]), &mut Vec::new(), &third), 0);
+    assert!(!third.calls.borrow().is_empty());
 }

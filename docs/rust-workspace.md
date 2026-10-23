@@ -19,6 +19,7 @@ docs/       문서
 | `corpus_layout` | 색인 제외 디렉토리 상수 | `utils/corpus_layout.py` |
 | `es_client` | Elasticsearch REST 클라이언트(http 전용): 검색, 갱신, 조회, 삭제 | `backend/es_manager.py` 일부 |
 | `htmlkit` | HTML 토큰화와 BeautifulSoup 호환 텍스트 추출 | (bs4) |
+| `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출(HTTPS는 `rustls`, 파싱은 `scraper`). Python `html.parser`와 트리가 달라 알라딘 ISBN은 Rust가 더 잘 찾는다 | `backend/bookstore.py` 일부 |
 | `pyfmt` | Python 호환 서식: `py_repr`, `py_float`, `py_round` | |
 | `stat` | 색인·파싱 통계 카운터 | `utils/stat.py` |
 | `file_time` | 파일 생성 시각 | `utils/file_time.py` |
@@ -40,7 +41,7 @@ docs/       문서
 | `move_semi_clusters` | 준확실 클러스터 도서를 장르 폴더로 이동(`run`, `--dry-run`) | `utils/move_semi_clusters.py` 유지 |
 | `classify_books_client` | REST API로 자동 분류 요청·진행 감시(`--api-url`). 로컬 엔진 직접 모드는 미이식 | `utils/classify_books_client.py` 유지 |
 | `reload_samgukji_epubs` | `2_소설역사`의 삼국지 EPUB 나열(`--list`)·loader 재적재(`--apply`) | `utils/reload_samgukji_epubs.sh` 유지 |
-| `normalize_comic_directories` | 만화 디렉토리 이름 정규화. 서점 조회는 캐시 전용(`SKIP_NOT_CACHED`) | `utils/normalize_comic_directories.py` 유지 |
+| `normalize_comic_directories` | 만화 디렉토리 이름 정규화. 서점은 HTTPS로 조회하고 캐시에 남긴다(`--offline`이면 캐시만, 없으면 `SKIP_NOT_CACHED`) | `utils/normalize_comic_directories.py` 유지 |
 
 ## 규칙
 
@@ -50,6 +51,7 @@ docs/       문서
 - **커버리지는 100%에 가깝게 유지한다.** `cargo llvm-cov --workspace --summary-only`.
 - **라이브러리는 도구에 의존하지 않는다.** 공유할 코드는 `libs/`로 올린다.
 - Python 원본은 사용자가 지우라고 한 것만 지운다.
+- TLS는 `bookstore`만 쓴다(공개 서점 HTTPS). ES는 내부망 http 전용이라 `es_client`가 https 주소를 직접 거부한다. 인증서 검증을 끄는 우회로는 두지 않는다.
 - ZIP은 `corpus_common::reader::open_zip`으로 연다. `zip` 크레이트 기본 설정(`Detect`)은 파일 전체를 훑어 느리다
   (1.5MB EPUB 하나에 읽기 1만 3천 번, 48ms). `open_zip`은 `Known(0)`으로 먼저 열고(0.2ms) 실패하면 `Detect`로 다시 연다.
 

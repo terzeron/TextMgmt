@@ -122,7 +122,7 @@ fn base64(input: &[u8]) -> String {
 
 impl EsClient {
     pub fn new(url: &str, user: &str, password: &str, index: &str) -> Self {
-        // 내부망 http로만 통신한다. TLS 기능을 빌드에 넣지 않았으므로 https 주소는 요청 시 오류가 난다.
+        // 내부망 http로만 통신한다. 같은 빌드에 다른 crate가 켠 TLS 기능이 섞여도 https 주소는 `call`에서 거부한다.
         let builder = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).http_status_as_error(false);
         EsClient { agent: builder.build().into(), base: url.trim_end_matches('/').to_owned(), auth: format!("Basic {}", base64(format!("{user}:{password}").as_bytes())), index: index.to_owned() }
     }
@@ -138,6 +138,9 @@ impl EsClient {
 
     fn call(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, EsError> {
         let url = format!("{}{path}", self.base);
+        if !url.starts_with("http://") {
+            return Err(EsError::Transport(format!("ES는 내부망 http만 지원한다(https와 인증서 검증 우회는 쓰지 않는다): {}", self.base)));
+        }
         let result = match (method, body) {
             ("POST", Some(b)) => self.agent.post(&url).header("Authorization", &self.auth).send_json(b),
             ("DELETE", _) => self.agent.delete(&url).header("Authorization", &self.auth).call(),

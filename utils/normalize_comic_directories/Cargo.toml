@@ -1,6 +1,6 @@
 [package]
 name = "normalize_comic_directories"
-description = "만화 디렉토리 이름을 파일명과 서점 결과로 정규화한다 (utils/normalize_comic_directories.py의 Rust 대응, 서점 조회는 캐시 전용)"
+description = "만화 디렉토리 이름을 파일명과 서점 결과로 정규화한다 (utils/normalize_comic_directories.py의 Rust 대응)"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -19,6 +19,7 @@ name = "plan"
 path = "../../tests/rust/normalize_comic_directories/plan.rs"
 
 [dependencies]
+bookstore = { path = "../../libs/bookstore" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 fancy-regex = "0.14"
 serde_json = { workspace = true, features = ["preserve_order"] }

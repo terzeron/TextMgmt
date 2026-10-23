@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 
+use bookstore::{Fetcher, HttpFetcher, Store};
+
 use crate::cache::{BookstoreSearchCache, DEFAULT_NEGATIVE_CACHE_SECONDS, StoreRow};
 use crate::plan::{Searcher, apply_renames, build_proposals, write_report};
 
@@ -44,6 +46,23 @@ impl Searcher for CacheOnly {
     }
 }
 
+/// 서점에 실제로 물어보는 검색. 서점 이름은 `yes24`, `aladin`, `kyobo`다.
+pub struct LiveSearch<F: Fetcher> {
+    pub fetcher: F,
+}
+
+impl<F: Fetcher> Searcher for LiveSearch<F> {
+    fn is_live(&self) -> bool {
+        true
+    }
+
+    fn search(&self, store: &str, title: &str, author: &str) -> Result<Vec<StoreRow>, String> {
+        let store = Store::from_name(store).ok_or_else(|| format!("알 수 없는 서점: {store}"))?;
+        let outcome = bookstore::search(store, &self.fetcher, "", title, author);
+        Ok(outcome.rows.into_iter().map(|r| StoreRow { title: r.title, author: r.author, category: r.category, url: r.detail_url, isbn: r.isbn }).collect())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Options {
     pub root: PathBuf,
@@ -53,6 +72,10 @@ pub struct Options {
     pub cache: PathBuf,
     pub negative_cache_seconds: u64,
     pub apply: bool,
+    /// 서점에 묻지 않고 캐시만 쓴다.
+    pub offline: bool,
+    /// 시작 전에 캐시 파일을 비운다.
+    pub refresh_cache: bool,
 }
 
 impl Default for Options {
@@ -65,6 +88,8 @@ impl Default for Options {
             cache: default_dir().join(CACHE_NAME),
             negative_cache_seconds: DEFAULT_NEGATIVE_CACHE_SECONDS,
             apply: false,
+            offline: false,
+            refresh_cache: false,
         }
     }
 }
@@ -78,9 +103,9 @@ pub fn print_usage(program: &str, out: &mut dyn Write) {
         "{program} - 만화 디렉토리 이름을 `[저자] 제목 (1-10권 완)` 꼴로 정리한다.
 
 3_미정리, 4_대기, 9_temp 밑의 디렉토리마다 안의 파일 이름에서 제목·저자·권수 범위를 뽑고,
-서점 검색 결과(캐시)로 제목과 저자를 확인해 새 이름을 정한다. 기본은 리포트(TSV)만 쓰는 점검이다.
-서점 조회는 캐시 전용이다. 캐시에 없는 질의는 SKIP_NOT_CACHED로 건너뛰므로, 새 질의는
-utils/normalize_comic_directories.py로 먼저 캐시를 채운다.
+서점(Yes24, 알라딘, 교보문고) 검색 결과로 제목과 저자를 확인해 새 이름을 정한다. 기본은 리포트(TSV)만 쓰는 점검이다.
+서점 결과는 캐시에 남기고, 같은 질의는 캐시에서 읽는다. 서점에는 HTTPS로 접속한다.
+--offline이면 서점에 묻지 않고 캐시만 쓴다. 캐시에 없는 질의는 SKIP_NOT_CACHED로 건너뛴다.
 
 사용법:
   {program} run [옵션]
@@ -94,7 +119,9 @@ utils/normalize_comic_directories.py로 먼저 캐시를 채운다.
   --cache FILE                  서점 결과 캐시 JSONL (기본 {cache_default})
   --negative-cache-seconds N    빈 결과를 캐시에 두는 시간(초) (기본 {DEFAULT_NEGATIVE_CACHE_SECONDS})
   --max-searches N              새 질의 수 상한, 0이면 무제한 (기본 0)
-  --delay SEC                   서점 요청 사이 대기(초). 캐시 전용에서는 쓰지 않는다 (기본 1.2)
+  --delay SEC                   서점 요청 사이 대기(초) (기본 1.2)
+  --offline                     서점에 묻지 않고 캐시만 쓴다
+  --refresh-cache               시작 전에 캐시 파일을 비운다
   --apply                       RENAME 계획을 실제로 적용한다
   -h, --help                    이 도움말
 
@@ -103,7 +130,7 @@ utils/normalize_comic_directories.py로 먼저 캐시를 채운다.
     );
 }
 
-/// 인자를 읽는다. `--refresh-cache`는 캐시를 비우기만 하고 다시 채울 수 없어 받지 않는다.
+/// 인자를 읽는다.
 pub fn parse_options(args: &[String]) -> Result<Options, String> {
     let mut options = Options::default();
     let mut it = args.iter();
@@ -130,15 +157,21 @@ pub fn parse_options(args: &[String]) -> Result<Options, String> {
                 options.negative_cache_seconds = raw.parse::<i64>().map_err(|_| format!("argument --negative-cache-seconds: invalid int value: '{raw}'"))?.max(0) as u64;
             }
             "--apply" => options.apply = true,
-            "--refresh-cache" => return Err("--refresh-cache는 지원하지 않는다. 캐시를 다시 채울 수 없어서다. 필요하면 Python 원본을 쓴다".into()),
+            "--offline" => options.offline = true,
+            "--refresh-cache" => options.refresh_cache = true,
             other => return Err(format!("unrecognized arguments: {other}")),
         }
     }
     Ok(options)
 }
 
-/// 진입점. 종료 코드를 돌려준다.
+/// 진입점. 서점에는 HTTPS로 실제 접속한다(`--offline`이면 접속하지 않는다). 종료 코드를 돌려준다.
 pub fn run(program: &str, args: &[String], out: &mut dyn Write) -> i32 {
+    run_with_searcher(program, args, out, &LiveSearch { fetcher: HttpFetcher::new() })
+}
+
+/// `run`과 같고, 서점 검색을 바꿔 끼울 수 있다. `--offline`이면 `live`를 쓰지 않는다.
+pub fn run_with_searcher(program: &str, args: &[String], out: &mut dyn Write, live: &dyn Searcher) -> i32 {
     match args.first().map(String::as_str) {
         None | Some("-h" | "--help") => {
             print_usage(program, out);
@@ -166,8 +199,9 @@ pub fn run(program: &str, args: &[String], out: &mut dyn Write) -> i32 {
         eprintln!("ERROR {e}");
         return 1;
     }
-    let mut cache = BookstoreSearchCache::new(&options.cache, false, options.negative_cache_seconds);
-    let proposals = build_proposals(&root, options.delay, options.max_searches, &mut cache, &CacheOnly);
+    let mut cache = BookstoreSearchCache::new(&options.cache, options.refresh_cache, options.negative_cache_seconds);
+    let searcher: &dyn Searcher = if options.offline { &CacheOnly } else { live };
+    let proposals = build_proposals(&root, options.delay, options.max_searches, &mut cache, searcher);
     if let Err(e) = write_report(&proposals, &options.report) {
         eprintln!("ERROR 리포트를 쓰지 못했다: {}: {e}", options.report.display());
         return 1;

@@ -1,0 +1,193 @@
+{
+ "links": {
+  "yes24_search": [
+   "yes24",
+   [
+    "https://www.yes24.com/product/goods/111",
+    "https://www.yes24.com/product/goods/222"
+   ]
+  ],
+  "yes24_search_fallback": [
+   "yes24",
+   [
+    "https://www.yes24.com/product/goods/501",
+    "https://www.yes24.com/product/goods/502"
+   ]
+  ],
+  "aladin_search": [
+   "aladin",
+   [
+    "https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=100",
+    "https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=100&x=1",
+    "https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=300",
+    "https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=400"
+   ]
+  ],
+  "kyobo_search": [
+   "kyobo",
+   [
+    "https://product.kyobobook.co.kr/detail/S000001",
+    "https://product.kyobobook.co.kr/detail/S000002"
+   ]
+  ],
+  "kyobo_search_fallback": [
+   "kyobo",
+   [
+    "/detail/S1",
+    "https://ebook-product.kyobobook.co.kr/x",
+    "/detail/S2",
+    "/detail/S3"
+   ]
+  ]
+ },
+ "info": {
+  "yes24_detail": [
+   "yes24",
+   {
+    "title": "원피스 1",
+    "author": "오다 에이이치로",
+    "category": "",
+    "isbn": "9788900000001"
+   }
+  ],
+  "yes24_detail_plain": [
+   "yes24",
+   {
+    "title": "제목만",
+    "author": "글 홍길동",
+    "category": "",
+    "isbn": "1234567890"
+   }
+  ],
+  "yes24_detail_category": [
+   "yes24",
+   {
+    "title": "분류 있음",
+    "author": "",
+    "category": "만화 > 일본만화",
+    "isbn": "8900000009"
+   }
+  ],
+  "yes24_detail_comment": [
+   "yes24",
+   {
+    "title": "주석 분류",
+    "author": "",
+    "category": "만화/라이트노벨 > 액션",
+    "isbn": ""
+   }
+  ],
+  "aladin_detail": [
+   "aladin",
+   {
+    "title": "원피스 1 (og)",
+    "author": "오다 (meta)",
+    "category": "국내도서 > 만화 > 일본만화",
+    "isbn": "9788900000001"
+   }
+  ],
+  "aladin_detail_title_only": [
+   "aladin",
+   {
+    "title": "제목 | 부제",
+    "author": "저자명",
+    "category": "",
+    "isbn": "8900000001"
+   }
+  ],
+  "aladin_detail_empty_meta": [
+   "aladin",
+   {
+    "title": "",
+    "author": "",
+    "category": "",
+    "isbn": ""
+   }
+  ],
+  "kyobo_detail": [
+   "kyobo",
+   {
+    "title": "원피스 1",
+    "author": "오다 에이이치로",
+    "category": "만화 > 만화 > 일본만화",
+    "isbn": "9788900000001"
+   }
+  ],
+  "kyobo_detail_title_fallback": [
+   "kyobo",
+   {
+    "title": "제목 입니다",
+    "author": "",
+    "category": "소설",
+    "isbn": ""
+   }
+  ],
+  "kyobo_detail_title_pipe": [
+   "kyobo",
+   {
+    "title": "또 다른 제목",
+    "author": "",
+    "category": "",
+    "isbn": ""
+   }
+  ]
+ },
+ "urls": {
+  "yes24": [
+   "https://www.yes24.com/Product/Search?domain=ALL&query=%EC%9B%90%ED%94%BC%EC%8A%A4%201%20%26%20%EC%A0%80%EC%9E%90",
+   "https://www.yes24.com/Product/Search?domain=ALL&query=9788900000001"
+  ],
+  "aladin": [
+   "https://www.aladin.co.kr/search/wsearchresult.aspx?SearchTarget=All&SearchWord=%EC%9B%90%ED%94%BC%EC%8A%A4%201%20%26%20%EC%A0%80%EC%9E%90",
+   "https://www.aladin.co.kr/search/wsearchresult.aspx?SearchTarget=All&SearchWord=9788900000001"
+  ],
+  "kyobo": [
+   "https://search.kyobobook.co.kr/search?keyword=%EC%9B%90%ED%94%BC%EC%8A%A4%201%20%26%20%EC%A0%80%EC%9E%90",
+   "https://search.kyobobook.co.kr/search?keyword=9788900000001"
+  ]
+ },
+ "truncate": [
+  [
+   "제목 - 부제",
+   "제목"
+  ],
+  [
+   "제목－부제",
+   "제목"
+  ],
+  [
+   "제목-부제-더",
+   "제목"
+  ],
+  [
+   "제목：부제",
+   "제목"
+  ],
+  [
+   "그냥",
+   "그냥"
+  ],
+  [
+   "a - b：c",
+   "a"
+  ]
+ ],
+ "strip_num": [
+  [
+   "마왕의 딸 3",
+   "마왕의 딸"
+  ],
+  [
+   "마왕의 딸",
+   "마왕의 딸"
+  ],
+  [
+   "3",
+   "3"
+  ],
+  [
+   "제목 12  ",
+   "제목"
+  ]
+ ]
+}
