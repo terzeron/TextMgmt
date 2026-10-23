@@ -38,6 +38,14 @@ path = "../tests/rust/backend/common_smoke.rs"
 name = "view_history_store"
 path = "../tests/rust/backend/view_history_store.rs"
 
+[[test]]
+name = "category_mapping"
+path = "../tests/rust/backend/category_mapping.rs"
+
+[[test]]
+name = "classify_proposal_status_db"
+path = "../tests/rust/backend/classify_proposal_status_db.rs"
+
 [dev-dependencies]
 base64 = "0.23.1"
 flate2 = "1"

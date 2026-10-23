@@ -15,23 +15,24 @@
 //!   - `trait DbConnection: Send { fn cursor(&mut self) -> Box<dyn DbCursor>; fn commit(&mut self) -> Result<(), DbError>; fn rollback(&mut self) -> Result<(), DbError>; fn close(&mut self); }`
 //!   - `type ConnectionProvider = Arc<dyn Fn() -> Result<Box<dyn DbConnection>, DbError> + Send + Sync>`
 //! - `backend::category_mapping::CategoryMapping`
-//!   - `with_connector(provider: ConnectionProvider) -> Result<CategoryMapping, E>` (`init_db` 실행. 마이그레이션 예외는 삼킨다. 구 `with_connector(host, port, db, user, pw, provider)`)
-//!   - `with_connection_provider(provider: ConnectionProvider) -> CategoryMapping` (`init_db` 생략. 구 `set_connection_provider`/`cm._get_connection = ...` 대입. `set_*`는 없다)
-//!   - `get_all_mappings(&self) -> HashMap<String, Vec<String>>`, `get_keywords(&self, &str) -> Vec<String>`
-//!   - `add_keyword(&self, &str, &str) -> bool`, `remove_keyword(&self, &str, &str) -> bool`, `set_keywords(&self, &str, &[&str]) -> bool`
-//!   - `update_all_mappings(&self, &HashMap<String, Vec<String>>) -> bool`
-//!   - `delete_category(&self, &str, prefix: bool) -> bool`, `rename_category(&self, &str, &str) -> bool`
-//!   - `get_hidden_categories(&self) -> Vec<String>`, `set_hidden(&self, &str, bool) -> bool`
-//!   - `get_latest_excluded_categories(&self) -> Vec<String>`, `set_latest_excluded(&self, &str, bool) -> bool`
-//!   - `search_by_keyword(&self, &str) -> Vec<String>`
+//!   - `with_connector(provider: ConnectionProvider) -> Result<CategoryMapping, DbError>` (`init_db` 실행. 마이그레이션의 인덱스 삭제 예외는 삼킨다)
+//!   - `with_connection_provider(provider: ConnectionProvider) -> CategoryMapping` (`init_db` 생략)
+//!   - `content_type`은 기본값이 없어 매번 마지막 인자로 넘긴다(`delete_category`만 `(category, content_type, prefix)`). 아래 목록은 `"book"`을 넘기는 모양이다.
+//!   - `get_all_mappings(&self, ct) -> HashMap<String, Vec<String>>`, `get_keywords(&self, &str, ct) -> Vec<String>`
+//!   - `add_keyword(&self, &str, &str, ct) -> bool`, `remove_keyword(&self, &str, &str, ct) -> bool`, `set_keywords(&self, &str, &[&str], ct) -> bool`
+//!   - `update_all_mappings(&self, &HashMap<String, Vec<String>>, ct) -> bool`
+//!   - `delete_category(&self, &str, ct, prefix: bool) -> bool`, `rename_category(&self, &str, &str, ct) -> bool`
+//!   - `get_hidden_categories(&self, ct) -> Vec<String>`, `set_hidden(&self, &str, bool, ct) -> bool`
+//!   - `get_latest_excluded_categories(&self, ct) -> Vec<String>`, `set_latest_excluded(&self, &str, bool, ct) -> bool`
+//!   - `search_by_keyword(&self, &str, ct) -> Vec<String>`
 //!   - `acquire_reload_lock(&self, content_type: &str, category: Option<&str>, reload_source: Option<&str>) -> (bool, Option<String>, Option<Row>)`
 //!   - `release_reload_lock(&self, content_type: &str, category: Option<&str>)`
 //!   - `heartbeat_reload_lock(&self, content_type: &str, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), ValueError>`
 //!   - `complete_reload_lock(&self, content_type: &str, status: &str, error: Option<&str>, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), ValueError>`
-//!   - `get_reload_status(&self, content_type: &str) -> Option<Row>`
-//!   - `add_classify_proposal_items(&self, items: &[Value], category: &str)`, `get_classify_proposal_items(&self) -> Vec<Value>`
-//!   - `clear_classify_proposal_items(&self, content_type: &str)`, `delete_classify_proposal_item(&self, file_path: &str, content_type: Option<&str>) -> u64`
-//!   - `merge_classify_proposal_status(&self, status: &Value)`
+//!   - `get_reload_status(&self, content_type: &str, category: Option<&str>) -> Option<Row>`
+//!   - `add_classify_proposal_items(&self, items: &[Value], category: &str, ct)`, `get_classify_proposal_items(&self, ct) -> Vec<Value>`
+//!   - `clear_classify_proposal_items(&self, ct)`, `delete_classify_proposal_item(&self, file_path: &str, ct) -> u64`
+//!   - `merge_classify_proposal_status(&self, status: &Value, ct)`
 //!   - `pub const RELOAD_LOCK_HEARTBEAT_STALE_SECONDS: i64`, `struct ValueError(pub String)`
 //! - `chrono`가 dev-dependency에 있다고 본다 (`datetime.now()` 대응).
 
@@ -284,9 +285,9 @@ mod test_category_mapping {
     fn test_get_all_and_keywords() {
         let cursor = FakeCursor::new().with_rows(vec![row([("category", "c1".into()), ("keyword", "k1".into())]), row([("category", "c1".into()), ("keyword", "k2".into())])]);
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
-        let mappings = cm.get_all_mappings();
+        let mappings = cm.get_all_mappings("book");
         assert_eq!(mappings, HashMap::from([("c1".to_string(), strs(&["k1", "k2"]))]));
-        let keywords = cm.get_keywords("c1");
+        let keywords = cm.get_keywords("c1", "book");
         assert_eq!(keywords, strs(&["k1", "k2"]));
     }
 
@@ -294,22 +295,22 @@ mod test_category_mapping {
     fn test_add_and_remove_keyword() {
         let cursor = FakeCursor::new();
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
-        assert!(cm.add_keyword("cat", " kw "));
-        assert!(cm.remove_keyword("cat", "kw"));
+        assert!(cm.add_keyword("cat", " kw ", "book"));
+        assert!(cm.remove_keyword("cat", "kw", "book"));
     }
 
     #[test]
     fn test_add_keyword_empty() {
         let cursor = FakeCursor::new();
         let cm = build_cm(&cursor);
-        assert!(!cm.add_keyword("cat", "  "));
+        assert!(!cm.add_keyword("cat", "  ", "book"));
     }
 
     #[test]
     fn test_add_keyword_duplicate() {
         let cursor_fail = FakeCursor::new().with_side_effect(|_sql, _params| Err(DbError::IntegrityError("dup".to_string())));
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor_fail));
-        assert!(!cm.add_keyword("cat", "kw"));
+        assert!(!cm.add_keyword("cat", "kw", "book"));
     }
 
     #[test]
@@ -317,13 +318,13 @@ mod test_category_mapping {
         let cursor = FakeCursor::new();
         let conn = FakeConn::new(&cursor);
         let cm = CategoryMapping::with_connection_provider(provider_of(&conn));
-        assert!(cm.set_keywords("cat", &["a", "a", " ", "b"]));
+        assert!(cm.set_keywords("cat", &["a", "a", " ", "b"], "book"));
         assert!(conn.committed());
 
         let cursor_fail = FakeCursor::new().with_side_effect(fail_with("fail"));
         let conn_fail = FakeConn::new(&cursor_fail);
         let cm = CategoryMapping::with_connection_provider(provider_of(&conn_fail));
-        assert!(!cm.set_keywords("cat", &["a"]));
+        assert!(!cm.set_keywords("cat", &["a"], "book"));
         assert!(conn_fail.rolled_back());
     }
 
@@ -332,7 +333,7 @@ mod test_category_mapping {
         let cursor = FakeCursor::new();
         let conn = FakeConn::new(&cursor);
         let cm = CategoryMapping::with_connection_provider(provider_of(&conn));
-        assert!(cm.update_all_mappings(&HashMap::from([("c1".to_string(), strs(&["k1", "k2"]))])));
+        assert!(cm.update_all_mappings(&HashMap::from([("c1".to_string(), strs(&["k1", "k2"]))]), "book"));
         assert!(conn.committed());
     }
 
@@ -340,25 +341,25 @@ mod test_category_mapping {
     fn test_delete_and_hidden() {
         let cursor = FakeCursor::new().with_rowcount(1);
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
-        assert!(cm.delete_category("cat", false));
-        assert!(cm.delete_category("cat", true));
+        assert!(cm.delete_category("cat", "book", false));
+        assert!(cm.delete_category("cat", "book", true));
 
         let cursor_hidden = FakeCursor::new().with_rows(vec![row([("category", "c1".into())])]);
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor_hidden));
-        assert_eq!(cm.get_hidden_categories(), strs(&["c1"]));
+        assert_eq!(cm.get_hidden_categories("book"), strs(&["c1"]));
     }
 
     #[test]
     fn test_get_and_set_latest_excluded_categories() {
         let cursor_latest = FakeCursor::new().with_rows(vec![row([("category", "c1".into())])]);
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor_latest));
-        assert_eq!(cm.get_latest_excluded_categories(), strs(&["c1"]));
+        assert_eq!(cm.get_latest_excluded_categories("book"), strs(&["c1"]));
 
         let cursor_set = FakeCursor::new();
         let conn = FakeConn::new(&cursor_set);
         let cm = CategoryMapping::with_connection_provider(provider_of(&conn));
-        assert!(cm.set_latest_excluded("cat", true));
-        assert!(cm.set_latest_excluded("cat", false));
+        assert!(cm.set_latest_excluded("cat", true, "book"));
+        assert!(cm.set_latest_excluded("cat", false, "book"));
         assert!(conn.committed());
         assert!(cursor_set.ran("INSERT IGNORE INTO latest_excluded_categories"));
         assert!(cursor_set.ran("DELETE FROM latest_excluded_categories"));
@@ -368,18 +369,18 @@ mod test_category_mapping {
     fn test_categories_search_and_rename() {
         let cursor = FakeCursor::new().with_rows(vec![row([("category", "a".into())]), row([("category", "b".into())])]);
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
-        assert_eq!(cm.search_by_keyword("key"), strs(&["a", "b"]));
+        assert_eq!(cm.search_by_keyword("key", "book"), strs(&["a", "b"]));
 
         let cursor_rename = FakeCursor::new();
         let conn = FakeConn::new(&cursor_rename);
         let cm = CategoryMapping::with_connection_provider(provider_of(&conn));
-        assert!(cm.rename_category("old", "new"));
+        assert!(cm.rename_category("old", "new", "book"));
         assert!(cursor_rename.ran("UPDATE latest_excluded_categories SET category"));
 
         let cursor_fail = FakeCursor::new().with_side_effect(fail_with("fail"));
         let conn_fail = FakeConn::new(&cursor_fail);
         let cm = CategoryMapping::with_connection_provider(provider_of(&conn_fail));
-        assert!(!cm.rename_category("old", "new"));
+        assert!(!cm.rename_category("old", "new", "book"));
     }
 
     #[test]
@@ -387,13 +388,13 @@ mod test_category_mapping {
         let cursor = FakeCursor::new();
         let conn = FakeConn::new(&cursor);
         let cm = CategoryMapping::with_connection_provider(provider_of(&conn));
-        assert!(cm.set_hidden("cat", true));
-        assert!(cm.set_hidden("cat", false));
+        assert!(cm.set_hidden("cat", true, "book"));
+        assert!(cm.set_hidden("cat", false, "book"));
 
         let cursor_fail = FakeCursor::new().with_side_effect(fail_with("fail"));
         let conn_fail = FakeConn::new(&cursor_fail);
         let cm = CategoryMapping::with_connection_provider(provider_of(&conn_fail));
-        assert!(!cm.set_hidden("cat", true));
+        assert!(!cm.set_hidden("cat", true, "book"));
     }
 
     #[test]
@@ -401,7 +402,7 @@ mod test_category_mapping {
         let cursor_fail = FakeCursor::new().with_side_effect(fail_with("fail"));
         let conn_fail = FakeConn::new(&cursor_fail);
         let cm = CategoryMapping::with_connection_provider(provider_of(&conn_fail));
-        assert!(!cm.set_latest_excluded("cat", true));
+        assert!(!cm.set_latest_excluded("cat", true, "book"));
     }
 
     #[test]
@@ -439,7 +440,7 @@ mod test_category_mapping {
         });
         let conn_fail = FakeConn::new(&cursor_fail);
         let cm = CategoryMapping::with_connection_provider(provider_of(&conn_fail));
-        assert!(!cm.update_all_mappings(&HashMap::from([("c1".to_string(), strs(&["k1"]))])));
+        assert!(!cm.update_all_mappings(&HashMap::from([("c1".to_string(), strs(&["k1"]))]), "book"));
         assert!(conn_fail.rolled_back());
     }
 
@@ -447,15 +448,15 @@ mod test_category_mapping {
     fn test_get_all_mappings_empty_and_remove_keyword_not_found() {
         let cursor = FakeCursor::new().with_rows(Vec::new()).with_rowcount(0);
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
-        assert!(cm.get_all_mappings().is_empty());
-        assert!(!cm.remove_keyword("cat", "kw"));
+        assert!(cm.get_all_mappings("book").is_empty());
+        assert!(!cm.remove_keyword("cat", "kw", "book"));
     }
 
     #[test]
     fn test_delete_category_not_found() {
         let cursor = FakeCursor::new().with_rowcount(0);
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
-        assert!(!cm.delete_category("missing", false));
+        assert!(!cm.delete_category("missing", "book", false));
     }
 
     #[test]
@@ -463,7 +464,7 @@ mod test_category_mapping {
         let cursor = FakeCursor::new().with_rowcount(0);
         let conn = FakeConn::new(&cursor);
         let cm = CategoryMapping::with_connection_provider(provider_of(&conn));
-        assert!(cm.set_hidden("cat", false));
+        assert!(cm.set_hidden("cat", false, "book"));
         assert!(conn.committed());
     }
 
@@ -694,7 +695,7 @@ mod test_category_mapping {
     fn test_get_reload_status_none_when_no_row() {
         let cursor = FakeCursor::new().with_fetchone_rows(vec![None]);
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
-        assert!(cm.get_reload_status("book").is_none());
+        assert!(cm.get_reload_status("book", None).is_none());
     }
 
     #[test]
@@ -715,7 +716,7 @@ mod test_category_mapping {
         ]);
         let cursor = FakeCursor::new().with_fetchone_rows(vec![Some(status_row)]);
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
-        let status = cm.get_reload_status("book").unwrap();
+        let status = cm.get_reload_status("book", None).unwrap();
         assert_eq!(status["status"], DbValue::from("running"));
         assert_eq!(status["category"], DbValue::from("A"));
         assert_eq!(status["reload_source"], DbValue::from("mismatch"));
@@ -727,7 +728,7 @@ mod test_category_mapping {
         let old_updated_at = now() - Duration::seconds(RELOAD_LOCK_HEARTBEAT_STALE_SECONDS + 60);
         let cursor = FakeCursor::new().with_fetchone_rows(vec![Some(reload_row("A".into(), "running", old_updated_at))]);
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
-        let status = cm.get_reload_status("book").unwrap();
+        let status = cm.get_reload_status("book", None).unwrap();
         assert_eq!(status["status"], DbValue::from("failed"));
         // Python `assert status["error"]`: None이나 빈 문자열이면 실패한다.
         assert!(!matches!(&status["error"], DbValue::Null) && status["error"] != DbValue::from(""), "{:?}", status["error"]);
@@ -836,7 +837,7 @@ mod test_classify_proposal_items {
         let conn = FakeConn::new(&cursor);
         let cm = CategoryMapping::with_connection_provider(provider_of(&conn));
         let items = vec![json!({"file_path": "a.epub", "target_category": "3_SF"}), json!({"file_path": "b.epub", "target_category": "3_SF"})];
-        cm.add_classify_proposal_items(&items, "0_inbox");
+        cm.add_classify_proposal_items(&items, "0_inbox", "book");
 
         assert!(conn.committed());
         let many = cursor.executed_many();
@@ -853,7 +854,7 @@ mod test_classify_proposal_items {
             row([("payload", payload(1)), ("apply_status", "pending".into()), ("apply_error", DbValue::Null)]),
         ]);
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor_get));
-        let fetched = cm.get_classify_proposal_items();
+        let fetched = cm.get_classify_proposal_items("book");
         let paths: Vec<&str> = fetched.iter().map(|i| i["file_path"].as_str().unwrap()).collect();
         assert_eq!(paths, vec!["a.epub", "b.epub"]);
         assert!(cursor_get.ran("ORDER BY id ASC"));
@@ -864,7 +865,7 @@ mod test_classify_proposal_items {
         let cursor = FakeCursor::new();
         let conn = FakeConn::new(&cursor);
         let cm = CategoryMapping::with_connection_provider(provider_of(&conn));
-        cm.add_classify_proposal_items(&[], "0_inbox");
+        cm.add_classify_proposal_items(&[], "0_inbox", "book");
         assert!(cursor.executed_many().is_empty());
         assert!(!conn.committed());
     }
@@ -903,11 +904,11 @@ mod test_classify_proposal_items {
         let cursor = ClassifyItemsFakeCursor::new(&store);
         let cm = CategoryMapping::with_connection_provider(classify_items_provider(&cursor));
         let batch = |range: std::ops::Range<usize>| -> Vec<Value> { range.map(|i| json!({"file_path": format!("{i}.epub")})).collect() };
-        cm.add_classify_proposal_items(&batch(0..100), "0_inbox");
-        cm.add_classify_proposal_items(&batch(100..200), "0_inbox");
-        cm.add_classify_proposal_items(&batch(200..250), "0_inbox");
+        cm.add_classify_proposal_items(&batch(0..100), "0_inbox", "book");
+        cm.add_classify_proposal_items(&batch(100..200), "0_inbox", "book");
+        cm.add_classify_proposal_items(&batch(200..250), "0_inbox", "book");
 
-        let items = cm.get_classify_proposal_items();
+        let items = cm.get_classify_proposal_items("book");
         assert_eq!(items.len(), 250);
         let paths: Vec<String> = items.iter().map(|i| i["file_path"].as_str().unwrap().to_string()).collect();
         let expected: Vec<String> = (0..250).map(|i| format!("{i}.epub")).collect();
@@ -929,7 +930,7 @@ mod test_classify_proposal_delete_and_merge {
         let cursor = FakeCursor::new().with_rowcount(1);
         let (cm, conns) = make_cm(&cursor);
 
-        assert_eq!(cm.delete_classify_proposal_item("/lib/a.epub", Some("comic")), 1);
+        assert_eq!(cm.delete_classify_proposal_item("/lib/a.epub", "comic"), 1);
 
         let (sql, params) = cursor.executed().last().cloned().unwrap();
         assert!(sql.starts_with("DELETE FROM classify_proposal_items"));
@@ -942,7 +943,7 @@ mod test_classify_proposal_delete_and_merge {
         let cursor = FakeCursor::new().with_rowcount(0);
         let (cm, _) = make_cm(&cursor);
 
-        assert_eq!(cm.delete_classify_proposal_item("/lib/none.epub", None), 0);
+        assert_eq!(cm.delete_classify_proposal_item("/lib/none.epub", "book"), 0);
     }
 
     #[test]
@@ -950,7 +951,7 @@ mod test_classify_proposal_delete_and_merge {
         let cursor = FakeCursor::new();
         let (cm, conns) = make_cm(&cursor);
 
-        cm.merge_classify_proposal_status(&json!({"status": "ready", "progress": 3, "name": "한글"}));
+        cm.merge_classify_proposal_status(&json!({"status": "ready", "progress": 3, "name": "한글"}), "book");
 
         let (sql, params) = cursor.executed().last().cloned().unwrap();
         assert!(sql.contains("JSON_MERGE_PATCH"));
@@ -966,7 +967,7 @@ mod test_classify_proposal_delete_and_merge {
         let (cm, conns) = make_cm(&cursor);
         let before = cursor.executed().len();
 
-        cm.merge_classify_proposal_status(&json!({"status": "ready"}));
+        cm.merge_classify_proposal_status(&json!({"status": "ready"}), "book");
 
         assert_eq!(cursor.executed().len(), before);
         assert!(conns.lock().unwrap().is_empty());

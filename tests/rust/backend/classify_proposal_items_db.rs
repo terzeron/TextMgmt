@@ -4,9 +4,9 @@
 //! utf8mb4 한글 왕복, 100건 배치의 꼬리 유실을 증명할 수 없다.
 //!
 //! 가정한 API (아직 구현 전이다. docs/rust-test-seams.md 3.4, 3.13):
-//! - `backend::category_mapping::CategoryMapping::new() -> Result<CategoryMapping, MappingError>`  (생성자가 `_init_db`로 테이블을 만들고 마이그레이션한다)
-//! - `CategoryMapping::get_connection(&self) -> Result<Box<dyn DbConnection>, DbError>`  (`_get_connection`. 구 `Connection`/`mysql::Conn`을 `DbConnection`으로 통일)
-//! - `backend::db::DbConnection` 편의 메서드:
+//! - `backend::category_mapping::CategoryMapping::new() -> Result<CategoryMapping, DbError>`  (생성자가 `_init_db`로 테이블을 만들고 마이그레이션한다)
+//! - `CategoryMapping::get_connection(&self) -> Result<MappingConnection, DbError>` (`execute`/`fetch_all`/`fetch_one`/`commit`을 가진 래퍼)  (`_get_connection`. 구 `Connection`/`mysql::Conn`을 `DbConnection`으로 통일)
+//! - `MappingConnection` 편의 메서드:
 //!   `execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError>`, `fetch_all(.., &[DbValue]) -> Result<Vec<Row>, DbError>`,
 //!   `fetch_one(.., &[DbValue]) -> Result<Option<Row>, DbError>`, `commit(&mut self) -> Result<(), DbError>`
 //! - `backend::db::{DbValue, Row}`: `enum DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`, `From<Value>`),
@@ -16,15 +16,19 @@
 //! - `CategoryMapping::update_classify_proposal_item_status(&self, file_path: &str, status: &str, error: Option<&str>, content_type: &str)`
 //! - `CategoryMapping::update_classify_proposal_item_payloads(&self, items: &[Value], content_type: &str)`
 //! - `CategoryMapping::clear_classify_proposal_items(&self, content_type: &str)`
-//! - `CategoryMapping::delete_applied_classify_proposal_items(&self, content_type: &str) -> usize`
+//! - `CategoryMapping::delete_applied_classify_proposal_items(&self, content_type: &str) -> u64`
 //!
 //! Python의 `content_type` 기본값 "book"은 Rust에 기본 인자가 없어 매번 명시한다.
-//! `mysql_container` fixture(testcontainers)는 대응하지 않는다. `TM_MYSQL_HOST/PORT/DATABASE/USER/PASSWORD`가 가리키는 MySQL 8.0이 이미 떠 있다고 가정하고,
-//! `TM_MYSQL_HOST`가 없으면 panic한다. 실제 MySQL이 필요하므로 모든 테스트는 `#[ignore]`이고 `--ignored`로 실행한다. 테이블을 공유하므로 직렬 실행(`--test-threads=1`)을 가정한다.
+//! `cm()`이 `common/mysql_fixture.rs`로 일회용 MySQL 컨테이너를 띄우고 `TM_MYSQL_*`를 설정한다(Docker가 없으면 panic).
+//! `SHOW CREATE TABLE`/`EXPLAIN`은 준비된 문장이 결과 열 정보를 주지 않아 `mysql` crate(dev-dependency)의 텍스트 프로토콜로 읽는다. 실제 MySQL이 필요하므로 모든 테스트는 `#[ignore]`이고 `--ignored`로 실행한다. 테이블을 공유하므로 직렬 실행(`--test-threads=1`)을 가정한다.
 
 mod common;
+#[path = "common/mysql_fixture.rs"]
+mod mysql_fixture;
 
 use backend::category_mapping::CategoryMapping;
+use std::collections::BTreeMap;
+
 use backend::db::{DbValue, Row};
 use serde_json::{Value, json};
 
@@ -39,12 +43,25 @@ fn text(row: &Row, key: &str) -> String {
 /// `cm` fixture. 대상 테이블을 비운 CategoryMapping을 돌려준다. MySQL이 없으면 panic.
 fn cm() -> CategoryMapping {
     common::setup_env();
-    assert!(std::env::var_os("TM_MYSQL_HOST").is_some(), "실제 MySQL 필요: TM_MYSQL_HOST가 없다. --ignored 실행 전에 MySQL 8.0을 띄우고 TM_MYSQL_*를 설정할 것");
+    // 일회용 MySQL 컨테이너를 세션당 한 번 띄우고 TM_MYSQL_*를 설정한다(Python `mysql_container` fixture). Docker가 없으면 panic한다.
+    mysql_fixture::mysql_container();
     let mapping = CategoryMapping::new().expect("MySQL 연결");
     let mut conn = mapping.get_connection().unwrap();
     conn.execute("TRUNCATE TABLE classify_proposal_items", &[]).unwrap();
     conn.commit().unwrap();
     mapping
+}
+
+/// 텍스트 프로토콜로 한 행을 읽는다(pymysql처럼). 준비된 문장은 `SHOW CREATE TABLE`/`EXPLAIN`의 결과 열 정보를
+/// 준비 시점에 주지 않아 Diesel 기반 `backend::db`로는 읽을 수 없다. 값은 문자열이고 NULL은 `None`이다.
+fn text_protocol_row(sql: &str) -> BTreeMap<String, Option<String>> {
+    use mysql::prelude::Queryable;
+    let env = |key: &str| std::env::var(key).unwrap_or_else(|_| panic!("{key}가 없다"));
+    let opts = mysql::OptsBuilder::new().ip_or_hostname(Some(env("TM_MYSQL_HOST"))).tcp_port(env("TM_MYSQL_PORT").parse().unwrap()).db_name(Some(env("TM_MYSQL_DATABASE"))).user(Some(env("TM_MYSQL_USER"))).pass(Some(env("TM_MYSQL_PASSWORD")));
+    let mut conn = mysql::Conn::new(opts).expect("텍스트 프로토콜 연결");
+    let row: mysql::Row = conn.query_first(sql).unwrap().expect("결과 행이 없다");
+    let names: Vec<String> = row.columns_ref().iter().map(|c| c.name_str().into_owned()).collect();
+    names.into_iter().enumerate().map(|(i, name)| (name, row.get_opt::<Option<String>, _>(i).and_then(Result::ok).flatten())).collect()
 }
 
 fn files(paths: impl IntoIterator<Item = String>) -> Vec<Value> {
@@ -62,10 +79,10 @@ fn index_names(cm: &CategoryMapping) -> Vec<String> {
 fn test_create_table_statement_runs_on_real_mysql() {
     // CREATE TABLE IF NOT EXISTS classify_proposal_items가 MySQL 8.0에서 실제로 성공했는지 확인한다.
     // JSON 컬럼, 두 개의 복합/단일 인덱스, VARCHAR(1024)는 fake cursor로는 문법 오류를 잡을 수 없다.
-    let cm = cm();
-    let row = cm.get_connection().unwrap().fetch_one("SHOW CREATE TABLE classify_proposal_items", &[]).unwrap().unwrap();
+    let _cm = cm();
+    let row = text_protocol_row("SHOW CREATE TABLE classify_proposal_items");
 
-    let ddl = text(&row, "Create Table").to_lowercase();
+    let ddl = row["Create Table"].clone().unwrap().to_lowercase();
     assert!(ddl.contains("`payload` json") || ddl.contains("json"));
     assert!(ddl.contains("varchar(1024)"));
     assert!(ddl.contains("idx_content_source"));
@@ -80,15 +97,10 @@ fn test_status_update_uses_an_index_instead_of_scanning_the_table() {
     let cm = cm();
     cm.add_classify_proposal_items(&files((0..50).map(|i| format!("3_판타지/책 {i}.epub"))), "3_판타지", "book");
 
-    let plan = cm
-        .get_connection()
-        .unwrap()
-        .fetch_one("EXPLAIN UPDATE classify_proposal_items SET apply_status = 'moved' WHERE content_type = %s AND file_path = %s", &[DbValue::from("book"), DbValue::from("3_판타지/책 7.epub")])
-        .unwrap()
-        .unwrap();
+    let plan = text_protocol_row("EXPLAIN UPDATE classify_proposal_items SET apply_status = 'moved' WHERE content_type = 'book' AND file_path = '3_판타지/책 7.epub'");
 
-    assert_eq!(plan["key"], DbValue::from("idx_content_file"), "file_path 인덱스를 타지 않는다: {plan:?}");
-    assert_ne!(plan["type"], DbValue::from("index"), "인덱스 전수 훑기를 고르고 있다");
+    assert_eq!(plan["key"].as_deref(), Some("idx_content_file"), "file_path 인덱스를 타지 않는다: {plan:?}");
+    assert_ne!(plan["type"].as_deref(), Some("index"), "인덱스 전수 훑기를 고르고 있다");
 }
 
 #[test]
@@ -133,7 +145,7 @@ fn test_payload_round_trips_korean_nested_null_and_long_path() {
         "candidates": [{"category": "3_SF", "source": "bookstore", "detail": "서점 2곳 일치"}, {"category": "5_에세이", "source": "model", "detail": "모델 판정"}],
     });
 
-    cm.add_classify_proposal_items(&[item.clone()], "0_inbox", "book");
+    cm.add_classify_proposal_items(std::slice::from_ref(&item), "0_inbox", "book");
     let fetched = cm.get_classify_proposal_items("book");
 
     assert_eq!(fetched.len(), 1);

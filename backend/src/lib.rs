@@ -7,3 +7,4 @@ pub mod es_manager;
 pub mod main;
 pub mod db;
 pub mod view_history_store;
+pub mod category_mapping;

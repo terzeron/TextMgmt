@@ -5,9 +5,9 @@
 //! 하트비트가 끊긴 작업이 조회에서만 failed로 보이고 행은 그대로인가.
 //!
 //! 가정한 API (아직 구현 전이다. docs/rust-test-seams.md 3.4, 3.13):
-//! - `backend::category_mapping::CategoryMapping::new() -> Result<CategoryMapping, MappingError>`
-//! - `CategoryMapping::get_connection(&self) -> Result<Box<dyn DbConnection>, DbError>` (구 `Connection`/`mysql::Conn`을 `DbConnection`으로 통일)
-//! - `backend::db::DbConnection::{execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>, fetch_one(&mut self, sql, &[DbValue]) -> Result<Option<Row>, DbError>, commit(&mut self) -> Result<(), DbError>}`
+//! - `backend::category_mapping::CategoryMapping::new() -> Result<CategoryMapping, DbError>`
+//! - `CategoryMapping::get_connection(&self) -> Result<MappingConnection, DbError>` (`execute`/`fetch_one`/`commit`을 가진 래퍼)
+//! - `MappingConnection::{execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>, fetch_one(&mut self, sql, &[DbValue]) -> Result<Option<Row>, DbError>, commit(&mut self) -> Result<(), DbError>}`
 //! - `backend::db::{DbValue, Row}`: `enum DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`, `From<Value>`),
 //!   `type Row = BTreeMap<String, DbValue>`. 구 `serde_json::Value` 파라미터는 `DbValue`로 쓴다.
 //! - `CategoryMapping::get_classify_proposal_status(&self, content_type: &str, stale_seconds: i64) -> Value`
@@ -17,24 +17,27 @@
 //! - `CategoryMapping::try_begin_classify_apply(&self, token: &str, content_type: &str, stale_seconds: i64) -> (bool, Value)`
 //!
 //! Python의 `content_type` 기본값 "book"은 매번 명시한다. `CategoryMapping`은 스레드마다 새로 만들어 각자 커넥션을 쓰게 한다(`Send` 가정).
-//! `mysql_container` fixture는 대응하지 않는다. `TM_MYSQL_*`가 가리키는 MySQL 8.0이 떠 있다고 가정하고, `TM_MYSQL_HOST`가 없으면 panic한다. 모든 테스트는 `#[ignore]`이고 `--ignored`로 실행한다.
+//! `cm()`이 `common/mysql_fixture.rs`로 일회용 MySQL 컨테이너를 띄우고 `TM_MYSQL_*`를 설정한다(Docker가 없으면 panic). 모든 테스트는 `#[ignore]`이고 `--ignored`로 실행한다.
 //! 테이블을 공유하므로 직렬 실행(`--test-threads=1`)을 가정한다.
 
 mod common;
+#[path = "common/mysql_fixture.rs"]
+mod mysql_fixture;
 
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 
 use backend::category_mapping::CategoryMapping;
 use backend::db::DbValue;
-use serde_json::{Value, json};
+use serde_json::json;
 
 const STALE: i64 = 300;
 
 /// `cm` fixture. 상태 행을 비운 CategoryMapping을 돌려준다. MySQL이 없으면 panic.
 fn cm() -> CategoryMapping {
     common::setup_env();
-    assert!(std::env::var_os("TM_MYSQL_HOST").is_some(), "실제 MySQL 필요: TM_MYSQL_HOST가 없다. --ignored 실행 전에 MySQL 8.0을 띄우고 TM_MYSQL_*를 설정할 것");
+    // 일회용 MySQL 컨테이너를 세션당 한 번 띄우고 TM_MYSQL_*를 설정한다(Python `mysql_container` fixture). Docker가 없으면 panic한다.
+    mysql_fixture::mysql_container();
     let mapping = CategoryMapping::new().expect("MySQL 연결");
     let mut conn = mapping.get_connection().unwrap();
     conn.execute("TRUNCATE TABLE classify_proposal_status", &[]).unwrap();
