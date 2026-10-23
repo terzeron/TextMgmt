@@ -1657,3 +1657,61 @@ fn test_insert_illustration_rejects_malformed_base64_without_changing_book() {
         assert!(!backups(root).exists(), "image_data={image_data:?}");
     }
 }
+
+/// 보안 검토 지적: 썸네일 경로가 표지 크기·화소 상한을 보지 않고 읽고 디코딩했다. 상한을 넘으면 읽거나 디코딩하기 전에 거부해야 한다.
+mod added_thumbnail_limits {
+    use super::*;
+
+    fn epub_with_cover(root: &Path, width: u32, height: u32) -> PathBuf {
+        let path = make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", true));
+        let data = encode_image(width, height, BLUE, ImageFormat::Jpeg);
+        rewrite_epub_members(&path, |members| members.set("OPS/cover.jpg", data.clone()));
+        path
+    }
+
+    fn hooks_with(limits: Limits) -> EpubCoverHooks {
+        EpubCoverHooks::default().with_limits(limits)
+    }
+
+    #[test]
+    fn thumbnail_is_made_within_the_default_limits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = epub_with_cover(tmp.path(), 40, 60);
+        let thumbnail = epub_cover::extract_epub_thumbnail_with(&path, Some(150), &EpubCoverHooks::default()).expect("기본 상한 안에서는 만든다");
+        assert_eq!(image_size(&thumbnail), (40, 60));
+    }
+
+    #[test]
+    fn thumbnail_refuses_an_image_over_the_byte_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = epub_with_cover(tmp.path(), 40, 60);
+        let hooks = hooks_with(Limits { max_image_bytes: 10, ..Limits::default() });
+        assert!(epub_cover::extract_epub_thumbnail_with(&path, Some(150), &hooks).is_none());
+    }
+
+    #[test]
+    fn thumbnail_refuses_an_image_over_the_pixel_limit_and_accepts_the_boundary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = epub_with_cover(tmp.path(), 20, 20);
+        let over = hooks_with(Limits { max_image_pixels: 399, ..Limits::default() });
+        assert!(epub_cover::extract_epub_thumbnail_with(&path, Some(150), &over).is_none(), "400화소가 399 상한을 넘었는데 만들었다");
+        let boundary = hooks_with(Limits { max_image_pixels: 400, ..Limits::default() });
+        assert!(epub_cover::extract_epub_thumbnail_with(&path, Some(150), &boundary).is_some(), "상한과 같은 400화소는 허용한다");
+    }
+
+    #[test]
+    fn preview_refuses_when_the_cover_inspection_reported_an_error() {
+        // 검사가 표지 이미지를 읽지 못했다고 보고하면(`cover_error`) 썸네일도 만들지 않는다.
+        // 썸네일러를 항상 성공하는 가짜로 바꿔, 다른 상한 검사가 아니라 이 분기가 막는지 따로 확인한다.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        epub_with_cover(root, 40, 60);
+        let fake = thumbnailer(|_path, _kind, _width| Some(b"fake thumbnail".to_vec()));
+        let inspected = CoverHooks::default().with_thumbnailer(fake.clone()).with_epub_hooks(hooks_with(Limits { max_image_bytes: 10, ..Limits::default() }));
+        let outcome = CoverManagement::with_hooks(root, inspected).preview("book.epub", false);
+        assert!(outcome.is_err(), "표지 검사가 실패했는데 썸네일을 돌려줬다");
+        // 같은 가짜 썸네일러도 검사가 성공하면 그대로 쓴다(위 거부가 가짜 때문이 아님을 확인한다).
+        let healthy = CoverHooks::default().with_thumbnailer(fake);
+        assert_eq!(CoverManagement::with_hooks(root, healthy).preview("book.epub", false).unwrap(), b"fake thumbnail");
+    }
+}

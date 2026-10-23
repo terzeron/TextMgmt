@@ -616,13 +616,26 @@ fn existing_member_path<R: Read + Seek>(archive: &ZipArchive<R>, base: &str, hre
 
 /// EPUB 표지 이미지를 `width`(150 또는 300, 그 밖에는 300) 안에 들어가는 JPEG 썸네일로 만든다. 표지가 없으면 `None`이다.
 pub fn extract_epub_thumbnail(path: &Path, width: Option<u32>) -> Option<Vec<u8>> {
+    extract_epub_thumbnail_with(path, width, &EpubCoverHooks::default())
+}
+
+/// `extract_epub_thumbnail`에 크기 상한을 주입한다. 악의적인 EPUB의 거대한 표지로 메모리가 고갈되지 않게,
+/// 읽기 전에 ZIP 항목 크기를, 디코딩 전에 헤더의 화소 수를 상한과 비교한다. 넘으면 `None`이다.
+pub fn extract_epub_thumbnail_with(path: &Path, width: Option<u32>, hooks: &EpubCoverHooks) -> Option<Vec<u8>> {
     let width = if matches!(width, Some(150 | 300)) { width.unwrap_or(300) } else { 300 };
+    let limits = hooks.limits();
     let mut archive = ZipArchive::new(File::open(path).ok()?).ok()?;
     let member = find_epub_cover_member(&mut archive)?;
+    if entry_size(&mut archive, &member).ok()? > limits.max_image_bytes as u64 {
+        return None;
+    }
     let data = read_entry(&mut archive, &member).ok()?;
+    let (w, h) = image::ImageReader::new(std::io::Cursor::new(&data)).with_guessed_format().ok()?.into_dimensions().ok()?;
+    if (w as u64) * (h as u64) > limits.max_image_pixels as u64 {
+        return None;
+    }
     let decoded = image::load_from_memory(&data).ok()?;
     let rgb = decoded.to_rgb8();
-    let (w, h) = (rgb.width(), rgb.height());
     let (nw, nh) = thumbnail_size(w, h, width, width * 10);
     let rgb = if (nw, nh) == (w, h) { rgb } else { image::imageops::resize(&rgb, nw, nh, image::imageops::FilterType::Lanczos3) };
     encode_jpeg(&rgb, 85).ok()

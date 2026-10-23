@@ -1009,15 +1009,20 @@ impl CoverManagement {
     pub fn preview_width(&self, relative: &str, original: bool, width: Option<u32>) -> Result<Vec<u8>, CoverError> {
         let path = self.resolve(relative, false)?;
         // 저장 중인 파일을 읽지 않도록 표지 검사에서 공유 잠금을 확인한다.
-        if !truthy(self.inspect(&path)?.get("has_cover")) {
+        let info = self.inspect(&path)?;
+        if !truthy(info.get("has_cover")) {
             return Err(CoverError::new("EPUB에 표지가 없습니다"));
+        }
+        // 검사가 표지 이미지를 읽지 못했다고 보고하면(크기 상한 초과 등) 썸네일도 만들지 않는다.
+        if truthy(info.get("cover_error")) {
+            return Err(CoverError::new(UNREADABLE_COVER));
         }
         if original {
             return self.original_cover(&path);
         }
         let thumbnail = match &self.hooks.thumbnailer {
             Some(thumbnailer) => thumbnailer.extract_cover_thumbnail(&path, "epub", width),
-            None => epub_cover::extract_epub_thumbnail(&path, width),
+            None => epub_cover::extract_epub_thumbnail_with(&path, width, self.epub_hooks()),
         };
         thumbnail.ok_or_else(|| CoverError::new(UNREADABLE_COVER))
     }
