@@ -92,6 +92,14 @@ path = "../tests/rust/backend/es_manager_gaps.rs"
 name = "es_manager_http"
 path = "../tests/rust/backend/es_manager_http.rs"
 
+[[test]]
+name = "comics"
+path = "../tests/rust/backend/comics.rs"
+
+[[test]]
+name = "comics_manager"
+path = "../tests/rust/backend/comics_manager.rs"
+
 [dev-dependencies]
 base64 = "0.23.1"
 flate2 = "1"
