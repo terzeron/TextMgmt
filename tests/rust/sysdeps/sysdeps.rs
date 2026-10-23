@@ -1,0 +1,269 @@
+//! sysdeps 테스트: 시계, 파일시스템, 외부 명령, HTTP 응답 값 객체.
+//! 설계: docs/rust-test-seams.md 3.1
+
+use std::io::ErrorKind;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use sysdeps::{Clock, CommandError, CommandRunner, FsOps, HttpResponse, RealFs, SystemClock, SystemRunner};
+
+fn argv(parts: &[&str]) -> Vec<String> {
+    parts.iter().map(|s| s.to_string()).collect()
+}
+
+mod clock {
+    use super::*;
+
+    #[test]
+    fn now_is_unix_time_in_seconds() {
+        let now = SystemClock.now();
+        // 2020-01-01 이후이고 소수 초를 가진다.
+        assert!(now > 1_577_836_800.0, "now={now}");
+    }
+
+    #[test]
+    fn monotonic_never_decreases() {
+        let a = SystemClock.monotonic();
+        let b = SystemClock.monotonic();
+        assert!(b >= a);
+    }
+
+    #[test]
+    fn sleep_waits_at_least_the_requested_time() {
+        let start = Instant::now();
+        SystemClock.sleep(0.05);
+        assert!(start.elapsed() >= Duration::from_millis(50));
+    }
+
+    #[test]
+    fn sleep_ignores_negative_and_non_finite_values() {
+        let start = Instant::now();
+        SystemClock.sleep(-1.0);
+        SystemClock.sleep(f64::NAN);
+        assert!(start.elapsed() < Duration::from_millis(50));
+    }
+}
+
+mod fs {
+    use super::*;
+
+    #[test]
+    fn read_dir_lists_entries_as_full_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), b"a").unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        let mut got = RealFs.read_dir(dir.path()).unwrap();
+        got.sort();
+        assert_eq!(got, vec![dir.path().join("a.txt"), dir.path().join("sub")]);
+    }
+
+    #[test]
+    fn read_dir_of_a_missing_dir_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = RealFs.read_dir(&dir.path().join("missing")).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn metadata_reports_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("f");
+        std::fs::write(&p, b"12345").unwrap();
+        assert_eq!(RealFs.metadata(&p).unwrap().len(), 5);
+    }
+
+    #[test]
+    fn is_file_is_false_for_dirs_and_missing_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("f");
+        std::fs::write(&p, b"x").unwrap();
+        assert!(RealFs.is_file(&p).unwrap());
+        assert!(!RealFs.is_file(dir.path()).unwrap());
+        // Python Path.is_file()은 없는 경로에서 예외 없이 False다.
+        assert!(!RealFs.is_file(&dir.path().join("missing")).unwrap());
+    }
+
+    #[test]
+    fn rename_moves_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        std::fs::write(&a, b"x").unwrap();
+        RealFs.rename(&a, &b).unwrap();
+        assert!(!a.exists() && b.exists());
+    }
+
+    #[test]
+    fn remove_file_and_remove_dir_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("f");
+        std::fs::write(&f, b"x").unwrap();
+        RealFs.remove_file(&f).unwrap();
+        assert!(!f.exists());
+        let sub = dir.path().join("sub");
+        std::fs::create_dir_all(sub.join("inner")).unwrap();
+        std::fs::write(sub.join("inner/x"), b"x").unwrap();
+        RealFs.remove_dir_all(&sub).unwrap();
+        assert!(!sub.exists());
+    }
+
+    #[test]
+    fn canonicalize_resolves_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::write(&real, b"x").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert_eq!(RealFs.canonicalize(&link).unwrap(), real.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn same_file_follows_links_and_rejects_different_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        std::fs::write(&a, b"x").unwrap();
+        std::fs::write(&b, b"x").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&a, &link).unwrap();
+        assert!(RealFs.same_file(&a, &link).unwrap());
+        assert!(!RealFs.same_file(&a, &b).unwrap());
+    }
+
+    #[test]
+    fn open_and_write_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("f");
+        RealFs.write(&p, b"hello").unwrap();
+        let mut f = RealFs.open(&p).unwrap();
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut f, &mut s).unwrap();
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn disk_free_is_positive_for_an_existing_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(RealFs.disk_free(dir.path()).unwrap() > 0);
+    }
+
+    #[test]
+    fn sync_file_succeeds_on_a_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("f");
+        RealFs.write(&p, b"x").unwrap();
+        let f = RealFs.open(&p).unwrap();
+        RealFs.sync_file(&f).unwrap();
+    }
+
+    #[test]
+    fn nonblocking_exclusive_lock_reports_would_block_while_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("lock");
+        RealFs.write(&p, b"").unwrap();
+        let first = RealFs.open(&p).unwrap();
+        let second = RealFs.open(&p).unwrap();
+        RealFs.lock_exclusive(&first, true).unwrap();
+        let err = RealFs.lock_exclusive(&second, true).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::WouldBlock);
+        drop(first);
+        RealFs.lock_exclusive(&second, true).unwrap();
+    }
+}
+
+mod runner {
+    use super::*;
+
+    #[test]
+    fn run_captures_stdout_and_returncode() {
+        let out = SystemRunner.run(&argv(&["sh", "-c", "printf hi; exit 3"]), None).unwrap();
+        assert_eq!(out.returncode, 3);
+        assert_eq!(out.stdout, b"hi");
+    }
+
+    #[test]
+    fn run_captures_stderr() {
+        let out = SystemRunner.run(&argv(&["sh", "-c", "printf oops >&2"]), None).unwrap();
+        assert_eq!(out.stderr, b"oops");
+    }
+
+    #[test]
+    fn run_kills_a_command_that_exceeds_the_timeout() {
+        let start = Instant::now();
+        let err = SystemRunner.run(&argv(&["sleep", "5"]), Some(Duration::from_millis(100))).unwrap_err();
+        assert!(matches!(err, CommandError::Timeout), "{err:?}");
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn run_reports_a_missing_program_as_not_found() {
+        let err = SystemRunner.run(&argv(&["definitely-not-a-real-program-xyz"]), None).unwrap_err();
+        assert!(matches!(err, CommandError::NotFound), "{err:?}");
+    }
+
+    #[test]
+    fn run_rejects_an_empty_argv() {
+        let err = SystemRunner.run(&[], None).unwrap_err();
+        assert!(matches!(err, CommandError::Failed(_)), "{err:?}");
+    }
+
+    #[test]
+    fn which_finds_programs_on_path() {
+        let found = SystemRunner.which("sh").unwrap();
+        assert!(found.is_absolute() && Path::new(&found).exists());
+        assert!(SystemRunner.which("definitely-not-a-real-program-xyz").is_none());
+    }
+}
+
+mod http {
+    use super::*;
+
+    #[test]
+    fn from_text_exposes_status_text_and_json() {
+        let r = HttpResponse::from_text(200, "{\"a\": 1}");
+        assert_eq!(r.status_code, 200);
+        assert_eq!(r.json()["a"], 1);
+        assert_eq!(HttpResponse::from_text(200, "한글").text(), "한글");
+    }
+
+    #[test]
+    fn from_chunks_concatenates_chunks_and_marks_the_body_closed() {
+        let closed = Arc::new(AtomicBool::new(false));
+        let r = HttpResponse::from_chunks(200, vec![], vec![b"ab".to_vec(), b"cd".to_vec()], closed.clone());
+        assert!(!closed.load(Ordering::SeqCst));
+        assert_eq!(r.text(), "abcd");
+        assert!(closed.load(Ordering::SeqCst), "본문을 다 읽으면 닫아야 한다");
+    }
+
+    #[test]
+    fn dropping_an_unread_response_closes_the_body() {
+        let closed = Arc::new(AtomicBool::new(false));
+        let r = HttpResponse::from_chunks(200, vec![], vec![b"ab".to_vec()], closed.clone());
+        drop(r);
+        assert!(closed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn next_chunk_streams_until_exhausted() {
+        let closed = Arc::new(AtomicBool::new(false));
+        let mut r = HttpResponse::from_chunks(200, vec![], vec![b"ab".to_vec(), b"cd".to_vec()], closed);
+        assert_eq!(r.next_chunk().unwrap().unwrap(), b"ab");
+        assert_eq!(r.next_chunk().unwrap().unwrap(), b"cd");
+        assert!(r.next_chunk().is_none());
+    }
+
+    #[test]
+    fn redirect_statuses_expose_the_location_header_case_insensitively() {
+        for status in [301u16, 302, 303, 307, 308] {
+            let r = HttpResponse::from_chunks(status, vec![("Location".into(), "https://x.test/a".into())], vec![], Arc::new(AtomicBool::new(false)));
+            assert!(r.is_redirect(), "status={status}");
+            assert_eq!(r.location(), Some("https://x.test/a"));
+        }
+        let ok = HttpResponse::from_text(200, "");
+        assert!(!ok.is_redirect());
+        assert_eq!(ok.location(), None);
+        assert_eq!(ok.header("Content-Type"), None);
+    }
+}
