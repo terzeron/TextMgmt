@@ -20,6 +20,20 @@ pub const MYSQL_DATABASE: &str = "testdb";
 pub const MYSQL_ROOT_PASSWORD: &str = "rootpass";
 
 static CONTAINER: Mutex<Option<Container<Mysql>>> = Mutex::new(None);
+
+unsafe extern "C" {
+    fn atexit(callback: extern "C" fn()) -> i32;
+}
+
+/// 프로세스가 끝날 때 컨테이너를 지운다. `static`은 `Drop`이 돌지 않아서, 이 훅이 없으면 테스트를 돌릴 때마다 컨테이너가 하나씩 남는다.
+extern "C" fn remove_container_at_exit() {
+    // 정리 중 panic이 FFI 경계를 넘으면 abort하므로 여기서 막는다.
+    let _ = std::panic::catch_unwind(|| {
+        if let Ok(mut guard) = CONTAINER.lock() {
+            guard.take();
+        }
+    });
+}
 static READY: OnceLock<bool> = OnceLock::new();
 /// `TRUNCATE`로 테이블을 비우는 테스트끼리 병렬로 돌지 않게 한다. Python은 순차 실행이다.
 static DB_LOCK: Mutex<()> = Mutex::new(());
@@ -46,6 +60,8 @@ pub fn mysql_container() -> bool {
                     std::env::set_var("TM_MYSQL_PASSWORD", MYSQL_PASSWORD);
                 }
                 *CONTAINER.lock().unwrap() = Some(container);
+                // SAFETY: `remove_container_at_exit`는 인자가 없는 `extern "C"` 함수이고 panic을 밖으로 내보내지 않는다.
+                unsafe { atexit(remove_container_at_exit) };
                 true
             }
             Err(e) => panic!("Docker 필요: MySQL 컨테이너를 띄울 수 없다: {e}"),
