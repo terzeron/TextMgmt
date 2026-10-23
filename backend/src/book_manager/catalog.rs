@@ -5,9 +5,11 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
-use super::{BookContent, BookManager, MAX_CATEGORY_PAGE_SIZE, MAX_CATEGORY_RESULT_COUNT};
+use std::sync::Arc;
+
+use super::{BookContent, BookManager, MAX_CATEGORY_PAGE_SIZE, MAX_LATEST_BOOK_COUNT};
 use crate::book::Book;
-use crate::es_manager::{Docs, decode_category_cursor, encode_category_cursor};
+use crate::es_manager::{Docs, EsManagerApi, decode_category_cursor, encode_category_cursor};
 
 /// Python `if doc:`: 없거나 빈 객체면 문서가 없는 것이다.
 fn non_empty(doc: Option<Value>) -> Option<Value> {
@@ -18,6 +20,21 @@ fn non_empty(doc: Option<Value>) -> Option<Value> {
 const SIMILAR_SUMMARY_CHARS: usize = 3500;
 
 impl BookManager {
+    /// 동기 ES 호출을 워커 스레드로 넘겨 이벤트 루프를 막지 않는다(동기 클라이언트를 루프에서 부르면 같은 워커의 다른 요청이 멈춘다).
+    pub(crate) async fn blocking<T: Send + 'static>(&self, f: impl FnOnce(Arc<dyn EsManagerApi>) -> T + Send + 'static) -> T {
+        let es = self.es.clone();
+        match tokio::task::spawn_blocking(move || f(es)).await {
+            Ok(value) => value,
+            Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+            Err(e) => panic!("blocking task failed: {e}"),
+        }
+    }
+
+    /// `find_doc`의 비동기 판. 이벤트 루프 밖에서 ES를 부른다.
+    pub(crate) async fn find_doc_async(&self, book_id: i64) -> Result<Option<Value>, String> {
+        self.blocking(move |es| es.search_by_id(book_id).map(non_empty).map_err(|e| e.to_string())).await
+    }
+
     /// `es.search_by_id`를 Python 진리값 규칙으로 읽는다. ES 오류는 문자열로 돌려준다.
     pub(crate) fn find_doc(&self, book_id: i64) -> Result<Option<Value>, String> {
         self.es.search_by_id(book_id).map(non_empty).map_err(|e| e.to_string())
@@ -25,19 +42,20 @@ impl BookManager {
 
     pub async fn get_categories(&self) -> (BTreeMap<String, i64>, Option<String>) {
         log::debug!("# get_categories()");
-        match self.es.search_and_aggregate_by_category() {
+        match self.blocking(|es| es.search_and_aggregate_by_category()).await {
             Ok(categories) => (categories, None),
             Err(e) => (BTreeMap::new(), Some(e.to_string())),
         }
     }
 
     pub async fn get_books_in_category(&self, category: &str) -> (Vec<Book>, Option<String>) {
-        let hits = match self.es.search_by_category(category, MAX_CATEGORY_RESULT_COUNT) {
+        let (category_owned, limit) = (category.to_string(), self.max_category_result_count);
+        let hits = match self.blocking(move |es| es.search_by_category(&category_owned, limit)).await {
             Ok(hits) => hits,
             Err(e) => return (Vec::new(), Some(e.to_string())),
         };
-        if hits.len() as i64 >= MAX_CATEGORY_RESULT_COUNT {
-            log::warn!("get_books_in_category: category '{category}' 결과가 상한({MAX_CATEGORY_RESULT_COUNT})에 도달하여 잘렸습니다.");
+        if hits.len() as i64 >= limit {
+            log::warn!("get_books_in_category: category '{category}' 결과가 상한({limit})에 도달하여 잘렸습니다.");
         }
         if hits.is_empty() {
             return (Vec::new(), Some(format!("No books found in '{category}'")));
@@ -53,7 +71,8 @@ impl BookManager {
         if !cursor.is_empty() && search_after.is_none() {
             return (Vec::new(), 0, None, Some("invalid cursor".to_string()));
         }
-        match self.es.search_by_category_paged(category, size, search_after.as_deref()) {
+        let category_owned = category.to_string();
+        match self.blocking(move |es| es.search_by_category_paged(&category_owned, size, search_after.as_deref())).await {
             Ok((hits, total, next)) => {
                 let books = hits.iter().map(|(id, doc, _)| self.make_book(*id, doc, 0.0)).collect();
                 let next_cursor = next.filter(|n| !n.is_empty()).map(|n| encode_category_cursor(&n));
@@ -65,7 +84,7 @@ impl BookManager {
 
     pub async fn get_book(&self, book_id: i64) -> (Option<Book>, Option<String>) {
         log::debug!("# get_book(book_id={book_id})");
-        match self.find_doc(book_id) {
+        match self.find_doc_async(book_id).await {
             Ok(Some(doc)) => (Some(self.make_book(book_id, &doc, 0.0)), None),
             Ok(None) => (None, Some(format!("No book found by '{book_id}'"))),
             Err(e) => (None, Some(e)),
@@ -75,7 +94,7 @@ impl BookManager {
     /// 책 파일을 돌려준다. 문서나 파일이 없으면 빈 문자열이다.
     pub async fn get_book_content(&self, book_id: i64) -> BookContent {
         log::debug!("# get_book_content(book_id={book_id})");
-        let Ok(Some(doc)) = self.find_doc(book_id) else { return BookContent::Text(String::new()) };
+        let Ok(Some(doc)) = self.find_doc_async(book_id).await else { return BookContent::Text(String::new()) };
         let book = self.make_book(book_id, &doc, 0.0);
         if self.fs.is_file(&book.file_path).unwrap_or(false) {
             return BookContent::File(book.file_path);
@@ -85,7 +104,8 @@ impl BookManager {
 
     pub async fn search_by_keyword(&self, keyword: &str, max_result_count: i64) -> (Vec<Book>, Option<String>) {
         log::debug!("# search_by_keyword(keyword='{keyword}')");
-        match self.es.search_by_keyword(keyword, max_result_count) {
+        let keyword_owned = keyword.to_string();
+        match self.blocking(move |es| es.search_by_keyword(&keyword_owned, max_result_count)).await {
             Ok(hits) if !hits.is_empty() => (hits.iter().map(|(id, doc, _)| self.make_book(*id, doc, 0.0)).collect(), None),
             Ok(_) => (Vec::new(), Some("No books found".to_string())),
             Err(e) => (Vec::new(), Some(e.to_string())),
@@ -95,7 +115,7 @@ impl BookManager {
     pub async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, exclude_categories: Option<&[String]>, category: Option<&str>) -> (Vec<Book>, i64, Option<String>) {
         log::debug!("# search_by_keyword_paged(keyword='{keyword}', size={size}, offset={offset}, exclude_categories={exclude_categories:?}, category={category:?})");
         let args = json!({"keyword": keyword, "size": size, "offset": offset, "exclude_categories": exclude_categories, "category": category.filter(|c| !c.is_empty())});
-        match self.es.search_by_keyword_paged(&args) {
+        match self.blocking(move |es| es.search_by_keyword_paged(&args)).await {
             Ok((hits, total)) => (hits.iter().map(|(id, doc, _)| self.make_book(*id, doc, 0.0)).collect(), total, None),
             Err(e) => (Vec::new(), 0, Some(e.to_string())),
         }
@@ -113,14 +133,14 @@ impl BookManager {
 
     pub async fn search_similar_books(&self, book_id: i64, max_result_count: i64) -> (Vec<Book>, Option<String>) {
         log::debug!("# search_similar_books(book_id={book_id})");
-        let doc = match self.find_doc(book_id) {
+        let doc = match self.find_doc_async(book_id).await {
             Ok(Some(doc)) => doc,
             Ok(None) => return (Vec::new(), Some(format!("No book found with id '{book_id}'"))),
             Err(e) => return (Vec::new(), Some(e)),
         };
         let mut args = Self::similar_args(book_id, &doc);
         args["max_result_count"] = json!(max_result_count);
-        match self.es.search_similar_docs(&args) {
+        match self.blocking(move |es| es.search_similar_docs(&args)).await {
             Ok(hits) if !hits.is_empty() => (hits.iter().map(|(id, similar, _)| self.make_book(*id, similar, 0.0)).collect(), None),
             Ok(_) => (Vec::new(), Some("No similar books found".to_string())),
             Err(e) => (Vec::new(), Some(e.to_string())),
@@ -129,7 +149,7 @@ impl BookManager {
 
     pub async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> (Vec<Book>, i64, Option<String>) {
         log::debug!("# search_similar_books_paged(book_id={book_id}, size={size}, offset={offset})");
-        let doc = match self.find_doc(book_id) {
+        let doc = match self.find_doc_async(book_id).await {
             Ok(Some(doc)) => doc,
             Ok(None) => return (Vec::new(), 0, Some(format!("No book found with id '{book_id}'"))),
             Err(e) => return (Vec::new(), 0, Some(e)),
@@ -137,15 +157,28 @@ impl BookManager {
         let mut args = Self::similar_args(book_id, &doc);
         args["size"] = json!(size);
         args["offset"] = json!(offset);
-        match self.es.search_similar_docs_paged(&args) {
+        match self.blocking(move |es| es.search_similar_docs_paged(&args)).await {
             Ok((hits, total)) if !hits.is_empty() => (hits.iter().map(|(id, similar, score)| self.make_book(*id, similar, *score)).collect(), total, None),
             Ok((_, total)) => (Vec::new(), total, Some("No similar books found".to_string())),
             Err(e) => (Vec::new(), 0, Some(e.to_string())),
         }
     }
 
+    /// 최신 책 목록. `size`는 1~`MAX_LATEST_BOOK_COUNT`로 맞춘다. 반환: (책 목록, 전체 수, 오류).
+    pub async fn get_latest_books(&self, size: i64, exclude_categories: Option<Vec<String>>) -> (Vec<Book>, i64, Option<String>) {
+        log::debug!("# get_latest_books(size={size}, exclude_categories={exclude_categories:?})");
+        let size = size.clamp(1, MAX_LATEST_BOOK_COUNT);
+        match self.blocking(move |es| es.search_latest_docs(size, exclude_categories.as_deref())).await {
+            Ok((hits, total)) => (hits.iter().map(|(id, doc, _)| self.make_book(*id, doc, 0.0)).collect(), total, None),
+            Err(e) => (Vec::new(), 0, Some(e.to_string())),
+        }
+    }
+
     /// 문서를 색인한다. 문서가 하나일 때만 성공으로 본다. ES 예외는 `Err`로 돌려준다(Python은 예외가 그대로 올라간다).
     pub(crate) fn add_book_raw(&self, data: &Docs) -> Result<(Option<i64>, Option<String>), String> {
+        if let Some(adder) = self.seams().book_adder {
+            return adder.add_book().map_err(|e| e.to_string());
+        }
         let ids = self.es.insert(data).map_err(|e| e.to_string())?;
         if ids.len() == 1 {
             // 단일 문서 추가 후 즉시 검색되도록 한다.

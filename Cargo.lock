@@ -208,6 +208,7 @@ dependencies = [
  "diesel",
  "flate2",
  "htmlkit",
+ "hwp3_parser",
  "image",
  "jsonwebtoken",
  "log",

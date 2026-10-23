@@ -22,6 +22,8 @@ pub type Hit = (i64, Value, f64);
 pub type Docs = BTreeMap<i64, Value>;
 /// (히트, 전체 건수, 다음 `search_after`)
 pub type PagedHits = (Vec<Hit>, i64, Option<Vec<Value>>);
+/// 커버 파일 한 페이지: ([(문서 id, 문서, 정렬값)], 전체 건수).
+pub type CoverFileHits = (Vec<(i64, Value, Vec<Value>)>, i64);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EsError {
@@ -142,6 +144,22 @@ pub trait EsManagerApi: Send + Sync {
         Err(EsError::Unsupported)
     }
     fn backfill_created_time(&self, _path_prefix: &Path) -> Result<Value, EsError> {
+        Err(EsError::Unsupported)
+    }
+
+    /// 커버 형식 문서가 있는 카테고리별 (문서 수, 최근 수정 시각, 최근 생성 시각). 시각은 epoch 밀리초이고 없으면 `i64::MIN`에 해당하는 값이다.
+    fn aggregate_cover_categories(&self) -> Result<HashMap<String, (usize, f64, f64)>, EsError> {
+        Err(EsError::Unsupported)
+    }
+
+    /// 카테고리에 직접 속한 커버 형식 파일을 최신순으로 한 페이지. `search_after`는 정렬값 `(수정, 생성, 경로)`다.
+    /// 반환: ([(문서 id, 문서, 정렬값)], 전체 건수).
+    fn search_cover_files_paged(&self, _categories: &[String], _size: i64, _search_after: Option<(i64, i64, String)>, _exclude: &[String]) -> Result<CoverFileHits, EsError> {
+        Err(EsError::Unsupported)
+    }
+
+    /// 작품 디렉토리마다 대표 후보(경로순 앞쪽 몇 권).
+    fn search_group_representatives(&self, _keys: &[String], _exclude: &[String]) -> Result<HashMap<String, Vec<(i64, Value)>>, EsError> {
         Err(EsError::Unsupported)
     }
 }
@@ -1761,5 +1779,22 @@ impl EsManagerApi for ESManager {
 
     fn backfill_created_time(&self, path_prefix: &Path) -> Result<Value, EsError> {
         Ok(ESManager::backfill_created_time(self, path_prefix, 500))
+    }
+
+    fn aggregate_cover_categories(&self) -> Result<HashMap<String, (usize, f64, f64)>, EsError> {
+        // 시각이 없는 카테고리는 ES 정렬값과 같은 `i64::MIN`으로 채운다(가장 뒤).
+        let missing = i64::MIN as f64;
+        Ok(ESManager::aggregate_cover_categories(self).into_iter().map(|(category, (count, updated, created))| (category, (count.max(0) as usize, updated.unwrap_or(missing), created.unwrap_or(missing)))).collect())
+    }
+
+    fn search_cover_files_paged(&self, categories: &[String], size: i64, search_after: Option<(i64, i64, String)>, exclude: &[String]) -> Result<CoverFileHits, EsError> {
+        let (categories, exclude) = (texts(categories), texts(exclude));
+        let after: Option<Vec<Value>> = search_after.map(|(updated, created, path)| vec![json!(updated), json!(created), json!(path)]);
+        Ok(ESManager::search_cover_files_paged(self, &categories, size, after.as_deref(), Some(&exclude)))
+    }
+
+    fn search_group_representatives(&self, keys: &[String], exclude: &[String]) -> Result<HashMap<String, Vec<(i64, Value)>>, EsError> {
+        let (keys, exclude) = (texts(keys), texts(exclude));
+        Ok(ESManager::search_group_representatives(self, &keys, Some(&exclude)))
     }
 }

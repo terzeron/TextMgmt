@@ -22,6 +22,7 @@ corpus_layout = { path = "../libs/corpus_layout" }
 diesel = { version = "2.3.14", default-features = false, features = ["mysql", "r2d2", "chrono"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 htmlkit = { path = "../libs/htmlkit" }
+hwp3_parser = { path = "../libs/hwp3_parser" }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif"] }
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 log = "0.4.34"
@@ -31,9 +32,9 @@ mysqlclient-sys = { version = "0.5.2", features = ["bundled"] }
 regex = "1.13.1"
 roxmltree = "0.21.1"
 scraper = "0.29.0"
+sha2 = "0.11.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
-sha2 = "0.11.1"
 sysdeps = { path = "../libs/sysdeps" }
 ureq.workspace = true
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
@@ -124,6 +125,18 @@ name = "view_history_api"
 path = "../tests/rust/backend/view_history_api.rs"
 
 [[test]]
+name = "book_manager_2"
+path = "../tests/rust/backend/book_manager_2.rs"
+
+[[test]]
+name = "book_manager_gaps"
+path = "../tests/rust/backend/book_manager_gaps.rs"
+
+[[test]]
+name = "book_manager_hwp_preview"
+path = "../tests/rust/backend/book_manager_hwp_preview.rs"
+
+[[test]]
 name = "book_manager_1"
 path = "../tests/rust/backend/book_manager_1.rs"
 
@@ -142,6 +155,10 @@ path = "../tests/rust/backend/epub_image_edit.rs"
 [[test]]
 name = "cover_management"
 path = "../tests/rust/backend/cover_management.rs"
+
+[[test]]
+name = "html_sanitizer"
+path = "../tests/rust/backend/html_sanitizer.rs"
 
 [dev-dependencies]
 base64 = "0.23.1"

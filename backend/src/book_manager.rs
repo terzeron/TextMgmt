@@ -23,7 +23,6 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -32,7 +31,7 @@ use sysdeps::{CommandRunner, EnvFn, FsOps, RealFs, SystemRunner};
 use crate::book::Book;
 use crate::classifier::Classify;
 use crate::es_manager::{Docs, EsManagerApi};
-use crate::pdf::{LopdfOpener, LopdfPageOps, PdfOpener, PdfPageOps};
+use crate::pdf::{LopdfOpener, LopdfPageOps, PageCountCache, PdfOpener, PdfPageOps, PdfReaderCache};
 
 pub use crate::comics_manager::RuntimeError;
 pub use crate::main::{BookContent, BookManagerApi, BookResponse};
@@ -42,20 +41,28 @@ mod backfill;
 mod catalog;
 mod category;
 mod classify;
+mod cover_list;
 mod cover;
 mod epub;
 mod file_reader;
+mod html;
 mod mismatch;
 mod paths;
+mod pdf_cover;
 mod preview;
 mod reload;
+mod seams;
 mod update;
 mod util;
 mod validate;
+mod xml_safe;
 
-pub use classify::{ApplyOptions, MODEL_CERTAIN_MIN_CONFIDENCE, ProposeOptions};
+pub use cover_list::CoverPageOpts;
+pub use classify::{ApplyOptions, MODEL_CERTAIN_MIN_CONFIDENCE, MoveOpts, ProposeOptions};
 pub use cover::{BookLookup, BookRef, Thumbnailer};
 pub use file_reader::DefaultFileReader;
+pub use seams::{BackfillThread, BookAdder, BookManagerError, CategoryNameCheck, PathIsRelativeTo, PreviewEpubValidator};
+pub use xml_safe::{SafeXmlParser, XmlElement, _declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, decode_category_cursor, encode_category_cursor};
 
 /// 카테고리 단위 ES 조회 상한. ES `max_result_window`(기본 10000)와 같다.
 pub const MAX_CATEGORY_RESULT_COUNT: i64 = 10000;
@@ -82,6 +89,14 @@ pub type ProgressFn<'a> = &'a (dyn Fn(Value) + Send + Sync);
 ///
 /// 실제 구현은 `loader` crate의 `read_file`을 감싸야 한다. 이 crate는 `loader`에 의존하지 않으므로
 /// 조립하는 쪽(바이너리)이 `BookManagerDeps::with_file_reader`로 꽂는다. 꽂지 않으면 `DefaultFileReader`가 쓰인다.
+/// `FileReader::try_read_file`이 돌려주는 오류.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadFileError {
+    /// 파서가 시간 상한을 넘었다(Python `ParserTimeout`).
+    Timeout(String),
+    Other(String),
+}
+
 pub trait FileReader: Send + Sync {
     /// 파일이 아니거나 지원하지 않는 형식이면 빈 묶음이다.
     fn read_file(&self, path: &Path, path_prefix: Option<&Path>) -> Docs;
@@ -90,6 +105,11 @@ pub trait FileReader: Send + Sync {
     fn read_file_with_options(&self, path: &Path, path_prefix: Option<&Path>, skip_text: bool) -> Docs {
         let _ = skip_text;
         self.read_file(path, path_prefix)
+    }
+
+    /// 실패 사유를 구분해 읽는다. 기본 구현은 실패를 빈 묶음으로 표현하는 `read_file_with_options`에 맡긴다.
+    fn try_read_file(&self, path: &Path, path_prefix: Option<&Path>, skip_text: bool) -> Result<Docs, ReadFileError> {
+        Ok(self.read_file_with_options(path, path_prefix, skip_text))
     }
 }
 
@@ -133,6 +153,8 @@ pub struct BookManagerDeps {
     iter_category_indexable_files_override: Option<IterFilesOverride>,
     is_high_confidence_override: Option<HighConfidenceOverride>,
     loader_program: String,
+    duplicate_name_max_index: usize,
+    max_category_result_count: i64,
     ext: Extensions,
 }
 
@@ -155,6 +177,8 @@ impl BookManagerDeps {
             iter_category_indexable_files_override: None,
             is_high_confidence_override: None,
             loader_program: "loader".to_string(),
+            duplicate_name_max_index: DUPLICATE_NAME_MAX_INDEX,
+            max_category_result_count: MAX_CATEGORY_RESULT_COUNT,
             ext: Extensions::default(),
         }
     }
@@ -229,6 +253,18 @@ impl BookManagerDeps {
         self
     }
 
+    /// `name (N).ext` 번호를 붙일 수 있는 최대 N. 이 값까지 다 차면 옮기지 않고 오류를 낸다(기본 1000).
+    pub fn with_duplicate_name_max_index(mut self, n: usize) -> Self {
+        self.duplicate_name_max_index = n;
+        self
+    }
+
+    /// 카테고리 단위 ES 조회 상한(기본 `MAX_CATEGORY_RESULT_COUNT`). 값 설정이다.
+    pub fn with_max_category_result_count(mut self, n: i64) -> Self {
+        self.max_category_result_count = n.max(1);
+        self
+    }
+
     /// 하위 모듈이 정의한 설정이나 대역을 꽂는다. 같은 타입을 다시 꽂으면 덮어쓴다.
     pub fn with_ext<T: Any + Send + Sync>(mut self, value: T) -> Self {
         self.ext.insert(value);
@@ -268,22 +304,31 @@ pub struct BookManager {
     iter_category_indexable_files_override: Option<IterFilesOverride>,
     is_high_confidence_override: Option<HighConfidenceOverride>,
     loader_program: String,
+    duplicate_name_max_index: usize,
+    max_category_result_count: i64,
     ext: Extensions,
     state: Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
     mismatch: Mutex<MismatchState>,
     scan_lock: Mutex<()>,
-    backfill_thread: Mutex<Option<JoinHandle<()>>>,
+    pdf_cache: PdfReaderCache,
+    page_count_cache: PageCountCache,
+    backfill_thread: Mutex<Option<Arc<dyn BackfillThread>>>,
 }
 
 impl BookManager {
     pub const CACHE_MAX_AGE_SECONDS: u64 = CACHE_MAX_AGE_SECONDS;
+    /// 이미지 축소 정책 버전. 캐시 파일 이름에 붙여 정책이 바뀌면 옛 산출물이 계속 나가지 않게 한다.
+    pub const EPUB_IMAGE_POLICY_VERSION: u32 = 3;
     pub const EPUB_IMAGE_MAX_EDGE: u32 = EPUB_IMAGE_MAX_EDGE;
     /// 최상위 파일을 가리키는 카테고리 이름.
     pub const ROOT_CATEGORY: &'static str = "_root";
 
     /// 대역을 꽂아 만든다. ES 색인 생성(`create_index`)과 백필은 하지 않는다(`from_env`가 한다).
     pub fn with_deps(deps: BookManagerDeps) -> BookManager {
+        let seams = deps.seams();
         BookManager {
+            pdf_cache: PdfReaderCache::new(seams.pdf_cache_limits.unwrap_or_default()),
+            page_count_cache: PageCountCache::new(seams.page_count_cache_max.unwrap_or(PageCountCache::DEFAULT_MAX)),
             path_prefix: deps.path_prefix,
             es: deps.es,
             fs: deps.fs,
@@ -299,6 +344,8 @@ impl BookManager {
             iter_category_indexable_files_override: deps.iter_category_indexable_files_override,
             is_high_confidence_override: deps.is_high_confidence_override,
             loader_program: deps.loader_program,
+            duplicate_name_max_index: deps.duplicate_name_max_index,
+            max_category_result_count: deps.max_category_result_count,
             ext: deps.ext,
             state: Mutex::new(HashMap::new()),
             mismatch: Mutex::new(MismatchState::default()),
@@ -327,7 +374,7 @@ impl BookManager {
             deps = deps.with_loader_program(&program);
         }
         let manager = BookManager::with_deps(customize(deps));
-        manager.backfill_created_time_if_enabled(env, &index_name);
+        manager.start_created_time_backfill(matches!(env(CREATED_TIME_BACKFILL_ENV).unwrap_or_default().trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"), &index_name);
         Ok(manager)
     }
 

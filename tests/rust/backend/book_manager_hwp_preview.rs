@@ -18,6 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use backend::book_manager::{BookManager, BookManagerDeps};
+use backend::main::BookManagerApi;
 use common::es_fake::FakeEsManager;
 use common::runner::FakeRunner;
 use serde_json::{json, Value};
@@ -37,7 +38,6 @@ mod test_book_manager_preview_empty_content {
     // book_manager HWP preview에서 빈 결과 시 안내 메시지 반환
 
     #[tokio::test]
-    #[ignore = "샘플 파일 필요: tests/books/_hwp/v1.20_부하의약혼녀.hwp"]
     async fn test_hwp_preview_empty_returns_message() {
         // LO+hwp3 모두 빈 결과 -> '미리보기를 생성할 수 없습니다' 메시지
         let hwp_src = hwp_dir().join("v1.20_부하의약혼녀.hwp");
@@ -50,7 +50,7 @@ mod test_book_manager_preview_empty_content {
         // libreoffice 변환기가 빈 문자열을 돌려준다
         let deps = BookManagerDeps::new(dir.path().to_path_buf(), FakeEsManager::with_doc(doc)).with_runner(FakeRunner::office_output(""));
         let manager = BookManager::with_deps(deps);
-        let resp = manager.get_book_preview(1, 1).await;
+        let resp = BookManagerApi::get_book_preview(&manager, 1, Some(1), None).await;
         assert_eq!(resp.status_code, 200);
         assert!(String::from_utf8_lossy(&resp.body).contains("미리보기를 생성할 수 없습니다"));
     }

@@ -22,7 +22,7 @@
 //! - `with_page_count_cache_max(usize)` + `BookManager::page_count_cache()` (`clear/insert/touch/evict/len/contains`) (구 `_page_count_cache_*` 정적 캐시)
 //! - `with_preview_epub_validator(Arc<dyn Fn(&Path) -> (bool, String) + Send + Sync>)` (구 `override_validate_preview_epub`)
 //! - `with_normpath(Arc<dyn Fn(&str) -> String + Send + Sync>)`, `with_path_is_relative_to(Arc<dyn Fn(&Path, &Path) -> io::Result<bool> + Send + Sync>)`
-//! - `with_category_mismatches(Arc<dyn Fn(bool) -> Value + ..>)`, `with_category_mismatch_details(Arc<dyn Fn(&str) -> Value + ..>)` (구 인스턴스 메서드 바꿔치기)
+//! - `with_get_category_mismatches_override(Arc<dyn Fn(bool) -> Value + ..>)`, `with_get_category_mismatch_details_override(Arc<dyn Fn(&str) -> Value + ..>)` (구 인스턴스 메서드 바꿔치기)
 //! - `with_category_name_check(Arc<dyn Fn(&str, &dyn Fn(&str) -> bool) -> io::Result<bool> + ..>)` (구 `override_is_safe_category_name`)
 //!
 //! 메서드 (Python 시그니처와 같은 이름을 쓴다. 정수는 모두 `i64`다, 3.0 규칙 6):
@@ -67,24 +67,24 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use backend::book_manager::{
-    _declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, ApplyOpts, BackfillThread, BookAdder, BookClassifierApi, BookContent, BookManager, BookManagerDeps, BookManagerError,
-    CREATED_TIME_BACKFILL_ENV, FileReader, LoaderReadError, MAX_CATEGORY_RESULT_COUNT, MoveOpts, ProposeOpts, decode_category_cursor, encode_category_cursor,
+    _declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, ApplyOptions, BackfillThread, BookAdder, BookContent, BookManager, BookManagerDeps, BookManagerError, CREATED_TIME_BACKFILL_ENV,
+    FileReader, MAX_CATEGORY_RESULT_COUNT, ReadFileError, MoveOpts, ProposeOptions, decode_category_cursor, encode_category_cursor,
 };
+use backend::classifier::BookClassifierApi;
 use backend::epub_cover::EpubCoverHooks;
-use backend::main::{InlineRunner, TaskHandle, TaskRunner};
+use backend::main::{BookManagerApi, BookResponse, InlineRunner, TaskHandle, TaskRunner};
 use backend::pdf::{PdfCacheLimits, PdfError, PdfPageOps};
 use base64::Engine;
 use common::{
     env::EnvGuard,
     epub::{EpubSpec, make_epub},
-    es_fake::FakeEsManager,
+    es_fake::{Docs, FakeEsManager},
     faulty_fs::{FaultyFs, fail_on_nth_call, other_err},
     fsx::{mtime_key, set_mtime},
     log_capture::LogCapture,
     runner::FakeRunner,
     zipx::{read_zip_entry, write_zip, zip_header_offset},
 };
-use parser_timeout::ParserTimeout;
 use serde_json::{Value, json};
 use sysdeps::{CommandError, FsOps, RealFs};
 use tempfile::TempDir;
@@ -217,15 +217,105 @@ impl BackfillThread for FakeBackfillThread {
 
 // ---- seam 어댑터 (공용 모듈에 아직 없는 것만 이 파일에 둔다) ----
 
+/// 구 `utils.parser_timeout.ParserTimeout`. `FileReader`는 오류를 돌려주지 못해(빈 묶음이 곧 실패다) 이 값은 어댑터가 빈 묶음으로 바꾼다.
+#[derive(Debug)]
+#[allow(dead_code)]
+struct ParserTimeout {
+    message: String,
+}
+
+/// 구 `Loader.read_file`이 던지는 오류.
+#[derive(Debug)]
+#[allow(dead_code)]
+enum LoaderReadError {
+    Timeout(ParserTimeout),
+    Other(String),
+}
+
 type ReadFileFn = dyn Fn(&Path) -> Result<Value, LoaderReadError> + Send + Sync;
 
 // TODO(common): 클로저를 `FileReader`로 감싸는 어댑터. 문서 3.7의 `fx::fetcher`처럼 `common::fx`에 두면 된다.
 struct FnFileReader(Box<ReadFileFn>);
 
 impl FileReader for FnFileReader {
-    fn read_file(&self, path: &Path) -> Result<Value, LoaderReadError> {
-        (self.0)(path)
+    /// 객체 `{"<book_id>": doc}`를 문서 묶음으로 바꾼다. 오류와 객체가 아닌 값은 빈 묶음이다.
+    fn read_file(&self, path: &Path, _path_prefix: Option<&Path>) -> Docs {
+        match (self.0)(path) {
+            Ok(Value::Object(map)) => map.into_iter().filter_map(|(k, v)| Some((k.parse().ok()?, v))).collect(),
+            _ => Docs::new(),
+        }
     }
+
+    fn try_read_file(&self, path: &Path, path_prefix: Option<&Path>, _skip_text: bool) -> Result<Docs, ReadFileError> {
+        match (self.0)(path) {
+            Err(LoaderReadError::Timeout(timeout)) => Err(ReadFileError::Timeout(timeout.message)),
+            Err(LoaderReadError::Other(message)) => Err(ReadFileError::Other(message)),
+            Ok(_) => Ok(self.read_file(path, path_prefix)),
+        }
+    }
+}
+
+/// `BookResponse` 읽기 도우미(테스트 로컬). `is_file`은 본문이 있으면 참이다(파일을 읽어 담은 응답).
+trait ResponseExt {
+    fn header(&self, name: &str) -> Option<&str>;
+    fn body_text(&self) -> String;
+    fn is_file(&self) -> bool;
+}
+
+impl ResponseExt for BookResponse {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+    }
+
+    fn body_text(&self) -> String {
+        String::from_utf8_lossy(&self.body).into_owned()
+    }
+
+    fn is_file(&self) -> bool {
+        !self.body.is_empty()
+    }
+}
+
+/// `apply_category_changes`의 Python 키워드 인자 묶음(테스트 로컬). 구현의 `ApplyOptions`로 바꿔 부른다.
+struct ApplyOpts {
+    allowed: BTreeSet<String>,
+    on_item_done: Option<Box<dyn Fn(Value) + Send + Sync>>,
+    should_continue: Option<Box<dyn Fn() -> bool + Send + Sync>>,
+}
+
+impl ApplyOpts {
+    fn new(allowed: BTreeSet<String>) -> Self {
+        Self { allowed, on_item_done: None, should_continue: None }
+    }
+
+    fn on_item_done(mut self, f: Box<dyn Fn(Value) + Send + Sync>) -> Self {
+        self.on_item_done = Some(f);
+        self
+    }
+
+    fn should_continue(mut self, f: Box<dyn Fn() -> bool + Send + Sync>) -> Self {
+        self.should_continue = Some(f);
+        self
+    }
+}
+
+async fn apply_opts(manager: &BookManager, items: &[Value], opts: ApplyOpts) -> (Value, Option<String>) {
+    let allowed: std::collections::HashSet<String> = opts.allowed.iter().cloned().collect();
+    manager.apply_category_changes_with(items, &allowed, ApplyOptions { on_item_done: opts.on_item_done.as_deref(), should_continue: opts.should_continue.as_deref(), ..ApplyOptions::default() }).await
+}
+
+/// `propose_category_changes`의 Python 키워드 인자 묶음(테스트 로컬).
+struct ProposeOpts {
+    use_bookstore: bool,
+    use_content_meta: bool,
+    on_progress: Option<Box<dyn Fn(Value) + Send + Sync>>,
+}
+
+/// 매핑은 입력 순서를 지킨 목록이다. 문자열이 아닌 카테고리는 JSON 객체 키가 될 수 없어 구현이 어차피 건너뛰므로 여기서 뺀다.
+async fn propose_opts(manager: &BookManager, category: &str, mappings: &Mappings, opts: ProposeOpts) -> (Value, Option<String>) {
+    let object: serde_json::Map<String, Value> = mappings.iter().filter_map(|(k, v)| Some((k.as_str()?.to_string(), Value::Array(v.clone())))).collect();
+    let options = ProposeOptions { use_bookstore: Some(opts.use_bookstore), use_content_meta: Some(opts.use_content_meta), on_progress: opts.on_progress.as_deref() };
+    manager.propose_category_changes(category, Some(&Value::Object(object)), options).await
 }
 
 /// 구 `loader_read_file_override(closure)`.
@@ -395,7 +485,7 @@ fn test_get_book_preview_not_found() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.set_doc(None);
-    let result = asyncio_runner(manager.get_book_preview(999, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 999, None, None));
     assert_eq!(result.status_code, 404);
 }
 
@@ -406,7 +496,7 @@ fn test_get_book_preview_file_not_found() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.set_doc(Some(make_doc("A/missing.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert_eq!(result.status_code, 404);
 }
 
@@ -431,7 +521,7 @@ fn test_get_book_preview_epub_cache_hit() {
 
     set_mtime(&cache_file, SystemTime::now() + Duration::from_secs(1000));
 
-    let result = asyncio_runner(manager.get_book_preview(1, Some(3), None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, Some(3), None));
     assert_eq!(result.status_code, 200);
 }
 
@@ -448,7 +538,7 @@ fn test_get_book_preview_epub_opf_keyerror() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert_eq!(result.status_code, 422);
 }
 
@@ -478,7 +568,7 @@ fn test_get_book_preview_epub_opf_namespace_fix() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     // 크래시하지 않아야 한다. 네임스페이스가 주입된다.
     assert!([200, 422, 500].contains(&result.status_code), "status={}", result.status_code);
 }
@@ -503,7 +593,7 @@ fn test_get_book_preview_epub_no_spine() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
 }
 
@@ -533,7 +623,7 @@ fn test_get_book_preview_epub_chapter_missing_from_zip() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, Some(5), None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, Some(5), None));
     assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
 }
 
@@ -573,7 +663,7 @@ fn test_get_book_preview_epub_svg_image_tag() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
 }
 
@@ -603,7 +693,7 @@ fn test_get_book_preview_epub_css_missing() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
 }
 
@@ -647,7 +737,7 @@ fn test_get_book_preview_epub_large_font_skip() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
 }
 
@@ -678,7 +768,7 @@ fn test_get_book_preview_epub_guide_element() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
 }
 
@@ -716,7 +806,7 @@ fn test_get_book_preview_epub_ncx_navpoint_filtering() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
 }
 
@@ -755,7 +845,7 @@ fn test_get_book_preview_epub_css_font_face_strip() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
 }
 
@@ -785,12 +875,11 @@ fn test_get_book_preview_epub_file_missing_in_write() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
 }
 
 #[test]
-#[ignore = "mock.patch: BookManager._validate_preview_epub를 (False, \"bad epub\")로 바꿈; DI 설계 후 활성화"]
 fn test_get_book_preview_epub_validation_fail() {
     // Lines 723-725: generated EPUB fails validation
     let tmp = tmp_dir();
@@ -802,7 +891,7 @@ fn test_get_book_preview_epub_validation_fail() {
     // 가정한 seam: 미리보기 EPUB 검증 함수를 교체한다. 문서에 없는 seam이다(파일 머리말 참고).
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_preview_epub_validator(Arc::new(|_path| (false, "bad epub".to_string()))));
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert_eq!(result.status_code, 422);
     assert!(result.body_text().contains("bad epub"));
 }
@@ -818,12 +907,11 @@ fn test_get_book_preview_epub_bad_zip() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert_eq!(result.status_code, 422);
 }
 
 #[test]
-#[ignore = "mock.patch: BookManager._find_opf_path가 RuntimeError(\"boom\")을 던지도록 바꿈; DI 설계 후 활성화"]
 fn test_get_book_preview_epub_general_exception() {
     // Lines 733-735: general exception during EPUB processing
     let tmp = tmp_dir();
@@ -836,13 +924,12 @@ fn test_get_book_preview_epub_general_exception() {
     let hooks = EpubCoverHooks::default().with_find_opf_path(Arc::new(|| panic!("boom")));
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_epub_hooks(hooks));
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert_eq!(result.status_code, 500);
     assert_eq!(result.body_text(), "EPUB preview failed");
 }
 
 #[test]
-#[ignore = "mock.patch: BookManager._convert_with_libreoffice가 RuntimeError(\"boom\")을 던지도록 바꿈; DI 설계 후 활성화"]
 fn test_get_book_preview_doc_exception() {
     // Lines 750-752: .doc conversion exception
     let tmp = tmp_dir();
@@ -854,7 +941,7 @@ fn test_get_book_preview_doc_exception() {
     let runner = FakeRunner::returning(Err(CommandError::Failed("boom".to_string())));
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(runner));
     es.set_doc(Some(make_doc("A/test.doc", "doc")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert_eq!(result.status_code, 500);
     assert_eq!(result.body_text(), ".DOC preview failed");
 }
@@ -867,7 +954,7 @@ fn test_reload_category_empty_name() {
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
-    let (_result, err) = asyncio_runner(manager.reload_category(""));
+    let (_result, err) = asyncio_runner(manager.reload_category("", None));
     let err = err.expect("err is not None");
     assert!(err.contains("비어있습니다"));
 }
@@ -878,7 +965,7 @@ fn test_reload_category_path_traversal() {
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
-    let (_result, err) = asyncio_runner(manager.reload_category("../etc"));
+    let (_result, err) = asyncio_runner(manager.reload_category("../etc", None));
     assert!(err.is_some());
 }
 
@@ -891,7 +978,7 @@ fn test_reload_category_path_escape() {
     let manager = make_manager(tmp_path, &es);
     let evil = tmp_path.join("evil");
     symlink("/tmp", &evil).unwrap();
-    let (_result, err) = asyncio_runner(manager.reload_category("evil"));
+    let (_result, err) = asyncio_runner(manager.reload_category("evil", None));
     assert!(err.is_some());
 }
 
@@ -903,7 +990,7 @@ fn test_reload_category_not_a_directory() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     fs::write(tmp_path.join("notadir"), "file").unwrap();
-    let (_result, err) = asyncio_runner(manager.reload_category("notadir"));
+    let (_result, err) = asyncio_runner(manager.reload_category("notadir", None));
     let err = err.expect("err is not None");
     assert!(err.contains("디렉토리를 찾을 수 없습니다"));
 }
@@ -996,7 +1083,6 @@ fn test_rename_category_new_path_traversal() {
 // ---- coverage: index_single_file unsupported format ----
 
 #[test]
-#[ignore = "mock.patch: Loader.read_file을 항상 빈 dict로 바꿈; DI 설계 후 활성화"]
 fn test_index_single_file_unsupported() {
     // Line 1011: Loader.read_file returns falsy
     let tmp = tmp_dir();
@@ -1055,7 +1141,7 @@ fn test_update_book_ioerror_on_rename() {
     fs::write(&src, "content").unwrap();
     es.set_doc(Some(make_doc("A/src.txt", ".txt")));
 
-    let (result, err) = asyncio_runner(manager.update_book(1, "A", "dst", "U", &tmp_path.join("A").join("dst.txt"), "txt", false));
+    let (result, err) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "A", "dst", "U", &tmp_path.join("A").join("dst.txt"), "txt", false));
     assert_eq!(result, "Error");
     assert!(err.expect("err").contains("can't move"));
 }
@@ -1074,7 +1160,7 @@ fn test_update_book_force_overwrite() {
     fs::write(&dst, "existing").unwrap();
     es.set_doc(Some(make_doc("A/src.txt", ".txt")));
 
-    let (result, _err) = asyncio_runner(manager.update_book(1, "A", "dst", "U", &dst, "txt", true));
+    let (result, _err) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "A", "dst", "U", &dst, "txt", true));
     assert_eq!(result, "Ok");
     assert!(!src.exists());
     assert_eq!(fs::read_to_string(&dst).unwrap(), "source");
@@ -1119,7 +1205,7 @@ fn test_get_book_preview_epub_spine_trimmed() {
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
     // 2개 챕터만 요청한다. ch3-ch5는 spine에서 빠져야 한다.
-    let result = asyncio_runner(manager.get_book_preview(1, Some(2), None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, Some(2), None));
     assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
 }
 
@@ -1132,7 +1218,7 @@ fn test_get_categories_unit() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.set_aggregate(&[("Cat1", 3), ("Cat2", 5)]);
-    let (cats, err) = asyncio_runner(manager.get_categories());
+    let (cats, err) = asyncio_runner(BookManagerApi::get_categories(&manager));
     assert!(err.is_none());
     assert_eq!(cats, json!({"Cat1": 3, "Cat2": 5}));
 }
@@ -1170,7 +1256,6 @@ fn copy_hwp_sample(tmp_path: &Path, sample_name: &str, dest_name: &str) -> PathB
 }
 
 #[test]
-#[ignore = "mock.patch: BookManager._convert_with_libreoffice가 빈 문자열을 반환하도록 바꿈; DI 설계 후 활성화"]
 fn test_hwp_preview_fallback_when_libreoffice_empty() {
     // LibreOffice가 빈 문자열 반환 시 hwp3 파서로 fallback하여 HTML 생성
     let tmp = tmp_dir();
@@ -1180,7 +1265,7 @@ fn test_hwp_preview_fallback_when_libreoffice_empty() {
     let es = FakeEsManager::new();
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
     es.set_doc(Some(doc));
-    let resp = asyncio_runner(manager.get_book_preview(1, None, None));
+    let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert_eq!(resp.status_code, 200);
     let body = resp.body_text();
     assert!(body.contains("영동") || body.contains("교가"));
@@ -1188,7 +1273,6 @@ fn test_hwp_preview_fallback_when_libreoffice_empty() {
 }
 
 #[test]
-#[ignore = "mock.patch: BookManager._convert_with_libreoffice가 빈 문자열을 반환하도록 바꿈; DI 설계 후 활성화"]
 fn test_hwp_preview_fallback_v3_00() {
     // V3.00 파일의 fallback 프리뷰
     let tmp = tmp_dir();
@@ -1198,14 +1282,13 @@ fn test_hwp_preview_fallback_v3_00() {
     let es = FakeEsManager::new();
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
     es.set_doc(Some(doc));
-    let resp = asyncio_runner(manager.get_book_preview(1, None, None));
+    let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert_eq!(resp.status_code, 200);
     let body = resp.body_text();
     assert!(body.chars().count() > 50);
 }
 
 #[test]
-#[ignore = "mock.patch: BookManager._convert_with_libreoffice가 빈 문자열을 반환하도록 바꿈; DI 설계 후 활성화"]
 fn test_hwp_preview_fallback_caches_result() {
     // fallback 결과가 캐시 파일에 저장되는지 확인
     let tmp = tmp_dir();
@@ -1215,14 +1298,13 @@ fn test_hwp_preview_fallback_caches_result() {
     let es = FakeEsManager::new();
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
     es.set_doc(Some(doc));
-    asyncio_runner(manager.get_book_preview(1, None, None));
+    asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     let cache_file = tmp_path.join(".preview_cache").join("1.html");
     assert!(cache_file.exists());
     assert!(fs::read_to_string(&cache_file).unwrap().chars().count() > 50);
 }
 
 #[test]
-#[ignore = "mock.patch: BookManager._convert_with_libreoffice가 빈 문자열을 반환하도록 바꿈; DI 설계 후 활성화"]
 fn test_hwp_preview_no_fallback_for_doc() {
     // DOC 파일은 hwp3 fallback을 사용하지 않음
     let tmp = tmp_dir();
@@ -1234,14 +1316,13 @@ fn test_hwp_preview_no_fallback_for_doc() {
     let es = FakeEsManager::new();
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
     es.set_doc(Some(doc));
-    let resp = asyncio_runner(manager.get_book_preview(1, None, None));
+    let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     // DOC는 빈 html_content → 캐시 안 되고 preview 없음
     assert!([200, 400, 500].contains(&resp.status_code) || resp.status_code == 755, "status={}", resp.status_code);
     // 빈 content면 status 755 안 나옴
 }
 
 #[test]
-#[ignore = "mock.patch: BookManager._convert_with_libreoffice가 빈 문자열을 반환하도록 바꿈; DI 설계 후 활성화"]
 fn test_hwp_preview_fallback_both_fail() {
     // LibreOffice도 실패하고 hwp3 파서도 빈 결과인 경우 (V1.20)
     let tmp = tmp_dir();
@@ -1251,14 +1332,13 @@ fn test_hwp_preview_fallback_both_fail() {
     let es = FakeEsManager::new();
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
     es.set_doc(Some(doc));
-    asyncio_runner(manager.get_book_preview(1, None, None));
+    asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     // V1.20은 hwp3 파서도 빈 결과 → 캐시 미생성, 400/500 가능
     let cache_file = tmp_path.join(".preview_cache").join("1.html");
     assert!(!cache_file.exists());
 }
 
 #[test]
-#[ignore = "mock.patch: BookManager._convert_with_libreoffice가 \"<p>LibreOffice 결과</p>\"를 반환하도록 바꿈; DI 설계 후 활성화"]
 fn test_hwp_preview_libreoffice_success_no_fallback() {
     // LibreOffice가 정상 결과 반환 시 hwp3 fallback 미사용
     let tmp = tmp_dir();
@@ -1266,9 +1346,15 @@ fn test_hwp_preview_libreoffice_success_no_fallback() {
     copy_hwp_sample(tmp_path, "v2.10_KYOKA.hwp", "kyoka.hwp");
     let doc = make_doc("A/kyoka.hwp", "hwp");
     let es = FakeEsManager::new();
-    let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("<p>LibreOffice 결과</p>")));
+    // LibreOffice처럼 `--outdir`에 `<이름>.html`을 쓰는 변환기 대역이다(`office_output`은 stdout에만 담아 실제 변환기와 다르다).
+    let runner = FakeRunner::new(|argv| {
+        let outdir = PathBuf::from(&argv[argv.iter().position(|a| a == "--outdir").unwrap() + 1]);
+        fs::write(outdir.join("kyoka.html"), "<p>LibreOffice 결과</p>").unwrap();
+        Ok(sysdeps::CommandOutput { returncode: 0, stdout: vec![], stderr: vec![] })
+    });
+    let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(runner));
     es.set_doc(Some(doc));
-    let resp = asyncio_runner(manager.get_book_preview(1, None, None));
+    let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert_eq!(resp.status_code, 200);
     let body = resp.body_text();
     assert!(body.contains("LibreOffice"));
@@ -1276,7 +1362,6 @@ fn test_hwp_preview_libreoffice_success_no_fallback() {
 }
 
 #[test]
-#[ignore = "mock.patch: BookManager._convert_with_libreoffice가 빈 문자열을 반환하도록 바꿈; DI 설계 후 활성화"]
 fn test_hwp_preview_html_escaping() {
     // fallback HTML 출력에서 특수문자가 이스케이프되는지 확인
     let tmp = tmp_dir();
@@ -1286,7 +1371,7 @@ fn test_hwp_preview_html_escaping() {
     let es = FakeEsManager::new();
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
     es.set_doc(Some(doc));
-    let resp = asyncio_runner(manager.get_book_preview(1, None, None));
+    let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     if resp.status_code == 200 {
         let body = resp.body_text();
         // XSS 방지: <script> 같은 태그가 이스케이프되어야 함
@@ -1327,7 +1412,7 @@ fn test_get_book_preview_html_sanitizes_active_content_and_rewrites_resources() 
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(doc));
 
-    let resp = asyncio_runner(manager.get_book_preview(1, None, Some("/html-resource/1")));
+    let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, Some("/html-resource/1")));
     let body = resp.body_text();
 
     assert_eq!(resp.status_code, 200);
@@ -1384,12 +1469,15 @@ fn test_get_book_content_html_forces_attachment() {
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(doc));
 
-    let resp = match asyncio_runner(manager.get_book_content(1)) {
-        BookContent::File(resp) => resp,
+    // 응답 헤더는 라우트가 `file_response_meta`로 만든다(`BookContent::File`은 경로만 담는다).
+    let path = match asyncio_runner(manager.get_book_content(1)) {
+        BookContent::File(path) => path,
         other => panic!("FileResponse가 아님: {other:?}"),
     };
-    assert!(resp.is_file());
-    let content_disposition = resp.header("content-disposition").expect("content-disposition");
+    assert!(path.is_file());
+    let (media_type, headers) = BookManager::file_response_meta(&path);
+    assert_eq!(media_type, "text/html");
+    let content_disposition = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("content-disposition")).map(|(_, v)| v.as_str()).expect("content-disposition");
     assert!(content_disposition.starts_with("attachment;"));
 }
 
@@ -1447,7 +1535,6 @@ fn test_sanitize_html_external_src_attribute_removed() {
 // ── get_book_preview: HTML read_text 예외 → 500 (lines 818-820) ─────────────
 
 #[test]
-#[ignore = "mock.patch: pathlib.Path.read_text가 PermissionError(\"denied\")를 던지도록 바꿈; chmod 000으로 대체했으나 root 실행 시 무효, DI 설계 후 활성화"]
 fn test_get_book_preview_html_read_exception() {
     // HTML 파일 read_text 가 예외를 올리면 500 응답을 반환한다.
     let tmp = tmp_dir();
@@ -1463,7 +1550,7 @@ fn test_get_book_preview_html_read_exception() {
 
     // 읽기 권한을 없애 PermissionError를 흉내 낸다.
     fs::set_permissions(&html_file, fs::Permissions::from_mode(0o000)).unwrap();
-    let resp = asyncio_runner(manager.get_book_preview(1, None, None));
+    let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     fs::set_permissions(&html_file, fs::Permissions::from_mode(0o644)).unwrap();
 
     assert_eq!(resp.status_code, 500);
@@ -1530,7 +1617,6 @@ mod test_get_html_resource {
     }
 
     #[test]
-    #[ignore = "mock.patch: pathlib.Path.is_relative_to가 OSError(\"path too long\")를 던지도록 바꿈; DI 설계 후 활성화"]
     fn test_is_relative_to_oserror_returns_400() {
         // is_relative_to 가 OSError 를 던지면 400 (lines 873-874).
         let tmp = tmp_dir();
@@ -1559,7 +1645,7 @@ fn test_update_book_no_such_book_returns_error() {
     let manager = make_manager(tmp_path, &FakeEsManager::new());
     let new_path = tmp_path.join("A").join("new.txt");
 
-    let (status, msg) = asyncio_runner(manager.update_book(999, "A", "Title", "Author", &new_path, "txt", false));
+    let (status, msg) = asyncio_runner(BookManagerApi::update_book(&manager, 999, "A", "Title", "Author", &new_path, "txt", false));
     assert_eq!(status, "Error");
     assert!(msg.unwrap_or_default().contains("no such a book"));
 }
@@ -1602,13 +1688,12 @@ fn test_get_books_in_category_uses_bounded_result_count() {
     asyncio_runner(manager.get_books_in_category("A"));
 
     let got = captured.lock().unwrap().expect("search_by_category가 호출되지 않음");
-    assert_eq!(got, MAX_CATEGORY_RESULT_COUNT as i64);
+    assert_eq!(got, MAX_CATEGORY_RESULT_COUNT);
     assert_ne!(got, isize::MAX as i64);
-    assert!(MAX_CATEGORY_RESULT_COUNT <= 10000); // ES max_result_window 이내 → scroll 미사용 경로 유지
+    const _: () = assert!(MAX_CATEGORY_RESULT_COUNT <= 10000); // ES max_result_window 이내 → scroll 미사용 경로 유지
 }
 
 #[test]
-#[ignore = "mock.patch: backend.book_manager.MAX_CATEGORY_RESULT_COUNT를 1로 바꾸고 caplog로 로그 캡처; DI 설계 후 활성화"]
 fn test_get_books_in_category_warns_on_truncation() {
     // 결과가 MAX_CATEGORY_RESULT_COUNT 에 도달하면 잘림 경고를 남긴다 (book_manager.py:372).
     let tmp = tmp_dir();
@@ -1627,7 +1712,6 @@ fn test_get_books_in_category_warns_on_truncation() {
 }
 
 #[test]
-#[ignore = "mock.patch: backend.book_manager.MAX_CATEGORY_RESULT_COUNT를 1로 바꿈; DI 설계 후 활성화"]
 fn test_get_category_mismatch_details_reads_all_pages() {
     // 상한 크기의 첫 페이지에서 멈추지 않고 다음 페이지까지 비교한다.
     let tmp = tmp_dir();
@@ -1654,7 +1738,7 @@ fn test_get_category_mismatch_details_reads_all_pages() {
 // ── Additional edge case tests to reach >99% coverage on backend/book_manager.py ──
 
 #[test]
-#[ignore = "mock.patch: posixpath.normpath가 항상 빈 문자열을 반환하도록 바꿈; DI 설계 후 활성화"]
+#[ignore = "seam 없음: 정적 `_validate_preview_epub` 안의 normpath를 바꿀 수 없다(`with_normpath` 미구현). 지금은 단언이 실패한다"]
 fn test_in_names_empty_path() {
     // Line 204: _in_names(path) when path is empty
     let tmp = tmp_dir();
@@ -1669,13 +1753,12 @@ fn test_in_names_empty_path() {
     );
     // 가정한 seam: 경로 정규화 함수(normpath)를 빈 문자열로 바꾸는 훅. 문서에 없는 seam이다(파일 머리말 참고).
     // 정적 함수에는 주입할 곳이 없어 `_validate_preview_epub`를 인스턴스 메서드로 가정한다.
-    let manager = BookManager::with_deps(deps(tmp.path(), &FakeEsManager::new()).with_normpath(Arc::new(|_p| String::new())));
-    let (valid, _msg) = manager._validate_preview_epub(&epub_path);
+    // `with_normpath` seam은 구현하지 않았다. 정적 `_validate_preview_epub`는 normpath를 바꿀 수 없어 이 단언은 지금 실패한다(그래서 `#[ignore]`).
+    let (valid, _msg) = BookManager::_validate_preview_epub(&epub_path);
     assert!(!valid);
 }
 
 #[test]
-#[ignore = "mock.patch: monkeypatch.setattr(BookManager, \"PAGE_COUNT_CACHE_MAX\", 2)와 클래스 속성 _page_count_cache 직접 조작; DI 설계 후 활성화"]
 fn test_page_count_cache_eviction() {
     // Line 386: page_count_cache eviction when max exceeded
     // 캐시를 인스턴스가 갖는다(3.11). 상한과 캐시 접근자는 문서에 없는 seam이다(파일 머리말 참고).
@@ -1709,7 +1792,6 @@ fn test_get_latest_books_delegation() {
 }
 
 #[test]
-#[ignore = "mock.patch: threading.Thread.start가 RuntimeError를 던지도록 바꿈, MagicMock 스레드 주입; DI 설계 후 활성화"]
 fn test_backfill_created_time_thread_states() {
     // Lines 549, 561-563: thread is alive and start exception
     let tmp = tmp_dir();
@@ -1897,7 +1979,6 @@ fn test_move_classified_file_same_size_different_content_keeps_both() {
     assert_eq!(fs::read_to_string(tmp_path.join("B").join("book.txt")).unwrap(), "BBBB");
 }
 #[test]
-#[ignore = "mock.patch: shutil.move를 FsOps::rename으로 합친 가정과 BookAdder 모양이 확정되기 전까지 보류; DI 설계 후 활성화"]
 fn test_move_classified_file_edge_cases() {
     // Lines 1379-1380, 1385-1387, 1393-1394, 1398, 1420-1421, 1440-1441, 1450, 1473, 1490-1491, 1494-1499, 1503
     let tmp = tmp_dir();
@@ -1930,7 +2011,7 @@ fn test_move_classified_file_edge_cases() {
     let faulty_dup = FaultyFs::new();
     faulty_dup.set_same_file(|_a, _b| Some(other_err("samefile failed")));
     let manager_dup = BookManager::with_deps(deps(tmp_path, &FakeEsManager::new()).with_fs(faulty_dup.clone()));
-    let (res3, err3) = asyncio_runner(manager_dup._move_classified_file(&f1, "B", "book", MoveOpts { dry_run: true, clean_existing: true }));
+    let (res3, err3) = asyncio_runner(manager_dup._move_classified_file(&f1, "B", "book", MoveOpts { dry_run: true, clean_existing: true, ..Default::default() }));
     let res3 = res3.expect("res3");
     assert_eq!(res3["action"], "duplicate_clean");
     assert_eq!(res3["status"], "dry_run");
@@ -1939,7 +2020,7 @@ fn test_move_classified_file_edge_cases() {
     // 4. 1420-1421: clean_existing exception
     // samefile 실패는 그대로 두고 unlink(remove_file)만 더 실패시킨다.
     faulty_dup.set_remove_file(|_p| Some(other_err("delete duplicate failed")));
-    let (res4, err4) = asyncio_runner(manager_dup._move_classified_file(&f1, "B", "book", MoveOpts { dry_run: false, clean_existing: true }));
+    let (res4, err4) = asyncio_runner(manager_dup._move_classified_file(&f1, "B", "book", MoveOpts { dry_run: false, clean_existing: true, ..Default::default() }));
     assert!(res4.is_none());
     assert!(err4.expect("err4").contains("중복 파일 정리 실패"));
 
@@ -2052,7 +2133,6 @@ fn test_move_classified_file_rejects_existing_duplicate_without_clean() {
 }
 
 #[test]
-#[ignore = "mock.patch: utils.loader.Loader.read_file이 호출되면 AssertionError를 던지도록 바꿈; DI 설계 후 활성화"]
 fn test_move_classified_file_preserves_existing_es_metadata() {
     // 관리자가 ES에서 고친 제목/저자/요약은 재색인 때도 유지된다.
     let tmp = tmp_dir();
@@ -2083,7 +2163,6 @@ fn test_move_classified_file_preserves_existing_es_metadata() {
 }
 
 #[test]
-#[ignore = "mock.patch: Loader.read_file(타임아웃/빈 결과), manager.get_category_mismatches/get_category_mismatch_details를 바꿈; DI 설계 후 활성화"]
 fn test_mismatch_and_reload_more_edge_cases() {
     // Lines 1780-1781, 1905-1906, 1909-1912, 1921, 1935, 1951-1952, 1964-1965, 1989, 1995, 2012, 2029-2030, 2042-2043, 2063, 2065, 2087-2088
     let tmp = tmp_dir();
@@ -2116,7 +2195,7 @@ fn test_mismatch_and_reload_more_edge_cases() {
     // merged is empty (1921)
     let manager_empty = BookManager::with_deps(deps(tmp_path, &FakeEsManager::new()).with_file_reader(file_reader(|_path| Ok(json!({})))));
     let (idx3, _fail3) = asyncio_runner(manager_empty._bulk_index_files(&["A/timeout.txt"], true));
-    assert_eq!(idx3, json!({}));
+    assert!(idx3.is_empty());
 
     // ES insert failure (1935)
     let f_ok = tmp_path.join("A").join("ok.txt");
@@ -2151,25 +2230,24 @@ fn test_mismatch_and_reload_more_edge_cases() {
     let refresh_err_es = FakeEsManager::new();
     refresh_err_es.fail("refresh", "refresh error");
     // 가정한 seam: 인스턴스 메서드 바꿔치기(문서에 없는 seam, 파일 머리말 참고).
-    let manager_ref_err = BookManager::with_deps(deps(tmp_path, &refresh_err_es).with_category_mismatches(Arc::new(|_force_refresh| json!({"mismatches": [{"category": "../unsafe"}]}))));
-    let (res_mismatches, _) = asyncio_runner(manager_ref_err.reload_category_mismatches());
+    let manager_ref_err = BookManager::with_deps(deps(tmp_path, &refresh_err_es).with_get_category_mismatches_override(Arc::new(|_force_refresh| json!({"mismatches": [{"category": "../unsafe"}]}))));
+    let (res_mismatches, _) = asyncio_runner(manager_ref_err.reload_category_mismatches(None));
     let failures = res_mismatches["failures"].as_array().unwrap();
     assert!(failures.iter().any(|f| f.to_string().contains("잘못된 카테고리 경로입니다")));
     assert!(failures.iter().any(|f| f.to_string().contains("ES refresh 실패")));
 
     // 2063, 2065, 2087-2088: reload_category_mismatch_files validation and refresh exception
-    let (_, err_empty) = asyncio_runner(manager.reload_category_mismatch_files(""));
+    let (_, err_empty) = asyncio_runner(manager.reload_category_mismatch_files("", None));
     assert_eq!(err_empty.as_deref(), Some("카테고리 이름이 비어있습니다"));
-    let (_, err_unsafe) = asyncio_runner(manager.reload_category_mismatch_files("../unsafe"));
+    let (_, err_unsafe) = asyncio_runner(manager.reload_category_mismatch_files("../unsafe", None));
     assert_eq!(err_unsafe.as_deref(), Some("잘못된 카테고리 경로입니다"));
 
-    let manager_ref_details = BookManager::with_deps(deps(tmp_path, &refresh_err_es).with_category_mismatch_details(Arc::new(|_cat| json!({"fs_only": [], "es_only": [], "duplicates": []}))));
-    let (res_single_reload, _) = asyncio_runner(manager_ref_details.reload_category_mismatch_files("A"));
+    let manager_ref_details = BookManager::with_deps(deps(tmp_path, &refresh_err_es).with_get_category_mismatch_details_override(Arc::new(|_cat| json!({"fs_only": [], "es_only": [], "duplicates": []}))));
+    let (res_single_reload, _) = asyncio_runner(manager_ref_details.reload_category_mismatch_files("A", None));
     assert!(res_single_reload["failures"].as_array().unwrap().iter().any(|f| f.to_string().contains("ES refresh 실패")));
 }
 
 #[test]
-#[ignore = "mock.patch: BookManager._get_cached_page_count가 OSError(28)를 던지도록 바꿈; DI 설계 후 활성화"]
 fn test_get_pdf_pages_oserror() {
     // Lines 2209-2210: OSError in get_pdf_pages
     let tmp = tmp_dir();
@@ -2188,7 +2266,6 @@ fn test_get_pdf_pages_oserror() {
 }
 
 #[test]
-#[ignore = "mock.patch: pathlib.Path.rename(두 번째 호출 실패), Loader.read_file, manager.add_book을 단계마다 바꿈; DI 설계 후 활성화"]
 fn test_update_book_reindex_and_rollback_branches() {
     // Lines 1169, 1182-1184, 1188-1190, 1192-1193, 1204-1206, 1208-1211
     let tmp = tmp_dir();
@@ -2211,7 +2288,7 @@ fn test_update_book_reindex_and_rollback_branches() {
     let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(empty_reader()).with_fs(faulty_rename));
 
     let dst = tmp_path.join("B").join("book.txt");
-    let (st1, msg1) = asyncio_runner(manager.update_book(1, "B", "T", "A", &dst, "txt", false));
+    let (st1, msg1) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false));
     assert_eq!(st1, "Error");
     assert!(msg1.expect("msg1").contains("파일 롤백도 실패"));
 
@@ -2224,7 +2301,7 @@ fn test_update_book_reindex_and_rollback_branches() {
     let manager =
         BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(empty_reader()).with_book_adder(book_adder(|| Err(BookManagerError::Runtime("restore old doc exception".to_string())))));
 
-    let (st2, msg2) = asyncio_runner(manager.update_book(1, "B", "T", "A", &dst, "txt", false));
+    let (st2, msg2) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false));
     assert_eq!(st2, "Error");
     assert!(msg2.expect("msg2").contains("기존 ES 문서 복구 실패"));
 
@@ -2236,7 +2313,7 @@ fn test_update_book_reindex_and_rollback_branches() {
 
     let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(empty_reader()).with_book_adder(book_adder(|| Ok((None, Some("restore error message".to_string()))))));
 
-    let (st3, msg3) = asyncio_runner(manager.update_book(1, "B", "T", "A", &dst, "txt", false));
+    let (st3, msg3) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false));
     assert_eq!(st3, "Error");
     assert!(msg3.expect("msg3").contains("restore error message"));
 
@@ -2249,7 +2326,7 @@ fn test_update_book_reindex_and_rollback_branches() {
     let manager =
         BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(crash_reader()).with_book_adder(book_adder(|| Err(BookManagerError::Runtime("restore old doc exception".to_string())))));
 
-    let (st4, msg4) = asyncio_runner(manager.update_book(1, "B", "T", "A", &dst, "txt", false));
+    let (st4, msg4) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false));
     assert_eq!(st4, "Error");
     assert!(msg4.expect("msg4").contains("기존 ES 문서 복구 실패"));
 
@@ -2261,7 +2338,7 @@ fn test_update_book_reindex_and_rollback_branches() {
 
     let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(crash_reader()).with_book_adder(book_adder(|| Ok((None, Some("restore error message".to_string()))))));
 
-    let (st5, msg5) = asyncio_runner(manager.update_book(1, "B", "T", "A", &dst, "txt", false));
+    let (st5, msg5) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false));
     assert_eq!(st5, "Error");
     assert!(msg5.expect("msg5").contains("restore error message"));
 
@@ -2272,7 +2349,7 @@ fn test_update_book_reindex_and_rollback_branches() {
     fs::write(&src_file, "content").unwrap();
 
     let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(crash_reader()).with_book_adder(book_adder(|| Ok((Some(1), None)))));
-    let (st6, msg6) = asyncio_runner(manager.update_book(1, "B", "T", "A", &dst, "txt", false));
+    let (st6, msg6) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false));
     assert_eq!(st6, "Error");
     assert!(msg6.expect("msg6").contains("기존 ES 문서 복구 완료"));
 }
@@ -2288,7 +2365,6 @@ fn test_encode_decode_category_cursor() {
 }
 
 #[test]
-#[ignore = "mock.patch: BookManager 클래스 속성(PAGE_COUNT_CACHE_MAX, PDF_READER_CACHE_MAX*, _pdf_reader_cache) 직접 변경; DI 설계 후 활성화"]
 fn test_pdf_reader_cache_eviction_and_branches() {
     // Lines 333-334, 375-376, 386, 389, 395
     // 캐시를 인스턴스가 갖는다(3.11). 한도는 `with_pdf_cache_limits`, 쪽수 캐시 상한은 문서에 없는 seam이다(파일 머리말 참고).
@@ -2352,24 +2428,23 @@ fn test_get_books_in_category_paged() {
     es.set_category_docs(vec![(1, doc.clone(), 1.0), (2, doc, 1.0)]);
 
     // 1. Invalid cursor (line 524)
-    let (books, _total, _next_cur, err) = asyncio_runner(manager.get_books_in_category_paged("A", None, Some("bad_cursor!!!")));
+    let (books, _total, _next_cur, err) = asyncio_runner(BookManagerApi::get_books_in_category_paged(&manager, "A", None, Some("bad_cursor!!!")));
     assert_eq!(err.as_deref(), Some("invalid cursor"));
     assert!(books.is_empty());
 
     // 2. Success first page with next cursor (lines 525-528)
-    let (books, _total, next_cur, err) = asyncio_runner(manager.get_books_in_category_paged("A", Some(1), None));
+    let (books, _total, next_cur, err) = asyncio_runner(BookManagerApi::get_books_in_category_paged(&manager, "A", Some(1), None));
     assert!(err.is_none());
     assert_eq!(books.len(), 1);
     assert!(next_cur.is_some());
 
     // 3. Next page using cursor
-    let (books2, _total2, _next_cur2, err2) = asyncio_runner(manager.get_books_in_category_paged("A", Some(1), next_cur.as_deref()));
+    let (books2, _total2, _next_cur2, err2) = asyncio_runner(BookManagerApi::get_books_in_category_paged(&manager, "A", Some(1), next_cur.as_deref()));
     assert!(err2.is_none());
     assert_eq!(books2.len(), 1);
 }
 
 #[test]
-#[ignore = "mock.patch: threading.Thread.start를 실패/동기 실행으로 바꿈, es.backfill_created_time 교체, monkeypatch.undo; DI 설계 후 활성화"]
 fn test_backfill_created_time_branches() {
     // Lines 545, 549, 554-555, 561-563
     let tmp = tmp_dir();
@@ -2434,7 +2509,7 @@ fn test_epub_preview_raw_zip_and_ncx_branches() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
-    let result = asyncio_runner(manager.get_book_preview(1, None, None));
+    let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
 }
 
@@ -2558,7 +2633,6 @@ fn test_iter_category_indexable_files_branches() {
     assert_eq!(files2, Vec::<PathBuf>::new());
 }
 #[test]
-#[ignore = "mock.patch: manager.add_book이 RuntimeError를 던지도록 바꿈; DI 설계 후 활성화"]
 fn test_move_classified_file_target_traversal_and_restore_err() {
     // Lines 1385, 1498-1499
     let tmp = tmp_dir();
@@ -2595,12 +2669,11 @@ fn test_get_category_mismatches_root_file() {
     es.set_aggregate(&[]);
     fs::write(tmp_path.join("root_file.txt"), "sample").unwrap();
     // 3.2 `BookManagerApi`가 `Result<Value, String>`을 돌려주므로 풀어서 읽는다.
-    let result = manager.get_category_mismatches(false).expect("get_category_mismatches");
+    let result = BookManagerApi::get_category_mismatches(&manager, false).expect("get_category_mismatches");
     assert!(result["fs_only"].as_array().unwrap().iter().any(|m| m["category"] == "_root"));
 }
 
 #[test]
-#[ignore = "mock.patch: manager.get_category_mismatch_details가 고정 dict를 반환하도록 바꿈; DI 설계 후 활성화"]
 fn test_reload_category_mismatch_files_non_int_book_id() {
     // Line 1995
     let tmp = tmp_dir();
@@ -2608,15 +2681,14 @@ fn test_reload_category_mismatch_files_non_int_book_id() {
     let es = FakeEsManager::new();
     // 가정한 seam: 인스턴스 메서드 바꿔치기(문서에 없는 seam, 파일 머리말 참고).
     let manager = BookManager::with_deps(
-        deps(tmp_path, &es).with_category_mismatch_details(Arc::new(|_cat| json!({"duplicates": [{"file_path": "cat/dup.txt", "docs": [{"book_id": "bad_id"}]}], "fs_only": [], "es_only": []}))),
+        deps(tmp_path, &es).with_get_category_mismatch_details_override(Arc::new(|_cat| json!({"duplicates": [{"file_path": "cat/dup.txt", "docs": [{"book_id": "bad_id"}]}], "fs_only": [], "es_only": []}))),
     );
     fs::create_dir_all(tmp_path.join("cat")).unwrap();
-    let (_result, err) = asyncio_runner(manager.reload_category_mismatch_files("cat"));
+    let (_result, err) = asyncio_runner(manager.reload_category_mismatch_files("cat", None));
     assert!(err.is_none());
 }
 
 #[test]
-#[ignore = "mock.patch: pathlib.Path.is_file이 OSError(5)를 던지도록 바꿈; DI 설계 후 활성화"]
 fn test_get_pdf_pages_storage_oserror_and_cached_reader_none() {
     // Lines 2159-2161, 2192
     let tmp = tmp_dir();
@@ -2655,7 +2727,7 @@ fn test_delete_category_success() {
     fs::create_dir_all(tmp_path.join("test_cat")).unwrap();
     es.set_counts(&[("test_cat", 5)]);
     es.with(|s| s.deleted_by_category = json!({"deleted": 5, "failures": []}));
-    let (res, err) = asyncio_runner(manager.delete_category("test_cat"));
+    let (res, err) = asyncio_runner(manager.delete_category("test_cat", false));
     assert!(err.is_none());
     assert_eq!(res["deleted_count"], 5);
     assert_eq!(res["category"], "test_cat");
@@ -3056,7 +3128,7 @@ fn test_model_alternative_never_repeats_the_destination() {
 }
 
 fn manager_propose(manager: &BookManager, category: &str, mappings: &Mappings) -> (Value, Option<String>) {
-    asyncio_runner(manager.propose_category_changes(category, mappings, ProposeOpts { use_bookstore: false, use_content_meta: false, on_progress: None }))
+    asyncio_runner(propose_opts(manager, category, mappings, ProposeOpts { use_bookstore: false, use_content_meta: false, on_progress: None }))
 }
 
 #[test]
@@ -3090,7 +3162,7 @@ fn test_propose_category_changes_progress_reports_new_items_only() {
 
     let progress: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = progress.clone();
-    let (result, error) = asyncio_runner(manager.propose_category_changes(
+    let (result, error) = asyncio_runner(propose_opts(&manager, 
         "A",
         &mappings(&[("3_SF", &["과학소설"])]),
         ProposeOpts { use_bookstore: false, use_content_meta: false, on_progress: Some(Box::new(move |call| sink.lock().unwrap().push(call))) },
@@ -3124,7 +3196,7 @@ fn test_propose_category_changes_lists_every_target_before_classifying() {
 
     let progress: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = progress.clone();
-    asyncio_runner(manager.propose_category_changes(
+    asyncio_runner(propose_opts(&manager, 
         "A",
         &mappings(&[]),
         ProposeOpts { use_bookstore: false, use_content_meta: false, on_progress: Some(Box::new(move |call| sink.lock().unwrap().push(call))) },
@@ -3169,7 +3241,7 @@ fn test_apply_category_changes_rejects_unknown_file() {
     let manager = make_manager(tmp_path, &FakeEsManager::new());
     make_source_file(tmp_path, "A", "book.epub");
 
-    let (result, error) = asyncio_runner(manager.apply_category_changes(&[json!({"file_path": "A/book.epub", "target_category": "3_SF"})], ApplyOpts::new(BTreeSet::new())));
+    let (result, error) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "3_SF"})], ApplyOpts::new(BTreeSet::new())));
 
     assert!(error.is_none());
     assert_eq!(result["applied_count"], 0);
@@ -3185,7 +3257,7 @@ fn test_apply_category_changes_rejects_unsafe_target() {
     make_source_file(tmp_path, "A", "book.epub");
     let allowed = allowed_set(&["A/book.epub"]);
 
-    let (result, _error) = asyncio_runner(manager.apply_category_changes(&[json!({"file_path": "A/book.epub", "target_category": "../밖"})], ApplyOpts::new(allowed)));
+    let (result, _error) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "../밖"})], ApplyOpts::new(allowed)));
 
     assert_eq!(result["applied_count"], 0);
     assert!(result["results"][0]["apply_error"].as_str().unwrap().contains("카테고리"));
@@ -3201,7 +3273,7 @@ fn test_apply_category_changes_uses_user_chosen_target() {
     make_source_file(tmp_path, "A", "book.epub");
     let allowed = allowed_set(&["A/book.epub"]);
 
-    let (result, _error) = asyncio_runner(manager.apply_category_changes(&[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed)));
+    let (result, _error) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed)));
 
     assert_eq!(result["applied_count"], 1);
     assert!(tmp_path.join("5_음악").join("book.epub").is_file());
@@ -3216,7 +3288,7 @@ fn test_apply_category_changes_records_missing_file() {
     fs::create_dir(tmp_path.join("A")).unwrap();
     let allowed = allowed_set(&["A/사라진책.epub"]);
 
-    let (result, _error) = asyncio_runner(manager.apply_category_changes(&[json!({"file_path": "A/사라진책.epub", "target_category": "3_SF"})], ApplyOpts::new(allowed)));
+    let (result, _error) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/사라진책.epub", "target_category": "3_SF"})], ApplyOpts::new(allowed)));
 
     assert_eq!(result["failed_count"], 1);
     assert!(result["results"][0]["apply_error"].as_str().unwrap().contains("파일"));
@@ -3234,7 +3306,7 @@ fn test_apply_category_changes_rejects_top_level_but_unsafe_target() {
     make_source_file(tmp_path, "A", "book.epub");
     let allowed = allowed_set(&["A/book.epub"]);
 
-    let (result, _error) = asyncio_runner(manager.apply_category_changes(&[json!({"file_path": "A/book.epub", "target_category": ".."})], ApplyOpts::new(allowed)));
+    let (result, _error) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": ".."})], ApplyOpts::new(allowed)));
 
     assert_eq!(result["applied_count"], 0);
     assert!(result["results"][0]["apply_error"].as_str().unwrap().contains("카테고리"));
@@ -3256,7 +3328,7 @@ fn test_apply_category_changes_rejects_symlinked_source() {
     symlink(&outside, &link_path).unwrap();
     let allowed = allowed_set(&["A/book.epub"]);
 
-    let (result, _error) = asyncio_runner(manager.apply_category_changes(&[json!({"file_path": "A/book.epub", "target_category": "3_SF"})], ApplyOpts::new(allowed)));
+    let (result, _error) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "3_SF"})], ApplyOpts::new(allowed)));
 
     assert_eq!(result["applied_count"], 0);
     assert!(result["results"][0]["apply_error"].as_str().unwrap().contains("링크"));
@@ -3281,7 +3353,7 @@ fn test_apply_category_changes_calls_on_item_done_per_item() {
     let done_calls: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = done_calls.clone();
 
-    let (result, _error) = asyncio_runner(manager.apply_category_changes(
+    let (result, _error) = asyncio_runner(apply_opts(&manager, 
         &[json!({"file_path": "A/ok.epub", "target_category": "5_음악"}), json!({"file_path": "A/missing.epub", "target_category": "5_음악"})],
         ApplyOpts::new(allowed).on_item_done(Box::new(move |call| sink.lock().unwrap().push(call))),
     ));
@@ -3316,7 +3388,7 @@ fn test_apply_category_changes_stops_before_next_item_when_should_continue_is_fa
     let calls = Arc::new(Mutex::new(0usize));
     let counter = calls.clone();
 
-    let (result, _error) = asyncio_runner(manager.apply_category_changes(
+    let (result, _error) = asyncio_runner(apply_opts(&manager, 
         &[json!({"file_path": "A/first.epub", "target_category": "5_음악"}), json!({"file_path": "A/second.epub", "target_category": "5_음악"})],
         ApplyOpts::new(allowed).should_continue(Box::new(move || {
             let mut n = counter.lock().unwrap();
@@ -3336,7 +3408,6 @@ fn test_apply_category_changes_stops_before_next_item_when_should_continue_is_fa
 }
 
 #[test]
-#[ignore = "mock.patch: manager._is_safe_category_name이 첫 호출에서 OSError를 던지도록 바꿈; DI 설계 후 활성화"]
 fn test_apply_category_changes_on_item_done_already_called_for_items_before_exception() {
     // 한 항목에서 예외가 나도, 그 항목까지의 on_item_done 호출은 이미 일어난 채로
     // 다음 항목 처리를 계속한다 — 중단되면 그때까지 처리한 결과가 이미 기록된
@@ -3359,7 +3430,7 @@ fn test_apply_category_changes_on_item_done_already_called_for_items_before_exce
     let done_calls: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = done_calls.clone();
 
-    let (result, _error) = asyncio_runner(manager.apply_category_changes(
+    let (result, _error) = asyncio_runner(apply_opts(&manager, 
         &[json!({"file_path": "A/boom.epub", "target_category": "5_음악"}), json!({"file_path": "A/ok.epub", "target_category": "5_음악"})],
         ApplyOpts::new(allowed).on_item_done(Box::new(move |call| sink.lock().unwrap().push(call))),
     ));
@@ -3377,7 +3448,6 @@ fn test_apply_category_changes_on_item_done_already_called_for_items_before_exce
 }
 
 #[test]
-#[ignore = "mock.patch: manager._is_safe_category_name이 첫 호출에서 OSError를 던지도록 바꿈; DI 설계 후 활성화"]
 fn test_apply_category_changes_continues_after_one_item_raises() {
     // 한 항목 처리 중 예외가 나도 배치 전체가 죽지 않고 나머지를 계속 처리한다.
     let tmp = tmp_dir();
@@ -3396,7 +3466,7 @@ fn test_apply_category_changes_continues_after_one_item_raises() {
     })));
 
     let (result, _error) = asyncio_runner(
-        manager.apply_category_changes(&[json!({"file_path": "A/boom.epub", "target_category": "5_음악"}), json!({"file_path": "A/ok.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed)),
+        apply_opts(&manager, &[json!({"file_path": "A/boom.epub", "target_category": "5_음악"}), json!({"file_path": "A/ok.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed)),
     );
 
     assert_eq!(result["total_count"], 2);
@@ -3423,13 +3493,13 @@ fn test_apply_category_changes_retry_of_failed_row_succeeds() {
     make_source_file(tmp_path, "A", "book.epub");
 
     // 1차 시도: allowed에 없어 거부된다(버그가 있던 상태를 재현).
-    let (first, _) = asyncio_runner(manager.apply_category_changes(&[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(BTreeSet::new())));
+    let (first, _) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(BTreeSet::new())));
     assert_eq!(first["results"][0]["apply_status"], "failed");
     assert_eq!(first["results"][0]["apply_error"], "제안 목록에 없는 파일입니다");
     assert!(tmp_path.join("A").join("book.epub").is_file());
 
     // 재시도: failed 행이 allowed에 다시 담기면(고친 뒤 동작) 실제로 이동한다.
-    let (second, _) = asyncio_runner(manager.apply_category_changes(&[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed_set(&["A/book.epub"]))));
+    let (second, _) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed_set(&["A/book.epub"]))));
     assert_eq!(second["results"][0]["apply_status"], "moved");
     assert!(!tmp_path.join("A").join("book.epub").exists());
     assert!(tmp_path.join("5_음악").join("book.epub").is_file());
@@ -3450,7 +3520,7 @@ fn test_apply_category_changes_retrying_moving_row_when_file_already_moved() {
     // 원본은 이미 없고(실제로는 이동이 끝남), 목적지에만 파일이 있다.
     fs::write(tmp_path.join("5_음악").join("book.epub"), "x").unwrap();
 
-    let (result, _) = asyncio_runner(manager.apply_category_changes(&[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed_set(&["A/book.epub"]))));
+    let (result, _) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed_set(&["A/book.epub"]))));
 
     assert_eq!(result["results"][0]["apply_status"], "failed");
     assert!(result["results"][0]["apply_error"].as_str().unwrap().contains("파일을 찾을 수 없습니다"));
@@ -3468,7 +3538,7 @@ fn test_apply_category_changes_retrying_moving_row_when_move_never_happened() {
     fs::create_dir(tmp_path.join("5_음악")).unwrap();
     make_source_file(tmp_path, "A", "book.epub");
 
-    let (result, _) = asyncio_runner(manager.apply_category_changes(&[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed_set(&["A/book.epub"]))));
+    let (result, _) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed_set(&["A/book.epub"]))));
 
     assert_eq!(result["results"][0]["apply_status"], "moved");
     assert!(!tmp_path.join("A").join("book.epub").exists());
@@ -3489,11 +3559,11 @@ mod test_es_reads_do_not_block_event_loop {
         let manager = make_manager(tmp.path(), &es);
         let loop_thread = std::thread::current().id();
 
-        manager.get_categories().await;
+        BookManagerApi::get_categories(&manager).await;
         manager.get_book(1).await;
-        manager.get_books_in_category_paged("A", Some(10), None).await;
+        BookManagerApi::get_books_in_category_paged(&manager, "A", Some(10), None).await;
         manager.get_latest_books(10, None).await;
-        manager.search_by_keyword_paged("k", Some(10)).await;
+        manager.search_by_keyword_paged("k", 10, 0, None, None).await;
 
         let call_threads = es.call_threads();
         let names: BTreeSet<&str> = call_threads.keys().map(String::as_str).collect();
@@ -3617,7 +3687,8 @@ fn strict_parses(data: &[u8]) -> bool {
 #[test]
 fn test_declare_unbound_prefixes_handles_any_whitespace_after_package() {
     for sep in [" ", "\n  ", "\t"] {
-        let fixed = _declare_unbound_prefixes(&opf(sep, r#"opf:role="aut""#, ""));
+        let data = opf(sep, r#"opf:role="aut""#, "");
+        let fixed = _declare_unbound_prefixes(&data);
         assert!(strict_parses(&fixed), "sep={sep:?}");
         assert!(String::from_utf8_lossy(&fixed).contains(&format!(r#"xmlns:opf="{OPF_NS_STR}""#)), "sep={sep:?}");
     }
@@ -3626,7 +3697,8 @@ fn test_declare_unbound_prefixes_handles_any_whitespace_after_package() {
 #[test]
 fn test_declare_unbound_prefixes_handles_prefixes_other_than_opf() {
     for (attr, prefix) in [(r#"xsi:type="x""#, "xsi"), (r#"calibre:series="s""#, "calibre")] {
-        let fixed = _declare_unbound_prefixes(&opf(" ", attr, ""));
+        let data = opf(" ", attr, "");
+        let fixed = _declare_unbound_prefixes(&data);
         assert!(strict_parses(&fixed), "attr={attr}");
         assert!(String::from_utf8_lossy(&fixed).contains(&format!("xmlns:{prefix}=")), "attr={attr}, prefix={prefix}");
     }

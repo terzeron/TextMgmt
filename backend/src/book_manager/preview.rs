@@ -25,7 +25,6 @@ const EPUB_IMAGE_MIN_BYTES: usize = 400 * 1024;
 /// 이 크기를 넘는 폰트는 미리보기에서 뺀다(바이트).
 const FONT_SIZE_LIMIT: u64 = 500 * 1024;
 /// 이미지 축소 정책 버전. 캐시 파일 이름에 붙여 정책이 바뀌면 옛 산출물이 계속 나가지 않게 한다.
-const EPUB_IMAGE_POLICY_VERSION: u32 = 3;
 const FONT_EXTENSIONS: [&str; 4] = [".ttf", ".otf", ".woff", ".woff2"];
 const FONT_MEDIA_TYPES: [&str; 8] = ["font/ttf", "font/otf", "font/woff", "font/woff2", "application/font-ttf", "application/font-woff", "application/font-woff2", "application/x-font-ttf"];
 const XHTML_SUFFIXES: [&str; 3] = [".xhtml", ".html", ".htm"];
@@ -34,8 +33,13 @@ const DEFAULT_PREVIEW_PAGES: u32 = 5;
 const DEFAULT_PREVIEW_CHAPTERS: u32 = 10;
 
 /// 본문이 문자열인 응답. FastAPI `Response(content=..., status_code=...)`.
-fn text_response(status_code: u16, content: impl Into<String>) -> BookResponse {
+pub(super) fn text_response(status_code: u16, content: impl Into<String>) -> BookResponse {
     BookResponse { status_code, media_type: None, headers: Vec::new(), body: content.into().into_bytes() }
+}
+
+/// `html.escape(text)`: `&`, `<`, `>`, `"`, `'`를 바꾼다.
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#x27;")
 }
 
 fn no_transform_headers() -> Vec<(String, String)> {
@@ -180,12 +184,6 @@ impl BookManager {
         }
     }
 
-    /// 확장자 `.html` 미리보기. TODO(preview): `_sanitize_html_for_viewer`를 옮기기 전에는 내보내지 않는다.
-    fn preview_html(&self, book_id: i64, _file_path: &Path, _resource_base_url: &str) -> BookResponse {
-        log::warn!("get_book_preview: HTML preview is not implemented (book_id={book_id})");
-        text_response(501, "HTML preview is not implemented")
-    }
-
     fn preview_office(&self, book_id: i64, file_path: &Path, cache_dir: &Path, original_mtime: SystemTime, suffix: &str) -> BookResponse {
         let cache_file = cache_dir.join(format!("{book_id}.html"));
         if self.cache_is_fresh(&cache_file, original_mtime) && self.fs.metadata(&cache_file).is_ok_and(|m| m.len() > 0) {
@@ -200,7 +198,15 @@ impl BookManager {
                 return text_response(500, format!("{} preview failed", suffix.to_uppercase()));
             }
         };
-        // TODO(preview): HWP는 LibreOffice 변환이 비면 HWP3 네이티브 파서(`extract_text_from_hwp3`)로 폴백해야 한다.
+        let mut html_content = html_content;
+        if html_content.trim().is_empty() && suffix == ".hwp" {
+            // LibreOffice 변환 실패 - 네이티브 HWP3 파서로 폴백한다.
+            let plain_text = hwp3_parser::extract_text_from_hwp3(file_path);
+            if !plain_text.is_empty() {
+                let paragraphs: String = escape_html(&plain_text).split('\n').filter(|line| !line.trim().is_empty()).map(|line| format!("<p>{line}</p>")).collect::<Vec<_>>().join("\n");
+                html_content = format!("<html><body style=\"font-family:sans-serif;padding:1em;line-height:1.8\">{paragraphs}</body></html>");
+            }
+        }
         if !html_content.is_empty() {
             if let Err(e) = self.fs.write(&cache_file, html_content.as_bytes()) {
                 log::error!("{} preview cache write failed for book_id={book_id}: {e}", suffix.to_uppercase());
@@ -223,7 +229,7 @@ impl BookManager {
         let total_chapters = Self::_get_epub_total_chapters(file_path);
         // chapters<=0: 전체 챕터 포함(대용량 폰트 제거, 대형 이미지 축소)
         let chapters = if requested_chapters == 0 { total_chapters } else { i64::from(requested_chapters) };
-        let cache_name = format!("{book_id}_ch{chapters}_v{EPUB_IMAGE_POLICY_VERSION}.epub");
+        let cache_name = format!("{book_id}_ch{chapters}_v{}.epub", BookManager::EPUB_IMAGE_POLICY_VERSION);
         let cache_file = cache_dir.join(&cache_name);
 
         // 구 형식 캐시 정리(book_id.epub, book_id.html, 정책 버전 없는 ch 캐시)
@@ -255,10 +261,19 @@ impl BookManager {
             return self.file_response(&cache_file, "application/epub+zip", extra_headers);
         }
 
-        match self.build_epub_preview(book_id, file_path, &cache_file, requested_chapters == 0, chapters) {
+        // 훅이나 파서가 panic해도 요청 하나의 500으로 끝낸다.
+        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.build_epub_preview(book_id, file_path, &cache_file, requested_chapters == 0, chapters)))
+            .unwrap_or_else(|_| Err(PreviewFailure::Other("panic during EPUB preview".to_string())));
+        match built {
             Ok(chapter_count) => {
                 // 생성된 EPUB 유효성 검증
-                let (valid, err) = Self::_validate_preview_epub_with(&*self.fs, &cache_file);
+                let (valid, err) = match self.seams().preview_epub_validator {
+                    Some(validator) => {
+                        let (valid, reason) = validator(&cache_file);
+                        (valid, (!reason.is_empty()).then_some(reason))
+                    }
+                    None => Self::_validate_preview_epub_with(&*self.fs, &cache_file),
+                };
                 if !valid {
                     let _ = self.fs.remove_file(&cache_file);
                     let err = err.unwrap_or_default();
@@ -291,7 +306,8 @@ impl BookManager {
         let names = zip_names(&mut zin);
 
         // OPF 경로 찾기(container.xml -> regex -> 직접 탐색)
-        let Some(opf_path) = Self::_find_opf_path(&mut zin) else {
+        let opf_override = self.opf_path_override().filter(|p| !p.is_empty());
+        let Some(opf_path) = opf_override.or_else(|| Self::_find_opf_path(&mut zin)) else {
             log::warn!("EPUB preview: OPF file not found for book_id={book_id}");
             return Err(PreviewFailure::Response(text_response(422, "EPUB structure error: OPF file not found")));
         };
@@ -505,6 +521,7 @@ impl BookManager {
         let modified_opf = format!("{XML_DECLARATION}{}", apply_edits(&opf_text, root_range, edits));
         let ncx_zp = item_of(&toc_id).filter(|_| !toc_id.is_empty()).map(|m| zip_path(&opf_dir, &clean_href(&m.href)));
 
+        let seams = self.seams();
         let out_file = std::fs::File::create(cache_file).map_err(|e| e.to_string())?;
         let mut zout = zip::ZipWriter::new(out_file);
         let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -545,8 +562,11 @@ impl BookManager {
                     data = stripped.into_owned().into_bytes();
                 } else if XHTML_SUFFIXES.iter().any(|s| lower.ends_with(s)) {
                     data = expand_self_closing_rcdata(&data);
-                } else if EPUB_IMAGE_SUFFIXES.iter().any(|s| lower.ends_with(s)) && data.len() > EPUB_IMAGE_MIN_BYTES {
-                    data = Self::_downscale_epub_image(&data);
+                } else if EPUB_IMAGE_SUFFIXES.iter().any(|s| lower.ends_with(s)) && data.len() > seams.epub_image_min_bytes.unwrap_or(EPUB_IMAGE_MIN_BYTES) {
+                    data = match &seams.downscale_hook {
+                        Some(hook) => hook(&data),
+                        None => Self::_downscale_epub_image(&data),
+                    };
                 }
                 data
             };
@@ -555,6 +575,17 @@ impl BookManager {
         }
         zout.finish().map_err(|e| e.to_string())?;
         Ok(chapter_idrefs.len())
+    }
+
+    /// PDF 쪽 추출 실패 응답. 저장소 오류(`OSError`)는 503, 그 밖은 500이다. 원인을 알 수 있게 오류 종류와 메시지를 본문에 담는다.
+    fn pdf_pages_failure(&self, book_id: i64, path: &Path, e: &crate::pdf::PdfError) -> BookResponse {
+        log::error!("PDF pages extraction failed for book_id={book_id} ({}): {e}", path.display());
+        if e.kind == "OSError" {
+            // "[Errno 28] No space left on device"에서 사람이 읽을 부분만 쓴다.
+            let reason = e.message.split_once("] ").map_or(e.message.as_str(), |(_, rest)| rest);
+            return text_response(503, format!("Storage access error ({reason}): {}", path.display()));
+        }
+        text_response(500, format!("PDF pages extraction failed ({}): {}", e.kind, e.message))
     }
 
     /// PDF에서 `start`~`end`쪽(1부터, 양끝 포함)만 추출해 돌려준다.
@@ -579,13 +610,10 @@ impl BookManager {
             return text_response(400, format!("Not a PDF file: {}", book.file_path.display()));
         }
 
-        // 페이지 수만 먼저 구한다. 디스크 캐시 히트면 페이지 추출이 필요 없다.
-        let total_pages = match self.pdf_pages.page_count(&book.file_path) {
-            Ok(n) => n as i64,
-            Err(e) => {
-                log::error!("PDF pages extraction failed for book_id={book_id}: {e}");
-                return text_response(500, format!("PDF pages extraction failed ({}): {}", e.kind, e.message));
-            }
+        // 페이지 수만 먼저 구한다. 디스크 캐시 히트면 페이지 추출이 필요 없으므로 리더를 만들 필요가 없다.
+        let total_pages = match self.try_get_cached_page_count(&book.file_path) {
+            Ok((total, _reader)) => total,
+            Err(e) => return self.pdf_pages_failure(book_id, &book.file_path, &e),
         };
         // 범위 검증
         let start = start.max(1);
@@ -618,10 +646,7 @@ impl BookManager {
         // 쪽 추출. Python `range(start - 1, end)`와 같다.
         let pdf_bytes = match self.pdf_pages.extract_pages(&book.file_path, (start - 1) as usize, end.max(0) as usize) {
             Ok(bytes) => bytes,
-            Err(e) => {
-                log::error!("PDF pages extraction failed for book_id={book_id}: {e}");
-                return text_response(500, format!("PDF pages extraction failed ({}): {}", e.kind, e.message));
-            }
+            Err(e) => return self.pdf_pages_failure(book_id, &book.file_path, &e),
         };
         if let Err(e) = self.fs.write(&cache_file, &pdf_bytes) {
             log::error!("PDF pages extraction failed for book_id={book_id} ({}): {e}", book.file_path.display());

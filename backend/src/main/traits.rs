@@ -248,6 +248,39 @@ pub trait BookManagerApi: Send + Sync {
         BookResponse { status_code: 501, ..BookResponse::default() }
     }
 
+    async fn get_html_resource(&self, _book_id: i64, _resource_path: &str) -> BookResponse {
+        BookResponse { status_code: 501, ..BookResponse::default() }
+    }
+
+    async fn get_cover(&self, _book_id: i64, _width: Option<i64>) -> BookResponse {
+        BookResponse { status_code: 501, ..BookResponse::default() }
+    }
+
+    async fn validate_epub(&self, _book_id: i64) -> (Option<Value>, Option<String>) {
+        (None, unimplemented_error())
+    }
+
+    async fn validate_pdf(&self, _book_id: i64) -> (Option<Value>, Option<String>) {
+        (None, unimplemented_error())
+    }
+
+    async fn get_books_in_category(&self, _category: &str) -> (Vec<Book>, Option<String>) {
+        (Vec::new(), unimplemented_error())
+    }
+
+    async fn get_latest_books(&self, _size: i64, _exclude_categories: Option<&[String]>) -> (Vec<Book>, i64, Option<String>) {
+        (Vec::new(), 0, unimplemented_error())
+    }
+
+    async fn search_similar_books_paged(&self, _book_id: i64, _size: i64, _offset: i64) -> (Vec<Book>, i64, Option<String>) {
+        (Vec::new(), 0, unimplemented_error())
+    }
+
+    /// (항목 [(대표 책, 작품 디렉터리 이름 또는 "")], 전체 항목 수, 다음 커서, 오류)
+    async fn get_cover_books_paged(&self, _category: &str, _size: i64, _cursor: &str, _exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, i64, Option<String>, Option<String>) {
+        (Vec::new(), 0, None, unimplemented_error())
+    }
+
     fn get_category_mismatches(&self, _force_refresh: bool) -> Result<Value, String> {
         Err(UNIMPLEMENTED.to_string())
     }

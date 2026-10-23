@@ -9,7 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use super::{BookContent, BookManager, BookManagerApi, BookResponse};
+use super::{BookContent, BookManager, BookManagerApi, BookResponse, CoverPageOpts};
 use crate::book::Book;
 use crate::es_manager::EsManagerApi;
 
@@ -51,6 +51,40 @@ impl BookManagerApi for BookManager {
 
     async fn get_pdf_pages(&self, id: i64, start: i64, end: i64) -> BookResponse {
         BookManager::get_pdf_pages(self, id, start, end).await
+    }
+
+    async fn get_html_resource(&self, book_id: i64, resource_path: &str) -> BookResponse {
+        BookManager::get_html_resource(self, book_id, resource_path).await
+    }
+
+    async fn get_cover(&self, book_id: i64, width: Option<i64>) -> BookResponse {
+        BookManager::get_cover(self, book_id, width).await
+    }
+
+    async fn validate_epub(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+        BookManager::validate_epub(self, book_id).await
+    }
+
+    async fn validate_pdf(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+        BookManager::validate_pdf(self, book_id).await
+    }
+
+    async fn get_books_in_category(&self, category: &str) -> (Vec<Book>, Option<String>) {
+        BookManager::get_books_in_category(self, category).await
+    }
+
+    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> (Vec<Book>, i64, Option<String>) {
+        BookManager::get_latest_books(self, size, exclude_categories.map(<[String]>::to_vec)).await
+    }
+
+    async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> (Vec<Book>, i64, Option<String>) {
+        BookManager::search_similar_books_paged(self, book_id, size, offset).await
+    }
+
+    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, i64, Option<String>, Option<String>) {
+        let opts = CoverPageOpts { category: Some(category.to_string()), size: size.max(0) as usize, cursor: Some(cursor.to_string()), exclude_categories: exclude_categories.map(<[String]>::to_vec).unwrap_or_default() };
+        let (items, total, next_cursor, error) = BookManager::get_cover_books_paged(self, opts).await;
+        (items, total as i64, next_cursor, error)
     }
 
     fn get_category_mismatches(&self, force_refresh: bool) -> Result<Value, String> {

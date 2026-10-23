@@ -25,7 +25,7 @@
 //! - `manager.get_category_mismatches(force_refresh: bool) -> Value`, `async manager._reload_root_files() -> (Value, Option<String>)`
 //! - `BookManager::_find_epub_cover_member(&mut ZipArchive<File>) -> Option<String>`, `_is_mostly_blank_cover(&DynamicImage) -> bool`,
 //!   `_extract_cover_thumbnail(&Path, &str, Option<u32>) -> Option<Vec<u8>>`, `BookManager::COVER_ASPECT_RATIO: f64`
-//! - `async manager.get_cover(i64) -> BookResponse`, `async manager.get_book_preview(i64, chapters) -> BookResponse`
+//! - `async manager.get_cover(i64, None) -> BookResponse`, `async BookManagerApi::get_book_preview(&manager, i64, Some(chapters), None) -> BookResponse`
 //!   (`BookResponse { status_code: u16, body: Vec<u8> }`. 구 `PreviewResponse { status_code, path }`의 파일 내용은 `body`에 담긴다고 가정한다)
 //! - `async manager.get_cover_books_paged(CoverPageOpts) -> (Vec<(Book, String)>, usize, Option<String>, Option<String>)`
 //! - `backend::book_manager::{encode_category_cursor(&Value) -> String, MAX_CATEGORY_PAGE_SIZE: usize}`
@@ -46,8 +46,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use backend::book::Book;
-use backend::book_classifier::BookClassifierApi;
-use backend::book_manager::{BookManager, BookManagerDeps, CoverPageOpts, FileReader, MAX_CATEGORY_PAGE_SIZE, encode_category_cursor};
+use backend::book_manager::{ApplyOptions, BookManager, BookManagerDeps, CoverPageOpts, FileReader, MAX_CATEGORY_PAGE_SIZE, MoveOpts, ProposeOptions, encode_category_cursor};
+use backend::classifier::BookClassifierApi;
+use backend::main::BookManagerApi;
 use backend::es_manager::{EsError, EsManagerApi};
 use common::es_fake::{Docs, FakeEsManager};
 use common::faulty_fs::FaultyFs;
@@ -132,7 +133,6 @@ fn test_downscale_epub_image_keeps_non_jpeg_png_format() {
 }
 
 #[tokio::test]
-#[ignore = "seam 미정: 값 설정 with_epub_image_min_bytes와 관찰 훅 with_downscale_epub_image_hook이 문서 3.12에 없다"]
 async fn test_preview_downscales_large_epub_images() {
     // 가정한 seam(문서 3.12에 없음. 3.0 규칙대로 Deps 빌더로 옮겼다): 최소 바이트 값을 0으로 두고 축소 함수 호출 길이를 기록하는 훅
     let calls: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
@@ -163,7 +163,7 @@ async fn test_preview_downscales_large_epub_images() {
     }));
     let manager = BookManager::with_deps(deps);
 
-    let resp = manager.get_book_preview(1, 1).await;
+    let resp = BookManagerApi::get_book_preview(&manager, 1, Some(1), None).await;
 
     assert_eq!(resp.status_code, 200);
     assert!(!calls.lock().unwrap().is_empty(), "이미지 멤버가 축소 경로를 지나야 한다");
@@ -199,11 +199,11 @@ async fn test_preview_keeps_cover_image_not_referenced_by_chapters() {
         );
         let manager = make_manager(tmp.path(), FakeEsManager::with_doc(make_doc("cov.epub", "epub")));
 
-        let resp = manager.get_book_preview(1, 1).await;
+        let resp = BookManagerApi::get_book_preview(&manager, 1, Some(1), None).await;
 
         assert_eq!(resp.status_code, 200, "case {case_id}");
         let mut zf = ZipArchive::new(Cursor::new(resp.body)).unwrap();
-        assert!(zf.file_names().any(|n| n == "OEBPS/images/front.jpg"), "case {case_id}");
+        assert!(zf.file_names().any(|n| n.is_ok_and(|n| n == "OEBPS/images/front.jpg")), "case {case_id}");
         let opf_text = std::io::read_to_string(zf.by_name("OEBPS/content.opf").unwrap()).unwrap();
         assert!(opf_text.contains(r#"id="cover-img""#), "case {case_id}");
     }
@@ -274,19 +274,18 @@ fn test_vote_count_defaults_to_one_when_category_has_no_votes() {
 async fn test_propose_rejects_unsafe_category_name() {
     let tmp = TempDir::new().unwrap();
     let manager = make_manager(tmp.path(), FakeEsManager::new());
-    let (result, err) = manager.propose_category_changes("../밖", Default::default()).await;
+    let (result, err) = manager.propose_category_changes("../밖", None, Default::default()).await;
     assert_eq!(result, json!({}));
     assert_eq!(err.as_deref(), Some("잘못된 카테고리 경로입니다"));
 }
 
 #[tokio::test]
-#[ignore = "seam 미정: 비공개 메서드 _propose_category_for_file 바꿔치기가 문서 3.12에 없다"]
 async fn test_propose_awaits_async_progress_callback_and_records_failures() {
     let tmp = TempDir::new().unwrap();
     category_with_files(tmp.path(), "A", &["ok.txt", "bad.txt"]);
 
     // 가정한 seam(문서 3.12에 없음. 3.0 규칙대로 Deps 빌더로 옮겼다): 파일별 제안 함수를 교체하는 훅
-    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_propose_category_for_file_hook(Box::new(|file_path: &Path| {
+    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_propose_category_for_file_hook(Arc::new(|file_path: &Path| {
         if file_path.file_name().unwrap() == "bad.txt" {
             return Err("분류기 오류".to_string());
         }
@@ -295,16 +294,11 @@ async fn test_propose_awaits_async_progress_callback_and_records_failures() {
     let manager = BookManager::with_deps(deps);
     let reports: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = reports.clone();
-    let opts = backend::book_manager::ProposeOpts {
-        use_bookstore: false,
-        use_content_meta: false,
-        on_progress: Some(Arc::new(move |payload: Value| {
-            let sink = sink.clone();
-            Box::pin(async move { sink.lock().unwrap().push(payload) })
-        })),
-    };
+    // 진행 보고 콜백은 동기 함수다(Python은 코루틴도 받는다).
+    let on_progress = move |payload: Value| sink.lock().unwrap().push(payload);
+    let opts = ProposeOptions { use_bookstore: Some(false), use_content_meta: Some(false), on_progress: Some(&on_progress) };
 
-    let (result, err) = manager.propose_category_changes("A", opts).await;
+    let (result, err) = manager.propose_category_changes("A", None, opts).await;
 
     assert_eq!(err, None);
     let titles: Vec<&str> = result["items"].as_array().unwrap().iter().map(|i| i["title"].as_str().unwrap()).collect();
@@ -316,7 +310,6 @@ async fn test_propose_awaits_async_progress_callback_and_records_failures() {
 // ---- 분류 적용 ----
 
 #[tokio::test]
-#[ignore = "seam 미정: 비공개 메서드 _move_classified_file 바꿔치기가 문서 3.12에 없다"]
 async fn test_apply_awaits_async_callbacks() {
     let tmp = TempDir::new().unwrap();
     category_with_files(tmp.path(), "1_A", &["a.txt"]);
@@ -325,24 +318,17 @@ async fn test_apply_awaits_async_callbacks() {
     let progress: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
 
     // 가정한 seam(문서 3.12에 없음. 3.0 규칙대로 Deps 빌더로 옮겼다): 파일 이동 함수를 교체하는 훅
-    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Box::new(|_args| Box::pin(async { (Some(json!({"status": "moved"})), None) })));
+    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Arc::new(|_path: &Path, _target: &str| (Some(json!({"status": "moved"})), None)));
     let manager = BookManager::with_deps(deps);
     let (done_sink, progress_sink) = (done.clone(), progress.clone());
-    let opts = backend::book_manager::ApplyOpts {
-        should_continue: Some(Arc::new(|| Box::pin(async { true }))),
-        on_item_done: Some(Arc::new(move |payload: Value| {
-            let sink = done_sink.clone();
-            Box::pin(async move { sink.lock().unwrap().push(payload["apply_status"].as_str().unwrap().to_string()) })
-        })),
-        on_progress: Some(Arc::new(move |payload: Value| {
-            let sink = progress_sink.clone();
-            Box::pin(async move { sink.lock().unwrap().push(payload) })
-        })),
-        ..Default::default()
-    };
+    // 콜백은 동기 함수다(Python은 코루틴도 받는다).
+    let should_continue = || true;
+    let on_item_done = move |payload: Value| done_sink.lock().unwrap().push(payload["apply_status"].as_str().unwrap().to_string());
+    let on_progress = move |payload: Value| progress_sink.lock().unwrap().push(payload);
+    let opts = ApplyOptions { should_continue: Some(&should_continue), on_item_done: Some(&on_item_done), on_progress: Some(&on_progress), ..Default::default() };
     let allowed: HashSet<String> = ["1_A/a.txt".to_string()].into();
 
-    let (result, err) = manager.apply_category_changes(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, opts).await;
+    let (result, err) = manager.apply_category_changes_with(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, opts).await;
 
     assert_eq!(err, None);
     assert_eq!(result["applied_count"], 1);
@@ -351,14 +337,13 @@ async fn test_apply_awaits_async_callbacks() {
 }
 
 #[tokio::test]
-#[ignore = "seam 미정: 비공개 메서드 _move_classified_file 바꿔치기가 문서 3.12에 없다"]
 async fn test_apply_records_move_error_as_failed() {
     let tmp = TempDir::new().unwrap();
     category_with_files(tmp.path(), "1_A", &["a.txt"]);
     fs::create_dir(tmp.path().join("2_B")).unwrap();
 
     // 가정한 seam(문서 3.12에 없음. 3.0 규칙대로 Deps 빌더로 옮겼다): 파일 이동 함수를 교체하는 훅
-    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Box::new(|_args| Box::pin(async { (None, Some("이동 실패".to_string())) })));
+    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Arc::new(|_path: &Path, _target: &str| (None, Some("이동 실패".to_string()))));
     let manager = BookManager::with_deps(deps);
     let allowed: HashSet<String> = ["1_A/a.txt".to_string()].into();
 
@@ -395,14 +380,14 @@ fn test_iter_category_files_skips_subdirectories_and_outside_symlinked_category(
     category_with_files(tmp.path(), "A", &["keep.txt"]);
     fs::create_dir(tmp.path().join("A").join("sub")).unwrap();
 
-    let names: Vec<String> = manager._iter_category_indexable_files("A").iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+    let names: Vec<String> = manager._iter_category_indexable_files("A", false).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
     assert_eq!(names, vec!["keep.txt"]);
 
     // 같은 부모 디렉토리 아래에 corpus 밖 디렉토리를 만든다(부모는 별도 TempDir로 둔다).
     let outside = TempDir::new().unwrap();
     fs::write(outside.path().join("leak.txt"), "밖").unwrap();
     std::os::unix::fs::symlink(outside.path(), tmp.path().join("L")).unwrap();
-    assert!(manager._iter_category_indexable_files("L").is_empty());
+    assert!(manager._iter_category_indexable_files("L", false).is_empty());
 }
 
 // ---- 중복 판정/번호 붙이기/이동 ----
@@ -416,20 +401,16 @@ fn test_is_duplicate_content_treats_unreadable_file_as_not_duplicate() {
 }
 
 #[test]
-#[ignore = "seam 미정: 정적 함수 _next_numbered_path가 읽는 모듈 상수 DUPLICATE_NAME_MAX_INDEX를 인스턴스 seam으로 옮길 수 없다"]
 fn test_next_numbered_path_gives_up_when_all_slots_taken() {
-    // 가정한 seam: 상수 재정의 setter
-    backend::book_manager::set_duplicate_name_max_index(1);
+    // 상수 재정의 setter 대신 상한을 인자로 받는 `_next_numbered_path_with`를 쓴다.
     let tmp = TempDir::new().unwrap();
     let target = tmp.path().join("book.txt");
     fs::write(tmp.path().join("book (1).txt"), "x").unwrap();
-    let result = BookManager::_next_numbered_path(&target);
-    backend::book_manager::reset_duplicate_name_max_index();
+    let result = BookManager::_next_numbered_path_with(&target, 1);
     assert!(result.is_none());
 }
 
 #[tokio::test]
-#[ignore = "seam 미정: 값 설정 with_duplicate_name_max_index가 문서 3.12에 없다"]
 async fn test_move_reports_when_numbered_names_are_exhausted() {
     let tmp = TempDir::new().unwrap();
     // 가정한 seam(문서 3.12에 없음. 3.0 규칙대로 값 설정을 Deps 빌더로 옮겼다): 번호 붙이기 상한을 1로 둔다
@@ -452,7 +433,7 @@ async fn test_move_removes_identical_duplicate_when_clean_existing() {
     category_with_files(tmp.path(), "A", &["book.txt"]);
     category_with_files(tmp.path(), "B", &["book.txt"]);
 
-    let opts = backend::book_manager::MoveOpts { clean_existing: true, source_category: Some("A".to_string()), ..Default::default() };
+    let opts = MoveOpts { clean_existing: true, source_category: Some("A".to_string()), ..Default::default() };
     let (result, err) = manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await;
 
     assert_eq!(err, None);
@@ -472,7 +453,7 @@ async fn test_move_reports_duplicate_cleanup_failure() {
     fs_ops.set_remove_file(|_p: &Path| Some(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "삭제 거부")));
     let manager = BookManager::with_deps(make_deps(tmp.path(), FakeEsManager::new()).with_fs(fs_ops));
 
-    let opts = backend::book_manager::MoveOpts { clean_existing: true, ..Default::default() };
+    let opts = MoveOpts { clean_existing: true, ..Default::default() };
     let (result, err) = manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await;
 
     assert!(result.is_none());
@@ -486,7 +467,7 @@ async fn test_move_dry_run_reports_plain_move_without_touching_files() {
     category_with_files(tmp.path(), "A", &["book.txt"]);
     fs::create_dir(tmp.path().join("B")).unwrap();
 
-    let opts = backend::book_manager::MoveOpts { dry_run: true, ..Default::default() };
+    let opts = MoveOpts { dry_run: true, ..Default::default() };
     let (result, err) = manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await;
 
     assert_eq!(err, None);
@@ -541,7 +522,6 @@ async fn test_reload_root_files_reports_unreadable_root() {
 }
 
 #[tokio::test]
-#[ignore = "seam 미정: 비공개 메서드 _bulk_index_files 바꿔치기가 문서 3.12에 없다 (es.refresh 예외는 FakeEsManager::fail로 가능)"]
 async fn test_reload_root_files_reports_refresh_and_batch_failures() {
     let tmp = TempDir::new().unwrap();
     let es = FakeEsManager::new();
@@ -549,7 +529,7 @@ async fn test_reload_root_files_reports_refresh_and_batch_failures() {
     es.fail("refresh", "refresh 불가");
 
     // 가정한 seam(문서 3.12에 없음. 3.0 규칙대로 Deps 빌더로 옮겼다): 색인 함수를 교체하는 훅
-    let deps = make_deps(tmp.path(), es).with_bulk_index_files_hook(Box::new(|_names, _clean_existing| Box::pin(async { (json!({}), vec![json!({"error": "색인 실패"})]) })));
+    let deps = make_deps(tmp.path(), es).with_bulk_index_files_hook(Arc::new(|_names: &[String], _clean_existing: bool| (std::collections::BTreeMap::new(), vec![json!({"error": "색인 실패"})])));
     let manager = BookManager::with_deps(deps);
 
     let (result, err) = manager._reload_root_files().await;
@@ -628,10 +608,10 @@ fn test_find_epub_cover_member_falls_back_to_first_spine_page_image() {
 }
 
 #[test]
-#[ignore = "seam 미정: 색 목록을 못 얻는 이미지 대역(StubImage)이 문서에 없다. image crate 타입으로는 만들 수 없다"]
+#[ignore = "대역 없음: 색 목록을 못 얻는 이미지(StubImage)를 image crate 타입으로 만들 수 없다. 0x0 이미지로 대신했으나 줄이기에서 panic한다(프로덕션 crate에 testing 모듈을 두지 않는다)"]
 fn test_blank_cover_check_returns_false_when_image_has_no_colors() {
-    // 가정한 seam: 색 목록을 얻지 못하는 이미지 대역. image crate 타입으로는 만들 수 없다.
-    let image = backend::book_manager::testing::StubImage::without_colors();
+    // 색 목록을 얻지 못하는 이미지를 흉내 낼 수 없어 크기 0 이미지를 쓴다.
+    let image = image::DynamicImage::new_rgb8(0, 0);
     assert!(!BookManager::_is_mostly_blank_cover(&image));
 }
 
@@ -645,7 +625,7 @@ fn test_extract_cover_thumbnail_ignores_unsupported_type() {
 async fn test_get_cover_returns_404_when_file_is_missing() {
     let tmp = TempDir::new().unwrap();
     let manager = make_manager(tmp.path(), FakeEsManager::with_doc(make_doc("gone.epub", "epub")));
-    let resp = manager.get_cover(1).await;
+    let resp = manager.get_cover(1, None).await;
     assert_eq!(resp.status_code, 404);
 }
 
@@ -659,7 +639,7 @@ async fn test_get_cover_returns_503_when_storage_access_fails() {
     fs_ops.set_is_file(|p: &Path| if p.file_name().unwrap() == "book.epub" { Some(std::io::Error::from_raw_os_error(5)) } else { None });
     let manager = BookManager::with_deps(make_deps(tmp.path(), FakeEsManager::with_doc(make_doc("book.epub", "epub"))).with_fs(fs_ops));
 
-    let resp = manager.get_cover(1).await;
+    let resp = manager.get_cover(1, None).await;
 
     assert_eq!(resp.status_code, 503);
 }
@@ -696,10 +676,13 @@ type CoverEntry = (i64, Value, (i64, i64, String));
 
 /// 커버 목록 조회용 ES 대역. `FakeEsManager`에 커버 목록 메서드가 없어 이 세 메서드만 가진 로컬 대역을 쓴다.
 /// 나머지 `EsManagerApi` 메서드는 기본 구현(`Unsupported`)이다. TODO(common): `FakeEsManager`에 커버 목록 훅이 생기면 지운다.
+type CoverFilesFn = dyn Fn(&[String], i64, Option<(i64, i64, String)>, &[String]) -> (Vec<(i64, Value, Vec<Value>)>, i64) + Send + Sync;
+type CoverRepsFn = dyn Fn(&[String], &[String]) -> HashMap<String, Vec<(i64, Value)>> + Send + Sync;
+
 struct CoverEs {
     stats: Stats,
-    files: Box<dyn Fn(&[String], i64, Option<(i64, i64, String)>, &[String]) -> (Vec<(i64, Value, Vec<Value>)>, i64) + Send + Sync>,
-    reps: Box<dyn Fn(&[String], &[String]) -> HashMap<String, Vec<(i64, Value)>> + Send + Sync>,
+    files: Box<CoverFilesFn>,
+    reps: Box<CoverRepsFn>,
 }
 
 impl EsManagerApi for CoverEs {
@@ -763,7 +746,9 @@ fn strings(list: &[&str]) -> Vec<String> {
 }
 
 /// 디렉토리 A: 직속 파일 가(수정 400), 다(수정 200)와 작품 디렉토리 나작품(최근 300), 라작품(최근 100).
-fn cover_fixture() -> (Vec<(Value, i64)>, HashMap<String, Vec<Value>>, Stats) {
+type CoverFixture = (Vec<(Value, i64)>, HashMap<String, Vec<Value>>, Stats);
+
+fn cover_fixture() -> CoverFixture {
     let files = vec![(cover_doc("A/가.epub", "가", "A", "epub"), 400), (cover_doc("A/다.pdf", "다", "A", "pdf"), 200)];
     let reps = HashMap::from([
         ("A/나작품".to_string(), vec![cover_doc("A/나작품/나작품 02권.pdf", "나작품 02권", "A/나작품", "pdf"), cover_doc("A/나작품/나작품 01권.pdf", "나작품 01권", "A/나작품", "pdf")]),
@@ -918,7 +903,7 @@ async fn test_get_cover_books_paged_rejects_malformed_cursor() {
 
         let result = manager.get_cover_books_paged(page(None, 10, Some(bad_cursor), &[])).await;
 
-        assert_eq!(result, (vec![], 0, None, Some("invalid cursor".to_string())), "cursor {bad_cursor}");
+        assert!(result.0.is_empty() && result.1 == 0 && result.2.is_none() && result.3.as_deref() == Some("invalid cursor"), "cursor {bad_cursor}");
     }
 }
 
@@ -949,7 +934,7 @@ async fn test_get_cover_books_paged_clamps_page_size() {
 
     let calls = calls.lock().unwrap();
     assert_eq!(calls.files[0].size, 1);
-    assert_eq!(calls.files[1].size, MAX_CATEGORY_PAGE_SIZE);
+    assert_eq!(calls.files[1].size, MAX_CATEGORY_PAGE_SIZE as usize);
 }
 
 /// 쪽 크기 66x165pt인 빈 한 쪽짜리 PDF를 직접 만든다(pikepdf 대신).

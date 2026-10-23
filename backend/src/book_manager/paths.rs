@@ -83,6 +83,34 @@ impl BookManager {
         if normalized == "." { String::new() } else { normalized }
     }
 
+    /// 카테고리 이름 검사. `with_category_name_check`로 바꾼 검사가 파일시스템 오류를 내면 `Err`다.
+    pub(crate) fn try_is_safe_category_name(&self, category: &str) -> std::io::Result<bool> {
+        match self.seams().category_name_check {
+            Some(check) => check(category, &|c| self.is_safe_category_name(c)),
+            None => Ok(self.is_safe_category_name(category)),
+        }
+    }
+
+    /// `_is_safe_category_name`.
+    pub fn _is_safe_category_name(&self, category: &str) -> bool {
+        self.is_safe_category_name(category)
+    }
+
+    /// `_normalize_stored_file_path`.
+    pub fn _normalize_stored_file_path(&self, file_path: &str) -> String {
+        self.normalize_stored_file_path(file_path)
+    }
+
+    /// `_is_indexable_file_path`.
+    pub fn _is_indexable_file_path(&self, file_path: &Path) -> bool {
+        self.is_indexable_file_path(file_path)
+    }
+
+    /// `_iter_category_indexable_files`.
+    pub fn _iter_category_indexable_files(&self, category: &str, recursive: bool) -> Vec<PathBuf> {
+        self.iter_category_indexable_files(category, recursive)
+    }
+
     /// `_is_safe_category_name`.
     pub(crate) fn is_safe_category_name(&self, category: &str) -> bool {
         if category == Self::ROOT_CATEGORY {

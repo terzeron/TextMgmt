@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::{Map, Value, json};
 use sysdeps::CommandError;
 
-use super::{BookManager, HARD_PARSE_TIMEOUT_SECONDS, ProgressFn};
+use super::{BookManager, HARD_PARSE_TIMEOUT_SECONDS, ProgressFn, ReadFileError};
 use crate::es_manager::Docs;
 
 /// `reload_category`의 loader 실행 시간 상한.
@@ -32,18 +32,18 @@ fn progress_payload(base: Option<&Value>, indexed: i64, deleted: Option<i64>) ->
 impl BookManager {
     /// 파일 하나를 파싱한다. 파싱은 별도 스레드에서 돌리고 `HARD_PARSE_TIMEOUT_SECONDS`를 넘기면 포기한다
     /// (파서가 멈춰도 재적재 전체가 서지 않게 한다. 스레드는 죽일 수 없어 끝날 때까지 남는다).
-    fn read_with_hard_timeout(&self, abs_path: PathBuf) -> Result<Docs, ()> {
+    fn read_with_hard_timeout(&self, abs_path: PathBuf) -> Result<Docs, ReadFileError> {
         let reader = self.reader();
         let (tx, rx) = mpsc::channel();
         let spawned = std::thread::Builder::new().name("book-parse".to_string()).spawn(move || {
-            let _ = tx.send(reader.read_file(&abs_path, None));
+            let _ = tx.send(reader.try_read_file(&abs_path, None, false));
         });
         if spawned.is_err() {
-            return Err(());
+            return Err(ReadFileError::Other("파서 스레드를 시작하지 못했다".to_string()));
         }
         match rx.recv_timeout(Duration::from_secs(HARD_PARSE_TIMEOUT_SECONDS)) {
-            Ok(docs) => Ok(docs),
-            Err(mpsc::RecvTimeoutError::Timeout) => Err(()),
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(ReadFileError::Timeout("파싱 시간 상한을 넘었다".to_string())),
             // 파서가 panic했다. 읽지 못한 파일로 본다.
             Err(mpsc::RecvTimeoutError::Disconnected) => Ok(Docs::new()),
         }
@@ -56,6 +56,10 @@ impl BookManager {
 
     /// `_bulk_index_files`에 진행 보고를 붙인 판. `progress_base`는 이 배치 이전까지 확정된 누적 카운트다.
     pub async fn _bulk_index_files_with(&self, file_paths: &[&str], clean_existing: bool, on_progress: Option<ProgressFn<'_>>, progress_base: Option<&Value>) -> (BTreeMap<String, i64>, Vec<Value>) {
+        if let Some(hook) = self.seams().bulk_index_hook {
+            let names: Vec<String> = file_paths.iter().map(|p| p.to_string()).collect();
+            return hook(&names, clean_existing);
+        }
         let mut merged = Docs::new();
         let mut id_by_path: Vec<(String, i64)> = Vec::new();
         let mut failures: Vec<Value> = Vec::new();
@@ -75,9 +79,14 @@ impl BookManager {
             };
             let data = match self.read_with_hard_timeout(abs_path) {
                 Ok(data) => data,
-                Err(()) => {
-                    log::error!("파일 파싱 타임아웃: {file_path}");
+                Err(ReadFileError::Timeout(reason)) => {
+                    log::error!("파일 파싱 타임아웃: {file_path} ({reason})");
                     failures.push(json!({"file_path": file_path, "error": format!("파싱 시간 초과: {file_path}")}));
+                    continue;
+                }
+                Err(ReadFileError::Other(reason)) => {
+                    log::error!("파일 파싱 실패: {file_path} ({reason})");
+                    failures.push(json!({"file_path": file_path, "error": format!("파일 읽기 실패: {file_path}")}));
                     continue;
                 }
             };
@@ -336,6 +345,11 @@ impl BookManager {
     }
 
     /// `_root`는 실제 디렉터리가 아니라 최상위 파일 묶음이라, loader 대신 최상위 파일만 직접 색인한다.
+    /// `_reload_root_files`: 최상위 파일만 다시 색인한다.
+    pub async fn _reload_root_files(&self) -> (Value, Option<String>) {
+        self.reload_root_files("book").await
+    }
+
     async fn reload_root_files(&self, content_type: &str) -> (Value, Option<String>) {
         log::info!("_reload_root_files 시작: content_type='{content_type}'");
         let entries = match self.fs.read_dir(&self.path_prefix) {

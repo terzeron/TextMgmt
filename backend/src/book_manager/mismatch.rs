@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use serde_json::{Map, Value, json};
 
-use super::{BookManager, MAX_CATEGORY_RESULT_COUNT};
+use super::BookManager;
 use crate::es_manager::Hit;
 
 /// ES 쪽 카테고리 하나의 경로 집합.
@@ -103,7 +103,7 @@ impl BookManager {
         let mut result: Vec<Hit> = Vec::new();
         let mut search_after: Option<Vec<Value>> = None;
         loop {
-            let (page, _total, next) = self.es.search_by_category_paged(category, MAX_CATEGORY_RESULT_COUNT, search_after.as_deref()).map_err(|e| e.to_string())?;
+            let (page, _total, next) = self.es.search_by_category_paged(category, self.max_category_result_count, search_after.as_deref()).map_err(|e| e.to_string())?;
             result.extend(page);
             match next {
                 Some(next) => search_after = Some(next),
