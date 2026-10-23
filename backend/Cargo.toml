@@ -26,6 +26,7 @@ log = "0.4.34"
 # MySQL 클라이언트는 개발 헤더 없이 쓰려고 소스에서 번들 빌드한다 (docs/rust-test-seams.md, diesel spike)
 mysqlclient-sys = { version = "0.5.2", features = ["bundled"] }
 regex = "1.13.1"
+scraper = "0.29.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 sysdeps = { path = "../libs/sysdeps" }
@@ -99,6 +100,10 @@ path = "../tests/rust/backend/comics.rs"
 [[test]]
 name = "comics_manager"
 path = "../tests/rust/backend/comics_manager.rs"
+
+[[test]]
+name = "bookstore"
+path = "../tests/rust/backend/bookstore.rs"
 
 [dev-dependencies]
 base64 = "0.23.1"

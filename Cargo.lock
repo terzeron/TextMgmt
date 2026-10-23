@@ -190,6 +190,7 @@ dependencies = [
  "mysqlclient-sys",
  "regex",
  "roxmltree",
+ "scraper",
  "serde",
  "serde_json",
  "sha2",

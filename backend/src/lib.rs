@@ -16,3 +16,4 @@ pub mod cover_sources;
 pub mod direct_cover_url;
 pub mod comics;
 pub mod comics_manager;
+pub mod bookstore;

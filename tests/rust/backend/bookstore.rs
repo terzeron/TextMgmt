@@ -240,6 +240,7 @@ type SaveHook = Box<dyn Fn(&str, &str) + Send + Sync>;
 /// monkeypatch로 인스턴스 메서드를 바꾸던 곳은 이 덮어쓰기와 훅 필드로 옮긴다.
 macro_rules! dummy_store {
     ($name:ident { $($over:item)* }) => {
+        #[allow(dead_code)]
         struct $name {
             kind: Kind,
             base_url: String,
@@ -258,6 +259,7 @@ macro_rules! dummy_store {
             save: Option<SaveHook>,
         }
 
+        #[allow(dead_code)]
         impl $name {
             fn new(kind: Kind) -> Self {
                 common::setup_env();
@@ -635,7 +637,6 @@ fn test_search_isbn_not_supported() {
 }
 
 #[test]
-#[ignore = "mock.patch: tempfile.gettempdir를 tmp_path로 교체; tmp_dir seam 설계 후 활성화"]
 fn test_save_and_load_html_cache() {
     let tmp = TempDir::new().unwrap();
     let mut store = Plain::new(Kind::Dummy);
@@ -660,7 +661,7 @@ fn test_base_build_isbn_search_and_empty_search() {
 }
 
 #[test]
-#[ignore = "추상 메서드의 기본 본문(None 반환)은 Rust trait에 대응이 없다; abstract_* 함수 설계 후 활성화"]
+#[ignore = "추상 메서드의 기본 본문(None 반환)은 Rust trait에 대응이 없다. abstract_* 함수는 항상 None이라 검증할 동작이 없다"]
 fn test_base_class_abstract_methods_are_callable() {
     let store = Plain::new(Kind::BaseOnly);
     assert_eq!(abstract_build_search_url(&store, "x"), None);
@@ -714,7 +715,6 @@ fn test_fetch_search_results_empty_links_and_blank_html() {
 }
 
 #[test]
-#[ignore = "mock.patch: tempfile.gettempdir, builtins.open, os.path.exists 교체; tmp_dir seam 설계 후 활성화"]
 fn test_save_and_load_html_cache_errors() {
     let tmp = TempDir::new().unwrap();
     // open이 OSError를 던지는 상황: 임시 디렉터리 자리에 일반 파일을 놓아 쓰기와 읽기를 막는다.
@@ -771,7 +771,6 @@ fn test_yes24_author_text_and_isbn10() {
 }
 
 #[test]
-#[ignore = "BadSoup/BadText: 메서드가 예외를 던지는 soup 대역을 &str 입력으로 재현할 수 없다; SoupSource seam 설계 후 활성화"]
 fn test_yes24_category_and_isbn_exception_paths() {
     let store = yes24(false);
 
@@ -872,7 +871,6 @@ fn test_munpia_meta_description_author() {
 }
 
 #[test]
-#[ignore = "BadSoup: select()가 예외를 던지는 soup 대역을 &str 입력으로 재현할 수 없다; SoupSource seam 설계 후 활성화"]
 fn test_aladin_isbn_fallback_and_exception() {
     let store = aladin(false);
     let html = r#"
@@ -938,7 +936,6 @@ fn test_ridibooks_search_success_and_extract() {
 }
 
 #[test]
-#[ignore = "BadSoup: find_all()이 예외를 던지는 soup 대역을 &str 입력으로 재현할 수 없다; SoupSource seam 설계 후 활성화"]
 fn test_ridibooks_isbn_exception() {
     let store = ridibooks(false);
 
@@ -1053,7 +1050,6 @@ fn test_yes24_extract_search_links_fallback_verbose() {
 
 /// Lines 287-288: 책 정보를 뽑다가 예외가 나도 부분 결과를 돌려준다
 #[test]
-#[ignore = "mock.patch: soup.find를 'span'에서 예외를 던지게 교체; SoupSource seam 설계 후 활성화"]
 fn test_yes24_extract_book_info_exception() {
     let store = yes24(false);
     let soup = RaisingSoup { html: "<html><h2 class='gd_name'>Title</h2></html>", raise_on: "span" };
@@ -1173,7 +1169,6 @@ fn test_naver_shopping_json_parse_error_verbose() {
 
 /// Lines 708-709: NaverShopping extract_book_info 예외
 #[test]
-#[ignore = "mock.patch: soup.find를 'h2'에서 예외를 던지게 교체; SoupSource seam 설계 후 활성화"]
 fn test_naver_shopping_extract_book_info_exception() {
     let store = naver_shopping(false);
     let soup = RaisingSoup { html: "<html><body>normal</body></html>", raise_on: "h2" };
@@ -1337,7 +1332,6 @@ fn test_fetch_search_results_uses_cached_html_parsing() {
 }
 
 #[test]
-#[ignore = "mock.patch: tempfile.gettempdir를 tmp_path로 교체; tmp_dir seam 설계 후 활성화"]
 fn test_save_and_load_html_cache_parsing() {
     let tmp = TempDir::new().unwrap();
     let mut store = Plain::new(Kind::Parsing);
@@ -2218,4 +2212,126 @@ fn test_bookstore_default_max_results_is_four() {
     store = store.with_session(constant(200, "", json!({"searchList": list})));
     let titles: Vec<String> = store.search_by_keyword("작품").into_iter().map(|r| r.0).collect();
     assert_eq!(titles, ["작품 1", "작품 2", "작품 3", "작품 4"]);
+}
+
+// ---------------------------------------------------------------------------
+// 새 테스트 (Python 원본에 없음): 조아라 API 키 환경 변수, 캐시 파일 이름
+// 키는 소스에 두지 않고 `TM_JOARA_API_KEY`에서 읽는다. 아래 값은 모두 더미다.
+// ---------------------------------------------------------------------------
+
+mod added_joara_key_and_cache_name {
+    use super::*;
+    use common::env::{EnvGuard, empty_env, map_env};
+    use common::log_capture::LogCapture;
+    use std::sync::Arc;
+
+    const DUMMY_KEY: &str = "dummy-joara-key-0000";
+
+    fn ok_payload() -> Value {
+        json!({"status": 1, "data": {"list": [{"book_code": 1, "subject": "데미안", "member_name": "A", "category_name": "C"}]}})
+    }
+
+    #[test]
+    fn test_joara_api_key_is_sent_from_injected_env() {
+        let (fake, calls) = session(|_, _| http(200, "", ok_payload()));
+        let store = joara(false).with_env(Arc::new(map_env(&[("TM_JOARA_API_KEY", DUMMY_KEY)]))).with_session(fake);
+        assert_eq!(store.search_by_keyword("데미안").len(), 1);
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls[0].url, "https://api.joara.com/v2/search/query");
+        assert_eq!(calls[0].params["api_key"], DUMMY_KEY);
+        assert_eq!(calls[0].params["query"], "데미안");
+        assert_eq!(calls[0].params["offset"], "4");
+        let uid = &calls[0].params["deviceuid"];
+        assert!(uid.len() == 32 && uid.bytes().all(|b| b.is_ascii_hexdigit()), "deviceuid는 32자리 16진수");
+    }
+
+    #[test]
+    fn test_joara_device_uid_changes_per_call() {
+        let (fake, calls) = session(|_, _| http(200, "", ok_payload()));
+        let store = joara(false).with_env(Arc::new(empty_env())).with_session(fake);
+        store.search_by_keyword("a");
+        store.search_by_keyword("a");
+        let calls = calls.lock().unwrap();
+        assert_ne!(calls[0].params["deviceuid"], calls[1].params["deviceuid"]);
+    }
+
+    #[test]
+    fn test_joara_api_key_is_empty_when_env_missing() {
+        let (fake, calls) = session(|_, _| http(200, "", ok_payload()));
+        let store = joara(false).with_env(Arc::new(empty_env())).with_session(fake);
+        store.search_by_keyword("데미안");
+        assert_eq!(calls.lock().unwrap()[0].params["api_key"], "");
+    }
+
+    #[test]
+    fn test_joara_default_env_reads_process_environment() {
+        let mut env = EnvGuard::new();
+        env.set("TM_JOARA_API_KEY", DUMMY_KEY);
+        let (fake, calls) = session(|_, _| http(200, "", ok_payload()));
+        let store = joara(false).with_session(fake);
+        store.search_by_keyword("a");
+        assert_eq!(calls.lock().unwrap()[0].params["api_key"], DUMMY_KEY);
+
+        env.remove("TM_JOARA_API_KEY");
+        store.search_by_keyword("a");
+        assert_eq!(calls.lock().unwrap()[1].params["api_key"], "");
+    }
+
+    /// 세션 오류 문장이나 API 메시지에 키가 들어 와도 로그에는 가려서 남긴다.
+    #[test]
+    fn test_joara_logs_and_errors_do_not_contain_key() {
+        let logs = LogCapture::start(log::Level::Trace);
+        let env = || Arc::new(map_env(&[("TM_JOARA_API_KEY", DUMMY_KEY)]));
+
+        // 요청 실패: 오류 문장에 요청 주소(키 포함)가 들어 있는 경우
+        let leaky = session(|_, params| {
+            let key = params.iter().find(|(k, _)| k == "api_key").map(|(_, v)| v.clone()).unwrap_or_default();
+            Err(HttpError::Connection(format!("GET https://api.joara.com/v2/search/query?api_key={key} 실패")))
+        })
+        .0;
+        let mut store = joara(true).with_env(env()).with_session(leaky);
+        assert!(store.search_by_keyword("데미안").is_empty());
+
+        // status != 1: 메시지에 키가 들어 있는 경우
+        let message = format!("잘못된 키 {DUMMY_KEY}");
+        store = store.with_session(constant(200, "", json!({"status": 0, "message": message})));
+        assert!(store.search_by_keyword("데미안").is_empty());
+
+        // 성공과 HTTP 오류 경로
+        store = store.with_session(constant(200, "", ok_payload()));
+        assert_eq!(store.search_by_keyword("데미안").len(), 1);
+        store = store.with_session(constant(500, "", json!({})));
+        assert!(store.search_by_keyword("데미안").is_empty());
+
+        let text = logs.text();
+        assert!(!text.is_empty(), "verbose 로그가 남아야 한다");
+        assert!(!text.contains(DUMMY_KEY), "로그에 키가 나오면 안 된다: {text}");
+        assert!(text.contains("****"), "가린 자리가 보여야 한다: {text}");
+    }
+
+    #[test]
+    fn test_joara_log_without_key_keeps_message() {
+        let logs = LogCapture::start(log::Level::Trace);
+        let store = joara(true).with_env(Arc::new(empty_env())).with_session(failing());
+        assert!(store.search_by_keyword("데미안").is_empty());
+        assert!(logs.text().contains("boom"));
+    }
+
+    /// Python `uuid.uuid5(uuid.NAMESPACE_URL, url)`와 같은 이름이어야 기존 캐시 파일을 이어 쓴다.
+    #[test]
+    fn test_cache_file_name_matches_python_uuid5() {
+        assert_eq!(backend::bookstore::cache_file_name("https://example.com/detail/1"), "2c75ebbd-c7d8-5945-b588-d1286cf77aee.html");
+        assert_eq!(backend::bookstore::cache_file_name("http://example.com/detail/123"), "0a5f1021-24ca-5315-aa3e-96a26387cd63.html");
+        assert_eq!(backend::bookstore::cache_file_name(""), "1b4db7eb-4057-5ddf-91e0-36dec72071f5.html");
+    }
+
+    #[test]
+    fn test_save_html_writes_uuid5_named_file() {
+        let tmp = TempDir::new().unwrap();
+        let store = yes24(false).with_tmp_dir(tmp.path().to_path_buf());
+        store._save_html_to_tmp("<html>x</html>", "https://example.com/detail/1");
+        let written = fs::read_to_string(tmp.path().join("2c75ebbd-c7d8-5945-b588-d1286cf77aee.html")).unwrap();
+        assert_eq!(written, "<html>x</html>");
+    }
 }
