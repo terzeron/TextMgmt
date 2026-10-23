@@ -20,7 +20,7 @@
 //!     - `_session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError>`
 //!   - `struct SessionQuery { status: String, current_family_id: Option<String>, page: u32, page_size: u32, email: Option<String> }`
 //!     (`Default`: status "active", page 1, page_size 50. Python 키워드 인자의 기본값에 대응한다)
-//!   - `RefreshTokenStore::new(path: &str) -> Result<Self, StoreError>`, `with_max_session_groups(self, usize) -> Self` (두 저장소 모두. Python 모듈 전역 `MAX_SESSION_GROUPS` 대체. 설정 값은 소비형 `with_*`)
+//!   - SQLite `RefreshTokenStore`는 구현하지 않았다(rusqlite 미승인, 운영은 mysql). `with_max_session_groups(self, usize) -> Self` ( Python 모듈 전역 `MAX_SESSION_GROUPS` 대체. 설정 값은 소비형 `with_*`)
 //!   - `MySQLRefreshTokenStore::{new() -> Result<Self, StoreError> (TM_MYSQL_* 환경 변수), with_connector(ConnectionProvider) -> Result<Self, StoreError> (_init_db 실행),
 //!     with_connection_provider(ConnectionProvider) -> Self (_init_db 생략, Python `__new__` + `_connect` 대입),
 //!     _connect(&self) -> Result<Box<dyn DbConnection>, DbError>}` (`set_connection_provider`는 없다)
@@ -31,7 +31,7 @@
 //!   - `summarize_user_agent(&str) -> String`, `_parse_browser_name_version_with(ua: &str, patterns: &[(regex::Regex, &str)]) -> Option<String>` (`_UA_BROWSER_PATTERNS` 대체)
 //!   - `StoreError: Display`
 //! - 로그 캡처는 `common::log_capture::LogCapture`(`log` crate 기반), 환경 변수는 `common::env::EnvGuard`, 실제 MySQL 컨테이너는 `common/mysql_fixture.rs`.
-//! - dev-dependency: `rusqlite`, `tempfile`, `regex`, `testcontainers-modules`(mysql, blocking)
+//! - dev-dependency: `tempfile`, `regex`, `testcontainers-modules`(mysql, blocking)
 
 use std::collections::{BTreeSet, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -43,8 +43,8 @@ mod mysql_fixture;
 
 use backend::db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
 use backend::refresh_token_store::{
-    _rotation_grace_seconds, AnyRefreshTokenStore, DEFAULT_ROTATION_GRACE_SECONDS, MAX_USER_AGENT_LENGTH, MySQLRefreshTokenStore, RefreshTokenStore, RefreshTokenStoreApi, SessionQuery,
-    create_refresh_token_store, create_refresh_token_store_with, summarize_user_agent,
+    _rotation_grace_seconds, AnyRefreshTokenStore, DEFAULT_ROTATION_GRACE_SECONDS, MAX_USER_AGENT_LENGTH, MySQLRefreshTokenStore, RefreshTokenStoreApi, SessionQuery, create_refresh_token_store_with,
+    summarize_user_agent,
 };
 use common::env::EnvGuard;
 use common::log_capture::LogCapture;
@@ -61,14 +61,21 @@ fn fam(c: char) -> String {
     c.to_string().repeat(32)
 }
 
-fn new_store(dir: &TempDir, name: &str) -> RefreshTokenStore {
-    RefreshTokenStore::new(dir.path().join(name).to_str().unwrap()).unwrap()
+/// SQLite 저장소는 옮기지 않았다(운영은 mysql). 같은 단언을 메모리 MySQL 대역(`MemDb`)에 붙인 `MySQLRefreshTokenStore`로 검증한다.
+fn new_store(_dir: &TempDir, _name: &str) -> MySQLRefreshTokenStore {
+    mem_store().0
+}
+
+fn mem_store() -> (MySQLRefreshTokenStore, MemDb) {
+    let db = MemDb::default();
+    (MySQLRefreshTokenStore::with_connector(db.provider()).unwrap(), db)
 }
 
 fn issue(s: &dyn RefreshTokenStoreApi, token_id: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64) {
     s.store_issued(token_id, family_id, email, issued_at, expires_at, None, None).unwrap();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn issue_from(s: &dyn RefreshTokenStoreApi, token_id: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64, client_ip: &str, user_agent: &str) {
     s.store_issued(token_id, family_id, email, issued_at, expires_at, Some(client_ip), Some(user_agent)).unwrap();
 }
@@ -281,7 +288,221 @@ fn mysql_session_row(now: i64) -> Row {
     ])
 }
 
-// ---- SQLite 회전 상태머신 ----
+// ---- 메모리 MySQL 대역 (SQLite 저장소 테스트를 MySQL 저장소로 옮기기 위한 상태 있는 가짜) ----
+
+#[derive(Clone)]
+struct Tok {
+    jti: String,
+    family_id: String,
+    email: String,
+    issued_at: i64,
+    expires_at: i64,
+    replaced_by: Option<String>,
+    revoked_at: Option<i64>,
+    revoke_reason: Option<String>,
+    client_ip: Option<String>,
+    user_agent: Option<String>,
+}
+
+/// refresh_tokens 테이블 한 개를 흉내 낸다. 저장소가 보내는 SQL 문장 종류를 앞부분으로 구분해 실행한다(트랜잭션은 즉시 반영).
+#[derive(Clone, Default)]
+struct MemDb {
+    rows: Arc<Mutex<Vec<Tok>>>,
+}
+
+fn p_text(p: &[DbValue], i: usize) -> Option<String> {
+    p.get(i).and_then(|v| v.as_str()).map(str::to_string)
+}
+
+fn p_int(p: &[DbValue], i: usize) -> i64 {
+    p.get(i).and_then(|v| v.as_i64()).unwrap()
+}
+
+fn opt_text(v: &Option<String>) -> DbValue {
+    v.as_deref().into()
+}
+
+impl MemDb {
+    fn count(&self, jti: &str) -> usize {
+        self.rows.lock().unwrap().iter().filter(|t| t.jti == jti).count()
+    }
+
+    fn provider(&self) -> ConnectionProvider {
+        let db = self.clone();
+        Arc::new(move || Ok(Box::new(MemConn { db: db.clone() }) as Box<dyn DbConnection>))
+    }
+
+    fn aggregate(&self, sql: &str, p: &[DbValue]) -> Vec<Row> {
+        let now = p_int(p, 0);
+        let mut next = 2;
+        let mut email = None;
+        let mut family = None;
+        if sql.contains("email = %s") {
+            email = p_text(p, next);
+            next += 1;
+        }
+        if sql.contains("family_id = %s") {
+            family = p_text(p, next);
+        }
+        let limit: usize = sql.rsplit("LIMIT").next().unwrap().trim().parse().unwrap();
+        let rows = self.rows.lock().unwrap();
+        let mut groups: Vec<((String, String), Vec<&Tok>)> = Vec::new();
+        for t in rows.iter().filter(|t| email.as_ref().is_none_or(|e| *e == t.email) && family.as_ref().is_none_or(|f| *f == t.family_id)) {
+            let key = (t.family_id.clone(), t.email.clone());
+            match groups.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, v)) => v.push(t),
+                None => groups.push((key, vec![t])),
+            }
+        }
+        groups.sort_by_key(|(_, v)| std::cmp::Reverse(v.iter().map(|t| t.issued_at).max().unwrap()));
+        groups
+            .into_iter()
+            .take(limit)
+            .map(|((family_id, email), v)| {
+                let alive = |t: &&&Tok| t.revoked_at.is_none() && t.expires_at >= now;
+                let latest = v.iter().max_by_key(|t| (t.issued_at, t.jti.clone())).unwrap();
+                let terminal = v.iter().filter_map(|t| t.revoke_reason.clone()).filter(|r| r != "rotated").max();
+                row([
+                    ("family_id", family_id.as_str().into()),
+                    ("email", email.as_str().into()),
+                    ("created_at", v.iter().map(|t| t.issued_at).min().unwrap().into()),
+                    ("last_seen_at", v.iter().map(|t| t.issued_at).max().unwrap().into()),
+                    ("max_expires_at", v.iter().map(|t| t.expires_at).max().unwrap().into()),
+                    ("token_count", (v.len() as i64).into()),
+                    // MySQL 의 SUM() 은 DECIMAL 이라 문자열로 돌아온다.
+                    ("valid_token_count", v.iter().filter(alive).count().to_string().into()),
+                    ("active_expires_at", v.iter().filter(alive).map(|t| t.expires_at).max().unwrap_or(0).into()),
+                    ("terminal_reason", terminal.into()),
+                    ("revoked_at", v.iter().filter_map(|t| t.revoked_at).max().into()),
+                    ("client_ip", opt_text(&latest.client_ip)),
+                    ("user_agent", opt_text(&latest.user_agent)),
+                ])
+            })
+            .collect()
+    }
+}
+
+struct MemConn {
+    db: MemDb,
+}
+
+struct MemCursor {
+    db: MemDb,
+    result: Option<Vec<Row>>,
+}
+
+impl DbCursor for MemCursor {
+    fn execute(&mut self, sql: &str, p: &[DbValue]) -> Result<(), DbError> {
+        let sql = sql.trim_start();
+        self.result = None;
+        if sql.starts_with("CREATE") || sql.starts_with("ALTER") {
+            return Ok(());
+        }
+        if sql.contains("information_schema.columns") {
+            self.result = Some(vec![row([("cnt", 1_i64.into())])]);
+        } else if sql.contains("ROW_NUMBER") {
+            self.result = Some(self.db.aggregate(sql, p));
+        } else if sql.starts_with("SELECT family_id, email, expires_at") {
+            let jti = p_text(p, 0).unwrap();
+            let rows = self.db.rows.lock().unwrap();
+            self.result = Some(
+                rows.iter()
+                    .filter(|t| t.jti == jti)
+                    .map(|t| {
+                        row([
+                            ("family_id", t.family_id.as_str().into()),
+                            ("email", t.email.as_str().into()),
+                            ("expires_at", t.expires_at.into()),
+                            ("replaced_by", opt_text(&t.replaced_by)),
+                            ("revoked_at", t.revoked_at.into()),
+                            ("revoke_reason", opt_text(&t.revoke_reason)),
+                        ])
+                    })
+                    .collect(),
+            );
+        } else if sql.starts_with("SELECT replaced_by, revoked_at, revoke_reason") {
+            let jti = p_text(p, 0).unwrap();
+            let rows = self.db.rows.lock().unwrap();
+            self.result = Some(
+                rows.iter()
+                    .filter(|t| t.jti == jti)
+                    .map(|t| row([("replaced_by", opt_text(&t.replaced_by)), ("revoked_at", t.revoked_at.into()), ("revoke_reason", opt_text(&t.revoke_reason))]))
+                    .collect(),
+            );
+        } else if sql.starts_with("INSERT INTO refresh_tokens") {
+            let tok = Tok {
+                jti: p_text(p, 0).unwrap(),
+                family_id: p_text(p, 1).unwrap(),
+                email: p_text(p, 2).unwrap(),
+                issued_at: p_int(p, 3),
+                expires_at: p_int(p, 4),
+                replaced_by: None,
+                revoked_at: None,
+                revoke_reason: None,
+                client_ip: p_text(p, 5),
+                user_agent: p_text(p, 6),
+            };
+            let mut rows = self.db.rows.lock().unwrap();
+            match rows.iter_mut().find(|t| t.jti == tok.jti) {
+                Some(existing) if sql.contains("ON DUPLICATE KEY UPDATE") => *existing = tok,
+                Some(_) => return Err(DbError::IntegrityError("중복 jti".to_string())),
+                None => rows.push(tok),
+            }
+        } else if sql.starts_with("UPDATE refresh_tokens SET replaced_by") {
+            let jti = p_text(p, 3).unwrap();
+            for t in self.db.rows.lock().unwrap().iter_mut().filter(|t| t.jti == jti) {
+                t.replaced_by = p_text(p, 0);
+                t.revoked_at = Some(p_int(p, 1));
+                t.revoke_reason = p_text(p, 2);
+            }
+        } else if sql.starts_with("UPDATE refresh_tokens") && sql.contains("COALESCE") {
+            let family = p_text(p, 2).unwrap();
+            for t in self.db.rows.lock().unwrap().iter_mut().filter(|t| t.family_id == family) {
+                t.revoked_at = t.revoked_at.or(Some(p_int(p, 0)));
+                if t.revoke_reason.as_deref().is_none_or(|r| r == "rotated") {
+                    t.revoke_reason = p_text(p, 1);
+                }
+            }
+        } else {
+            return Err(DbError::Other(format!("MemDb 가 모르는 SQL: {sql}")));
+        }
+        Ok(())
+    }
+
+    fn executemany(&mut self, _sql: &str, _seq: &[Vec<DbValue>]) -> Result<(), DbError> {
+        Ok(())
+    }
+
+    fn fetchall(&mut self) -> Option<Vec<Row>> {
+        self.result.take()
+    }
+
+    fn fetchone(&mut self) -> Option<Row> {
+        self.result.as_mut().and_then(|r| (!r.is_empty()).then(|| r.remove(0)))
+    }
+
+    fn rowcount(&self) -> u64 {
+        self.result.as_ref().map_or(0, |r| r.len() as u64)
+    }
+}
+
+impl DbConnection for MemConn {
+    fn cursor(&mut self) -> Box<dyn DbCursor> {
+        Box::new(MemCursor { db: self.db.clone(), result: None })
+    }
+
+    fn commit(&mut self) -> Result<(), DbError> {
+        Ok(())
+    }
+
+    fn rollback(&mut self) -> Result<(), DbError> {
+        Ok(())
+    }
+
+    fn close(&mut self) {}
+}
+
+// ---- 회전 상태머신 (메모리 MySQL 대역) ----
 
 #[test]
 fn test_rotate_success() {
@@ -369,30 +590,42 @@ fn test_rotate_rejects_family_or_email_mismatch() {
 
 #[test]
 fn test_rotate_rejects_expired_token_without_creating_replacement() {
-    let dir = TempDir::new().unwrap();
-    let db_path = dir.path().join("refresh_tokens.sqlite3");
-    let store = RefreshTokenStore::new(db_path.to_str().unwrap()).unwrap();
+    let (store, db) = mem_store();
     let now = now();
     issue(&store, "token-1", "family-1", "admin@example.com", now - 100, now - 1);
 
     let result = rot(&store, "token-1", "token-2", "family-1", "admin@example.com", now, now + 1000);
 
     assert_eq!(result, "expired");
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM refresh_tokens WHERE jti = ?1", ["token-2"], |r| r.get(0)).unwrap();
-    assert_eq!(count, 0);
+    assert_eq!(db.count("token-2"), 0);
 }
 
 // --- N3: MySQL 공유 백엔드 (replica 간 일관성) ---
 
 #[test]
+#[ignore = "SQLite 저장소 미구현: rusqlite 미승인. 운영은 mysql"]
 fn test_factory_defaults_to_sqlite() {
-    let dir = TempDir::new().unwrap();
+    // Python: TM_REFRESH_TOKEN_BACKEND 가 없으면 TM_REFRESH_TOKEN_DB 의 SQLite 저장소를 만든다.
+    unimplemented!("SQLite 저장소 미구현");
+}
+
+#[test]
+fn test_factory_rejects_sqlite_backend() {
+    // Rust 백엔드는 SQLite 저장소를 지원하지 않는다. 명확한 오류를 돌려준다.
+    let mut env = EnvGuard::new();
+    for value in ["sqlite", "unknown"] {
+        env.set("TM_REFRESH_TOKEN_BACKEND", value);
+        let err = create_refresh_token_store_with(provider_of(&FakeConn::new(None))).err().unwrap();
+        assert!(err.to_string().contains("TM_REFRESH_TOKEN_BACKEND=mysql"), "{err}");
+    }
+}
+
+#[test]
+fn test_factory_defaults_to_mysql() {
     let mut env = EnvGuard::new();
     env.remove("TM_REFRESH_TOKEN_BACKEND");
-    env.set("TM_REFRESH_TOKEN_DB", dir.path().join("x.sqlite3").to_str().unwrap());
-    let store = create_refresh_token_store().unwrap();
-    assert!(matches!(store, AnyRefreshTokenStore::Sqlite(_)));
+    let store = create_refresh_token_store_with(provider_of(&FakeConn::new(None))).unwrap();
+    assert!(matches!(store, AnyRefreshTokenStore::MySql(_)));
 }
 
 #[test]
@@ -630,7 +863,7 @@ fn test_mysql_get_token_observation_returns_none_for_unknown_token() {
 // ========== Admin 세션 관리: 집계/폐기 ==========
 
 /// 활성/폐기/만료 family 를 각각 하나씩 만든 store 를 돌려준다. TempDir은 store보다 오래 살아야 한다.
-fn session_fixture() -> (TempDir, RefreshTokenStore, i64) {
+fn session_fixture() -> (TempDir, MySQLRefreshTokenStore, i64) {
     let dir = TempDir::new().unwrap();
     let store = new_store(&dir, "sessions.sqlite3");
     let now = now();
@@ -1012,23 +1245,10 @@ fn test_store_truncates_oversized_client_info() {
 }
 
 #[test]
+#[ignore = "SQLite 저장소 미구현: rusqlite 미승인. 운영은 mysql"]
 fn test_sqlite_migration_adds_client_columns() {
-    // 컬럼 추가 이전 스키마의 DB 를 열어도 ALTER 로 보정되고 조회가 동작한다.
-    let dir = TempDir::new().unwrap();
-    let db_path = dir.path().join("legacy.sqlite3");
-    let legacy = rusqlite::Connection::open(&db_path).unwrap();
-    legacy.execute("CREATE TABLE refresh_tokens (jti TEXT PRIMARY KEY, family_id TEXT NOT NULL, email TEXT NOT NULL, issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, replaced_by TEXT, revoked_at INTEGER, revoke_reason TEXT)", []).unwrap();
-    let now = now();
-    legacy.execute("INSERT INTO refresh_tokens VALUES ('t1', ?1, 'admin@example.com', ?2, ?3, NULL, NULL, NULL)", rusqlite::params![fam('a'), now, now + 1000]).unwrap();
-    drop(legacy);
-
-    let store = RefreshTokenStore::new(db_path.to_str().unwrap()).unwrap();
-
-    let check = rusqlite::Connection::open(&db_path).unwrap();
-    let mut stmt = check.prepare("SELECT name FROM pragma_table_info('refresh_tokens')").unwrap();
-    let columns: HashSet<String> = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(|r| r.unwrap()).collect();
-    assert!(["client_ip", "user_agent"].iter().all(|c| columns.contains(*c)), "{columns:?}");
-    assert_eq!(items_of(&store.list_sessions(&all()).unwrap())[0]["client_ip"], json!(""));
+    // Python: 컬럼 추가 이전 스키마의 SQLite 파일을 열어도 ALTER 로 client_ip/user_agent 가 붙고 조회가 동작한다.
+    unimplemented!("SQLite 저장소 미구현");
 }
 
 #[test]
@@ -1160,14 +1380,12 @@ fn test_summarize_user_agent_with_only_browser_or_only_os() {
 }
 
 #[test]
-#[ignore = "mock.patch: 모듈 전역 _UA_BROWSER_PATTERNS를 버전 그룹 없는 패턴으로 바꾼다; DI 설계 후 활성화"]
 fn test_parse_browser_name_version_returns_none_when_pattern_has_no_version() {
     let patterns = [(regex::Regex::new("Foo").unwrap(), "Foo {0}")];
     assert!(backend::refresh_token_store::_parse_browser_name_version_with("Foo/1", &patterns).is_none());
 }
 
 #[test]
-#[ignore = "seam 미확정: MAX_SESSION_GROUPS 설정자(with_max_session_groups)가 문서 4.1에 없다"]
 fn test_sqlite_session_rows_warns_when_limit_is_reached() {
     let (_dir, store, _) = session_fixture();
     let store = store.with_max_session_groups(1);
@@ -1178,7 +1396,6 @@ fn test_sqlite_session_rows_warns_when_limit_is_reached() {
 }
 
 #[test]
-#[ignore = "seam 미확정: MAX_SESSION_GROUPS 설정자(with_max_session_groups)가 문서 4.1에 없다"]
 fn test_mysql_session_rows_warns_when_limit_is_reached() {
     // MagicMock 커서 대신 FakeConn을 쓴다. fetchall은 [{"family_id": "F"}]를 돌려준다.
     let conn = FakeConn::new(Some(row([("family_id", "F".into())])));

@@ -21,6 +21,7 @@ diesel = { version = "2.3.14", default-features = false, features = ["mysql", "r
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 log = "0.4.34"
 mysqlclient-sys = { version = "0.5.2", features = ["bundled"] }
+regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 sysdeps = { path = "../libs/sysdeps" }
@@ -33,6 +34,10 @@ path = "../tests/rust/backend/db.rs"
 [[test]]
 name = "common_smoke"
 path = "../tests/rust/backend/common_smoke.rs"
+
+[[test]]
+name = "refresh_token_store"
+path = "../tests/rust/backend/refresh_token_store.rs"
 
 [[test]]
 name = "view_history_store"
