@@ -60,6 +60,46 @@ pub trait BookSearch {
     fn search_similar_docs(&self, summary: &str) -> Result<Vec<Hit>, EsError>;
 }
 
+/// 문서 갱신에 쓰는 필드. 비어 있거나 0인 값은 보내지 않는다(원본 `ESManager.update`와 같다).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UpdateFields {
+    pub category: String,
+    pub title: String,
+    pub author: String,
+    pub file_path: String,
+    pub file_type: String,
+    pub file_size: i64,
+    pub summary: String,
+    pub updated_time: String,
+}
+
+impl UpdateFields {
+    fn to_doc(&self) -> Value {
+        let mut doc = serde_json::Map::new();
+        for (key, value) in [("category", &self.category), ("title", &self.title), ("author", &self.author), ("file_path", &self.file_path), ("file_type", &self.file_type)] {
+            if !value.is_empty() {
+                doc.insert(key.into(), json!(value));
+            }
+        }
+        if self.file_size != 0 {
+            doc.insert("file_size".into(), json!(self.file_size));
+        }
+        for (key, value) in [("summary", &self.summary), ("updated_time", &self.updated_time)] {
+            if !value.is_empty() {
+                doc.insert(key.into(), json!(value));
+            }
+        }
+        Value::Object(doc)
+    }
+}
+
+/// 문서 쓰기·조회·삭제. 테스트가 실제 ES 없이 CLI를 확인할 수 있게 분리했다.
+pub trait BookStore {
+    fn update(&self, doc_id: i64, fields: &UpdateFields) -> Result<bool, EsError>;
+    fn search_by_id(&self, doc_id: i64) -> Result<Value, EsError>;
+    fn delete(&self, doc_id: i64) -> Result<bool, EsError>;
+}
+
 pub struct EsClient {
     agent: ureq::Agent,
     base: String,
@@ -100,6 +140,7 @@ impl EsClient {
         let url = format!("{}{path}", self.base);
         let result = match (method, body) {
             ("POST", Some(b)) => self.agent.post(&url).header("Authorization", &self.auth).send_json(b),
+            ("DELETE", _) => self.agent.delete(&url).header("Authorization", &self.auth).call(),
             _ => self.agent.get(&url).header("Authorization", &self.auth).call(),
         };
         let mut resp = result.map_err(|e| EsError::Transport(e.to_string()))?;
@@ -188,6 +229,44 @@ impl EsClient {
             query["bool"]["must_not"] = json!([{"term": {"_id": id.to_string()}}]);
         }
         self.search(query, n, Some(&LIST_SOURCE_FIELDS))
+    }
+}
+
+impl EsClient {
+    /// 문서의 일부 필드를 갱신한다(`refresh=true`). 샤드 실패가 있으면 `false`다. 없는 문서는 오류다.
+    pub fn update(&self, doc_id: i64, fields: &UpdateFields) -> Result<bool, EsError> {
+        let body = json!({"doc": fields.to_doc()});
+        let response = self.call("POST", &format!("/{}/_update/{doc_id}?refresh=true", self.index), Some(&body))?;
+        Ok(response["_shards"]["failed"].as_i64().is_none_or(|failed| failed <= 0))
+    }
+
+    /// 문서 하나의 `_source`. 없으면 빈 객체다.
+    pub fn search_by_id(&self, doc_id: i64) -> Result<Value, EsError> {
+        match self.call("GET", &format!("/{}/_doc/{doc_id}", self.index), None) {
+            Ok(response) => Ok(response["_source"].clone()),
+            Err(EsError::Status { status: 404, .. }) => Ok(json!({})),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// 문서를 지운다(`refresh=true`). 결과가 `deleted`일 때만 `true`다. 없는 문서는 오류다.
+    pub fn delete(&self, doc_id: i64) -> Result<bool, EsError> {
+        let response = self.call("DELETE", &format!("/{}/_doc/{doc_id}?refresh=true", self.index), None)?;
+        Ok(response["result"] == "deleted")
+    }
+}
+
+impl BookStore for EsClient {
+    fn update(&self, doc_id: i64, fields: &UpdateFields) -> Result<bool, EsError> {
+        EsClient::update(self, doc_id, fields)
+    }
+
+    fn search_by_id(&self, doc_id: i64) -> Result<Value, EsError> {
+        EsClient::search_by_id(self, doc_id)
+    }
+
+    fn delete(&self, doc_id: i64) -> Result<bool, EsError> {
+        EsClient::delete(self, doc_id)
     }
 }
 

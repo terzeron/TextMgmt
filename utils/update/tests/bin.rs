@@ -1,0 +1,65 @@
+//! 바이너리 진입점 테스트: 실제 실행 파일을 띄워 종료 코드와 출력을 확인한다.
+
+use std::process::Command;
+
+fn bin() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_update"))
+}
+
+#[test]
+fn no_arguments_print_the_usage_and_exit_zero_without_connecting() {
+    let out = bin().env_remove("TM_ES_URL").output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("사용법") && text.contains("update run"), "{text}");
+}
+
+#[test]
+fn run_without_the_environment_exits_255_before_touching_anything() {
+    let out = bin().arg("run").env_remove("TM_ES_URL").env_remove("TM_ES_USER").env_remove("TM_ES_PASSWORD").env_remove("TM_ES_BOOK_INDEX").output().unwrap();
+    assert_eq!(out.status.code(), Some(255));
+    assert!(String::from_utf8(out.stderr).unwrap().contains("TM_ES_BOOK_INDEX"));
+}
+
+/// 요청 줄만 보고 ES처럼 답하는 서버. 요청 수만큼 연결을 받는다.
+fn mock_es(requests: usize) -> (String, std::thread::JoinHandle<Vec<String>>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let handle = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        for _ in 0..requests {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = vec![0u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let head = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let line = head.lines().next().unwrap().to_owned();
+            let body = if line.starts_with("GET / ") {
+                r#"{"version": {"number": "8.0.0"}}"#
+            } else if line.contains("_update") {
+                r#"{"_shards": {"failed": 0}}"#
+            } else if line.starts_with("GET") {
+                r#"{"_source": {"book_id": 3384, "title": "test title2"}}"#
+            } else {
+                r#"{"result": "deleted"}"#
+            };
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            seen.push(line);
+        }
+        seen
+    });
+    (url, handle)
+}
+
+#[test]
+fn run_walks_through_update_get_and_delete_against_a_mock_server() {
+    let (url, server) = mock_es(4);
+    let out = bin().arg("run").env("TM_ES_URL", &url).env("TM_ES_USER", "u").env("TM_ES_PASSWORD", "p").env("TM_ES_BOOK_INDEX", "books").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8(out.stdout).unwrap().contains("{'book_id': 3384, 'title': 'test title2'}"));
+    assert!(String::from_utf8(out.stderr).unwrap().contains("Elasticsearch 연결 성공"));
+    let seen = server.join().unwrap();
+    assert_eq!(seen[1], "POST /books/_update/3384?refresh=true HTTP/1.1");
+    assert_eq!(seen[2], "GET /books/_doc/3384 HTTP/1.1");
+    assert_eq!(seen[3], "DELETE /books/_doc/3384?refresh=true HTTP/1.1");
+}

@@ -232,3 +232,84 @@ fn the_book_search_trait_uses_the_default_arguments() {
     assert_eq!(body["query"]["bool"]["should"][2]["more_like_this"]["like"], "요약");
     assert!(body["query"]["bool"].get("must_not").is_none());
 }
+
+// ---- 문서 갱신·조회·삭제 ----
+
+#[test]
+fn update_sends_only_the_given_fields_with_refresh() {
+    let (url, rx) = serve_once(200, json!({"_shards": {"total": 1, "successful": 1, "failed": 0}}));
+    let fields = es_client::UpdateFields { category: "2_utf8".into(), title: "test title2".into(), file_size: 10_000_000, ..Default::default() };
+    assert!(client(&url).update(3384, &fields).unwrap());
+    let req = rx.recv().unwrap();
+    assert_eq!(req.request_line, "POST /books/_update/3384?refresh=true HTTP/1.1");
+    assert_eq!(req.body, json!({"doc": {"category": "2_utf8", "title": "test title2", "file_size": 10_000_000}}));
+}
+
+#[test]
+fn update_sends_every_field_when_all_are_given() {
+    let (url, rx) = serve_once(200, json!({"_shards": {"failed": 0}}));
+    let f = es_client::UpdateFields {
+        category: "c".into(),
+        title: "t".into(),
+        author: "a".into(),
+        file_path: "/p".into(),
+        file_type: "epub".into(),
+        file_size: 5,
+        summary: "s".into(),
+        updated_time: "2026-01-01T00:00:00".into(),
+    };
+    client(&url).update(1, &f).unwrap();
+    let doc = rx.recv().unwrap().body["doc"].clone();
+    assert_eq!(doc, json!({"category": "c", "title": "t", "author": "a", "file_path": "/p", "file_type": "epub", "file_size": 5, "summary": "s", "updated_time": "2026-01-01T00:00:00"}));
+}
+
+#[test]
+fn update_is_false_when_a_shard_failed_and_true_without_shard_info() {
+    let (url, _rx) = serve_once(200, json!({"_shards": {"failed": 2}}));
+    assert!(!client(&url).update(1, &Default::default()).unwrap());
+    let (url, _rx) = serve_once(200, json!({"result": "updated"}));
+    assert!(client(&url).update(1, &Default::default()).unwrap());
+    let (url, _rx) = serve_once(200, json!({"_shards": {"total": 1}}));
+    assert!(client(&url).update(1, &Default::default()).unwrap());
+}
+
+#[test]
+fn update_of_a_missing_document_is_an_error_like_the_python_client() {
+    let (url, _rx) = serve_once(404, json!({"error": {"type": "document_missing_exception"}}));
+    assert!(matches!(client(&url).update(3384, &Default::default()).unwrap_err(), EsError::Status { status: 404, .. }));
+}
+
+#[test]
+fn search_by_id_returns_the_source_or_an_empty_object_when_missing() {
+    let (url, rx) = serve_once(200, json!({"_id": "7", "_source": {"title": "책", "summary": "요약"}}));
+    assert_eq!(client(&url).search_by_id(7).unwrap(), json!({"title": "책", "summary": "요약"}));
+    assert_eq!(rx.recv().unwrap().request_line, "GET /books/_doc/7 HTTP/1.1");
+    let (url, _rx) = serve_once(404, json!({"found": false}));
+    assert_eq!(client(&url).search_by_id(7).unwrap(), json!({}));
+    let (url, _rx) = serve_once(500, json!({"error": "boom"}));
+    assert!(matches!(client(&url).search_by_id(7).unwrap_err(), EsError::Status { status: 500, .. }));
+}
+
+#[test]
+fn delete_is_true_only_when_the_result_is_deleted() {
+    let (url, rx) = serve_once(200, json!({"result": "deleted"}));
+    assert!(client(&url).delete(3384).unwrap());
+    assert_eq!(rx.recv().unwrap().request_line, "DELETE /books/_doc/3384?refresh=true HTTP/1.1");
+    let (url, _rx) = serve_once(200, json!({"result": "noop"}));
+    assert!(!client(&url).delete(3384).unwrap());
+    let (url, _rx) = serve_once(200, json!({}));
+    assert!(!client(&url).delete(3384).unwrap());
+    let (url, _rx) = serve_once(404, json!({"result": "not_found"}));
+    assert!(matches!(client(&url).delete(3384).unwrap_err(), EsError::Status { status: 404, .. }));
+}
+
+#[test]
+fn the_book_store_trait_delegates_to_the_client() {
+    use es_client::BookStore;
+    let (url, _rx) = serve_once(200, json!({"_shards": {"failed": 0}}));
+    assert!(BookStore::update(&client(&url), 1, &Default::default()).unwrap());
+    let (url, _rx) = serve_once(200, json!({"_source": {"a": 1}}));
+    assert_eq!(BookStore::search_by_id(&client(&url), 1).unwrap(), json!({"a": 1}));
+    let (url, _rx) = serve_once(200, json!({"result": "deleted"}));
+    assert!(BookStore::delete(&client(&url), 1).unwrap());
+}

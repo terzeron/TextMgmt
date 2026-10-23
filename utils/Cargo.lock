@@ -1442,6 +1442,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
 
 [[package]]
+name = "update"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "es_client",
+ "search",
+ "serde_json",
+]
+
+[[package]]
 name = "ureq"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
