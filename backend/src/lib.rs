@@ -18,3 +18,6 @@ pub mod comics;
 pub mod comics_manager;
 pub mod bookstore;
 pub mod auth;
+pub mod book_manager;
+pub mod pdf;
+pub mod classifier;

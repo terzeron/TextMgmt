@@ -40,7 +40,7 @@
 //! - `backend::classifier::Classify { fn is_available(&self) -> bool; fn classify_path(&self, &Path, Option<f64>) -> Result<Prediction, String>; fn classify_document(&self, &Value, Option<f64>) -> Result<Prediction, String> }`
 //! - `backend::classifier::model::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str) -> Prediction`
 //! - `backend::es_manager::{EsManagerApi, EsError, ESManager::connect(env, connector, clock)}` (문서 3.3. 대역은 `common::es_fake::FakeEsManager`)
-//! - 파일 읽기(`Loader.read_file`)는 이미 있는 `loader` crate의 `loader::record::read_file`을 쓴다. (실제 ES 테스트에서만)
+//! - 파일 읽기(`Loader.read_file`)는 `backend::book_manager::DefaultFileReader`로 대신한다(실제 ES 테스트에서만). `loader` crate에는 의존하지 않는다.
 //!
 //! TODO(common): 아래 로컬 정의는 common에 같은 것이 생기면 지운다. `FnFileReader`(FileReader 대역), `StaticPdfDoc`/`FakePdfOpener`/`FakePdfPageOps`(문서 3.11의 `fake_pdf.rs`),
 //! `BackfillEs`(`FakeEsManager::on_backfill_created_time`).
@@ -232,21 +232,31 @@ impl EsManagerApi for BackfillEs {
 // 실제 ES / Loader 대응 (TestBookManager 전용)
 // ---------------------------------------------------------------------------
 
-/// `Loader.read_file(path)` 대응. 이미 있는 `loader` crate의 `read_file`로 문서 하나를 만든다.
+/// `Loader.read_file(path)` 대응. 기본 `FileReader`(`DefaultFileReader`)로 문서 하나를 만든다.
+/// 운영용 `loader::record::read_file`은 사용자의 미커밋 crate라 쓰지 않는다. 이 테스트는 카테고리·제목·저자·크기·형식만 확인한다.
 fn loader_read_file(path: &Path) -> Docs {
-    let book_dir = std::env::var("TM_BOOK_DIR").unwrap();
-    let comics_dir = std::env::var("TM_COMICS_DIR").unwrap();
-    let cfg = loader::config::Config::new(book_dir, comics_dir);
-    // PDF 단계를 자식 프로세스로 돌리는 실행 파일은 여기서 쓰지 않는다.
-    let runner = loader::cli::ChildRunner::new(PathBuf::from("/nonexistent"));
-    let outcome = loader::record::read_file(&cfg, path, None, false, None, &runner, stat::Stat::global());
-    outcome.item.into_iter().collect()
+    let book_dir = PathBuf::from(std::env::var("TM_BOOK_DIR").unwrap());
+    backend::book_manager::DefaultFileReader::new(book_dir).read_file(path, None)
 }
 
-/// `Loader.read_files(path, num_files=5)` 대응.
+/// `Loader.read_files(path, num_files=5)` 대응. 디렉토리를 재귀로 훑어 이름순으로 앞의 `num_files`개를 읽는다.
 fn loader_read_files(root: &Path, num_files: usize) -> Docs {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        paths.sort();
+        for path in paths {
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.is_file() {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(root, &mut files);
     let mut data = Docs::new();
-    for file in loader::flow::recursive_files(root).into_iter().take(num_files) {
+    for file in files.into_iter().take(num_files) {
         data.extend(loader_read_file(&file));
     }
     data
@@ -340,7 +350,7 @@ mod test_book_manager {
         for (key, value) in result.iter() {
             // 키는 String, 값은 정수여야 한다
             let _: &String = key;
-            assert!(is_int(value), "카테고리 {key}의 값이 정수가 아니다: {value}");
+            assert!(is_int(&json!(value)), "카테고리 {key}의 값이 정수가 아니다: {value}");
         }
     }
 
@@ -1671,7 +1681,6 @@ fn test_book_manager_init_requires_env() {
 }
 
 #[test]
-#[ignore = "seam 일부 미정: common FakeEsManager에 backfill 훅이 없어 로컬 BackfillEs로 대신했다(TODO(common)). from_env 시작 때 백필 스레드를 띄우는 방식은 구현 뒤 확인"]
 fn test_book_manager_created_time_backfill_does_not_block_init() {
     let tmp = TempDir::new().unwrap();
     let started = Event::new();
@@ -2082,7 +2091,6 @@ fn test_reload_category_mismatch_details_batches_large_fs_only_list() {
 }
 
 #[test]
-#[ignore = "seam 미정: get_category_mismatches/get_category_mismatch_details 바꿔치기(`with_*_override`)가 문서 3.12에 없다"]
 fn test_reload_category_mismatches_indexes_missing_files_and_deletes_stale_docs() {
     let tmp = TempDir::new().unwrap();
     let tmp_path = tmp.path();
@@ -2143,7 +2151,6 @@ fn test_reload_category_mismatches_indexes_missing_files_and_deletes_stale_docs(
 }
 
 #[test]
-#[ignore = "seam 미정: get_category_mismatch_details 바꿔치기(`with_*_override`)가 문서 3.12에 없다"]
 fn test_reload_category_mismatch_files_limits_to_selected_category() {
     let tmp = TempDir::new().unwrap();
     let tmp_path = tmp.path();
@@ -2203,7 +2210,6 @@ fn test_reload_category_mismatch_files_limits_to_selected_category() {
 /// 이전에는 시작 시 before_count 1회만 emit하고, 실제 카운트는 작업이 끝난 뒤에야
 /// 기록돼서 화면의 잔여 건수가 작업 내내 최초 대상 건수에 고정됐다.
 #[test]
-#[ignore = "seam 미정: get_category_mismatch_details 바꿔치기(`with_*_override`)가 문서 3.12에 없다"]
 fn test_reload_category_mismatch_files_reports_progress_during_run() {
     let tmp = TempDir::new().unwrap();
     let tmp_path = tmp.path();
@@ -2255,7 +2261,6 @@ fn test_reload_category_mismatch_files_reports_progress_during_run() {
 
 /// 일괄 재적재도 카테고리 경계가 아니라 파일 단위로 누적 진행률을 보고해야 한다.
 #[test]
-#[ignore = "seam 미정: get_category_mismatches/get_category_mismatch_details 바꿔치기(`with_*_override`)가 문서 3.12에 없다"]
 fn test_reload_category_mismatches_reports_progress_within_category() {
     let tmp = TempDir::new().unwrap();
     let tmp_path = tmp.path();
@@ -2446,7 +2451,6 @@ fn test_propose_category_changes_rejects_invalid_category() {
 
 /// 스캔된 경로가 corpus 밖이면(ValueError) 그 항목만 실패로 남기고 계속한다.
 #[test]
-#[ignore = "seam 미정: _iter_category_indexable_files 바꿔치기(`with_iter_category_indexable_files_override`)가 문서 3.12에 없다"]
 fn test_propose_category_changes_records_value_error() {
     let tmp = TempDir::new().unwrap();
     let tmp_path = tmp.path();
@@ -2461,7 +2465,6 @@ fn test_propose_category_changes_records_value_error() {
 
 /// 제안 생성이 학습된 모델의 판정을 그대로 제안에 담는지 본다. 파일은 옮기지 않는다.
 #[test]
-#[ignore = "seam 미정: _is_high_confidence 바꿔치기(`with_is_high_confidence_override`)가 문서 3.12에 없다"]
 fn test_propose_category_changes_uses_the_supervised_model() {
     let tmp = TempDir::new().unwrap();
     let tmp_path = tmp.path();
@@ -2699,7 +2702,6 @@ fn test_update_book_reindex_exception_rollback_failure() {
 
 /// Lines 875-876: PermissionError in count_files helper
 #[test]
-#[ignore = "FsOps.read_dir 호출 횟수 의미가 미정: scandir과 read_dir을 하나로 합쳐(3.5) 두 번째 호출의 의미가 구현마다 달라진다"]
 fn test_category_mismatch_count_files_permission_error() {
     let tmp = TempDir::new().unwrap();
     let tmp_path = tmp.path();
@@ -2727,7 +2729,6 @@ fn test_category_mismatch_count_files_permission_error() {
 
 /// Lines 899-900: PermissionError during L2 scandir
 #[test]
-#[ignore = "FsOps.read_dir 호출 횟수 의미가 미정: scandir과 read_dir을 하나로 합쳐(3.5) 세 번째 호출부터의 의미가 구현마다 달라진다"]
 fn test_category_mismatch_l2_scandir_error() {
     let tmp = TempDir::new().unwrap();
     let tmp_path = tmp.path();
