@@ -21,22 +21,20 @@
 //!
 //! `lxml`은 `roxmltree`로, PIL은 `image`로, `zipfile`은 `zip`으로 옮겼다. PIL 색 이름은 `common::image::color`로 푼다.
 //! ZIP 쓰기·읽기와 이미지 인코딩은 `common::{zipx, image}`를, ES 대역은 `common::es_fake::FakeEsManager`를 쓴다.
-//! `book_fixtures`에서는 `FakeManager`(라우트 테스트용 `BookManagerApi` 대역)만 아직 `#[path]`로 가져온다(TODO).
+//! `book_fixtures`는 옛 API(`loader`, `AddBook` 등)에 묶여 컴파일되지 않아 `FakeManager`(라우트 테스트용 `BookManagerApi` 대역)를 이 파일에 둔다.
 
 mod common;
-#[path = "common/book_fixtures.rs"]
-mod fx;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
-use backend::epub_cover::{CoverError, EditImages, OPF_NS, edit_images, edit_page_images, read_package, revision};
-use backend::main::{AppDeps, AuthMode, app_with};
+use backend::epub_cover::{CoverError, EditImages, EpubCoverHooks, Limits, OPF_NS, edit_images, edit_images_with, edit_page_images, read_package, revision};
+use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
 use common::image::{b64, color, encode, image_size, jpeg_bytes};
@@ -159,6 +157,31 @@ fn size(data: &[u8]) -> (u32, u32) {
 
 fn text_of(members: &BTreeMap<String, Vec<u8>>, name: &str) -> String {
     String::from_utf8(members[name].clone()).unwrap()
+}
+
+/// `MagicMock` book_manager. 호출 인자를 기록하고 정해 둔 `(result, error)`를 돌려준다.
+struct FakeManager {
+    edit_epub_images: Mutex<(Option<Value>, Option<String>)>,
+    /// (메서드 이름, 인자 목록): `await_args.args`에 대응한다.
+    calls: Mutex<Vec<(String, Vec<Value>)>>,
+}
+
+impl FakeManager {
+    fn new() -> Arc<Self> {
+        Arc::new(Self { edit_epub_images: Mutex::new((Some(json!({"idrefs": {"inserted": [], "split": {}}})), None)), calls: Mutex::new(Vec::new()) })
+    }
+
+    fn args(&self, method: &str) -> Vec<Value> {
+        self.calls.lock().unwrap().iter().rev().find(|(m, _)| m == method).map(|(_, a)| a.clone()).unwrap_or_else(|| panic!("{method}가 불리지 않았다"))
+    }
+}
+
+#[async_trait]
+impl BookManagerApi for FakeManager {
+    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> (Option<Value>, Option<String>) {
+        self.calls.lock().unwrap().push(("edit_epub_images".into(), vec![json!(book_id), json!(crops), json!(splits), json!(deletes), json!(inserts)]));
+        self.edit_epub_images.lock().unwrap().clone()
+    }
 }
 
 /// `book` fixture: (책 경로, 휴지통 경로)
@@ -407,7 +430,7 @@ fn test_combined_request_is_applied_atomically() {
     let mut archive = ZipArchive::new(File::open(&b.path).unwrap()).unwrap();
     for i in 0..archive.len() {
         let mut f = archive.by_index(i).unwrap();
-        std::io::copy(&mut f, &mut std::io::sink()).unwrap_or_else(|e| panic!("{}: {e}", f.name()));
+        std::io::copy(&mut f, &mut std::io::sink()).unwrap_or_else(|e| panic!("{:?}: {e}", f.name()));
     }
 }
 
@@ -518,8 +541,8 @@ async fn test_manager_reports_errors_as_messages() {
 mod test_route {
     use super::*;
 
-    fn client() -> (TestClient, Arc<fx::FakeManager>) {
-        let fake = fx::FakeManager::new();
+    fn client() -> (TestClient, Arc<FakeManager>) {
+        let fake = FakeManager::new();
         let app = app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(fake.clone()));
         (TestClient::with_app(app), fake)
     }
@@ -680,7 +703,7 @@ fn verify(path: &Path) {
     let mut archive = ZipArchive::new(File::open(path).unwrap()).unwrap();
     for i in 0..archive.len() {
         let mut f = archive.by_index(i).unwrap();
-        std::io::copy(&mut f, &mut std::io::sink()).unwrap_or_else(|e| panic!("{}: {e}", f.name()));
+        std::io::copy(&mut f, &mut std::io::sink()).unwrap_or_else(|e| panic!("{:?}: {e}", f.name()));
     }
     read_package(&mut archive).unwrap();
 }
@@ -832,4 +855,92 @@ fn test_undecodable_page_is_refused() {
     let path = make_multi(&tmp.path().join("bad.epub"), &page);
     let result = edit(&path, &tmp.path().join("0_trash"), EditImages { deletes: vec![json!({"idref": "multi", "index": 0})], ..EditImages::default() });
     assert!(result.is_err());
+}
+
+// ── 입력 검증과 상한(Python보다 엄격한 부분) ───────────────────────────────────
+
+fn edit_with(b: &Book, hooks: &EpubCoverHooks, args: EditImages) -> Result<Value, CoverError> {
+    edit_images_with(&b.path, &revision(&b.path), &b.trash, EditImages { backup_name: Some("book.epub".to_string()), ..args }, hooks)
+}
+
+#[test]
+fn test_edit_counts_and_indexes_are_capped() {
+    let b = book();
+    let original = fs::read(&b.path).unwrap();
+    let deletes: Vec<Value> = (0..501).map(|i| json!({"idref": "multi", "index": i})).collect();
+    assert_refused(b.edit(EditImages { deletes, ..EditImages::default() }), "항목 수", "501 deletes");
+    let inserts: Vec<(String, Vec<u8>)> = (0..101).map(|_| ("p1".to_string(), jpeg("red"))).collect();
+    assert_refused(b.edit(EditImages { inserts, ..EditImages::default() }), "항목 수", "101 inserts");
+    assert_refused(b.edit(EditImages { deletes: vec![json!({"idref": "p1", "index": 10001})], ..EditImages::default() }), "위치", "index 10001");
+    assert_refused(b.edit(EditImages { deletes: vec![json!({"idref": "p1", "index": 1.5})], ..EditImages::default() }), "위치", "index 1.5");
+    assert_eq!(fs::read(&b.path).unwrap(), original);
+}
+
+#[test]
+fn test_malformed_crop_rectangles_are_refused() {
+    let b = book();
+    let original = fs::read(&b.path).unwrap();
+    let cases = [json!([0, 0, "a", 1, 0]), json!([0, 0, 1]), json!([0, 0, 1, 1, 0, 0]), json!(null), json!("0,0,1,1"), json!([0, 0, f64::NAN, 1, 0]), json!([0, 0, 1, 1, 400]), json!([0, 0, 1, 1e308, 0]), json!([-0.5, 0, 1, 1, 0])];
+    for rect in cases {
+        let label = rect.to_string();
+        assert!(b.edit(EditImages { crops: vec![json!({"idref": "p1", "rect": rect})], ..EditImages::default() }).is_err(), "{label}");
+    }
+    assert_refused(b.edit(EditImages { crops: vec![json!({"idref": "p1", "rect": [0, 0, 1, 1, 90]})], ..EditImages::default() }), "기울어진", "90도로 이미지 밖");
+    assert_eq!(fs::read(&b.path).unwrap(), original);
+}
+
+#[test]
+fn test_oversized_image_is_refused_before_decoding() {
+    let b = book();
+    let original = fs::read(&b.path).unwrap();
+    let observer = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = observer.clone();
+    let observe = move || {
+        seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    };
+    // 바이트 크기: 읽기 전에 거절한다.
+    let hooks = EpubCoverHooks::default().with_limits(Limits { max_image_bytes: 10, ..Limits::default() }).with_pixel_decode_observer(Arc::new(observe.clone()));
+    assert_refused(edit_with(&b, &hooks, EditImages { crops: vec![json!({"idref": "p1", "rect": full()})], ..EditImages::default() }), "너무 큼", "bytes");
+    // 화소 수: 디코딩 전에 거절한다.
+    let hooks = EpubCoverHooks::default().with_limits(Limits { max_image_pixels: 100, ..Limits::default() }).with_pixel_decode_observer(Arc::new(observe));
+    assert_refused(edit_with(&b, &hooks, EditImages { crops: vec![json!({"idref": "p1", "rect": full()})], ..EditImages::default() }), "해상도가 너무 큼", "pixels");
+    assert_eq!(observer.load(std::sync::atomic::Ordering::SeqCst), 0, "상한을 넘는 이미지를 디코딩했다");
+    assert_eq!(fs::read(&b.path).unwrap(), original);
+}
+
+#[test]
+fn test_oversized_page_document_is_refused() {
+    let b = book();
+    let hooks = EpubCoverHooks::default().with_limits(Limits { max_xml_bytes: 50, ..Limits::default() });
+    assert!(edit_with(&b, &hooks, EditImages { crops: vec![json!({"idref": "p1", "rect": full()})], ..EditImages::default() }).is_err());
+}
+
+#[test]
+fn test_edit_result_never_exceeds_the_source_image() {
+    // 크롭은 원본 안쪽만 쓰므로 어떤 영역·각도로도 결과가 원본보다 커지지 않는다.
+    let b = book();
+    b.edit(EditImages { crops: vec![json!({"idref": "p1", "rect": [0, 0, 1, 1, 0]})], ..EditImages::default() }).unwrap();
+    assert_eq!(size(&read(&b.path)["OPS/img/1.jpg"]), (200, 100));
+}
+
+mod test_route_limits {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_too_many_items_and_bad_numbers_are_validation_errors() {
+        let (http, fake) = test_route_client();
+        let many: Vec<Value> = (0..501).map(|_| json!({"idref": "p1"})).collect();
+        assert_eq!(http.post_json("/epub-images/1", &json!({"deletes": many})).await.status, 422);
+        assert_eq!(http.post_json("/epub-images/1", &json!({"deletes": [{"idref": "p1", "index": 10001}]})).await.status, 422);
+        assert_eq!(http.post_json("/epub-images/1", &json!({"crops": [{"idref": "p1", "x0": 0, "y0": 0, "x1": "a", "y1": 1}]})).await.status, 422);
+        assert_eq!(http.post_json("/epub-images/1", &json!({"crops": [{"idref": "p1", "x0": 0, "y0": 0, "y1": 1}]})).await.status, 422);
+        assert_eq!(http.post_json("/epub-images/x", &json!({})).await.status, 422);
+        assert!(fake.calls.lock().unwrap().is_empty());
+    }
+}
+
+fn test_route_client() -> (TestClient, Arc<FakeManager>) {
+    let fake = FakeManager::new();
+    let app = app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(fake.clone()));
+    (TestClient::with_app(app), fake)
 }

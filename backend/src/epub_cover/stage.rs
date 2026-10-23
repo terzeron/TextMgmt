@@ -36,6 +36,11 @@ impl Added {
     pub fn names(&self) -> BTreeSet<String> {
         self.items.iter().map(|(n, _)| n.clone()).collect()
     }
+
+    /// 쌓아 둔 멤버 내용의 합(바이트). 편집 결과가 메모리를 넘치게 쌓지 않도록 확인하는 데 쓴다.
+    pub fn total_bytes(&self) -> usize {
+        self.items.iter().map(|(_, d)| d.len()).sum()
+    }
 }
 
 /// `package`의 OPF 구역. 처음 나온 요소를 쓴다(`package.find`).
@@ -709,4 +714,24 @@ pub fn stage_cover_removal(source: &File, destination: &Path, hooks: &EpubCoverH
         return Err(CoverError::new("표지를 삭제한 EPUB의 검증에 실패했습니다").into());
     }
     Ok(())
+}
+
+/// 쪽 안 분할의 둘째 영역 이미지를 새 멤버로 추가하고 그 멤버 경로를 돌려준다.
+pub fn add_split_image(opf_path: &str, manifest: &mut Element, original_names: &BTreeSet<String>, added: &mut Added, image: &[u8], suffix: &str, media_type: &str) -> FResult<String> {
+    let digest = digest16(image);
+    let existing_ids: BTreeSet<String> = manifest.child_elements().filter_map(|i| i.attr("id").map(str::to_string)).collect();
+    let mut existing_names = original_names.clone();
+    existing_names.extend(added.names());
+    let base = dirname(opf_path);
+    for serial in 1..1000 {
+        let token = if serial == 1 { digest.clone() } else { format!("{digest}-{serial}") };
+        let image_id = format!("tm-split-{token}");
+        let image_member = join(&base, &format!("{image_id}{suffix}"));
+        if !existing_ids.contains(&image_id) && !existing_names.contains(&image_member) {
+            manifest.push_child(new_item(manifest, &[("id", &image_id), ("href", &format!("{image_id}{suffix}")), ("media-type", media_type)]));
+            added.insert(&image_member, image.to_vec());
+            return Ok(image_member);
+        }
+    }
+    Err(CoverError::new("추가할 이미지 ID를 만들 수 없습니다").into())
 }

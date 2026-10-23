@@ -163,6 +163,46 @@ impl BookManager {
         .await
     }
 
+    /// EPUB 쪽 이미지의 크롭·분할·삭제·삽입을 한 번에 저장한다: (결과, 오류 메시지).
+    ///
+    /// crops: `[{idref, index, x0, y0, x1, y1, angle}]`, splits: `[{idref, index, first, second}]`, deletes: `[{idref, index}]`
+    /// (index는 쪽 안 이미지의 문서 순서, 기본 0), inserts: `[{before_idref, url | image_data(base64)}]`.
+    /// 저장 절차는 표지와 같다(백업·색인 갱신·캐시 무효화).
+    pub async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> (Option<Value>, Option<String>) {
+        fn number(entry: &Value, key: &str) -> Result<f64, CoverError> {
+            entry.get(key).and_then(Value::as_f64).filter(|f| f.is_finite()).ok_or_else(|| CoverError::new("크롭 영역이 올바르지 않습니다"))
+        }
+        fn rect(entry: &Value) -> Result<Value, CoverError> {
+            let angle = match entry.get("angle") {
+                None | Some(Value::Null) => 0.0,
+                Some(_) => number(entry, "angle")?,
+            };
+            Ok(json!([number(entry, "x0")?, number(entry, "y0")?, number(entry, "x1")?, number(entry, "y1")?, angle]))
+        }
+        let index = |entry: &Value| entry.get("index").cloned().filter(|v| !v.is_null()).unwrap_or(json!(0));
+        let converted = (|| -> Result<(Vec<Value>, Vec<Value>), CoverError> {
+            let crop_args = crops.iter().map(|c| Ok(json!({"idref": c.get("idref"), "index": index(c), "rect": rect(c)?}))).collect::<Result<Vec<_>, CoverError>>()?;
+            let split_args = splits
+                .iter()
+                .map(|s| Ok(json!({"idref": s.get("idref"), "index": index(s), "first": rect(s.get("first").unwrap_or(&Value::Null))?, "second": rect(s.get("second").unwrap_or(&Value::Null))?})))
+                .collect::<Result<Vec<_>, CoverError>>()?;
+            Ok((crop_args, split_args))
+        })();
+        let (crop_args, split_args) = match converted {
+            Ok(args) => args,
+            Err(err) => return (None, Some(err.to_string())),
+        };
+        let (deletes, inserts) = (deletes.to_vec(), inserts.to_vec());
+        self.change_epub_cover(
+            book_id,
+            Box::new(move |service, relative, revision, backup| {
+                let edits = epub_cover::EditImages { crops: crop_args, splits: split_args, deletes, ..Default::default() };
+                service.edit_images(relative, revision, edits, &inserts, backup)
+            }),
+        )
+        .await
+    }
+
     /// EPUB 표지를 읽기 순서에서 뺀다: (결과, 오류 메시지). 본문과 공유하는 이미지는 보존한다.
     pub async fn remove_epub_cover(&self, book_id: i64) -> (Option<Value>, Option<String>) {
         self.change_epub_cover(book_id, Box::new(|service, relative, revision, backup| service.remove(relative, revision, backup))).await

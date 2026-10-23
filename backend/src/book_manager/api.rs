@@ -61,6 +61,10 @@ impl BookManagerApi for BookManager {
         BookManager::set_epub_cover(self, book_id, url, image_data).await
     }
 
+    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> (Option<Value>, Option<String>) {
+        BookManager::edit_epub_images(self, book_id, crops, splits, deletes, inserts).await
+    }
+
     async fn remove_epub_cover(&self, book_id: i64) -> (Option<Value>, Option<String>) {
         BookManager::remove_epub_cover(self, book_id).await
     }

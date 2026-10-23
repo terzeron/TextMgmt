@@ -257,6 +257,11 @@ pub trait BookManagerApi: Send + Sync {
         (None, unimplemented_error())
     }
 
+    /// EPUB 쪽 이미지의 크롭·분할·삭제·삽입을 한 번에 저장한다. 항목은 라우트가 검증한 JSON 객체다.
+    async fn edit_epub_images(&self, _book_id: i64, _crops: &[Value], _splits: &[Value], _deletes: &[Value], _inserts: &[Value]) -> (Option<Value>, Option<String>) {
+        (None, unimplemented_error())
+    }
+
     /// EPUB 표지를 뺀다.
     async fn remove_epub_cover(&self, _book_id: i64) -> (Option<Value>, Option<String>) {
         (None, unimplemented_error())

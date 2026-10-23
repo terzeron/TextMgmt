@@ -63,6 +63,16 @@ pub fn ext(path: &str) -> String {
     }
 }
 
+/// `posixpath.relpath(path, start)`(현재 디렉터리를 쓰지 않고 둘 다 상대 경로라고 본다).
+pub fn relpath(path: &str, start: &str) -> String {
+    let normal = |p: &str| -> Vec<String> { normpath(p).split('/').filter(|c| !c.is_empty() && *c != ".").map(str::to_string).collect() };
+    let (target, base) = (normal(path), normal(start));
+    let common = target.iter().zip(&base).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<String> = vec!["..".to_string(); base.len() - common];
+    parts.extend(target[common..].iter().cloned());
+    if parts.is_empty() { ".".to_string() } else { parts.join("/") }
+}
+
 /// `urllib.parse.unquote`. 잘못된 UTF-8은 U+FFFD로 바꾼다.
 pub fn unquote(text: &str) -> String {
     if !text.contains('%') {
@@ -155,6 +165,13 @@ mod tests {
         assert_eq!(member_path("OPS", ""), "");
         assert_eq!(member_path("OPS", "a.xhtml#frag"), "OPS/a.xhtml");
         assert_eq!(member_path("", "a.jpg?x=1"), "a.jpg");
+    }
+
+    #[test]
+    fn relpath_matches_posixpath() {
+        assert_eq!(relpath("OEBPS/tm-split-a.jpg", "OEBPS/Text"), "../tm-split-a.jpg");
+        assert_eq!(relpath("a/b.jpg", ""), "a/b.jpg");
+        assert_eq!(relpath("a/b.jpg", "a"), "b.jpg");
     }
 
     #[test]

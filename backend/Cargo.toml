@@ -136,6 +136,10 @@ name = "epub_cover_set"
 path = "../tests/rust/backend/epub_cover_set.rs"
 
 [[test]]
+name = "epub_image_edit"
+path = "../tests/rust/backend/epub_image_edit.rs"
+
+[[test]]
 name = "cover_management"
 path = "../tests/rust/backend/cover_management.rs"
 
