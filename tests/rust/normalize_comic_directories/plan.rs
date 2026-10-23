@@ -415,3 +415,27 @@ fn wait_for_request_slot_sleeps_only_for_the_remaining_delay() {
     cache.wait_for_request_slot(0.05);
     assert!(start.elapsed().as_secs_f64() >= 0.04);
 }
+
+#[test]
+fn default_paths_are_per_user_not_shared_tmp() {
+    let o = Options::default();
+    assert!(!o.cache.starts_with("/tmp") && !o.report.starts_with("/tmp"), "{:?} {:?}", o.cache, o.report);
+    assert!(o.cache.ends_with("tm_dev/comic-bookstore-title-cache.jsonl"));
+}
+
+#[test]
+fn a_group_or_world_writable_cache_is_refused_before_anything_runs() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_tmp, root) = comic_root();
+    let work = tempfile::tempdir().unwrap();
+    let cache = work.path().join("c.jsonl");
+    fs::write(&cache, "").unwrap();
+    assert!(normalize_comic_directories::cli::check_cache_trust(&work.path().join("missing")).is_ok());
+    fs::set_permissions(&cache, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(normalize_comic_directories::cli::check_cache_trust(&cache).is_ok());
+    fs::set_permissions(&cache, fs::Permissions::from_mode(0o666)).unwrap();
+    assert!(normalize_comic_directories::cli::check_cache_trust(&cache).unwrap_err().contains("chmod go-w"));
+    let a = args(&["run", "--root", root.to_str().unwrap(), "--report", work.path().join("r.tsv").to_str().unwrap(), "--cache", cache.to_str().unwrap()]);
+    assert_eq!(run("ncd", &a, &mut Vec::new()), 1);
+    assert!(!work.path().join("r.tsv").exists(), "거부하면 리포트도 쓰지 않는다");
+}

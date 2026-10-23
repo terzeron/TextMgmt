@@ -8,8 +8,28 @@ use crate::cache::{BookstoreSearchCache, DEFAULT_NEGATIVE_CACHE_SECONDS, StoreRo
 use crate::plan::{Searcher, apply_renames, build_proposals, write_report};
 
 const DEFAULT_ROOT: &str = "/mnt/data/만화";
-const DEFAULT_REPORT: &str = "/tmp/comic-directory-normalization.tsv";
-const DEFAULT_CACHE: &str = "/tmp/comic-bookstore-title-cache.jsonl";
+const REPORT_NAME: &str = "comic-directory-normalization.tsv";
+const CACHE_NAME: &str = "comic-bookstore-title-cache.jsonl";
+
+/// 사용자별 기본 디렉토리: `$XDG_CACHE_HOME/tm_dev`, 없으면 `$HOME/.cache/tm_dev`. 공유 `/tmp`는 쓰지 않는다.
+fn default_dir() -> PathBuf {
+    let base = std::env::var_os("XDG_CACHE_HOME").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| std::env::var_os("HOME").filter(|v| !v.is_empty()).map(|h| PathBuf::from(h).join(".cache")));
+    base.unwrap_or_else(|| PathBuf::from(".")).join("tm_dev")
+}
+
+/// 캐시가 내 파일이고 그룹·타인이 쓸 수 없는지 확인한다. 캐시 내용이 이름 변경을 이끌기 때문이다.
+pub fn check_cache_trust(path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(meta) = std::fs::metadata(path) else { return Ok(()) };
+    let me = std::fs::metadata("/proc/self").map(|m| m.uid()).map_err(|e| format!("현재 사용자를 확인하지 못했다: {e}"))?;
+    if meta.uid() != me {
+        return Err(format!("캐시 소유자가 내가 아니다: {}", path.display()));
+    }
+    if meta.mode() & 0o022 != 0 {
+        return Err(format!("캐시를 그룹·타인이 쓸 수 있다(chmod go-w 필요): {}", path.display()));
+    }
+    Ok(())
+}
 
 /// 캐시에 있는 결과만 쓰는 검색. 캐시에 없으면 조회하지 않는다.
 pub struct CacheOnly;
@@ -39,10 +59,10 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             root: DEFAULT_ROOT.into(),
-            report: DEFAULT_REPORT.into(),
+            report: default_dir().join(REPORT_NAME),
             delay: 1.2,
             max_searches: 0,
-            cache: DEFAULT_CACHE.into(),
+            cache: default_dir().join(CACHE_NAME),
             negative_cache_seconds: DEFAULT_NEGATIVE_CACHE_SECONDS,
             apply: false,
         }
@@ -51,6 +71,8 @@ impl Default for Options {
 
 /// 인자 없이 실행하거나 `-h`/`--help`를 주면 프로그램의 용도와 인자·옵션을 보여 준다.
 pub fn print_usage(program: &str, out: &mut dyn Write) {
+    let report_default = default_dir().join(REPORT_NAME).display().to_string();
+    let cache_default = default_dir().join(CACHE_NAME).display().to_string();
     let _ = write!(
         out,
         "{program} - 만화 디렉토리 이름을 `[저자] 제목 (1-10권 완)` 꼴로 정리한다.
@@ -68,8 +90,8 @@ utils/normalize_comic_directories.py로 먼저 캐시를 채운다.
 
 옵션:
   --root DIR                    만화 루트 (기본 {DEFAULT_ROOT})
-  --report FILE                 리포트 경로 (기본 {DEFAULT_REPORT})
-  --cache FILE                  서점 결과 캐시 JSONL (기본 {DEFAULT_CACHE})
+  --report FILE                 리포트 경로 (기본 {report_default})
+  --cache FILE                  서점 결과 캐시 JSONL (기본 {cache_default})
   --negative-cache-seconds N    빈 결과를 캐시에 두는 시간(초) (기본 {DEFAULT_NEGATIVE_CACHE_SECONDS})
   --max-searches N              새 질의 수 상한, 0이면 무제한 (기본 0)
   --delay SEC                   서점 요청 사이 대기(초). 캐시 전용에서는 쓰지 않는다 (기본 1.2)
@@ -140,6 +162,10 @@ pub fn run(program: &str, args: &[String], out: &mut dyn Write) -> i32 {
         return 2;
     };
 
+    if let Err(e) = check_cache_trust(&options.cache) {
+        eprintln!("ERROR {e}");
+        return 1;
+    }
     let mut cache = BookstoreSearchCache::new(&options.cache, false, options.negative_cache_seconds);
     let proposals = build_proposals(&root, options.delay, options.max_searches, &mut cache, &CacheOnly);
     if let Err(e) = write_report(&proposals, &options.report) {
