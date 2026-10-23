@@ -1786,6 +1786,8 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     it("다시 열면 표시한 URL 을 채우고, 새 이미지로 바꾸면 이전 미리보기를 해제한다", async () => {
       respond({ preview: blobResponse() });
       await openWithPendingCover();
+      // 새 이미지는 다른 blob URL 을 받는다(같은 URL 이면 해제하지 않는다).
+      globalThis.URL.createObjectURL = vi.fn(() => "blob:newer-cover");
 
       fireEvent.click(screen.getByRole("button", { name: "표지 이미지 교체" }));
       expect(screen.getByTestId("cover-modal").getAttribute("data-initial-url")).toBe(
@@ -2376,6 +2378,328 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       cleanup();
 
       expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith("blob:new-cover");
+    });
+  });
+
+  describe("편집 화면의 이미지 크롭·분할·삭제", () => {
+    const SAVE_URL = "http://localhost:8000/epub-images/7";
+    const spine = (target) =>
+      typeof target === "number"
+        ? { idref: `s${target}`, href: `OEBPS/Text/section${target}.html` }
+        : null;
+    const relocateTo = async (index) => {
+      await act(async () => {
+        lastRendition._emit("relocated", {
+          start: { index, cfi: `epubcfi(/6/${index * 2 + 2})` },
+        });
+      });
+    };
+    const rectOf = ({ left, top, width, height }) => ({
+      left,
+      top,
+      width,
+      height,
+      right: left + width,
+      bottom: top + height,
+    });
+    // iframe 안에 이미지 imageCount 장(그리고 text)이 든 쪽을 mockViews 로 만든다.
+    function showPage({ imageCount = 1, text = "", img = { left: 100, top: 50, width: 400, height: 300 } } = {}) {
+      const doc = document.implementation.createHTMLDocument("page");
+      doc.body.textContent = text;
+      for (let i = 0; i < imageCount; i += 1) {
+        const image = doc.createElement("img");
+        image.getBoundingClientRect = () => rectOf(img);
+        doc.body.appendChild(image);
+      }
+      const iframe = document.createElement("iframe");
+      iframe.getBoundingClientRect = () => rectOf({ left: 10, top: 20, width: 700, height: 500 });
+      mockViews = [{ section: { idref: "s3" }, iframe, contents: { document: doc } }];
+    }
+    const jsonOk = (body) => ({ ok: true, status: 200, json: () => Promise.resolve(body) });
+    function respondSave(save) {
+      const base = globalThis.fetch.getMockImplementation();
+      globalThis.fetch.mockImplementation((url, init) => {
+        if (url === SAVE_URL) return Promise.resolve(save);
+        if (String(url).includes("/preview/")) {
+          return Promise.resolve(base(url, init)).then((response) => ({
+            ...response,
+            arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+          }));
+        }
+        return base(url, init);
+      });
+    }
+    async function openOnImagePage(pageOptions) {
+      spineGetter = spine;
+      showPage(pageOptions);
+      vi.spyOn(HTMLDivElement.prototype, "getBoundingClientRect").mockReturnValue(
+        rectOf({ left: 0, top: 0, width: 800, height: 600 }),
+      );
+      render(<ViewEPUB bookId={7} preview editable />);
+      await openBook();
+      await relocateTo(3);
+    }
+    const savedBody = () => {
+      const [, init] = globalThis.fetch.mock.calls.find(([url]) => url === SAVE_URL);
+      return JSON.parse(init.body);
+    };
+
+    afterEach(() => {
+      mockViews = [];
+    });
+
+    it("이미지가 정확히 한 장인 쪽에서만 크롭·분할·삭제 버튼을 그린다", async () => {
+      await openOnImagePage();
+      expect(await screen.findByRole("button", { name: "이 쪽 이미지 크롭" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "이 쪽 이미지 분할" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "이 쪽 이미지 삭제 표시" })).toBeTruthy();
+    });
+
+    it("이미지가 여러 장이면 번호 배지로 대상을 고르고, 표시는 고른 이미지에만 붙는다", async () => {
+      await openOnImagePage({ imageCount: 2 });
+      expect(await screen.findByRole("button", { name: "이 쪽 이미지 크롭" })).toBeTruthy();
+      // 기본 대상은 첫 이미지
+      expect(screen.getByRole("button", { name: "이미지 1 선택" }).getAttribute("aria-pressed")).toBe("true");
+      fireEvent.click(screen.getByRole("button", { name: "이미지 2 선택" }));
+      expect(screen.getByRole("button", { name: "이미지 2 선택" }).getAttribute("aria-pressed")).toBe("true");
+
+      fireEvent.click(screen.getByRole("button", { name: "이 쪽 이미지 크롭" }));
+      // 박스는 고른 둘째 이미지에만 생긴다.
+      expect(screen.getAllByTestId("image-crop-box")).toHaveLength(1);
+    });
+
+    it("이미지가 여러 장이어도 크롭은 고른 이미지의 순번(index)으로 저장한다", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      respondSave(jsonOk({ status: "success", result: {} }));
+      await openOnImagePage({ imageCount: 2 });
+      fireEvent.click(await screen.findByRole("button", { name: "이미지 2 선택" }));
+      fireEvent.click(screen.getByRole("button", { name: "이 쪽 이미지 크롭" }));
+      fireEvent.click(screen.getByRole("button", { name: "이미지 편집 저장" }));
+
+      await waitFor(() => expect(globalThis.fetch.mock.calls.some(([url]) => url === SAVE_URL)).toBe(true));
+      expect(savedBody().crops).toEqual([
+        { idref: "s3", index: 1, x0: 0.1, y0: 0.1, x1: 0.9, y1: 0.9, angle: 0 },
+      ]);
+    });
+
+    it("글이 함께 있는 쪽도 이미지의 크롭·분할·삭제 버튼을 그린다", async () => {
+      await openOnImagePage({ text: "본문 글" });
+      expect(await screen.findByRole("button", { name: "이 쪽 이미지 크롭" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "이 쪽 이미지 분할" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "이 쪽 이미지 삭제 표시" })).toBeTruthy();
+    });
+
+    it("이미지가 하나도 없는 쪽은 버튼을 그리지 않는다", async () => {
+      await openOnImagePage({ imageCount: 0 });
+      expect(screen.queryByRole("button", { name: "이 쪽 이미지 크롭" })).toBeNull();
+    });
+
+    it("크롭을 켜면 이미지 위치에 박스와 점선 격자를 얹고, 다시 누르면 지운다", async () => {
+      await openOnImagePage();
+      const button = await screen.findByRole("button", { name: "이 쪽 이미지 크롭" });
+      fireEvent.click(button);
+
+      const overlay = screen.getByTestId("epub-image-overlay");
+      // iframe(10, 20) 안의 이미지(100, 50) → 뷰어 기준 (110, 70)
+      expect(overlay.style.left).toBe("110px");
+      expect(overlay.style.top).toBe("70px");
+      expect(overlay.style.width).toBe("400px");
+      expect(overlay.style.height).toBe("300px");
+      expect(screen.getAllByTestId("image-crop-box")).toHaveLength(1);
+      expect(screen.getByTestId("image-crop-grid")).toBeTruthy();
+      expect(button.getAttribute("aria-pressed")).toBe("true");
+
+      fireEvent.click(button);
+      expect(screen.queryByTestId("epub-image-overlay")).toBeNull();
+    });
+
+    it("분할은 앞·뒤 두 박스, 삭제는 회색 덮개를 보여 주고 서로 바꿔 쓴다", async () => {
+      await openOnImagePage();
+      fireEvent.click(await screen.findByRole("button", { name: "이 쪽 이미지 분할" }));
+      expect(screen.getAllByTestId("image-crop-box")).toHaveLength(2);
+
+      fireEvent.click(screen.getByRole("button", { name: "이 쪽 이미지 삭제 표시" }));
+      expect(screen.queryByTestId("image-crop-box")).toBeNull();
+      expect(screen.getByTestId("epub-image-delete-overlay")).toBeTruthy();
+    });
+
+    it("이미지가 뷰어 밖에 걸쳐 보이지 않으면 편집 버튼도 박스도 없다", async () => {
+      await openOnImagePage({ img: { left: 900, top: 50, width: 400, height: 300 } });
+      await act(async () => {});
+      expect(screen.queryByRole("button", { name: "이 쪽 이미지 크롭" })).toBeNull();
+      expect(screen.queryByTestId("epub-image-overlay")).toBeNull();
+    });
+
+    it("저장은 확인창에서 취소하면 요청하지 않는다", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(false);
+      await openOnImagePage();
+      fireEvent.click(await screen.findByRole("button", { name: "이 쪽 이미지 크롭" }));
+      fireEvent.click(screen.getByRole("button", { name: "이미지 편집 저장" }));
+
+      expect(globalThis.fetch.mock.calls.some(([url]) => url === SAVE_URL)).toBe(false);
+    });
+
+    it("저장하면 크롭 표시를 epub-images 로 보내고 표시를 지운 뒤 다시 불러온다", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      respondSave(jsonOk({ status: "success", result: {} }));
+      await openOnImagePage();
+      fireEvent.click(await screen.findByRole("button", { name: "이 쪽 이미지 크롭" }));
+      fireEvent.click(screen.getByRole("button", { name: "이미지 편집 저장" }));
+
+      await waitFor(() => expect(screen.queryByRole("button", { name: "이미지 편집 저장" })).toBeNull());
+      expect(confirm).toHaveBeenCalledWith(
+        "이미지 1건 크롭를 저장합니다. 원본은 0_trash에 보존됩니다. 저장할까요?",
+      );
+      const [, init] = globalThis.fetch.mock.calls.find(([url]) => url === SAVE_URL);
+      expect(init.method).toBe("POST");
+      expect(savedBody()).toEqual({
+        crops: [{ idref: "s3", index: 0, x0: 0.1, y0: 0.1, x1: 0.9, y1: 0.9, angle: 0 }],
+        splits: [],
+        deletes: [],
+      });
+    });
+
+    it("분할 표시는 splits 로 보낸다", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      respondSave(jsonOk({ status: "success", result: {} }));
+      await openOnImagePage();
+      fireEvent.click(await screen.findByRole("button", { name: "이 쪽 이미지 분할" }));
+      fireEvent.click(screen.getByRole("button", { name: "이미지 편집 저장" }));
+
+      await waitFor(() => expect(globalThis.fetch.mock.calls.some(([url]) => url === SAVE_URL)).toBe(true));
+      const body = savedBody();
+      expect(body.splits).toHaveLength(1);
+      expect(body.splits[0]).toMatchObject({
+        idref: "s3",
+        index: 0,
+        first: { x0: 0, x1: 0.5 },
+        second: { x0: 0.5, x1: 1 },
+      });
+    });
+
+    it("삭제 표시는 deletes 로 보낸다", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      respondSave(jsonOk({ status: "success", result: {} }));
+      await openOnImagePage();
+      fireEvent.click(await screen.findByRole("button", { name: "이 쪽 이미지 삭제 표시" }));
+      fireEvent.click(screen.getByRole("button", { name: "이미지 편집 저장" }));
+
+      await waitFor(() => expect(globalThis.fetch.mock.calls.some(([url]) => url === SAVE_URL)).toBe(true));
+      expect(savedBody().deletes).toEqual([{ idref: "s3", index: 0 }]);
+    });
+
+    it("서버가 실패를 알리면 사유를 보여 주고 표시를 유지한다", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      respondSave(jsonOk({ status: "failure", error: "목차가 가리키는 쪽은 삭제할 수 없습니다" }));
+      await openOnImagePage();
+      fireEvent.click(await screen.findByRole("button", { name: "이 쪽 이미지 삭제 표시" }));
+      fireEvent.click(screen.getByRole("button", { name: "이미지 편집 저장" }));
+
+      expect(await screen.findByText("목차가 가리키는 쪽은 삭제할 수 없습니다")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "이미지 편집 저장" })).toBeTruthy();
+    });
+
+    it("HTTP 오류도 사유로 보여 준다", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      respondSave({ ok: false, status: 500, text: () => Promise.resolve("") });
+      await openOnImagePage();
+      fireEvent.click(await screen.findByRole("button", { name: "이 쪽 이미지 크롭" }));
+      fireEvent.click(screen.getByRole("button", { name: "이미지 편집 저장" }));
+
+      expect(await screen.findByRole("alert")).toBeTruthy();
+    });
+
+    it("이미지를 아직 다 읽지 못했으면 load 뒤에 다시 잰다", async () => {
+      spineGetter = spine;
+      showPage();
+      const image = mockViews[0].contents.document.images[0];
+      Object.defineProperty(image, "complete", { value: false, configurable: true });
+      vi.spyOn(HTMLDivElement.prototype, "getBoundingClientRect").mockReturnValue(
+        rectOf({ left: 0, top: 0, width: 800, height: 600 }),
+      );
+      render(<ViewEPUB bookId={7} preview editable />);
+      await openBook();
+      await relocateTo(3);
+      fireEvent.click(await screen.findByRole("button", { name: "이 쪽 이미지 크롭" }));
+      expect(screen.getByTestId("epub-image-overlay").style.width).toBe("400px");
+
+      image.getBoundingClientRect = () => rectOf({ left: 100, top: 50, width: 200, height: 150 });
+      await act(async () => {
+        image.dispatchEvent(new Event("load"));
+      });
+      await waitFor(() =>
+        expect(screen.getByTestId("epub-image-overlay").style.width).toBe("200px"),
+      );
+    });
+
+    describe("표지 화면", () => {
+      const defineNatural = (width, height) => {
+        Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", { get: () => width, configurable: true });
+        Object.defineProperty(HTMLImageElement.prototype, "naturalHeight", { get: () => height, configurable: true });
+      };
+      afterEach(() => {
+        delete HTMLImageElement.prototype.naturalWidth;
+        delete HTMLImageElement.prototype.naturalHeight;
+      });
+      async function openOnCover() {
+        defineNatural(600, 900);
+        mockCoverUrl = "blob:epub-cover";
+        vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+          rectOf({ left: 0, top: 0, width: 800, height: 600 }),
+        );
+        render(<ViewEPUB bookId={7} preview editable />);
+        await openBook();
+        await screen.findByTestId("epub-cover-page");
+      }
+
+      it("표지 화면에도 크롭 버튼만 나오고, 켜면 그림 위에 박스를 얹는다", async () => {
+        await openOnCover();
+        const button = await screen.findByRole("button", { name: "이 쪽 이미지 크롭" });
+        expect(screen.queryByRole("button", { name: "이 쪽 이미지 분할" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "이 쪽 이미지 삭제 표시" })).toBeNull();
+
+        fireEvent.click(button);
+        const overlay = screen.getByTestId("epub-image-overlay");
+        // 600x900 그림이 800x600 상자에 contain 으로 들어가면 높이 600, 너비 400
+        expect(overlay.style.height).toBe("600px");
+        expect(overlay.style.width).toBe("400px");
+        expect(overlay.style.left).toBe("200px");
+        expect(screen.getAllByTestId("image-crop-box")).toHaveLength(1);
+      });
+
+      it("표지 크롭은 @cover 대상으로 저장한다", async () => {
+        vi.spyOn(window, "confirm").mockReturnValue(true);
+        respondSave(jsonOk({ status: "success", result: {} }));
+        await openOnCover();
+        fireEvent.click(await screen.findByRole("button", { name: "이 쪽 이미지 크롭" }));
+        fireEvent.click(screen.getByRole("button", { name: "이미지 편집 저장" }));
+
+        await waitFor(() => expect(globalThis.fetch.mock.calls.some(([url]) => url === SAVE_URL)).toBe(true));
+        expect(savedBody().crops).toEqual([
+          { idref: "@cover", index: 0, x0: 0.1, y0: 0.1, x1: 0.9, y1: 0.9, angle: 0 },
+        ]);
+      });
+
+      it("그림을 아직 읽지 못했으면 버튼을 그리지 않는다", async () => {
+        await openOnCover();
+        defineNatural(0, 0);
+        cleanup();
+        mockCoverUrl = "blob:epub-cover";
+        render(<ViewEPUB bookId={7} preview editable />);
+        await openBook();
+        await screen.findByTestId("epub-cover-page");
+        expect(screen.queryByRole("button", { name: "이 쪽 이미지 크롭" })).toBeNull();
+      });
+    });
+
+    it("쪽을 넘기면 박스는 사라지지만 표시와 저장 버튼은 남는다", async () => {
+      await openOnImagePage();
+      fireEvent.click(await screen.findByRole("button", { name: "이 쪽 이미지 크롭" }));
+      mockViews = [];
+      await relocateTo(4);
+
+      expect(screen.queryByTestId("epub-image-overlay")).toBeNull();
+      expect(screen.getByRole("button", { name: "이미지 편집 저장" })).toBeTruthy();
     });
   });
 });

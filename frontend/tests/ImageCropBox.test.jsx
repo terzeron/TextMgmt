@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
-import PdfCropBox from "../src/PdfCropBox";
+import ImageCropBox, { MarkCropBox } from "../src/ImageCropBox";
+import { GRID_DIVISIONS, newMark } from "../src/cropRect";
 
 function mockLayerRect(width, height) {
   return vi
@@ -20,51 +21,44 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("PdfCropBox: 레이어 크기 측정", () => {
-  it("ResizeObserver 가 있으면 레이어를 관찰하고 크기가 바뀌면 다시 재며 언마운트 때 해제한다", () => {
-    const instances = [];
-    class MockResizeObserver {
-      constructor(callback) {
-        this.callback = callback;
-        this.observe = vi.fn();
-        this.disconnect = vi.fn();
-        instances.push(this);
-      }
+describe("ImageCropBox: 표시", () => {
+  it("박스 바깥을 흐리게 덮는 요소를 그리지 않는다(기울어도 마찬가지다)", () => {
+    mockLayerRect(200, 100);
+    const { container, rerender } = render(<ImageCropBox boxes={boxesOf()} onChange={vi.fn()} />);
+    expect(container.querySelector(".image-crop-dim")).toBeNull();
+    rerender(<ImageCropBox boxes={boxesOf({ ...RECT, angle: 30 })} onChange={vi.fn()} />);
+    expect(container.querySelector(".image-crop-dim")).toBeNull();
+    expect(screen.queryByTestId("image-crop-dim-rotated")).toBeNull();
+  });
+
+  it("박스마다 안쪽에 점선 격자(가로·세로 각각 GRID_DIVISIONS-1 줄)를 그린다", () => {
+    render(
+      <ImageCropBox
+        boxes={[
+          { id: "a", rect: RECT, color: "#00f" },
+          { id: "b", rect: { ...RECT, angle: 20 }, color: "#f00" },
+        ]}
+        onChange={vi.fn()}
+      />,
+    );
+    const grids = screen.getAllByTestId("image-crop-grid");
+    expect(grids).toHaveLength(2);
+    for (const grid of grids) {
+      expect(grid.closest('[data-testid="image-crop-box"]')).toBeTruthy();
+      expect(grid.querySelectorAll("line")).toHaveLength((GRID_DIVISIONS - 1) * 2);
     }
-    vi.stubGlobal("ResizeObserver", MockResizeObserver);
-    const spy = mockLayerRect(200, 100);
-    const rotated = boxesOf({ ...RECT, angle: 30 });
-    const { unmount } = render(<PdfCropBox boxes={rotated} onChange={vi.fn()} />);
-
-    const [observer] = instances;
-    expect(instances).toHaveLength(1);
-    expect(observer.observe).toHaveBeenCalledWith(screen.getByTestId("pdf-crop-layer"));
-    // 크기를 알면 기울어진 박스는 clip-path 덮개를 쓴다.
-    expect(screen.getByTestId("pdf-crop-dim-rotated")).toBeTruthy();
-
-    // 같은 크기로 다시 재도 상태가 그대로이고 덮개도 유지된다.
-    act(() => observer.callback());
-    expect(screen.getByTestId("pdf-crop-dim-rotated")).toBeTruthy();
-
-    // 크기가 0 이 되면 아직 못 잰 것으로 보고 조각 덮개로 돌아간다.
-    spy.mockReturnValue({ width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 });
-    act(() => observer.callback());
-    expect(screen.queryByTestId("pdf-crop-dim-rotated")).toBeNull();
-
-    unmount();
-    expect(observer.disconnect).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("PdfCropBox: 포인터 조작", () => {
+describe("ImageCropBox: 포인터 조작", () => {
   it("드래그 중이 아니면 이동·종료 이벤트를 무시한다", () => {
     mockLayerRect(200, 100);
     const onChange = vi.fn();
-    render(<PdfCropBox boxes={boxesOf()} onChange={onChange} />);
+    render(<ImageCropBox boxes={boxesOf()} onChange={onChange} />);
 
     fireEvent.pointerMove(handle("e"), { clientX: 50, clientY: 0, pointerId: 1 });
     fireEvent.pointerUp(handle("e"), { pointerId: 1 });
-    fireEvent.pointerMove(screen.getByTestId("pdf-crop-rotate"), { clientX: 50, clientY: 0 });
+    fireEvent.pointerMove(screen.getByTestId("image-crop-rotate"), { clientX: 50, clientY: 0 });
 
     expect(onChange).not.toHaveBeenCalled();
   });
@@ -72,7 +66,7 @@ describe("PdfCropBox: 포인터 조작", () => {
   it("레이어 크기를 아직 모르면(0x0) 드래그해도 onChange 를 부르지 않는다", () => {
     // jsdom 의 getBoundingClientRect 기본값은 0x0 이다.
     const onChange = vi.fn();
-    render(<PdfCropBox boxes={boxesOf()} onChange={onChange} />);
+    render(<ImageCropBox boxes={boxesOf()} onChange={onChange} />);
 
     fireEvent.pointerDown(handle("e"), { clientX: 0, clientY: 0, pointerId: 1 });
     fireEvent.pointerMove(handle("e"), { clientX: 20, clientY: 0, pointerId: 1 });
@@ -85,7 +79,7 @@ describe("PdfCropBox: 포인터 조작", () => {
     const onChange = vi.fn();
     const setPointerCapture = vi.fn();
     const releasePointerCapture = vi.fn();
-    render(<PdfCropBox boxes={boxesOf()} onChange={onChange} />);
+    render(<ImageCropBox boxes={boxesOf()} onChange={onChange} />);
     const east = handle("e");
     east.setPointerCapture = setPointerCapture;
     east.releasePointerCapture = releasePointerCapture;
@@ -110,8 +104,8 @@ describe("PdfCropBox: 포인터 조작", () => {
   it("angle 이 없는 박스도 회전 핸들을 끌면 포인터 각도만큼 돌고, Shift 면 15도 단위로 맞춘다", () => {
     mockLayerRect(200, 200);
     const onChange = vi.fn();
-    render(<PdfCropBox boxes={boxesOf()} onChange={onChange} />);
-    const rotate = screen.getByTestId("pdf-crop-rotate");
+    render(<ImageCropBox boxes={boxesOf()} onChange={onChange} />);
+    const rotate = screen.getByTestId("image-crop-rotate");
 
     // 박스 중심(100,100)에서 오른쪽(0도)을 잡고 아래쪽(90도)으로 끈다.
     fireEvent.pointerDown(rotate, { clientX: 200, clientY: 100, pointerId: 1 });
@@ -124,5 +118,24 @@ describe("PdfCropBox: 포인터 조작", () => {
     fireEvent.pointerMove(rotate, { clientX: 190, clientY: 160, pointerId: 1, shiftKey: true });
     const [, snapped] = onChange.mock.calls.at(-1);
     expect(snapped.angle).toBeCloseTo(30);
+  });
+});
+
+describe("MarkCropBox", () => {
+  it("크롭 표시는 박스 하나, 분할 표시는 앞·뒤 라벨이 붙은 박스 둘을 그린다", () => {
+    const { rerender } = render(<MarkCropBox mark={newMark("crop")} onChange={vi.fn()} />);
+    expect(screen.getAllByTestId("image-crop-box")).toHaveLength(1);
+
+    rerender(<MarkCropBox mark={newMark("split")} onChange={vi.fn()} />);
+    expect(screen.getAllByTestId("image-crop-box")).toHaveLength(2);
+    expect(screen.getByText("앞")).toBeTruthy();
+    expect(screen.getByText("뒤")).toBeTruthy();
+  });
+
+  it("삭제 표시나 표시 없음이면 아무것도 그리지 않는다", () => {
+    const { container, rerender } = render(<MarkCropBox mark={newMark("page")} onChange={vi.fn()} />);
+    expect(container.firstChild).toBeNull();
+    rerender(<MarkCropBox mark={undefined} onChange={vi.fn()} />);
+    expect(container.firstChild).toBeNull();
   });
 });

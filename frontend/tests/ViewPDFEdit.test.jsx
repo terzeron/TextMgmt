@@ -248,12 +248,12 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
     await renderEditable();
 
     fireEvent.click(screen.getByLabelText("2쪽 크롭"));
-    expect(screen.getAllByTestId("pdf-crop-box")).toHaveLength(1);
+    expect(screen.getAllByTestId("image-crop-box")).toHaveLength(1);
     expect(screen.getAllByLabelText("저장")).toHaveLength(1);
     expect(screen.getByLabelText("2쪽 크롭").getAttribute("aria-pressed")).toBe("true");
 
     fireEvent.click(screen.getByLabelText("2쪽 크롭"));
-    expect(screen.queryByTestId("pdf-crop-box")).toBeNull();
+    expect(screen.queryByTestId("image-crop-box")).toBeNull();
     expect(screen.queryByLabelText("저장")).toBeNull();
   });
 
@@ -265,9 +265,9 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
     expect(screen.getByTestId("pdf-delete-overlay-1")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("1쪽 크롭"));
     expect(screen.queryByTestId("pdf-delete-overlay-1")).toBeNull();
-    expect(screen.getAllByTestId("pdf-crop-box")).toHaveLength(1);
+    expect(screen.getAllByTestId("image-crop-box")).toHaveLength(1);
     fireEvent.click(screen.getByLabelText("1쪽 삭제 표시"));
-    expect(screen.queryByTestId("pdf-crop-box")).toBeNull();
+    expect(screen.queryByTestId("image-crop-box")).toBeNull();
     expect(screen.getByTestId("pdf-delete-overlay-1")).toBeTruthy();
   });
 
@@ -327,10 +327,10 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
     await renderEditable();
 
     fireEvent.click(screen.getByLabelText("1쪽 크롭"));
-    expect(screen.getByTestId("pdf-crop-box")).toBeTruthy();
+    expect(screen.getByTestId("image-crop-box")).toBeTruthy();
     fireEvent.click(screen.getByText("1장씩"));
 
-    expect(screen.queryByTestId("pdf-crop-box")).toBeNull();
+    expect(screen.queryByTestId("image-crop-box")).toBeNull();
     expect(screen.getByLabelText("1쪽 크롭").disabled).toBe(true);
   });
 
@@ -348,7 +348,7 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
     await renderEditable();
 
     fireEvent.click(screen.getByLabelText("2쪽 분할"));
-    const boxes = screen.getAllByTestId("pdf-crop-box");
+    const boxes = screen.getAllByTestId("image-crop-box");
     expect(boxes.map((box) => box.dataset.box)).toEqual(["first", "second"]);
     expect(boxes[0].style.getPropertyValue("--crop-color")).toBe("#4a90d9");
     expect(boxes[1].style.getPropertyValue("--crop-color")).toBe("#d9534f");
@@ -357,7 +357,7 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
     expect(screen.getAllByLabelText("저장")).toHaveLength(1);
 
     fireEvent.click(screen.getByLabelText("2쪽 분할"));
-    expect(screen.queryByTestId("pdf-crop-box")).toBeNull();
+    expect(screen.queryByTestId("image-crop-box")).toBeNull();
     expect(screen.queryByLabelText("저장")).toBeNull();
   });
 
@@ -366,13 +366,13 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
     await renderEditable();
 
     fireEvent.click(screen.getByLabelText("1쪽 분할"));
-    expect(screen.getAllByTestId("pdf-crop-box")).toHaveLength(2);
+    expect(screen.getAllByTestId("image-crop-box")).toHaveLength(2);
     fireEvent.click(screen.getByLabelText("1쪽 크롭"));
-    expect(screen.getAllByTestId("pdf-crop-box")).toHaveLength(1);
+    expect(screen.getAllByTestId("image-crop-box")).toHaveLength(1);
     fireEvent.click(screen.getByLabelText("1쪽 분할"));
-    expect(screen.getAllByTestId("pdf-crop-box")).toHaveLength(2);
+    expect(screen.getAllByTestId("image-crop-box")).toHaveLength(2);
     fireEvent.click(screen.getByLabelText("1쪽 삭제 표시"));
-    expect(screen.queryByTestId("pdf-crop-box")).toBeNull();
+    expect(screen.queryByTestId("image-crop-box")).toBeNull();
     expect(screen.getByTestId("pdf-delete-overlay-1")).toBeTruthy();
   });
 
@@ -417,7 +417,7 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
     fireEvent.click(screen.getByLabelText("1쪽 분할"));
     fireEvent.click(screen.getByText("1장씩"));
 
-    expect(screen.queryByTestId("pdf-crop-box")).toBeNull();
+    expect(screen.queryByTestId("image-crop-box")).toBeNull();
     expect(screen.getByLabelText("1쪽 분할").disabled).toBe(true);
   });
 
@@ -431,35 +431,33 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
         right: size,
         bottom: size,
       });
-    const rotateHandle = () => document.querySelector('[data-testid="pdf-crop-rotate"]');
+    const rotateHandle = () => document.querySelector('[data-testid="image-crop-rotate"]');
 
     it("박스마다 회전 손잡이가 박스 안에 있다", async () => {
       globalThis.fetch = createFetch(okResponse);
       await renderEditable();
       fireEvent.click(screen.getByLabelText("1쪽 분할"));
-      expect(screen.getAllByTestId("pdf-crop-rotate")).toHaveLength(2);
-      for (const handle of screen.getAllByTestId("pdf-crop-rotate")) {
-        expect(handle.closest('[data-testid="pdf-crop-box"]')).toBeTruthy();
+      expect(screen.getAllByTestId("image-crop-rotate")).toHaveLength(2);
+      for (const handle of screen.getAllByTestId("image-crop-rotate")) {
+        expect(handle.closest('[data-testid="image-crop-box"]')).toBeTruthy();
       }
     });
 
-    it("회전 손잡이를 드래그하면 박스가 기울고 각도 라벨과 기울어진 덮개가 나타난다", async () => {
+    it("회전 손잡이를 드래그하면 박스가 기울고 각도 라벨이 나타난다", async () => {
       globalThis.fetch = createFetch(okResponse);
       page(400);
       await renderEditable();
       fireEvent.click(screen.getByLabelText("1쪽 크롭"));
-      expect(screen.queryByTestId("pdf-crop-dim-rotated")).toBeNull();
 
       // 중심 (200,200) 의 위쪽(-90°)에서 오른쪽(0°)으로: 시계 방향 +90°
       fireEvent.pointerDown(rotateHandle(), { clientX: 200, clientY: 40, pointerId: 1 });
       fireEvent.pointerMove(rotateHandle(), { clientX: 360, clientY: 200, pointerId: 1 });
       fireEvent.pointerUp(rotateHandle(), { pointerId: 1 });
 
-      const box = screen.getByTestId("pdf-crop-box");
+      const box = screen.getByTestId("image-crop-box");
       expect(Number(box.dataset.angle)).toBeCloseTo(90, 3);
       expect(box.style.transform).toBe("rotate(90deg)");
       expect(screen.getByText("90.0°")).toBeTruthy();
-      expect(screen.getByTestId("pdf-crop-dim-rotated").style.clipPath).toContain("evenodd");
     });
 
     it("Shift 를 누르고 돌리면 15도 단위로 맞춰진다", async () => {
@@ -478,7 +476,7 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
       });
       fireEvent.pointerUp(rotateHandle(), { pointerId: 1 });
 
-      expect(Number(screen.getByTestId("pdf-crop-box").dataset.angle)).toBe(15);
+      expect(Number(screen.getByTestId("image-crop-box").dataset.angle)).toBe(15);
     });
 
     it("쪽 밖으로 나가는 각도까지는 돌지 않는다", async () => {
@@ -487,7 +485,7 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
       await renderEditable();
       fireEvent.click(screen.getByLabelText("1쪽 분할"));
       // 세로로 긴 앞쪽 박스를 45° 돌리려 하면 꼭짓점이 쪽 밖으로 나간다
-      const handle = document.querySelector('[data-box="first"] [data-testid="pdf-crop-rotate"]');
+      const handle = document.querySelector('[data-box="first"] [data-testid="image-crop-rotate"]');
       fireEvent.pointerDown(handle, { clientX: 110, clientY: 40, pointerId: 1 });
       fireEvent.pointerMove(handle, { clientX: 110 + 100, clientY: 200 - 100, pointerId: 1 });
       fireEvent.pointerUp(handle, { pointerId: 1 });
@@ -851,7 +849,7 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
 
       fireEvent.click(screen.getByLabelText("2쪽 분할"));
 
-      expect(screen.getAllByTestId("pdf-crop-box")).toHaveLength(2);
+      expect(screen.getAllByTestId("image-crop-box")).toHaveLength(2);
       expect(screen.getByTestId("pdf-insert-preview-2")).toBeTruthy();
     });
 
@@ -1188,7 +1186,7 @@ describe("ViewPDF 편집 모드: 경계 분기", () => {
       );
     });
 
-    expect(screen.queryByTestId("pdf-crop-box")).toBeNull();
+    expect(screen.queryByTestId("image-crop-box")).toBeNull();
     expect(screen.queryByLabelText("저장")).toBeNull();
   });
 });
