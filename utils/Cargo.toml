@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["pdfscan", "corpus_layout", "es_client", "detect_mojibake", "quarantine_broken", "cluster_hybrid_genres", "search", "epubscan"]
+members = ["pdfscan", "corpus_layout", "es_client", "detect_mojibake", "quarantine_broken", "cluster_hybrid_genres", "search", "epubscan", "stat", "file_time", "parser_timeout", "htmlkit", "isbn"]
 
 [workspace.package]
 version = "0.1.0"

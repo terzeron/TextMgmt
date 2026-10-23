@@ -9,6 +9,7 @@ publish.workspace = true
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 detect_mojibake = { path = "../detect_mojibake" }
 fancy-regex = "0.14"
+htmlkit = { path = "../htmlkit" }
 indexmap = { version = "2.14.2", features = ["serde"] }
 rayon = "1.12.0"
 regex = "1.13.1"

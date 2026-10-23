@@ -1,0 +1,8 @@
+[package]
+name = "parser_timeout"
+description = "외부 파서에 벽시계 상한을 거는 공용 유틸 (utils/parser_timeout.py의 Rust 대응)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
