@@ -1,0 +1,11 @@
+[package]
+name = "search"
+description = "ES 제목·내용 검색 점검 도구 (utils/search.py의 Rust 대응)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+es_client = { path = "../es_client" }
+serde_json = { workspace = true, features = ["preserve_order"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }

@@ -885,46 +885,8 @@ def _make_es_manager(monkeypatch):
         return ESManager()
 
 
-# ---- coverage: search.py and update.py CLI tests ----
-
-
-def test_search_main(monkeypatch):
-    """utils/search.py main() with mocked ESManager"""
-    _set_es_env(monkeypatch)
-    monkeypatch.setattr("sys.argv", ["search", "test_title"])
-
-    with patch.object(Elasticsearch, "__init__", return_value=None), patch.object(Elasticsearch, "info", return_value={}):
-        from utils.search import main
-
-        mock_es = MagicMock()
-        mock_es.search_by_title.return_value = [(1, {"summary": "short summary text"}, 1.0)]
-        mock_es.search_similar_docs.return_value = []
-        monkeypatch.setattr("utils.search.ESManager", lambda: mock_es)
-        result = main()
-        assert result == 0
-
-
-def test_search_main_with_content(monkeypatch):
-    _set_es_env(monkeypatch)
-    monkeypatch.setattr("sys.argv", ["search", "title", "content", "txt", "100"])
-
-    with patch.object(Elasticsearch, "__init__", return_value=None), patch.object(Elasticsearch, "info", return_value={}):
-        from utils.search import main
-
-        mock_es = MagicMock()
-        mock_es.search_by_title.return_value = []
-        mock_es.search_similar_docs.return_value = [(2, {"summary": "s"}, 1.0)]
-        monkeypatch.setattr("utils.search.ESManager", lambda: mock_es)
-        result = main()
-        assert result == 0
-
-
-def test_search_print_usage(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["search"])
-    from utils.search import print_usage
-
-    with pytest.raises(SystemExit):
-        print_usage("search")
+# ---- coverage: update.py CLI tests ----
+# utils/search.py 는 Rust(utils/search)로 옮겨 이 파일의 search 테스트는 utils/search/tests 로 이식했다.
 
 
 def test_update_main(monkeypatch):
@@ -970,18 +932,6 @@ def test_update_main_delete_failure(monkeypatch):
         monkeypatch.setattr("utils.update.ESManager", lambda: mock_es)
         result = main()
         assert result == -1
-
-
-def test_search_main_no_args(monkeypatch):
-    """Line 29: main() with no args calls print_usage"""
-    _set_es_env(monkeypatch)
-    monkeypatch.setattr("sys.argv", ["search"])
-
-    with patch.object(Elasticsearch, "__init__", return_value=None), patch.object(Elasticsearch, "info", return_value={}):
-        from utils.search import main
-
-        with pytest.raises(SystemExit):
-            main()
 
 
 # ---- coverage: _search scroll edge cases ----

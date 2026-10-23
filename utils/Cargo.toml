@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["pdfscan", "corpus_layout", "es_client", "detect_mojibake", "quarantine_broken", "cluster_hybrid_genres", "search"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# 공유 의존성은 여기서 버전을 한 번만 정한다. 각 crate는 `dep.workspace = true`로 쓴다.
+[workspace.dependencies]
+lopdf = "0.46"
+serde_json = "1"
+ureq = { version = "3.5", default-features = false, features = ["rustls", "json"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind" # pdfscan이 catch_unwind로 파서 panic을 격리한다
+strip = true

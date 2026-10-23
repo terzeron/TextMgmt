@@ -1,0 +1,9 @@
+[package]
+name = "pdfscan"
+description = "Static PDF action / active-content scanner"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+lopdf.workspace = true
