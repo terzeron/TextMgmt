@@ -1,0 +1,287 @@
+//! 앱이 주입받는 능력(trait)과 실제·기본 구현. 설계: docs/rust-test-seams.md 3.0, 3.2.
+//!
+//! 규칙: 모든 trait는 `Send + Sync`이고 모든 메서드에 기본 구현이 있다. 기본값은 `Err(..unimplemented)`/빈 값이다.
+//! 테스트 대역은 쓰는 메서드만 구현한다. facade 이름은 `XxxApi`, 좁은 능력은 역할 명사다.
+//!
+//! 이 파일의 `BookManagerApi`, `CategoryMappingApi`, `ViewHistoryApi`, `BookAccess`는 라우트를 붙이는 쪽이 필요로 하는
+//! 메서드만 먼저 정의한 뼈대다. 새 라우트가 메서드를 더 필요로 하면 여기에 기본 구현과 함께 추가한다.
+//! (실제 `BookManager`가 생기면 `backend::book_manager`가 이 trait를 `pub use`하거나 구현한다.)
+
+use std::fmt;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::thread::JoinHandle;
+
+use async_trait::async_trait;
+use serde_json::Value;
+
+use crate::auth::HTTPException;
+use crate::book::Book;
+use crate::category_mapping::CategoryMapping;
+use crate::es_manager::EsManagerApi;
+use crate::view_history_store::{ViewHistoryError, ViewHistoryStore};
+
+/// 사용 가능한 구현이 없을 때 쓰는 사유 문구.
+pub const UNIMPLEMENTED: &str = "unimplemented";
+
+// ---------------------------------------------------------------------------
+// Google 로그인
+// ---------------------------------------------------------------------------
+
+/// Google ID 토큰 검증. Python `google_id_token.verify_oauth2_token`과 `TM_GOOGLE_CLIENT_ID`에 대응한다.
+pub trait GoogleVerifier: Send + Sync {
+    /// 설정된 OAuth 클라이언트 ID. 없으면 None.
+    fn client_id(&self) -> Option<String> {
+        std::env::var("TM_GOOGLE_CLIENT_ID").ok().filter(|v| !v.is_empty())
+    }
+
+    /// 검증에 성공하면 토큰의 claims를 돌려준다. 실패 사유는 문자열이다(Python `ValueError`).
+    fn verify(&self, _credential: &str, _audience: &str) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
+    }
+}
+
+/// 자리표시자. Google 공개 키를 HTTPS로 가져오는 TLS 클라이언트가 아직 없어서 항상 "검증 불가"를 돌려준다.
+/// 그래서 이 구현으로는 아무도 로그인할 수 없다(실패로 닫힌다).
+pub struct UnavailableGoogleVerifier;
+
+impl GoogleVerifier for UnavailableGoogleVerifier {
+    fn verify(&self, _credential: &str, _audience: &str) -> Result<Value, String> {
+        Err("Google ID token verification is not available in this build".to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 백그라운드 작업
+// ---------------------------------------------------------------------------
+
+/// `TaskRunner::spawn`이 돌려주는 핸들.
+pub trait TaskHandle: Send {
+    fn is_finished(&self) -> bool {
+        true
+    }
+
+    fn join(self: Box<Self>) {}
+}
+
+struct ThreadHandle(JoinHandle<()>);
+
+impl TaskHandle for ThreadHandle {
+    fn is_finished(&self) -> bool {
+        self.0.is_finished()
+    }
+
+    fn join(self: Box<Self>) {
+        let _ = self.0.join();
+    }
+}
+
+struct DoneHandle;
+
+impl TaskHandle for DoneHandle {}
+
+/// 백그라운드 작업 실행기. Starlette `BackgroundTasks`와 `asyncio.to_thread`에 대응한다.
+pub trait TaskRunner: Send + Sync {
+    /// 기본 구현은 새 스레드에서 실행한다.
+    fn spawn(&self, name: &str, job: Box<dyn FnOnce() + Send>) -> Box<dyn TaskHandle> {
+        match std::thread::Builder::new().name(name.to_string()).spawn(job) {
+            Ok(handle) => Box::new(ThreadHandle(handle)),
+            Err(e) => {
+                log::error!("failed to start task {name}: {e}");
+                Box::new(DoneHandle)
+            }
+        }
+    }
+
+    /// 블로킹 풀로 넘어간 함수 이름을 알린다(Python `to_thread_spy`). 기본 구현은 아무것도 하지 않는다.
+    fn spawn_blocking_observed(&self, _name: &str) {}
+}
+
+/// 실제 실행기: 작업마다 스레드를 띄운다.
+pub struct ThreadRunner;
+
+impl TaskRunner for ThreadRunner {}
+
+/// 응답을 돌려주기 전에 같은 스레드에서 작업을 끝낸다(Starlette `TestClient` 가정). 스레드 로컬 로그 수집에 필요하다.
+pub struct InlineRunner;
+
+impl TaskRunner for InlineRunner {
+    fn spawn(&self, _name: &str, job: Box<dyn FnOnce() + Send>) -> Box<dyn TaskHandle> {
+        job();
+        Box::new(DoneHandle)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 조회 이력
+// ---------------------------------------------------------------------------
+
+/// 사용자별 조회 이력 저장소 facade. `ViewHistoryStore`가 구현한다.
+pub trait ViewHistoryApi: Send + Sync {
+    fn record_view(&self, _email: &str, _content_type: &str, _book_id: i64, _title: &str, _category: &str) -> Result<(), ViewHistoryError> {
+        Err(ViewHistoryError::RuntimeError(UNIMPLEMENTED.to_string()))
+    }
+
+    fn list_recent_views(&self, _limit: usize) -> Result<Value, ViewHistoryError> {
+        Err(ViewHistoryError::RuntimeError(UNIMPLEMENTED.to_string()))
+    }
+}
+
+impl ViewHistoryApi for ViewHistoryStore {
+    fn record_view(&self, email: &str, content_type: &str, book_id: i64, title: &str, category: &str) -> Result<(), ViewHistoryError> {
+        ViewHistoryStore::record_view(self, email, content_type, book_id, title, category)
+    }
+
+    fn list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError> {
+        ViewHistoryStore::list_recent_views(self, limit)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 카테고리 매핑
+// ---------------------------------------------------------------------------
+
+/// 카테고리 매핑 facade의 오류. `Http`는 라우트가 그대로 응답으로 바꾼다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MappingError {
+    Http(u16, String),
+    Other(String),
+}
+
+impl fmt::Display for MappingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MappingError::Http(status, detail) => write!(f, "{status}: {detail}"),
+            MappingError::Other(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl std::error::Error for MappingError {}
+
+fn unimplemented_mapping<T>() -> Result<T, MappingError> {
+    Err(MappingError::Other(UNIMPLEMENTED.to_string()))
+}
+
+/// 카테고리 매핑 facade. 동기 메서드다. 지금은 viewer 접근 제어에 필요한 조회만 있다.
+pub trait CategoryMappingApi: Send + Sync {
+    fn get_hidden_categories(&self, _content_type: &str) -> Result<Vec<String>, MappingError> {
+        unimplemented_mapping()
+    }
+
+    fn get_latest_excluded_categories(&self, _content_type: &str) -> Result<Vec<String>, MappingError> {
+        unimplemented_mapping()
+    }
+}
+
+impl CategoryMappingApi for CategoryMapping {
+    fn get_hidden_categories(&self, content_type: &str) -> Result<Vec<String>, MappingError> {
+        Ok(CategoryMapping::get_hidden_categories(self, content_type))
+    }
+
+    fn get_latest_excluded_categories(&self, content_type: &str) -> Result<Vec<String>, MappingError> {
+        Ok(CategoryMapping::get_latest_excluded_categories(self, content_type))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 책 관리자
+// ---------------------------------------------------------------------------
+
+/// `get_book_content`의 결과: 디스크 파일 또는 본문 텍스트.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BookContent {
+    File(PathBuf),
+    Text(String),
+}
+
+/// 미리보기·PDF 쪽·표지 같은 응답 하나. 구 `PreviewResponse`, `PdfPagesResponse`, `CoverResponse`를 합친 것이다.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BookResponse {
+    pub status_code: u16,
+    pub media_type: Option<String>,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+struct NoEs;
+
+impl EsManagerApi for NoEs {}
+
+fn unimplemented_error() -> Option<String> {
+    Some(UNIMPLEMENTED.to_string())
+}
+
+/// 책/만화 관리자 facade. 책과 만화가 같은 trait를 쓴다. 지금은 문서 3.2의 통일 시그니처 일부만 있다.
+#[async_trait]
+pub trait BookManagerApi: Send + Sync {
+    fn path_prefix(&self) -> PathBuf {
+        PathBuf::new()
+    }
+
+    fn es_manager(&self) -> Arc<dyn EsManagerApi> {
+        Arc::new(NoEs)
+    }
+
+    async fn get_book(&self, _id: i64) -> (Option<Book>, Option<String>) {
+        (None, unimplemented_error())
+    }
+
+    async fn get_categories(&self) -> (Value, Option<String>) {
+        (Value::Null, unimplemented_error())
+    }
+
+    /// (목록, 전체 수, 다음 커서, 오류)
+    async fn get_books_in_category_paged(&self, _category: &str, _size: Option<i64>, _cursor: Option<&str>) -> (Vec<Book>, i64, Option<String>, Option<String>) {
+        (Vec::new(), 0, None, unimplemented_error())
+    }
+
+    async fn get_book_content(&self, _id: i64) -> BookContent {
+        BookContent::Text(String::new())
+    }
+
+    async fn get_book_preview(&self, _id: i64, _chapters: Option<i64>, _resource_base_url: Option<&str>) -> BookResponse {
+        BookResponse { status_code: 501, ..BookResponse::default() }
+    }
+
+    async fn get_pdf_pages(&self, _id: i64, _start: i64, _end: i64) -> BookResponse {
+        BookResponse { status_code: 501, ..BookResponse::default() }
+    }
+
+    fn get_category_mismatches(&self, _force_refresh: bool) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn update_book(&self, _id: i64, _category: &str, _title: &str, _author: &str, _path: &std::path::Path, _file_type: &str, _force: bool) -> (Value, Option<String>) {
+        (Value::Null, unimplemented_error())
+    }
+}
+
+/// 설정이 없을 때 쓰는 관리자. 모든 메서드가 기본 구현(미구현 오류)이다.
+pub struct UnavailableBookManager;
+
+impl BookManagerApi for UnavailableBookManager {}
+
+// ---------------------------------------------------------------------------
+// viewer 접근 확인
+// ---------------------------------------------------------------------------
+
+/// `BookAccess`가 돌려주는 책 요약.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BookStub {
+    pub title: String,
+    pub category: Option<String>,
+}
+
+/// Python `_get_book_and_ensure_viewer_access`: 책을 찾고, viewer가 볼 수 없는 카테고리면 403 오류를 돌려준다.
+pub trait BookAccess: Send + Sync {
+    fn get_book_and_ensure_viewer_access(&self, _book_id: i64, _payload: &Value, _content_type: &str) -> Result<(Option<BookStub>, Option<String>), HTTPException> {
+        Err(HTTPException::new(500, UNIMPLEMENTED))
+    }
+}
+
+/// 설정이 없을 때 쓰는 접근 확인. 기본 구현(미구현 오류)이다.
+pub struct UnavailableBookAccess;
+
+impl BookAccess for UnavailableBookAccess {}

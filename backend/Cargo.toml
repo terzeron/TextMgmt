@@ -22,6 +22,7 @@ diesel = { version = "2.3.14", default-features = false, features = ["mysql", "r
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 htmlkit = { path = "../libs/htmlkit" }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif"] }
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 log = "0.4.34"
 # MySQL 클라이언트는 개발 헤더 없이 쓰려고 소스에서 번들 빌드한다 (docs/rust-test-seams.md, diesel spike)
 mysqlclient-sys = { version = "0.5.2", features = ["bundled"] }
@@ -104,6 +105,14 @@ path = "../tests/rust/backend/comics_manager.rs"
 [[test]]
 name = "bookstore"
 path = "../tests/rust/backend/bookstore.rs"
+
+[[test]]
+name = "auth"
+path = "../tests/rust/backend/auth.rs"
+
+[[test]]
+name = "client_error_log"
+path = "../tests/rust/backend/client_error_log.rs"
 
 [dev-dependencies]
 base64 = "0.23.1"

@@ -3,7 +3,7 @@
 //! JWT 발급·검증, 권한 의존성(`require_auth`/`require_admin`), 쿠키 설정, Google OAuth 로그인, refresh 회전 관측 로그,
 //! 접속 IP 추출, admin 로그인 세션 관리 API 테스트. Python의 autouse `setup_env` fixture는 `fixture()`(`common::env::EnvGuard`)로 옮겼다.
 //! Python `monkeypatch.setattr(main_mod, ...)`는 `AppDeps`의 `with_google_verifier`/`with_role_resolver`/`with_refresh_token_store`로 옮겼다.
-//! 토큰 발급 함수(`create_jwt_token`/`create_refresh_token`)의 반환값을 고정해야 하는 `test_auth_refresh_and_logout` 하나만 seam이 없어 `#[ignore]`로 남겼다.
+//! 토큰 발급 함수의 반환값을 고정해야 하는 `test_auth_refresh_and_logout`은 `AppDeps::with_token_issuer(Arc<dyn TokenIssuer>)` seam으로 풀었다.
 //!
 //! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.2, 3.4, 3.9, 3.10):
 //! - `backend::auth` (환경 변수는 호출 시점에 읽는다. Python의 `importlib.reload` 불필요)
@@ -25,6 +25,7 @@
 //!   - `trait GoogleVerifier { fn client_id(&self) -> Option<String>; fn verify(&self, credential: &str, audience: &str) -> Result<Value, String>; }`
 //!   - `trait RoleResolver { fn determine_role(&self, email: &str) -> Option<String>; }`
 //!   - (모든 trait 메서드에 기본 구현이 있다. fake는 쓰는 메서드만 구현한다)
+//!   - `trait TokenIssuer` (`backend::auth`, 모든 메서드에 기본 구현): `create_access_token`, `create_refresh_token`, `decode_refresh_token`, `new_id`. `AppDeps::with_token_issuer(Arc<dyn TokenIssuer>)`
 //!   - `ACCESS_COOKIE_NAME`, `REFRESH_COOKIE_NAME: &str`, `observation_hash(&str) -> String`
 //!   - `_get_cookie_settings() -> (bool, String)`, `_set_auth_cookies(&mut CustomJSONResponse, &str, &str)`, `_clear_auth_cookies(&mut CustomJSONResponse)`
 //!   - `CustomJSONResponse::{new(Value) -> Self, headers(&self) -> &HeaderMap}`, `custom_jsonable_encoder(&Value) -> Value`
@@ -33,7 +34,7 @@
 //!     `async general_exception_handler(&Parts, &(dyn Error + Send + Sync)) -> Response`, `RequestValidationError::new(Vec<Value>, Value /*body*/)`
 //!   - `route_table() -> Vec<RouteInfo>`, `struct RouteInfo { path: String, methods: Vec<String>, dependencies: Vec<String> }` (FastAPI `route.dependant.dependencies` 대응)
 //! - `backend::refresh_token_store`: `trait RefreshTokenStoreApi`(store_issued, rotate, revoke_family, get_token_observation, list_sessions, revoke_session),
-//!   `SessionQuery { status, current_family_id, page, page_size, email }`, `StoreError::Other(String)`
+//!   `SessionQuery { status, current_family_id, page, page_size, email }`, `StoreError::Unsupported(String)`
 //! - 로그 캡처는 `common::log_capture::LogCapture`(`log` crate 기반), 환경 변수는 `common::env::EnvGuard`.
 //! - dev-dependency: `jsonwebtoken`, `tokio`
 //!
@@ -49,7 +50,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
-use backend::auth::{ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, RequestParts, SystemExit};
+use backend::auth::{ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, RequestParts, SystemExit, TokenIssuer};
+use backend::db::Row;
 use backend::main::{ACCESS_COOKIE_NAME, AppDeps, AuthMode, CustomJSONResponse, GoogleVerifier, REFRESH_COOKIE_NAME, RequestValidationError, RoleResolver, app_with, observation_hash};
 use backend::refresh_token_store::{RefreshTokenStoreApi, SessionQuery, StoreError};
 use common::env::EnvGuard;
@@ -189,9 +191,11 @@ fn no_role() -> Arc<FixedRole> {
 }
 
 /// `GoogleVerifier` fake. `client_id`와 검증 결과를 정한다 (구 `.google_client_id`, `.verify_google_token`).
+type VerifyFn = dyn Fn(&str, &str) -> Result<Value, String> + Send + Sync;
+
 struct FakeGoogle {
     client_id: Option<String>,
-    verify: Box<dyn Fn(&str, &str) -> Result<Value, String> + Send + Sync>,
+    verify: Box<VerifyFn>,
 }
 
 impl GoogleVerifier for FakeGoogle {
@@ -261,7 +265,7 @@ impl FakeStore {
     }
 }
 
-// TODO(common): `StoreError::Other(String)`은 가정이다. 문서(3.0 규칙 4)에는 Unimplemented만 있다.
+// 실제 `StoreError`에는 `Other`가 없어서 임의 사유 문자열은 `Unsupported(String)`으로 옮긴다.
 #[allow(clippy::too_many_arguments)]
 impl RefreshTokenStoreApi for FakeStore {
     fn store_issued(&self, token_id: &str, family_id: &str, email: &str, _issued_at: i64, _expires_at: i64, client_ip: Option<&str>, user_agent: Option<&str>) -> Result<(), StoreError> {
@@ -294,20 +298,46 @@ impl RefreshTokenStoreApi for FakeStore {
 
     fn get_token_observation(&self, _token_id: &str) -> Result<Option<Value>, StoreError> {
         match self.observation.lock().unwrap().clone() {
-            Some(result) => result.map_err(StoreError::Other),
+            Some(result) => result.map_err(StoreError::Unsupported),
             None => Ok(None),
         }
+    }
+
+    // 이 fake는 `list_sessions`/`revoke_session`을 직접 구현하므로 행 조회는 쓰이지 않는다.
+    fn _session_rows(&self, _email: Option<&str>, _family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
+        Err(StoreError::Unsupported("unimplemented".to_string()))
     }
 
     fn list_sessions(&self, q: &SessionQuery) -> Result<Value, StoreError> {
         // Python 키워드 인자를 객체로 담아 둔다. 키 이름은 Python과 같다.
         self.list_calls.lock().unwrap().push(json!({"status": q.status, "current_family_id": q.current_family_id, "page": q.page, "page_size": q.page_size, "email": q.email}));
-        self.sessions.lock().unwrap().clone().unwrap_or_else(|| Err("unset".to_string())).map_err(StoreError::Other)
+        self.sessions.lock().unwrap().clone().unwrap_or_else(|| Err("unset".to_string())).map_err(StoreError::Unsupported)
     }
 
     fn revoke_session(&self, family_id: &str) -> Result<Value, StoreError> {
         self.revoke_session_calls.lock().unwrap().push(json!({"family_id": family_id}));
-        self.revoke_result.lock().unwrap().clone().unwrap_or_else(|| Err("unset".to_string())).map_err(StoreError::Other)
+        self.revoke_result.lock().unwrap().clone().unwrap_or_else(|| Err("unset".to_string())).map_err(StoreError::Unsupported)
+    }
+}
+
+/// `TokenIssuer` fake: 접근 토큰은 "jwt", 갱신 토큰은 "rjwt"로 고정하고, "rjwt"는 family1 토큰으로 해독한다.
+/// 그 밖의 토큰은 실제 해독으로 넘긴다(앞쪽 요청은 `crafted_refresh`가 만든 실제 토큰을 쓴다).
+struct FixedTokens;
+
+impl TokenIssuer for FixedTokens {
+    fn create_access_token(&self, _email: &str, _role: &str, _name: &str, _picture: &str) -> String {
+        "jwt".to_string()
+    }
+
+    fn create_refresh_token(&self, _email: &str, _role: &str, _name: &str, _picture: &str, _family_id: &str, _token_id: &str) -> String {
+        "rjwt".to_string()
+    }
+
+    fn decode_refresh_token(&self, token: &str) -> Result<Value, HTTPException> {
+        if token == "rjwt" {
+            return Ok(json!({"type": "refresh", "email": "e@example.com", "fid": "family1", "jti": "new-token"}));
+        }
+        backend::auth::decode_refresh_token(token)
     }
 }
 
@@ -849,7 +879,6 @@ async fn test_auth_google_errors() {
 }
 
 #[tokio::test]
-#[ignore = "seam 부족: create_refresh_token이 고정값(\"rjwt\")을 돌려주게 하는 토큰 발급 seam이 설계에 없다(본문은 이를 가정한다)"]
 async fn test_auth_refresh_and_logout() {
     let _env = fixture();
     // 쿠키 없는 refresh는 400
@@ -857,8 +886,8 @@ async fn test_auth_refresh_and_logout() {
     assert_eq!(resp.status, 400);
 
     let store = FakeStore::rotating("ok");
-    // TODO(seam): `create_jwt_token`/`create_refresh_token`이 "jwt"/"rjwt"를 돌려주게 하는 seam이 필요하다. 지금은 실제 토큰이 발급된다.
-    let deps = auth_deps().with_role_resolver(role("user")).with_refresh_token_store(store.clone());
+    // `AppDeps::with_token_issuer`가 Python의 `create_jwt_token`/`create_refresh_token`/`decode_refresh_token` 덮어쓰기를 대신한다.
+    let deps = auth_deps().with_role_resolver(role("user")).with_refresh_token_store(store.clone()).with_token_issuer(Arc::new(FixedTokens));
     let app = auth_app(deps);
     let token = crafted_refresh("e@example.com", "family1", "old-token");
 
@@ -941,7 +970,7 @@ async fn test_auth_me_expires_in_with_real_token() {
     let data = resp.json();
     let expires_in = data["result"]["expires_in"].as_i64().unwrap();
     // 방금 생성한 토큰이므로 남은 시간은 만료 시간에 근접해야 함 (±5초 오차 허용)
-    assert!(ACCESS_TOKEN_EXPIRATION_SECONDS - 5 <= expires_in && expires_in <= ACCESS_TOKEN_EXPIRATION_SECONDS, "expires_in={expires_in}");
+    assert!((ACCESS_TOKEN_EXPIRATION_SECONDS - 5..=ACCESS_TOKEN_EXPIRATION_SECONDS).contains(&expires_in), "expires_in={expires_in}");
 }
 
 #[tokio::test]
