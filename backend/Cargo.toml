@@ -16,10 +16,14 @@ path = "src/bin/backend.rs"
 [dependencies]
 async-trait = "0.1"
 axum = "0.8.9"
-# MySQL 클라이언트는 개발 헤더 없이 쓰려고 소스에서 번들 빌드한다 (docs/rust-test-seams.md, diesel spike)
+bookstore_lib = { package = "bookstore", path = "../libs/bookstore" }
+corpus_layout = { path = "../libs/corpus_layout" }
 diesel = { version = "2.3.14", default-features = false, features = ["mysql", "r2d2", "chrono"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+htmlkit = { path = "../libs/htmlkit" }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif"] }
 log = "0.4.34"
+# MySQL 클라이언트는 개발 헤더 없이 쓰려고 소스에서 번들 빌드한다 (docs/rust-test-seams.md, diesel spike)
 mysqlclient-sys = { version = "0.5.2", features = ["bundled"] }
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -55,10 +59,29 @@ path = "../tests/rust/backend/classify_proposal_items_db.rs"
 name = "classify_proposal_status_db"
 path = "../tests/rust/backend/classify_proposal_status_db.rs"
 
+[[test]]
+name = "book"
+path = "../tests/rust/backend/book.rs"
+
+[[test]]
+name = "image_edit"
+path = "../tests/rust/backend/image_edit.rs"
+
+[[test]]
+name = "cover_browse"
+path = "../tests/rust/backend/cover_browse.rs"
+
+[[test]]
+name = "cover_sources"
+path = "../tests/rust/backend/cover_sources.rs"
+
+[[test]]
+name = "direct_cover_url"
+path = "../tests/rust/backend/direct_cover_url.rs"
+
 [dev-dependencies]
 base64 = "0.23.1"
 flate2 = "1"
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif"] }
 lopdf.workspace = true
 roxmltree = "0.21.1"
 sha2 = "0.11.1"

@@ -1,7 +1,7 @@
 //! 원본: tests/test_direct_cover_url.py
 //!
 //! 직접 표지 URL의 SSRF 차단과 제한된 다운로드를 검증한다. Python은 `socket.getaddrinfo`와 `urllib3` 연결 풀을
-//! monkeypatch로 바꿨다. Rust에서는 DNS 조회와 연결 풀을 `Net` trait로 주입한다고 가정하고, 모든 테스트를 `#[ignore]`로 둔다.
+//! monkeypatch로 바꿨다. Rust에서는 DNS 조회와 연결 풀을 `Net` trait로 주입한다.
 //!
 //! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.7. `Net`/`Pool`/`PoolResponse`는 연결 수준 계약이라 `HttpSession`과 합치지 않고 그대로 둔다):
 //! - `backend::direct_cover_url::fetch_url_image_with(url: &str, net: &dyn Net, max_image_bytes: usize) -> Result<Vec<u8>, FetchError>`
@@ -129,7 +129,6 @@ fn fetch(url: &str, net: &FakeNet) -> Result<Vec<u8>, String> {
 }
 
 #[test]
-#[ignore = "monkeypatch: socket.getaddrinfo와 urllib3.HTTPSConnectionPool을 바꾼다; DI 설계 후 활성화"]
 fn test_mixed_public_and_private_dns_is_rejected_before_connecting() {
     let net = FakeNet::new(addresses(&["8.8.8.8", "192.168.1.10"]), vec![Spec::new(200, &[])]);
     let err = fetch("https://images.example.org/cover.jpg", &net).unwrap_err();
@@ -138,7 +137,6 @@ fn test_mixed_public_and_private_dns_is_rejected_before_connecting() {
 }
 
 #[test]
-#[ignore = "monkeypatch: socket.getaddrinfo와 urllib3.HTTPSConnectionPool을 바꾼다; DI 설계 후 활성화"]
 fn test_ipv6_image_uses_bracketed_host_and_validated_address() {
     let address = "2001:4860:4860::8888";
     let spec = Spec::new(200, &[b"image"]);
@@ -151,7 +149,6 @@ fn test_ipv6_image_uses_bracketed_host_and_validated_address() {
 }
 
 #[test]
-#[ignore = "monkeypatch: socket.getaddrinfo, MAX_IMAGE_BYTES, urllib3.HTTPSConnectionPool을 바꾼다; DI 설계 후 활성화"]
 fn test_stream_limit_counts_chunks_instead_of_trusting_content_length() {
     let mut spec = Spec::new(200, &[b"abc", b"def"]).header("Content-Length", "1");
     // 제한을 넘은 뒤에도 읽으면 이 오류가 나서 테스트가 실패한다(Python의 `raise AssertionError`).
@@ -163,7 +160,6 @@ fn test_stream_limit_counts_chunks_instead_of_trusting_content_length() {
 }
 
 #[test]
-#[ignore = "monkeypatch: socket.getaddrinfo와 urllib3.HTTPSConnectionPool을 바꾼다; DI 설계 후 활성화"]
 fn test_relative_redirect_downloads_image_and_closes_every_response() {
     for status in [301, 302, 303, 307, 308] {
         let redirect = Spec::new(status, &[]).header("Location", "/real.jpg?version=2");
@@ -177,7 +173,6 @@ fn test_relative_redirect_downloads_image_and_closes_every_response() {
 }
 
 #[test]
-#[ignore = "monkeypatch: socket.getaddrinfo와 urllib3.HTTPSConnectionPool을 바꾼다; DI 설계 후 활성화"]
 fn test_https_connects_to_validated_ip_with_original_tls_hostname() {
     let spec = Spec::new(200, &[b"im", b"age"]);
     let net = FakeNet::new(public_dns(), vec![spec.clone()]);
@@ -193,7 +188,6 @@ fn test_https_connects_to_validated_ip_with_original_tls_hostname() {
 }
 
 #[test]
-#[ignore = "monkeypatch: socket.getaddrinfo가 127.0.0.1을 돌려준다; DI 설계 후 활성화"]
 fn test_rejects_invalid_urls_and_private_addresses() {
     for url in ["file:///etc/passwd", "ftp://example.org/x", "http://u:p@example.org/x", "https://example.org:444/x", "https:///no-host", "http://127.0.0.1/x"] {
         let net = FakeNet::new(addresses(&["127.0.0.1"]), vec![Spec::new(200, &[b"data"])]);
@@ -202,7 +196,6 @@ fn test_rejects_invalid_urls_and_private_addresses() {
 }
 
 #[test]
-#[ignore = "monkeypatch: socket.getaddrinfo와 urllib3.HTTPSConnectionPool을 바꾼다; DI 설계 후 활성화"]
 fn test_redirect_is_revalidated_before_connecting() {
     let resolver: Resolver = Box::new(|host, _port| Ok(vec![(if host == "example.org" { "8.8.8.8" } else { "10.0.0.1" }).parse().unwrap()]));
     let spec = Spec::new(302, &[]).header("Location", "https://internal.example.org/a.jpg");
@@ -213,7 +206,6 @@ fn test_redirect_is_revalidated_before_connecting() {
 }
 
 #[test]
-#[ignore = "monkeypatch: socket.getaddrinfo, MAX_IMAGE_BYTES, urllib3 연결 풀을 바꾼다; DI 설계 후 활성화"]
 fn test_download_limits_cleanup_and_url_validation() {
     for mode in ["http", "no_location", "bad_status", "size", "redirect_limit", "read_error", "bad_port", "bad_host", "empty_dns"] {
         let status = match mode {

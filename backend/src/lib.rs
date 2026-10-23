@@ -9,3 +9,8 @@ pub mod db;
 pub mod view_history_store;
 pub mod category_mapping;
 pub mod refresh_token_store;
+pub mod book;
+pub mod image_edit;
+pub mod cover_browse;
+pub mod cover_sources;
+pub mod direct_cover_url;

@@ -37,9 +37,11 @@ fn test_one_bit_image_is_rotated_as_grey() {
     assert_eq!(out.color(), ColorType::L8);
 }
 
+type Case = ((f64, f64, f64, f64, f64), &'static str);
+
 #[test]
 fn test_invalid_regions_raise_with_a_reason() {
-    let cases: [((f64, f64, f64, f64, f64), &str); 5] = [
+    let cases: [Case; 5] = [
         ((0.5, 0.1, 0.4, 0.9, 0.0), "밖이거나 비어"),
         ((0.0, 0.0, 1.2, 1.0, 0.0), "밖이거나 비어"),
         ((0.0, 0.0, f64::NAN, 1.0, 0.0), "밖이거나 비어"),

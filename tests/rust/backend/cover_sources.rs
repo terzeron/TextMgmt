@@ -2,7 +2,7 @@
 //!
 //! 서점별 표지 검색·URL 검증·잠금·차단 backoff를 확인한다. 순수 파서와 실제 파일 잠금은 그대로 돌리고,
 //! 네트워크·DNS·시계·클라이언트 factory를 monkeypatch로 바꾸던 테스트는 통일 seam(`HttpSession`, `FsOps`, `Clock`, `SearchHooks`)으로 주입한다.
-//! seam만으로 표현되지 않는 테스트는 `#[ignore]`로 남긴다. 설계: docs/rust-test-seams.md 3.1, 3.5, 3.7, 3.8.
+//! 설계: docs/rust-test-seams.md 3.1, 3.5, 3.7, 3.8.
 //!
 //! 가정한 API (아직 구현 전이다. Python 이름 그대로이고 비공개 `_x`는 `pub fn x`로 본다):
 //! - `backend::cover_sources::{extract_html_candidates(store: &str, url: &str, html: &str) -> Vec<Value>, parse_naver_candidates(html: &str) -> Vec<Value>}`
@@ -12,13 +12,13 @@
 //! - `backend::cover_sources::store_lock(dir: &Path, store: &str) -> Result<StoreLockGuard, StoreLockError>`
 //!   - `enum StoreLockError { UnknownStore(String), Cancelled, Timeout }`
 //!   - `store_lock_with(dir: &Path, store: &str, fs: &dyn FsOps, clock: &dyn Clock) -> Result<StoreLockGuard, StoreLockError>` (문서 3.5. `FsOps::lock_exclusive`가 `WouldBlock`이면 `BlockingIOError`, 시간은 `Clock::monotonic`)
-//!   - 취소 입력은 문서에 없다. `cancelled: &dyn Fn() -> bool`을 5번째 인자로 더 받는다고 가정한다(`test_cancelled_and_timed_out_store_locks`만 쓰며 `#[ignore]`).
+//!   - 취소 입력은 문서에 없다. `cancelled: &dyn Fn() -> bool`을 5번째 인자로 더 받는다고 가정한다(`test_cancelled_and_timed_out_store_locks`만 쓴다).
 //! - `backend::cover_sources::fetch_bytes_with(store, url, session: &dyn HttpSession, max_bytes: Option<usize>, validate: &dyn Fn(&str, &str) -> Result<String, ValueError>) -> Result<Vec<u8>, ValueError>`
 //!   - `sysdeps::HttpSession { fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError>; }` (구 `Session`)
 //!   - `sysdeps::HttpResponse::from_chunks(status: u16, headers: Vec<(String, String)>, chunks: Vec<Vec<u8>>, closed: Arc<AtomicBool>)`, `is_redirect()`, `location()`
 //! - `backend::cover_sources::{SearchHooks, StoreClient, search_candidates_with, SearchError}`
 //!   - `SearchHooks::default()`, `.with_session_factory(Arc<dyn Fn(&str) -> Arc<dyn HttpSession> + Send + Sync>)`(인자는 store. 구 `with_fetch`), `.with_client_factory(store: &str, Fn() -> Box<dyn StoreClient>)`,
-//!   `.with_cancel(Arc<dyn Fn() -> bool + Send + Sync>)`(구 `set_request_cancelled` 가드)
+//!     `.with_cancel(Arc<dyn Fn() -> bool + Send + Sync>)`(구 `set_request_cancelled` 가드)
 //!   - `search_candidates_with(store: &str, metadata: &Value, hooks: &SearchHooks) -> Result<Value, SearchError>` (`result["status"]`, `["candidates"]`, `["search_url"]`)
 //!   - `enum SearchError { Value(String), Http { status: u16 }, Cancelled }`
 //!   - `trait StoreClient { fn supports_isbn_search(&self) -> bool; fn api_key(&self) -> String; fn api_url(&self) -> String; fn base_url(&self) -> String;
@@ -87,12 +87,13 @@ fn decode(raw: &str) -> String {
     let mut out = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(v) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("zz"), 16) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(v) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("zz"), 16)
+        {
+            out.push(v);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;
@@ -102,9 +103,11 @@ fn decode(raw: &str) -> String {
 
 /// 요청 URL마다 `body`를 돌려주는 가짜 `HttpSession`. 구 `fetch_bytes` monkeypatch(`with_fetch`)를 대신한다.
 // TODO(common): `common`에 `HttpSession` 대역이 없다(bookstore.rs의 `FakeSession`은 따로 있다). 생기면 지운다.
+type Responder = Arc<dyn Fn(&str, &str) -> Vec<u8> + Send + Sync>;
+
 struct BodySession {
     store: String,
-    respond: Arc<dyn Fn(&str, &str) -> Vec<u8> + Send + Sync>,
+    respond: Responder,
 }
 
 impl HttpSession for BodySession {
@@ -114,8 +117,8 @@ impl HttpSession for BodySession {
 }
 
 /// `respond(store, url)`이 본문을 정하는 세션 factory. 모든 store가 같은 함수를 쓴다.
-fn session_factory(respond: impl Fn(&str, &str) -> Vec<u8> + Send + Sync + 'static) -> Arc<dyn Fn(&str) -> Arc<dyn HttpSession> + Send + Sync> {
-    let respond: Arc<dyn Fn(&str, &str) -> Vec<u8> + Send + Sync> = Arc::new(respond);
+fn session_factory(respond: impl Fn(&str, &str) -> Vec<u8> + Send + Sync + 'static) -> backend::cover_sources::SessionFactory {
+    let respond: Responder = Arc::new(respond);
     Arc::new(move |store| Arc::new(BodySession { store: store.to_string(), respond: respond.clone() }) as Arc<dyn HttpSession>)
 }
 
@@ -231,13 +234,11 @@ fn dns(addresses: &'static [&'static str]) -> impl Fn(&str, u16) -> std::io::Res
 }
 
 #[test]
-#[ignore = "monkeypatch: cover_sources.socket.getaddrinfo가 127.0.0.1을 돌려준다; DI 설계 후 활성화"]
 fn test_download_rejects_private_dns() {
     assert!(validate_url_with("yes24", "https://image.yes24.com/a", &dns(&["127.0.0.1"])).is_err());
 }
 
 #[test]
-#[ignore = "monkeypatch: cover_sources.socket.getaddrinfo를 공인 주소 또는 빈 목록으로 바꾼다; DI 설계 후 활성화"]
 fn test_public_dns_and_empty_dns() {
     for empty in [false, true] {
         let url = "https://image.yes24.com/a";
@@ -250,7 +251,6 @@ fn test_public_dns_and_empty_dns() {
 }
 
 #[test]
-#[ignore = "취소 입력(`cancelled`)이 `store_lock_with`의 문서 시그니처(dir, store, &FsOps, &Clock)에 없다; 시그니처 확정 후 활성화"]
 fn test_cancelled_and_timed_out_store_locks() {
     let tmp = tempfile::tempdir().unwrap();
     let unknown = store_lock(tmp.path(), "unknown");
@@ -483,7 +483,6 @@ fn test_store_gate_spaces_naver_requests_but_not_other_stores() {
 }
 
 #[test]
-#[ignore = "monkeypatch: cover_sources._now/_sleep을 가짜 시계로 바꾸고 취소를 건다; `StoreGate::with_cancel`이 문서에 없어 확정 후 활성화"]
 fn test_store_gate_wait_can_be_cancelled() {
     let tmp = tempfile::tempdir().unwrap();
     let clock = FakeClock::new(1000.0);
@@ -503,7 +502,6 @@ fn test_store_gate_ignores_corrupt_state_file() {
 }
 
 #[test]
-#[ignore = "monkeypatch: Path.write_text를 OSError를 내는 함수로 바꾼다; `StoreGate::with_fs`가 문서에 없어 확정 후 활성화"]
 fn test_store_gate_keeps_working_when_state_cannot_be_saved() {
     let tmp = tempfile::tempdir().unwrap();
     let fs = FaultyFs::new();
