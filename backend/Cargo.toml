@@ -114,6 +114,10 @@ path = "../tests/rust/backend/auth.rs"
 name = "client_error_log"
 path = "../tests/rust/backend/client_error_log.rs"
 
+[[test]]
+name = "view_history_api"
+path = "../tests/rust/backend/view_history_api.rs"
+
 [dev-dependencies]
 base64 = "0.23.1"
 flate2 = "1"

@@ -13,7 +13,7 @@
 //!   - `Split`은 `require_auth`와 `require_admin`을 각각 고정 payload로 바꾼다(구 `auth_override`, `admin_override`)
 //!   - `AuthOnly`는 `require_auth`만 고정하고 `require_admin`은 실제 의존성이다
 //! - `backend::main::{TaskRunner, InlineRunner}`: `InlineRunner`는 백그라운드 작업을 응답 전에 같은 스레드에서 끝낸다. 스레드 로컬 `LogCapture`가 로그를 잡으려면 필요하다
-//! - `backend::view_history_store::ViewHistoryApi`:
+//! - `backend::main::ViewHistoryApi` (뼈대가 `main/traits.rs`에 둔다):
 //!   `record_view(&self, email: &str, content_type: &str, book_id: i64, title: &str, category: &str) -> Result<(), ViewHistoryError>`,
 //!   `list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError>` (`ViewHistoryStore`도 구현한다)
 //! - `ViewHistoryStore::get_connection(&self) -> Result<Box<dyn DbConnection>, DbError>` (구 `_get_connection() -> mysql::Conn`), `DbConnection::execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>`
@@ -32,8 +32,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::http::Method;
-use backend::main::{AppDeps, AuthMode, BookAccess, BookStub, HttpException, InlineRunner, MAX_RECENT_VIEWS, app_with, route_dependencies};
-use backend::view_history_store::{ViewHistoryApi, ViewHistoryError, ViewHistoryStore};
+use backend::main::{AppDeps, AuthMode, BookAccess, BookStub, HttpException, InlineRunner, MAX_RECENT_VIEWS, ViewHistoryApi, app_with, route_dependencies};
+use backend::view_history_store::{ViewHistoryError, ViewHistoryStore};
 use common::TestClient;
 use common::log_capture::LogCapture;
 use log::Level;
@@ -329,7 +329,6 @@ mod test_list_view_history {
     }
 
     #[test]
-    #[ignore = "라우트 의존성 introspection: FastAPI route.dependant 대응 seam(route_dependencies)이 없다; DI 설계 후 활성화"]
     fn test_declares_admin_dependency() {
         let dependencies = route_dependencies("/view-history");
         assert!(dependencies.contains(&"require_admin"), "{dependencies:?}");
@@ -340,12 +339,15 @@ mod test_list_view_history {
 ///
 /// 책 조회만 대역으로 두고 스토어는 진짜를 쓴다(스토어 대역 테스트와 실제 SQL 테스트
 /// 사이의 배선 공백을 닫는다).
+// DB 잠금은 테스트 전체 동안 잡아야 한다. 테스트마다 런타임과 스레드가 따로라서 await 중에 잡고 있어도 교착하지 않는다.
+#[allow(clippy::await_holding_lock)]
 mod test_end_to_end_with_real_store {
     use super::*;
 
     /// `real_store` fixture. 컨테이너를 못 띄우면 panic한다.
-    fn real_store() -> (Arc<ViewHistoryStore>, std::sync::MutexGuard<'static, ()>) {
-        mysql_fixture::mysql_container();
+    async fn real_store() -> (Arc<ViewHistoryStore>, std::sync::MutexGuard<'static, ()>) {
+        // testcontainers의 blocking 러너는 tokio 런타임 안에서 직접 부를 수 없다.
+        tokio::task::spawn_blocking(mysql_fixture::mysql_container).await.expect("컨테이너 기동");
         let guard = mysql_fixture::db_lock();
         let store = ViewHistoryStore::new().expect("스토어 연결");
         let mut conn = store.get_connection().expect("연결");
@@ -356,7 +358,7 @@ mod test_end_to_end_with_real_store {
     #[tokio::test]
     #[ignore = "실제 MySQL 컨테이너가 필요하다(common/mysql_fixture)"]
     async fn test_recorded_view_is_visible_to_admin() {
-        let (store, _guard) = real_store();
+        let (store, _guard) = real_store().await;
         let access = FnAccess(Box::new(|book_id, _, content_type| {
             let title = if content_type == "comic" { "만화 제목" } else { "책 제목" };
             Ok((Some(make_book(&format!("{title} {book_id}"), "분류")), None))
@@ -383,7 +385,7 @@ mod test_end_to_end_with_real_store {
     #[tokio::test]
     #[ignore = "실제 MySQL 컨테이너가 필요하다(common/mysql_fixture)"]
     async fn test_limit_narrows_returned_items() {
-        let (store, _guard) = real_store();
+        let (store, _guard) = real_store().await;
         let access = FnAccess(Box::new(|book_id, _, _| Ok((Some(make_book(&format!("책 {book_id}"), "분류")), None))));
         let client = admin_client(store.clone(), Some(Arc::new(access)));
         for book_id in 0..4 {
