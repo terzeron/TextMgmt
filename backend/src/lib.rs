@@ -21,3 +21,5 @@ pub mod auth;
 pub mod book_manager;
 pub mod pdf;
 pub mod classifier;
+pub mod epub_cover;
+pub mod cover_management;

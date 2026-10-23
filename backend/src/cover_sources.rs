@@ -23,8 +23,11 @@ use self::urlx::{Netloc, quote, urlencode, urljoin, urlsplit};
 
 pub const STORE_NAMES: [&str; 8] = ["yes24", "aladin", "kyobo", "naver", "ridi", "munpia", "naverseries", "joara"];
 
+/// Python `STORES`의 키(서점 이름 순서).
+pub const STORES: &[&str] = &STORE_NAMES;
+
 /// 실제 서점 페이지/API에서 확인한 origin과 CDN만 허용한다.
-fn store_hosts(store: &str) -> &'static [&'static str] {
+pub fn store_hosts(store: &str) -> &'static [&'static str] {
     match store {
         "yes24" => &["yes24.com"],
         "aladin" => &["aladin.co.kr"],
@@ -786,6 +789,12 @@ impl SearchHooks {
         self
     }
 
+    /// 이 설정의 세션과 URL 검증으로 `url`을 받는다(Python `fetch_bytes`). 취소 함수도 이 설정의 것을 쓴다.
+    pub fn fetch_bytes(&self, store: &str, url: &str, max_bytes: Option<usize>) -> Result<Vec<u8>, SearchError> {
+        let session = (self.session_factory)(store);
+        fetch_bytes_cancellable(store, url, session.as_ref(), max_bytes, &*self.validate, &|| (self.cancel)())
+    }
+
     fn client(&self, store: &str) -> Option<Box<dyn StoreClient>> {
         match self.client_factories.get(store) {
             Some(factory) => Some(factory()),
@@ -908,4 +917,9 @@ pub fn search_candidates_with(store: &str, metadata: &Value, hooks: &SearchHooks
     };
     let status = if results.is_empty() { "not_found" } else { "success" };
     Ok(json!({"status": status, "search_url": search_url, "candidates": results.into_iter().take(4).collect::<Vec<_>>()}))
+}
+
+/// 서점의 검색 화면 URL(Python `STORES[store](verbose=False).build_search_url(keyword)`). 모르는 서점이면 빈 문자열이다.
+pub fn build_search_url(store: &str, keyword: &str) -> String {
+    default_client(store).map(|client| client.build_search_url(keyword)).unwrap_or_default()
 }

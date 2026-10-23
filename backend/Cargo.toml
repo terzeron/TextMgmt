@@ -15,6 +15,7 @@ path = "src/bin/backend.rs"
 
 [dependencies]
 async-trait = "0.1"
+base64 = "0.23.1"
 axum = "0.8.9"
 bookstore_lib = { package = "bookstore", path = "../libs/bookstore" }
 corpus_layout = { path = "../libs/corpus_layout" }
@@ -32,6 +33,7 @@ roxmltree = "0.21.1"
 scraper = "0.29.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
+sha2 = "0.11.1"
 sysdeps = { path = "../libs/sysdeps" }
 ureq.workspace = true
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
@@ -124,6 +126,14 @@ path = "../tests/rust/backend/view_history_api.rs"
 [[test]]
 name = "book_manager_1"
 path = "../tests/rust/backend/book_manager_1.rs"
+
+[[test]]
+name = "cover_repair"
+path = "../tests/rust/backend/cover_repair.rs"
+
+[[test]]
+name = "cover_management"
+path = "../tests/rust/backend/cover_management.rs"
 
 [dev-dependencies]
 base64 = "0.23.1"

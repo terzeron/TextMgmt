@@ -92,6 +92,20 @@ pub fn fetch_url_image(url: &str) -> Result<Vec<u8>, FetchError> {
     fetch_url_image_with(url, &SystemNet, MAX_IMAGE_BYTES)
 }
 
+/// 공개 이미지 URL을 내려받는 능력. 테스트는 대역으로 바꾼다(설계: docs/rust-test-seams.md 3.7).
+pub trait ImageFetcher: Send + Sync {
+    fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError>;
+}
+
+/// 실제 연결로 내려받는 구현.
+pub struct RealImageFetcher;
+
+impl ImageFetcher for RealImageFetcher {
+    fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError> {
+        fetch_url_image(url)
+    }
+}
+
 /// 응답을 버릴 때 반드시 닫는다.
 struct Closing(Box<dyn PoolResponse>);
 

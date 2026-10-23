@@ -298,7 +298,6 @@ async fn test_covered_listing_mode_filters_pages_and_preserves_epub() {
 }
 
 #[tokio::test]
-#[ignore = "monkeypatch: cover_management.inspect_epub을 호출 경로를 기록하는 감싸기 함수로 바꾼다; DI 설계 후 활성화"]
 async fn test_listing_scans_past_160_books_without_recursing_or_modifying_files() {
     for covered in [false, true] {
         let tmp = tempfile::tempdir().unwrap();
@@ -384,7 +383,6 @@ async fn test_original_cover_preview_uses_saved_600px_image() {
 }
 
 #[test]
-#[ignore = "monkeypatch: cover_management.inspect_epub(검사 뒤 파일을 바꿈)와 MAX_IMAGE_BYTES를 바꾼다; DI 설계 후 활성화"]
 fn test_original_preview_handles_changes_between_inspection_and_read() {
     for change in ["missing_image", "bad_zip", "writer_lock", "size_limit"] {
         let tmp = tempfile::tempdir().unwrap();
@@ -505,7 +503,7 @@ fn test_apply_image_rejects_malformed_base64_without_changing_book() {
 #[test]
 fn test_apply_image_payload_limit_is_validated_before_decoding() {
     let encoded_limit = MAX_IMAGE_BYTES.div_ceil(3) * 4;
-    let err = ApplyImageModel::new("book.epub", "r1", &"A".repeat(encoded_limit + 1)).err().expect("한도를 넘는 payload가 통과했다");
+    let err = ApplyImageModel::new("book.epub", "r1", &"A".repeat(encoded_limit + 1)).expect_err("한도를 넘는 payload가 통과했다");
     assert!(err.to_string().contains("string_too_long"), "{err}");
 }
 
@@ -810,7 +808,7 @@ fn test_cover_save_preserves_book_id_and_content() {
         let mut archive = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
         {
             let first = archive.by_index(0).unwrap();
-            assert_eq!(first.name(), "mimetype", "version={version}");
+            assert_eq!(first.name().unwrap(), "mimetype", "version={version}");
             assert_eq!(first.compression(), CompressionMethod::Stored, "version={version}");
         }
         drop(archive);
@@ -1048,7 +1046,6 @@ fn test_failed_apply_keeps_candidates_for_retry() {
 }
 
 #[test]
-#[ignore = "monkeypatch: cover_management.fetch_bytes(다운로드 대기)와 fcntl.flock 관찰 함수를 바꾼다; DI 설계 후 활성화"]
 fn test_apply_waits_for_download_and_removes_its_cache() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -1177,7 +1174,6 @@ fn test_search_error_cache_expiry_cancel_and_cache_double_check() {
 }
 
 #[test]
-#[ignore = "monkeypatch: cover_management.store_lock을 이미지를 만들어 놓는 함수로 바꾼다(cached_candidates 포함); DI 설계 후 활성화"]
 fn test_invalid_cached_records_refresh_and_image_lock_double_check() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -1207,7 +1203,6 @@ fn test_invalid_cached_records_refresh_and_image_lock_double_check() {
 }
 
 #[test]
-#[ignore = "monkeypatch: cover_management.search_candidates, fetch_bytes(cached_candidates)와 service._delete_book_cache를 바꾼다; DI 설계 후 활성화"]
 fn test_success_warns_on_candidate_cleanup_failure_and_invalidates_only_own_previews() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -1253,7 +1248,6 @@ fn test_invalid_listing_cursor_is_rejected() {
 }
 
 #[tokio::test]
-#[ignore = "monkeypatch: cover_management.search_candidates와 fetch_bytes(cached_candidates), CoverManagement.directories를 바꾼다; DI 설계 후 활성화"]
 async fn test_all_api_gets_and_clear_cache_response() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -1326,7 +1320,6 @@ async fn test_new_api_auth_and_input_validation() {
 }
 
 #[tokio::test]
-#[ignore = "monkeypatch: CoverManagement.candidates를 취소 확인 루프로, starlette Request.is_disconnected를 항상 true로 바꾼다; DI 설계 후 활성화"]
 async fn test_disconnected_search_cancels_worker() {
     let tmp = tempfile::tempdir().unwrap();
     let finished = Event::new();
@@ -1477,7 +1470,6 @@ fn test_cover_rebuild_guards_and_old_declaration_cleanup() {
 }
 
 #[test]
-#[ignore = "monkeypatch: pathlib.Path.resolve를 바깥 경로로 바꾸고, 그 뒤 cached_candidates가 search_candidates와 fetch_bytes를 바꾼다; DI 설계 후 활성화"]
 fn test_resolved_escape_and_incomplete_legacy_cache_are_safe() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -1504,7 +1496,6 @@ fn test_resolved_escape_and_incomplete_legacy_cache_are_safe() {
 }
 
 #[test]
-#[ignore = "monkeypatch: ZipInfo.file_size를 5MB로 덮어쓴다(oversized 케이스); DI 설계 후 활성화"]
 fn test_unreadable_or_oversized_cover_page_is_not_a_cover() {
     let cases: [(&[u8], bool); 3] = [(b"", false), (b"\xff", false), (b"<html/>", true)];
     for (markup, oversized) in cases {
@@ -1558,7 +1549,6 @@ fn test_saved_cover_is_at_most_600_pixels_wide_and_keeps_aspect_ratio() {
 }
 
 #[test]
-#[ignore = "monkeypatch: cover_management.store_lock을 호출 기록 함수로, fetch_url_image를 가짜로 바꾼다; DI 설계 후 활성화"]
 fn test_direct_store_url_uses_same_store_lock() {
     for host in ["image.yes24.com", "yes24.com"] {
         let tmp = tempfile::tempdir().unwrap();

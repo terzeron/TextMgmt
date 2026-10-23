@@ -14,6 +14,20 @@ serde_json = "1"
 # 내부망 http 전용이라 TLS 기능을 켜지 않는다.
 ureq = { version = "3.5", default-features = false, features = ["json"] }
 
+# 개발·테스트 빌드에서 이미지 디코딩이 너무 느리다 (6000x8000 JPEG 테스트가 100초). 디코더 crate만 최적화한다.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.backend]
+opt-level = 1
+
 [profile.release]
 opt-level = 3
 lto = "thin"

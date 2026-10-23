@@ -15,6 +15,7 @@ use super::traits::{
 };
 use crate::auth::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
 use crate::category_mapping::CategoryMapping;
+use crate::cover_management::CoverHooks;
 use crate::refresh_token_store::{RefreshTokenStoreApi, create_refresh_token_store};
 use crate::view_history_store::create_view_history_store;
 
@@ -87,6 +88,7 @@ pub struct AppDeps {
     fs: Arc<dyn FsOps>,
     clock: Arc<dyn Clock>,
     task_runner: Arc<dyn TaskRunner>,
+    cover_hooks: CoverHooks,
     reload_progress_flush_interval: Duration,
 }
 
@@ -112,6 +114,7 @@ impl AppDeps {
             fs: Arc::new(RealFs),
             clock: Arc::new(SystemClock),
             task_runner: Arc::new(ThreadRunner),
+            cover_hooks: CoverHooks::default(),
             reload_progress_flush_interval: Duration::from_secs(RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS),
         }
     }
@@ -181,6 +184,12 @@ impl AppDeps {
         self
     }
 
+    /// 표지 관리 라우트가 쓰는 검색·내려받기·시계 등 바깥 의존성.
+    pub fn with_cover_hooks(mut self, hooks: CoverHooks) -> Self {
+        self.cover_hooks = hooks;
+        self
+    }
+
     pub fn with_reload_progress_flush_interval(mut self, d: Duration) -> Self {
         self.reload_progress_flush_interval = d;
         self
@@ -238,6 +247,10 @@ impl AppDeps {
 
     pub fn task_runner(&self) -> Arc<dyn TaskRunner> {
         self.task_runner.clone()
+    }
+
+    pub fn cover_hooks(&self) -> CoverHooks {
+        self.cover_hooks.clone()
     }
 
     pub fn reload_progress_flush_interval(&self) -> Duration {

@@ -22,9 +22,11 @@ use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use backend::book::{Book, PathPrefixGuard};
-use backend::cover_management::{AdminGate, BookIndex, CoverHooks, CoverManagement, create_cover_router};
-use backend::cover_sources::Clock;
+use backend::auth::create_jwt_token;
+use backend::cover_management::{CoverHooks, CoverManagement};
+use backend::es_manager::{EsError, EsManagerApi};
+use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
+use sysdeps::Clock;
 use image::{ImageFormat, Rgb, RgbImage};
 use lopdf::{Document, Object, Stream, dictionary};
 use serde_json::{Value, json};
@@ -168,7 +170,7 @@ pub fn rewrite_epub_members(path: &Path, transform: impl FnOnce(&mut Members)) {
         }
         let mut data = Vec::new();
         file.read_to_end(&mut data).unwrap();
-        members.items.push((file.name().to_string(), data));
+        members.items.push((file.name().unwrap().to_string(), data));
     }
     drop(archive);
     transform(&mut members);
@@ -192,7 +194,7 @@ pub fn read_member(path: &Path, name: &str) -> Vec<u8> {
 /// ZIP 멤버 이름을 저장 순서대로 돌려준다. Python `archive.namelist()`.
 pub fn member_names(path: &Path) -> Vec<String> {
     let archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
-    archive.file_names().map(str::to_string).collect()
+    archive.file_names().map(|n| n.unwrap().into_owned()).collect()
 }
 
 /// `//*[local-name()=local]` 중 `attr`(이름, 값)을 만족하는 요소 수. Python `package.xpath('count(...)')`.
@@ -261,6 +263,10 @@ impl Clock for FakeClock {
         *self.now.lock().unwrap()
     }
 
+    fn monotonic(&self) -> f64 {
+        *self.now.lock().unwrap()
+    }
+
     fn sleep(&self, seconds: f64) {
         self.slept.lock().unwrap().push(seconds);
         *self.now.lock().unwrap() += seconds;
@@ -311,16 +317,106 @@ pub fn cached_candidates(service: &mut CoverManagement, relative: &str, stores: 
 
 // ---- cover_api -------------------------------------------------------------------------------
 
-/// Python `Mock()` manager: `es_manager.search_by_id`/`update`의 반환값을 바꾸고 호출을 기록한다.
+/// `BookManagerApi`와 `EsManagerApi` 대역. 표지 라우트가 쓰는 `path_prefix`, `search_by_id`, `update`만 구현한다.
 pub struct MockManager {
+    root: PathBuf,
     search: Mutex<Result<Option<Value>, String>>,
     update_result: Mutex<Result<bool, String>>,
     update_calls: Mutex<Vec<(i64, Value)>>,
 }
 
+struct MockEs(Arc<MockManager>);
+
+impl EsManagerApi for MockEs {
+    fn search_by_id(&self, _doc_id: i64) -> Result<Option<Value>, EsError> {
+        self.0.search.lock().unwrap().clone().map_err(EsError::Other)
+    }
+
+    fn update(&self, doc_id: i64, fields: &Value) -> Result<bool, EsError> {
+        self.0.update_calls.lock().unwrap().push((doc_id, fields.clone()));
+        self.0.update_result.lock().unwrap().clone().map_err(EsError::Other)
+    }
+}
+
+#[async_trait::async_trait]
+impl BookManagerApi for MockManagerHandle {
+    fn path_prefix(&self) -> PathBuf {
+        self.0.root.clone()
+    }
+
+    fn es_manager(&self) -> Arc<dyn EsManagerApi> {
+        Arc::new(MockEs(self.0.clone()))
+    }
+}
+
+/// `BookManagerApi`로 앱에 꽂는 손잡이. 호출 기록은 `MockManager`가 갖는다.
+pub struct MockManagerHandle(pub Arc<MockManager>);
+
+/// 표지 관리 라우트의 인증 상태. 구 `AdminGate`: `allow`는 관리자, `deny(403)`은 viewer, `clear`와 `deny(401)`은 로그인 없음이다.
+/// 실제 쿠키 인증(`AuthMode::Cookies`)을 쓰므로 요청마다 상태에 맞는 쿠키를 붙인다.
+#[derive(Clone)]
+pub struct AdminGate {
+    state: Arc<Mutex<Option<&'static str>>>,
+}
+
+impl AdminGate {
+    fn new() -> Self {
+        Self { state: Arc::new(Mutex::new(Some("admin"))) }
+    }
+
+    pub fn allow(&self, _payload: Value) {
+        *self.state.lock().unwrap() = Some("admin");
+    }
+
+    pub fn deny(&self, status: u16, _detail: &str) {
+        *self.state.lock().unwrap() = if status == 401 { None } else { Some("viewer") };
+    }
+
+    pub fn clear(&self) {
+        *self.state.lock().unwrap() = None;
+    }
+
+    fn token(&self) -> Option<String> {
+        match *self.state.lock().unwrap() {
+            Some("admin") => Some(create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None)),
+            Some(_) => Some(create_jwt_token("viewer@test.com", "viewer", None, None)),
+            None => None,
+        }
+    }
+}
+
+/// 게이트 상태를 요청마다 반영하는 클라이언트.
+pub struct GateClient {
+    app: axum::Router,
+    gate: AdminGate,
+}
+
+impl GateClient {
+    fn client(&self) -> TestClient {
+        let client = TestClient::with_app(self.app.clone());
+        match self.gate.token() {
+            Some(token) => client.cookie("tm_access_token", &token),
+            None => client,
+        }
+    }
+
+    pub async fn get(&self, path: &str) -> crate::common::Response {
+        self.client().get(path).await
+    }
+
+    pub async fn post_json(&self, path: &str, body: &Value) -> crate::common::Response {
+        self.client().post_json(path, body).await
+    }
+}
+
 impl MockManager {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self { search: Mutex::new(Ok(Some(json!({"title": "책"})))), update_result: Mutex::new(Ok(true)), update_calls: Mutex::new(Vec::new()) })
+    pub fn new(root: &Path) -> Arc<Self> {
+        Arc::new(Self {
+            root: root.to_path_buf(),
+            search: Mutex::new(Ok(Some(json!({"title": "책"})))),
+            update_result: Mutex::new(Ok(true)),
+            update_calls: Mutex::new(Vec::new()),
+        })
     }
 
     /// `search_by_id.return_value = value`
@@ -348,33 +444,18 @@ impl MockManager {
     }
 }
 
-impl BookIndex for MockManager {
-    fn search_by_id(&self, _book_id: i64) -> Result<Option<Value>, String> {
-        self.search.lock().unwrap().clone()
-    }
-
-    fn update(&self, book_id: i64, fields: &Value) -> Result<bool, String> {
-        self.update_calls.lock().unwrap().push((book_id, fields.clone()));
-        self.update_result.lock().unwrap().clone()
-    }
-}
-
 pub struct CoverApi {
-    pub client: TestClient,
+    pub client: GateClient,
     pub gate: AdminGate,
     pub manager: Arc<MockManager>,
-    _prefix: PathPrefixGuard,
 }
 
-/// 표지 라우터만 올린 앱. `Book.path_prefix`를 `root`로 바꾸고 관리자 의존성을 통과시킨다. Python `cover_api` fixture.
+/// 표지 라우터가 올라간 앱. 책 경로를 `root`로 두고 관리자 쿠키를 붙인다. Python `cover_api` fixture.
 pub fn cover_api(root: &Path, hooks: CoverHooks) -> CoverApi {
-    let prefix = Book::override_path_prefix(root);
-    let manager = MockManager::new();
-    let gate = AdminGate::default();
-    gate.allow(json!({"role": "admin"}));
-    let shared: Arc<dyn BookIndex> = manager.clone();
-    let router = create_cover_router(Arc::new(move || shared.clone()), gate.clone(), hooks);
-    CoverApi { client: TestClient::with_app(router), gate, manager, _prefix: prefix }
+    let manager = MockManager::new(root);
+    let gate = AdminGate::new();
+    let app = app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(Arc::new(MockManagerHandle(manager.clone()))).with_cover_hooks(hooks));
+    CoverApi { client: GateClient { app, gate: gate.clone() }, gate, manager }
 }
 
 // ---- PDF 생성 --------------------------------------------------------------------------------

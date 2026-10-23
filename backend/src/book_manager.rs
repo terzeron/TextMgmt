@@ -42,6 +42,7 @@ mod backfill;
 mod catalog;
 mod category;
 mod classify;
+mod cover;
 mod epub;
 mod file_reader;
 mod mismatch;
@@ -53,6 +54,7 @@ mod util;
 mod validate;
 
 pub use classify::{ApplyOptions, MODEL_CERTAIN_MIN_CONFIDENCE, ProposeOptions};
+pub use cover::Thumbnailer;
 pub use file_reader::DefaultFileReader;
 
 /// 카테고리 단위 ES 조회 상한. ES `max_result_window`(기본 10000)와 같다.
