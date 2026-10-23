@@ -14,6 +14,14 @@
 - **Search**: Elasticsearch (`backend/es_manager.py`)
 - **Auth**: JWT (access + refresh token), Google OAuth2
 
+## Directory Layout (Python -> Rust 전환 중)
+
+- `backend/` API, `frontend/` React, `utils/` 실행 도구(Python 스크립트 + Rust 도구 crate),
+  `libs/` 공통 모듈 crate, `tests/` Python 테스트와 Rust 테스트(`tests/rust/<crate>/`).
+- Rust workspace는 저장소 루트 `Cargo.toml`이다. 규칙과 crate 목록은 `docs/rust-workspace.md`를 본다.
+- Rust 변경 후 `cargo test --workspace`와 `cargo clippy --workspace --all-targets`를 통과시킨다.
+- 모든 Rust 바이너리는 인자 없이 실행하면 `print_usage()`로 용도와 사용법을 출력한다.
+
 ## Project Rules
 
 - Python 패키지 추가/제거는 `uv add` / `uv remove`를 사용한다. `pip` 직접 사용 금지.

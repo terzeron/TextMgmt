@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use detect_mojibake::{DEFAULT_LIBRARY_ROOT, DEFAULT_WORKERS, Log, default_report_path, pool};
+use corpus_common::{DEFAULT_LIBRARY_ROOT, DEFAULT_WORKERS, Log, default_report_path, pool};
 use rayon::prelude::*;
 
 use crate::security::{Limits, SecurityReport, Status, scan_epub};

@@ -4,9 +4,19 @@ description = "본문 처음·마지막 500단어로 5대 장르 비율을 재�
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+autotests = false
+
+[[test]]
+name = "bin"
+path = "../../tests/rust/cluster_hybrid_genres/bin.rs"
+
+[[test]]
+name = "cluster"
+path = "../../tests/rust/cluster_hybrid_genres/cluster.rs"
 
 [dependencies]
-detect_mojibake = { path = "../detect_mojibake" }
+pyfmt = { path = "../../libs/pyfmt" }
+corpus_common = { path = "../../libs/corpus_common" }
 fancy-regex = "0.14"
 indexmap = { version = "2.14.2", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }

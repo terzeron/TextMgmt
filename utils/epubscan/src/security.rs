@@ -10,8 +10,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::LazyLock;
 
-use detect_mojibake::reader::{Zip, open_zip};
-use detect_mojibake::util::{posix_dirname, posix_join, posix_normpath, unquote};
+use corpus_common::reader::{Zip, open_zip};
+use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
 use htmlkit::{Tag, decode_entities, local_name, tokenize};
 use regex::Regex;
 use serde::Serialize;

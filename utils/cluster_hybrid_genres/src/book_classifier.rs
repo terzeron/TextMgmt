@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use detect_mojibake::util::{posix_normpath, unquote};
+use corpus_common::util::{posix_normpath, unquote};
 use fancy_regex::Regex;
 
 fn re(pattern: &str) -> Regex {

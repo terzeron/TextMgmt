@@ -4,6 +4,15 @@ description = "인코딩이 손상된 문서를 0_broken으로 격리하고 되�
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+autotests = false
+
+[[test]]
+name = "bin"
+path = "../../tests/rust/quarantine_broken/bin.rs"
+
+[[test]]
+name = "quarantine"
+path = "../../tests/rust/quarantine_broken/quarantine.rs"
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }

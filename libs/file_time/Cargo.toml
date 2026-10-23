@@ -1,0 +1,17 @@
+[package]
+name = "file_time"
+description = "파일 생성 시각 (utils/file_time.py의 Rust 대응)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "file_time"
+path = "../../tests/rust/file_time/file_time.rs"
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -4,8 +4,18 @@ description = "ES 제목·내용 검색 점검 도구 (utils/search.py의 Rust �
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+autotests = false
+
+[[test]]
+name = "bin"
+path = "../../tests/rust/search/bin.rs"
+
+[[test]]
+name = "search"
+path = "../../tests/rust/search/search.rs"
 
 [dependencies]
-es_client = { path = "../es_client" }
+pyfmt = { path = "../../libs/pyfmt" }
+es_client = { path = "../../libs/es_client" }
 serde_json = { workspace = true, features = ["preserve_order"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }

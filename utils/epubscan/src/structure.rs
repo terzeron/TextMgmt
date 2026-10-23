@@ -17,9 +17,9 @@ use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use zip::CompressionMethod;
 
-use detect_mojibake::reader::{Zip, open_zip};
-use detect_mojibake::util::{category_of, posix_dirname, posix_join, posix_normpath, unquote};
-use detect_mojibake::{Log, limited, list_library_files, now_iso, pool, round1, thousands};
+use corpus_common::reader::{Zip, open_zip};
+use corpus_common::util::{category_of, posix_dirname, posix_join, posix_normpath, unquote};
+use corpus_common::{Log, limited, list_library_files, now_iso, pool, round1, thousands};
 use rayon::prelude::*;
 
 pub const EPUB_MIMETYPE: &[u8] = b"application/epub+zip";

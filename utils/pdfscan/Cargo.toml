@@ -4,6 +4,15 @@ description = "Static PDF action / active-content scanner"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+autotests = false
+
+[[test]]
+name = "bin"
+path = "../../tests/rust/pdfscan/bin.rs"
+
+[[test]]
+name = "pdfscan"
+path = "../../tests/rust/pdfscan/pdfscan.rs"
 
 [dependencies]
 lopdf.workspace = true

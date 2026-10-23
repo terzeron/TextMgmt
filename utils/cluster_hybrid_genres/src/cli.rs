@@ -8,7 +8,8 @@ use indexmap::IndexMap;
 use serde::Serialize;
 
 use crate::book_classifier::{clean_empty_parent_dirs, get_effective_filename, resolve_lenient};
-use crate::{GenreResult, calculate_5_genre_scores_and_ratios, extract_content_head_tail_words, py_float};
+use crate::{GenreResult, calculate_5_genre_scores_and_ratios, extract_content_head_tail_words};
+use pyfmt::py_float;
 
 const USAGE: &str =
     "usage: cluster_hybrid_genres [--source-dir SOURCE_DIR] [--library-root LIBRARY_ROOT] [--limit LIMIT] [--auto-move-pure] [--move-hybrids-to MOVE_HYBRIDS_TO] [--clean-existing] [--report REPORT]";

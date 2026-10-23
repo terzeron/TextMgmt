@@ -1,8 +1,0 @@
-[package]
-name = "htmlkit"
-description = "HTML/XML 마크업 토큰화와 텍스트 추출 (BeautifulSoup html.parser 동작에 맞춤)"
-version.workspace = true
-edition.workspace = true
-publish.workspace = true
-
-[dependencies]

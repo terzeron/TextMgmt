@@ -6,7 +6,7 @@
 use std::io::Write;
 
 use es_client::{BookStore, EsError, UpdateFields};
-use search::py_repr;
+use pyfmt::py_repr;
 
 /// 점검에 쓰는 문서 번호. 원본에 박혀 있던 값이다.
 pub const DEFAULT_DOC_ID: i64 = 3384;

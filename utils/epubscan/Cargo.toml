@@ -4,12 +4,33 @@ description = "EPUB 구조 검사와 스크립트 실행 코드 검출 (detect_m
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+autotests = false
+
+[[test]]
+name = "bin"
+path = "../../tests/rust/epubscan/bin.rs"
+
+[[test]]
+name = "cli"
+path = "../../tests/rust/epubscan/cli.rs"
+
+[[test]]
+name = "gaps"
+path = "../../tests/rust/epubscan/gaps.rs"
+
+[[test]]
+name = "security"
+path = "../../tests/rust/epubscan/security.rs"
+
+[[test]]
+name = "structure"
+path = "../../tests/rust/epubscan/structure.rs"
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-detect_mojibake = { path = "../detect_mojibake" }
+corpus_common = { path = "../../libs/corpus_common" }
 fancy-regex = "0.14"
-htmlkit = { path = "../htmlkit" }
+htmlkit = { path = "../../libs/htmlkit" }
 indexmap = { version = "2.14.2", features = ["serde"] }
 rayon = "1.12.0"
 regex = "1.13.1"

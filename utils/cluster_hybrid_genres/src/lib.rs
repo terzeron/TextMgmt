@@ -14,10 +14,10 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::LazyLock;
 
-use detect_mojibake::py_round;
-use detect_mojibake::reader::{MAX_MEMBER_BYTES, decode_korean_ignore, decode_utf8_ignore, open_zip};
+use corpus_common::reader::{MAX_MEMBER_BYTES, decode_korean_ignore, decode_utf8_ignore, open_zip};
 use fancy_regex::Regex;
 use indexmap::IndexMap;
+use pyfmt::py_round;
 
 use book_classifier::extract_explicit_genre;
 
@@ -63,11 +63,6 @@ fn py_splitlines(s: &str) -> Vec<&str> {
 /// Python 텍스트 모드의 universal newlines: `\r\n`과 `\r`을 `\n`으로 바꾼다.
 fn universal_newlines(s: &str) -> String {
     s.replace("\r\n", "\n").replace('\r', "\n")
-}
-
-/// Python의 float 표기. 정수값에도 `.0`이 붙는다.
-pub fn py_float(v: f64) -> String {
-    if v.is_finite() && v.fract() == 0.0 { format!("{v:.1}") } else { format!("{v}") }
 }
 
 static HANGUL_RUN: LazyLock<Regex> = LazyLock::new(|| re(r"[가-힣]{3,}"));

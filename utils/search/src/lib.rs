@@ -5,64 +5,8 @@
 use std::io::Write;
 
 use es_client::{BookSearch, EsError, Hit};
+use pyfmt::py_repr;
 use serde_json::Value;
-
-/// Python `repr(str)`: 작은따옴표를 기본으로 쓰되 `'`만 있으면 큰따옴표로 감싼다.
-fn py_str_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
-    let mut out = String::from(quote);
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if c.is_control()
-                || matches!(c, '\u{ad}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{feff}' | '\u{e000}'..='\u{f8ff}' | '\u{e0000}'..='\u{e007f}' | '\u{f0000}'..='\u{10ffff}') =>
-            {
-                let n = c as u32;
-                if n <= 0xff {
-                    out.push_str(&format!("\\x{n:02x}"))
-                } else if n <= 0xffff {
-                    out.push_str(&format!("\\u{n:04x}"))
-                } else {
-                    out.push_str(&format!("\\U{n:08x}"))
-                }
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
-}
-
-fn py_float_repr(v: f64) -> String {
-    let abs = v.abs();
-    if abs != 0.0 && !(1e-4..1e16).contains(&abs) {
-        // Python은 지수를 두 자리 이상으로 쓴다(1e-05).
-        let s = format!("{v:e}");
-        let (mant, exp) = s.split_once('e').unwrap_or((&s, "0"));
-        let exp: i32 = exp.parse().unwrap_or(0);
-        return format!("{mant}e{}{:02}", if exp < 0 { '-' } else { '+' }, exp.abs());
-    }
-    if v.fract() == 0.0 { format!("{v:.1}") } else { format!("{v}") }
-}
-
-/// JSON 값을 Python `repr(dict)`과 같은 모양으로 쓴다(`print("item:", item)`과 같은 출력).
-pub fn py_repr(v: &Value) -> String {
-    match v {
-        Value::Null => "None".into(),
-        Value::Bool(b) => if *b { "True" } else { "False" }.into(),
-        Value::Number(n) => n.as_f64().filter(|_| n.is_f64()).map_or_else(|| n.to_string(), py_float_repr),
-        Value::String(s) => py_str_repr(s),
-        Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
-        Value::Object(o) => format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", py_str_repr(k), py_repr(v))).collect::<Vec<_>>().join(", ")),
-    }
-}
 
 /// 인자 없이 실행하거나 `-h`/`--help`를 주면 프로그램의 용도와 인자·옵션을 보여 준다.
 pub fn print_usage(program: &str, out: &mut dyn Write) {

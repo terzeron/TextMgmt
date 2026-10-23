@@ -1,0 +1,14 @@
+[package]
+name = "pyfmt"
+description = "Python 호환 서식: repr, float 표기, round"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "pyfmt"
+path = "../../tests/rust/pyfmt/pyfmt.rs"
+
+[dependencies]
+serde_json = { workspace = true, features = ["preserve_order"] }

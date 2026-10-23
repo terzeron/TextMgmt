@@ -47,4 +47,4 @@ tmp/
 backend/classifier/model.joblib
 
 # Rust build output
-utils/target/
+/target/
