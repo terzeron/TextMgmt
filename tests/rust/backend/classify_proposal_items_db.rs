@@ -27,7 +27,6 @@ mod common;
 mod mysql_fixture;
 
 use backend::category_mapping::CategoryMapping;
-use std::collections::BTreeMap;
 
 use backend::db::{DbValue, Row};
 use serde_json::{Value, json};
@@ -52,18 +51,6 @@ fn cm() -> CategoryMapping {
     mapping
 }
 
-/// 텍스트 프로토콜로 한 행을 읽는다(pymysql처럼). 준비된 문장은 `SHOW CREATE TABLE`/`EXPLAIN`의 결과 열 정보를
-/// 준비 시점에 주지 않아 Diesel 기반 `backend::db`로는 읽을 수 없다. 값은 문자열이고 NULL은 `None`이다.
-fn text_protocol_row(sql: &str) -> BTreeMap<String, Option<String>> {
-    use mysql::prelude::Queryable;
-    let env = |key: &str| std::env::var(key).unwrap_or_else(|_| panic!("{key}가 없다"));
-    let opts = mysql::OptsBuilder::new().ip_or_hostname(Some(env("TM_MYSQL_HOST"))).tcp_port(env("TM_MYSQL_PORT").parse().unwrap()).db_name(Some(env("TM_MYSQL_DATABASE"))).user(Some(env("TM_MYSQL_USER"))).pass(Some(env("TM_MYSQL_PASSWORD")));
-    let mut conn = mysql::Conn::new(opts).expect("텍스트 프로토콜 연결");
-    let row: mysql::Row = conn.query_first(sql).unwrap().expect("결과 행이 없다");
-    let names: Vec<String> = row.columns_ref().iter().map(|c| c.name_str().into_owned()).collect();
-    names.into_iter().enumerate().map(|(i, name)| (name, row.get_opt::<Option<String>, _>(i).and_then(Result::ok).flatten())).collect()
-}
-
 fn files(paths: impl IntoIterator<Item = String>) -> Vec<Value> {
     paths.into_iter().map(|p| json!({"file_path": p})).collect()
 }
@@ -79,28 +66,59 @@ fn index_names(cm: &CategoryMapping) -> Vec<String> {
 fn test_create_table_statement_runs_on_real_mysql() {
     // CREATE TABLE IF NOT EXISTS classify_proposal_items가 MySQL 8.0에서 실제로 성공했는지 확인한다.
     // JSON 컬럼, 두 개의 복합/단일 인덱스, VARCHAR(1024)는 fake cursor로는 문법 오류를 잡을 수 없다.
-    let _cm = cm();
-    let row = text_protocol_row("SHOW CREATE TABLE classify_proposal_items");
+    // 원본은 `SHOW CREATE TABLE` 문자열을 읽는다. 준비된 문장으로는 읽을 수 없어서 같은 사실을 information_schema에서 읽는다.
+    let cm = cm();
+    let mut conn = cm.get_connection().unwrap();
+    let rows = conn.fetch_all("SELECT column_name AS name, column_type AS ty FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'classify_proposal_items'", &[]).unwrap();
+    let types: Vec<String> = rows.iter().map(|r| text(r, "ty").to_lowercase()).collect();
 
-    let ddl = row["Create Table"].clone().unwrap().to_lowercase();
-    assert!(ddl.contains("`payload` json") || ddl.contains("json"));
-    assert!(ddl.contains("varchar(1024)"));
-    assert!(ddl.contains("idx_content_source"));
-    assert!(ddl.contains("idx_content_file"));
+    assert!(types.iter().any(|t| t == "json"), "JSON 컬럼이 없다: {types:?}");
+    assert!(types.iter().any(|t| t == "varchar(1024)"), "VARCHAR(1024) 컬럼이 없다: {types:?}");
+    let names = index_names(&cm);
+    assert!(names.contains(&"idx_content_source".to_string()));
+    assert!(names.contains(&"idx_content_file".to_string()));
+}
+
+/// 옵티마이저 trace에서 고른 범위 접근 계획(`chosen_range_access_summary.range_access_plan`)을 모두 찾는다.
+fn chosen_range_plans<'a>(node: &'a Value, out: &mut Vec<&'a Value>) {
+    match node {
+        Value::Object(map) => {
+            if let Some(plan) = map.get("chosen_range_access_summary").and_then(|v| v.get("range_access_plan")) {
+                out.push(plan);
+            }
+            map.values().for_each(|v| chosen_range_plans(v, out));
+        }
+        Value::Array(items) => items.iter().for_each(|v| chosen_range_plans(v, out)),
+        _ => {}
+    }
 }
 
 #[test]
 #[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_status_update_uses_an_index_instead_of_scanning_the_table() {
-    // 승인이 책 한 권마다 부르는 UPDATE가 인덱스를 타는지 EXPLAIN으로 확인한다.
+    // 승인이 책 한 권마다 부르는 UPDATE가 인덱스를 타는지 확인한다.
     // 실행 시간은 장비마다 달라 고정할 수 없으므로 "전수 훑기가 아니라 인덱스 조회를 고른다"는 실행 계획 자체를 잠근다.
+    // 원본은 `EXPLAIN UPDATE`의 key/type을 읽는다. 준비된 문장으로는 EXPLAIN을 읽을 수 없어서, 같은 세션에서
+    // 옵티마이저 trace(information_schema.OPTIMIZER_TRACE)로 실제 실행 계획이 고른 접근 경로를 읽는다.
     let cm = cm();
     cm.add_classify_proposal_items(&files((0..50).map(|i| format!("3_판타지/책 {i}.epub"))), "3_판타지", "book");
 
-    let plan = text_protocol_row("EXPLAIN UPDATE classify_proposal_items SET apply_status = 'moved' WHERE content_type = 'book' AND file_path = '3_판타지/책 7.epub'");
+    let mut conn = cm.get_connection().unwrap();
+    conn.execute("SET optimizer_trace = 'enabled=on'", &[]).unwrap();
+    conn.execute("UPDATE classify_proposal_items SET apply_status = 'moved' WHERE content_type = 'book' AND file_path = '3_판타지/책 7.epub'", &[]).unwrap();
+    let row = conn.fetch_one("SELECT trace AS trace FROM information_schema.OPTIMIZER_TRACE", &[]).unwrap().expect("옵티마이저 trace가 없다");
+    conn.execute("SET optimizer_trace = 'enabled=off'", &[]).unwrap();
+    conn.commit().unwrap();
 
-    assert_eq!(plan["key"].as_deref(), Some("idx_content_file"), "file_path 인덱스를 타지 않는다: {plan:?}");
-    assert_ne!(plan["type"].as_deref(), Some("index"), "인덱스 전수 훑기를 고르고 있다");
+    let trace: Value = serde_json::from_str(&text(&row, "trace")).expect("trace JSON");
+    let mut plans = Vec::new();
+    chosen_range_plans(&trace, &mut plans);
+    assert!(!plans.is_empty(), "고른 접근 계획을 trace에서 찾지 못했다: {trace}");
+    for plan in plans {
+        assert_eq!(plan["index"].as_str(), Some("idx_content_file"), "file_path 인덱스를 타지 않는다: {plan}");
+        assert_ne!(plan["type"].as_str(), Some("index_scan"), "인덱스 전수 훑기를 고르고 있다: {plan}");
+        assert!(plan["rows"].as_i64().is_some_and(|n| n <= 1), "한 행이 아니라 여러 행을 훑는 계획이다: {plan}");
+    }
 }
 
 #[test]

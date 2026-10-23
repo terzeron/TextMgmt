@@ -48,6 +48,10 @@ name = "category_mapping"
 path = "../tests/rust/backend/category_mapping.rs"
 
 [[test]]
+name = "classify_proposal_items_db"
+path = "../tests/rust/backend/classify_proposal_items_db.rs"
+
+[[test]]
 name = "classify_proposal_status_db"
 path = "../tests/rust/backend/classify_proposal_status_db.rs"
 
