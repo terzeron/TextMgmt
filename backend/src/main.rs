@@ -27,6 +27,7 @@ mod errors;
 mod extract;
 mod log_routes;
 mod routes;
+mod routes_epub_cover;
 mod routes_view_history;
 mod traits;
 
@@ -52,7 +53,7 @@ pub type HttpException = HTTPException;
 
 /// 앱의 모든 라우트. 새 라우트 파일은 여기에 `.merge(..)` 한 줄로 붙인다.
 fn all_routes() -> Routes {
-    Routes::new().merge(auth_routes::routes()).merge(log_routes::routes()).merge(routes_view_history::routes()).merge(crate::cover_management::routes::routes())
+    Routes::new().merge(auth_routes::routes()).merge(log_routes::routes()).merge(routes_view_history::routes()).merge(routes_epub_cover::routes()).merge(crate::cover_management::routes::routes())
 }
 
 /// 환경 변수로 조립한 운영용 앱.

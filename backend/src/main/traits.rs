@@ -252,6 +252,21 @@ pub trait BookManagerApi: Send + Sync {
         Err(UNIMPLEMENTED.to_string())
     }
 
+    /// EPUB 표지를 URL 또는 올린 이미지(base64)로 넣거나 바꾼다: (결과, 오류 메시지).
+    async fn set_epub_cover(&self, _book_id: i64, _url: Option<&str>, _image_data: Option<&str>) -> (Option<Value>, Option<String>) {
+        (None, unimplemented_error())
+    }
+
+    /// EPUB 표지를 뺀다.
+    async fn remove_epub_cover(&self, _book_id: i64) -> (Option<Value>, Option<String>) {
+        (None, unimplemented_error())
+    }
+
+    /// `before_idref` 페이지 앞에 삽화를 넣는다.
+    async fn insert_epub_illustration(&self, _book_id: i64, _before_idref: &str, _url: Option<&str>, _image_data: Option<&str>) -> (Option<Value>, Option<String>) {
+        (None, unimplemented_error())
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn update_book(&self, _id: i64, _category: &str, _title: &str, _author: &str, _path: &std::path::Path, _file_type: &str, _force: bool) -> (Value, Option<String>) {
         (Value::Null, unimplemented_error())

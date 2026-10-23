@@ -59,19 +59,20 @@ enum Kind {
 pub struct CoverError {
     kind: Kind,
     message: String,
+    io_kind: Option<std::io::ErrorKind>,
 }
 
 impl CoverError {
     pub fn new(message: &str) -> Self {
-        CoverError { kind: Kind::Message, message: message.to_string() }
+        CoverError { kind: Kind::Message, message: message.to_string(), io_kind: None }
     }
 
     pub fn io(message: &str) -> Self {
-        CoverError { kind: Kind::Io, message: message.to_string() }
+        CoverError { kind: Kind::Io, message: message.to_string(), io_kind: None }
     }
 
     pub fn cancelled() -> Self {
-        CoverError { kind: Kind::Cancelled, message: "표지 요청을 취소했습니다".to_string() }
+        CoverError { kind: Kind::Cancelled, message: "표지 요청을 취소했습니다".to_string(), io_kind: None }
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -81,6 +82,11 @@ impl CoverError {
     /// 운영체제 오류인가. 라우트는 이 경우 409 대신 503을 돌려준다.
     pub fn is_io(&self) -> bool {
         self.kind == Kind::Io
+    }
+
+    /// 운영체제 오류였다면 그 종류(예: `AlreadyExists`). 그 밖에는 `None`이다.
+    pub fn io_kind(&self) -> Option<std::io::ErrorKind> {
+        self.io_kind
     }
 
     pub fn message(&self) -> &str {
@@ -98,7 +104,7 @@ impl std::error::Error for CoverError {}
 
 impl From<std::io::Error> for CoverError {
     fn from(err: std::io::Error) -> Self {
-        CoverError::io(&err.to_string())
+        CoverError { io_kind: Some(err.kind()), ..CoverError::io(&err.to_string()) }
     }
 }
 
@@ -723,6 +729,16 @@ pub(crate) fn inspect_archive<R: Read + Seek>(archive: &mut ZipArchive<R>, hooks
         metadata.insert("cover_error".to_string(), json!(cover_error));
     }
     Ok(hooks.finish_inspect(Value::Object(metadata)))
+}
+
+/// 임시 경로에 도판을 끼운 EPUB를 만든다(원본은 건드리지 않는다). 새 쪽의 idref를 돌려준다.
+pub fn stage_illustration(source: &File, destination: &Path, image: &[u8], before_idref: &str) -> Result<String, CoverError> {
+    stage::stage_illustration(source, destination, image, before_idref, &EpubCoverHooks::default()).map_err(Fail::into_cover)
+}
+
+/// 임시 경로에 표지를 뺀 EPUB를 만든다(원본은 건드리지 않는다).
+pub fn stage_cover_removal(source: &File, destination: &Path) -> Result<(), CoverError> {
+    stage::stage_cover_removal(source, destination, &EpubCoverHooks::default()).map_err(Fail::into_cover)
 }
 
 pub fn inspect_epub(path: &Path) -> Result<Value, CoverError> {

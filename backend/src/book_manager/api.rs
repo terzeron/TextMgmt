@@ -57,6 +57,18 @@ impl BookManagerApi for BookManager {
         self.try_get_category_mismatches(force_refresh)
     }
 
+    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>) {
+        BookManager::set_epub_cover(self, book_id, url, image_data).await
+    }
+
+    async fn remove_epub_cover(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+        BookManager::remove_epub_cover(self, book_id).await
+    }
+
+    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>) {
+        BookManager::insert_epub_illustration(self, book_id, before_idref, url, image_data).await
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn update_book(&self, id: i64, category: &str, title: &str, author: &str, path: &Path, file_type: &str, force: bool) -> (Value, Option<String>) {
         let (status, error) = BookManager::update_book_with(self, id, category, title, author, path, file_type, force).await;

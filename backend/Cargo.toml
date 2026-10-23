@@ -132,6 +132,10 @@ name = "cover_repair"
 path = "../tests/rust/backend/cover_repair.rs"
 
 [[test]]
+name = "epub_cover_set"
+path = "../tests/rust/backend/epub_cover_set.rs"
+
+[[test]]
 name = "cover_management"
 path = "../tests/rust/backend/cover_management.rs"
 
