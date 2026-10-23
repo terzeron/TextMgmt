@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use detect_mojibake::py_round;
-use detect_mojibake::reader::{decode_korean_ignore, decode_utf8_ignore, open_zip};
+use detect_mojibake::reader::{MAX_MEMBER_BYTES, decode_korean_ignore, decode_utf8_ignore, open_zip};
 use fancy_regex::Regex;
 use indexmap::IndexMap;
 
@@ -168,9 +168,10 @@ fn epub_head_tail(path: &Path) -> (String, String) {
     let mut chunks = |idxs: &[usize]| -> Option<String> {
         let mut out = Vec::new();
         for &i in idxs {
-            let mut entry = zip.by_index(i).ok()?;
+            let entry = zip.by_index(i).ok()?;
             let mut raw = Vec::new();
-            entry.read_to_end(&mut raw).ok()?;
+            // 작게 압축된 거대 멤버(zip bomb)가 메모리를 먹지 못하게 상한을 둔다.
+            entry.take(MAX_MEMBER_BYTES).read_to_end(&mut raw).ok()?;
             let clean = TAG_RE.replace_all(&decode_utf8_ignore(&raw), " ").into_owned();
             if clean.trim().chars().count() > 50 {
                 out.push(clean);

@@ -185,7 +185,8 @@ impl Scanner<'_> {
 
         for (key, value) in d.iter() {
             let key_name = String::from_utf8_lossy(key).into_owned();
-            let child = format!("{path}/{key_name}");
+            // 경로는 출력에 그대로 나간다. PDF가 정한 키 이름의 제어문자는 걷어낸다. 판정은 원래 이름으로 한다.
+            let child = format!("{path}/{}", sanitize(key));
             match key_name.as_str() {
                 // The action dict case is already reported through /S above.
                 "JS" if action.as_deref() != Some("JavaScript") => {
@@ -293,7 +294,7 @@ fn json_str(s: &str) -> String {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
-            c if (c as u32) < 0x20 => {
+            c if (c as u32) < 0x20 || (0x7f..=0x9f).contains(&(c as u32)) => {
                 let _ = write!(out, "\\u{:04x}", c as u32);
             }
             c => out.push(c),
@@ -443,5 +444,30 @@ fn main() -> ExitCode {
         ExitCode::from(2)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_str_escapes_c0_and_c1_controls() {
+        assert_eq!(json_str("a\u{1b}b\u{85}c\u{7f}"), "\"a\\u001bb\\u0085c\\u007f\"");
+    }
+
+    #[test]
+    fn finding_paths_never_carry_control_characters_from_key_names() {
+        let doc = Document::new();
+        let mut action = Dictionary::new();
+        action.set("S", Object::Name(b"Launch".to_vec()));
+        let mut outer = Dictionary::new();
+        outer.set(b"\x1b[2J\x07evil".to_vec(), Object::Dictionary(action));
+        let mut sc = Scanner { doc: &doc, findings: Vec::new() };
+        sc.walk(&Object::Dictionary(outer), (1, 0), "", 0);
+        assert!(!sc.findings.is_empty());
+        for f in &sc.findings {
+            assert!(!f.path.chars().any(char::is_control), "{:?}", f.path);
+        }
     }
 }

@@ -201,10 +201,14 @@ fn read_txt_parts(path: &Path, size: u64, head_chars: usize, tail_chars: usize) 
     Ok(parts.join(" "))
 }
 
+/// 멤버 하나에서 읽는 압축 해제 바이트 상한. 작게 압축된 거대 멤버(zip bomb)가 메모리를 먹지 못하게 한다.
+/// 표본은 앞쪽 수만 자만 쓰므로 정상 문서는 영향이 없다.
+pub const MAX_MEMBER_BYTES: u64 = 16 * 1024 * 1024;
+
 fn read_entry(zip: &mut Zip, index: usize) -> Option<Vec<u8>> {
-    let mut entry = zip.by_index(index).ok()?;
+    let entry = zip.by_index(index).ok()?;
     let mut data = Vec::new();
-    entry.read_to_end(&mut data).ok()?;
+    entry.take(MAX_MEMBER_BYTES).read_to_end(&mut data).ok()?;
     Some(data)
 }
 
