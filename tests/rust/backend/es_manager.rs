@@ -44,7 +44,7 @@
 //!   `search_group_representatives(&self, group_keys: &[&str], exclude_categories: Option<&[&str]>) -> HashMap<String, Vec<(i64, Value)>>`
 //! - 정적: `ESManager::_path_prefix_query(&str) -> Value`, `ESManager::_exclude_category_queries(Option<&[&str]>) -> Vec<Value>`
 //! - 기타: `get_doc_ids_by_path_prefix(&self, &str) -> HashSet<i64>`, `backfill_created_time(&self, path_prefix: &Path, batch_size: usize) -> Value`
-//! - `backend::book_manager::{encode_category_cursor(&[Value]) -> String, decode_category_cursor(&str) -> Option<Vec<Value>>}`
+//! - `backend::es_manager::{encode_category_cursor(&[Value]) -> String, decode_category_cursor(&str) -> Option<Vec<Value>>}` (book_manager 모듈이 아직 없어 여기에 둔다. 나중에 book_manager가 다시 내보낸다)
 //! - 구 `set_*_override` 6종은 없다. `set_search_override`는 `with_search_stub`, `set_search_paged_override`/`set_do_exist_index_override`/
 //!   `set_ensure_category_nori_subfield_override`는 `DummyEs::on(op, ..)`, `set_path_created_time_override`/`set_resolve_override`는 `with_fs(FaultyFs)`다.
 //! - 공용 가짜는 `common::es_dummy::DummyEs`(`EsTransport` 구현), `common::clock::FakeClock`, `common::faulty_fs::FaultyFs`
@@ -55,8 +55,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use backend::book_manager::{decode_category_cursor, encode_category_cursor};
-use backend::es_manager::{ConnectOptions, ESManager, ESManagerError, EsConnector, EsError, EsTransport, SimilarDocsArgs, UpdateFields};
+use backend::es_manager::{ConnectOptions, ESManager, ESManagerError, EsConnector, EsError, EsTransport, SimilarDocsArgs, UpdateFields, decode_category_cursor, encode_category_cursor};
 use base64::Engine;
 use common::clock::FakeClock;
 use common::es_dummy::{DummyEs, runtime_error};
@@ -65,6 +64,8 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 type Hit = (i64, Value, f64);
+/// `with_search_stub`이 받은 호출 하나: (query, sort, max_result_count).
+type SearchCall = (Value, Option<Value>, i64);
 /// 구 `set_search_override`의 함수 모양. `ESManager::with_search_stub`이 받는다.
 type SearchStub = Arc<dyn Fn(&Value, Option<&Value>, i64, Option<&[String]>) -> Result<Vec<Hit>, EsError> + Send + Sync>;
 
@@ -159,6 +160,7 @@ fn last_search(es: &DummyEs) -> Value {
     es.calls_of("search").pop().expect("search 호출")
 }
 
+#[allow(dead_code)]
 fn str_vec(values: &[&str]) -> Vec<String> {
     values.iter().map(|s| s.to_string()).collect()
 }
@@ -215,7 +217,6 @@ fn test_get_existing_created_time_metadata_returns_stored_values() {
 }
 
 #[test]
-#[ignore = "_ensure_category_nori_subfield 호출 횟수를 indices.get_mapping 호출 횟수로 세는데, created_time/publisher ensure도 같은 호출을 해서 횟수가 맞는지 확신할 수 없다"]
 fn test_create_index_paths() {
     let es = new_es();
     let manager = make_manager(&es);
@@ -433,9 +434,10 @@ fn test_search_similar_docs_paged_without_exclude() {
 }
 
 #[test]
+#[allow(non_snake_case)]
 fn test_search_builders_delegate_to__search() {
     let es = new_es();
-    let captured: Arc<Mutex<Vec<(Value, Option<Value>, i64)>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured: Arc<Mutex<Vec<SearchCall>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = captured.clone();
     let stub: SearchStub = Arc::new(move |query, sort, max_result_count, _fields| {
         sink.lock().unwrap().push((query.clone(), sort.cloned(), max_result_count));
@@ -1245,7 +1247,6 @@ fn mock_backfill_es() -> (Arc<DummyEs>, Arc<MockBackfill>) {
 }
 
 #[test]
-#[ignore = "path_created_time_with_source의 OSError를 FsOps::metadata 실패로 만들 수 있는지 확신할 수 없고, ESManager::with_fs는 설계 문서에 없다"]
 fn test_backfill_created_time_all_error_branches() {
     let tmp = TempDir::new().unwrap();
 
@@ -1334,7 +1335,6 @@ fn test_ensure_category_nori_and_created_time_fields_already_present() {
 }
 
 #[test]
-#[ignore = "Path.resolve 실패를 FsOps::canonicalize 실패로 만들 수 있는지 확신할 수 없고, ESManager::with_fs는 설계 문서에 없다"]
 fn test_backfill_created_time_resolve_oserror_and_clear_scroll_error() {
     // ClearScrollErrES: 검색 1건, 스크롤은 빈 페이지, clear_scroll은 기록 후 예외.
     let es = new_es();

@@ -29,6 +29,7 @@ regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 sysdeps = { path = "../libs/sysdeps" }
+ureq.workspace = true
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 
 [[test]]
@@ -78,6 +79,18 @@ path = "../tests/rust/backend/cover_sources.rs"
 [[test]]
 name = "direct_cover_url"
 path = "../tests/rust/backend/direct_cover_url.rs"
+
+[[test]]
+name = "es_manager"
+path = "../tests/rust/backend/es_manager.rs"
+
+[[test]]
+name = "es_manager_gaps"
+path = "../tests/rust/backend/es_manager_gaps.rs"
+
+[[test]]
+name = "es_manager_http"
+path = "../tests/rust/backend/es_manager_http.rs"
 
 [dev-dependencies]
 base64 = "0.23.1"

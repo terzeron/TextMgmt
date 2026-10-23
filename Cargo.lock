@@ -198,6 +198,7 @@ dependencies = [
  "testcontainers-modules",
  "tokio",
  "tower",
+ "ureq",
  "zip",
 ]
 
