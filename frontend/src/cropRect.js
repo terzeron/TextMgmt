@@ -30,35 +30,8 @@ export const DEFAULT_SPLIT_RECTS = Object.freeze({
   second: Object.freeze({ x0: 0.5, y0: 0, x1: 1, y1: 1, angle: 0 }),
 });
 
-// 박스들의 합집합 바깥을 {left, top, width, height}(0~1 비율) 직사각형 조각으로 나눠 돌려준다.
-// 박스마다 따로 덮으면 서로 겹친 영역이 다시 어두워지므로, 세로 띠로 자른 뒤 띠마다 비는 구간만 덮는다.
-export function unionDimRects(rects) {
-  const xs = [
-    ...new Set([0, 1, ...rects.flatMap((rect) => [rect.x0, rect.x1])]),
-  ].sort((a, b) => a - b);
-  const pieces = [];
-  for (let i = 0; i < xs.length - 1; i += 1) {
-    const left = xs[i];
-    const width = xs[i + 1] - left;
-    if (width <= 1e-9) continue;
-    const middle = left + width / 2;
-    const spans = rects
-      .filter((rect) => rect.x0 <= middle && middle <= rect.x1)
-      .map((rect) => [rect.y0, rect.y1])
-      .sort((a, b) => a[0] - b[0]);
-    let cursor = 0;
-    for (const [y0, y1] of spans) {
-      if (y0 > cursor) {
-        pieces.push({ left, top: cursor, width, height: y0 - cursor });
-      }
-      cursor = Math.max(cursor, y1);
-    }
-    if (cursor < 1) {
-      pieces.push({ left, top: cursor, width, height: 1 - cursor });
-    }
-  }
-  return pieces;
-}
+// 크롭 박스 안의 점선 격자는 가로·세로를 이 수만큼 등분한다.
+export const GRID_DIVISIONS = 6;
 
 const DEG = Math.PI / 180;
 // 기울어진 박스의 네 꼭짓점이 쪽 밖으로 나가는 것을 허용하는 오차(px). 서버는 이미지 픽셀 1.5까지 허용한다.
@@ -203,15 +176,29 @@ export function resizeCursor(handle, angle = 0) {
   return CURSORS[Math.round(direction / 45) % 4];
 }
 
-// 기울어진 박스가 하나라도 있을 때 박스들 바깥을 덮는 clip-path. 바깥 사각형과 박스마다의 구멍을
-// 한 경로로 이어 even-odd 로 구멍을 뚫는다. 박스끼리 겹치면 겹친 부분이 다시 덮이는 한계가 있다.
-export function dimClipPath(rects, width, height) {
-  const percent = (value, total) => `${(value / total) * 100}%`;
-  const holes = rects.map((rect) => {
-    const points = boxCorners(rect, width, height).map(
-      ([x, y]) => `${percent(x, width)} ${percent(y, height)}`,
-    );
-    return [...points, points[0], "0% 0%"].join(", ");
-  });
-  return `polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, ${holes.join(", ")})`;
+// 크롭 박스 색. 분할에서는 파랑이 앞쪽(첫째) 영역, 빨강이 뒤쪽(둘째) 영역이 된다.
+export const CROP_COLOR = "#4a90d9";
+export const SPLIT_COLORS = Object.freeze({ first: "#4a90d9", second: "#d9534f" });
+
+// 변경 표시(mark): { kind: "page" }(쪽 삭제) | { kind: "crop", rect } | { kind: "split", rects: { first, second } }.
+// kind 에 맞는 새 표시를 기본 영역으로 만든다. 박스는 서로 영향이 없게 복사한다.
+export function newMark(kind) {
+  if (kind === "crop") return { kind, rect: { ...DEFAULT_CROP_RECT } };
+  if (kind === "split") {
+    return {
+      kind,
+      rects: {
+        first: { ...DEFAULT_SPLIT_RECTS.first },
+        second: { ...DEFAULT_SPLIT_RECTS.second },
+      },
+    };
+  }
+  return { kind };
+}
+
+// 박스 id("crop" 또는 분할의 "first"/"second")의 영역을 rect 로 바꾼 새 표시를 돌려준다.
+export function withBoxRect(mark, id, rect) {
+  return mark.kind === "split"
+    ? { kind: "split", rects: { ...mark.rects, [id]: rect } }
+    : { kind: "crop", rect };
 }

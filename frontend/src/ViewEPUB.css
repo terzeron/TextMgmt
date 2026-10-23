@@ -157,3 +157,34 @@
     z-index: 6;
     background: rgba(90, 90, 90, 0.6);
 }
+
+/* 편집 화면 전용: 지금 쪽의 이미지 위에 얹는 크롭·분할·삭제 표시 레이어. 위치와 크기는 이미지에 맞춰 inline 으로 준다.
+   클릭은 통과시키고 박스 핸들만 받는다. 표지 레이어(z-index 5, 저장 전 표시는 6)와 같은 층이다. */
+.epub-image-overlay {
+    position: absolute;
+    z-index: 6;
+    pointer-events: none;
+}
+
+/* 쪽 안에 이미지가 여러 장일 때 편집 대상을 고르는 번호 배지. 레이어는 클릭을 통과시키므로 배지만 클릭을 받는다. */
+.epub-image-pick {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 7;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 6px;
+    border: 1px solid #4a90d9;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.92);
+    color: #4a90d9;
+    font-size: 12px;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+.epub-image-pick.active {
+    background: #4a90d9;
+    color: #fff;
+}

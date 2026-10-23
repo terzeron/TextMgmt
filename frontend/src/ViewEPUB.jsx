@@ -6,11 +6,17 @@ import { getApiUrlPrefix } from "./Common";
 import AddPhotoAlternateIcon from "@mui/icons-material/AddPhotoAlternate";
 import SaveIcon from "@mui/icons-material/Save";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
+import CropFreeIcon from "@mui/icons-material/CropFree";
+import VerticalSplitOutlinedIcon from "@mui/icons-material/VerticalSplitOutlined";
 import ViewerFontSelect from "./ViewerFontSelect";
 import EpubCoverModal from "./EpubCoverModal";
 import EpubIllustrationModal from "./EpubIllustrationModal";
 import { describeHttpError } from "./httpError";
-import { blobToBase64, requestInsertPreview } from "./insertPreview";
+import { blobToBase64 } from "./insertPreview";
+import usePendingImages from "./usePendingImages";
+import { MarkCropBox } from "./ImageCropBox";
+import { newMark, withBoxRect } from "./cropRect";
+import { measureCoverImage, measureCurrentImage } from "./epubImageRect";
 import "./viewerEditActions.css";
 import {
   buildFontFaceCss,
@@ -20,6 +26,16 @@ import {
 import "./ViewEPUB.css";
 
 const CHAPTERS_PREVIEW = 10;
+// 저장 전 새 표지·삽화는 한 번에 하나만 대기하므로 usePendingImages 의 키 하나에 담는다.
+const PENDING_COVER_KEY = "cover";
+// 이미지 변경 표시의 키: 표지 화면은 spine 항목이 아니므로 서버와 약속한 이름을 쓴다(backend COVER_TARGET).
+const COVER_EDIT_KEY = "@cover#0";
+// 이미지 변경 표시의 키는 "쪽 idref#쪽 안 이미지 순번"이다. 서버로 보낼 때 다시 나눈다.
+const markKey = (idref, index) => `${idref}#${index}`;
+const splitMarkKey = (key) => {
+  const at = key.lastIndexOf("#");
+  return { idref: key.slice(0, at), index: Number(key.slice(at + 1)) };
+};
 
 // 일부 EPUB은 <html:html>처럼 접두사를 붙여 저장한다. DOMPurify는 nodeName을 허용 목록과
 // 비교하므로 접두사 요소(루트는 예외를 던지고, 그 밖은 조용히 제거)를 처리하지 못한다.
@@ -227,33 +243,29 @@ export default function ViewEPUB({
   const [currentIdref, setCurrentIdref] = useState("");
   const [illustrationDialog, setIllustrationDialog] = useState(null);
   const jumpIdrefRef = useRef("");
+  // 편집 화면 전용: 지금 보는 쪽의 이미지 위치·상태(measureCurrentImage), 쪽(idref)별 이미지 변경 표시.
+  // 표시는 PDF 의 쪽 표시와 같다: { kind: "page" }(이미지 쪽 삭제) | { kind: "crop", rect } | { kind: "split", rects }.
+  // 저장하기 전까지 서버의 EPUB 은 건드리지 않는다.
+  const viewerRef = useRef(null);
+  const [imageInfo, setImageInfo] = useState(null);
+  // 쪽 안에 이미지가 여러 장일 때 편집 대상으로 고른 이미지의 순번.
+  const [activeImage, setActiveImage] = useState(0);
+  // 표지 화면의 그림 위치(measureCoverImage). 표지 화면이 아니면 null.
+  const coverImgRef = useRef(null);
+  const [coverRect, setCoverRect] = useState(null);
+  const [imageMarks, setImageMarks] = useState(() => new Map());
   const [reloadToken, setReloadToken] = useState(0);
   // 편집 화면 전용: 저장 전 새 표지 { url, previewSrc }. URL 과 서버가 만든 미리보기(blob URL)다.
-  // 저장하기 전까지 서버의 EPUB 은 건드리지 않는다. blob URL 은 쓰지 않게 되면 해제한다.
-  const [pendingCover, setPendingCover] = useState(null);
-  const pendingCoverRef = useRef(null);
+  // 저장하기 전까지 서버의 EPUB 은 건드리지 않는다. 목록·blob URL 관리는 PDF 쪽 삽입과 같은 훅을 쓴다.
+  // 표지와 삽화는 한 번에 하나만 대기하므로 키 하나에 담는다.
+  const { entries: pendingEntries, set: setPendingEntry, preview: previewPending } =
+    usePendingImages({ apiPrefix, bookId, onChange: () => setSaveError(null) });
+  const pendingCover = pendingEntries.get(PENDING_COVER_KEY) ?? null;
+  const replacePendingCover = (next) => setPendingEntry(PENDING_COVER_KEY, next);
   // 표지 삭제 표시(PDF 의 쪽 삭제 표시와 같다). 새 표지 삽입 표시와는 함께 둘 수 없다.
   const [removeMarked, setRemoveMarked] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
-  const replacePendingCover = (next) => {
-    if (pendingCoverRef.current) {
-      URL.revokeObjectURL(pendingCoverRef.current.previewSrc);
-    }
-    pendingCoverRef.current = next;
-    setPendingCover(next);
-  };
-  // 화면을 닫은 뒤 도착한 미리보기 응답은 버린다(받으면 해제할 곳이 없는 blob URL 이 남는다).
-  const cancelledRef = useRef(false);
-  useEffect(() => {
-    cancelledRef.current = false;
-    return () => {
-      cancelledRef.current = true;
-      if (pendingCoverRef.current) {
-        URL.revokeObjectURL(pendingCoverRef.current.previewSrc);
-      }
-    };
-  }, []);
   const [pageInfo, setPageInfo] = useState({ page: 0, total: 0 });
   // 책 전체 진행률(0~1). 위치 계산이 끝나기 전에는 null이다.
   const [progress, setProgress] = useState(null);
@@ -268,27 +280,12 @@ export default function ViewEPUB({
   // 뷰어 높이는 상수로 둔다(측정·재계산 기계는 텍스트 잘림의 원인이었다).
   const containerHeight = standalone ? "100%" : preview ? "60vh" : "100dvh";
 
-  // 서버가 이미지(URL 이면 내려받고, 이 기기의 파일이면 받아서)를 정규화한 미리보기를 받아 온다. 저장할 때 들어가는 것과 같은 이미지다.
-  // 실패 사유(문자열)를 돌려주고, 성공하면 새 표지를 표시한 뒤 null 을 돌려준다.
+  // 실패 사유(문자열)를 돌려주고, 성공하면 새 표지(또는 삽화)를 표시한 뒤 null 을 돌려준다.
   // 미리보기는 PDF 이미지 삽입과 같은 insert-preview 를 쓴다.
   const previewCover = async (source, meta = {}) => {
-    try {
-      const blob = await requestInsertPreview(apiPrefix, bookId, source);
-      if (cancelledRef.current) return null;
-      setSaveError(null);
-      setRemoveMarked(false);
-      replacePendingCover({
-        ...(typeof source === "string"
-          ? { url: source }
-          : { label: source.name }),
-        blob,
-        previewSrc: URL.createObjectURL(blob),
-        ...meta,
-      });
-      return null;
-    } catch (err) {
-      return err?.message || "이미지를 가져오지 못했습니다";
-    }
+    const message = await previewPending(PENDING_COVER_KEY, source, meta);
+    if (!message) setRemoveMarked(false);
+    return message;
   };
 
   const toggleRemoveMarked = () => {
@@ -346,6 +343,100 @@ export default function ViewEPUB({
       }
       replacePendingCover(null);
       setRemoveMarked(false);
+      setReloadToken((prev) => prev + 1);
+    } catch (err) {
+      setSaveError(err?.message || "저장에 실패했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // 이미지 변경 표시를 달 대상: 표지 화면이면 표지 이미지, 아니면 지금 쪽에서 고른 이미지(쪽 안에 이미지가 여러 장일 수 있다).
+  // 고른 이미지가 화면 밖이면 보이는 첫 이미지를 쓴다.
+  const visibleImages = (imageInfo?.images ?? []).filter((image) => image.rect);
+  const activeImg = visibleImages.find((image) => image.index === activeImage) ?? visibleImages[0] ?? null;
+  const editKey = isCoverPage
+    ? COVER_EDIT_KEY
+    : activeImg
+      ? markKey(currentIdref, activeImg.index)
+      : "";
+  const imageMark = imageMarks.get(editKey);
+  // 표지(화면·표지 쪽)는 크롭만 한다. 본문 쪽은 이미지마다 크롭·분할·삭제를 한다.
+  const onToolCoverPage = currentIdref.startsWith("tm-cover-page-");
+  const canCropImage =
+    (isCoverPage && Boolean(coverUrl) && Boolean(coverRect)) ||
+    (!isCoverPage && Boolean(currentIdref) && activeImg !== null);
+  const canSplitImage = canCropImage && !isCoverPage && !onToolCoverPage;
+  // 박스를 얹을 이미지 목록: 표시가 달렸거나, 이미지가 여럿이라 고르기 배지가 필요한 것.
+  const overlays = isCoverPage
+    ? coverRect
+      ? [{ key: COVER_EDIT_KEY, rect: coverRect, index: 0 }]
+      : []
+    : visibleImages.map((image) => ({
+        key: markKey(currentIdref, image.index),
+        rect: image.rect,
+        index: image.index,
+      }));
+  const toggleImageMark = (kind) => {
+    setSaveError(null);
+    setImageMarks((prev) => {
+      const next = new Map(prev);
+      if (next.get(editKey)?.kind === kind) next.delete(editKey);
+      else next.set(editKey, newMark(kind));
+      return next;
+    });
+  };
+  const changeImageBox = (key, id, rect) =>
+    setImageMarks((prev) => {
+      const mark = prev.get(key);
+      if (!mark) return prev;
+      return new Map(prev).set(key, withBoxRect(mark, id, rect));
+    });
+
+  // 저장 버튼은 표시한 변경이 있을 때만 그려지고 저장 중에는 disabled 이므로 여기서 따로 막지 않는다.
+  const saveImageMarks = async () => {
+    const entries = [...imageMarks];
+    const crops = entries
+      .filter(([, mark]) => mark.kind === "crop")
+      .map(([key, mark]) => ({ ...splitMarkKey(key), ...mark.rect }));
+    const splits = entries
+      .filter(([, mark]) => mark.kind === "split")
+      .map(([key, mark]) => ({ ...splitMarkKey(key), ...mark.rects }));
+    const deletes = entries
+      .filter(([, mark]) => mark.kind === "page")
+      .map(([key]) => splitMarkKey(key));
+    const summary = [
+      crops.length > 0 && `이미지 ${crops.length}건 크롭`,
+      splits.length > 0 && `이미지 ${splits.length}건 분할`,
+      deletes.length > 0 && `이미지 쪽 ${deletes.length}건 삭제`,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    if (
+      !window.confirm(
+        `${summary}를 저장합니다. 원본은 0_trash에 보존됩니다. 저장할까요?`,
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const response = await fetch(
+        `${getApiUrlPrefix()}${apiPrefix}/epub-images/${bookId}`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ crops, splits, deletes }),
+        },
+      );
+      if (!response.ok) throw new Error(await describeHttpError(response));
+      const body = await response.json();
+      if (body.status !== "success") {
+        throw new Error(body.error || "저장에 실패했습니다.");
+      }
+      setImageMarks(new Map());
       setReloadToken((prev) => prev + 1);
     } catch (err) {
       setSaveError(err?.message || "저장에 실패했습니다.");
@@ -620,6 +711,65 @@ export default function ViewEPUB({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fontSize/fontFamily는 별도 effect로 적용한다
   }, [epubData, bookId, preview]);
 
+  // 편집 화면: 표지 화면의 그림 위치를 재서 크롭 박스를 얹는다. 그림을 다 읽거나 창 크기가 바뀌면 다시 잰다.
+  useEffect(() => {
+    const img = coverImgRef.current;
+    if (!editable || !isCoverPage || !coverUrl || !img) {
+      setCoverRect(null);
+      return undefined;
+    }
+    const measure = () => {
+      const next = measureCoverImage(img, viewerRef.current);
+      setCoverRect((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+    };
+    measure();
+    img.addEventListener("load", measure);
+    window.addEventListener("resize", measure);
+    return () => {
+      img.removeEventListener("load", measure);
+      window.removeEventListener("resize", measure);
+    };
+  }, [editable, isCoverPage, coverUrl]);
+
+  // 편집 화면: 지금 쪽의 이미지 위치를 재서 크롭 박스를 그 위에 얹는다. 쪽을 넘기거나 창 크기가 바뀌거나
+  // 이미지를 다 읽으면 다시 잰다.
+  useEffect(() => {
+    const rendition = renditionRef.current;
+    if (!editable || !epubData || !rendition) return undefined;
+    let frame = 0;
+    let watched = [];
+    const measure = () => {
+      const result = measureCurrentImage(rendition, viewerRef.current, currentIdref);
+      for (const img of watched) img.removeEventListener("load", measure);
+      // 아직 읽는 중인 이미지는 다 읽은 뒤 다시 잰다(SVG image 는 complete 가 없다).
+      watched = (result?.images ?? []).map(({ img }) => img).filter((img) => img.complete === false);
+      for (const img of watched) img.addEventListener("load", measure, { once: true });
+      const next = result && {
+        count: result.count,
+        imageOnly: result.imageOnly,
+        images: result.images.map(({ index, rect }) => ({ index, rect })),
+      };
+      setImageInfo((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+    };
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    };
+    measure();
+    rendition.on("relocated", schedule);
+    rendition.on("rendered", schedule);
+    rendition.on("resized", schedule);
+    window.addEventListener("resize", schedule);
+    return () => {
+      cancelAnimationFrame(frame);
+      for (const img of watched) img.removeEventListener("load", measure);
+      rendition.off("relocated", schedule);
+      rendition.off("rendered", schedule);
+      rendition.off("resized", schedule);
+      window.removeEventListener("resize", schedule);
+    };
+  }, [editable, epubData, currentIdref, isCoverPage]);
+
   // 글자 크기·글꼴 변경: reflow 뒤 뷰가 낡은 폭에 머물지 않게 다시 측정한다.
   // 글꼴 규칙은 이미 표시된 뷰에 즉시 적용하고, 새 섹션은 content hook이 처리한다.
   useEffect(() => {
@@ -849,6 +999,7 @@ export default function ViewEPUB({
 
   return (
     <div
+      ref={viewerRef}
       className={`epub-viewer${preview ? "" : " epub-viewer--framed"}`}
       style={{
         height: containerHeight,
@@ -895,7 +1046,7 @@ export default function ViewEPUB({
 
       {isCoverPage && coverUrl && (
         <div className="epub-cover-page" data-testid="epub-cover-page">
-          <img src={coverUrl} alt="책 표지" />
+          <img ref={coverImgRef} src={coverUrl} alt="책 표지" />
         </div>
       )}
 
@@ -923,6 +1074,48 @@ export default function ViewEPUB({
               </div>
             </div>
           )}
+          {overlays.map(({ key, rect, index }) => {
+            const mark = imageMarks.get(key);
+            const picker = !isCoverPage && visibleImages.length > 1;
+            if (!mark && !picker) return null;
+            return (
+              <div
+                key={key}
+                className="epub-image-overlay"
+                data-testid="epub-image-overlay"
+                style={{
+                  left: rect.left,
+                  top: rect.top,
+                  width: rect.width,
+                  height: rect.height,
+                }}
+              >
+                {mark?.kind === "page" ? (
+                  <div
+                    className="viewer-edit-delete-overlay"
+                    data-testid="epub-image-delete-overlay"
+                  />
+                ) : (
+                  <MarkCropBox
+                    mark={mark}
+                    onChange={(id, next) => changeImageBox(key, id, next)}
+                  />
+                )}
+                {picker && (
+                  <button
+                    type="button"
+                    className={`epub-image-pick${activeImg?.index === index ? " active" : ""}`}
+                    aria-label={`이미지 ${index + 1} 선택`}
+                    aria-pressed={activeImg?.index === index}
+                    title="이 이미지를 편집 대상으로 선택"
+                    onClick={() => setActiveImage(index)}
+                  >
+                    {index + 1}
+                  </button>
+                )}
+              </div>
+            );
+          })}
           <div className="viewer-edit-actions epub-cover-actions">
             {saving && <span className="epub-cover-status">저장 중...</span>}
             {saveError && (
@@ -964,6 +1157,19 @@ export default function ViewEPUB({
                 </button>
               </>
             )}
+            {imageMarks.size > 0 && (
+              <button
+                type="button"
+                className="viewer-edit-btn"
+                aria-label="이미지 편집 저장"
+                title="표시한 이미지 변경을 저장"
+                disabled={saving}
+                onClick={saveImageMarks}
+              >
+                <SaveIcon fontSize="small" />
+              </button>
+            )}
+            {/* 버튼 순서는 삽입 > 분할 > 크롭 > 삭제로 고정한다. 표지 화면과 본문 쪽이 같은 자리를 쓰되 없는 버튼만 빠진다. */}
             {!isCoverPage && currentIdref && !currentIdref.startsWith("tm-cover-page-") && (
               <button
                 type="button"
@@ -993,6 +1199,45 @@ export default function ViewEPUB({
                 onClick={() => setCoverDialog(true)}
               >
                 <AddPhotoAlternateIcon fontSize="small" />
+              </button>
+            )}
+            {canSplitImage && (
+              <button
+                type="button"
+                className={`viewer-edit-btn${imageMark?.kind === "split" ? " active" : ""}`}
+                aria-label="이 쪽 이미지 분할"
+                aria-pressed={imageMark?.kind === "split"}
+                title={imageMark?.kind === "split" ? "분할 표시 해제" : "이미지를 앞·뒤 두 쪽으로 분할"}
+                disabled={saving}
+                onClick={() => toggleImageMark("split")}
+              >
+                <VerticalSplitOutlinedIcon fontSize="small" />
+              </button>
+            )}
+            {canCropImage && (
+              <button
+                type="button"
+                className={`viewer-edit-btn${imageMark?.kind === "crop" ? " active" : ""}`}
+                aria-label="이 쪽 이미지 크롭"
+                aria-pressed={imageMark?.kind === "crop"}
+                title={imageMark?.kind === "crop" ? "크롭 표시 해제" : "남길 영역을 박스로 지정"}
+                disabled={saving}
+                onClick={() => toggleImageMark("crop")}
+              >
+                <CropFreeIcon fontSize="small" />
+              </button>
+            )}
+            {canSplitImage && (
+              <button
+                type="button"
+                className={`viewer-edit-btn${imageMark?.kind === "page" ? " active" : ""}`}
+                aria-label="이 쪽 이미지 삭제 표시"
+                aria-pressed={imageMark?.kind === "page"}
+                title={imageMark?.kind === "page" ? "삭제 표시 해제" : "이미지 쪽을 삭제 표시"}
+                disabled={saving}
+                onClick={() => toggleImageMark("page")}
+              >
+                <DeleteOutlineIcon fontSize="small" />
               </button>
             )}
             {(isCoverPage || atStart) && coverUrl && (

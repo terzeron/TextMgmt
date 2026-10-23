@@ -17,14 +17,12 @@ import ArrowDropUpIcon from "@mui/icons-material/ArrowDropUp";
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import PdfInsertImageModal from "./PdfInsertImageModal";
 import { describeHttpError } from "./httpError";
-import { blobToBase64, requestInsertPreview } from "./insertPreview";
+import { blobToBase64 } from "./insertPreview";
+import usePendingImages from "./usePendingImages";
 import "./viewerEditActions.css";
-import PdfCropBox from "./PdfCropBox";
-import { DEFAULT_CROP_RECT, DEFAULT_SPLIT_RECTS } from "./cropRect";
+import { MarkCropBox } from "./ImageCropBox";
+import { newMark, withBoxRect } from "./cropRect";
 
-// 크롭 박스 색. 분할에서는 파랑이 앞쪽 페이지, 빨강이 뒤쪽 페이지가 된다.
-const CROP_COLOR = "#4a90d9";
-const SPLIT_COLORS = { first: "#4a90d9", second: "#d9534f" };
 import { getApiUrlPrefix } from "./Common";
 import {
   DISPLAY_SCALE,
@@ -70,20 +68,17 @@ export default function ViewPDF({
   // 저장하기 전까지 서버는 건드리지 않는다. 한 쪽에는 한 종류만 표시한다.
   const [markedPages, setMarkedPages] = useState(() => new Map());
   // 쪽(1-based) → { url, previewSrc }: 그 쪽 앞에 끼울 이미지의 URL 과, 서버가 만들어 준 미리보기(blob URL).
-  // 삭제·크롭·분할 표시와는 따로 둔다(같은 쪽에 함께 있을 수 있다). blob URL 은 쓰지 않게 되면 해제한다.
-  const [insertions, setInsertions] = useState(() => new Map());
-  const insertionsRef = useRef(insertions);
-  useEffect(() => {
-    insertionsRef.current = insertions;
-  }, [insertions]);
-  useEffect(
-    () => () => {
-      for (const entry of insertionsRef.current.values()) {
-        URL.revokeObjectURL(entry.previewSrc);
-      }
-    },
-    [],
-  );
+  // 삭제·크롭·분할 표시와는 따로 둔다(같은 쪽에 함께 있을 수 있다). 목록·blob URL 관리는 EPUB 삽화와 같은 훅을 쓴다.
+  const {
+    entries: insertions,
+    set: setInsertion,
+    clear: clearInsertions,
+    preview: previewInsertion,
+  } = usePendingImages({
+    apiPrefix,
+    bookId,
+    onChange: () => setSaveError(null),
+  });
   // 이미지 URL 입력 모달이 열려 있는 쪽 번호(없으면 null)
   const [insertDialog, setInsertDialog] = useState(null);
   // 쪽 순서 바꾸기: 화면에 보이는 순서대로 원본 쪽 번호를 나열한 배열(null 이면 순서를 바꾸지 않았다).
@@ -114,17 +109,7 @@ export default function ViewPDF({
     setMarkedPages((prev) => {
       const next = new Map(prev);
       if (next.get(pageNum)?.kind === kind) next.delete(pageNum);
-      else if (kind === "crop")
-        next.set(pageNum, { kind, rect: { ...DEFAULT_CROP_RECT } });
-      else if (kind === "split")
-        next.set(pageNum, {
-          kind,
-          rects: {
-            first: { ...DEFAULT_SPLIT_RECTS.first },
-            second: { ...DEFAULT_SPLIT_RECTS.second },
-          },
-        });
-      else next.set(pageNum, { kind });
+      else next.set(pageNum, newMark(kind));
       return next;
     });
   };
@@ -144,50 +129,8 @@ export default function ViewPDF({
     setMarkedPages((prev) => {
       const mark = prev.get(pageNum);
       if (!mark) return prev;
-      const next =
-        mark.kind === "split"
-          ? { kind: "split", rects: { ...mark.rects, [id]: rect } }
-          : { kind: "crop", rect };
-      return new Map(prev).set(pageNum, next);
+      return new Map(prev).set(pageNum, withBoxRect(mark, id, rect));
     });
-  const setInsertion = (pageNum, entry) => {
-    setSaveError(null);
-    const previous = insertionsRef.current.get(pageNum);
-    if (previous && previous.previewSrc !== entry?.previewSrc) {
-      URL.revokeObjectURL(previous.previewSrc);
-    }
-    setInsertions((prev) => {
-      const next = new Map(prev);
-      if (entry) next.set(pageNum, entry);
-      else next.delete(pageNum);
-      return next;
-    });
-  };
-  const clearInsertions = () => {
-    for (const entry of insertionsRef.current.values()) {
-      URL.revokeObjectURL(entry.previewSrc);
-    }
-    setInsertions(new Map());
-  };
-  // 서버가 이미지(URL 이면 내려받고, 이 기기의 파일이면 받아서)를 정규화한 미리보기를 받아 온다. 저장할 때 삽입되는 것과 같은 이미지다.
-  // 실패 사유(문자열)를 돌려주고, 성공하면 삽입을 표시한 뒤 null 을 돌려준다.
-  const previewInsertion = async (pageNum, source) => {
-    try {
-      const blob = await requestInsertPreview(apiPrefix, bookId, source);
-      /* v8 ignore next -- the viewer unmounts only while this request is in flight. */
-      if (cancelledRef.current) return null;
-      setInsertion(pageNum, {
-        ...(typeof source === "string"
-          ? { url: source }
-          : { label: source.name }),
-        blob,
-        previewSrc: URL.createObjectURL(blob),
-      });
-      return null;
-    } catch (err) {
-      return err?.message || "이미지를 가져오지 못했습니다";
-    }
-  };
   const saveMarkedPages = async () => {
     if (
       saving ||
@@ -584,10 +527,7 @@ export default function ViewPDF({
     const loadPdf = async () => {
       setError(null);
       setMarkedPages(new Map());
-      for (const entry of insertionsRef.current.values()) {
-        URL.revokeObjectURL(entry.previewSrc);
-      }
-      setInsertions(new Map());
+      clearInsertions();
       setInsertDialog(null);
       setTotalPages(0);
       setLoadedPages(0);
@@ -992,31 +932,10 @@ export default function ViewPDF({
                   data-kind="page"
                 />
               )}
-              {mark?.kind === "crop" && (
-                <PdfCropBox
-                  boxes={[{ id: "crop", rect: mark.rect, color: CROP_COLOR }]}
-                  onChange={(id, rect) => changeBox(pageNum, id, rect)}
-                />
-              )}
-              {mark?.kind === "split" && (
-                <PdfCropBox
-                  boxes={[
-                    {
-                      id: "first",
-                      rect: mark.rects.first,
-                      color: SPLIT_COLORS.first,
-                      label: "앞",
-                    },
-                    {
-                      id: "second",
-                      rect: mark.rects.second,
-                      color: SPLIT_COLORS.second,
-                      label: "뒤",
-                    },
-                  ]}
-                  onChange={(id, rect) => changeBox(pageNum, id, rect)}
-                />
-              )}
+              <MarkCropBox
+                mark={mark}
+                onChange={(id, rect) => changeBox(pageNum, id, rect)}
+              />
               <div className="viewer-edit-actions">
                 {marked && (
                   <button
@@ -1276,104 +1195,6 @@ const pdfStyles = `
     .pdf-container.pdf-single .pdf-insert-image {
         height: 100%;
         object-fit: contain;
-    }
-    /* 크롭: 박스 안은 선명하게 두고 바깥 네 구역만 회색+블러로 덮는다. 레이어 자체는 클릭을 통과시키고 핸들만 받는다. */
-    .pdf-crop-layer {
-        position: absolute;
-        inset: 0;
-        z-index: 4;
-        pointer-events: none;
-    }
-    .pdf-crop-dim {
-        position: absolute;
-        background: rgba(90, 90, 90, 0.6);
-        -webkit-backdrop-filter: blur(3px);
-        backdrop-filter: blur(3px);
-    }
-    .pdf-crop-box {
-        --crop-color: #4a90d9;
-        position: absolute;
-        box-sizing: border-box;
-        border: 2px solid var(--crop-color);
-    }
-    .pdf-crop-label {
-        position: absolute;
-        top: 20px;
-        left: 4px;
-        padding: 0 6px;
-        border-radius: 3px;
-        background: var(--crop-color);
-        color: #fff;
-        font-size: 12px;
-        line-height: 18px;
-        pointer-events: none;
-    }
-    /* 조절 핸들은 모두 박스 안쪽(테두리 안)에만 둔다. 박스끼리 맞닿아도 서로의 핸들 영역이 겹치지 않는다.
-       변 핸들은 두 모서리 핸들 사이 전체를 따라 잡히고, 가운데에 눈에 보이는 손잡이를 그려 드래그할 수 있음을 알린다. */
-    .pdf-crop-handle {
-        position: absolute;
-        pointer-events: auto;
-        touch-action: none;
-    }
-    .pdf-crop-handle-n, .pdf-crop-handle-s { left: 16px; right: 16px; height: 16px; cursor: ns-resize; }
-    .pdf-crop-handle-n { top: 0; }
-    .pdf-crop-handle-s { bottom: 0; }
-    .pdf-crop-handle-e, .pdf-crop-handle-w { top: 16px; bottom: 16px; width: 16px; cursor: ew-resize; }
-    .pdf-crop-handle-w { left: 0; }
-    .pdf-crop-handle-e { right: 0; }
-    .pdf-crop-handle-n::after, .pdf-crop-handle-s::after,
-    .pdf-crop-handle-e::after, .pdf-crop-handle-w::after {
-        content: "";
-        position: absolute;
-        left: 50%;
-        top: 50%;
-        transform: translate(-50%, -50%);
-        box-sizing: border-box;
-        background: #fff;
-        border: 2px solid var(--crop-color);
-        border-radius: 3px;
-    }
-    .pdf-crop-handle-n::after, .pdf-crop-handle-s::after { width: 28px; height: 8px; }
-    .pdf-crop-handle-e::after, .pdf-crop-handle-w::after { width: 8px; height: 28px; }
-    /* 회전 손잡이: 박스 안쪽(위쪽 변 손잡이 바로 아래)에 둔다. 박스와 함께 돌고 박스 밖으로 나가지 않는다. */
-    .pdf-crop-rotate {
-        position: absolute;
-        top: 22px;
-        left: 50%;
-        transform: translateX(-50%);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 24px;
-        height: 24px;
-        box-sizing: border-box;
-        border: 2px solid var(--crop-color);
-        border-radius: 50%;
-        background: #fff;
-        color: var(--crop-color);
-        font-size: 16px;
-        cursor: grab;
-        pointer-events: auto;
-        touch-action: none;
-    }
-    .pdf-crop-rotate:active {
-        cursor: grabbing;
-    }
-    .pdf-crop-handle-nw, .pdf-crop-handle-ne, .pdf-crop-handle-sw, .pdf-crop-handle-se {
-        width: 16px;
-        height: 16px;
-        box-sizing: border-box;
-        background: #fff;
-        border: 2px solid var(--crop-color);
-    }
-    .pdf-crop-handle-nw { top: 0; left: 0; cursor: nwse-resize; }
-    .pdf-crop-handle-se { bottom: 0; right: 0; cursor: nwse-resize; }
-    .pdf-crop-handle-ne { top: 0; right: 0; cursor: nesw-resize; }
-    .pdf-crop-handle-sw { bottom: 0; left: 0; cursor: nesw-resize; }
-    @media (pointer: coarse) {
-        .pdf-crop-handle-n, .pdf-crop-handle-s { left: 28px; right: 28px; height: 28px; }
-        .pdf-crop-handle-e, .pdf-crop-handle-w { top: 28px; bottom: 28px; width: 28px; }
-        .pdf-crop-handle-nw, .pdf-crop-handle-ne, .pdf-crop-handle-sw, .pdf-crop-handle-se { width: 28px; height: 28px; }
     }
     .loading-container {
         display: flex;

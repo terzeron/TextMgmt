@@ -2,9 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   DEFAULT_CROP_RECT,
   DEFAULT_SPLIT_RECTS,
+  newMark,
+  withBoxRect,
   MIN_CROP_FRACTION,
   boxCorners,
-  dimClipPath,
   insidePage,
   normalizeAngle,
   resizeBox,
@@ -12,7 +13,6 @@ import {
   resizeRect,
   rotateBox,
   snapAngle,
-  unionDimRects,
 } from "../src/cropRect";
 
 const rect = { x0: 0.2, y0: 0.2, x1: 0.8, y1: 0.8 };
@@ -57,65 +57,13 @@ describe("resizeRect", () => {
   });
 });
 
-const area = (pieces) => pieces.reduce((sum, p) => sum + p.width * p.height, 0);
 const rectArea = (r) => (r.x1 - r.x0) * (r.y1 - r.y0);
 
-describe("unionDimRects", () => {
-  it("박스 하나면 박스 바깥 면적을 덮는다", () => {
-    expect(area(unionDimRects([DEFAULT_CROP_RECT]))).toBeCloseTo(
-      1 - rectArea(DEFAULT_CROP_RECT),
-    );
-  });
-
-  it("기본 분할 박스는 쪽 네 모서리에 맞는 서로소 왼쪽·오른쪽 절반이다", () => {
+describe("DEFAULT_SPLIT_RECTS", () => {
+  it("앞·뒤 박스가 겹치지 않고 쪽 전체를 채운다", () => {
     const { first, second } = DEFAULT_SPLIT_RECTS;
-    // 왼쪽(파랑)은 왼쪽 절반 전체, 오른쪽(빨강)은 오른쪽 절반 전체다.
-    expect(first).toEqual({ x0: 0, y0: 0, x1: 0.5, y1: 1, angle: 0 });
-    expect(second).toEqual({ x0: 0.5, y0: 0, x1: 1, y1: 1, angle: 0 });
-    // 가운데에서 딱 맞닿고 겹치지 않으며, 둘을 합치면 쪽 전체다.
     expect(first.x1).toBe(second.x0);
     expect(rectArea(first) + rectArea(second)).toBeCloseTo(1);
-    // 쪽 전체가 박스 안이므로 어둡게 덮을 곳이 없다.
-    expect(area(unionDimRects([first, second]))).toBeCloseTo(0);
-  });
-
-  it("떨어진 두 박스는 각 박스 안을 덮지 않는다", () => {
-    const { first, second } = DEFAULT_SPLIT_RECTS;
-    expect(area(unionDimRects([first, second]))).toBeCloseTo(
-      1 - rectArea(first) - rectArea(second),
-    );
-  });
-
-  it("겹친 영역은 한 번만 센다(다시 어두워지지 않는다)", () => {
-    const a = { x0: 0.1, y0: 0.1, x1: 0.6, y1: 0.9 };
-    const b = { x0: 0.4, y0: 0.2, x1: 0.9, y1: 0.8 };
-    const overlap = (0.6 - 0.4) * (0.8 - 0.2);
-    expect(area(unionDimRects([a, b]))).toBeCloseTo(
-      1 - rectArea(a) - rectArea(b) + overlap,
-    );
-  });
-
-  it("덮개 조각은 어떤 박스 안쪽 점도 덮지 않는다", () => {
-    const boxes = [
-      { x0: 0.1, y0: 0.1, x1: 0.6, y1: 0.9 },
-      { x0: 0.4, y0: 0.2, x1: 0.9, y1: 0.8 },
-    ];
-    const pieces = unionDimRects(boxes);
-    for (const [x, y] of [[0.3, 0.5], [0.5, 0.5], [0.8, 0.5], [0.5, 0.85]]) {
-      const inBox = boxes.some((b) => x > b.x0 && x < b.x1 && y > b.y0 && y < b.y1);
-      const covered = pieces.some(
-        (p) => x > p.left && x < p.left + p.width && y > p.top && y < p.top + p.height,
-      );
-      expect(covered).toBe(!inBox);
-    }
-  });
-
-  it("맞닿은 두 박스 사이에 틈이 생기지 않는다", () => {
-    const pieces = unionDimRects([
-      { x0: 0.05, y0: 0.05, x1: 0.5, y1: 0.95 },
-      { x0: 0.5, y0: 0.05, x1: 0.95, y1: 0.95 },
-    ]);
-    expect(pieces.some((p) => 0.5 > p.left + 1e-9 && 0.5 < p.left + p.width - 1e-9 && p.top < 0.5 && p.top + p.height > 0.5)).toBe(false);
   });
 });
 
@@ -230,31 +178,7 @@ describe("rotateBox", () => {
   });
 });
 
-describe("dimClipPath", () => {
-  it("바깥 사각형과 박스 구멍을 even-odd 한 경로로 잇는다", () => {
-    const path = dimClipPath([{ x0: 0.1, y0: 0.1, x1: 0.9, y1: 0.9, angle: 0 }], 100, 100);
-    expect(path.startsWith("polygon(evenodd, 0% 0%, 100% 0%, 100% 100%")).toBe(true);
-    expect(path).toContain("10% 10%");
-    expect(path).toContain("90% 90%");
-  });
-
-  it("기울이면 꼭짓점이 회전한 위치로 들어간다", () => {
-    const path = dimClipPath([{ x0: 0.3, y0: 0.4, x1: 0.7, y1: 0.6, angle: 90 }], 100, 100);
-    expect(path).toContain("60% 30%");
-    expect(path).toContain("60% 70%");
-  });
-});
-
 describe("cropRect 보강 (경계 분기)", () => {
-  it("unionDimRects 는 거의 같은 x 경계가 만든 폭 0 띠를 건너뛴다", () => {
-    const a = { x0: 0.5, y0: 0, x1: 0.8, y1: 1 };
-    const b = { x0: 0.5 + 1e-12, y0: 0, x1: 0.9, y1: 1 };
-    const pieces = unionDimRects([a, b]);
-    // 폭이 1e-9 이하인 조각은 없고, 덮는 면적은 쪽 전체에서 합집합(0.5~0.9)을 뺀 값이다.
-    expect(pieces.every((piece) => piece.width > 1e-9)).toBe(true);
-    expect(area(pieces)).toBeCloseTo(1 - 0.4);
-  });
-
   it("angle 이 없는 박스는 각도 0 으로 보고 꼭짓점을 계산한다", () => {
     const corners = boxCorners({ x0: 0.25, y0: 0.25, x1: 0.75, y1: 0.75 }, 100, 100);
     expect(corners).toEqual([
@@ -283,5 +207,25 @@ describe("cropRect 보강 (경계 분기)", () => {
     // 90도: 아래쪽 변을 화면 왼쪽으로 10px 끌면 높이가 10px 는다.
     const next = resizeBox(rect, "s", -10, 0, 100, 100);
     expect(next.y1 - next.y0).toBeCloseTo(0.5);
+  });
+});
+
+describe("newMark / withBoxRect", () => {
+  it("newMark 는 기본 영역을 복사해 만들어 서로 영향이 없다", () => {
+    const crop = newMark("crop");
+    crop.rect.x0 = 0.3;
+    expect(newMark("crop").rect.x0).toBe(DEFAULT_CROP_RECT.x0);
+    const split = newMark("split");
+    split.rects.first.x1 = 0.4;
+    expect(newMark("split").rects.first.x1).toBe(DEFAULT_SPLIT_RECTS.first.x1);
+    expect(newMark("page")).toEqual({ kind: "page" });
+  });
+
+  it("withBoxRect 는 크롭이면 영역을, 분할이면 해당 박스만 바꾼다", () => {
+    const moved = { x0: 0.2, y0: 0.2, x1: 0.8, y1: 0.8, angle: 0 };
+    expect(withBoxRect(newMark("crop"), "crop", moved)).toEqual({ kind: "crop", rect: moved });
+    const split = withBoxRect(newMark("split"), "second", moved);
+    expect(split.rects.second).toEqual(moved);
+    expect(split.rects.first).toEqual(DEFAULT_SPLIT_RECTS.first);
   });
 });
