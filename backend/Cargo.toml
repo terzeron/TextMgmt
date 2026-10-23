@@ -1,0 +1,47 @@
+[package]
+name = "backend"
+description = "TextMgmt 백엔드 API (backend/*.py의 Rust 대응). axum + diesel + libs/es_client"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "backend"
+path = "src/bin/backend.rs"
+
+[dependencies]
+async-trait = "0.1"
+axum = "0.8.9"
+# MySQL 클라이언트는 개발 헤더 없이 쓰려고 소스에서 번들 빌드한다 (docs/rust-test-seams.md, diesel spike)
+diesel = { version = "2.3.14", default-features = false, features = ["mysql", "r2d2", "chrono"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+log = "0.4.34"
+mysqlclient-sys = { version = "0.5.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+sysdeps = { path = "../libs/sysdeps" }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+
+[[test]]
+name = "db"
+path = "../tests/rust/backend/db.rs"
+
+[[test]]
+name = "common_smoke"
+path = "../tests/rust/backend/common_smoke.rs"
+
+[dev-dependencies]
+base64 = "0.23.1"
+flate2 = "1"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif"] }
+lopdf.workspace = true
+roxmltree = "0.21.1"
+sha2 = "0.11.1"
+tempfile = "3.27.0"
+testcontainers-modules = { version = "0.15.0", features = ["mysql", "blocking"] }
+tower = { version = "0.5.3", features = ["util"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
