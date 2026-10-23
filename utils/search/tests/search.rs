@@ -127,3 +127,31 @@ fn usage_explains_the_purpose_and_every_argument() {
     assert_eq!(go(&["--help"], &es).1, out);
     assert!(es.title_calls.borrow().is_empty());
 }
+
+#[test]
+fn python_repr_escapes_control_characters_and_formats_floats_like_python() {
+    use search::py_repr;
+    assert_eq!(py_repr(&json!("a\rb")), "'a\\rb'");
+    assert_eq!(py_repr(&json!("a\u{1b}b")), "'a\\x1bb'");
+    assert_eq!(py_repr(&json!("a\u{200b}b")), "'a\\u200bb'");
+    assert_eq!(py_repr(&json!("a\u{e0001}b")), "'a\\U000e0001b'");
+    assert_eq!(py_repr(&json!(1e-7)), "1e-07");
+    assert_eq!(py_repr(&json!(1.5e20)), "1.5e+20");
+    assert_eq!(py_repr(&json!(0.0)), "0.0");
+    assert_eq!(py_repr(&json!(-3)), "-3");
+}
+
+#[test]
+fn similar_search_failure_exits_one() {
+    struct Down;
+    impl BookSearch for Down {
+        fn search_by_title(&self, _: &str, _: &str, _: i64) -> Result<Vec<Hit>, EsError> {
+            Ok(vec![])
+        }
+        fn search_similar_docs(&self, _: &str) -> Result<Vec<Hit>, EsError> {
+            Err(EsError::Unsupported("down".into()))
+        }
+    }
+    let mut out = Vec::new();
+    assert_eq!(run("search", &["t".to_string(), "content".to_string()], &mut out, &|| Ok(&Down as &dyn BookSearch)), 1);
+}

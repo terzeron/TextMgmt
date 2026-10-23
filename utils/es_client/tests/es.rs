@@ -199,3 +199,36 @@ fn connect_with_retry_succeeds_when_the_server_answers() {
     assert!(client(&url).connect_with_retry(5, &|_| panic!("쉬지 않는다")).is_ok());
     assert_eq!(rx.recv().unwrap().request_line, "GET / HTTP/1.1");
 }
+
+// ---- 분기 보강 ----
+
+#[test]
+fn error_messages_are_readable() {
+    assert!(EsError::Transport("refused".into()).to_string().contains("연결 실패"));
+    assert!(EsError::Parse("x".into()).to_string().contains("해석 실패"));
+    assert!(EsError::Unsupported("y".into()).to_string().contains("지원하지 않는"));
+    assert!(EsError::MissingEnv("K".into()).to_string().contains("K"));
+}
+
+#[test]
+fn malformed_responses_are_parse_errors() {
+    let (url, _rx) = serve_once(200, json!({"hits": {"max_score": 1.0, "hits": "nope"}}));
+    assert!(matches!(client(&url).search(json!({}), 10, None).unwrap_err(), EsError::Parse(_)));
+    let (url, _rx) = serve_once(200, json!({"hits": {"max_score": 1.0, "hits": [{"_id": "abc", "_score": 1.0, "_source": {}}]}}));
+    assert!(matches!(client(&url).search(json!({}), 10, None).unwrap_err(), EsError::Parse(_)));
+}
+
+#[test]
+fn the_book_search_trait_uses_the_default_arguments() {
+    use es_client::BookSearch;
+    let (url, rx) = serve_once(200, hits(json!(1.0), &[("1", 1.0, json!({"title": "a"}))]));
+    let r = BookSearch::search_by_title(&client(&url), "제목", "epub", 5).unwrap();
+    assert_eq!(r.len(), 1);
+    assert_eq!(rx.recv().unwrap().body["size"], 10);
+
+    let (url, rx) = serve_once(200, hits(json!(1.0), &[]));
+    BookSearch::search_similar_docs(&client(&url), "요약").unwrap();
+    let body = rx.recv().unwrap().body;
+    assert_eq!(body["query"]["bool"]["should"][2]["more_like_this"]["like"], "요약");
+    assert!(body["query"]["bool"].get("must_not").is_none());
+}

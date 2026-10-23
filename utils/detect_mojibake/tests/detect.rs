@@ -401,3 +401,62 @@ fn no_arguments_and_help_print_purpose_and_usage() {
     // 아무것도 스캔하지 않는다.
     assert!(!d.path().join("tmp").exists());
 }
+
+// ---- 분기 보강 ----
+
+#[test]
+fn files_without_extractable_text_get_a_distinct_reason() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("blob.bin");
+    fs::write(&p, b"binary").unwrap();
+    let r = inspect_file(p.to_str().unwrap());
+    assert_eq!((r.verdict.as_str(), r.reason.as_deref()), (VERDICT_UNREADABLE, Some("no_text_extracted")));
+}
+
+#[test]
+fn scan_options_default_to_two_workers_and_progress_every_2000() {
+    let o = ScanOptions::default();
+    assert_eq!((o.workers, o.limit, o.progress_every), (DEFAULT_WORKERS, 0, 2000));
+}
+
+#[test]
+fn cli_accepts_inline_values_and_rejects_extra_positionals_and_unwritable_reports() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("text");
+    fs::create_dir(&root).unwrap();
+    write(&root.join("a.txt"), &clean_korean());
+    let report = d.path().join("r.json");
+    let inline = [format!("--root={}", root.display()), format!("--report={}", report.display()), "--workers=1".to_string()];
+    let refs: Vec<&str> = std::iter::once("scan").chain(inline.iter().map(String::as_str)).collect();
+    assert_eq!(run_cli(d.path(), &refs).code, 0);
+    assert!(report.exists());
+
+    assert_eq!(run_cli(d.path(), &["scan", "extra"]).code, 2);
+
+    let blocker = d.path().join("file");
+    fs::write(&blocker, "x").unwrap();
+    let bad = blocker.join("r.json");
+    assert_eq!(run_cli(d.path(), &["scan", "--root", root.to_str().unwrap(), "--report", bad.to_str().unwrap()]).code, 1);
+}
+
+#[test]
+fn path_helpers_follow_posixpath() {
+    use detect_mojibake::util::{category_of, posix_dirname, posix_join, posix_normpath, unquote};
+    assert_eq!(posix_normpath(""), ".");
+    assert_eq!(posix_normpath("a/./b//c/../d"), "a/b/d");
+    assert_eq!(posix_normpath("//a"), "//a");
+    assert_eq!(posix_normpath("///a"), "/a");
+    assert_eq!(posix_normpath("../a/.."), "..");
+    assert_eq!(posix_join("a", "b"), "a/b");
+    assert_eq!(posix_join("a/", "b"), "a/b");
+    assert_eq!(posix_join("", "b"), "b");
+    assert_eq!(posix_join("a", "/b"), "/b");
+    assert_eq!(posix_dirname("a/b/c"), "a/b");
+    assert_eq!(posix_dirname("c"), "");
+    assert_eq!(posix_dirname("/c"), "/");
+    assert_eq!(unquote("a%20b%zz%2"), "a b%zz%2");
+    assert_eq!(unquote("%ED%95%9C"), "한");
+    assert_eq!(category_of(Path::new("/mnt/data/text/3_판타지/a.txt")), "3_판타지");
+    assert_eq!(category_of(Path::new("/tmp/x/a.txt")), "");
+    assert_eq!(category_of(Path::new("/mnt/data/text")), "");
+}

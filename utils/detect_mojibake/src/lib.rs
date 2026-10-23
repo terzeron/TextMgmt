@@ -26,7 +26,6 @@ pub mod util;
 
 use std::collections::BTreeSet;
 use std::io::{self, Write};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -83,7 +82,7 @@ pub fn classify_text(text: &str) -> (&'static str, Option<f64>) {
     }
 }
 
-/// 파일 한 건의 판정. 읽기에 실패한 파일은 `error`만 채운다.
+/// 파일 한 건의 판정.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FileResult {
     pub path: String,
@@ -97,8 +96,6 @@ pub struct FileResult {
     pub sample_len: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
 }
 
 /// Python `round(x, ndigits)`와 같은 결과를 낸다. 곱셈 뒤 반올림은 `0.35` 같은 값에서 어긋나므로,
@@ -118,21 +115,7 @@ pub fn round1(x: f64) -> f64 {
 /// 파일 한 건을 읽어 판정한다.
 pub fn inspect_file(path_str: &str) -> FileResult {
     let path = Path::new(path_str);
-    let text = match catch_unwind(AssertUnwindSafe(|| reader::read_document_text(path, DEFAULT_HEAD_CHARS, DEFAULT_TAIL_CHARS))) {
-        Ok(t) => t,
-        Err(_) => {
-            return FileResult {
-                path: path_str.into(),
-                category: None,
-                verdict: VERDICT_UNREADABLE.into(),
-                likeness: None,
-                size: None,
-                sample_len: None,
-                reason: None,
-                error: Some("panic while reading".into()),
-            };
-        }
-    };
+    let text = reader::read_document_text(path, DEFAULT_HEAD_CHARS, DEFAULT_TAIL_CHARS);
     let (verdict, likeness) = classify_text(&text);
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let reason = if verdict == VERDICT_UNREADABLE {
@@ -155,7 +138,6 @@ pub fn inspect_file(path_str: &str) -> FileResult {
         size: Some(size),
         sample_len: Some(text.chars().count()),
         reason: Some(reason.into()),
-        error: None,
     }
 }
 

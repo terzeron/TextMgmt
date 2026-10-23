@@ -856,6 +856,8 @@ name = "pdfscan"
 version = "0.1.0"
 dependencies = [
  "lopdf",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

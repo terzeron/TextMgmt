@@ -21,7 +21,9 @@ fn py_str_repr(s: &str) -> String {
                 out.push('\\');
                 out.push(c);
             }
-            c if c.is_control() || matches!(c, '\u{ad}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{feff}') => {
+            c if c.is_control()
+                || matches!(c, '\u{ad}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{feff}' | '\u{e000}'..='\u{f8ff}' | '\u{e0000}'..='\u{e007f}' | '\u{f0000}'..='\u{10ffff}') =>
+            {
                 let n = c as u32;
                 if n <= 0xff {
                     out.push_str(&format!("\\x{n:02x}"))
@@ -39,15 +41,6 @@ fn py_str_repr(s: &str) -> String {
 }
 
 fn py_float_repr(v: f64) -> String {
-    if !v.is_finite() {
-        return if v.is_nan() {
-            "nan".into()
-        } else if v > 0.0 {
-            "inf".into()
-        } else {
-            "-inf".into()
-        };
-    }
     let abs = v.abs();
     if abs != 0.0 && !(1e-4..1e16).contains(&abs) {
         // Python은 지수를 두 자리 이상으로 쓴다(1e-05).

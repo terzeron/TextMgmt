@@ -110,24 +110,21 @@ fn execute(args: &Args, repo_root: &Path, out: &mut dyn Write, log: Log) -> io::
 
     match args.command.as_str() {
         "fix-ext" => {
+            // (원본, 교정 결과 파일, 전, 후)와 (원본, 오류)로 나눠 모은다.
             let (mut fixed, mut skipped) = (Vec::new(), Vec::new());
             for rec in load_corrupted(&report)? {
                 match fix_extension(Path::new(&field(&rec, "path")), args.dry_run) {
                     None => {}
-                    Some(e @ FixResult::Error { .. }) => skipped.push(e),
-                    Some(r) => fixed.push(r),
+                    Some(FixResult::Error { path, error }) => skipped.push((path, error)),
+                    Some(FixResult::Restored { path, restored_to, before, after }) => fixed.push((path, restored_to, before, after)),
                 }
             }
             writeln!(out, "{} {}건", if args.dry_run { "교정 예정" } else { "교정 완료" }, fixed.len())?;
-            for f in &fixed {
-                if let FixResult::Restored { path, restored_to, before, after } = f {
-                    writeln!(out, "  {}\n    -> {}  ({} -> {} 바이트)", name_of(path, 48), name_of(restored_to, 48), crate::thousands(*before), crate::thousands(*after))?;
-                }
+            for (path, restored_to, before, after) in &fixed {
+                writeln!(out, "  {}\n    -> {}  ({} -> {} 바이트)", name_of(path, 48), name_of(restored_to, 48), crate::thousands(*before), crate::thousands(*after))?;
             }
-            for s in &skipped {
-                if let FixResult::Error { path, error } = s {
-                    writeln!(out, "  건너뜀: {} - {error}", name_of(path, 44))?;
-                }
+            for (path, error) in &skipped {
+                writeln!(out, "  건너뜀: {} - {error}", name_of(path, 44))?;
             }
             Ok(0)
         }

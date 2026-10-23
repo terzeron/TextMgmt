@@ -186,9 +186,6 @@ fn comments_and_cdata_do_not_hide_or_fake_findings() {
     // 주석 안의 태그는 실행되지 않는다.
     let r = scan_chapter("<!-- <script>alert(1)</script> --><p>x</p>");
     assert!(!has(&r, "SCRIPT_TAG"));
-    // 주석이 닫히지 않으면 나머지를 주석으로 본다. 브라우저도 그렇게 한다.
-    let r = scan_chapter("<p>x</p><!-- <script>alert(1)</script>");
-    assert!(!has(&r, "SCRIPT_TAG"));
     // 대소문자와 따옴표 없는 속성, 줄바꿈이 낀 태그도 잡는다.
     let r = scan_chapter("<SCRIPT\n type=text/javascript\n>alert(1)</SCRIPT>");
     assert!(has(&r, "SCRIPT_TAG"));
@@ -518,4 +515,107 @@ fn report_serializes_with_python_compatible_status_labels() {
     assert_eq!(v["status"], "FINDINGS");
     assert_eq!(v["findings"][0]["severity"], "HIGH");
     assert!(v["findings"][0]["code"].is_string());
+}
+
+// ---- 파서 차이를 이용한 우회 ----
+
+#[test]
+fn declared_media_type_decides_which_scanner_runs() {
+    let items = format!(
+        "{}{}{}{}",
+        opf_item("c1", "ch1.xhtml", "application/xhtml+xml", ""),
+        opf_item("p1", "payload.dat", "application/xhtml+xml", ""),
+        opf_item("p2", "pic.png", "text/javascript", ""),
+        opf_item("p3", "style.txt", "text/css", "")
+    );
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    epub_with_files(
+        &p,
+        &opf(&items),
+        &xhtml("<p>x</p>"),
+        &[("OEBPS/payload.dat", b"<html><script>alert(1)</script></html>"), ("OEBPS/pic.png", b"eval(document.cookie)"), ("OEBPS/style.txt", b"p { width: expression(alert(1)); }")],
+    );
+    let r = scan(&p);
+    for code in ["SCRIPT_TAG", "DYNAMIC_CODE_EXEC", "CSS_EXPRESSION"] {
+        assert!(has(&r, code), "{code}: {:?}", codes(&r));
+    }
+    let mismatches: Vec<&str> = r.findings.iter().filter(|f| f.code == "MEDIA_TYPE_MISMATCH").map(|f| f.location.as_str()).collect();
+    assert_eq!(severity_of(&r, "MEDIA_TYPE_MISMATCH"), Severity::Medium);
+    assert_eq!(mismatches.len(), 3, "{mismatches:?}");
+}
+
+#[test]
+fn compatible_declarations_are_not_mismatches() {
+    let items = format!("{}{}{}", opf_item("c1", "ch1.xhtml", "application/xhtml+xml", ""), opf_item("n1", "toc.ncx", "application/x-dtbncx+xml", ""), opf_item("i1", "a.png", "image/png", ""));
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    epub_with_files(&p, &opf(&items), &xhtml("<p>x</p>"), &[("OEBPS/toc.ncx", b"<ncx/>"), ("OEBPS/a.png", b"\x89PNG\r\n\x1a\n")]);
+    assert!(!has(&scan(&p), "MEDIA_TYPE_MISMATCH"));
+}
+
+#[test]
+fn the_package_document_named_by_container_xml_is_found_without_an_opf_extension() {
+    // rootfile이 .opf가 아닌 이름을 가리켜도 매니페스트를 읽어 선언 검사를 한다.
+    let container = CONTAINER_XML.replace("OEBPS/content.opf", "OEBPS/package.xml");
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    {
+        let mut z = zip::ZipWriter::new(fs::File::create(&p).unwrap());
+        let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        z.start_file("mimetype", o).unwrap();
+        z.write_all(b"application/epub+zip").unwrap();
+        z.start_file("META-INF/container.xml", o).unwrap();
+        z.write_all(container.as_bytes()).unwrap();
+        z.start_file("OEBPS/package.xml", o).unwrap();
+        z.write_all(scripted_opf().replace("scripted", "").as_bytes()).unwrap();
+        z.start_file("OEBPS/ch1.xhtml", o).unwrap();
+        z.write_all(xhtml("<script>1</script>").as_bytes()).unwrap();
+        z.finish().unwrap();
+    }
+    assert!(has(&scan(&p), "UNDECLARED_SCRIPTED_CONTENT"));
+}
+
+#[test]
+fn every_javascript_mime_type_and_unknown_types_count_as_executable() {
+    for ty in [
+        "text/jscript.encode",
+        "TEXT/JAVASCRIPT",
+        "text/javascript1.2",
+        "application/x-ecmascript",
+        "text/livescript",
+        "text/x-javascript",
+        "module",
+        "application/javascript; charset=utf-8",
+        "  text/javascript  ",
+        "text/vbscript",
+        "text/x-custom",
+    ] {
+        let r = scan_chapter(&format!(r#"<script type="{ty}">alert(1)</script>"#));
+        assert_eq!(severity_of(&r, "SCRIPT_TAG"), Severity::High, "{ty:?}");
+    }
+    for ty in ["application/json", "application/ld+json", "text/plain", "text/x-handlebars-template", "importmap", "speculationrules"] {
+        let r = scan_chapter(&format!(r#"<script type="{ty}">{{"a":1}}</script>"#));
+        assert_eq!(severity_of(&r, "SCRIPT_TAG"), Severity::Low, "{ty:?}");
+    }
+}
+
+#[test]
+fn markup_hidden_after_cdata_or_odd_comments_is_still_scanned() {
+    for body in [
+        "<![CDATA[ <script>alert(1)</script> ]]>",
+        "<!--> <script>alert(1)</script>",
+        "<!---> <script>alert(1)</script>",
+        "<!-- x --!> <script>alert(1)</script>",
+        "<p>x</p><!-- <script>alert(1)</script>",
+    ] {
+        let r = scan_chapter(body);
+        assert!(has(&r, "SCRIPT_TAG"), "{body}: {:?}", codes(&r));
+    }
+    // 닫히지 않은 주석은 파서마다 해석이 달라 따로 알린다.
+    let r = scan_chapter("<p>x</p><!-- never closed");
+    assert_eq!(severity_of(&r, "MALFORMED_MARKUP"), Severity::Low);
+    // 정상적으로 닫힌 주석은 여전히 숨긴다.
+    assert!(!has(&scan_chapter("<!-- <script>alert(1)</script> --><p>x</p>"), "SCRIPT_TAG"));
+    assert!(!has(&scan_chapter("<!-- a --><p>x</p>"), "MALFORMED_MARKUP"));
 }

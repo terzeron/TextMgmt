@@ -114,7 +114,14 @@ const SCRIPT_MEDIA_TYPES: &[&str] = &[
     "application/java-archive",
     "application/x-bat",
 ];
-const JS_SCRIPT_TYPES: &[&str] = &["", "text/javascript", "application/javascript", "module", "text/ecmascript", "application/ecmascript", "text/jscript", "jscript", "application/x-javascript"];
+/// `<script type>`이 실행되지 않는 데이터 블록인지. 데이터 블록이 아니면 전부 실행 가능으로 본다.
+/// 브라우저가 아는 JavaScript MIME 형식은 길고 구버전 변형(jscript.encode 등)도 있어서, 알려진 형식을
+/// 나열하는 것보다 데이터 블록 쪽을 좁게 정의하는 편이 우회에 강하다.
+fn is_executable_script_type(ty: &str) -> bool {
+    let data = matches!(ty, "application/json" | "text/plain" | "importmap" | "speculationrules") || ty.ends_with("json") || ty.contains("template");
+    !data
+}
+
 const URL_ATTRS: &[&str] = &["href", "src", "action", "formaction", "xlink:href", "background", "poster", "data", "codebase", "manifest", "ping"];
 
 // ---------------------------------------------------------------- 정규식
@@ -246,24 +253,36 @@ fn parse_tag(text: &str, start: usize) -> (Tag, usize) {
 }
 
 /// 태그 목록. 주석·CDATA·선언은 건너뛰고, 닫히지 않은 주석은 나머지를 주석으로 본다(브라우저와 같다).
-fn tokenize(text: &str) -> Vec<Tag> {
+fn tokenize(text: &str) -> (Vec<Tag>, bool) {
     let bytes = text.as_bytes();
     let lower = text.to_ascii_lowercase();
     let mut tags = Vec::new();
+    let mut malformed = false;
     let mut i = 0;
     while let Some(off) = text[i..].find('<') {
         i += off;
         let rest = &text[i..];
         if rest.starts_with("<!--") {
-            match text[i + 4..].find("-->") {
-                Some(e) => i += 4 + e + 3,
-                None => break,
+            // HTML 규칙: `<!-->`와 `<!--->`는 빈 주석이고 `--!>`도 주석을 닫는다. 닫히지 않은 주석은 파서마다
+            // 해석이 달라(XML은 오류, HTML은 나머지 전부 주석) 뒤쪽도 계속 검사한다.
+            let after = &text[i + 4..];
+            if after.starts_with('>') {
+                i += 5;
+            } else if after.starts_with("->") {
+                i += 6;
+            } else {
+                let close = [("-->", 3), ("--!>", 4)].iter().filter_map(|(m, l)| after.find(m).map(|e| (e, *l))).min();
+                match close {
+                    Some((e, l)) => i += 4 + e + l,
+                    None => {
+                        malformed = true;
+                        i += 4;
+                    }
+                }
             }
         } else if rest.starts_with("<![CDATA[") {
-            match text[i..].find("]]>") {
-                Some(e) => i += e + 3,
-                None => break,
-            }
+            // XML에서는 CDATA, HTML에서는 가짜 주석이라 파서마다 안쪽을 다르게 본다. 안쪽도 마크업으로 검사한다.
+            i += 9;
         } else if rest.starts_with("<!") || rest.starts_with("<?") {
             match text[i..].find('>') {
                 Some(e) => i += e + 1,
@@ -284,7 +303,7 @@ fn tokenize(text: &str) -> Vec<Tag> {
             i += 1;
         }
     }
-    tags
+    (tags, malformed)
 }
 
 fn decode_entities(s: &str) -> String {
@@ -382,6 +401,7 @@ fn classify_url(value: &str) -> UrlKind {
 
 #[derive(Default)]
 struct ManifestEntry {
+    media: String,
     scripted: bool,
     remote_resources: bool,
 }
@@ -403,7 +423,10 @@ impl Scanner {
     }
 
     fn partial(&mut self, location: &str, msg: &str) {
-        self.notes.push(safe(&format!("{location}: {msg}")));
+        let note = safe(&format!("{location}: {msg}"));
+        if !self.notes.contains(&note) {
+            self.notes.push(note);
+        }
     }
 
     fn zip_name(&mut self, name: &str) {
@@ -506,7 +529,11 @@ impl Scanner {
     fn scan_html(&mut self, text: &str, name: &str) {
         self.scan_doctype(text, name);
         let mut form_seen = false;
-        for tag in tokenize(text) {
+        let (tags, malformed) = tokenize(text);
+        if malformed {
+            self.add(Severity::Low, "MALFORMED_MARKUP", name, "Unclosed comment");
+        }
+        for tag in tags {
             if tag.closing {
                 continue;
             }
@@ -551,7 +578,7 @@ impl Scanner {
         match t {
             "script" => {
                 let ty = tag.attr("type").map(|v| v.split(';').next().unwrap_or("").trim().to_lowercase()).unwrap_or_default();
-                let js = JS_SCRIPT_TYPES.contains(&ty.as_str());
+                let js = is_executable_script_type(&ty);
                 self.add(if js { Severity::High } else { Severity::Low }, "SCRIPT_TAG", name, &format!("script element type={ty:?}"));
                 if let Some(src) = tag.attr("src") {
                     if matches!(classify_url(src), UrlKind::Remote) {
@@ -619,7 +646,7 @@ impl Scanner {
         }
     }
 
-    fn scan_xml(&mut self, text: &str, name: &str) {
+    fn scan_xml(&mut self, text: &str, name: &str, is_opf: bool) {
         self.scan_doctype(text, name);
         if let Some(m) = XML_STYLESHEET.find(text) {
             let remote = m.as_str().contains("http://") || m.as_str().contains("https://") || m.as_str().contains("href=\"//");
@@ -628,7 +655,7 @@ impl Scanner {
         if text.contains("http://www.w3.org/2001/XInclude") {
             self.add(Severity::Medium, "XINCLUDE", name, "XInclude can pull in other files");
         }
-        if name.to_lowercase().ends_with(".opf") {
+        if is_opf {
             self.scan_opf(text, name);
         }
     }
@@ -654,13 +681,55 @@ impl Scanner {
                     if resolved == ".." || resolved.starts_with("../") || resolved.starts_with('/') {
                         self.add(Severity::High, "MANIFEST_PATH_ESCAPE", name, &format!("manifest href leaves the archive: {href}"));
                     }
-                    self.manifest.insert(resolved, ManifestEntry { scripted: props.contains(&"scripted"), remote_resources: props.contains(&"remote-resources") });
+                    self.manifest.insert(resolved, ManifestEntry { media: media.clone(), scripted: props.contains(&"scripted"), remote_resources: props.contains(&"remote-resources") });
                 }
             }
             if SCRIPT_MEDIA_TYPES.contains(&media.as_str()) {
                 self.add(Severity::Medium, "SCRIPT_MEDIA_TYPE", name, &format!("manifest media-type {media}"));
             }
         }
+    }
+}
+
+/// 내용을 어떻게 읽을지. 선언된 media-type이 있으면 그것을, 없으면 확장자를 따른다(뷰어가 그렇게 한다).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Html,
+    Xml,
+    Css,
+    Js,
+    Other,
+}
+
+impl Kind {
+    /// 마크업(HTML·XML)은 서로 호환된다. 그 밖의 종류가 다르면 선언과 확장자가 어긋난 것이다.
+    fn class(self) -> u8 {
+        match self {
+            Kind::Html | Kind::Xml => 0,
+            Kind::Css => 1,
+            Kind::Js => 2,
+            Kind::Other => 3,
+        }
+    }
+}
+
+fn kind_of_ext(ext: &str) -> Kind {
+    match ext {
+        e if HTML_EXTS.contains(&e) => Kind::Html,
+        e if XML_EXTS.contains(&e) => Kind::Xml,
+        "css" => Kind::Css,
+        "js" | "mjs" => Kind::Js,
+        _ => Kind::Other,
+    }
+}
+
+fn kind_of_media(media: &str) -> Kind {
+    match media {
+        "application/xhtml+xml" | "text/html" | "image/svg+xml" => Kind::Html,
+        "text/css" => Kind::Css,
+        m if SCRIPT_MEDIA_TYPES.contains(&m) && m.contains("script") => Kind::Js,
+        m if m.ends_with("+xml") || m.ends_with("/xml") => Kind::Xml,
+        _ => Kind::Other,
     }
 }
 
@@ -674,6 +743,23 @@ fn read_limited(zip: &mut Zip, index: usize, limit: u64) -> Result<Vec<u8>, Stri
     let mut data = Vec::new();
     entry.take(limit + 1).read_to_end(&mut data).map_err(|e| e.to_string())?;
     Ok(data)
+}
+
+/// 패키지 문서 이름들: `.opf` 확장자이거나 container.xml의 rootfile이 가리키는 파일.
+fn package_documents(zip: &mut Zip, names: &[String], limits: &Limits) -> HashSet<String> {
+    let mut found: HashSet<String> = names.iter().filter(|n| n.to_lowercase().ends_with(".opf")).cloned().collect();
+    if let Some(i) = names.iter().position(|n| n == "META-INF/container.xml")
+        && let Ok(data) = read_limited(zip, i, limits.max_member.min(5 * 1024 * 1024))
+        && let Ok(doc) = roxmltree::Document::parse_with_options(&String::from_utf8_lossy(&data), roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
+    {
+        for root in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "rootfile") {
+            let path = posix_normpath(&unquote(root.attribute("full-path").unwrap_or("")));
+            if names.contains(&path) {
+                found.insert(path);
+            }
+        }
+    }
+    found
 }
 
 fn check_magic(s: &mut Scanner, data: &[u8], name: &str, ext: &str, textual: bool) {
@@ -703,7 +789,7 @@ fn check_magic(s: &mut Scanner, data: &[u8], name: &str, ext: &str, textual: boo
     }
 }
 
-fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits: &Limits, budget: u64) -> u64 {
+fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits: &Limits, budget: u64, opf_names: &HashSet<String>) -> u64 {
     let (size, csize, encrypted, method) = match zip.by_index_raw(index) {
         Ok(f) => (f.size(), f.compressed_size(), f.encrypted(), f.compression()),
         Err(_) => return 0,
@@ -728,11 +814,7 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
         s.add(Severity::Medium, "HIGH_COMPRESSION_RATIO", name, "Potential decompression bomb");
     }
     let data = match read_limited(zip, index, limits.max_member) {
-        Ok(d) if d.len() as u64 <= limits.max_member => d,
-        Ok(_) => {
-            s.partial(name, "Member exceeded read limit");
-            return 0;
-        }
+        Ok(d) => d,
         Err(e) => {
             s.partial(name, &format!("Could not decompress/check CRC: {e}"));
             return 0;
@@ -743,21 +825,27 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
     if EXEC_EXTS.contains(&ext.as_str()) {
         s.add(Severity::High, "EMBEDDED_EXECUTABLE", name, &format!("Executable/script file type: .{ext}"));
     }
-    let is_html = HTML_EXTS.contains(&ext.as_str());
-    let textual = is_html || XML_EXTS.contains(&ext.as_str()) || matches!(ext.as_str(), "js" | "mjs" | "css" | "txt");
-    check_magic(s, &data, name, &ext, textual);
+    let ext_kind = kind_of_ext(&ext);
+    let declared = s.manifest.get(&posix_normpath(name)).map(|e| (e.media.clone(), kind_of_media(&e.media))).filter(|(_, k)| *k != Kind::Other);
+    if let Some((media, k)) = &declared
+        && k.class() != ext_kind.class()
+    {
+        s.add(Severity::Medium, "MEDIA_TYPE_MISMATCH", name, &format!("Declared {media} but the extension is .{ext}"));
+    }
+    let kind = declared.map_or(ext_kind, |(_, k)| k);
+    check_magic(s, &data, name, &ext, kind != Kind::Other || ext == "txt");
 
     let text = String::from_utf8_lossy(&data);
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    match ext.as_str() {
-        _ if is_html => s.scan_html(text, name),
-        "js" | "mjs" => {
+    match kind {
+        Kind::Html => s.scan_html(text, name),
+        Kind::Js => {
             s.add(Severity::Medium, "SCRIPT_FILE", name, "JavaScript member present");
             s.scan_js(text, name);
         }
-        "css" => s.scan_css(text, name),
-        _ if XML_EXTS.contains(&ext.as_str()) => s.scan_xml(text, name),
-        _ => {}
+        Kind::Css => s.scan_css(text, name),
+        Kind::Xml => s.scan_xml(text, name, opf_names.contains(name)),
+        Kind::Other => {}
     }
     data.len() as u64
 }
@@ -811,11 +899,20 @@ pub fn scan_epub(path: &Path, limits: &Limits) -> SecurityReport {
                 s.add(Severity::Medium, "MISSING_CONTAINER_XML", "ZIP", "EPUB META-INF/container.xml missing");
             }
 
+            // 매니페스트를 먼저 읽는다. 선언된 media-type으로 각 멤버를 어떻게 읽을지 정해야 하기 때문이다.
+            let opf_names = package_documents(&mut zip, &names, limits);
+            for (i, name) in names.iter().enumerate() {
+                if opf_names.contains(name)
+                    && let Ok(data) = read_limited(&mut zip, i, limits.max_member)
+                {
+                    s.scan_opf(&String::from_utf8_lossy(&data), name);
+                }
+            }
             for (i, name) in names.iter().enumerate().take(limits.max_files) {
                 if name.ends_with('/') {
                     continue;
                 }
-                inspected += check_member(&mut s, &mut zip, i, name, limits, limits.max_total.saturating_sub(inspected));
+                inspected += check_member(&mut s, &mut zip, i, name, limits, limits.max_total.saturating_sub(inspected), &opf_names);
             }
             if let Some(i) = names.iter().position(|n| n == "mimetype")
                 && let Ok(data) = read_limited(&mut zip, i, 64)

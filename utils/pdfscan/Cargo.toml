@@ -7,3 +7,7 @@ publish.workspace = true
 
 [dependencies]
 lopdf.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile = "3.27.0"

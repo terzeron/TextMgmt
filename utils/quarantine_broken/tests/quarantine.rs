@@ -1,7 +1,7 @@
 //! 손상 문서 격리 도구 테스트 (tests/test_quarantine_broken.py 이식).
 //! 이동은 항상 되돌릴 수 있어야 한다. 판정에 오탐이 섞일 수 있기 때문이다.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -536,4 +536,117 @@ fn no_arguments_and_help_print_purpose_and_usage() {
         }
     }
     assert!(lib.root.join("3_판타지/a.txt").exists());
+}
+
+// ---- 분기 보강 ----
+
+#[test]
+fn cli_parses_inline_values_and_rejects_unknown_options_and_extra_positionals() {
+    let lib = library();
+    let report = report_for(&lib, &["3_판타지/a.txt", "3_판타지/b.txt"]);
+    let inline = [format!("--report={}", report.display()), format!("--library-root={}", lib.root.display()), "--limit=1".to_string()];
+    let refs: Vec<&str> = std::iter::once("plan").chain(inline.iter().map(String::as_str)).collect();
+    let (code, out) = run_cli(&lib, &refs);
+    assert_eq!(code, 0);
+    assert!(out.contains("대상 1건"));
+    assert_eq!(run_cli(&lib, &["plan", "--bogus"]).0, 2);
+    assert_eq!(run_cli(&lib, &["plan", "extra", "more"]).0, 2);
+}
+
+#[test]
+fn plan_prints_none_for_a_missing_likeness() {
+    let lib = library();
+    let report = lib.tmp.join("r.json");
+    fs::write(&report, json!([{"path": lib.root.join("3_판타지/a.txt").to_string_lossy(), "verdict": "corrupted"}]).to_string()).unwrap();
+    let (_, out) = run_cli(&lib, &["plan", "--report", p(&report), "--library-root", p(&lib.root)]);
+    assert!(out.contains("likeness=None"), "{out}");
+}
+
+#[test]
+fn fix_extension_leaves_files_that_already_have_the_right_extension() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, mangled) = binary_pair();
+    let f = dir.path().join("a.hwp");
+    fs::write(&f, &mangled).unwrap();
+    assert!(fix_extension(&f, false).is_none());
+    assert!(f.exists());
+}
+
+#[test]
+fn fix_extension_reports_a_write_failure_and_keeps_the_original() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let (_, mangled) = binary_pair();
+    let f = dir.path().join("책.txt");
+    fs::write(&f, &mangled).unwrap();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+    let res = fix_extension(&f, false);
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(res, Some(FixResult::Error { .. })), "{res:?}");
+    assert!(f.exists());
+}
+
+#[test]
+fn load_corrupted_rejects_reports_without_a_corrupted_list() {
+    let dir = tempfile::tempdir().unwrap();
+    for body in [r#"{"total": 3}"#, r#""text""#, "not json"] {
+        let f = dir.path().join("r.json");
+        fs::write(&f, body).unwrap();
+        assert!(load_corrupted(&f).is_err(), "{body}");
+    }
+    assert!(load_corrupted(&dir.path().join("none.json")).is_err());
+    // 항목이 객체가 아니면 건너뛴다.
+    let f = dir.path().join("mixed.json");
+    fs::write(&f, r#"[1, "x", {"path": "/a"}]"#).unwrap();
+    assert_eq!(load_corrupted(&f).unwrap().len(), 1);
+}
+
+#[test]
+fn plan_skips_records_without_a_path() {
+    let lib = library();
+    let rec = json!({"verdict": "corrupted"}).as_object().unwrap().clone();
+    assert!(plan_moves(&[rec], &lib.root, &quiet).is_empty());
+}
+
+#[test]
+fn copy_fallback_cleans_up_when_the_copy_fails() {
+    let lib = library();
+    let src = lib.root.join("3_판타지/a.txt");
+    let err = copy_then_remove(&src, &lib.tmp.join("no/such/dir/a.txt")).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    assert!(src.exists());
+}
+
+#[test]
+fn move_file_falls_back_to_copy_across_filesystems() {
+    use std::os::unix::fs::MetadataExt;
+    let shm = Path::new("/dev/shm");
+    let lib = library();
+    if !shm.is_dir() || fs::metadata(shm).unwrap().dev() == fs::metadata(&lib.tmp).unwrap().dev() {
+        return; // 다른 파일시스템이 없는 환경에서는 건너뛴다.
+    }
+    let src = lib.root.join("3_판타지/a.txt");
+    let dst = shm.join(format!("qb-{}.txt", std::process::id()));
+    move_file(&src, &dst).unwrap();
+    assert!(!src.exists());
+    assert_eq!(fs::read_to_string(&dst).unwrap(), "3_판타지/a.txt 내용");
+    fs::remove_file(&dst).unwrap();
+}
+
+#[test]
+fn manifest_write_failure_is_logged_but_the_move_is_reported() {
+    let lib = library();
+    let blocker = lib.tmp.join("file");
+    fs::write(&blocker, "x").unwrap();
+    let logged = RefCell::new(Vec::<String>::new());
+    let log = |m: &str| logged.borrow_mut().push(m.to_string());
+    let result = apply_moves(&plan(&lib, &["3_판타지/a.txt"]), &blocker.join("m.json"), false, &log);
+    assert_eq!(result.moved.len(), 1);
+    assert!(logged.borrow().iter().any(|m| m.starts_with("ERROR 매니페스트를 쓰지 못했다")), "{:?}", logged.borrow());
+}
+
+#[test]
+fn summaries_group_thousands_with_commas() {
+    let moves: Vec<Value> = (0..1234).map(|i| json!({"dst": format!("/text/{BROKEN_DIR_NAME}/3_판타지/{i}.txt"), "size": 1})).collect();
+    assert!(summary(&moves).contains("대상 1,234건"));
 }

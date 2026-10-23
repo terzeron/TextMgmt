@@ -232,10 +232,8 @@ pub fn apply_moves_with(moves: &[Rec], manifest_path: &Path, dry_run: bool, log:
             done.push(mv.clone());
             continue;
         }
-        let moved = match dst.parent() {
-            Some(parent) => fs::create_dir_all(parent).and_then(|()| mover(&src, &dst)),
-            None => mover(&src, &dst),
-        };
+        // 부모가 없는 경로는 create_dir_all("")이 그냥 성공한다.
+        let moved = fs::create_dir_all(dst.parent().unwrap_or(Path::new(""))).and_then(|()| mover(&src, &dst));
         match moved {
             Ok(()) => done.push(mv.clone()),
             Err(e) => {
@@ -308,10 +306,7 @@ pub fn undo_moves_with(manifest_path: &Path, dry_run: bool, mover: Mover) -> io:
             restored.push(mv.clone());
             continue;
         }
-        let back = match src.parent() {
-            Some(parent) => fs::create_dir_all(parent).and_then(|()| mover(&dst, &src)),
-            None => mover(&dst, &src),
-        };
+        let back = fs::create_dir_all(src.parent().unwrap_or(Path::new(""))).and_then(|()| mover(&dst, &src));
         match back {
             Ok(()) => restored.push(mv.clone()),
             Err(e) => failed.push(with_error(mv, e.to_string())),

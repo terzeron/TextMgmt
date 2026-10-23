@@ -67,12 +67,11 @@ pub fn resolve_lenient(path: &Path) -> PathBuf {
     let normalized = PathBuf::from(posix_normpath(&abs.to_string_lossy()));
     let mut head = normalized.clone();
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    // 정규화한 절대 경로는 `/`까지 올라가면 반드시 존재하므로 file_name이 없는 경우는 오지 않는다.
     while !head.exists() {
-        let Some(name) = head.file_name().map(|n| n.to_owned()) else { return normalized };
+        let Some(name) = head.file_name().map(|n| n.to_owned()) else { break };
         tail.push(name);
-        if !head.pop() {
-            return normalized;
-        }
+        head.pop();
     }
     let mut resolved = head.canonicalize().unwrap_or(head);
     for name in tail.into_iter().rev() {
@@ -95,8 +94,6 @@ pub fn clean_empty_parent_dirs(parent_dir: &Path, stop_dir: &Path) {
         if !empty || fs::remove_dir(&curr).is_err() {
             break;
         }
-        if !curr.pop() {
-            break;
-        }
+        curr.pop();
     }
 }

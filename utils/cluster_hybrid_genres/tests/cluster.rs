@@ -432,3 +432,91 @@ fn no_arguments_and_help_print_purpose_and_usage_without_running() {
         assert!(!r.out.contains("분석 시작"), "인자가 없으면 분석하지 않는다");
     }
 }
+
+// ---- 분기 보강 ----
+
+#[test]
+fn an_already_tagged_file_name_keeps_its_own_author_tag() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("library");
+    let series = root.join("[부모작가] 시리즈");
+    fs::create_dir_all(&series).unwrap();
+    let f = series.join("[자기작가] 긴 제목.txt");
+    write(&f, "x");
+    assert_eq!(get_effective_filename(&f, &root), "[자기작가] 긴 제목.txt");
+    let g = root.join("제목 없는 부모").join("긴 제목.txt");
+    fs::create_dir_all(g.parent().unwrap()).unwrap();
+    write(&g, "x");
+    assert_eq!(get_effective_filename(&g, &root), "긴 제목.txt");
+}
+
+#[test]
+fn cli_accepts_inline_values_and_unknown_valued_options_exit_2() {
+    let x = dirs();
+    write(&x.src.join("a.txt"), "무협 소림사");
+    let args = [format!("--source-dir={}", x.src.display()), format!("--report={}", x.report.display()), "--limit=1".to_string()];
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    assert_eq!(run_cli(&refs).code, 0);
+    assert_eq!(run_cli(&["--bogus", "value"]).code, 2);
+    assert_eq!(run_cli(&["stray"]).code, 2);
+}
+
+#[test]
+fn parent_directory_components_make_a_path_hidden() {
+    let x = dirs();
+    write(&x.src.join("a.txt"), "무협 소림사");
+    let via_parent = x.src.join("..").join("source");
+    let r = run_cli(&["--source-dir", via_parent.to_str().unwrap(), "--report", x.report.to_str().unwrap()]);
+    assert!(r.out.contains("총 0권"), "{}", r.out);
+}
+
+#[test]
+fn a_file_already_in_its_target_category_is_left_alone() {
+    let x = dirs();
+    let text = "소림사 무당파 화산파 장문인 내공 진기 운기조식 강호 무림맹 ".repeat(20);
+    let dest = x.lib.join("3_무협");
+    fs::create_dir_all(&dest).unwrap();
+    write(&dest.join("제자리.txt"), &text);
+    let r = run_cli(&["--source-dir", p(&dest), "--library-root", p(&x.lib), "--auto-move-pure", "--report", p(&x.report)]);
+    assert_eq!(r.code, 0);
+    assert!(r.out.contains("신규 이동: 0권, 중복 정리: 0권"));
+    assert!(dest.join("제자리.txt").exists());
+}
+
+#[test]
+fn unmatched_score_mixes_fall_into_the_misc_cluster() {
+    // 무협 2, 여성향 2, 판타지 1: 어느 하이브리드 규칙에도, 60% 준확실에도 걸리지 않는다.
+    let res = calculate_5_genre_scores_and_ratios("제목", "무협 무림 로맨스 남주 던전");
+    assert_eq!((res.cluster.as_str(), res.target_cat), ("기타_복합", None));
+}
+
+#[test]
+fn text_extraction_ignores_other_extensions_and_handles_crlf_and_long_heads() {
+    let d = tempfile::tempdir().unwrap();
+    let pdf = d.path().join("a.pdf");
+    fs::write(&pdf, b"%PDF").unwrap();
+    assert_eq!(extract_content_head_tail_words(&pdf, 10, 10), "");
+
+    // CRLF와 단독 CR, 250줄을 넘는 앞부분, 청크 경계의 CR.
+    let crlf = d.path().join("crlf.txt");
+    let body: String = (0..300).map(|i| format!("무협 강호의 소림사 {i}\r\n")).collect();
+    fs::write(&crlf, &body).unwrap();
+    assert!(extract_content_head_tail_words(&crlf, 5000, 5000).contains("소림사 0"));
+
+    let cr = d.path().join("cr.txt");
+    let body: String = (0..300).map(|i| format!("무협 강호의 소림사 {i}\r")).collect();
+    fs::write(&cr, &body).unwrap();
+    assert!(extract_content_head_tail_words(&cr, 5000, 5000).contains("소림사 0"));
+
+    let edge = d.path().join("edge.txt");
+    let mut raw = "가".repeat(10).into_bytes();
+    raw.extend(vec![b'x'; 64 * 1024 - raw.len() - 1]);
+    raw.extend("\r\n무협 강호의 소림사\n".as_bytes());
+    fs::write(&edge, raw).unwrap();
+    assert!(extract_content_head_tail_words(&edge, 50, 50).contains("소림사"));
+
+    // 4MB를 넘는 한 줄은 읽기 상한에서 멈춘다.
+    let huge = d.path().join("huge.txt");
+    fs::write(&huge, format!("무협 소림사 {}", "x".repeat(5 * 1024 * 1024))).unwrap();
+    assert!(extract_content_head_tail_words(&huge, 5, 5).contains("소림사"));
+}
