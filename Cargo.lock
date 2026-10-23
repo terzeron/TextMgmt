@@ -912,27 +912,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "doc_reader"
-version = "0.1.0"
-dependencies = [
- "corpus_common",
- "ego-tree",
- "encoding_rs",
- "flate2",
- "hwp3_parser",
- "isbn",
- "lopdf",
- "parser_timeout",
- "pyfmt",
- "regex",
- "roxmltree",
- "scraper",
- "serde_json",
- "tempfile",
- "zip",
-]
-
-[[package]]
 name = "docker_credential"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1911,25 +1890,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
 
 [[package]]
-name = "loader"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "corpus_common",
- "corpus_layout",
- "doc_reader",
- "es_client",
- "file_time",
- "isbn",
- "lopdf",
- "parser_timeout",
- "serde_json",
- "stat",
- "tempfile",
- "zip",
-]
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2132,7 +2092,6 @@ dependencies = [
  "bookstore",
  "chrono",
  "fancy-regex",
- "pyfmt",
  "serde_json",
  "tempfile",
  "unicode-normalization",
@@ -2533,7 +2492,6 @@ name = "pyfmt"
 version = "0.1.0"
 dependencies = [
  "serde_json",
- "unicode-general-category",
 ]
 
 [[package]]
@@ -3596,12 +3554,6 @@ name = "unicode-bidi"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
-
-[[package]]
-name = "unicode-general-category"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b993bddc193ae5bd0d623b49ec06ac3e9312875fdae725a975c51db1cc1677f"
 
 [[package]]
 name = "unicode-ident"
