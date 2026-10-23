@@ -1,0 +1,20 @@
+[package]
+name = "classify_books_client"
+description = "tm_dev REST API로 도서 자동 분류를 요청하고 진행 상태를 지켜본다 (utils/classify_books_client.py의 REST 모드 대응)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "bin"
+path = "../../tests/rust/classify_books_client/bin.rs"
+
+[[test]]
+name = "client"
+path = "../../tests/rust/classify_books_client/client.rs"
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+ureq.workspace = true

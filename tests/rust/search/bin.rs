@@ -6,6 +6,25 @@ fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_search"))
 }
 
+/// 머리와 Content-Length만큼의 본문을 모두 읽는다. 머리와 본문이 따로 도착해도 안전하다.
+fn read_request(stream: &mut std::net::TcpStream) -> String {
+    use std::io::Read;
+    let mut data = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut chunk).unwrap();
+        data.extend_from_slice(&chunk[..n]);
+        let text = String::from_utf8_lossy(&data).into_owned();
+        if let Some((head, body)) = text.split_once("\r\n\r\n") {
+            let wanted = head.lines().find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap())).unwrap_or(0);
+            if body.len() >= wanted {
+                return text;
+            }
+        }
+        assert!(n > 0, "요청이 끝나기 전에 연결이 닫혔다");
+    }
+}
+
 #[test]
 fn no_arguments_print_the_usage_and_exit_zero() {
     let out = bin().output().unwrap();
@@ -23,15 +42,13 @@ fn missing_environment_variables_exit_255() {
 
 #[test]
 fn a_title_search_runs_end_to_end_against_a_mock_server() {
-    use std::io::{Read, Write};
+    use std::io::Write;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
         for _ in 0..2 {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buf = vec![0u8; 8192];
-            let n = stream.read(&mut buf).unwrap();
-            let head = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let head = read_request(&mut stream);
             let body = if head.starts_with("GET / ") {
                 r#"{"version": {}}"#.to_string()
             } else {

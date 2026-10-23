@@ -15,7 +15,7 @@ docs/       문서
 
 | crate | 용도 | 대응 Python |
 | --- | --- | --- |
-| `corpus_common` | 본문 표본 읽기, 인코딩 판별, ZIP 열기(`open_zip`), 경로·URL 도구, 병렬 풀 | `backend/classifier/reader.py` 일부 |
+| `corpus_common` | 본문 표본 읽기, 인코딩 판별, ZIP 열기(`open_zip`), 경로·URL 도구, 빈 디렉토리 청소(`clean_empty_parent_dirs`), 병렬 풀 | `backend/classifier/reader.py` 일부 |
 | `corpus_layout` | 색인 제외 디렉토리 상수 | `utils/corpus_layout.py` |
 | `es_client` | Elasticsearch REST 클라이언트(http 전용): 검색, 갱신, 조회, 삭제 | `backend/es_manager.py` 일부 |
 | `htmlkit` | HTML 토큰화와 BeautifulSoup 호환 텍스트 추출 | (bs4) |
@@ -37,6 +37,10 @@ docs/       문서
 | `cluster_hybrid_genres` | 5대 장르 비율 클러스터링 | 삭제함 |
 | `search` | ES 제목·내용 검색 점검 | 삭제함 |
 | `update` | ES 갱신·조회·삭제 점검(`update run` 필요) | `utils/update.py` 유지 |
+| `move_semi_clusters` | 준확실 클러스터 도서를 장르 폴더로 이동(`run`, `--dry-run`) | `utils/move_semi_clusters.py` 유지 |
+| `classify_books_client` | REST API로 자동 분류 요청·진행 감시(`--api-url`). 로컬 엔진 직접 모드는 미이식 | `utils/classify_books_client.py` 유지 |
+| `reload_samgukji_epubs` | `2_소설역사`의 삼국지 EPUB 나열(`--list`)·loader 재적재(`--apply`) | `utils/reload_samgukji_epubs.sh` 유지 |
+| `normalize_comic_directories` | 만화 디렉토리 이름 정규화. 서점 조회는 캐시 전용(`SKIP_NOT_CACHED`) | `utils/normalize_comic_directories.py` 유지 |
 
 ## 규칙
 

@@ -21,18 +21,35 @@ fn run_without_the_environment_exits_255_before_touching_anything() {
     assert!(String::from_utf8(out.stderr).unwrap().contains("TM_ES_BOOK_INDEX"));
 }
 
+/// 머리와 Content-Length만큼의 본문을 모두 읽는다. 머리와 본문이 따로 도착해도 안전하다.
+fn read_request(stream: &mut std::net::TcpStream) -> String {
+    use std::io::Read;
+    let mut data = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut chunk).unwrap();
+        data.extend_from_slice(&chunk[..n]);
+        let text = String::from_utf8_lossy(&data).into_owned();
+        if let Some((head, body)) = text.split_once("\r\n\r\n") {
+            let wanted = head.lines().find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap())).unwrap_or(0);
+            if body.len() >= wanted {
+                return text;
+            }
+        }
+        assert!(n > 0, "요청이 끝나기 전에 연결이 닫혔다");
+    }
+}
+
 /// 요청 줄만 보고 ES처럼 답하는 서버. 요청 수만큼 연결을 받는다.
 fn mock_es(requests: usize) -> (String, std::thread::JoinHandle<Vec<String>>) {
-    use std::io::{Read, Write};
+    use std::io::Write;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let handle = std::thread::spawn(move || {
         let mut seen = Vec::new();
         for _ in 0..requests {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buf = vec![0u8; 8192];
-            let n = stream.read(&mut buf).unwrap();
-            let head = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let head = read_request(&mut stream);
             let line = head.lines().next().unwrap().to_owned();
             let body = if line.starts_with("GET / ") {
                 r#"{"version": {"number": "8.0.0"}}"#

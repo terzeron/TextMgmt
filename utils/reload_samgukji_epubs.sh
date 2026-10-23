@@ -4,7 +4,7 @@ set -euo pipefail
 
 mode="${1:---list}"
 if [[ "$#" -gt 1 || ( "$mode" != "--list" && "$mode" != "--apply" ) ]]; then
-    echo "Usage: bash scripts/reload_samgukji_epubs.sh [--list|--apply]" >&2
+    echo "Usage: bash utils/reload_samgukji_epubs.sh [--list|--apply]" >&2
     exit 2
 fi
 
@@ -34,4 +34,4 @@ if [[ "$mode" == "--apply" ]]; then
     # 개별 파일 인자는 기존 문서도 강제 재적재한다. 디렉토리 전체를 넘기지 않는다.
     exec uv run --no-sync python -m utils.loader book "${files[@]}"
 fi
-echo "재적재: bash scripts/reload_samgukji_epubs.sh --apply"
+echo "재적재: bash utils/reload_samgukji_epubs.sh --apply"

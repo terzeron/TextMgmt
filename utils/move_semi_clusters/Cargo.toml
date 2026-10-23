@@ -1,0 +1,22 @@
+[package]
+name = "move_semi_clusters"
+description = "준확실 클러스터 도서를 대상 장르 폴더로 옮긴다 (utils/move_semi_clusters.py의 Rust 대응)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "bin"
+path = "../../tests/rust/move_semi_clusters/bin.rs"
+
+[[test]]
+name = "mover"
+path = "../../tests/rust/move_semi_clusters/mover.rs"
+
+[dependencies]
+corpus_common = { path = "../../libs/corpus_common" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"

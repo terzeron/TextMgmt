@@ -203,6 +203,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "classify_books_client"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "cluster_hybrid_genres"
 version = "0.1.0"
 dependencies = [
@@ -921,6 +930,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "move_semi_clusters"
+version = "0.1.0"
+dependencies = [
+ "corpus_common",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "multiversion_no_op"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -945,6 +963,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df9761775871bdef83bee530e60050f7e54b1105350d6884eb0fb4f46c2f9405"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "normalize_comic_directories"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "fancy-regex",
+ "serde_json",
+ "tempfile",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -1153,6 +1182,13 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "reload_samgukji_epubs"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "roxmltree"
