@@ -29,6 +29,7 @@ from backend.es_manager import ESManager
 from backend.cover_browse import latest_rank, merge_cover_page, pick_representative, plan_cover_scope
 from backend.cover_status import CoverStatusCache, has_official_cover
 from backend.book import Book
+from backend.image_edit import ImageCropError, crop_pil
 from backend.book_classifier import BookClassifierService, clean_empty_parent_dirs
 from utils.corpus_layout import IGNORED_DIR_NAMES
 
@@ -2985,8 +2986,6 @@ class BookManager:
         쪽 크기도 같은 비율로 줄인다. 지원하지 않는 구조면 아무것도 바꾸지 않고 ValueError 를 던진다.
         JPEG 은 원본 양자화 테이블·서브샘플링을 그대로 써서 재압축 손실을 줄인다.
         """
-        import math
-
         import pikepdf
         from PIL import Image, JpegImagePlugin
 
@@ -3033,9 +3032,6 @@ class BookManager:
             if "/SMask" in image or "/Mask" in image or "/Decode" in image or bool(image.get("/ImageMask", False)):
                 raise unsupported("지원하지 않는 이미지 색상 구성")
 
-        x0, y0, x1, y1, angle = rect
-        if not all(math.isfinite(v) for v in rect) or not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1) or abs(angle) > 360:
-            raise unsupported("크롭 영역이 쪽 밖이거나 비어 있음")
         if is_jpeg:
             source = Image.open(io.BytesIO(image.read_raw_bytes()))
         else:
@@ -3053,31 +3049,11 @@ class BookManager:
             width, height = source.size
             if width != int(image.Width) or height != int(image.Height):
                 raise unsupported("이미지 크기 불일치")
-            if abs(angle) < 0.01:
-                left, top, right, bottom = round(x0 * width), round(y0 * height), round(x1 * width), round(y1 * height)
-                out_w, out_h = right - left, bottom - top
-            else:
-                out_w, out_h = round((x1 - x0) * width), round((y1 - y0) * height)
-            if out_w < BookManager.MIN_CROP_PIXELS or out_h < BookManager.MIN_CROP_PIXELS:
-                raise unsupported("크롭 영역이 너무 작음")
-            if abs(angle) < 0.01:
-                cropped = source.crop((left, top, right, bottom))
-            else:
-                theta = math.radians(angle)
-                cos_t, sin_t = math.cos(theta), math.sin(theta)
-                center_x, center_y = (x0 + x1) / 2 * width, (y0 + y1) / 2 * height
-                half_w, half_h = out_w / 2, out_h / 2
-                for sign_x, sign_y in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
-                    corner_x = center_x + cos_t * sign_x * half_w - sin_t * sign_y * half_h
-                    corner_y = center_y + sin_t * sign_x * half_w + cos_t * sign_y * half_h
-                    if not (-1.5 <= corner_x <= width + 1.5 and -1.5 <= corner_y <= height + 1.5):
-                        raise unsupported("기울어진 크롭 영역이 쪽 밖으로 나감")
-                # 출력 픽셀 (x, y) → 원본 좌표: 박스 중심을 기준으로 angle 만큼 돌린 위치
-                coefficients = (cos_t, -sin_t, center_x - cos_t * half_w + sin_t * half_h, sin_t, cos_t, center_y - sin_t * half_w - cos_t * half_h)
-                # 1비트 이미지는 보간할 수 없으므로 8비트 회색으로 올려서 돌린다
-                rotating = source.convert("L") if source.mode == "1" else source
-                fill = 255 if rotating.mode == "L" else (255, 255, 255)
-                cropped = rotating.transform((out_w, out_h), Image.Transform.AFFINE, coefficients, resample=Image.Resampling.BICUBIC, fillcolor=fill)
+            try:
+                cropped = crop_pil(source, rect, min_pixels=BookManager.MIN_CROP_PIXELS)
+            except ImageCropError as exc:
+                raise unsupported(str(exc)) from None
+            out_w, out_h = cropped.size
             if is_jpeg:
                 # JPEG 은 원본 양자화 테이블·서브샘플링을 그대로 써서 재압축 손실을 줄인다.
                 save_args: dict[str, Any] = {"format": "JPEG", "qtables": source.quantization, "progressive": bool(source.info.get("progressive"))}
@@ -3252,6 +3228,21 @@ class BookManager:
         if not image_data and not url:
             return None, "이미지 URL이 비어 있습니다"
         return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.insert_illustration(relative, revision, before_idref, url=url, image_data=image_data, **backup))
+
+    async def edit_epub_images(self, book_id: int, crops: list[dict[str, Any]], splits: list[dict[str, Any]], deletes: list[dict[str, Any]], inserts: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, str | None]:
+        """EPUB 쪽 이미지의 크롭·분할·삭제·삽입을 한 번에 저장한다: (결과, 오류 메시지).
+
+        crops: [{idref, index, x0, y0, x1, y1, angle}], splits: [{idref, index, first, second}], deletes: [{idref, index}],
+        (index 는 쪽 안 이미지의 문서 순서, 기본 0)
+        inserts: [{before_idref, url | image_data}]. 저장 절차는 표지와 같다(백업·색인 갱신·캐시 무효화).
+        """
+
+        def rect(entry: dict[str, Any]) -> Rect:
+            return (entry["x0"], entry["y0"], entry["x1"], entry["y1"], entry.get("angle", 0.0))
+
+        crop_args = [{"idref": c["idref"], "index": c.get("index", 0), "rect": rect(c)} for c in crops]
+        split_args = [{"idref": s["idref"], "index": s.get("index", 0), "first": rect(s["first"]), "second": rect(s["second"])} for s in splits]
+        return await self._change_epub_cover(book_id, lambda service, relative, revision, backup: service.edit_images(relative, revision, crops=crop_args, splits=split_args, deletes=deletes, inserts=inserts, **backup))
 
     async def remove_epub_cover(self, book_id: int) -> tuple[dict[str, Any] | None, str | None]:
         """EPUB 표지를 읽기 순서에서 뺀다: (결과, 오류 메시지). 본문과 공유하는 이미지는 보존한다."""

@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from backend.auth import require_admin
 from backend.book import Book
 from backend.cover_sources import STORES, STORE_HOSTS, FetchCancelled, StoreBlocked, StoreGate, blocked_status, check_cancelled, fetch_bytes, search_candidates, store_lock, request_cancelled
-from backend.epub_cover import CoverError, MAX_IMAGE_BYTES, add_cover, add_illustration, inspect_epub, normalize_image, remove_cover, revision
+from backend.epub_cover import CoverError, MAX_IMAGE_BYTES, add_cover, add_illustration, edit_images, inspect_epub, normalize_image, remove_cover, revision
 from backend.direct_cover_url import fetch_url_image
 from utils.corpus_layout import IGNORED_DIR_NAMES
 
@@ -335,6 +335,27 @@ class CoverManagement:
             result = add_illustration(path, data, expected_revision, backup_dir or self.root / ".cover_backups", before_idref, backup_name=backup_name)
             return self._finish_save(relative, result, expected_revision)
 
+    def edit_images(self, relative: str, expected_revision: str, *, crops: list[dict[str, Any]], splits: list[dict[str, Any]], deletes: list[dict[str, Any]], inserts: list[dict[str, Any]], backup_dir: Path | None = None, backup_name: str | None = None) -> dict[str, Any]:
+        """쪽 이미지를 한 번에 크롭·분할·삭제·삽입한다. inserts 는 [{before_idref, url | image_data(base64)}]. 표지 저장과 같은 잠금·백업·캐시 무효화를 쓴다."""
+        path = self.resolve(relative)
+        relative = str(path.relative_to(self.root))
+        decoded: list[tuple[str, bytes | None, str]] = []
+        for entry in inserts:
+            data = None
+            if entry.get("image_data"):
+                try:
+                    data = base64.b64decode(entry["image_data"], validate=True)
+                except (binascii.Error, ValueError) as exc:
+                    raise CoverError("삽화 이미지 데이터를 읽을 수 없습니다") from exc
+            url = (entry.get("url") or "").strip()
+            if data is None and not url:
+                raise CoverError("이미지 URL이 비어 있습니다")
+            decoded.append((entry["before_idref"], data, url))
+        with self._book_lock(relative, exclusive=True):
+            images = [(before, data if data is not None else self._download_image(url)) for before, data, url in decoded]
+            result = edit_images(path, expected_revision, backup_dir or self.root / ".cover_backups", crops=crops, splits=splits, deletes=deletes, inserts=images, backup_name=backup_name)
+            return self._finish_save(relative, result, expected_revision)
+
     def apply_image(self, relative: str, image_data: str, expected_revision: str, *, backup_dir: Path | None = None, backup_name: str | None = None) -> dict[str, Any]:
         path = self.resolve(relative)
         relative = str(path.relative_to(self.root))
@@ -389,6 +410,8 @@ class CoverManagement:
             response["warning"] = result["warning"]
         if result.get("idref"):
             response["idref"] = result["idref"]
+        if result.get("idrefs"):
+            response["idrefs"] = result["idrefs"]
         return response
 
     def preview(self, relative: str, *, original: bool = False, width: int | None = None) -> bytes:

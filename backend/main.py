@@ -472,6 +472,33 @@ class EpubIllustrationModel(ImageSourceModel):
     before_idref: str = Field(min_length=1, max_length=256)  # 이 spine 항목 앞에 삽화를 넣는다
 
 
+class EpubPageRef(BaseModel):
+    idref: str = Field(min_length=1, max_length=256)  # 편집할 spine 항목
+    index: int = Field(default=0, ge=0, le=10000)  # 그 쪽 안 이미지의 문서 순서
+
+
+class EpubCropModel(PdfRectModel, EpubPageRef):
+    pass
+
+
+class EpubSplitModel(EpubPageRef):
+    first: PdfRectModel
+    second: PdfRectModel
+
+
+class EpubInsertModel(ImageSourceModel):
+    before_idref: str = Field(min_length=1, max_length=256)
+
+
+class EpubImagesModel(BaseModel):
+    """EPUB 쪽 이미지의 크롭·분할·삭제·삽입을 한 번에 저장한다."""
+
+    crops: list[EpubCropModel] = Field(default=[], max_length=500)
+    splits: list[EpubSplitModel] = Field(default=[], max_length=500)
+    deletes: list[EpubPageRef] = Field(default=[], max_length=500)
+    inserts: list[EpubInsertModel] = Field(default=[], max_length=100)
+
+
 class PdfDeletePagesModel(BaseModel):
     pages: list[int] = []
     crops: list[PdfCropModel] = []
@@ -757,6 +784,20 @@ def create_item_router(manager, content_type: str = "book") -> APIRouter:
     async def insert_epub_illustration(book_id: int, body: EpubIllustrationModel) -> dict[str, Any]:
         LOGGER.debug("# insert_epub_illustration(book_id=%d, before=%r, url=%r)", book_id, body.before_idref, body.url or "<upload>")
         result, error = await manager.insert_epub_illustration(book_id, body.before_idref, body.url, body.image_data)
+        if error is None:
+            return {"status": "success", "result": result}
+        return {"status": "failure", "error": error}
+
+    @router.post("/epub-images/{book_id}", dependencies=admin_dep)
+    async def edit_epub_images(book_id: int, body: EpubImagesModel) -> dict[str, Any]:
+        LOGGER.debug("# edit_epub_images(book_id=%d, crops=%d, splits=%d, deletes=%d, inserts=%d)", book_id, len(body.crops), len(body.splits), len(body.deletes), len(body.inserts))
+        result, error = await manager.edit_epub_images(
+            book_id,
+            [c.model_dump() for c in body.crops],
+            [s.model_dump() for s in body.splits],
+            [d.model_dump() for d in body.deletes],
+            [i.model_dump() for i in body.inserts],
+        )
         if error is None:
             return {"status": "success", "result": result}
         return {"status": "failure", "error": error}
