@@ -11,7 +11,8 @@ publish = false
 [workspace.dependencies]
 lopdf = "0.46"
 serde_json = "1"
-ureq = { version = "3.5", default-features = false, features = ["rustls", "json"] }
+# 내부망 http 전용이라 TLS 기능을 켜지 않는다.
+ureq = { version = "3.5", default-features = false, features = ["json"] }
 
 [profile.release]
 opt-level = 3

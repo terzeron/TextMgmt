@@ -1,12 +1,12 @@
 //! Elasticsearch REST 클라이언트. `backend/es_manager.py`의 `ESManager` 중 검색 부분의 이식.
 //!
+//! 통신은 내부망 http 전용이다(TLS 미지원).
 //! 접속 정보는 환경변수 `TM_ES_BOOK_INDEX`, `TM_ES_URL`, `TM_ES_USER`, `TM_ES_PASSWORD`에서 읽는다.
 
 use std::fmt;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use ureq::tls::TlsConfig;
 
 /// 목록 응답에 필요한 필드만 받는다. summary는 단건 조회에만 쓴다(원본 `LIST_SOURCE_FIELDS`).
 pub const LIST_SOURCE_FIELDS: [&str; 11] = ["category", "title", "author", "file_path", "file_type", "file_size", "line_count", "page_count", "isbn", "created_time", "updated_time"];
@@ -82,11 +82,8 @@ fn base64(input: &[u8]) -> String {
 
 impl EsClient {
     pub fn new(url: &str, user: &str, password: &str, index: &str) -> Self {
-        let mut builder = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).http_status_as_error(false);
-        if url.to_lowercase().starts_with("https") {
-            // ECK 자체서명 인증서: 전송 구간은 TLS로 암호화하되 인증서 검증은 생략한다.
-            builder = builder.tls_config(TlsConfig::builder().disable_verification(true).build());
-        }
+        // 내부망 http로만 통신한다. TLS 기능을 빌드에 넣지 않았으므로 https 주소는 요청 시 오류가 난다.
+        let builder = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).http_status_as_error(false);
         EsClient { agent: builder.build().into(), base: url.trim_end_matches('/').to_owned(), auth: format!("Basic {}", base64(format!("{user}:{password}").as_bytes())), index: index.to_owned() }
     }
 

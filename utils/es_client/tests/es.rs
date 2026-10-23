@@ -176,9 +176,10 @@ fn from_env_reports_the_first_missing_variable() {
 }
 
 #[test]
-fn https_urls_build_a_client_that_skips_certificate_verification() {
-    // ECK 자체서명 인증서: 전송 구간은 TLS로 암호화하되 검증은 생략한다. 생성만 확인한다.
-    let _ = EsClient::new("https://es.example:9200", "u", "p", "books");
+fn https_urls_are_rejected_because_tls_is_not_built_in() {
+    // 내부망 http 전용이다. 인증서 검증을 끄는 우회로를 두지 않고 요청 단계에서 거부한다.
+    let err = EsClient::new("https://127.0.0.1:1", "u", "p", "books").search(json!({}), 10, None).unwrap_err();
+    assert!(matches!(err, EsError::Transport(_)), "{err}");
 }
 
 #[test]
