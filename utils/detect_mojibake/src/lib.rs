@@ -21,8 +21,8 @@
 //! 빠지고, 국한문 혼용은 한글이 정상이라 likeness가 높게 나온다.
 
 pub mod cli;
-pub mod epub;
 pub mod reader;
+pub mod util;
 
 use std::collections::BTreeSet;
 use std::io::{self, Write};
@@ -37,7 +37,6 @@ use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-pub use epub::{EPUB_ISSUES, EpubResult, inspect_epub_structure};
 pub use reader::{MIN_SYLLABLES_FOR_LIKENESS, korean_likeness};
 
 pub const DEFAULT_LIBRARY_ROOT: &str = "/mnt/data/text";
@@ -112,7 +111,7 @@ fn round4(x: f64) -> f64 {
     py_round(x, 4)
 }
 
-fn round1(x: f64) -> f64 {
+pub fn round1(x: f64) -> f64 {
     py_round(x, 1)
 }
 
@@ -150,7 +149,7 @@ pub fn inspect_file(path_str: &str) -> FileResult {
     };
     FileResult {
         path: path_str.into(),
-        category: Some(epub::category_of(path)),
+        category: Some(util::category_of(path)),
         verdict: verdict.into(),
         likeness: likeness.map(round4),
         size: Some(size),
@@ -168,7 +167,7 @@ static SLUG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^\w.-]+").unwra
 /// 라이브러리 밖은 디렉토리 이름을 쓴다.
 pub fn default_report_path(kind: &str, root: &Path, repo_root: &Path) -> PathBuf {
     let abs = if root.is_absolute() { root.to_path_buf() } else { std::env::current_dir().unwrap_or_default().join(root) };
-    let root = PathBuf::from(epub::posix_normpath(&abs.to_string_lossy()));
+    let root = PathBuf::from(util::posix_normpath(&abs.to_string_lossy()));
     let parts: Vec<String> = match root.strip_prefix(DEFAULT_LIBRARY_ROOT) {
         Ok(rel) => rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect(),
         Err(_) => vec![root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()],
@@ -232,22 +231,11 @@ pub struct ScanReport {
     pub undetermined: Vec<FileResult>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EpubReport {
-    pub scanned_at: String,
-    pub root: String,
-    pub total: usize,
-    pub flagged_count: usize,
-    pub counts: IndexMap<String, usize>,
-    pub elapsed_sec: f64,
-    pub flagged: Vec<EpubResult>,
-}
-
-fn now_iso() -> String {
+pub fn now_iso() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
 }
 
-fn thousands(n: usize) -> String {
+pub fn thousands(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
@@ -259,11 +247,11 @@ fn thousands(n: usize) -> String {
     out
 }
 
-fn pool(workers: usize) -> rayon::ThreadPool {
+pub fn pool(workers: usize) -> rayon::ThreadPool {
     rayon::ThreadPoolBuilder::new().num_threads(workers.max(1)).build().expect("thread pool")
 }
 
-fn limited(mut files: Vec<PathBuf>, limit: usize) -> Vec<PathBuf> {
+pub fn limited(mut files: Vec<PathBuf>, limit: usize) -> Vec<PathBuf> {
     if limit > 0 {
         files.truncate(limit);
     }
@@ -328,38 +316,6 @@ pub fn scan(root: &Path, opts: &ScanOptions, log: Log) -> ScanReport {
         unreadable: pick(VERDICT_UNREADABLE),
         undetermined: pick(VERDICT_UNDETERMINED),
     }
-}
-
-/// 라이브러리의 EPUB 구조를 훑어 문제가 있는 파일 목록을 모은다.
-pub fn scan_epub_structure(root: &Path, workers: usize, limit: usize, log: Log) -> EpubReport {
-    let files = limited(list_library_files(root).into_iter().filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("epub"))).collect(), limit);
-    log(&format!("INFO EPUB {}건, 워커 {}개", thousands(files.len()), workers));
-
-    let started = Instant::now();
-    let results: Vec<EpubResult> = pool(workers).install(|| files.par_iter().map(|p| inspect_epub_structure(&p.to_string_lossy())).collect());
-
-    let flagged: Vec<EpubResult> = results.iter().filter(|r| !r.issues.is_empty()).cloned().collect();
-    let counts = EPUB_ISSUES.iter().map(|code| (code.to_string(), flagged.iter().filter(|r| r.issues.iter().any(|i| i == code)).count())).collect();
-    EpubReport {
-        scanned_at: now_iso(),
-        root: root.to_string_lossy().into_owned(),
-        total: results.len(),
-        flagged_count: flagged.len(),
-        counts,
-        elapsed_sec: round1(started.elapsed().as_secs_f64()),
-        flagged,
-    }
-}
-
-pub fn print_epub_structure_summary(report: &EpubReport, out: &mut dyn Write) -> io::Result<()> {
-    let total = report.total.max(1) as f64;
-    writeln!(out, "\nEPUB {}건 검사 / {:.1}분, 문제 {}건 ({:.2}%)", thousands(report.total), report.elapsed_sec / 60.0, thousands(report.flagged_count), report.flagged_count as f64 / total * 100.0)?;
-    for (code, n) in &report.counts {
-        if *n > 0 {
-            writeln!(out, "  {code:<22}{:>8}", thousands(*n))?;
-        }
-    }
-    Ok(())
 }
 
 pub fn print_summary(report: &ScanReport, out: &mut dyn Write) -> io::Result<()> {

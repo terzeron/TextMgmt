@@ -418,3 +418,17 @@ fn py_float_matches_python_repr() {
     assert_eq!(py_float(66.7), "66.7");
     assert_eq!(py_float(0.0), "0.0");
 }
+
+// ---- 사용법 ----
+
+#[test]
+fn no_arguments_and_help_print_purpose_and_usage_without_running() {
+    for argv in [&[][..], &["--help"], &["-h"]] {
+        let r = run_cli(argv);
+        assert_eq!(r.code, 0, "{argv:?}");
+        for needle in ["cluster_hybrid_genres", "장르", "사용법:", "--source-dir", "--library-root", "--limit", "--auto-move-pure", "--move-hybrids-to", "--clean-existing", "--report"] {
+            assert!(r.out.contains(needle), "{needle} 없음: {}", r.out);
+        }
+        assert!(!r.out.contains("분석 시작"), "인자가 없으면 분석하지 않는다");
+    }
+}

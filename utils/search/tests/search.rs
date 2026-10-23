@@ -116,3 +116,14 @@ fn python_repr_of_values() {
     assert_eq!(py_repr(&json!(2.0)), "2.0");
     assert_eq!(py_repr(&json!("tab\there\\")), "'tab\\there\\\\'");
 }
+
+#[test]
+fn usage_explains_the_purpose_and_every_argument() {
+    let es = Dummy::default();
+    let (_, out) = go(&[], &es);
+    for needle in ["검색", "<title>", "<content>", "<ext>", "<size>", "TM_ES_URL", "TM_ES_BOOK_INDEX"] {
+        assert!(out.contains(needle), "{needle} 없음: {out}");
+    }
+    assert_eq!(go(&["--help"], &es).1, out);
+    assert!(es.title_calls.borrow().is_empty());
+}

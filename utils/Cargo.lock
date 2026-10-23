@@ -394,6 +394,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "epubscan"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "detect_mojibake",
+ "encoding_rs",
+ "fancy-regex",
+ "indexmap",
+ "rayon",
+ "regex",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

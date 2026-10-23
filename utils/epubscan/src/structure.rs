@@ -1,18 +1,26 @@
-//! EPUB 구조 검사: epubcheck는 통과시키지만 뷰어가 렌더링하지 못하는 구조를 찾는다.
+//! EPUB 구조 검사: epubscan이 하는 일 중 "뷰어가 렌더링하지 못하는 구조"를 찾는 부분.
+//! (원래 `detect_mojibake epub-structure`였고 `epubscan structure`로 옮겼다.)
 //!
 //! epubcheck는 XML 규격만 보므로 `<html:html>`처럼 접두사가 붙은 본문도 통과시키지만 뷰어의
 //! 정제기는 이를 거부한다. 단 bad_mimetype은 표준 위반일 뿐 뷰어를 깨뜨리지 않는다.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
+use std::io::{self, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::LazyLock;
+use std::time::Instant;
 
 use indexmap::IndexMap;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use zip::CompressionMethod;
+
+use detect_mojibake::reader::{Zip, open_zip};
+use detect_mojibake::util::{category_of, posix_dirname, posix_join, posix_normpath, unquote};
+use detect_mojibake::{Log, limited, list_library_files, now_iso, pool, round1, thousands};
+use rayon::prelude::*;
 
 pub const EPUB_MIMETYPE: &[u8] = b"application/epub+zip";
 pub const ISSUE_NOT_ZIP: &str = "not_zip";
@@ -26,8 +34,6 @@ pub const ISSUE_SPINE_MEMBER_MISSING: &str = "spine_member_missing";
 pub const ISSUE_PREFIXED_ROOT: &str = "prefixed_root";
 pub const EPUB_ISSUES: [&str; 9] =
     [ISSUE_NOT_ZIP, ISSUE_BAD_MIMETYPE, ISSUE_NO_CONTAINER, ISSUE_OPF_MISSING, ISSUE_MEMBER_UNREADABLE, ISSUE_SCAN_ERROR, ISSUE_OPF_UNPARSABLE, ISSUE_SPINE_MEMBER_MISSING, ISSUE_PREFIXED_ROOT];
-
-use crate::reader::{Zip, open_zip};
 
 /// 루트 태그는 파일 앞부분에 있다. DOCTYPE 내부 선언(<!ELEMENT)과 주석은 건너뛴다.
 const ROOT_TAG_HEAD_BYTES: usize = 4096;
@@ -52,68 +58,6 @@ pub struct EpubResult {
 }
 
 // ---- posixpath / urllib 대응 ----
-
-pub fn posix_normpath(path: &str) -> String {
-    if path.is_empty() {
-        return ".".into();
-    }
-    let initial = if path.starts_with("//") && !path.starts_with("///") { 2 } else { usize::from(path.starts_with('/')) };
-    let mut comps: Vec<&str> = Vec::new();
-    for c in path.split('/') {
-        if c.is_empty() || c == "." {
-            continue;
-        }
-        if c != ".." || (initial == 0 && comps.is_empty()) || comps.last() == Some(&"..") {
-            comps.push(c);
-        } else if !comps.is_empty() {
-            comps.pop();
-        }
-    }
-    let joined = format!("{}{}", "/".repeat(initial), comps.join("/"));
-    if joined.is_empty() { ".".into() } else { joined }
-}
-
-fn posix_join(a: &str, b: &str) -> String {
-    if b.starts_with('/') || a.is_empty() {
-        b.to_owned()
-    } else if a.ends_with('/') {
-        format!("{a}{b}")
-    } else {
-        format!("{a}/{b}")
-    }
-}
-
-/// `posixpath.dirname`: 마지막 '/'까지에서 끝의 '/'를 걷어낸다. 루트 슬래시만 남으면 유지한다.
-fn posix_dirname(p: &str) -> String {
-    let Some(i) = p.rfind('/') else { return String::new() };
-    let head = &p[..=i];
-    let trimmed = head.trim_end_matches('/');
-    if trimmed.is_empty() { head.to_owned() } else { trimmed.to_owned() }
-}
-
-/// `urllib.parse.unquote`: 퍼센트 인코딩을 풀고 잘못된 UTF-8은 U+FFFD로 바꾼다.
-pub fn unquote(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%'
-            && i + 2 < b.len()
-            && let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2]))
-        {
-            out.push(h * 16 + l);
-            i += 3;
-            continue;
-        }
-        out.push(b[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn hex(c: u8) -> Option<u8> {
-    (c as char).to_digit(16).map(|d| d as u8)
-}
 
 // ---- ZIP 읽기 ----
 
@@ -230,15 +174,6 @@ fn check_epub_members(zip: &mut Zip, root_tag: &dyn Fn(&[u8]) -> Option<String>,
     }
 }
 
-/// 분류 경로(`DEFAULT_LIBRARY_ROOT` 아래 첫 구간). 밖이면 빈 문자열.
-pub fn category_of(path: &Path) -> String {
-    let root = Path::new(crate::DEFAULT_LIBRARY_ROOT);
-    if !path.to_string_lossy().starts_with(crate::DEFAULT_LIBRARY_ROOT) {
-        return String::new();
-    }
-    path.strip_prefix(root).ok().and_then(|p| p.components().next()).map(|c| c.as_os_str().to_string_lossy().into_owned()).unwrap_or_default()
-}
-
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     payload.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown".into())
 }
@@ -272,4 +207,47 @@ pub fn inspect_epub_structure_with(path_str: &str, root_tag: &dyn Fn(&[u8]) -> O
 /// EPUB 한 건의 구조를 검사한다. issues는 중복 없는 코드 목록이고 examples는 코드별 첫 사례 멤버다.
 pub fn inspect_epub_structure(path_str: &str) -> EpubResult {
     inspect_epub_structure_with(path_str, &root_tag_name)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpubReport {
+    pub scanned_at: String,
+    pub root: String,
+    pub total: usize,
+    pub flagged_count: usize,
+    pub counts: IndexMap<String, usize>,
+    pub elapsed_sec: f64,
+    pub flagged: Vec<EpubResult>,
+}
+
+/// 라이브러리의 EPUB 구조를 훑어 문제가 있는 파일 목록을 모은다.
+pub fn scan_epub_structure(root: &Path, workers: usize, limit: usize, log: Log) -> EpubReport {
+    let files = limited(list_library_files(root).into_iter().filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("epub"))).collect(), limit);
+    log(&format!("INFO EPUB {}건, 워커 {}개", thousands(files.len()), workers));
+
+    let started = Instant::now();
+    let results: Vec<EpubResult> = pool(workers).install(|| files.par_iter().map(|p| inspect_epub_structure(&p.to_string_lossy())).collect());
+
+    let flagged: Vec<EpubResult> = results.iter().filter(|r| !r.issues.is_empty()).cloned().collect();
+    let counts = EPUB_ISSUES.iter().map(|code| (code.to_string(), flagged.iter().filter(|r| r.issues.iter().any(|i| i == code)).count())).collect();
+    EpubReport {
+        scanned_at: now_iso(),
+        root: root.to_string_lossy().into_owned(),
+        total: results.len(),
+        flagged_count: flagged.len(),
+        counts,
+        elapsed_sec: round1(started.elapsed().as_secs_f64()),
+        flagged,
+    }
+}
+
+pub fn print_epub_structure_summary(report: &EpubReport, out: &mut dyn Write) -> io::Result<()> {
+    let total = report.total.max(1) as f64;
+    writeln!(out, "\nEPUB {}건 검사 / {:.1}분, 문제 {}건 ({:.2}%)", thousands(report.total), report.elapsed_sec / 60.0, thousands(report.flagged_count), report.flagged_count as f64 / total * 100.0)?;
+    for (code, n) in &report.counts {
+        if *n > 0 {
+            writeln!(out, "  {code:<22}{:>8}", thousands(*n))?;
+        }
+    }
+    Ok(())
 }

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::{DEFAULT_LIBRARY_ROOT, FixResult, Log, Rec, apply_moves, fix_extension, load_corrupted, plan_moves, summarize, undo_moves};
+use crate::{BROKEN_DIR_NAME, DEFAULT_LIBRARY_ROOT, FixResult, Log, Rec, apply_moves, fix_extension, load_corrupted, plan_moves, summarize, undo_moves};
 
 const USAGE: &str = "usage: quarantine_broken {plan,move,undo,fix-ext} [--report REPORT] [--library-root LIBRARY_ROOT] [--manifest MANIFEST] [--limit LIMIT] [--exclude EXCLUDE] [--dry-run]";
 
@@ -80,10 +80,14 @@ fn py_str(v: Option<&Value>) -> String {
 
 /// 진입점. 종료 코드를 돌려준다. `repo_root`는 기본 리포트·매니페스트 위치(`<repo>/tmp`)의 기준이다.
 pub fn run(argv: &[String], repo_root: &Path, out: &mut dyn Write, log: Log) -> i32 {
+    if argv.is_empty() {
+        let _ = print_usage(out);
+        return 0;
+    }
     let args = match parse(argv) {
         Ok(Some(a)) => a,
         Ok(None) => {
-            let _ = writeln!(out, "{USAGE}");
+            let _ = print_usage(out);
             return 0;
         }
         Err(msg) => {
@@ -172,4 +176,39 @@ fn execute(args: &Args, repo_root: &Path, out: &mut dyn Write, log: Log) -> io::
             Ok(0)
         }
     }
+}
+
+/// 인자 없이 실행하거나 `-h`/`--help`를 주면 프로그램의 용도와 인자·옵션을 보여 준다.
+pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
+    write!(
+        out,
+        "quarantine_broken - 인코딩이 손상된 문서를 {BROKEN_DIR_NAME} 디렉토리로 격리하고 되돌린다.
+
+검사 리포트(detect_mojibake의 JSON)에서 손상 판정만 골라 원래 카테고리를 하위 디렉토리로
+유지한 채 옮긴다. 판정에 오탐이 섞일 수 있어 이동은 매니페스트에 기록하고 `undo`로 복구한다.
+
+사용법:
+  quarantine_broken plan    [--report PATH] [--library-root DIR] [--limit N] [--exclude TEXT ...]
+  quarantine_broken move    [--report PATH] [--library-root DIR] [--manifest PATH] [--limit N] [--exclude TEXT ...] [--dry-run]
+  quarantine_broken undo    [--manifest PATH] [--dry-run]
+  quarantine_broken fix-ext [--report PATH] [--dry-run]
+
+명령:
+  plan     무엇을 옮길지 요약만 출력한다. 파일은 그대로다.
+  move     격리하고 매니페스트를 남긴다. 처음에는 --limit 2로 표본만 옮겨 확인한다.
+  undo     매니페스트 기준으로 원위치시킨다.
+  fix-ext  UTF-16LE로 읽혀 저장된 바이너리(HWP·PDF·PNG)를 원래 바이트와 확장자로 되돌린다.
+
+옵션:
+  --report PATH        검사 리포트 (기본 <repo>/tmp/mojibake_recheck.json)
+  --library-root DIR   코퍼스 루트 (기본 {DEFAULT_LIBRARY_ROOT})
+  --manifest PATH      이동 기록 (기본 <repo>/tmp/quarantine_manifest.json)
+  --limit N            앞에서 N건만 처리한다 (0이면 전체).
+  --exclude TEXT       파일명에 이 문자열이 있으면 제외한다. 여러 번 지정할 수 있다.
+  --dry-run            실제로 옮기거나 고치지 않고 결과만 보여 준다.
+  -h, --help           이 도움말
+
+종료 코드: 0 정상, 1 실행 오류, 2 잘못된 인자
+"
+    )
 }

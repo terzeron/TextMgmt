@@ -389,8 +389,40 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn usage() -> ExitCode {
-    eprintln!("usage: pdfscan [--json] [--max-bytes N] <file-or-dir>...");
+/// 인자 없이 실행하거나 `-h`/`--help`를 주면 프로그램의 용도와 인자·옵션을 보여 준다.
+fn print_usage(out: &mut dyn std::io::Write) -> std::io::Result<()> {
+    write!(
+        out,
+        "pdfscan - PDF 정적 위험 검사. 렌더링하거나 스크립트를 실행하지 않고 객체 구조만 본다.
+
+PDF 뷰어·편집기에서 임의의 명령을 실행할 여지가 있는 요소(Launch, JavaScript, OpenAction, /AA,
+첨부 파일, 외부 연결 등)를 찾는다. PDF 파싱 자체가 공격면이므로 신뢰할 수 없는 파일은
+권한 없는 샌드박스에서 검사한다.
+
+사용법:
+  pdfscan [--json] [--max-bytes N] <file-or-dir>...
+
+인자:
+  <file-or-dir>   검사할 PDF 파일 또는 디렉토리 (여러 개 가능, 디렉토리는 하위까지 훑는다)
+
+옵션:
+  --json          결과를 JSON으로 출력한다.
+  --max-bytes N   이보다 큰 파일은 검사하지 않고 INCOMPLETE로 표시한다 (기본 {DEFAULT_MAX_BYTES})
+  -h, --help      이 도움말
+
+종료 코드: 0 지표 없음, 1 지표 있음, 2 검사하지 못한 파일이 있고 지표는 없음 또는 잘못된 인자
+"
+    )
+}
+
+/// 인자가 없거나 도움말을 요청했는가.
+fn usage_requested(args: &[String]) -> bool {
+    args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help")
+}
+
+/// 잘못된 인자일 때 stderr에 쓰는 한 줄 사용법이다.
+fn bad_usage() -> ExitCode {
+    eprintln!("usage: pdfscan [--json] [--max-bytes N] <file-or-dir>...  (자세한 설명: pdfscan --help)");
     ExitCode::from(2)
 }
 
@@ -399,20 +431,24 @@ fn main() -> ExitCode {
     let mut max_bytes = DEFAULT_MAX_BYTES;
     let mut inputs: Vec<PathBuf> = Vec::new();
 
-    let mut args = std::env::args().skip(1);
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if usage_requested(&argv) {
+        let _ = print_usage(&mut std::io::stdout());
+        return ExitCode::SUCCESS;
+    }
+    let mut args = argv.into_iter();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--json" => json = true,
             "--max-bytes" => match args.next().and_then(|v| v.parse().ok()) {
                 Some(n) => max_bytes = n,
-                None => return usage(),
+                None => return bad_usage(),
             },
-            "-h" | "--help" => return usage(),
             _ => inputs.push(PathBuf::from(a)),
         }
     }
     if inputs.is_empty() {
-        return usage();
+        return bad_usage();
     }
 
     let mut files = Vec::new();
@@ -450,6 +486,31 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn usage_is_requested_for_no_arguments_and_help_flags() {
+        assert!(usage_requested(&args(&[])));
+        assert!(usage_requested(&args(&["-h"])));
+        assert!(usage_requested(&args(&["--help"])));
+        assert!(usage_requested(&args(&["a.pdf", "--help"])));
+        assert!(!usage_requested(&args(&["a.pdf"])));
+        assert!(!usage_requested(&args(&["--json", "a.pdf"])));
+    }
+
+    #[test]
+    fn print_usage_explains_purpose_arguments_options_and_exit_codes() {
+        let mut out = Vec::new();
+        print_usage(&mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        for needle in ["pdfscan", "PDF", "사용법:", "<file-or-dir>", "--json", "--max-bytes", "-h, --help", "종료 코드", "Launch", "JavaScript"] {
+            assert!(text.contains(needle), "{needle} 없음: {text}");
+        }
+        assert!(text.contains(&DEFAULT_MAX_BYTES.to_string()));
+    }
 
     #[test]
     fn json_str_escapes_c0_and_c1_controls() {

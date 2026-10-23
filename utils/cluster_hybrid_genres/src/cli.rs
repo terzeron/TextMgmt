@@ -117,10 +117,14 @@ fn ratio_str(r: &GenreResult) -> String {
 
 /// 진입점. 종료 코드를 돌려준다.
 pub fn run(argv: &[String], out: &mut dyn Write) -> i32 {
+    if argv.is_empty() {
+        let _ = print_usage(out);
+        return 0;
+    }
     let args = match parse(argv) {
         Ok(Some(a)) => a,
         Ok(None) => {
-            let _ = writeln!(out, "{USAGE}");
+            let _ = print_usage(out);
             return 0;
         }
         Err(msg) => {
@@ -255,4 +259,34 @@ fn print_report(clusters: &IndexMap<String, Vec<(GenreResult, Item)>>, total: us
         writeln!(out, "  ▶ {c}: {}권", clusters[c].len())?;
     }
     Ok(())
+}
+
+/// 인자 없이 실행하거나 `-h`/`--help`를 주면 프로그램의 용도와 인자·옵션을 보여 준다.
+pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
+    write!(
+        out,
+        "cluster_hybrid_genres - 장르별 단어 빈도 비율로 도서를 클러스터링한다.
+
+본문 처음 500단어·마지막 500단어와 제목을 합쳐 무협·판타지·여성향·BL·성인 어휘의 비율을 재고,
+확실한 클러스터는 자동 분류 대상으로, 하이브리드는 사람이 검토할 목록으로 보고한다.
+인자 없이 실행하면 이 도움말만 출력하고 분석하지 않는다.
+
+사용법:
+  cluster_hybrid_genres [--source-dir DIR] [--library-root DIR] [--limit N]
+                        [--auto-move-pure] [--move-hybrids-to CATEGORY]
+                        [--clean-existing] [--report PATH]
+
+옵션:
+  --source-dir DIR          분석할 디렉토리 (기본 /mnt/data/text/0_telegram)
+  --library-root DIR        이동 대상 코퍼스 루트 (기본 /mnt/data/text)
+  --limit N                 앞에서 N건만 처리한다 (0이면 전체).
+  --auto-move-pure          확실한 클러스터(비율 75% 이상)를 해당 카테고리로 옮긴다.
+  --move-hybrids-to CAT     하이브리드 클러스터를 지정한 카테고리로 옮긴다 (예: 3_판타지).
+  --clean-existing          대상에 같은 이름이 있으면 원본을 지운다 (항상 켜져 있다).
+  --report PATH             리포트 경로 (기본 /mnt/data/text/hybrid_clustering_report.json)
+  -h, --help                이 도움말
+
+종료 코드: 0 정상, 1 실행 오류, 2 잘못된 인자
+"
+    )
 }

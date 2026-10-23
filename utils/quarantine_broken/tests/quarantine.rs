@@ -515,11 +515,25 @@ fn cli_help_and_bad_arguments() {
     let lib = library();
     assert_eq!(run_cli(&lib, &["--help"]).0, 0);
     assert_eq!(run_cli(&lib, &["bogus"]).0, 2);
-    assert_eq!(run_cli(&lib, &[]).0, 2);
     assert_eq!(run_cli(&lib, &["plan", "--limit", "x"]).0, 2);
 }
 
 #[test]
 fn rec_is_a_json_map() {
     let _: Rec = Map::new();
+}
+
+// ---- 사용법 ----
+
+#[test]
+fn no_arguments_and_help_print_purpose_and_usage() {
+    let lib = library();
+    for argv in [&[][..], &["--help"], &["-h"]] {
+        let (code, out) = run_cli(&lib, argv);
+        assert_eq!(code, 0, "{argv:?}");
+        for needle in ["quarantine_broken", "격리", "사용법:", "plan", "move", "undo", "fix-ext", "--report", "--library-root", "--manifest", "--limit", "--exclude", "--dry-run"] {
+            assert!(out.contains(needle), "{needle} 없음: {out}");
+        }
+    }
+    assert!(lib.root.join("3_판타지/a.txt").exists());
 }
