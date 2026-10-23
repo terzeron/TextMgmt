@@ -759,12 +759,16 @@ impl Default for SearchHooks {
 }
 
 impl SearchHooks {
-    /// 서점별 세션을 만드는 함수를 바꾼다. 주입한 세션은 호출자가 신뢰하는 것으로 보고 URL 검증(`validate`)을 통과시킨다.
-    /// 검증을 다시 켜려면 이 뒤에 `with_validate`를 부른다.
+    /// 서점별 세션을 만드는 함수를 바꾼다. URL 검증(SSRF 방어)은 그대로 둔다.
+    /// 검증을 끄거나 바꾸려면 `with_validate`로 명시해야 한다.
     pub fn with_session_factory(mut self, factory: SessionFactory) -> Self {
         self.session_factory = factory;
-        self.validate = Arc::new(|_store, url| Ok(url.to_string()));
         self
+    }
+
+    /// 이 설정으로 URL을 검증한다. 허용하면 정규화한 URL을, 막으면 `ValueError`를 돌려준다.
+    pub fn validate(&self, store: &str, url: &str) -> Result<String, ValueError> {
+        (self.validate)(store, url)
     }
 
     pub fn with_client_factory(mut self, store: &str, factory: impl Fn() -> Box<dyn StoreClient> + Send + Sync + 'static) -> Self {

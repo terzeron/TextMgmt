@@ -122,14 +122,38 @@ fn session_factory(respond: impl Fn(&str, &str) -> Vec<u8> + Send + Sync + 'stat
     Arc::new(move |store| Arc::new(BodySession { store: store.to_string(), respond: respond.clone() }) as Arc<dyn HttpSession>)
 }
 
+/// 테스트용 URL 검증: 스킴·호스트·사설 IP 규칙은 그대로 돌리고 DNS 조회만 공인 IP를 돌려주는 가짜로 바꾼다.
+fn validate_with_fake_dns(store: &str, url: &str) -> Result<String, backend::cover_sources::ValueError> {
+    backend::cover_sources::validate_url_with(store, url, &|_host, _port| Ok(vec!["93.184.216.34".parse().unwrap()]))
+}
+
+/// 검증을 명시적으로 끈다. 서점 허용 목록 밖의 호스트(`image.example.org`)를 가짜 세션으로 받는 테스트만 쓴다.
+/// 세션 주입(`with_session_factory`)은 검증을 끄지 않으므로, 끄는 곳이 테스트 본문에 드러나야 한다.
+fn skip_validation(_store: &str, url: &str) -> Result<String, backend::cover_sources::ValueError> {
+    Ok(url.to_string())
+}
+
+#[test]
+fn test_injecting_a_session_does_not_turn_off_url_validation() {
+    // 세션을 바꿔 끼우는 것과 SSRF 방어를 끄는 것은 별개다. 검증을 끄려면 `with_validate`로 명시해야 한다.
+    let hooks = SearchHooks::default().with_session_factory(session_factory(|_store, _url| Vec::new()));
+    for url in ["http://127.0.0.1/cover.jpg", "http://169.254.169.254/latest/meta-data", "http://10.0.0.5/a", "file:///etc/passwd"] {
+        assert!(hooks.validate("yes24", url).is_err(), "내부·비HTTP 주소가 통과했다: {url}");
+    }
+    let opted_out = hooks.with_validate(|_store, url| Ok(url.to_string()));
+    assert_eq!(opted_out.validate("yes24", "http://127.0.0.1/cover.jpg").unwrap(), "http://127.0.0.1/cover.jpg");
+}
+
 /// 요청 URL을 모으는 가짜 세션. 응답 본문은 `body`로 고정한다.
 fn recording_fetch(body: &'static str) -> (SearchHooks, Arc<Mutex<Vec<String>>>) {
     let seen = Arc::new(Mutex::new(Vec::<String>::new()));
     let sink = seen.clone();
-    let hooks = SearchHooks::default().with_session_factory(session_factory(move |_store, url| {
-        sink.lock().unwrap().push(url.to_string());
-        body.as_bytes().to_vec()
-    }));
+    let hooks = SearchHooks::default()
+        .with_session_factory(session_factory(move |_store, url| {
+            sink.lock().unwrap().push(url.to_string());
+            body.as_bytes().to_vec()
+        }))
+        .with_validate(validate_with_fake_dns);
     (hooks, seen)
 }
 
@@ -384,7 +408,7 @@ fn test_all_store_search_flows_with_local_fixtures() {
                 "naver" => r#"<a class="bookListItem_info_top"><img alt="책" src="https://image.example.org/a"></a>"#.as_bytes().to_vec(),
                 _ => r#"<html><a href="/books/1">책</a><meta property="og:image" content="https://image.example.org/a">검색</html>"#.as_bytes().to_vec(),
             }
-        }));
+        })).with_validate(skip_validation);
         let result = search_candidates_with(store, &json!({"title": "검색 제목", "isbn": "1234567890"}), &hooks).unwrap();
         assert_eq!(result["status"], "success", "store={store}");
         assert_eq!(result["candidates"][0]["title"], "책", "store={store}");
@@ -408,7 +432,7 @@ fn test_empty_and_blocked_search_closes_session() {
         let client = MockClient::new(false, true);
         let shared = client.clone();
         let hooks =
-            SearchHooks::default().with_client_factory("yes24", move || Box::new(SharedClient(shared.clone()))).with_session_factory(session_factory(move |_store, _url| html.as_bytes().to_vec()));
+            SearchHooks::default().with_client_factory("yes24", move || Box::new(SharedClient(shared.clone()))).with_session_factory(session_factory(move |_store, _url| html.as_bytes().to_vec())).with_validate(skip_validation);
         if status == "error" {
             assert!(matches!(search_candidates_with("yes24", &json!({"title": "책"}), &hooks), Err(SearchError::Value(_))), "html={html}");
         } else {
