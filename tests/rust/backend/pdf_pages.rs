@@ -2,26 +2,8 @@
 //!
 //! get_pdf_pages 메서드 및 /pdf-pages/ 엔드포인트 단위 테스트. Docker/ES 없이 mock 기반이다.
 //!
-//! 가정한 API (docs/rust-test-seams.md 3.2, 3.5, 3.11, 3.12):
-//! - `BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>) -> BookManagerDeps` (인자 순서는 (path, es))
-//!   - `.with_fs(Arc<dyn FsOps>)`: `Path.is_file` 바꿔치기. 구 `with_is_file`. 테스트는 `common::faulty_fs::FaultyFs::set_is_file`로 오류를 낸다
-//!   - `.with_pdf_cache_limits(PdfCacheLimits)`: 구 클래스 상수 `PDF_READER_CACHE_MAX_*`와 `set_pdf_reader_cache_limits` 가드
-//!   - `.with_pdf_opener(Arc<dyn PdfOpener>)`: 구 `with_open_pdf_observer`. 열기 횟수를 세는 대역으로 대신한다
-//! - `BookManager::with_deps(BookManagerDeps) -> BookManager`, `BookManager::get_pdf_pages(&self, book_id: i64, start: i64, end: i64) -> BookResponse`
-//!   - `BookManager`는 `BookManagerApi`를 구현한다(`with_book_manager(Arc<dyn BookManagerApi>)`에 `Arc<BookManager>`를 넘긴다)
-//! - `backend::book_manager::BookResponse { status_code: u16, media_type: Option<String>, headers: Vec<(String, String)>, body: Vec<u8> }`와
-//!   `fn header(&self, name: &str) -> Option<&str>` (대소문자 무시). 구 `PdfPagesResponse`
-//! - 인스턴스 소유 캐시(구 클래스 수준 정적 캐시): `BookManager::pdf_cache(&self) -> &PdfReaderCache`
-//!   - 문서가 정한 것: `clear()`, `contains(&Path) -> bool`, `len() -> usize`, `entry_sizes() -> Vec<u64>`
-//!   - 문서에 없어 가정한 것: `clear_page_counts()`, `page_count_contains(&Path, SystemTime) -> bool`, `max_bytes() -> u64` (구 `pdf_reader_cache_max_bytes()`)
-//!   - `BookManager::get_cached_pdf_reader(&self, &Path) -> std::io::Result<(Arc<PdfReader>, usize)>` (구 정적 함수를 인스턴스 메서드로 가정)
-//!   - 인스턴스마다 캐시가 따로라 테스트끼리 간섭하지 않는다. 구 `serial()` 잠금과 `set_pdf_reader_cache_limits` 가드는 없앴다
-//! - `backend::pdf::PdfCacheLimits { max_file_bytes: Option<u64>, max_bytes: Option<u64>, max_entries: Option<usize> }` (`Default`)
-//! - `backend::main::{app_with, AppDeps, AuthMode}`: `app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(Arc<dyn BookManagerApi>))`. 구 `app_with_book_manager`
-//! - `backend::auth::create_jwt_token(email, role, name: Option<&str>, picture: Option<&str>) -> String` (4인자로 고정)
-//! - 공용 도구: `common::es_fake::FakeEsManager`, `common::faulty_fs::FaultyFs`, `common::pdf::{make_blank_pdf, page_count_bytes}`
-//!
-//! Python의 모듈 범위 fixture(공유 임시 디렉터리)는 테스트마다 새 디렉터리로 바꿨다. 각 테스트가 자기 파일만 쓴다.
+//! 실제 PDF fixture로 페이지 범위·캐시 예산·디스크 캐시 재사용을 검증한다.
+//! HTTP 테스트는 같은 BookManager를 AppDeps에 주입한다.
 
 mod common;
 
@@ -29,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::main::{AppDeps, AuthMode, app_with};
@@ -40,6 +22,16 @@ use common::faulty_fs::FaultyFs;
 use common::pdf::{make_blank_pdf, page_count_bytes};
 use serde_json::{Value, json};
 use tempfile::TempDir;
+
+trait ResponseExt {
+    fn header(&self, name: &str) -> Option<&str>;
+}
+
+impl ResponseExt for backend::main::BookResponse {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str())
+    }
+}
 
 /// `create_test_pdf`
 fn create_test_pdf(num_pages: usize, output_path: &Path) {
@@ -207,6 +199,57 @@ mod test_get_pdf_pages {
 
 mod test_pdf_pages_endpoint {
     use super::*;
+    use backend::main::{CategoryMappingApi, MappingError};
+
+    struct HiddenCategories;
+
+    impl CategoryMappingApi for HiddenCategories {
+        fn get_hidden_categories(&self, content_type: &str) -> Result<Vec<String>, MappingError> {
+            Ok(if content_type == "book" { vec!["test_category".into()] } else { vec![] })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_authentication_precedes_input_validation() {
+        let e = env();
+        let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(e.bm.clone())));
+        for path in ["/pdf-pages/1", "/pdf-pages/invalid?start=bad", "/comics/pdf-pages/1"] {
+            assert_eq!(client.get(path).await.status, 401);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_invalid_integer_returns_422() {
+        let (client, _e) = setup_client();
+        for path in ["/pdf-pages/invalid", "/pdf-pages/1?start=no", "/pdf-pages/1?end=no"] {
+            assert_eq!(client.get(path).await.status, 422);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_viewer_hidden_category_and_descendants_are_forbidden() {
+        let e = env();
+        let deps = AppDeps::new(AuthMode::AuthOnly(json!({"role":"viewer"}))).with_book_manager(e.bm.clone()).with_category_mapping(Arc::new(HiddenCategories));
+        let client = TestClient::with_app(app_with(deps));
+        for category in ["test_category", "test_category/child"] {
+            e.es.with(|state| state.default_doc.as_mut().unwrap()["category"] = json!(category));
+            let response = client.get("/pdf-pages/1").await;
+            assert_eq!(response.status, 403);
+            assert_eq!(response.json()["detail"], "접근 권한이 없는 카테고리입니다.");
+        }
+        e.es.with(|state| state.default_doc.as_mut().unwrap()["category"] = json!("test_category_other"));
+        assert_eq!(client.get("/pdf-pages/1").await.status, 200);
+    }
+
+    #[tokio::test]
+    async fn test_comics_uses_comic_manager_and_category_policy() {
+        let e = env();
+        let deps = AppDeps::new(AuthMode::AuthOnly(json!({"role":"viewer"}))).with_comics_manager(e.bm.clone()).with_category_mapping(Arc::new(HiddenCategories));
+        let client = TestClient::with_app(app_with(deps));
+        let response = client.get("/comics/pdf-pages/1?start=2&end=3").await;
+        assert_eq!(response.status, 200);
+        assert_eq!(page_count_bytes(&response.body), 2);
+    }
 
     /// 라우터 클로저가 캡처한 manager의 내부 속성을 패치하는 fixture를 `AppDeps::with_book_manager`로 대신한다.
     fn setup_client() -> (TestClient, Env) {
@@ -257,10 +300,6 @@ mod test_pdf_pages_endpoint {
 mod test_pdf_reader_cache_budget {
     use super::*;
 
-    fn mtime(path: &Path) -> SystemTime {
-        fs::metadata(path).unwrap().modified().unwrap()
-    }
-
     /// 파일당 상한을 넘는 PDF 는 reader 를 캐시하지 않는다 (페이지 수만 캐시).
     #[test]
     fn test_large_pdf_reader_not_cached() {
@@ -272,13 +311,13 @@ mod test_pdf_reader_cache_budget {
         });
         let pdf = e.temp_dir.join("test_category").join("budget_large.pdf");
 
-        let (reader, total_pages) = e.bm.get_cached_pdf_reader(&pdf).unwrap();
+        let (reader, total_pages) = e.bm._get_cached_pdf_reader(&pdf);
 
         assert_eq!(total_pages, 3);
         assert!(Arc::strong_count(&reader) >= 1); // reader 자체는 정상 반환되어야 한다
-        assert!(!e.bm.pdf_cache().contains(&pdf)); // 그러나 보관하지 않는다
+        assert!(!e.bm.pdf_cache().contains(&pdf.to_string_lossy())); // 그러나 보관하지 않는다
         // 페이지 수는 int 하나라 비용이 없으므로 항상 캐시한다
-        assert!(e.bm.pdf_cache().page_count_contains(&pdf, mtime(&pdf)));
+        assert!(e.bm.page_count_cache().contains(&(pdf.to_string_lossy().into_owned(), common::fsx::mtime_key(&pdf))));
     }
 
     #[test]
@@ -291,9 +330,9 @@ mod test_pdf_reader_cache_budget {
         });
         let pdf = e.temp_dir.join("test_category").join("budget_small.pdf");
 
-        let (reader1, _) = e.bm.get_cached_pdf_reader(&pdf).unwrap();
-        assert!(e.bm.pdf_cache().contains(&pdf));
-        let (reader2, _) = e.bm.get_cached_pdf_reader(&pdf).unwrap();
+        let (reader1, _) = e.bm._get_cached_pdf_reader(&pdf);
+        assert!(e.bm.pdf_cache().contains(&pdf.to_string_lossy()));
+        let (reader2, _) = e.bm._get_cached_pdf_reader(&pdf);
         assert!(Arc::ptr_eq(&reader1, &reader2)); // 같은 객체를 재사용 (재파싱 없음)
     }
 
@@ -318,14 +357,14 @@ mod test_pdf_reader_cache_budget {
         }
 
         for p in &pdfs {
-            e.bm.get_cached_pdf_reader(p).unwrap();
+            e.bm._get_cached_pdf_reader(p);
         }
 
         assert_eq!(e.bm.pdf_cache().len(), 2);
-        assert!(!e.bm.pdf_cache().contains(&pdfs[0])); // 가장 오래된 것이 축출
-        assert!(e.bm.pdf_cache().contains(&pdfs[2]));
-        let total: u64 = e.bm.pdf_cache().entry_sizes().iter().sum();
-        assert!(total <= e.bm.pdf_cache().max_bytes());
+        assert!(!e.bm.pdf_cache().contains(&pdfs[0].to_string_lossy())); // 가장 오래된 것이 축출
+        assert!(e.bm.pdf_cache().contains(&pdfs[2].to_string_lossy()));
+        let total: u64 = pdfs.iter().filter(|p| e.bm.pdf_cache().contains(&p.to_string_lossy())).map(|p| fs::metadata(p).unwrap().len()).sum();
+        assert!(total <= e.bm.pdf_cache().limits().max_bytes.unwrap());
     }
 
     #[test]
@@ -334,7 +373,7 @@ mod test_pdf_reader_cache_budget {
         let pdf = e.temp_dir.join("test_category").join("budget_mtime.pdf");
         create_test_pdf(2, &pdf);
 
-        let (reader1, pages1) = e.bm.get_cached_pdf_reader(&pdf).unwrap();
+        let (reader1, pages1) = e.bm._get_cached_pdf_reader(&pdf);
         assert_eq!(pages1, 2);
 
         create_test_pdf(4, &pdf); // 내용 교체
@@ -342,23 +381,27 @@ mod test_pdf_reader_cache_budget {
         let times = fs::FileTimes::new().set_accessed(meta.accessed().unwrap() + Duration::from_secs(10)).set_modified(meta.modified().unwrap() + Duration::from_secs(10));
         fs::OpenOptions::new().write(true).open(&pdf).unwrap().set_times(times).unwrap();
 
-        let (reader2, pages2) = e.bm.get_cached_pdf_reader(&pdf).unwrap();
+        let (reader2, pages2) = e.bm._get_cached_pdf_reader(&pdf);
         assert!(!Arc::ptr_eq(&reader2, &reader1));
         assert_eq!(pages2, 4);
         assert_eq!(e.bm.pdf_cache().len(), 1); // 낡은 항목이 남지 않는다
     }
 
-    /// PDF를 열 때마다 횟수를 세고 실제 열기에 맡기는 `PdfOpener`. 구 `with_open_pdf_observer`.
-    // TODO(common): `common/fake_pdf.rs`(PdfOpener/PdfDoc 대역)가 아직 없어 로컬로 둔다. 실제 열기는 `backend::pdf::RealPdfOpener`(실제 구현체 이름 규칙 3.0.5)로 가정한다.
+    /// 실제 페이지 수 조회와 추출에서 PDF를 읽는 횟수를 센다.
     struct CountingOpener {
-        inner: Arc<dyn backend::pdf::PdfOpener>,
+        inner: backend::pdf::LopdfPageOps,
         opened: Arc<AtomicUsize>,
     }
 
-    impl backend::pdf::PdfOpener for CountingOpener {
-        fn open(&self, path: &Path) -> Result<Box<dyn backend::pdf::PdfDoc>, backend::pdf::PdfError> {
+    impl backend::pdf::PdfPageOps for CountingOpener {
+        fn page_count(&self, path: &Path) -> Result<usize, backend::pdf::PdfError> {
             self.opened.fetch_add(1, Ordering::SeqCst);
-            self.inner.open(path)
+            self.inner.page_count(path)
+        }
+
+        fn extract_pages(&self, path: &Path, start: usize, end: usize) -> Result<Vec<u8>, backend::pdf::PdfError> {
+            self.opened.fetch_add(1, Ordering::SeqCst);
+            self.inner.extract_pages(path, start, end)
         }
     }
 
@@ -367,11 +410,10 @@ mod test_pdf_reader_cache_budget {
     /// 예전에는 reader 를 디스크 캐시 확인보다 먼저 만들었기 때문에, 캐시 히트여도
     /// GB급 PDF 를 통째로 파싱했다 (관측된 최장 응답 125초).
     #[tokio::test]
-    #[ignore = "RealPdfOpener 이름이 문서에 없다(열기를 세면서 실제 PDF에 위임하는 PdfOpener 필요); 확정 후 활성화"]
     async fn test_disk_cache_hit_does_not_open_pdf() {
         let opened = Arc::new(AtomicUsize::new(0));
         let counter = opened.clone();
-        let e = build(move |_, d| d.with_pdf_opener(Arc::new(CountingOpener { inner: Arc::new(backend::pdf::RealPdfOpener), opened: counter })));
+        let e = build(move |_, d| d.with_pdf_pages(Arc::new(CountingOpener { inner: backend::pdf::LopdfPageOps, opened: counter })));
 
         let first = e.bm.get_pdf_pages(1, 1, 2).await;
         assert_eq!(first.status_code, 200);
@@ -379,6 +421,7 @@ mod test_pdf_reader_cache_budget {
         // reader 캐시만 비운다. 페이지 수 캐시와 디스크 캐시는 남은 상태.
         e.bm.pdf_cache().clear();
         let before = opened.load(Ordering::SeqCst);
+        assert!(before > 0);
 
         let second = e.bm.get_pdf_pages(1, 1, 2).await;
 

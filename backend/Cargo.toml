@@ -9,6 +9,10 @@ autotests = false
 [lib]
 path = "src/lib.rs"
 
+[[test]]
+name = "pdf_pages"
+path = "../tests/rust/backend/pdf_pages.rs"
+
 [[bin]]
 name = "backend"
 path = "src/bin/backend.rs"
