@@ -40,6 +40,7 @@ docs/       문서
 | `update` | ES 갱신·조회·삭제 점검(`update run` 필요) | `utils/update.py` 유지 |
 | `move_semi_clusters` | 준확실 클러스터 도서를 장르 폴더로 이동(`run`, `--dry-run`) | `utils/move_semi_clusters.py` 유지 |
 | `classify_books_client` | REST API로 자동 분류 요청·진행 감시(`--api-url`). 로컬 엔진 직접 모드는 미이식 | `utils/classify_books_client.py` 유지 |
+| `classify_cli` | 수집·평가·점수 보정·서점 정책·분류·재분류·모델 정보. 학습과 export는 Python 실행 | `utils/classify_cli.py` 유지 |
 | `reload_samgukji_epubs` | `2_소설역사`의 삼국지 EPUB 나열(`--list`)·loader 재적재(`--apply`) | `utils/reload_samgukji_epubs.sh` 유지 |
 | `normalize_comic_directories` | 만화 디렉토리 이름 정규화. 서점은 HTTPS로 조회하고 캐시에 남긴다(`--offline`이면 캐시만, 없으면 `SKIP_NOT_CACHED`) | `utils/normalize_comic_directories.py` 유지 |
 
@@ -54,6 +55,37 @@ docs/       문서
 - TLS는 `bookstore`만 쓴다(공개 서점 HTTPS). ES는 내부망 http 전용이라 `es_client`가 https 주소를 직접 거부한다. 인증서 검증을 끄는 우회로는 두지 않는다.
 - ZIP은 `corpus_common::reader::open_zip`으로 연다. `zip` 크레이트 기본 설정(`Detect`)은 파일 전체를 훑어 느리다
   (1.5MB EPUB 하나에 읽기 1만 3천 번, 48ms). `open_zip`은 `Known(0)`으로 먼저 열고(0.2ms) 실패하면 `Detect`로 다시 연다.
+
+## 분류 CLI
+
+`cargo run -p classify_cli -- <명령>`으로 실행한다. 인자 없이 실행하면 도움말과 종료 코드 0을 반환한다.
+`collect`, `train`, `evaluate`, `score-calibration`, `bookstore-policy`, `classify`, `reclassify`, `info`를 지원한다.
+
+```sh
+cargo run -p classify_cli -- collect --out tmp/classifier/corpus.jsonl
+cargo run -p classify_cli -- train --corpus tmp/classifier/corpus.jsonl --out tmp/classifier/export
+cargo run -p classify_cli -- evaluate --corpus tmp/classifier/corpus.jsonl --model tmp/classifier/export
+cargo run -p classify_cli -- classify book.txt --model tmp/classifier/export --no-es
+cargo run -p classify_cli -- reclassify 0_inbox --library-root /books --model tmp/classifier/export --no-es
+```
+
+- `--model`과 `train --out`은 JSON·가중치 파일을 담는 **디렉토리**다. 기본값은 `TM_CLASSIFIER_MODEL_DIR`, 없으면 `backend/classifier/export`다.
+- `train`은 기존 Python CLI로 sklearn 학습을 실행하고 `backend.classifier.export`로 내보낸다. 셸을 거치지 않는다.
+  Python 실행 파일은 `TM_CLASSIFIER_PYTHON`, 없으면 빌드한 저장소의 `.venv/bin/python`이다. Python 소스와 학습 환경이 필요하다.
+  `--out DIR`이면 Python 모델은 `DIR.joblib`, Rust 모델은 `DIR`, holdout 명단은 `DIR.holdout.json`이다.
+  Python 실패 코드를 전달하며 학습 실패 후에는 export하지 않는다. 출력은 각 Python 프로세스가 끝난 뒤 전달한다.
+- `evaluate`와 `score-calibration`은 저장된 holdout 명단을 우선한다. 명단이 없으면 경고 후 기존 해시 분할을 재구성한다.
+  보정은 `--dry-run`을 지원하며, 저장할 때 가중치는 유지하고 `model.json`만 원자적으로 교체한다.
+- ES는 기존 `TM_ES_URL`, `TM_ES_BOOK_INDEX`, `TM_ES_USER`, `TM_ES_PASSWORD`를 사용한다. `classify`와 `reclassify`는 `--no-es`로 파일만 읽는다.
+- `bookstore-policy`는 기존 서점 HTTPS 클라이언트와 분류 서비스의 캐시를 재사용한다. 표본 순서는 Python의 정수 seed shuffle과 같다.
+  `--reband PATH`는 서점 접속 없이 저장된 행을 다시 집계한다. 실서점 응답의 정확성은 네트워크와 HTML 상태에 달려 있다.
+- `reclassify`는 기본 미리보기다. `--apply`를 붙여야 이동하며, 목적지 충돌과 카테고리 심볼릭 링크를 거부한다.
+  같은 filesystem에서는 inode를 보존하고, 다른 filesystem에서는 복사 후 원본을 지운다. 이동 실패가 있으면 종료 코드 1이다.
+  이는 이동 실패에도 0을 반환하는 Python CLI보다 엄격하다.
+- 테스트는 `tests/rust/classify_cli/cli.rs`에 등록했다. 기존 `tests/rust/backend/classify_cli*.rs`는 구현 전 가정 API로 작성한 미등록 테스트다.
+  새 테스트는 실제 export 모델과 현재 `EsTransport`·`CommandRunner` 계약으로 실행한다.
+
+검증: `cargo test -p classify_cli --locked`, `cargo clippy -p classify_cli --all-targets --locked -- -D warnings`.
 
 ## 새 crate 추가
 

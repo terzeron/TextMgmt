@@ -1,0 +1,21 @@
+[package]
+name = "classify_cli"
+description = "도서 분류 모델 관리: Rust 추론과 Python 학습"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[dependencies]
+backend = { path = "../../backend" }
+bookstore = { path = "../../libs/bookstore" }
+regex = "1.13.1"
+serde_json.workspace = true
+sysdeps = { path = "../../libs/sysdeps" }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[[test]]
+name = "cli"
+path = "../../tests/rust/classify_cli/cli.rs"

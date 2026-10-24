@@ -499,6 +499,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "classify_cli"
+version = "0.1.0"
+dependencies = [
+ "backend",
+ "bookstore",
+ "regex",
+ "serde_json",
+ "sysdeps",
+ "tempfile",
+]
+
+[[package]]
 name = "cluster_hybrid_genres"
 version = "0.1.0"
 dependencies = [
