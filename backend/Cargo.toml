@@ -160,6 +160,10 @@ path = "../tests/rust/backend/cover_management.rs"
 name = "html_sanitizer"
 path = "../tests/rust/backend/html_sanitizer.rs"
 
+[[test]]
+name = "classifier_model"
+path = "../tests/rust/backend/classifier_model.rs"
+
 [dev-dependencies]
 base64 = "0.23.1"
 flate2 = "1"

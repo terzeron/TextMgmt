@@ -10,7 +10,12 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+pub mod export_format;
 pub mod model;
+pub mod pyunicode_table;
+pub mod softmax;
+pub mod tokenize;
+pub mod vectorize;
 
 use model::Prediction;
 
