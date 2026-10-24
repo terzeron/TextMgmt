@@ -18,7 +18,7 @@
 //!   - `SparseMatrix { shape() -> (usize, usize), nnz() -> usize, dtype() -> Dtype, to_dense() -> Vec<Vec<f64>> }`
 //!   - `shrink_sources(docs: &mut [Value], sources: &[&str], remaining: &[(&str, Value)])`
 //! - `backend::classifier::model`
-//!   - `DEFAULT_MODEL_PATH: &str`, `MODEL_ENV: &str`, `model_path() -> PathBuf`, `softmax_confidence(scores: &[Vec<f64>], temperature: f64) -> Vec<Vec<f64>>`
+//!   - `DEFAULT_MODEL_PATH: &str`, `MODEL_DIR_ENV: &str`, `model_path() -> PathBuf`, `softmax_confidence(scores: &[Vec<f64>], temperature: f64) -> Vec<Vec<f64>>`
 //!   - `CategoryModel` (Clone): `classes: Vec<String>`, `meta: Value`, `config: Value`, `predict_one(&self, doc: &Value, min_confidence: f64) -> Prediction`,
 //!     `predict(&self, docs: &[Value]) -> Vec<Prediction>`, `save(&self, Option<&Path>) -> io::Result<PathBuf>`, `CategoryModel::load(Option<&Path>) -> Option<CategoryModel>`,
 //!     `min_confidence(&self) -> f64`
@@ -47,7 +47,7 @@ use std::sync::Arc;
 use backend::classifier::config::{config_hash, default_config, enabled_fields, load_config, merge_config, resolve_parent, save_config, series_to_parent};
 use backend::classifier::corpus::{absolute_path, attach_publishers, document, is_trainable, read_jsonl, write_jsonl};
 use backend::classifier::features::{Dtype, FeatureSpace, FitOptions, field_text, make_vectorizer, shrink_sources};
-use backend::classifier::model::{CategoryModel, DEFAULT_MODEL_PATH, MODEL_ENV, Prediction, model_path, softmax_confidence};
+use backend::classifier::model::{CategoryModel, DEFAULT_MODEL_PATH, MODEL_DIR_ENV, Prediction, model_path, softmax_confidence};
 use backend::classifier::reader::read_epub_publisher;
 use backend::classifier::training::{TrainOptions, coverage_curve, evaluate, filter_by_size, format_report, max_coverage_at, rss_note_with, split_holdout, train};
 use backend::classifier::{BookCategoryClassifier, ClassifierOptions};
@@ -666,12 +666,17 @@ fn test_build_document_finds_documents_by_relative_path() {
 #[test]
 fn test_model_path_follows_the_environment_variable() {
     let mut env = EnvGuard::new();
-    env.remove(MODEL_ENV);
+    env.remove(MODEL_DIR_ENV);
     assert_eq!(model_path(), PathBuf::from(DEFAULT_MODEL_PATH));
 
     // pod 는 /books 로, 학습 머신은 /mnt/data/text 로 같은 파일을 본다. 복사가 없다.
-    env.set(MODEL_ENV, "/books/.classifier/model.joblib");
-    assert_eq!(model_path(), PathBuf::from("/books/.classifier/model.joblib"));
+    env.set(MODEL_DIR_ENV, "/books/.classifier/export");
+    assert_eq!(model_path(), PathBuf::from("/books/.classifier/export"));
+
+    // Python 이 joblib 파일 경로로 쓰는 TM_CLASSIFIER_MODEL 은 Rust 가 읽지 않는다.
+    env.remove(MODEL_DIR_ENV);
+    env.set("TM_CLASSIFIER_MODEL", "/books/.classifier/model.joblib");
+    assert_eq!(model_path(), PathBuf::from(DEFAULT_MODEL_PATH));
 }
 
 #[test]
@@ -680,7 +685,7 @@ fn test_save_and_load_use_the_environment_path() {
     let tmp = TempDir::new().unwrap();
     let (model, _) = trained();
     let dest = tmp.path().join("어딘가").join("model.joblib");
-    env.set(MODEL_ENV, dest.to_str().unwrap());
+    env.set(MODEL_DIR_ENV, dest.to_str().unwrap());
 
     // 경로를 안 줘도 환경변수가 가리키는 곳에 쓰고 거기서 읽는다
     assert_eq!(model.save(None).unwrap(), dest);

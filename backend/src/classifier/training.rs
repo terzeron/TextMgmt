@@ -154,7 +154,7 @@ pub fn document_key(doc: &Value) -> String {
 }
 
 /// Python `round()` 는 반올림에서 짝수 쪽을 고른다.
-fn round_half_even(x: f64) -> i64 {
+pub(crate) fn round_half_even(x: f64) -> i64 {
     let floor = x.floor();
     if x - floor == 0.5 {
         if floor % 2.0 == 0.0 { floor as i64 } else { floor as i64 + 1 }

@@ -21,8 +21,8 @@
 //! - `backend::classifier::BookCategoryClassifier::new(model: Option<Arc<dyn CategoryModelApi>>, ClassifierOptions)`는 `Classify`를 구현한다
 //! - `backend::book_classifier::BookstorePolicy { override_below: f64 }` (`prefers_bookstore(confidence) = confidence < override_below`)
 //!
-//! `test_book_classifier_service_methods_and_cache`와 `test_classify_file_exposes_model_confidence`는 `stub_*`/`set_fs`/`set_bookstores`/`FailingFs`/`StubBookstore` 등
-//! 서비스 내부 바꿔치기가 필요하다. seam 설계 문서에 이 부분이 없어(4.1은 `Option<Arc<..>>`만 언급) 본문은 그대로 두고 `#[ignore]`를 유지한다.
+//! `test_book_classifier_service_methods_and_cache`와 `test_classify_file_exposes_model_confidence`는 서비스 내부 바꿔치기(`stub_*`, `set_fs`, `set_bookstores`) 대신
+//! `with_fs`(FaultyFs), 서점 클라이언트 pub 필드(`StubBookstore`), 모델 대역으로 같은 갈래를 만든다. 단언은 원본 그대로다.
 
 #![allow(clippy::type_complexity)]
 
@@ -443,10 +443,9 @@ fn test_book_classifier_service_process_file() {
 fn test_inspect_txt_content_cp949_and_header_genre() {
     let tmp = TempDir::new().unwrap();
     let f = tmp.path().join("test_cp949.txt");
-    let content = "=====================\n[판타지] 룬의 아이들 1권\n=====================\n프롤로그...";
-    let (bytes, _, had_errors) = encoding_rs::EUC_KR.encode(content);
-    assert!(!had_errors);
-    fs::write(&f, bytes.as_ref()).unwrap();
+    // encoding_rs::EUC_KR.encode(...) 로 만든 바이트다(backend 에 encoding_rs 의존성을 더하지 않으려고 미리 계산해 두었다).
+    let bytes: &[u8] = b"=====================\n[\xc6\xc7\xc5\xb8\xc1\xf6] \xb7\xe9\xc0\xc7 \xbe\xc6\xc0\xcc\xb5\xe9 1\xb1\xc7\n=====================\n\xc7\xc1\xb7\xd1\xb7\xce\xb1\xd7...";
+    fs::write(&f, bytes).unwrap();
 
     let res = inspect_txt_content(&f);
     assert_eq!(res.header_genre.as_deref(), Some("판타지"));
@@ -503,23 +502,69 @@ fn test_clean_filename_author_title_edge_patterns() {
     assert_eq!(s, "영웅문");
 }
 
-/// 가정한 seam: Path::rmdir/Path::replace 실패와 서점 클라이언트(yes24/aladin/kyobo.search)를
-/// 주입할 수 있는 `FsOps`, `BookstoreClients` 트레이트가 있다. 아래는 그 가정으로 쓴 본문이다.
+/// 서점 클라이언트 대역. `BookstoreSearch` 를 구현한다. `failing` 은 조회가 예외를 던지는 서점이다(패닉).
+struct StubBookstore {
+    rows: Vec<backend::bookstore::SearchRow>,
+    fail: Option<&'static str>,
+}
+
+impl StubBookstore {
+    fn ok(rows: Vec<(&str, &str, &str, &str, &str, &str)>) -> Box<Self> {
+        Box::new(Self {
+            rows: rows
+                .into_iter()
+                .map(|(a, b, c, d, e, f)| {
+                    (a.into(), b.into(), c.into(), d.into(), e.into(), f.into())
+                })
+                .collect(),
+            fail: None,
+        })
+    }
+
+    fn failing(message: &'static str) -> Box<Self> {
+        Box::new(Self {
+            rows: Vec::new(),
+            fail: Some(message),
+        })
+    }
+}
+
+impl backend::bookstore::BookstoreSearch for StubBookstore {
+    fn search(
+        &self,
+        _isbn: &str,
+        title: &str,
+        _author: &str,
+    ) -> (Vec<backend::bookstore::SearchRow>, String, String) {
+        if let Some(message) = self.fail {
+            panic!("{message}");
+        }
+        (self.rows.clone(), title.to_string(), "title".into())
+    }
+}
+
+/// 원래는 Path.rmdir/Path.replace 실패, yes24/aladin/kyobo.search, query_bookstores, classify_file 을 바꿔치기했다.
+/// 지금은 같은 갈래를 `with_fs`(FaultyFs), 서점 대역(pub 필드), 모델 대역으로 만든다. 단언은 그대로다.
 #[test]
-#[ignore = "mock.patch: pathlib.Path.rmdir/Path.replace 실패, yes24/aladin/kyobo.search, query_bookstores, classify_file 바꿔치기; DI 설계 후 활성화"]
 fn test_book_classifier_service_methods_and_cache() {
-    use backend::book_classifier::{BookstoreResult, FailingFs, StubBookstore};
+    use common::faulty_fs::{other_err, FaultyFs};
 
     let tmp = TempDir::new().unwrap();
 
-    // 1070-1071: clean_empty_parent_dirs 예외 처리
+    // 1070-1071: clean_empty_parent_dirs 예외 처리 (디렉토리를 못 읽으면 아무것도 지우지 않는다)
     let sub = tmp.path().join("a").join("b");
     fs::create_dir_all(&sub).unwrap();
-    clean_empty_parent_dirs_with(&sub, tmp.path(), &FailingFs::rmdir("Busy"));
+    let busy = FaultyFs::new();
+    busy.set_scandir(|_| Some(other_err("Busy")));
+    clean_empty_parent_dirs_with(&sub, tmp.path(), busy.as_ref());
+    assert!(sub.exists());
 
     // 1098: cache_file default
     let svc_default = BookClassifierService::new(tmp.path(), None, None);
-    assert_eq!(svc_default.cache_file(), tmp.path().join("classification_cache.json"));
+    assert_eq!(
+        svc_default.cache_file(),
+        tmp.path().join("classification_cache.json")
+    );
 
     // 1110-1116: load_cache 손상 파일 예외 처리
     let corrupted_cache = tmp.path().join("corrupted_cache.json");
@@ -529,7 +574,11 @@ fn test_book_classifier_service_methods_and_cache() {
 
     // 1113: 유효한 캐시 파일 로드 로그
     let valid_cache = tmp.path().join("valid_cache.json");
-    fs::write(&valid_cache, json!({"test_item": {"search_title": "삼국지"}}).to_string()).unwrap();
+    fs::write(
+        &valid_cache,
+        json!({"test_item": {"search_title": "삼국지"}}).to_string(),
+    )
+    .unwrap();
     let svc_valid = BookClassifierService::new(tmp.path(), Some(&valid_cache), None);
     assert_eq!(svc_valid.cache().len(), 1);
 
@@ -552,42 +601,77 @@ fn test_book_classifier_service_methods_and_cache() {
     svc.build_title_index();
     assert!(svc.title_cache().contains_key("삼국지"));
 
-    // save_cache 예외 처리 (1127)
-    svc.set_fs(Box::new(FailingFs::replace("Permission Denied")));
+    // save_cache 예외 처리 (1127): 이름 바꾸기가 실패해도 죽지 않고, 원래 캐시 파일은 그대로다.
+    let before = fs::read(&cache_path).unwrap();
+    let denied = FaultyFs::new();
+    denied.set_rename(|_, _| Some(other_err("Permission Denied")));
+    svc = svc.with_fs(denied);
+    svc.set_cache(json!({}));
     svc.save_cache();
-    svc.set_fs(Box::new(backend::book_classifier::RealFs));
+    assert_eq!(fs::read(&cache_path).unwrap(), before);
+    svc.set_cache(serde_json::from_slice(&before).unwrap());
+    svc = svc.with_fs(Arc::new(sysdeps::RealFs));
 
     // 1138-1162: query_bookstores & _do_query 예외
-    svc.set_bookstores(StubBookstore::ok(vec![("삼국지", "나관중", "소설", "url", "", "")]), StubBookstore::failing("Timeout"), StubBookstore::ok(vec![]));
-    let (y_res, a_res, k_res): (BookstoreResult, BookstoreResult, BookstoreResult) = svc.query_bookstores("삼국지", "나관중", "삼국지");
-    assert_eq!(y_res.title, "삼국지");
-    assert_eq!(a_res.cat, "");
-    assert_eq!(k_res.cat, "");
+    svc.yes24 = StubBookstore::ok(vec![("삼국지", "나관중", "소설", "url", "", "")]);
+    svc.aladin = StubBookstore::failing("Timeout");
+    svc.kyobo = StubBookstore::ok(vec![]);
+    let (y_res, a_res, k_res) = svc.query_bookstores("삼국지", "나관중", "삼국지", "");
+    assert_eq!(y_res["title"], "삼국지");
+    assert_eq!(a_res["cat"], "");
+    assert_eq!(k_res["cat"], "");
 
     // 1179-1180: rel_path ValueError (fpath가 source_dir 하위가 아닐 때)
     let f_outside = tmp.path().join("outside.txt");
     fs::write(&f_outside, "내용").unwrap();
     let other_src = PathBuf::from("/some/nonexistent/source_dir");
-    svc.classify_file(&f_outside, &other_src, ClassifyOptions { use_bookstore: false, ..Default::default() });
+    svc.classify_file(
+        &f_outside,
+        &other_src,
+        ClassifyOptions {
+            use_bookstore: false,
+            ..Default::default()
+        },
+    );
 
     // 1186-1201: title_cache hit
     let f_samguk = tmp.path().join("나관중 - 삼국지 1권.txt");
     fs::write(&f_samguk, "유비 관우 장비 도원결의").unwrap();
-    let (_cat, _meth, _reas, entry) = svc.classify_file(&f_samguk, tmp.path(), ClassifyOptions { use_bookstore: false, ..Default::default() });
+    let (_cat, _meth, _reas, entry) = svc.classify_file(
+        &f_samguk,
+        tmp.path(),
+        ClassifyOptions {
+            use_bookstore: false,
+            ..Default::default()
+        },
+    );
     assert!(entry.is_some());
 
     // 1205: cache_only
     let f_uncached = tmp.path().join("미캐시책.txt");
     fs::write(&f_uncached, "내용").unwrap();
-    let (_cat_co, m_co, _r_co, _) = svc.classify_file(&f_uncached, tmp.path(), ClassifyOptions { cache_only: true, use_bookstore: true, ..Default::default() });
+    let (_cat_co, m_co, _r_co, _) = svc.classify_file(
+        &f_uncached,
+        tmp.path(),
+        ClassifyOptions {
+            cache_only: true,
+            use_bookstore: true,
+            ..Default::default()
+        },
+    );
     assert_eq!(m_co, "cache_only_skip");
 
     // 1209: use_bookstore=True (query_bookstores 호출)
-    svc.stub_query_bookstores(|| (json!({}), json!({}), json!({})));
-    svc.classify_file(&f_uncached, tmp.path(), ClassifyOptions { use_bookstore: true, ..Default::default() });
+    svc.classify_file(
+        &f_uncached,
+        tmp.path(),
+        ClassifyOptions {
+            use_bookstore: true,
+            ..Default::default()
+        },
+    );
 
-    // 1271: process_file - not target_cat
-    svc.stub_classify_file(|| (None, "not_found".into(), "reason".into(), Some(json!({}))));
+    // 1271: process_file - not target_cat (서점 대역이 다른 책을 돌려주므로 목적지가 없다)
     let res_none = svc.process_file(&f_uncached, tmp.path(), ProcessOptions::default());
     assert_eq!(res_none["action"], "none");
 
@@ -598,19 +682,33 @@ fn test_book_classifier_service_methods_and_cache() {
     fs::write(&existing_in_dest, "이미 있음").unwrap();
 
     // clean_existing = False -> skipped_already_exists (1285)
-    svc.stub_classify_file(|| (Some("2_소설한국".into()), "matched".into(), "reason".into(), Some(json!({}))));
-    let res_skip = svc.process_file(&f_samguk, tmp.path(), ProcessOptions { clean_existing: false, ..Default::default() });
+    let res_skip = svc.process_file(
+        &f_samguk,
+        tmp.path(),
+        ProcessOptions {
+            clean_existing: false,
+            ..Default::default()
+        },
+    );
+    assert_eq!(res_skip["target_category"], "2_소설한국");
     assert_eq!(res_skip["action"], "skipped_already_exists");
 
     // clean_existing = True -> cleaned_duplicate (1282, 1283)
-    let entry_dict = json!({"status": "pending"});
-    svc.stub_classify_file(move || (Some("2_소설한국".into()), "matched".into(), "reason".into(), Some(entry_dict.clone())));
-    let res_clean = svc.process_file(&f_samguk, tmp.path(), ProcessOptions { clean_existing: true, ..Default::default() });
+    let res_clean = svc.process_file(
+        &f_samguk,
+        tmp.path(),
+        ProcessOptions {
+            clean_existing: true,
+            ..Default::default()
+        },
+    );
     assert_eq!(res_clean["action"], "cleaned_duplicate");
-    assert_eq!(svc.last_entry()["status"], "already_exists_cleaned");
+    assert_eq!(
+        svc.cache()["나관중 - 삼국지 1권.txt"]["status"],
+        "already_exists_cleaned"
+    );
     assert!(!f_samguk.exists());
 }
-
 #[test]
 fn test_map_category_and_effective_filename_branches() {
     // 936: cat_str="거시경제 > 총론" -> leaf_cat="총론" (933 패스, 936 매칭)
@@ -789,26 +887,34 @@ fn test_decide_returns_nothing_when_there_is_no_model_and_no_bookstore() {
 }
 
 /// 등급을 매기려면 모델 점수가 밖으로 나와야 한다.
-/// 가정한 seam: `with_bookstore_policy`(3.12)와, 문서에 없는 `stub_decide_by_model/_by_bookstore/query_bookstores` 스텁.
+/// 원래는 `_decide_by_model`/`_decide_by_bookstore`/`query_bookstores` 를 바꿔치기했다. 지금은 모델 대역이 (3_SF, 0.87)을 돌려준다.
 #[test]
-#[ignore = "mock.patch: service.query_bookstores/_decide_by_model/_decide_by_bookstore 바꿔치기; DI 설계 후 활성화"]
 fn test_classify_file_exposes_model_confidence() {
     let tmp = TempDir::new().unwrap();
     // Policy: override_below = 0.5, prefers_bookstore(confidence) = confidence < override_below
-    let mut svc = BookClassifierService::new(tmp.path(), None, None).with_bookstore_policy(BookstorePolicy { override_below: 0.5 });
-    svc.stub_query_bookstores(|| (json!({}), json!({}), json!({})));
-    svc.stub_decide_by_model(|| (Some("3_SF".to_string()), "모델 판정".to_string(), 0.87));
-    svc.stub_decide_by_bookstore(|| (None, "not_found".to_string(), "서점에서 못 찾음".to_string()));
+    let mut svc = BookClassifierService::new(
+        tmp.path(),
+        None,
+        Some(Arc::new(StubClassifier::new("3_SF", 0.87))),
+    )
+    .with_delay(0.0)
+    .with_bookstore_policy(BookstorePolicy {
+        override_below: 0.5,
+        ..Default::default()
+    });
+    svc.yes24 = StubBookstore::ok(vec![]);
+    svc.aladin = StubBookstore::ok(vec![]);
+    svc.kyobo = StubBookstore::ok(vec![]);
     let target = tmp.path().join("[저자] 제목.epub");
     fs::write(&target, "x").unwrap();
 
-    let (_cat, _method, _reason, entry) = svc.classify_file(&target, tmp.path(), ClassifyOptions::default());
+    let (_cat, _method, _reason, entry) =
+        svc.classify_file(&target, tmp.path(), ClassifyOptions::default());
     let entry = entry.unwrap();
 
     assert_eq!(entry["confidence"], json!(0.87));
     assert_eq!(entry["model_category"], "3_SF");
 }
-
 // ---------------------------------------------------------------------------
 // 확신도 사각지대 — 모델이 답은 했지만 '확실'이라 부를 만큼은 아닌 구간
 // ---------------------------------------------------------------------------

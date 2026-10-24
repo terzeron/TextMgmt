@@ -107,7 +107,6 @@ fn test_keyword_map_survives_a_dead_database() {
 /// 목록을 돌려준다. `환상문학`(3_SF, 3_판타지)과 `클래식`(1_서양고전, 5_음악)이 그렇다.
 /// 어느 쪽인지는 서점 다수결이 가른다.
 #[test]
-#[ignore = "mock.patch: sys.modules['backend.category_mapping'].CategoryMapping을 대역으로 교체; DI 설계 후 활성화"]
 fn test_keyword_with_two_categories_keeps_both() {
     let _clean = clean_cache();
     let fake_mapping = |_content_type: &str| json!({"3_SF": ["환상문학", "과학소설"], "3_판타지": ["환상문학"], "5_음악": ["클래식"]});
@@ -422,7 +421,6 @@ fn test_service_passes_its_library_root_to_the_classifier() {
 }
 
 #[test]
-#[ignore = "mock.patch: sys.modules['backend.category_mapping'].CategoryMapping을 대역으로 교체; DI 설계 후 활성화"]
 fn test_keyword_map_ignores_blank_keywords() {
     let _clean = clean_cache();
     let fake_mapping = |_content_type: &str| json!({"3_SF": ["  ", "", null, " 과학소설 "]});

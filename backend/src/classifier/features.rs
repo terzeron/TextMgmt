@@ -156,6 +156,11 @@ impl FeatureSpace {
         Self { fields: fields.clone(), vectorizers: Vec::new(), block_sizes: Vec::new() }
     }
 
+    /// 설정에 적힌 필드 이름. 순서는 설정 순서다(Python `FeatureSpace.names`).
+    pub fn names(&self) -> Vec<String> {
+        self.fields.as_object().map(|m| m.keys().cloned().collect()).unwrap_or_default()
+    }
+
     pub fn has_vectorizer(&self, name: &str) -> bool {
         self.vectorizers.iter().any(|(n, _)| n == name)
     }

@@ -529,6 +529,18 @@ pub fn abstract_extract_book_info(_store: &dyn AbstractBookstore, _soup: &str) -
     None
 }
 
+/// 서점 조회 하나. 분류 서비스가 서점 세 곳을 이 모양으로만 안다. 시험에서는 대역으로 바꾼다.
+pub trait BookstoreSearch: Send + Sync {
+    /// `(결과, 실제 검색어, 방식)`. 결과는 `(제목, 저자, 카테고리, 상세 URL, 검색 URL, ISBN)`이다.
+    fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String);
+}
+
+impl<T: AbstractBookstore + Send> BookstoreSearch for T {
+    fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String) {
+        AbstractBookstore::search(self, isbn, title, author)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 구상 서점 공통 구조
 // ---------------------------------------------------------------------------

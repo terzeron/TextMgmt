@@ -87,7 +87,6 @@ fn test_title_match_rejects_unrelated_titles() {
 }
 
 #[test]
-#[ignore = "mock.patch: Path.resolve가 OSError를 던지도록 바꿈; seam 설계 문서에 book_classifier의 FsOps 주입 항목이 없어 유지"]
 fn test_clean_empty_parent_dirs_ignores_unresolvable_path() {
     let tmp = TempDir::new().unwrap();
     let child = tmp.path().join("a");

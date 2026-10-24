@@ -8,6 +8,7 @@
 
 import hashlib
 import json
+import random
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -281,6 +282,68 @@ def build_parity_fixture() -> Dict[str, Any]:
     }
 
 
+def build_book_parity_fixture() -> Dict[str, Any]:
+    """`backend/book_classifier.py` 의 순수 함수 출력을 모아 둔다. Rust `book_classifier_parity.rs` 가 같은 입력으로 대조한다."""
+    import re as _re  # noqa: PLC0415
+
+    from backend import book_classifier as bc  # noqa: PLC0415
+    from backend.classifier.bookstore_policy import map_bookstore_candidates, match_keyword  # noqa: PLC0415
+
+    rng = random.Random(20261024)
+    src = (ROOT / "backend" / "book_classifier.py").read_text(encoding="utf-8")
+    body = src[src.index("def map_category") : src.index("def get_effective_filename")]
+    keywords = sorted(set(_re.findall(r'"([^"\n]{1,12})"', body)))
+    keywords = [k for k in keywords if not k.startswith(("2_", "3_", "4_", "5_", "6_", "7_", "8_", "9_", "1_")) and k not in ("", " ")]
+    pool_title = ["달빛조각사", "해리포터와 마법사의 돌", "화산귀환", "손자병법", "을유세계문학 고전", "열린책들 세계문학", "올재 클래식스", "그림으로 읽는 과학", "평범한 제목", "OST 모음", "도깨비 OST (CD)", "무협 입문", "Harry Potter", "a b", "이지사이언스 3", "살림지식총서 001"]
+    pool_author = ["", "히가시노 게이고", "무라카미하루키", "남희성", "김용", "Kim"]
+
+    map_cases = []
+    for _ in range(700):
+        parts = [rng.choice(keywords) for _ in range(rng.choice([0, 1, 1, 2, 3]))]
+        cat = rng.choice([" > ", "/", " ", ">"]).join(parts)
+        title = rng.choice(["", "", "", *pool_title])
+        author = rng.choice(["", "", *pool_author])
+        map_cases.append({"cat": cat, "title": title, "author": author, "expected": bc.map_category(cat, title, author)})
+
+    frags = ["[남희성]", "@작가", " 1-300권 완", "(완결)", "#나무", "_", "(z-lib.org)", "신.화.급", "[로판]", "(무협)", "01권", "2024", "(비가)", " - ", "-이우혁", "[판타지]", "TXT ", "【완】", "vol.3", "특외", "완결", "(19)", "[1~3부]", "외전", "…", "%5B로맨스%5D", "[BL]", "(TS)", "SF ", "[설봉]"]
+    words = ["달빛조각사", "화산귀환", "사조영웅전", "룬의 아이들", "Harry Potter", "마법사", "무림", "나혼자만렙", "회귀", "악녀"]
+    exts = [".txt", ".epub", ".pdf", ""]
+    names = []
+    for _ in range(900):
+        parts = [rng.choice(words)] + [rng.choice(frags + words) for _ in range(rng.choice([0, 1, 2, 3]))]
+        rng.shuffle(parts)
+        names.append("".join(p if i == 0 else rng.choice(["", " "]) + p for i, p in enumerate(parts)) + rng.choice(exts))
+    name_cases = [{"name": n, "clean": list(bc.clean_filename_to_author_title(n)), "genre": bc.extract_explicit_genre(n)} for n in names]
+
+    title_cases = []
+    for _ in range(500):
+        a, b = rng.choice(pool_title), rng.choice(pool_title)
+        if rng.random() < 0.4:
+            b = a + rng.choice(["", " 1", " 완결판", " (전2권)", " 특별판"])
+        if rng.random() < 0.2:
+            a = " ".join(reversed(a.split()))
+        title_cases.append({"a": a, "b": b, "sim": bc.title_similarity(a, b), "single": bc.is_single_match_valid(a, b), "reliable": bc.is_title_match_reliable(a, b)})
+
+    eff = []
+    for parent, name in [("lib", "01권.txt"), ("lib/[전민희] 룬", "01권.txt"), ("lib/작품", "긴 제목입니다.txt"), ("lib/[작가] 시리즈", "긴 제목.txt"), ("lib/@작가 시리즈", "긴 제목.txt"), ("lib/시리즈", "[저자] 제목.txt"), ("lib/시리즈", "vol.3.epub"), ("lib/시리즈", "v2.epub"), ("lib/시리즈", "ab.txt"), ("lib/시리즈", "3~5권.txt"), ("lib/a/b", "제목 있음.txt")]:
+        eff.append({"path": f"{parent}/{name}", "target": "lib", "expected": bc.get_effective_filename(Path(f"{parent}/{name}"), Path("lib"))})
+
+    kw = {"영어": ["7_영어교육"], "영어전문교육": ["7_영어교육"], "교육": ["7_교육일반"], "클래식": ["1_서양고전", "5_음악"], "한문": ["1_동양고전한문"]}
+    kw_cases = []
+    for _ in range(150):
+        cat = " > ".join(rng.choice(keywords + ["영어", "교육", "클래식", "한문", "영어전문교육"]) for _ in range(rng.choice([0, 1, 2])))
+        title = rng.choice(["", *pool_title])
+        author = rng.choice(["", *pool_author])
+        kw_cases.append({"cat": cat, "title": title, "author": author, "match": match_keyword(cat, kw), "candidates": map_bookstore_candidates(cat, title, author, kw)})
+    return {"keywords": kw, "map_category": map_cases, "filenames": name_cases, "titles": title_cases, "effective": eff, "keyword_cases": kw_cases}
+
+
+def test_book_parity_fixture_is_current():
+    """book_classifier 순수 함수의 Python 출력이 저장소 기대값과 같은지 본다(Rust 가 이 파일로 대조한다)."""
+    committed = json.loads((FIXTURE_DIR / "book_classifier_parity.json").read_text(encoding="utf-8"))
+    assert committed == json.loads(json.dumps(build_book_parity_fixture()))
+
+
 def test_parity_fixture_is_current():
     """저장소의 parity.json 이 지금 Python 구현이 내는 값과 같은지 본다(Rust 는 이 파일을 기대값으로 쓴다)."""
     committed = json.loads((FIXTURE_DIR / "parity.json").read_text(encoding="utf-8"))
@@ -315,7 +378,9 @@ def _write_json(path: Path, obj: Any) -> None:
 if __name__ == "__main__":
     import shutil
 
-    if sys.argv[1:] == ["parity"]:
+    if sys.argv[1:] == ["book_parity"]:
+        _write_json(FIXTURE_DIR / "book_classifier_parity.json", build_book_parity_fixture())
+    elif sys.argv[1:] == ["parity"]:
         # 기대값 파일만 다시 쓴다. `trained/report.json` 이 먼저 있어야 한다.
         _write_json(FIXTURE_DIR / "parity.json", build_parity_fixture())
     elif sys.argv[1:] == ["trained"]:

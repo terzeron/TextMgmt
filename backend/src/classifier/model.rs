@@ -2,8 +2,8 @@
 //!
 //! 학습은 Python 이 하고 이 모델은 추론만 한다. 문서 본문은 로그에 남기지 않는다.
 //!
-//! 모델 파일은 pickle(joblib)이 아니라 `backend.classifier.export` 가 쓴 디렉토리다. 환경변수 `TM_CLASSIFIER_MODEL` 은
-//! Rust 에서 그 디렉토리를 가리킨다.
+//! 모델 파일은 pickle(joblib)이 아니라 `backend.classifier.export` 가 쓴 디렉토리다. Rust 는 환경변수
+//! `TM_CLASSIFIER_MODEL_DIR` 로 그 디렉토리를 찾는다. Python 이 joblib 파일 경로로 쓰는 `TM_CLASSIFIER_MODEL` 은 읽지 않는다.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -35,14 +35,15 @@ impl Prediction {
 /// 기본 상위 후보 수. Python `predict(top_k=3)`.
 pub const DEFAULT_TOP_K: usize = 3;
 
-/// 모델 경로를 담는 환경변수. `books-pv` 가 호스트의 /mnt/data/text 를 pod 의 /books 로 마운트하므로 같은 파일을 본다.
-pub const MODEL_ENV: &str = "TM_CLASSIFIER_MODEL";
+/// 내보내기 디렉토리를 담는 환경변수. `books-pv` 가 호스트의 /mnt/data/text 를 pod 의 /books 로 마운트하므로 같은 파일을 본다.
+/// Python 의 `TM_CLASSIFIER_MODEL`(joblib 파일 경로)과 다른 변수다.
+pub const MODEL_DIR_ENV: &str = "TM_CLASSIFIER_MODEL_DIR";
 /// 환경변수가 없을 때의 기본 경로. Python 의 `backend/classifier/model.joblib` 자리다.
 pub const DEFAULT_MODEL_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/classifier/model.joblib");
 
 /// 설정된 모델 경로.
 pub fn model_path() -> PathBuf {
-    match std::env::var(MODEL_ENV) {
+    match std::env::var(MODEL_DIR_ENV) {
         Ok(p) if !p.is_empty() => PathBuf::from(p),
         _ => PathBuf::from(DEFAULT_MODEL_PATH),
     }
@@ -54,10 +55,21 @@ pub fn softmax_confidence(scores: &[Vec<f64>], temperature: f64) -> Vec<Vec<f64>
 }
 
 /// 분류기가 모델에 요구하는 능력. 시험에서는 대역으로 바꾼다.
+///
+/// 모든 메서드에 기본 구현이 있다(판정하지 않는 모델). 대역은 필요한 것만 바꾼다.
 pub trait CategoryModelApi: Send + Sync {
-    fn min_confidence(&self) -> f64;
-    fn predict_one(&self, doc: &Value, min_confidence: Option<f64>) -> Prediction;
-    fn predict(&self, docs: &[Value], min_confidence: Option<f64>) -> Vec<Prediction>;
+    fn min_confidence(&self) -> f64 {
+        1.0
+    }
+
+    fn predict_one(&self, _doc: &Value, _min_confidence: Option<f64>) -> Prediction {
+        Prediction::new(None, 0.0, Vec::new(), "판정하지 않는 모델")
+    }
+
+    fn predict(&self, docs: &[Value], min_confidence: Option<f64>) -> Vec<Prediction> {
+        docs.iter().map(|d| self.predict_one(d, min_confidence)).collect()
+    }
+
     /// 확신도를 예상 정답률로 옮긴다. 보정이 없으면 `None`.
     fn expected_accuracy(&self, _confidence: f64) -> Option<f64> {
         None

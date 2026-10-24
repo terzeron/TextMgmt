@@ -189,6 +189,30 @@ path = "../tests/rust/backend/classifier_service.rs"
 name = "classifier_parity"
 path = "../tests/rust/backend/classifier_parity.rs"
 
+[[test]]
+name = "book_classifier"
+path = "../tests/rust/backend/book_classifier.rs"
+
+[[test]]
+name = "classifier_gaps"
+path = "../tests/rust/backend/classifier_gaps.rs"
+
+[[test]]
+name = "bookstore_policy"
+path = "../tests/rust/backend/bookstore_policy.rs"
+
+[[test]]
+name = "bookstore_cache"
+path = "../tests/rust/backend/bookstore_cache.rs"
+
+[[test]]
+name = "auth_bookstore_gaps"
+path = "../tests/rust/backend/auth_bookstore_gaps.rs"
+
+[[test]]
+name = "book_classifier_parity"
+path = "../tests/rust/backend/book_classifier_parity.rs"
+
 [dev-dependencies]
 base64 = "0.23.1"
 flate2 = "1"

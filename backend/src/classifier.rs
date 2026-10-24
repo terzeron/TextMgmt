@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use crate::es_manager::EsTransport;
 
+pub mod bookstore_policy;
 pub mod calibration;
 pub mod config;
 pub mod corpus;
@@ -35,6 +36,16 @@ pub trait Classify: Send + Sync {
     fn is_available(&self) -> bool;
     fn classify_path(&self, path: &Path, min_confidence: Option<f64>) -> Result<Prediction, String>;
     fn classify_document(&self, doc: &Value, min_confidence: Option<f64>) -> Result<Prediction, String>;
+
+    /// 모델이 "이 점수 미만이면 판정하지 않는다"고 정한 값. 모르면 `None`.
+    fn min_confidence(&self) -> Option<f64> {
+        None
+    }
+
+    /// 확신도를 예상 정답률로 옮긴다. 보정이 없으면 `None`.
+    fn expected_accuracy(&self, _confidence: f64) -> Option<f64> {
+        None
+    }
 }
 
 /// 분류기 서비스 facade. `BookManager`가 제안을 만들 때 쓰는 능력이다(구 `ClassifierService`, `FileClassifier`).
@@ -134,7 +145,7 @@ pub struct BookCategoryClassifier {
 }
 
 /// 존재하지 않는 경로도 Python `Path.resolve()` 처럼 풀어 준다. 가장 깊은 기존 조상을 정규화하고 나머지를 붙인다.
-fn resolve_lenient(path: &Path) -> PathBuf {
+pub(crate) fn resolve_lenient(path: &Path) -> PathBuf {
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     let mut cur = path.to_path_buf();
     loop {
@@ -275,8 +286,8 @@ impl BookCategoryClassifier {
     }
 
     /// 확신도를 예상 정답률(0~1)로 옮긴다. 보정이 없는 모델이면 `None`.
-    pub fn expected_accuracy(&self, confidence: Option<f64>) -> Option<f64> {
-        self.model.as_ref()?.expected_accuracy(confidence?)
+    pub fn expected_accuracy(&self, confidence: f64) -> Option<f64> {
+        self.model.as_ref()?.expected_accuracy(confidence)
     }
 }
 
@@ -294,5 +305,13 @@ impl Classify for BookCategoryClassifier {
 
     fn classify_document(&self, doc: &Value, min_confidence: Option<f64>) -> Result<Prediction, String> {
         Ok(BookCategoryClassifier::classify_document(self, doc, min_confidence))
+    }
+
+    fn min_confidence(&self) -> Option<f64> {
+        self.is_enabled().then(|| BookCategoryClassifier::min_confidence(self))
+    }
+
+    fn expected_accuracy(&self, confidence: f64) -> Option<f64> {
+        BookCategoryClassifier::expected_accuracy(self, confidence)
     }
 }
