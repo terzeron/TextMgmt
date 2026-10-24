@@ -49,6 +49,12 @@ impl BookManagerApi for BookManager {
         BookManager::get_book_preview_with_base(self, id, None, chapters, resource_base_url.unwrap_or("")).await
     }
 
+    async fn get_book_preview_with_pages(&self, id: i64, pages: Option<i64>, chapters: Option<i64>, resource_base_url: Option<&str>) -> BookResponse {
+        let pages = pages.map(|n| n.clamp(0, i64::from(u32::MAX)) as u32);
+        let chapters = chapters.map(|n| n.clamp(0, i64::from(u32::MAX)) as u32);
+        BookManager::get_book_preview_with_base(self, id, pages, chapters, resource_base_url.unwrap_or("")).await
+    }
+
     async fn get_pdf_pages(&self, id: i64, start: i64, end: i64) -> BookResponse {
         BookManager::get_pdf_pages(self, id, start, end).await
     }
@@ -82,7 +88,12 @@ impl BookManagerApi for BookManager {
     }
 
     async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, i64, Option<String>, Option<String>) {
-        let opts = CoverPageOpts { category: Some(category.to_string()), size: size.max(0) as usize, cursor: Some(cursor.to_string()), exclude_categories: exclude_categories.map(<[String]>::to_vec).unwrap_or_default() };
+        let opts = CoverPageOpts {
+            category: Some(category.to_string()),
+            size: size.max(0) as usize,
+            cursor: Some(cursor.to_string()),
+            exclude_categories: exclude_categories.map(<[String]>::to_vec).unwrap_or_default(),
+        };
         let (items, total, next_cursor, error) = BookManager::get_cover_books_paged(self, opts).await;
         (items, total as i64, next_cursor, error)
     }

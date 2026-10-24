@@ -1,0 +1,60 @@
+# Rust 전환 진행표
+
+기준: `feature/rust-backend`, 2026-10-25. 기존 `docs/rust-test-seams.md` 설계와 Python 동작을 기준으로 TDD를 수행한다.
+미등록 Rust 테스트는 구현을 가정해 작성한 초안이다. 실제 계약으로 맞추되 테스트의 동작 단언을 보존한다.
+
+## 완료 기준
+
+- 운영 backend·utils의 Python 기능을 Rust 실행 경로에 연결한다.
+- 각 변경은 실패 테스트 → 구현 → 해당 테스트 통과 순서로 검증한다.
+- API의 인증·입출력·오류 코드와 파일 수정 동작을 Python과 대조한다.
+- 미구현 기본값, 미등록 테스트, `ignore`, Python 호출을 전수 확인하고 남은 예외를 명시한다.
+- React와 모델 학습까지의 범위는 사용자 답변으로 확정한다. 공통 범위인 backend·utils 이식은 계속한다.
+- `pdfscan`·`epubscan`은 다른 세션이 맡으므로 이 작업에서 수정하지 않는다.
+- Python 원본은 검증 기준으로 유지한다. 배포·push·운영 데이터 변경은 별도 승인 대상이다.
+
+## 순서와 검증
+
+1. **PDF 조회·편집**: `pdf_pages`, `pdf_delete_pages`, `pdf_delete_pages_gaps`를 등록한다.
+   캐시·페이지 범위·원본 보존·권한·HTTP 라우트를 검증한다.
+2. **미리보기·표지**: `book_preview`, `cover`, `cover_status`, `epub_line_count`를 등록한다.
+   실제 PDF·EPUB fixture와 I/O 실패 대역으로 검증한다.
+3. **일반 API**: `main`, `main_mock`, `main_gaps`, `main_bulk_rename`, `api_exploration`을 등록한다.
+   검색·도서·카테고리·분류·재적재 라우트의 Python 계약을 검증한다.
+4. **운영 연결**: 실제 HTTP 세션·Google 검증·ES·DB·매니저 생성과 서버 실행을 연결한다.
+   로컬 fake 서버와 실제 프로세스 smoke test로 검증한다.
+5. **공통 모듈·도구**: 기존 `doc_reader`·`loader` 작업을 확인하고 미등록 테스트 및 남은 Python 호출을 해소한다.
+   문서 fixture, 임시 디렉토리, fake ES로 검증한다.
+6. **전수 검증**: Python/Rust 기능 대응표, 미구현·ignore 목록, 실행 구성과 패키징을 확인한다.
+   스캐너를 제외한 workspace 테스트·Clippy·관련 Python 회귀 결과와 coverage를 기록한다.
+
+## 현재 상태
+
+- 기존 커밋 `ad3e0ee`: 분류 CLI 8개 명령 이식. 학습·export는 Python 호출이다.
+- `00d99f0`: PDF 페이지 조회 라우트, 권한·범위·캐시 테스트 등록.
+- 도서/만화의 preview·download·html-resource·validate·cover 라우트를 연결했다.
+- `book_preview` 100개, `pdf_pages` 24개, `cover` 23개, `comics_manager` 11개가 통과했다.
+  EPUB 테스트 54개의 외부 ES 조건과 임시 파일 테스트 2개의 ignore를 제거했다.
+- SVG xlink 표지 참조, RGB/Gray/PNG predictor PDF 이미지, 썸네일 추출기 주입 누락을 수정했다.
+- ComicsManager가 BookManagerApi를 위임하도록 연결했다. 만화의 preview·validate·HTML 리소스 경로를 실제 관리자와 검증했다.
+- `cargo test --workspace --exclude pdfscan --exclude epubscan --locked`: 2,081 passed, 0 failed, 92 ignored.
+- `cargo clippy -p backend --all-targets --locked -- -D warnings`: 통과.
+- `uv run --no-sync python -m pytest tests/`: 3,040 passed, 3 failed. 아래의 기존 실패와 동일하다.
+- 알려진 기존 Python 실패: PDF 표지 테스트 3건에서 `Image.get_flattened_data`가 없다.
+- 별도 미커밋 변경: loader·문서 파서·스캐너·frontend·CI·k8s 등. 변경을 선별해 커밋한다.
+
+## 다음 구현과 남은 제한
+
+- 전체 전환은 미완료다. 서버 바이너리는 아직 실행 stub이며 AppDeps 운영 조립도 완성하지 않았다.
+- PDF 삭제·크롭·분할·삽입, cover_status, 일반 관리 API와 loader 연결을 이어서 구현한다.
+- `cover_status.py`는 SQLite 파일 캐시를 쓴다. Rust workspace에는 SQLite 의존성이 없다.
+  기존 DB 파일 호환을 유지할 의존성 선택과 추가는 AGENTS.md의 의존성 승인 대상이다.
+- PDF 썸네일은 빈 페이지와 단일 JPEG/RGB/Gray 픽셀 이미지 페이지를 지원한다.
+  텍스트·벡터·1비트·CMYK 등 범용 PDF 렌더링은 아직 Python과 동등하지 않다.
+- 다운로드 응답은 파일을 메모리에 읽는다. 운영 연결 전에 대형 파일 스트리밍 경로를 마련해야 한다.
+- 기존 facade의 `get_book_preview`를 유지하고 pages 인자를 받는 `get_book_preview_with_pages`를 추가했다.
+- epubcheck 테스트는 실제 구현 경계인 CommandRunner로 옮겼다. 60초 전달을 확인하며,
+  프로세스 종료는 workspace의 sysdeps `run_kills_a_command_that_exceeds_the_timeout` 테스트가 검증한다.
+- GitNexus CLI 인덱스를 갱신했다. FTS 구축은 Invalid UTF8로 실패했다.
+  MCP는 오래된 인덱스와 잘못 연결된 심볼 ID를 보고하므로 실제 소스와 회귀 검증을 병행한다.
+- 이 세션은 Python 원본·배포 설정·스캐너 작업을 수정하지 않았다.

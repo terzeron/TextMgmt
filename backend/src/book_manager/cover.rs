@@ -87,6 +87,10 @@ pub trait Thumbnailer: Send + Sync {
 }
 
 impl BookManager {
+    pub(super) fn thumbnailer(&self) -> Option<Arc<dyn Thumbnailer>> {
+        self.cover_ext().thumbnailer
+    }
+
     /// EPUB 표지 이미지 멤버 경로. 명시한 표지가 없으면 guide·manifest의 표지 XHTML에서 이미지를 찾는다.
     pub fn find_epub_cover_member<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Option<String> {
         epub_cover::find_epub_cover_member(archive)
@@ -161,11 +165,7 @@ impl BookManager {
             return (None, Some(EMPTY_URL.to_string()));
         }
         let before = before_idref.to_string();
-        self.change_epub_cover(
-            book_id,
-            Box::new(move |service, relative, revision, backup| service.insert_illustration_backup(relative, revision, &before, Some(&url), data.as_deref(), backup)),
-        )
-        .await
+        self.change_epub_cover(book_id, Box::new(move |service, relative, revision, backup| service.insert_illustration_backup(relative, revision, &before, Some(&url), data.as_deref(), backup))).await
     }
 
     /// EPUB 쪽 이미지의 크롭·분할·삭제·삽입을 한 번에 저장한다: (결과, 오류 메시지).

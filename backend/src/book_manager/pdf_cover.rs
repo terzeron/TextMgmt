@@ -1,8 +1,8 @@
 //! PDF 표지 렌더링. Python `_extract_cover_thumbnail`의 PDF 갈래와 `_is_mostly_blank_cover`에 대응한다.
 //!
 //! TODO(pdf): Python은 pdfium으로 쪽을 그린다. pdfium 바인딩(`pdfium-render`)은 런타임에 `libpdfium`이 있어야 해서 이 crate의 의존에 넣지 않았다.
-//! 그래서 여기서는 `lopdf`만으로 렌더링할 수 있는 두 경우만 지원한다: 내용이 없는 쪽(흰 쪽)과 쪽 전체를 덮는 JPEG 이미지 한 장뿐인 쪽(스캔본).
-//! 그 밖의 쪽(텍스트, 벡터, 다른 이미지 필터)은 `None`이고, 호출자는 표지를 만들 수 없는 파일로 취급한다.
+//! 여기서는 빈 쪽과 쪽 전체를 덮는 이미지 한 장뿐인 쪽을 지원한다. JPEG 및 8비트 RGB/Gray 픽셀 스트림을 읽는다.
+//! 그 밖의 쪽(텍스트, 벡터 등)은 `None`이고, 호출자는 표지를 만들 수 없는 파일로 취급한다.
 //!
 //! 안전: 파일 크기, 이미지 바이트, 이미지 화소 수를 읽기와 디코딩 전에 상한과 비교한다.
 
@@ -79,19 +79,45 @@ fn page_content(doc: &Document, page_id: ObjectId) -> Option<PageContent> {
         return None;
     }
     let stream = images[0];
+    if stream.content.len() > MAX_PDF_COVER_IMAGE_BYTES {
+        return None;
+    }
     let filter = stream.dict.get(b"Filter").ok().and_then(|f| match f {
         Object::Name(name) => Some(name.clone()),
         Object::Array(list) if list.len() == 1 => list[0].as_name().ok().map(<[u8]>::to_vec),
         _ => None,
-    })?;
-    if filter != b"DCTDecode" || stream.content.len() > MAX_PDF_COVER_IMAGE_BYTES {
+    });
+    if filter.as_deref() == Some(b"DCTDecode") {
+        let (w, h) = image::ImageReader::new(std::io::Cursor::new(&stream.content)).with_guessed_format().ok()?.into_dimensions().ok()?;
+        if u64::from(w) * u64::from(h) > MAX_PDF_COVER_IMAGE_PIXELS {
+            return None;
+        }
+        return image::load_from_memory_with_format(&stream.content, image::ImageFormat::Jpeg).ok().map(PageContent::Image);
+    }
+    // PDF의 픽셀 스트림은 PNG/JPEG 컨테이너가 없다. 선언한 크기로 출력 상한을 정한 뒤 압축을 푼다.
+    if stream.dict.get(b"BitsPerComponent").ok()?.as_i64().ok()? != 8 || [b"SMask".as_slice(), b"Mask", b"Decode"].iter().any(|key| stream.dict.has(key)) {
         return None;
     }
-    let (w, h) = image::ImageReader::new(std::io::Cursor::new(&stream.content)).with_guessed_format().ok()?.into_dimensions().ok()?;
-    if u64::from(w) * u64::from(h) > MAX_PDF_COVER_IMAGE_PIXELS {
+    let w = u32::try_from(stream.dict.get(b"Width").ok()?.as_i64().ok()?).ok()?;
+    let h = u32::try_from(stream.dict.get(b"Height").ok()?.as_i64().ok()?).ok()?;
+    let pixels = u64::from(w) * u64::from(h);
+    if pixels == 0 || pixels > MAX_PDF_COVER_IMAGE_PIXELS {
         return None;
     }
-    image::load_from_memory_with_format(&stream.content, image::ImageFormat::Jpeg).ok().map(PageContent::Image)
+    let colorspace = stream.dict.get(b"ColorSpace").ok()?.as_name().ok()?;
+    let channels = match colorspace {
+        b"DeviceRGB" => 3,
+        b"DeviceGray" => 1,
+        _ => return None,
+    };
+    let expected = usize::try_from(pixels.checked_mul(channels)?).ok()?;
+    // PNG predictor는 복원 전 각 행에 필터 바이트 하나를 더 쓴다. 중간 버퍼도 이 한도 안에서만 허용한다.
+    let data = stream.get_plain_content_with_limit(expected.checked_add(h as usize)?).ok()?;
+    if data.len() != expected {
+        return None;
+    }
+    let image = if channels == 3 { DynamicImage::ImageRgb8(RgbImage::from_raw(w, h, data)?) } else { DynamicImage::ImageLuma8(image::GrayImage::from_raw(w, h, data)?) };
+    Some(PageContent::Image(image))
 }
 
 /// 쪽의 `[x0, x1] x [y0, y1]`(0~1, 위가 0) 영역을 `out` 크기로 그린다.

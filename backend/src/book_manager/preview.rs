@@ -103,6 +103,11 @@ impl From<ZipError> for PreviewFailure {
 }
 
 impl BookManager {
+    /// Python과 같은 공개 검증 지점. EPUB 미리보기의 HTML 호환 변환을 수행한다.
+    pub fn _expand_self_closing_rcdata(data: &[u8]) -> Vec<u8> {
+        expand_self_closing_rcdata(data)
+    }
+
     fn mtime_of(&self, path: &Path) -> Option<SystemTime> {
         self.fs.metadata(path).ok().and_then(|m| m.modified().ok())
     }
@@ -434,7 +439,9 @@ impl BookManager {
                 let html = Html::parse_document(&content);
                 for element in html.select(&selector) {
                     let value = element.value();
-                    let url = ["src", "href", "data", "poster"].iter().filter_map(|a| value.attr(a)).find(|u| !u.is_empty()).unwrap_or("");
+                    // attr("href")는 빈 namespace만 찾는다. SVG의 xlink:href는 attrs()의 로컬 이름으로 읽는다.
+                    let url =
+                        ["src", "href", "xlink:href", "data", "poster"].iter().filter_map(|a| value.attrs().find(|(name, _)| name == a).map(|(_, url)| url)).find(|u| !u.is_empty()).unwrap_or("");
                     if !url.is_empty() && !url.starts_with("data:") {
                         let clean = clean_href(url);
                         if !clean.is_empty() {

@@ -136,7 +136,13 @@ impl BookManager {
         }
 
         let (path, file_type) = (book.file_path.clone(), book.file_type.clone());
-        let data = tokio::task::spawn_blocking(move || Self::_extract_cover_thumbnail(&path, &file_type, Some(width))).await.unwrap_or_else(|e| {
+        let thumbnailer = self.thumbnailer();
+        let data = tokio::task::spawn_blocking(move || match thumbnailer {
+            Some(extractor) => extractor.extract_cover_thumbnail(&path, &file_type, Some(width)),
+            None => Self::_extract_cover_thumbnail(&path, &file_type, Some(width)),
+        })
+        .await
+        .unwrap_or_else(|e| {
             // 손상 파일 등은 여기로 온다. 화면은 포맷명 상자로 대체한다.
             log::warn!("Cover extraction failed for book_id={book_id} ({}): {e}", book.file_path.display());
             None

@@ -13,6 +13,14 @@ path = "src/lib.rs"
 name = "pdf_pages"
 path = "../tests/rust/backend/pdf_pages.rs"
 
+[[test]]
+name = "book_preview"
+path = "../tests/rust/backend/book_preview.rs"
+
+[[test]]
+name = "cover"
+path = "../tests/rust/backend/cover.rs"
+
 [[bin]]
 name = "backend"
 path = "src/bin/backend.rs"

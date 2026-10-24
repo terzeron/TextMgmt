@@ -244,6 +244,11 @@ pub trait BookManagerApi: Send + Sync {
         BookResponse { status_code: 501, ..BookResponse::default() }
     }
 
+    /// PDF 페이지 수를 받는 확장. 기존 facade 대역은 챕터 기반 메서드를 계속 쓸 수 있다.
+    async fn get_book_preview_with_pages(&self, id: i64, _pages: Option<i64>, chapters: Option<i64>, resource_base_url: Option<&str>) -> BookResponse {
+        self.get_book_preview(id, chapters, resource_base_url).await
+    }
+
     async fn get_pdf_pages(&self, _id: i64, _start: i64, _end: i64) -> BookResponse {
         BookResponse { status_code: 501, ..BookResponse::default() }
     }

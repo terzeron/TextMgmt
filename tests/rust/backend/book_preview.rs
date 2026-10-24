@@ -3,42 +3,8 @@
 //! EPUB 미리보기(preview)와 다운로드(download) 엔드포인트 통합 테스트.
 //! 테스트용 미니 EPUB을 직접 만들어서 실제 EPUB 파일이 없는 환경에서도 동작한다.
 //! Python의 `backend_test_setup`/`test_book` fixture는 `Setup`/`TestBook`과 `register`로 옮겼다.
-//! ES는 `TM_ES_URL`(과 `TM_ES_BOOK_INDEX`)이 가리키는 테스트 ES를 쓴다. 없으면 panic하므로 해당 테스트는 `#[ignore]`이고 `--ignored`로만 돌린다.
-//!
-//! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.2, 3.5, 3.6, 3.11, 3.12). 함수명과 시그니처는 Python과 같다. 튜플 반환 `(result, error)`는 그대로 튜플이다.
-//! - `backend::book_manager::{BookManager, BookManagerDeps}`
-//!   `BookManager::from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, RuntimeError>` (구 `BookManager::new()`. `TM_ES_*` 환경 변수로 ES에 접속)
-//!   `BookManager::with_deps(BookManagerDeps) -> BookManager` (구 `BookManager::for_test`)
-//!   `BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>)`와 소비형 빌더:
-//!     `.with_book_lookup(Arc<dyn BookLookup>)`, `.with_process_spawner(Arc<dyn ProcessSpawner>)` (구 `hooks::set_epubcheck_spawner`),
-//!     `.with_pdf_opener(Arc<dyn PdfOpener>)` (구 `hooks::set_pdf_opener`), `.with_fs(Arc<dyn FsOps>)` (구 `hooks::set_unlink_hook`, `set_temp_file_observer`)
-//!   `bm.path_prefix() -> PathBuf`, `bm.es_manager() -> Arc<dyn EsManagerApi>` (`BookManagerApi` 메서드. 구 pub 필드)
-//!   `bm.add_book(&self, data: Value) -> (Option<i64>, Option<String>)` (async, `data`는 inode 문자열을 키로 한 JSON 객체)
-//!   `bm.get_book_preview(&self, book_id: i64, chapters: i64) -> axum::response::Response` (async. 문서 3.2는 `BookResponse`를 말하지만 이 파일은 axum 응답을 그대로 쓴다)
-//!   `bm.validate_epub(&self, book_id: i64) -> (Option<Value>, Option<String>)` (async)
-//!   `bm.validate_pdf(&self, book_id: i64) -> Result<(Option<Value>, Option<String>), RuntimeError>` (async)
-//!   `BookManager::_get_epub_total_chapters(path: &Path) -> usize`
-//!   `BookManager::_find_opf_path(archive: &mut ZipArchive<File>) -> String`
-//!   `BookManager::_evict_old_cache(dir: &Path)`, `BookManager::_evict_old_cache_with(dir: &Path, fs: &dyn FsOps)` (`_with` 말단 함수 규칙. 문서에 없어 가정)
-//!   `BookManager::_validate_preview_epub(path: &Path) -> (bool, Option<String>)`
-//!   `BookManager::_expand_self_closing_rcdata(data: &[u8]) -> Vec<u8>`
-//!   `BookManager::EPUB_IMAGE_POLICY_VERSION` (`Display`)
-//! - `backend::book_manager::{BookRef, BookLookup, RuntimeError}`
-//!   `BookRef { book_id: i64, file_path: PathBuf, file_type: String }` (`Clone`)
-//!   `trait BookLookup { async fn get_book(&self, book_id: i64) -> (Option<BookRef>, Option<String>) }` (`async_trait`)
-//! - `backend::es_manager::{EsManagerApi, ESManager, RealEsConnector}`: `EsManagerApi`는 `common::es_fake::FakeEsManager`가 구현한다. 실제 ES는
-//!   `ESManager::connect(env, &RealEsConnector, &SystemClock)`로 붙는다(`RealEsConnector` 이름은 문서에 없어 `SystemClock`/`RealFs` 규칙으로 가정)
-//! - `sysdeps::{ProcessSpawner, ChildProcess, TimedOut, FsOps, SystemClock}`: epubcheck 대역과 파일 시스템 대역
-//!   `trait ProcessSpawner { fn spawn(&self, argv: &[String]) -> io::Result<Box<dyn ChildProcess>> }`
-//!   `trait ChildProcess { async fn communicate(&mut self, timeout: Duration) -> Result<(Vec<u8>, Vec<u8>), TimedOut>; fn returncode(&self) -> Option<i32>; fn kill(&mut self); async fn wait(&mut self) }`
-//! - `backend::pdf::{PdfOpener, PdfDoc, PdfError}`: `trait PdfOpener { fn open(&self, path: &Path) -> Result<Box<dyn PdfDoc>, PdfError> }`,
-//!   `trait PdfDoc { fn check_pdf_syntax(&self) -> Result<Vec<String>, PdfError>; fn docinfo(&self) -> HashMap<String, String>; fn page_count(&self) -> usize; fn pdf_version(&self) -> String; fn close(&self) }`,
-//!   `PdfError { kind: String, message: String }`
-//! - `backend::main::{app_with, AppDeps, AuthMode, BookManagerApi}`: `app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(Arc<dyn BookManagerApi>))`
-//! - `backend::book::Book::path_prefix() -> PathBuf`
-//! - `backend::auth::create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`
-//! 공용 도구: `common::{zipx, fsx, es_fake, faulty_fs}`. 구 전역 `hooks::set_*` 4종과 `Restore` 가드는 없앴다(Deps는 만들 때 한 번에 꽂는다).
-//! 가정한 dev-dependency: zip, roxmltree, chrono, futures, async-trait, scraper, tempfile, tokio, serde_json.
+//! 모든 파일은 테스트별 TempDir에 만들고 FakeEsManager를 주입한다.
+//! epubcheck는 CommandRunner 대역으로 출력·시간 상한을 검증한다.
 
 mod common;
 
@@ -46,25 +12,21 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::future::Future;
 use std::io::{Cursor, Read, Write};
-use std::panic::{AssertUnwindSafe, resume_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use backend::book::Book;
-use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef, RuntimeError};
-use backend::es_manager::{ESManager, EsManagerApi, RealEsConnector};
-use backend::main::{AppDeps, AuthMode, BookManagerApi as _, app_with};
+use backend::book_manager::{BookManager, BookManagerDeps, BookRef};
+use backend::main::{AppDeps, AuthMode, app_with};
 use backend::pdf::{PdfDoc, PdfError, PdfOpener};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
 use common::faulty_fs::FaultyFs;
 use common::fsx::set_mtime_ago;
 use common::zipx::{ZipMode, write_zip_with};
-use futures::FutureExt;
 use serde_json::{Value, json};
-use sysdeps::{ChildProcess, ProcessSpawner, SystemClock, TimedOut};
+use sysdeps::{CommandError, CommandOutput, CommandRunner};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -72,6 +34,38 @@ const CATEGORY: &str = "_epub";
 const OPF_NS: &str = "http://www.idpf.org/2007/opf";
 const CNT_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
 const NCX_NS: &str = "http://www.daisy.org/z3986/2005/ncx/";
+
+#[tokio::test]
+async fn test_html_routes_preserve_comics_prefix_and_download_attachment() {
+    common::setup_env();
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("page.html"), r#"<html><body><script>alert(1)</script><img src="cover.png"><p>본문</p></body></html>"#).unwrap();
+    let image = common::image::png_bytes(2, 2);
+    fs::write(tmp.path().join("cover.png"), &image).unwrap();
+    let es = FakeEsManager::with_doc(json!({"category":"test", "title":"HTML", "author":"", "file_path":"page.html", "file_type":"html", "file_size":100, "updated_time":"2024-01-01T00:00:00"}));
+    let deps = BookManagerDeps::new(tmp.path().to_path_buf(), es);
+    let app = app_with(
+        AppDeps::new(AuthMode::Fixed(json!({"role":"admin"})))
+            .with_book_manager(Arc::new(BookManager::with_deps(deps.clone())))
+            .with_comics_manager(Arc::new(backend::comics_manager::ComicsManager::with_deps(deps))),
+    );
+    let client = TestClient::with_app(app);
+    for prefix in ["", "/comics"] {
+        let preview = client.get(&format!("{prefix}/preview/1")).await;
+        assert_eq!(preview.status, 200);
+        assert!(preview.text().contains(&format!("{prefix}/html-resource/1?path=cover.png")));
+        assert!(!preview.text().contains("alert(1)"));
+        let resource = client.get(&format!("{prefix}/html-resource/1?path=cover.png")).await;
+        assert_eq!(resource.status, 200);
+        assert_eq!(resource.body, image);
+        assert_eq!(client.get(&format!("{prefix}/html-resource/1")).await.status, 422);
+        assert_eq!(client.get(&format!("{prefix}/html-resource/1?path=../outside.png")).await.status, 400);
+        let download = client.get(&format!("{prefix}/download/1")).await;
+        assert_eq!(download.status, 200);
+        assert_eq!(download.header("content-disposition"), Some("attachment; filename=\"page.html\""));
+        assert_eq!(download.body, fs::read(tmp.path().join("page.html")).unwrap());
+    }
+}
 
 // ── EPUB 생성 헬퍼 ────────────────────────────────────────
 
@@ -502,39 +496,27 @@ fn create_corrupted_epub(path: &Path, chapter_count: usize, missing_all: bool) {
 
 /// BookManager + TestClient (ES 공유).
 struct Setup {
-    bm: BookManager,
+    bm: Arc<BookManager>,
     client: TestClient,
+    es: Arc<FakeEsManager>,
+    _tmp: tempfile::TempDir,
 }
 
-/// Python fixture `backend_test_setup`. ES를 쓸 수 없으면 panic한다.
-/// 이 fixture를 쓰는 테스트는 `#[ignore]`이므로 `--ignored`로 일부러 돌릴 때만 실행된다.
+/// 테스트별 파일과 ES 상태를 분리한다.
 async fn backend_test_setup() -> Setup {
     common::setup_env();
-    assert!(std::env::var_os("TM_ES_URL").is_some(), "TM_ES_URL이 필요하다. `cargo test -- --ignored`는 실제 ES가 있을 때만 쓴다");
-    let bm = BookManager::from_env(&real_env, &real_es).expect("BookManager를 만들지 못했다");
-    if let Err(e) = bm.es_manager().create_index() {
-        panic!("ES 인덱스를 준비하지 못했다: {e:?}");
-    }
-    let _ = bm.es_manager().refresh();
+    let tmp = tempfile::tempdir().unwrap();
+    let es = FakeEsManager::new();
+    let bm = Arc::new(BookManager::with_deps(BookManagerDeps::new(tmp.path().to_path_buf(), es.clone())));
     let token = backend::auth::create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
-    let client = TestClient::new().cookie("tm_access_token", &token);
-    Setup { bm, client }
-}
-
-fn real_env(key: &str) -> Option<String> {
-    std::env::var(key).ok()
-}
-
-/// 실제 ES에 붙는 `EsManagerApi`. `from_env`의 `es_factory`로 쓴다.
-// TODO(common): 실제 ES 연결 생성자가 문서에 없다. `ESManager::connect(env, &RealEsConnector, &SystemClock)`로 가정했다.
-fn real_es(_url: &str) -> Arc<dyn EsManagerApi> {
-    Arc::new(ESManager::connect(&real_env, &RealEsConnector, &SystemClock).expect("ES에 접속하지 못했다"))
+    let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(bm.clone()))).cookie("tm_access_token", &token);
+    Setup { bm, client, es, _tmp: tmp }
 }
 
 impl Setup {
     /// 같은 ES와 경로를 쓰되 epubcheck 대역을 꽂은 `BookManager`로 라우터를 만든 클라이언트. 구 `hooks::set_epubcheck_spawner`.
     fn client_with_spawner(&self, spawner: Arc<FakeSpawner>) -> TestClient {
-        let deps = BookManagerDeps::new(self.bm.path_prefix(), self.bm.es_manager()).with_process_spawner(spawner);
+        let deps = BookManagerDeps::new(self.bm.path_prefix(), self.es.clone()).with_runner(spawner);
         let token = backend::auth::create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
         TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(Arc::new(BookManager::with_deps(deps))))).cookie("tm_access_token", &token)
     }
@@ -565,7 +547,7 @@ fn build_epub_data(bm: &BookManager, epub_path: &Path) -> Value {
 
     let meta = fs::metadata(epub_path).unwrap();
     let inode = meta.ino();
-    let rel_path = epub_path.strip_prefix(&bm.path_prefix()).unwrap();
+    let rel_path = epub_path.strip_prefix(bm.path_prefix()).unwrap();
     let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.6f").to_string();
     let mut data = serde_json::Map::new();
     data.insert(
@@ -585,7 +567,9 @@ struct Registered<'a> {
 /// EPUB 파일을 ES에 등록하고 book_id를 돌려준다.
 async fn register<'a>(setup: &'a Setup, epub_path: &Path) -> Registered<'a> {
     let data = build_epub_data(&setup.bm, epub_path);
-    let (book_id, error) = setup.bm.add_book(data).await;
+    let docs = serde_json::from_value::<std::collections::BTreeMap<i64, Value>>(data.clone()).unwrap();
+    setup.es.with(|s| s.docs.extend(docs));
+    let (book_id, error) = setup.bm.add_book(&serde_json::from_value(data).unwrap()).await;
     assert!(book_id.is_some_and(|id| id != 0) && error.as_deref().is_none_or(str::is_empty), "Failed to register epub: {error:?}");
     Registered { setup, book_id: book_id.unwrap(), path: epub_path.to_path_buf() }
 }
@@ -606,11 +590,8 @@ async fn cleanup_book(setup: &Setup, book_id: i64, epub_path: &Path) {
 
 impl Registered<'_> {
     async fn run<F: Future<Output = ()>>(&self, body: F) {
-        let outcome = AssertUnwindSafe(body).catch_unwind().await;
+        body.await;
         cleanup_book(self.setup, self.book_id, &self.path).await;
-        if let Err(panic) = outcome {
-            resume_unwind(panic);
-        }
     }
 
     /// 이 책의 미리보기 캐시 경로(`{book_id}.epub`).
@@ -651,14 +632,11 @@ impl TestBook {
     }
 
     async fn run<F: Future<Output = ()>>(&self, body: F) {
-        let outcome = AssertUnwindSafe(body).catch_unwind().await;
+        body.await;
         // cleanup
         let _ = self.setup.client.delete(&format!("/books/{}", self.book_id)).await;
         unlink(&self.cache_file());
         unlink(&self.epub_path);
-        if let Err(panic) = outcome {
-            resume_unwind(panic);
-        }
     }
 }
 
@@ -671,7 +649,7 @@ fn parse_epub_zip(content: &[u8]) -> Zip {
 }
 
 fn namelist<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>) -> Vec<String> {
-    (0..zf.len()).map(|i| zf.by_index(i).unwrap().name().to_string()).collect()
+    (0..zf.len()).map(|i| zf.by_index(i).unwrap().name().unwrap().into_owned()).collect()
 }
 
 fn zip_read<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>, name: &str) -> Vec<u8> {
@@ -739,7 +717,6 @@ mod test_book_preview {
 
     /// 정상 EPUB → 200 + 유효한 ZIP (mimetype, container.xml 포함).
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_returns_valid_epub() {
         let book = book!();
         book.run(async {
@@ -758,7 +735,6 @@ mod test_book_preview {
 
     /// preview 응답에 Content-Encoding: identity와 Cache-Control: no-transform이 포함된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_response_headers() {
         let book = book!();
         book.run(async {
@@ -772,7 +748,6 @@ mod test_book_preview {
 
     /// chapters=1 → spine의 itemref가 1개 이하.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_limits_chapters() {
         let book = book!();
         book.run(async {
@@ -794,7 +769,6 @@ mod test_book_preview {
     /// 회귀: 스파인 첫머리가 nav·표지(linear="no")면 예전엔 그것들이 미리보기
     /// 정원을 차지해 넘길 페이지가 거의 남지 않았다. 이제 linear 항목만 골라야 한다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_skips_nonlinear_front_matter() {
         let setup = setup!();
         let epub_path = setup.bm.path_prefix().join(CATEGORY).join("[Test Author] Nonlinear Front.epub");
@@ -818,7 +792,6 @@ mod test_book_preview {
 
     /// preview에서 사용되지 않는 manifest item이 제거된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_strips_unreferenced_manifest_items() {
         let book = book!();
         book.run(async {
@@ -843,7 +816,6 @@ mod test_book_preview {
 
     /// 두 번째 요청 시 동일 응답 (캐시 히트).
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_caches_result() {
         let book = book!();
         book.run(async {
@@ -863,7 +835,6 @@ mod test_book_preview {
 
     /// 없는 book_id → 404.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_nonexistent_book_returns_404() {
         let setup = setup!();
         let response = setup.client.get("/preview/999999999?chapters=3").await;
@@ -875,7 +846,6 @@ mod test_book_preview {
     /// spine에 등록된 ch1이 실제 ZIP에 없을 때,
     /// KeyError로 인한 500 대신 graceful하게 처리되어야 한다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_missing_chapter_graceful() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -895,7 +865,6 @@ mod test_book_preview {
 
     /// 모든 챕터 파일이 누락된 EPUB → 유효성 검증에서 422 반환.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_all_chapters_missing_graceful() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -916,7 +885,6 @@ mod test_book_preview {
 
     /// CSS를 참조하는 EPUB → preview에 CSS 파일이 포함된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_includes_css_resources() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -939,7 +907,6 @@ mod test_book_preview {
 
     /// SVG `<image>`로 커버를 참조하는 EPUB → preview에 커버 이미지가 포함된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_includes_svg_image_cover() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -962,7 +929,6 @@ mod test_book_preview {
 
     /// 500KB 초과 폰트 파일은 미리보기에서 제외된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_excludes_large_font() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -985,7 +951,6 @@ mod test_book_preview {
 
     /// 500KB 이하 폰트 파일은 미리보기에 포함된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_includes_small_font() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1006,7 +971,6 @@ mod test_book_preview {
 
     /// manifest에 없는 spine idref는 필터링되고 정상 동작한다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_skips_invalid_spine_items() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1030,7 +994,6 @@ mod test_book_preview {
 
     /// 챕터에서 참조하지 않는 CSS와 그 CSS가 참조하는 폰트가 미리보기에서 제외된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_excludes_unreferenced_css() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1054,7 +1017,6 @@ mod test_book_preview {
 
     /// 제외된 대용량 폰트의 @font-face 선언이 CSS에서 제거된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_strips_font_face_for_excluded_font() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1089,7 +1051,6 @@ mod test_epub_error_recovery {
 
     /// OPF에 선언되지 않은 네임스페이스 프리픽스(opf:role)가 있어도 미리보기가 생성된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_unbound_namespace_prefix() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1114,7 +1075,6 @@ mod test_epub_error_recovery {
 
     /// `<package` 뒤가 개행이거나 opf: 외의 접두사(xsi:)가 미선언이어도 브라우저가 파싱할 수 있는 OPF를 낸다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_opf_is_strictly_parsable_for_other_unbound_prefixes() {
         for package_open in ["<package\n    xmlns=\"http://www.idpf.org/2007/opf\" version=\"2.0\">", "<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"2.0\">"] {
             let setup = setup!();
@@ -1157,7 +1117,6 @@ mod test_epub_error_recovery {
     ///
     /// 코퍼스의 을유세계문학전집 86건이 이 형태였고, 뷰어는 이 정규화에 기대어 정상 동작한다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_normalizes_nonstandard_mimetype_layout() {
         for layout in ["compressed", "directory_first", "compressed_not_first"] {
             let setup = setup!();
@@ -1195,7 +1154,7 @@ mod test_epub_error_recovery {
                 let mut zf = parse_epub_zip(&response.body);
                 {
                     let first = zf.by_index(0).unwrap();
-                    assert_eq!((first.name().to_string(), first.compression()), ("mimetype".to_string(), CompressionMethod::Stored), "layout={layout}");
+                    assert_eq!((first.name().unwrap().into_owned(), first.compression()), ("mimetype".to_string(), CompressionMethod::Stored), "layout={layout}");
                 }
                 assert_eq!(zip_read(&mut zf, "mimetype"), b"application/epub+zip", "layout={layout}");
             })
@@ -1205,7 +1164,6 @@ mod test_epub_error_recovery {
 
     /// spine·manifest·NCX 가 ZIP 에 없는 문서를 가리켜도 목차에 죽은 링크를 남기지 않고 챕터 수를 부풀리지 않는다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_drops_dead_ncx_entries_and_counts_only_existing_chapters() {
         for chapters in [0, 10] {
             let setup = setup!();
@@ -1241,7 +1199,6 @@ mod test_epub_error_recovery {
     ///
     /// 코퍼스의 죄와 벌 (하).epub 이 128KiB 에서 잘린 이 형태였다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_of_truncated_download_is_a_clear_422() {
         for chapters in [0, 10] {
             let setup = setup!();
@@ -1261,7 +1218,6 @@ mod test_epub_error_recovery {
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_total_chapters_of_truncated_download_is_zero() {
         let setup = setup!();
         let epub_path = setup.bm.path_prefix().join(CATEGORY).join("[Test Author] Truncated Count.epub");
@@ -1277,7 +1233,6 @@ mod test_epub_error_recovery {
     /// 코퍼스의 9_BLGL [모아이] 사규연애 4권이 챕터 하나 때문에 통째로 422 였다.
     /// 읽을 수 없는 챕터만 누락 챕터처럼 건너뛰고 나머지는 열린다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_skips_chapter_whose_zip_entry_is_unreadable() {
         for chapters in [0, 10] {
             let setup = setup!();
@@ -1285,8 +1240,7 @@ mod test_epub_error_recovery {
             create_epub_with_unbound_prefix(&epub_path);
             let offset = {
                 let mut zf = ZipArchive::new(File::open(&epub_path).unwrap()).unwrap();
-                let header_offset = zf.by_name("OEBPS/ch2.xhtml").unwrap().header_start() as usize;
-                header_offset
+                zf.by_name("OEBPS/ch2.xhtml").unwrap().header_start() as usize
             };
             let mut data = fs::read(&epub_path).unwrap();
             data[offset..offset + 4].copy_from_slice(&[0, 0, 0, 0]); // 로컬 헤더 시그니처를 망가뜨린다
@@ -1310,7 +1264,6 @@ mod test_epub_error_recovery {
 
     /// OPF에 선언되지 않은 프리픽스가 있어도 총 챕터 수가 올바르게 반환된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_total_chapters_unbound_prefix() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1326,7 +1279,6 @@ mod test_epub_error_recovery {
 
     /// container.xml이 없어도 OPF를 직접 탐색하여 미리보기가 생성된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_missing_container_xml() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1352,7 +1304,6 @@ mod test_epub_error_recovery {
 
     /// container.xml이 없어도 총 챕터 수가 올바르게 반환된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_total_chapters_missing_container_xml() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1368,7 +1319,6 @@ mod test_epub_error_recovery {
 
     /// container.xml에 선언되지 않은 네임스페이스 프리픽스가 있어도 lxml recover로 미리보기가 생성된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_corrupted_container_xml() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1393,7 +1343,6 @@ mod test_epub_error_recovery {
 
     /// spine이 없어도 manifest의 XHTML 문서 순서로 미리보기가 생성된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_missing_spine() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1419,7 +1368,6 @@ mod test_epub_error_recovery {
 
     /// spine이 없으면 총 챕터 수가 0으로 반환된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_total_chapters_missing_spine() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1435,7 +1383,6 @@ mod test_epub_error_recovery {
 
     /// container.xml이 존재하지 않는 OPF를 가리키면 422를 반환한다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_opf_missing_in_archive() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1456,7 +1403,6 @@ mod test_epub_error_recovery {
 
     /// container.xml도 없고 .opf 파일도 없으면 422를 반환한다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_no_opf_at_all() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1476,7 +1422,6 @@ mod test_epub_error_recovery {
 
     /// container.xml이 완전한 바이너리 쓰레기여도 regex 폴백으로 미리보기가 생성된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_binary_garbage_container_xml() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1499,7 +1444,6 @@ mod test_epub_error_recovery {
 
     /// container.xml이 깨진 XML이어도 총 챕터 수가 올바르게 반환된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_total_chapters_corrupted_container_xml() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1513,7 +1457,6 @@ mod test_epub_error_recovery {
 
     /// container.xml이 바이너리 쓰레기여도 regex 폴백으로 총 챕터 수가 반환된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_total_chapters_binary_garbage_container() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1529,7 +1472,6 @@ mod test_epub_error_recovery {
 
     /// 손상된 ZIP 파일은 422를 반환한다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_bad_zip_file() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1548,7 +1490,6 @@ mod test_epub_error_recovery {
 
     /// 손상된 ZIP 파일에 대해 총 챕터 수가 0으로 반환된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_total_chapters_bad_zip() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -1570,7 +1511,7 @@ mod test_find_opf_path {
 
     fn find_opf_path(epub_path: &Path) -> String {
         let mut zin = ZipArchive::new(File::open(epub_path).unwrap()).unwrap();
-        BookManager::_find_opf_path(&mut zin)
+        BookManager::_find_opf_path(&mut zin).unwrap_or_default()
     }
 
     /// 정상 container.xml에서 OPF 경로를 추출한다.
@@ -1644,7 +1585,6 @@ mod test_book_download {
 
     /// book_id만으로 download 요청 → 200 + EPUB 바이너리.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_download_by_book_id_only() {
         let book = book!();
         book.run(async {
@@ -1659,7 +1599,6 @@ mod test_book_download {
 
     /// download 응답에 Content-Encoding: identity와 Cache-Control: no-transform이 포함된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_download_response_headers() {
         let book = book!();
         book.run(async {
@@ -1673,7 +1612,6 @@ mod test_book_download {
 
     /// 라우트 제거 후 /download/{id}/{path} → 404 (회귀 테스트).
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_download_with_path_returns_404() {
         let book = book!();
         book.run(async {
@@ -1686,7 +1624,6 @@ mod test_book_download {
 
     /// 없는 book_id → 200 + 빈 문자열 응답.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_download_nonexistent_book() {
         let setup = setup!();
         let response = setup.client.get("/download/999999999").await;
@@ -1697,7 +1634,6 @@ mod test_book_download {
 
     /// download한 EPUB이 유효한 ZIP 파일이다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_download_returns_valid_epub_content() {
         let book = book!();
         book.run(async {
@@ -1776,7 +1712,7 @@ mod test_cache_eviction {
 
         let sub_dir = tmp.path().join("subdir");
         fs::create_dir(&sub_dir).unwrap();
-        set_mtime_ago(&sub_dir, 2 * DAY);
+        File::open(&sub_dir).unwrap().set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::now() - Duration::from_secs(2 * DAY))).unwrap();
 
         BookManager::_evict_old_cache(tmp.path());
 
@@ -1848,7 +1784,7 @@ mod test_cache_eviction {
             }
             None
         });
-        BookManager::_evict_old_cache_with(tmp.path(), faulty.as_ref());
+        BookManager::_evict_old_cache_with(faulty.as_ref(), tmp.path());
 
         // 1개는 실패로 남고, 나머지 2개는 삭제됨
         let remaining: Vec<&PathBuf> = files.iter().filter(|f| f.exists()).collect();
@@ -2098,7 +2034,6 @@ mod test_ncx_filtering {
 
     /// NCX에서 미리보기에 포함되지 않은 파일 참조 navPoint가 제거된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_strips_ncx_extra_navpoints() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -2134,7 +2069,6 @@ mod test_ncx_filtering {
 
     /// NCX에서 fragment-only src를 가진 navPoint는 유지된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_keeps_fragment_only_navpoints() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -2190,7 +2124,6 @@ mod test_ncx_filtering {
 
     /// guide reference의 href에 fragment가 포함되어도 올바르게 처리된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_guide_href_with_fragment() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -2253,7 +2186,6 @@ mod test_opf_namespace_fix {
 
     /// opf:role이 xmlns:opf 없이 사용된 OPF가 유효한 XML로 출력된다.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_preview_fixes_undeclared_opf_prefix() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -2311,34 +2243,7 @@ mod test_opf_namespace_fix {
 
 /// epubcheck 프로세스 대역의 호출 기록.
 struct ProcProbe {
-    kill_calls: AtomicUsize,
-    wait_calls: AtomicUsize,
-}
-
-/// `AsyncMock` subprocess. `timeout`이면 `communicate`가 시간 초과로 끝난다(`asyncio.wait_for`가 TimeoutError를 던지는 경우).
-struct FakeProcess {
-    returncode: i32,
-    timeout: bool,
-    probe: Arc<ProcProbe>,
-}
-
-#[async_trait::async_trait]
-impl ChildProcess for FakeProcess {
-    async fn communicate(&mut self, _timeout: Duration) -> Result<(Vec<u8>, Vec<u8>), TimedOut> {
-        if self.timeout { Err(TimedOut) } else { Ok((Vec::new(), Vec::new())) }
-    }
-
-    fn returncode(&self) -> Option<i32> {
-        Some(self.returncode)
-    }
-
-    fn kill(&mut self) {
-        self.probe.kill_calls.fetch_add(1, Ordering::SeqCst);
-    }
-
-    async fn wait(&mut self) {
-        self.probe.wait_calls.fetch_add(1, Ordering::SeqCst);
-    }
+    timeouts: Mutex<Vec<Option<Duration>>>,
 }
 
 enum Behavior {
@@ -2360,24 +2265,28 @@ struct FakeSpawner {
 
 impl FakeSpawner {
     fn new(behavior: Behavior) -> (Arc<Self>, Arc<ProcProbe>) {
-        let probe = Arc::new(ProcProbe { kill_calls: AtomicUsize::new(0), wait_calls: AtomicUsize::new(0) });
+        let probe = Arc::new(ProcProbe { timeouts: Mutex::new(Vec::new()) });
         (Arc::new(Self { behavior, probe: probe.clone() }), probe)
     }
 }
 
-impl ProcessSpawner for FakeSpawner {
-    fn spawn(&self, args: &[String]) -> std::io::Result<Box<dyn ChildProcess>> {
-        // args = ("epubcheck", book_path, "--json", json_path)
-        let (returncode, timeout) = match &self.behavior {
+impl CommandRunner for FakeSpawner {
+    fn run(&self, args: &[String], timeout: Option<Duration>) -> Result<CommandOutput, CommandError> {
+        self.probe.timeouts.lock().unwrap().push(timeout);
+        let returncode = match &self.behavior {
             Behavior::WritesJson { content, returncode } => {
-                fs::write(&args[3], content)?;
-                (*returncode, false)
+                fs::write(&args[3], content).map_err(|e| CommandError::Failed(e.to_string()))?;
+                *returncode
             }
-            Behavior::Noop { returncode } => (*returncode, false),
-            Behavior::NotInstalled => return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "epubcheck")),
-            Behavior::TimesOut => (0, true),
+            Behavior::Noop { returncode } => *returncode,
+            Behavior::NotInstalled => return Err(CommandError::NotFound),
+            Behavior::TimesOut => return Err(CommandError::Timeout),
         };
-        Ok(Box::new(FakeProcess { returncode, timeout, probe: self.probe.clone() }))
+        Ok(CommandOutput { returncode, ..CommandOutput::default() })
+    }
+
+    fn which(&self, _program: &str) -> Option<PathBuf> {
+        None
     }
 }
 
@@ -2400,7 +2309,6 @@ mod test_validate_epub {
 
     /// 정상 EPUB → valid=true 응답.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_validate_valid_epub() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -2427,7 +2335,6 @@ mod test_validate_epub {
 
     /// 에러가 있는 EPUB → valid=false, messages 포함.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_validate_epub_with_errors() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -2460,7 +2367,6 @@ mod test_validate_epub {
 
     /// 지원하지 않는 파일 타입 → failure + 에러 메시지.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_validate_unsupported_type() {
         let setup = setup!();
 
@@ -2472,14 +2378,15 @@ mod test_validate_epub {
 
         use std::os::unix::fs::MetadataExt;
         let meta = fs::metadata(&txt_path).unwrap();
-        let rel_path = txt_path.strip_prefix(&setup.bm.path_prefix()).unwrap();
+        let rel_path = txt_path.strip_prefix(setup.bm.path_prefix()).unwrap();
         let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.6f").to_string();
         let mut data = serde_json::Map::new();
         data.insert(
             meta.ino().to_string(),
             json!({"category": "_txt", "title": "Plain Text", "author": "Test Author", "file_path": rel_path.to_string_lossy(), "file_type": "txt", "file_size": meta.len(), "line_count": 1, "page_count": 0, "isbn": "", "summary": "test txt", "updated_time": now}),
         );
-        let (book_id, _error) = setup.bm.add_book(Value::Object(data)).await;
+        setup.es.with(|s| s.docs.extend(serde_json::from_value::<std::collections::BTreeMap<i64, Value>>(Value::Object(data.clone())).unwrap()));
+        let (book_id, _error) = setup.bm.add_book(&serde_json::from_value(Value::Object(data)).unwrap()).await;
         let book_id = book_id.expect("book_id");
 
         let book = Registered { setup: &setup, book_id, path: txt_path.clone() };
@@ -2495,7 +2402,6 @@ mod test_validate_epub {
 
     /// 파일이 존재하지 않는 EPUB → failure + 에러 메시지.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_validate_file_not_found() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -2517,7 +2423,6 @@ mod test_validate_epub {
 
     /// 존재하지 않는 book_id → failure + 에러 메시지.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_validate_book_not_found() {
         let setup = setup!();
 
@@ -2530,7 +2435,6 @@ mod test_validate_epub {
 
     /// epubcheck 미설치 → failure + 에러 메시지.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_validate_epubcheck_not_installed() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -2553,7 +2457,6 @@ mod test_validate_epub {
 
     /// epubcheck 타임아웃 → failure + 에러 메시지.
     #[tokio::test]
-    #[ignore = "실제 ES 필요: TM_ES_URL"]
     async fn test_validate_epubcheck_timeout() {
         let setup = setup!();
         let epub_dir = setup.bm.path_prefix().join(CATEGORY);
@@ -2570,24 +2473,13 @@ mod test_validate_epub {
             let body = response.json();
             assert_eq!(body["status"], "failure");
             assert!(body["error"].as_str().unwrap().contains("timed out"));
-            assert_eq!(probe.kill_calls.load(Ordering::SeqCst), 1, "kill은 한 번만 불려야 한다");
-            assert_eq!(probe.wait_calls.load(Ordering::SeqCst), 1, "wait는 한 번만 await되어야 한다");
+            assert_eq!(*probe.timeouts.lock().unwrap(), vec![Some(Duration::from_secs(60))]);
         })
         .await;
     }
 }
 
 // ── tests: epubcheck validate_epub 단위 테스트 (Docker 불필요) ──
-
-/// 단위 테스트용 책 조회 대역. `AsyncMock(return_value=(book, None))` get_book.
-struct FakeBooks(Option<BookRef>, Option<String>);
-
-#[async_trait::async_trait]
-impl BookLookup for FakeBooks {
-    async fn get_book(&self, _book_id: i64) -> (Option<BookRef>, Option<String>) {
-        (self.0.clone(), self.1.clone())
-    }
-}
 
 /// 단위 테스트용 책 조회 설정. `manager`가 Deps를 만들 때마다 같은 책 조회 대역과 `search_by_id`가 `{}`를 돌려주는 ES 대역을 꽂는다.
 /// epubcheck/PDF 대역은 만들 때 꽂아야 하므로 `validate_*_with`가 `configure`로 더한다.
@@ -2600,7 +2492,14 @@ struct UnitSetup {
 impl UnitSetup {
     fn manager(&self, configure: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> BookManager {
         common::setup_env();
-        let deps = BookManagerDeps::new(self.tmp_path.clone(), FakeEsManager::with_doc(json!({}))).with_book_lookup(Arc::new(FakeBooks(self.book.clone(), self.error.clone())));
+        let es = FakeEsManager::new();
+        if let Some(book) = &self.book {
+            es.set_doc(Some(json!({"category":"test", "title":"Test", "author":"", "file_path":book.file_path.strip_prefix(&self.tmp_path).unwrap(), "file_type":book.file_type, "file_size":0, "updated_time":"2024-01-01T00:00:00"})));
+        }
+        if let Some(error) = &self.error {
+            es.fail("search_by_id", error);
+        }
+        let deps = BookManagerDeps::new(self.tmp_path.clone(), es);
         BookManager::with_deps(configure(deps))
     }
 }
@@ -2635,7 +2534,7 @@ mod test_validate_epub_unit {
 
     /// epubcheck 대역을 끼운 manager로 `validate_epub(1)`을 부른다.
     async fn validate_with(bm: &UnitSetup, spawner: Arc<FakeSpawner>) -> (Option<Value>, Option<String>) {
-        validate_configured(bm, |d| d.with_process_spawner(spawner)).await
+        validate_configured(bm, |d| d.with_runner(spawner)).await
     }
 
     /// `configure`로 Deps를 더 꽂은 manager로 `validate_epub(1)`을 부른다.
@@ -2672,7 +2571,6 @@ mod test_validate_epub_unit {
     }
 
     /// 성공 시 임시 JSON 파일이 삭제되는지 검증.
-    #[ignore = "tempfile.mkstemp 추적 seam이 통일안에 없다: 임시 JSON 생성/정리를 FsOps(remove_file 호출 기록)로 볼 수 있는지 구현 후 확정"]
     #[tokio::test]
     async fn test_temp_file_cleanup_on_success() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2684,7 +2582,7 @@ mod test_validate_epub_unit {
 
         let valid_json = make_epubcheck_json_unit(true, None, None);
         let (spawner, _probe) = FakeSpawner::new(Behavior::WritesJson { content: valid_json, returncode: 0 });
-        let (_result, error) = validate_configured(&bm, |d| d.with_process_spawner(spawner).with_fs(faulty.clone())).await;
+        let (_result, error) = validate_configured(&bm, |d| d.with_runner(spawner).with_fs(faulty.clone())).await;
 
         assert!(error.is_none());
         let created = faulty.calls_of("remove_file");
@@ -2693,7 +2591,6 @@ mod test_validate_epub_unit {
     }
 
     /// JSON 파싱 실패 시에도 임시 파일이 삭제되는지 검증.
-    #[ignore = "tempfile.mkstemp 추적 seam이 통일안에 없다: 임시 JSON 생성/정리를 FsOps(remove_file 호출 기록)로 볼 수 있는지 구현 후 확정"]
     #[tokio::test]
     async fn test_temp_file_cleanup_on_parse_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2704,7 +2601,7 @@ mod test_validate_epub_unit {
         let faulty = FaultyFs::new();
 
         let (spawner, _probe) = FakeSpawner::new(Behavior::WritesJson { content: "BROKEN".to_string(), returncode: 0 });
-        let (result, _error) = validate_configured(&bm, |d| d.with_process_spawner(spawner).with_fs(faulty.clone())).await;
+        let (result, _error) = validate_configured(&bm, |d| d.with_runner(spawner).with_fs(faulty.clone())).await;
 
         assert!(result.is_none());
         let created = faulty.calls_of("remove_file");
@@ -2834,7 +2731,7 @@ fn make_mock_pdf_book(tmp_path: &Path, file_type: &str) -> BookRef {
 }
 
 /// pikepdf 대역을 끼운 manager로 `validate_pdf(1)`을 부른다.
-async fn validate_pdf_with(bm: &UnitSetup, opened: Result<MockPdf, String>) -> Result<(Option<Value>, Option<String>), RuntimeError> {
+async fn validate_pdf_with(bm: &UnitSetup, opened: Result<MockPdf, String>) -> (Option<Value>, Option<String>) {
     bm.manager(|d| d.with_pdf_opener(Arc::new(FakeOpener(Mutex::new(Some(opened)))))).validate_pdf(1).await
 }
 
@@ -2850,7 +2747,7 @@ mod test_validate_pdf_unit {
         let bm = unit_manager(tmp.path(), Some(book), None);
 
         let (mock_pdf, _close) = make_mock_pdf(vec![], &[], 10, "1.7");
-        let (result, error) = validate_pdf_with(&bm, Ok(mock_pdf)).await.unwrap();
+        let (result, error) = validate_pdf_with(&bm, Ok(mock_pdf)).await;
 
         assert!(error.is_none());
         let result = result.unwrap();
@@ -2868,7 +2765,7 @@ mod test_validate_pdf_unit {
 
         let issues = vec!["cross-reference table mismatch".to_string(), "missing object stream".to_string()];
         let (mock_pdf, _close) = make_mock_pdf(issues, &[], 10, "1.7");
-        let (result, error) = validate_pdf_with(&bm, Ok(mock_pdf)).await.unwrap();
+        let (result, error) = validate_pdf_with(&bm, Ok(mock_pdf)).await;
 
         assert!(error.is_none());
         let result = result.unwrap();
@@ -2886,7 +2783,7 @@ mod test_validate_pdf_unit {
         let book = make_mock_pdf_book(tmp.path(), "pdf");
         let bm = unit_manager(tmp.path(), Some(book), None);
 
-        let (result, error) = validate_pdf_with(&bm, Err("not a PDF file".to_string())).await.unwrap();
+        let (result, error) = validate_pdf_with(&bm, Err("not a PDF file".to_string())).await;
 
         assert!(result.is_none());
         assert!(err_has(&error, "Failed to open PDF"));
@@ -2901,7 +2798,7 @@ mod test_validate_pdf_unit {
 
         let docinfo = [("/Title", "Test PDF Title"), ("/Author", "Test Author"), ("/Producer", "Test Producer"), ("/CreationDate", "D:20240101120000")];
         let (mock_pdf, _close) = make_mock_pdf(vec![], &docinfo, 42, "1.5");
-        let (result, error) = validate_pdf_with(&bm, Ok(mock_pdf)).await.unwrap();
+        let (result, error) = validate_pdf_with(&bm, Ok(mock_pdf)).await;
 
         assert!(error.is_none());
         let result = result.unwrap();
@@ -2920,7 +2817,7 @@ mod test_validate_pdf_unit {
         let book = make_mock_pdf_book(tmp.path(), "epub");
         let bm = unit_manager(tmp.path(), Some(book), None);
 
-        let (result, error) = bm.manager(|d| d).validate_pdf(1).await.unwrap();
+        let (result, error) = bm.manager(|d| d).validate_pdf(1).await;
 
         assert!(result.is_none());
         assert!(err_has(&error, "Not a PDF file"));
@@ -2934,7 +2831,7 @@ mod test_validate_pdf_unit {
         let book = BookRef { book_id: 1, file_type: "pdf".to_string(), file_path: missing_path };
         let bm = unit_manager(tmp.path(), Some(book), None);
 
-        let (result, error) = bm.manager(|d| d).validate_pdf(1).await.unwrap();
+        let (result, error) = bm.manager(|d| d).validate_pdf(1).await;
 
         assert!(result.is_none());
         assert!(err_has(&error, "File not found"));
@@ -2946,7 +2843,7 @@ mod test_validate_pdf_unit {
         let tmp = tempfile::tempdir().unwrap();
         let bm = unit_manager(tmp.path(), None, Some("No book found"));
 
-        let (result, error) = bm.manager(|d| d).validate_pdf(1).await.unwrap();
+        let (result, error) = bm.manager(|d| d).validate_pdf(1).await;
 
         assert!(result.is_none());
         assert!(err_has(&error, "Book not found"));
@@ -2960,7 +2857,7 @@ mod test_validate_pdf_unit {
         let bm = unit_manager(tmp.path(), Some(book), None);
 
         let (mock_pdf, _close) = make_mock_pdf(vec![], &[], 5, "2.0");
-        let (result, error) = validate_pdf_with(&bm, Ok(mock_pdf)).await.unwrap();
+        let (result, error) = validate_pdf_with(&bm, Ok(mock_pdf)).await;
 
         assert!(error.is_none());
         let result = result.unwrap();
@@ -2983,10 +2880,8 @@ mod test_validate_pdf_unit {
         mock_pdf.issues = Err("internal check error".to_string());
         let outcome = validate_pdf_with(&bm, Ok(mock_pdf)).await;
 
-        match outcome {
-            Err(e) => assert!(e.to_string().contains("internal check error"), "RuntimeError 메시지: {e}"),
-            Ok(other) => panic!("RuntimeError(internal check error)를 기대했지만 {other:?}"),
-        }
+        assert!(outcome.0.is_none());
+        assert!(err_has(&outcome.1, "internal check error"));
 
         assert_eq!(close_calls.load(Ordering::SeqCst), 1, "close는 한 번만 불려야 한다");
     }
@@ -2999,7 +2894,7 @@ async fn test_epub_unquoted_href_and_full_view() {
     let tmp = tempfile::tempdir().unwrap();
     let tmp_path = tmp.path();
 
-    let epub_file = Book::path_prefix().join("encoded_book.epub");
+    let epub_file = tmp_path.join("encoded_book.epub");
     fs::create_dir_all(epub_file.parent().unwrap()).unwrap();
     let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
@@ -3042,10 +2937,10 @@ async fn test_epub_unquoted_href_and_full_view() {
     let es = FakeEsManager::with_doc(
         json!({"category": "test", "title": "Test Book", "author": "Author", "file_path": "encoded_book.epub", "file_type": "epub", "file_size": 1000, "updated_time": "2026-01-01T00:00:00.000000"}),
     );
-    let bm = BookManager::with_deps(BookManagerDeps::new(tmp_path.to_path_buf(), es).with_book_lookup(Arc::new(FakeBooks(None, None))));
+    let bm = BookManager::with_deps(BookManagerDeps::new(tmp_path.to_path_buf(), es));
 
-    let resp = bm.get_book_preview(1, 0).await;
-    assert_eq!(resp.status().as_u16(), 200);
+    let resp = bm.get_book_preview(1, None, Some(0)).await;
+    assert_eq!(resp.status_code, 200);
 
     let cache_file = tmp_path.join(".preview_cache").join(format!("1_ch1_v{}.epub", BookManager::EPUB_IMAGE_POLICY_VERSION));
     assert!(cache_file.exists());
@@ -3085,7 +2980,7 @@ async fn test_preview_expands_self_closing_title() {
     let tmp = tempfile::tempdir().unwrap();
     let tmp_path = tmp.path();
 
-    let epub_file = Book::path_prefix().join("self_closing_title.epub");
+    let epub_file = tmp_path.join("self_closing_title.epub");
     fs::create_dir_all(epub_file.parent().unwrap()).unwrap();
     let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="2.0">
@@ -3112,10 +3007,10 @@ async fn test_preview_expands_self_closing_title() {
     let es = FakeEsManager::with_doc(
         json!({"category": "test", "title": "Self Closing Title", "author": "Author", "file_path": "self_closing_title.epub", "file_type": "epub", "file_size": 1000, "updated_time": "2026-01-01T00:00:00.000000"}),
     );
-    let bm = BookManager::with_deps(BookManagerDeps::new(tmp_path.to_path_buf(), es).with_book_lookup(Arc::new(FakeBooks(None, None))));
+    let bm = BookManager::with_deps(BookManagerDeps::new(tmp_path.to_path_buf(), es));
 
-    let resp = bm.get_book_preview(2, 0).await;
-    assert_eq!(resp.status().as_u16(), 200);
+    let resp = bm.get_book_preview(2, None, Some(0)).await;
+    assert_eq!(resp.status_code, 200);
 
     let cache_file = tmp_path.join(".preview_cache").join(format!("2_ch1_v{}.epub", BookManager::EPUB_IMAGE_POLICY_VERSION));
     let mut zout = ZipArchive::new(File::open(&cache_file).unwrap()).unwrap();

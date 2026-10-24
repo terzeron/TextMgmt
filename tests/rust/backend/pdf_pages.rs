@@ -213,7 +213,7 @@ mod test_pdf_pages_endpoint {
     async fn test_authentication_precedes_input_validation() {
         let e = env();
         let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(e.bm.clone())));
-        for path in ["/pdf-pages/1", "/pdf-pages/invalid?start=bad", "/comics/pdf-pages/1"] {
+        for path in ["/pdf-pages/1", "/pdf-pages/invalid?start=bad", "/comics/pdf-pages/1", "/preview/1", "/download/1", "/validate/1", "/html-resource/1?path=x", "/comics/preview/1"] {
             assert_eq!(client.get(path).await.status, 401);
         }
     }
@@ -233,9 +233,11 @@ mod test_pdf_pages_endpoint {
         let client = TestClient::with_app(app_with(deps));
         for category in ["test_category", "test_category/child"] {
             e.es.with(|state| state.default_doc.as_mut().unwrap()["category"] = json!(category));
-            let response = client.get("/pdf-pages/1").await;
-            assert_eq!(response.status, 403);
-            assert_eq!(response.json()["detail"], "접근 권한이 없는 카테고리입니다.");
+            for path in ["/pdf-pages/1", "/preview/1", "/download/1", "/validate/1", "/cover/1", "/html-resource/1?path=x"] {
+                let response = client.get(path).await;
+                assert_eq!(response.status, 403, "{path}");
+                assert_eq!(response.json()["detail"], "접근 권한이 없는 카테고리입니다.");
+            }
         }
         e.es.with(|state| state.default_doc.as_mut().unwrap()["category"] = json!("test_category_other"));
         assert_eq!(client.get("/pdf-pages/1").await.status, 200);
@@ -249,6 +251,23 @@ mod test_pdf_pages_endpoint {
         let response = client.get("/comics/pdf-pages/1?start=2&end=3").await;
         assert_eq!(response.status, 200);
         assert_eq!(page_count_bytes(&response.body), 2);
+    }
+
+    #[tokio::test]
+    async fn test_preview_page_limit_and_comics_route() {
+        let e = env();
+        let comics = backend::comics_manager::ComicsManager::with_deps(BookManagerDeps::new(e.temp_dir.clone(), e.es.clone()));
+        let deps = AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_book_manager(e.bm.clone()).with_comics_manager(Arc::new(comics));
+        let client = TestClient::with_app(app_with(deps));
+        for prefix in ["", "/comics"] {
+            let response = client.get(&format!("{prefix}/preview/1?pages=2")).await;
+            assert_eq!(response.status, 200);
+            assert_eq!(page_count_bytes(&response.body), 2);
+            assert_eq!(client.get(&format!("{prefix}/preview/1?pages=bad")).await.status, 422);
+            let validation = client.get(&format!("{prefix}/validate/1")).await;
+            assert_eq!(validation.json()["status"], "success");
+            assert_eq!(validation.json()["result"]["publication"]["page_count"], 5);
+        }
     }
 
     /// 라우터 클로저가 캡처한 manager의 내부 속성을 패치하는 fixture를 `AppDeps::with_book_manager`로 대신한다.

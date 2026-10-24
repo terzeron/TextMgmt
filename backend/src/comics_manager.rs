@@ -1,7 +1,6 @@
 //! 만화 관리자. Python `backend/comics_manager.py`에 대응한다.
 //!
-//! Python은 `BookManager`를 상속한다. Rust `BookManager`가 아직 없으므로 이 파일은 `__init__`이 하는 일
-//! (루트 경로, ES 색인, 선택적 created_time 백필, 불일치 캐시 상태)만 옮긴다.
+//! 만화 루트와 ES 색인을 따로 보관하고 도서 처리 기능은 `BookManager`에 위임한다.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -12,7 +11,11 @@ use std::time::Instant;
 use serde_json::Value;
 use sysdeps::EnvFn;
 
+use crate::book_manager::{BookManager, BookManagerDeps};
 use crate::es_manager::EsManagerApi;
+use crate::main::BookManagerApi;
+
+mod api;
 
 /// Python `RuntimeError`에 대응한다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +42,7 @@ fn monotonic_seconds() -> f64 {
 }
 
 pub struct ComicsManager {
+    inner: BookManager,
     path_prefix: PathBuf,
     es_index_name: String,
     es_manager: Arc<dyn EsManagerApi>,
@@ -50,6 +54,22 @@ pub struct ComicsManager {
 }
 
 impl ComicsManager {
+    /// 책과 분리된 경로·ES·테스트 대역으로 만화 관리자를 만든다.
+    pub fn with_deps(deps: BookManagerDeps) -> Self {
+        let inner = BookManager::with_deps(deps);
+        Self {
+            path_prefix: inner.path_prefix(),
+            es_manager: BookManagerApi::es_manager(&inner),
+            inner,
+            es_index_name: String::new(),
+            backfill_thread: Mutex::new(None),
+            mismatch_cache: None,
+            mismatch_cache_time: 0.0,
+            mismatch_state_lock: Mutex::new(()),
+            mismatch_scan_lock: Mutex::new(()),
+        }
+    }
+
     pub fn from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<ComicsManager, RuntimeError> {
         let Some(dir) = env("TM_COMICS_DIR") else {
             return Err(RuntimeError("The environment variable TM_COMICS_DIR is not set.".to_string()));
@@ -61,16 +81,8 @@ impl ComicsManager {
         log::debug!("{}", path_prefix.display());
         let es_manager = es_factory(&index_name);
         es_manager.create_index().map_err(|e| RuntimeError(format!("create_index failed: {e}")))?;
-        let manager = ComicsManager {
-            path_prefix,
-            es_index_name: index_name,
-            es_manager,
-            backfill_thread: Mutex::new(None),
-            mismatch_cache: None,
-            mismatch_cache_time: 0.0,
-            mismatch_state_lock: Mutex::new(()),
-            mismatch_scan_lock: Mutex::new(()),
-        };
+        let mut manager = Self::with_deps(BookManagerDeps::new(path_prefix, es_manager));
+        manager.es_index_name = index_name;
         manager.backfill_created_time_if_enabled(env);
         Ok(manager)
     }

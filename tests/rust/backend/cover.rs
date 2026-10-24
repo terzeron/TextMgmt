@@ -3,18 +3,8 @@
 //! `BookManager::get_cover` 단위 테스트와 `/cover/{book_id}` 엔드포인트 테스트. Docker/ES 없이 가짜 ES로 돈다.
 //! Python 모듈 스코프 fixture(`temp_dir`, `book_manager_module`)는 테스트마다 새 임시 디렉터리와 관리자로 옮긴다(테스트 사이에 공유 상태가 없다).
 //!
-//! 가정한 API (아직 구현 전이다. Python 이름 그대로이고 비공개 `_x`는 `pub fn x`로 본다. 설계: docs/rust-test-seams.md 3.2, 3.12):
-//! - `backend::book_manager::{BookManager, BookManagerDeps, BookManagerApi, Thumbnailer}`
-//!   - `BookManager::with_deps(BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>).with_thumbnailer(Arc<dyn Thumbnailer>)) -> BookManager`
-//!     (구 `with_es`, `with_es_and_extractor`, `CoverManaging`. ES는 `common::es_fake::FakeEsManager`)
-//!   - `trait Thumbnailer: Send + Sync { fn extract_cover_thumbnail(&self, path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>>; }` (구 `ThumbnailExtractor`. Python `_extract_cover_thumbnail` patch 대체)
-//!   - `async fn get_cover(&self, book_id: i64, width: Option<i64>) -> BookResponse` (`BookManager`와 `ComicsManager`가 `BookManagerApi`로 모두 가진다. `BookResponse { status_code, media_type: Option<String>, body: Vec<u8>, .. }`)
-//!   - `BookManager::COVER_CACHE_VERSION: u32`, `BookManager::COVER_THUMBNAIL_WIDTH: u32`, `BookManager::normalize_cover_width(width: &Value) -> u32` (int만 허용 목록에 있으면 그대로, 그 밖에는 기본 폭)
-//! - `backend::comics_manager::ComicsManager::with_deps(BookManagerDeps) -> ComicsManager` (`BookManager`와 같은 모양. 항목 경로 접두사는 `Deps`의 `path_prefix`로 정해 `Book.path_prefix` 가드가 필요 없다)
-//! - `backend::main::{app_with, AppDeps, AuthMode, BookAccess}`: `AppDeps::new(AuthMode::Cookies).with_book_manager(Arc<dyn BookManagerApi>).with_book_access(Arc<dyn BookAccess>)`, `app_with(deps) -> axum::Router`
-//!   (구 `AppDeps::new(Arc<BookManager>)`, `with_viewer_check`. Python `main.book_manager` 속성 교체와 `ComicsManager` ESManager, `CategoryMapping._init_db` patch를 생성자 주입으로 대신한다)
-//!   - `trait BookAccess { fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<(Option<BookStub>, Option<String>), HttpException>; }` (view_history_api와 같은 가정)
-//! - `backend::auth::create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String` (4인자 통일)
+//! 실제 PDF·EPUB과 주입한 Thumbnailer로 표지 선택·크기·캐시 revision을 검증한다.
+//! HTTP 테스트는 viewer 카테고리 정책과 인증을 실제 라우터에서 확인한다.
 
 mod common;
 
@@ -25,7 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use backend::auth::create_jwt_token;
 use backend::book_manager::{BookManager, BookManagerApi, BookManagerDeps, Thumbnailer};
 use backend::comics_manager::ComicsManager;
-use backend::main::{AppDeps, AuthMode, BookAccess, BookStub, HttpException, app_with};
+use backend::main::{AppDeps, AuthMode, CategoryMappingApi, MappingError, app_with};
 use common::{
     TestClient,
     epub::{EpubSpec, make_epub},
@@ -153,6 +143,35 @@ fn env() -> Env {
 
 mod test_get_cover {
     use super::*;
+
+    #[tokio::test]
+    async fn test_pdf_pixel_stream_formats_and_decode_errors() {
+        for (kind, expected_status) in [("rgb", 200), ("gray", 200), ("rgb_png", 200), ("corrupt", 404), ("cmyk", 404), ("smask", 404)] {
+            let e = env();
+            let path = e.dir().join("pixels.pdf");
+            common::pdf::make_pixel_pdf(&path, &[kind]);
+            use_doc(&e.es, "pixels.pdf", "pdf");
+            let response = e.manager.get_cover(1, None).await;
+            assert_eq!(response.status_code, expected_status, "{kind}");
+            if expected_status == 200 {
+                assert_jpeg_thumbnail(&response.body);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pdf_pixel_stream_size_mismatch_is_rejected() {
+        let e = env();
+        let path = e.dir().join("pixels.pdf");
+        common::pdf::make_pixel_pdf(&path, &["rgb"]);
+        common::pdf::edit_pdf(&path, |doc| {
+            let image = common::pdf::first_xobject_mut(doc, 1);
+            image.dict.set("Width", 1);
+            image.dict.set("Height", 1);
+        });
+        use_doc(&e.es, "pixels.pdf", "pdf");
+        assert_eq!(e.manager.get_cover(1, None).await.status_code, 404);
+    }
 
     #[tokio::test]
     async fn test_epub_cover_image_property() {
@@ -384,8 +403,8 @@ mod test_get_cover {
 
     #[test]
     fn test_normalize_cover_width_rejects_non_int() {
-        assert_eq!(BookManager::normalize_cover_width(&json!(150)), 150);
-        assert_eq!(BookManager::normalize_cover_width(&json!("150")), BookManager::COVER_THUMBNAIL_WIDTH);
+        assert_eq!(BookManager::normalize_cover_width(json!(150).as_i64()), 150);
+        assert_eq!(BookManager::normalize_cover_width(json!("150").as_i64()), BookManager::COVER_THUMBNAIL_WIDTH);
     }
 }
 
@@ -498,12 +517,12 @@ fn admin_client(app: axum::Router) -> TestClient {
     TestClient::with_app(app).cookie("tm_access_token", &token)
 }
 
-/// 모든 책의 viewer 접근을 403으로 막는 `BookAccess`. Python `_ensure_viewer_book_allowed`가 `HTTPException(403)`을 내는 patch를 대신한다.
+/// viewer가 접근할 수 없는 카테고리 정책.
 struct DenyAccess;
 
-impl BookAccess for DenyAccess {
-    fn get_book_and_ensure_viewer_access(&self, _book_id: i64, _payload: &Value, _content_type: &str) -> Result<(Option<BookStub>, Option<String>), HttpException> {
-        Err(HttpException { status_code: 403, detail: "forbidden".to_string() })
+impl CategoryMappingApi for DenyAccess {
+    fn get_hidden_categories(&self, _content_type: &str) -> Result<Vec<String>, MappingError> {
+        Ok(vec!["test_category".into()])
     }
 }
 
@@ -532,10 +551,9 @@ mod test_cover_endpoint {
     }
 
     #[tokio::test]
-    #[ignore = "mock.patch: main._ensure_viewer_book_allowed가 HTTPException(403)을 낸다; BookAccess 메서드 시그니처가 문서에 없어 확정 후 활성화"]
     async fn test_checks_viewer_access() {
         let env = endpoint_env();
-        let client = admin_client(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(env.manager.clone()).with_book_access(Arc::new(DenyAccess))));
+        let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::AuthOnly(json!({"role":"viewer"}))).with_book_manager(env.manager.clone()).with_category_mapping(Arc::new(DenyAccess))));
 
         let response = client.get("/cover/201").await;
 
