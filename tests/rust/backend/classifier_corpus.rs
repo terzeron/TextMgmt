@@ -47,7 +47,6 @@ fn hit(doc_id: &str) -> Value {
 
 /// 가정한 seam: `scan_documents_with`가 `elasticsearch.helpers.scan` 자리에 함수를 주입받는다.
 #[test]
-#[ignore = "mock.patch: elasticsearch.helpers.scan 바꿔치기; DI 설계 후 활성화"]
 fn test_scan_documents_yields_records() {
     let captured: Mutex<Value> = Mutex::new(json!({}));
     let fake_scan = |kwargs: &Value| -> Vec<Value> {
@@ -67,7 +66,6 @@ fn test_scan_documents_yields_records() {
 }
 
 #[test]
-#[ignore = "mock.patch: elasticsearch.helpers.scan 바꿔치기; DI 설계 후 활성화"]
 fn test_scan_documents_honors_explicit_index() {
     let captured: Mutex<Value> = Mutex::new(json!({}));
     let fake_scan = |kwargs: &Value| -> Vec<Value> {
@@ -118,7 +116,6 @@ fn test_fetch_by_path_uses_explicit_index() {
 }
 
 #[test]
-#[ignore = "mock.patch: elasticsearch.helpers.scan 바꿔치기; DI 설계 후 활성화"]
 fn test_collect_writes_only_trainable_rows() {
     let fake_scan = |_: &Value| -> Vec<Value> {
         vec![
@@ -136,14 +133,13 @@ fn test_collect_writes_only_trainable_rows() {
     let tmp = TempDir::new().unwrap();
     let out = tmp.path().join("corpus.jsonl");
     let es = fake_es(Value::Null, Value::Null, "");
-    let stats = collect_with(&*es, &out, CollectOptions { min_chars: 10, excluded_prefixes: vec!["9_".to_string()] }, &fake_scan);
+    let stats = collect_with(&*es, &out, CollectOptions { min_chars: 10, excluded_prefixes: vec!["9_".to_string()] }, &fake_scan).unwrap();
 
     assert_eq!(stats, json!({"kept": 2, "skipped": 3, "categories": 1, "per_category": {"2_소설한국": 2}}));
     assert_eq!(fs::read_to_string(&out).unwrap().trim().lines().count(), 2);
 }
 
 #[test]
-#[ignore = "mock.patch: backend.classifier.reader.read_epub_publisher 가 예외를 던지도록 바꿈; DI 설계 후 활성화"]
 fn test_publisher_of_swallows_reader_errors() {
     let tmp = TempDir::new().unwrap();
     let boom = |_: &Path| -> Result<String, String> { Err("EPUB 깨짐".to_string()) };
@@ -159,12 +155,11 @@ fn epub_docs() -> Vec<Value> {
     ]
 }
 
-fn opts(workers: usize, progress_every: usize) -> AttachOptions {
+fn opts(workers: usize, progress_every: usize) -> AttachOptions<'static> {
     AttachOptions { workers, progress_every, log: None }
 }
 
 #[test]
-#[ignore = "mock.patch: corpus._publisher_of 를 상수 반환 람다로 바꿈; DI 설계 후 활성화"]
 fn test_attach_publishers_reads_only_missing_epubs() {
     let tmp = TempDir::new().unwrap();
     let publisher_of = |_: &Path| "민음사".to_string();
@@ -182,7 +177,6 @@ fn test_attach_publishers_reads_only_missing_epubs() {
 }
 
 #[test]
-#[ignore = "mock.patch: corpus._publisher_of 를 호출되면 실패하는 함수로 바꿈; DI 설계 후 활성화"]
 fn test_attach_publishers_uses_cache_and_skips_disk() {
     let tmp = TempDir::new().unwrap();
     let cache_path = tmp.path().join("pub.json");
@@ -197,7 +191,6 @@ fn test_attach_publishers_uses_cache_and_skips_disk() {
 }
 
 #[test]
-#[ignore = "mock.patch: corpus._publisher_of 를 상수 반환 람다로 바꿈; DI 설계 후 활성화"]
 fn test_attach_publishers_rebuilds_broken_cache() {
     let tmp = TempDir::new().unwrap();
     let cache_path = tmp.path().join("pub.json");
@@ -213,7 +206,6 @@ fn test_attach_publishers_rebuilds_broken_cache() {
 }
 
 #[test]
-#[ignore = "mock.patch: corpus._publisher_of 를 상수 반환 람다로 바꿈; DI 설계 후 활성화"]
 fn test_attach_publishers_skips_documents_without_path() {
     let tmp = TempDir::new().unwrap();
     let publisher_of = |_: &Path| "민음사".to_string();
@@ -226,7 +218,6 @@ fn test_attach_publishers_skips_documents_without_path() {
 }
 
 #[test]
-#[ignore = "mock.patch: corpus._publisher_of 바꿈 + caplog 로 로그 수집; DI 설계 후 활성화"]
 fn test_attach_publishers_logs_progress() {
     let tmp = TempDir::new().unwrap();
     let publisher_of = |_: &Path| "민음사".to_string();

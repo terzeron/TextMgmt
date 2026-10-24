@@ -35,7 +35,7 @@
 //!   - `is_enabled()`, `classify_path(&Path) -> Prediction`, `classify_documents(&[Value]) -> Vec<Prediction>`, `build_document(&Path) -> Value`, `min_confidence() -> f64`, `indexed_path(&Path) -> String`
 //! - `backend::es_manager::EsTransport`: `index_name()`, `call(op, kwargs) -> Result<Value, EsError>` (`get`, `search` 기본 구현). 구 `EsLookup`(`get_by_id`, `search_by_path`) 대신
 //!   `common::es_dummy::DummyEs`의 `get`(id 조회)·`search`(`query.term.file_path` 조회) 응답으로 같은 조회를 만든다.
-//! - `backend::classifier::training::rss_note_with(status_path: &Path) -> String` (전역 `set_proc_status_path` 대신. 문서에 없는 가정이라 해당 테스트는 `#[ignore]` 유지)
+//! - `backend::classifier::training::rss_note_with(status_path: &Path) -> String` (전역 `set_proc_status_path` 대신. 상태 파일 경로를 인자로 받는다)
 
 mod common;
 
@@ -100,10 +100,17 @@ fn train_opts() -> TrainOptions {
     TrainOptions { accept_parent: Some(series_to_parent()), spill_dir: None }
 }
 
-/// pytest fixture `trained`에 대응한다.
+/// pytest fixture `trained`에 대응한다. Rust는 학습하지 않으므로, 같은 문서·설정으로 Python이 학습해 내보낸 모델과
+/// 홀드아웃 리포트를 읽는다(`python tests/test_classifier_export.py trained` 로 다시 쓴다).
+fn load_trained(name: &str) -> (CategoryModel, Value) {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny").join(name);
+    let model = CategoryModel::load(Some(&dir)).expect("학습 결과 픽스처를 읽어야 한다");
+    let report: Value = serde_json::from_slice(&fs::read(dir.join("report.json")).unwrap()).unwrap();
+    (model, report)
+}
+
 fn trained() -> (CategoryModel, Value) {
-    let config = merge_config(&default_config(), &json!({"corpus": {"min_per_category": 5}, "model": {"n_jobs": 1}, "fields": small_fields(), "holdout": 0.25}));
-    train(&mut make_docs(40), &config, train_opts()).unwrap()
+    load_trained("trained")
 }
 
 fn approx(a: f64, b: f64, abs: f64) -> bool {
@@ -348,7 +355,6 @@ fn test_softmax_confidence_temperature_flattens_probabilities() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_train_learns_the_three_categories() {
     let (model, report) = trained();
     let classes: HashSet<&str> = model.classes.iter().map(String::as_str).collect();
@@ -360,7 +366,6 @@ fn test_train_learns_the_three_categories() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_predict_returns_ranked_candidates_and_refuses_when_unsure() {
     let (model, _) = trained();
     let doc = json!({"text": vocab("3_무협"), "title": "무림 이야기", "author": "작가1", "publisher": "테스트출판사", "type": "epub", "name": "무림맹_1.epub"});
@@ -376,14 +381,12 @@ fn test_predict_returns_ranked_candidates_and_refuses_when_unsure() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_predict_on_empty_input_returns_empty_list() {
     let (model, _) = trained();
     assert!(model.predict(&[]).is_empty());
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_model_save_and_load_round_trip() {
     let tmp = TempDir::new().unwrap();
     let (model, _) = trained();
@@ -459,7 +462,6 @@ fn test_max_coverage_at_returns_zero_when_target_is_unreachable() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_evaluate_accepts_parent_genre_as_correct() {
     let (model, _) = trained();
     let docs = vec![json!({"cat": "3_무협", "text": vocab("3_무협"), "title": "", "author": "", "publisher": "", "type": "epub", "name": "무림맹_1.epub"})];
@@ -478,7 +480,6 @@ fn test_train_raises_when_every_category_is_too_small() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_format_report_shows_curve_and_both_targets() {
     let (_, report) = trained();
     let text = format_report(&report);
@@ -518,12 +519,11 @@ fn test_classifier_without_a_model_refuses_to_answer() {
     let pred = clf.classify_path(&tmp.path().join("책.epub"));
     assert_eq!(pred.category, None);
     assert!(pred.reason.contains("모델 파일이 없어"));
-    let preds = clf.classify_documents(&[json!({}), json!({})]);
-    assert!(preds == vec![pred.clone(), pred.clone()] || clf.classify_documents(&[json!({}), json!({})]).iter().all(|p| p.category.is_none()));
+    let preds = clf.classify_documents(&[json!({}), json!({})], None);
+    assert!(preds == vec![pred.clone(), pred.clone()] || clf.classify_documents(&[json!({}), json!({})], None).iter().all(|p| p.category.is_none()));
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_build_document_prefers_elasticsearch_by_inode() {
     use std::os::unix::fs::MetadataExt;
     let tmp = TempDir::new().unwrap();
@@ -543,7 +543,6 @@ fn test_build_document_prefers_elasticsearch_by_inode() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_build_document_falls_back_to_path_lookup_then_to_the_file() {
     let tmp = TempDir::new().unwrap();
     let (model, _) = trained();
@@ -560,7 +559,6 @@ fn test_build_document_falls_back_to_path_lookup_then_to_the_file() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_build_document_reads_the_file_when_elasticsearch_is_absent() {
     let tmp = TempDir::new().unwrap();
     let (model, _) = trained();
@@ -577,12 +575,11 @@ fn test_build_document_reads_the_file_when_elasticsearch_is_absent() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_classify_path_uses_the_model() {
     let tmp = TempDir::new().unwrap();
     let (model, _) = trained();
     let f = tmp.path().join("무림맹_1.txt");
-    fs::write(&f, vec![vocab("3_무협"); 10].join(" ")).unwrap();
+    fs::write(&f, [vocab("3_무협"); 10].join(" ")).unwrap();
 
     let clf = BookCategoryClassifier::new(Some(Arc::new(model)), opts(None, None, Some(0.0)));
     let pred: Prediction = clf.classify_path(&f);
@@ -590,7 +587,6 @@ fn test_classify_path_uses_the_model() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_min_confidence_precedence() {
     let (model, _) = trained();
     assert_eq!(BookCategoryClassifier::new(Some(Arc::new(model.clone())), opts(None, None, Some(0.55))).min_confidence(), 0.55);
@@ -600,7 +596,6 @@ fn test_min_confidence_precedence() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_threshold_comes_from_the_holdout_when_config_leaves_it_open() {
     // 확신도 척도는 데이터마다 달라 고정값을 못 쓴다. 학습이 홀드아웃에서 고른다.
     let (model, report) = trained();
@@ -610,7 +605,6 @@ fn test_threshold_comes_from_the_holdout_when_config_leaves_it_open() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_explicit_threshold_wins_over_the_calibrated_one() {
     let (mut model, _) = trained();
     model.config = merge_config(&model.config, &json!({"decision": {"min_confidence": 0.77}}));
@@ -618,7 +612,6 @@ fn test_explicit_threshold_wins_over_the_calibrated_one() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_uncalibrated_model_refuses_everything() {
     // 홀드아웃 기록이 없으면 오분류보다 무판정을 고른다.
     let (mut model, _) = trained();
@@ -627,16 +620,14 @@ fn test_uncalibrated_model_refuses_everything() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_target_accuracy_95_picks_the_stricter_threshold() {
-    let config = merge_config(&default_config(), &json!({"corpus": {"min_per_category": 5}, "model": {"n_jobs": 1}, "fields": small_fields(), "holdout": 0.25, "decision": {"target_accuracy": 0.95}}));
-    let (model, report) = train(&mut make_docs(40), &config, train_opts()).unwrap();
+    // 목표 정답률 0.95 로 학습한 픽스처(trained_95)를 읽는다.
+    let (model, report) = load_trained("trained_95");
     assert_eq!(model.meta["calibrated_threshold"], report["at_precision_95"]["threshold"]);
     assert_eq!(model.meta["calibrated_target"], 0.95);
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_indexed_path_is_relative_to_the_library_root() {
     let tmp = TempDir::new().unwrap();
     let (model, _) = trained();
@@ -656,7 +647,6 @@ fn test_indexed_path_is_relative_to_the_library_root() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_build_document_finds_documents_by_relative_path() {
     let tmp = TempDir::new().unwrap();
     let (model, _) = trained();
@@ -685,7 +675,6 @@ fn test_model_path_follows_the_environment_variable() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
 fn test_save_and_load_use_the_environment_path() {
     let mut env = EnvGuard::new();
     let tmp = TempDir::new().unwrap();
@@ -843,7 +832,7 @@ fn spill_train_config() -> Value {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
+#[ignore = "학습은 Python에 남는다: backend/classifier/training.py"]
 fn test_train_with_spill_gives_the_same_model_as_without() {
     // 스필은 메모리를 아끼는 길일 뿐, 성적이 달라지면 안 된다.
     //
@@ -871,7 +860,7 @@ fn test_train_with_spill_gives_the_same_model_as_without() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
+#[ignore = "학습은 Python에 남는다: backend/classifier/training.py"]
 fn test_train_with_spill_releases_train_text_but_keeps_the_holdout() {
     // 원문 해제가 홀드아웃까지 건드리면 평가가 조용히 빈 문서로 돌아간다.
     let tmp = TempDir::new().unwrap();
@@ -887,7 +876,7 @@ fn test_train_with_spill_releases_train_text_but_keeps_the_holdout() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
+#[ignore = "학습은 Python에 남는다: backend/classifier/training.py"]
 fn test_train_without_spill_leaves_the_documents_untouched() {
     let mut docs = make_docs(40);
     train(&mut docs, &spill_train_config(), train_opts()).unwrap();
@@ -922,14 +911,13 @@ fn test_shrink_sources_leaves_the_filename_alone() {
 }
 
 #[test]
-#[ignore = "mock.patch: builtins.open이 OSError를 던지게 해 /proc/self/status 읽기 실패를 만듦; seam 설계 문서에 /proc 경로 주입 항목이 없어 유지"]
 fn test_rss_note_is_empty_when_proc_status_is_unreadable() {
     // 가정한 seam: /proc 상태 파일 경로를 인자로 받는 `rss_note_with`. 읽을 수 없는 경로를 준다. (전역 `set_proc_status_path` 대체)
     assert_eq!(rss_note_with(&PathBuf::from("/no/such/proc/status")), "");
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요"]
+#[ignore = "학습은 Python에 남는다: backend/classifier/training.py"]
 fn test_train_logs_dropped_small_categories() {
     let config = merge_config(&default_config(), &json!({"corpus": {"min_per_category": 5}, "model": {"n_jobs": 1}, "fields": small_fields(), "holdout": 0.25}));
     let mut docs = make_docs(40);

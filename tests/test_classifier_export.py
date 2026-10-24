@@ -3,7 +3,7 @@
 
 작은 합성 모델을 학습해 내보내고, 파일 구조·sha256·shape·전치 레이아웃을 검증한다.
 `python tests/test_classifier_export.py` 로 실행하면 저장소 fixture
-(`tests/fixtures/classifier_tiny/`)를 다시 쓴다. Rust parity 테스트가 이 fixture 를 읽는다.
+(`tests/fixtures/classifier_tiny/`)를, `... trained` 로 실행하면 학습 결과 픽스처(`trained/`, `trained_95/`)를 다시 쓴다. Rust parity 테스트가 이 fixture 를 읽는다.
 """
 
 import hashlib
@@ -220,10 +220,110 @@ def test_committed_fixture_is_intact():
     assert (FIXTURE_DIR / "golden.json").exists()
 
 
+def _lcg(seed: int):
+    """Rust 테스트(`classifier_parity.rs`)와 같은 결정적 난수. 값은 [0, 1)."""
+    state = seed & 0xFFFFFFFFFFFFFFFF
+    while True:
+        state = (state * 6364136223846793005 + 1442695040888963407) & 0xFFFFFFFFFFFFFFFF
+        yield (state >> 11) / float(1 << 53)
+
+
+def build_parity_fixture() -> Dict[str, Any]:
+    """Rust 가 Python 과 같은 수치를 내는지 대조할 기대값. `classifier_parity.rs` 가 읽는다."""
+    import hashlib as _hashlib  # noqa: PLC0415
+
+    from backend.classifier.calibration import expected_accuracy, fit_expected_accuracy, from_coverage_report  # noqa: PLC0415
+    from backend.classifier.config import DEFAULT_CONFIG, config_hash  # noqa: PLC0415
+    from backend.classifier.corpus import write_jsonl  # noqa: PLC0415
+    from backend.classifier.training import format_report, split_holdout  # noqa: PLC0415
+
+    rng = _lcg(1)
+    conf, correct = [], []
+    for _ in range(600):
+        c = 0.013 + 0.137 * next(rng)
+        conf.append(c)
+        correct.append(next(rng) < min(0.99, max(0.0, 0.4 + (c - 0.013) * 4.3)))
+    iso = fit_expected_accuracy(conf, correct)
+    probes = [0.0, 0.02, 0.054, 0.076, 0.1281779488151631, 0.2, 0.5]
+    holdout = {
+        "n": 47008,
+        "curve": [
+            {"coverage": 0.5, "precision": 0.974004424778761, "threshold": 0.1281779488151631},
+            {"coverage": 0.7, "precision": 0.942136453426531, "threshold": 0.10072196828305498},
+            {"coverage": 0.8, "precision": 0.9265010902515556, "threshold": 0.08265990361070291},
+            {"coverage": 0.9, "precision": 0.9044602548041695, "threshold": 0.060971974205370344},
+            {"coverage": 0.95, "precision": 0.8889759724119399, "threshold": 0.04635731124736481},
+            {"coverage": 1.0, "precision": 0.864788972089857, "threshold": 0.019518310797334633},
+        ],
+        "at_precision_90": {"coverage": 0.917290673927842, "precision": 0.9, "threshold": 0.056374553813004144},
+        "at_precision_95": {"coverage": 0.6435287610619469, "precision": 0.9500181812171499, "threshold": 0.10885944805582125},
+    }
+    curve = from_coverage_report(holdout)
+    blake = [{"data": d, "key": k, "hex": _hashlib.blake2b(d.encode("utf-8"), digest_size=8, key=k.encode()).hexdigest()} for d, k in [("", "1"), ("abc", "20260914"), ("한글 키", "7"), ("x" * 300, "20260914"), ("y" * 128, "5"), ("z" * 256, "5")]]
+    docs = [{"id": str(i), "cat": "A"} for i in range(500)] + [{"id": str(i), "cat": "B"} for i in range(1000, 1037)] + [{"id": str(i), "cat": "C"} for i in range(2000, 2002)] + [{"id": "solo", "cat": "D"}]
+    train_docs, hold_docs = split_holdout(docs, 0.2, 20260914)
+    floats = [0.1, 1.0, 1e-5, 1e16, 1e15, 123456789012345680.0, 0.0001, 1e22, 5e-324, 0.3, 2.5e-7, 100.0, 1.5e300, 0.30000000000000004, -1.5, 0.5, 12345.678]
+    sample_doc = {"id": "1", "cat": "3_무협", "text": "본문 \"따옴표\" \n줄바꿈 \u0001", "title": "é", "n": 1.5, "t": True, "none": None}
+    tmp = FIXTURE_DIR / "_jsonl.tmp"
+    write_jsonl([sample_doc], tmp)
+    line = tmp.read_text(encoding="utf-8")
+    tmp.unlink()
+    report = json.loads((FIXTURE_DIR / "trained" / "report.json").read_text(encoding="utf-8"))
+    return {
+        "isotonic": {"seed": 1, "n": 600, "expected": iso, "probes": probes, "probe_values": [expected_accuracy(iso, p) for p in probes]},
+        "coverage": {"holdout": holdout, "expected": curve, "probes": probes, "probe_values": [expected_accuracy(curve, p) for p in probes]},
+        "blake2b": blake,
+        "split": {"docs": docs, "ratio": 0.2, "seed": 20260914, "train_ids": [d["id"] for d in train_docs], "hold_ids": [d["id"] for d in hold_docs]},
+        "float_repr": [{"value": v, "repr": repr(v)} for v in floats],
+        "config_hash_default": config_hash(DEFAULT_CONFIG),
+        "json_dumps": {"value": sample_doc, "line": line, "sorted": json.dumps({"b": [1, 2.5, {"é": None}], "a": True, "10": 1e-7}, ensure_ascii=False, sort_keys=True)},
+        "report_text": format_report(report),
+    }
+
+
+def test_parity_fixture_is_current():
+    """저장소의 parity.json 이 지금 Python 구현이 내는 값과 같은지 본다(Rust 는 이 파일을 기대값으로 쓴다)."""
+    committed = json.loads((FIXTURE_DIR / "parity.json").read_text(encoding="utf-8"))
+    assert committed == json.loads(json.dumps(build_parity_fixture()))
+
+
+def write_trained_fixtures() -> None:
+    """`tests/test_classifier.py` 의 `trained` 픽스처와 같은 학습 결과를 내보낸다.
+
+    Rust 테스트(`tests/rust/backend/classifier.rs`)는 학습하지 않으므로, 같은 문서·설정으로 Python 이 학습한
+    모델(`trained/`)과 목표 정답률 95% 판(`trained_95/`)을 읽는다. 홀드아웃 리포트는 각 디렉토리의 `report.json` 이다.
+    """
+    sys.path.insert(0, str(ROOT / "tests"))
+    from test_classifier import make_docs  # noqa: PLC0415
+
+    from backend.classifier.config import DEFAULT_CONFIG, SERIES_TO_PARENT, merge_config  # noqa: PLC0415
+    from backend.classifier.training import train  # noqa: PLC0415
+
+    small = {"body_word": {"min_df": 1, "max_features": 5000}, "body_char": {"enabled": False}, "filename": {"min_df": 1}, "title": {"min_df": 1}, "author": {"min_df": 1}, "publisher": {"min_df": 1}, "file_type": {"min_df": 1}}
+    base = {"corpus": {"min_per_category": 5}, "model": {"n_jobs": 1}, "fields": small, "holdout": 0.25}
+    for name, extra in (("trained", {}), ("trained_95", {"decision": {"target_accuracy": 0.95}})):
+        model, report = train(make_docs(40), merge_config(DEFAULT_CONFIG, merge_config(base, extra)), accept_parent=SERIES_TO_PARENT)
+        out = FIXTURE_DIR / name
+        export_model(model, out)
+        _write_json(out / "report.json", report)
+
+
+def _write_json(path: Path, obj: Any) -> None:
+    path.write_text(json.dumps(obj, ensure_ascii=False, indent=1, allow_nan=False) + "\n", encoding="utf-8")
+
+
 if __name__ == "__main__":
     import shutil
 
-    if FIXTURE_DIR.exists():
-        shutil.rmtree(FIXTURE_DIR)
-    export_model(make_tiny_model(), FIXTURE_DIR, golden=40, seed=11)
+    if sys.argv[1:] == ["parity"]:
+        # 기대값 파일만 다시 쓴다. `trained/report.json` 이 먼저 있어야 한다.
+        _write_json(FIXTURE_DIR / "parity.json", build_parity_fixture())
+    elif sys.argv[1:] == ["trained"]:
+        # 학습 결과 픽스처만 다시 쓴다. 기본 합성 모델은 건드리지 않는다.
+        write_trained_fixtures()
+    else:
+        for stale in FIXTURE_DIR.glob("*"):
+            if stale.is_file():
+                stale.unlink()
+        export_model(make_tiny_model(), FIXTURE_DIR, golden=40, seed=11)
     print(f"fixture 를 썼다: {FIXTURE_DIR}")

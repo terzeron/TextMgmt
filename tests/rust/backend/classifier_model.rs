@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use backend::classifier::export_format::{ModelError, sha256_hex};
-use backend::classifier::model::CategoryModel;
+use backend::classifier::model::{CategoryModel, CategoryModelApi};
 use backend::classifier::softmax::{fixed, rank_desc, softmax_confidence};
 use backend::classifier::tokenize::{AnalyzerKind, AnalyzerSpec, analyze, collapse_whitespace, is_py_digit, is_py_space, is_py_word};
 use backend::classifier::vectorize::field_text;
@@ -163,7 +163,7 @@ fn check_parity(model: &CategoryModel, golden_path: &Path) -> ParityStats {
         for (g, e) in got.iter().zip(&expected) {
             stats.max_score_err = stats.max_score_err.max((g - e).abs());
         }
-        let pred = model.predict_one(&case["doc"], None);
+        let pred = CategoryModelApi::predict_one(model, &case["doc"], None);
         let top = case["top"].as_array().unwrap();
         for (i, t) in top.iter().enumerate() {
             stats.max_conf_err = stats.max_conf_err.max((pred.ranked[i].1 - t["confidence"].as_f64().unwrap()).abs());
@@ -223,10 +223,10 @@ fn min_confidence_priority_config_then_meta_then_one() {
     assert_eq!(model.min_confidence(), 1.0);
     // 임계값 1.0 이면 아무것도 판정하지 않는다. 호출 인자는 모델 값을 이긴다.
     let doc = json!({"text": "무림맹 장문인 내공 화산파"});
-    let pred = model.predict_one(&doc, None);
+    let pred = CategoryModelApi::predict_one(&model, &doc, None);
     assert!(pred.category.is_none());
     assert!(pred.reason.contains("< 임계값 1.00 이라 판정하지 않음 (1위 후보 "));
-    let forced = model.predict_one(&doc, Some(0.0));
+    let forced = CategoryModelApi::predict_one(&model, &doc, Some(0.0));
     assert_eq!(forced.category.as_deref(), Some(pred.ranked[0].0.as_str()));
     assert!(forced.reason.starts_with("모델 확신도 "));
 }
@@ -234,12 +234,12 @@ fn min_confidence_priority_config_then_meta_then_one() {
 #[test]
 fn predict_handles_top_k_and_empty_batch() {
     let model = CategoryModel::load_dir(Path::new(FIXTURE)).unwrap();
-    assert!(model.predict(&[], None, 3).is_empty());
+    assert!(model.predict_top_k(&[], None, 3).is_empty());
     let doc = json!({"text": "무림맹"});
-    let one = &model.predict(std::slice::from_ref(&doc), Some(0.0), 1)[0];
+    let one = &model.predict_top_k(std::slice::from_ref(&doc), Some(0.0), 1)[0];
     assert_eq!(one.ranked.len(), 1);
     assert!(!one.reason.contains("2위"));
-    let all = &model.predict(std::slice::from_ref(&doc), Some(0.0), 10)[0];
+    let all = &model.predict_top_k(std::slice::from_ref(&doc), Some(0.0), 10)[0];
     assert_eq!(all.ranked.len(), 3);
     assert!((all.ranked.iter().map(|r| r.1).sum::<f64>() - 1.0).abs() < 1e-9);
 }
@@ -252,7 +252,9 @@ fn copy_fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     for entry in fs::read_dir(FIXTURE).unwrap() {
         let entry = entry.unwrap();
-        fs::copy(entry.path(), dir.path().join(entry.file_name())).unwrap();
+        if entry.path().is_file() {
+            fs::copy(entry.path(), dir.path().join(entry.file_name())).unwrap();
+        }
     }
     dir
 }

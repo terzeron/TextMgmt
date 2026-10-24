@@ -1,0 +1,46 @@
+{
+ "n": 30,
+ "top1_accuracy": 1.0,
+ "curve": [
+  {
+   "coverage": 0.5,
+   "precision": 1.0,
+   "threshold": 0.7796946629225144
+  },
+  {
+   "coverage": 0.7,
+   "precision": 1.0,
+   "threshold": 0.778470629113272
+  },
+  {
+   "coverage": 0.8,
+   "precision": 1.0,
+   "threshold": 0.7710662003788766
+  },
+  {
+   "coverage": 0.9,
+   "precision": 1.0,
+   "threshold": 0.7682285570522752
+  },
+  {
+   "coverage": 0.95,
+   "precision": 1.0,
+   "threshold": 0.7679812325730685
+  },
+  {
+   "coverage": 1.0,
+   "precision": 1.0,
+   "threshold": 0.7659948076699419
+  }
+ ],
+ "at_precision_90": {
+  "coverage": 1.0,
+  "precision": 1.0,
+  "threshold": 0.7659948076699419
+ },
+ "at_precision_95": {
+  "coverage": 1.0,
+  "precision": 1.0,
+  "threshold": 0.7659948076699419
+ }
+}

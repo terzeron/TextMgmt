@@ -71,7 +71,9 @@ impl CategoryModelApi for FakeModel {
 }
 
 /// 함수 두 개로 만드는 ES 대역. `None`이면 호출 즉시 실패시킨다. `common::es_dummy::DummyEs`(색인 `books`)의 `get`/`search`를 바꿔 만든다.
-fn fake_es(get: Option<Box<dyn Fn(&Value) -> Value + Send + Sync>>, search: Option<Box<dyn Fn(&Value) -> Value + Send + Sync>>) -> Arc<DummyEs> {
+type Handler = Option<Box<dyn Fn(&Value) -> Value + Send + Sync>>;
+
+fn fake_es(get: Handler, search: Handler) -> Arc<DummyEs> {
     let es = DummyEs::with_index("books");
     es.on("get", move |params| Ok((get.as_ref().expect("get 을 부르면 안 된다"))(params)));
     es.on("search", move |params| Ok((search.as_ref().expect("search 를 부르면 안 된다"))(params)));
@@ -164,7 +166,6 @@ fn test_indexed_path_keeps_absolute_path_outside_library() {
 
 /// 가정한 seam: `BookCategoryClassifier::read_text_with(path, reader)`가 reader 함수를 주입받는다.
 #[test]
-#[ignore = "mock.patch: backend.classifier.reader.read_document_text 가 예외를 던지도록 바꿈; DI 설계 후 활성화"]
 fn test_read_text_swallows_reader_errors() {
     let tmp = TempDir::new().unwrap();
     let f = tmp.path().join("a.txt");
@@ -176,7 +177,6 @@ fn test_read_text_swallows_reader_errors() {
 
 /// 가정한 seam: `BookCategoryClassifier::read_publisher_with(path, reader)`가 reader 함수를 주입받는다.
 #[test]
-#[ignore = "mock.patch: backend.classifier.reader.read_epub_publisher 가 예외를 던지도록 바꿈; DI 설계 후 활성화"]
 fn test_read_publisher_skips_non_epub_and_swallows_errors() {
     let tmp = TempDir::new().unwrap();
     assert_eq!(BookCategoryClassifier::read_publisher(&tmp.path().join("a.pdf")), "");

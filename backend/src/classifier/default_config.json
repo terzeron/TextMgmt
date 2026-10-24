@@ -1,0 +1,137 @@
+{
+ "config": {
+  "version": 1,
+  "corpus": {
+   "library_root": "/mnt/data/text",
+   "min_chars": 200,
+   "min_per_category": 30,
+   "label_pattern": "^[1-9]_",
+   "excluded_prefixes": [
+    "9_북스캔OCR"
+   ]
+  },
+  "fields": {
+   "body_word": {
+    "enabled": true,
+    "source": "text",
+    "weight": 1.0,
+    "analyzer": "word",
+    "ngram": [
+     1,
+     1
+    ],
+    "min_df": 10,
+    "max_features": 300000,
+    "max_chars": 0
+   },
+   "body_char": {
+    "enabled": true,
+    "source": "text",
+    "weight": 1.0,
+    "analyzer": "char_wb",
+    "ngram": [
+     2,
+     4
+    ],
+    "min_df": 20,
+    "max_features": 300000,
+    "max_chars": 1000
+   },
+   "filename": {
+    "enabled": true,
+    "source": "name",
+    "weight": 1.0,
+    "analyzer": "char_wb",
+    "ngram": [
+     2,
+     4
+    ],
+    "min_df": 3,
+    "max_features": 200000,
+    "max_chars": 0
+   },
+   "title": {
+    "enabled": true,
+    "source": "title",
+    "weight": 1.0,
+    "analyzer": "char_wb",
+    "ngram": [
+     2,
+     4
+    ],
+    "min_df": 3,
+    "max_features": 100000,
+    "max_chars": 0
+   },
+   "author": {
+    "enabled": true,
+    "source": "author",
+    "weight": 0.3,
+    "analyzer": "char_wb",
+    "ngram": [
+     2,
+     4
+    ],
+    "min_df": 3,
+    "max_features": 100000,
+    "max_chars": 0
+   },
+   "publisher": {
+    "enabled": true,
+    "source": "publisher",
+    "weight": 3.0,
+    "analyzer": "word",
+    "ngram": [
+     1,
+     2
+    ],
+    "min_df": 2,
+    "max_features": 50000,
+    "max_chars": 0
+   },
+   "file_type": {
+    "enabled": true,
+    "source": "type",
+    "weight": 0.5,
+    "analyzer": "word",
+    "ngram": [
+     1,
+     1
+    ],
+    "min_df": 1,
+    "max_features": 100,
+    "max_chars": 0
+   }
+  },
+  "model": {
+   "C": 1.0,
+   "class_weight": "balanced",
+   "max_iter": 2000,
+   "n_jobs": 2
+  },
+  "decision": {
+   "min_confidence": null,
+   "target_accuracy": 0.9,
+   "temperature": 1.0
+  },
+  "holdout": 0.2,
+  "seed": 20260914
+ },
+ "series_to_parent": {
+  "2_을유세계문학전집": "2_소설외국",
+  "2_열린책들세계문학": "2_소설외국",
+  "2_동서문화사월드북": "2_소설외국",
+  "2_문예세계문학선": "2_소설외국",
+  "2_소설Abe전집": "2_소설일본",
+  "2_소설일본게이고": "2_소설일본",
+  "2_소설일본하루키": "2_소설일본",
+  "3_SF그리폰북스": "3_SF",
+  "3_SF환상문학전집": "3_SF",
+  "3_SF직지": "3_SF",
+  "3_SF영문": "3_SF",
+  "3_셜록홈즈": "3_스릴러",
+  "4_살림지식총서": "4_인문일반논픽션",
+  "4_시공디스커버리": "4_인문일반논픽션",
+  "5_이지사이언스": "5_수학과학일반"
+ }
+}

@@ -306,3 +306,49 @@ pub fn load_dir(dir: &Path) -> Result<LoadedModel, ModelError> {
     let coef = read_coef(dir, &manifest.coef_file, &manifest.coef_sha256, n_values)?;
     Ok(LoadedModel { manifest, fields, coef })
 }
+
+fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), ModelError> {
+    check_file_name(name)?;
+    std::fs::write(dir.join(name), bytes).map_err(|e| io_err(name, e))
+}
+
+/// 모델을 내보내기 형식 디렉토리로 쓴다. Python `export_model` 이 쓰는 것과 같은 형식이라 `load_dir` 로 다시 읽힌다.
+/// `fields` 는 열 순서대로여야 하고, 필드 이름은 파일 이름에 쓰이므로 영문·숫자·밑줄만 허용한다.
+pub fn write_dir(dir: &Path, classes: &[String], fields: &[FieldVectorizer], coef: &[f32], intercept: &[f64], config: &Value, meta: &Value) -> Result<(), ModelError> {
+    use super::tokenize::AnalyzerKind;
+    std::fs::create_dir_all(dir).map_err(|e| io_err("model.json", e))?;
+    let n_features: usize = fields.iter().map(FieldVectorizer::vocab_size).sum();
+    if coef.len() != n_features * classes.len() || intercept.len() != classes.len() {
+        return invalid("계수 개수가 n_features x n_classes 와 다르다");
+    }
+    let mut field_json = Vec::new();
+    for f in fields {
+        if f.name.is_empty() || !f.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return invalid(format!("필드 이름 '{}' 은 파일 이름으로 쓸 수 없다", f.name));
+        }
+        let (vocab_file, idf_file) = (format!("vocab.{}.json", f.name), format!("idf.{}.f32", f.name));
+        let vocab_bytes = serde_json::to_vec(&f.vocab_terms()).map_err(|e| ModelError::Json { file: vocab_file.clone(), message: e.to_string() })?;
+        let idf_bytes: Vec<u8> = f.idf().iter().flat_map(|v| v.to_le_bytes()).collect();
+        write_atomic(dir, &vocab_file, &vocab_bytes)?;
+        write_atomic(dir, &idf_file, &idf_bytes)?;
+        let kind = match f.spec.kind {
+            AnalyzerKind::Word => "word",
+            AnalyzerKind::Char => "char",
+            AnalyzerKind::CharWb => "char_wb",
+        };
+        field_json.push(serde_json::json!({
+            "name": f.name, "source": f.source, "weight": f64::from(f.weight), "max_chars": f.max_chars, "analyzer": kind,
+            "ngram_range": [f.spec.ngram_lo, f.spec.ngram_hi], "lowercase": f.spec.lowercase, "sublinear_tf": f.sublinear_tf, "norm": "l2",
+            "token_pattern": WORD_TOKEN_PATTERN, "offset": f.offset, "size": f.vocab_size(), "vocab_file": vocab_file, "idf_file": idf_file,
+            "idf_sha256": sha256_hex(&idf_bytes), "vocab_sha256": sha256_hex(&vocab_bytes),
+        }));
+    }
+    let coef_bytes: Vec<u8> = coef.iter().flat_map(|v| v.to_le_bytes()).collect();
+    write_atomic(dir, "coef.f32", &coef_bytes)?;
+    let manifest = serde_json::json!({
+        "format_version": SUPPORTED_FORMAT_VERSION, "classes": classes, "config": config, "meta": meta, "n_features": n_features, "n_classes": classes.len(),
+        "fields": field_json, "coef_file": "coef.f32", "coef_sha256": sha256_hex(&coef_bytes), "intercept": intercept,
+    });
+    let bytes = serde_json::to_vec(&manifest).map_err(|e| ModelError::Json { file: "model.json".into(), message: e.to_string() })?;
+    write_atomic(dir, "model.json", &bytes)
+}

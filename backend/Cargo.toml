@@ -18,6 +18,7 @@ async-trait = "0.1"
 base64 = "0.23.1"
 axum = "0.8.9"
 bookstore_lib = { package = "bookstore", path = "../libs/bookstore" }
+corpus_common = { path = "../libs/corpus_common" }
 corpus_layout = { path = "../libs/corpus_layout" }
 diesel = { version = "2.3.14", default-features = false, features = ["mysql", "r2d2", "chrono"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
@@ -163,6 +164,30 @@ path = "../tests/rust/backend/html_sanitizer.rs"
 [[test]]
 name = "classifier_model"
 path = "../tests/rust/backend/classifier_model.rs"
+
+[[test]]
+name = "classifier"
+path = "../tests/rust/backend/classifier.rs"
+
+[[test]]
+name = "classifier_calibration"
+path = "../tests/rust/backend/classifier_calibration.rs"
+
+[[test]]
+name = "classifier_corpus"
+path = "../tests/rust/backend/classifier_corpus.rs"
+
+[[test]]
+name = "classifier_reader"
+path = "../tests/rust/backend/classifier_reader.rs"
+
+[[test]]
+name = "classifier_service"
+path = "../tests/rust/backend/classifier_service.rs"
+
+[[test]]
+name = "classifier_parity"
+path = "../tests/rust/backend/classifier_parity.rs"
 
 [dev-dependencies]
 base64 = "0.23.1"

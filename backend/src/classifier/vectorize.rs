@@ -117,6 +117,19 @@ impl FieldVectorizer {
         self.idf.len()
     }
 
+    /// 열 번호 순서의 어휘. 저장할 때 쓴다.
+    pub fn vocab_terms(&self) -> Vec<String> {
+        let mut terms = vec![String::new(); self.vocab.len()];
+        for (term, &i) in &self.vocab {
+            terms[i as usize] = term.clone();
+        }
+        terms
+    }
+
+    pub fn idf(&self) -> &[f32] {
+        &self.idf
+    }
+
     /// 원문 하나를 희소 벡터(전체 열 번호 오름차순)로 바꿔 `out` 에 덧붙인다.
     ///
     /// 순서는 sklearn 과 같다. 빈도 → `1 + ln(tf)` → `× idf` → 행 L2 정규화(float32) → `× weight`.
@@ -153,6 +166,40 @@ impl FieldVectorizer {
                 entry.1 /= norm;
             }
             entry.1 *= self.weight;
+            entry.0 += self.offset;
+        }
+    }
+
+    /// `transform_into` 의 float64 판. 학습 쪽 특징 행렬(`features::FeatureSpace`)이 쓴다.
+    pub fn transform_into_f64(&self, text: &str, out: &mut Vec<(u32, f64)>) {
+        let mut cols: Vec<u32> = Vec::new();
+        for_each_term(text, &self.spec, |term| {
+            if let Some(&col) = self.vocab.get(term) {
+                cols.push(col);
+            }
+        });
+        if cols.is_empty() {
+            return;
+        }
+        cols.sort_unstable();
+        let start = out.len();
+        let mut i = 0;
+        while i < cols.len() {
+            let mut j = i;
+            while j < cols.len() && cols[j] == cols[i] {
+                j += 1;
+            }
+            let count = (j - i) as f64;
+            let tf = if self.sublinear_tf { count.ln() + 1.0 } else { count };
+            out.push((cols[i], tf * f64::from(self.idf[cols[i] as usize])));
+            i = j;
+        }
+        let norm = out[start..].iter().map(|e| e.1 * e.1).sum::<f64>().sqrt();
+        for entry in &mut out[start..] {
+            if norm != 0.0 {
+                entry.1 /= norm;
+            }
+            entry.1 *= f64::from(self.weight);
             entry.0 += self.offset;
         }
     }
