@@ -1040,6 +1040,54 @@ impl SharedBookClassifier {
     }
 }
 
+impl SharedBookClassifier {
+    /// 요청 하나를 시작한다. 디스크의 분류 캐시를 다시 읽어 이전 요청의 메모리 상태가 새지 않게 한다(Python 은 요청마다 서비스를 새로 만든다).
+    pub fn begin_request(&self) {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).load_cache();
+    }
+
+    /// 분류 캐시를 파일에 쓴다. 같은 잠금 안에서 쓰므로 동시 요청이 같은 파일을 겹쳐 쓰지 않는다.
+    pub fn save_cache(&self) {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).save_cache();
+    }
+
+    /// 요청 하나의 호출 조건(원본 디렉토리, 서점·본문 사용 여부)을 묶어 `BookClassifierApi` 로 내놓는다.
+    pub fn call(&self, source_dir: &Path, use_bookstore: bool, use_content_meta: bool) -> ServiceCall<'_> {
+        ServiceCall { shared: self, source_dir: source_dir.to_path_buf(), opts: ClassifyOptions { use_bookstore, use_content_meta, ..Default::default() } }
+    }
+}
+
+/// `SharedBookClassifier` 를 한 요청의 조건으로 부르는 `BookClassifierApi`. Python `classify_file(path, source_dir, use_bookstore=..., use_content_meta=...)` 과 같다.
+pub struct ServiceCall<'a> {
+    shared: &'a SharedBookClassifier,
+    source_dir: PathBuf,
+    opts: ClassifyOptions,
+}
+
+impl BookClassifierApi for ServiceCall<'_> {
+    fn classify_file(&self, path: &Path) -> (Option<String>, String, String, Value) {
+        let mut svc = self.shared.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let (cat, method, reason, entry) = svc.classify_file(path, &self.source_dir, self.opts);
+        (cat, method, reason, entry.unwrap_or_else(|| json!({})))
+    }
+
+    fn override_below(&self) -> f64 {
+        self.shared.override_below()
+    }
+
+    fn prefers_bookstore(&self, confidence: f64) -> bool {
+        self.shared.prefers_bookstore(confidence)
+    }
+
+    fn min_confidence(&self) -> Option<f64> {
+        self.shared.min_confidence()
+    }
+
+    fn expected_accuracy(&self, confidence: Option<f64>) -> Option<Option<f64>> {
+        self.shared.expected_accuracy(confidence)
+    }
+}
+
 impl BookClassifierApi for SharedBookClassifier {
     fn classify_file(&self, path: &Path) -> (Option<String>, String, String, Value) {
         let mut svc = self.inner.lock().unwrap_or_else(|e| e.into_inner());

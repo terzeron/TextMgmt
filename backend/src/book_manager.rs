@@ -29,6 +29,7 @@ use serde_json::Value;
 use sysdeps::{CommandRunner, EnvFn, FsOps, RealFs, SystemRunner};
 
 use crate::book::Book;
+use crate::book_classifier::SharedBookClassifier;
 use crate::classifier::Classify;
 use crate::es_manager::{Docs, EsManagerApi};
 use crate::pdf::{LopdfOpener, LopdfPageOps, PageCountCache, PdfOpener, PdfPageOps, PdfReaderCache};
@@ -114,6 +115,8 @@ pub trait FileReader: Send + Sync {
 }
 
 pub type ClassifierFactory = Arc<dyn Fn() -> Arc<dyn Classify> + Send + Sync>;
+/// 서점 득표·정책·보정을 가진 분류 서비스를 돌려준다. `None` 이면 분류기가 없는 것이다. 서비스는 매니저 안에서 한 번만 만든다.
+pub type ClassifierServiceFactory = Arc<dyn Fn() -> Option<Arc<SharedBookClassifier>> + Send + Sync>;
 pub type MismatchOverride = Arc<dyn Fn(bool) -> Value + Send + Sync>;
 pub type DetailsOverride = Arc<dyn Fn(&str) -> Value + Send + Sync>;
 pub type IterFilesOverride = Arc<dyn Fn(&str, bool) -> Vec<PathBuf> + Send + Sync>;
@@ -146,6 +149,7 @@ pub struct BookManagerDeps {
     pdf_pages: Arc<dyn PdfPageOps>,
     file_reader: Option<Arc<dyn FileReader>>,
     classifier_factory: Option<ClassifierFactory>,
+    classifier_service_factory: Option<ClassifierServiceFactory>,
     bulk_reindex_batch_size: usize,
     scan_observer: Option<Arc<dyn Fn() + Send + Sync>>,
     get_category_mismatches_override: Option<MismatchOverride>,
@@ -170,6 +174,7 @@ impl BookManagerDeps {
             pdf_pages: Arc::new(LopdfPageOps),
             file_reader: None,
             classifier_factory: None,
+            classifier_service_factory: None,
             bulk_reindex_batch_size: BULK_REINDEX_BATCH_SIZE,
             scan_observer: None,
             get_category_mismatches_override: None,
@@ -210,6 +215,13 @@ impl BookManagerDeps {
 
     pub fn with_classifier_factory(mut self, factory: ClassifierFactory) -> Self {
         self.classifier_factory = Some(factory);
+        self
+    }
+
+    /// 분류 서비스(서점 득표·정책·보정 포함)를 꽂는다. 안 꽂으면 `TM_CLASSIFIER_MODEL_DIR` 의 모델로 기본 서비스를 만든다.
+    /// `with_classifier_factory`(모델 단독 대역)가 있으면 그쪽이 먼저다.
+    pub fn with_classifier_service_factory(mut self, factory: ClassifierServiceFactory) -> Self {
+        self.classifier_service_factory = Some(factory);
         self
     }
 
@@ -297,6 +309,7 @@ pub struct BookManager {
     pdf_pages: Arc<dyn PdfPageOps>,
     file_reader: Option<Arc<dyn FileReader>>,
     classifier_factory: Option<ClassifierFactory>,
+    classifier_service_factory: Option<ClassifierServiceFactory>,
     bulk_reindex_batch_size: usize,
     scan_observer: Option<Arc<dyn Fn() + Send + Sync>>,
     get_category_mismatches_override: Option<MismatchOverride>,
@@ -307,6 +320,8 @@ pub struct BookManager {
     duplicate_name_max_index: usize,
     max_category_result_count: i64,
     ext: Extensions,
+    /// 분류 서비스. 처음 쓸 때 한 번 만든다(모델 로드가 무거워 매니저 생성에서는 읽지 않는다).
+    classifier_service: std::sync::OnceLock<Option<Arc<SharedBookClassifier>>>,
     state: Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
     mismatch: Mutex<MismatchState>,
     scan_lock: Mutex<()>,
@@ -337,6 +352,8 @@ impl BookManager {
             pdf_pages: deps.pdf_pages,
             file_reader: deps.file_reader,
             classifier_factory: deps.classifier_factory,
+            classifier_service_factory: deps.classifier_service_factory,
+            classifier_service: std::sync::OnceLock::new(),
             bulk_reindex_batch_size: deps.bulk_reindex_batch_size,
             scan_observer: deps.scan_observer,
             get_category_mismatches_override: deps.get_category_mismatches_override,

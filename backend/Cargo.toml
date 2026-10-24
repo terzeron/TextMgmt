@@ -213,6 +213,10 @@ path = "../tests/rust/backend/auth_bookstore_gaps.rs"
 name = "book_classifier_parity"
 path = "../tests/rust/backend/book_classifier_parity.rs"
 
+[[test]]
+name = "book_manager_classifier"
+path = "../tests/rust/backend/book_manager_classifier.rs"
+
 [dev-dependencies]
 base64 = "0.23.1"
 flate2 = "1"
