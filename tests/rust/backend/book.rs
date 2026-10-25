@@ -64,6 +64,7 @@ mod test_book {
 
     #[test]
     fn test_init_uses_optional_defaults_and_score() {
+        common::setup_env();
         let info = json!({
             "category": "category2",
             "title": "title2",
@@ -84,6 +85,7 @@ mod test_book {
 
     #[test]
     fn test_init_uses_created_time_when_present() {
+        common::setup_env();
         let info = json!({
             "category": "category3",
             "title": "title3",
