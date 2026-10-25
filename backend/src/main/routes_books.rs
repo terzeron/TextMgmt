@@ -17,6 +17,7 @@ use super::traits::{BookContent, BookManagerApi, BookResponse, MappingError};
 use crate::book_manager::BookManager;
 
 mod browse;
+mod catalog;
 
 pub(super) fn routes() -> Routes {
     let mut routes = Routes::new();
@@ -28,7 +29,7 @@ pub(super) fn routes() -> Routes {
             .get(&format!("{prefix}/cover/{{book_id}}"), &["require_auth"], cover)
             .get(&format!("{prefix}/validate/{{book_id}}"), &["require_auth"], validate);
     }
-    routes.merge(browse::routes())
+    routes.merge(browse::routes()).merge(catalog::routes())
 }
 
 pub(super) fn parse_book_id(raw: &str) -> ApiResult<i64> {

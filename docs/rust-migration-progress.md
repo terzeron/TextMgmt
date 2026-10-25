@@ -54,6 +54,10 @@
   lockfile은 별도 checkout에서 승인 의존성만 해석해 선별했다. 전체 대상 offline metadata는
   캐시에 없는 macOS `core-foundation` 때문에 실패했으나 Linux 테스트는 `--locked --offline`으로 통과했다.
 
+- 일반 조회 API: 도서·만화의 메타데이터, 카테고리 목록·커서 조회, 최신 목록, 검색, 유사 자료를 연결했다.
+  실제 관리자와 fake ES를 사용하는 HTTP 테스트 8개가 통과했다. 관련 회귀는 337 passed, 13 ignored이며 Clippy도 통과했다.
+  검색 facade 누락을 보완하고 숨긴 카테고리, 최신 제외 목록, 만화 상대 경로와 유사 자료 fallback을 검증했다.
+
 ## 다음 구현과 남은 제한
 
 - 전체 전환은 미완료다. 서버 바이너리는 아직 실행 stub이며 AppDeps 운영 조립도 완성하지 않았다.

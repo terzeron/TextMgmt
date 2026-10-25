@@ -246,3 +246,7 @@ sha2 = "0.11.1"
 tempfile = "3.27.0"
 testcontainers-modules = { version = "0.15.0", features = ["mysql", "blocking"] }
 tower = { version = "0.5.3", features = ["util"] }
+
+[[test]]
+name = "catalog_api"
+path = "../tests/rust/backend/catalog_api.rs"

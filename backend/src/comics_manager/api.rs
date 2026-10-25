@@ -81,6 +81,10 @@ impl BookManagerApi for ComicsManager {
         BookManagerApi::get_latest_books(&self.inner, size, exclude_categories).await
     }
 
+    async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, excluded: Option<&[String]>, category: Option<&str>) -> (Vec<Book>, i64, Option<String>) {
+        BookManagerApi::search_by_keyword_paged(&self.inner, keyword, size, offset, excluded, category).await
+    }
+
     async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> (Vec<Book>, i64, Option<String>) {
         BookManagerApi::search_similar_books_paged(&self.inner, book_id, size, offset).await
     }

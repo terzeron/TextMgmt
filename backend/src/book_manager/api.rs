@@ -95,6 +95,10 @@ impl BookManagerApi for BookManager {
         BookManager::get_latest_books(self, size, exclude_categories.map(<[String]>::to_vec)).await
     }
 
+    async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, excluded: Option<&[String]>, category: Option<&str>) -> (Vec<Book>, i64, Option<String>) {
+        BookManager::search_by_keyword_paged(self, keyword, size, offset, excluded, category).await
+    }
+
     async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> (Vec<Book>, i64, Option<String>) {
         BookManager::search_similar_books_paged(self, book_id, size, offset).await
     }

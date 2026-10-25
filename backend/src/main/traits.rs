@@ -297,6 +297,10 @@ pub trait BookManagerApi: Send + Sync {
         (Vec::new(), 0, unimplemented_error())
     }
 
+    async fn search_by_keyword_paged(&self, _keyword: &str, _size: i64, _offset: i64, _excluded: Option<&[String]>, _category: Option<&str>) -> (Vec<Book>, i64, Option<String>) {
+        (Vec::new(), 0, unimplemented_error())
+    }
+
     async fn search_similar_books_paged(&self, _book_id: i64, _size: i64, _offset: i64) -> (Vec<Book>, i64, Option<String>) {
         (Vec::new(), 0, unimplemented_error())
     }
