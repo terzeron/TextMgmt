@@ -71,9 +71,14 @@
   axum static 경로와 충돌하는 `rename`·`delete` 카테고리 GET도 유지했다.
   `book_admin_api` 8개를 포함한 관련 회귀 417개가 통과했다(기존 ignore 13개).
 
+- 서버 CLI의 실패 테스트 3개를 먼저 확인하고 `backend serve --addr HOST:PORT`를 구현했다.
+  loopback 임시 포트의 실제 HTTP 응답, 잘못된 인자, 포트 충돌, SIGTERM 정상 종료가 통과했다.
+  최신 workspace 전체 검사(doctest 포함): 2,155 passed, 0 failed, 92 ignored. Backend Clippy도 통과했다.
+
 ## 다음 구현과 남은 제한
 
-- 전체 전환은 미완료다. 서버 바이너리는 아직 실행 stub이며 AppDeps 운영 조립도 완성하지 않았다.
+- 전체 전환은 미완료다. 서버 CLI는 실행되지만 AppDeps의 운영용 매니저·Google 검증 조립은 아직 남았다.
+  현재 기본 BookManager/ComicsManager는 `UnavailableBookManager`다. 운영 전환 완료로 보지 않는다.
 - PDF 삭제·순서 변경·크롭·분할·삽입과 도서/만화 admin 편집 API를 추가했다.
   원본 백업 보존, 파일 교체 실패, 재색인 실패, 픽셀·색 공간·EXIF를 실제 fixture로 검증한다.
   테스트 등록 파일은 `tests/rust/backend/pdf_edit.rs`다. 기존 `pdf_delete_pages*` 초안의 전수 이식은 아직 남았다.
@@ -98,3 +103,18 @@
   이번 변경의 재색인 후에도 Rust 파일에 frontend/Python 심볼명이 연결된다.
   `detect_changes`의 전체 diff HIGH·선별 diff MEDIUM 결과를 안전성 판정 근거로 쓰지 않았다.
 - 이 세션은 Python 원본·배포 설정·스캐너 작업을 수정하지 않았다.
+
+## 다음 의존성 변경안 — 승인 대기
+
+사용자에게 별도 승인을 요청했다. 실제 Cargo 의존성에는 아직 적용하지 않았다.
+구체적인 manifest patch는 `/tmp/tm-backend-next-dependencies.patch`에 있다.
+
+- `axum 0.8.9`의 `multipart`: 이미지 업로드 라우트와 크기 제한·손상 이미지 HTTP 테스트.
+- workspace `ureq 3.5.0`의 `rustls`: 실제 HTTPS·Google 공개 키 조회·URL 이미지 fetch 연결.
+- 기존 `doc_reader`·`loader` path dependency: 실제 파일 읽기, 재색인, EPUB 행수 및 PDF 편집 초안 테스트 등록.
+- `fancy-regex 0.14.0`: Python의 lookaround/backreference를 포함하는 파일명 정규식 치환.
+- `pdfium-render 0.9.4` (`pdfium_latest`, `thread_safe`, default-features=false): 텍스트·벡터·CMYK를 포함하는 PDF 렌더링.
+
+Backend 미등록 테스트 파일 10개: `api_exploration`, `classify_cli`, `classify_cli_gaps`, `epub_line_count`,
+`main`, `main_bulk_rename`, `main_gaps`, `main_mock`, `pdf_delete_pages`, `pdf_delete_pages_gaps`.
+`classify_cli` 실행 경로의 학습·export는 아직 Python을 호출한다.
