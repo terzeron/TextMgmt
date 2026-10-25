@@ -108,6 +108,11 @@ impl BookManager {
 }
 
 impl BookManager {
+    pub(super) fn pdf_edit_settings(&self) -> (String, Arc<dyn ImageFetcher>) {
+        let ext = self.cover_ext();
+        (ext.trash_dirname.unwrap_or_else(|| TRASH_DIRNAME.into()), ext.image_fetcher.unwrap_or_else(|| Arc::new(crate::direct_cover_url::RealImageFetcher)))
+    }
+
     /// 훅이 정한 OPF 경로(구 `override_find_opf_path`). 훅이 없으면 `None`.
     pub(super) fn opf_path_override(&self) -> Option<String> {
         self.ext::<CoverExt>().and_then(|ext| ext.epub_hooks.as_ref().and_then(|h| h.opf_path_override()))

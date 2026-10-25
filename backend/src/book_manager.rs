@@ -50,6 +50,7 @@ mod html;
 mod mismatch;
 mod paths;
 mod pdf_cover;
+mod pdf_edit;
 mod preview;
 mod reload;
 mod seams;

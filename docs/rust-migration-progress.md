@@ -9,7 +9,7 @@
 - 각 변경은 실패 테스트 → 구현 → 해당 테스트 통과 순서로 검증한다.
 - API의 인증·입출력·오류 코드와 파일 수정 동작을 Python과 대조한다.
 - 미구현 기본값, 미등록 테스트, `ignore`, Python 호출을 전수 확인하고 남은 예외를 명시한다.
-- React와 모델 학습까지의 범위는 사용자 답변으로 확정한다. 공통 범위인 backend·utils 이식은 계속한다.
+- Frontend는 사용자 지시에 따라 제외한다. Backend·utils와 모델 학습의 Python 실행 경로는 전환 대상이다.
 - `pdfscan`·`epubscan`은 다른 세션이 맡으므로 이 작업에서 수정하지 않는다.
 - Python 원본은 검증 기준으로 유지한다. 배포·push·운영 데이터 변경은 별도 승인 대상이다.
 
@@ -42,13 +42,27 @@
 - `uv run --no-sync python -m pytest tests/`: 3,040 passed, 3 failed. 아래의 기존 실패와 동일하다.
 - 알려진 기존 Python 실패: PDF 표지 테스트 3건에서 `Image.get_flattened_data`가 없다.
 - 별도 미커밋 변경: loader·문서 파서·스캐너·frontend·CI·k8s 등. 변경을 선별해 커밋한다.
+- 이번 PDF 편집 단계: 신규 테스트 23개 통과. 파일 백업·재색인·크롭·분할·삽입·URL 미리보기·admin 권한을 검증했다.
+- 전체 검사 중 기존 Book 테스트 두 개의 환경 초기화 누락을 독립 실행으로 재현했다.
+  `2c46ac2`에서 `setup_env()`를 추가했고, 두 테스트가 각각 환경을 준비하도록 수정했다.
+- 최신 workspace 검사: 스캐너를 제외하고 2,104 passed, 0 failed, 92 ignored.
+  Python 회귀 검사는 3,040 passed, 3 failed로 기존 Pillow 실패와 같다.
 
 ## 다음 구현과 남은 제한
 
 - 전체 전환은 미완료다. 서버 바이너리는 아직 실행 stub이며 AppDeps 운영 조립도 완성하지 않았다.
-- PDF 삭제·크롭·분할·삽입, cover_status, 일반 관리 API와 loader 연결을 이어서 구현한다.
+- PDF 삭제·순서 변경·크롭·분할·삽입과 도서/만화 admin 편집 API를 추가했다.
+  원본 백업 보존, 파일 교체 실패, 재색인 실패, 픽셀·색 공간·EXIF를 실제 fixture로 검증한다.
+  테스트 등록 파일은 `tests/rust/backend/pdf_edit.rs`다. 기존 `pdf_delete_pages*` 초안의 전수 이식은 아직 남았다.
+- JPEG 크롭은 현재 디코딩한 픽셀을 Flate로 저장한다. Python의 JPEG 양자화·서브샘플링·progressive 보존과 다르다.
+  `jpeg-encoder 0.7.1` 추가 승인을 요청했다. 로컬 crate 소스에서 사용자 양자화 테이블과 sampling/progressive API를 확인했다.
+  승인 전에는 Cargo 의존성을 변경하지 않는다.
+- URL 이미지 미리보기 API를 연결했다. `preview_insert_upload` 메서드는 구현했지만 multipart 업로드 라우트는 아직 없다.
+  실제 URL fetcher의 `SystemNet` 연결 풀도 기존 stub이다. 이 단계의 URL 테스트는 ImageFetcher 대역을 쓴다.
+- cover_status, 일반 관리 API와 loader 연결을 이어서 구현한다.
 - `cover_status.py`는 SQLite 파일 캐시를 쓴다. Rust workspace에는 SQLite 의존성이 없다.
   기존 DB 파일 호환을 유지할 의존성 선택과 추가는 AGENTS.md의 의존성 승인 대상이다.
+  `rusqlite 0.40.2`의 `bundled` 기능 추가 승인을 요청했다. 기존 `cover_status` 스키마는 유지한다.
 - PDF 썸네일은 빈 페이지와 단일 JPEG/RGB/Gray 픽셀 이미지 페이지를 지원한다.
   텍스트·벡터·1비트·CMYK 등 범용 PDF 렌더링은 아직 Python과 동등하지 않다.
 - 다운로드 응답은 파일을 메모리에 읽는다. 운영 연결 전에 대형 파일 스트리밍 경로를 마련해야 한다.
@@ -57,4 +71,6 @@
   프로세스 종료는 workspace의 sysdeps `run_kills_a_command_that_exceeds_the_timeout` 테스트가 검증한다.
 - GitNexus CLI 인덱스를 갱신했다. FTS 구축은 Invalid UTF8로 실패했다.
   MCP는 오래된 인덱스와 잘못 연결된 심볼 ID를 보고하므로 실제 소스와 회귀 검증을 병행한다.
+  이번 변경의 재색인 후에도 Rust 파일에 frontend/Python 심볼명이 연결된다.
+  `detect_changes`의 전체 diff HIGH·선별 diff MEDIUM 결과를 안전성 판정 근거로 쓰지 않았다.
 - 이 세션은 Python 원본·배포 설정·스캐너 작업을 수정하지 않았다.

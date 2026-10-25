@@ -9,6 +9,18 @@ use std::sync::Arc;
 
 #[async_trait::async_trait]
 impl BookManagerApi for ComicsManager {
+    async fn preview_insert_image(&self, url: &str) -> (Option<Vec<u8>>, Option<String>) {
+        BookManagerApi::preview_insert_image(&self.inner, url).await
+    }
+
+    async fn preview_insert_upload(&self, data: &[u8]) -> (Option<Vec<u8>>, Option<String>) {
+        BookManagerApi::preview_insert_upload(&self.inner, data).await
+    }
+
+    async fn delete_pdf_pages(&self, id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> (Option<Value>, Option<String>) {
+        BookManagerApi::delete_pdf_pages(&self.inner, id, pages, crops, splits, inserts, order).await
+    }
+
     fn path_prefix(&self) -> PathBuf {
         BookManagerApi::path_prefix(&self.inner)
     }

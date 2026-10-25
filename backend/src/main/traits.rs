@@ -253,6 +253,18 @@ pub trait BookManagerApi: Send + Sync {
         BookResponse { status_code: 501, ..BookResponse::default() }
     }
 
+    async fn delete_pdf_pages(&self, _id: i64, _pages: &[i64], _crops: Option<&[Value]>, _splits: Option<&[Value]>, _inserts: Option<&[Value]>, _order: Option<&[i64]>) -> (Option<Value>, Option<String>) {
+        (None, unimplemented_error())
+    }
+
+    async fn preview_insert_image(&self, _url: &str) -> (Option<Vec<u8>>, Option<String>) {
+        (None, unimplemented_error())
+    }
+
+    async fn preview_insert_upload(&self, _data: &[u8]) -> (Option<Vec<u8>>, Option<String>) {
+        (None, unimplemented_error())
+    }
+
     async fn get_html_resource(&self, _book_id: i64, _resource_path: &str) -> BookResponse {
         BookResponse { status_code: 501, ..BookResponse::default() }
     }

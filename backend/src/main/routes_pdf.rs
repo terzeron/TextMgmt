@@ -13,8 +13,10 @@ use super::extract::{ApiQuery, RequireAuth};
 use super::routes::Routes;
 use super::routes_books::{book_response, checked_manager, parse_book_id};
 
+mod edit;
+
 pub(super) fn routes() -> Routes {
-    Routes::new().get("/pdf-pages/{book_id}", &["require_auth"], book_pages).get("/comics/pdf-pages/{book_id}", &["require_auth"], comic_pages)
+    Routes::new().get("/pdf-pages/{book_id}", &["require_auth"], book_pages).get("/comics/pdf-pages/{book_id}", &["require_auth"], comic_pages).merge(edit::routes())
 }
 
 #[derive(Deserialize)]

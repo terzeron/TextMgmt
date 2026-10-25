@@ -10,6 +10,10 @@ autotests = false
 path = "src/lib.rs"
 
 [[test]]
+name = "pdf_edit"
+path = "../tests/rust/backend/pdf_edit.rs"
+
+[[test]]
 name = "pdf_pages"
 path = "../tests/rust/backend/pdf_pages.rs"
 
