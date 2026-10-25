@@ -9,6 +9,18 @@ use std::sync::Arc;
 
 #[async_trait::async_trait]
 impl BookManagerApi for ComicsManager {
+    async fn delete_book(&self, id: i64) -> (String, Option<String>) {
+        BookManagerApi::delete_book(&self.inner, id).await
+    }
+    async fn rename_category(&self, old: &str, new: &str) -> (Value, Option<String>) {
+        BookManagerApi::rename_category(&self.inner, old, new).await
+    }
+    async fn delete_category(&self, category: &str, delete_files: bool) -> (Value, Option<String>) {
+        BookManagerApi::delete_category(&self.inner, category, delete_files).await
+    }
+    async fn preview_delete_category(&self, category: &str) -> (Value, Option<String>) {
+        BookManagerApi::preview_delete_category(&self.inner, category).await
+    }
     async fn preview_insert_image(&self, url: &str) -> (Option<Vec<u8>>, Option<String>) {
         BookManagerApi::preview_insert_image(&self.inner, url).await
     }

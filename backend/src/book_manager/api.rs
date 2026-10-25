@@ -18,6 +18,18 @@ const DEFAULT_CATEGORY_PAGE_SIZE: i64 = 500;
 
 #[async_trait]
 impl BookManagerApi for BookManager {
+    async fn delete_book(&self, id: i64) -> (String, Option<String>) {
+        BookManager::delete_book(self, id).await
+    }
+    async fn rename_category(&self, old: &str, new: &str) -> (Value, Option<String>) {
+        BookManager::rename_category(self, old, new).await
+    }
+    async fn delete_category(&self, category: &str, delete_files: bool) -> (Value, Option<String>) {
+        BookManager::delete_category(self, category, delete_files).await
+    }
+    async fn preview_delete_category(&self, category: &str) -> (Value, Option<String>) {
+        BookManager::preview_delete_category(self, category).await
+    }
     async fn preview_insert_image(&self, url: &str) -> (Option<Vec<u8>>, Option<String>) {
         BookManager::preview_insert_image(self, url).await
     }

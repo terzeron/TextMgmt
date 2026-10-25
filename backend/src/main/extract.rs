@@ -8,11 +8,29 @@ use axum::extract::{FromRequest, FromRequestParts, Query, Request};
 use axum::http::header;
 use axum::http::request::Parts;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use super::deps::{AppDeps, AuthMode};
 use super::errors::{ApiError, RequestValidationError};
 use crate::auth::{HTTPException, optional_auth_with, require_admin_with, require_auth_with};
+
+/// Pydantic bool의 JSON·쿼리 입력 규칙.
+pub(super) fn python_bool<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    let value = Value::deserialize(d)?;
+    let text = match value {
+        Value::Bool(v) => return Ok(v),
+        Value::String(s) => s.to_ascii_lowercase(),
+        Value::Number(n) if n.as_f64() == Some(0.0) => return Ok(false),
+        Value::Number(n) if n.as_f64() == Some(1.0) => return Ok(true),
+        _ => String::new(),
+    };
+    match text.as_str() {
+        "true" | "1" | "on" | "yes" | "t" | "y" => Ok(true),
+        "false" | "0" | "off" | "no" | "f" | "n" => Ok(false),
+        _ => Err(serde::de::Error::custom("Input should be a valid boolean")),
+    }
+}
 
 async fn resolve_auth(deps: &AppDeps, parts: &Parts, admin: bool) -> Result<Value, HTTPException> {
     let slot = |m: &std::sync::Mutex<Value>| m.lock().unwrap_or_else(|e| e.into_inner()).clone();

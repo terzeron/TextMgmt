@@ -18,6 +18,8 @@ pub(super) fn routes() -> Routes {
             .get(&format!("{prefix}/books/{{book_id}}"), &["require_auth"], metadata)
             .get(&format!("{prefix}/categories"), &["require_auth"], categories)
             .get(&format!("{prefix}/categories/{{*category}}"), &["require_auth"], in_category)
+            .get(&format!("{prefix}/categories/rename"), &["require_auth"], reserved_category)
+            .get(&format!("{prefix}/categories/delete"), &["require_auth"], reserved_category)
             .get(&format!("{prefix}/latest"), &["require_auth"], latest)
             .get(&format!("{prefix}/search/{{keyword}}"), &["require_auth"], search)
             .get(&format!("{prefix}/similar/{{book_id}}"), &["require_auth"], similar);
@@ -103,6 +105,12 @@ async fn categories(RequireAuth(payload): RequireAuth, State(deps): State<Arc<Ap
 struct CategoryQuery {
     limit: i64,
     cursor: String,
+}
+
+// axum은 static 경로를 wildcard보다 먼저 선택한다. 같은 이름의 카테고리 GET도 유지한다.
+async fn reserved_category(auth: RequireAuth, deps: State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, query: ApiQuery<CategoryQuery>) -> ApiResult<Json<Value>> {
+    let category = uri.path().rsplit('/').next().unwrap_or_default().to_owned();
+    in_category(auth, deps, OriginalUri(uri), Path(category), query).await
 }
 async fn in_category(
     RequireAuth(payload): RequireAuth,

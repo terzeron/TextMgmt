@@ -254,3 +254,7 @@ path = "../tests/rust/backend/catalog_api.rs"
 [[test]]
 name = "mapping_api"
 path = "../tests/rust/backend/mapping_api.rs"
+
+[[test]]
+name = "book_admin_api"
+path = "../tests/rust/backend/book_admin_api.rs"

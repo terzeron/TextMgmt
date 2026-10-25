@@ -165,6 +165,9 @@ fn unimplemented_mapping<T>() -> Result<T, MappingError> {
 
 /// 카테고리 매핑 facade. 동기 메서드다. 지금은 viewer 접근 제어에 필요한 조회만 있다.
 pub trait CategoryMappingApi: Send + Sync {
+    fn rename_category(&self, _old: &str, _new: &str, _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
     fn get_all_mappings(&self, _content_type: &str) -> Result<Value, MappingError> {
         unimplemented_mapping()
     }
@@ -202,6 +205,9 @@ pub trait CategoryMappingApi: Send + Sync {
 }
 
 impl CategoryMappingApi for CategoryMapping {
+    fn rename_category(&self, old: &str, new: &str, content_type: &str) -> Result<bool, MappingError> {
+        Ok(CategoryMapping::rename_category(self, old, new, content_type))
+    }
     fn get_all_mappings(&self, content_type: &str) -> Result<Value, MappingError> {
         Ok(serde_json::json!(CategoryMapping::get_all_mappings(self, content_type)))
     }
@@ -270,6 +276,18 @@ fn unimplemented_error() -> Option<String> {
 /// 책/만화 관리자 facade. 책과 만화가 같은 trait를 쓴다. 지금은 문서 3.2의 통일 시그니처 일부만 있다.
 #[async_trait]
 pub trait BookManagerApi: Send + Sync {
+    async fn delete_book(&self, _id: i64) -> (String, Option<String>) {
+        ("Error".into(), unimplemented_error())
+    }
+    async fn rename_category(&self, _old: &str, _new: &str) -> (Value, Option<String>) {
+        (Value::Null, unimplemented_error())
+    }
+    async fn delete_category(&self, _category: &str, _delete_files: bool) -> (Value, Option<String>) {
+        (Value::Null, unimplemented_error())
+    }
+    async fn preview_delete_category(&self, _category: &str) -> (Value, Option<String>) {
+        (Value::Null, unimplemented_error())
+    }
     fn path_prefix(&self) -> PathBuf {
         PathBuf::new()
     }

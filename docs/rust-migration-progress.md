@@ -66,6 +66,11 @@
   checkout 검사가 끝난 뒤 workspace 전체 doctest를 순서대로 재실행해 통과했다. 이후 checkout 검사는 순차 실행한다.
   Python은 3,040 passed, 기존 Pillow 오류 3 failed다.
 
+- 도서·만화 수정/삭제, 카테고리 이름 변경/삭제/삭제 미리보기/PDF 통계 API를 연결했다.
+  파일 삭제와 이동, 기본 파일 보존, 하위 카테고리 정책 정리, viewer JWT 차단, 라이브러리 밖 이동 차단을 검증했다.
+  axum static 경로와 충돌하는 `rename`·`delete` 카테고리 GET도 유지했다.
+  `book_admin_api` 8개를 포함한 관련 회귀 417개가 통과했다(기존 ignore 13개).
+
 ## 다음 구현과 남은 제한
 
 - 전체 전환은 미완료다. 서버 바이너리는 아직 실행 stub이며 AppDeps 운영 조립도 완성하지 않았다.

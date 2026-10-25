@@ -1,10 +1,11 @@
 //! 카테고리 설정. 동기 DB 작업과 lazy 초기화는 blocking pool에서 실행한다.
+use super::extract::python_bool;
 use super::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, CategoryMappingApi, MappingError, RequireAdmin, RequireAuth, Routes};
 use axum::{
     Json,
     extract::{OriginalUri, Path, State},
 };
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
 
@@ -56,21 +57,6 @@ struct Excluded {
     excluded: bool,
 }
 
-fn python_bool<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
-    let value = Value::deserialize(d)?;
-    let text = match value {
-        Value::Bool(v) => return Ok(v),
-        Value::String(s) => s.to_ascii_lowercase(),
-        Value::Number(n) if n.as_f64() == Some(0.0) => return Ok(false),
-        Value::Number(n) if n.as_f64() == Some(1.0) => return Ok(true),
-        _ => String::new(),
-    };
-    match text.as_str() {
-        "true" | "1" | "on" | "yes" | "t" | "y" => Ok(true),
-        "false" | "0" | "off" | "no" | "f" | "n" => Ok(false),
-        _ => Err(serde::de::Error::custom("Input should be a valid boolean")),
-    }
-}
 fn success(result: impl serde::Serialize) -> Value {
     json!({"status":"success","result":result})
 }
