@@ -253,7 +253,15 @@ pub trait BookManagerApi: Send + Sync {
         BookResponse { status_code: 501, ..BookResponse::default() }
     }
 
-    async fn delete_pdf_pages(&self, _id: i64, _pages: &[i64], _crops: Option<&[Value]>, _splits: Option<&[Value]>, _inserts: Option<&[Value]>, _order: Option<&[i64]>) -> (Option<Value>, Option<String>) {
+    async fn delete_pdf_pages(
+        &self,
+        _id: i64,
+        _pages: &[i64],
+        _crops: Option<&[Value]>,
+        _splits: Option<&[Value]>,
+        _inserts: Option<&[Value]>,
+        _order: Option<&[i64]>,
+    ) -> (Option<Value>, Option<String>) {
         (None, unimplemented_error())
     }
 
@@ -296,6 +304,16 @@ pub trait BookManagerApi: Send + Sync {
     /// (항목 [(대표 책, 작품 디렉터리 이름 또는 "")], 전체 항목 수, 다음 커서, 오류)
     async fn get_cover_books_paged(&self, _category: &str, _size: i64, _cursor: &str, _exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, i64, Option<String>, Option<String>) {
         (Vec::new(), 0, None, unimplemented_error())
+    }
+
+    async fn get_uncovered_books_paged(
+        &self,
+        _category: &str,
+        _size: i64,
+        _cursor: &str,
+        _exclude_categories: Option<&[String]>,
+    ) -> (Vec<(Book, String)>, Option<i64>, Option<String>, Option<String>) {
+        (Vec::new(), None, None, unimplemented_error())
     }
 
     fn get_category_mismatches(&self, _force_refresh: bool) -> Result<Value, String> {

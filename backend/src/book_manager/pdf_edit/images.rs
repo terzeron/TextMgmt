@@ -228,7 +228,7 @@ fn crop_page(pdf: &mut Document, id: ObjectId, n: i64, rect: Rect) -> Result<(),
     let (w, h) = (source.width(), source.height());
     let cropped = crop_pil(&source, rect).map_err(|e| fail(&e.to_string()))?;
     let (ow, oh) = (cropped.width(), cropped.height());
-    // 원본 픽셀을 다시 손실 압축하지 않는다. JPEG 양자화 보존은 별도 이식 대상이다.
+    let is_jpeg = stream.filters().ok().is_some_and(|filters| filters == [b"DCTDecode".as_slice()]);
     let grayscale = matches!(cropped, DynamicImage::ImageLuma8(_));
     let mut pixels = if grayscale { cropped.to_luma8().into_raw() } else { cropped.to_rgb8().into_raw() };
     if one_bit {
@@ -241,6 +241,7 @@ fn crop_page(pdf: &mut Document, id: ObjectId, n: i64, rect: Rect) -> Result<(),
         }
         pixels = packed;
     }
+    if is_jpeg { pixels = super::jpeg::encode_crop(&stream.content, &cropped).map_err(|reason| fail(&reason))?; }
     let mut new_image = Stream::new(
         dictionary! {"Type"=>"XObject","Subtype"=>"Image","Width"=>ow as i64,"Height"=>oh as i64,"BitsPerComponent"=>if one_bit {1} else {8},"ColorSpace"=>if grayscale {"DeviceGray"} else {"DeviceRGB"}},
         pixels,
@@ -250,6 +251,7 @@ fn crop_page(pdf: &mut Document, id: ObjectId, n: i64, rect: Rect) -> Result<(),
     {
         new_image.dict.set("ColorSpace", space);
     }
+    if is_jpeg { new_image.dict.set("Filter", "DCTDecode"); }
     new_image.compress().map_err(|e| fail(&e.to_string()))?;
     let image = pdf.add_object(new_image);
     xobjects.set(name, image);

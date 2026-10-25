@@ -48,21 +48,28 @@
 - 최신 workspace 검사: 스캐너를 제외하고 2,104 passed, 0 failed, 92 ignored.
   Python 회귀 검사는 3,040 passed, 3 failed로 기존 Pillow 실패와 같다.
 
+- 표지 호환성 단계의 최신 workspace 검사: 2,127 passed, 0 failed, 92 ignored.
+  별도 checkout에서 관련 204개 테스트가 통과했고 Backend Clippy도 통과했다.
+  Python 회귀 검사는 3,040 passed, 3 failed로 기존 Pillow 실패와 같다.
+  lockfile은 별도 checkout에서 승인 의존성만 해석해 선별했다. 전체 대상 offline metadata는
+  캐시에 없는 macOS `core-foundation` 때문에 실패했으나 Linux 테스트는 `--locked --offline`으로 통과했다.
+
 ## 다음 구현과 남은 제한
 
 - 전체 전환은 미완료다. 서버 바이너리는 아직 실행 stub이며 AppDeps 운영 조립도 완성하지 않았다.
 - PDF 삭제·순서 변경·크롭·분할·삽입과 도서/만화 admin 편집 API를 추가했다.
   원본 백업 보존, 파일 교체 실패, 재색인 실패, 픽셀·색 공간·EXIF를 실제 fixture로 검증한다.
   테스트 등록 파일은 `tests/rust/backend/pdf_edit.rs`다. 기존 `pdf_delete_pages*` 초안의 전수 이식은 아직 남았다.
-- JPEG 크롭은 현재 디코딩한 픽셀을 Flate로 저장한다. Python의 JPEG 양자화·서브샘플링·progressive 보존과 다르다.
-  `jpeg-encoder 0.7.1` 추가 승인을 요청했다. 로컬 crate 소스에서 사용자 양자화 테이블과 sampling/progressive API를 확인했다.
-  승인 전에는 Cargo 의존성을 변경하지 않는다.
+- 사용자 승인으로 `jpeg-encoder 0.7.1`을 추가했다. JPEG 크롭에서 원본 양자화·서브샘플링·progressive·grayscale을 보존한다.
+  8비트 양자화 값을 지원하며, 255를 넘는 양자화 값과 지원하지 않는 sampling은 명시적 오류로 처리한다.
+  비대칭 양자화 테이블과 실제 픽셀을 포함한 PDF 편집 테스트 24개가 통과했다.
 - URL 이미지 미리보기 API를 연결했다. `preview_insert_upload` 메서드는 구현했지만 multipart 업로드 라우트는 아직 없다.
   실제 URL fetcher의 `SystemNet` 연결 풀도 기존 stub이다. 이 단계의 URL 테스트는 ImageFetcher 대역을 쓴다.
-- cover_status, 일반 관리 API와 loader 연결을 이어서 구현한다.
-- `cover_status.py`는 SQLite 파일 캐시를 쓴다. Rust workspace에는 SQLite 의존성이 없다.
-  기존 DB 파일 호환을 유지할 의존성 선택과 추가는 AGENTS.md의 의존성 승인 대상이다.
-  `rusqlite 0.40.2`의 `bundled` 기능 추가 승인을 요청했다. 기존 `cover_status` 스키마는 유지한다.
+- 사용자 승인으로 `rusqlite 0.40.2`의 `bundled` 기능을 추가했다. 기존 SQLite 스키마를 유지한다.
+  Python 생성 DB의 Rust 읽기, Rust 갱신 DB의 Python 읽기, 파일 시각·크기 기반 무효화를 검증했다.
+- 표지 판정·미표지 조회·도서/만화 `/browse`를 연결했다. 실제 첫 이미지(XObject/inline), EPUB 표지,
+  시간·페이지·동시 작업 제한, 숨긴 카테고리와 인증을 포함해 `cover_status` 테스트 22개가 통과했다.
+- 일반 관리 API와 loader 연결을 이어서 구현한다.
 - PDF 썸네일은 빈 페이지와 단일 JPEG/RGB/Gray 픽셀 이미지 페이지를 지원한다.
   텍스트·벡터·1비트·CMYK 등 범용 PDF 렌더링은 아직 Python과 동등하지 않다.
 - 다운로드 응답은 파일을 메모리에 읽는다. 운영 연결 전에 대형 파일 스트리밍 경로를 마련해야 한다.

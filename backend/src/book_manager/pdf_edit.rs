@@ -11,6 +11,7 @@ use super::util::{strerror, unique_token};
 use super::{BookManager, Docs};
 
 mod images;
+mod jpeg;
 use images::Edits;
 
 struct EditResult {

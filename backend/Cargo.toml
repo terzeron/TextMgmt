@@ -25,6 +25,10 @@ path = "../tests/rust/backend/book_preview.rs"
 name = "cover"
 path = "../tests/rust/backend/cover.rs"
 
+[[test]]
+name = "cover_status"
+path = "../tests/rust/backend/cover_status.rs"
+
 [[bin]]
 name = "backend"
 path = "src/bin/backend.rs"
@@ -56,6 +60,8 @@ sysdeps = { path = "../libs/sysdeps" }
 ureq.workspace = true
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+jpeg-encoder = "0.7.1"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [[test]]
 name = "db"

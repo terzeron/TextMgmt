@@ -12,6 +12,7 @@ pub mod refresh_token_store;
 pub mod book;
 pub mod image_edit;
 pub mod cover_browse;
+pub mod cover_status;
 pub mod cover_sources;
 pub mod direct_cover_url;
 pub mod comics;

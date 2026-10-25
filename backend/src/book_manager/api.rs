@@ -114,6 +114,12 @@ impl BookManagerApi for BookManager {
         self.try_get_category_mismatches(force_refresh)
     }
 
+    async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, Option<i64>, Option<String>, Option<String>) {
+        let opts = CoverPageOpts { category: Some(category.into()), size: size.max(0) as usize, cursor: Some(cursor.into()), exclude_categories: exclude_categories.unwrap_or_default().to_vec() };
+        let (items, total, next, error) = BookManager::get_uncovered_books_paged(self, opts).await;
+        (items, total.map(|n| n as i64), next, error)
+    }
+
     async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>) {
         BookManager::set_epub_cover(self, book_id, url, image_data).await
     }

@@ -55,11 +55,13 @@ mod preview;
 mod reload;
 mod seams;
 mod update;
+mod uncovered;
 mod util;
 mod validate;
 mod xml_safe;
 
 pub use cover_list::CoverPageOpts;
+pub use uncovered::{CoverBooksPager, CoverPage};
 pub use classify::{ApplyOptions, MODEL_CERTAIN_MIN_CONFIDENCE, MoveOpts, ProposeOptions};
 pub use cover::{BookLookup, BookRef, Thumbnailer};
 pub use file_reader::DefaultFileReader;

@@ -93,6 +93,10 @@ impl BookManagerApi for ComicsManager {
         BookManagerApi::get_category_mismatches(&self.inner, force_refresh)
     }
 
+    async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, Option<i64>, Option<String>, Option<String>) {
+        BookManagerApi::get_uncovered_books_paged(&self.inner, category, size, cursor, exclude_categories).await
+    }
+
     async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>) {
         BookManagerApi::set_epub_cover(&self.inner, book_id, url, image_data).await
     }

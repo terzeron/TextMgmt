@@ -1,21 +1,5 @@
-//! 원본: tests/test_cover_status.py
-//!
-//! 가정한 API (아직 구현 전이다. Python 이름 그대로이고 비공개 `_x`는 `pub fn x`로 본다. 설계: docs/rust-test-seams.md 3.11, 3.12):
-//! - `backend::cover_status::STANDARD_COVER_SIZES: &[(u32, u32)]`
-//! - `backend::cover_status::pdf_first_image_size(path: &Path, lock: &Mutex<()>) -> Option<(u32, u32)>`
-//! - `backend::cover_status::has_official_cover(path: &Path, file_type: &str, lock: &Mutex<()>) -> bool`
-//! - `backend::cover_status::CoverStatusCache::new(path: &Path)`, `get_or_compute(&self, path: &Path, compute: &dyn Fn() -> bool) -> bool`
-//! - `backend::book_manager::{BookManager, BookManagerDeps, CoverBook, CoverPage, CoverBooksPager}`
-//!   - `BookManager::with_deps(BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>)...)` (구 `BookManager::without_es(path)`. ES는 `common::es_fake::FakeEsManager`)
-//!   - `struct CoverBook { pub file_path: PathBuf, pub file_type: String, pub name: String }` (Clone)
-//!   - `type CoverPage = (Vec<(CoverBook, String)>, usize, Option<String>, Option<String>)` (목록, 전체 수, 다음 커서, 오류)
-//!   - `type CoverBooksPager = Arc<dyn Fn(Option<String>) -> BoxFuture<'static, CoverPage> + Send + Sync>`
-//!   - `BookManagerDeps::with_cover_books_pager(self, pager: CoverBooksPager) -> Self` (구 `set_cover_books_pager`. Python `manager.get_cover_books_paged = AsyncMock(...)`)
-//!   - `BookManagerDeps::with_uncovered_scan_budget_seconds(self, seconds: f64) -> Self`, `with_uncovered_max_scan_pages(self, pages: usize) -> Self` (구 `set_*`. 값 설정자), `BookManager::UNCOVERED_MAX_CONCURRENT_SCANS: usize`
-//!   - `async fn get_uncovered_books_paged(&self, size: Option<usize>, cursor: Option<&str>) -> (Vec<(CoverBook, String)>, Option<usize>, Option<String>, Option<String>)` (목록, 전체 수, 다음 커서, 오류)
-//!   - `fn uncovered_flags(&self, books: &[CoverBook]) -> Vec<bool>`
-//! - `backend::cover_status::{pdf_first_image_size_with, has_official_cover_with}`: 마지막 인자로 `open: &dyn Fn(&Path) -> Box<dyn PdfDoc>`를 더 받는다.
-//!   `backend::pdf::PdfDoc`(구 `PdfDocument`): `fn page_count(&self) -> usize; fn close(&self);`. 나머지 메서드는 기본 구현이다. (Python `monkeypatch.setattr(pypdfium2, "PdfDocument", ...)`)
+//! Python tests/test_cover_status.py의 표지 판정, SQLite 호환성, 목록 조회 계약.
+//! 실제 PDF/EPUB 파일과 임시 SQLite DB로 검증한다.
 
 mod common;
 
@@ -25,17 +9,124 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use backend::book_manager::{BookManager, BookManagerDeps, CoverBook, CoverBooksPager, CoverPage};
-use backend::cover_status::{CoverStatusCache, STANDARD_COVER_SIZES, has_official_cover, has_official_cover_with, pdf_first_image_size, pdf_first_image_size_with};
-use backend::pdf::PdfDoc;
+use backend::book::Book as CoverBook;
+use backend::book_manager::{BookManager, BookManagerDeps, CoverBooksPager, CoverPage, CoverPageOpts};
+use backend::cover_status::{CoverStatusCache, STANDARD_COVER_SIZES, has_official_cover, pdf_first_image_size};
 use common::{
     epub::{EpubSpec, make_epub},
     es_fake::FakeEsManager,
     image::solid,
     pdf::{write_blank_pdf, write_image_pdf},
 };
+use serde_json::json;
 
 static LOCK: Mutex<()> = Mutex::new(());
+
+#[test]
+fn cache_reads_python_sqlite_and_python_reads_rust_updates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("한글 ' book.pdf");
+    std::fs::write(&file, b"old").unwrap();
+    let db = tmp.path().join("legacy.sqlite3");
+    let python = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(
+            r#"
+import sqlite3, sys, pathlib
+p = pathlib.Path(sys.argv[2]); s = p.stat()
+with sqlite3.connect(sys.argv[1]) as c:
+    c.execute('CREATE TABLE cover_status (file_path TEXT PRIMARY KEY, mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL, has_cover INTEGER NOT NULL)')
+    c.execute('INSERT INTO cover_status VALUES (?,?,?,?)', (str(p),s.st_mtime_ns,s.st_size,1))
+"#,
+        )
+        .arg(&db)
+        .arg(&file)
+        .status()
+        .unwrap();
+    assert!(python.success());
+    let cache = CoverStatusCache::new(&db);
+    assert!(cache.get_or_compute(&file, &|| panic!("legacy row should be reused")).unwrap());
+    std::fs::write(&file, b"new contents").unwrap();
+    assert!(!cache.get_or_compute(&file, &|| Ok(false)).unwrap());
+    let check = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(
+            r#"
+import sqlite3, sys, pathlib
+p = pathlib.Path(sys.argv[2]); s = p.stat()
+with sqlite3.connect(sys.argv[1]) as c:
+    row = c.execute('SELECT mtime_ns,size,has_cover FROM cover_status WHERE file_path=?',(str(p),)).fetchone()
+assert row == (s.st_mtime_ns,s.st_size,0), row
+"#,
+        )
+        .arg(&db)
+        .arg(&file)
+        .status()
+        .unwrap();
+    assert!(check.success());
+}
+
+#[test]
+fn cache_invalidates_same_size_timestamp_changes_and_does_not_store_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("file.pdf");
+    std::fs::write(&file, b"same").unwrap();
+    let db = tmp.path().join("cache.sqlite3");
+    let cache = CoverStatusCache::new(&db);
+    assert!(!cache.get_or_compute(&file, &|| Ok(false)).unwrap());
+    let now = std::fs::metadata(&file).unwrap().modified().unwrap();
+    std::fs::File::options().write(true).open(&file).unwrap().set_modified(now + Duration::from_secs(1)).unwrap();
+    assert!(cache.get_or_compute(&file, &|| Err("decode failed".into())).is_err());
+    assert!(cache.get_or_compute(&file, &|| Ok(true)).unwrap());
+    assert!(CoverStatusCache::new(&db).get_or_compute(&file, &|| panic!("persisted row should be reused")).unwrap());
+}
+
+#[test]
+fn cache_propagates_missing_file_and_invalid_database() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("bad.sqlite3");
+    std::fs::write(&db, b"not sqlite").unwrap();
+    let cache = CoverStatusCache::new(&db);
+    assert!(cache.get_or_compute(&tmp.path().join("missing"), &|| panic!("no file")).is_err());
+    let file = tmp.path().join("present");
+    std::fs::write(&file, b"data").unwrap();
+    assert!(cache.get_or_compute(&file, &|| panic!("bad database")).is_err());
+}
+
+#[test]
+fn pdf_uses_first_drawn_image_not_first_resource() {
+    use lopdf::{Object, Stream, dictionary};
+    let tmp = tempfile::tempdir().unwrap();
+    let pdf = make_pdf(&tmp.path().join("order.pdf"), Some((480, 623)));
+    common::pdf::edit_pdf(&pdf, |doc| {
+        let unused = doc.add_object(Stream::new(dictionary! {"Type"=>"XObject","Subtype"=>"Image","Width"=>11,"Height"=>22}, vec![]));
+        let page_id = doc.get_pages()[&1];
+        let page = doc.get_object_mut(page_id).unwrap().as_dict_mut().unwrap();
+        let objects = page.get_mut(b"Resources").unwrap().as_dict_mut().unwrap().get_mut(b"XObject").unwrap().as_dict_mut().unwrap();
+        let drawn = objects.get(b"Im0").unwrap().clone();
+        *objects = dictionary! {"FirstButUnused"=>Object::Reference(unused),"Im0"=>drawn};
+    });
+    assert_eq!(pdf_first_image_size(&pdf, &LOCK).unwrap(), Some((480, 623)));
+}
+
+#[test]
+fn inline_image_counts_without_xobject_resources() {
+    use lopdf::{
+        Object, Stream,
+        content::{Content, Operation},
+        dictionary,
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let pdf = tmp.path().join("inline.pdf");
+    let mut fixture = common::pdf::PdfBuilder::new();
+    let page = fixture.add_page(480, 623);
+    let image = Stream::new(dictionary! {"W"=>480,"H"=>623,"BPC"=>8,"CS"=>"RGB"}, vec![42; 480 * 623 * 3]);
+    let data = Content { operations: vec![Operation::new("BI", vec![Object::Stream(image)])] }.encode().unwrap();
+    fixture.content(page, &data);
+    fixture.save(&pdf);
+    assert_eq!(pdf_first_image_size(&pdf, &LOCK).unwrap(), Some((480, 623)));
+    assert!(has_official_cover(&pdf, "pdf", &LOCK).unwrap());
+}
 
 fn make_pdf(path: &Path, size: Option<(u32, u32)>) -> PathBuf {
     match size {
@@ -53,8 +144,8 @@ fn test_pdf_with_standard_cover_size_is_covered() {
         let tmp = tempfile::tempdir().unwrap();
         let pdf = make_pdf(&tmp.path().join("a.pdf"), Some(size));
 
-        assert_eq!(pdf_first_image_size(&pdf, &LOCK), Some(size), "size={size:?}");
-        assert!(has_official_cover(&pdf, "pdf", &LOCK), "size={size:?}");
+        assert_eq!(pdf_first_image_size(&pdf, &LOCK).unwrap(), Some(size), "size={size:?}");
+        assert!(has_official_cover(&pdf, "pdf", &LOCK).unwrap(), "size={size:?}");
     }
 }
 
@@ -63,7 +154,7 @@ fn test_pdf_with_other_first_image_is_uncovered() {
     let tmp = tempfile::tempdir().unwrap();
     let pdf = make_pdf(&tmp.path().join("a.pdf"), Some((690, 1600)));
 
-    assert!(!has_official_cover(&pdf, "pdf", &LOCK));
+    assert!(!has_official_cover(&pdf, "pdf", &LOCK).unwrap());
 }
 
 #[test]
@@ -71,14 +162,14 @@ fn test_pdf_without_image_is_uncovered() {
     let tmp = tempfile::tempdir().unwrap();
     let pdf = make_pdf(&tmp.path().join("a.pdf"), None);
 
-    assert_eq!(pdf_first_image_size(&pdf, &LOCK), None);
-    assert!(!has_official_cover(&pdf, "pdf", &LOCK));
+    assert_eq!(pdf_first_image_size(&pdf, &LOCK).unwrap(), None);
+    assert!(!has_official_cover(&pdf, "pdf", &LOCK).unwrap());
 }
 
 #[test]
 fn test_unsupported_type_is_not_reported_uncovered() {
     let tmp = tempfile::tempdir().unwrap();
-    assert!(has_official_cover(&tmp.path().join("a.txt"), "txt", &LOCK));
+    assert!(has_official_cover(&tmp.path().join("a.txt"), "txt", &LOCK).unwrap());
 }
 
 #[test]
@@ -93,12 +184,12 @@ fn test_cache_reuses_result_until_file_changes() {
         has_official_cover(&pdf, "pdf", &LOCK)
     };
 
-    assert!(!cache.get_or_compute(&pdf, &compute));
-    assert!(!cache.get_or_compute(&pdf, &compute));
+    assert!(!cache.get_or_compute(&pdf, &compute).unwrap());
+    assert!(!cache.get_or_compute(&pdf, &compute).unwrap());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
     make_pdf(&pdf, Some((480, 623)));
-    assert!(cache.get_or_compute(&pdf, &compute));
+    assert!(cache.get_or_compute(&pdf, &compute).unwrap());
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
@@ -112,7 +203,12 @@ fn make_manager(tmp: &Path) -> BookManager {
 }
 
 fn book(name: &str, tmp: &Path, size: (u32, u32)) -> CoverBook {
-    CoverBook { file_path: make_pdf(&tmp.join(name), Some(size)), file_type: "pdf".to_string(), name: name.to_string() }
+    common::setup_env();
+    CoverBook::new(1, &json!({"category":"", "title":name, "author":"", "file_path":make_pdf(&tmp.join(name),Some(size)), "file_type":"pdf", "file_size":0, "updated_time":"2026-01-01T00:00:00"}), 0.0)
+}
+
+fn opts(size: Option<usize>, cursor: Option<&str>) -> CoverPageOpts {
+    CoverPageOpts { size: size.unwrap_or(60), cursor: cursor.map(str::to_string), ..Default::default() }
 }
 
 /// 스크립트한 페이지를 차례로 돌려주고, 받은 커서를 기록하는 pager. Python `AsyncMock(side_effect=[...])`.
@@ -120,8 +216,8 @@ fn scripted(pages: Vec<CoverPage>) -> (CoverBooksPager, Arc<Mutex<Vec<Option<Str
     let queue = Arc::new(Mutex::new(VecDeque::from(pages)));
     let cursors = Arc::new(Mutex::new(Vec::new()));
     let (q, c) = (queue.clone(), cursors.clone());
-    let pager: CoverBooksPager = Arc::new(move |cursor| {
-        c.lock().unwrap().push(cursor);
+    let pager: CoverBooksPager = Arc::new(move |opts: CoverPageOpts| {
+        c.lock().unwrap().push(opts.cursor);
         let page = q.lock().unwrap().pop_front().expect("스크립트한 페이지를 모두 썼다");
         Box::pin(async move { page })
     });
@@ -129,7 +225,7 @@ fn scripted(pages: Vec<CoverPage>) -> (CoverBooksPager, Arc<Mutex<Vec<Option<Str
 }
 
 fn names(items: &[(CoverBook, String)]) -> Vec<&str> {
-    items.iter().map(|entry| entry.0.name.as_str()).collect()
+    items.iter().map(|entry| entry.0.title.as_str()).collect()
 }
 
 #[tokio::test]
@@ -141,7 +237,7 @@ async fn test_uncovered_page_collects_across_scan_pages_and_keeps_scan_cursor() 
     let (pager, cursors) = scripted(vec![(vec![(covered, String::new()), (plain1, String::new())], 3, Some("c1".into()), None), (vec![(plain2, String::new())], 3, Some("c2".into()), None)]);
     let manager = BookManager::with_deps(deps(tmp.path()).with_cover_books_pager(pager));
 
-    let (items, total, next_cursor, error) = manager.get_uncovered_books_paged(Some(2), None).await;
+    let (items, total, next_cursor, error) = manager.get_uncovered_books_paged(opts(Some(2), None)).await;
 
     assert_eq!(error, None);
     assert_eq!(names(&items), ["plain1.pdf", "plain2.pdf"]);
@@ -157,7 +253,7 @@ async fn test_uncovered_page_ends_when_list_ends() {
     let (pager, _cursors) = scripted(vec![(vec![(covered, String::new())], 1, None, None)]);
     let manager = BookManager::with_deps(deps(tmp.path()).with_cover_books_pager(pager));
 
-    let (items, total, next_cursor, error) = manager.get_uncovered_books_paged(Some(5), None).await;
+    let (items, total, next_cursor, error) = manager.get_uncovered_books_paged(opts(Some(5), None)).await;
 
     assert!(items.is_empty());
     assert_eq!((total, next_cursor, error), (None, None, None));
@@ -170,7 +266,7 @@ async fn test_uncovered_page_stops_at_budget_even_without_items() {
     let (pager, cursors) = scripted(vec![(vec![(covered.clone(), String::new())], 9, Some("c1".into()), None), (vec![(covered, String::new())], 9, Some("c2".into()), None)]);
     let manager = BookManager::with_deps(deps(tmp.path()).with_uncovered_scan_budget_seconds(-1.0).with_cover_books_pager(pager));
 
-    let (items, _total, next_cursor, error) = manager.get_uncovered_books_paged(Some(5), None).await;
+    let (items, _total, next_cursor, error) = manager.get_uncovered_books_paged(opts(Some(5), None)).await;
 
     assert!(items.is_empty());
     assert_eq!((next_cursor.as_deref(), error), (Some("c1"), None));
@@ -188,7 +284,7 @@ async fn test_uncovered_page_stops_at_page_cap_and_returns_resume_cursor() {
     ]);
     let manager = BookManager::with_deps(deps(tmp.path()).with_uncovered_max_scan_pages(2).with_cover_books_pager(pager));
 
-    let (items, _total, next_cursor, _error) = manager.get_uncovered_books_paged(Some(5), None).await;
+    let (items, _total, next_cursor, _error) = manager.get_uncovered_books_paged(opts(Some(5), None)).await;
 
     assert!(items.is_empty());
     assert_eq!(next_cursor.as_deref(), Some("c2"));
@@ -212,9 +308,15 @@ async fn test_uncovered_scans_run_at_most_two_at_once() {
             (Vec::new(), 0, None, None)
         })
     });
-    let manager = BookManager::with_deps(deps(tmp.path()).with_cover_books_pager(slow_page));
-
-    futures::future::join_all((0..6).map(|_| manager.get_uncovered_books_paged(None, None))).await;
+    let manager = Arc::new(BookManager::with_deps(deps(tmp.path()).with_cover_books_pager(slow_page)));
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..6 {
+        let manager = manager.clone();
+        tasks.spawn(async move { manager.get_uncovered_books_paged(opts(None, None)).await });
+    }
+    while let Some(result) = tasks.join_next().await {
+        result.unwrap();
+    }
 
     assert_eq!(peak.load(Ordering::SeqCst), BookManager::UNCOVERED_MAX_CONCURRENT_SCANS);
 }
@@ -225,7 +327,7 @@ async fn test_uncovered_page_passes_through_errors() {
     let (pager, _cursors) = scripted(vec![(Vec::new(), 0, None, Some("invalid cursor".into()))]);
     let manager = BookManager::with_deps(deps(tmp.path()).with_cover_books_pager(pager));
 
-    let (items, total, next_cursor, error) = manager.get_uncovered_books_paged(None, Some("x")).await;
+    let (items, total, next_cursor, error) = manager.get_uncovered_books_paged(opts(None, Some("x"))).await;
 
     assert!(items.is_empty());
     assert_eq!((total, next_cursor, error.as_deref()), (None, None, Some("invalid cursor")));
@@ -234,39 +336,20 @@ async fn test_uncovered_page_passes_through_errors() {
 #[test]
 fn test_unreadable_file_is_not_reported_uncovered() {
     let tmp = tempfile::tempdir().unwrap();
-    let broken = CoverBook { file_path: tmp.path().join("missing.pdf"), file_type: "pdf".to_string(), name: "missing.pdf".to_string() };
+    let mut broken = book("exists.pdf", tmp.path(), (480, 623));
+    broken.file_path = tmp.path().join("missing.pdf");
     let manager = make_manager(tmp.path());
 
     assert_eq!(manager.uncovered_flags(&[broken]), [false]);
 }
 
-/// Python `EmptyDocument`: 쪽이 없고 `close` 호출을 기록한다.
-struct EmptyDocument {
-    closed: Arc<Mutex<Vec<bool>>>,
-}
-
-impl PdfDoc for EmptyDocument {
-    fn page_count(&self) -> usize {
-        0
-    }
-
-    fn close(&self) {
-        self.closed.lock().unwrap().push(true);
-    }
-}
-
 #[test]
 fn test_pdf_without_pages_has_no_first_image() {
     let tmp = tempfile::tempdir().unwrap();
-    let closed = Arc::new(Mutex::new(Vec::new()));
-    let sink = closed.clone();
-    let open = move |_path: &Path| -> Box<dyn PdfDoc> { Box::new(EmptyDocument { closed: sink.clone() }) };
     let pdf = tmp.path().join("empty.pdf");
-    std::fs::write(&pdf, b"%PDF-1.4").unwrap();
-
-    assert_eq!(pdf_first_image_size_with(&pdf, &LOCK, &open), None);
-    assert!(!has_official_cover_with(&pdf, "pdf", &LOCK, &open));
-    assert_eq!(*closed.lock().unwrap(), [true, true]);
+    common::pdf::PdfBuilder::new().save(&pdf);
+    assert_eq!(pdf_first_image_size(&pdf, &LOCK).unwrap(), None);
+    assert!(!has_official_cover(&pdf, "pdf", &LOCK).unwrap());
 }
 
 #[test]
@@ -275,6 +358,80 @@ fn test_epub_is_judged_by_cover_metadata() {
         let tmp = tempfile::tempdir().unwrap();
         let path = make_epub(&tmp.path().join("book.epub"), &EpubSpec::cover("3.0", cover));
 
-        assert_eq!(has_official_cover(&path, "epub", &LOCK), cover, "cover={cover}");
+        assert_eq!(has_official_cover(&path, "epub", &LOCK).unwrap(), cover, "cover={cover}");
     }
+}
+
+#[tokio::test]
+async fn uncovered_http_uses_real_book_and_comic_managers() {
+    use backend::main::{AppDeps, AuthMode, app_with};
+    for prefix in ["", "/comics"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let covered = book("covered.pdf", tmp.path(), (480, 623));
+        let plain = book("plain.pdf", tmp.path(), (690, 1600));
+        let (pager, _) = scripted(vec![(vec![(covered, String::new()), (plain, "작품 제목".into())], 2, None, None)]);
+        let managers = deps(tmp.path()).with_cover_books_pager(pager);
+        let deps = AppDeps::new(AuthMode::Fixed(json!({"role":"admin"})));
+        let deps = if prefix.is_empty() {
+            deps.with_book_manager(Arc::new(BookManager::with_deps(managers)))
+        } else {
+            deps.with_comics_manager(Arc::new(backend::comics_manager::ComicsManager::with_deps(managers)))
+        };
+        let client = common::TestClient::with_app(app_with(deps));
+        let response = client.get(&format!("{prefix}/browse?uncovered=true&limit=2")).await;
+        assert_eq!(response.status, 200, "{}", response.text());
+        let body = response.json();
+        assert_eq!(body["status"], "success");
+        assert_eq!(body["total"], serde_json::Value::Null);
+        assert_eq!(body["result"].as_array().unwrap().len(), 1);
+        assert_eq!(body["result"][0]["title"], "plain.pdf");
+        assert_eq!(body["result"][0]["file_path"], "plain.pdf");
+        assert_eq!(body["result"][0]["display_title"], "작품 제목");
+        assert_eq!(body["next_cursor"], serde_json::Value::Null);
+    }
+}
+
+struct BrowseManager(Mutex<Vec<serde_json::Value>>);
+#[async_trait::async_trait]
+impl backend::main::BookManagerApi for BrowseManager {
+    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, excluded: Option<&[String]>) -> (Vec<(CoverBook, String)>, i64, Option<String>, Option<String>) {
+        self.0.lock().unwrap().push(json!([category, size, cursor, excluded]));
+        (vec![], 17, Some("next".into()), None)
+    }
+}
+struct Hidden;
+impl backend::main::CategoryMappingApi for Hidden {
+    fn get_hidden_categories(&self, kind: &str) -> Result<Vec<String>, backend::main::MappingError> {
+        Ok(vec![if kind == "comic" { "hidden-comic".into() } else { "hidden-book".into() }])
+    }
+}
+
+#[tokio::test]
+async fn browse_passes_hidden_categories_and_blocks_hidden_descendants() {
+    use backend::main::{AppDeps, AuthMode, app_with};
+    let manager = Arc::new(BrowseManager(Mutex::new(vec![])));
+    let deps = AppDeps::new(AuthMode::AuthOnly(json!({"role":"viewer"}))).with_book_manager(manager.clone()).with_comics_manager(manager.clone()).with_category_mapping(Arc::new(Hidden));
+    let client = common::TestClient::with_app(app_with(deps));
+    for (prefix, hidden) in [("", "hidden-book"), ("/comics", "hidden-comic")] {
+        assert_eq!(client.get(&format!("{prefix}/browse?category={hidden}/child")).await.status, 403);
+        let response = client.get(&format!("{prefix}/browse?category=public&limit=30&cursor=old")).await;
+        assert_eq!(response.status, 200);
+        assert_eq!(response.json(), json!({"status":"success","result":[],"total":17,"next_cursor":"next"}));
+        assert_eq!(manager.0.lock().unwrap().last().unwrap(), &json!(["public", 30, "old", [hidden]]));
+    }
+    assert_eq!(manager.0.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn browse_requires_auth_and_validates_limits() {
+    use backend::main::{AppDeps, AuthMode, app_with};
+    let client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies)));
+    assert_eq!(client.get("/browse").await.status, 401);
+    let manager = Arc::new(BrowseManager(Mutex::new(vec![])));
+    let client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_book_manager(manager.clone())));
+    for query in ["limit=0", "limit=-1", "limit=10001", "uncovered=invalid"] {
+        assert_eq!(client.get(&format!("/browse?{query}")).await.status, 422);
+    }
+    assert_eq!(client.get("/browse").await.status, 200);
+    assert_eq!(manager.0.lock().unwrap().as_slice(), &[json!(["", 60, "", []])]);
 }

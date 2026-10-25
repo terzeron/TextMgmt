@@ -409,6 +409,68 @@ async fn conflicting_or_duplicate_edits_do_not_save() {
     assert!(!e.backup().exists());
 }
 
+/// JPEG 헤더의 DQT와 SOF를 읽는다. 엔트로피 데이터는 첫 SOS에서 멈춘다.
+fn jpeg_header_segments(bytes: &[u8]) -> Vec<(u8, Vec<u8>)> {
+    assert_eq!(&bytes[..2], &[0xff, 0xd8]);
+    let mut pos = 2;
+    let mut result = Vec::new();
+    loop {
+        assert_eq!(bytes[pos], 0xff);
+        let marker = bytes[pos + 1];
+        if marker == 0xda {
+            break;
+        }
+        let len = u16::from_be_bytes([bytes[pos + 2], bytes[pos + 3]]) as usize;
+        if [0xdb, 0xc0, 0xc1, 0xc2].contains(&marker) {
+            result.push((marker, bytes[pos + 4..pos + 2 + len].to_vec()));
+        }
+        pos += 2 + len;
+    }
+    result
+}
+
+#[tokio::test]
+async fn jpeg_crop_preserves_quantization_sampling_progressive_and_grayscale() {
+    use jpeg_encoder::{ColorType, Encoder, QuantizationTableType, SamplingFactor};
+    for (gray, progressive, sampling) in
+        [(false, false, SamplingFactor::F_1_1), (false, false, SamplingFactor::F_2_1), (false, true, SamplingFactor::F_2_2), (true, false, SamplingFactor::F_1_1), (true, true, SamplingFactor::F_1_1)]
+    {
+        let e = env();
+        let source = image::RgbImage::from_fn(100, 60, |x, _| if x < 50 { image::Rgb([180, 180, 180]) } else { image::Rgb([40, 40, 40]) });
+        let pixels = if gray { image::DynamicImage::ImageRgb8(source.clone()).to_luma8().into_raw() } else { source.into_raw() };
+        let mut jpeg = Vec::new();
+        let mut encoder = Encoder::new(&mut jpeg, 75);
+        encoder.set_progressive(progressive);
+        encoder.set_sampling_factor(sampling);
+        encoder
+            .set_quantization_tables(QuantizationTableType::Custom(Box::new(std::array::from_fn(|i| 7 + i as u16))), QuantizationTableType::Custom(Box::new(std::array::from_fn(|i| 90 - i as u16))));
+        encoder.encode(&pixels, 100, 60, if gray { ColorType::Luma } else { ColorType::Rgb }).unwrap();
+        let expected = jpeg_header_segments(&jpeg);
+        common::pdf::make_pixel_pdf(&e.pdf, &["jpeg"]);
+        common::pdf::edit_pdf(&e.pdf, |pdf| {
+            let stream = common::pdf::first_xobject_mut(pdf, 1);
+            stream.content = jpeg.clone();
+            stream.dict.set("ColorSpace", if gray { "DeviceGray" } else { "DeviceRGB" });
+        });
+        let crops = [json!({"page":1,"x0":0.5,"y0":0.0,"x1":1.0,"y1":1.0})];
+        let (_, error) = e.bm.delete_pdf_pages(1, &[], Some(&crops), None, None, None).await;
+        assert_eq!(error, None);
+        let doc = common::pdf::load(&e.pdf);
+        let stream = common::pdf::first_xobject(&doc, 1);
+        assert_eq!(stream.dict.get(b"Filter").unwrap().as_name().unwrap(), b"DCTDecode");
+        let actual = jpeg_header_segments(&stream.content);
+        assert_eq!(actual.iter().filter(|(m, _)| *m == 0xdb).collect::<Vec<_>>(), expected.iter().filter(|(m, _)| *m == 0xdb).collect::<Vec<_>>());
+        let actual_frame = actual.iter().find(|(m, _)| *m != 0xdb).unwrap();
+        let expected_frame = expected.iter().find(|(m, _)| *m != 0xdb).unwrap();
+        assert_eq!(actual_frame.0, expected_frame.0);
+        assert_eq!(&actual_frame.1[5..], &expected_frame.1[5..]);
+        let decoded = image::load_from_memory(&stream.content).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (50, 60));
+        assert!(decoded.to_luma8().get_pixel(25, 30)[0] < 50);
+        assert_eq!(stream.dict.get(b"ColorSpace").unwrap().as_name().unwrap(), if gray { b"DeviceGray".as_slice() } else { b"DeviceRGB".as_slice() });
+    }
+}
+
 struct FetchImage(Result<Vec<u8>, backend::direct_cover_url::FetchError>);
 impl backend::direct_cover_url::ImageFetcher for FetchImage {
     fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, backend::direct_cover_url::FetchError> {
