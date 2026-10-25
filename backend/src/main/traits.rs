@@ -165,6 +165,33 @@ fn unimplemented_mapping<T>() -> Result<T, MappingError> {
 
 /// 카테고리 매핑 facade. 동기 메서드다. 지금은 viewer 접근 제어에 필요한 조회만 있다.
 pub trait CategoryMappingApi: Send + Sync {
+    fn get_all_mappings(&self, _content_type: &str) -> Result<Value, MappingError> {
+        unimplemented_mapping()
+    }
+    fn get_keywords(&self, _category: &str, _content_type: &str) -> Result<Vec<String>, MappingError> {
+        unimplemented_mapping()
+    }
+    fn set_keywords(&self, _category: &str, _keywords: &[String], _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    fn add_keyword(&self, _category: &str, _keyword: &str, _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    fn remove_keyword(&self, _category: &str, _keyword: &str, _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    fn delete_category(&self, _category: &str, _content_type: &str, _prefix: bool) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    fn update_all_mappings(&self, _mappings: &Value, _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    fn set_hidden(&self, _category: &str, _hidden: bool, _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    fn set_latest_excluded(&self, _category: &str, _excluded: bool, _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
     fn get_hidden_categories(&self, _content_type: &str) -> Result<Vec<String>, MappingError> {
         unimplemented_mapping()
     }
@@ -175,6 +202,34 @@ pub trait CategoryMappingApi: Send + Sync {
 }
 
 impl CategoryMappingApi for CategoryMapping {
+    fn get_all_mappings(&self, content_type: &str) -> Result<Value, MappingError> {
+        Ok(serde_json::json!(CategoryMapping::get_all_mappings(self, content_type)))
+    }
+    fn get_keywords(&self, category: &str, content_type: &str) -> Result<Vec<String>, MappingError> {
+        Ok(CategoryMapping::get_keywords(self, category, content_type))
+    }
+    fn set_keywords(&self, category: &str, keywords: &[String], content_type: &str) -> Result<bool, MappingError> {
+        Ok(CategoryMapping::set_keywords(self, category, &keywords.iter().map(String::as_str).collect::<Vec<_>>(), content_type))
+    }
+    fn add_keyword(&self, category: &str, keyword: &str, content_type: &str) -> Result<bool, MappingError> {
+        Ok(CategoryMapping::add_keyword(self, category, keyword, content_type))
+    }
+    fn remove_keyword(&self, category: &str, keyword: &str, content_type: &str) -> Result<bool, MappingError> {
+        Ok(CategoryMapping::remove_keyword(self, category, keyword, content_type))
+    }
+    fn delete_category(&self, category: &str, content_type: &str, prefix: bool) -> Result<bool, MappingError> {
+        Ok(CategoryMapping::delete_category(self, category, content_type, prefix))
+    }
+    fn update_all_mappings(&self, mappings: &Value, content_type: &str) -> Result<bool, MappingError> {
+        let mappings = serde_json::from_value(mappings.clone()).map_err(|e| MappingError::Other(e.to_string()))?;
+        Ok(CategoryMapping::update_all_mappings(self, &mappings, content_type))
+    }
+    fn set_hidden(&self, category: &str, hidden: bool, content_type: &str) -> Result<bool, MappingError> {
+        Ok(CategoryMapping::set_hidden(self, category, hidden, content_type))
+    }
+    fn set_latest_excluded(&self, category: &str, excluded: bool, content_type: &str) -> Result<bool, MappingError> {
+        Ok(CategoryMapping::set_latest_excluded(self, category, excluded, content_type))
+    }
     fn get_hidden_categories(&self, content_type: &str) -> Result<Vec<String>, MappingError> {
         Ok(CategoryMapping::get_hidden_categories(self, content_type))
     }

@@ -250,3 +250,7 @@ tower = { version = "0.5.3", features = ["util"] }
 [[test]]
 name = "catalog_api"
 path = "../tests/rust/backend/catalog_api.rs"
+
+[[test]]
+name = "mapping_api"
+path = "../tests/rust/backend/mapping_api.rs"

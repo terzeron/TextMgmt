@@ -28,6 +28,7 @@ mod extract;
 mod log_routes;
 mod routes;
 mod routes_books;
+mod routes_mapping;
 mod routes_epub_cover;
 mod routes_pdf;
 mod routes_view_history;
@@ -62,6 +63,7 @@ fn all_routes() -> Routes {
         .merge(routes_epub_cover::routes())
         .merge(routes_pdf::routes())
         .merge(routes_books::routes())
+        .merge(routes_mapping::routes())
         .merge(crate::cover_management::routes::routes())
 }
 

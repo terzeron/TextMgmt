@@ -58,6 +58,14 @@
   실제 관리자와 fake ES를 사용하는 HTTP 테스트 8개가 통과했다. 관련 회귀는 337 passed, 13 ignored이며 Clippy도 통과했다.
   검색 facade 누락을 보완하고 숨긴 카테고리, 최신 제외 목록, 만화 상대 경로와 유사 자료 fallback을 검증했다.
 
+- 카테고리 설정 API 11개를 연결했다. 키워드 CRUD, 숨김·최신 제외 설정, Python bool 규칙을 검증했다.
+  DB 초기화와 작업을 blocking pool에서 실행하고, viewer JWT가 설정을 바꾸지 못하는지 확인했다.
+  `mapping_api` 9개와 별도 checkout의 관련 165개 테스트가 통과했다.
+- 최신 workspace 단위·통합 검사는 2,144 passed, 0 failed, 92 ignored다. Clippy도 통과했다.
+  첫 doctest는 다른 checkout과 target을 공유해 `bookstore` crate 탐색에 실패했다.
+  checkout 검사가 끝난 뒤 workspace 전체 doctest를 순서대로 재실행해 통과했다. 이후 checkout 검사는 순차 실행한다.
+  Python은 3,040 passed, 기존 Pillow 오류 3 failed다.
+
 ## 다음 구현과 남은 제한
 
 - 전체 전환은 미완료다. 서버 바이너리는 아직 실행 stub이며 AppDeps 운영 조립도 완성하지 않았다.
