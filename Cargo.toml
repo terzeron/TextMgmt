@@ -40,6 +40,15 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.memchr]
 opt-level = 3
+# EPUB 본문은 HTML 파서로 읽는다. 최적화하지 않으면 코퍼스 EPUB 테스트가 6.6초다(최적화 시 1.9초).
+[profile.dev.package.scraper]
+opt-level = 3
+[profile.dev.package.html5ever]
+opt-level = 3
+[profile.dev.package.markup5ever]
+opt-level = 3
+[profile.dev.package.tendril]
+opt-level = 3
 [profile.dev.package.backend]
 opt-level = 1
 
