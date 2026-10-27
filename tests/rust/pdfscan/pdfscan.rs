@@ -640,3 +640,39 @@ fn javascript_that_cannot_be_decompressed_within_the_limit_is_reported_not_passe
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("[HIGH] JavaScript stream not fully inspected"), "{out}");
 }
+
+/// UTF-16 문자열을 16진 문자열로 쓴다. `bom`이 `Some(true)`면 BE, `Some(false)`면 LE(BOM 포함), `None`이면 BOM 없는 LE.
+fn utf16_hex(text: &str, bom: Option<bool>) -> String {
+    let be = bom.unwrap_or(false) && bom == Some(true);
+    let body: String = text.encode_utf16().map(|u| if be { format!("{u:04X}") } else { format!("{:02X}{:02X}", u & 0xff, u >> 8) }).collect();
+    let prefix = match bom {
+        Some(true) => "FEFF",
+        Some(false) => "FFFE",
+        None => "",
+    };
+    format!("<{prefix}{body}>")
+}
+
+#[test]
+fn utf16_encoded_file_names_do_not_hide_an_executable() {
+    // 파일 이름은 UTF-16(BOM)이거나 BOM 없는 UTF-16일 수 있다. 바이트를 그대로 UTF-8로 읽으면 확장자 검사를 빠져나간다.
+    for bom in [Some(true), Some(false), None] {
+        let name = utf16_hex("calc.exe", bom);
+        let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("<< /S /Launch /F {name} >>")]);
+        assert!(out.contains("[CRITICAL] Launch action"), "bom={bom:?} {name}: {out}");
+        // 파일 지정 사전의 이름 키도 같다. 읽을 수 있는 이름으로 지표에 남는다.
+        let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("<< /Type /Filespec /UF {name} /EF << >> >>")]);
+        assert!(out.contains("executable-looking file name") && out.contains("calc.exe"), "bom={bom:?}: {out}");
+    }
+    // 무해한 UTF-16 이름은 올리지 않는다.
+    let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("<< /S /Launch /F {} >>", utf16_hex("readme.txt", Some(true)))]);
+    assert!(out.contains("[HIGH] Launch action") && !out.contains("CRITICAL"), "{out}");
+}
+
+#[test]
+fn exploit_javascript_in_utf16_without_a_bom_is_still_found() {
+    // BOM 없는 UTF-16LE JS는 글자 사이에 NUL이 끼어 `eval(unescape(`가 안 보인다. NUL을 걷어 내고 본다.
+    let js = utf16_hex("eval(unescape('x'));", None);
+    let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("<< /S /JavaScript /JS {js} >>")]);
+    assert!(out.contains("[CRITICAL] exploit JavaScript"), "{out}");
+}

@@ -118,6 +118,11 @@ fn shrink_dict(d: &mut Dictionary, depth: usize) {
 
 /// 스트림을 어떻게 해석할지 정하는 키. 배열이 길다고 비우면 필터가 사라져서, 인코딩된 JS가 해독되지 않은 채 검사를 빠져나간다.
 const STREAM_DECODING_KEYS: [&[u8]; 4] = [b"Filter", b"DecodeParms", b"FFilter", b"FDecodeParms"];
+/// 현실적인 필터 체인은 몇 단계다. 이보다 길면 노드로 메모리를 부풀리려는 것이므로 잘라 낸다.
+const FILTER_KEEP_LEN: usize = 16;
+/// 필터 체인을 잘랐다는 표지. 잘리면 해독이 틀어지므로 그 스트림은 "끝까지 검사하지 못한" 것으로 알려야 한다.
+/// 파일이 같은 키를 직접 넣어도 알림이 하나 더 붙을 뿐이라 안전한 쪽이다.
+const FILTER_TRUNCATED_KEY: &[u8] = b"PdfscanFilterTruncated";
 
 /// 객체 하나를 스캔에 필요한 만큼만 남긴다. 제자리에서 줄인다.
 fn shrink(obj: &mut Object, depth: usize) {
@@ -135,7 +140,22 @@ fn shrink(obj: &mut Object, depth: usize) {
                 st.content.truncate(STREAM_KEEP_BYTES);
                 st.content.shrink_to_fit();
             }
-            st.dict.iter_mut().filter(|(k, _)| !STREAM_DECODING_KEYS.contains(&k.as_slice())).for_each(|(_, v)| shrink(v, depth + 1));
+            // 필터 키는 배열이 길다는 이유로 비우면 해독이 사라지므로 비우지 않되, 노드로 메모리를 부풀리지 못하게 길이는 제한한다.
+            let mut truncated = false;
+            for (k, v) in st.dict.iter_mut() {
+                if STREAM_DECODING_KEYS.contains(&k.as_slice())
+                    && let Object::Array(items) = v
+                    && items.len() > FILTER_KEEP_LEN
+                {
+                    items.truncate(FILTER_KEEP_LEN);
+                    items.shrink_to_fit();
+                    truncated = true;
+                }
+                shrink(v, depth + 1);
+            }
+            if truncated {
+                st.dict.set(FILTER_TRUNCATED_KEY.to_vec(), Object::Boolean(true));
+            }
         }
         _ => {}
     }
@@ -172,7 +192,7 @@ fn name_of(obj: &Object) -> Option<String> {
 }
 
 fn has_risky_ext(name: &[u8]) -> bool {
-    let lower = String::from_utf8_lossy(name).to_ascii_lowercase();
+    let lower = name_text(name).to_ascii_lowercase();
     // 맨 앞이 http·https·ftp 주소이고 호스트가 비어 있지 않을 때만 호스트가 아니라 경로의 확장자를 본다.
     // `https://example.com`의 `.com`은 DOS 실행 파일이 아니고, `https://x.example/evil.exe`는 경로가 .exe라서 잡힌다.
     // 문자열 중간의 `://`나 모르는 형태는 이름 그대로 검사한다(뷰어가 어떻게 읽을지 모르므로 열어 두지 않는다).
@@ -241,13 +261,13 @@ fn filespec_is_dangerous(doc: &Document, obj: &Object) -> bool {
 /// 이때 탐지는 앞부분(또는 압축 원본)만 본 것이므로, 조용히 지나가지 않고 알려야 한다. 패딩이나 거대한 해제분으로 탐지를 피하지 못하게 한다.
 fn js_stream_not_fully_inspected(doc: &Document, obj: &Object) -> bool {
     let Object::Reference(id) = obj else { return false };
-    matches!(doc.get_object(*id), Ok(Object::Stream(st)) if st.content.len() >= STREAM_KEEP_BYTES || st.decompressed_content_with_limit(MAX_DECOMPRESSED_STREAM_BYTES).is_err())
+    matches!(doc.get_object(*id), Ok(Object::Stream(st)) if st.content.len() >= STREAM_KEEP_BYTES || st.dict.has(FILTER_TRUNCATED_KEY) || st.decompressed_content_with_limit(MAX_DECOMPRESSED_STREAM_BYTES).is_err())
 }
 
 /// 문서에서 열 이유가 없는 대상인가: 실행 파일 확장자이거나 셸·스크립트 인터프리터를 부른다.
 fn launch_target_is_dangerous(target: &[u8]) -> bool {
     const SHELLS: &[&str] = &["cmd.exe", "cmd/c", "powershell", "pwsh", "mshta", "wscript", "cscript", "rundll32", "regsvr32", "/bin/sh", "/bin/bash"];
-    let flat: String = String::from_utf8_lossy(target).to_ascii_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
+    let flat: String = name_text(target).to_ascii_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
     has_risky_ext(target) || SHELLS.iter().any(|sh| flat.contains(sh))
 }
 
@@ -264,9 +284,15 @@ fn js_text(bytes: &[u8]) -> String {
     }
 }
 
+/// 파일 이름 바이트를 글로 바꾼다. PDF 문자열은 UTF-16(BOM)일 수 있고, BOM 없이 UTF-16이 들어오는 경우도 있어서 NUL을 지운다.
+/// 그대로 `from_utf8_lossy`로 읽으면 `<FEFF0063…>`로 인코딩한 `calc.exe`가 확장자 검사를 빠져나간다.
+fn name_text(bytes: &[u8]) -> String {
+    js_text(bytes).replace('\0', "")
+}
+
 /// 알려진 공격 수법이 든 JavaScript인가: 첨부 자동 실행, 로컬·UNC 경로 실행, 복호화한 페이로드의 eval, 셸코드 NOP sled.
 fn js_is_exploit(source: &[u8]) -> bool {
-    let flat: String = js_text(source).to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
+    let flat: String = js_text(source).to_lowercase().chars().filter(|c| !c.is_whitespace() && *c != '\0').collect();
     (flat.contains("exportdataobject") && flat.contains("nlaunch"))
         || (flat.contains("launchurl") && (flat.contains("file:") || flat.contains("\\\\")))
         || flat.contains("eval(unescape(")
@@ -351,7 +377,7 @@ impl Scanner<'_> {
             if let Ok(Object::String(name, _)) = d.get(key) {
                 let is_filespec = d.has(b"EF") || matches!(d.get(b"Type").ok().and_then(name_of).as_deref(), Some("Filespec")) || action.as_deref() == Some("Launch");
                 if is_filespec && has_risky_ext(name) {
-                    self.add(Severity::High, "executable-looking file name", id, path, sanitize(name));
+                    self.add(Severity::High, "executable-looking file name", id, path, sanitize(name_text(name).as_bytes()));
                 }
             }
         }
@@ -781,23 +807,84 @@ mod tests {
         assert_eq!(json_str("a\u{1b}b\u{85}c\u{7f}"), "\"a\\u001bb\\u0085c\\u007f\"");
     }
 
+    #[test]
+    fn helper_fallbacks_and_json_report_lists_are_covered() {
+        assert_eq!(name_of(&Object::Integer(1)), None);
+        assert!(has_risky_ext(b"payload.exe"));
+        assert!(!has_risky_ext(b"notes.txt"));
+
+        let mut filespec = Dictionary::new();
+        filespec.set("Unix", Object::String(b"payload.exe".to_vec(), lopdf::StringFormat::Literal));
+        assert!(filespec_is_dangerous(&Document::new(), &Object::Dictionary(filespec)));
+        assert!(filespec_is_dangerous(&Document::new(), &Object::Name(b"cmd.exe".to_vec())));
+
+        let mut stream = filter_stream(FILTER_KEEP_LEN + 1);
+        let transformed = shrink_on_load((7, 0), &mut stream).unwrap();
+        assert_eq!(transformed.0, (7, 0));
+        assert!(matches!(transformed.1, Object::Stream(_)));
+
+        let report = Report {
+            file: PathBuf::from("report.pdf"),
+            findings: vec![
+                Finding { severity: Severity::High, kind: "first", object: (1, 0), path: "Root".into(), detail: "one".into() },
+                Finding { severity: Severity::Medium, kind: "second", object: (2, 0), path: "Names".into(), detail: "two".into() },
+            ],
+            notes: vec!["first note".into(), "second note".into()],
+            incomplete: true,
+        };
+        let mut output = Vec::new();
+        print_json_report(&report, &mut output).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["notes"].as_array().unwrap().len(), 2);
+        assert_eq!(json["findings"].as_array().unwrap().len(), 2);
+    }
+
     fn long_name_array() -> Object {
         Object::Array((0..40).map(|_| Object::Name(b"FlateDecode".to_vec())).collect())
     }
 
-    #[test]
-    fn shrink_keeps_a_streams_filter_chain_but_drops_other_long_numeric_arrays() {
+    fn filter_stream(chain_len: usize) -> Object {
         let mut dict = Dictionary::new();
-        dict.set("Filter", long_name_array());
-        dict.set("DecodeParms", long_name_array());
+        dict.set("Filter", Object::Array((0..chain_len).map(|_| Object::Name(b"FlateDecode".to_vec())).collect()));
+        dict.set("DecodeParms", Object::Array((0..chain_len).map(|_| Object::Null).collect()));
         dict.set("Widths", Object::Array((0..100).map(Object::Integer).collect()));
         let mut obj = Object::Stream(lopdf::Stream::new(dict, b"x".to_vec()));
         shrink(&mut obj, 0);
-        let Object::Stream(st) = obj else { unreachable!() };
+        obj
+    }
+
+    #[test]
+    fn shrink_keeps_a_realistic_filter_chain_and_drops_other_long_numeric_arrays() {
+        let Object::Stream(st) = filter_stream(FILTER_KEEP_LEN) else { unreachable!() };
         // 필터 배열이 비면 인코딩된 JS가 해독되지 않은 채 검사를 빠져나간다.
-        assert_eq!(st.dict.get(b"Filter").unwrap().as_array().unwrap().len(), 40);
-        assert_eq!(st.dict.get(b"DecodeParms").unwrap().as_array().unwrap().len(), 40);
+        assert_eq!(st.dict.get(b"Filter").unwrap().as_array().unwrap().len(), FILTER_KEEP_LEN);
+        assert_eq!(st.dict.get(b"DecodeParms").unwrap().as_array().unwrap().len(), FILTER_KEEP_LEN);
+        assert!(!st.dict.has(FILTER_TRUNCATED_KEY), "자르지 않았으면 표지가 없어야 한다");
         assert!(st.dict.get(b"Widths").unwrap().as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn shrink_bounds_an_absurdly_long_filter_chain_and_marks_the_stream() {
+        // 이름 수백만 개짜리 /Filter가 그대로 남으면 노드(약 120B)로 메모리를 부풀린다. 길이를 제한하고 표지를 붙인다.
+        let Object::Stream(st) = filter_stream(100_000) else { unreachable!() };
+        assert_eq!(st.dict.get(b"Filter").unwrap().as_array().unwrap().len(), FILTER_KEEP_LEN);
+        assert_eq!(st.dict.get(b"DecodeParms").unwrap().as_array().unwrap().len(), FILTER_KEEP_LEN);
+        assert!(st.dict.has(FILTER_TRUNCATED_KEY));
+    }
+
+    #[test]
+    fn a_stream_with_a_truncated_filter_chain_is_reported_as_not_fully_inspected() {
+        let mut doc = Document::new();
+        let Object::Stream(marked) = filter_stream(100_000) else { unreachable!() };
+        // 필터가 없는 작은 스트림: 표지도 없고 해제도 문제없다.
+        let plain = lopdf::Stream::new(Dictionary::new(), b"app.alert(1)".to_vec());
+        doc.objects.insert((5, 0), Object::Stream(marked));
+        doc.objects.insert((6, 0), Object::Stream(plain));
+        assert!(js_stream_not_fully_inspected(&doc, &Object::Reference((5, 0))));
+        // 표지가 없고 작은 스트림이면 알리지 않는다. 참조가 아니거나 없는 객체도 마찬가지다.
+        assert!(!js_stream_not_fully_inspected(&doc, &Object::Reference((6, 0))));
+        assert!(!js_stream_not_fully_inspected(&doc, &Object::Integer(1)));
+        assert!(!js_stream_not_fully_inspected(&doc, &Object::Reference((99, 0))));
     }
 
     #[test]
