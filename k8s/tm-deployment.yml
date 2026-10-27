@@ -64,6 +64,8 @@ spec:
             requests:
               memory: "1Gi"
               cpu: "250m"
+              # 관측된 Pod 임시 사용량(약 4MiB)에 여유를 둬 축출 우선순위를 낮춘다.
+              ephemeral-storage: "128Mi"
             limits:
               memory: "4Gi"
               cpu: "2"
